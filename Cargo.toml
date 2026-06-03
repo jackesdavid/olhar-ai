@@ -1,0 +1,39 @@
+[package]
+name = "bishop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratatui = "0.29"
+rand = "0.8"
+# HTTP + JSON for the Anthropic and ElevenLabs clients (always present).
+ureq = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# ONVIF camera discovery / credential test (WS-Security digest) + snapshot decode.
+sha1 = "0.10"
+base64 = "0.22"
+chrono = "0.4"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+# Loads .env into the process environment at startup (Claude + ElevenLabs keys).
+dotenvy = "0.15"
+rodio = { version = "0.19", optional = true, default-features = false, features = ["wav", "vorbis", "mp3"] }
+# Microphone capture for speech-to-text (same cpal rodio pulls in, so no dup).
+cpal = { version = "0.15", optional = true }
+# Self-rendered CRT window (the `crt` feature): a wgpu backend for ratatui with a
+# built-in CRT post-processing shader, our own window via winit, block_on via pollster.
+ratatui-wgpu = { version = "0.4", optional = true }
+winit = { version = "0.30", optional = true }
+pollster = { version = "0.4", optional = true }
+
+# Unix-only: used to redirect stderr away from the TUI (see main.rs).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[features]
+default = ["audio", "crt"]
+audio = ["dep:rodio", "dep:cpal"]
+crt = ["dep:ratatui-wgpu", "dep:winit", "dep:pollster"]
+
+[profile.release]
+opt-level = 2

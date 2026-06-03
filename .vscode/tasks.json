@@ -1,0 +1,47 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "cargo build (debug)",
+      "type": "shell",
+      // VS Code's task runner doesn't inherit the shell PATH on macOS, so cargo
+      // (in ~/.cargo/bin) isn't found by the `cargo` task provider. Call it by
+      // absolute path and put ~/.cargo/bin on PATH for the rustup shim it execs.
+      "command": "${userHome}/.cargo/bin/cargo",
+      "args": ["build", "--bin=bishop", "--package=bishop"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PATH": "${userHome}/.cargo/bin:${env:PATH}"
+        }
+      },
+      "problemMatcher": ["$rustc"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "clear": true,
+        "reveal": "silent"
+      }
+    },
+    {
+      "label": "cargo build (debug, no audio)",
+      "type": "shell",
+      "command": "${userHome}/.cargo/bin/cargo",
+      "args": ["build", "--bin=bishop", "--package=bishop", "--no-default-features"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PATH": "${userHome}/.cargo/bin:${env:PATH}"
+        }
+      },
+      "problemMatcher": ["$rustc"],
+      "group": "build",
+      "presentation": {
+        "clear": true,
+        "reveal": "silent"
+      }
+    }
+  ]
+}

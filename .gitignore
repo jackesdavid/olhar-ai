@@ -1,0 +1,11 @@
+target/
+
+# Local secrets — never commit these
+.env
+.vscode/launch.json
+
+# Saved camera devices + credentials (plaintext)
+devices.json
+
+# Local ship configuration (volumes, voice toggle, …)
+config.json
