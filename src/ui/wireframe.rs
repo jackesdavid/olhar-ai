@@ -331,6 +331,54 @@ pub fn draw_ship(ctx: &mut Context<'_>, phase: f64) {
     SHIP.draw(ctx, |p| p.rot_y(phase * 0.8).rot_x(0.30));
 }
 
+// -- ALERTS: rotating alert diamond (octahedron) with a pulsing core ----------
+
+static ALARM_VERTS: &[P3] = &[
+    P3::new(0.0, 0.85, 0.0),  // 0 top
+    P3::new(0.0, -0.85, 0.0), // 1 bottom
+    P3::new(0.8, 0.0, 0.0),   // 2 +x
+    P3::new(0.0, 0.0, 0.8),   // 3 +z
+    P3::new(-0.8, 0.0, 0.0),  // 4 -x
+    P3::new(0.0, 0.0, -0.8),  // 5 -z
+];
+
+static ALARM_EDGES: &[(usize, usize)] = &[
+    (0, 2), (0, 3), (0, 4), (0, 5), // top → equator
+    (1, 2), (1, 3), (1, 4), (1, 5), // bottom → equator
+    (2, 3), (3, 4), (4, 5), (5, 2), // equator ring
+];
+
+static ALARM: Mesh = Mesh { verts: ALARM_VERTS, edges: ALARM_EDGES };
+
+/// ALERTS schematic: a rotating octahedron "alert diamond" with a core that
+/// throbs bright→faint, like a warning lamp.
+pub fn draw_alarm(ctx: &mut Context<'_>, phase: f64) {
+    let spin = |p: P3| p.rot_y(phase * 0.7).rot_x(0.35);
+    ALARM.draw(ctx, spin);
+
+    // Pulsing core: a small diamond at the centre whose colour throbs.
+    ctx.layer();
+    let lit = (phase * 3.0).sin() * 0.5 + 0.5;
+    let color = if lit > 0.66 {
+        PHOSPHOR
+    } else if lit > 0.33 {
+        PHOSPHOR_DIM
+    } else {
+        PHOSPHOR_FAINT
+    };
+    let r = 0.16;
+    let n = [
+        P3::new(r, 0.0, 0.0),
+        P3::new(0.0, r, 0.0),
+        P3::new(-r, 0.0, 0.0),
+        P3::new(0.0, -r, 0.0),
+    ];
+    draw_edge(ctx, spin(n[0]), spin(n[1]), color);
+    draw_edge(ctx, spin(n[1]), spin(n[2]), color);
+    draw_edge(ctx, spin(n[2]), spin(n[3]), color);
+    draw_edge(ctx, spin(n[3]), spin(n[0]), color);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

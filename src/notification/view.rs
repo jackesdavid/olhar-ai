@@ -1,23 +1,33 @@
-//! The ALERTS screen: a simple manager for trusted notification targets. Targets
-//! are added by pairing from Telegram (`/pair <code>`); here the operator can see
-//! them, toggle delivery on/off, remove one, or fire a test alert. Drawn as
-//! stacked boxes to match the home menu and device list.
+//! The BEACONS screen: the trusted notification devices, drawn as a grid of
+//! rotating beacon wireframes (each paired phone is a "comm beacon"). Beacons are
+//! enrolled by pairing from Telegram (`/pair <code>`); from here the operator can
+//! open one, rename it, test it, mute it, or remove it. Also hosts the
+//! beacon-detail view (a rotating beacon on one side, a rename form on the other).
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    symbols::Marker,
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{canvas::Canvas, Block, BorderType, Borders, Paragraph, Wrap},
     Frame,
 };
 
 use super::domain::{NotificationConfig, NotificationTarget};
-use super::handler::AlertsScreen;
+use super::handler::{BeaconDetail, BeaconField, BeaconsScreen, BEACON_COLS};
 use crate::ui::chrome::panel;
 use crate::ui::theme::{AMBER, PHOSPHOR, PHOSPHOR_DIM, PHOSPHOR_FAINT};
+use crate::ui::wireframe;
 
-/// Render the targets list (a snapshot, cloned by the caller) plus a status line.
-pub fn render(f: &mut Frame, area: Rect, targets: &[NotificationTarget], screen: &AlertsScreen) {
-    let outer = panel(" ALERT TARGETS ", true);
+/// Render the beacon grid (a snapshot, cloned by the caller) plus a status line.
+/// `phase` (the global sweep) spins each beacon wireframe.
+pub fn render(
+    f: &mut Frame,
+    area: Rect,
+    targets: &[NotificationTarget],
+    screen: &BeaconsScreen,
+    phase: f64,
+) {
+    let outer = panel(" BEACONS ", true);
     let inner = outer.inner(area);
     f.render_widget(outer, area);
 
@@ -26,12 +36,11 @@ pub fn render(f: &mut Frame, area: Rect, targets: &[NotificationTarget], screen:
         return;
     }
 
-    // Reserve the bottom row for a status line; the list fills the rest.
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(inner);
-    render_list(f, rows[0], targets, screen);
+    render_grid(f, rows[0], targets, screen, phase);
 
     if !screen.status.is_empty() {
         f.render_widget(
@@ -45,62 +54,77 @@ pub fn render(f: &mut Frame, area: Rect, targets: &[NotificationTarget], screen:
     }
 }
 
-fn render_list(f: &mut Frame, area: Rect, targets: &[NotificationTarget], screen: &AlertsScreen) {
-    // top pad, then [box(3), blurb(1), gap(1)] per target — matching the menu.
-    let mut constraints = vec![Constraint::Length(1)];
-    for _ in targets {
-        constraints.push(Constraint::Length(3));
-        constraints.push(Constraint::Length(1));
-        constraints.push(Constraint::Length(1));
-    }
-    let rows = Layout::default()
+fn render_grid(
+    f: &mut Frame,
+    area: Rect,
+    targets: &[NotificationTarget],
+    screen: &BeaconsScreen,
+    phase: f64,
+) {
+    let cols = BEACON_COLS;
+    let grid_rows = targets.len().div_ceil(cols);
+    let row_rects = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(constraints)
+        .constraints(vec![Constraint::Ratio(1, grid_rows as u32); grid_rows])
         .split(area);
 
     for (i, t) in targets.iter().enumerate() {
-        let selected = i == screen.selected;
-        let box_area = rows[1 + i * 3];
-        let blurb_area = rows[2 + i * 3];
-
-        let mark = if t.enabled { "\u{25CF}" } else { "\u{25CB}" }; // ● online / ○ muted
-        let label = format!("{:02}  {} {}", i + 1, mark, t.label);
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(if selected { BorderType::Double } else { BorderType::Plain });
-        let (block, label_style) = if selected {
-            (
-                block
-                    .border_style(Style::default().fg(AMBER))
-                    .style(Style::default().bg(AMBER).fg(Color::Black)),
-                Style::default().fg(Color::Black).add_modifier(Modifier::BOLD),
-            )
-        } else {
-            (
-                block.border_style(Style::default().fg(PHOSPHOR_DIM)),
-                Style::default().fg(PHOSPHOR),
-            )
-        };
-        f.render_widget(
-            Paragraph::new(Line::from(Span::styled(label, label_style)))
-                .alignment(Alignment::Center)
-                .block(block),
-            box_area,
-        );
-
-        let state = if t.enabled { "ONLINE" } else { "MUTED" };
-        let blurb = format!("chat {}  \u{00b7}  {}", t.chat_id, state);
-        let blurb_style = if selected {
-            Style::default().fg(AMBER)
-        } else {
-            Style::default().fg(PHOSPHOR_FAINT)
-        };
-        f.render_widget(
-            Paragraph::new(Line::from(Span::styled(blurb, blurb_style))).alignment(Alignment::Center),
-            blurb_area,
-        );
+        let r = i / cols;
+        let c = i % cols;
+        let cell = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![Constraint::Ratio(1, cols as u32); cols])
+            .split(row_rects[r])[c];
+        render_cell(f, cell, i, t, i == screen.selected, phase);
     }
+}
+
+/// One grid cell: a bordered box with a small spinning beacon, the label, and the
+/// online/muted state. The selected cell gets the amber double border.
+fn render_cell(f: &mut Frame, area: Rect, idx: usize, t: &NotificationTarget, selected: bool, phase: f64) {
+    let border = if selected { AMBER } else { PHOSPHOR_DIM };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(if selected { BorderType::Double } else { BorderType::Plain })
+        .border_style(Style::default().fg(border));
+    let cell = block.inner(area);
+    f.render_widget(block, area);
+
+    let parts = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1), Constraint::Length(1)])
+        .split(cell);
+
+    // Offset each beacon's phase so the grid doesn't pulse in lockstep.
+    let p = phase + idx as f64 * 0.7;
+    let beacon = Canvas::default()
+        .marker(Marker::Braille)
+        .x_bounds([-1.0, 1.0])
+        .y_bounds([-1.0, 1.0])
+        .paint(move |ctx| wireframe::draw_beacon(ctx, p));
+    f.render_widget(beacon, parts[0]);
+
+    let label_style = if selected {
+        Style::default().fg(AMBER).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(PHOSPHOR)
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(format!("{:02} {}", idx + 1, t.label), label_style)))
+            .alignment(Alignment::Center),
+        parts[1],
+    );
+
+    let mark = if t.enabled { "\u{25CF}" } else { "\u{25CB}" };
+    let state = if t.enabled { "ONLINE" } else { "MUTED" };
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!("{mark} {state}"),
+            Style::default().fg(if selected { AMBER } else { PHOSPHOR_FAINT }),
+        )))
+        .alignment(Alignment::Center),
+        parts[2],
+    );
 }
 
 /// Empty state: explain how to pair a phone, showing the live `/pair` code when
@@ -111,18 +135,18 @@ fn render_empty(f: &mut Frame, area: Rect) {
             format!("From Telegram, send the bot:  /pair {}", cfg.pairing_code)
         }
         Some(_) => "Set TELEGRAM_PAIRING_CODE, then /pair it from Telegram.".to_string(),
-        None => "Set TELEGRAM_BOT_TOKEN and TELEGRAM_PAIRING_CODE to enable alerts.".to_string(),
+        None => "Set TELEGRAM_BOT_TOKEN and TELEGRAM_PAIRING_CODE to enable beacons.".to_string(),
     };
     let lines = vec![
         Line::from(""),
         Line::from(Span::styled(
-            "NO TARGETS PAIRED",
+            "NO BEACONS PAIRED",
             Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(pair_line, Style::default().fg(PHOSPHOR_DIM))),
         Line::from(Span::styled(
-            "A phone becomes a target once it sends the code.",
+            "A phone becomes a beacon once it sends the code.",
             Style::default().fg(PHOSPHOR_FAINT),
         )),
     ];
@@ -133,4 +157,125 @@ fn render_empty(f: &mut Frame, area: Rect) {
         height: 5.min(area.height),
     };
     f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), mid);
+}
+
+// ---- beacon detail ----------------------------------------------------------
+
+/// The beacon-detail screen: a rename form on the left, a rotating beacon on the
+/// right. `phase` spins the beacon.
+pub fn render_detail(
+    f: &mut Frame,
+    area: Rect,
+    detail: &BeaconDetail,
+    target: &NotificationTarget,
+    phase: f64,
+) {
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+        .split(area);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4), // beacon info
+            Constraint::Length(3), // name
+            Constraint::Length(3), // action buttons
+            Constraint::Min(0),    // status
+        ])
+        .split(cols[0]);
+
+    // ---- beacon info (read-only) ------------------------------------------
+    let info = vec![
+        Line::from(vec![
+            Span::styled("PROVIDER ", Style::default().fg(PHOSPHOR_DIM)),
+            Span::styled("TELEGRAM", Style::default().fg(PHOSPHOR)),
+        ]),
+        Line::from(vec![
+            Span::styled("CHAT ID  ", Style::default().fg(PHOSPHOR_DIM)),
+            Span::styled(target.chat_id.to_string(), Style::default().fg(PHOSPHOR)),
+        ]),
+    ];
+    f.render_widget(
+        Paragraph::new(info).block(panel(" BEACON ", true)).wrap(Wrap { trim: true }),
+        rows[0],
+    );
+
+    // ---- editable name ----------------------------------------------------
+    input_field(f, rows[1], " NAME ", &detail.name, detail.field == BeaconField::Name);
+
+    // ---- action buttons ---------------------------------------------------
+    let mute_label = if target.enabled { "MUTE" } else { "UNMUTE" };
+    let btns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(34),
+            Constraint::Percentage(26),
+            Constraint::Percentage(24),
+            Constraint::Percentage(16),
+        ])
+        .split(rows[2]);
+    button(f, btns[0], "RENAME", detail.field == BeaconField::Rename);
+    button(f, btns[1], "TEST", detail.field == BeaconField::Test);
+    button(f, btns[2], mute_label, detail.field == BeaconField::Mute);
+    button(f, btns[3], "BACK", detail.field == BeaconField::Back);
+
+    // ---- status -----------------------------------------------------------
+    let status = if detail.status.is_empty() {
+        "Tab between fields. Edit NAME, then activate RENAME to save.".to_string()
+    } else {
+        detail.status.clone()
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(status, Style::default().fg(AMBER))))
+            .block(panel(" STATUS ", false))
+            .wrap(Wrap { trim: true }),
+        rows[3],
+    );
+
+    // ---- rotating beacon on the right -------------------------------------
+    let block = panel(" SIGNAL ", false);
+    let beacon_area = block.inner(cols[1]);
+    f.render_widget(block, cols[1]);
+    let beacon = Canvas::default()
+        .marker(Marker::Braille)
+        .x_bounds([-1.0, 1.0])
+        .y_bounds([-1.0, 1.0])
+        .paint(move |ctx| wireframe::draw_beacon(ctx, phase));
+    f.render_widget(beacon, beacon_area);
+}
+
+fn input_field(f: &mut Frame, area: Rect, title: &'static str, value: &str, focused: bool) {
+    let border = if focused { AMBER } else { PHOSPHOR_DIM };
+    let mut spans = vec![Span::styled(value.to_string(), Style::default().fg(PHOSPHOR))];
+    if focused {
+        spans.push(Span::styled("\u{2588}", Style::default().fg(PHOSPHOR)));
+    }
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border))
+        .title(Span::styled(title, Style::default().fg(border)));
+    f.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
+}
+
+fn button(f: &mut Frame, area: Rect, label: &str, focused: bool) {
+    let (block_style, text_style) = if focused {
+        (
+            Style::default().bg(AMBER).fg(Color::Black),
+            Style::default().fg(Color::Black).add_modifier(Modifier::BOLD),
+        )
+    } else {
+        (Style::default(), Style::default().fg(PHOSPHOR))
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(if focused { BorderType::Double } else { BorderType::Plain })
+        .border_style(Style::default().fg(if focused { AMBER } else { PHOSPHOR_DIM }))
+        .style(block_style);
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(label.to_string(), text_style)))
+            .alignment(Alignment::Center)
+            .block(block),
+        area,
+    );
 }

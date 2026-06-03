@@ -75,6 +75,17 @@ impl ConfigScreen {
                 }
                 false
             }
+            Field::CrtSweep => {
+                if delta != 0 {
+                    settings.crt_sweep = !settings.crt_sweep;
+                }
+                false
+            }
+            Field::CrtSweepIntensity => {
+                settings.crt_sweep_intensity =
+                    (settings.crt_sweep_intensity + d).clamp(0.0, 1.0);
+                false
+            }
         }
     }
 }

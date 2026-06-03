@@ -15,18 +15,20 @@
 //! texture via `queue.write_texture` and shown through a UV sub-rect. The text
 //! texture is `Rgba8Unorm`, so the overlay pipeline targets that format and
 //! writes linear values — the CRT applies sRGB/brightness uniformly afterward.
+use std::time::Instant;
+
 use ratatui_wgpu::shaders::{CrtPostProcessor, CrtSettings};
 use ratatui_wgpu::wgpu::{
     AddressMode, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BindingResource, BindingType, BlendState, Buffer, BufferBindingType,
-    BufferDescriptor, BufferUsages, ColorTargetState, ColorWrites, CommandEncoder, Device,
-    Extent3d, FilterMode, FragmentState, LoadOp, MultisampleState, Operations,
-    PipelineCompilationOptions, PipelineLayoutDescriptor, PrimitiveState, Queue,
-    RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
-    SamplerBindingType, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages,
-    StoreOp, SurfaceConfiguration, Texture, TexelCopyBufferLayout, TextureDescriptor,
-    TextureDimension, TextureFormat, TextureSampleType, TextureUsages, TextureView,
-    TextureViewDescriptor, TextureViewDimension, VertexState,
+    BindGroupLayoutEntry, BindingResource, BindingType, BlendComponent, BlendFactor,
+    BlendOperation, BlendState, Buffer, BufferBindingType, BufferDescriptor, BufferUsages,
+    ColorTargetState, ColorWrites, CommandEncoder, Device, Extent3d, FilterMode, FragmentState,
+    LoadOp, MultisampleState, Operations, PipelineCompilationOptions, PipelineLayoutDescriptor,
+    PrimitiveState, Queue, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
+    RenderPipelineDescriptor, SamplerBindingType, SamplerDescriptor, ShaderModuleDescriptor,
+    ShaderSource, ShaderStages, StoreOp, SurfaceConfiguration, Texture, TexelCopyBufferLayout,
+    TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
+    TextureView, TextureViewDescriptor, TextureViewDimension, VertexState,
 };
 use ratatui_wgpu::PostProcessor;
 
@@ -252,6 +254,170 @@ impl VideoOverlay {
     }
 }
 
+/// The Alien-monitor "refresh roll": a soft, wide brightness wave that drifts
+/// slowly from the top of the glass to the bottom and wraps. WGSL only — driven
+/// by a single time uniform; tuning lives in [`RollingBand::PARAMS`].
+const BAND_SHADER: &str = r#"
+struct U { p: vec4<f32> };  // x: time(s), y: speed(passes/s), z: half-width, w: intensity
+@group(0) @binding(0) var<uniform> u: U;
+
+struct VsOut {
+  @builtin(position) pos: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs(@builtin(vertex_index) vi: u32) -> VsOut {
+  // A single oversized triangle covering the screen.
+  let uv = vec2<f32>(f32((vi << 1u) & 2u), f32(vi & 2u));
+  var o: VsOut;
+  o.pos = vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0);
+  o.uv = uv;
+  return o;
+}
+
+@fragment
+fn fs(in: VsOut) -> @location(0) vec4<f32> {
+  let sy = 1.0 - in.uv.y;                 // 0 at top of screen .. 1 at bottom
+  let center = fract(u.p.x * u.p.y);      // sweeps top->bottom, wraps seamlessly
+  var d = abs(sy - center);
+  d = min(d, 1.0 - d);                    // wrap distance so there is no seam
+  let band = smoothstep(u.p.z, 0.0, d) * u.p.w;
+  // Soft green phosphor glow, premultiplied so it composites additively.
+  let glow = band * vec3<f32>(0.16, 1.0, 0.32);
+  return vec4<f32>(glow, band);
+}
+"#;
+
+/// Draws the refresh roll as a single additive full-screen pass over the CRT
+/// output. Self-contained: own pipeline + a 16-byte time/param uniform.
+struct RollingBand {
+    pipeline: RenderPipeline,
+    bind_group: BindGroup,
+    uniforms: Buffer,
+    start: Instant,
+}
+
+impl RollingBand {
+    /// Fixed tuning: passes-per-second (≈ one drift every 5.5s) and the band's
+    /// soft half-height (fraction of the screen). Kept deliberately gentle — a
+    /// slow wave, not a strobing bar.
+    const PARAMS: (f32, f32) = (0.18, 0.22);
+
+    /// Peak brightness at full user strength. The live `sweep_intensity` (0..1)
+    /// scales this; the default strength of 0.5 lands at a gentle ~0.045.
+    const MAX_INTENSITY: f32 = 0.09;
+
+    fn new(device: &Device, format: TextureFormat) -> Self {
+        let uniforms = device.create_buffer(&BufferDescriptor {
+            label: Some("refresh-roll uniforms"),
+            size: 16, // one vec4<f32>
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("refresh-roll bgl"),
+            entries: &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("refresh-roll bind group"),
+            layout: &bgl,
+            entries: &[BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() }],
+        });
+
+        let shader = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("refresh-roll shader"),
+            source: ShaderSource::Wgsl(BAND_SHADER.into()),
+        });
+
+        let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("refresh-roll pipeline layout"),
+            bind_group_layouts: &[&bgl],
+            push_constant_ranges: &[],
+        });
+
+        // Additive over the existing CRT output: source already premultiplied.
+        let blend = BlendState {
+            color: BlendComponent {
+                src_factor: BlendFactor::One,
+                dst_factor: BlendFactor::One,
+                operation: BlendOperation::Add,
+            },
+            alpha: BlendComponent {
+                src_factor: BlendFactor::One,
+                dst_factor: BlendFactor::One,
+                operation: BlendOperation::Add,
+            },
+        };
+
+        let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("refresh-roll pipeline"),
+            layout: Some(&layout),
+            vertex: VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: PipelineCompilationOptions::default(),
+            },
+            fragment: Some(FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                targets: &[Some(ColorTargetState {
+                    format,
+                    blend: Some(blend),
+                    write_mask: ColorWrites::ALL,
+                })],
+                compilation_options: PipelineCompilationOptions::default(),
+            }),
+            primitive: PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        RollingBand { pipeline, bind_group, uniforms, start: Instant::now() }
+    }
+
+    /// Paint the band onto `target` (the swapchain view) on top of whatever the
+    /// CRT pass already wrote (`LoadOp::Load`).
+    fn draw(&self, queue: &Queue, encoder: &mut CommandEncoder, target: &TextureView) {
+        let (speed, width) = Self::PARAMS;
+        let intensity = crate::ui::video::sweep_intensity() * Self::MAX_INTENSITY;
+        let secs = self.start.elapsed().as_secs_f32();
+        let mut bytes = [0u8; 16];
+        for (i, v) in [secs, speed, width, intensity].iter().enumerate() {
+            bytes[i * 4..i * 4 + 4].copy_from_slice(&v.to_ne_bytes());
+        }
+        queue.write_buffer(&self.uniforms, 0, &bytes);
+
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("refresh-roll pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                ops: Operations { load: LoadOp::Load, store: StoreOp::Store },
+                depth_slice: None,
+            })],
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+}
+
 /// User data handed to the backend at build time: the CRT settings plus the
 /// shared compositor the GPU side reads each frame.
 pub struct NostromoData {
@@ -259,10 +425,12 @@ pub struct NostromoData {
     pub state: &'static std::sync::Mutex<Compositor>,
 }
 
-/// The composed post-processor: stock CRT look, then the camera texture on top.
+/// The composed post-processor: stock CRT look, the camera texture composited
+/// into it, then the refresh-roll sweep painted over the final image.
 pub struct NostromoPost {
     crt: CrtPostProcessor,
     video: VideoOverlay,
+    band: RollingBand,
     state: &'static std::sync::Mutex<Compositor>,
 }
 
@@ -277,7 +445,8 @@ impl PostProcessor for NostromoPost {
     ) -> Self {
         let crt = CrtPostProcessor::compile(device, text_view, surface_config, user_data.crt);
         let video = VideoOverlay::new(device);
-        NostromoPost { crt, video, state: user_data.state }
+        let band = RollingBand::new(device, surface_config.format);
+        NostromoPost { crt, video, band, state: user_data.state }
     }
 
     fn resize(&mut self, device: &Device, text_view: &TextureView, surface_config: &SurfaceConfiguration) {
@@ -302,11 +471,17 @@ impl PostProcessor for NostromoPost {
             }
         }
         self.crt.process(encoder, queue, text_view, surface_config, surface_view);
+
+        // Finally, drift the refresh roll over the finished CRT image.
+        if crate::ui::video::sweep_enabled() {
+            self.band.draw(queue, encoder, surface_view);
+        }
     }
 
     fn needs_update(&self) -> bool {
-        // Keep repainting while a feed is on screen so the video animates even
-        // when the surrounding text is static.
-        self.state.lock().map(|c| c.active).unwrap_or(false)
+        // Keep repainting while a feed is on screen (so the video animates) or
+        // while the refresh roll is on (so the sweep keeps drifting) even when
+        // the surrounding text is static.
+        crate::ui::video::sweep_enabled() || self.state.lock().map(|c| c.active).unwrap_or(false)
     }
 }

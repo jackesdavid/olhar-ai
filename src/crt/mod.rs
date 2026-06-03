@@ -94,8 +94,10 @@ impl CrtApp {
         let now = Instant::now();
         while now.duration_since(*last_tick) >= TICK {
             app.on_tick();
-            if app.screen == Screen::Boot {
-                app.boot_tick();
+            match app.screen {
+                Screen::Splash => app.splash_tick(),
+                Screen::Boot => app.boot_tick(),
+                _ => {}
             }
             *last_tick += TICK;
         }

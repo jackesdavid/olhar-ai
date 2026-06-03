@@ -49,10 +49,21 @@ impl App {
         if let Some(cfg) = crate::notification::NotificationConfig::from_env() {
             crate::notification::spawn_pairing(notification.clone(), cfg);
         }
-        let (alert_tx, alert_rx) = std::sync::mpsc::channel();
+        let (beacon_tx, beacon_rx) = std::sync::mpsc::channel();
+
+        // The ALERTS subsystem: its own persisted store + a delivery-status channel.
+        let alert_store: crate::alerts::AlertStore =
+            std::sync::Arc::new(std::sync::Mutex::new(crate::alerts::domain::load_alerts()));
+        let (alert_status_tx, alert_status_rx) = std::sync::mpsc::channel();
+
+        // Reflect the saved CRT-sweep preferences into the shared flags the GPU
+        // post-processor reads each frame (no-op on the TTY frontend).
+        crate::ui::video::set_sweep(settings.crt_sweep);
+        crate::ui::video::set_sweep_intensity(settings.crt_sweep_intensity);
 
         App {
-            screen: Screen::Boot,
+            screen: Screen::Splash,
+            splash: crate::splash::SplashSequence::new(),
             boot: BootSequence::new(),
             menu: Menu::new(),
             scan: ScanState::new(),
@@ -77,9 +88,14 @@ impl App {
             stt_tx,
             stt_rx,
             notification,
-            alerts: crate::notification::AlertsScreen::new(),
-            alert_tx,
-            alert_rx,
+            beacons: crate::notification::BeaconsScreen::new(),
+            beacon_detail: None,
+            beacon_tx,
+            beacon_rx,
+            alert_store,
+            alerts: crate::alerts::AlertsScreen::new(),
+            alert_status_tx,
+            alert_status_rx,
             map: crate::map::MapState::new(),
             activity: Activity::new(),
         }
@@ -96,6 +112,13 @@ impl App {
         self.levels.set_voice_enabled(self.settings.voice_enabled);
     }
 
+    /// Push the CRT refresh-roll settings into the shared flags the GPU
+    /// post-processor reads each frame. No-op effect on the `--tty` frontend.
+    fn sync_crt_sweep(&self) {
+        crate::ui::video::set_sweep(self.settings.crt_sweep);
+        crate::ui::video::set_sweep_intensity(self.settings.crt_sweep_intensity);
+    }
+
     /// Advance the always-on simulation (the radar sweep runs in every screen so
     /// the boot cursor can blink off it and the tracker is live the instant it
     /// opens), deliver any Claude replies, reveal speech whose audio is ready,
@@ -108,14 +131,16 @@ impl App {
         self.poll_scan_events();
         self.poll_tool_ui();
         self.poll_stt();
-        self.poll_alerts();
+        self.poll_beacons();
+        self.poll_alert_status();
         if let Some(s) = self.live.as_mut() {
             let now = std::time::Instant::now();
             s.drain(now);
             s.supervise(now, &self.activity);
         }
-        // Loop the "working" sound while processing (but never on the boot screen).
-        let working = self.screen != Screen::Boot && self.activity.is_busy();
+        // Loop the "working" sound while processing (but never on the splash/boot screens).
+        let working =
+            !matches!(self.screen, Screen::Splash | Screen::Boot) && self.activity.is_busy();
         self.sfx.set_working(working);
     }
 
@@ -229,13 +254,14 @@ impl App {
         let store = self.scan.devices.clone();
         let ui_tx = self.tool_ui_tx.clone();
         let notif = self.notification.clone();
+        let alerts = self.alert_store.clone();
         // Begin "processing". The guard rides with the reply and is only dropped
         // once the reply's audio is ready (see `say`).
         let busy = self.activity.begin();
         std::thread::spawn(move || {
             // Live Claude (with tools) if configured, else the offline persona stub.
             let registry = ToolRegistry::new();
-            let ctx = ToolContext { store, ui_tx, notif };
+            let ctx = ToolContext { store, ui_tx, notif, alerts };
             let outcome = crate::agent::client::ask(&history, &registry, &ctx)
                 .unwrap_or_else(|| AgentOutcome::offline(crate::chat::handler::reply(&text)));
             let _ = tx.send((outcome, busy));
@@ -339,6 +365,20 @@ impl App {
                     self.convo.start_typing(text);
                 }
             }
+        }
+    }
+
+    /// Advance the splash card; hand off to the boot scroll when its ~3s elapse.
+    pub fn splash_tick(&mut self) {
+        if self.splash.tick() {
+            self.screen = Screen::Boot;
+        }
+    }
+
+    /// Skip the splash card (any keypress) straight to the boot scroll.
+    fn skip_splash(&mut self) {
+        if self.screen == Screen::Splash {
+            self.screen = Screen::Boot;
         }
     }
 
@@ -565,6 +605,11 @@ impl App {
                         }
                     }
                 }
+                ToolUiEvent::AlertsPersisted => {
+                    // A tool changed the alert log — keep the dashboard cursor valid.
+                    let n = self.today_alert_count();
+                    self.alerts.clamp(n);
+                }
             }
         }
     }
@@ -584,7 +629,7 @@ impl App {
 
         // Global voice link: F9 toggles "talk to Bishop" from any screen (the
         // boot scroll excepted). The reply is spoken wherever you are.
-        if key.code == KeyCode::F(9) && self.screen != Screen::Boot {
+        if key.code == KeyCode::F(9) && !matches!(self.screen, Screen::Splash | Screen::Boot) {
             self.toggle_listening();
             return false;
         }
@@ -596,6 +641,12 @@ impl App {
         }
 
         match self.screen {
+            Screen::Splash => {
+                if key.code == KeyCode::Esc {
+                    return true; // nothing to back out to yet
+                }
+                self.skip_splash(); // any other key jumps to the boot scroll
+            }
             Screen::Boot => {
                 if key.code == KeyCode::Esc {
                     return true; // nothing to back out to yet
@@ -750,6 +801,7 @@ impl App {
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('-') => {
                     self.config.adjust(&mut self.settings, -1);
                     self.sync_levels();
+                    self.sync_crt_sweep();
                 }
                 KeyCode::Right
                 | KeyCode::Char('l')
@@ -758,23 +810,106 @@ impl App {
                 | KeyCode::Enter => {
                     self.config.adjust(&mut self.settings, 1);
                     self.sync_levels();
+                    self.sync_crt_sweep();
                 }
                 _ => {}
             },
-            Screen::Alerts => match key.code {
+            Screen::Beacons => match key.code {
                 KeyCode::Esc => self.screen = Screen::Menu,
-                KeyCode::Up | KeyCode::Char('k') => {
+                KeyCode::Left | KeyCode::Char('h') => {
                     let n = self.notification.lock().unwrap().len();
-                    self.alerts.prev(n);
+                    self.beacons.prev(n);
                 }
+                KeyCode::Right | KeyCode::Char('l') => {
+                    let n = self.notification.lock().unwrap().len();
+                    self.beacons.next(n);
+                }
+                KeyCode::Up | KeyCode::Char('k') => self.beacons.up(),
                 KeyCode::Down | KeyCode::Char('j') => {
                     let n = self.notification.lock().unwrap().len();
-                    self.alerts.next(n);
+                    self.beacons.down(n);
                 }
-                KeyCode::Enter | KeyCode::Char(' ') => self.toggle_alert(),
-                KeyCode::Char('t') | KeyCode::Char('T') => self.test_alert(),
-                KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => self.delete_alert(),
+                KeyCode::Enter => self.open_beacon_detail(),
+                KeyCode::Char('t') | KeyCode::Char('T') => self.test_beacon(),
+                KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => self.delete_beacon(),
                 _ => {}
+            },
+            Screen::BeaconDetail => match key.code {
+                KeyCode::Esc => {
+                    self.beacon_detail = None;
+                    self.screen = Screen::Beacons;
+                }
+                KeyCode::Tab | KeyCode::Down => {
+                    if let Some(d) = self.beacon_detail.as_mut() {
+                        d.focus_next();
+                    }
+                }
+                KeyCode::BackTab | KeyCode::Up => {
+                    if let Some(d) = self.beacon_detail.as_mut() {
+                        d.focus_prev();
+                    }
+                }
+                KeyCode::Enter => self.beacon_detail_activate(),
+                KeyCode::Backspace => {
+                    if let Some(d) = self.beacon_detail.as_mut() {
+                        d.backspace();
+                    }
+                }
+                KeyCode::Char(c)
+                    if !key.modifiers.intersects(
+                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                    ) =>
+                {
+                    if let Some(d) = self.beacon_detail.as_mut() {
+                        d.type_char(c);
+                    }
+                }
+                _ => {}
+            },
+            Screen::Alerts => match self.alerts.mode {
+                crate::alerts::AlertsMode::Browse => match key.code {
+                    KeyCode::Esc => self.screen = Screen::Menu,
+                    KeyCode::Up | KeyCode::Char('k') => self.alerts.prev(),
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        let n = self.today_alert_count();
+                        self.alerts.next(n);
+                    }
+                    KeyCode::Char('n') | KeyCode::Char('N') => self.alerts.enter_create(),
+                    KeyCode::Char('d') | KeyCode::Char('D') => self.deliver_selected_alert(),
+                    KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => {
+                        self.delete_selected_alert()
+                    }
+                    _ => {}
+                },
+                crate::alerts::AlertsMode::Create => match key.code {
+                    KeyCode::Esc => self.alerts.cancel_create(),
+                    KeyCode::Tab | KeyCode::Down => self.alerts.draft.focus_next(),
+                    KeyCode::BackTab | KeyCode::Up => self.alerts.draft.focus_prev(),
+                    KeyCode::Left => {
+                        let n = self.map.rooms.len();
+                        self.alerts.draft.adjust(-1, n);
+                    }
+                    KeyCode::Right => {
+                        let n = self.map.rooms.len();
+                        self.alerts.draft.adjust(1, n);
+                    }
+                    KeyCode::Enter => {
+                        if self.alerts.draft.field == crate::alerts::DraftField::Submit {
+                            self.commit_alert_draft();
+                        } else {
+                            self.alerts.draft.focus_next();
+                        }
+                    }
+                    KeyCode::Backspace => self.alerts.draft.backspace(),
+                    KeyCode::Char(c)
+                        if !key.modifiers.intersects(
+                            KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                        ) =>
+                    {
+                        self.alerts.draft.type_char(c)
+                    }
+                    _ => {}
+                },
             },
             Screen::Map => match self.map.mode {
                 crate::map::MapMode::Browse => match key.code {
@@ -851,53 +986,199 @@ impl App {
         }
     }
 
-    // ---- ALERTS screen actions --------------------------------------------
+    // ---- BEACONS screen actions -------------------------------------------
 
-    /// Drain background test-alert results into the on-screen status line.
-    fn poll_alerts(&mut self) {
-        while let Ok(status) = self.alert_rx.try_recv() {
+    /// Drain background beacon-test results into the grid status line (and the
+    /// open beacon detail, if any).
+    fn poll_beacons(&mut self) {
+        while let Ok(status) = self.beacon_rx.try_recv() {
+            self.beacons.status = status.clone();
+            if let Some(d) = self.beacon_detail.as_mut() {
+                d.status = status;
+            }
+        }
+    }
+
+    /// Open the beacon-detail screen for the selected beacon.
+    fn open_beacon_detail(&mut self) {
+        let t = self.notification.lock().unwrap().get(self.beacons.selected).cloned();
+        if let Some(t) = t {
+            self.beacon_detail = Some(crate::notification::BeaconDetail::new(t.chat_id, t.label));
+            self.screen = Screen::BeaconDetail;
+        }
+    }
+
+    /// Fire a test alert to the selected beacon (grid).
+    fn test_beacon(&mut self) {
+        let label = self.notification.lock().unwrap().get(self.beacons.selected).map(|t| t.label.clone());
+        match label {
+            Some(label) => self.spawn_beacon_test(label),
+            None => self.beacons.status = "No beacon selected.".into(),
+        }
+    }
+
+    /// Remove the selected beacon (grid).
+    fn delete_beacon(&mut self) {
+        if let Some(label) =
+            crate::notification::handler::delete_target(&self.notification, self.beacons.selected)
+        {
+            let len = self.notification.lock().unwrap().len();
+            self.beacons.clamp(len);
+            self.beacons.status = format!("Removed '{label}'.");
+        }
+    }
+
+    /// Activate the focused action on the beacon-detail form.
+    fn beacon_detail_activate(&mut self) {
+        let Some(field) = self.beacon_detail.as_ref().map(|d| d.field) else { return };
+        match field {
+            crate::notification::BeaconField::Name => {
+                if let Some(d) = self.beacon_detail.as_mut() {
+                    d.focus_next();
+                }
+            }
+            crate::notification::BeaconField::Rename => self.commit_beacon_rename(),
+            crate::notification::BeaconField::Test => self.test_beacon_detail(),
+            crate::notification::BeaconField::Mute => self.toggle_beacon_mute(),
+            crate::notification::BeaconField::Back => {
+                self.beacon_detail = None;
+                self.screen = Screen::Beacons;
+            }
+        }
+    }
+
+    fn commit_beacon_rename(&mut self) {
+        let Some((chat_id, name)) = self.beacon_detail.as_ref().map(|d| (d.chat_id, d.name.clone()))
+        else {
+            return;
+        };
+        match crate::notification::handler::rename_target(&self.notification, chat_id, &name) {
+            Ok(label) => {
+                if let Some(d) = self.beacon_detail.as_mut() {
+                    d.name = label.clone();
+                    d.status = format!("Renamed to '{label}'.");
+                }
+            }
+            Err(e) => {
+                if let Some(d) = self.beacon_detail.as_mut() {
+                    d.status = e;
+                }
+            }
+        }
+    }
+
+    fn toggle_beacon_mute(&mut self) {
+        let Some(chat_id) = self.beacon_detail.as_ref().map(|d| d.chat_id) else { return };
+        if let Some((label, on)) =
+            crate::notification::handler::toggle_enabled_by_id(&self.notification, chat_id)
+        {
+            if let Some(d) = self.beacon_detail.as_mut() {
+                d.status = format!("'{label}' {}", if on { "unmuted" } else { "muted" });
+            }
+        }
+    }
+
+    fn test_beacon_detail(&mut self) {
+        let Some(chat_id) = self.beacon_detail.as_ref().map(|d| d.chat_id) else { return };
+        let label =
+            self.notification.lock().unwrap().iter().find(|t| t.chat_id == chat_id).map(|t| t.label.clone());
+        if let Some(label) = label {
+            self.spawn_beacon_test(label);
+        }
+    }
+
+    /// Send a test message to a beacon by label on a background thread; the result
+    /// lands in [`poll_beacons`].
+    fn spawn_beacon_test(&mut self, label: String) {
+        let Some(cfg) = crate::notification::NotificationConfig::from_env() else {
+            let msg = "Set TELEGRAM_BOT_TOKEN to send.".to_string();
+            self.beacons.status = msg.clone();
+            if let Some(d) = self.beacon_detail.as_mut() {
+                d.status = msg;
+            }
+            return;
+        };
+        let pending = format!("Sending test to '{label}'\u{2026}");
+        self.beacons.status = pending.clone();
+        if let Some(d) = self.beacon_detail.as_mut() {
+            d.status = pending;
+        }
+        let store = self.notification.clone();
+        let tx = self.beacon_tx.clone();
+        std::thread::spawn(move || {
+            let msg = "BISHOP/AP test alert \u{2014} this beacon is paired and reachable.";
+            let result = crate::notification::dispatch(&store, &cfg, Some(&label), msg, None);
+            let _ = tx.send(result.unwrap_or_else(|e| format!("Test failed: {e}")));
+        });
+    }
+
+    // ---- ALERTS dashboard actions -----------------------------------------
+
+    /// Drain background alert-delivery results into the dashboard status line.
+    fn poll_alert_status(&mut self) {
+        while let Ok(status) = self.alert_status_rx.try_recv() {
             self.alerts.status = status;
         }
     }
 
-    /// Toggle delivery on/off for the highlighted target.
-    fn toggle_alert(&mut self) {
-        if let Some((label, on)) =
-            crate::notification::handler::toggle_enabled(&self.notification, self.alerts.selected)
-        {
-            self.alerts.status = format!("'{label}' {}", if on { "enabled" } else { "muted" });
-        }
+    fn today_alert_count(&self) -> usize {
+        let alerts = self.alert_store.lock().unwrap();
+        crate::alerts::domain::today_indices(&alerts).len()
     }
 
-    /// Remove the highlighted target.
-    fn delete_alert(&mut self) {
-        if let Some(label) =
-            crate::notification::handler::delete_target(&self.notification, self.alerts.selected)
-        {
-            let len = self.notification.lock().unwrap().len();
-            self.alerts.clamp(len);
-            self.alerts.status = format!("Removed '{label}'.");
-        }
+    /// The id of the alert the Browse cursor points at (today's list).
+    fn selected_alert_id(&self) -> Option<u64> {
+        let alerts = self.alert_store.lock().unwrap();
+        let today = crate::alerts::domain::today_indices(&alerts);
+        today.get(self.alerts.selected).map(|&i| alerts[i].id)
     }
 
-    /// Fire a test alert to the highlighted target on a background thread.
-    fn test_alert(&mut self) {
-        let Some(t) = self.notification.lock().unwrap().get(self.alerts.selected).cloned() else {
-            self.alerts.status = "No target selected.".into();
+    /// Dispatch the selected alert to the live beacons on a background thread.
+    fn deliver_selected_alert(&mut self) {
+        let Some(id) = self.selected_alert_id() else {
+            self.alerts.status = "No alert selected.".into();
             return;
         };
-        let Some(cfg) = crate::notification::NotificationConfig::from_env() else {
-            self.alerts.status = "Set TELEGRAM_BOT_TOKEN to send.".into();
-            return;
-        };
-        self.alerts.status = format!("Sending test to '{}'\u{2026}", t.label);
-        let store = self.notification.clone();
-        let tx = self.alert_tx.clone();
+        self.alerts.status = format!("Delivering alert {id}\u{2026}");
+        let store = self.alert_store.clone();
+        let notif = self.notification.clone();
+        let tx = self.alert_status_tx.clone();
         std::thread::spawn(move || {
-            let msg = "BISHOP/AP test alert \u{2014} this target is paired and reachable.";
-            let result = crate::notification::dispatch(&store, &cfg, Some(&t.label), msg, None);
-            let _ = tx.send(result.unwrap_or_else(|e| format!("Test failed: {e}")));
+            let result = crate::alerts::actions::deliver(&store, &notif, id);
+            let _ = tx.send(result.unwrap_or_else(|e| format!("Deliver failed: {e}")));
         });
+    }
+
+    fn delete_selected_alert(&mut self) {
+        let Some(id) = self.selected_alert_id() else { return };
+        if crate::alerts::actions::delete(&self.alert_store, id) {
+            let n = self.today_alert_count();
+            self.alerts.clamp(n);
+            self.alerts.status = format!("Removed alert {id}.");
+        }
+    }
+
+    /// Commit the CREATE form into a new alert and return to Browse.
+    fn commit_alert_draft(&mut self) {
+        if self.alerts.draft.message.trim().is_empty() {
+            self.alerts.status = "Message can't be empty.".into();
+            return;
+        }
+        let level = self.alerts.draft.level;
+        let message = self.alerts.draft.message.trim().to_string();
+        let source = {
+            let s = self.alerts.draft.source.trim();
+            if s.is_empty() { "operator".to_string() } else { s.to_string() }
+        };
+        let (room_id, room_name) = match self.alerts.draft.room_idx.and_then(|i| self.map.rooms.get(i)) {
+            Some(r) => (Some(r.id), Some(r.name.clone())),
+            None => (None, None),
+        };
+        let alert =
+            crate::alerts::actions::create(&self.alert_store, level, message, room_id, room_name, source);
+        self.alerts.mode = crate::alerts::AlertsMode::Browse;
+        self.alerts.selected = 0;
+        self.alerts.status = format!("Raised alert {} [{}].", alert.id, alert.level.label());
     }
 }
 
@@ -934,8 +1215,10 @@ pub fn run(terminal: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> 
 
         if last_tick.elapsed() >= tick_rate {
             app.on_tick();
-            if app.screen == Screen::Boot {
-                app.boot_tick();
+            match app.screen {
+                Screen::Splash => app.splash_tick(),
+                Screen::Boot => app.boot_tick(),
+                _ => {}
             }
             last_tick = Instant::now();
         }
@@ -948,8 +1231,31 @@ mod tests {
     use crate::boot::domain::{BOOT_SCRIPT, BOOT_TOTAL_TICKS};
 
     #[test]
+    fn splash_holds_then_hands_off_to_boot() {
+        use crate::splash::domain::SPLASH_TOTAL_TICKS;
+        let mut app = App::new();
+        assert_eq!(app.screen, Screen::Splash);
+        for _ in 0..SPLASH_TOTAL_TICKS {
+            app.on_tick();
+            if app.screen == Screen::Splash {
+                app.splash_tick();
+            }
+        }
+        assert_eq!(app.screen, Screen::Boot);
+    }
+
+    #[test]
+    fn any_key_skips_splash_to_boot() {
+        let mut app = App::new();
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.screen, Screen::Boot);
+    }
+
+    #[test]
     fn boot_reveals_all_lines_then_opens_menu() {
         let mut app = App::new();
+        // Step past the splash card into the boot scroll.
+        app.skip_splash();
         assert_eq!(app.screen, Screen::Boot);
         // Enough ticks to run the full boot window plus a small margin.
         let budget = BOOT_TOTAL_TICKS + 5;
@@ -966,6 +1272,7 @@ mod tests {
     #[test]
     fn skip_boot_jumps_to_menu() {
         let mut app = App::new();
+        app.skip_splash();
         app.skip_boot();
         assert_eq!(app.screen, Screen::Menu);
         assert_eq!(app.boot.revealed, BOOT_SCRIPT.len());
@@ -974,6 +1281,7 @@ mod tests {
     #[test]
     fn menu_enter_opens_selected_feature() {
         let mut app = App::new();
+        app.skip_splash();
         app.skip_boot();
         // default selection is the first entry → Scan
         app.handle_key(KeyEvent::from(KeyCode::Enter));

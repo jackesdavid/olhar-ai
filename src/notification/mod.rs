@@ -13,5 +13,5 @@ pub mod domain;
 pub mod handler;
 pub mod view;
 
-pub use domain::{load_targets, NotificationConfig, NotificationStore};
-pub use handler::{dispatch, spawn_pairing, AlertsScreen};
+pub use domain::{load_targets, NotificationConfig, NotificationStore, NotificationTarget};
+pub use handler::{dispatch, spawn_pairing, BeaconDetail, BeaconField, BeaconsScreen};

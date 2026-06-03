@@ -25,6 +25,25 @@ pub struct Settings {
     /// `config.json` files written before this field still load (→ TCP).
     #[serde(default)]
     pub transport: Transport,
+    /// Whether the CRT window paints the slow top-to-bottom refresh roll (the
+    /// Alien-monitor sweep). GPU-window only; ignored on the `--tty` frontend.
+    /// `default = "default_true"` so older configs load with it enabled.
+    #[serde(default = "default_true")]
+    pub crt_sweep: bool,
+    /// Refresh-roll strength, 0.0..=1.0; scaled into peak brightness on the GPU.
+    /// `default = "default_sweep_intensity"` so older configs get a sane value.
+    #[serde(default = "default_sweep_intensity")]
+    pub crt_sweep_intensity: f32,
+}
+
+/// serde default for `crt_sweep` — on unless a saved config says otherwise.
+fn default_true() -> bool {
+    true
+}
+
+/// serde default for `crt_sweep_intensity` — a gentle half-strength roll.
+fn default_sweep_intensity() -> f32 {
+    0.5
 }
 
 impl Default for Settings {
@@ -38,6 +57,8 @@ impl Default for Settings {
             typing_speed: 2,
             stt_autosend: true,
             transport: Transport::Tcp,
+            crt_sweep: true,
+            crt_sweep_intensity: 0.5,
         }
     }
 }
@@ -85,11 +106,13 @@ pub enum Field {
     TypingSpeed,
     SttAutosend,
     RtspTransport,
+    CrtSweep,
+    CrtSweepIntensity,
 }
 
 impl Field {
     /// The rows, top to bottom — the order the cursor walks.
-    pub const ALL: [Field; 8] = [
+    pub const ALL: [Field; 10] = [
         Field::Master,
         Field::Voice,
         Field::Ui,
@@ -98,6 +121,8 @@ impl Field {
         Field::TypingSpeed,
         Field::SttAutosend,
         Field::RtspTransport,
+        Field::CrtSweep,
+        Field::CrtSweepIntensity,
     ];
 
     pub fn label(self) -> &'static str {
@@ -110,6 +135,8 @@ impl Field {
             Field::TypingSpeed => "TELETYPE SPEED",
             Field::SttAutosend => "SPEECH AUTO-SEND",
             Field::RtspTransport => "RTSP TRANSPORT",
+            Field::CrtSweep => "CRT REFRESH ROLL",
+            Field::CrtSweepIntensity => "ROLL INTENSITY",
         }
     }
 }

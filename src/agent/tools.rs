@@ -7,6 +7,7 @@ use std::sync::mpsc::Sender;
 use image::GrayImage;
 use serde_json::{json, Value};
 
+use crate::alerts::AlertStore;
 use crate::device::actions::{self, DeviceSummary};
 use crate::notification::NotificationStore;
 use crate::scan::DeviceStore;
@@ -26,6 +27,8 @@ pub enum ToolUiEvent {
         user: String,
         pass: String,
     },
+    /// The alert store changed on disk — re-validate the dashboard cursor.
+    AlertsPersisted,
 }
 
 /// What a tool executor can touch.
@@ -34,6 +37,8 @@ pub struct ToolContext {
     pub ui_tx: Sender<ToolUiEvent>,
     /// Trusted notification targets, for the `send_notification` tool.
     pub notif: NotificationStore,
+    /// The ship's alert registry, for the alert tools.
+    pub alerts: AlertStore,
 }
 
 type ToolFn = fn(&Value, &ToolContext) -> Result<String, String>;
@@ -61,6 +66,11 @@ impl ToolRegistry {
                 delete_device_by_index(),
                 rename_device(),
                 send_notification(),
+                create_alert(),
+                list_alerts(),
+                alert_stats(),
+                deliver_alert(),
+                delete_alert(),
             ],
         }
     }
@@ -323,6 +333,204 @@ fn send_notification() -> ToolSpec {
     }
 }
 
+// ---- the alert tools --------------------------------------------------------
+
+fn create_alert() -> ToolSpec {
+    ToolSpec {
+        name: "create_alert",
+        description: "Raise an alert in the ship's alert registry. Give a message; optionally a \
+            level (\"debug\", \"info\", \"warn\", or \"error\" — default \"info\"), a room name (the \
+            location, matched against the map's compartments; omit for a system-wide alert), and a \
+            source (the subsystem raising it — default \"bishop\"). The alert is logged but NOT sent \
+            to anyone; use deliver_alert to dispatch it to the beacons.",
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "message": { "type": "string", "description": "the alert text" },
+                "level": { "type": "string", "description": "debug | info | warn | error (default info)" },
+                "room": { "type": "string", "description": "optional map room name (the location)" },
+                "source": { "type": "string", "description": "optional subsystem name (default bishop)" }
+            },
+            "required": ["message"]
+        }),
+        run: |input, ctx| {
+            let message = input.get("message").and_then(Value::as_str).ok_or("Missing 'message'.")?;
+            let level = input
+                .get("level")
+                .and_then(Value::as_str)
+                .and_then(crate::alerts::AlertLevel::parse)
+                .unwrap_or_default();
+            let source = input
+                .get("source")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("bishop")
+                .to_string();
+
+            // Resolve an optional room name against the saved map.
+            let (room_id, room_name) = match input
+                .get("room")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+            {
+                Some(name) => {
+                    let rooms = crate::map::domain::load_map();
+                    match rooms.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim())) {
+                        Some(r) => (Some(r.id), Some(r.name.clone())),
+                        None => {
+                            let known: Vec<&str> = rooms.iter().map(|r| r.name.as_str()).collect();
+                            return Err(format!(
+                                "No room named '{}'. Known rooms: {}.",
+                                name.trim(),
+                                if known.is_empty() { "none".into() } else { known.join(", ") }
+                            ));
+                        }
+                    }
+                }
+                None => (None, None),
+            };
+
+            let a = crate::alerts::actions::create(
+                &ctx.alerts,
+                level,
+                message.to_string(),
+                room_id,
+                room_name.clone(),
+                source,
+            );
+            let _ = ctx.ui_tx.send(ToolUiEvent::AlertsPersisted);
+            let loc = room_name.map(|n| format!(" in {n}")).unwrap_or_default();
+            Ok(format!("Raised alert {} [{}]{loc}.", a.id, a.level.label()))
+        },
+    }
+}
+
+fn list_alerts() -> ToolSpec {
+    ToolSpec {
+        name: "list_alerts",
+        description: "List alerts from the registry (id, level, time, location, message, and \
+            whether they've been delivered). By default lists today's alerts; pass today_only=false \
+            for the full log. Optional filters: level, room (name), undelivered_only.",
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "today_only": { "type": "boolean", "description": "limit to today (default true)" },
+                "level": { "type": "string", "description": "filter by level" },
+                "room": { "type": "string", "description": "filter by room name" },
+                "undelivered_only": { "type": "boolean", "description": "only alerts not yet delivered" }
+            },
+            "required": []
+        }),
+        run: |input, ctx| {
+            let today_only = input.get("today_only").and_then(Value::as_bool).unwrap_or(true);
+            let level = input.get("level").and_then(Value::as_str).and_then(crate::alerts::AlertLevel::parse);
+            let room = input.get("room").and_then(Value::as_str).filter(|s| !s.trim().is_empty());
+            let undelivered_only = input.get("undelivered_only").and_then(Value::as_bool).unwrap_or(false);
+
+            let alerts = ctx.alerts.lock().unwrap();
+            let mut lines = Vec::new();
+            for a in alerts.iter().rev() {
+                if today_only && !crate::alerts::domain::is_today(&a.created_at) {
+                    continue;
+                }
+                if level.is_some() && Some(a.level) != level {
+                    continue;
+                }
+                if let Some(r) = room {
+                    if a.room_name.as_deref().map(|n| !n.eq_ignore_ascii_case(r.trim())).unwrap_or(true) {
+                        continue;
+                    }
+                }
+                if undelivered_only && a.delivered() {
+                    continue;
+                }
+                let time = chrono::DateTime::parse_from_rfc3339(&a.created_at)
+                    .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M").to_string())
+                    .unwrap_or_else(|_| "--:--".into());
+                let loc = a.room_name.clone().unwrap_or_else(|| "ship".into());
+                let status = if a.delivered() { "delivered" } else { "pending" };
+                lines.push(format!(
+                    "#{} [{}] {time} {loc}: {} ({status})",
+                    a.id, a.level.label(), a.message
+                ));
+            }
+            Ok(if lines.is_empty() { "No matching alerts.".into() } else { lines.join("\n") })
+        },
+    }
+}
+
+fn alert_stats() -> ToolSpec {
+    ToolSpec {
+        name: "alert_stats",
+        description: "Summarize today's alerts: total count, how many are undelivered, the counts \
+            by level, and the locations (rooms) with the most alerts.",
+        input_schema: json!({ "type": "object", "properties": {}, "required": [] }),
+        run: |_input, ctx| {
+            let alerts = ctx.alerts.lock().unwrap();
+            let total = crate::alerts::domain::today_indices(&alerts).len();
+            let pending = crate::alerts::domain::pending_today(&alerts);
+            let by_level = crate::alerts::domain::counts_by_level(&alerts);
+            let by_room = crate::alerts::domain::counts_by_room(&alerts);
+
+            let levels = crate::alerts::AlertLevel::ALL
+                .iter()
+                .enumerate()
+                .map(|(i, l)| format!("{} {}", l.label(), by_level[i]))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let rooms = if by_room.is_empty() {
+                "none".to_string()
+            } else {
+                by_room.iter().take(5).map(|(n, c)| format!("{n} {c}")).collect::<Vec<_>>().join(", ")
+            };
+            Ok(format!(
+                "Today: {total} alerts, {pending} undelivered. By level: {levels}. Top locations: {rooms}."
+            ))
+        },
+    }
+}
+
+fn deliver_alert() -> ToolSpec {
+    ToolSpec {
+        name: "deliver_alert",
+        description: "Deliver an alert (by its numeric id) to all live beacons, recording who \
+            received it and when. A beacon must be paired first.",
+        input_schema: json!({
+            "type": "object",
+            "properties": { "id": { "type": "integer", "description": "the alert id" } },
+            "required": ["id"]
+        }),
+        run: |input, ctx| {
+            let id = input.get("id").and_then(Value::as_u64).ok_or("Missing 'id'.")?;
+            let result = crate::alerts::actions::deliver(&ctx.alerts, &ctx.notif, id)?;
+            let _ = ctx.ui_tx.send(ToolUiEvent::AlertsPersisted);
+            Ok(result)
+        },
+    }
+}
+
+fn delete_alert() -> ToolSpec {
+    ToolSpec {
+        name: "delete_alert",
+        description: "Permanently delete an alert by its numeric id. Only call this AFTER the \
+            operator has explicitly confirmed.",
+        input_schema: json!({
+            "type": "object",
+            "properties": { "id": { "type": "integer", "description": "the alert id" } },
+            "required": ["id"]
+        }),
+        run: |input, ctx| {
+            let id = input.get("id").and_then(Value::as_u64).ok_or("Missing 'id'.")?;
+            if crate::alerts::actions::delete(&ctx.alerts, id) {
+                let _ = ctx.ui_tx.send(ToolUiEvent::AlertsPersisted);
+                Ok(format!("Deleted alert {id}."))
+            } else {
+                Err(format!("Alert {id} not found."))
+            }
+        },
+    }
+}
+
 /// Re-encode arbitrary snapshot bytes (JPEG over HTTP, or a frame from the RTSP
 /// fallback) to JPEG, which is what Telegram's `sendPhoto` expects.
 fn to_jpeg(bytes: &[u8]) -> Result<Vec<u8>, String> {
@@ -345,6 +553,7 @@ mod tests {
             store: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             ui_tx: tx,
             notif: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
+            alerts: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
         };
         assert!(reg.run("nope", &json!({}), &ctx).is_err());
         // list_devices always succeeds, even with an empty store

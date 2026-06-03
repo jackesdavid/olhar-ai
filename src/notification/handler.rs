@@ -130,29 +130,43 @@ fn dedupe_label(targets: &[NotificationTarget], base: &str) -> String {
     (2..).map(|n| format!("{base} {n}")).find(|c| !targets.iter().any(|t| &t.label == c)).unwrap()
 }
 
-// ---- ALERTS management screen ----------------------------------------------
+// ---- BEACONS management screen ---------------------------------------------
 
-/// Transient UI state for the ALERTS screen: the highlighted row plus a one-line
-/// status (the target data itself lives in the shared [`NotificationStore`]).
-pub struct AlertsScreen {
+/// Fixed column count for the beacon grid. Cells are sized to the panel width /
+/// this; both the grid view and the cursor navigation share it.
+pub const BEACON_COLS: usize = 4;
+
+/// Transient UI state for the BEACONS screen: a cursor over the beacon grid plus
+/// a one-line status (the beacon data lives in the shared [`NotificationStore`]).
+pub struct BeaconsScreen {
     pub selected: usize,
     pub status: String,
 }
 
-impl AlertsScreen {
+impl BeaconsScreen {
     pub fn new() -> Self {
-        AlertsScreen { selected: 0, status: String::new() }
+        BeaconsScreen { selected: 0, status: String::new() }
     }
 
+    /// Step to the next/previous cell in reading order (wraps within the list).
     pub fn next(&mut self, len: usize) {
         if len > 0 {
-            self.selected = (self.selected + 1) % len;
+            self.selected = (self.selected + 1).min(len - 1);
         }
     }
 
-    pub fn prev(&mut self, len: usize) {
-        if len > 0 {
-            self.selected = (self.selected + len - 1) % len;
+    pub fn prev(&mut self, _len: usize) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+
+    /// Move up/down a grid row (BEACON_COLS cells), clamped to the list.
+    pub fn up(&mut self) {
+        self.selected = self.selected.saturating_sub(BEACON_COLS);
+    }
+
+    pub fn down(&mut self, len: usize) {
+        if len > 0 && self.selected + BEACON_COLS < len {
+            self.selected += BEACON_COLS;
         }
     }
 
@@ -162,20 +176,10 @@ impl AlertsScreen {
     }
 }
 
-impl Default for AlertsScreen {
+impl Default for BeaconsScreen {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Flip a target's `enabled` flag and persist. Returns `(label, new_state)`.
-pub fn toggle_enabled(store: &NotificationStore, idx: usize) -> Option<(String, bool)> {
-    let mut targets = store.lock().unwrap();
-    let t = targets.get_mut(idx)?;
-    t.enabled = !t.enabled;
-    let out = (t.label.clone(), t.enabled);
-    save_targets(&targets);
-    Some(out)
 }
 
 /// Remove a target by index and persist. Returns the removed label.
@@ -187,6 +191,92 @@ pub fn delete_target(store: &NotificationStore, idx: usize) -> Option<String> {
     let removed = targets.remove(idx);
     save_targets(&targets);
     Some(removed.label)
+}
+
+// ---- beacon detail screen (rotating beacon + rename form) -------------------
+
+/// Focusable element on the beacon-detail form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BeaconField {
+    Name,
+    Rename,
+    Test,
+    Mute,
+    Back,
+}
+
+/// State for the beacon-detail screen. Identifies its beacon by the stable
+/// `chat_id` (a list reorder/delete can't corrupt it), edits a draft `name`, and
+/// commits it back to the store via RENAME.
+pub struct BeaconDetail {
+    pub chat_id: i64,
+    pub field: BeaconField,
+    pub name: String,
+    pub status: String,
+}
+
+impl BeaconDetail {
+    pub fn new(chat_id: i64, name: String) -> Self {
+        BeaconDetail { chat_id, field: BeaconField::Name, name, status: String::new() }
+    }
+
+    pub fn focus_next(&mut self) {
+        self.field = match self.field {
+            BeaconField::Name => BeaconField::Rename,
+            BeaconField::Rename => BeaconField::Test,
+            BeaconField::Test => BeaconField::Mute,
+            BeaconField::Mute => BeaconField::Back,
+            BeaconField::Back => BeaconField::Name,
+        };
+    }
+
+    pub fn focus_prev(&mut self) {
+        self.field = match self.field {
+            BeaconField::Name => BeaconField::Back,
+            BeaconField::Rename => BeaconField::Name,
+            BeaconField::Test => BeaconField::Rename,
+            BeaconField::Mute => BeaconField::Test,
+            BeaconField::Back => BeaconField::Mute,
+        };
+    }
+
+    /// Type into the NAME field (no-op elsewhere).
+    pub fn type_char(&mut self, c: char) {
+        if self.field == BeaconField::Name {
+            self.name.push(c);
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        if self.field == BeaconField::Name {
+            self.name.pop();
+        }
+    }
+}
+
+/// Commit a renamed label for the beacon identified by `chat_id` and persist.
+/// Empty names are rejected. Returns the committed label on success.
+pub fn rename_target(store: &NotificationStore, chat_id: i64, new_label: &str) -> Result<String, String> {
+    let label = new_label.trim().to_string();
+    if label.is_empty() {
+        return Err("Name can't be empty.".into());
+    }
+    let mut targets = store.lock().unwrap();
+    let t = targets.iter_mut().find(|t| t.chat_id == chat_id).ok_or("Beacon not found.")?;
+    t.label = label.clone();
+    save_targets(&targets);
+    Ok(label)
+}
+
+/// Flip the `enabled` flag for the beacon identified by `chat_id` and persist.
+/// Returns `(label, new_state)`.
+pub fn toggle_enabled_by_id(store: &NotificationStore, chat_id: i64) -> Option<(String, bool)> {
+    let mut targets = store.lock().unwrap();
+    let t = targets.iter_mut().find(|t| t.chat_id == chat_id)?;
+    t.enabled = !t.enabled;
+    let out = (t.label.clone(), t.enabled);
+    save_targets(&targets);
+    Some(out)
 }
 
 #[cfg(test)]

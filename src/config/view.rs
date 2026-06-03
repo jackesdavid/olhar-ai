@@ -85,6 +85,8 @@ fn render_row(f: &mut Frame, area: Rect, field: Field, settings: &Settings, focu
         Field::TypingSpeed => speed_gauge(settings.typing_speed, accent),
         Field::SttAutosend => toggle(settings.stt_autosend, accent),
         Field::RtspTransport => transport_selector(settings.transport, accent),
+        Field::CrtSweep => toggle(settings.crt_sweep, accent),
+        Field::CrtSweepIntensity => gauge(settings.crt_sweep_intensity, accent),
     };
     f.render_widget(Paragraph::new(control), cols[1]);
 }

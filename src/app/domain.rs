@@ -15,12 +15,13 @@ use crate::menu::Menu;
 use crate::scan::{Device, ScanState};
 use crate::stream::LiveStream;
 
-/// Which screen is currently shown. The app opens on `Boot`, hands off to the
-/// home `Menu`, and from there opens one of the feature screens. `Esc` from a
-/// feature returns to its parent (`DeviceDetail` → `Scan` → `Menu`); `Esc` at
-/// the menu quits.
+/// Which screen is currently shown. The app opens on `Splash`, hands off to the
+/// `Boot` self-test, then the home `Menu`, and from there opens one of the
+/// feature screens. `Esc` from a feature returns to its parent
+/// (`DeviceDetail` → `Scan` → `Menu`); `Esc` at the menu quits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
+    Splash,
     Boot,
     Menu,
     Scan,
@@ -28,6 +29,8 @@ pub enum Screen {
     Chat,
     About,
     Config,
+    Beacons,
+    BeaconDetail,
     Alerts,
     Map,
 }
@@ -99,6 +102,7 @@ impl Drop for ActivityGuard {
 /// and the audio backend they all share.
 pub struct App {
     pub screen: Screen,
+    pub splash: crate::splash::SplashSequence,
     pub boot: BootSequence,
     pub menu: Menu,
     pub scan: ScanState,
@@ -142,13 +146,21 @@ pub struct App {
     /// Trusted Telegram notification targets, shared with the pairing poller and
     /// the agent thread (the `send_notification` tool).
     pub notification: crate::notification::NotificationStore,
-    /// Cursor + status for the ALERTS management screen.
-    pub alerts: crate::notification::AlertsScreen,
+    /// Cursor + status for the BEACONS management screen (notification devices).
+    pub beacons: crate::notification::BeaconsScreen,
+    /// The open beacon-detail screen (rotating beacon + rename form), if any.
+    pub beacon_detail: Option<crate::notification::BeaconDetail>,
     /// The floor-plan MAP editor state (rooms + camera assignments).
     pub map: crate::map::MapState,
-    /// Background test-alert results land here as a status line, drained each tick.
-    pub alert_tx: Sender<String>,
-    pub alert_rx: Receiver<String>,
+    /// Background beacon test results land here as a status line, drained each tick.
+    pub beacon_tx: Sender<String>,
+    pub beacon_rx: Receiver<String>,
+    /// The ALERTS subsystem: the shared alert store and the dashboard screen.
+    pub alert_store: crate::alerts::AlertStore,
+    pub alerts: crate::alerts::AlertsScreen,
+    /// Background alert-delivery results land here as a status line.
+    pub alert_status_tx: Sender<String>,
+    pub alert_status_rx: Receiver<String>,
     /// App-wide "processing" indicator, shared with background workers.
     pub activity: Activity,
 }

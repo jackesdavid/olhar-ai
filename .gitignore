@@ -12,3 +12,5 @@ config.json
 
 # notification 
 notifications.json
+map.json
+alerts.json

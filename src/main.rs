@@ -20,6 +20,7 @@
 
 mod about;
 mod agent;
+mod alerts;
 mod app;
 mod audio;
 mod boot;
@@ -34,6 +35,7 @@ mod menu;
 mod notification;
 mod onvif;
 mod scan;
+mod splash;
 mod stream;
 mod ui;
 #[cfg(feature = "audio")]

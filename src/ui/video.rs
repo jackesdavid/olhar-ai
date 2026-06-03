@@ -11,10 +11,42 @@
 //!
 //! When no compositor is installed (the `--tty` frontend), [`texture_mode`]
 //! is false and the image renderer falls back to drawing octants as before.
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use image::GrayImage;
 use ratatui::layout::Rect;
+
+/// Whether the CRT refresh-roll sweep is enabled. Set from the config screen
+/// (and at startup from the saved setting), read by the GPU post-processor each
+/// frame. Plain atomic — always compiled; has no effect on the `--tty` frontend.
+static SWEEP_ON: AtomicBool = AtomicBool::new(true);
+
+/// The refresh roll's user strength, 0.0..=1.0 (f32 bits). The GPU side scales
+/// this into the actual peak brightness. Initialised to `0x3F00_0000` = `0.5`.
+static SWEEP_INTENSITY: AtomicU32 = AtomicU32::new(0x3F00_0000);
+
+/// Enable/disable the CRT refresh roll. Cheap; safe to call from any thread.
+pub fn set_sweep(on: bool) {
+    SWEEP_ON.store(on, Ordering::Relaxed);
+}
+
+/// Whether the CRT refresh roll should be painted this frame.
+#[cfg_attr(not(feature = "crt"), allow(dead_code))]
+pub fn sweep_enabled() -> bool {
+    SWEEP_ON.load(Ordering::Relaxed)
+}
+
+/// Set the refresh-roll strength (0.0..=1.0). Cheap; safe from any thread.
+pub fn set_sweep_intensity(v: f32) {
+    SWEEP_INTENSITY.store(v.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+}
+
+/// The current refresh-roll strength (0.0..=1.0), read by the GPU side.
+#[cfg_attr(not(feature = "crt"), allow(dead_code))]
+pub fn sweep_intensity() -> f32 {
+    f32::from_bits(SWEEP_INTENSITY.load(Ordering::Relaxed))
+}
 
 /// The shared frame buffer + placement the GPU compositor reads. One instance,
 /// installed by the CRT frontend at startup.

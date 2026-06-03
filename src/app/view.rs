@@ -20,6 +20,7 @@ use crate::ui::theme::{AMBER, PHOSPHOR, PHOSPHOR_DIM};
 
 pub fn draw(f: &mut Frame, app: &App) {
     match app.screen {
+        Screen::Splash => crate::splash::view::render(f, &app.splash, app.scan.tracker.sweep),
         Screen::Boot => boot::view::render(f, &app.boot, app.scan.tracker.sweep),
         Screen::Menu => render_menu(f, app),
         Screen::Scan => render_scan(f, app),
@@ -27,6 +28,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         Screen::Chat => render_chat(f, app),
         Screen::About => render_about(f, app),
         Screen::Config => render_config(f, app),
+        Screen::Beacons => render_beacons(f, app),
+        Screen::BeaconDetail => render_beacon_detail(f, app),
         Screen::Alerts => render_alerts(f, app),
         Screen::Map => render_map(f, app),
     }
@@ -252,14 +255,39 @@ fn render_config(f: &mut Frame, app: &App) {
     crate::config::view::render(f, body, &app.settings, &app.config);
 }
 
-fn render_alerts(f: &mut Frame, app: &App) {
+fn render_beacons(f: &mut Frame, app: &App) {
     let body = framed(
         f,
         app,
-        "[ Up/Down ] select   [ Enter ] mute/unmute   [ T ] test   [ X ] delete   [ Esc ] menu",
+        "[ Arrows ] select   [ Enter ] open   [ T ] test   [ X ] remove   [ Esc ] menu",
     );
     let targets = app.notification.lock().unwrap().clone();
-    crate::notification::view::render(f, body, &targets, &app.alerts);
+    crate::notification::view::render(f, body, &targets, &app.beacons, app.scan.tracker.sweep);
+}
+
+fn render_beacon_detail(f: &mut Frame, app: &App) {
+    let body = framed(f, app, "[ Tab ] field   [ Enter ] activate   [ Esc ] back");
+    if let Some(detail) = &app.beacon_detail {
+        let target =
+            app.notification.lock().unwrap().iter().find(|t| t.chat_id == detail.chat_id).cloned();
+        if let Some(target) = target {
+            crate::notification::view::render_detail(f, body, detail, &target, app.scan.tracker.sweep);
+        }
+    }
+}
+
+fn render_alerts(f: &mut Frame, app: &App) {
+    let hint = match app.alerts.mode {
+        crate::alerts::AlertsMode::Browse => {
+            "[ Up/Down ] select   [ N ] new   [ D ] deliver   [ X ] delete   [ Esc ] menu"
+        }
+        crate::alerts::AlertsMode::Create => {
+            "[ Tab ] field   [ Left/Right ] level/room   [ Enter ] raise (on button)   [ Esc ] cancel"
+        }
+    };
+    let body = framed(f, app, hint);
+    let alerts = app.alert_store.lock().unwrap();
+    crate::alerts::view::render(f, body, &app.alerts, &alerts, &app.map.rooms);
 }
 
 fn render_map(f: &mut Frame, app: &App) {
