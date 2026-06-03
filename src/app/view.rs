@@ -293,12 +293,16 @@ fn render_alerts(f: &mut Frame, app: &App) {
 fn render_map(f: &mut Frame, app: &App) {
     let hint = match app.map.mode {
         crate::map::MapMode::Browse => {
-            "[N]add [R]ename [M]ove [S]ize [C]ams [X]del   [Up/Down] select   [Esc] menu"
+            "[N]add [R]name [M]ove [S]ize [C]ams [X]del · [P]an [+/-]zoom [F]it · [Up/Down]sel [Esc]menu"
         }
         crate::map::MapMode::Move => "[ Arrows ] move room    [ Enter/Esc ] done",
         crate::map::MapMode::Resize => "[ Arrows ] resize room    [ Enter/Esc ] done",
         crate::map::MapMode::Rename => "[ Type ] name    [ Enter ] save    [ Esc ] cancel",
-        crate::map::MapMode::Cameras => "[ Up/Down ] camera    [ Space/Enter ] assign    [ Esc ] back",
+        crate::map::MapMode::Cameras => {
+            "[ Up/Down ] camera   [ Space ] assign   [ Enter ] position   [ Esc ] back"
+        }
+        crate::map::MapMode::CamPlace => "[ Arrows ] position camera in room   [ Enter/Esc ] done",
+        crate::map::MapMode::Pan => "[ Arrows ] pan view    [ +/- ] zoom    [ Enter/Esc ] done",
     };
     let body = framed(f, app, hint);
     crate::map::view::render(f, body, &app.map, &app.scan);

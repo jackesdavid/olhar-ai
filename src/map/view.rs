@@ -22,23 +22,45 @@ pub fn render(f: &mut Frame, area: Rect, map: &MapState, scan: &ScanState) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
         .split(area);
-    render_floor(f, cols[0], map);
+    render_floor(f, cols[0], map, scan);
     render_context(f, cols[1], map, scan);
 }
 
 /// The left floor-plan canvas: a faint grid, the room rectangles (y-flipped so a
 /// y-down grid reads right-side up), labels, and per-room camera markers.
-fn render_floor(f: &mut Frame, area: Rect, map: &MapState) {
+fn render_floor(f: &mut Frame, area: Rect, map: &MapState, scan: &ScanState) {
     let gw = GRID_W as f64;
     let gh = GRID_H as f64;
     let rooms = map.rooms.clone();
     let selected = map.selected;
+    // Show only the viewport window into the world; the canvas clips the rest.
+    let (vx, vy, vw, vh) = map.viewport();
+
+    // Resolve each assigned camera to a name + absolute position; the one being
+    // repositioned in CamPlace mode is highlighted.
+    let placing_ip = if map.mode == MapMode::CamPlace {
+        scan.devices_snapshot().get(map.cam_cursor).map(|d| d.ip.clone())
+    } else {
+        None
+    };
+    let mut markers: Vec<(f64, f64, String, bool)> = Vec::new();
+    for (i, r) in rooms.iter().enumerate() {
+        let room_sel = i == selected;
+        for c in &r.cameras {
+            let ax = (r.x + c.dx.clamp(0, (r.w - 1).max(0))) as f64;
+            let ay = (r.y + c.dy.clamp(0, (r.h - 1).max(0))) as f64;
+            let name =
+                scan.device_by_ip(&c.ip).map(|d| d.name.clone()).unwrap_or_else(|| c.ip.clone());
+            let hot = room_sel && placing_ip.as_deref() == Some(c.ip.as_str());
+            markers.push((ax, ay, name, hot));
+        }
+    }
 
     let canvas = Canvas::default()
         .block(panel(" FLOOR PLAN ", false))
         .marker(Marker::Braille)
-        .x_bounds([0.0, gw])
-        .y_bounds([0.0, gh])
+        .x_bounds([vx as f64, (vx + vw) as f64])
+        .y_bounds([(GRID_H - (vy + vh)) as f64, (GRID_H - vy) as f64])
         .paint(move |ctx| {
             for gx in 0..=GRID_W {
                 ctx.draw(&CanvasLine {
@@ -83,16 +105,24 @@ fn render_floor(f: &mut Frame, area: Rect, map: &MapState) {
                     cy,
                     Line::from(Span::styled(r.name.clone(), Style::default().fg(name_color))),
                 );
-                if !r.cameras.is_empty() {
-                    ctx.print(
-                        cx - 1.0,
-                        cy - 1.0,
-                        Line::from(Span::styled(
-                            format!("\u{25A3}{}", r.cameras.len()),
-                            Style::default().fg(PHOSPHOR),
-                        )),
-                    );
-                }
+            }
+            ctx.layer();
+
+            // Camera markers: a node at the camera's position with the device
+            // name beside it (amber while being repositioned).
+            for (ax, ay, name, hot) in &markers {
+                let my = gh - (*ay + 0.5);
+                let color = if *hot { AMBER } else { PHOSPHOR };
+                ctx.print(
+                    *ax + 0.2,
+                    my,
+                    Line::from(Span::styled("\u{25C9}".to_string(), Style::default().fg(color))),
+                );
+                ctx.print(
+                    *ax + 0.9,
+                    my,
+                    Line::from(Span::styled(name.clone(), Style::default().fg(color))),
+                );
             }
         });
     f.render_widget(canvas, area);
@@ -159,6 +189,14 @@ fn render_detail(f: &mut Frame, area: Rect, map: &MapState, scan: &ScanState) {
         Span::styled("    SIZE  ", Style::default().fg(PHOSPHOR_DIM)),
         Span::styled(format!("{} \u{00d7} {}", room.w, room.h), Style::default().fg(PHOSPHOR)),
     ]));
+    let (vx, vy, vw, vh) = map.viewport();
+    lines.push(Line::from(vec![
+        Span::styled("VIEW  ", Style::default().fg(PHOSPHOR_DIM)),
+        Span::styled(
+            format!("{vw}\u{00d7}{vh} @ ({vx},{vy})"),
+            Style::default().fg(PHOSPHOR_FAINT),
+        ),
+    ]));
     if map.mode != MapMode::Browse {
         let tag = match map.mode {
             MapMode::Move => "MODE: MOVE",
@@ -171,15 +209,19 @@ fn render_detail(f: &mut Frame, area: Rect, map: &MapState, scan: &ScanState) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled("CAMERAS", Style::default().fg(PHOSPHOR_DIM))));
 
-    // Resolve assigned cameras to live device names; skip stale ips.
+    // Resolve assigned cameras to live device names; skip stale ips. Show each
+    // camera's offset within the room.
     let mut shown = 0;
-    for ip in &room.cameras {
-        if let Some(d) = scan.device_by_ip(ip) {
+    for cam in &room.cameras {
+        if let Some(d) = scan.device_by_ip(&cam.ip) {
             shown += 1;
             lines.push(Line::from(vec![
                 Span::styled(" \u{2713} ", Style::default().fg(PHOSPHOR)),
                 Span::styled(d.name.clone(), Style::default().fg(PHOSPHOR)),
-                Span::styled(format!("  {}", d.ip), Style::default().fg(PHOSPHOR_FAINT)),
+                Span::styled(
+                    format!("  @{},{}", cam.dx, cam.dy),
+                    Style::default().fg(PHOSPHOR_FAINT),
+                ),
             ]));
         }
     }
@@ -194,7 +236,7 @@ fn render_detail(f: &mut Frame, area: Rect, map: &MapState, scan: &ScanState) {
 /// to the selected room, the cursor row drawn as a solid amber panel.
 fn render_camera_picker(f: &mut Frame, area: Rect, map: &MapState, scan: &ScanState) {
     let devices = scan.devices_snapshot();
-    let assigned: &[String] = map.selected_room().map_or(&[], |r| r.cameras.as_slice());
+    let room = map.selected_room();
 
     if devices.is_empty() {
         let note = Line::from(Span::styled(
@@ -220,7 +262,7 @@ fn render_camera_picker(f: &mut Frame, area: Rect, map: &MapState, scan: &ScanSt
     for (i, d) in devices.iter().enumerate() {
         let Some(&box_area) = rows.get(1 + i * 2) else { break };
         let selected = i == map.cam_cursor;
-        let on = assigned.iter().any(|ip| ip == &d.ip);
+        let on = room.map_or(false, |r| r.cameras.iter().any(|c| c.ip == d.ip));
         let mark = if on { "\u{2713}" } else { "\u{00b7}" };
         let label = format!("{} {}", mark, d.name);
 

@@ -926,6 +926,10 @@ impl App {
                             self.scan.devices_snapshot().into_iter().map(|d| d.ip).collect();
                         self.map.enter_cameras(&ips);
                     }
+                    KeyCode::Char('+') | KeyCode::Char('=') => self.map.zoom_in(),
+                    KeyCode::Char('-') | KeyCode::Char('_') => self.map.zoom_out(),
+                    KeyCode::Char('p') | KeyCode::Char('P') => self.map.enter_pan(),
+                    KeyCode::Char('f') | KeyCode::Char('F') => self.map.fit(),
                     _ => {}
                 },
                 crate::map::MapMode::Move => match key.code {
@@ -970,7 +974,28 @@ impl App {
                         let n = self.scan.device_count();
                         self.map.cam_next(n);
                     }
-                    KeyCode::Enter | KeyCode::Char(' ') => self.toggle_room_camera(),
+                    KeyCode::Char(' ') => self.toggle_room_camera(),
+                    // Enter assigns an unassigned camera, or positions an
+                    // already-assigned one.
+                    KeyCode::Enter => self.cameras_enter(),
+                    _ => {}
+                },
+                crate::map::MapMode::CamPlace => match key.code {
+                    KeyCode::Left => self.move_selected_camera(-1, 0),
+                    KeyCode::Right => self.move_selected_camera(1, 0),
+                    KeyCode::Up => self.move_selected_camera(0, -1),
+                    KeyCode::Down => self.move_selected_camera(0, 1),
+                    KeyCode::Enter | KeyCode::Esc => self.map.commit_cam_place(),
+                    _ => {}
+                },
+                crate::map::MapMode::Pan => match key.code {
+                    KeyCode::Left => self.map.pan(-1, 0),
+                    KeyCode::Right => self.map.pan(1, 0),
+                    KeyCode::Up => self.map.pan(0, -1),
+                    KeyCode::Down => self.map.pan(0, 1),
+                    KeyCode::Char('+') | KeyCode::Char('=') => self.map.zoom_in(),
+                    KeyCode::Char('-') | KeyCode::Char('_') => self.map.zoom_out(),
+                    KeyCode::Enter | KeyCode::Esc => self.map.exit_pan(),
                     _ => {}
                 },
             },
@@ -983,6 +1008,30 @@ impl App {
         let devices = self.scan.devices_snapshot();
         if let Some(d) = devices.get(self.map.cam_cursor) {
             self.map.toggle_camera(d.ip.clone());
+        }
+    }
+
+    /// Enter on the camera picker: assign the highlighted camera if it isn't
+    /// assigned yet, otherwise drop into CamPlace to position it in the room.
+    fn cameras_enter(&mut self) {
+        let devices = self.scan.devices_snapshot();
+        let Some(d) = devices.get(self.map.cam_cursor) else { return };
+        let ip = d.ip.clone();
+        let assigned =
+            self.map.selected_room().is_some_and(|r| r.cameras.iter().any(|c| c.ip == ip));
+        if assigned {
+            self.map.enter_cam_place();
+        } else {
+            self.map.toggle_camera(ip);
+        }
+    }
+
+    /// Move the highlighted (assigned) camera within its room (CamPlace mode).
+    fn move_selected_camera(&mut self, ddx: i32, ddy: i32) {
+        let devices = self.scan.devices_snapshot();
+        if let Some(d) = devices.get(self.map.cam_cursor) {
+            let ip = d.ip.clone();
+            self.map.move_camera(&ip, ddx, ddy);
         }
     }
 
