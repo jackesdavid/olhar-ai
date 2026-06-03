@@ -225,6 +225,39 @@ pub fn draw_torus(ctx: &mut Context<'_>, phase: f64) {
     }
 }
 
+// -- MAP: tilted wireframe floor plan (a deck schematic) ----------------------
+
+const BLUEPRINT_DIV: usize = 6; // grid divisions across the plane
+
+/// MAP schematic: a ground-plane grid laid flat and pitched toward the eye, with
+/// a couple of room rectangles raised just off it — a slowly rotating deck
+/// blueprint.
+pub fn draw_blueprint(ctx: &mut Context<'_>, phase: f64) {
+    // Lay the plane flat (steep pitch) and yaw it slowly on the turntable.
+    let xf = |p: P3| p.rot_x(1.25).rot_y(phase * 0.4);
+    let half = 0.85;
+
+    // Grid lines on the y = 0 plane spanning [-half, half] in x and z.
+    for i in 0..=BLUEPRINT_DIV {
+        let t = -half + i as f64 / BLUEPRINT_DIV as f64 * (2.0 * half);
+        draw_edge_shaded(ctx, xf(P3::new(t, 0.0, -half)), xf(P3::new(t, 0.0, half)));
+        draw_edge_shaded(ctx, xf(P3::new(-half, 0.0, t)), xf(P3::new(half, 0.0, t)));
+    }
+
+    // Two raised room outlines floating just above the plane.
+    ctx.layer();
+    let room = |ctx: &mut Context<'_>, x0: f64, z0: f64, x1: f64, z1: f64, c: Color| {
+        let y = 0.18;
+        let p = |x: f64, z: f64| xf(P3::new(x, y, z));
+        draw_edge(ctx, p(x0, z0), p(x1, z0), c);
+        draw_edge(ctx, p(x1, z0), p(x1, z1), c);
+        draw_edge(ctx, p(x1, z1), p(x0, z1), c);
+        draw_edge(ctx, p(x0, z1), p(x0, z0), c);
+    };
+    room(ctx, -0.70, -0.55, -0.05, 0.20, PHOSPHOR);
+    room(ctx, 0.10, -0.10, 0.65, 0.60, PHOSPHOR_DIM);
+}
+
 // -- ALERTS: broadcast beacon emitting signal rings ---------------------------
 
 const BEACON_RINGS: usize = 3;

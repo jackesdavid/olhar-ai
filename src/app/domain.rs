@@ -29,6 +29,7 @@ pub enum Screen {
     About,
     Config,
     Alerts,
+    Map,
 }
 
 /// Results from scan/camera background workers, drained by the main loop.
@@ -143,6 +144,8 @@ pub struct App {
     pub notification: crate::notification::NotificationStore,
     /// Cursor + status for the ALERTS management screen.
     pub alerts: crate::notification::AlertsScreen,
+    /// The floor-plan MAP editor state (rooms + camera assignments).
+    pub map: crate::map::MapState,
     /// Background test-alert results land here as a status line, drained each tick.
     pub alert_tx: Sender<String>,
     pub alert_rx: Receiver<String>,

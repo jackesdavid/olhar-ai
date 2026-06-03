@@ -28,6 +28,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Screen::About => render_about(f, app),
         Screen::Config => render_config(f, app),
         Screen::Alerts => render_alerts(f, app),
+        Screen::Map => render_map(f, app),
     }
 
     // The voice link overlays every screen so you always know it's listening.
@@ -259,4 +260,18 @@ fn render_alerts(f: &mut Frame, app: &App) {
     );
     let targets = app.notification.lock().unwrap().clone();
     crate::notification::view::render(f, body, &targets, &app.alerts);
+}
+
+fn render_map(f: &mut Frame, app: &App) {
+    let hint = match app.map.mode {
+        crate::map::MapMode::Browse => {
+            "[N]add [R]ename [M]ove [S]ize [C]ams [X]del   [Up/Down] select   [Esc] menu"
+        }
+        crate::map::MapMode::Move => "[ Arrows ] move room    [ Enter/Esc ] done",
+        crate::map::MapMode::Resize => "[ Arrows ] resize room    [ Enter/Esc ] done",
+        crate::map::MapMode::Rename => "[ Type ] name    [ Enter ] save    [ Esc ] cancel",
+        crate::map::MapMode::Cameras => "[ Up/Down ] camera    [ Space/Enter ] assign    [ Esc ] back",
+    };
+    let body = framed(f, app, hint);
+    crate::map::view::render(f, body, &app.map, &app.scan);
 }

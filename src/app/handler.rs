@@ -80,6 +80,7 @@ impl App {
             alerts: crate::notification::AlertsScreen::new(),
             alert_tx,
             alert_rx,
+            map: crate::map::MapState::new(),
             activity: Activity::new(),
         }
     }
@@ -775,8 +776,79 @@ impl App {
                 KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => self.delete_alert(),
                 _ => {}
             },
+            Screen::Map => match self.map.mode {
+                crate::map::MapMode::Browse => match key.code {
+                    KeyCode::Esc => self.screen = Screen::Menu,
+                    KeyCode::Up | KeyCode::Char('k') => self.map.prev(),
+                    KeyCode::Down | KeyCode::Char('j') => self.map.next(),
+                    KeyCode::Char('n') | KeyCode::Char('N') => self.map.new_room(),
+                    KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => self.map.delete_room(),
+                    KeyCode::Char('r') | KeyCode::Char('R') => self.map.enter_rename(),
+                    KeyCode::Char('m') | KeyCode::Char('M') => self.map.enter_move(),
+                    KeyCode::Char('s') | KeyCode::Char('S') => self.map.enter_resize(),
+                    KeyCode::Char('c') | KeyCode::Char('C') => {
+                        let ips: Vec<String> =
+                            self.scan.devices_snapshot().into_iter().map(|d| d.ip).collect();
+                        self.map.enter_cameras(&ips);
+                    }
+                    _ => {}
+                },
+                crate::map::MapMode::Move => match key.code {
+                    KeyCode::Left => self.map.nudge(-1, 0),
+                    KeyCode::Right => self.map.nudge(1, 0),
+                    KeyCode::Up => self.map.nudge(0, -1),
+                    KeyCode::Down => self.map.nudge(0, 1),
+                    KeyCode::Enter | KeyCode::Esc => self.map.commit_geometry(),
+                    _ => {}
+                },
+                crate::map::MapMode::Resize => match key.code {
+                    KeyCode::Left => self.map.resize(-1, 0),
+                    KeyCode::Right => self.map.resize(1, 0),
+                    KeyCode::Up => self.map.resize(0, -1),
+                    KeyCode::Down => self.map.resize(0, 1),
+                    KeyCode::Enter | KeyCode::Esc => self.map.commit_geometry(),
+                    _ => {}
+                },
+                crate::map::MapMode::Rename => match key.code {
+                    KeyCode::Enter => self.map.commit_rename(),
+                    KeyCode::Esc => self.map.cancel_rename(),
+                    KeyCode::Backspace => self.map.backspace(),
+                    KeyCode::Char(c)
+                        if !key.modifiers.intersects(
+                            KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                        ) =>
+                    {
+                        self.map.type_char(c)
+                    }
+                    _ => {}
+                },
+                crate::map::MapMode::Cameras => match key.code {
+                    KeyCode::Esc => {
+                        self.map.mode = crate::map::MapMode::Browse;
+                        self.map.status.clear();
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        let n = self.scan.device_count();
+                        self.map.cam_prev(n);
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        let n = self.scan.device_count();
+                        self.map.cam_next(n);
+                    }
+                    KeyCode::Enter | KeyCode::Char(' ') => self.toggle_room_camera(),
+                    _ => {}
+                },
+            },
         }
         false
+    }
+
+    /// Toggle the camera at the picker cursor on/off the selected room.
+    fn toggle_room_camera(&mut self) {
+        let devices = self.scan.devices_snapshot();
+        if let Some(d) = devices.get(self.map.cam_cursor) {
+            self.map.toggle_camera(d.ip.clone());
+        }
     }
 
     // ---- ALERTS screen actions --------------------------------------------

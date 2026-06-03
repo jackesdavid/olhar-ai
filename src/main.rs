@@ -29,6 +29,7 @@ mod config;
 mod crt;
 mod device;
 mod listen;
+mod map;
 mod menu;
 mod notification;
 mod onvif;

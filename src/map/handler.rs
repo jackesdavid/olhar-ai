@@ -1,0 +1,289 @@
+//! Floor-plan editing logic: room selection, geometry edits (move/resize),
+//! rename, and camera assignment. Pure state mutation — the device list is
+//! passed in by `App` where needed, so this module never touches the scan store.
+use super::domain::{
+    save_map, MapMode, MapRoom, MapState, DEFAULT_ROOM_H, DEFAULT_ROOM_W, GRID_H, GRID_W,
+};
+
+impl MapState {
+    // ---- selection (mirrors AlertsScreen::{next,prev,clamp}) ---------------
+    pub fn next(&mut self) {
+        let n = self.rooms.len();
+        if n > 0 {
+            self.selected = (self.selected + 1) % n;
+        }
+    }
+
+    pub fn prev(&mut self) {
+        let n = self.rooms.len();
+        if n > 0 {
+            self.selected = (self.selected + n - 1) % n;
+        }
+    }
+
+    fn clamp(&mut self) {
+        let n = self.rooms.len();
+        self.selected = if n == 0 { 0 } else { self.selected.min(n - 1) };
+    }
+
+    pub fn selected_room(&self) -> Option<&MapRoom> {
+        self.rooms.get(self.selected)
+    }
+
+    // ---- add / delete ------------------------------------------------------
+    /// Add a default-size room, cascade-offset so successive rooms don't stack
+    /// perfectly, clamped into the grid. Selects it and saves.
+    pub fn new_room(&mut self) {
+        let id = self.next_id;
+        self.next_id += 1;
+        let off = (self.rooms.len() as i32 % 4) * 2;
+        let x = (2 + off).min(GRID_W - DEFAULT_ROOM_W);
+        let y = (2 + off).min(GRID_H - DEFAULT_ROOM_H);
+        self.rooms.push(MapRoom {
+            id,
+            name: format!("ROOM {id:02}"),
+            x,
+            y,
+            w: DEFAULT_ROOM_W,
+            h: DEFAULT_ROOM_H,
+            cameras: Vec::new(),
+        });
+        self.selected = self.rooms.len() - 1;
+        self.status = format!("Added ROOM {id:02}.");
+        save_map(&self.rooms);
+    }
+
+    /// Remove the selected room, clamp the cursor, persist.
+    pub fn delete_room(&mut self) {
+        if self.selected >= self.rooms.len() {
+            return;
+        }
+        let r = self.rooms.remove(self.selected);
+        self.clamp();
+        self.status = format!("Removed '{}'.", r.name);
+        save_map(&self.rooms);
+    }
+
+    // ---- geometry edits (Move / Resize) ------------------------------------
+    /// Translate the selected room by (dx,dy), clamped so it stays in the grid.
+    pub fn nudge(&mut self, dx: i32, dy: i32) {
+        if let Some(r) = self.rooms.get_mut(self.selected) {
+            r.x = (r.x + dx).clamp(0, GRID_W - r.w);
+            r.y = (r.y + dy).clamp(0, GRID_H - r.h);
+        }
+    }
+
+    /// Grow/shrink the selected room; min size 1, kept inside the grid.
+    pub fn resize(&mut self, dw: i32, dh: i32) {
+        if let Some(r) = self.rooms.get_mut(self.selected) {
+            r.w = (r.w + dw).clamp(1, GRID_W - r.x);
+            r.h = (r.h + dh).clamp(1, GRID_H - r.y);
+        }
+    }
+
+    // ---- mode transitions --------------------------------------------------
+    pub fn enter_move(&mut self) {
+        if !self.rooms.is_empty() {
+            self.mode = MapMode::Move;
+            self.status = "MOVE \u{2014} arrows reposition, Enter/Esc done".into();
+        }
+    }
+
+    pub fn enter_resize(&mut self) {
+        if !self.rooms.is_empty() {
+            self.mode = MapMode::Resize;
+            self.status = "RESIZE \u{2014} arrows resize, Enter/Esc done".into();
+        }
+    }
+
+    /// Commit a Move/Resize edit and persist.
+    pub fn commit_geometry(&mut self) {
+        self.mode = MapMode::Browse;
+        self.status.clear();
+        save_map(&self.rooms);
+    }
+
+    // ---- rename (reuses the device handler's push/pop model) ---------------
+    pub fn enter_rename(&mut self) {
+        if let Some(r) = self.rooms.get(self.selected) {
+            self.rename_backup = r.name.clone();
+            self.mode = MapMode::Rename;
+        }
+    }
+
+    pub fn type_char(&mut self, c: char) {
+        if self.mode == MapMode::Rename {
+            if let Some(r) = self.rooms.get_mut(self.selected) {
+                r.name.push(c);
+            }
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        if self.mode == MapMode::Rename {
+            if let Some(r) = self.rooms.get_mut(self.selected) {
+                r.name.pop();
+            }
+        }
+    }
+
+    pub fn commit_rename(&mut self) {
+        self.mode = MapMode::Browse;
+        self.rename_backup.clear();
+        save_map(&self.rooms);
+    }
+
+    pub fn cancel_rename(&mut self) {
+        let backup = std::mem::take(&mut self.rename_backup);
+        if let Some(r) = self.rooms.get_mut(self.selected) {
+            r.name = backup;
+        }
+        self.mode = MapMode::Browse;
+    }
+
+    // ---- camera assignment (device data supplied by App) -------------------
+    /// Enter the camera picker: prune stale ips so the checklist matches the
+    /// live device list, then reset the cursor.
+    pub fn enter_cameras(&mut self, valid_ips: &[String]) {
+        if self.rooms.is_empty() {
+            return;
+        }
+        self.prune_cameras(valid_ips);
+        self.cam_cursor = 0;
+        self.mode = MapMode::Cameras;
+    }
+
+    pub fn cam_next(&mut self, len: usize) {
+        if len > 0 {
+            self.cam_cursor = (self.cam_cursor + 1) % len;
+        }
+    }
+
+    pub fn cam_prev(&mut self, len: usize) {
+        if len > 0 {
+            self.cam_cursor = (self.cam_cursor + len - 1) % len;
+        }
+    }
+
+    /// Toggle a camera (by ip) on the selected room. Persists.
+    pub fn toggle_camera(&mut self, ip: String) {
+        if let Some(r) = self.rooms.get_mut(self.selected) {
+            if let Some(pos) = r.cameras.iter().position(|c| c == &ip) {
+                r.cameras.remove(pos);
+                self.status = format!("Unassigned {ip}.");
+            } else {
+                r.cameras.push(ip.clone());
+                self.status = format!("Assigned {ip}.");
+            }
+            save_map(&self.rooms);
+        }
+    }
+
+    /// Drop camera ips that no longer match a live device, across all rooms.
+    pub fn prune_cameras(&mut self, valid_ips: &[String]) {
+        let mut changed = false;
+        for r in &mut self.rooms {
+            let before = r.cameras.len();
+            r.cameras.retain(|ip| valid_ips.iter().any(|v| v == ip));
+            changed |= r.cameras.len() != before;
+        }
+        if changed {
+            save_map(&self.rooms);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build an in-memory state without touching `map.json`.
+    fn state(rooms: Vec<MapRoom>) -> MapState {
+        let next_id = rooms.iter().map(|r| r.id).max().map_or(0, |m| m + 1);
+        MapState {
+            rooms,
+            selected: 0,
+            mode: MapMode::Browse,
+            cam_cursor: 0,
+            status: String::new(),
+            next_id,
+            rename_backup: String::new(),
+        }
+    }
+
+    fn room(id: u32, x: i32, y: i32, w: i32, h: i32) -> MapRoom {
+        MapRoom { id, name: format!("R{id}"), x, y, w, h, cameras: vec![] }
+    }
+
+    #[test]
+    fn new_room_increments_id_and_selects() {
+        let mut s = state(vec![]);
+        s.new_room();
+        s.new_room();
+        assert_eq!(s.rooms.len(), 2);
+        assert_eq!(s.rooms[0].id, 0);
+        assert_eq!(s.rooms[1].id, 1);
+        assert_eq!(s.next_id, 2);
+        assert_eq!(s.selected, 1); // last added
+    }
+
+    #[test]
+    fn nudge_and_resize_clamp_to_grid() {
+        let mut s = state(vec![room(0, GRID_W - DEFAULT_ROOM_W, 0, DEFAULT_ROOM_W, DEFAULT_ROOM_H)]);
+        let x0 = s.rooms[0].x;
+        s.nudge(5, 0); // already at the right edge → no move
+        assert_eq!(s.rooms[0].x, x0);
+        s.resize(0, 999); // height clamps to GRID_H - y
+        assert_eq!(s.rooms[0].h, GRID_H);
+        s.resize(-999, -999); // floors at 1×1
+        assert_eq!((s.rooms[0].w, s.rooms[0].h), (1, 1));
+    }
+
+    #[test]
+    fn delete_clamps_selection() {
+        let mut s = state(vec![room(0, 0, 0, 4, 4), room(1, 5, 0, 4, 4), room(2, 10, 0, 4, 4)]);
+        s.selected = 2;
+        s.delete_room();
+        assert_eq!(s.selected, 1);
+        s.delete_room();
+        s.delete_room();
+        assert_eq!(s.selected, 0); // empty, no panic
+        assert!(s.rooms.is_empty());
+    }
+
+    #[test]
+    fn toggle_camera_adds_then_removes() {
+        let mut s = state(vec![room(0, 0, 0, 4, 4)]);
+        s.toggle_camera("10.0.0.1".into());
+        s.toggle_camera("10.0.0.2".into());
+        assert_eq!(s.rooms[0].cameras, vec!["10.0.0.1", "10.0.0.2"]);
+        s.toggle_camera("10.0.0.1".into());
+        assert_eq!(s.rooms[0].cameras, vec!["10.0.0.2"]);
+    }
+
+    #[test]
+    fn prune_drops_unknown_ips() {
+        let mut s = state(vec![MapRoom {
+            id: 0,
+            name: "R".into(),
+            x: 0,
+            y: 0,
+            w: 4,
+            h: 4,
+            cameras: vec!["a".into(), "b".into()],
+        }]);
+        s.prune_cameras(&["a".into()]);
+        assert_eq!(s.rooms[0].cameras, vec!["a"]);
+    }
+
+    #[test]
+    fn cancel_rename_restores_name() {
+        let mut s = state(vec![room(0, 0, 0, 4, 4)]);
+        let original = s.rooms[0].name.clone();
+        s.enter_rename();
+        s.type_char('Z');
+        s.cancel_rename();
+        assert_eq!(s.rooms[0].name, original);
+        assert_eq!(s.mode, MapMode::Browse);
+    }
+}

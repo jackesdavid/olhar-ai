@@ -102,6 +102,7 @@ pub fn render_visual(f: &mut Frame, area: Rect, menu: &Menu, phase: f64) {
             Screen::Chat => wireframe::draw_scope(ctx, phase),
             Screen::Config => wireframe::draw_torus(ctx, phase),
             Screen::Alerts => wireframe::draw_beacon(ctx, phase),
+            Screen::Map => wireframe::draw_blueprint(ctx, phase),
             _ => wireframe::draw_ship(ctx, phase), // About
         });
     f.render_widget(canvas, area);

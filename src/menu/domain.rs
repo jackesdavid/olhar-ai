@@ -96,6 +96,21 @@ fn entries() -> Vec<MenuItem> {
             ],
         },
         MenuItem {
+            label: "MAP",
+            blurb: "deck schematic & camera coverage",
+            target: Screen::Map,
+            help: &[
+                "DECK SCHEMATIC  —  COMPARTMENT MAP",
+                "",
+                "Lay out the deck compartment by compartment and assign",
+                "the cameras that cover each. Add a room, then move and",
+                "resize it on the grid until the plan matches the deck.",
+                "",
+                "Each room records real geometry, so a future refit can",
+                "plot the contacts its cameras resolve inside it.",
+            ],
+        },
+        MenuItem {
             label: "ABOUT",
             blurb: "ship dossier & system versions",
             target: Screen::About,

@@ -9,3 +9,6 @@ devices.json
 
 # Local ship configuration (volumes, voice toggle, …)
 config.json
+
+# notification 
+notifications.json
