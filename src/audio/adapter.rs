@@ -4,11 +4,11 @@
 //! `None` if there's no device, and every method degrades to silence on failure.
 use std::fs::File;
 use std::io::BufReader;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::path::{ Path, PathBuf };
+use std::sync::atomic::{ AtomicUsize, Ordering };
+use std::sync::{ Arc, Mutex };
 
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+use rodio::{ Decoder, OutputStream, OutputStreamHandle, Sink, Source };
 
 use super::domain::Sfx;
 use super::levels::AudioLevels;
@@ -19,6 +19,10 @@ const KEY_SOUNDS: usize = 8;
 
 /// Number of `working_NN.wav` samples in `assets/` (working_01..working_05).
 const WORKING_SOUNDS: usize = 5;
+
+/// Brief silence inserted when one Bishop voice line interrupts another, so the
+/// two don't butt right up against each other.
+const VOICE_GAP: std::time::Duration = std::time::Duration::from_millis(180);
 
 /// A shared list of currently-playing one-shot/voice sinks. We keep them alive
 /// here (instead of detaching) so the top bar can report whether audio is live;
@@ -35,6 +39,9 @@ pub struct Audio {
     working_sink: Sink,
     // Live one-shot/voice sinks, retained so `is_active` can see them.
     voices: Voices,
+    // The currently-playing Bishop voice line. Held separately so a new line can
+    // stop the previous one — we never play two Bishop voices at once.
+    voice_sink: Arc<Mutex<Option<Sink>>>,
     // Rotating index into the keyNN.wav keystroke samples.
     key_index: AtomicUsize,
     // Rotating index into the working_NN.wav samples.
@@ -57,6 +64,7 @@ impl Audio {
             boot_sink,
             working_sink,
             voices: Arc::new(Mutex::new(Vec::new())),
+            voice_sink: Arc::new(Mutex::new(None)),
             key_index: AtomicUsize::new(0),
             working_index: AtomicUsize::new(0),
             assets,
@@ -100,8 +108,7 @@ impl Audio {
 impl Sfx for Audio {
     fn boot_loop(&self) {
         if let Some(src) = self.load("boot_loop.wav") {
-            self.boot_sink
-                .append(src.amplify(self.levels.ambient_gain()).repeat_infinite());
+            self.boot_sink.append(src.amplify(self.levels.ambient_gain()).repeat_infinite());
             self.boot_sink.play();
         }
     }
@@ -145,10 +152,10 @@ impl Sfx for Audio {
             on_ready();
             return;
         }
-        // Clone the handle + voices list so the worker thread can own a sink. If
+        // Clone the handle + voice slot so the worker thread can own a sink. If
         // TTS isn't configured (no API key) or anything fails, this stays silent.
         let handle = self.handle.clone();
-        let voices = self.voices.clone();
+        let voice_sink = self.voice_sink.clone();
         let levels = self.levels.clone();
         let text = text.to_string();
         std::thread::spawn(move || {
@@ -157,8 +164,15 @@ impl Sfx for Audio {
             if let Some(mp3) = voice::client::synthesize(&text) {
                 if let Ok(src) = Decoder::new(std::io::Cursor::new(mp3)) {
                     if let Ok(sink) = Sink::try_new(&handle) {
+                        // Stop whatever Bishop was saying — only ever one voice
+                        // at a time — then leave a short beat of silence so the
+                        // two lines don't run straight into each other.
+                        if let Some(prev) = voice_sink.lock().unwrap().take() {
+                            prev.stop();
+                            std::thread::sleep(VOICE_GAP);
+                        }
                         sink.append(src.amplify(levels.voice_gain()));
-                        Self::track(&voices, sink); // kept alive; plays to completion
+                        *voice_sink.lock().unwrap() = Some(sink);
                     }
                 }
             }
@@ -168,9 +182,15 @@ impl Sfx for Audio {
     fn is_active(&self) -> bool {
         let mut v = self.voices.lock().unwrap();
         v.retain(|s| !s.empty());
+        // The Bishop voice lives in its own slot; treat it as live until empty.
+        let speaking = self.voice_sink
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|s| !s.empty());
         // The boot hum / working loop run until stopped, so a non-empty sink
         // means audio is playing.
-        !self.boot_sink.empty() || !self.working_sink.empty() || !v.is_empty()
+        !self.boot_sink.empty() || !self.working_sink.empty() || !v.is_empty() || speaking
     }
 }
 
