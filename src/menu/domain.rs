@@ -127,6 +127,22 @@ fn entries() -> Vec<MenuItem> {
             ],
         },
         MenuItem {
+            label: "WORKFLOWS",
+            blurb: "automation graphs & triggers",
+            target: Screen::Workflows,
+            help: &[
+                "WORKFLOW AUTOMATION  —  GRAPH ENGINE",
+                "",
+                "Wire the ship's subsystems into automations: each graph",
+                "links typed, single-purpose nodes — fetch an alert, snap",
+                "a camera, describe it, raise or dispatch an alert, signal",
+                "a beacon — into one directed flow.",
+                "",
+                "A graph fires by hand, on a timer, or when a new alert",
+                "clears a level, then runs its nodes once to completion.",
+            ],
+        },
+        MenuItem {
             label: "ABOUT",
             blurb: "ship dossier & system versions",
             target: Screen::About,

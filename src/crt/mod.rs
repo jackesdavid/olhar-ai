@@ -121,7 +121,9 @@ impl ApplicationHandler for CrtApp {
 
         let attrs = Window::default_attributes()
             .with_title("BISHOP/AP  —  MU/TH/UR 6000")
-            .with_inner_size(LogicalSize::new(1200.0, 780.0));
+            // Larger default window → more cells at the same 20px font (higher
+            // resolution, unchanged text size). The window re-grids on resize.
+            .with_inner_size(LogicalSize::new(1600.0, 1000.0));
         let window = Arc::new(
             event_loop
                 .create_window(attrs)

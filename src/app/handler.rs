@@ -56,6 +56,13 @@ impl App {
             std::sync::Arc::new(std::sync::Mutex::new(crate::alerts::domain::load_alerts()));
         let (alert_status_tx, alert_status_rx) = std::sync::mpsc::channel();
 
+        // The WORKFLOWS subsystem: its persisted graphs plus the run engine,
+        // seeded so the existing alert backlog doesn't fire `OnNewAlert` graphs.
+        let workflow_seed = alert_store.lock().unwrap().iter().map(|a| a.id).max().unwrap_or(0);
+        let workflows = crate::workflows::WorkflowsState::new();
+        let engine = crate::workflows::WorkflowEngine::new(workflow_seed);
+        let (workflow_tx, workflow_rx) = std::sync::mpsc::channel();
+
         // Reflect the saved CRT-sweep preferences into the shared flags the GPU
         // post-processor reads each frame (no-op on the TTY frontend).
         crate::ui::video::set_sweep(settings.crt_sweep);
@@ -97,6 +104,10 @@ impl App {
             alert_status_tx,
             alert_status_rx,
             map: crate::map::MapState::new(),
+            workflows,
+            engine,
+            workflow_tx,
+            workflow_rx,
             activity: Activity::new(),
         }
     }
@@ -133,6 +144,7 @@ impl App {
         self.poll_stt();
         self.poll_beacons();
         self.poll_alert_status();
+        self.poll_workflows();
         if let Some(s) = self.live.as_mut() {
             let now = std::time::Instant::now();
             s.drain(now);
@@ -999,8 +1011,221 @@ impl App {
                     _ => {}
                 },
             },
+            Screen::Workflows => {
+                self.handle_workflows_key(key);
+                // A Run-now request from Browse fires the selected graph.
+                if let Some(id) = self.workflows.run_request.take() {
+                    self.spawn_run(id);
+                }
+            }
         }
         false
+    }
+
+    /// Route a keypress for the WORKFLOWS editor, dispatching on its mode
+    /// (mirrors the `Screen::Map` arm). All mutations stay inside `WorkflowsState`.
+    fn handle_workflows_key(&mut self, key: KeyEvent) {
+        let wf = &mut self.workflows;
+        match wf.mode {
+            crate::workflows::WfMode::Browse => match key.code {
+                KeyCode::Esc => self.screen = Screen::Menu,
+                KeyCode::Up | KeyCode::Char('k') => wf.prev(),
+                KeyCode::Down | KeyCode::Char('j') => wf.next(),
+                KeyCode::Char('a') | KeyCode::Char('A') => wf.enter_palette(),
+                KeyCode::Char('l') | KeyCode::Char('L') => wf.enter_link(),
+                KeyCode::Char('c') | KeyCode::Char('C') => wf.enter_config(),
+                KeyCode::Char('m') | KeyCode::Char('M') => wf.enter_move(),
+                KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => wf.delete_node(),
+                KeyCode::Char('e') | KeyCode::Char('E') => wf.toggle_enabled(),
+                KeyCode::Char('r') | KeyCode::Char('R') => wf.request_run(),
+                KeyCode::Char('g') | KeyCode::Char('G') => wf.enter_graphs(),
+                KeyCode::Char('p') | KeyCode::Char('P') => wf.enter_pan(),
+                KeyCode::Char('+') | KeyCode::Char('=') => wf.zoom_in(),
+                KeyCode::Char('-') | KeyCode::Char('_') => wf.zoom_out(),
+                _ => {}
+            },
+            crate::workflows::WfMode::Palette => match key.code {
+                KeyCode::Esc => {
+                    wf.mode = crate::workflows::WfMode::Browse;
+                    wf.status.clear();
+                }
+                KeyCode::Up | KeyCode::Char('k') => wf.palette_prev(),
+                KeyCode::Down | KeyCode::Char('j') => wf.palette_next(),
+                KeyCode::Enter => wf.drop_palette_node(),
+                _ => {}
+            },
+            crate::workflows::WfMode::Move => match key.code {
+                KeyCode::Left => wf.nudge(-1, 0),
+                KeyCode::Right => wf.nudge(1, 0),
+                KeyCode::Up => wf.nudge(0, -1),
+                KeyCode::Down => wf.nudge(0, 1),
+                KeyCode::Enter | KeyCode::Esc => wf.commit_move(),
+                _ => {}
+            },
+            crate::workflows::WfMode::Link => match key.code {
+                KeyCode::Esc => wf.cancel_link(),
+                // Before lock-in ←/→ cycle the source output; after, they cycle
+                // the target input and ↑/↓ pick the target node.
+                KeyCode::Left => {
+                    if wf.link_from.is_some() {
+                        wf.link_cycle_input(-1);
+                    } else {
+                        wf.link_cycle(-1);
+                    }
+                }
+                KeyCode::Right => {
+                    if wf.link_from.is_some() {
+                        wf.link_cycle_input(1);
+                    } else {
+                        wf.link_cycle(1);
+                    }
+                }
+                KeyCode::Up => wf.link_cycle(-1),
+                KeyCode::Down => wf.link_cycle(1),
+                KeyCode::Enter => wf.link_enter(),
+                _ => {}
+            },
+            crate::workflows::WfMode::Config => match key.code {
+                KeyCode::Esc => wf.cancel_config(),
+                KeyCode::Up => wf.config_prev(),
+                KeyCode::Down => wf.config_next(),
+                KeyCode::Left => wf.config_adjust(-1),
+                KeyCode::Right => wf.config_adjust(1),
+                KeyCode::Enter => wf.commit_config(),
+                KeyCode::Backspace => wf.config_backspace(),
+                KeyCode::Char(c)
+                    if !key.modifiers.intersects(
+                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                    ) =>
+                {
+                    wf.config_type(c)
+                }
+                _ => {}
+            },
+            crate::workflows::WfMode::Pan => match key.code {
+                KeyCode::Left => wf.pan(-1, 0),
+                KeyCode::Right => wf.pan(1, 0),
+                KeyCode::Up => wf.pan(0, -1),
+                KeyCode::Down => wf.pan(0, 1),
+                KeyCode::Char('+') | KeyCode::Char('=') => wf.zoom_in(),
+                KeyCode::Char('-') | KeyCode::Char('_') => wf.zoom_out(),
+                KeyCode::Enter | KeyCode::Esc => wf.exit_pan(),
+                _ => {}
+            },
+            crate::workflows::WfMode::Graphs => {
+                if wf.graphs_editing {
+                    match key.code {
+                        KeyCode::Esc => wf.graphs_cancel_edit(),
+                        KeyCode::Enter => wf.graphs_commit_edit(),
+                        KeyCode::Backspace => wf.graphs_backspace(),
+                        KeyCode::Char(c)
+                            if !key.modifiers.intersects(
+                                KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                            ) =>
+                        {
+                            wf.graphs_type(c)
+                        }
+                        _ => {}
+                    }
+                } else {
+                    match key.code {
+                        KeyCode::Esc => {
+                            wf.mode = crate::workflows::WfMode::Browse;
+                            wf.status.clear();
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => wf.graphs_prev(),
+                        KeyCode::Down | KeyCode::Char('j') => wf.graphs_next(),
+                        KeyCode::Enter => wf.graphs_select(),
+                        KeyCode::Char('n') | KeyCode::Char('N') => wf.graphs_begin_create(),
+                        KeyCode::Char('r') | KeyCode::Char('R') => wf.graphs_begin_rename(),
+                        KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => {
+                            wf.graphs_delete()
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- WORKFLOWS engine + runs ------------------------------------------
+
+    /// Drain finished workflow runs into the status line, release the engine's
+    /// run slot, and spawn any queued fire that should now run (QueueSingle drain).
+    fn poll_workflows(&mut self) {
+        // 1. Finished runs.
+        while let Ok((graph_id, status)) = self.workflow_rx.try_recv() {
+            self.workflows.status = status;
+            if self.engine.on_finish(graph_id) {
+                self.spawn_run(graph_id); // a queued fire drains to a fresh run
+            }
+        }
+
+        // 2. New alert levels, computed ONCE per tick.
+        let levels = {
+            let alerts = self.alert_store.lock().unwrap();
+            self.engine.drain_new_alert_levels(&alerts)
+        };
+
+        // 3. Per-graph trigger evaluation (snapshot to avoid borrow conflicts).
+        let graphs: Vec<(u32, bool, crate::workflows::Trigger, crate::workflows::ConcurrencyPolicy)> =
+            self.workflows
+                .workflows
+                .graphs
+                .iter()
+                .map(|g| (g.id, g.enabled, g.trigger.clone(), g.concurrency.clone()))
+                .collect();
+        let now = std::time::Instant::now();
+        for (id, enabled, trigger, concurrency) in graphs {
+            if !enabled {
+                continue;
+            }
+            let due = match trigger {
+                crate::workflows::Trigger::Manual => false,
+                crate::workflows::Trigger::Cron { every_secs } => {
+                    self.engine.cron_due(id, every_secs, now)
+                }
+                crate::workflows::Trigger::OnNewAlert { min_level } => {
+                    crate::workflows::WorkflowEngine::levels_qualify(&levels, min_level)
+                }
+            };
+            if !due {
+                continue;
+            }
+            match self.engine.decide(id, &concurrency) {
+                crate::workflows::Fire::Spawn => self.spawn_run(id),
+                crate::workflows::Fire::Queue => self.engine.on_queue(id),
+                crate::workflows::Fire::Skip => {}
+            }
+        }
+    }
+
+    /// Run a graph once on a background thread (mirrors `deliver_selected_alert`):
+    /// clone the graph so the thread owns it, build a `ToolContext` from the
+    /// shared stores, register the spawn, and send the `(id, status)` result back.
+    fn spawn_run(&mut self, graph_id: u32) {
+        let Some(graph) =
+            self.workflows.workflows.graphs.iter().find(|g| g.id == graph_id).cloned()
+        else {
+            return;
+        };
+        self.engine.on_spawn(graph_id);
+        let ctx = ToolContext {
+            store: self.scan.devices.clone(),
+            ui_tx: self.tool_ui_tx.clone(),
+            notif: self.notification.clone(),
+            alerts: self.alert_store.clone(),
+        };
+        let tx = self.workflow_tx.clone();
+        let guard = self.activity.begin();
+        std::thread::spawn(move || {
+            let _busy = guard;
+            let msg = match crate::workflows::run_dag(&graph, &ctx) {
+                Ok(outs) => format!("\u{2713} {} ran {} node(s)", graph.name, outs.len()),
+                Err(e) => format!("\u{2717} {}: {e}", graph.name),
+            };
+            let _ = tx.send((graph_id, msg));
+        });
     }
 
     /// Toggle the camera at the picker cursor on/off the selected room.

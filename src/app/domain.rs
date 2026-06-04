@@ -33,6 +33,7 @@ pub enum Screen {
     BeaconDetail,
     Alerts,
     Map,
+    Workflows,
 }
 
 /// Results from scan/camera background workers, drained by the main loop.
@@ -161,6 +162,15 @@ pub struct App {
     /// Background alert-delivery results land here as a status line.
     pub alert_status_tx: Sender<String>,
     pub alert_status_rx: Receiver<String>,
+    /// The WORKFLOWS editor state (named graphs + the canvas editor).
+    pub workflows: crate::workflows::WorkflowsState,
+    /// Per-graph trigger timers + concurrency counters, seeded from the alert
+    /// high-water mark so the backlog doesn't fire `OnNewAlert` graphs on boot.
+    pub engine: crate::workflows::WorkflowEngine,
+    /// Background workflow-run results land here as `(graph id, status line)`,
+    /// drained each tick (the id lets the engine release the run + drain queues).
+    pub workflow_tx: Sender<(u32, String)>,
+    pub workflow_rx: Receiver<(u32, String)>,
     /// App-wide "processing" indicator, shared with background workers.
     pub activity: Activity,
 }

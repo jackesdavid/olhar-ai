@@ -15,3 +15,6 @@ notifications.json
 map.json
 mapview.json
 alerts.json
+
+# Workflows automation graphs (runtime state)
+workflows.json

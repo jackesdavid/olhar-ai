@@ -38,6 +38,7 @@ mod scan;
 mod splash;
 mod stream;
 mod ui;
+mod workflows;
 #[cfg(feature = "audio")]
 mod voice;
 

@@ -32,6 +32,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Screen::BeaconDetail => render_beacon_detail(f, app),
         Screen::Alerts => render_alerts(f, app),
         Screen::Map => render_map(f, app),
+        Screen::Workflows => render_workflows(f, app),
     }
 
     // The voice link overlays every screen so you always know it's listening.
@@ -306,4 +307,26 @@ fn render_map(f: &mut Frame, app: &App) {
     };
     let body = framed(f, app, hint);
     crate::map::view::render(f, body, &app.map, &app.scan);
+}
+
+fn render_workflows(f: &mut Frame, app: &App) {
+    let hint = match app.workflows.mode {
+        crate::workflows::WfMode::Browse => {
+            "[A]dd [L]ink [C]onfig [M]ove [X]del [E]nable [R]un · [G]raphs [P]an [+/-]zoom · [Up/Down]sel [Esc]menu"
+        }
+        crate::workflows::WfMode::Palette => "[ Up/Down ] node kind   [ Enter ] drop   [ Esc ] cancel",
+        crate::workflows::WfMode::Move => "[ Arrows ] move node   [ Enter/Esc ] done",
+        crate::workflows::WfMode::Link => {
+            "[ \u{2190}/\u{2192} ] port   [ Up/Down ] target node   [ Enter ] wire   [ Esc ] cancel"
+        }
+        crate::workflows::WfMode::Config => {
+            "[ Up/Down ] field   [ Type / \u{2190}\u{2192} ] edit   [ Enter ] save   [ Esc ] cancel"
+        }
+        crate::workflows::WfMode::Pan => "[ Arrows ] pan view   [ +/- ] zoom   [ Enter/Esc ] done",
+        crate::workflows::WfMode::Graphs => {
+            "[ Up/Down ] graph   [ Enter ] select   [ N ]ew [ R ]ename [ X ]del   [ Esc ] back"
+        }
+    };
+    let body = framed(f, app, hint);
+    crate::workflows::view::render(f, body, &app.workflows, &app.scan, &app.engine);
 }
