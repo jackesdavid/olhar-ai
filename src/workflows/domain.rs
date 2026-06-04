@@ -11,9 +11,10 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-/// Node box size on the canvas grid (y-down, like `MapRoom`).
-pub const NODE_W: i32 = 16;
-pub const NODE_H: i32 = 4;
+/// Node box size on the canvas grid (y-down, like `MapRoom`). Kept compact so
+/// many nodes fit on screen (use `fit()` to frame them all).
+pub const NODE_W: i32 = 12;
+pub const NODE_H: i32 = 3;
 
 // ---------------------------------------------------------------------------
 // Ports
@@ -767,6 +768,41 @@ impl WorkflowsState {
             self.view_y = (ny + NODE_H / 2) - vh / 2;
             self.clamp_view();
         }
+    }
+
+    /// Frame all nodes in the selected graph: the smallest zoom whose window
+    /// contains their bounding box, centred on it. Resets to the default view when
+    /// the graph is empty. (Mirrors `MapState::fit`.)
+    pub fn fit(&mut self) {
+        let bounds = self.graph().map(|g| {
+            g.nodes.iter().fold(None, |acc: Option<(i32, i32, i32, i32)>, n| {
+                let (nx0, ny0, nx1, ny1) = (n.x, n.y, n.x + NODE_W, n.y + NODE_H);
+                Some(match acc {
+                    None => (nx0, ny0, nx1, ny1),
+                    Some((minx, miny, maxx, maxy)) => {
+                        (minx.min(nx0), miny.min(ny0), maxx.max(nx1), maxy.max(ny1))
+                    }
+                })
+            })
+        });
+        let Some(Some((minx, miny, maxx, maxy))) = bounds else {
+            self.zoom = WF_DEFAULT_ZOOM;
+            self.view_x = 0;
+            self.view_y = 0;
+            return;
+        };
+        let (bw, bh) = (maxx - minx, maxy - miny);
+        let zoom = (0..WF_ZOOM_SPANS.len())
+            .find(|&z| {
+                let (w, h) = Self::span(z);
+                w >= bw && h >= bh
+            })
+            .unwrap_or(WF_ZOOM_SPANS.len() - 1);
+        self.zoom = zoom;
+        let (w, h) = Self::span(zoom);
+        self.view_x = (minx + bw / 2) - w / 2;
+        self.view_y = (miny + bh / 2) - h / 2;
+        self.clamp_view();
     }
 }
 

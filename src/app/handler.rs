@@ -1039,6 +1039,7 @@ impl App {
                 KeyCode::Char('e') | KeyCode::Char('E') => wf.toggle_enabled(),
                 KeyCode::Char('r') | KeyCode::Char('R') => wf.request_run(),
                 KeyCode::Char('g') | KeyCode::Char('G') => wf.enter_graphs(),
+                KeyCode::Char('f') | KeyCode::Char('F') => wf.fit(),
                 KeyCode::Char('p') | KeyCode::Char('P') => wf.enter_pan(),
                 KeyCode::Char('+') | KeyCode::Char('=') => wf.zoom_in(),
                 KeyCode::Char('-') | KeyCode::Char('_') => wf.zoom_out(),

@@ -432,6 +432,7 @@ impl WorkflowsState {
             self.selected = 0;
             self.mode = WfMode::Browse;
             self.status.clear();
+            self.fit(); // frame the newly-selected graph's nodes
         }
     }
 
@@ -592,6 +593,27 @@ mod tests {
         assert_eq!(s.graph().unwrap().nodes[0].kind, NodeKind::CreateAlert);
         assert_eq!(s.selected, 0);
         assert_eq!(s.mode, WfMode::Browse);
+    }
+
+    #[test]
+    fn fit_frames_all_nodes() {
+        use crate::workflows::domain::{NODE_H, NODE_W};
+        let mut s = state();
+        {
+            let g = s.graph_mut().unwrap();
+            g.add_node(NodeKind::GetLastAlert, 5, 5);
+            g.add_node(NodeKind::NotifyBeacon, 50, 30);
+        }
+        s.fit();
+        let (vx, vy, vw, vh) = s.viewport();
+        let nodes: Vec<(i32, i32)> =
+            s.graph().unwrap().nodes.iter().map(|n| (n.x, n.y)).collect();
+        for (x, y) in nodes {
+            assert!(
+                x >= vx && y >= vy && x + NODE_W <= vx + vw && y + NODE_H <= vy + vh,
+                "node ({x},{y}) not framed by viewport ({vx},{vy},{vw},{vh})"
+            );
+        }
     }
 
     #[test]

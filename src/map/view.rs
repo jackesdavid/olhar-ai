@@ -2,12 +2,12 @@
 //! panel (selected-room detail, or the camera checklist) on the right.
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     symbols::Marker,
     text::{Line, Span},
     widgets::{
         canvas::{Canvas, Line as CanvasLine, Rectangle as CanvasRect},
-        Block, BorderType, Borders, Paragraph,
+        Paragraph,
     },
     Frame,
 };
@@ -15,12 +15,12 @@ use ratatui::{
 use super::domain::{MapMode, MapState, GRID_H, GRID_W};
 use crate::scan::ScanState;
 use crate::ui::chrome::panel;
-use crate::ui::theme::{AMBER, PHOSPHOR, PHOSPHOR_DIM, PHOSPHOR_FAINT};
+use crate::ui::theme::{AMBER, GRID, PHOSPHOR, PHOSPHOR_DIM, PHOSPHOR_FAINT};
 
 pub fn render(f: &mut Frame, area: Rect, map: &MapState, scan: &ScanState) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+        .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
         .split(area);
     render_floor(f, cols[0], map, scan);
     render_context(f, cols[1], map, scan);
@@ -29,12 +29,20 @@ pub fn render(f: &mut Frame, area: Rect, map: &MapState, scan: &ScanState) {
 /// The left floor-plan canvas: a faint grid, the room rectangles (y-flipped so a
 /// y-down grid reads right-side up), labels, and per-room camera markers.
 fn render_floor(f: &mut Frame, area: Rect, map: &MapState, scan: &ScanState) {
-    let gw = GRID_W as f64;
     let gh = GRID_H as f64;
     let rooms = map.rooms.clone();
     let selected = map.selected;
     // Show only the viewport window into the world; the canvas clips the rest.
     let (vx, vy, vw, vh) = map.viewport();
+    // Grid spacing scales with the zoom span; each line is clamped to the visible
+    // window so BOTH endpoints stay on-canvas — ratatui drops a whole Line if either
+    // endpoint is off-bounds, which is why the grid only showed when fully zoomed out.
+    let stepx = ((vw / 8).max(1)) as usize;
+    let stepy = ((vh / 6).max(1)) as usize;
+    let x_lo = vx as f64;
+    let x_hi = (vx + vw) as f64;
+    let y_lo = (GRID_H - (vy + vh)) as f64;
+    let y_hi = (GRID_H - vy) as f64;
 
     // Resolve each assigned camera to a name + absolute position; the one being
     // repositioned in CamPlace mode is highlighted.
@@ -62,15 +70,19 @@ fn render_floor(f: &mut Frame, area: Rect, map: &MapState, scan: &ScanState) {
         .x_bounds([vx as f64, (vx + vw) as f64])
         .y_bounds([(GRID_H - (vy + vh)) as f64, (GRID_H - vy) as f64])
         .paint(move |ctx| {
-            for gx in 0..=GRID_W {
-                ctx.draw(&CanvasLine {
-                    x1: gx as f64, y1: 0.0, x2: gx as f64, y2: gh, color: PHOSPHOR_FAINT,
-                });
+            for gx in (0..=GRID_W).step_by(stepx) {
+                let x = gx as f64;
+                if x < x_lo || x > x_hi {
+                    continue;
+                }
+                ctx.draw(&CanvasLine { x1: x, y1: y_lo, x2: x, y2: y_hi, color: GRID });
             }
-            for gy in 0..=GRID_H {
-                ctx.draw(&CanvasLine {
-                    x1: 0.0, y1: gy as f64, x2: gw, y2: gy as f64, color: PHOSPHOR_FAINT,
-                });
+            for gy in (0..=GRID_H).step_by(stepy) {
+                let y = gy as f64;
+                if y < y_lo || y > y_hi {
+                    continue;
+                }
+                ctx.draw(&CanvasLine { x1: x_lo, y1: y, x2: x_hi, y2: y, color: GRID });
             }
             ctx.layer();
 
@@ -248,40 +260,34 @@ fn render_camera_picker(f: &mut Frame, area: Rect, map: &MapState, scan: &ScanSt
         return;
     }
 
-    // top pad, then [box(3), gap(1)] per device.
-    let mut constraints = vec![Constraint::Length(1)];
-    for _ in &devices {
-        constraints.push(Constraint::Length(3));
-        constraints.push(Constraint::Length(1));
-    }
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(area);
+    // Compact text list with a checkmark for assigned devices; scrolls so the
+    // cursor row stays visible when the device list is long.
+    let n = devices.len();
+    let cursor = map.cam_cursor.min(n - 1);
+    let list_h = (area.height as usize).saturating_sub(1).max(1); // 1 row for the header
+    let start = if cursor >= list_h { cursor + 1 - list_h } else { 0 };
+    let end = (start + list_h).min(n);
 
-    for (i, d) in devices.iter().enumerate() {
-        let Some(&box_area) = rows.get(1 + i * 2) else { break };
-        let selected = i == map.cam_cursor;
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        format!("CAMERAS  ({}/{})", cursor + 1, n),
+        Style::default().fg(PHOSPHOR_DIM),
+    )));
+    for (i, d) in devices.iter().enumerate().take(end).skip(start) {
+        let sel = i == cursor;
         let on = room.map_or(false, |r| r.cameras.iter().any(|c| c.ip == d.ip));
         let mark = if on { "\u{2713}" } else { "\u{00b7}" };
-        let label = format!("{} {}", mark, d.name);
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(if selected { BorderType::Double } else { BorderType::Plain });
-        let (block, label_style) = if selected {
-            (
-                block.border_style(Style::default().fg(AMBER)).style(Style::default().bg(AMBER).fg(Color::Black)),
-                Style::default().fg(Color::Black).add_modifier(Modifier::BOLD),
-            )
+        let style = if sel {
+            Style::default().fg(AMBER).add_modifier(Modifier::BOLD)
         } else {
-            (block.border_style(Style::default().fg(PHOSPHOR_DIM)), Style::default().fg(PHOSPHOR))
+            Style::default().fg(PHOSPHOR)
         };
-        f.render_widget(
-            Paragraph::new(Line::from(Span::styled(label, label_style)))
-                .alignment(Alignment::Center)
-                .block(block),
-            box_area,
-        );
+        lines.push(Line::from(vec![
+            Span::styled(if sel { "\u{25B8} " } else { "  " }, style),
+            Span::styled(format!("{mark} "), Style::default().fg(if on { AMBER } else { PHOSPHOR_DIM })),
+            Span::styled(d.name.clone(), style),
+            Span::styled(format!("  {}", d.ip), Style::default().fg(PHOSPHOR_FAINT)),
+        ]));
     }
+    f.render_widget(Paragraph::new(lines), area);
 }

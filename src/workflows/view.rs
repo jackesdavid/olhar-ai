@@ -8,7 +8,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{
         canvas::{Canvas, Line as CanvasLine, Rectangle as CanvasRect},
-        Block, BorderType, Borders, Paragraph,
+        Paragraph,
     },
     Frame,
 };
@@ -20,7 +20,7 @@ use super::domain::{
 use super::engine::WorkflowEngine;
 use crate::scan::ScanState;
 use crate::ui::chrome::panel;
-use crate::ui::theme::{AMBER, PHOSPHOR, PHOSPHOR_DIM, PHOSPHOR_FAINT};
+use crate::ui::theme::{AMBER, GRID, PHOSPHOR, PHOSPHOR_DIM, PHOSPHOR_FAINT};
 
 pub fn render(
     f: &mut Frame,
@@ -31,7 +31,7 @@ pub fn render(
 ) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+        .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
         .split(area);
     render_canvas(f, cols[0], state);
     render_context(f, cols[1], state, scan, engine);
@@ -45,10 +45,16 @@ fn render_canvas(f: &mut Frame, area: Rect, state: &WorkflowsState) {
     let gw = WF_GRID_W as f64;
     let gh = WF_GRID_H as f64;
     let (vx, vy, vw, vh) = state.viewport();
-    // Grid spacing scales with the zoom span so a ~8×6 lattice stays visible at
-    // every level (a fixed step vanishes when zoomed in past it).
+    // Grid spacing scales with the zoom span; each grid line is clamped to the
+    // visible window so BOTH endpoints stay on-canvas — ratatui drops a whole Line
+    // if either endpoint is off-bounds, which is why a full-extent grid only showed
+    // when fully zoomed out.
     let stepx = ((vw / 8).max(1)) as usize;
     let stepy = ((vh / 6).max(1)) as usize;
+    let x_lo = vx as f64;
+    let x_hi = (vx + vw) as f64;
+    let y_lo = (WF_GRID_H - (vy + vh)) as f64;
+    let y_hi = (WF_GRID_H - vy) as f64;
 
     let Some(graph) = state.graph() else {
         let canvas = Canvas::default()
@@ -79,16 +85,22 @@ fn render_canvas(f: &mut Frame, area: Rect, state: &WorkflowsState) {
         .x_bounds([vx as f64, (vx + vw) as f64])
         .y_bounds([(WF_GRID_H - (vy + vh)) as f64, (WF_GRID_H - vy) as f64])
         .paint(move |ctx| {
-            // Faint grid — step scales with zoom so the lattice is visible at any level.
+            // Faint grid — each line spans only the visible window so both endpoints
+            // stay in-bounds (a full-extent line is dropped entirely when an endpoint
+            // sits off-canvas, i.e. at any zoom tighter than the whole world).
             for gx in (0..=WF_GRID_W).step_by(stepx) {
-                ctx.draw(&CanvasLine {
-                    x1: gx as f64, y1: 0.0, x2: gx as f64, y2: gh, color: PHOSPHOR_FAINT,
-                });
+                let x = gx as f64;
+                if x < x_lo || x > x_hi {
+                    continue;
+                }
+                ctx.draw(&CanvasLine { x1: x, y1: y_lo, x2: x, y2: y_hi, color: GRID });
             }
             for gy in (0..=WF_GRID_H).step_by(stepy) {
-                ctx.draw(&CanvasLine {
-                    x1: 0.0, y1: gy as f64, x2: gw, y2: gy as f64, color: PHOSPHOR_FAINT,
-                });
+                let y = gy as f64;
+                if y < y_lo || y > y_hi {
+                    continue;
+                }
+                ctx.draw(&CanvasLine { x1: x_lo, y1: y, x2: x_hi, y2: y, color: GRID });
             }
             ctx.layer();
 
@@ -449,41 +461,29 @@ fn render_link(f: &mut Frame, area: Rect, state: &WorkflowsState) {
     f.render_widget(Paragraph::new(lines), area);
 }
 
-/// The node-kind checklist used in Palette mode; the cursor row is a solid amber
-/// panel (mirrors `map`'s camera picker).
+/// The node-kind picker in Palette mode — a compact text list, the cursor row
+/// marked with `▸` and lit amber.
 fn render_palette(f: &mut Frame, area: Rect, state: &WorkflowsState) {
-    let kinds = NodeKind::ALL;
-    let mut constraints = vec![Constraint::Length(1)];
-    for _ in kinds.iter() {
-        constraints.push(Constraint::Length(3));
-        constraints.push(Constraint::Length(1));
-    }
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(area);
-
-    for (i, k) in kinds.iter().enumerate() {
-        let Some(&box_area) = rows.get(1 + i * 2) else { break };
-        let selected = i == state.palette_cursor;
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(if selected { BorderType::Double } else { BorderType::Plain });
-        let (block, label_style) = if selected {
-            (
-                block.border_style(Style::default().fg(AMBER)).style(Style::default().bg(AMBER).fg(Color::Black)),
-                Style::default().fg(Color::Black).add_modifier(Modifier::BOLD),
-            )
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled("ADD NODE", Style::default().fg(PHOSPHOR_DIM))));
+    for (i, k) in NodeKind::ALL.iter().enumerate() {
+        let sel = i == state.palette_cursor;
+        let style = if sel {
+            Style::default().fg(AMBER).add_modifier(Modifier::BOLD)
         } else {
-            (block.border_style(Style::default().fg(PHOSPHOR_DIM)), Style::default().fg(PHOSPHOR))
+            Style::default().fg(PHOSPHOR)
         };
-        f.render_widget(
-            Paragraph::new(Line::from(Span::styled(k.label(), label_style)))
-                .alignment(Alignment::Center)
-                .block(block),
-            box_area,
-        );
+        lines.push(Line::from(vec![
+            Span::styled(if sel { "\u{25B8} " } else { "  " }, style),
+            Span::styled(k.label(), style),
+        ]));
     }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "\u{2191}/\u{2193} \u{00b7} Enter drop \u{00b7} Esc",
+        Style::default().fg(PHOSPHOR_FAINT),
+    )));
+    f.render_widget(Paragraph::new(lines), area);
 }
 
 /// The per-node + graph config form; the focused row is highlighted amber.
