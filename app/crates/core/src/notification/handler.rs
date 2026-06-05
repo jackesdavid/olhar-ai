@@ -85,12 +85,15 @@ pub fn dispatch(
 /// registers it as a trusted target, persists it to `path`, and replies to
 /// confirm. Wrong codes / unpaired chats are ignored. Never panics; on any error
 /// it backs off and retries.
-pub fn spawn_pairing(
+pub fn spawn_pairing<F>(
     store: NotificationStore,
     cfg: NotificationConfig,
     path: PathBuf,
     stop: Arc<AtomicBool>,
-) {
+    on_change: F,
+) where
+    F: Fn() + Send + 'static,
+{
     if !cfg.can_pair() {
         return; // no pairing code → accept no pairings
     }
@@ -109,6 +112,7 @@ pub fn spawn_pairing(
                             continue;
                         }
                         if register_target(&store, &path, u) {
+                            on_change(); // notify the UI layer to refresh the beacon list
                             let _ = client::send_message(
                                 &cfg,
                                 u.chat_id,

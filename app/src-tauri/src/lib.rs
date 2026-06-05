@@ -38,6 +38,7 @@ type PairingHandle = Arc<Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>>;
 /// start a fresh poller if Telegram is configured with a pairing code.
 fn restart_pairing(app: &tauri::AppHandle, store: NotificationStore, handle: &PairingHandle) {
     use std::sync::atomic::{AtomicBool, Ordering};
+    use tauri::Emitter;
     if let Some(old) = handle.lock().unwrap().take() {
         old.store(true, Ordering::Relaxed); // tell the previous poller to exit
     }
@@ -45,7 +46,11 @@ fn restart_pairing(app: &tauri::AppHandle, store: NotificationStore, handle: &Pa
         Some(cfg) if cfg.can_pair() => {
             let stop = Arc::new(AtomicBool::new(false));
             *handle.lock().unwrap() = Some(stop.clone());
-            notification::spawn_pairing(store, cfg, notifications_file(app), stop);
+            // On each new pairing, emit so an open Beacons view refreshes live.
+            let emitter = app.clone();
+            notification::spawn_pairing(store, cfg, notifications_file(app), stop, move || {
+                let _ = emitter.emit("beacons-changed", ());
+            });
             log::info!("Pairing poller (re)started.");
         }
         Some(_) => log::info!("Telegram token set but no pairing code — poller not started."),

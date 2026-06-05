@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
   import { toast } from "svelte-sonner";
 
   import Save from "@lucide/svelte/icons/save";
@@ -69,7 +70,14 @@
     }
   }
 
-  onMount(load);
+  onMount(() => {
+    load();
+    // Live-refresh when the backend pairing poller adds a beacon.
+    const unlisten = listen("beacons-changed", () => loadBeacons());
+    return () => {
+      unlisten.then((un) => un());
+    };
+  });
 
   async function saveConfig() {
     savingConfig = true;
