@@ -668,13 +668,37 @@ fn build_go2rtc_yaml(devices: &[Device]) -> String {
     out
 }
 
-/// Best-effort spawn of the bundled `binaries/go2rtc` (relative to the src-tauri
-/// cwd) pointing at the generated config. Kills any previously-spawned child
-/// first. If the binary is missing (it is never committed), logs a warning and
+/// Best-effort, **idempotent** (re)start of the bundled `binaries/go2rtc`
+/// (relative to the src-tauri cwd) for the desired `yaml` config.
+///
+/// Writes the config and (re)starts the sidecar **only when something actually
+/// changed** — the on-disk config differs from `yaml`, or the prior child has
+/// exited. If go2rtc is already running and serving the same streams, this is a
+/// no-op: re-entering the Live page must NOT kill a healthy sidecar out from
+/// under a connecting player (that left the iframe on a black screen).
+///
+/// If the binary is missing (it is never committed) it logs a warning and
 /// returns without failing — the rest of the app keeps working.
-fn spawn_go2rtc(app: &tauri::AppHandle, config: &std::path::Path) {
+fn spawn_go2rtc(app: &tauri::AppHandle, config: &std::path::Path, yaml: &str) {
     let handle = app.state::<Go2rtcHandle>();
     let mut guard = handle.lock().unwrap();
+
+    // Is the previously-spawned child still alive?
+    let alive = guard
+        .as_mut()
+        .map(|c| matches!(c.try_wait(), Ok(None)))
+        .unwrap_or(false);
+    // Does the on-disk config already match what we want to serve?
+    let unchanged = std::fs::read_to_string(config).map(|prev| prev == yaml).unwrap_or(false);
+
+    if alive && unchanged {
+        return; // already serving the right streams — leave the live sidecar untouched
+    }
+
+    if let Err(e) = std::fs::write(config, yaml) {
+        log::error!("failed to write go2rtc config: {e}");
+        return;
+    }
 
     // Kill a prior instance so a restart doesn't leave an orphan on :1984.
     if let Some(mut child) = guard.take() {
@@ -729,9 +753,9 @@ async fn ensure_streams(
 
     let yaml = build_go2rtc_yaml(&devices);
     let config = go2rtc_config_file(&app);
-    std::fs::write(&config, &yaml).map_err(|e| format!("Failed to write go2rtc config: {e}"))?;
-
-    spawn_go2rtc(&app, &config);
+    // Idempotent: only (re)starts go2rtc if the stream set actually changed, so
+    // re-entering Live doesn't kill a healthy sidecar mid-connection.
+    spawn_go2rtc(&app, &config, &yaml);
 
     let streams: Vec<StreamInfo> = devices
         .iter()
@@ -828,9 +852,7 @@ pub fn run() {
             let handle = app.handle().clone();
             let devices = handle.state::<DeviceStore>().lock().unwrap().clone();
             let config = go2rtc_config_file(&handle);
-            if std::fs::write(&config, build_go2rtc_yaml(&devices)).is_ok() {
-                spawn_go2rtc(&handle, &config);
-            }
+            spawn_go2rtc(&handle, &config, &build_go2rtc_yaml(&devices));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
