@@ -316,7 +316,7 @@
                     <Button
                       variant="ghost"
                       size="sm"
-                      title="Deliver to beacons"
+                      title="Deliver to recipients"
                       disabled={deliveringId === a.id}
                       onclick={() => doDeliver(a)}
                     >

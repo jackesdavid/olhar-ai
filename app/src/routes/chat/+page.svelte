@@ -78,7 +78,7 @@
         if (speakReplies && voiceReady) speakText(reply);
       }
     } catch (err) {
-      toast.error("Bishop", { description: String(err) });
+      toast.error("Sentinel", { description: String(err) });
       messages = [...messages, { kind: "bishop", text: `⚠️ ${String(err)}` }];
     } finally {
       sending = false;
@@ -176,7 +176,7 @@
     <div>
       <h1 class="text-2xl font-semibold tracking-tight">Chat</h1>
       <p class="text-sm text-muted-foreground">
-        Talk to Bishop — he can act on your cameras, alerts, and beacons.
+        Talk to Sentinel — it can act on your cameras, alerts, and recipients.
       </p>
     </div>
     <div class="flex items-center gap-2">
@@ -184,7 +184,7 @@
         <Button
           variant={speakReplies ? "default" : "outline"}
           size="sm"
-          title={speakReplies ? "Bishop's replies are spoken" : "Speak Bishop's replies"}
+          title={speakReplies ? "Sentinel's replies are spoken" : "Speak Sentinel's replies"}
           onclick={() => (speakReplies = !speakReplies)}
         >
           {#if speakReplies}<Volume2 class="size-4" />{:else}<VolumeX class="size-4" />{/if}
@@ -202,7 +202,7 @@
     <div class="mt-4 flex items-start gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-sm">
       <TriangleAlert class="mt-0.5 size-5 shrink-0 text-amber-400" />
       <div>
-        <p class="font-medium text-amber-300">Bishop is offline</p>
+        <p class="font-medium text-amber-300">Sentinel is offline</p>
         <p class="text-muted-foreground">
           Set <code class="rounded bg-background px-1 py-0.5 font-mono">ANTHROPIC_API_KEY</code> in
           the environment and restart to enable the assistant.
@@ -216,7 +216,7 @@
     {#if messages.length === 0}
       <div class="flex h-full flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
         <Bot class="size-8 opacity-50" />
-        <p>Ask Bishop to list your cameras, check what's on one, or raise an alert.</p>
+        <p>Ask Sentinel to list your cameras, check what's on one, or raise an alert.</p>
       </div>
     {/if}
 
@@ -290,7 +290,7 @@
         bind:value={input}
         onkeydown={onKeydown}
         rows="1"
-        placeholder={ready ? "Message Bishop…" : "Set ANTHROPIC_API_KEY to chat"}
+        placeholder={ready ? "Message Sentinel…" : "Set ANTHROPIC_API_KEY to chat"}
         disabled={!ready || sending}
         class="flex max-h-40 min-h-10 w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
       ></textarea>

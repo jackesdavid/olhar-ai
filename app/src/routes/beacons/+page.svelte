@@ -142,7 +142,7 @@
         chatId: renameTarget.chat_id,
         label: renameValue.trim(),
       });
-      toast.success("Beacon renamed.");
+      toast.success("Recipient renamed.");
       renameOpen = false;
       renameTarget = null;
       await loadBeacons();
@@ -164,7 +164,7 @@
     deleting = true;
     try {
       await invoke("delete_beacon", { chatId: deleteTarget.chat_id });
-      toast.success("Beacon removed.");
+      toast.success("Recipient removed.");
       deleteOpen = false;
       deleteTarget = null;
       await loadBeacons();
@@ -179,9 +179,9 @@
 
 <div class="space-y-6">
   <div>
-    <h1 class="text-2xl font-semibold tracking-tight">Beacons</h1>
+    <h1 class="text-2xl font-semibold tracking-tight">Recipients</h1>
     <p class="text-sm text-muted-foreground">
-      Trusted Telegram targets that receive Sentinel's alerts.
+      Trusted Telegram contacts that receive Sentinel's alerts.
     </p>
   </div>
 
@@ -253,8 +253,8 @@
   <!-- Paired beacons -->
   <Card.Root>
     <Card.Header>
-      <Card.Title>Paired beacons</Card.Title>
-      <Card.Description>Devices that paired via the bot.</Card.Description>
+      <Card.Title>Paired recipients</Card.Title>
+      <Card.Description>Contacts that paired via the bot.</Card.Description>
     </Card.Header>
     <Card.Content>
       {#if loading}
@@ -262,7 +262,7 @@
       {:else if beacons.length === 0}
         <p class="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
           <Radio class="size-6 opacity-50" />
-          No beacons paired yet. DM the bot the pairing code above.
+          No recipients paired yet. DM the bot the pairing code above.
         </p>
       {:else}
         <Table.Root>
@@ -329,7 +329,7 @@
 <Dialog.Root bind:open={renameOpen}>
   <Dialog.Content class="sm:max-w-md">
     <Dialog.Header>
-      <Dialog.Title>Rename beacon</Dialog.Title>
+      <Dialog.Title>Rename recipient</Dialog.Title>
       <Dialog.Description>Give this device a recognizable name.</Dialog.Description>
     </Dialog.Header>
     <div class="space-y-2">
@@ -351,7 +351,7 @@
 <Dialog.Root bind:open={deleteOpen}>
   <Dialog.Content class="sm:max-w-md">
     <Dialog.Header>
-      <Dialog.Title>Remove beacon?</Dialog.Title>
+      <Dialog.Title>Remove recipient?</Dialog.Title>
       <Dialog.Description>
         Remove
         <span class="font-medium text-foreground">{deleteTarget?.label}</span>. It will stop

@@ -32,7 +32,7 @@
     <div>
       <h1 class="text-2xl font-semibold tracking-tight">Dashboard</h1>
       <p class="text-sm text-muted-foreground">
-        Overview of your surveillance console.
+        Overview of your devices, alerts, and automations.
       </p>
     </div>
     <Badge variant="secondary">M0 preview</Badge>

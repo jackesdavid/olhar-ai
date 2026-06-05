@@ -26,7 +26,7 @@
       </div>
       <div class="flex flex-col leading-tight">
         <span class="text-sm font-semibold tracking-tight">Sentinel</span>
-        <span class="text-[10px] text-muted-foreground">Surveillance Console</span>
+        <span class="text-[10px] text-muted-foreground">Monitoring &amp; Automation</span>
       </div>
     </div>
 

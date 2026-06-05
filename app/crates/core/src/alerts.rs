@@ -174,7 +174,7 @@ pub fn delete(store: &AlertStore, path: &Path, id: u64) -> bool {
 
 /// The single line sent to a beacon for an alert: `[WARN] front garage — <msg>`.
 pub fn format_message(a: &Alert) -> String {
-    let loc = a.room_name.as_deref().unwrap_or("ship");
+    let loc = a.room_name.as_deref().unwrap_or("site");
     format!("[{}] {} \u{2014} {}", a.level.label(), loc, a.message)
 }
 

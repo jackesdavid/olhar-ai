@@ -344,7 +344,7 @@ fn create_alert() -> ToolSpec {
         name: "create_alert",
         description: "Raise an alert in the alert registry. Give a message; optionally a level \
             (\"debug\", \"info\", \"warn\", or \"error\" — default \"info\"), a room name (the \
-            location, matched against the map's compartments; omit for a system-wide alert), and a \
+            location, matched against your saved map zones; omit for a site-wide alert), and a \
             source (the subsystem raising it — default \"bishop\"). The alert is logged but NOT sent \
             to anyone; use deliver_alert to dispatch it to the beacons.",
         input_schema: json!({
@@ -452,7 +452,7 @@ fn list_alerts() -> ToolSpec {
                 let time = chrono::DateTime::parse_from_rfc3339(&a.created_at)
                     .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M").to_string())
                     .unwrap_or_else(|_| "--:--".into());
-                let loc = a.room_name.clone().unwrap_or_else(|| "ship".into());
+                let loc = a.room_name.clone().unwrap_or_else(|| "site".into());
                 let status = if a.delivered() { "delivered" } else { "pending" };
                 lines.push(format!(
                     "#{} [{}] {time} {loc}: {} ({status})",
