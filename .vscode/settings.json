@@ -1,0 +1,8 @@
+{
+  // Point rust-analyzer at the two real crates so it doesn't probe the repo root
+  // (which has no Cargo.toml) and litter a stray ./target/flycheck dir.
+  "rust-analyzer.linkedProjects": [
+    "app/src-tauri/Cargo.toml",
+    "legacy/Cargo.toml"
+  ]
+}

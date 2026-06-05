@@ -1,20 +1,19 @@
 target/
+node_modules/
+
+# macOS
+.DS_Store
 
 # Local secrets — never commit these
 .env
 .vscode/launch.json
 
-# Saved camera devices + credentials (plaintext)
+# Runtime state — the ratatui app (legacy/) writes these to its cwd; the web app
+# (app/) writes its own under the OS app-data dir. Never commit either.
 devices.json
-
-# Local ship configuration (volumes, voice toggle, …)
 config.json
-
-# notification
 notifications.json
 map.json
 mapview.json
 alerts.json
-
-# Workflows automation graphs (runtime state)
 workflows.json
