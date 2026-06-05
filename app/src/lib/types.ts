@@ -32,6 +32,15 @@ export type DiscoveredDevice = {
   model?: string | null;
 };
 
+/** A playable go2rtc stream for the Live screen (matches `StreamInfo` in src-tauri). */
+export type StreamInfo = {
+  ip: string;
+  /** go2rtc stream name, e.g. `cam_192_168_1_50`. */
+  name: string;
+  /** go2rtc's ready-made WebRTC player URL. */
+  player_url: string;
+};
+
 export const DEFAULT_SETTINGS: Settings = {
   master: 0.8,
   voice: 0.8,

@@ -149,12 +149,20 @@
     }
     testing = true;
     try {
-      const rtsp = await invoke<string>("test_credentials", {
-        xaddrOrIp: detail.xaddr || detail.ip,
+      // validate_device verifies the creds AND persists them + the resolved
+      // rtsp_url onto the saved device (so snapshots and live video work).
+      const updated = await invoke<Device>("validate_device", {
+        ip: detail.ip,
         username: editUser,
         password: editPass,
       });
-      toast.success("Credentials verified.", { description: rtsp });
+      detail = updated;
+      editUser = updated.username ?? editUser;
+      editPass = updated.password ?? editPass;
+      toast.success("Credentials verified and saved.", {
+        description: updated.rtsp_url ?? undefined,
+      });
+      await loadDevices();
     } catch (err) {
       console.error("Credential check failed", err);
       toast.error("Credentials rejected", { description: String(err) });
