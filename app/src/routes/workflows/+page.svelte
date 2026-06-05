@@ -6,16 +6,23 @@
 
   import Plus from "@lucide/svelte/icons/plus";
   import Play from "@lucide/svelte/icons/play";
+  import Pause from "@lucide/svelte/icons/pause";
+  import Square from "@lucide/svelte/icons/square";
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import Pencil from "@lucide/svelte/icons/pencil";
   import Power from "@lucide/svelte/icons/power";
   import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import ZoomIn from "@lucide/svelte/icons/zoom-in";
+  import ZoomOut from "@lucide/svelte/icons/zoom-out";
+  import Maximize from "@lucide/svelte/icons/maximize";
+  import Hand from "@lucide/svelte/icons/hand";
+  import ChevronDown from "@lucide/svelte/icons/chevron-down";
+  import X from "@lucide/svelte/icons/x";
 
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import { Switch } from "$lib/components/ui/switch";
-  import { Badge } from "$lib/components/ui/badge";
   import * as Dialog from "$lib/components/ui/dialog";
   import Loader from "$lib/components/loader.svelte";
   import EmptyState from "$lib/components/empty-state.svelte";
@@ -59,10 +66,10 @@
   let catalog = $state<Record<string, CatKind>>({});
   let selectedGraphId = $state<number | null>(null);
   let selectedNodeId = $state<number | null>(null);
-  let paletteKind = $state<string>("");
   let pending = $state<{ node: number; port: string } | null>(null);
   let loading = $state(true);
   let running = $state(false);
+  let addOpen = $state(false);
 
   // ---- dialogs (window.prompt/confirm are no-ops in the Tauri WebView) ------
   let nameOpen = $state(false);
@@ -113,7 +120,6 @@
       try {
         const cat = await invoke<{ kinds: CatKind[] }>("node_catalog");
         catalog = Object.fromEntries(cat.kinds.map((k) => [k.slug, k]));
-        if (cat.kinds[0]) paletteKind = cat.kinds[0].slug;
         await reload();
       } catch (err) {
         toast.error("Failed to load workflows", { description: String(err) });
@@ -221,13 +227,19 @@
   }
 
   // ---- node + edge ops -----------------------------------------------------
-  async function addNode() {
-    if (!graph || !paletteKind) return;
-    const x = 40 + (graph.nodes.length % 4) * 40;
-    const y = 40 + (graph.nodes.length % 4) * 30;
-    const id = await invoke<number>("add_node", { graphId: graph.id, kind: paletteKind, x, y });
+  async function addNodeKind(slug: string) {
+    if (!graph) return;
+    const n = graph.nodes.length;
+    const x = 80 + (n % 5) * 48;
+    const y = 70 + (n % 5) * 40;
+    const id = await invoke<number>("add_node", { graphId: graph.id, kind: slug, x, y });
     selectedNodeId = id;
+    addOpen = false;
     await reload();
+  }
+
+  function comingSoon(what: string) {
+    toast.info(`${what} — coming soon`);
   }
   async function removeNode(n: Node) {
     if (!graph) return;
@@ -310,163 +322,23 @@
   const LEVELS = ["debug", "info", "warn", "error"];
 </script>
 
-<div class="flex h-[calc(100vh-3.5rem)] gap-4">
-  <!-- Sidebar: graph list + settings -->
-  <aside class="flex w-72 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border pr-4">
-    <div class="flex items-center justify-between">
-      <h1 class="text-lg font-semibold tracking-tight">Workflows</h1>
-      <Button size="sm" variant="outline" onclick={openCreate}>
-        <Plus class="size-4" /> New
-      </Button>
+<div class="relative h-[calc(100vh-3.5rem)] w-full">
+  {#if loading}
+    <div class="flex h-full items-center justify-center">
+      <Loader label="Loading workflows…" />
     </div>
-
-    {#if loading}
-      <Loader label="Loading…" size={32} />
-    {:else if graphs.length === 0}
+  {:else if graphs.length === 0}
+    <div class="flex h-full items-center justify-center">
       <EmptyState title="No workflows yet" description="Create one to start automating.">
-        <Button size="sm" onclick={openCreate}><Plus class="size-4" /> New workflow</Button>
+        <Button onclick={openCreate}><Plus class="size-4" /> New workflow</Button>
       </EmptyState>
-    {:else}
-      <div class="space-y-1">
-        {#each graphs as g (g.id)}
-          <button
-            class="flex w-full items-center justify-between rounded-lg border px-2.5 py-2 text-left text-sm transition-all duration-200 {selectedGraphId ===
-            g.id
-              ? 'border-primary/50 bg-primary/10 text-foreground'
-              : 'border-border text-muted-foreground hover:translate-x-0.5 hover:bg-muted/50 hover:text-foreground'}"
-            onclick={() => {
-              selectedGraphId = g.id;
-              selectedNodeId = null;
-              pending = null;
-            }}
-          >
-            <span class="flex items-center gap-2 truncate">
-              <StatusDot state={g.enabled ? "online" : "offline"} />
-              <span class="truncate">{g.name}</span>
-            </span>
-            <span class="rounded bg-muted px-1.5 text-[10px] tabular-nums text-muted-foreground">
-              {g.nodes.length}
-            </span>
-          </button>
-        {/each}
-      </div>
-    {/if}
-
-    {#if graph}
-      <div class="space-y-3 border-t border-border pt-3">
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Settings</span>
-          <div class="flex gap-1">
-            <Button size="sm" variant="ghost" title="Rename" onclick={() => openRename(graph)}>
-              <Pencil class="size-3.5" />
-            </Button>
-            <Button size="sm" variant="ghost" title="Delete" onclick={() => openDelete(graph)}>
-              <Trash2 class="size-3.5" />
-            </Button>
-          </div>
-        </div>
-
-        <div class="flex items-center justify-between">
-          <Label class="flex items-center gap-1.5 text-sm"><Power class="size-3.5" /> Enabled</Label>
-          <Switch checked={graph.enabled} onCheckedChange={(v) => toggleEnabled(graph, v)} />
-        </div>
-
-        <!-- Trigger -->
-        <div class="space-y-1.5">
-          <Label class="text-xs text-muted-foreground">Trigger</Label>
-          <select
-            class="h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm"
-            value={triggerKind(graph.trigger)}
-            onchange={(e) => applyTrigger(graph, e.currentTarget.value, triggerSecs(graph.trigger), triggerLevel(graph.trigger))}
-          >
-            <option value="manual">Manual (Run-now only)</option>
-            <option value="cron">Cron (every N seconds)</option>
-            <option value="on_new_alert">On new alert</option>
-          </select>
-          {#if triggerKind(graph.trigger) === "cron"}
-            <div class="flex items-center gap-2">
-              <Input
-                type="number"
-                min="1"
-                value={triggerSecs(graph.trigger)}
-                class="h-8"
-                onchange={(e) => applyTrigger(graph, "cron", Number(e.currentTarget.value), "info")}
-              />
-              <span class="text-xs text-muted-foreground">sec</span>
-            </div>
-          {:else if triggerKind(graph.trigger) === "on_new_alert"}
-            <select
-              class="h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm"
-              value={triggerLevel(graph.trigger)}
-              onchange={(e) => applyTrigger(graph, "on_new_alert", 60, e.currentTarget.value)}
-            >
-              {#each LEVELS as l}<option value={l}>≥ {l}</option>{/each}
-            </select>
-          {/if}
-        </div>
-
-        <!-- Concurrency -->
-        <div class="space-y-1.5">
-          <Label class="text-xs text-muted-foreground">Concurrency</Label>
-          <select
-            class="h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm"
-            value={concKind(graph.concurrency)}
-            onchange={(e) => applyConcurrency(graph, e.currentTarget.value, concMax(graph.concurrency))}
-          >
-            <option value="skip">Skip if running</option>
-            <option value="queue">Queue (max N)</option>
-            <option value="concurrent">Concurrent (max N)</option>
-          </select>
-          {#if concKind(graph.concurrency) !== "skip"}
-            <Input
-              type="number"
-              min="1"
-              value={concMax(graph.concurrency)}
-              class="h-8"
-              onchange={(e) => applyConcurrency(graph, concKind(graph.concurrency), Number(e.currentTarget.value))}
-            />
-          {/if}
-        </div>
-
-        <Button class="w-full" onclick={() => runNow(graph)} disabled={running}>
-          {#if running}
-            <LoaderCircle class="size-4 animate-spin" /> Running…
-          {:else}
-            <Play class="size-4" /> Run now
-          {/if}
-        </Button>
-      </div>
-    {/if}
-  </aside>
-
-  <!-- Canvas + palette + config -->
-  <section class="flex min-w-0 flex-1 flex-col gap-3">
-    {#if !graph}
-      <div class="flex flex-1 items-center justify-center">
-        <EmptyState
-          title="No workflow selected"
-          description="Pick a workflow on the left, or create one to start wiring nodes."
-        />
-      </div>
-    {:else}
-      <div class="flex flex-wrap items-center gap-2">
-        <select bind:value={paletteKind} class="h-9 rounded-md border border-input bg-transparent px-2 text-sm">
-          {#each kinds as k}<option value={k.slug}>{k.label}</option>{/each}
-        </select>
-        <Button size="sm" variant="outline" onclick={addNode}><Plus class="size-4" /> Add node</Button>
-        {#if pending}
-          <Badge variant="outline" class="border-primary/40 text-primary">
-            wiring from #{pending.node}.{pending.port} — click an input port
-          </Badge>
-          <Button size="sm" variant="ghost" onclick={() => (pending = null)}>cancel</Button>
-        {:else}
-          <span class="text-xs text-muted-foreground">Click an output ●, then an input ○ to wire. Click a wired input to unwire.</span>
-        {/if}
-      </div>
-
-      <div
-        class="relative min-h-0 flex-1 overflow-auto rounded-xl border border-border bg-card/20 bg-[radial-gradient(circle,_rgba(52,211,153,0.1)_1px,_transparent_1px)] [background-size:18px_18px]"
-      >
+    </div>
+  {:else}
+    <!-- Full-bleed node editor -->
+    <div
+      class="absolute inset-0 overflow-auto rounded-xl border border-border bg-card/20 bg-[radial-gradient(circle,_rgba(52,211,153,0.1)_1px,_transparent_1px)] [background-size:18px_18px]"
+    >
+      {#if graph}
         <svg
           width="1600"
           height="900"
@@ -605,59 +477,266 @@
             </g>
           {/each}
         </svg>
-      </div>
-
-      <!-- selected node config -->
-      {#if selectedNode}
-        {@const k = catalog[selectedNode.kind]}
-        <div class="rounded-xl border border-border bg-card/40 p-3">
-          <div class="mb-2.5 flex items-center justify-between">
-            <span class="flex items-center gap-2 text-sm font-medium">
-              <span class="size-1.5 rounded-full bg-primary"></span>
-              {k?.label ?? selectedNode.kind}
-              <span class="text-muted-foreground">#{selectedNode.id}</span>
-            </span>
-            <Button size="sm" variant="ghost" onclick={() => removeNode(selectedNode)}>
-              <Trash2 class="size-3.5" /> Delete node
-            </Button>
-          </div>
-          {#if Object.keys(selectedNode.config).length === 0}
-            <p class="text-xs text-muted-foreground">This node has no settings.</p>
-          {:else}
-            <div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {#each Object.keys(selectedNode.config) as key (key)}
-                {@const wired = wiredInto(selectedNode.id, key)}
-                <div class="space-y-1">
-                  <Label class="text-xs text-muted-foreground">{key}</Label>
-                  {#if wired}
-                    <p
-                      class="rounded border border-dashed border-primary/30 bg-primary/5 px-2 py-1.5 text-xs text-primary/80"
-                    >
-                      ← #{wired.from}.{wired.from_port}
-                    </p>
-                  {:else if key === "level"}
-                    <select
-                      class="h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm"
-                      value={String(selectedNode.config[key] ?? "info")}
-                      onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })}
-                    >
-                      {#each LEVELS as l}<option value={l}>{l}</option>{/each}
-                    </select>
-                  {:else}
-                    <Input
-                      class="h-8"
-                      value={String(selectedNode.config[key] ?? "")}
-                      onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })}
-                    />
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          {/if}
+      {:else}
+        <div class="flex h-full items-center justify-center">
+          <EmptyState
+            title="No workflow selected"
+            description="Pick a workflow top-left, or create one to start wiring nodes."
+          />
         </div>
       {/if}
+    </div>
+
+    {#if graph}
+      <!-- TOP-LEFT: workflow switcher + add node -->
+      <div class="absolute left-3 top-3 flex items-center gap-2">
+        <div
+          class="flex items-center gap-1 rounded-lg border border-border bg-background/75 p-1 shadow-lg backdrop-blur"
+        >
+          <div class="relative">
+            <select
+              class="h-8 appearance-none rounded-md bg-transparent pl-2.5 pr-7 text-sm font-medium outline-none"
+              value={String(selectedGraphId)}
+              onchange={(e) => {
+                selectedGraphId = Number(e.currentTarget.value);
+                selectedNodeId = null;
+                pending = null;
+              }}
+            >
+              {#each graphs as g (g.id)}<option value={g.id}>{g.name}</option>{/each}
+            </select>
+            <ChevronDown
+              class="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+            />
+          </div>
+          <Button variant="ghost" size="icon" class="size-8" title="New workflow" onclick={openCreate}>
+            <Plus class="size-4" />
+          </Button>
+        </div>
+        <Button class="shadow-lg" onclick={() => (addOpen = true)}>
+          <Plus class="size-4" /> Add node
+        </Button>
+      </div>
+
+      <!-- TOP-CENTER: transport -->
+      <div
+        class="absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1 rounded-lg border border-border bg-background/75 p-1 shadow-lg backdrop-blur"
+      >
+        <Button
+          variant="ghost"
+          size="icon"
+          class="size-8 text-primary hover:text-primary"
+          title="Run now"
+          disabled={running}
+          onclick={() => runNow(graph)}
+        >
+          {#if running}<LoaderCircle class="size-4 animate-spin" />{:else}<Play class="size-4" />{/if}
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          class="size-8"
+          title="Pause (coming soon)"
+          onclick={() => comingSoon("Pause")}
+        >
+          <Pause class="size-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          class="size-8"
+          title="Stop (coming soon)"
+          onclick={() => comingSoon("Stop")}
+        >
+          <Square class="size-4" />
+        </Button>
+      </div>
+
+      <!-- RIGHT COLUMN: zoom · global properties (top) · node property (middle) -->
+      <div class="pointer-events-none absolute bottom-3 right-3 top-3 flex w-72 flex-col gap-2">
+        <!-- zoom / pan -->
+        <div
+          class="pointer-events-auto ml-auto flex items-center gap-1 rounded-lg border border-border bg-background/75 p-1 shadow-lg backdrop-blur"
+        >
+          <Button variant="ghost" size="icon" class="size-8" title="Zoom in (coming soon)" onclick={() => comingSoon("Zoom")}>
+            <ZoomIn class="size-4" />
+          </Button>
+          <Button variant="ghost" size="icon" class="size-8" title="Zoom out (coming soon)" onclick={() => comingSoon("Zoom")}>
+            <ZoomOut class="size-4" />
+          </Button>
+          <Button variant="ghost" size="icon" class="size-8" title="Fit to view (coming soon)" onclick={() => comingSoon("Fit to view")}>
+            <Maximize class="size-4" />
+          </Button>
+          <Button variant="ghost" size="icon" class="size-8" title="Pan (coming soon)" onclick={() => comingSoon("Pan")}>
+            <Hand class="size-4" />
+          </Button>
+        </div>
+
+        <!-- global properties -->
+        <div
+          class="pointer-events-auto space-y-3 rounded-xl border border-border bg-background/85 p-3 shadow-lg backdrop-blur"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span class="flex min-w-0 items-center gap-2 text-sm font-medium">
+              <StatusDot state={graph.enabled ? "online" : "offline"} />
+              <span class="truncate">{graph.name}</span>
+            </span>
+            <div class="flex shrink-0">
+              <Button variant="ghost" size="icon" class="size-7" title="Rename" onclick={() => openRename(graph)}>
+                <Pencil class="size-3.5" />
+              </Button>
+              <Button variant="ghost" size="icon" class="size-7" title="Delete" onclick={() => openDelete(graph)}>
+                <Trash2 class="size-3.5" />
+              </Button>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between">
+            <Label class="flex items-center gap-1.5 text-sm"><Power class="size-3.5" /> Enabled</Label>
+            <Switch checked={graph.enabled} onCheckedChange={(v) => toggleEnabled(graph, v)} />
+          </div>
+
+          <div class="space-y-1.5">
+            <Label class="text-xs text-muted-foreground">Trigger</Label>
+            <select
+              class="h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm"
+              value={triggerKind(graph.trigger)}
+              onchange={(e) => applyTrigger(graph, e.currentTarget.value, triggerSecs(graph.trigger), triggerLevel(graph.trigger))}
+            >
+              <option value="manual">Manual (Run-now only)</option>
+              <option value="cron">Cron (every N seconds)</option>
+              <option value="on_new_alert">On new alert</option>
+            </select>
+            {#if triggerKind(graph.trigger) === "cron"}
+              <div class="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min="1"
+                  value={triggerSecs(graph.trigger)}
+                  class="h-8"
+                  onchange={(e) => applyTrigger(graph, "cron", Number(e.currentTarget.value), "info")}
+                />
+                <span class="text-xs text-muted-foreground">sec</span>
+              </div>
+            {:else if triggerKind(graph.trigger) === "on_new_alert"}
+              <select
+                class="h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm"
+                value={triggerLevel(graph.trigger)}
+                onchange={(e) => applyTrigger(graph, "on_new_alert", 60, e.currentTarget.value)}
+              >
+                {#each LEVELS as l}<option value={l}>≥ {l}</option>{/each}
+              </select>
+            {/if}
+          </div>
+
+          <div class="space-y-1.5">
+            <Label class="text-xs text-muted-foreground">Concurrency</Label>
+            <select
+              class="h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm"
+              value={concKind(graph.concurrency)}
+              onchange={(e) => applyConcurrency(graph, e.currentTarget.value, concMax(graph.concurrency))}
+            >
+              <option value="skip">Skip if running</option>
+              <option value="queue">Queue (max N)</option>
+              <option value="concurrent">Concurrent (max N)</option>
+            </select>
+            {#if concKind(graph.concurrency) !== "skip"}
+              <Input
+                type="number"
+                min="1"
+                value={concMax(graph.concurrency)}
+                class="h-8"
+                onchange={(e) => applyConcurrency(graph, concKind(graph.concurrency), Number(e.currentTarget.value))}
+              />
+            {/if}
+          </div>
+        </div>
+
+        <!-- node property (centered in the remaining space) -->
+        {#if selectedNode}
+          {@const nk = catalog[selectedNode.kind]}
+          <div class="flex-1"></div>
+          <div
+            class="pointer-events-auto max-h-[55%] space-y-2.5 overflow-y-auto rounded-xl border border-border bg-background/85 p-3 shadow-lg backdrop-blur"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <span class="flex min-w-0 items-center gap-2 text-sm font-medium">
+                <span class="size-1.5 shrink-0 rounded-full bg-primary"></span>
+                <span class="truncate">{nk?.label ?? selectedNode.kind}</span>
+                <span class="shrink-0 text-muted-foreground">#{selectedNode.id}</span>
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="size-7 shrink-0"
+                title="Delete node"
+                onclick={() => removeNode(selectedNode)}
+              >
+                <Trash2 class="size-3.5" />
+              </Button>
+            </div>
+            {#if Object.keys(selectedNode.config).length === 0}
+              <p class="text-xs text-muted-foreground">This node has no settings.</p>
+            {:else}
+              <div class="space-y-2.5">
+                {#each Object.keys(selectedNode.config) as key (key)}
+                  {@const wired = wiredInto(selectedNode.id, key)}
+                  <div class="space-y-1">
+                    <Label class="text-xs text-muted-foreground">{key}</Label>
+                    {#if wired}
+                      <p
+                        class="rounded border border-dashed border-primary/30 bg-primary/5 px-2 py-1.5 text-xs text-primary/80"
+                      >
+                        ← #{wired.from}.{wired.from_port}
+                      </p>
+                    {:else if key === "level"}
+                      <select
+                        class="h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm"
+                        value={String(selectedNode.config[key] ?? "info")}
+                        onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })}
+                      >
+                        {#each LEVELS as l}<option value={l}>{l}</option>{/each}
+                      </select>
+                    {:else}
+                      <Input
+                        class="h-8"
+                        value={String(selectedNode.config[key] ?? "")}
+                        onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })}
+                      />
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+          <div class="flex-1"></div>
+        {/if}
+      </div>
+
+      <!-- BOTTOM-CENTER: wiring hint / pending -->
+      <div class="absolute bottom-3 left-1/2 -translate-x-1/2">
+        {#if pending}
+          <div
+            class="flex items-center gap-2 rounded-full border border-primary/40 bg-background/85 px-3 py-1 text-xs text-primary shadow-lg backdrop-blur"
+          >
+            wiring from #{pending.node}.{pending.port} — click an input port
+            <button
+              class="text-muted-foreground transition-colors hover:text-foreground"
+              onclick={() => (pending = null)}
+            >
+              cancel
+            </button>
+          </div>
+        {:else}
+          <div
+            class="rounded-full border border-border bg-background/70 px-3 py-1 text-[11px] text-muted-foreground shadow-lg backdrop-blur"
+          >
+            Click an output ●, then an input ○ to wire · click a wired input to unwire
+          </div>
+        {/if}
+      </div>
     {/if}
-  </section>
+  {/if}
 </div>
 
 <!-- Create / rename dialog -->
@@ -698,3 +777,42 @@
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
+
+<!-- Add-node modal — centered over the editor with a subtle backdrop blur -->
+{#if addOpen}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <button
+      class="absolute inset-0 bg-background/40 backdrop-blur-sm duration-200 animate-in fade-in"
+      aria-label="Close"
+      onclick={() => (addOpen = false)}
+    ></button>
+    <div
+      class="relative z-10 w-full max-w-lg rounded-2xl border border-border bg-popover/95 p-4 shadow-2xl duration-200 animate-in fade-in zoom-in-95"
+    >
+      <div class="mb-3 flex items-center justify-between">
+        <h3 class="flex items-center gap-2 text-sm font-semibold">
+          <span class="size-1.5 rounded-full bg-primary"></span> Add a node
+        </h3>
+        <Button variant="ghost" size="icon" class="size-7" onclick={() => (addOpen = false)}>
+          <X class="size-4" />
+        </Button>
+      </div>
+      <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {#each kinds as k (k.slug)}
+          <button
+            class="interactive group flex flex-col items-start gap-1 rounded-xl border border-border bg-card p-2.5 text-left"
+            onclick={() => addNodeKind(k.slug)}
+          >
+            <span class="flex items-center gap-2 text-sm font-medium">
+              <span class="size-1.5 rounded-full bg-primary transition-transform group-hover:scale-125"></span>
+              {k.label}
+            </span>
+            <span class="text-[10px] tabular-nums text-muted-foreground">
+              {k.inputs.length} in · {k.outputs.length} out
+            </span>
+          </button>
+        {/each}
+      </div>
+    </div>
+  </div>
+{/if}
