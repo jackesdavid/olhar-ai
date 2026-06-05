@@ -39,15 +39,29 @@ tasks:
         set -e
         mkdir -p src-tauri/binaries
         os=$(uname -s); arch=$(uname -m)
+        # NOTE: macOS assets are .zip (extract the binary); Linux assets are bare.
         case "$os-$arch" in
-          Darwin-arm64)               asset=go2rtc_mac_arm64 ;;
-          Darwin-x86_64)              asset=go2rtc_mac_amd64 ;;
+          Darwin-arm64)               asset=go2rtc_mac_arm64.zip ;;
+          Darwin-x86_64)              asset=go2rtc_mac_amd64.zip ;;
           Linux-x86_64)               asset=go2rtc_linux_amd64 ;;
           Linux-aarch64|Linux-arm64)  asset=go2rtc_linux_arm64 ;;
           *) echo "Unsupported $os-$arch — fetch go2rtc manually (see src-tauri/binaries/DOWNLOAD.md)"; exit 1 ;;
         esac
+        url="https://github.com/AlexxIT/go2rtc/releases/latest/download/$asset"
         echo "Fetching $asset (latest)…"
-        curl -fL -o src-tauri/binaries/go2rtc "https://github.com/AlexxIT/go2rtc/releases/latest/download/$asset"
+        case "$asset" in
+          *.zip)
+            tmp=$(mktemp -d)
+            curl -fL -o "$tmp/go2rtc.zip" "$url"
+            unzip -o "$tmp/go2rtc.zip" -d "$tmp" >/dev/null
+            bin=$(find "$tmp" -type f ! -name '*.zip' | head -1)
+            mv "$bin" src-tauri/binaries/go2rtc
+            rm -rf "$tmp"
+            ;;
+          *)
+            curl -fL -o src-tauri/binaries/go2rtc "$url"
+            ;;
+        esac
         chmod +x src-tauri/binaries/go2rtc
         echo "✓ go2rtc → src-tauri/binaries/go2rtc"
 

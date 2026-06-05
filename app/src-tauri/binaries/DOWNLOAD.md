@@ -4,28 +4,31 @@ Unit 015 (Live video) spawns `binaries/go2rtc` — an RTSP→WebRTC gateway. The
 generates `<app_data_dir>/go2rtc.yaml` from your saved devices and starts go2rtc pointed
 at it; the `/live` page then plays each camera over WebRTC.
 
-Download the build for your OS into **this folder**, named exactly `go2rtc` (no extension on
-macOS/Linux) or `go2rtc.exe` (Windows), and `chmod +x` it on Unix.
+**Easiest: `task fetch-go2rtc`** (or `task setup`) auto-detects your OS/arch and does all of this.
+
+Manual: download the build for your OS into **this folder**, named exactly `go2rtc` (or
+`go2rtc.exe` on Windows), and `chmod +x` it on Unix. **macOS & Windows assets are `.zip`
+(extract the binary); Linux assets are bare.**
 Releases: https://github.com/AlexxIT/go2rtc/releases/latest
 
 ```bash
-# macOS (Apple Silicon)
-curl -L -o go2rtc https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_mac_arm64
-chmod +x go2rtc
+# macOS (Apple Silicon) — .zip
+curl -L -o /tmp/g.zip https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_mac_arm64.zip
+unzip -o /tmp/g.zip -d . && chmod +x go2rtc
 
-# macOS (Intel)
-curl -L -o go2rtc https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_mac_amd64
-chmod +x go2rtc
+# macOS (Intel) — .zip
+curl -L -o /tmp/g.zip https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_mac_amd64.zip
+unzip -o /tmp/g.zip -d . && chmod +x go2rtc
 
-# Linux (x86_64)
+# Linux (x86_64) — bare binary
 curl -L -o go2rtc https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_amd64
 chmod +x go2rtc
 
-# Linux (arm64)
+# Linux (arm64) — bare binary
 curl -L -o go2rtc https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_arm64
 chmod +x go2rtc
 
-# Windows (x86_64) — name it go2rtc.exe (the backend looks for binaries/go2rtc.exe on Windows)
+# Windows (x86_64) — .zip, extract go2rtc.exe here (backend looks for binaries/go2rtc.exe)
 #   https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_win64.zip
 ```
 
