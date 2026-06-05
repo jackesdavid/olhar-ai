@@ -790,6 +790,114 @@ fn save_map(app: tauri::AppHandle, rooms: Vec<MapRoom>) {
     log::info!("save_map: persisted {} room(s)", rooms.len());
 }
 
+// ---- Chat / Bishop (agent) -------------------------------------------------
+
+/// The chat conversation history (with verbatim `tool_use`/`tool_result`
+/// blocks), held in managed state for a single ongoing conversation.
+type ChatHistory = Arc<Mutex<Vec<app_core::agent::Message>>>;
+
+/// Whether the agent is configured (an `ANTHROPIC_API_KEY` is set). The chat
+/// screen shows an offline notice when this is false.
+#[tauri::command]
+fn chat_ready() -> bool {
+    app_core::agent::AgentConfig::from_env().is_some()
+}
+
+/// Clear the conversation history.
+#[tauri::command]
+fn reset_chat(history: tauri::State<'_, ChatHistory>) {
+    history.lock().unwrap().clear();
+}
+
+/// Run one chat turn: append the operator's message, run Bishop's tool-use loop
+/// on a blocking task, splice the produced turns into history, and return the
+/// final reply. Tool side-effects (snapshots, store changes, open-live) stream
+/// to the UI as Tauri events drained off the tool channel while the turn runs.
+#[tauri::command]
+async fn send_chat(
+    app: tauri::AppHandle,
+    devices: tauri::State<'_, DeviceStore>,
+    alert_state: tauri::State<'_, AlertStore>,
+    notif_state: tauri::State<'_, NotificationStore>,
+    history_state: tauri::State<'_, ChatHistory>,
+    text: String,
+) -> Result<String, String> {
+    use app_core::agent::{client, Message, ToolContext, ToolRegistry, ToolUiEvent};
+    use tauri::Emitter;
+
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err("Say something first.".into());
+    }
+    if app_core::agent::AgentConfig::from_env().is_none() {
+        return Err("Bishop is offline — set ANTHROPIC_API_KEY to enable chat.".into());
+    }
+
+    // Optimistically append the user turn and snapshot the full history for the call.
+    let snapshot = {
+        let mut h = history_state.lock().unwrap();
+        h.push(Message::user(text));
+        h.clone()
+    };
+
+    // Drain tool UI-effects off the channel and re-emit them as Tauri events
+    // while the turn runs. The thread ends when the tool context (and its
+    // Sender) is dropped at the end of the blocking task below.
+    let (tx, rx) = std::sync::mpsc::channel::<ToolUiEvent>();
+    let emit_app = app.clone();
+    std::thread::spawn(move || {
+        while let Ok(ev) = rx.recv() {
+            match ev {
+                ToolUiEvent::Snapshot { camera, jpeg } => {
+                    let data = B64.encode(&jpeg);
+                    let _ = emit_app
+                        .emit("chat-image", serde_json::json!({ "camera": camera, "data": data }));
+                }
+                ToolUiEvent::DevicesChanged => {
+                    let _ = emit_app.emit("devices-changed", ());
+                }
+                ToolUiEvent::AlertsChanged => {
+                    let _ = emit_app.emit("alerts-changed", ());
+                }
+                ToolUiEvent::OpenLive { ip } => {
+                    let _ = emit_app.emit("chat-open-live", ip);
+                }
+            }
+        }
+    });
+
+    let ctx = ToolContext {
+        devices: devices.inner().clone(),
+        devices_path: devices_file(&app),
+        alerts: alert_state.inner().clone(),
+        alerts_path: alerts_file(&app),
+        notif: notif_state.inner().clone(),
+        map_path: map_file(&app),
+        notif_cfg: resolve_telegram_config(&app),
+        ui_tx: tx,
+    };
+
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let registry = ToolRegistry::new();
+        client::ask(&snapshot, &registry, &ctx, false)
+    })
+    .await
+    .map_err(|e| format!("Chat task failed: {e}"))?;
+
+    match outcome {
+        Some(o) => {
+            history_state.lock().unwrap().extend(o.appended);
+            Ok(o.reply_text)
+        }
+        None => {
+            // The request failed — roll back the optimistic user turn so history
+            // stays valid (no two user turns in a row on the next request).
+            history_state.lock().unwrap().pop();
+            Err("Bishop didn't respond just now — check the API key and network, then retry.".into())
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -849,6 +957,10 @@ pub fn run() {
             // the binary is absent or no devices have an rtsp_url yet).
             let go2rtc: Go2rtcHandle = Arc::new(Mutex::new(None));
             app.manage(go2rtc);
+
+            // Chat: a single managed conversation history for Bishop's agent.
+            let history: ChatHistory = Arc::new(Mutex::new(Vec::new()));
+            app.manage(history);
             let handle = app.handle().clone();
             let devices = handle.state::<DeviceStore>().lock().unwrap().clone();
             let config = go2rtc_config_file(&handle);
@@ -881,6 +993,9 @@ pub fn run() {
             deliver_alert,
             load_map,
             save_map,
+            chat_ready,
+            reset_chat,
+            send_chat,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

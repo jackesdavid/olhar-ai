@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
   import { toast } from "svelte-sonner";
 
   import Plus from "@lucide/svelte/icons/plus";
@@ -115,7 +116,14 @@
     }
   }
 
-  onMount(load);
+  onMount(() => {
+    load();
+    // Live-refresh when the chat agent raises/delivers/deletes an alert.
+    const unlisten = listen("alerts-changed", () => load());
+    return () => {
+      unlisten.then((un) => un());
+    };
+  });
 
   function openCreate() {
     formLevel = "info";

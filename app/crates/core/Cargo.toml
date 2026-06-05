@@ -14,3 +14,6 @@ sha1 = "0.10"
 base64 = "0.22"
 rand = "0.8"
 chrono = "0.4"
+# Agent vision + chat snapshots: decode/re-encode camera frames to bounded JPEG
+# (copied from the ratatui src/agent). JPEG-only to keep the build lean.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }

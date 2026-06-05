@@ -7,6 +7,7 @@
 //! Path-parameterized persistence (no hardcoded cwd files) so the web app writes its own
 //! state under the OS app-data dir and never clobbers the ratatui app's JSON files.
 
+pub mod agent;
 pub mod alerts;
 pub mod config;
 pub mod device_actions;

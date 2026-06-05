@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
   import { toast } from "svelte-sonner";
 
   import Radar from "@lucide/svelte/icons/radar";
@@ -66,7 +67,14 @@
     }
   }
 
-  onMount(loadDevices);
+  onMount(() => {
+    loadDevices();
+    // Live-refresh when the chat agent renames/removes a device.
+    const unlisten = listen("devices-changed", () => loadDevices());
+    return () => {
+      unlisten.then((un) => un());
+    };
+  });
 
   async function scan() {
     scanning = true;
