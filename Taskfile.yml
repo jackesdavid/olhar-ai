@@ -65,6 +65,18 @@ tasks:
         chmod +x src-tauri/binaries/go2rtc
         echo "✓ go2rtc → src-tauri/binaries/go2rtc"
 
+  go2rtc:
+    desc: Run the go2rtc sidecar standalone for debugging (web UI at http://localhost:1984)
+    dir: "{{.APP}}/src-tauri"
+    cmds:
+      - cmd: test -x binaries/go2rtc || (echo "go2rtc missing — run 'task fetch-go2rtc'"; exit 1)
+        silent: true
+      # Uses the app's generated config if present (validate a camera in-app first),
+      # otherwise starts empty — add streams via the web UI at :1984.
+      - |
+        cfg="$HOME/Library/Application Support/com.jackesdavid.sentinel/go2rtc.yaml"
+        if [ -f "$cfg" ]; then ./binaries/go2rtc -config "$cfg"; else ./binaries/go2rtc; fi
+
   doctor:
     desc: Check required system tools are installed (node, npm, cargo, ffmpeg)
     silent: true
