@@ -16,6 +16,7 @@
   import { Label } from "$lib/components/ui/label";
   import { Switch } from "$lib/components/ui/switch";
   import { Badge } from "$lib/components/ui/badge";
+  import * as Dialog from "$lib/components/ui/dialog";
 
   // ---- types (the serialized core shapes) ----------------------------------
   type PortType = "text" | "num" | "bool" | "image";
@@ -58,6 +59,13 @@
   let paletteKind = $state<string>("");
   let pending = $state<{ node: number; port: string } | null>(null);
   let loading = $state(true);
+
+  // ---- dialogs (window.prompt/confirm are no-ops in the Tauri WebView) ------
+  let nameOpen = $state(false);
+  let nameValue = $state("");
+  let nameTarget = $state<Graph | null>(null); // null = create, else rename
+  let deleteOpen = $state(false);
+  let deleteTarget = $state<Graph | null>(null);
 
   const graph = $derived(graphs.find((g) => g.id === selectedGraphId) ?? null);
   const selectedNode = $derived(graph?.nodes.find((n) => n.id === selectedNodeId) ?? null);
@@ -118,25 +126,51 @@
   });
 
   // ---- graph CRUD ----------------------------------------------------------
-  async function createGraph() {
-    const name = prompt("New workflow name?", "Untitled")?.trim();
-    if (name === undefined) return;
-    const id = await invoke<number>("create_graph", { name: name || "Untitled" });
-    selectedGraphId = id;
-    selectedNodeId = null;
-    await reload();
+  function openCreate() {
+    nameTarget = null;
+    nameValue = "Untitled";
+    nameOpen = true;
   }
-  async function renameGraph(g: Graph) {
-    const name = prompt("Rename workflow", g.name)?.trim();
-    if (!name) return;
-    await invoke("rename_graph", { id: g.id, name });
-    await reload();
+  function openRename(g: Graph) {
+    nameTarget = g;
+    nameValue = g.name;
+    nameOpen = true;
   }
-  async function deleteGraph(g: Graph) {
-    if (!confirm(`Delete workflow "${g.name}"?`)) return;
-    await invoke("delete_graph", { id: g.id });
-    if (selectedGraphId === g.id) selectedGraphId = null;
-    await reload();
+  async function submitName() {
+    const name = nameValue.trim();
+    if (!name) {
+      toast.error("Name can't be empty.");
+      return;
+    }
+    try {
+      if (nameTarget) {
+        await invoke("rename_graph", { id: nameTarget.id, name });
+      } else {
+        const id = await invoke<number>("create_graph", { name });
+        selectedGraphId = id;
+        selectedNodeId = null;
+      }
+      nameOpen = false;
+      await reload();
+    } catch (err) {
+      toast.error("Failed", { description: String(err) });
+    }
+  }
+  function openDelete(g: Graph) {
+    deleteTarget = g;
+    deleteOpen = true;
+  }
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    try {
+      await invoke("delete_graph", { id: deleteTarget.id });
+      if (selectedGraphId === deleteTarget.id) selectedGraphId = null;
+      deleteOpen = false;
+      deleteTarget = null;
+      await reload();
+    } catch (err) {
+      toast.error("Failed to delete", { description: String(err) });
+    }
   }
   async function toggleEnabled(g: Graph, enabled: boolean) {
     await invoke("set_graph_enabled", { id: g.id, enabled });
@@ -274,7 +308,7 @@
   <aside class="flex w-72 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border pr-4">
     <div class="flex items-center justify-between">
       <h1 class="text-lg font-semibold tracking-tight">Workflows</h1>
-      <Button size="sm" variant="outline" onclick={createGraph}>
+      <Button size="sm" variant="outline" onclick={openCreate}>
         <Plus class="size-4" /> New
       </Button>
     </div>
@@ -308,10 +342,10 @@
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Settings</span>
           <div class="flex gap-1">
-            <Button size="sm" variant="ghost" title="Rename" onclick={() => renameGraph(graph)}>
+            <Button size="sm" variant="ghost" title="Rename" onclick={() => openRename(graph)}>
               <Pencil class="size-3.5" />
             </Button>
-            <Button size="sm" variant="ghost" title="Delete" onclick={() => deleteGraph(graph)}>
+            <Button size="sm" variant="ghost" title="Delete" onclick={() => openDelete(graph)}>
               <Trash2 class="size-3.5" />
             </Button>
           </div>
@@ -536,3 +570,42 @@
     {/if}
   </section>
 </div>
+
+<!-- Create / rename dialog -->
+<Dialog.Root bind:open={nameOpen}>
+  <Dialog.Content class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>{nameTarget ? "Rename workflow" : "New workflow"}</Dialog.Title>
+    </Dialog.Header>
+    <div class="space-y-2">
+      <Label for="wf-name">Name</Label>
+      <Input
+        id="wf-name"
+        bind:value={nameValue}
+        placeholder="e.g. Night patrol"
+        onkeydown={(e) => e.key === "Enter" && submitName()}
+      />
+    </div>
+    <Dialog.Footer>
+      <Button variant="outline" onclick={() => (nameOpen = false)}>Cancel</Button>
+      <Button onclick={submitName}>{nameTarget ? "Save" : "Create"}</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- Delete dialog -->
+<Dialog.Root bind:open={deleteOpen}>
+  <Dialog.Content class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Delete workflow?</Dialog.Title>
+      <Dialog.Description>
+        Remove <span class="font-medium text-foreground">{deleteTarget?.name}</span> and its nodes
+        and wiring. This can't be undone.
+      </Dialog.Description>
+    </Dialog.Header>
+    <Dialog.Footer>
+      <Button variant="outline" onclick={() => (deleteOpen = false)}>Cancel</Button>
+      <Button variant="destructive" onclick={confirmDelete}>Delete</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
