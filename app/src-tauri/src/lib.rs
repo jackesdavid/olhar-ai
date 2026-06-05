@@ -403,6 +403,9 @@ pub fn run() {
         // Rust logs → terminal stdout (visible under `task dev`) at Info+.
         .plugin(
             tauri_plugin_log::Builder::new()
+                // clear_targets() first — the default set already includes Stdout, and
+                // `.target()` APPENDS, so without this you get two Stdout targets → doubled logs.
+                .clear_targets()
                 .target(tauri_plugin_log::Target::new(
                     tauri_plugin_log::TargetKind::Stdout,
                 ))
