@@ -17,6 +17,7 @@
   import VolumeX from "@lucide/svelte/icons/volume-x";
 
   import { Button } from "$lib/components/ui/button";
+  import EmptyState from "$lib/components/empty-state.svelte";
 
   type ChatMsg =
     | { kind: "user"; text: string }
@@ -214,9 +215,11 @@
   <!-- Message log -->
   <div bind:this={scroller} class="min-h-0 flex-1 space-y-4 overflow-y-auto px-1 py-4">
     {#if messages.length === 0}
-      <div class="flex h-full flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
-        <Bot class="size-8 opacity-50" />
-        <p>Ask Sentinel to list your cameras, check what's on one, or raise an alert.</p>
+      <div class="flex h-full items-center justify-center">
+        <EmptyState
+          title="Talk to Sentinel"
+          description="Ask it to list your cameras, check what's on one, raise an alert, or notify someone."
+        />
       </div>
     {/if}
 

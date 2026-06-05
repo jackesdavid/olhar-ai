@@ -22,6 +22,9 @@
   import { Switch } from "$lib/components/ui/switch";
   import { Badge } from "$lib/components/ui/badge";
   import { Separator } from "$lib/components/ui/separator";
+  import Loader from "$lib/components/loader.svelte";
+  import EmptyState from "$lib/components/empty-state.svelte";
+  import StatusDot from "$lib/components/status-dot.svelte";
 
   import type { NotificationTarget, TelegramConfigState } from "$lib/types";
 
@@ -258,12 +261,12 @@
     </Card.Header>
     <Card.Content>
       {#if loading}
-        <p class="py-6 text-center text-sm text-muted-foreground">Loading…</p>
+        <Loader label="Loading recipients…" />
       {:else if beacons.length === 0}
-        <p class="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
-          <Radio class="size-6 opacity-50" />
-          No recipients paired yet. DM the bot the pairing code above.
-        </p>
+        <EmptyState
+          title="No recipients paired"
+          description="DM the bot the pairing code above — paired phones appear here automatically."
+        />
       {:else}
         <Table.Root>
           <Table.Header>
@@ -276,8 +279,13 @@
           </Table.Header>
           <Table.Body>
             {#each beacons as b (b.chat_id)}
-              <Table.Row>
-                <Table.Cell class="font-medium">{b.label}</Table.Cell>
+              <Table.Row class="transition-colors hover:bg-primary/5">
+                <Table.Cell class="font-medium">
+                  <span class="flex items-center gap-2">
+                    <StatusDot state={b.enabled ? "online" : "offline"} />
+                    {b.label}
+                  </span>
+                </Table.Cell>
                 <Table.Cell class="tabular-nums text-muted-foreground">{b.chat_id}</Table.Cell>
                 <Table.Cell>
                   <div class="flex items-center gap-2">

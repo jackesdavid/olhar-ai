@@ -11,6 +11,9 @@
   import * as Card from "$lib/components/ui/card";
   import * as Select from "$lib/components/ui/select";
   import { Button } from "$lib/components/ui/button";
+  import Loader from "$lib/components/loader.svelte";
+  import EmptyState from "$lib/components/empty-state.svelte";
+  import StatusDot from "$lib/components/status-dot.svelte";
   import { Label } from "$lib/components/ui/label";
 
   import type { Device, StreamInfo } from "$lib/types";
@@ -102,24 +105,17 @@
   </div>
 
   {#if loading}
-    <p class="py-10 text-center text-sm text-muted-foreground">Loading streams…</p>
+    <Loader label="Loading streams…" />
   {:else}
     <Card.Root>
       <Card.Content class="space-y-4 pt-6">
         {#if playable.length === 0}
-          <div
-            class="flex flex-col items-center gap-3 rounded-md border border-dashed border-border py-12 text-center"
+          <EmptyState
+            title="No camera streams yet"
+            description="Add a camera and validate its credentials on the Devices page — that stores the RTSP URL this screen needs."
           >
-            <VideoOff class="size-8 text-muted-foreground" />
-            <div>
-              <p class="text-sm font-medium">No camera streams available</p>
-              <p class="text-sm text-muted-foreground">
-                Add a camera and validate its credentials on the
-                <a href="/devices" class="underline underline-offset-4">Devices</a> page first —
-                that stores its RTSP URL, which this screen needs.
-              </p>
-            </div>
-          </div>
+            <Button href="/devices" variant="outline">Go to Devices</Button>
+          </EmptyState>
         {:else}
           <div class="space-y-2">
             <Label>Camera</Label>
@@ -141,8 +137,14 @@
           <!-- 16:9 framed player. go2rtc serves its auto-negotiating player at
                http://localhost:1984/stream.html?src=<stream> (WebRTC → MSE →
                MJPEG fallback so WKWebView gets a frame); same-origin to :1984. -->
-          <div class="frame">
+          <div class="frame relative">
             {#if selectedStream}
+              <div
+                class="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-1.5 rounded-full border border-primary/30 bg-background/70 px-2.5 py-1 text-[11px] font-medium tracking-wide text-primary backdrop-blur"
+              >
+                <StatusDot state="online" />
+                LIVE
+              </div>
               {#key selectedStream.name}
                 <iframe
                   title="Live camera {selected?.name ?? ''}"

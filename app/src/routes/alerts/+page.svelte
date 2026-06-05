@@ -18,6 +18,8 @@
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import { Badge } from "$lib/components/ui/badge";
+  import Loader from "$lib/components/loader.svelte";
+  import EmptyState from "$lib/components/empty-state.svelte";
 
   import type { Alert, AlertLevel, AlertStats } from "$lib/types";
 
@@ -266,12 +268,12 @@
     </Card.Header>
     <Card.Content>
       {#if loading}
-        <p class="py-6 text-center text-sm text-muted-foreground">Loading…</p>
+        <Loader label="Loading alerts…" />
       {:else if alerts.length === 0}
-        <p class="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
-          <BellRing class="size-6 opacity-50" />
-          No alerts yet. Create one with “New alert”.
-        </p>
+        <EmptyState
+          title="All clear"
+          description="No alerts yet. Raise one with “New alert”, or let a workflow create them automatically."
+        />
       {:else}
         <Table.Root>
           <Table.Header>

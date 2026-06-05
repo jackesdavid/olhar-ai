@@ -23,6 +23,7 @@
   import { Label } from "$lib/components/ui/label";
   import { Badge } from "$lib/components/ui/badge";
   import { Separator } from "$lib/components/ui/separator";
+  import Loader from "$lib/components/loader.svelte";
 
   import MapScene from "$lib/three/MapScene.svelte";
   import type { Device, MapRoom } from "$lib/types";
@@ -180,12 +181,12 @@
   </div>
 
   {#if loading}
-    <p class="py-10 text-center text-sm text-muted-foreground">Loading map…</p>
+    <Loader label="Loading map…" />
   {:else}
     <div class="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[1fr_22rem]">
       <!-- 3D canvas -->
       <Card.Root class="min-h-[24rem] overflow-hidden p-0">
-        <div class="h-full w-full bg-[#0e1320]">
+        <div class="h-full w-full bg-[oklch(0.145_0.006_162)]">
           <Canvas>
             <MapScene {rooms} bind:selected={selectedId} onCameraClick={goLive} />
           </Canvas>

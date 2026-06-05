@@ -21,6 +21,9 @@
   import { Label } from "$lib/components/ui/label";
   import { Badge } from "$lib/components/ui/badge";
   import { Separator } from "$lib/components/ui/separator";
+  import Loader from "$lib/components/loader.svelte";
+  import EmptyState from "$lib/components/empty-state.svelte";
+  import StatusDot from "$lib/components/status-dot.svelte";
 
   import type { Device, DiscoveredDevice } from "$lib/types";
 
@@ -244,11 +247,16 @@
     </Card.Header>
     <Card.Content>
       {#if loading}
-        <p class="py-6 text-center text-sm text-muted-foreground">Loading…</p>
+        <Loader label="Loading devices…" />
       {:else if devices.length === 0}
-        <p class="py-6 text-center text-sm text-muted-foreground">
-          No saved devices. Scan the network to find cameras.
-        </p>
+        <EmptyState
+          title="No devices yet"
+          description="Scan the local network to discover ONVIF cameras nearby."
+        >
+          <Button onclick={scan} disabled={scanning}>
+            <Radar class="size-4" /> Scan network
+          </Button>
+        </EmptyState>
       {:else}
         <Table.Root>
           <Table.Header>
@@ -262,13 +270,23 @@
           </Table.Header>
           <Table.Body>
             {#each devices as d (d.ip)}
-              <Table.Row>
-                <Table.Cell class="font-medium">{d.name}</Table.Cell>
+              <Table.Row class="transition-colors hover:bg-primary/5">
+                <Table.Cell class="font-medium">
+                  <span class="flex items-center gap-2">
+                    <StatusDot state={d.rtsp_url && d.rtsp_url.trim() ? "online" : "offline"} />
+                    {d.name}
+                  </span>
+                </Table.Cell>
                 <Table.Cell class="tabular-nums text-muted-foreground">{d.ip}</Table.Cell>
                 <Table.Cell class="text-muted-foreground">{makeModel(d)}</Table.Cell>
                 <Table.Cell>
                   {#if d.username}
-                    <Badge variant="secondary">Saved</Badge>
+                    <Badge
+                      variant="outline"
+                      class="border-primary/30 bg-primary/10 text-primary"
+                    >
+                      Saved
+                    </Badge>
                   {:else}
                     <Badge variant="outline">None</Badge>
                   {/if}
@@ -310,9 +328,7 @@
       </Card.Header>
       <Card.Content>
         {#if scanning}
-          <p class="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
-            <LoaderCircle class="size-4 animate-spin" /> Probing the network…
-          </p>
+          <Loader label="Probing the network…" />
         {:else}
           <Table.Root>
             <Table.Header>

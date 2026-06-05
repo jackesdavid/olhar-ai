@@ -44,7 +44,7 @@
 <!-- ground -->
 <T.Mesh rotation.x={-Math.PI / 2} position={[center.x, 0, center.z]}>
   <T.PlaneGeometry args={[300, 300]} />
-  <T.MeshStandardMaterial color="#0e1320" />
+  <T.MeshStandardMaterial color="#0b0f0e" />
 </T.Mesh>
 
 {#each rooms as room (room.id)}
@@ -62,14 +62,16 @@
   >
     <T.BoxGeometry args={[Math.max(room.w, 0.1), WALL, Math.max(room.h, 0.1)]} />
     <T.MeshStandardMaterial
-      color={isSel ? "#f59e0b" : "#3b82f6"}
+      color={isSel ? "#10b981" : "#334155"}
+      emissive={isSel ? "#10b981" : "#000000"}
+      emissiveIntensity={isSel ? 0.3 : 0}
       transparent
       opacity={0.85}
       roughness={0.6}
     />
   </T.Mesh>
 
-  <!-- camera markers (cyan cones) — clicking one jumps to Live -->
+  <!-- camera markers (emerald cones) — clicking one jumps to Live -->
   {#each room.cameras as cam (cam.ip)}
     <T.Mesh
       position={[room.x + cam.dx, WALL + 1.1, room.y + cam.dy]}
@@ -81,7 +83,7 @@
       onpointerleave={() => (document.body.style.cursor = "default")}
     >
       <T.ConeGeometry args={[0.6, 1.4, 12]} />
-      <T.MeshStandardMaterial color="#22d3ee" emissive="#0891b2" emissiveIntensity={0.4} />
+      <T.MeshStandardMaterial color="#34d399" emissive="#10b981" emissiveIntensity={0.5} />
     </T.Mesh>
   {/each}
 {/each}

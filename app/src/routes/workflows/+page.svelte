@@ -17,6 +17,8 @@
   import { Switch } from "$lib/components/ui/switch";
   import { Badge } from "$lib/components/ui/badge";
   import * as Dialog from "$lib/components/ui/dialog";
+  import Loader from "$lib/components/loader.svelte";
+  import EmptyState from "$lib/components/empty-state.svelte";
 
   // ---- types (the serialized core shapes) ----------------------------------
   type PortType = "text" | "num" | "bool" | "image";
@@ -314,12 +316,11 @@
     </div>
 
     {#if loading}
-      <p class="text-sm text-muted-foreground">Loading…</p>
+      <Loader label="Loading…" size={32} />
     {:else if graphs.length === 0}
-      <p class="flex flex-col items-center gap-2 py-8 text-center text-sm text-muted-foreground">
-        <Workflow class="size-6 opacity-50" />
-        No workflows yet. Create one to start automating.
-      </p>
+      <EmptyState title="No workflows yet" description="Create one to start automating.">
+        <Button size="sm" onclick={openCreate}><Plus class="size-4" /> New workflow</Button>
+      </EmptyState>
     {:else}
       <div class="space-y-1">
         {#each graphs as g (g.id)}
@@ -423,8 +424,11 @@
   <!-- Canvas + palette + config -->
   <section class="flex min-w-0 flex-1 flex-col gap-3">
     {#if !graph}
-      <div class="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-        Select or create a workflow.
+      <div class="flex flex-1 items-center justify-center">
+        <EmptyState
+          title="No workflow selected"
+          description="Pick a workflow on the left, or create one to start wiring nodes."
+        />
       </div>
     {:else}
       <div class="flex flex-wrap items-center gap-2">
