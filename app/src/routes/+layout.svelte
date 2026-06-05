@@ -4,6 +4,7 @@
   import { navItems } from "$lib/nav";
   import { Toaster } from "$lib/components/ui/sonner";
   import SentinelMark from "$lib/components/sentinel-mark.svelte";
+  import SensorField from "$lib/components/sensor-field.svelte";
 
   let { children } = $props();
 
@@ -14,7 +15,9 @@
   }
 </script>
 
-<div class="flex h-screen w-screen overflow-hidden bg-background text-foreground">
+<SensorField />
+
+<div class="flex h-screen w-screen overflow-hidden text-foreground">
   <aside
     class="flex w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
   >
