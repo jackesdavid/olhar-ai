@@ -109,9 +109,12 @@ fn rename_device(
 /// Run an ONVIF WS-Discovery sweep on a blocking task (it's a sync UDP collect).
 #[tauri::command]
 async fn discover_devices() -> Vec<DiscoveredDevice> {
-    tauri::async_runtime::spawn_blocking(onvif::discovery::discover)
+    log::info!("discover_devices: starting ONVIF WS-Discovery…");
+    let found = tauri::async_runtime::spawn_blocking(onvif::discovery::discover)
         .await
-        .unwrap_or_default()
+        .unwrap_or_default();
+    log::info!("discover_devices: found {} device(s)", found.len());
+    found
 }
 
 /// Capture a JPEG snapshot from the saved device with `ip`, returned as a
@@ -129,10 +132,23 @@ async fn capture_snapshot(
         .cloned()
         .ok_or("Device not found.")?;
 
-    let bytes = tauri::async_runtime::spawn_blocking(move || capture_snapshot_bytes(&device))
-        .await
-        .map_err(|e| format!("Snapshot task failed: {e}"))??;
+    log::info!(
+        "capture_snapshot: ip={ip} name='{}' xaddr={} has_creds={} rtsp_url={:?}",
+        device.name,
+        device.xaddr,
+        device.has_credentials(),
+        device.rtsp_url
+    );
 
+    let result = tauri::async_runtime::spawn_blocking(move || capture_snapshot_bytes(&device))
+        .await
+        .map_err(|e| format!("Snapshot task failed: {e}"))?;
+
+    match &result {
+        Ok(b) => log::info!("capture_snapshot: ok — {} bytes", b.len()),
+        Err(e) => log::error!("capture_snapshot failed for ip={ip}: {e}"),
+    }
+    let bytes = result?;
     Ok(format!("data:image/jpeg;base64,{}", B64.encode(&bytes)))
 }
 
@@ -144,20 +160,40 @@ async fn test_credentials(
     username: String,
     password: String,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    log::info!("test_credentials: target={xaddr_or_ip} user={username}");
+    let result = tauri::async_runtime::spawn_blocking(move || {
         onvif::client::test_credentials(&xaddr_or_ip, &username, &password)
     })
     .await
-    .map_err(|e| format!("Credential check task failed: {e}"))?
+    .map_err(|e| format!("Credential check task failed: {e}"))?;
+    match &result {
+        Ok(uri) => log::info!("test_credentials: ok — rtsp {uri}"),
+        Err(e) => log::error!("test_credentials failed: {e}"),
+    }
+    result
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Rust logs → terminal stdout (visible under `task dev`) at Info+.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .target(tauri_plugin_log::Target::new(
+                    tauri_plugin_log::TargetKind::Stdout,
+                ))
+                .level(log::LevelFilter::Info)
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let path = devices_file(&app.handle());
             let store: DeviceStore = Arc::new(Mutex::new(load_devices(&path)));
+            log::info!(
+                "Sentinel backend started — {} device(s) loaded from {}",
+                store.lock().unwrap().len(),
+                path.display()
+            );
             app.manage(store);
             Ok(())
         })

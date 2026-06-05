@@ -1,0 +1,74 @@
+# Task runner (https://taskfile.dev) for the NEW web app (Tauri + SvelteKit) in ./app.
+# The ratatui app at the repo root is unaffected. Install Task: `brew install go-task`.
+# Run `task` to list, `task dev` to launch the desktop app.
+version: "3"
+
+vars:
+  APP: app # the web app directory
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  install:
+    desc: Install the web app's frontend dependencies (npm)
+    dir: "{{.APP}}"
+    cmds:
+      - npm install
+
+  dev:
+    desc: Run the desktop app (Tauri window + SvelteKit dev, hot-reload)
+    dir: "{{.APP}}"
+    env:
+      RUST_BACKTRACE: "1" # full panic traces in the terminal
+    cmds:
+      - npm run tauri dev
+
+  frontend:
+    desc: Run only the SvelteKit dev server (no Tauri window) on :1420
+    dir: "{{.APP}}"
+    cmds:
+      - npm run dev
+
+  build:
+    desc: Build the SvelteKit frontend (static)
+    dir: "{{.APP}}"
+    cmds:
+      - npm run build
+
+  bundle:
+    desc: Build the distributable Tauri desktop bundle (installers)
+    dir: "{{.APP}}"
+    cmds:
+      - npm run tauri build
+
+  check:
+    desc: Type-check the frontend (svelte-check)
+    dir: "{{.APP}}"
+    cmds:
+      - npm run check
+
+  cargo:
+    desc: cargo check the app workspace (Rust backend + crates/core)
+    dir: "{{.APP}}"
+    cmds:
+      - cargo check
+
+  fmt:
+    desc: Format the Rust backend
+    dir: "{{.APP}}"
+    cmds:
+      - cargo fmt
+
+  verify:
+    desc: Full verify — Rust cargo check + SvelteKit build (what CI should gate on)
+    deps: [cargo, build]
+
+  clean:
+    desc: Remove web app build artifacts (build/, .svelte-kit/, target/)
+    dir: "{{.APP}}"
+    cmds:
+      - rm -rf build .svelte-kit src-tauri/target target
