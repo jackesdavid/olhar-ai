@@ -1,9 +1,11 @@
 <script lang="ts">
-  // The living background: a faint emerald dot-lattice (the logo's halftone) with
-  // periodic "pings" — wavefronts that ripple outward from random points and
-  // brighten dots as they pass, like a sensor sweeping. Sits fixed behind all
-  // content. Throttled to ~30fps, paused when the tab is hidden, static fallback
-  // for prefers-reduced-motion. Canvas keeps it cheap regardless of dot count.
+  // The living background. A permanent, dim emerald dot-lattice (the logo's
+  // halftone) — the dots are always *there*, just not activated. Every few
+  // seconds a pulse emanates from the focal centre and a WIDE, soft wavefront
+  // spreads outward: each dot swells up and gently back down as the light passes,
+  // so activation flows smoothly across neighbours (a sensor sweep), never a
+  // sharp blink. Deliberately subtle. Fixed behind content; paused when hidden;
+  // static field under prefers-reduced-motion.
   import { onMount } from "svelte";
 
   let canvas: HTMLCanvasElement;
@@ -15,17 +17,20 @@
 
     const S = 44; // lattice spacing (px)
     const RGB = "52,211,153"; // emerald-400
-    const SPEED = 155; // wavefront px/s
-    const LIFE = 3.4; // ping lifetime (s)
-    const BAND = 26; // wavefront thickness (px)
-    const SPAWN_MS = 2300; // gap between pings
+    const REST = 0.05; // resting alpha — dots are always visible (dim)
+    const PEAK = 0.3; // extra alpha at full activation
+    const SPEED = 90; // px/s the wavefront spreads
+    const BAND = 105; // px — WIDE & soft so activation rises/falls gently
+    const LIFE = 5.2; // s — a pulse fades as it travels outward
+    const SPAWN_MS = 5400; // gap between pulses (calm)
 
     let w = 0;
     let h = 0;
+    let fx = 0; // focal origin
+    let fy = 0;
     let dots: { x: number; y: number; cf: number }[] = [];
-    let pings: { x: number; y: number; t: number }[] = [];
+    let pulses: { x: number; y: number; t: number }[] = [];
     let lastSpawn = 0;
-    let lastFrame = 0;
     let raf = 0;
 
     function rebuild() {
@@ -38,71 +43,59 @@
       canvas.style.height = `${h}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
+      fx = w / 2;
+      fy = h * 0.4; // focal point a touch above centre
+      const maxD = Math.hypot(Math.max(fx, w - fx), Math.max(fy, h - fy)) || 1;
       dots = [];
       const rowH = S * 0.866; // triangular lattice
-      const cx = w / 2;
-      const cy = h * 0.4; // focal point a touch above center
-      const maxD = Math.hypot(Math.max(cx, w - cx), Math.max(cy, h - cy));
       for (let r = 0, y = 0; y <= h + S; r++, y += rowH) {
         const off = r % 2 ? S / 2 : 0;
         for (let x = -off; x <= w + S; x += S) {
-          const cf = 1 - 0.55 * (Math.hypot(x - cx, y - cy) / maxD); // center brighter
-          dots.push({ x, y, cf: Math.max(0.15, cf) });
+          const cf = 1 - 0.45 * (Math.hypot(x - fx, y - fy) / maxD);
+          dots.push({ x, y, cf: Math.max(0.3, cf) });
         }
       }
     }
 
-    function drawStatic() {
+    function draw(now: number) {
       ctx.clearRect(0, 0, w, h);
       for (const d of dots) {
+        let b = 0; // activation 0..1
+        for (const p of pulses) {
+          const age = (now - p.t) / 1000;
+          const radius = age * SPEED;
+          const e = (Math.hypot(d.x - p.x, d.y - p.y) - radius) / BAND;
+          b += Math.exp(-e * e) * Math.max(0, 1 - age / LIFE); // soft swell, fades with travel
+        }
+        if (b > 1) b = 1;
+        const a = (REST + b * PEAK) * d.cf;
         ctx.beginPath();
-        ctx.arc(d.x, d.y, 0.9, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${RGB},${(0.05 * d.cf).toFixed(3)})`;
+        ctx.arc(d.x, d.y, 0.8 + b * 1.2, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${RGB},${a.toFixed(3)})`;
         ctx.fill();
       }
     }
 
     function frame(now: number) {
       raf = requestAnimationFrame(frame);
-      if (document.hidden) return;
-      if (now - lastFrame < 33) return; // ~30fps
-      lastFrame = now;
-
+      if (document.hidden) return; // smooth 60fps; per-frame work is light
       if (now - lastSpawn > SPAWN_MS) {
-        const bx = (Math.random() - 0.5) * 0.7 + 0.5;
-        const by = (Math.random() - 0.5) * 0.7 + 0.45;
-        pings.push({ x: bx * w, y: by * h, t: now });
+        // emanate from the focal centre with a little organic jitter
+        pulses.push({ x: fx + (Math.random() - 0.5) * w * 0.18, y: fy + (Math.random() - 0.5) * h * 0.18, t: now });
         lastSpawn = now;
       }
-      pings = pings.filter((p) => (now - p.t) / 1000 < LIFE);
-
-      ctx.clearRect(0, 0, w, h);
-      for (const d of dots) {
-        let b = 0;
-        for (const p of pings) {
-          const age = (now - p.t) / 1000;
-          const radius = age * SPEED;
-          const edge = (Math.hypot(d.x - p.x, d.y - p.y) - radius) / BAND;
-          b += Math.exp(-edge * edge) * Math.max(0, 1 - age / LIFE);
-        }
-        b = b > 1 ? 1 : b;
-        const a = (0.05 + b * 0.6) * d.cf;
-        if (a < 0.012) continue;
-        ctx.beginPath();
-        ctx.arc(d.x, d.y, 0.8 + b * 1.8, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${RGB},${a.toFixed(3)})`;
-        ctx.fill();
-      }
+      pulses = pulses.filter((p) => (now - p.t) / 1000 < LIFE);
+      draw(now);
     }
 
     rebuild();
     const onResize = () => {
       rebuild();
-      if (reduce) drawStatic();
+      if (reduce) draw(0);
     };
     window.addEventListener("resize", onResize);
 
-    if (reduce) drawStatic();
+    if (reduce) draw(0);
     else raf = requestAnimationFrame(frame);
 
     return () => {
