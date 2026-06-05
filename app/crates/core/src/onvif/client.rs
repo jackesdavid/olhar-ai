@@ -185,6 +185,12 @@ pub fn rtsp_url_with_creds(rtsp: &str, user: &str, pass: &str) -> String {
 }
 
 fn snapshot_from_rtsp(rtsp: &str, user: &str, pass: &str) -> Result<Vec<u8>, String> {
+    if rtsp.trim().is_empty() {
+        return Err(
+            "Camera has no RTSP URL — validate its credentials first (Devices → Test credentials)."
+                .into(),
+        );
+    }
     let url = rtsp_url_with_creds(rtsp, user, pass);
 
     let out = Command::new("ffmpeg")

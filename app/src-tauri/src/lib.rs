@@ -128,16 +128,49 @@ async fn discover_devices() -> Vec<DiscoveredDevice> {
 /// `data:image/jpeg;base64,…` URL ready for an `<img src>`.
 #[tauri::command]
 async fn capture_snapshot(
+    app: tauri::AppHandle,
     state: tauri::State<'_, DeviceStore>,
     ip: String,
 ) -> Result<String, String> {
-    let device = state
+    let mut device = state
         .lock()
         .unwrap()
         .iter()
         .find(|d| d.ip == ip)
         .cloned()
         .ok_or("Device not found.")?;
+
+    // Self-heal: many cameras have no ONVIF GetSnapshotUri and need the RTSP fallback,
+    // which requires `rtsp_url`. If it's missing but we have creds, resolve it via
+    // ONVIF (GetStreamUri) and persist it onto the device — so snapshots + live "just work".
+    let needs_rtsp = device.rtsp_url.as_deref().unwrap_or("").trim().is_empty();
+    if needs_rtsp && device.has_credentials() {
+        log::info!("capture_snapshot: rtsp_url missing — resolving via ONVIF for ip={ip}");
+        let xaddr = if device.xaddr.is_empty() {
+            device.ip.clone()
+        } else {
+            device.xaddr.clone()
+        };
+        let user = device.username.clone().unwrap_or_default();
+        let pass = device.password.clone().unwrap_or_default();
+        match tauri::async_runtime::spawn_blocking(move || {
+            onvif::client::test_credentials(&xaddr, &user, &pass)
+        })
+        .await
+        .map_err(|e| format!("Resolve task failed: {e}"))?
+        {
+            Ok(rtsp) => {
+                device.rtsp_url = Some(rtsp.clone());
+                let mut devices = state.lock().unwrap();
+                if let Some(d) = devices.iter_mut().find(|d| d.ip == ip) {
+                    d.rtsp_url = Some(rtsp);
+                }
+                save_devices(&devices_file(&app), &devices);
+                log::info!("capture_snapshot: resolved + persisted rtsp_url for ip={ip}");
+            }
+            Err(e) => log::warn!("capture_snapshot: could not resolve rtsp_url for ip={ip}: {e}"),
+        }
+    }
 
     log::info!(
         "capture_snapshot: ip={ip} name='{}' xaddr={} has_creds={} rtsp_url={:?}",
