@@ -3,6 +3,11 @@
 # Run `task` to list, `task dev` to launch the desktop app.
 version: "3"
 
+# Load secrets from the gitignored root .env (ANTHROPIC_API_KEY, ELEVENLABS_*,
+# TELEGRAM_*). Copy .env.example → .env and fill it in. Single source of truth,
+# shared with the ratatui debugger (VS Code launch.json envFile).
+dotenv: [".env"]
+
 vars:
   APP: app # the web app directory
 
