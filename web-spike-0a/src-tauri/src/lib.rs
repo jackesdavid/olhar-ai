@@ -69,6 +69,52 @@ fn list_alerts() -> Vec<Alert> {
     alerts
 }
 
+// ---- Map rooms (Phase-0c: Bishop's floor-plan data → Threlte 3D scene) ------
+// Spike copy of `bishop::map::domain::{MapRoom, RoomCamera}`.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoomCamera {
+    pub ip: String,
+    #[serde(default)]
+    pub dx: i32,
+    #[serde(default)]
+    pub dy: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MapRoom {
+    pub id: u32,
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    #[serde(default)]
+    pub cameras: Vec<RoomCamera>,
+}
+
+fn load_rooms() -> Vec<MapRoom> {
+    let candidates = [
+        PathBuf::from("map.json"),
+        PathBuf::from("../map.json"),
+        PathBuf::from("../../map.json"), // repo root, from web-spike-0a/src-tauri
+    ];
+    for p in candidates {
+        if let Ok(s) = std::fs::read_to_string(&p) {
+            if let Ok(v) = serde_json::from_str::<Vec<MapRoom>>(&s) {
+                return v;
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Returns Bishop's floor-plan rooms (from `map.json`) for the 3D scene.
+#[tauri::command]
+fn list_rooms() -> Vec<MapRoom> {
+    load_rooms()
+}
+
 /// Phase-0b: best-effort start of the **go2rtc** sidecar (an RTSP→WebRTC gateway) pointing
 /// at `go2rtc.yaml`. The webview then plays the camera via go2rtc's WebRTC player — the
 /// least-broken cross-platform path for live video in a Tauri webview.
@@ -102,7 +148,7 @@ pub fn run() {
             spawn_go2rtc();
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_alerts])
+        .invoke_handler(tauri::generate_handler![list_alerts, list_rooms])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -70,3 +70,39 @@ If Linux fails, the fallbacks (in order): build/enable WebKitGTK WebRTC; or swit
 **MSE/fMP4** (go2rtc also serves that) instead of WebRTC; or last resort, ffmpeg→JPEG-over-IPC for
 a low-fps preview. **This OS matrix is the decision point for the whole migration's live-video story.**
 
+---
+
+## Phase-0c — 3D floor-plan (Threlte / Three.js)
+
+Renders Bishop's **real `map.json` rooms** as 3D objects, proving the map-in-3D path.
+
+Pieces:
+- `src-tauri/src/lib.rs::list_rooms` — a command returning Bishop's rooms (spike copy of
+  `map::domain::{MapRoom, RoomCamera}`, reading the repo's `map.json`).
+- `src/lib/three/Scene.svelte` — a **Threlte** scene: rooms as extruded boxes, camera markers
+  as cones, **OrbitControls** (drag/zoom), and **click-to-select** via `interactivity()`
+  (raycasting). Declarative Three.js, native JS, **zero WASM↔JS boundary** — the key win over
+  the Leptos route.
+- `src/routes/map3d/+page.svelte` — hosts the `<Canvas>` + a HUD (room/camera counts, selection).
+
+Deps: `@threlte/core` 8, `@threlte/extras` 9, `three` 0.184 (Svelte 5).
+
+**Validated here:** `npm run build` (Threlte route bundles) + `cargo check` both clean.
+**Run it:** `npm run tauri dev` → open "Floor plan 3D"; drag to orbit, click a room to select.
+
+> "Real objects" (GLB models instead of boxes) drop in via Threlte's `useGltf` + a bundled
+> `.glb` asset — same scene, one loader call.
+
+---
+
+## Summary — all three Phase-0 spikes done
+
+| Spike | Proves | Status |
+|---|---|---|
+| **0a** alerts over IPC | Tauri↔SvelteKit↔Rust-core reuse | ✅ builds + compiles (run for the window) |
+| **0b** live video | go2rtc→WebRTC in the webview | ✅ harness builds; **you run the cross-OS test** (the go/no-go) |
+| **0c** 3D floor-plan | Threlte 3D from real map data | ✅ builds + compiles (run for the scene) |
+
+Run all three from one window: `npm run tauri dev` → nav links **Floor plan 3D** / **Live camera**
+on the Alerts page.
+

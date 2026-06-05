@@ -60,6 +60,7 @@
       </p>
     </div>
     <div class="actions">
+      <a class="link" href="/map3d">Floor plan 3D →</a>
       <a class="link" href="/live">Live camera →</a>
       <button class="refresh" onclick={load} disabled={loading}>
         {loading ? "Loading…" : "Refresh"}
