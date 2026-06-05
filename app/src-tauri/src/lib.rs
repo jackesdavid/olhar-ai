@@ -16,6 +16,7 @@ use app_core::alerts::{self, load_alerts, Alert, AlertLevel, AlertStore};
 use app_core::config::{load_settings, save_settings, Settings};
 use app_core::device_actions::capture_snapshot_bytes;
 use app_core::devices::{load_devices, save_devices, Device, DeviceStore};
+use app_core::map::{load_map as core_load_map, save_map as core_save_map, MapRoom};
 use app_core::notification::{
     self, load_targets, NotificationConfig, NotificationStore, NotificationTarget,
 };
@@ -96,6 +97,16 @@ fn notifications_file(app: &tauri::AppHandle) -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."));
     let _ = std::fs::create_dir_all(&dir);
     dir.join("notifications.json")
+}
+
+/// The web app's floor-plan file, under the platform app-data dir (created if missing).
+fn map_file(app: &tauri::AppHandle) -> PathBuf {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("map.json")
 }
 
 /// The web app's Telegram config file, under the platform app-data dir. Holds the
@@ -738,6 +749,22 @@ async fn ensure_streams(
     Ok(streams)
 }
 
+// ---- Map (3D floor plan) ---------------------------------------------------
+
+/// The saved floor plan (rooms + assigned cameras). Stateless: the frontend owns
+/// the working copy and saves the whole array back.
+#[tauri::command]
+fn load_map(app: tauri::AppHandle) -> Vec<MapRoom> {
+    core_load_map(&map_file(&app))
+}
+
+/// Persist the whole floor-plan array to `<app_data_dir>/map.json`.
+#[tauri::command]
+fn save_map(app: tauri::AppHandle, rooms: Vec<MapRoom>) {
+    core_save_map(&map_file(&app), &rooms);
+    log::info!("save_map: persisted {} room(s)", rooms.len());
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -829,6 +856,8 @@ pub fn run() {
             delete_beacon,
             test_beacon,
             deliver_alert,
+            load_map,
+            save_map,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

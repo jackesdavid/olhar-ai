@@ -86,6 +86,26 @@ export type TelegramConfigState = {
   pairing_code: string;
 };
 
+/** A camera assigned to a room (matches `app_core::map::RoomCamera`).
+ * Positioned by an offset (`dx,dy`) in cells from the room's top-left. */
+export type RoomCamera = {
+  ip: string;
+  dx: number;
+  dy: number;
+};
+
+/** One room on the floor plan (matches `app_core::map::MapRoom`).
+ * Axis-aligned rectangle on an integer grid, y-down/top-left origin. */
+export type MapRoom = {
+  id: number;
+  name: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  cameras: RoomCamera[];
+};
+
 export const DEFAULT_SETTINGS: Settings = {
   master: 0.8,
   voice: 0.8,

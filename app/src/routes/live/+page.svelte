@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { page } from "$app/stores";
   import { toast } from "svelte-sonner";
 
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
@@ -30,7 +31,7 @@
   const selectedStream = $derived(selectedIp ? streamByIp.get(selectedIp) ?? null : null);
   const selectedLabel = $derived(selected ? selected.name : "Select a camera");
 
-  async function refresh(announce = false) {
+  async function refresh(announce = false, prefer = "") {
     try {
       const [devs, strs] = await Promise.all([
         invoke<Device[]>("list_devices"),
@@ -39,6 +40,10 @@
       devices = devs;
       streams = strs;
 
+      // Preselect a requested camera (e.g. from /map's "Live") if it has a stream.
+      if (prefer && strs.some((s) => s.ip === prefer)) {
+        selectedIp = prefer;
+      }
       // Keep / pick a sensible selection.
       if (!selectedIp || !strs.some((s) => s.ip === selectedIp)) {
         selectedIp = strs.length > 0 ? strs[0].ip : "";
@@ -61,7 +66,9 @@
 
   onMount(async () => {
     loading = true;
-    await refresh(false);
+    // Honor a ?cam=<ip> deep-link (from the Map page's camera markers / Live buttons).
+    const cam = $page.url.searchParams.get("cam") ?? "";
+    await refresh(false, cam);
     loading = false;
   });
 

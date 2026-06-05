@@ -16,12 +16,15 @@
     "@internationalized/date": "^3.12.2",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
+    "@threlte/core": "^8.5.16",
+    "@threlte/extras": "^9.21.0",
     "bits-ui": "^2.18.1",
     "clsx": "^2.1.1",
     "mode-watcher": "^1.1.0",
     "svelte-sonner": "^1.1.1",
     "tailwind-merge": "^3.6.0",
-    "tailwind-variants": "^3.2.2"
+    "tailwind-variants": "^3.2.2",
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@lucide/svelte": "^1.17.0",
@@ -31,6 +34,7 @@
     "@tailwindcss/vite": "^4.3.0",
     "@tauri-apps/cli": "^2",
     "@types/node": "^25.9.1",
+    "@types/three": "^0.184.1",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "tailwindcss": "^4.3.0",

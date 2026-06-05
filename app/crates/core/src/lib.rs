@@ -11,5 +11,6 @@ pub mod alerts;
 pub mod config;
 pub mod device_actions;
 pub mod devices;
+pub mod map;
 pub mod notification;
 pub mod onvif;
