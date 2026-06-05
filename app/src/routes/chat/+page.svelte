@@ -12,6 +12,9 @@
   import User from "@lucide/svelte/icons/user";
   import Video from "@lucide/svelte/icons/video";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
+  import Mic from "@lucide/svelte/icons/mic";
+  import Volume2 from "@lucide/svelte/icons/volume-2";
+  import VolumeX from "@lucide/svelte/icons/volume-x";
 
   import { Button } from "$lib/components/ui/button";
 
@@ -26,6 +29,14 @@
   let ready = $state(true);
   let liveIp = $state<string | null>(null);
 
+  // ---- voice (TTS) + dictation (STT) ---------------------------------------
+  let voiceReady = $state(false);
+  let speakReplies = $state(false);
+  let recording = $state(false);
+  let transcribing = $state(false);
+  let mediaRecorder: MediaRecorder | null = null;
+  let chunks: Blob[] = [];
+
   let scroller = $state<HTMLDivElement | null>(null);
 
   async function scrollToBottom() {
@@ -35,6 +46,7 @@
 
   onMount(() => {
     invoke<boolean>("chat_ready").then((r) => (ready = r)).catch(() => (ready = false));
+    invoke<boolean>("voice_ready").then((r) => (voiceReady = r)).catch(() => (voiceReady = false));
 
     // Tool side-effects streamed from the backend during a turn.
     const unImg = listen<{ camera: string; data: string }>("chat-image", (e) => {
@@ -61,7 +73,10 @@
     await scrollToBottom();
     try {
       const reply = await invoke<string>("send_chat", { text });
-      if (reply) messages = [...messages, { kind: "bishop", text: reply }];
+      if (reply) {
+        messages = [...messages, { kind: "bishop", text: reply }];
+        if (speakReplies && voiceReady) speakText(reply);
+      }
     } catch (err) {
       toast.error("Bishop", { description: String(err) });
       messages = [...messages, { kind: "bishop", text: `⚠️ ${String(err)}` }];
@@ -88,6 +103,72 @@
       send();
     }
   }
+
+  // ---- text-to-speech ------------------------------------------------------
+  async function speakText(text: string) {
+    try {
+      const b64 = await invoke<string>("speak", { text });
+      const audio = new Audio(`data:audio/mpeg;base64,${b64}`);
+      audio.play().catch(() => {});
+    } catch (err) {
+      console.error("speak failed", err);
+    }
+  }
+
+  // ---- dictation (mic → Scribe → send) -------------------------------------
+  function bytesToBase64(bytes: Uint8Array): string {
+    let bin = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return btoa(bin);
+  }
+
+  async function toggleMic() {
+    if (recording) {
+      mediaRecorder?.stop();
+      return;
+    }
+    if (!voiceReady) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      chunks = [];
+      const mr = new MediaRecorder(stream);
+      mediaRecorder = mr;
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      mr.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        recording = false;
+        const blob = new Blob(chunks, { type: mr.mimeType || "audio/webm" });
+        await transcribeAndSend(blob);
+      };
+      mr.start();
+      recording = true;
+    } catch (err) {
+      toast.error("Microphone unavailable", { description: String(err) });
+    }
+  }
+
+  async function transcribeAndSend(blob: Blob) {
+    if (blob.size === 0) return;
+    transcribing = true;
+    try {
+      const buf = new Uint8Array(await blob.arrayBuffer());
+      const audioB64 = bytesToBase64(buf);
+      const transcript = await invoke<string>("transcribe", { audioB64, mime: blob.type });
+      if (transcript) {
+        input = transcript;
+        await send();
+      }
+    } catch (err) {
+      toast.error("Couldn't transcribe that", { description: String(err) });
+    } finally {
+      transcribing = false;
+    }
+  }
 </script>
 
 <div class="flex h-[calc(100vh-3.5rem)] flex-col">
@@ -98,10 +179,23 @@
         Talk to Bishop — he can act on your cameras, alerts, and beacons.
       </p>
     </div>
-    <Button variant="outline" size="sm" onclick={reset} disabled={messages.length === 0 || sending}>
-      <Trash2 class="size-4" />
-      Reset
-    </Button>
+    <div class="flex items-center gap-2">
+      {#if voiceReady}
+        <Button
+          variant={speakReplies ? "default" : "outline"}
+          size="sm"
+          title={speakReplies ? "Bishop's replies are spoken" : "Speak Bishop's replies"}
+          onclick={() => (speakReplies = !speakReplies)}
+        >
+          {#if speakReplies}<Volume2 class="size-4" />{:else}<VolumeX class="size-4" />{/if}
+          Voice
+        </Button>
+      {/if}
+      <Button variant="outline" size="sm" onclick={reset} disabled={messages.length === 0 || sending}>
+        <Trash2 class="size-4" />
+        Reset
+      </Button>
+    </div>
   </div>
 
   {#if !ready}
@@ -200,6 +294,20 @@
         disabled={!ready || sending}
         class="flex max-h-40 min-h-10 w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
       ></textarea>
+      {#if voiceReady}
+        <Button
+          variant={recording ? "destructive" : "outline"}
+          onclick={toggleMic}
+          disabled={!ready || sending || transcribing}
+          title={recording ? "Stop and transcribe" : "Dictate a message"}
+        >
+          {#if transcribing}
+            <LoaderCircle class="size-4 animate-spin" />
+          {:else}
+            <Mic class="size-4 {recording ? 'animate-pulse' : ''}" />
+          {/if}
+        </Button>
+      {/if}
       <Button onclick={send} disabled={!ready || sending || input.trim().length === 0}>
         {#if sending}
           <LoaderCircle class="size-4 animate-spin" />
@@ -209,7 +317,7 @@
       </Button>
     </div>
     <p class="mt-1.5 px-1 text-xs text-muted-foreground">
-      Enter to send · Shift+Enter for a new line
+      Enter to send · Shift+Enter for a new line{#if voiceReady} · mic to dictate{/if}
     </p>
   </div>
 </div>

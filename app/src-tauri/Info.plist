@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Required for the WebView's getUserMedia() so the operator can dictate
+       messages to Bishop (unit 021 STT). Without this string macOS denies
+       microphone access. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Sentinel uses the microphone so you can dictate messages to Bishop.</string>
+</dict>
+</plist>
