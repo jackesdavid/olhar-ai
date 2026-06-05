@@ -13,11 +13,63 @@ tasks:
       - task --list
     silent: true
 
+  setup:
+    desc: One-shot — fetch & install ALL deps (npm + Rust crates + go2rtc sidecar)
+    dir: "{{.APP}}"
+    cmds:
+      - npm install
+      - cargo fetch
+      - task: fetch-go2rtc
+      - cmd: echo "✅ Setup complete. Run 'task doctor' to check system tools, then 'task dev'."
+        silent: true
+
   install:
     desc: Install the web app's frontend dependencies (npm)
     dir: "{{.APP}}"
     cmds:
       - npm install
+
+  fetch-go2rtc:
+    desc: Download the go2rtc live-video sidecar into src-tauri/binaries (skips if present)
+    dir: "{{.APP}}"
+    status:
+      - test -x src-tauri/binaries/go2rtc
+    cmds:
+      - |
+        set -e
+        mkdir -p src-tauri/binaries
+        os=$(uname -s); arch=$(uname -m)
+        case "$os-$arch" in
+          Darwin-arm64)               asset=go2rtc_mac_arm64 ;;
+          Darwin-x86_64)              asset=go2rtc_mac_amd64 ;;
+          Linux-x86_64)               asset=go2rtc_linux_amd64 ;;
+          Linux-aarch64|Linux-arm64)  asset=go2rtc_linux_arm64 ;;
+          *) echo "Unsupported $os-$arch — fetch go2rtc manually (see src-tauri/binaries/DOWNLOAD.md)"; exit 1 ;;
+        esac
+        echo "Fetching $asset (latest)…"
+        curl -fL -o src-tauri/binaries/go2rtc "https://github.com/AlexxIT/go2rtc/releases/latest/download/$asset"
+        chmod +x src-tauri/binaries/go2rtc
+        echo "✓ go2rtc → src-tauri/binaries/go2rtc"
+
+  doctor:
+    desc: Check required system tools are installed (node, npm, cargo, ffmpeg)
+    silent: true
+    cmds:
+      - |
+        missing=0
+        for t in node npm cargo ffmpeg; do
+          if command -v "$t" >/dev/null 2>&1; then
+            echo "✓ $t  ($(command -v "$t"))"
+          else
+            echo "✗ $t  — MISSING"
+            missing=1
+          fi
+        done
+        if [ "$missing" -ne 0 ]; then
+          echo ""
+          echo "Install on macOS:  brew install node rust ffmpeg"
+          exit 1
+        fi
 
   dev:
     desc: Run the desktop app (Tauri window + SvelteKit dev, hot-reload)
