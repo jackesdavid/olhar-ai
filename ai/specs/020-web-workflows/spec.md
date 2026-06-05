@@ -1,6 +1,8 @@
 # Spec: 020 — Web migration: Workflows (graph-based automation)
 
-> **Status: IN PROGRESS — web migration unit (M2 finisher).** Ports the ratatui 013 engine
+> **Status: DONE (code) — web migration unit (M2 finisher).** cargo check + npm build clean; 35
+> core tests pass (14 new); ratatui src/ untouched. Trigger/concurrency firing is runtime-verified
+> by the operator. Completes **M2**. Ports the ratatui 013 engine
 > (`domain`/`node`/`engine`) into `app/crates/core/workflows` with path-parameterized persistence
 > and the web `ToolContext`; the ratatui editor (`handler`/`view`) is replaced by Tauri commands +
 > a Svelte node editor. Triggers/concurrency run in a backend poller. Ratatui `src/` untouched.
