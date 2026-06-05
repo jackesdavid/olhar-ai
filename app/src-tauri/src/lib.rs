@@ -30,6 +30,29 @@ use tauri::Manager;
 /// Managed Tauri state; `None` until the first spawn.
 type Go2rtcHandle = Arc<Mutex<Option<Child>>>;
 
+/// The current pairing poller's stop flag, so a config change can restart it
+/// without an app restart. Managed Tauri state.
+type PairingHandle = Arc<Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>>;
+
+/// (Re)start the Telegram pairing poller: signal any running one to stop, then
+/// start a fresh poller if Telegram is configured with a pairing code.
+fn restart_pairing(app: &tauri::AppHandle, store: NotificationStore, handle: &PairingHandle) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    if let Some(old) = handle.lock().unwrap().take() {
+        old.store(true, Ordering::Relaxed); // tell the previous poller to exit
+    }
+    match resolve_telegram_config(app) {
+        Some(cfg) if cfg.can_pair() => {
+            let stop = Arc::new(AtomicBool::new(false));
+            *handle.lock().unwrap() = Some(stop.clone());
+            notification::spawn_pairing(store, cfg, notifications_file(app), stop);
+            log::info!("Pairing poller (re)started.");
+        }
+        Some(_) => log::info!("Telegram token set but no pairing code — poller not started."),
+        None => log::info!("Telegram not configured — poller not started."),
+    }
+}
+
 /// The web app's settings file, under the platform app-config dir (created if missing).
 fn settings_file(app: &tauri::AppHandle) -> PathBuf {
     let dir = app
@@ -463,11 +486,25 @@ fn get_telegram_config(app: tauri::AppHandle) -> TelegramConfigState {
 #[tauri::command]
 fn set_telegram_config(
     app: tauri::AppHandle,
+    notif: tauri::State<'_, NotificationStore>,
+    pairing: tauri::State<'_, PairingHandle>,
     bot_token: String,
     pairing_code: String,
 ) -> Result<String, String> {
+    // The token is never sent back to the UI, so a blank field means "keep the
+    // saved one" — preserve it instead of wiping it.
+    let token = {
+        let t = bot_token.trim();
+        if t.is_empty() {
+            load_stored_telegram(&app)
+                .map(|s| s.bot_token)
+                .unwrap_or_default()
+        } else {
+            t.to_string()
+        }
+    };
     let cfg = StoredTelegramConfig {
-        bot_token: bot_token.trim().to_string(),
+        bot_token: token,
         pairing_code: pairing_code.trim().to_string(),
     };
     let json = serde_json::to_string_pretty(&cfg).map_err(|e| format!("serialize failed: {e}"))?;
@@ -477,7 +514,9 @@ fn set_telegram_config(
         if cfg.bot_token.is_empty() { "unset" } else { "set" },
         if cfg.pairing_code.is_empty() { "unset" } else { "set" }
     );
-    Ok("Saved. Restart the app to (re)start the pairing listener.".into())
+    // Restart the pairing listener with the new config — no app restart needed.
+    restart_pairing(&app, notif.inner().clone(), &pairing);
+    Ok("Saved — pairing listener restarted.".into())
 }
 
 /// The paired beacons (Telegram targets).
@@ -741,23 +780,12 @@ pub fn run() {
             );
             app.manage(notif_store);
 
-            // Pairing poller: if Telegram is configured (saved file or env), start
-            // the inbound `/pair <code>` listener on a background thread. It clones
-            // the store and persists newly-paired targets to notifications.json. A
-            // later config change needs an app restart to pick up.
-            if let Some(cfg) = resolve_telegram_config(&app.handle()) {
-                if cfg.can_pair() {
-                    let store = app.handle().state::<NotificationStore>().inner().clone();
-                    log::info!("Pairing poller starting (Telegram configured).");
-                    notification::spawn_pairing(store, cfg, notif_path);
-                } else {
-                    log::info!(
-                        "Telegram token set but no pairing code — pairing poller not started."
-                    );
-                }
-            } else {
-                log::info!("Telegram not configured — pairing poller not started.");
-            }
+            // Pairing poller: managed stop-handle so `set_telegram_config` can
+            // restart the inbound `/pair <code>` listener without an app restart.
+            let pairing: PairingHandle = Arc::new(Mutex::new(None));
+            app.manage(pairing.clone());
+            let store = app.handle().state::<NotificationStore>().inner().clone();
+            restart_pairing(&app.handle(), store, &pairing);
 
             // Live video: managed handle for the go2rtc sidecar, then a
             // best-effort startup spawn so streams are ready on launch (no-op if

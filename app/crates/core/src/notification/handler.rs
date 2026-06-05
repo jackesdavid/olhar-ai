@@ -7,6 +7,8 @@
 //! web app drives those from Svelte. Persistence is path-parameterized so the
 //! poller writes under the OS app-data dir.
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -83,14 +85,23 @@ pub fn dispatch(
 /// registers it as a trusted target, persists it to `path`, and replies to
 /// confirm. Wrong codes / unpaired chats are ignored. Never panics; on any error
 /// it backs off and retries.
-pub fn spawn_pairing(store: NotificationStore, cfg: NotificationConfig, path: PathBuf) {
+pub fn spawn_pairing(
+    store: NotificationStore,
+    cfg: NotificationConfig,
+    path: PathBuf,
+    stop: Arc<AtomicBool>,
+) {
     if !cfg.can_pair() {
         return; // no pairing code → accept no pairings
     }
     thread::spawn(move || {
         let mut offset: i64 = 0; // 0 = take the current backlog once
         loop {
-            match client::get_updates(&cfg, offset, 30) {
+            if stop.load(Ordering::Relaxed) {
+                break; // a newer config replaced us
+            }
+            // 15s long-poll so the stop flag is checked promptly on a config change.
+            match client::get_updates(&cfg, offset, 15) {
                 Ok(updates) => {
                     for u in &updates {
                         offset = offset.max(u.update_id + 1); // ack
@@ -102,14 +113,19 @@ pub fn spawn_pairing(store: NotificationStore, cfg: NotificationConfig, path: Pa
                                 &cfg,
                                 u.chat_id,
                                 &format!(
-                                    "\u{2705} Paired as {}. You'll receive Bishop's alerts here.",
+                                    "\u{2705} Paired as {}. You'll receive alerts here.",
                                     u.sender_label
                                 ),
                             );
                         }
                     }
                 }
-                Err(_) => thread::sleep(Duration::from_secs(5)),
+                Err(_) => {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_secs(5));
+                }
             }
         }
     });
