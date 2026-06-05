@@ -18,9 +18,9 @@
   <aside
     class="flex w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
   >
-    <div class="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
+    <div class="flex h-14 items-center gap-2.5 border-b border-sidebar-border px-4">
       <div
-        class="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground"
+        class="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-[0_0_18px_-4px] shadow-primary/60"
       >
         <ShieldCheck class="size-5" />
       </div>
@@ -30,30 +30,44 @@
       </div>
     </div>
 
-    <nav class="flex-1 space-y-1 overflow-y-auto p-2">
+    <nav class="flex-1 space-y-0.5 overflow-y-auto p-2">
       {#each navItems as item (item.href)}
         {@const Icon = item.icon}
+        {@const active = isActive(item.href)}
         <a
           href={item.href}
-          data-active={isActive(item.href)}
-          class="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground"
+          data-active={active}
+          class="group relative flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-all duration-200 hover:translate-x-0.5 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground data-[active=true]:bg-sidebar-accent data-[active=true]:text-foreground"
         >
-          <Icon class="size-4 shrink-0" />
+          <span
+            class="absolute left-0 top-1/2 h-5 -translate-y-1/2 rounded-r-full bg-primary transition-all duration-200 {active
+              ? 'w-1 opacity-100'
+              : 'w-0 opacity-0'}"
+          ></span>
+          <Icon class="size-4 shrink-0 transition-colors group-data-[active=true]:text-primary" />
           <span>{item.label}</span>
         </a>
       {/each}
     </nav>
 
-    <div class="border-t border-sidebar-border p-3 text-[11px] text-muted-foreground">
-      <span class="font-mono">v0.1.0</span> · M0 foundation
+    <div
+      class="flex items-center gap-1.5 border-t border-sidebar-border p-3 text-[11px] text-muted-foreground"
+    >
+      <span class="size-1.5 rounded-full bg-primary status-live"></span>
+      <span class="font-mono">v0.1.0</span>
+      <span>· ready</span>
     </div>
   </aside>
 
   <div class="flex min-w-0 flex-1 flex-col">
     <main class="flex-1 overflow-y-auto">
-      <div class="mx-auto w-full max-w-6xl p-6">
-        {@render children()}
-      </div>
+      {#key $page.url.pathname}
+        <div
+          class="mx-auto w-full max-w-6xl p-6 duration-300 animate-in fade-in slide-in-from-bottom-2"
+        >
+          {@render children()}
+        </div>
+      {/key}
     </main>
   </div>
 </div>
