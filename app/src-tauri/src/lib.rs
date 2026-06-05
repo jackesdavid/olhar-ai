@@ -16,11 +16,14 @@ use app_core::alerts::{self, load_alerts, Alert, AlertLevel, AlertStore};
 use app_core::config::{load_settings, save_settings, Settings};
 use app_core::device_actions::capture_snapshot_bytes;
 use app_core::devices::{load_devices, save_devices, Device, DeviceStore};
+use app_core::notification::{
+    self, load_targets, NotificationConfig, NotificationStore, NotificationTarget,
+};
 use app_core::onvif;
 use app_core::onvif::client::rtsp_url_with_creds;
 use app_core::onvif::DiscoveredDevice;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 /// Handle to the running go2rtc sidecar so a restart can kill the old one.
@@ -55,6 +58,59 @@ fn alerts_file(app: &tauri::AppHandle) -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."));
     let _ = std::fs::create_dir_all(&dir);
     dir.join("alerts.json")
+}
+
+/// The web app's paired-beacons file, under the platform app-data dir (created if missing).
+fn notifications_file(app: &tauri::AppHandle) -> PathBuf {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("notifications.json")
+}
+
+/// The web app's Telegram config file, under the platform app-data dir. Holds the
+/// bot token + pairing code so the app no longer depends on env vars.
+fn telegram_file(app: &tauri::AppHandle) -> PathBuf {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("telegram.json")
+}
+
+/// Persisted Telegram config (bot token + pairing code). Mirrors the fields of
+/// `NotificationConfig` but is the on-disk form the app owns.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct StoredTelegramConfig {
+    #[serde(default)]
+    bot_token: String,
+    #[serde(default)]
+    pairing_code: String,
+}
+
+/// Load the saved Telegram config from `telegram.json`. Returns `None` if the
+/// file is missing/empty.
+fn load_stored_telegram(app: &tauri::AppHandle) -> Option<StoredTelegramConfig> {
+    let raw = std::fs::read_to_string(telegram_file(app)).ok()?;
+    serde_json::from_str::<StoredTelegramConfig>(&raw).ok()
+}
+
+/// Resolve the active `NotificationConfig`: the saved `telegram.json` if it has a
+/// non-empty token, else the environment (`TELEGRAM_BOT_TOKEN` / `…_PAIRING_CODE`).
+/// Returns `None` when neither source provides a token.
+fn resolve_telegram_config(app: &tauri::AppHandle) -> Option<NotificationConfig> {
+    if let Some(stored) = load_stored_telegram(app) {
+        if !stored.bot_token.trim().is_empty() {
+            return Some(NotificationConfig {
+                bot_token: stored.bot_token,
+                pairing_code: stored.pairing_code,
+            });
+        }
+    }
+    NotificationConfig::from_env()
 }
 
 #[tauri::command]
@@ -377,6 +433,148 @@ fn alert_stats(state: tauri::State<'_, AlertStore>) -> AlertStats {
     AlertStats { total, today, by_level, undelivered }
 }
 
+// ---- Telegram config + Beacons ---------------------------------------------
+
+/// What the UI needs to know about Telegram config, WITHOUT leaking the token:
+/// whether a token is set and the pairing code to show the operator.
+#[derive(Debug, Clone, Serialize)]
+struct TelegramConfigState {
+    /// True when a bot token is set (saved file or env).
+    configured: bool,
+    /// The pairing code users DM the bot (`/pair <code>`); empty when unset.
+    pairing_code: String,
+}
+
+/// Report whether Telegram is configured + the pairing code (never the token).
+#[tauri::command]
+fn get_telegram_config(app: tauri::AppHandle) -> TelegramConfigState {
+    match resolve_telegram_config(&app) {
+        Some(cfg) => TelegramConfigState {
+            configured: !cfg.bot_token.trim().is_empty(),
+            pairing_code: cfg.pairing_code,
+        },
+        None => TelegramConfigState { configured: false, pairing_code: String::new() },
+    }
+}
+
+/// Persist the Telegram bot token + pairing code to `telegram.json`. A token
+/// change needs an app restart to (re)start the pairing poller — noted to the
+/// caller via the returned string.
+#[tauri::command]
+fn set_telegram_config(
+    app: tauri::AppHandle,
+    bot_token: String,
+    pairing_code: String,
+) -> Result<String, String> {
+    let cfg = StoredTelegramConfig {
+        bot_token: bot_token.trim().to_string(),
+        pairing_code: pairing_code.trim().to_string(),
+    };
+    let json = serde_json::to_string_pretty(&cfg).map_err(|e| format!("serialize failed: {e}"))?;
+    std::fs::write(telegram_file(&app), json).map_err(|e| format!("write failed: {e}"))?;
+    log::info!(
+        "set_telegram_config: token={} pairing_code={}",
+        if cfg.bot_token.is_empty() { "unset" } else { "set" },
+        if cfg.pairing_code.is_empty() { "unset" } else { "set" }
+    );
+    Ok("Saved. Restart the app to (re)start the pairing listener.".into())
+}
+
+/// The paired beacons (Telegram targets).
+#[tauri::command]
+fn list_beacons(state: tauri::State<'_, NotificationStore>) -> Vec<NotificationTarget> {
+    state.lock().unwrap().clone()
+}
+
+/// Enable/disable a beacon by `chat_id` and persist.
+#[tauri::command]
+fn toggle_beacon(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, NotificationStore>,
+    chat_id: i64,
+    enabled: bool,
+) -> Result<(), String> {
+    let (label, _) = notification::set_enabled_by_id(&state, &notifications_file(&app), chat_id, enabled)
+        .ok_or("Beacon not found.")?;
+    log::info!("toggle_beacon: '{label}' (chat_id={chat_id}) enabled={enabled}");
+    Ok(())
+}
+
+/// Rename a beacon by `chat_id` and persist.
+#[tauri::command]
+fn rename_beacon(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, NotificationStore>,
+    chat_id: i64,
+    label: String,
+) -> Result<(), String> {
+    let new_label = notification::rename_target(&state, &notifications_file(&app), chat_id, &label)?;
+    log::info!("rename_beacon: chat_id={chat_id} -> '{new_label}'");
+    Ok(())
+}
+
+/// Remove a beacon by `chat_id` and persist.
+#[tauri::command]
+fn delete_beacon(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, NotificationStore>,
+    chat_id: i64,
+) -> Result<(), String> {
+    let removed = notification::delete_target(&state, &notifications_file(&app), chat_id)
+        .ok_or("Beacon not found.")?;
+    log::info!("delete_beacon: removed '{removed}' (chat_id={chat_id})");
+    Ok(())
+}
+
+/// Send a test message to the beacon with `label`. Network IO on a blocking task.
+#[tauri::command]
+async fn test_beacon(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, NotificationStore>,
+    label: String,
+) -> Result<String, String> {
+    let cfg = resolve_telegram_config(&app)
+        .ok_or("Telegram is not configured (set the bot token in Beacons).")?;
+    let store = state.inner().clone();
+    let msg = "\u{1F514} Test from Sentinel — this beacon is live.".to_string();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        notification::dispatch(&store, &cfg, Some(&label), &msg, None)
+    })
+    .await
+    .map_err(|e| format!("Test task failed: {e}"))?;
+    match &result {
+        Ok(s) => log::info!("test_beacon: {s}"),
+        Err(e) => log::error!("test_beacon failed: {e}"),
+    }
+    result
+}
+
+/// Deliver the alert with `id` to every enabled beacon and record the result.
+/// Network IO on a blocking task.
+#[tauri::command]
+async fn deliver_alert(
+    app: tauri::AppHandle,
+    alert_state: tauri::State<'_, AlertStore>,
+    notif_state: tauri::State<'_, NotificationStore>,
+    id: u64,
+) -> Result<String, String> {
+    let cfg = resolve_telegram_config(&app)
+        .ok_or("Telegram is not configured (set the bot token in Beacons).")?;
+    let alert_store = alert_state.inner().clone();
+    let notif_store = notif_state.inner().clone();
+    let path = alerts_file(&app);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        alerts::deliver(&alert_store, &path, &notif_store, &cfg, id)
+    })
+    .await
+    .map_err(|e| format!("Deliver task failed: {e}"))?;
+    match &result {
+        Ok(s) => log::info!("deliver_alert: {s}"),
+        Err(e) => log::error!("deliver_alert failed for id={id}: {e}"),
+    }
+    result
+}
+
 // ---- Live video (go2rtc sidecar) -------------------------------------------
 
 /// The generated go2rtc config, under the platform app-data dir.
@@ -532,6 +730,35 @@ pub fn run() {
             );
             app.manage(alert_store);
 
+            // Beacons: managed target list loaded from <app_data_dir>/notifications.json.
+            let notif_path = notifications_file(&app.handle());
+            let notif_store: NotificationStore =
+                Arc::new(Mutex::new(load_targets(&notif_path)));
+            log::info!(
+                "Beacons loaded — {} target(s) from {}",
+                notif_store.lock().unwrap().len(),
+                notif_path.display()
+            );
+            app.manage(notif_store);
+
+            // Pairing poller: if Telegram is configured (saved file or env), start
+            // the inbound `/pair <code>` listener on a background thread. It clones
+            // the store and persists newly-paired targets to notifications.json. A
+            // later config change needs an app restart to pick up.
+            if let Some(cfg) = resolve_telegram_config(&app.handle()) {
+                if cfg.can_pair() {
+                    let store = app.handle().state::<NotificationStore>().inner().clone();
+                    log::info!("Pairing poller starting (Telegram configured).");
+                    notification::spawn_pairing(store, cfg, notif_path);
+                } else {
+                    log::info!(
+                        "Telegram token set but no pairing code — pairing poller not started."
+                    );
+                }
+            } else {
+                log::info!("Telegram not configured — pairing poller not started.");
+            }
+
             // Live video: managed handle for the go2rtc sidecar, then a
             // best-effort startup spawn so streams are ready on launch (no-op if
             // the binary is absent or no devices have an rtsp_url yet).
@@ -561,6 +788,14 @@ pub fn run() {
             create_alert,
             delete_alert,
             alert_stats,
+            get_telegram_config,
+            set_telegram_config,
+            list_beacons,
+            toggle_beacon,
+            rename_beacon,
+            delete_beacon,
+            test_beacon,
+            deliver_alert,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

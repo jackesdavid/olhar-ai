@@ -72,6 +72,20 @@ export type AlertStats = {
   undelivered: number;
 };
 
+/** A paired Telegram beacon (matches `app_core::notification::NotificationTarget`). */
+export type NotificationTarget = {
+  label: string;
+  chat_id: number;
+  enabled: boolean;
+};
+
+/** Telegram config state for the Beacons screen (matches `TelegramConfigState`).
+ * The bot token is never returned — only whether it's set. */
+export type TelegramConfigState = {
+  configured: boolean;
+  pairing_code: string;
+};
+
 export const DEFAULT_SETTINGS: Settings = {
   master: 0.8,
   voice: 0.8,

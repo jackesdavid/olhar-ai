@@ -7,6 +7,7 @@
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import LoaderCircle from "@lucide/svelte/icons/loader-circle";
   import BellRing from "@lucide/svelte/icons/bell-ring";
+  import Send from "@lucide/svelte/icons/send";
 
   import * as Card from "$lib/components/ui/card";
   import * as Table from "$lib/components/ui/table";
@@ -45,6 +46,9 @@
   let deleteOpen = $state(false);
   let deleteTarget = $state<Alert | null>(null);
   let deleting = $state(false);
+
+  // ---- Deliver -------------------------------------------------------------
+  let deliveringId = $state<number | null>(null);
 
   // Tailwind text colors per level (Debug/Info/Warn/Error).
   function levelTextClass(level: AlertLevel): string {
@@ -166,6 +170,25 @@
       deleting = false;
     }
   }
+
+  /** Whether at least one delivery of this alert succeeded. */
+  function isDelivered(a: Alert): boolean {
+    return a.deliveries.some((d) => d.ok);
+  }
+
+  async function doDeliver(a: Alert) {
+    deliveringId = a.id;
+    try {
+      const msg = await invoke<string>("deliver_alert", { id: a.id });
+      toast.success(msg);
+      await load(); // refresh so deliveries/delivered state updates
+    } catch (err) {
+      console.error("Failed to deliver alert", err);
+      toast.error("Delivery failed", { description: String(err) });
+    } finally {
+      deliveringId = null;
+    }
+  }
 </script>
 
 <div class="space-y-6">
@@ -250,6 +273,7 @@
               <Table.Head>Room</Table.Head>
               <Table.Head>Source</Table.Head>
               <Table.Head>Time</Table.Head>
+              <Table.Head>Delivered</Table.Head>
               <Table.Head class="text-right">Actions</Table.Head>
             </Table.Row>
           </Table.Header>
@@ -267,10 +291,37 @@
                 <Table.Cell class="tabular-nums text-muted-foreground">
                   {formatTime(a.created_at)}
                 </Table.Cell>
+                <Table.Cell>
+                  {#if isDelivered(a)}
+                    <Badge
+                      variant="outline"
+                      class="border-emerald-500/30 bg-emerald-500/15 text-emerald-400"
+                    >
+                      Sent
+                    </Badge>
+                  {:else}
+                    <span class="text-xs text-muted-foreground">—</span>
+                  {/if}
+                </Table.Cell>
                 <Table.Cell class="text-right">
-                  <Button variant="ghost" size="sm" title="Delete" onclick={() => confirmDelete(a)}>
-                    <Trash2 class="size-4" />
-                  </Button>
+                  <div class="flex items-center justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title="Deliver to beacons"
+                      disabled={deliveringId === a.id}
+                      onclick={() => doDeliver(a)}
+                    >
+                      {#if deliveringId === a.id}
+                        <LoaderCircle class="size-4 animate-spin" />
+                      {:else}
+                        <Send class="size-4" />
+                      {/if}
+                    </Button>
+                    <Button variant="ghost" size="sm" title="Delete" onclick={() => confirmDelete(a)}>
+                      <Trash2 class="size-4" />
+                    </Button>
+                  </div>
                 </Table.Cell>
               </Table.Row>
             {/each}

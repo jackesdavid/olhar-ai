@@ -4,14 +4,15 @@
 //! other copied modules, persistence is path-parameterized (no hardcoded cwd
 //! `alerts.json`) so the Tauri shell writes under the OS app-data dir.
 //!
-//! `deliver` (which dispatches to beacons via the notification layer) is
-//! intentionally DROPPED here — it depends on the notification module and is
-//! deferred to migration unit 017. The `deliveries: Vec<Delivery>` field is kept
-//! as plain data so the schema and stats are stable.
+//! `deliver` (which dispatches to beacons via the notification layer) was
+//! deferred to migration unit 017 and lands here, ported from the ratatui
+//! `src/alerts/actions.rs::deliver`. Persistence stays path-parameterized.
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
+
+use crate::notification::{self, NotificationConfig, NotificationStore, NotificationTarget};
 
 /// The shared alert log — held by the Tauri managed state and cloned into
 /// background threads so commands read/mutate the same store.
@@ -169,6 +170,66 @@ pub fn delete(store: &AlertStore, path: &Path, id: u64) -> bool {
         save_alerts(path, &alerts);
     }
     removed
+}
+
+/// The single line sent to a beacon for an alert: `[WARN] front garage — <msg>`.
+pub fn format_message(a: &Alert) -> String {
+    let loc = a.room_name.as_deref().unwrap_or("ship");
+    format!("[{}] {} \u{2014} {}", a.level.label(), loc, a.message)
+}
+
+/// Deliver the alert with `id` to every enabled beacon, recording a [`Delivery`]
+/// per beacon, persist to `path`, and return a human status string. Network IO is
+/// inline, so callers run it on a background thread. Ported from the ratatui
+/// `src/alerts/actions.rs::deliver` (the config is passed in rather than read
+/// from env here, so the Tauri shell can source it from a saved file).
+pub fn deliver(
+    store: &AlertStore,
+    path: &Path,
+    notif: &NotificationStore,
+    cfg: &NotificationConfig,
+    id: u64,
+) -> Result<String, String> {
+    // Snapshot the message + the enabled beacons under their locks, release first.
+    let msg = {
+        let alerts = store.lock().unwrap();
+        let a = alerts
+            .iter()
+            .find(|a| a.id == id)
+            .ok_or_else(|| format!("Alert {id} not found."))?;
+        format_message(a)
+    };
+    let beacons: Vec<NotificationTarget> = {
+        let targets = notif.lock().unwrap();
+        targets.iter().filter(|t| t.enabled).cloned().collect()
+    };
+    if beacons.is_empty() {
+        return Err("No live beacons to deliver to.".into());
+    }
+
+    let mut deliveries = Vec::new();
+    let mut ok_count = 0usize;
+    for b in &beacons {
+        let ok = notification::dispatch(notif, cfg, Some(&b.label), &msg, None).is_ok();
+        if ok {
+            ok_count += 1;
+        }
+        deliveries.push(Delivery {
+            target: b.label.clone(),
+            chat_id: b.chat_id,
+            at: now_rfc3339(),
+            ok,
+        });
+    }
+
+    {
+        let mut alerts = store.lock().unwrap();
+        if let Some(a) = alerts.iter_mut().find(|a| a.id == id) {
+            a.deliveries.extend(deliveries);
+        }
+        save_alerts(path, &alerts);
+    }
+    Ok(format!("Delivered alert {id} to {ok_count}/{} beacon(s).", beacons.len()))
 }
 
 #[cfg(test)]
