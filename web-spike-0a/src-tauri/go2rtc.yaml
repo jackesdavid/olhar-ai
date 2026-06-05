@@ -1,0 +1,16 @@
+# go2rtc spike config — RTSP→WebRTC gateway. Docs: https://github.com/AlexxIT/go2rtc
+#
+# 1. Edit the `camera:` line below with your camera's RTSP URL.
+# 2. Drop the go2rtc binary at ../binaries/go2rtc  (see binaries/DOWNLOAD.md).
+# 3. Run the app (`npm run tauri dev`) — the backend starts go2rtc automatically; the
+#    /live page plays the stream over WebRTC.
+#
+# go2rtc serves its API + WebRTC player on http://localhost:1984 by default and does
+# H.264 PASSTHROUGH (no re-encode) for sub-second latency.
+
+streams:
+  camera: rtsp://USER:PASS@CAMERA_IP:554/Streaming/Channels/101 # <-- EDIT THIS
+
+# Defaults are fine for localhost; uncomment to pin the API port explicitly.
+# api:
+#   listen: ":1984"
