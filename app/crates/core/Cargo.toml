@@ -1,0 +1,9 @@
+[package]
+name = "app-core"
+version = "0.1.0"
+edition = "2021"
+description = "Bishop's UI-agnostic logic, copied for the web app (parallel to the ratatui src/)."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -1,0 +1,5 @@
+# Workspace for the web app's Rust side: the Tauri shell (`src-tauri`) + the copied,
+# UI-agnostic Bishop logic (`crates/core`). Independent of the root ratatui crate.
+[workspace]
+members = ["crates/core", "src-tauri"]
+resolver = "2"
