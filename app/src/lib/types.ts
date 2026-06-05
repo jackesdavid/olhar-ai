@@ -11,6 +11,27 @@ export type Settings = {
   transport: Transport;
 };
 
+/** A saved camera (matches `app_core::devices::Device`). */
+export type Device = {
+  ip: string;
+  xaddr: string;
+  name: string;
+  manufacturer?: string | null;
+  model?: string | null;
+  username?: string | null;
+  password?: string | null;
+  rtsp_url?: string | null;
+};
+
+/** A camera that answered a discovery probe (matches `app_core::onvif::DiscoveredDevice`). */
+export type DiscoveredDevice = {
+  xaddr: string;
+  ip: string;
+  name: string;
+  manufacturer?: string | null;
+  model?: string | null;
+};
+
 export const DEFAULT_SETTINGS: Settings = {
   master: 0.8,
   voice: 0.8,

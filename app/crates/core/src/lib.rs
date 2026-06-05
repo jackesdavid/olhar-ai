@@ -8,3 +8,6 @@
 //! state under the OS app-data dir and never clobbers the ratatui app's JSON files.
 
 pub mod config;
+pub mod device_actions;
+pub mod devices;
+pub mod onvif;

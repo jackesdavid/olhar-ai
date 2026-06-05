@@ -7,3 +7,10 @@ description = "Bishop's UI-agnostic logic, copied for the web app (parallel to t
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# ONVIF camera support (copied from the ratatui src/onvif): blocking HTTP +
+# WS-Security PasswordDigest + WS-Discovery UUIDs.
+ureq = "2"
+sha1 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+chrono = "0.4"
