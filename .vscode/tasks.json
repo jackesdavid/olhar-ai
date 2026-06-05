@@ -10,7 +10,7 @@
       "command": "${userHome}/.cargo/bin/cargo",
       "args": ["build", "--bin=bishop", "--package=bishop"],
       "options": {
-        "cwd": "${workspaceFolder}",
+        "cwd": "${workspaceFolder}/legacy",
         "env": {
           "PATH": "${userHome}/.cargo/bin:${env:PATH}"
         }
@@ -31,7 +31,7 @@
       "command": "${userHome}/.cargo/bin/cargo",
       "args": ["build", "--bin=bishop", "--package=bishop", "--no-default-features"],
       "options": {
-        "cwd": "${workspaceFolder}",
+        "cwd": "${workspaceFolder}/legacy",
         "env": {
           "PATH": "${userHome}/.cargo/bin:${env:PATH}"
         }
