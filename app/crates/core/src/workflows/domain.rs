@@ -1,0 +1,612 @@
+//! Workflows domain — typed ports, nodes, edges, named graphs, persistence.
+//! Ported from the ratatui `src/workflows/domain.rs` (spec 013) for the web app;
+//! the ratatui editor state (`WfMode`/`WorkflowsState`/viewport) is dropped — the
+//! Svelte editor owns view state. Persistence is path-parameterized → app-data
+//! `workflows.json`.
+//!
+//! Isolation model: a node declares typed input/output **ports**; **edges** map a
+//! source output port to a target input port. The engine owns all edges and
+//! resolves wiring — a node never references another node.
+
+pub use crate::alerts::AlertLevel;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
+// ---------------------------------------------------------------------------
+// Ports
+// ---------------------------------------------------------------------------
+
+/// The value kinds that flow along edges. An edge is valid only if its source
+/// output port and target input port share the same `PortType`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PortType {
+    Text,
+    Num,
+    Bool,
+    Image,
+}
+
+/// A static port declaration on a `NodeKind` (not persisted — derived from the kind).
+#[derive(Debug, Clone, Copy)]
+pub struct Port {
+    pub name: &'static str,
+    pub ty: PortType,
+    /// Inputs only: a required input with no edge and no config literal fails the run.
+    pub required: bool,
+}
+
+const fn p(name: &'static str, ty: PortType, required: bool) -> Port {
+    Port { name, ty, required }
+}
+
+// ---------------------------------------------------------------------------
+// Node kinds + their port declarations
+// ---------------------------------------------------------------------------
+
+/// The atomic node set (v1). Each kind does exactly one thing; behaviour is composed
+/// by linking. Triggers are NOT nodes — they are a property of the `Graph`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeKind {
+    /// Source: reads the most-recent alert from the store into typed outputs.
+    GetLastAlert,
+    CreateAlert,
+    DeliverAlert,
+    CameraSnapshot,
+    DescribeImage,
+    NotifyBeacon,
+    /// Pure text composition: substitutes `{p1..p3}` into a `template`.
+    Format,
+}
+
+// Port tables (static). `*` in the spec == `required: true`.
+const GET_LAST_ALERT_OUT: [Port; 7] = [
+    p("id", PortType::Num, false),
+    p("level", PortType::Text, false),
+    p("message", PortType::Text, false),
+    p("room", PortType::Text, false),
+    p("source", PortType::Text, false),
+    p("created_at", PortType::Text, false),
+    p("ok", PortType::Bool, false),
+];
+
+const CREATE_ALERT_IN: [Port; 2] = [
+    p("message", PortType::Text, true),
+    p("room", PortType::Text, false),
+];
+const CREATE_ALERT_OUT: [Port; 3] = [
+    p("id", PortType::Num, false),
+    p("result", PortType::Text, false),
+    p("ok", PortType::Bool, false),
+];
+
+const DELIVER_ALERT_IN: [Port; 1] = [p("id", PortType::Num, true)];
+const DELIVER_ALERT_OUT: [Port; 2] = [
+    p("result", PortType::Text, false),
+    p("ok", PortType::Bool, false),
+];
+
+const CAMERA_SNAPSHOT_IN: [Port; 1] = [p("camera", PortType::Text, true)];
+const CAMERA_SNAPSHOT_OUT: [Port; 3] = [
+    p("image", PortType::Image, false),
+    p("result", PortType::Text, false),
+    p("ok", PortType::Bool, false),
+];
+
+const DESCRIBE_IMAGE_IN: [Port; 1] = [p("image", PortType::Image, true)];
+const DESCRIBE_IMAGE_OUT: [Port; 2] = [
+    p("description", PortType::Text, false),
+    p("ok", PortType::Bool, false),
+];
+
+const NOTIFY_BEACON_IN: [Port; 3] = [
+    p("message", PortType::Text, true),
+    p("target", PortType::Text, false),
+    p("image", PortType::Image, false),
+];
+const NOTIFY_BEACON_OUT: [Port; 2] = [
+    p("result", PortType::Text, false),
+    p("ok", PortType::Bool, false),
+];
+
+const FORMAT_IN: [Port; 3] = [
+    p("p1", PortType::Text, false),
+    p("p2", PortType::Text, false),
+    p("p3", PortType::Text, false),
+];
+const FORMAT_OUT: [Port; 1] = [p("text", PortType::Text, false)];
+
+const NO_PORTS: [Port; 0] = [];
+
+impl NodeKind {
+    pub const ALL: [NodeKind; 7] = [
+        NodeKind::GetLastAlert,
+        NodeKind::CreateAlert,
+        NodeKind::DeliverAlert,
+        NodeKind::CameraSnapshot,
+        NodeKind::DescribeImage,
+        NodeKind::NotifyBeacon,
+        NodeKind::Format,
+    ];
+
+    /// The `snake_case` wire name (matches the serde rename) — used by the
+    /// frontend palette and `add_node`.
+    pub fn slug(self) -> &'static str {
+        match self {
+            NodeKind::GetLastAlert => "get_last_alert",
+            NodeKind::CreateAlert => "create_alert",
+            NodeKind::DeliverAlert => "deliver_alert",
+            NodeKind::CameraSnapshot => "camera_snapshot",
+            NodeKind::DescribeImage => "describe_image",
+            NodeKind::NotifyBeacon => "notify_beacon",
+            NodeKind::Format => "format",
+        }
+    }
+
+    pub fn from_slug(s: &str) -> Option<NodeKind> {
+        NodeKind::ALL.into_iter().find(|k| k.slug() == s)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            NodeKind::GetLastAlert => "GET LAST ALERT",
+            NodeKind::CreateAlert => "CREATE ALERT",
+            NodeKind::DeliverAlert => "DELIVER ALERT",
+            NodeKind::CameraSnapshot => "CAMERA SNAPSHOT",
+            NodeKind::DescribeImage => "DESCRIBE IMAGE",
+            NodeKind::NotifyBeacon => "NOTIFY BEACON",
+            NodeKind::Format => "FORMAT",
+        }
+    }
+
+    pub fn input_ports(self) -> &'static [Port] {
+        match self {
+            NodeKind::GetLastAlert => &NO_PORTS,
+            NodeKind::CreateAlert => &CREATE_ALERT_IN,
+            NodeKind::DeliverAlert => &DELIVER_ALERT_IN,
+            NodeKind::CameraSnapshot => &CAMERA_SNAPSHOT_IN,
+            NodeKind::DescribeImage => &DESCRIBE_IMAGE_IN,
+            NodeKind::NotifyBeacon => &NOTIFY_BEACON_IN,
+            NodeKind::Format => &FORMAT_IN,
+        }
+    }
+
+    pub fn output_ports(self) -> &'static [Port] {
+        match self {
+            NodeKind::GetLastAlert => &GET_LAST_ALERT_OUT,
+            NodeKind::CreateAlert => &CREATE_ALERT_OUT,
+            NodeKind::DeliverAlert => &DELIVER_ALERT_OUT,
+            NodeKind::CameraSnapshot => &CAMERA_SNAPSHOT_OUT,
+            NodeKind::DescribeImage => &DESCRIBE_IMAGE_OUT,
+            NodeKind::NotifyBeacon => &NOTIFY_BEACON_OUT,
+            NodeKind::Format => &FORMAT_OUT,
+        }
+    }
+
+    pub fn input_port(self, name: &str) -> Option<Port> {
+        self.input_ports().iter().copied().find(|p| p.name == name)
+    }
+
+    pub fn output_port(self, name: &str) -> Option<Port> {
+        self.output_ports().iter().copied().find(|p| p.name == name)
+    }
+
+    /// Static config + literal fallbacks for unconnected input ports.
+    pub fn default_config(self) -> Value {
+        match self {
+            NodeKind::GetLastAlert => json!({}),
+            NodeKind::CreateAlert => {
+                json!({ "message": "", "room": "", "level": "info", "source": "workflow" })
+            }
+            NodeKind::DeliverAlert => json!({ "id": "" }),
+            NodeKind::CameraSnapshot => json!({ "camera": "first" }),
+            NodeKind::DescribeImage => json!({}),
+            NodeKind::NotifyBeacon => json!({ "message": "", "target": "" }),
+            NodeKind::Format => json!({ "template": "{p1} — {p2}", "p1": "", "p2": "", "p3": "" }),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Graph elements
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GraphNode {
+    pub id: u32,
+    pub kind: NodeKind,
+    /// Canvas position (the Svelte editor owns the units; persisted so layout survives).
+    pub x: i32,
+    pub y: i32,
+    /// Static settings + literal fallbacks for unconnected input ports.
+    #[serde(default)]
+    pub config: Value,
+}
+
+/// A typed, directed wire: source node's `from_port` → target node's `to_port`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Edge {
+    pub from: u32,
+    pub from_port: String,
+    pub to: u32,
+    pub to_port: String,
+}
+
+/// How a graph fires. A property of the engine/graph — NOT a node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Trigger {
+    /// Only fired by Run-now.
+    Manual,
+    /// Engine poller starts a fresh one-shot run every `every_secs`.
+    Cron { every_secs: u64 },
+    /// Engine starts one run per new alert at or above `min_level`.
+    OnNewAlert { min_level: AlertLevel },
+}
+
+impl Default for Trigger {
+    fn default() -> Self {
+        Trigger::Manual
+    }
+}
+
+/// What happens when a graph fires while a previous run of the same graph is in flight.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ConcurrencyPolicy {
+    /// ≤1 run; a fire while running is dropped.
+    SkipIfRunning,
+    /// ≤1 run; extra fires queue up to `max_queued`, then drop.
+    QueueSingle { max_queued: u32 },
+    /// Up to `max_concurrent` runs at once; a fire at capacity is dropped.
+    Concurrent { max_concurrent: u32 },
+}
+
+impl Default for ConcurrencyPolicy {
+    fn default() -> Self {
+        ConcurrencyPolicy::SkipIfRunning
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Graph
+// ---------------------------------------------------------------------------
+
+/// One named automation: a trigger + a DAG of typed nodes/edges.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Graph {
+    pub id: u32,
+    pub name: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub trigger: Trigger,
+    #[serde(default)]
+    pub concurrency: ConcurrencyPolicy,
+    #[serde(default = "one")]
+    pub next_id: u32,
+    #[serde(default)]
+    pub nodes: Vec<GraphNode>,
+    #[serde(default)]
+    pub edges: Vec<Edge>,
+}
+
+fn one() -> u32 {
+    1
+}
+
+impl Graph {
+    pub fn new(id: u32, name: &str) -> Self {
+        Graph {
+            id,
+            name: name.to_string(),
+            enabled: false,
+            trigger: Trigger::Manual,
+            concurrency: ConcurrencyPolicy::SkipIfRunning,
+            next_id: 1,
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        }
+    }
+
+    pub fn node(&self, id: u32) -> Option<&GraphNode> {
+        self.nodes.iter().find(|n| n.id == id)
+    }
+
+    pub fn node_mut(&mut self, id: u32) -> Option<&mut GraphNode> {
+        self.nodes.iter_mut().find(|n| n.id == id)
+    }
+
+    /// Add a node at (x, y); returns its new id.
+    pub fn add_node(&mut self, kind: NodeKind, x: i32, y: i32) -> u32 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.nodes.push(GraphNode { id, kind, x, y, config: kind.default_config() });
+        id
+    }
+
+    /// Remove a node and any edge that touches it.
+    pub fn remove_node(&mut self, id: u32) {
+        self.nodes.retain(|n| n.id != id);
+        self.edges.retain(|e| e.from != id && e.to != id);
+    }
+
+    /// Distinct downstream node ids reachable in one hop, in edge order.
+    pub fn children(&self, id: u32) -> Vec<u32> {
+        let mut out = Vec::new();
+        for e in &self.edges {
+            if e.from == id && !out.contains(&e.to) {
+                out.push(e.to);
+            }
+        }
+        out
+    }
+
+    /// Nodes with no incoming edge (sources / fully-literal nodes).
+    pub fn roots(&self) -> Vec<u32> {
+        self.nodes
+            .iter()
+            .map(|n| n.id)
+            .filter(|id| !self.edges.iter().any(|e| e.to == *id))
+            .collect()
+    }
+
+    /// True if `target` is reachable from `start` over node-level edges.
+    fn reaches(&self, start: u32, target: u32) -> bool {
+        let mut stack = vec![start];
+        let mut seen = HashSet::new();
+        while let Some(n) = stack.pop() {
+            if n == target {
+                return true;
+            }
+            if !seen.insert(n) {
+                continue;
+            }
+            for c in self.children(n) {
+                stack.push(c);
+            }
+        }
+        false
+    }
+
+    /// Validate and add a typed edge. Rejects: self-loop · unknown port ·
+    /// type mismatch · an already-fed input port · a cycle · an exact duplicate.
+    pub fn add_edge(
+        &mut self,
+        from: u32,
+        from_port: &str,
+        to: u32,
+        to_port: &str,
+    ) -> Result<(), String> {
+        if from == to {
+            return Err("a node cannot link to itself".into());
+        }
+        let fk = self.node(from).ok_or("source node not found")?.kind;
+        let tk = self.node(to).ok_or("target node not found")?.kind;
+        let ft = fk
+            .output_port(from_port)
+            .ok_or_else(|| format!("{} has no output port '{from_port}'", fk.label()))?
+            .ty;
+        let tt = tk
+            .input_port(to_port)
+            .ok_or_else(|| format!("{} has no input port '{to_port}'", tk.label()))?
+            .ty;
+        if ft != tt {
+            return Err(format!("type mismatch: {ft:?} → {tt:?}"));
+        }
+        if self.edges.iter().any(|e| e.to == to && e.to_port == to_port) {
+            return Err(format!("input '{to_port}' is already wired"));
+        }
+        if self.reaches(to, from) {
+            return Err("that link would create a cycle".into());
+        }
+        self.edges.push(Edge {
+            from,
+            from_port: from_port.to_string(),
+            to,
+            to_port: to_port.to_string(),
+        });
+        Ok(())
+    }
+
+    pub fn remove_edge(&mut self, idx: usize) {
+        if idx < self.edges.len() {
+            self.edges.remove(idx);
+        }
+    }
+
+    /// Topological node order (stable: follows node insertion order on ties).
+    /// `Err` if the graph contains a cycle.
+    pub fn topo_order(&self) -> Result<Vec<u32>, String> {
+        let mut indeg: HashMap<u32, usize> = self.nodes.iter().map(|n| (n.id, 0)).collect();
+        let mut adj: HashMap<u32, Vec<u32>> = self.nodes.iter().map(|n| (n.id, Vec::new())).collect();
+        let mut seen = HashSet::new();
+        for e in &self.edges {
+            if seen.insert((e.from, e.to)) {
+                if let Some(v) = adj.get_mut(&e.from) {
+                    v.push(e.to);
+                }
+                if let Some(d) = indeg.get_mut(&e.to) {
+                    *d += 1;
+                }
+            }
+        }
+        let mut order = Vec::with_capacity(self.nodes.len());
+        let mut done: HashSet<u32> = HashSet::new();
+        while order.len() < self.nodes.len() {
+            let next = self
+                .nodes
+                .iter()
+                .map(|n| n.id)
+                .find(|id| !done.contains(id) && indeg.get(id).copied().unwrap_or(0) == 0);
+            let Some(id) = next else {
+                return Err("graph has a cycle".into());
+            };
+            done.insert(id);
+            order.push(id);
+            if let Some(children) = adj.get(&id) {
+                for c in children {
+                    if let Some(d) = indeg.get_mut(c) {
+                        *d = d.saturating_sub(1);
+                    }
+                }
+            }
+        }
+        Ok(order)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Named-graph collection + persistence
+// ---------------------------------------------------------------------------
+
+/// The collection of named graphs (managed state on the Tauri side).
+#[derive(Default)]
+pub struct Workflows {
+    pub graphs: Vec<Graph>,
+    pub next_graph_id: u32,
+}
+
+impl Workflows {
+    pub fn from_graphs(graphs: Vec<Graph>) -> Self {
+        let next_graph_id = graphs.iter().map(|g| g.id).max().map_or(1, |m| m + 1);
+        Workflows { graphs, next_graph_id }
+    }
+
+    pub fn create_graph(&mut self, name: &str) -> u32 {
+        let id = self.next_graph_id;
+        self.next_graph_id += 1;
+        self.graphs.push(Graph::new(id, name));
+        id
+    }
+
+    pub fn remove_graph(&mut self, id: u32) {
+        self.graphs.retain(|g| g.id != id);
+    }
+
+    pub fn graph(&self, id: u32) -> Option<&Graph> {
+        self.graphs.iter().find(|g| g.id == id)
+    }
+
+    pub fn graph_mut(&mut self, id: u32) -> Option<&mut Graph> {
+        self.graphs.iter_mut().find(|g| g.id == id)
+    }
+}
+
+/// On-disk shape: one object holding the named-graph array.
+#[derive(Default, Serialize, Deserialize)]
+struct WorkflowsFile {
+    #[serde(default)]
+    graphs: Vec<Graph>,
+}
+
+/// Load the named graphs from `path`. Empty when the file is missing/unreadable.
+pub fn load_workflows(path: &Path) -> Vec<Graph> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<WorkflowsFile>(&s).ok())
+        .map(|f| f.graphs)
+        .unwrap_or_default()
+}
+
+/// Persist the named graphs to `path`.
+pub fn save_workflows(path: &Path, graphs: &[Graph]) {
+    let file = WorkflowsFile { graphs: graphs.to_vec() };
+    if let Ok(json) = serde_json::to_string_pretty(&file) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chain() -> (Graph, u32, u32) {
+        // get_last_alert.message -> create_alert.message
+        let mut g = Graph::new(1, "test");
+        let a = g.add_node(NodeKind::GetLastAlert, 0, 0);
+        let b = g.add_node(NodeKind::CreateAlert, 30, 0);
+        g.add_edge(a, "message", b, "message").unwrap();
+        (g, a, b)
+    }
+
+    #[test]
+    fn add_node_assigns_incrementing_ids_and_default_config() {
+        let mut g = Graph::new(1, "g");
+        let a = g.add_node(NodeKind::CreateAlert, 1, 2);
+        let b = g.add_node(NodeKind::Format, 3, 4);
+        assert_eq!((a, b), (1, 2));
+        assert_eq!(g.next_id, 3);
+        assert_eq!(g.node(a).unwrap().config["source"], "workflow");
+    }
+
+    #[test]
+    fn remove_node_cascades_edges() {
+        let (mut g, a, b) = chain();
+        assert_eq!(g.edges.len(), 1);
+        g.remove_node(a);
+        assert!(g.node(a).is_none());
+        assert_eq!(g.edges.len(), 0);
+        assert_eq!(g.children(b), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn children_and_topo_order_follow_edges() {
+        let (g, a, b) = chain();
+        assert_eq!(g.children(a), vec![b]);
+        assert_eq!(g.topo_order().unwrap(), vec![a, b]);
+        assert_eq!(g.roots(), vec![a]);
+    }
+
+    #[test]
+    fn add_edge_rejects_type_mismatch_double_fed_cycle_and_unknown() {
+        let mut g = Graph::new(1, "g");
+        let snap = g.add_node(NodeKind::CameraSnapshot, 0, 0);
+        let fmt = g.add_node(NodeKind::Format, 0, 0);
+        assert!(g.add_edge(snap, "image", fmt, "p1").unwrap_err().contains("type mismatch"));
+        assert!(g.add_edge(fmt, "text", fmt, "p1").is_err()); // self-loop
+        assert!(g.add_edge(snap, "nope", fmt, "p1").is_err()); // unknown port
+
+        let gla = g.add_node(NodeKind::GetLastAlert, 0, 0);
+        let ca = g.add_node(NodeKind::CreateAlert, 0, 0);
+        g.add_edge(gla, "message", ca, "message").unwrap();
+        assert!(g.add_edge(fmt, "text", ca, "message").unwrap_err().contains("already wired"));
+
+        let a = g.add_node(NodeKind::Format, 0, 0);
+        let b = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(a, "text", b, "p1").unwrap();
+        assert!(g.add_edge(b, "text", a, "p1").unwrap_err().contains("cycle"));
+    }
+
+    #[test]
+    fn graph_json_round_trips_with_trigger_concurrency_and_typed_edges() {
+        let (mut g, _a, _b) = chain();
+        g.trigger = Trigger::Cron { every_secs: 10 };
+        g.concurrency = ConcurrencyPolicy::QueueSingle { max_queued: 3 };
+        g.enabled = true;
+        let s = serde_json::to_string(&g).unwrap();
+        let g2: Graph = serde_json::from_str(&s).unwrap();
+        assert_eq!(g, g2);
+    }
+
+    #[test]
+    fn workflows_collection_create_remove_lookup() {
+        let mut w = Workflows::from_graphs(Vec::new());
+        let id1 = w.create_graph("alpha");
+        let id2 = w.create_graph("beta");
+        assert_ne!(id1, id2);
+        assert_eq!(w.graphs.len(), 2);
+        assert_eq!(w.graph(id2).unwrap().name, "beta");
+        w.remove_graph(id1);
+        assert_eq!(w.graphs.len(), 1);
+        assert!(w.graph(id1).is_none());
+    }
+
+    #[test]
+    fn slug_round_trips_all_kinds() {
+        for k in NodeKind::ALL {
+            assert_eq!(NodeKind::from_slug(k.slug()), Some(k));
+        }
+    }
+}

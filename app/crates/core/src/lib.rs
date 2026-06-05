@@ -15,3 +15,4 @@ pub mod devices;
 pub mod map;
 pub mod notification;
 pub mod onvif;
+pub mod workflows;
