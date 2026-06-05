@@ -41,6 +41,37 @@ export type StreamInfo = {
   player_url: string;
 };
 
+export type AlertLevel = "debug" | "info" | "warn" | "error";
+
+/** A delivery record of an alert to a beacon (data only until unit 017). */
+export type Delivery = {
+  target: string;
+  chat_id: number;
+  at: string;
+  ok: boolean;
+};
+
+/** A single alert (matches `app_core::alerts::Alert`). */
+export type Alert = {
+  id: number;
+  level: AlertLevel;
+  message: string;
+  room_id: number | null;
+  room_name: string | null;
+  source: string;
+  created_at: string;
+  deliveries: Delivery[];
+};
+
+/** Aggregate alert counts for the dashboard (matches `AlertStats` in src-tauri). */
+export type AlertStats = {
+  total: number;
+  today: number;
+  /** `[label, count]` per level, e.g. `["DEBUG", 0]`. */
+  by_level: [string, number][];
+  undelivered: number;
+};
+
 export const DEFAULT_SETTINGS: Settings = {
   master: 0.8,
   voice: 0.8,

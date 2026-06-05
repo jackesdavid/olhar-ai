@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
 
+use app_core::alerts::{self, load_alerts, Alert, AlertLevel, AlertStore};
 use app_core::config::{load_settings, save_settings, Settings};
 use app_core::device_actions::capture_snapshot_bytes;
 use app_core::devices::{load_devices, save_devices, Device, DeviceStore};
@@ -44,6 +45,16 @@ fn devices_file(app: &tauri::AppHandle) -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."));
     let _ = std::fs::create_dir_all(&dir);
     dir.join("devices.json")
+}
+
+/// The web app's alert log file, under the platform app-data dir (created if missing).
+fn alerts_file(app: &tauri::AppHandle) -> PathBuf {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("alerts.json")
 }
 
 #[tauri::command]
@@ -278,6 +289,94 @@ async fn validate_device(
     Ok(updated)
 }
 
+// ---- Alerts ----------------------------------------------------------------
+
+/// Aggregate counts for the alerts dashboard.
+#[derive(Debug, Clone, Serialize)]
+struct AlertStats {
+    /// Total alerts in the log.
+    total: u32,
+    /// Alerts whose `created_at` falls on today's local date.
+    today: u32,
+    /// `(level label, count)` for every level in [`AlertLevel::ALL`] order.
+    by_level: Vec<(String, u32)>,
+    /// Alerts that have never been delivered (empty `deliveries`).
+    undelivered: u32,
+}
+
+/// The alert log, newest first.
+#[tauri::command]
+fn list_alerts(state: tauri::State<'_, AlertStore>) -> Vec<Alert> {
+    let mut alerts = state.lock().unwrap().clone();
+    alerts.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(b.id.cmp(&a.id)));
+    alerts
+}
+
+/// Create an alert (level defaults to Info, source defaults to "operator"),
+/// persist, and return it. `room` is free text stored as `room_name`; map
+/// lookup (`room_id`) lands in a later unit.
+#[tauri::command]
+fn create_alert(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AlertStore>,
+    level: String,
+    message: String,
+    room: Option<String>,
+    source: Option<String>,
+) -> Alert {
+    let level = AlertLevel::parse(&level).unwrap_or_default();
+    let source = source
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "operator".to_string());
+    let room_name = room
+        .map(|r| r.trim().to_string())
+        .filter(|r| !r.is_empty());
+
+    let alert = alerts::create(
+        &state,
+        &alerts_file(&app),
+        level,
+        message,
+        None,
+        room_name,
+        source,
+    );
+    log::info!(
+        "create_alert: id={} level={} source={} room={:?}",
+        alert.id,
+        alert.level.label(),
+        alert.source,
+        alert.room_name
+    );
+    alert
+}
+
+/// Remove the alert with `id` and persist. Returns whether one was removed.
+#[tauri::command]
+fn delete_alert(app: tauri::AppHandle, state: tauri::State<'_, AlertStore>, id: u64) -> bool {
+    let removed = alerts::delete(&state, &alerts_file(&app), id);
+    log::info!("delete_alert: id={id} removed={removed}");
+    removed
+}
+
+/// Aggregate counts over the alert log for the dashboard stat cards.
+#[tauri::command]
+fn alert_stats(state: tauri::State<'_, AlertStore>) -> AlertStats {
+    let alerts = state.lock().unwrap();
+    let total = alerts.len() as u32;
+    let today = alerts.iter().filter(|a| alerts::is_today(&a.created_at)).count() as u32;
+    let undelivered = alerts.iter().filter(|a| a.deliveries.is_empty()).count() as u32;
+    let by_level = AlertLevel::ALL
+        .iter()
+        .map(|&lvl| {
+            let n = alerts.iter().filter(|a| a.level == lvl).count() as u32;
+            (lvl.label().to_string(), n)
+        })
+        .collect();
+    AlertStats { total, today, by_level, undelivered }
+}
+
 // ---- Live video (go2rtc sidecar) -------------------------------------------
 
 /// The generated go2rtc config, under the platform app-data dir.
@@ -423,6 +522,16 @@ pub fn run() {
             );
             app.manage(store);
 
+            // Alerts: managed log loaded from <app_data_dir>/alerts.json.
+            let alerts_path = alerts_file(&app.handle());
+            let alert_store: AlertStore = Arc::new(Mutex::new(load_alerts(&alerts_path)));
+            log::info!(
+                "Alerts loaded — {} alert(s) from {}",
+                alert_store.lock().unwrap().len(),
+                alerts_path.display()
+            );
+            app.manage(alert_store);
+
             // Live video: managed handle for the go2rtc sidecar, then a
             // best-effort startup spawn so streams are ready on launch (no-op if
             // the binary is absent or no devices have an rtsp_url yet).
@@ -448,6 +557,10 @@ pub fn run() {
             test_credentials,
             validate_device,
             ensure_streams,
+            list_alerts,
+            create_alert,
+            delete_alert,
+            alert_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
