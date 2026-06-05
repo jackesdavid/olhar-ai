@@ -125,13 +125,15 @@
   }
   body {
     @apply bg-background text-foreground;
-    /* Subtle emerald top-glow for depth — fixed so it doesn't scroll. */
-    background-image: radial-gradient(
-      55% 45% at 50% -5%,
-      oklch(0.7 0.16 162 / 0.06),
-      transparent 70%
-    );
-    background-attachment: fixed;
+    /* On-brand depth: an emerald top-glow (focal point) over a faint dot-field
+       (the logo's halftone DNA). Both fixed so they don't scroll. */
+    background-image:
+      radial-gradient(55% 45% at 50% -5%, oklch(0.7 0.16 162 / 0.06), transparent 70%),
+      radial-gradient(oklch(1 0 0 / 0.022) 1px, transparent 1.2px);
+    background-size:
+      100% 100%,
+      22px 22px;
+    background-attachment: fixed, fixed;
   }
 
   /* Emerald text selection. */

@@ -3,7 +3,7 @@
   import { page } from "$app/stores";
   import { navItems } from "$lib/nav";
   import { Toaster } from "$lib/components/ui/sonner";
-  import ShieldCheck from "@lucide/svelte/icons/shield-check";
+  import SentinelMark from "$lib/components/sentinel-mark.svelte";
 
   let { children } = $props();
 
@@ -19,11 +19,10 @@
     class="flex w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
   >
     <div class="flex h-14 items-center gap-2.5 border-b border-sidebar-border px-4">
-      <div
-        class="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-[0_0_18px_-4px] shadow-primary/60"
-      >
-        <ShieldCheck class="size-5" />
-      </div>
+      <SentinelMark
+        size={32}
+        class="text-primary drop-shadow-[0_0_10px_oklch(0.7_0.16_162/0.45)]"
+      />
       <div class="flex flex-col leading-tight">
         <span class="text-sm font-semibold tracking-tight">Sentinel</span>
         <span class="text-[10px] text-muted-foreground">Monitoring &amp; Automation</span>
