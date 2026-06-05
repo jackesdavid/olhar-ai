@@ -8,8 +8,8 @@
   import Play from "@lucide/svelte/icons/play";
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import Pencil from "@lucide/svelte/icons/pencil";
-  import Workflow from "@lucide/svelte/icons/workflow";
   import Power from "@lucide/svelte/icons/power";
+  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
 
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -19,6 +19,7 @@
   import * as Dialog from "$lib/components/ui/dialog";
   import Loader from "$lib/components/loader.svelte";
   import EmptyState from "$lib/components/empty-state.svelte";
+  import StatusDot from "$lib/components/status-dot.svelte";
 
   // ---- types (the serialized core shapes) ----------------------------------
   type PortType = "text" | "num" | "bool" | "image";
@@ -61,6 +62,7 @@
   let paletteKind = $state<string>("");
   let pending = $state<{ node: number; port: string } | null>(null);
   let loading = $state(true);
+  let running = $state(false);
 
   // ---- dialogs (window.prompt/confirm are no-ops in the Tauri WebView) ------
   let nameOpen = $state(false);
@@ -120,6 +122,7 @@
       }
     })();
     const un = listen<{ name: string; ok: boolean; summary: string }>("workflow-run", (e) => {
+      running = false;
       const { name, ok, summary } = e.payload;
       if (ok) toast.success(`Workflow "${name}"`, { description: summary });
       else toast.error(`Workflow "${name}" failed`, { description: summary });
@@ -179,10 +182,12 @@
     await reload();
   }
   async function runNow(g: Graph) {
+    running = true;
     try {
       const msg = await invoke<string>("run_graph", { id: g.id });
       toast.info(msg);
     } catch (err) {
+      running = false;
       toast.error("Run", { description: String(err) });
     }
   }
@@ -325,14 +330,23 @@
       <div class="space-y-1">
         {#each graphs as g (g.id)}
           <button
-            class="flex w-full items-center justify-between rounded-md border px-2.5 py-2 text-left text-sm transition-colors {selectedGraphId === g.id ? 'border-primary bg-muted' : 'border-border hover:bg-muted/50'}"
-            onclick={() => { selectedGraphId = g.id; selectedNodeId = null; pending = null; }}
+            class="flex w-full items-center justify-between rounded-lg border px-2.5 py-2 text-left text-sm transition-all duration-200 {selectedGraphId ===
+            g.id
+              ? 'border-primary/50 bg-primary/10 text-foreground'
+              : 'border-border text-muted-foreground hover:translate-x-0.5 hover:bg-muted/50 hover:text-foreground'}"
+            onclick={() => {
+              selectedGraphId = g.id;
+              selectedNodeId = null;
+              pending = null;
+            }}
           >
             <span class="flex items-center gap-2 truncate">
-              <span class="size-2 shrink-0 rounded-full {g.enabled ? 'bg-emerald-400' : 'bg-muted-foreground/40'}"></span>
+              <StatusDot state={g.enabled ? "online" : "offline"} />
               <span class="truncate">{g.name}</span>
             </span>
-            <span class="text-xs text-muted-foreground">{g.nodes.length}n</span>
+            <span class="rounded bg-muted px-1.5 text-[10px] tabular-nums text-muted-foreground">
+              {g.nodes.length}
+            </span>
           </button>
         {/each}
       </div>
@@ -414,8 +428,12 @@
           {/if}
         </div>
 
-        <Button class="w-full" onclick={() => runNow(graph)}>
-          <Play class="size-4" /> Run now
+        <Button class="w-full" onclick={() => runNow(graph)} disabled={running}>
+          {#if running}
+            <LoaderCircle class="size-4 animate-spin" /> Running…
+          {:else}
+            <Play class="size-4" /> Run now
+          {/if}
         </Button>
       </div>
     {/if}
@@ -446,7 +464,9 @@
         {/if}
       </div>
 
-      <div class="min-h-0 flex-1 overflow-auto rounded-lg border border-border bg-[radial-gradient(circle,_theme(colors.border)_1px,_transparent_1px)] [background-size:16px_16px]">
+      <div
+        class="relative min-h-0 flex-1 overflow-auto rounded-xl border border-border bg-card/20 bg-[radial-gradient(circle,_rgba(52,211,153,0.1)_1px,_transparent_1px)] [background-size:18px_18px]"
+      >
         <svg
           width="1600"
           height="900"
@@ -456,6 +476,12 @@
           onpointerleave={endDrag}
           role="presentation"
         >
+          <defs>
+            <filter id="nodeGlow" x="-40%" y="-40%" width="180%" height="180%">
+              <feDropShadow dx="0" dy="0" stdDeviation="5" flood-color="#10b981" flood-opacity="0.5" />
+            </filter>
+          </defs>
+
           <!-- edges -->
           {#each graph.edges as e, idx (idx)}
             {@const fromN = graph.nodes.find((n) => n.id === e.from)}
@@ -466,12 +492,12 @@
               {@const x2 = toN.x}
               {@const y2 = inPortY(toN, Math.max(0, portIndex(toN, e.to_port, "in")))}
               <path
-                d={`M ${x1} ${y1} C ${x1 + 50} ${y1}, ${x2 - 50} ${y2}, ${x2} ${y2}`}
+                d={`M ${x1} ${y1} C ${x1 + 60} ${y1}, ${x2 - 60} ${y2}, ${x2} ${y2}`}
                 fill="none"
-                stroke="#71717a"
                 stroke-width="2"
-                class="cursor-pointer hover:stroke-red-400"
+                class="cursor-pointer stroke-primary/40 transition-colors hover:stroke-destructive"
                 onclick={() => removeEdge(idx)}
+                role="presentation"
               />
             {/if}
           {/each}
@@ -480,48 +506,99 @@
           {#each graph.nodes as n (n.id)}
             {@const k = catalog[n.kind]}
             {@const h = nodeHeight(n)}
-            <g>
+            {@const sel = selectedNodeId === n.id}
+            <g filter={sel ? "url(#nodeGlow)" : undefined}>
               <rect
-                x={n.x} y={n.y} width={NODE_W} height={h} rx="6"
-                fill="hsl(240 6% 12%)"
-                stroke={selectedNodeId === n.id ? "hsl(220 90% 60%)" : "hsl(240 5% 26%)"}
-                stroke-width={selectedNodeId === n.id ? 2 : 1}
+                x={n.x}
+                y={n.y}
+                width={NODE_W}
+                height={h}
+                rx="8"
+                stroke-width={sel ? 2 : 1}
+                class="fill-card transition-[stroke] {sel
+                  ? 'stroke-primary'
+                  : 'stroke-border hover:stroke-primary/50'}"
               />
+              <!-- title row: emerald accent dot + label + transparent drag handle -->
               <rect
-                x={n.x} y={n.y} width={NODE_W} height={HEAD_H} rx="6"
-                fill="hsl(240 6% 16%)" class="cursor-move"
+                x={n.x}
+                y={n.y}
+                width={NODE_W}
+                height={HEAD_H}
+                fill="transparent"
+                class="cursor-move"
                 onpointerdown={(ev) => startDrag(ev, n)}
                 role="presentation"
               />
-              <text x={n.x + 8} y={n.y + 17} class="pointer-events-none select-none fill-zinc-200" font-size="11" font-weight="600">
+              <circle
+                cx={n.x + 12}
+                cy={n.y + HEAD_H / 2}
+                r="2.5"
+                class="pointer-events-none fill-primary"
+              />
+              <text
+                x={n.x + 20}
+                y={n.y + 17}
+                class="pointer-events-none select-none fill-foreground"
+                font-size="11"
+                font-weight="600"
+              >
                 {k?.label ?? n.kind}
               </text>
+              <line
+                x1={n.x}
+                y1={n.y + HEAD_H}
+                x2={n.x + NODE_W}
+                y2={n.y + HEAD_H}
+                class="pointer-events-none stroke-border"
+                stroke-width="1"
+              />
+
               <!-- input ports -->
               {#each k?.inputs ?? [] as p, i}
                 {@const wired = wiredInto(n.id, p.name)}
                 <circle
-                  cx={n.x} cy={inPortY(n, i)} r="5"
-                  fill={wired ? portColor[p.type] : "hsl(240 6% 12%)"}
-                  stroke={portColor[p.type]} stroke-width="2"
+                  cx={n.x}
+                  cy={inPortY(n, i)}
+                  r="5"
+                  fill={wired ? portColor[p.type] : "#151c19"}
+                  stroke={portColor[p.type]}
+                  stroke-width="2"
                   class="cursor-pointer"
                   onclick={() => clickInPort(n, p.name)}
                   role="presentation"
                 />
-                <text x={n.x + 10} y={inPortY(n, i) + 3} class="pointer-events-none select-none fill-zinc-400" font-size="10">
+                <text
+                  x={n.x + 11}
+                  y={inPortY(n, i) + 3}
+                  class="pointer-events-none select-none fill-muted-foreground"
+                  font-size="10"
+                >
                   {p.name}{p.required ? "*" : ""}
                 </text>
               {/each}
+
               <!-- output ports -->
               {#each k?.outputs ?? [] as p, i}
+                {@const isPending = pending && pending.node === n.id && pending.port === p.name}
                 <circle
-                  cx={n.x + NODE_W} cy={outPortY(n, i)} r="5"
-                  fill={pending && pending.node === n.id && pending.port === p.name ? portColor[p.type] : "hsl(240 6% 12%)"}
-                  stroke={portColor[p.type]} stroke-width="2"
-                  class="cursor-pointer"
+                  cx={n.x + NODE_W}
+                  cy={outPortY(n, i)}
+                  r={isPending ? 6 : 5}
+                  fill={isPending ? portColor[p.type] : "#151c19"}
+                  stroke={portColor[p.type]}
+                  stroke-width="2"
+                  class="cursor-pointer transition-all"
                   onclick={() => clickOutPort(n, p.name)}
                   role="presentation"
                 />
-                <text x={n.x + NODE_W - 10} y={outPortY(n, i) + 3} text-anchor="end" class="pointer-events-none select-none fill-zinc-400" font-size="10">
+                <text
+                  x={n.x + NODE_W - 11}
+                  y={outPortY(n, i) + 3}
+                  text-anchor="end"
+                  class="pointer-events-none select-none fill-muted-foreground"
+                  font-size="10"
+                >
                   {p.name}
                 </text>
               {/each}
@@ -533,9 +610,13 @@
       <!-- selected node config -->
       {#if selectedNode}
         {@const k = catalog[selectedNode.kind]}
-        <div class="rounded-lg border border-border p-3">
-          <div class="mb-2 flex items-center justify-between">
-            <span class="text-sm font-medium">{k?.label ?? selectedNode.kind} <span class="text-muted-foreground">#{selectedNode.id}</span></span>
+        <div class="rounded-xl border border-border bg-card/40 p-3">
+          <div class="mb-2.5 flex items-center justify-between">
+            <span class="flex items-center gap-2 text-sm font-medium">
+              <span class="size-1.5 rounded-full bg-primary"></span>
+              {k?.label ?? selectedNode.kind}
+              <span class="text-muted-foreground">#{selectedNode.id}</span>
+            </span>
             <Button size="sm" variant="ghost" onclick={() => removeNode(selectedNode)}>
               <Trash2 class="size-3.5" /> Delete node
             </Button>
@@ -549,7 +630,11 @@
                 <div class="space-y-1">
                   <Label class="text-xs text-muted-foreground">{key}</Label>
                   {#if wired}
-                    <p class="rounded border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">← #{wired.from}.{wired.from_port}</p>
+                    <p
+                      class="rounded border border-dashed border-primary/30 bg-primary/5 px-2 py-1.5 text-xs text-primary/80"
+                    >
+                      ← #{wired.from}.{wired.from_port}
+                    </p>
                   {:else if key === "level"}
                     <select
                       class="h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm"
