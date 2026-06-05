@@ -138,9 +138,9 @@
             </Select.Root>
           </div>
 
-          <!-- 16:9 framed WebRTC player. go2rtc serves its player at
-               http://localhost:1984/webrtc.html?src=<stream>; the iframe runs
-               same-origin to localhost:1984. -->
+          <!-- 16:9 framed player. go2rtc serves its auto-negotiating player at
+               http://localhost:1984/stream.html?src=<stream> (WebRTC → MSE →
+               MJPEG fallback so WKWebView gets a frame); same-origin to :1984. -->
           <div class="frame">
             {#if selectedStream}
               {#key selectedStream.name}

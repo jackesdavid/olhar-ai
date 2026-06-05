@@ -713,7 +713,8 @@ struct StreamInfo {
     ip: String,
     /// go2rtc stream name, e.g. `cam_192_168_1_50`.
     name: String,
-    /// go2rtc's ready-made WebRTC player URL for this stream.
+    /// go2rtc's ready-made auto-negotiating player URL for this stream
+    /// (`stream.html`: WebRTC → MSE → MJPEG fallback; MSE plays in WKWebView).
     player_url: String,
 }
 
@@ -739,7 +740,7 @@ async fn ensure_streams(
             let name = format!("cam_{}", sanitize_ip(&d.ip));
             StreamInfo {
                 ip: d.ip.clone(),
-                player_url: format!("http://localhost:1984/webrtc.html?src={name}"),
+                player_url: format!("http://localhost:1984/stream.html?src={name}"),
                 name,
             }
         })
