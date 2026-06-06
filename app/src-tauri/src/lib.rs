@@ -1173,6 +1173,12 @@ fn node_catalog() -> serde_json::Value {
             })
             .collect::<Vec<_>>()
     };
+    // Every node carries the universal control-flow ports up front, then its data ports.
+    let with_exec = |exec: workflows::Port, list: &[workflows::Port]| {
+        let mut v = ports(&[exec]);
+        v.extend(ports(list));
+        v
+    };
     let kinds = WfNodeKind::ALL
         .iter()
         .map(|k| {
@@ -1180,8 +1186,8 @@ fn node_catalog() -> serde_json::Value {
                 "slug": k.slug(),
                 "label": k.label(),
                 "category": k.category(),
-                "inputs": ports(k.input_ports()),
-                "outputs": ports(k.output_ports()),
+                "inputs": with_exec(workflows::EXEC_IN, k.input_ports()),
+                "outputs": with_exec(workflows::EXEC_OUT, k.output_ports()),
                 "default_config": k.default_config(),
             })
         })

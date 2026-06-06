@@ -39,7 +39,7 @@
   import StatusDot from "$lib/components/status-dot.svelte";
 
   // ---- types (the serialized core shapes) ----------------------------------
-  type PortType = "text" | "num" | "bool" | "image" | "recipient";
+  type PortType = "text" | "num" | "bool" | "image" | "recipient" | "exec";
   type CatPort = { name: string; type: PortType; required: boolean };
   type CatKind = {
     slug: string;
@@ -248,7 +248,8 @@
   const configRows = $derived.by(() => {
     if (!selectedNode) return [] as { key: string; port: CatPort | null }[];
     const nk = catalog[selectedNode.kind];
-    const inputs = nk?.inputs ?? [];
+    // Exec pins are pure wiring — never editable settings, so exclude them.
+    const inputs = (nk?.inputs ?? []).filter((p) => p.type !== "exec");
     const rows: { key: string; port: CatPort | null }[] = inputs.map((p) => ({ key: p.name, port: p }));
     for (const key of Object.keys(nk?.default_config ?? {})) {
       if (!inputs.some((p) => p.name === key)) rows.push({ key, port: null });
@@ -261,26 +262,37 @@
     return g.enabled ? "idle" : "disabled";
   }
 
+  // Control-flow (exec) ports are universal and sit on the node's header row.
+  const EXEC_IN_NAME = "exec_in";
+  const EXEC_OUT_NAME = "exec_out";
+  const isExec = (port: string) => port === EXEC_IN_NAME || port === EXEC_OUT_NAME;
+  // Data ports = everything except the white exec pins (those render on the header).
+  function dataPorts(k: CatKind | undefined, side: "in" | "out"): CatPort[] {
+    const list = side === "in" ? k?.inputs : k?.outputs;
+    return (list ?? []).filter((p) => p.type !== "exec");
+  }
+
   function nodeHeight(n: Node): number {
     const k = catalog[n.kind];
-    const rows = Math.max(k?.inputs.length ?? 0, k?.outputs.length ?? 0, 1);
+    const rows = Math.max(dataPorts(k, "in").length, dataPorts(k, "out").length, 1);
     return HEAD_H + rows * ROW_H + PAD;
   }
-  // Port Y *within* a node (local coords — the node <g> is translated to n.x/n.y).
-  function portY(i: number) {
+  // Local Y of the i-th data port within a node (the <g> is translated to n.x/n.y).
+  function dataPortY(i: number) {
     return HEAD_H + i * ROW_H + ROW_H / 2;
   }
+  // Local Y of a port by name — exec pins sit on the header row, data ports below.
+  function portLocalY(node: Node, port: string, side: "in" | "out") {
+    if (isExec(port)) return HEAD_H / 2;
+    const i = dataPorts(catalog[node.kind], side).findIndex((p) => p.name === port);
+    return dataPortY(Math.max(0, i));
+  }
   // Absolute port Y (for drawing edges between nodes).
-  function inPortY(n: Node, i: number) {
-    return n.y + portY(i);
+  function inPortY(n: Node, port: string) {
+    return n.y + portLocalY(n, port, "in");
   }
-  function outPortY(n: Node, i: number) {
-    return n.y + portY(i);
-  }
-  function portIndex(node: Node, port: string, side: "in" | "out") {
-    const k = catalog[node.kind];
-    const list = side === "in" ? k?.inputs : k?.outputs;
-    return list?.findIndex((p) => p.name === port) ?? -1;
+  function outPortY(n: Node, port: string) {
+    return n.y + portLocalY(n, port, "out");
   }
   function wiredInto(nodeId: number, port: string): Edge | undefined {
     return graph?.edges.find((e) => e.to === nodeId && e.to_port === port);
@@ -291,9 +303,11 @@
     bool: "#fbbf24",
     image: "#f472b6",
     recipient: "#a78bfa",
+    exec: "#f4f4f5",
   };
   // The colour of a port (used so a connection follows its data type).
   function portColorOf(node: Node, port: string, side: "in" | "out"): string {
+    if (isExec(port)) return portColor.exec;
     const list = side === "out" ? catalog[node.kind]?.outputs : catalog[node.kind]?.inputs;
     const p = list?.find((x) => x.name === port);
     return p ? portColor[p.type] : "#52796f";
@@ -547,7 +561,7 @@
     if (isRunning) return;
     pending = { node: node.id, port };
     // seed the wire's free end at the port so it starts with zero length
-    cursor = { x: node.x + NODE_W, y: outPortY(node, Math.max(0, portIndex(node, port, "out"))) };
+    cursor = { x: node.x + NODE_W, y: outPortY(node, port) };
   }
   async function clickInPort(node: Node, port: string) {
     if (!graph || isRunning) return;
@@ -869,9 +883,9 @@
                 {@const toN = graph.nodes.find((n) => n.id === e.to)}
                 {#if fromN && toN}
                   {@const x1 = fromN.x + NODE_W}
-                  {@const y1 = outPortY(fromN, Math.max(0, portIndex(fromN, e.from_port, "out")))}
+                  {@const y1 = outPortY(fromN, e.from_port)}
                   {@const x2 = toN.x}
-                  {@const y2 = inPortY(toN, Math.max(0, portIndex(toN, e.to_port, "in")))}
+                  {@const y2 = inPortY(toN, e.to_port)}
                   {@const eLive = nodeLive(e.to)}
                   {@const eColor = portColorOf(fromN, e.from_port, "out")}
                   <path
@@ -941,9 +955,8 @@
                     onpointerdown={(ev) => startDrag(ev, n)}
                     role="presentation"
                   />
-                  <circle cx="12" cy={HEAD_H / 2} r="2.5" class="pointer-events-none fill-primary" />
                   <text
-                    x="20"
+                    x="14"
                     y="17"
                     class="pointer-events-none select-none fill-foreground"
                     font-size="11"
@@ -960,12 +973,38 @@
                     stroke-width="1"
                   />
 
-                  <!-- input ports -->
-                  {#each k?.inputs ?? [] as p, i}
+                  <!-- exec (control-flow) pins — white, on the header row -->
+                  <circle
+                    cx="0"
+                    cy={HEAD_H / 2}
+                    r="5"
+                    fill={wiredInto(n.id, EXEC_IN_NAME) ? portColor.exec : "#151c19"}
+                    stroke={portColor.exec}
+                    stroke-width="2"
+                    class="cursor-pointer"
+                    onclick={() => clickInPort(n, EXEC_IN_NAME)}
+                    role="presentation"
+                  />
+                  <circle
+                    cx={NODE_W}
+                    cy={HEAD_H / 2}
+                    r={pending && pending.node === n.id && pending.port === EXEC_OUT_NAME ? 6 : 5}
+                    fill={pending && pending.node === n.id && pending.port === EXEC_OUT_NAME
+                      ? portColor.exec
+                      : "#151c19"}
+                    stroke={portColor.exec}
+                    stroke-width="2"
+                    class="cursor-pointer transition-all"
+                    onclick={() => clickOutPort(n, EXEC_OUT_NAME)}
+                    role="presentation"
+                  />
+
+                  <!-- input data ports -->
+                  {#each dataPorts(k, "in") as p, i}
                     {@const wired = wiredInto(n.id, p.name)}
                     <circle
                       cx="0"
-                      cy={portY(i)}
+                      cy={dataPortY(i)}
                       r="5"
                       fill={wired ? portColor[p.type] : "#151c19"}
                       stroke={portColor[p.type]}
@@ -976,7 +1015,7 @@
                     />
                     <text
                       x="11"
-                      y={portY(i) + 3}
+                      y={dataPortY(i) + 3}
                       class="pointer-events-none select-none fill-muted-foreground"
                       font-size="10"
                     >
@@ -984,12 +1023,12 @@
                     </text>
                   {/each}
 
-                  <!-- output ports -->
-                  {#each k?.outputs ?? [] as p, i}
+                  <!-- output data ports -->
+                  {#each dataPorts(k, "out") as p, i}
                     {@const isPending = pending && pending.node === n.id && pending.port === p.name}
                     <circle
                       cx={NODE_W}
-                      cy={portY(i)}
+                      cy={dataPortY(i)}
                       r={isPending ? 6 : 5}
                       fill={isPending ? portColor[p.type] : "#151c19"}
                       stroke={portColor[p.type]}
@@ -1000,7 +1039,7 @@
                     />
                     <text
                       x={NODE_W - 11}
-                      y={portY(i) + 3}
+                      y={dataPortY(i) + 3}
                       text-anchor="end"
                       class="pointer-events-none select-none fill-muted-foreground"
                       font-size="10"
@@ -1016,7 +1055,7 @@
                 {@const pn = graph.nodes.find((n) => n.id === pending.node)}
                 {#if pn}
                   {@const px = pn.x + NODE_W}
-                  {@const py = outPortY(pn, Math.max(0, portIndex(pn, pending.port, "out")))}
+                  {@const py = outPortY(pn, pending.port)}
                   {@const pColor = portColorOf(pn, pending.port, "out")}
                   <path
                     d={`M ${px} ${py} C ${px + 60} ${py}, ${cursor.x - 60} ${cursor.y}, ${cursor.x} ${cursor.y}`}

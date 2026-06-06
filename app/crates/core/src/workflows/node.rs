@@ -101,6 +101,8 @@ pub fn literal_for(config: &Value, port: Port) -> Option<PortValue> {
                 Some(PortValue::Recipient(s.to_string()))
             }
         }
+        // Control-flow ports never carry a value.
+        PortType::Exec => None,
     }
 }
 
@@ -120,21 +122,21 @@ pub fn run_node(
         NodeKind::DescribeImage => run_describe_image(config, inputs),
         NodeKind::NotifyRecipient => run_notify_recipient(inputs, sys),
         NodeKind::Format => run_format(config, inputs),
-        NodeKind::Wait => run_wait(inputs),
+        NodeKind::Wait => run_wait(config),
     }
 }
 
-/// Delay the run by `seconds` (clamped 0..=3600), then pass `in` through to `out`.
+/// Delay the run by `seconds` (clamped 0..=3600). A pure control-flow node: it
+/// has no data ports — its exec_out simply fires the next node after the delay.
 /// The node stays active for the whole delay since the engine runs it synchronously.
-fn run_wait(inputs: &PortValues) -> Result<PortValues, String> {
-    let secs = inputs.get("seconds").and_then(PortValue::as_num).unwrap_or(1).clamp(0, 3600);
+fn run_wait(config: &Value) -> Result<PortValues, String> {
+    let secs = config
+        .get("seconds")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+        .unwrap_or(1)
+        .clamp(0, 3600);
     std::thread::sleep(std::time::Duration::from_secs(secs as u64));
-    let mut o = PortValues::new();
-    if let Some(v) = inputs.get("in") {
-        o.insert("out".into(), v.clone());
-    }
-    o.insert("ok".into(), PortValue::Bool(true));
-    Ok(o)
+    Ok(PortValues::new())
 }
 
 /// Output the recipient chosen in this node's config as a typed `Recipient`.
@@ -342,13 +344,11 @@ mod tests {
     }
 
     #[test]
-    fn wait_passes_input_through_and_reports_ok() {
-        let mut inputs = PortValues::new();
-        inputs.insert("seconds".into(), PortValue::Num(0)); // no real delay in the test
-        inputs.insert("in".into(), PortValue::Text("payload".into()));
-        let out = run_node(NodeKind::Wait, &json!({}), &inputs, &test_ctx()).unwrap();
-        assert_eq!(out["out"].as_text(), Some("payload"));
-        assert_eq!(out["ok"].as_bool(), Some(true));
+    fn wait_is_pure_control_flow_no_data_outputs() {
+        // seconds=0 → no real delay; a control-flow node emits no data ports.
+        let out = run_node(NodeKind::Wait, &json!({ "seconds": "0" }), &PortValues::new(), &test_ctx())
+            .unwrap();
+        assert!(out.is_empty());
     }
 
     #[test]

@@ -29,6 +29,8 @@ pub enum PortType {
     Image,
     /// A notification recipient handle (carried as the recipient's label).
     Recipient,
+    /// Control flow ("white") — carries no value; sequences node execution.
+    Exec,
 }
 
 /// A static port declaration on a `NodeKind` (not persisted — derived from the kind).
@@ -132,13 +134,12 @@ const FORMAT_IN: [Port; 3] = [
 ];
 const FORMAT_OUT: [Port; 1] = [p("text", PortType::Text, false)];
 
-// Wait: holds the run at this node for `seconds`, then passes `in` through.
-const WAIT_IN: [Port; 2] =
-    [p("in", PortType::Text, false), p("seconds", PortType::Num, false)];
-const WAIT_OUT: [Port; 2] =
-    [p("out", PortType::Text, false), p("ok", PortType::Bool, false)];
-
 const NO_PORTS: [Port; 0] = [];
+
+// Universal control-flow ports — every node has these in addition to its data
+// ports. They carry no value; they only add execution ordering to the run.
+pub const EXEC_IN: Port = p("exec_in", PortType::Exec, false);
+pub const EXEC_OUT: Port = p("exec_out", PortType::Exec, false);
 
 impl NodeKind {
     pub const ALL: [NodeKind; 9] = [
@@ -209,7 +210,7 @@ impl NodeKind {
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_IN,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_IN,
             NodeKind::Format => &FORMAT_IN,
-            NodeKind::Wait => &WAIT_IN,
+            NodeKind::Wait => &NO_PORTS, // control-flow only — sequenced via exec ports
         }
     }
 
@@ -223,15 +224,21 @@ impl NodeKind {
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_OUT,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_OUT,
             NodeKind::Format => &FORMAT_OUT,
-            NodeKind::Wait => &WAIT_OUT,
+            NodeKind::Wait => &NO_PORTS, // control-flow only — sequenced via exec ports
         }
     }
 
     pub fn input_port(self, name: &str) -> Option<Port> {
+        if name == EXEC_IN.name {
+            return Some(EXEC_IN);
+        }
         self.input_ports().iter().copied().find(|p| p.name == name)
     }
 
     pub fn output_port(self, name: &str) -> Option<Port> {
+        if name == EXEC_OUT.name {
+            return Some(EXEC_OUT);
+        }
         self.output_ports().iter().copied().find(|p| p.name == name)
     }
 
@@ -248,7 +255,7 @@ impl NodeKind {
             NodeKind::DescribeImage => json!({}),
             NodeKind::NotifyRecipient => json!({ "message": "" }),
             NodeKind::Format => json!({ "template": "{p1} — {p2}", "p1": "", "p2": "", "p3": "" }),
-            NodeKind::Wait => json!({ "seconds": "1", "in": "" }),
+            NodeKind::Wait => json!({ "seconds": "1" }),
         }
     }
 }
@@ -643,6 +650,23 @@ mod tests {
         let b = g.add_node(NodeKind::Format, 0, 0);
         g.add_edge(a, "text", b, "p1").unwrap();
         assert!(g.add_edge(b, "text", a, "p1").unwrap_err().contains("cycle"));
+    }
+
+    #[test]
+    fn exec_ports_wire_between_any_nodes_but_not_to_data() {
+        let mut g = Graph::new(1, "g");
+        let a = g.add_node(NodeKind::GetLastAlert, 0, 0);
+        let w = g.add_node(NodeKind::Wait, 0, 0);
+        let b = g.add_node(NodeKind::CreateAlert, 0, 0);
+        // exec → exec sequences nodes that share no data.
+        g.add_edge(a, "exec_out", w, "exec_in").unwrap();
+        g.add_edge(w, "exec_out", b, "exec_in").unwrap();
+        // exec can't connect to a data port.
+        assert!(g.add_edge(a, "exec_out", b, "message").unwrap_err().contains("type mismatch"));
+        assert!(g.add_edge(a, "message", b, "exec_in").unwrap_err().contains("type mismatch"));
+        // Wait is control-flow only — it has no data ports.
+        assert!(NodeKind::Wait.input_ports().is_empty());
+        assert!(NodeKind::Wait.output_ports().is_empty());
     }
 
     #[test]
