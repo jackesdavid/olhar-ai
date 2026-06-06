@@ -70,6 +70,8 @@ pub enum NodeKind {
     Format,
     /// Flow control: delays the run by `seconds`, staying active until it ends.
     Wait,
+    /// Network: POST form data (`key1..3` = field names, `value1..3` = values) to a URL.
+    HttpPost,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -134,6 +136,20 @@ const FORMAT_IN: [Port; 3] = [
 ];
 const FORMAT_OUT: [Port; 1] = [p("text", PortType::Text, false)];
 
+// HTTP POST: url + up to three form fields (each field's value is a wired/literal
+// input; its key name is static config `key1..key3`).
+const HTTP_POST_IN: [Port; 4] = [
+    p("url", PortType::Text, true),
+    p("value1", PortType::Text, false),
+    p("value2", PortType::Text, false),
+    p("value3", PortType::Text, false),
+];
+const HTTP_POST_OUT: [Port; 3] = [
+    p("status", PortType::Num, false),
+    p("response", PortType::Text, false),
+    p("ok", PortType::Bool, false),
+];
+
 const NO_PORTS: [Port; 0] = [];
 
 // Universal control-flow ports — every node has these in addition to its data
@@ -142,7 +158,7 @@ pub const EXEC_IN: Port = p("exec_in", PortType::Exec, false);
 pub const EXEC_OUT: Port = p("exec_out", PortType::Exec, false);
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 9] = [
+    pub const ALL: [NodeKind; 10] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -152,6 +168,7 @@ impl NodeKind {
         NodeKind::NotifyRecipient,
         NodeKind::Format,
         NodeKind::Wait,
+        NodeKind::HttpPost,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -167,6 +184,7 @@ impl NodeKind {
             NodeKind::NotifyRecipient => "notify_recipient",
             NodeKind::Format => "format",
             NodeKind::Wait => "wait",
+            NodeKind::HttpPost => "http_post",
         }
     }
 
@@ -185,6 +203,7 @@ impl NodeKind {
             NodeKind::NotifyRecipient => "Notify recipient",
             NodeKind::Format => "Format",
             NodeKind::Wait => "Wait",
+            NodeKind::HttpPost => "HTTP post",
         }
     }
 
@@ -197,6 +216,7 @@ impl NodeKind {
             NodeKind::DescribeImage => "AI",
             NodeKind::Format => "Text",
             NodeKind::Wait => "Flow",
+            NodeKind::HttpPost => "Network",
         }
     }
 
@@ -211,6 +231,7 @@ impl NodeKind {
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_IN,
             NodeKind::Format => &FORMAT_IN,
             NodeKind::Wait => &NO_PORTS, // control-flow only — sequenced via exec ports
+            NodeKind::HttpPost => &HTTP_POST_IN,
         }
     }
 
@@ -225,6 +246,7 @@ impl NodeKind {
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_OUT,
             NodeKind::Format => &FORMAT_OUT,
             NodeKind::Wait => &NO_PORTS, // control-flow only — sequenced via exec ports
+            NodeKind::HttpPost => &HTTP_POST_OUT,
         }
     }
 
@@ -256,6 +278,12 @@ impl NodeKind {
             NodeKind::NotifyRecipient => json!({ "message": "" }),
             NodeKind::Format => json!({ "template": "{p1} — {p2}", "p1": "", "p2": "", "p3": "" }),
             NodeKind::Wait => json!({ "seconds": "1" }),
+            NodeKind::HttpPost => json!({
+                "url": "",
+                "key1": "", "value1": "",
+                "key2": "", "value2": "",
+                "key3": "", "value3": "",
+            }),
         }
     }
 }

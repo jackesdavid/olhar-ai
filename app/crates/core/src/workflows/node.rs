@@ -123,7 +123,50 @@ pub fn run_node(
         NodeKind::NotifyRecipient => run_notify_recipient(inputs, sys),
         NodeKind::Format => run_format(config, inputs),
         NodeKind::Wait => run_wait(config),
+        NodeKind::HttpPost => run_http_post(config, inputs),
     }
+}
+
+/// POST `application/x-www-form-urlencoded` form data to `url`. Form fields are
+/// `key1..key3` (names, from config) paired with `value1..value3` (wired/literal
+/// inputs); empty-named fields are skipped. Outputs the HTTP status, body, and ok.
+fn run_http_post(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let url = req_text(inputs, "url").map(str::to_string).or_else(|_| {
+        let u = config.get("url").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        if u.is_empty() { Err("missing required input 'url'".to_string()) } else { Ok(u) }
+    })?;
+
+    let mut form: Vec<(String, String)> = Vec::new();
+    for i in 1..=3 {
+        let key = config.get(format!("key{i}")).and_then(Value::as_str).unwrap_or("").trim();
+        if key.is_empty() {
+            continue;
+        }
+        let val = inputs.get(&format!("value{i}")).and_then(PortValue::as_text).unwrap_or("");
+        form.push((key.to_string(), val.to_string()));
+    }
+    let form_refs: Vec<(&str, &str)> = form.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(20))
+        .build();
+    let (status, body, ok) = match agent.post(&url).send_form(&form_refs) {
+        Ok(resp) => {
+            let s = resp.status();
+            (s as i64, resp.into_string().unwrap_or_default(), (200..300).contains(&s))
+        }
+        // ureq treats 4xx/5xx as an error but still carries the response.
+        Err(ureq::Error::Status(code, resp)) => {
+            (code as i64, resp.into_string().unwrap_or_default(), false)
+        }
+        Err(e) => return Err(format!("HTTP POST to {url} failed: {e}")),
+    };
+
+    let mut o = PortValues::new();
+    o.insert("status".into(), PortValue::Num(status));
+    o.insert("response".into(), PortValue::Text(body));
+    o.insert("ok".into(), PortValue::Bool(ok));
+    Ok(o)
 }
 
 /// Delay the run by `seconds` (clamped 0..=3600). A pure control-flow node: it
@@ -341,6 +384,13 @@ mod tests {
         assert_eq!(literal_for(&cfg, text).unwrap().as_text(), Some("front"));
         assert!(literal_for(&cfg, blank).is_none());
         assert_eq!(literal_for(&cfg, num).unwrap().as_num(), Some(7));
+    }
+
+    #[test]
+    fn http_post_requires_a_url_before_any_request() {
+        let err = run_node(NodeKind::HttpPost, &json!({ "url": "  " }), &PortValues::new(), &test_ctx())
+            .unwrap_err();
+        assert!(err.contains("missing required input 'url'"), "got: {err}");
     }
 
     #[test]
