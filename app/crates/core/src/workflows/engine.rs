@@ -28,8 +28,19 @@ pub fn run_dag_with(
     on_node: &mut dyn FnMut(u32),
 ) -> Result<HashMap<u32, PortValues>, String> {
     let order = graph.topo_order()?;
+    // Only nodes wired into the graph participate in a run — a node with no edges
+    // (in or out) is an orphan on the canvas; running it would just do work whose
+    // output goes nowhere, so skip it (and don't highlight it as executing).
+    let mut connected: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for e in &graph.edges {
+        connected.insert(e.from);
+        connected.insert(e.to);
+    }
     let mut outputs: HashMap<u32, PortValues> = HashMap::new();
     for nid in order {
+        if !connected.contains(&nid) {
+            continue;
+        }
         on_node(nid);
         let n = graph.node(nid).ok_or("node vanished mid-run")?;
         let mut inputs = PortValues::new();
@@ -232,11 +243,29 @@ mod tests {
     #[test]
     fn run_dag_stops_on_missing_required_input_without_io() {
         let ctx = test_ctx();
+        ctx.alerts.lock().unwrap().push(alert(1, AlertLevel::Info, "operator", "hi"));
         let mut g = Graph::new(1, "g");
-        g.add_node(NodeKind::CreateAlert, 0, 0); // default message "" -> missing
+        let gla = g.add_node(NodeKind::GetLastAlert, 0, 0);
+        let ca = g.add_node(NodeKind::CreateAlert, 0, 0); // message "" -> missing
+        g.add_edge(gla, "room", ca, "room").unwrap(); // connect so it isn't skipped
         let err = run_dag(&g, &ctx).unwrap_err();
         assert!(err.contains("missing required input 'message'"), "got: {err}");
-        assert!(ctx.alerts.lock().unwrap().is_empty());
+        // create_alert errored before persisting — only the seed alert remains.
+        assert_eq!(ctx.alerts.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn run_dag_skips_disconnected_nodes() {
+        let ctx = test_ctx();
+        ctx.alerts.lock().unwrap().push(alert(1, AlertLevel::Info, "operator", "hi"));
+        let mut g = Graph::new(1, "g");
+        // A lone, fully-wired-up create_alert with a literal message would normally
+        // persist an alert — but with no edges it's an orphan and must be skipped.
+        let ca = g.add_node(NodeKind::CreateAlert, 0, 0);
+        g.node_mut(ca).unwrap().config["message"] = json!("orphan should not fire");
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(!outs.contains_key(&ca), "orphan node should not run");
+        assert_eq!(ctx.alerts.lock().unwrap().len(), 1, "no alert from the orphan");
     }
 
     #[test]
