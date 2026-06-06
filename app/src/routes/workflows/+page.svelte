@@ -191,12 +191,16 @@
   }
 
   // Property rows = the node's input ports (so wire-only ports like recipient /
-  // image are always visible) + any static config keys that aren't ports.
+  // image are always visible) + the legitimate static settings for that kind.
+  // We use the catalog's default_config (the schema) — NOT the node's live
+  // config — so stale keys from older schemas (e.g. notify_beacon's `target`)
+  // are never rendered.
   const configRows = $derived.by(() => {
     if (!selectedNode) return [] as { key: string; port: CatPort | null }[];
-    const inputs = catalog[selectedNode.kind]?.inputs ?? [];
+    const nk = catalog[selectedNode.kind];
+    const inputs = nk?.inputs ?? [];
     const rows: { key: string; port: CatPort | null }[] = inputs.map((p) => ({ key: p.name, port: p }));
-    for (const key of Object.keys(selectedNode.config)) {
+    for (const key of Object.keys(nk?.default_config ?? {})) {
       if (!inputs.some((p) => p.name === key)) rows.push({ key, port: null });
     }
     return rows;
