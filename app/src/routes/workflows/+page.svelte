@@ -881,9 +881,12 @@
                       class="node-running stroke-primary"
                     />
                   {/if}
+                  <!-- Drag handle covers the whole node body; ports render after
+                       this rect, so they stay clickable on top of it. -->
                   <rect
                     width={NODE_W}
-                    height={HEAD_H}
+                    height={h}
+                    rx="8"
                     fill="transparent"
                     class="cursor-move"
                     onpointerdown={(ev) => startDrag(ev, n)}
