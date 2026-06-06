@@ -176,7 +176,7 @@
 
   // node palette: search + group by category
   let nodeSearch = $state("");
-  const CATEGORY_ORDER = ["Cameras", "AI", "Alerts", "Recipients", "Text"];
+  const CATEGORY_ORDER = ["Cameras", "AI", "Alerts", "Recipients", "Text", "Flow"];
   const nodeCategories = $derived.by(() => {
     const q = nodeSearch.trim().toLowerCase();
     const matched = kinds.filter(

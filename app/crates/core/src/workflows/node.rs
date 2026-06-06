@@ -42,6 +42,12 @@ impl PortValue {
             _ => None,
         }
     }
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            PortValue::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
     pub fn as_image(&self) -> Option<&[u8]> {
         match self {
             PortValue::Image(b) => Some(b),
@@ -114,7 +120,21 @@ pub fn run_node(
         NodeKind::DescribeImage => run_describe_image(config, inputs),
         NodeKind::NotifyRecipient => run_notify_recipient(inputs, sys),
         NodeKind::Format => run_format(config, inputs),
+        NodeKind::Wait => run_wait(inputs),
     }
+}
+
+/// Delay the run by `seconds` (clamped 0..=3600), then pass `in` through to `out`.
+/// The node stays active for the whole delay since the engine runs it synchronously.
+fn run_wait(inputs: &PortValues) -> Result<PortValues, String> {
+    let secs = inputs.get("seconds").and_then(PortValue::as_num).unwrap_or(1).clamp(0, 3600);
+    std::thread::sleep(std::time::Duration::from_secs(secs as u64));
+    let mut o = PortValues::new();
+    if let Some(v) = inputs.get("in") {
+        o.insert("out".into(), v.clone());
+    }
+    o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
 }
 
 /// Output the recipient chosen in this node's config as a typed `Recipient`.
@@ -319,6 +339,16 @@ mod tests {
         assert_eq!(literal_for(&cfg, text).unwrap().as_text(), Some("front"));
         assert!(literal_for(&cfg, blank).is_none());
         assert_eq!(literal_for(&cfg, num).unwrap().as_num(), Some(7));
+    }
+
+    #[test]
+    fn wait_passes_input_through_and_reports_ok() {
+        let mut inputs = PortValues::new();
+        inputs.insert("seconds".into(), PortValue::Num(0)); // no real delay in the test
+        inputs.insert("in".into(), PortValue::Text("payload".into()));
+        let out = run_node(NodeKind::Wait, &json!({}), &inputs, &test_ctx()).unwrap();
+        assert_eq!(out["out"].as_text(), Some("payload"));
+        assert_eq!(out["ok"].as_bool(), Some(true));
     }
 
     #[test]

@@ -66,6 +66,8 @@ pub enum NodeKind {
     NotifyRecipient,
     /// Pure text composition: substitutes `{p1..p3}` into a `template`.
     Format,
+    /// Flow control: delays the run by `seconds`, staying active until it ends.
+    Wait,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -130,10 +132,16 @@ const FORMAT_IN: [Port; 3] = [
 ];
 const FORMAT_OUT: [Port; 1] = [p("text", PortType::Text, false)];
 
+// Wait: holds the run at this node for `seconds`, then passes `in` through.
+const WAIT_IN: [Port; 2] =
+    [p("in", PortType::Text, false), p("seconds", PortType::Num, false)];
+const WAIT_OUT: [Port; 2] =
+    [p("out", PortType::Text, false), p("ok", PortType::Bool, false)];
+
 const NO_PORTS: [Port; 0] = [];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 8] = [
+    pub const ALL: [NodeKind; 9] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -142,6 +150,7 @@ impl NodeKind {
         NodeKind::DescribeImage,
         NodeKind::NotifyRecipient,
         NodeKind::Format,
+        NodeKind::Wait,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -156,6 +165,7 @@ impl NodeKind {
             NodeKind::DescribeImage => "describe_image",
             NodeKind::NotifyRecipient => "notify_recipient",
             NodeKind::Format => "format",
+            NodeKind::Wait => "wait",
         }
     }
 
@@ -173,6 +183,7 @@ impl NodeKind {
             NodeKind::DescribeImage => "Describe image",
             NodeKind::NotifyRecipient => "Notify recipient",
             NodeKind::Format => "Format",
+            NodeKind::Wait => "Wait",
         }
     }
 
@@ -184,6 +195,7 @@ impl NodeKind {
             NodeKind::CameraSnapshot => "Cameras",
             NodeKind::DescribeImage => "AI",
             NodeKind::Format => "Text",
+            NodeKind::Wait => "Flow",
         }
     }
 
@@ -197,6 +209,7 @@ impl NodeKind {
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_IN,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_IN,
             NodeKind::Format => &FORMAT_IN,
+            NodeKind::Wait => &WAIT_IN,
         }
     }
 
@@ -210,6 +223,7 @@ impl NodeKind {
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_OUT,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_OUT,
             NodeKind::Format => &FORMAT_OUT,
+            NodeKind::Wait => &WAIT_OUT,
         }
     }
 
@@ -234,6 +248,7 @@ impl NodeKind {
             NodeKind::DescribeImage => json!({}),
             NodeKind::NotifyRecipient => json!({ "message": "" }),
             NodeKind::Format => json!({ "template": "{p1} — {p2}", "p1": "", "p2": "", "p3": "" }),
+            NodeKind::Wait => json!({ "seconds": "1", "in": "" }),
         }
     }
 }
