@@ -28,6 +28,7 @@
   import * as Card from "$lib/components/ui/card";
   import * as Table from "$lib/components/ui/table";
   import * as Dialog from "$lib/components/ui/dialog";
+  import * as Select from "$lib/components/ui/select";
   import Loader from "$lib/components/loader.svelte";
   import EmptyState from "$lib/components/empty-state.svelte";
   import StatusDot from "$lib/components/status-dot.svelte";
@@ -416,6 +417,19 @@
   }
 
   const LEVELS = ["debug", "info", "warn", "error"];
+  const TRIGGER_OPTS = [
+    { value: "manual", label: "Manual (Run-now only)" },
+    { value: "cron", label: "Cron (every N seconds)" },
+    { value: "on_new_alert", label: "On new alert" },
+  ];
+  const CONC_OPTS = [
+    { value: "skip", label: "Skip if running" },
+    { value: "queue", label: "Queue (max N)" },
+    { value: "concurrent", label: "Concurrent (max N)" },
+  ];
+  function labelOf(opts: { value: string; label: string }[], v: string) {
+    return opts.find((o) => o.value === v)?.label ?? v;
+  }
 </script>
 
 <div class="h-full">
@@ -728,38 +742,51 @@
 
             <div class="space-y-1.5">
               <Label class="text-xs text-muted-foreground">Trigger</Label>
-              <select
-                class="h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm"
+              <Select.Root
+                type="single"
                 value={triggerKind(graph.trigger)}
-                onchange={(e) => applyTrigger(graph, e.currentTarget.value, triggerSecs(graph.trigger), triggerLevel(graph.trigger))}
+                onValueChange={(v) => applyTrigger(graph, v ?? "manual", triggerSecs(graph.trigger), triggerLevel(graph.trigger))}
               >
-                <option value="manual">Manual (Run-now only)</option>
-                <option value="cron">Cron (every N seconds)</option>
-                <option value="on_new_alert">On new alert</option>
-              </select>
+                <Select.Trigger class="h-9 w-full">{labelOf(TRIGGER_OPTS, triggerKind(graph.trigger))}</Select.Trigger>
+                <Select.Content>
+                  {#each TRIGGER_OPTS as o (o.value)}
+                    <Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
               {#if triggerKind(graph.trigger) === "cron"}
                 <div class="flex items-center gap-2">
                   <Input type="number" min="1" value={triggerSecs(graph.trigger)} class="h-8" onchange={(e) => applyTrigger(graph, "cron", Number(e.currentTarget.value), "info")} />
                   <span class="text-xs text-muted-foreground">sec</span>
                 </div>
               {:else if triggerKind(graph.trigger) === "on_new_alert"}
-                <select class="h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm" value={triggerLevel(graph.trigger)} onchange={(e) => applyTrigger(graph, "on_new_alert", 60, e.currentTarget.value)}>
-                  {#each LEVELS as l}<option value={l}>≥ {l}</option>{/each}
-                </select>
+                <Select.Root
+                  type="single"
+                  value={triggerLevel(graph.trigger)}
+                  onValueChange={(v) => applyTrigger(graph, "on_new_alert", 60, v ?? "info")}
+                >
+                  <Select.Trigger class="h-8 w-full">≥ {triggerLevel(graph.trigger)}</Select.Trigger>
+                  <Select.Content>
+                    {#each LEVELS as l (l)}<Select.Item value={l} label={`≥ ${l}`}>≥ {l}</Select.Item>{/each}
+                  </Select.Content>
+                </Select.Root>
               {/if}
             </div>
 
             <div class="space-y-1.5">
               <Label class="text-xs text-muted-foreground">Concurrency</Label>
-              <select
-                class="h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm"
+              <Select.Root
+                type="single"
                 value={concKind(graph.concurrency)}
-                onchange={(e) => applyConcurrency(graph, e.currentTarget.value, concMax(graph.concurrency))}
+                onValueChange={(v) => applyConcurrency(graph, v ?? "skip", concMax(graph.concurrency))}
               >
-                <option value="skip">Skip if running</option>
-                <option value="queue">Queue (max N)</option>
-                <option value="concurrent">Concurrent (max N)</option>
-              </select>
+                <Select.Trigger class="h-9 w-full">{labelOf(CONC_OPTS, concKind(graph.concurrency))}</Select.Trigger>
+                <Select.Content>
+                  {#each CONC_OPTS as o (o.value)}
+                    <Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
               {#if concKind(graph.concurrency) !== "skip"}
                 <Input type="number" min="1" value={concMax(graph.concurrency)} class="h-8" onchange={(e) => applyConcurrency(graph, concKind(graph.concurrency), Number(e.currentTarget.value))} />
               {/if}
@@ -791,9 +818,16 @@
                       {#if wired}
                         <p class="rounded border border-dashed border-primary/30 bg-primary/5 px-2 py-1.5 text-xs text-primary/80">← #{wired.from}.{wired.from_port}</p>
                       {:else if key === "level"}
-                        <select class="h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm" value={String(selectedNode.config[key] ?? "info")} onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })}>
-                          {#each LEVELS as l}<option value={l}>{l}</option>{/each}
-                        </select>
+                        <Select.Root
+                          type="single"
+                          value={String(selectedNode.config[key] ?? "info")}
+                          onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "info" })}
+                        >
+                          <Select.Trigger class="h-8 w-full capitalize">{String(selectedNode.config[key] ?? "info")}</Select.Trigger>
+                          <Select.Content>
+                            {#each LEVELS as l (l)}<Select.Item value={l} label={l} class="capitalize">{l}</Select.Item>{/each}
+                          </Select.Content>
+                        </Select.Root>
                       {:else}
                         <Input class="h-8" value={String(selectedNode.config[key] ?? "")} onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })} />
                       {/if}
