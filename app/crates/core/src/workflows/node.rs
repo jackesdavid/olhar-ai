@@ -80,8 +80,21 @@ pub fn literal_for(config: &Value, port: Port) -> Option<PortValue> {
             }
         }
         PortType::Bool => v.as_bool().map(PortValue::Bool),
-        PortType::Image => None,
-        PortType::Recipient => None, // recipients only come from a GetRecipient node
+        // An image literal is a file path the user picked; read it at run time.
+        PortType::Image => v
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .and_then(|p| std::fs::read(p).ok())
+            .map(PortValue::Image),
+        // A recipient literal is the recipient's label (also produced by GetRecipient).
+        PortType::Recipient => {
+            let s = v.as_str()?;
+            if s.trim().is_empty() {
+                None
+            } else {
+                Some(PortValue::Recipient(s.to_string()))
+            }
+        }
     }
 }
 

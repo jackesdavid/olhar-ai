@@ -1485,6 +1485,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let path = devices_file(&app.handle());
             let store: DeviceStore = Arc::new(Mutex::new(load_devices(&path)));

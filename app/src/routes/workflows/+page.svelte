@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
   import { toast } from "svelte-sonner";
 
   import Plus from "@lucide/svelte/icons/plus";
@@ -22,6 +23,8 @@
   import Search from "@lucide/svelte/icons/search";
   import Link2 from "@lucide/svelte/icons/link-2";
   import Unplug from "@lucide/svelte/icons/unplug";
+  import Upload from "@lucide/svelte/icons/upload";
+  import ImageIcon from "@lucide/svelte/icons/image";
 
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -206,10 +209,6 @@
     }
     return rows;
   });
-  // A port whose value can only arrive over a wire (no literal config fallback).
-  function mustWire(port: CatPort | null): boolean {
-    return !!port && (port.type === "recipient" || port.type === "image");
-  }
 
   function runStatus(g: Graph): "running" | "idle" | "disabled" {
     if ((activity[g.id]?.running ?? 0) > 0) return "running";
@@ -517,6 +516,19 @@
     await invoke("set_node_config", { graphId: graph.id, nodeId: n.id, config });
     await reload();
   }
+  // Pick an image file from disk for an image port (stored as a path literal).
+  async function pickImage(n: Node, key: string) {
+    if (isRunning) return;
+    const picked = await openFileDialog({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] }],
+    });
+    if (typeof picked === "string") {
+      await saveNodeConfig(n, { ...n.config, [key]: picked });
+    }
+  }
+  const fileName = (p: string) => p.split(/[\\/]/).pop() || p;
 
   // ---- canvas: infinite pan / zoom + node drag -----------------------------
   let svgEl: SVGSVGElement | undefined;
@@ -1113,21 +1125,9 @@
                             </button>
                           </div>
                           <p class="mt-1 text-[10px] leading-snug text-muted-foreground">
-                            {#if mustWire(port)}
-                              Set by the connected node — unlink to wire a different one.
-                            {:else}
-                              Set by the connected node — unlink to fill it manually.
-                            {/if}
+                            Set by the connected node — unlink to fill it manually.
                           </p>
                         </div>
-                      {:else if mustWire(port)}
-                        <p
-                          class="flex items-center gap-1.5 rounded-lg border border-dashed px-2 py-1.5 text-xs"
-                          style="border-color: {portColor[port.type]}66; color: {portColor[port.type]}"
-                        >
-                          <Link2 class="size-3 shrink-0" />
-                          Wire a {port.type} into this port.
-                        </p>
                       {:else if key === "camera"}
                         {#if cameraOptions.length === 0}
                           <p class="rounded border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">
@@ -1142,7 +1142,7 @@
                             </Select.Content>
                           </Select.Root>
                         {/if}
-                      {:else if key === "recipient"}
+                      {:else if key === "recipient" || port?.type === "recipient"}
                         {#if recipientOptions.length === 0}
                           <p class="rounded border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">
                             No recipients — pair one in Recipients.
@@ -1156,6 +1156,43 @@
                             </Select.Content>
                           </Select.Root>
                         {/if}
+                      {:else if port?.type === "image"}
+                        {@const img = String(selectedNode.config[key] ?? "")}
+                        {#if img}
+                          <div class="flex items-center gap-2 rounded-lg border border-border bg-card px-2 py-1.5">
+                            <ImageIcon class="size-4 shrink-0 text-muted-foreground" />
+                            <span class="min-w-0 flex-1 truncate text-xs" title={img}>{fileName(img)}</span>
+                            <button
+                              class="interactive rounded-md border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground disabled:pointer-events-none disabled:opacity-50"
+                              disabled={isRunning}
+                              onclick={() => pickImage(selectedNode, key)}
+                            >
+                              Change
+                            </button>
+                            <button
+                              class="interactive rounded-md border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-destructive disabled:pointer-events-none disabled:opacity-50"
+                              disabled={isRunning}
+                              onclick={() => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: "" })}
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        {:else}
+                          <Button variant="outline" size="sm" class="h-8 w-full justify-start gap-2" disabled={isRunning} onclick={() => pickImage(selectedNode, key)}>
+                            <Upload class="size-3.5" /> Upload image…
+                          </Button>
+                        {/if}
+                      {:else if port?.type === "bool"}
+                        <div class="flex h-8 items-center gap-2">
+                          <Switch
+                            checked={selectedNode.config[key] === true || selectedNode.config[key] === "true"}
+                            disabled={isRunning}
+                            onCheckedChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v })}
+                          />
+                          <span class="text-xs text-muted-foreground">
+                            {selectedNode.config[key] === true || selectedNode.config[key] === "true" ? "True" : "False"}
+                          </span>
+                        </div>
                       {:else if key === "level"}
                         <Select.Root
                           type="single"
