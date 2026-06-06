@@ -275,6 +275,51 @@
   // The open graph is runnable only when wired up AND every required input is set.
   const graphReady = $derived(!!graph && canRun(graph) && !graphHasUnfilled(graph));
 
+  // ---- render decisions (kept out of the markup) ---------------------------
+  // Run-now in the list: only a stopped, runnable, non-cron, complete graph.
+  function listRunDisabled(g: Graph): boolean {
+    return (
+      runStatus(g) !== "disabled" ||
+      triggerKind(g.trigger) === "cron" ||
+      !canRun(g) ||
+      graphHasUnfilled(g)
+    );
+  }
+  function listRunTitle(g: Graph): string {
+    const st = runStatus(g);
+    if (st === "running") return "Running…";
+    if (st === "idle") return "Active — stop it to run manually";
+    if (triggerKind(g.trigger) === "cron") return "Runs on a schedule — use the editor to run manually";
+    if (graphHasUnfilled(g)) return "A node has a required input not filled";
+    if (canRun(g)) return "Run now";
+    return "Nothing to run — connect nodes or enable orphans";
+  }
+  // The emerald/amber/none marching-ants border on a list row.
+  function listRowAnim(g: Graph): string {
+    const st = runStatus(g);
+    if (st === "running") return "list-running";
+    if (st === "idle") return "list-idle";
+    return "";
+  }
+  // Run-now in the editor: blocked while busy, active (armed/running), or not ready.
+  function editorRunDisabled(): boolean {
+    return running || editLocked || !graphReady;
+  }
+  function editorRunTitle(): string {
+    if (!graph) return "";
+    if (isRunning) return "Already running";
+    if (graph.enabled) return "Graph is active — stop it to run manually";
+    if (graphHasUnfilled(graph)) return "A node has a required input not filled";
+    if (canRun(graph)) return "Run now";
+    return "Nothing to run — connect nodes or enable orphans";
+  }
+  // A node's border colour: emerald when running/selected, red when incomplete.
+  function nodeBorderClass(n: Node): string {
+    if (nodeLive(n.id) || selectedNodeId === n.id) return "stroke-primary";
+    if (requiredUnfilled(n).length > 0) return "stroke-destructive/70";
+    return "stroke-border hover:stroke-primary/50";
+  }
+
   // Property rows = the node's input ports (so wire-only ports like recipient /
   // image are always visible) + the legitimate static settings for that kind.
   // We use the catalog's default_config (the schema) — NOT the node's live
@@ -844,11 +889,7 @@
               <Table.Body>
                 {#each graphs as g (g.id)}
                   <Table.Row
-                    class="cursor-pointer transition-colors hover:bg-primary/5 {runStatus(g) === 'running'
-                      ? 'list-running'
-                      : runStatus(g) === 'idle'
-                        ? 'list-idle'
-                        : ''}"
+                    class="cursor-pointer transition-colors hover:bg-primary/5 {listRowAnim(g)}"
                     onclick={() => openGraph(g.id)}
                   >
                     {@const st = runStatus(g)}
@@ -884,18 +925,8 @@
                           variant="ghost"
                           size="icon"
                           class="size-8 text-primary"
-                          title={st === "running"
-                            ? "Running…"
-                            : st === "idle"
-                              ? "Active — stop it to run manually"
-                              : triggerKind(g.trigger) === "cron"
-                                ? "Runs on a schedule — use the editor to run manually"
-                                : graphHasUnfilled(g)
-                                  ? "A node has a required input not filled"
-                                  : canRun(g)
-                                    ? "Run now"
-                                    : "Nothing to run — connect nodes or enable orphans"}
-                          disabled={st !== "disabled" || triggerKind(g.trigger) === "cron" || !canRun(g) || graphHasUnfilled(g)}
+                          title={listRunTitle(g)}
+                          disabled={listRunDisabled(g)}
                           onclick={() => runNow(g)}
                         >
                           {#if st === "running"}
@@ -1017,13 +1048,7 @@
                     height={h}
                     rx="8"
                     stroke-width={sel || live || invalid ? 2 : 1}
-                    class="fill-card transition-[stroke] {live
-                      ? 'stroke-primary'
-                      : sel
-                        ? 'stroke-primary'
-                        : invalid
-                          ? 'stroke-destructive/70'
-                          : 'stroke-border hover:stroke-primary/50'}"
+                    class="fill-card transition-[stroke] {nodeBorderClass(n)}"
                   />
                   {#if live}
                     <!-- the executing node: a bright marching-ants emerald border
@@ -1217,16 +1242,8 @@
               variant="ghost"
               size="icon"
               class="size-8 text-primary hover:text-primary"
-              title={isRunning
-                ? "Already running"
-                : graph.enabled
-                  ? "Graph is active — stop it to run manually"
-                  : graphHasUnfilled(graph)
-                    ? "A node has a required input not filled"
-                    : canRun(graph)
-                      ? "Run now"
-                      : "Nothing to run — connect nodes or enable orphans"}
-              disabled={running || editLocked || !graphReady}
+              title={editorRunTitle()}
+              disabled={editorRunDisabled()}
               onclick={() => runNow(graph)}
             >
               {#if running}<LoaderCircle class="size-4 animate-spin" />{:else}<Play class="size-4" />{/if}
