@@ -88,6 +88,32 @@
   let consoleOpen = $state(false);
   let logs = $state<LogLine[]>([]);
 
+  // resizable right column (config/property panel)
+  const PANEL_MIN = 240;
+  const PANEL_MAX = 560;
+  let panelW = $state(300);
+  let resizing = $state(false);
+  function startResize(e: PointerEvent) {
+    resizing = true;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }
+  function onResizeMove(e: PointerEvent) {
+    if (!resizing) return;
+    // dragging the splitter left grows the panel (it sits on the panel's left edge)
+    const w = window.innerWidth - e.clientX - 16; // 16px = outer page padding
+    panelW = Math.max(PANEL_MIN, Math.min(PANEL_MAX, w));
+  }
+  function endResize(e: PointerEvent) {
+    if (!resizing) return;
+    resizing = false;
+    (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    try {
+      localStorage.setItem("wf.panelW", String(panelW));
+    } catch {
+      /* ignore */
+    }
+  }
+
   // canvas viewport (infinite pan/zoom)
   let pan = $state({ x: 40, y: 40 });
   let zoom = $state(1);
@@ -313,6 +339,8 @@
   }
 
   onMount(() => {
+    const savedW = Number(localStorage.getItem("wf.panelW"));
+    if (savedW >= PANEL_MIN && savedW <= PANEL_MAX) panelW = savedW;
     (async () => {
       try {
         const cat = await invoke<{ kinds: CatKind[] }>("node_catalog");
@@ -789,10 +817,10 @@
         {/if}
       </div>
 
-      <!-- row 1: editor (80%) + side panel (20%) -->
-      <div class="flex min-h-0 flex-1 gap-3">
+      <!-- row 1: editor + resizable side panel -->
+      <div class="flex min-h-0 flex-1 gap-1">
         <!-- col 1: the node editor -->
-        <div class="relative min-w-0 basis-4/5">
+        <div class="relative min-w-0 flex-1">
           <div
             class="absolute inset-0 overflow-hidden rounded-xl border border-border bg-card/20 bg-[radial-gradient(circle,_rgba(52,211,153,0.12)_1px,_transparent_1px)]"
             style="background-size: {18 * zoom}px {18 * zoom}px; background-position: {pan.x}px {pan.y}px;"
@@ -1044,8 +1072,29 @@
           </div>
         </div>
 
+        <!-- splitter: drag to resize the side panel -->
+        <div
+          class="group relative flex w-2 shrink-0 cursor-col-resize items-center justify-center"
+          onpointerdown={startResize}
+          onpointermove={onResizeMove}
+          onpointerup={endResize}
+          onpointercancel={endResize}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize panel"
+        >
+          <div
+            class="h-10 w-1 rounded-full transition-colors {resizing
+              ? 'bg-primary'
+              : 'bg-border group-hover:bg-primary/60'}"
+          ></div>
+        </div>
+
         <!-- col 2: configuration + node property -->
-        <div class="flex basis-1/5 min-w-[14rem] flex-col gap-3 overflow-y-auto">
+        <div
+          class="flex shrink-0 flex-col gap-3 overflow-y-auto"
+          style="width: {panelW}px"
+        >
           <!-- configuration -->
           <div class="space-y-3 rounded-xl border border-border bg-card/40 p-3">
             <div class="flex items-center justify-between gap-2">
