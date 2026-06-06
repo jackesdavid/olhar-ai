@@ -126,6 +126,10 @@
   // run state for the open graph
   const act = $derived(selectedGraphId != null ? activity[selectedGraphId] : undefined);
   const isRunning = $derived((act?.running ?? 0) > 0);
+  // A node is "live" if it's executing (event-held) or the polled current node.
+  function nodeLive(id: number): boolean {
+    return liveSet.has(id) || act?.current === id;
+  }
 
   // option lists for camera / recipient node dropdowns (the real items)
   const cameraOptions = $derived(devices.map((d) => ({ value: d.name, label: d.name })));
@@ -223,13 +227,22 @@
         loading = false;
       }
     })();
-    const un = listen<{ name: string; ok: boolean; summary: string }>("workflow-run", (e) => {
-      running = false;
-      const { name, ok, summary } = e.payload;
-      logs = [{ time: new Date().toLocaleTimeString(), name, ok, summary }, ...logs].slice(0, 200);
-      if (ok) toast.success(`Workflow "${name}"`, { description: summary });
-      else toast.error(`Workflow "${name}" failed`, { description: summary });
-    });
+    const un = listen<{ graph: number; name: string; ok: boolean; summary: string }>(
+      "workflow-run",
+      (e) => {
+        running = false;
+        const { graph: gid, name, ok, summary } = e.payload;
+        // Run finished (ok or error) → stop the node/edge animation at once.
+        if (gid === selectedGraphId) {
+          clearLive();
+          const a = activity[gid];
+          if (a) activity[gid] = { running: a.running, current: null };
+        }
+        logs = [{ time: new Date().toLocaleTimeString(), name, ok, summary }, ...logs].slice(0, 200);
+        if (ok) toast.success(`Workflow "${name}"`, { description: summary });
+        else toast.error(`Workflow "${name}" failed`, { description: summary });
+      },
+    );
     // Per-node execution events (real-time, catch every node).
     const unNode = listen<{ graph: number; node: number }>("workflow-node", (e) => {
       if (e.payload.graph === selectedGraphId) markLive(e.payload.node);
@@ -676,11 +689,14 @@
                   {@const y1 = outPortY(fromN, Math.max(0, portIndex(fromN, e.from_port, "out")))}
                   {@const x2 = toN.x}
                   {@const y2 = inPortY(toN, Math.max(0, portIndex(toN, e.to_port, "in")))}
+                  {@const eLive = nodeLive(e.to)}
                   <path
                     d={`M ${x1} ${y1} C ${x1 + 60} ${y1}, ${x2 - 60} ${y2}, ${x2} ${y2}`}
                     fill="none"
-                    stroke-width="2"
-                    class="cursor-pointer stroke-primary/40 transition-colors hover:stroke-destructive"
+                    stroke-width={eLive ? 3 : 2}
+                    class="cursor-pointer transition-colors hover:stroke-destructive {eLive
+                      ? 'node-running stroke-primary'
+                      : 'stroke-primary/40'}"
                     onclick={() => removeEdge(idx)}
                     role="presentation"
                   />
@@ -692,7 +708,7 @@
                 {@const k = catalog[n.kind]}
                 {@const h = nodeHeight(n)}
                 {@const sel = selectedNodeId === n.id}
-                {@const live = liveSet.has(n.id) || act?.current === n.id}
+                {@const live = nodeLive(n.id)}
                 <!-- One transform moves the whole node; inner coords are local,
                      so dragging only updates this single attribute (no per-port
                      recompute). -->
