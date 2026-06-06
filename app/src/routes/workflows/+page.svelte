@@ -569,6 +569,7 @@
       pending = null; // clicking empty space cancels the wire being drawn
       return;
     }
+    selectedNodeId = null; // clicking the empty canvas deselects the node
     panning = { sx: e.clientX, sy: e.clientY, ox: pan.x, oy: pan.y };
     svgEl?.setPointerCapture?.(e.pointerId);
   }
@@ -1030,76 +1031,89 @@
               </Button>
             </div>
 
-            <div class="space-y-1.5">
+            <!-- Name -->
+            <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-x-3">
               <Label class="text-xs text-muted-foreground">Name</Label>
               <Input class="h-8" value={graph.name} onchange={(e) => renameInline(e.currentTarget.value)} />
             </div>
 
-            <div class="flex items-center justify-between">
-              <Label class="flex items-center gap-1.5 text-sm"><Power class="size-3.5" /> Enabled</Label>
-              <Switch checked={graph.enabled} onCheckedChange={(v) => toggleEnabled(graph, v)} />
-            </div>
-
-            <div class="space-y-1">
-              <div class="flex items-center justify-between">
-                <Label class="flex items-center gap-1.5 text-sm"><Unplug class="size-3.5" /> Run orphan nodes</Label>
-                <Switch checked={graph.run_orphans ?? false} onCheckedChange={(v) => toggleRunOrphans(graph, v)} />
+            <!-- Enabled -->
+            <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-x-3">
+              <Label class="flex items-center gap-1.5 text-xs text-muted-foreground"><Power class="size-3.5" /> Enabled</Label>
+              <div class="flex h-8 items-center">
+                <Switch checked={graph.enabled} onCheckedChange={(v) => toggleEnabled(graph, v)} />
               </div>
-              <p class="text-[10px] leading-snug text-muted-foreground">
-                When off, nodes with no connections are skipped during a run.
-              </p>
             </div>
 
-            <div class="space-y-1.5">
-              <Label class="text-xs text-muted-foreground">Trigger</Label>
-              <Select.Root
-                type="single"
-                value={triggerKind(graph.trigger)}
-                onValueChange={(v) => applyTrigger(graph, v ?? "manual", triggerSecs(graph.trigger), triggerLevel(graph.trigger))}
-              >
-                <Select.Trigger class="h-9 w-full">{labelOf(TRIGGER_OPTS, triggerKind(graph.trigger))}</Select.Trigger>
-                <Select.Content>
-                  {#each TRIGGER_OPTS as o (o.value)}
-                    <Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>
-                  {/each}
-                </Select.Content>
-              </Select.Root>
-              {#if triggerKind(graph.trigger) === "cron"}
-                <div class="flex items-center gap-2">
-                  <Input type="number" min="1" value={triggerSecs(graph.trigger)} class="h-8" onchange={(e) => applyTrigger(graph, "cron", Number(e.currentTarget.value), "info")} />
-                  <span class="text-xs text-muted-foreground">sec</span>
+            <!-- Run orphans -->
+            <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">
+              <Label class="flex items-center gap-1.5 pt-2 text-xs text-muted-foreground"><Unplug class="size-3.5" /> Orphans</Label>
+              <div>
+                <div class="flex h-8 items-center">
+                  <Switch checked={graph.run_orphans ?? false} onCheckedChange={(v) => toggleRunOrphans(graph, v)} />
                 </div>
-              {:else if triggerKind(graph.trigger) === "on_new_alert"}
+                <p class="text-[10px] leading-snug text-muted-foreground">
+                  When off, nodes with no connections are skipped during a run.
+                </p>
+              </div>
+            </div>
+
+            <!-- Trigger -->
+            <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">
+              <Label class="pt-2 text-xs text-muted-foreground">Trigger</Label>
+              <div class="space-y-1.5">
                 <Select.Root
                   type="single"
-                  value={triggerLevel(graph.trigger)}
-                  onValueChange={(v) => applyTrigger(graph, "on_new_alert", 60, v ?? "info")}
+                  value={triggerKind(graph.trigger)}
+                  onValueChange={(v) => applyTrigger(graph, v ?? "manual", triggerSecs(graph.trigger), triggerLevel(graph.trigger))}
                 >
-                  <Select.Trigger class="h-8 w-full">≥ {triggerLevel(graph.trigger)}</Select.Trigger>
+                  <Select.Trigger class="h-8 w-full">{labelOf(TRIGGER_OPTS, triggerKind(graph.trigger))}</Select.Trigger>
                   <Select.Content>
-                    {#each LEVELS as l (l)}<Select.Item value={l} label={`≥ ${l}`}>≥ {l}</Select.Item>{/each}
+                    {#each TRIGGER_OPTS as o (o.value)}
+                      <Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>
+                    {/each}
                   </Select.Content>
                 </Select.Root>
-              {/if}
+                {#if triggerKind(graph.trigger) === "cron"}
+                  <div class="flex items-center gap-2">
+                    <Input type="number" min="1" value={triggerSecs(graph.trigger)} class="h-8" onchange={(e) => applyTrigger(graph, "cron", Number(e.currentTarget.value), "info")} />
+                    <span class="text-xs text-muted-foreground">sec</span>
+                  </div>
+                {:else if triggerKind(graph.trigger) === "on_new_alert"}
+                  <Select.Root
+                    type="single"
+                    value={triggerLevel(graph.trigger)}
+                    onValueChange={(v) => applyTrigger(graph, "on_new_alert", 60, v ?? "info")}
+                  >
+                    <Select.Trigger class="h-8 w-full">≥ {triggerLevel(graph.trigger)}</Select.Trigger>
+                    <Select.Content>
+                      {#each LEVELS as l (l)}<Select.Item value={l} label={`≥ ${l}`}>≥ {l}</Select.Item>{/each}
+                    </Select.Content>
+                  </Select.Root>
+                {/if}
+              </div>
             </div>
 
-            <div class="space-y-1.5">
-              <Label class="text-xs text-muted-foreground">Concurrency</Label>
-              <Select.Root
-                type="single"
-                value={concKind(graph.concurrency)}
-                onValueChange={(v) => applyConcurrency(graph, v ?? "skip", concMax(graph.concurrency))}
-              >
-                <Select.Trigger class="h-9 w-full">{labelOf(CONC_OPTS, concKind(graph.concurrency))}</Select.Trigger>
-                <Select.Content>
-                  {#each CONC_OPTS as o (o.value)}
-                    <Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>
-                  {/each}
-                </Select.Content>
-              </Select.Root>
-              {#if concKind(graph.concurrency) !== "skip"}
-                <Input type="number" min="1" value={concMax(graph.concurrency)} class="h-8" onchange={(e) => applyConcurrency(graph, concKind(graph.concurrency), Number(e.currentTarget.value))} />
-              {/if}
+            <!-- Concurrency -->
+            <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">
+              <Label class="pt-2 text-xs text-muted-foreground">Concurrency</Label>
+              <div class="space-y-1.5">
+                <Select.Root
+                  type="single"
+                  value={concKind(graph.concurrency)}
+                  onValueChange={(v) => applyConcurrency(graph, v ?? "skip", concMax(graph.concurrency))}
+                >
+                  <Select.Trigger class="h-8 w-full">{labelOf(CONC_OPTS, concKind(graph.concurrency))}</Select.Trigger>
+                  <Select.Content>
+                    {#each CONC_OPTS as o (o.value)}
+                      <Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>
+                    {/each}
+                  </Select.Content>
+                </Select.Root>
+                {#if concKind(graph.concurrency) !== "skip"}
+                  <Input type="number" min="1" value={concMax(graph.concurrency)} class="h-8" onchange={(e) => applyConcurrency(graph, concKind(graph.concurrency), Number(e.currentTarget.value))} />
+                {/if}
+              </div>
             </div>
           </div>
 
@@ -1123,18 +1137,11 @@
                 <div class="space-y-2.5">
                   {#each configRows as { key, port } (key)}
                     {@const wired = wiredInto(selectedNode.id, key)}
-                    <div class="space-y-1">
-                      <div class="flex items-center justify-between gap-2">
-                        <Label class="text-xs text-muted-foreground">
-                          {key}{#if port?.required}<span class="text-destructive"> *</span>{/if}
-                        </Label>
-                        {#if wired}
-                          <!-- Link mark: this property is driven by an upstream connection -->
-                          <span class="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary">
-                            <Link2 class="size-2.5" /> Linked
-                          </span>
-                        {/if}
-                      </div>
+                    <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">
+                      <Label class="flex items-center gap-1 pt-2 text-xs text-muted-foreground">
+                        <span class="min-w-0 truncate">{key}</span>{#if port?.required}<span class="text-destructive">*</span>{/if}{#if wired}<Link2 class="size-3 shrink-0 text-primary" />{/if}
+                      </Label>
+                      <div class="min-w-0">
                       {#if wired}
                         <div class="rounded-lg border border-primary/30 bg-primary/5 px-2 py-1.5">
                           <div class="flex items-center justify-between gap-2">
@@ -1235,6 +1242,7 @@
                       {:else}
                         <Input class="h-8" disabled={isRunning} value={String(selectedNode.config[key] ?? "")} onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })} />
                       {/if}
+                      </div>
                     </div>
                   {/each}
                 </div>
