@@ -82,6 +82,8 @@
   // canvas viewport (infinite pan/zoom)
   let pan = $state({ x: 40, y: 40 });
   let zoom = $state(1);
+  // cursor in world coords — the live end of a wire being drawn
+  let cursor = $state({ x: 0, y: 0 });
 
   // live references for node dropdowns + per-graph run activity (polled)
   let devices = $state<{ name: string; rtsp_url?: string | null }[]>([]);
@@ -400,6 +402,8 @@
   function clickOutPort(node: Node, port: string) {
     if (isRunning) return;
     pending = { node: node.id, port };
+    // seed the wire's free end at the port so it starts with zero length
+    cursor = { x: node.x + NODE_W, y: outPortY(node, Math.max(0, portIndex(node, port, "out"))) };
   }
   async function clickInPort(node: Node, port: string) {
     if (!graph || isRunning) return;
@@ -450,10 +454,15 @@
   }
   function onCanvasDown(e: PointerEvent) {
     if (e.target !== e.currentTarget) return; // only grab empty canvas, not a node
+    if (pending) {
+      pending = null; // clicking empty space cancels the wire being drawn
+      return;
+    }
     panning = { sx: e.clientX, sy: e.clientY, ox: pan.x, oy: pan.y };
     svgEl?.setPointerCapture?.(e.pointerId);
   }
   function onCanvasMove(e: PointerEvent) {
+    if (pending) cursor = worldPoint(e); // drag the open wire end with the cursor
     if (panning) {
       pan = { x: panning.ox + (e.clientX - panning.sx), y: panning.oy + (e.clientY - panning.sy) };
       return;
@@ -820,6 +829,21 @@
                   {/each}
                 </g>
               {/each}
+
+              <!-- wire being drawn: from the chosen output port to the cursor -->
+              {#if pending}
+                {@const pn = graph.nodes.find((n) => n.id === pending.node)}
+                {#if pn}
+                  {@const px = pn.x + NODE_W}
+                  {@const py = outPortY(pn, Math.max(0, portIndex(pn, pending.port, "out")))}
+                  <path
+                    d={`M ${px} ${py} C ${px + 60} ${py}, ${cursor.x - 60} ${cursor.y}, ${cursor.x} ${cursor.y}`}
+                    fill="none"
+                    stroke-width="2.5"
+                    class="node-running pointer-events-none stroke-primary"
+                  />
+                {/if}
+              {/if}
               </g>
             </svg>
           </div>
