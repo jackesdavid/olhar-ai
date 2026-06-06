@@ -62,6 +62,7 @@
     enabled: boolean;
     trigger: Trigger;
     concurrency: Concurrency;
+    run_orphans?: boolean;
     nodes: Node[];
     edges: Edge[];
     viewport?: { x: number; y: number; zoom: number };
@@ -389,6 +390,10 @@
   }
   async function toggleEnabled(g: Graph, enabled: boolean) {
     await invoke("set_graph_enabled", { id: g.id, enabled });
+    await reload();
+  }
+  async function toggleRunOrphans(g: Graph, run_orphans: boolean) {
+    await invoke("set_graph_run_orphans", { id: g.id, runOrphans: run_orphans });
     await reload();
   }
   async function runNow(g: Graph) {
@@ -1073,6 +1078,16 @@
               {#if concKind(graph.concurrency) !== "skip"}
                 <Input type="number" min="1" value={concMax(graph.concurrency)} class="h-8" onchange={(e) => applyConcurrency(graph, concKind(graph.concurrency), Number(e.currentTarget.value))} />
               {/if}
+            </div>
+
+            <div class="space-y-1">
+              <div class="flex items-center justify-between">
+                <Label class="flex items-center gap-1.5 text-sm"><Unplug class="size-3.5" /> Run orphan nodes</Label>
+                <Switch checked={graph.run_orphans ?? false} onCheckedChange={(v) => toggleRunOrphans(graph, v)} />
+              </div>
+              <p class="text-[10px] leading-snug text-muted-foreground">
+                When off, nodes with no connections are skipped during a run.
+              </p>
             </div>
           </div>
 

@@ -1293,6 +1293,21 @@ fn set_graph_enabled(app: tauri::AppHandle, store: tauri::State<'_, WfStore>, id
 }
 
 #[tauri::command]
+fn set_graph_run_orphans(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, WfStore>,
+    id: u32,
+    run_orphans: bool,
+) -> Result<(), String> {
+    {
+        let mut s = store.lock().unwrap();
+        s.graph_mut(id).ok_or("graph not found")?.run_orphans = run_orphans;
+    }
+    persist_workflows(&app, &store);
+    Ok(())
+}
+
+#[tauri::command]
 fn add_node(
     app: tauri::AppHandle,
     store: tauri::State<'_, WfStore>,
@@ -1602,6 +1617,7 @@ pub fn run() {
             set_graph_trigger,
             set_graph_concurrency,
             set_graph_enabled,
+            set_graph_run_orphans,
             set_graph_viewport,
             add_node,
             remove_node,

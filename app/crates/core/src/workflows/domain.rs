@@ -327,6 +327,10 @@ pub struct Graph {
     pub trigger: Trigger,
     #[serde(default)]
     pub concurrency: ConcurrencyPolicy,
+    /// Run nodes that have no edges (orphans on the canvas). Default `false` —
+    /// orphans are skipped so leftover/experimental nodes don't fire.
+    #[serde(default)]
+    pub run_orphans: bool,
     #[serde(default = "one")]
     pub next_id: u32,
     #[serde(default)]
@@ -349,6 +353,7 @@ impl Graph {
             enabled: false,
             trigger: Trigger::Manual,
             concurrency: ConcurrencyPolicy::SkipIfRunning,
+            run_orphans: false,
             next_id: 1,
             nodes: Vec::new(),
             edges: Vec::new(),

@@ -28,14 +28,15 @@ pub fn run_dag_with(
     on_node: &mut dyn FnMut(u32),
 ) -> Result<HashMap<u32, PortValues>, String> {
     let order = graph.topo_order()?;
-    // Only nodes wired into the graph participate in a run — a node with no edges
-    // (in or out) is an orphan on the canvas; running it would just do work whose
-    // output goes nowhere, so skip it (and don't highlight it as executing).
-    let mut connected: std::collections::HashSet<u32> = std::collections::HashSet::new();
-    for e in &graph.edges {
-        connected.insert(e.from);
-        connected.insert(e.to);
-    }
+    // Unless the graph opts in (`run_orphans`), only nodes wired into the graph
+    // participate in a run — a node with no edges (in or out) is an orphan on the
+    // canvas; running it would just do work whose output goes nowhere, so skip it
+    // (and don't highlight it as executing).
+    let connected: std::collections::HashSet<u32> = if graph.run_orphans {
+        order.iter().copied().collect()
+    } else {
+        graph.edges.iter().flat_map(|e| [e.from, e.to]).collect()
+    };
     let mut outputs: HashMap<u32, PortValues> = HashMap::new();
     for nid in order {
         if !connected.contains(&nid) {
@@ -266,6 +267,12 @@ mod tests {
         let outs = run_dag(&g, &ctx).unwrap();
         assert!(!outs.contains_key(&ca), "orphan node should not run");
         assert_eq!(ctx.alerts.lock().unwrap().len(), 1, "no alert from the orphan");
+
+        // ...unless the graph opts in via run_orphans.
+        g.run_orphans = true;
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(outs.contains_key(&ca), "orphan runs when run_orphans is on");
+        assert_eq!(ctx.alerts.lock().unwrap().len(), 2, "orphan created an alert");
     }
 
     #[test]
