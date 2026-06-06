@@ -20,6 +20,7 @@
   import Terminal from "@lucide/svelte/icons/terminal";
   import X from "@lucide/svelte/icons/x";
   import Search from "@lucide/svelte/icons/search";
+  import Link2 from "@lucide/svelte/icons/link-2";
 
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -187,6 +188,22 @@
   // list (what "default to first" means) when the stored value is empty/missing.
   function resolveOpt(opts: { value: string; label: string }[], stored: string) {
     return opts.some((o) => o.value === stored) ? stored : (opts[0]?.value ?? "");
+  }
+
+  // Property rows = the node's input ports (so wire-only ports like recipient /
+  // image are always visible) + any static config keys that aren't ports.
+  const configRows = $derived.by(() => {
+    if (!selectedNode) return [] as { key: string; port: CatPort | null }[];
+    const inputs = catalog[selectedNode.kind]?.inputs ?? [];
+    const rows: { key: string; port: CatPort | null }[] = inputs.map((p) => ({ key: p.name, port: p }));
+    for (const key of Object.keys(selectedNode.config)) {
+      if (!inputs.some((p) => p.name === key)) rows.push({ key, port: null });
+    }
+    return rows;
+  });
+  // A port whose value can only arrive over a wire (no literal config fallback).
+  function mustWire(port: CatPort | null): boolean {
+    return !!port && (port.type === "recipient" || port.type === "image");
   }
 
   function runStatus(g: Graph): "running" | "idle" | "disabled" {
@@ -1050,16 +1067,42 @@
                   <Trash2 class="size-3.5" />
                 </Button>
               </div>
-              {#if Object.keys(selectedNode.config).length === 0}
+              {#if configRows.length === 0}
                 <p class="text-xs text-muted-foreground">This node has no settings.</p>
               {:else}
                 <div class="space-y-2.5">
-                  {#each Object.keys(selectedNode.config) as key (key)}
+                  {#each configRows as { key, port } (key)}
                     {@const wired = wiredInto(selectedNode.id, key)}
                     <div class="space-y-1">
-                      <Label class="text-xs text-muted-foreground">{key}</Label>
+                      <div class="flex items-center justify-between gap-2">
+                        <Label class="text-xs text-muted-foreground">
+                          {key}{#if port?.required}<span class="text-destructive"> *</span>{/if}
+                        </Label>
+                        {#if wired}
+                          <!-- Link mark: this property is driven by an upstream connection -->
+                          <span class="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary">
+                            <Link2 class="size-2.5" /> Linked
+                          </span>
+                        {/if}
+                      </div>
                       {#if wired}
-                        <p class="rounded border border-dashed border-primary/30 bg-primary/5 px-2 py-1.5 text-xs text-primary/80">← #{wired.from}.{wired.from_port}</p>
+                        <div class="rounded-lg border border-primary/30 bg-primary/5 px-2 py-1.5">
+                          <p class="flex items-center gap-1.5 text-xs font-medium text-primary">
+                            <span class="size-1.5 shrink-0 rounded-full bg-primary"></span>
+                            from #{wired.from}.{wired.from_port}
+                          </p>
+                          <p class="mt-1 text-[10px] leading-snug text-muted-foreground">
+                            Set by the connected node — edit the wire to change it.
+                          </p>
+                        </div>
+                      {:else if mustWire(port)}
+                        <p
+                          class="flex items-center gap-1.5 rounded-lg border border-dashed px-2 py-1.5 text-xs"
+                          style="border-color: {portColor[port.type]}66; color: {portColor[port.type]}"
+                        >
+                          <Link2 class="size-3 shrink-0" />
+                          Wire a {port.type} into this port.
+                        </p>
                       {:else if key === "camera"}
                         {#if cameraOptions.length === 0}
                           <p class="rounded border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">
