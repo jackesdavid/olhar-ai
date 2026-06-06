@@ -9,7 +9,6 @@
   import Pause from "@lucide/svelte/icons/pause";
   import Square from "@lucide/svelte/icons/square";
   import Trash2 from "@lucide/svelte/icons/trash-2";
-  import Pencil from "@lucide/svelte/icons/pencil";
   import Power from "@lucide/svelte/icons/power";
   import LoaderCircle from "@lucide/svelte/icons/loader-circle";
   import ZoomIn from "@lucide/svelte/icons/zoom-in";
@@ -130,10 +129,7 @@
     liveNode = null;
   }
 
-  // ---- dialogs (window.prompt/confirm are no-ops in the Tauri WebView) ------
-  let nameOpen = $state(false);
-  let nameValue = $state("");
-  let nameTarget = $state<Graph | null>(null); // null = create, else rename
+  // ---- delete confirmation (window.confirm is a no-op in the Tauri WebView) --
   let deleteOpen = $state(false);
   let deleteTarget = $state<Graph | null>(null);
 
@@ -277,35 +273,24 @@
   });
 
   // ---- graph CRUD ----------------------------------------------------------
-  function openCreate() {
-    nameTarget = null;
-    nameValue = "Untitled";
-    nameOpen = true;
-  }
-  function openRename(g: Graph) {
-    nameTarget = g;
-    nameValue = g.name;
-    nameOpen = true;
-  }
-  async function submitName() {
-    const name = nameValue.trim();
-    if (!name) {
-      toast.error("Name can't be empty.");
-      return;
-    }
+  async function createWorkflow() {
     try {
-      if (nameTarget) {
-        await invoke("rename_graph", { id: nameTarget.id, name });
-        nameOpen = false;
-        await reload();
-      } else {
-        const id = await invoke<number>("create_graph", { name });
-        nameOpen = false;
-        await reload();
-        openGraph(id);
-      }
+      const id = await invoke<number>("create_graph", { name: "Untitled" });
+      await reload();
+      openGraph(id); // opens the editor — rename it inline in Configuration
     } catch (err) {
-      toast.error("Failed", { description: String(err) });
+      toast.error("Couldn't create workflow", { description: String(err) });
+    }
+  }
+  async function renameInline(name: string) {
+    if (!graph) return;
+    const n = name.trim();
+    if (!n || n === graph.name) return;
+    try {
+      await invoke("rename_graph", { id: graph.id, name: n });
+      await reload();
+    } catch (err) {
+      toast.error("Rename failed", { description: String(err) });
     }
   }
   function openDelete(g: Graph) {
@@ -568,7 +553,7 @@
             Graph automations that run on a trigger or on demand.
           </p>
         </div>
-        <Button onclick={openCreate}><Plus class="size-4" /> New workflow</Button>
+        <Button onclick={createWorkflow}><Plus class="size-4" /> New workflow</Button>
       </div>
 
       <Card.Root>
@@ -578,7 +563,7 @@
               title="No workflows yet"
               description="Create one to chain cameras, alerts, vision, and recipients into an automation."
             >
-              <Button onclick={openCreate}><Plus class="size-4" /> New workflow</Button>
+              <Button onclick={createWorkflow}><Plus class="size-4" /> New workflow</Button>
             </EmptyState>
           {:else}
             <Table.Root>
@@ -893,14 +878,14 @@
           <div class="space-y-3 rounded-xl border border-border bg-card/40 p-3">
             <div class="flex items-center justify-between gap-2">
               <span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Configuration</span>
-              <div class="flex shrink-0">
-                <Button variant="ghost" size="icon" class="size-7" title="Rename" onclick={() => openRename(graph)}>
-                  <Pencil class="size-3.5" />
-                </Button>
-                <Button variant="ghost" size="icon" class="size-7" title="Delete" onclick={() => openDelete(graph)}>
-                  <Trash2 class="size-3.5" />
-                </Button>
-              </div>
+              <Button variant="ghost" size="icon" class="size-7" title="Delete workflow" onclick={() => openDelete(graph)}>
+                <Trash2 class="size-3.5" />
+              </Button>
+            </div>
+
+            <div class="space-y-1.5">
+              <Label class="text-xs text-muted-foreground">Name</Label>
+              <Input class="h-8" value={graph.name} onchange={(e) => renameInline(e.currentTarget.value)} />
             </div>
 
             <div class="flex items-center justify-between">
@@ -1085,28 +1070,6 @@
     </div>
   {/if}
 </div>
-
-<!-- Create / rename dialog -->
-<Dialog.Root bind:open={nameOpen}>
-  <Dialog.Content class="sm:max-w-md">
-    <Dialog.Header>
-      <Dialog.Title>{nameTarget ? "Rename workflow" : "New workflow"}</Dialog.Title>
-    </Dialog.Header>
-    <div class="space-y-2">
-      <Label for="wf-name">Name</Label>
-      <Input
-        id="wf-name"
-        bind:value={nameValue}
-        placeholder="e.g. Night patrol"
-        onkeydown={(e) => e.key === "Enter" && submitName()}
-      />
-    </div>
-    <Dialog.Footer>
-      <Button variant="outline" onclick={() => (nameOpen = false)}>Cancel</Button>
-      <Button onclick={submitName}>{nameTarget ? "Save" : "Create"}</Button>
-    </Dialog.Footer>
-  </Dialog.Content>
-</Dialog.Root>
 
 <!-- Delete dialog -->
 <Dialog.Root bind:open={deleteOpen}>
