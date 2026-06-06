@@ -193,16 +193,24 @@
   };
 
   // ---- navigation ----------------------------------------------------------
+  // Remembered viewport (pan/zoom) per graph — restored when re-opening it.
+  const viewports = new Map<number, { pan: { x: number; y: number }; zoom: number }>();
+  function saveViewport() {
+    if (selectedGraphId != null) viewports.set(selectedGraphId, { pan: { ...pan }, zoom });
+  }
   function openGraph(id: number) {
+    saveViewport();
     selectedGraphId = id;
     selectedNodeId = null;
     pending = null;
-    pan = { x: 40, y: 40 };
-    zoom = 1;
+    const v = viewports.get(id);
+    pan = v ? { ...v.pan } : { x: 40, y: 40 };
+    zoom = v ? v.zoom : 1;
     clearLive();
     view = "editor";
   }
   function backToList() {
+    saveViewport();
     view = "list";
     selectedNodeId = null;
     pending = null;
@@ -863,10 +871,10 @@
             <Button variant="ghost" size="icon" class="size-8 text-primary hover:text-primary" title="Run now" disabled={running} onclick={() => runNow(graph)}>
               {#if running}<LoaderCircle class="size-4 animate-spin" />{:else}<Play class="size-4" />{/if}
             </Button>
-            <Button variant="ghost" size="icon" class="size-8" title="Pause (coming soon)" onclick={() => comingSoon("Pause")}>
+            <Button variant="ghost" size="icon" class="size-8" title="Pause (coming soon)" disabled={!isRunning} onclick={() => comingSoon("Pause")}>
               <Pause class="size-4" />
             </Button>
-            <Button variant="ghost" size="icon" class="size-8" title="Stop (coming soon)" onclick={() => comingSoon("Stop")}>
+            <Button variant="ghost" size="icon" class="size-8" title="Stop (coming soon)" disabled={!isRunning} onclick={() => comingSoon("Stop")}>
               <Square class="size-4" />
             </Button>
           </div>
