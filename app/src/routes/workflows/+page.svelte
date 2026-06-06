@@ -91,7 +91,7 @@
 
   // Per-node "live" highlight — driven by workflow-node events and held for a
   // minimum time so even an instant execution is visible on screen (visual only).
-  const MIN_HIGHLIGHT_MS = 550;
+  const MIN_HIGHLIGHT_MS = 800;
   let liveSet = $state(new Set<number>());
   const liveTimers = new Map<number, ReturnType<typeof setTimeout>>();
   function markLive(nodeId: number) {
@@ -692,7 +692,7 @@
                 {@const k = catalog[n.kind]}
                 {@const h = nodeHeight(n)}
                 {@const sel = selectedNodeId === n.id}
-                {@const live = liveSet.has(n.id)}
+                {@const live = liveSet.has(n.id) || act?.current === n.id}
                 <!-- One transform moves the whole node; inner coords are local,
                      so dragging only updates this single attribute (no per-port
                      recompute). -->
@@ -709,13 +709,22 @@
                         : 'stroke-border hover:stroke-primary/50'}"
                   />
                   {#if live}
-                    <!-- the executing node: an animated marching-ants emerald stroke -->
+                    <!-- the executing node: a bright marching-ants emerald border
+                         over a breathing solid ring -->
                     <rect
                       width={NODE_W}
                       height={h}
                       rx="8"
                       fill="none"
-                      stroke-width="2.5"
+                      stroke-width="3"
+                      class="node-run-glow stroke-primary"
+                    />
+                    <rect
+                      width={NODE_W}
+                      height={h}
+                      rx="8"
+                      fill="none"
+                      stroke-width="3"
                       class="node-running stroke-primary"
                     />
                   {/if}

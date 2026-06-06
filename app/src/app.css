@@ -203,14 +203,27 @@
     animation: status-pulse 2s ease-in-out infinite;
   }
 
-  /* Executing-node outline: marching-ants emerald stroke (workflow editor). */
+  /* Executing-node border (workflow editor): a bright marching-ants emerald
+     stroke over a solid ring that breathes — clearly shows the running node. */
   @keyframes node-march {
     to {
-      stroke-dashoffset: -20;
+      stroke-dashoffset: -28;
+    }
+  }
+  @keyframes node-glow {
+    0%,
+    100% {
+      opacity: 0.35;
+    }
+    50% {
+      opacity: 0.9;
     }
   }
   .node-running {
-    stroke-dasharray: 7 5;
-    animation: node-march 0.5s linear infinite;
+    stroke-dasharray: 9 6;
+    animation: node-march 0.6s linear infinite;
+  }
+  .node-run-glow {
+    animation: node-glow 1s ease-in-out infinite;
   }
 }
