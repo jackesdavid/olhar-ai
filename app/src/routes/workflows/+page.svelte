@@ -212,6 +212,16 @@
     return liveNode === id;
   }
 
+  // Re-entering the editor mid-run (e.g. during a long Wait) won't get a fresh
+  // workflow-node event until that node finishes — so adopt the polled "current"
+  // node to resume the live animation where it left off.
+  $effect(() => {
+    const cur = act?.current ?? null;
+    if (view === "editor" && cur !== null && liveNode === null && liveTimer === null) {
+      markLive(cur);
+    }
+  });
+
   // option lists for camera / recipient node dropdowns (the real items)
   const cameraOptions = $derived(devices.map((d) => ({ value: d.name, label: d.name })));
   const recipientOptions = $derived(recipients.map((r) => ({ value: r.label, label: r.label })));
