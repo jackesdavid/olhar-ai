@@ -21,6 +21,7 @@
   import X from "@lucide/svelte/icons/x";
   import Search from "@lucide/svelte/icons/search";
   import Link2 from "@lucide/svelte/icons/link-2";
+  import Unplug from "@lucide/svelte/icons/unplug";
 
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -473,6 +474,12 @@
     if (!graph) return;
     await invoke("remove_edge", { graphId: graph.id, idx });
     await reload();
+  }
+  // Drop the wire feeding a node's input port so the user can fill it manually.
+  async function unlinkPort(nodeId: number, port: string) {
+    if (!graph || isRunning) return;
+    const idx = graph.edges.findIndex((e) => e.to === nodeId && e.to_port === port);
+    if (idx >= 0) await removeEdge(idx);
   }
   function clickOutPort(node: Node, port: string) {
     if (isRunning) return;
@@ -1091,12 +1098,26 @@
                       </div>
                       {#if wired}
                         <div class="rounded-lg border border-primary/30 bg-primary/5 px-2 py-1.5">
-                          <p class="flex items-center gap-1.5 text-xs font-medium text-primary">
-                            <span class="size-1.5 shrink-0 rounded-full bg-primary"></span>
-                            from #{wired.from}.{wired.from_port}
-                          </p>
+                          <div class="flex items-center justify-between gap-2">
+                            <p class="flex items-center gap-1.5 text-xs font-medium text-primary">
+                              <span class="size-1.5 shrink-0 rounded-full bg-primary"></span>
+                              from #{wired.from}.{wired.from_port}
+                            </p>
+                            <button
+                              class="interactive inline-flex items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-destructive disabled:pointer-events-none disabled:opacity-50"
+                              disabled={isRunning}
+                              title="Remove the link and edit this value manually"
+                              onclick={() => unlinkPort(selectedNode.id, key)}
+                            >
+                              <Unplug class="size-2.5" /> Unlink
+                            </button>
+                          </div>
                           <p class="mt-1 text-[10px] leading-snug text-muted-foreground">
-                            Set by the connected node — edit the wire to change it.
+                            {#if mustWire(port)}
+                              Set by the connected node — unlink to wire a different one.
+                            {:else}
+                              Set by the connected node — unlink to fill it manually.
+                            {/if}
                           </p>
                         </div>
                       {:else if mustWire(port)}
