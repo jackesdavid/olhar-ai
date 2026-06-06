@@ -445,7 +445,6 @@
   }
   async function runNow(g: Graph) {
     running = true;
-    if (!consoleOpen) consoleOpen = true;
     try {
       const msg = await invoke<string>("run_graph", { id: g.id });
       toast.info(msg);
