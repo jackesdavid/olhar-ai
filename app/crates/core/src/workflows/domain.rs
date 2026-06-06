@@ -29,8 +29,8 @@ pub enum PortType {
     Image,
     /// A notification recipient handle (carried as the recipient's label).
     Recipient,
-    /// An arbitrary string→string map (e.g. HTTP headers / form fields).
-    Map,
+    /// An arbitrary string→string dictionary (e.g. HTTP headers / form fields).
+    Dictionary,
     /// Any file (raw bytes + filename), like `Image` but for arbitrary types.
     File,
     /// Control flow ("white") — carries no value; sequences node execution.
@@ -143,8 +143,8 @@ const FORMAT_OUT: [Port; 1] = [p("text", PortType::Text, false)];
 // HTTP POST: url + arbitrary header/field maps + an optional file (→ multipart).
 const HTTP_POST_IN: [Port; 4] = [
     p("url", PortType::Text, true),
-    p("headers", PortType::Map, false),
-    p("fields", PortType::Map, false),
+    p("headers", PortType::Dictionary, false),
+    p("fields", PortType::Dictionary, false),
     p("file", PortType::File, false),
 ];
 const HTTP_POST_OUT: [Port; 3] = [

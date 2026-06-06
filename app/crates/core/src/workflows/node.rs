@@ -35,8 +35,8 @@ pub enum PortValue {
     Image(Vec<u8>),
     /// A notification recipient (the recipient's label).
     Recipient(String),
-    /// An arbitrary string→string map (HTTP headers / form fields).
-    Map(Vec<(String, String)>),
+    /// An arbitrary string→string dictionary (HTTP headers / form fields).
+    Dict(Vec<(String, String)>),
     /// Any file (bytes + name + MIME).
     File(FileVal),
 }
@@ -72,9 +72,9 @@ impl PortValue {
             _ => None,
         }
     }
-    pub fn as_map(&self) -> Option<&[(String, String)]> {
+    pub fn as_dict(&self) -> Option<&[(String, String)]> {
         match self {
-            PortValue::Map(m) => Some(m),
+            PortValue::Dict(m) => Some(m),
             _ => None,
         }
     }
@@ -156,8 +156,8 @@ pub fn literal_for(config: &Value, port: Port) -> Option<PortValue> {
                 Some(PortValue::Recipient(s.to_string()))
             }
         }
-        // A map literal is a JSON object of string→string in config.
-        PortType::Map => {
+        // A dictionary literal is a JSON object of string→string in config.
+        PortType::Dictionary => {
             let obj = v.as_object()?;
             if obj.is_empty() {
                 return None;
@@ -169,7 +169,7 @@ pub fn literal_for(config: &Value, port: Port) -> Option<PortValue> {
                     (k.clone(), s)
                 })
                 .collect();
-            Some(PortValue::Map(pairs))
+            Some(PortValue::Dict(pairs))
         }
         // A file literal is a path the user picked; read it at run time.
         PortType::File => {
@@ -207,8 +207,8 @@ pub fn run_node(
 /// otherwise as `application/x-www-form-urlencoded`. Outputs status, body, ok.
 fn run_http_post(_config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
     let url = req_text(inputs, "url")?.to_string();
-    let headers = inputs.get("headers").and_then(PortValue::as_map).unwrap_or(&[]);
-    let fields = inputs.get("fields").and_then(PortValue::as_map).unwrap_or(&[]);
+    let headers = inputs.get("headers").and_then(PortValue::as_dict).unwrap_or(&[]);
+    let fields = inputs.get("fields").and_then(PortValue::as_dict).unwrap_or(&[]);
     let file = inputs.get("file").and_then(PortValue::as_file);
 
     let agent = ureq::AgentBuilder::new()
@@ -492,15 +492,15 @@ mod tests {
     }
 
     #[test]
-    fn literal_for_parses_a_string_map() {
+    fn literal_for_parses_a_string_dictionary() {
         let cfg = json!({ "headers": { "Authorization": "Bearer x", "X-Env": "prod" }, "empty": {} });
-        let map = Port { name: "headers", ty: PortType::Map, required: false };
-        let empty = Port { name: "empty", ty: PortType::Map, required: false };
-        let got = literal_for(&cfg, map).unwrap();
-        let pairs = got.as_map().unwrap();
+        let dict = Port { name: "headers", ty: PortType::Dictionary, required: false };
+        let empty = Port { name: "empty", ty: PortType::Dictionary, required: false };
+        let got = literal_for(&cfg, dict).unwrap();
+        let pairs = got.as_dict().unwrap();
         assert_eq!(pairs.len(), 2);
         assert!(pairs.contains(&("Authorization".into(), "Bearer x".into())));
-        assert!(literal_for(&cfg, empty).is_none()); // empty map → not provided
+        assert!(literal_for(&cfg, empty).is_none()); // empty dictionary → not provided
     }
 
     #[test]

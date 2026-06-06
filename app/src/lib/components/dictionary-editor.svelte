@@ -1,5 +1,5 @@
 <script lang="ts">
-  // An editor for an arbitrary string→string map (e.g. HTTP headers / form fields).
+  // An editor for an arbitrary string→string dictionary (e.g. HTTP headers / form fields).
   // Manages its own row state and emits the rebuilt object on change. Remount it
   // (via {#key}) when the underlying node/port changes so it re-seeds cleanly.
   import { Input } from "$lib/components/ui/input";

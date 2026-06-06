@@ -26,7 +26,7 @@
   import Upload from "@lucide/svelte/icons/upload";
   import ImageIcon from "@lucide/svelte/icons/image";
   import FileIcon from "@lucide/svelte/icons/file";
-  import MapEditor from "$lib/components/map-editor.svelte";
+  import DictionaryEditor from "$lib/components/dictionary-editor.svelte";
 
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -41,7 +41,7 @@
   import StatusDot from "$lib/components/status-dot.svelte";
 
   // ---- types (the serialized core shapes) ----------------------------------
-  type PortType = "text" | "num" | "bool" | "image" | "recipient" | "map" | "file" | "exec";
+  type PortType = "text" | "num" | "bool" | "image" | "recipient" | "dictionary" | "file" | "exec";
   type CatPort = { name: string; type: PortType; required: boolean };
   type CatKind = {
     slug: string;
@@ -305,7 +305,7 @@
     bool: "#fbbf24",
     image: "#f472b6",
     recipient: "#a78bfa",
-    map: "#2dd4bf",
+    dictionary: "#2dd4bf",
     file: "#fb923c",
     exec: "#f4f4f5",
   };
@@ -1335,9 +1335,9 @@
                             </Select.Content>
                           </Select.Root>
                         {/if}
-                      {:else if port?.type === "map"}
+                      {:else if port?.type === "dictionary"}
                         {#key selectedNode.id + ":" + key}
-                          <MapEditor
+                          <DictionaryEditor
                             value={(selectedNode.config[key] as Record<string, unknown>) ?? {}}
                             disabled={isRunning}
                             onchange={(obj) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: obj })}
