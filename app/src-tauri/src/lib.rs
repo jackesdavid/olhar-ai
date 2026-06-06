@@ -978,6 +978,10 @@ fn spawn_graph_run(app: &tauri::AppHandle, graph_id: u32) {
                     .entry(graph_id)
                     .or_default()
                     .current = Some(nid);
+                // Per-node event so the editor highlights every node, even on a
+                // run faster than the poll interval.
+                let _ = progress_app
+                    .emit("workflow-node", serde_json::json!({ "graph": graph_id, "node": nid }));
             };
             workflows::run_dag_with(&graph, &ctx, &mut on_node)
             // ctx drops here → its drain thread ends.

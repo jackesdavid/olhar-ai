@@ -202,4 +202,15 @@
   .status-live {
     animation: status-pulse 2s ease-in-out infinite;
   }
+
+  /* Executing-node outline: marching-ants emerald stroke (workflow editor). */
+  @keyframes node-march {
+    to {
+      stroke-dashoffset: -20;
+    }
+  }
+  .node-running {
+    stroke-dasharray: 7 5;
+    animation: node-march 0.5s linear infinite;
+  }
 }

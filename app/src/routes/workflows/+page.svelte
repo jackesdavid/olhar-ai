@@ -89,6 +89,29 @@
   let recipients = $state<{ label: string; enabled: boolean }[]>([]);
   let activity = $state<Record<number, { running: number; current: number | null }>>({});
 
+  // Per-node "live" highlight — driven by workflow-node events and held for a
+  // minimum time so even an instant execution is visible on screen (visual only).
+  const MIN_HIGHLIGHT_MS = 550;
+  let liveSet = $state(new Set<number>());
+  const liveTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  function markLive(nodeId: number) {
+    const prev = liveTimers.get(nodeId);
+    if (prev) clearTimeout(prev);
+    liveSet.add(nodeId);
+    liveTimers.set(
+      nodeId,
+      setTimeout(() => {
+        liveSet.delete(nodeId);
+        liveTimers.delete(nodeId);
+      }, MIN_HIGHLIGHT_MS),
+    );
+  }
+  function clearLive() {
+    liveTimers.forEach((t) => clearTimeout(t));
+    liveTimers.clear();
+    liveSet.clear();
+  }
+
   // ---- dialogs (window.prompt/confirm are no-ops in the Tauri WebView) ------
   let nameOpen = $state(false);
   let nameValue = $state("");
@@ -103,7 +126,6 @@
   // run state for the open graph
   const act = $derived(selectedGraphId != null ? activity[selectedGraphId] : undefined);
   const isRunning = $derived((act?.running ?? 0) > 0);
-  const activeNode = $derived(act?.current ?? null);
 
   // option lists for camera / recipient node dropdowns (the real items)
   const cameraOptions = $derived(devices.map((d) => ({ value: d.name, label: d.name })));
@@ -157,12 +179,14 @@
     pending = null;
     pan = { x: 40, y: 40 };
     zoom = 1;
+    clearLive();
     view = "editor";
   }
   function backToList() {
     view = "list";
     selectedNodeId = null;
     pending = null;
+    clearLive();
   }
 
   // ---- load ----------------------------------------------------------------
@@ -206,7 +230,11 @@
       if (ok) toast.success(`Workflow "${name}"`, { description: summary });
       else toast.error(`Workflow "${name}" failed`, { description: summary });
     });
-    // Poll live run activity (running graphs + currently-executing node).
+    // Per-node execution events (real-time, catch every node).
+    const unNode = listen<{ graph: number; node: number }>("workflow-node", (e) => {
+      if (e.payload.graph === selectedGraphId) markLive(e.payload.node);
+    });
+    // Poll run activity (running graphs + status) for the lock + list badges.
     const poll = setInterval(async () => {
       try {
         activity = await invoke("run_states");
@@ -216,6 +244,7 @@
     }, 700);
     return () => {
       un.then((u) => u());
+      unNode.then((u) => u());
       clearInterval(poll);
     };
   });
@@ -663,7 +692,7 @@
                 {@const k = catalog[n.kind]}
                 {@const h = nodeHeight(n)}
                 {@const sel = selectedNodeId === n.id}
-                {@const live = activeNode === n.id}
+                {@const live = liveSet.has(n.id)}
                 <!-- One transform moves the whole node; inner coords are local,
                      so dragging only updates this single attribute (no per-port
                      recompute). -->
@@ -680,14 +709,14 @@
                         : 'stroke-border hover:stroke-primary/50'}"
                   />
                   {#if live}
-                    <!-- the executing node: a pulsing emerald outline -->
+                    <!-- the executing node: an animated marching-ants emerald stroke -->
                     <rect
                       width={NODE_W}
                       height={h}
                       rx="8"
                       fill="none"
                       stroke-width="2.5"
-                      class="animate-pulse stroke-primary"
+                      class="node-running stroke-primary"
                     />
                   {/if}
                   <rect
