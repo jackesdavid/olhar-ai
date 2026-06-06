@@ -33,7 +33,7 @@
   import StatusDot from "$lib/components/status-dot.svelte";
 
   // ---- types (the serialized core shapes) ----------------------------------
-  type PortType = "text" | "num" | "bool" | "image";
+  type PortType = "text" | "num" | "bool" | "image" | "recipient";
   type CatPort = { name: string; type: PortType; required: boolean };
   type CatKind = {
     slug: string;
@@ -191,6 +191,7 @@
     num: "#34d399",
     bool: "#fbbf24",
     image: "#f472b6",
+    recipient: "#a78bfa",
   };
   // The colour of a port (used so a connection follows its data type).
   function portColorOf(node: Node, port: string, side: "in" | "out"): string {
@@ -396,8 +397,8 @@
       cfg.camera = devices[0].name;
       patched = true;
     }
-    if ("target" in cfg && recipients[0]) {
-      cfg.target = recipients[0].label;
+    if ("recipient" in cfg && recipients[0]) {
+      cfg.recipient = recipients[0].label;
       patched = true;
     }
     if (patched) await invoke("set_node_config", { graphId: graph.id, nodeId: id, config: cfg });
@@ -1034,7 +1035,7 @@
                             </Select.Content>
                           </Select.Root>
                         {/if}
-                      {:else if key === "target"}
+                      {:else if key === "recipient"}
                         {#if recipientOptions.length === 0}
                           <p class="rounded border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">
                             No recipients — pair one in Recipients.

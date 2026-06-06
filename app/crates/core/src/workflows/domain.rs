@@ -27,6 +27,8 @@ pub enum PortType {
     Num,
     Bool,
     Image,
+    /// A notification recipient handle (carried as the recipient's label).
+    Recipient,
 }
 
 /// A static port declaration on a `NodeKind` (not persisted — derived from the kind).
@@ -53,11 +55,15 @@ const fn p(name: &'static str, ty: PortType, required: bool) -> Port {
 pub enum NodeKind {
     /// Source: reads the most-recent alert from the store into typed outputs.
     GetLastAlert,
+    /// Source: pick a notification recipient → a typed `Recipient` output.
+    GetRecipient,
     CreateAlert,
     DeliverAlert,
     CameraSnapshot,
     DescribeImage,
-    NotifyBeacon,
+    /// Renamed from `notify_beacon`; the alias keeps old `workflows.json` loadable.
+    #[serde(alias = "notify_beacon")]
+    NotifyRecipient,
     /// Pure text composition: substitutes `{p1..p3}` into a `template`.
     Format,
 }
@@ -102,12 +108,17 @@ const DESCRIBE_IMAGE_OUT: [Port; 2] = [
     p("ok", PortType::Bool, false),
 ];
 
-const NOTIFY_BEACON_IN: [Port; 3] = [
+const GET_RECIPIENT_OUT: [Port; 2] = [
+    p("recipient", PortType::Recipient, false),
+    p("ok", PortType::Bool, false),
+];
+
+const NOTIFY_RECIPIENT_IN: [Port; 3] = [
     p("message", PortType::Text, true),
-    p("target", PortType::Text, false),
+    p("recipient", PortType::Recipient, false),
     p("image", PortType::Image, false),
 ];
-const NOTIFY_BEACON_OUT: [Port; 2] = [
+const NOTIFY_RECIPIENT_OUT: [Port; 2] = [
     p("result", PortType::Text, false),
     p("ok", PortType::Bool, false),
 ];
@@ -122,13 +133,14 @@ const FORMAT_OUT: [Port; 1] = [p("text", PortType::Text, false)];
 const NO_PORTS: [Port; 0] = [];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 7] = [
+    pub const ALL: [NodeKind; 8] = [
         NodeKind::GetLastAlert,
+        NodeKind::GetRecipient,
         NodeKind::CreateAlert,
         NodeKind::DeliverAlert,
         NodeKind::CameraSnapshot,
         NodeKind::DescribeImage,
-        NodeKind::NotifyBeacon,
+        NodeKind::NotifyRecipient,
         NodeKind::Format,
     ];
 
@@ -137,11 +149,12 @@ impl NodeKind {
     pub fn slug(self) -> &'static str {
         match self {
             NodeKind::GetLastAlert => "get_last_alert",
+            NodeKind::GetRecipient => "get_recipient",
             NodeKind::CreateAlert => "create_alert",
             NodeKind::DeliverAlert => "deliver_alert",
             NodeKind::CameraSnapshot => "camera_snapshot",
             NodeKind::DescribeImage => "describe_image",
-            NodeKind::NotifyBeacon => "notify_beacon",
+            NodeKind::NotifyRecipient => "notify_recipient",
             NodeKind::Format => "format",
         }
     }
@@ -153,11 +166,12 @@ impl NodeKind {
     pub fn label(self) -> &'static str {
         match self {
             NodeKind::GetLastAlert => "GET LAST ALERT",
+            NodeKind::GetRecipient => "GET RECIPIENT",
             NodeKind::CreateAlert => "CREATE ALERT",
             NodeKind::DeliverAlert => "DELIVER ALERT",
             NodeKind::CameraSnapshot => "CAMERA SNAPSHOT",
             NodeKind::DescribeImage => "DESCRIBE IMAGE",
-            NodeKind::NotifyBeacon => "NOTIFY BEACON",
+            NodeKind::NotifyRecipient => "NOTIFY RECIPIENT",
             NodeKind::Format => "FORMAT",
         }
     }
@@ -165,11 +179,12 @@ impl NodeKind {
     pub fn input_ports(self) -> &'static [Port] {
         match self {
             NodeKind::GetLastAlert => &NO_PORTS,
+            NodeKind::GetRecipient => &NO_PORTS,
             NodeKind::CreateAlert => &CREATE_ALERT_IN,
             NodeKind::DeliverAlert => &DELIVER_ALERT_IN,
             NodeKind::CameraSnapshot => &CAMERA_SNAPSHOT_IN,
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_IN,
-            NodeKind::NotifyBeacon => &NOTIFY_BEACON_IN,
+            NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_IN,
             NodeKind::Format => &FORMAT_IN,
         }
     }
@@ -177,11 +192,12 @@ impl NodeKind {
     pub fn output_ports(self) -> &'static [Port] {
         match self {
             NodeKind::GetLastAlert => &GET_LAST_ALERT_OUT,
+            NodeKind::GetRecipient => &GET_RECIPIENT_OUT,
             NodeKind::CreateAlert => &CREATE_ALERT_OUT,
             NodeKind::DeliverAlert => &DELIVER_ALERT_OUT,
             NodeKind::CameraSnapshot => &CAMERA_SNAPSHOT_OUT,
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_OUT,
-            NodeKind::NotifyBeacon => &NOTIFY_BEACON_OUT,
+            NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_OUT,
             NodeKind::Format => &FORMAT_OUT,
         }
     }
@@ -198,13 +214,14 @@ impl NodeKind {
     pub fn default_config(self) -> Value {
         match self {
             NodeKind::GetLastAlert => json!({}),
+            NodeKind::GetRecipient => json!({ "recipient": "" }),
             NodeKind::CreateAlert => {
                 json!({ "message": "", "room": "", "level": "info", "source": "workflow" })
             }
             NodeKind::DeliverAlert => json!({ "id": "" }),
             NodeKind::CameraSnapshot => json!({ "camera": "first" }),
             NodeKind::DescribeImage => json!({}),
-            NodeKind::NotifyBeacon => json!({ "message": "", "target": "" }),
+            NodeKind::NotifyRecipient => json!({ "message": "" }),
             NodeKind::Format => json!({ "template": "{p1} — {p2}", "p1": "", "p2": "", "p3": "" }),
         }
     }

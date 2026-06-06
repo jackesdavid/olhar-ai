@@ -25,6 +25,8 @@ pub enum PortValue {
     Num(i64),
     Bool(bool),
     Image(Vec<u8>),
+    /// A notification recipient (the recipient's label).
+    Recipient(String),
 }
 
 impl PortValue {
@@ -43,6 +45,12 @@ impl PortValue {
     pub fn as_image(&self) -> Option<&[u8]> {
         match self {
             PortValue::Image(b) => Some(b),
+            _ => None,
+        }
+    }
+    pub fn as_recipient(&self) -> Option<&str> {
+        match self {
+            PortValue::Recipient(s) => Some(s),
             _ => None,
         }
     }
@@ -73,6 +81,7 @@ pub fn literal_for(config: &Value, port: Port) -> Option<PortValue> {
         }
         PortType::Bool => v.as_bool().map(PortValue::Bool),
         PortType::Image => None,
+        PortType::Recipient => None, // recipients only come from a GetRecipient node
     }
 }
 
@@ -85,13 +94,24 @@ pub fn run_node(
 ) -> Result<PortValues, String> {
     match kind {
         NodeKind::GetLastAlert => run_get_last_alert(sys),
+        NodeKind::GetRecipient => run_get_recipient(config),
         NodeKind::CreateAlert => run_create_alert(config, inputs, sys),
         NodeKind::DeliverAlert => run_deliver_alert(inputs, sys),
         NodeKind::CameraSnapshot => run_camera_snapshot(inputs, sys),
         NodeKind::DescribeImage => run_describe_image(config, inputs),
-        NodeKind::NotifyBeacon => run_notify_beacon(inputs, sys),
+        NodeKind::NotifyRecipient => run_notify_recipient(inputs, sys),
         NodeKind::Format => run_format(config, inputs),
     }
+}
+
+/// Output the recipient chosen in this node's config as a typed `Recipient`.
+fn run_get_recipient(config: &Value) -> Result<PortValues, String> {
+    let label = config.get("recipient").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let ok = !label.is_empty();
+    let mut o = PortValues::new();
+    o.insert("recipient".into(), PortValue::Recipient(label));
+    o.insert("ok".into(), PortValue::Bool(ok));
+    Ok(o)
 }
 
 fn req_text<'a>(inputs: &'a PortValues, name: &str) -> Result<&'a str, String> {
@@ -217,11 +237,12 @@ fn run_describe_image(config: &Value, inputs: &PortValues) -> Result<PortValues,
     Ok(o)
 }
 
-fn run_notify_beacon(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+fn run_notify_recipient(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
     let message = req_text(inputs, "message")?;
+    // A wired Recipient picks the target; unwired → auto (the sole enabled one).
     let target = inputs
-        .get("target")
-        .and_then(PortValue::as_text)
+        .get("recipient")
+        .and_then(PortValue::as_recipient)
         .filter(|s| !s.trim().is_empty());
     let image = inputs.get("image").and_then(PortValue::as_image).map(|b| b.to_vec());
     let cfg = sys
