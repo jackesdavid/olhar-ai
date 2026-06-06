@@ -45,7 +45,7 @@ pub struct ToolContext {
     pub notif: NotificationStore,
     pub map_path: PathBuf,
     /// Resolved Telegram config (saved `telegram.json` else env), or `None` when
-    /// notifications aren't configured — the `notify_beacon` tool errors then.
+    /// notifications aren't configured — the `send_notification` tool errors then.
     pub notif_cfg: Option<NotificationConfig>,
     pub ui_tx: Sender<ToolUiEvent>,
 }
@@ -74,6 +74,7 @@ impl ToolRegistry {
                 delete_device(),
                 delete_device_by_index(),
                 rename_device(),
+                list_recipients(),
                 send_notification(),
                 create_alert(),
                 list_alerts(),
@@ -290,21 +291,47 @@ fn rename_device() -> ToolSpec {
     }
 }
 
+fn list_recipients() -> ToolSpec {
+    ToolSpec {
+        name: "list_recipients",
+        description: "List the paired notification recipients (the phones/people who receive alerts \
+            via Telegram) and whether each is enabled. Use this to show the operator who can be \
+            notified, or to find a recipient's name before sending to them.",
+        input_schema: json!({ "type": "object", "properties": {}, "required": [] }),
+        run: |_input, ctx| {
+            let targets = ctx.notif.lock().unwrap();
+            if targets.is_empty() {
+                return Ok("No recipients are paired yet. The operator pairs one by DMing the \
+                    pairing code to the Telegram bot (Recipients screen)."
+                    .into());
+            }
+            let lines: Vec<String> = targets
+                .iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    format!("{}. {} ({})", i + 1, t.label, if t.enabled { "enabled" } else { "disabled" })
+                })
+                .collect();
+            Ok(lines.join("\n"))
+        },
+    }
+}
+
 fn send_notification() -> ToolSpec {
     ToolSpec {
         name: "send_notification",
-        description: "Send the operator an alert on their phone via Telegram — text, or text plus \
-            a snapshot from one of their cameras. Use this when the operator asks to be notified, \
-            texted, alerted, or pinged about something, or to forward what a camera sees to their \
-            phone. Give the message; optionally name the target (the phone/person to reach) and a \
-            camera whose current snapshot to attach. A phone must be paired first (the operator \
-            sends a one-time pairing code to the bot); if none is paired, tell the operator to \
-            pair one. If several targets exist and none is named, ask which.",
+        description: "Send the operator an alert on a recipient's phone via Telegram — text, or \
+            text plus a snapshot from one of their cameras. Use this when the operator asks to be \
+            notified, texted, alerted, or pinged about something, or to forward what a camera sees \
+            to a recipient. Give the message; optionally name the recipient to reach (see \
+            list_recipients) and a camera whose current snapshot to attach. A recipient must be \
+            paired first (the operator DMs a one-time pairing code to the bot); if none is paired, \
+            tell the operator to pair one. If several recipients exist and none is named, ask which.",
         input_schema: json!({
             "type": "object",
             "properties": {
                 "message": { "type": "string", "description": "the alert text to send" },
-                "target": { "type": "string", "description": "the paired phone/person label to send to (optional if only one is paired)" },
+                "target": { "type": "string", "description": "the paired recipient label to send to (optional if only one is paired)" },
                 "camera": { "type": "string", "description": "optional camera name (or \"first\") whose current snapshot to attach" }
             },
             "required": ["message"]
@@ -317,7 +344,7 @@ fn send_notification() -> ToolSpec {
             let cfg = ctx
                 .notif_cfg
                 .as_ref()
-                .ok_or("Notifications are not configured (set the Telegram bot token in Beacons).")?;
+                .ok_or("Notifications are not configured (set the Telegram bot token in Recipients).")?;
 
             // Optional snapshot: resolve + capture on this (background) task.
             let image = match camera {
@@ -346,7 +373,7 @@ fn create_alert() -> ToolSpec {
             (\"debug\", \"info\", \"warn\", or \"error\" — default \"info\"), a room name (the \
             location, matched against your saved map zones; omit for a site-wide alert), and a \
             source (the subsystem raising it — default \"bishop\"). The alert is logged but NOT sent \
-            to anyone; use deliver_alert to dispatch it to the beacons.",
+            to anyone; use deliver_alert to dispatch it to the recipients.",
         input_schema: json!({
             "type": "object",
             "properties": {
@@ -524,7 +551,7 @@ fn deliver_alert() -> ToolSpec {
             let cfg = ctx
                 .notif_cfg
                 .as_ref()
-                .ok_or("Notifications are not configured (set the Telegram bot token in Beacons).")?;
+                .ok_or("Notifications are not configured (set the Telegram bot token in Recipients).")?;
             let result = alerts::deliver(&ctx.alerts, &ctx.alerts_path, &ctx.notif, cfg, id)?;
             let _ = ctx.ui_tx.send(ToolUiEvent::AlertsChanged);
             Ok(result)
