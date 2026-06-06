@@ -195,6 +195,13 @@
     return opts.some((o) => o.value === stored) ? stored : (opts[0]?.value ?? "");
   }
 
+  // A graph can only do something when it has at least one wired node — unless it
+  // opts into running orphans. With no edges and orphans off, every node is
+  // skipped, so a run is a no-op and Run is disabled.
+  function canRun(g: Graph): boolean {
+    return (g.run_orphans ?? false) || g.edges.length > 0;
+  }
+
   // Property rows = the node's input ports (so wire-only ports like recipient /
   // image are always visible) + the legitimate static settings for that kind.
   // We use the catalog's default_config (the schema) — NOT the node's live
@@ -733,7 +740,14 @@
                     </Table.Cell>
                     <Table.Cell class="text-right" onclick={(e) => e.stopPropagation()}>
                       <div class="flex items-center justify-end gap-1">
-                        <Button variant="ghost" size="icon" class="size-8 text-primary" title="Run now" onclick={() => runNow(g)}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          class="size-8 text-primary"
+                          title={canRun(g) ? "Run now" : "Nothing to run — connect nodes or enable orphans"}
+                          disabled={!canRun(g)}
+                          onclick={() => runNow(g)}
+                        >
                           <Play class="size-4" />
                         </Button>
                         <Button variant="ghost" size="icon" class="size-8" title="Delete" onclick={() => openDelete(g)}>
@@ -984,7 +998,14 @@
           <div
             class="absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1 rounded-lg border border-border bg-background/75 p-1 shadow-lg backdrop-blur"
           >
-            <Button variant="ghost" size="icon" class="size-8 text-primary hover:text-primary" title="Run now" disabled={running} onclick={() => runNow(graph)}>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="size-8 text-primary hover:text-primary"
+              title={canRun(graph) ? "Run now" : "Nothing to run — connect nodes or enable orphans"}
+              disabled={running || !canRun(graph)}
+              onclick={() => runNow(graph)}
+            >
               {#if running}<LoaderCircle class="size-4 animate-spin" />{:else}<Play class="size-4" />{/if}
             </Button>
             <Button variant="ghost" size="icon" class="size-8" title="Pause (coming soon)" disabled={!isRunning} onclick={() => comingSoon("Pause")}>
