@@ -97,6 +97,16 @@ pub fn parse_uri(xml: &str) -> Option<String> {
     extract_tag(xml, "Uri").map(|s| s.to_string())
 }
 
+/// The stable device id from a ProbeMatch — the WS-Addressing
+/// `EndpointReference/Address` (typically `urn:uuid:…`), which survives DHCP/IP
+/// changes. Reads *inside* the EndpointReference element so it never picks up the
+/// SOAP header's MessageID / RelatesTo (also UUIDs).
+pub fn parse_endpoint_address(xml: &str) -> Option<String> {
+    let er = extract_tag(xml, "EndpointReference")?;
+    let addr = extract_tag(er, "Address")?;
+    (!addr.is_empty()).then(|| addr.to_string())
+}
+
 pub fn parse_xaddrs_and_scopes(xml: &str) -> Option<(String, Vec<String>)> {
     let xaddrs_text = extract_tag(xml, "XAddrs")?;
     let first_url = xaddrs_text.split_whitespace().next()?.to_string();

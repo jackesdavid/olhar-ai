@@ -120,6 +120,7 @@ mod tests {
 
     fn mk(name: &str, ip: &str, creds: bool) -> Device {
         Device {
+            id: String::new(),
             ip: ip.into(),
             xaddr: String::new(),
             name: name.into(),

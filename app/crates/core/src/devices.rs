@@ -18,6 +18,12 @@ pub type DeviceStore = Arc<Mutex<Vec<Device>>>;
 /// Persisted to `devices.json` so it survives restarts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
+    /// Stable ONVIF device id (WS-Addressing `EndpointReference`, e.g.
+    /// `urn:uuid:…`). The reconciler keys on this so a camera that changes IP
+    /// (DHCP / power-cycle) is recognised as the same device. Empty for devices
+    /// saved before this existed — backfilled on the next scan by IP match.
+    #[serde(default)]
+    pub id: String,
     pub ip: String,
     pub xaddr: String,
     pub name: String,
@@ -35,6 +41,7 @@ pub struct Device {
 impl Device {
     pub fn from_discovered(d: DiscoveredDevice) -> Self {
         Device {
+            id: d.id,
             ip: d.ip,
             xaddr: d.xaddr,
             name: d.name,
@@ -74,6 +81,7 @@ mod tests {
 
     fn mk(ip: &str) -> Device {
         Device {
+            id: String::new(),
             ip: ip.into(),
             xaddr: String::new(),
             name: ip.into(),

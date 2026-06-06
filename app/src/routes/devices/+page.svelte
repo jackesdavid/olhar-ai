@@ -102,6 +102,7 @@
 
   async function addDiscovered(d: DiscoveredDevice) {
     const device: Device = {
+      id: d.id ?? "",
       ip: d.ip,
       xaddr: d.xaddr,
       name: d.name,

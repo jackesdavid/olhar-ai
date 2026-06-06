@@ -227,13 +227,76 @@ fn rename_device(
 
 /// Run an ONVIF WS-Discovery sweep on a blocking task (it's a sync UDP collect).
 #[tauri::command]
-async fn discover_devices() -> Vec<DiscoveredDevice> {
+async fn discover_devices(app: tauri::AppHandle) -> Vec<DiscoveredDevice> {
     log::info!("discover_devices: starting ONVIF WS-Discovery…");
     let found = tauri::async_runtime::spawn_blocking(onvif::discovery::discover)
         .await
         .unwrap_or_default();
     log::info!("discover_devices: found {} device(s)", found.len());
+    reconcile_devices(&app, &found);
     found
+}
+
+/// Reconcile saved devices against a fresh discovery. Match by the stable ONVIF
+/// id; when a camera's IP changed (DHCP / power-cycle) update its ip/xaddr/
+/// rtsp_url, persist, and raise a warning alert. Also backfills the stable id on
+/// devices saved before it existed (matched by current IP).
+fn reconcile_devices(app: &tauri::AppHandle, found: &[DiscoveredDevice]) {
+    use tauri::Emitter;
+    let store = app.state::<DeviceStore>();
+    let mut changed = false;
+    let mut ip_changes: Vec<(String, String, String)> = Vec::new(); // (name, old_ip, new_ip)
+
+    {
+        let mut devices = store.lock().unwrap();
+        for d in found {
+            if d.id.is_empty() {
+                continue; // can't reconcile a camera that didn't advertise an id
+            }
+            if let Some(saved) = devices.iter_mut().find(|s| s.id == d.id) {
+                if saved.ip != d.ip {
+                    let old = std::mem::replace(&mut saved.ip, d.ip.clone());
+                    saved.xaddr = d.xaddr.clone();
+                    saved.rtsp_url = saved.rtsp_url.clone().map(|u| u.replace(&old, &d.ip));
+                    ip_changes.push((saved.name.clone(), old, d.ip.clone()));
+                    changed = true;
+                }
+            } else if let Some(saved) = devices.iter_mut().find(|s| s.id.is_empty() && s.ip == d.ip) {
+                saved.id = d.id.clone(); // backfill the stable id on a pre-existing device
+                changed = true;
+            }
+        }
+        if changed {
+            save_devices(&devices_file(app), &devices);
+        }
+    }
+
+    if changed {
+        let _ = app.emit("devices-changed", ());
+    }
+    if !ip_changes.is_empty() {
+        let alert_store = app.state::<AlertStore>().inner().clone();
+        let path = alerts_file(app);
+        for (name, old, new) in ip_changes {
+            let msg = format!("Camera '{name}' changed IP address: {old} → {new}");
+            log::warn!("reconcile: {msg}");
+            alerts::create(&alert_store, &path, AlertLevel::Warn, msg, None, None, "scanner".into());
+        }
+        let _ = app.emit("alerts-changed", ());
+    }
+}
+
+/// Hourly background rescan: re-discover ONVIF cameras and reconcile the store so
+/// a camera that changed IP (DHCP / power-cycle) is found again automatically.
+fn spawn_device_rescan(app: &tauri::AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(3600));
+        let found = onvif::discovery::discover();
+        if !found.is_empty() {
+            reconcile_devices(&app, &found);
+        }
+    });
 }
 
 /// Capture a JPEG snapshot from the saved device with `ip`, returned as a
@@ -1472,6 +1535,9 @@ pub fn run() {
             let wf_activity: WfActivity = Arc::new(Mutex::new(HashMap::new()));
             app.manage(wf_activity);
             spawn_workflow_poller(&app.handle());
+
+            // Hourly ONVIF rescan → reconcile IP changes (DHCP / power-cycle).
+            spawn_device_rescan(&app.handle());
             let handle = app.handle().clone();
             let devices = handle.state::<DeviceStore>().lock().unwrap().clone();
             let config = go2rtc_config_file(&handle);

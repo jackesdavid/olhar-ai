@@ -13,6 +13,8 @@ export type Settings = {
 
 /** A saved camera (matches `app_core::devices::Device`). */
 export type Device = {
+  /** Stable ONVIF device id (survives IP/DHCP changes); "" if unknown. */
+  id?: string;
   ip: string;
   xaddr: string;
   name: string;
@@ -25,6 +27,8 @@ export type Device = {
 
 /** A camera that answered a discovery probe (matches `app_core::onvif::DiscoveredDevice`). */
 export type DiscoveredDevice = {
+  /** Stable ONVIF device id (WS-Addressing EndpointReference). */
+  id?: string;
   xaddr: string;
   ip: string;
   name: string;

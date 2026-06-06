@@ -6,7 +6,7 @@ use std::time::Duration;
 use rand::RngCore;
 
 use super::domain::DiscoveredDevice;
-use super::xml::parse_xaddrs_and_scopes;
+use super::xml::{parse_endpoint_address, parse_xaddrs_and_scopes};
 
 const MULTICAST: &str = "239.255.255.250:3702";
 
@@ -20,7 +20,7 @@ pub fn discover() -> Vec<DiscoveredDevice> {
 
     let probe = build_probe(&random_uuid());
     let mut seen: Vec<String> = Vec::new();
-    let mut raw: Vec<(String, Vec<String>)> = Vec::new();
+    let mut raw: Vec<(String, Vec<String>, String)> = Vec::new();
 
     for _ in 0..2 {
         if sock.send_to(probe.as_bytes(), MULTICAST).is_err() {
@@ -34,8 +34,9 @@ pub fn discover() -> Vec<DiscoveredDevice> {
                     if !seen.contains(&key) {
                         seen.push(key);
                         let xml = String::from_utf8_lossy(&buf[..n]).into_owned();
-                        if let Some(entry) = parse_xaddrs_and_scopes(&xml) {
-                            raw.push(entry);
+                        if let Some((xaddr, scopes)) = parse_xaddrs_and_scopes(&xml) {
+                            let id = parse_endpoint_address(&xml).unwrap_or_default();
+                            raw.push((xaddr, scopes, id));
                         }
                     }
                 }
@@ -45,7 +46,7 @@ pub fn discover() -> Vec<DiscoveredDevice> {
     }
 
     raw.into_iter()
-        .map(|(xaddr, scopes)| {
+        .map(|(xaddr, scopes, id)| {
             let ip = extract_ip(&xaddr);
             let mut manufacturer = None;
             let mut model = None;
@@ -59,7 +60,7 @@ pub fn discover() -> Vec<DiscoveredDevice> {
                     manufacturer = Some(v.to_string());
                 }
             }
-            DiscoveredDevice { xaddr, ip, name, manufacturer, model }
+            DiscoveredDevice { id, xaddr, ip, name, manufacturer, model }
         })
         .collect()
 }
