@@ -217,7 +217,9 @@
   // node to resume the live animation where it left off.
   $effect(() => {
     const cur = act?.current ?? null;
-    if (view === "editor" && cur !== null && liveNode === null && liveTimer === null) {
+    // `!runEnded` guards against the polled `current` lagging behind the run-end
+    // event: without it we'd re-light the last node after the flow already ended.
+    if (view === "editor" && cur !== null && !runEnded && liveNode === null && liveTimer === null) {
       markLive(cur);
     }
   });
