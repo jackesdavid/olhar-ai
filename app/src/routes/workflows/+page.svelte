@@ -105,15 +105,14 @@
   const isRunning = $derived((act?.running ?? 0) > 0);
   const activeNode = $derived(act?.current ?? null);
 
-  // option lists for camera / recipient node dropdowns
-  const cameraOptions = $derived([
-    { value: "first", label: "First camera" },
-    ...devices.map((d) => ({ value: d.name, label: d.name })),
-  ]);
-  const recipientOptions = $derived([
-    { value: "", label: "Auto (first / only)" },
-    ...recipients.map((r) => ({ value: r.label, label: r.label })),
-  ]);
+  // option lists for camera / recipient node dropdowns (the real items)
+  const cameraOptions = $derived(devices.map((d) => ({ value: d.name, label: d.name })));
+  const recipientOptions = $derived(recipients.map((r) => ({ value: r.label, label: r.label })));
+  // Resolve a stored value to a real option — falls back to the FIRST item in the
+  // list (what "default to first" means) when the stored value is empty/missing.
+  function resolveOpt(opts: { value: string; label: string }[], stored: string) {
+    return opts.some((o) => o.value === stored) ? stored : (opts[0]?.value ?? "");
+  }
 
   function runStatus(g: Graph): "running" | "idle" | "disabled" {
     if ((activity[g.id]?.running ?? 0) > 0) return "running";
@@ -326,6 +325,18 @@
     const x = 80 + (n % 5) * 48;
     const y = 70 + (n % 5) * 40;
     const id = await invoke<number>("add_node", { graphId: graph.id, kind: slug, x, y });
+    // Default camera/recipient configs to the actual first item in each list.
+    const cfg = { ...(catalog[slug]?.default_config ?? {}) };
+    let patched = false;
+    if ("camera" in cfg && devices[0]) {
+      cfg.camera = devices[0].name;
+      patched = true;
+    }
+    if ("target" in cfg && recipients[0]) {
+      cfg.target = recipients[0].label;
+      patched = true;
+    }
+    if (patched) await invoke("set_node_config", { graphId: graph.id, nodeId: id, config: cfg });
     selectedNodeId = id;
     addOpen = false;
     await reload();
@@ -907,29 +918,33 @@
                       {#if wired}
                         <p class="rounded border border-dashed border-primary/30 bg-primary/5 px-2 py-1.5 text-xs text-primary/80">← #{wired.from}.{wired.from_port}</p>
                       {:else if key === "camera"}
-                        <Select.Root
-                          type="single"
-                          disabled={isRunning}
-                          value={String(selectedNode.config[key] ?? "first")}
-                          onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "first" })}
-                        >
-                          <Select.Trigger class="h-8 w-full">{labelOf(cameraOptions, String(selectedNode.config[key] ?? "first"))}</Select.Trigger>
-                          <Select.Content>
-                            {#each cameraOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
-                          </Select.Content>
-                        </Select.Root>
+                        {#if cameraOptions.length === 0}
+                          <p class="rounded border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">
+                            No cameras — add one in Devices.
+                          </p>
+                        {:else}
+                          {@const cv = resolveOpt(cameraOptions, String(selectedNode.config[key] ?? ""))}
+                          <Select.Root type="single" disabled={isRunning} value={cv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? cv })}>
+                            <Select.Trigger class="h-8 w-full">{cv}</Select.Trigger>
+                            <Select.Content>
+                              {#each cameraOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                            </Select.Content>
+                          </Select.Root>
+                        {/if}
                       {:else if key === "target"}
-                        <Select.Root
-                          type="single"
-                          disabled={isRunning}
-                          value={String(selectedNode.config[key] ?? "")}
-                          onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "" })}
-                        >
-                          <Select.Trigger class="h-8 w-full">{labelOf(recipientOptions, String(selectedNode.config[key] ?? ""))}</Select.Trigger>
-                          <Select.Content>
-                            {#each recipientOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
-                          </Select.Content>
-                        </Select.Root>
+                        {#if recipientOptions.length === 0}
+                          <p class="rounded border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">
+                            No recipients — pair one in Recipients.
+                          </p>
+                        {:else}
+                          {@const rv = resolveOpt(recipientOptions, String(selectedNode.config[key] ?? ""))}
+                          <Select.Root type="single" disabled={isRunning} value={rv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? rv })}>
+                            <Select.Trigger class="h-8 w-full">{rv}</Select.Trigger>
+                            <Select.Content>
+                              {#each recipientOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                            </Select.Content>
+                          </Select.Root>
+                        {/if}
                       {:else if key === "level"}
                         <Select.Root
                           type="single"
