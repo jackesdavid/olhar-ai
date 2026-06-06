@@ -15,7 +15,6 @@
   import ZoomIn from "@lucide/svelte/icons/zoom-in";
   import ZoomOut from "@lucide/svelte/icons/zoom-out";
   import Maximize from "@lucide/svelte/icons/maximize";
-  import Hand from "@lucide/svelte/icons/hand";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import ArrowLeft from "@lucide/svelte/icons/arrow-left";
@@ -80,6 +79,10 @@
   let consoleOpen = $state(false);
   let logs = $state<LogLine[]>([]);
 
+  // canvas viewport (infinite pan/zoom)
+  let pan = $state({ x: 40, y: 40 });
+  let zoom = $state(1);
+
   // ---- dialogs (window.prompt/confirm are no-ops in the Tauri WebView) ------
   let nameOpen = $state(false);
   let nameValue = $state("");
@@ -122,6 +125,8 @@
     selectedGraphId = id;
     selectedNodeId = null;
     pending = null;
+    pan = { x: 40, y: 40 };
+    zoom = 1;
     view = "editor";
   }
   function backToList() {
@@ -318,43 +323,91 @@
     await reload();
   }
 
-  // ---- node dragging -------------------------------------------------------
+  // ---- canvas: infinite pan / zoom + node drag -----------------------------
+  let svgEl: SVGSVGElement | undefined;
   let drag: { id: number; offX: number; offY: number } | null = null;
+  let panning: { sx: number; sy: number; ox: number; oy: number } | null = null;
+
+  // Screen → world (the <g> transform is translate(pan) scale(zoom)).
+  function worldPoint(e: PointerEvent | WheelEvent) {
+    const r = svgEl!.getBoundingClientRect();
+    return { x: (e.clientX - r.left - pan.x) / zoom, y: (e.clientY - r.top - pan.y) / zoom };
+  }
   function startDrag(e: PointerEvent, n: Node) {
     selectedNodeId = n.id;
-    drag = { id: n.id, offX: 0, offY: 0 };
-    const svg = (e.currentTarget as Element).closest("svg") as SVGSVGElement | null;
-    if (svg) {
-      const pt = svgPoint(svg, e);
-      drag = { id: n.id, offX: pt.x - n.x, offY: pt.y - n.y };
+    const wp = worldPoint(e);
+    drag = { id: n.id, offX: wp.x - n.x, offY: wp.y - n.y };
+  }
+  function onCanvasDown(e: PointerEvent) {
+    if (e.target !== e.currentTarget) return; // only grab empty canvas, not a node
+    panning = { sx: e.clientX, sy: e.clientY, ox: pan.x, oy: pan.y };
+    svgEl?.setPointerCapture?.(e.pointerId);
+  }
+  function onCanvasMove(e: PointerEvent) {
+    if (panning) {
+      pan = { x: panning.ox + (e.clientX - panning.sx), y: panning.oy + (e.clientY - panning.sy) };
+      return;
+    }
+    if (drag && graph) {
+      const wp = worldPoint(e);
+      const n = graph.nodes.find((x) => x.id === drag!.id);
+      if (n) {
+        n.x = Math.round(wp.x - drag.offX);
+        n.y = Math.round(wp.y - drag.offY);
+      }
     }
   }
-  function onDragMove(e: PointerEvent) {
-    if (!drag || !graph) return;
-    const svg = e.currentTarget as SVGSVGElement;
-    const pt = svgPoint(svg, e);
-    const n = graph.nodes.find((x) => x.id === drag!.id);
-    if (n) {
-      n.x = Math.max(0, Math.round(pt.x - drag.offX));
-      n.y = Math.max(0, Math.round(pt.y - drag.offY));
+  async function onCanvasUp() {
+    if (panning) {
+      panning = null;
+      return;
+    }
+    if (drag && graph) {
+      const id = drag.id;
+      const n = graph.nodes.find((x) => x.id === id);
+      drag = null;
+      if (n) await invoke("move_node", { graphId: graph.id, nodeId: id, x: n.x, y: n.y });
     }
   }
-  async function endDrag() {
-    if (!drag || !graph) return;
-    const id = drag.id;
-    const n = graph.nodes.find((x) => x.id === id);
-    drag = null;
-    if (n) await invoke("move_node", { graphId: graph.id, nodeId: id, x: n.x, y: n.y });
+  function clampZoom(z: number) {
+    return Math.min(2.5, Math.max(0.35, z));
   }
-  function svgPoint(svg: SVGSVGElement, e: PointerEvent) {
-    const r = svg.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  function zoomBy(f: number) {
+    zoom = clampZoom(Math.round(zoom * f * 100) / 100);
+  }
+  function onWheel(e: WheelEvent) {
+    e.preventDefault();
+    const r = svgEl!.getBoundingClientRect();
+    const cx = e.clientX - r.left;
+    const cy = e.clientY - r.top;
+    const nz = clampZoom(zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+    // keep the world point under the cursor fixed while zooming
+    pan = { x: cx - ((cx - pan.x) / zoom) * nz, y: cy - ((cy - pan.y) / zoom) * nz };
+    zoom = nz;
+  }
+  function fitView() {
+    if (!graph || graph.nodes.length === 0 || !svgEl) {
+      pan = { x: 40, y: 40 };
+      zoom = 1;
+      return;
+    }
+    const minX = Math.min(...graph.nodes.map((n) => n.x)) - 60;
+    const minY = Math.min(...graph.nodes.map((n) => n.y)) - 60;
+    const maxX = Math.max(...graph.nodes.map((n) => n.x + NODE_W)) + 60;
+    const maxY = Math.max(...graph.nodes.map((n) => n.y + nodeHeight(n))) + 60;
+    const r = svgEl.getBoundingClientRect();
+    const z = clampZoom(Math.min(r.width / (maxX - minX), r.height / (maxY - minY), 1.5));
+    zoom = z;
+    pan = {
+      x: (r.width - (maxX - minX) * z) / 2 - minX * z,
+      y: (r.height - (maxY - minY) * z) / 2 - minY * z,
+    };
   }
 
   const LEVELS = ["debug", "info", "warn", "error"];
 </script>
 
-<div class="h-[calc(100vh-3.5rem)]">
+<div class="h-full">
   {#if loading}
     <div class="flex h-full items-center justify-center">
       <Loader label="Loading workflows…" />
@@ -362,7 +415,8 @@
 
     <!-- ════════════════════ LIST ════════════════════ -->
   {:else if view === "list"}
-    <div class="space-y-6">
+    <div class="h-full overflow-y-auto">
+      <div class="mx-auto max-w-6xl space-y-6 p-6">
       <div class="flex items-center justify-between">
         <div>
           <h1 class="text-2xl font-semibold tracking-tight">Workflows</h1>
@@ -429,11 +483,12 @@
           {/if}
         </Card.Content>
       </Card.Root>
+      </div>
     </div>
 
     <!-- ════════════════════ EDITOR ════════════════════ -->
   {:else if graph}
-    <div class="flex h-full flex-col gap-3">
+    <div class="flex h-full flex-col gap-3 p-4">
       <!-- header -->
       <div class="flex shrink-0 items-center gap-3">
         <Button variant="outline" size="sm" onclick={backToList}>
@@ -452,15 +507,17 @@
         <!-- col 1: the node editor -->
         <div class="relative min-w-0 basis-4/5">
           <div
-            class="absolute inset-0 overflow-auto rounded-xl border border-border bg-card/20 bg-[radial-gradient(circle,_rgba(52,211,153,0.1)_1px,_transparent_1px)] [background-size:18px_18px]"
+            class="absolute inset-0 overflow-hidden rounded-xl border border-border bg-card/20 bg-[radial-gradient(circle,_rgba(52,211,153,0.12)_1px,_transparent_1px)]"
+            style="background-size: {18 * zoom}px {18 * zoom}px; background-position: {pan.x}px {pan.y}px;"
           >
             <svg
-              width="1600"
-              height="900"
-              class="block"
-              onpointermove={onDragMove}
-              onpointerup={endDrag}
-              onpointerleave={endDrag}
+              bind:this={svgEl}
+              class="block size-full {panning ? 'cursor-grabbing' : 'cursor-grab'}"
+              onpointerdown={onCanvasDown}
+              onpointermove={onCanvasMove}
+              onpointerup={onCanvasUp}
+              onpointerleave={onCanvasUp}
+              onwheel={onWheel}
               role="presentation"
             >
               <defs>
@@ -469,6 +526,7 @@
                 </filter>
               </defs>
 
+              <g transform="translate({pan.x} {pan.y}) scale({zoom})">
               <!-- edges -->
               {#each graph.edges as e, idx (idx)}
                 {@const fromN = graph.nodes.find((n) => n.id === e.from)}
@@ -585,6 +643,7 @@
                   {/each}
                 </g>
               {/each}
+              </g>
             </svg>
           </div>
 
@@ -615,10 +674,10 @@
           <div
             class="absolute right-3 top-3 flex items-center gap-1 rounded-lg border border-border bg-background/75 p-1 shadow-lg backdrop-blur"
           >
-            <Button variant="ghost" size="icon" class="size-8" title="Zoom in (coming soon)" onclick={() => comingSoon("Zoom")}><ZoomIn class="size-4" /></Button>
-            <Button variant="ghost" size="icon" class="size-8" title="Zoom out (coming soon)" onclick={() => comingSoon("Zoom")}><ZoomOut class="size-4" /></Button>
-            <Button variant="ghost" size="icon" class="size-8" title="Fit to view (coming soon)" onclick={() => comingSoon("Fit to view")}><Maximize class="size-4" /></Button>
-            <Button variant="ghost" size="icon" class="size-8" title="Pan (coming soon)" onclick={() => comingSoon("Pan")}><Hand class="size-4" /></Button>
+            <Button variant="ghost" size="icon" class="size-8" title="Zoom out" onclick={() => zoomBy(1 / 1.2)}><ZoomOut class="size-4" /></Button>
+            <span class="w-10 text-center text-[11px] tabular-nums text-muted-foreground">{Math.round(zoom * 100)}%</span>
+            <Button variant="ghost" size="icon" class="size-8" title="Zoom in" onclick={() => zoomBy(1.2)}><ZoomIn class="size-4" /></Button>
+            <Button variant="ghost" size="icon" class="size-8" title="Fit to view" onclick={fitView}><Maximize class="size-4" /></Button>
           </div>
 
           <!-- bottom-center: wiring hint -->

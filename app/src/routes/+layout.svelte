@@ -13,6 +13,13 @@
     if (href === "/") return path === "/";
     return path === href || path.startsWith(href + "/");
   }
+
+  // Routes that manage their own full-width/height canvas (no centered max-width
+  // container, no page padding) — e.g. the workflow editor.
+  const FULL_BLEED = ["/workflows"];
+  const fullBleed = $derived(
+    FULL_BLEED.some((p) => $page.url.pathname === p || $page.url.pathname.startsWith(p + "/")),
+  );
 </script>
 
 <SensorField />
@@ -64,11 +71,17 @@
   <div class="flex min-w-0 flex-1 flex-col">
     <main class="flex-1 overflow-y-auto">
       {#key $page.url.pathname}
-        <div
-          class="mx-auto w-full max-w-6xl p-6 duration-300 animate-in fade-in slide-in-from-bottom-2"
-        >
-          {@render children()}
-        </div>
+        {#if fullBleed}
+          <div class="h-full overflow-hidden duration-200 animate-in fade-in">
+            {@render children()}
+          </div>
+        {:else}
+          <div
+            class="mx-auto w-full max-w-6xl p-6 duration-300 animate-in fade-in slide-in-from-bottom-2"
+          >
+            {@render children()}
+          </div>
+        {/if}
       {/key}
     </main>
   </div>
