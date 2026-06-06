@@ -165,14 +165,14 @@ impl NodeKind {
 
     pub fn label(self) -> &'static str {
         match self {
-            NodeKind::GetLastAlert => "GET LAST ALERT",
-            NodeKind::GetRecipient => "GET RECIPIENT",
-            NodeKind::CreateAlert => "CREATE ALERT",
-            NodeKind::DeliverAlert => "DELIVER ALERT",
-            NodeKind::CameraSnapshot => "CAMERA SNAPSHOT",
-            NodeKind::DescribeImage => "DESCRIBE IMAGE",
-            NodeKind::NotifyRecipient => "NOTIFY RECIPIENT",
-            NodeKind::Format => "FORMAT",
+            NodeKind::GetLastAlert => "Get last alert",
+            NodeKind::GetRecipient => "Get recipient",
+            NodeKind::CreateAlert => "Create alert",
+            NodeKind::DeliverAlert => "Deliver alert",
+            NodeKind::CameraSnapshot => "Camera snapshot",
+            NodeKind::DescribeImage => "Describe image",
+            NodeKind::NotifyRecipient => "Notify recipient",
+            NodeKind::Format => "Format",
         }
     }
 
