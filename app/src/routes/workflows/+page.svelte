@@ -389,12 +389,24 @@
     }
   }
   async function toggleEnabled(g: Graph, enabled: boolean) {
-    await invoke("set_graph_enabled", { id: g.id, enabled });
-    await reload();
+    g.enabled = enabled; // optimistic — reflect the flip instantly
+    try {
+      await invoke("set_graph_enabled", { id: g.id, enabled });
+      await reload();
+    } catch (err) {
+      g.enabled = !enabled; // roll back on failure
+      toast.error("Couldn't update", { description: String(err) });
+    }
   }
   async function toggleRunOrphans(g: Graph, run_orphans: boolean) {
-    await invoke("set_graph_run_orphans", { id: g.id, runOrphans: run_orphans });
-    await reload();
+    g.run_orphans = run_orphans; // optimistic
+    try {
+      await invoke("set_graph_run_orphans", { id: g.id, runOrphans: run_orphans });
+      await reload();
+    } catch (err) {
+      g.run_orphans = !run_orphans; // roll back on failure
+      toast.error("Couldn't update", { description: String(err) });
+    }
   }
   async function runNow(g: Graph) {
     running = true;
@@ -1028,6 +1040,16 @@
               <Switch checked={graph.enabled} onCheckedChange={(v) => toggleEnabled(graph, v)} />
             </div>
 
+            <div class="space-y-1">
+              <div class="flex items-center justify-between">
+                <Label class="flex items-center gap-1.5 text-sm"><Unplug class="size-3.5" /> Run orphan nodes</Label>
+                <Switch checked={graph.run_orphans ?? false} onCheckedChange={(v) => toggleRunOrphans(graph, v)} />
+              </div>
+              <p class="text-[10px] leading-snug text-muted-foreground">
+                When off, nodes with no connections are skipped during a run.
+              </p>
+            </div>
+
             <div class="space-y-1.5">
               <Label class="text-xs text-muted-foreground">Trigger</Label>
               <Select.Root
@@ -1078,16 +1100,6 @@
               {#if concKind(graph.concurrency) !== "skip"}
                 <Input type="number" min="1" value={concMax(graph.concurrency)} class="h-8" onchange={(e) => applyConcurrency(graph, concKind(graph.concurrency), Number(e.currentTarget.value))} />
               {/if}
-            </div>
-
-            <div class="space-y-1">
-              <div class="flex items-center justify-between">
-                <Label class="flex items-center gap-1.5 text-sm"><Unplug class="size-3.5" /> Run orphan nodes</Label>
-                <Switch checked={graph.run_orphans ?? false} onCheckedChange={(v) => toggleRunOrphans(graph, v)} />
-              </div>
-              <p class="text-[10px] leading-snug text-muted-foreground">
-                When off, nodes with no connections are skipped during a run.
-              </p>
             </div>
           </div>
 
