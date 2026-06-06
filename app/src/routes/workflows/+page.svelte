@@ -754,7 +754,7 @@
                         <span
                           class="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
                         >
-                          <span class="size-1.5 rounded-full bg-primary status-live"></span> Running
+                          <LoaderCircle class="size-3 animate-spin" /> Running
                         </span>
                       {:else if st === "idle"}
                         <span class="text-xs text-muted-foreground">Idle</span>
@@ -771,15 +771,21 @@
                           variant="ghost"
                           size="icon"
                           class="size-8 text-primary"
-                          title={triggerKind(g.trigger) === "cron"
-                            ? "Runs on a schedule — use the editor to run manually"
-                            : canRun(g)
-                              ? "Run now"
-                              : "Nothing to run — connect nodes or enable orphans"}
-                          disabled={triggerKind(g.trigger) === "cron" || !canRun(g)}
+                          title={st === "running"
+                            ? "Running…"
+                            : triggerKind(g.trigger) === "cron"
+                              ? "Runs on a schedule — use the editor to run manually"
+                              : canRun(g)
+                                ? "Run now"
+                                : "Nothing to run — connect nodes or enable orphans"}
+                          disabled={st === "running" || triggerKind(g.trigger) === "cron" || !canRun(g)}
                           onclick={() => runNow(g)}
                         >
-                          <Play class="size-4" />
+                          {#if st === "running"}
+                            <LoaderCircle class="size-4 animate-spin" />
+                          {:else}
+                            <Play class="size-4" />
+                          {/if}
                         </Button>
                         <Button variant="ghost" size="icon" class="size-8" title="Delete" onclick={() => openDelete(g)}>
                           <Trash2 class="size-4" />
