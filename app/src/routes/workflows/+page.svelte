@@ -89,27 +89,45 @@
   let recipients = $state<{ label: string; enabled: boolean }[]>([]);
   let activity = $state<Record<number, { running: number; current: number | null }>>({});
 
-  // Per-node "live" highlight — driven by workflow-node events and held for a
-  // minimum time so even an instant execution is visible on screen (visual only).
-  const MIN_HIGHLIGHT_MS = 800;
-  let liveSet = $state(new Set<number>());
-  const liveTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  // Per-node highlight controller (driven by workflow-node events): exactly ONE
+  // node is "live" at a time, shown for at least MIN_HIGHLIGHT_MS, in sequence.
+  // Fast nodes queue (so every node is still seen) and a finished node stops the
+  // moment the next one starts — no overlap. Visual only.
+  const MIN_HIGHLIGHT_MS = 700;
+  let liveNode = $state<number | null>(null);
+  let liveQueue: number[] = [];
+  let liveTimer: ReturnType<typeof setTimeout> | null = null;
+  let runEnded = false;
+
   function markLive(nodeId: number) {
-    const prev = liveTimers.get(nodeId);
-    if (prev) clearTimeout(prev);
-    liveSet.add(nodeId);
-    liveTimers.set(
-      nodeId,
-      setTimeout(() => {
-        liveSet.delete(nodeId);
-        liveTimers.delete(nodeId);
-      }, MIN_HIGHLIGHT_MS),
-    );
+    runEnded = false; // a node event means a run is active
+    const tail = liveQueue.length ? liveQueue[liveQueue.length - 1] : liveNode;
+    if (tail === nodeId) return; // already current / queued
+    if (liveTimer === null) showLive(nodeId);
+    else liveQueue.push(nodeId); // within the current node's minimum → queue it
+  }
+  function showLive(nodeId: number) {
+    liveNode = nodeId;
+    liveTimer = setTimeout(onMinElapsed, MIN_HIGHLIGHT_MS);
+  }
+  function onMinElapsed() {
+    liveTimer = null;
+    const next = liveQueue.shift();
+    if (next !== undefined) showLive(next);
+    else if (runEnded) liveNode = null;
+    // else: keep the current node lit (still running) until the next event
+  }
+  function endLive() {
+    // run finished/errored: let any queued min-holds drain, then stop.
+    runEnded = true;
+    if (liveTimer === null && liveQueue.length === 0) liveNode = null;
   }
   function clearLive() {
-    liveTimers.forEach((t) => clearTimeout(t));
-    liveTimers.clear();
-    liveSet.clear();
+    if (liveTimer) clearTimeout(liveTimer);
+    liveTimer = null;
+    liveQueue = [];
+    runEnded = false;
+    liveNode = null;
   }
 
   // ---- dialogs (window.prompt/confirm are no-ops in the Tauri WebView) ------
@@ -126,9 +144,9 @@
   // run state for the open graph
   const act = $derived(selectedGraphId != null ? activity[selectedGraphId] : undefined);
   const isRunning = $derived((act?.running ?? 0) > 0);
-  // A node is "live" if it's executing (event-held) or the polled current node.
+  // A node (and the edge feeding it) is "live" only while it's the current node.
   function nodeLive(id: number): boolean {
-    return liveSet.has(id) || act?.current === id;
+    return liveNode === id;
   }
 
   // option lists for camera / recipient node dropdowns (the real items)
@@ -232,12 +250,8 @@
       (e) => {
         running = false;
         const { graph: gid, name, ok, summary } = e.payload;
-        // Run finished (ok or error) → stop the node/edge animation at once.
-        if (gid === selectedGraphId) {
-          clearLive();
-          const a = activity[gid];
-          if (a) activity[gid] = { running: a.running, current: null };
-        }
+        // Run finished (ok or error) → drain remaining highlights, then stop.
+        if (gid === selectedGraphId) endLive();
         logs = [{ time: new Date().toLocaleTimeString(), name, ok, summary }, ...logs].slice(0, 200);
         if (ok) toast.success(`Workflow "${name}"`, { description: summary });
         else toast.error(`Workflow "${name}" failed`, { description: summary });
