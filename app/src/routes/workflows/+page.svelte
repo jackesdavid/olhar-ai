@@ -840,7 +840,7 @@
               <Table.Body>
                 {#each graphs as g (g.id)}
                   <Table.Row
-                    class="cursor-pointer transition-colors hover:bg-primary/5"
+                    class="cursor-pointer transition-colors hover:bg-primary/5 {runStatus(g) === 'running' ? 'list-running' : ''}"
                     onclick={() => openGraph(g.id)}
                   >
                     {@const st = runStatus(g)}

@@ -1252,7 +1252,11 @@ fn set_graph_trigger(
     };
     {
         let mut s = store.lock().unwrap();
-        s.graph_mut(id).ok_or("graph not found")?.trigger = trigger;
+        let g = s.graph_mut(id).ok_or("graph not found")?;
+        g.trigger = trigger;
+        // Changing the trigger always stops the graph — it must never start firing
+        // automatically on a config change. The user explicitly presses play (Enable).
+        g.enabled = false;
     }
     persist_workflows(&app, &store);
     Ok(())
