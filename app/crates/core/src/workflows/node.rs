@@ -198,7 +198,53 @@ pub fn run_node(
         NodeKind::Format => run_format(config, inputs),
         NodeKind::Wait => run_wait(config),
         NodeKind::HttpPost => run_http_post(config, inputs),
+        NodeKind::If => run_if(inputs),
+        NodeKind::MotionDetection => run_motion_detection(config, inputs),
     }
+}
+
+/// Control-flow branch: just validates the `condition` Bool is present. The engine
+/// reads the resolved condition to choose the live `true`/`false` exec branch.
+fn run_if(inputs: &PortValues) -> Result<PortValues, String> {
+    inputs
+        .get("condition")
+        .and_then(PortValue::as_bool)
+        .ok_or("missing required input 'condition'")?;
+    Ok(PortValues::new())
+}
+
+/// Compare two frames (resized to a common small grayscale) and report how much
+/// they differ. `moved` = changed% >= `sensitivity`; `score` = changed% (0..100).
+fn run_motion_detection(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let a = inputs.get("image_a").and_then(PortValue::as_image).ok_or("missing required input 'image_a'")?;
+    let b = inputs.get("image_b").and_then(PortValue::as_image).ok_or("missing required input 'image_b'")?;
+    let cfg_num = |k: &str, d: i64| -> i64 {
+        config.get(k).and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).unwrap_or(d)
+    };
+    let pixel_threshold = cfg_num("pixel_threshold", 25).clamp(0, 255) as i16;
+    let sensitivity = cfg_num("sensitivity", 2).clamp(0, 100) as f64;
+
+    const W: u32 = 320;
+    const H: u32 = 240;
+    let gray = |raw: &[u8]| -> Result<Vec<u8>, String> {
+        let img = image::load_from_memory(raw).map_err(|e| format!("Could not decode frame: {e}"))?;
+        Ok(img.resize_exact(W, H, image::imageops::FilterType::Triangle).to_luma8().into_raw())
+    };
+    let ga = gray(a)?;
+    let gb = gray(b)?;
+    let total = ga.len().max(1);
+    let changed = ga
+        .iter()
+        .zip(gb.iter())
+        .filter(|(x, y)| (**x as i16 - **y as i16).abs() > pixel_threshold)
+        .count();
+    let score = (changed as f64 / total as f64) * 100.0;
+
+    let mut o = PortValues::new();
+    o.insert("moved".into(), PortValue::Bool(score >= sensitivity));
+    o.insert("score".into(), PortValue::Num(score.round() as i64));
+    o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
 }
 
 /// POST form data to `url`. `fields` (a string map) are the form fields and
@@ -508,6 +554,47 @@ mod tests {
         let err = run_node(NodeKind::HttpPost, &json!({ "url": "  " }), &PortValues::new(), &test_ctx())
             .unwrap_err();
         assert!(err.contains("missing required input 'url'"), "got: {err}");
+    }
+
+    fn solid_jpeg(w: u32, h: u32, luma: u8) -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(w, h, image::Rgb([luma, luma, luma]));
+        let mut buf = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+            .unwrap();
+        buf
+    }
+
+    #[test]
+    fn motion_detects_difference_between_frames() {
+        let black = solid_jpeg(64, 48, 0);
+        let white = solid_jpeg(64, 48, 255);
+        let run = |a: &[u8], b: &[u8]| {
+            let mut inputs = PortValues::new();
+            inputs.insert("image_a".into(), PortValue::Image(a.to_vec()));
+            inputs.insert("image_b".into(), PortValue::Image(b.to_vec()));
+            run_node(NodeKind::MotionDetection, &json!({}), &inputs, &test_ctx()).unwrap()
+        };
+        let same = run(&black, &black);
+        assert_eq!(same["moved"].as_bool(), Some(false));
+        assert_eq!(same["score"].as_num(), Some(0));
+        let diff = run(&black, &white);
+        assert_eq!(diff["moved"].as_bool(), Some(true));
+        assert!(diff["score"].as_num().unwrap() > 90);
+    }
+
+    #[test]
+    fn motion_requires_both_frames() {
+        let err = run_node(NodeKind::MotionDetection, &json!({}), &PortValues::new(), &test_ctx())
+            .unwrap_err();
+        assert!(err.contains("missing required input 'image_a'"), "got: {err}");
+    }
+
+    #[test]
+    fn if_requires_a_condition() {
+        let err =
+            run_node(NodeKind::If, &json!({}), &PortValues::new(), &test_ctx()).unwrap_err();
+        assert!(err.contains("missing required input 'condition'"), "got: {err}");
     }
 
     #[test]

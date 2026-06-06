@@ -76,6 +76,10 @@ pub enum NodeKind {
     Wait,
     /// Network: POST form data (`key1..3` = field names, `value1..3` = values) to a URL.
     HttpPost,
+    /// Flow control: route the run down `true`/`false` exec branches on a Bool condition.
+    If,
+    /// Vision: compare two frames and report whether/how much they differ.
+    MotionDetection,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -153,15 +157,32 @@ const HTTP_POST_OUT: [Port; 3] = [
     p("ok", PortType::Bool, false),
 ];
 
+// If: a Bool condition routes the run down one of two exec branches.
+const IF_IN: [Port; 1] = [p("condition", PortType::Bool, true)];
+
+// Motion detection: compare two frames; report whether/how much they differ.
+const MOTION_IN: [Port; 2] =
+    [p("image_a", PortType::Image, true), p("image_b", PortType::Image, true)];
+const MOTION_OUT: [Port; 3] = [
+    p("moved", PortType::Bool, false),
+    p("score", PortType::Num, false),
+    p("ok", PortType::Bool, false),
+];
+
 const NO_PORTS: [Port; 0] = [];
 
-// Universal control-flow ports — every node has these in addition to its data
-// ports. They carry no value; they only add execution ordering to the run.
+// Universal control-flow ports — every node has an `exec_in` and, by default, an
+// `exec_out`. They carry no value; they sequence/gate execution. A node kind may
+// override its exec OUTPUTS (e.g. `If` splits into `true`/`false`).
 pub const EXEC_IN: Port = p("exec_in", PortType::Exec, false);
 pub const EXEC_OUT: Port = p("exec_out", PortType::Exec, false);
+pub const EXEC_TRUE: Port = p("true", PortType::Exec, false);
+pub const EXEC_FALSE: Port = p("false", PortType::Exec, false);
+const EXEC_OUT_DEFAULT: [Port; 1] = [EXEC_OUT];
+const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 10] = [
+    pub const ALL: [NodeKind; 12] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -172,6 +193,8 @@ impl NodeKind {
         NodeKind::Format,
         NodeKind::Wait,
         NodeKind::HttpPost,
+        NodeKind::If,
+        NodeKind::MotionDetection,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -188,6 +211,8 @@ impl NodeKind {
             NodeKind::Format => "format",
             NodeKind::Wait => "wait",
             NodeKind::HttpPost => "http_post",
+            NodeKind::If => "if",
+            NodeKind::MotionDetection => "motion_detection",
         }
     }
 
@@ -207,6 +232,8 @@ impl NodeKind {
             NodeKind::Format => "Format",
             NodeKind::Wait => "Wait",
             NodeKind::HttpPost => "HTTP post",
+            NodeKind::If => "If",
+            NodeKind::MotionDetection => "Motion detection",
         }
     }
 
@@ -218,8 +245,18 @@ impl NodeKind {
             NodeKind::CameraSnapshot => "Cameras",
             NodeKind::DescribeImage => "AI",
             NodeKind::Format => "Text",
-            NodeKind::Wait => "Flow",
+            NodeKind::Wait | NodeKind::If => "Flow",
             NodeKind::HttpPost => "Network",
+            NodeKind::MotionDetection => "Vision",
+        }
+    }
+
+    /// Exec OUTPUT pins for this kind. Default is a single `exec_out`; `If` splits
+    /// the run into `true`/`false` branches. (`exec_in` is universal — see EXEC_IN.)
+    pub fn exec_out_ports(self) -> &'static [Port] {
+        match self {
+            NodeKind::If => &EXEC_OUT_IF,
+            _ => &EXEC_OUT_DEFAULT,
         }
     }
 
@@ -235,6 +272,8 @@ impl NodeKind {
             NodeKind::Format => &FORMAT_IN,
             NodeKind::Wait => &NO_PORTS, // control-flow only — sequenced via exec ports
             NodeKind::HttpPost => &HTTP_POST_IN,
+            NodeKind::If => &IF_IN,
+            NodeKind::MotionDetection => &MOTION_IN,
         }
     }
 
@@ -250,6 +289,8 @@ impl NodeKind {
             NodeKind::Format => &FORMAT_OUT,
             NodeKind::Wait => &NO_PORTS, // control-flow only — sequenced via exec ports
             NodeKind::HttpPost => &HTTP_POST_OUT,
+            NodeKind::If => &NO_PORTS, // outputs are exec branches (true/false)
+            NodeKind::MotionDetection => &MOTION_OUT,
         }
     }
 
@@ -261,8 +302,8 @@ impl NodeKind {
     }
 
     pub fn output_port(self, name: &str) -> Option<Port> {
-        if name == EXEC_OUT.name {
-            return Some(EXEC_OUT);
+        if let Some(e) = self.exec_out_ports().iter().copied().find(|p| p.name == name) {
+            return Some(e);
         }
         self.output_ports().iter().copied().find(|p| p.name == name)
     }
@@ -282,6 +323,8 @@ impl NodeKind {
             NodeKind::Format => json!({ "template": "{p1} — {p2}", "p1": "", "p2": "", "p3": "" }),
             NodeKind::Wait => json!({ "seconds": "1" }),
             NodeKind::HttpPost => json!({ "url": "", "headers": {}, "fields": {}, "file": "" }),
+            NodeKind::If => json!({}),
+            NodeKind::MotionDetection => json!({ "sensitivity": "2", "pixel_threshold": "25" }),
         }
     }
 }
@@ -693,6 +736,22 @@ mod tests {
         // Wait is control-flow only — it has no data ports.
         assert!(NodeKind::Wait.input_ports().is_empty());
         assert!(NodeKind::Wait.output_ports().is_empty());
+    }
+
+    #[test]
+    fn if_node_has_true_false_exec_outputs() {
+        let mut g = Graph::new(1, "g");
+        let gate = g.add_node(NodeKind::If, 0, 0);
+        let a = g.add_node(NodeKind::Format, 0, 0);
+        // Both branch pins are wireable, typed Exec.
+        g.add_edge(gate, "true", a, "exec_in").unwrap();
+        let b = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(gate, "false", b, "exec_in").unwrap();
+        let names: Vec<_> = NodeKind::If.exec_out_ports().iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["true", "false"]);
+        assert_eq!(NodeKind::If.output_port("true").unwrap().ty, PortType::Exec);
+        // `condition` is a required Bool data input.
+        assert!(NodeKind::If.input_port("condition").unwrap().required);
     }
 
     #[test]

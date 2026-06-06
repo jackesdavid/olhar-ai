@@ -7,11 +7,11 @@
 //! resolving inputs from upstream outputs else config literals), stopping on the
 //! first node error. The trigger/concurrency methods are the pure decision logic
 //! the backend poller drives.
-use super::domain::{ConcurrencyPolicy, Graph};
-use super::node::{self, PortValues};
+use super::domain::{ConcurrencyPolicy, Graph, NodeKind, EXEC_IN};
+use super::node::{self, PortValue, PortValues};
 use crate::agent::tools::ToolContext;
 use crate::alerts::{Alert, AlertLevel};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 /// Run the whole graph once in topological order. Each node runs at most once; inputs
@@ -38,12 +38,34 @@ pub fn run_dag_with(
         graph.edges.iter().flat_map(|e| [e.from, e.to]).collect()
     };
     let mut outputs: HashMap<u32, PortValues> = HashMap::new();
+    // Live exec output pins published so far — `(node_id, out_pin_name)`. Drives
+    // conditional execution: a node activates only when fed by a live exec source.
+    let mut live_out: HashSet<(u32, String)> = HashSet::new();
     for nid in order {
         if !connected.contains(&nid) {
             continue;
         }
-        on_node(nid);
         let n = graph.node(nid).ok_or("node vanished mid-run")?;
+
+        // Exec-activation: a node runs if it has NO incoming exec edge (an entry
+        // node — unchanged behaviour for non-branching graphs) OR at least one
+        // incoming exec edge from a LIVE upstream exec output. An `If` lights only
+        // one branch, so the other branch (and its exec-descendants) never activates.
+        let incoming_exec = || graph.edges.iter().filter(|e| e.to == nid && e.to_port == EXEC_IN.name);
+        let mut has_exec_in = false;
+        let mut fed_live = false;
+        for e in incoming_exec() {
+            has_exec_in = true;
+            if live_out.contains(&(e.from, e.from_port.clone())) {
+                fed_live = true;
+                break;
+            }
+        }
+        if has_exec_in && !fed_live {
+            continue; // gated off by an inactive branch
+        }
+
+        on_node(nid);
         let mut inputs = PortValues::new();
         for port in n.kind.input_ports() {
             if let Some(edge) = graph.edges.iter().find(|e| e.to == nid && e.to_port == port.name) {
@@ -57,6 +79,16 @@ pub fn run_dag_with(
         }
         let o = node::run_node(n.kind, &n.config, &inputs, sys)
             .map_err(|e| format!("{}: {e}", n.kind.label()))?;
+
+        // Publish this node's live exec outputs so downstream nodes can activate.
+        if n.kind == NodeKind::If {
+            let cond = inputs.get("condition").and_then(PortValue::as_bool).unwrap_or(false);
+            live_out.insert((nid, if cond { "true" } else { "false" }.to_string()));
+        } else {
+            for p in n.kind.exec_out_ports() {
+                live_out.insert((nid, p.name.to_string()));
+            }
+        }
         outputs.insert(nid, o);
     }
     Ok(outputs)
@@ -226,6 +258,38 @@ mod tests {
             created_at: "2026-06-04T00:00:00Z".into(),
             deliveries: vec![],
         }
+    }
+
+    #[test]
+    fn if_node_runs_only_the_live_branch() {
+        for (cond, want, skip) in [(true, "a", "b"), (false, "b", "a")] {
+            let ctx = test_ctx();
+            let mut g = Graph::new(1, "g");
+            let gate = g.add_node(NodeKind::If, 0, 0);
+            g.node_mut(gate).unwrap().config["condition"] = json!(cond); // literal Bool
+            let a = g.add_node(NodeKind::Format, 0, 0);
+            let b = g.add_node(NodeKind::Format, 0, 0);
+            g.add_edge(gate, "true", a, "exec_in").unwrap();
+            g.add_edge(gate, "false", b, "exec_in").unwrap();
+            let outs = run_dag(&g, &ctx).unwrap();
+            let chosen = if want == "a" { a } else { b };
+            let skipped = if skip == "a" { a } else { b };
+            assert!(outs.contains_key(&gate), "If itself runs");
+            assert!(outs.contains_key(&chosen), "live branch runs (cond={cond})");
+            assert!(!outs.contains_key(&skipped), "dead branch is skipped (cond={cond})");
+        }
+    }
+
+    #[test]
+    fn exec_edge_without_if_still_runs_both() {
+        // Regression: a plain exec edge (no branch) must not gate anything off.
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "g");
+        let a = g.add_node(NodeKind::Format, 0, 0);
+        let b = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(a, "exec_out", b, "exec_in").unwrap();
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(outs.contains_key(&a) && outs.contains_key(&b));
     }
 
     #[test]

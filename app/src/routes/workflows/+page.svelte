@@ -178,7 +178,7 @@
 
   // node palette: search + group by category
   let nodeSearch = $state("");
-  const CATEGORY_ORDER = ["Cameras", "AI", "Alerts", "Recipients", "Text", "Network", "Flow"];
+  const CATEGORY_ORDER = ["Cameras", "Vision", "AI", "Alerts", "Recipients", "Text", "Network", "Flow"];
   const nodeCategories = $derived.by(() => {
     const q = nodeSearch.trim().toLowerCase();
     const matched = kinds.filter(
@@ -264,28 +264,45 @@
     return g.enabled ? "idle" : "disabled";
   }
 
-  // Control-flow (exec) ports are universal and sit on the node's header row.
+  // Control-flow (exec) ports are white. Every node has one `exec_in` pin on the
+  // left header; exec OUTPUTS (usually `exec_out`, but `true`/`false` for If) stack
+  // down the right edge from the header.
   const EXEC_IN_NAME = "exec_in";
-  const EXEC_OUT_NAME = "exec_out";
-  const isExec = (port: string) => port === EXEC_IN_NAME || port === EXEC_OUT_NAME;
-  // Data ports = everything except the white exec pins (those render on the header).
+  function portOf(node: Node, port: string, side: "in" | "out"): CatPort | undefined {
+    const list = side === "out" ? catalog[node.kind]?.outputs : catalog[node.kind]?.inputs;
+    return list?.find((p) => p.name === port);
+  }
+  function isExec(node: Node, port: string, side: "in" | "out"): boolean {
+    return portOf(node, port, side)?.type === "exec";
+  }
+  // Data ports = everything except the white exec pins.
   function dataPorts(k: CatKind | undefined, side: "in" | "out"): CatPort[] {
     const list = side === "in" ? k?.inputs : k?.outputs;
     return (list ?? []).filter((p) => p.type !== "exec");
   }
+  function execOutPorts(k: CatKind | undefined): CatPort[] {
+    return (k?.outputs ?? []).filter((p) => p.type === "exec");
+  }
 
   function nodeHeight(n: Node): number {
     const k = catalog[n.kind];
-    const rows = Math.max(dataPorts(k, "in").length, dataPorts(k, "out").length, 1);
+    // Extra exec outputs (beyond the first, which sits on the header) reserve rows.
+    const execRows = Math.max(0, execOutPorts(k).length - 1);
+    const rows = Math.max(dataPorts(k, "in").length, dataPorts(k, "out").length, execRows + 1, 1);
     return HEAD_H + rows * ROW_H + PAD;
   }
   // Local Y of the i-th data port within a node (the <g> is translated to n.x/n.y).
   function dataPortY(i: number) {
     return HEAD_H + i * ROW_H + ROW_H / 2;
   }
-  // Local Y of a port by name — exec pins sit on the header row, data ports below.
+  // Local Y of a port by name — exec_in on the header; exec outputs stack from the
+  // header down; data ports sit below the header divider.
   function portLocalY(node: Node, port: string, side: "in" | "out") {
-    if (isExec(port)) return HEAD_H / 2;
+    if (isExec(node, port, side)) {
+      if (side === "in") return HEAD_H / 2;
+      const i = execOutPorts(catalog[node.kind]).findIndex((p) => p.name === port);
+      return HEAD_H / 2 + Math.max(0, i) * ROW_H;
+    }
     const i = dataPorts(catalog[node.kind], side).findIndex((p) => p.name === port);
     return dataPortY(Math.max(0, i));
   }
@@ -311,9 +328,7 @@
   };
   // The colour of a port (used so a connection follows its data type).
   function portColorOf(node: Node, port: string, side: "in" | "out"): string {
-    if (isExec(port)) return portColor.exec;
-    const list = side === "out" ? catalog[node.kind]?.outputs : catalog[node.kind]?.inputs;
-    const p = list?.find((x) => x.name === port);
+    const p = portOf(node, port, side);
     return p ? portColor[p.type] : "#52796f";
   }
 
@@ -985,7 +1000,7 @@
                     stroke-width="1"
                   />
 
-                  <!-- exec (control-flow) pins — white, on the header row -->
+                  <!-- exec (control-flow) pins — white. exec_in on the left header. -->
                   <circle
                     cx="0"
                     cy={HEAD_H / 2}
@@ -997,19 +1012,33 @@
                     onclick={() => clickInPort(n, EXEC_IN_NAME)}
                     role="presentation"
                   />
-                  <circle
-                    cx={NODE_W}
-                    cy={HEAD_H / 2}
-                    r={pending && pending.node === n.id && pending.port === EXEC_OUT_NAME ? 6 : 5}
-                    fill={pending && pending.node === n.id && pending.port === EXEC_OUT_NAME
-                      ? portColor.exec
-                      : "#151c19"}
-                    stroke={portColor.exec}
-                    stroke-width="2"
-                    class="cursor-pointer transition-all"
-                    onclick={() => clickOutPort(n, EXEC_OUT_NAME)}
-                    role="presentation"
-                  />
+                  <!-- exec outputs stack down the right edge (exec_out, or true/false) -->
+                  {#each execOutPorts(k) as p, i}
+                    {@const ey = HEAD_H / 2 + i * ROW_H}
+                    {@const isP = pending && pending.node === n.id && pending.port === p.name}
+                    <circle
+                      cx={NODE_W}
+                      cy={ey}
+                      r={isP ? 6 : 5}
+                      fill={isP ? portColor.exec : "#151c19"}
+                      stroke={portColor.exec}
+                      stroke-width="2"
+                      class="cursor-pointer transition-all"
+                      onclick={() => clickOutPort(n, p.name)}
+                      role="presentation"
+                    />
+                    {#if execOutPorts(k).length > 1}
+                      <text
+                        x={NODE_W - 9}
+                        y={ey + 3}
+                        text-anchor="end"
+                        class="pointer-events-none select-none fill-muted-foreground"
+                        font-size="9"
+                      >
+                        {p.name}
+                      </text>
+                    {/if}
+                  {/each}
 
                   <!-- input data ports -->
                   {#each dataPorts(k, "in") as p, i}
