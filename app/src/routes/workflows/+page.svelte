@@ -84,6 +84,11 @@
   let pan = $state({ x: 40, y: 40 });
   let zoom = $state(1);
 
+  // live references for node dropdowns + per-graph run activity (polled)
+  let devices = $state<{ name: string; rtsp_url?: string | null }[]>([]);
+  let recipients = $state<{ label: string; enabled: boolean }[]>([]);
+  let activity = $state<Record<number, { running: number; current: number | null }>>({});
+
   // ---- dialogs (window.prompt/confirm are no-ops in the Tauri WebView) ------
   let nameOpen = $state(false);
   let nameValue = $state("");
@@ -94,6 +99,26 @@
   const graph = $derived(graphs.find((g) => g.id === selectedGraphId) ?? null);
   const selectedNode = $derived(graph?.nodes.find((n) => n.id === selectedNodeId) ?? null);
   const kinds = $derived(Object.values(catalog));
+
+  // run state for the open graph
+  const act = $derived(selectedGraphId != null ? activity[selectedGraphId] : undefined);
+  const isRunning = $derived((act?.running ?? 0) > 0);
+  const activeNode = $derived(act?.current ?? null);
+
+  // option lists for camera / recipient node dropdowns
+  const cameraOptions = $derived([
+    { value: "first", label: "First camera" },
+    ...devices.map((d) => ({ value: d.name, label: d.name })),
+  ]);
+  const recipientOptions = $derived([
+    { value: "", label: "Auto (first / only)" },
+    ...recipients.map((r) => ({ value: r.label, label: r.label })),
+  ]);
+
+  function runStatus(g: Graph): "running" | "idle" | "disabled" {
+    if ((activity[g.id]?.running ?? 0) > 0) return "running";
+    return g.enabled ? "idle" : "disabled";
+  }
 
   function nodeHeight(n: Node): number {
     const k = catalog[n.kind];
@@ -149,12 +174,26 @@
     }
   }
 
+  async function loadRefs() {
+    try {
+      const [d, r] = await Promise.all([
+        invoke<{ name: string; rtsp_url?: string | null }[]>("list_devices"),
+        invoke<{ label: string; enabled: boolean }[]>("list_beacons"),
+      ]);
+      devices = d;
+      recipients = r;
+    } catch (err) {
+      console.error("Failed to load devices/recipients", err);
+    }
+  }
+
   onMount(() => {
     (async () => {
       try {
         const cat = await invoke<{ kinds: CatKind[] }>("node_catalog");
         catalog = Object.fromEntries(cat.kinds.map((k) => [k.slug, k]));
         await reload();
+        await loadRefs();
       } catch (err) {
         toast.error("Failed to load workflows", { description: String(err) });
       } finally {
@@ -168,7 +207,18 @@
       if (ok) toast.success(`Workflow "${name}"`, { description: summary });
       else toast.error(`Workflow "${name}" failed`, { description: summary });
     });
-    return () => un.then((u) => u());
+    // Poll live run activity (running graphs + currently-executing node).
+    const poll = setInterval(async () => {
+      try {
+        activity = await invoke("run_states");
+      } catch {
+        /* ignore transient errors */
+      }
+    }, 700);
+    return () => {
+      un.then((u) => u());
+      clearInterval(poll);
+    };
   });
 
   // ---- graph CRUD ----------------------------------------------------------
@@ -271,7 +321,7 @@
 
   // ---- node + edge ops -----------------------------------------------------
   async function addNodeKind(slug: string) {
-    if (!graph) return;
+    if (!graph || isRunning) return;
     const n = graph.nodes.length;
     const x = 80 + (n % 5) * 48;
     const y = 70 + (n % 5) * 40;
@@ -296,10 +346,11 @@
     await reload();
   }
   function clickOutPort(node: Node, port: string) {
+    if (isRunning) return;
     pending = { node: node.id, port };
   }
   async function clickInPort(node: Node, port: string) {
-    if (!graph) return;
+    if (!graph || isRunning) return;
     const existing = graph.edges.findIndex((e) => e.to === node.id && e.to_port === port);
     if (existing >= 0) {
       await removeEdge(existing);
@@ -340,7 +391,8 @@
     return { x: (e.clientX - r.left - pan.x) / zoom, y: (e.clientY - r.top - pan.y) / zoom };
   }
   function startDrag(e: PointerEvent, n: Node) {
-    selectedNodeId = n.id;
+    selectedNodeId = n.id; // selecting to view props is fine
+    if (isRunning) return; // …but no moving while running
     const wp = worldPoint(e);
     drag = { id: n.id, offX: wp.x - n.x, offY: wp.y - n.y };
   }
@@ -468,6 +520,7 @@
                   <Table.Head>Name</Table.Head>
                   <Table.Head>Trigger</Table.Head>
                   <Table.Head class="w-20 text-center">Nodes</Table.Head>
+                  <Table.Head class="w-28">Status</Table.Head>
                   <Table.Head class="w-24">Enabled</Table.Head>
                   <Table.Head class="w-28 text-right">Actions</Table.Head>
                 </Table.Row>
@@ -478,6 +531,7 @@
                     class="cursor-pointer transition-colors hover:bg-primary/5"
                     onclick={() => openGraph(g.id)}
                   >
+                    {@const st = runStatus(g)}
                     <Table.Cell class="font-medium">
                       <span class="flex items-center gap-2">
                         <StatusDot state={g.enabled ? "online" : "offline"} />
@@ -487,6 +541,19 @@
                     <Table.Cell class="text-muted-foreground">{triggerSummary(g.trigger)}</Table.Cell>
                     <Table.Cell class="text-center tabular-nums text-muted-foreground">
                       {g.nodes.length}
+                    </Table.Cell>
+                    <Table.Cell>
+                      {#if st === "running"}
+                        <span
+                          class="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
+                        >
+                          <span class="size-1.5 rounded-full bg-primary status-live"></span> Running
+                        </span>
+                      {:else if st === "idle"}
+                        <span class="text-xs text-muted-foreground">Idle</span>
+                      {:else}
+                        <span class="text-xs text-muted-foreground/60">Disabled</span>
+                      {/if}
                     </Table.Cell>
                     <Table.Cell onclick={(e) => e.stopPropagation()}>
                       <Switch checked={g.enabled} onCheckedChange={(v) => toggleEnabled(g, v)} />
@@ -525,6 +592,14 @@
           <span class="text-sm font-medium">{graph.name}</span>
           <span class="text-xs text-muted-foreground">· {graph.nodes.length} nodes</span>
         </span>
+        {#if isRunning}
+          <span
+            class="flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-0.5 text-[11px] font-medium text-primary"
+          >
+            <span class="size-1.5 rounded-full bg-primary status-live"></span>
+            Running — editing locked
+          </span>
+        {/if}
       </div>
 
       <!-- row 1: editor (80%) + side panel (20%) -->
@@ -577,19 +652,33 @@
                 {@const k = catalog[n.kind]}
                 {@const h = nodeHeight(n)}
                 {@const sel = selectedNodeId === n.id}
+                {@const live = activeNode === n.id}
                 <!-- One transform moves the whole node; inner coords are local,
                      so dragging only updates this single attribute (no per-port
                      recompute). -->
-                <g transform="translate({n.x} {n.y})" filter={sel ? "url(#nodeGlow)" : undefined}>
+                <g transform="translate({n.x} {n.y})" filter={sel || live ? "url(#nodeGlow)" : undefined}>
                   <rect
                     width={NODE_W}
                     height={h}
                     rx="8"
-                    stroke-width={sel ? 2 : 1}
-                    class="fill-card transition-[stroke] {sel
+                    stroke-width={sel || live ? 2 : 1}
+                    class="fill-card transition-[stroke] {live
                       ? 'stroke-primary'
-                      : 'stroke-border hover:stroke-primary/50'}"
+                      : sel
+                        ? 'stroke-primary'
+                        : 'stroke-border hover:stroke-primary/50'}"
                   />
+                  {#if live}
+                    <!-- the executing node: a pulsing emerald outline -->
+                    <rect
+                      width={NODE_W}
+                      height={h}
+                      rx="8"
+                      fill="none"
+                      stroke-width="2.5"
+                      class="animate-pulse stroke-primary"
+                    />
+                  {/if}
                   <rect
                     width={NODE_W}
                     height={HEAD_H}
@@ -674,7 +763,7 @@
           <!-- floating controls (over the canvas only) -->
           <!-- top-left: add node -->
           <div class="absolute left-3 top-3">
-            <Button class="shadow-lg" onclick={() => (addOpen = true)}>
+            <Button class="shadow-lg" disabled={isRunning} onclick={() => (addOpen = true)}>
               <Plus class="size-4" /> Add node
             </Button>
           </div>
@@ -803,7 +892,7 @@
                   <span class="truncate">{nk?.label ?? selectedNode.kind}</span>
                   <span class="shrink-0 text-muted-foreground">#{selectedNode.id}</span>
                 </span>
-                <Button variant="ghost" size="icon" class="size-7 shrink-0" title="Delete node" onclick={() => removeNode(selectedNode)}>
+                <Button variant="ghost" size="icon" class="size-7 shrink-0" title="Delete node" disabled={isRunning} onclick={() => removeNode(selectedNode)}>
                   <Trash2 class="size-3.5" />
                 </Button>
               </div>
@@ -817,9 +906,34 @@
                       <Label class="text-xs text-muted-foreground">{key}</Label>
                       {#if wired}
                         <p class="rounded border border-dashed border-primary/30 bg-primary/5 px-2 py-1.5 text-xs text-primary/80">← #{wired.from}.{wired.from_port}</p>
+                      {:else if key === "camera"}
+                        <Select.Root
+                          type="single"
+                          disabled={isRunning}
+                          value={String(selectedNode.config[key] ?? "first")}
+                          onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "first" })}
+                        >
+                          <Select.Trigger class="h-8 w-full">{labelOf(cameraOptions, String(selectedNode.config[key] ?? "first"))}</Select.Trigger>
+                          <Select.Content>
+                            {#each cameraOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                          </Select.Content>
+                        </Select.Root>
+                      {:else if key === "target"}
+                        <Select.Root
+                          type="single"
+                          disabled={isRunning}
+                          value={String(selectedNode.config[key] ?? "")}
+                          onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "" })}
+                        >
+                          <Select.Trigger class="h-8 w-full">{labelOf(recipientOptions, String(selectedNode.config[key] ?? ""))}</Select.Trigger>
+                          <Select.Content>
+                            {#each recipientOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                          </Select.Content>
+                        </Select.Root>
                       {:else if key === "level"}
                         <Select.Root
                           type="single"
+                          disabled={isRunning}
                           value={String(selectedNode.config[key] ?? "info")}
                           onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "info" })}
                         >
@@ -829,7 +943,7 @@
                           </Select.Content>
                         </Select.Root>
                       {:else}
-                        <Input class="h-8" value={String(selectedNode.config[key] ?? "")} onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })} />
+                        <Input class="h-8" disabled={isRunning} value={String(selectedNode.config[key] ?? "")} onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })} />
                       {/if}
                     </div>
                   {/each}

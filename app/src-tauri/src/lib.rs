@@ -8,6 +8,7 @@
 //! credential validation, and JPEG snapshot commands. Network calls run on blocking
 //! tasks so the UI thread never stalls.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
@@ -922,6 +923,15 @@ type WfStore = Arc<Mutex<Workflows>>;
 /// The trigger/concurrency engine (timers + in-flight counters + alert watermark).
 type WfEngine = Arc<Mutex<WorkflowEngine>>;
 
+/// Live run activity per graph, polled by the editor/list: how many runs are in
+/// flight and which node is currently executing.
+#[derive(Default, Clone, Serialize)]
+struct GraphActivity {
+    running: u32,
+    current: Option<u32>,
+}
+type WfActivity = Arc<Mutex<HashMap<u32, GraphActivity>>>;
+
 /// A safety backstop: never let more than this many workflow runs be in flight
 /// across all graphs at once.
 const WF_GLOBAL_CAP: u32 = 8;
@@ -954,15 +964,41 @@ fn spawn_graph_run(app: &tauri::AppHandle, graph_id: u32) {
     let app = app.clone();
     std::thread::spawn(move || {
         use tauri::Emitter;
+        // Mark this graph as running for the live editor/list.
+        app.state::<WfActivity>().lock().unwrap().entry(graph_id).or_default().running += 1;
+
         let result = {
             let ctx = build_run_context(&app);
-            workflows::run_dag(&graph, &ctx)
+            let progress_app = app.clone();
+            let mut on_node = |nid: u32| {
+                progress_app
+                    .state::<WfActivity>()
+                    .lock()
+                    .unwrap()
+                    .entry(graph_id)
+                    .or_default()
+                    .current = Some(nid);
+            };
+            workflows::run_dag_with(&graph, &ctx, &mut on_node)
             // ctx drops here → its drain thread ends.
         };
         let (ok, summary) = match &result {
             Ok(outs) => (true, format!("ran {} node(s)", outs.len())),
             Err(e) => (false, e.clone()),
         };
+
+        // Release activity: decrement running, clear the current node when idle.
+        {
+            let activity = app.state::<WfActivity>();
+            let mut a = activity.lock().unwrap();
+            let e = a.entry(graph_id).or_default();
+            if e.running > 0 {
+                e.running -= 1;
+            }
+            if e.running == 0 {
+                e.current = None;
+            }
+        }
         if ok {
             log::info!("workflow '{}' ({graph_id}) ok: {summary}", graph.name);
         } else {
@@ -1045,6 +1081,13 @@ fn spawn_workflow_poller(app: &tauri::AppHandle) {
 #[tauri::command]
 fn load_graphs(store: tauri::State<'_, WfStore>) -> Vec<WfGraph> {
     store.lock().unwrap().graphs.clone()
+}
+
+/// Live run state per graph id (`{ running, current }`) — the editor/list poll
+/// this to show running/idle status and highlight the executing node.
+#[tauri::command]
+fn run_states(activity: tauri::State<'_, WfActivity>) -> HashMap<u32, GraphActivity> {
+    activity.lock().unwrap().clone()
 }
 
 /// Static node metadata (kinds + typed ports + default config) for the palette
@@ -1422,6 +1465,8 @@ pub fn run() {
                 .unwrap_or(0);
             let wf_engine: WfEngine = Arc::new(Mutex::new(WorkflowEngine::new(alert_max)));
             app.manage(wf_engine);
+            let wf_activity: WfActivity = Arc::new(Mutex::new(HashMap::new()));
+            app.manage(wf_activity);
             spawn_workflow_poller(&app.handle());
             let handle = app.handle().clone();
             let devices = handle.state::<DeviceStore>().lock().unwrap().clone();
@@ -1459,6 +1504,7 @@ pub fn run() {
             reset_chat,
             send_chat,
             load_graphs,
+            run_states,
             node_catalog,
             create_graph,
             rename_graph,

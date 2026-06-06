@@ -17,9 +17,20 @@ use std::time::{Duration, Instant};
 /// Run the whole graph once in topological order. Each node runs at most once; inputs
 /// resolve from upstream outputs (wired edges) else config literals; stops on first error.
 pub fn run_dag(graph: &Graph, sys: &ToolContext) -> Result<HashMap<u32, PortValues>, String> {
+    run_dag_with(graph, sys, &mut |_| {})
+}
+
+/// Like [`run_dag`], but calls `on_node(id)` just before each node executes — used
+/// by the shell to report the currently-running node for the live editor.
+pub fn run_dag_with(
+    graph: &Graph,
+    sys: &ToolContext,
+    on_node: &mut dyn FnMut(u32),
+) -> Result<HashMap<u32, PortValues>, String> {
     let order = graph.topo_order()?;
     let mut outputs: HashMap<u32, PortValues> = HashMap::new();
     for nid in order {
+        on_node(nid);
         let n = graph.node(nid).ok_or("node vanished mid-run")?;
         let mut inputs = PortValues::new();
         for port in n.kind.input_ports() {
