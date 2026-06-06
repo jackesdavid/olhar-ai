@@ -771,8 +771,12 @@
                           variant="ghost"
                           size="icon"
                           class="size-8 text-primary"
-                          title={canRun(g) ? "Run now" : "Nothing to run — connect nodes or enable orphans"}
-                          disabled={!canRun(g)}
+                          title={triggerKind(g.trigger) === "cron"
+                            ? "Runs on a schedule — use the editor to run manually"
+                            : canRun(g)
+                              ? "Run now"
+                              : "Nothing to run — connect nodes or enable orphans"}
+                          disabled={triggerKind(g.trigger) === "cron" || !canRun(g)}
                           onclick={() => runNow(g)}
                         >
                           <Play class="size-4" />
