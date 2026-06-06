@@ -886,14 +886,16 @@
                           class="size-8 text-primary"
                           title={st === "running"
                             ? "Running…"
-                            : triggerKind(g.trigger) === "cron"
-                              ? "Runs on a schedule — use the editor to run manually"
-                              : graphHasUnfilled(g)
-                                ? "A node has a required input not filled"
-                                : canRun(g)
-                                  ? "Run now"
-                                  : "Nothing to run — connect nodes or enable orphans"}
-                          disabled={st === "running" || triggerKind(g.trigger) === "cron" || !canRun(g) || graphHasUnfilled(g)}
+                            : st === "idle"
+                              ? "Active — stop it to run manually"
+                              : triggerKind(g.trigger) === "cron"
+                                ? "Runs on a schedule — use the editor to run manually"
+                                : graphHasUnfilled(g)
+                                  ? "A node has a required input not filled"
+                                  : canRun(g)
+                                    ? "Run now"
+                                    : "Nothing to run — connect nodes or enable orphans"}
+                          disabled={st !== "disabled" || triggerKind(g.trigger) === "cron" || !canRun(g) || graphHasUnfilled(g)}
                           onclick={() => runNow(g)}
                         >
                           {#if st === "running"}
@@ -1215,12 +1217,16 @@
               variant="ghost"
               size="icon"
               class="size-8 text-primary hover:text-primary"
-              title={graphHasUnfilled(graph)
-                ? "A node has a required input not filled"
-                : canRun(graph)
-                  ? "Run now"
-                  : "Nothing to run — connect nodes or enable orphans"}
-              disabled={running || !graphReady}
+              title={isRunning
+                ? "Already running"
+                : graph.enabled
+                  ? "Graph is active — stop it to run manually"
+                  : graphHasUnfilled(graph)
+                    ? "A node has a required input not filled"
+                    : canRun(graph)
+                      ? "Run now"
+                      : "Nothing to run — connect nodes or enable orphans"}
+              disabled={running || editLocked || !graphReady}
               onclick={() => runNow(graph)}
             >
               {#if running}<LoaderCircle class="size-4 animate-spin" />{:else}<Play class="size-4" />{/if}
