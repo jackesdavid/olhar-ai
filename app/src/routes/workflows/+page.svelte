@@ -99,11 +99,16 @@
     const rows = Math.max(k?.inputs.length ?? 0, k?.outputs.length ?? 0, 1);
     return HEAD_H + rows * ROW_H + PAD;
   }
+  // Port Y *within* a node (local coords — the node <g> is translated to n.x/n.y).
+  function portY(i: number) {
+    return HEAD_H + i * ROW_H + ROW_H / 2;
+  }
+  // Absolute port Y (for drawing edges between nodes).
   function inPortY(n: Node, i: number) {
-    return n.y + HEAD_H + i * ROW_H + ROW_H / 2;
+    return n.y + portY(i);
   }
   function outPortY(n: Node, i: number) {
-    return n.y + HEAD_H + i * ROW_H + ROW_H / 2;
+    return n.y + portY(i);
   }
   function portIndex(node: Node, port: string, side: "in" | "out") {
     const k = catalog[node.kind];
@@ -376,7 +381,6 @@
     zoom = clampZoom(Math.round(zoom * f * 100) / 100);
   }
   function onWheel(e: WheelEvent) {
-    e.preventDefault();
     const r = svgEl!.getBoundingClientRect();
     const cx = e.clientX - r.left;
     const cy = e.clientY - r.top;
@@ -384,6 +388,13 @@
     // keep the world point under the cursor fixed while zooming
     pan = { x: cx - ((cx - pan.x) / zoom) * nz, y: cy - ((cy - pan.y) / zoom) * nz };
     zoom = nz;
+  }
+  // Attach the wheel handler as a PASSIVE listener (no preventDefault) — better
+  // scroll performance; the canvas has nothing to scroll so passive is safe.
+  function passiveWheel(node: SVGSVGElement) {
+    const h = (e: WheelEvent) => onWheel(e);
+    node.addEventListener("wheel", h, { passive: true });
+    return { destroy: () => node.removeEventListener("wheel", h) };
   }
   function fitView() {
     if (!graph || graph.nodes.length === 0 || !svgEl) {
@@ -512,12 +523,12 @@
           >
             <svg
               bind:this={svgEl}
+              use:passiveWheel
               class="block size-full {panning ? 'cursor-grabbing' : 'cursor-grab'}"
               onpointerdown={onCanvasDown}
               onpointermove={onCanvasMove}
               onpointerup={onCanvasUp}
               onpointerleave={onCanvasUp}
-              onwheel={onWheel}
               role="presentation"
             >
               <defs>
@@ -552,10 +563,11 @@
                 {@const k = catalog[n.kind]}
                 {@const h = nodeHeight(n)}
                 {@const sel = selectedNodeId === n.id}
-                <g filter={sel ? "url(#nodeGlow)" : undefined}>
+                <!-- One transform moves the whole node; inner coords are local,
+                     so dragging only updates this single attribute (no per-port
+                     recompute). -->
+                <g transform="translate({n.x} {n.y})" filter={sel ? "url(#nodeGlow)" : undefined}>
                   <rect
-                    x={n.x}
-                    y={n.y}
                     width={NODE_W}
                     height={h}
                     rx="8"
@@ -565,8 +577,6 @@
                       : 'stroke-border hover:stroke-primary/50'}"
                   />
                   <rect
-                    x={n.x}
-                    y={n.y}
                     width={NODE_W}
                     height={HEAD_H}
                     fill="transparent"
@@ -574,10 +584,10 @@
                     onpointerdown={(ev) => startDrag(ev, n)}
                     role="presentation"
                   />
-                  <circle cx={n.x + 12} cy={n.y + HEAD_H / 2} r="2.5" class="pointer-events-none fill-primary" />
+                  <circle cx="12" cy={HEAD_H / 2} r="2.5" class="pointer-events-none fill-primary" />
                   <text
-                    x={n.x + 20}
-                    y={n.y + 17}
+                    x="20"
+                    y="17"
                     class="pointer-events-none select-none fill-foreground"
                     font-size="11"
                     font-weight="600"
@@ -585,10 +595,10 @@
                     {k?.label ?? n.kind}
                   </text>
                   <line
-                    x1={n.x}
-                    y1={n.y + HEAD_H}
-                    x2={n.x + NODE_W}
-                    y2={n.y + HEAD_H}
+                    x1="0"
+                    y1={HEAD_H}
+                    x2={NODE_W}
+                    y2={HEAD_H}
                     class="pointer-events-none stroke-border"
                     stroke-width="1"
                   />
@@ -597,8 +607,8 @@
                   {#each k?.inputs ?? [] as p, i}
                     {@const wired = wiredInto(n.id, p.name)}
                     <circle
-                      cx={n.x}
-                      cy={inPortY(n, i)}
+                      cx="0"
+                      cy={portY(i)}
                       r="5"
                       fill={wired ? portColor[p.type] : "#151c19"}
                       stroke={portColor[p.type]}
@@ -608,8 +618,8 @@
                       role="presentation"
                     />
                     <text
-                      x={n.x + 11}
-                      y={inPortY(n, i) + 3}
+                      x="11"
+                      y={portY(i) + 3}
                       class="pointer-events-none select-none fill-muted-foreground"
                       font-size="10"
                     >
@@ -621,8 +631,8 @@
                   {#each k?.outputs ?? [] as p, i}
                     {@const isPending = pending && pending.node === n.id && pending.port === p.name}
                     <circle
-                      cx={n.x + NODE_W}
-                      cy={outPortY(n, i)}
+                      cx={NODE_W}
+                      cy={portY(i)}
                       r={isPending ? 6 : 5}
                       fill={isPending ? portColor[p.type] : "#151c19"}
                       stroke={portColor[p.type]}
@@ -632,8 +642,8 @@
                       role="presentation"
                     />
                     <text
-                      x={n.x + NODE_W - 11}
-                      y={outPortY(n, i) + 3}
+                      x={NODE_W - 11}
+                      y={portY(i) + 3}
                       text-anchor="end"
                       class="pointer-events-none select-none fill-muted-foreground"
                       font-size="10"
