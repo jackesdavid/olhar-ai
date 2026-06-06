@@ -211,6 +211,10 @@
   // run state for the open graph
   const act = $derived(selectedGraphId != null ? activity[selectedGraphId] : undefined);
   const isRunning = $derived((act?.running ?? 0) > 0);
+  // An enabled graph is "armed" (idle, waiting for its trigger) — and a running one
+  // is executing. Either way it's ACTIVE, so editing is locked to avoid changing a
+  // graph mid-flight; stop it (disable) to edit nodes, configs, or positions.
+  const editLocked = $derived(isRunning || (graph?.enabled ?? false));
   // A node (and the edge feeding it) is "live" only while it's the current node.
   function nodeLive(id: number): boolean {
     return liveNode === id;
@@ -586,7 +590,7 @@
 
   // ---- node + edge ops -----------------------------------------------------
   async function addNodeKind(slug: string) {
-    if (!graph || isRunning) return;
+    if (!graph || editLocked) return;
     const n = graph.nodes.length;
     const x = 80 + (n % 5) * 48;
     const y = 70 + (n % 5) * 40;
@@ -618,24 +622,24 @@
     await reload();
   }
   async function removeEdge(idx: number) {
-    if (!graph) return;
+    if (!graph || editLocked) return;
     await invoke("remove_edge", { graphId: graph.id, idx });
     await reload();
   }
   // Drop the wire feeding a node's input port so the user can fill it manually.
   async function unlinkPort(nodeId: number, port: string) {
-    if (!graph || isRunning) return;
+    if (!graph || editLocked) return;
     const idx = graph.edges.findIndex((e) => e.to === nodeId && e.to_port === port);
     if (idx >= 0) await removeEdge(idx);
   }
   function clickOutPort(node: Node, port: string) {
-    if (isRunning) return;
+    if (editLocked) return;
     pending = { node: node.id, port };
     // seed the wire's free end at the port so it starts with zero length
     cursor = { x: node.x + NODE_W, y: outPortY(node, port) };
   }
   async function clickInPort(node: Node, port: string) {
-    if (!graph || isRunning) return;
+    if (!graph || editLocked) return;
     const existing = graph.edges.findIndex((e) => e.to === node.id && e.to_port === port);
     if (existing >= 0) {
       await removeEdge(existing);
@@ -666,7 +670,7 @@
   }
   // Pick an image file from disk for an image port (stored as a path literal).
   async function pickImage(n: Node, key: string) {
-    if (isRunning) return;
+    if (editLocked) return;
     const picked = await openFileDialog({
       multiple: false,
       directory: false,
@@ -678,7 +682,7 @@
   }
   // Pick any file from disk for a file port (stored as a path literal).
   async function pickFile(n: Node, key: string) {
-    if (isRunning) return;
+    if (editLocked) return;
     const picked = await openFileDialog({ multiple: false, directory: false });
     if (typeof picked === "string") {
       await saveNodeConfig(n, { ...n.config, [key]: picked });
@@ -698,7 +702,7 @@
   }
   function startDrag(e: PointerEvent, n: Node) {
     selectedNodeId = n.id; // selecting to view props is fine
-    if (isRunning) return; // …but no moving while running
+    if (editLocked) return; // …but no moving while the graph is active (running/armed)
     const wp = worldPoint(e);
     drag = { id: n.id, offX: wp.x - n.x, offY: wp.y - n.y };
   }
@@ -840,7 +844,11 @@
               <Table.Body>
                 {#each graphs as g (g.id)}
                   <Table.Row
-                    class="cursor-pointer transition-colors hover:bg-primary/5 {runStatus(g) === 'running' ? 'list-running' : ''}"
+                    class="cursor-pointer transition-colors hover:bg-primary/5 {runStatus(g) === 'running'
+                      ? 'list-running'
+                      : runStatus(g) === 'idle'
+                        ? 'list-idle'
+                        : ''}"
                     onclick={() => openGraph(g.id)}
                   >
                     {@const st = runStatus(g)}
@@ -929,6 +937,13 @@
           >
             <span class="size-1.5 rounded-full bg-primary status-live"></span>
             Running — editing locked
+          </span>
+        {:else if editLocked}
+          <span
+            class="flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-0.5 text-[11px] font-medium text-amber-500"
+          >
+            <span class="size-1.5 rounded-full bg-amber-500 status-live"></span>
+            Active — stop to edit
           </span>
         {/if}
       </div>
@@ -1182,7 +1197,7 @@
           <div class="absolute left-3 top-3">
             <Button
               class="shadow-lg"
-              disabled={isRunning}
+              disabled={editLocked}
               onclick={() => {
                 nodeSearch = "";
                 addOpen = true;
@@ -1278,7 +1293,7 @@
             <!-- Name -->
             <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-x-3">
               <Label class="text-xs text-muted-foreground">Name</Label>
-              <Input class="h-8" value={graph.name} onchange={(e) => renameInline(e.currentTarget.value)} />
+              <Input class="h-8" disabled={editLocked} value={graph.name} onchange={(e) => renameInline(e.currentTarget.value)} />
             </div>
 
             <!-- Enabled -->
@@ -1294,7 +1309,7 @@
               <Label class="flex items-center gap-1.5 pt-2 text-xs text-muted-foreground"><Unplug class="size-3.5" /> Orphans</Label>
               <div>
                 <div class="flex h-8 items-center">
-                  <Switch checked={graph.run_orphans ?? false} onCheckedChange={(v) => toggleRunOrphans(graph, v)} />
+                  <Switch checked={graph.run_orphans ?? false} disabled={editLocked} onCheckedChange={(v) => toggleRunOrphans(graph, v)} />
                 </div>
                 <p class="text-[10px] leading-snug text-muted-foreground">
                   When off, nodes with no connections are skipped during a run.
@@ -1307,7 +1322,7 @@
               <Label class="flex items-center gap-1.5 pt-2 text-xs text-muted-foreground"><Bug class="size-3.5" /> Debug</Label>
               <div>
                 <div class="flex h-8 items-center">
-                  <Switch checked={graph.debug ?? false} onCheckedChange={(v) => toggleDebug(graph, v)} />
+                  <Switch checked={graph.debug ?? false} disabled={editLocked} onCheckedChange={(v) => toggleDebug(graph, v)} />
                 </div>
                 <p class="text-[10px] leading-snug text-muted-foreground">
                   Log each node's result to the console during a run.
@@ -1321,6 +1336,7 @@
               <div class="space-y-1.5">
                 <Select.Root
                   type="single"
+                  disabled={editLocked}
                   value={triggerKind(graph.trigger)}
                   onValueChange={(v) => applyTrigger(graph, v ?? "manual", triggerSecs(graph.trigger), triggerLevel(graph.trigger))}
                 >
@@ -1333,12 +1349,13 @@
                 </Select.Root>
                 {#if triggerKind(graph.trigger) === "cron"}
                   <div class="flex items-center gap-2">
-                    <Input type="number" min="1" value={triggerSecs(graph.trigger)} class="h-8" onchange={(e) => applyTrigger(graph, "cron", Number(e.currentTarget.value), "info")} />
+                    <Input type="number" min="1" disabled={editLocked} value={triggerSecs(graph.trigger)} class="h-8" onchange={(e) => applyTrigger(graph, "cron", Number(e.currentTarget.value), "info")} />
                     <span class="text-xs text-muted-foreground">sec</span>
                   </div>
                 {:else if triggerKind(graph.trigger) === "on_new_alert"}
                   <Select.Root
                     type="single"
+                    disabled={editLocked}
                     value={triggerLevel(graph.trigger)}
                     onValueChange={(v) => applyTrigger(graph, "on_new_alert", 60, v ?? "info")}
                   >
@@ -1357,6 +1374,7 @@
               <div class="space-y-1.5">
                 <Select.Root
                   type="single"
+                  disabled={editLocked}
                   value={concKind(graph.concurrency)}
                   onValueChange={(v) => applyConcurrency(graph, v ?? "skip", concMax(graph.concurrency))}
                 >
@@ -1368,7 +1386,7 @@
                   </Select.Content>
                 </Select.Root>
                 {#if concKind(graph.concurrency) !== "skip"}
-                  <Input type="number" min="1" value={concMax(graph.concurrency)} class="h-8" onchange={(e) => applyConcurrency(graph, concKind(graph.concurrency), Number(e.currentTarget.value))} />
+                  <Input type="number" min="1" disabled={editLocked} value={concMax(graph.concurrency)} class="h-8" onchange={(e) => applyConcurrency(graph, concKind(graph.concurrency), Number(e.currentTarget.value))} />
                 {/if}
               </div>
             </div>
@@ -1384,7 +1402,7 @@
                   <span class="truncate">{nk?.label ?? selectedNode.kind}</span>
                   <span class="shrink-0 text-muted-foreground">#{selectedNode.id}</span>
                 </span>
-                <Button variant="ghost" size="icon" class="size-7 shrink-0" title="Delete node" disabled={isRunning} onclick={() => removeNode(selectedNode)}>
+                <Button variant="ghost" size="icon" class="size-7 shrink-0" title="Delete node" disabled={editLocked} onclick={() => removeNode(selectedNode)}>
                   <Trash2 class="size-3.5" />
                 </Button>
               </div>
@@ -1408,7 +1426,7 @@
                             </p>
                             <button
                               class="interactive inline-flex items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-destructive disabled:pointer-events-none disabled:opacity-50"
-                              disabled={isRunning}
+                              disabled={editLocked}
                               title="Remove the link and edit this value manually"
                               onclick={() => unlinkPort(selectedNode.id, key)}
                             >
@@ -1426,7 +1444,7 @@
                           </p>
                         {:else}
                           {@const cv = resolveOpt(cameraOptions, String(selectedNode.config[key] ?? ""))}
-                          <Select.Root type="single" disabled={isRunning} value={cv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? cv })}>
+                          <Select.Root type="single" disabled={editLocked} value={cv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? cv })}>
                             <Select.Trigger class="h-8 w-full">{cv}</Select.Trigger>
                             <Select.Content>
                               {#each cameraOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
@@ -1440,7 +1458,7 @@
                           </p>
                         {:else}
                           {@const rv = resolveOpt(recipientOptions, String(selectedNode.config[key] ?? ""))}
-                          <Select.Root type="single" disabled={isRunning} value={rv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? rv })}>
+                          <Select.Root type="single" disabled={editLocked} value={rv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? rv })}>
                             <Select.Trigger class="h-8 w-full">{rv}</Select.Trigger>
                             <Select.Content>
                               {#each recipientOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
@@ -1451,7 +1469,7 @@
                         {#key selectedNode.id + ":" + key}
                           <DictionaryEditor
                             value={(selectedNode.config[key] as Record<string, unknown>) ?? {}}
-                            disabled={isRunning}
+                            disabled={editLocked}
                             onchange={(obj) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: obj })}
                           />
                         {/key}
@@ -1463,21 +1481,21 @@
                             <span class="min-w-0 flex-1 truncate text-xs" title={file}>{fileName(file)}</span>
                             <button
                               class="interactive rounded-md border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground disabled:pointer-events-none disabled:opacity-50"
-                              disabled={isRunning}
+                              disabled={editLocked}
                               onclick={() => pickFile(selectedNode, key)}
                             >
                               Change
                             </button>
                             <button
                               class="interactive rounded-md border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-destructive disabled:pointer-events-none disabled:opacity-50"
-                              disabled={isRunning}
+                              disabled={editLocked}
                               onclick={() => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: "" })}
                             >
                               Clear
                             </button>
                           </div>
                         {:else}
-                          <Button variant="outline" size="sm" class="h-8 w-full justify-start gap-2" disabled={isRunning} onclick={() => pickFile(selectedNode, key)}>
+                          <Button variant="outline" size="sm" class="h-8 w-full justify-start gap-2" disabled={editLocked} onclick={() => pickFile(selectedNode, key)}>
                             <Upload class="size-3.5" /> Upload file…
                           </Button>
                         {/if}
@@ -1489,21 +1507,21 @@
                             <span class="min-w-0 flex-1 truncate text-xs" title={img}>{fileName(img)}</span>
                             <button
                               class="interactive rounded-md border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground disabled:pointer-events-none disabled:opacity-50"
-                              disabled={isRunning}
+                              disabled={editLocked}
                               onclick={() => pickImage(selectedNode, key)}
                             >
                               Change
                             </button>
                             <button
                               class="interactive rounded-md border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-destructive disabled:pointer-events-none disabled:opacity-50"
-                              disabled={isRunning}
+                              disabled={editLocked}
                               onclick={() => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: "" })}
                             >
                               Clear
                             </button>
                           </div>
                         {:else}
-                          <Button variant="outline" size="sm" class="h-8 w-full justify-start gap-2" disabled={isRunning} onclick={() => pickImage(selectedNode, key)}>
+                          <Button variant="outline" size="sm" class="h-8 w-full justify-start gap-2" disabled={editLocked} onclick={() => pickImage(selectedNode, key)}>
                             <Upload class="size-3.5" /> Upload image…
                           </Button>
                         {/if}
@@ -1511,7 +1529,7 @@
                         <div class="flex h-8 items-center gap-2">
                           <Switch
                             checked={selectedNode.config[key] === true || selectedNode.config[key] === "true"}
-                            disabled={isRunning}
+                            disabled={editLocked}
                             onCheckedChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v })}
                           />
                           <span class="text-xs text-muted-foreground">
@@ -1521,7 +1539,7 @@
                       {:else if key === "level"}
                         <Select.Root
                           type="single"
-                          disabled={isRunning}
+                          disabled={editLocked}
                           value={String(selectedNode.config[key] ?? "info")}
                           onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "info" })}
                         >
@@ -1531,7 +1549,7 @@
                           </Select.Content>
                         </Select.Root>
                       {:else}
-                        <Input class="h-8" disabled={isRunning} value={String(selectedNode.config[key] ?? "")} onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })} />
+                        <Input class="h-8" disabled={editLocked} value={String(selectedNode.config[key] ?? "")} onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })} />
                       {/if}
                       </div>
                     </div>
