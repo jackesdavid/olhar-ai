@@ -26,6 +26,7 @@
   import Upload from "@lucide/svelte/icons/upload";
   import ImageIcon from "@lucide/svelte/icons/image";
   import FileIcon from "@lucide/svelte/icons/file";
+  import Bug from "@lucide/svelte/icons/bug";
   import DictionaryEditor from "$lib/components/dictionary-editor.svelte";
 
   import { Button } from "$lib/components/ui/button";
@@ -65,11 +66,12 @@
     trigger: Trigger;
     concurrency: Concurrency;
     run_orphans?: boolean;
+    debug?: boolean;
     nodes: Node[];
     edges: Edge[];
     viewport?: { x: number; y: number; zoom: number };
   };
-  type LogLine = { time: string; name: string; ok: boolean; summary: string };
+  type LogLine = { time: string; name: string; ok: boolean; summary: string; debug?: boolean };
 
   // ---- layout constants ----------------------------------------------------
   const NODE_W = 176;
@@ -241,6 +243,33 @@
   function canRun(g: Graph): boolean {
     return (g.run_orphans ?? false) || g.edges.length > 0;
   }
+
+  // ---- required-input validation -------------------------------------------
+  // A required input is "filled" when it's wired or has a usable config literal.
+  function isFilled(node: Node, port: CatPort): boolean {
+    if (graph?.edges.some((e) => e.to === node.id && e.to_port === port.name)) return true;
+    const v = node.config[port.name];
+    switch (port.type) {
+      case "bool":
+        return typeof v === "boolean";
+      case "dictionary":
+        return !!v && typeof v === "object" && Object.keys(v).length > 0;
+      case "image":
+      case "file":
+      case "recipient":
+        return typeof v === "string" && v.trim() !== "";
+      default: // text / num
+        return v !== undefined && v !== null && String(v).trim() !== "";
+    }
+  }
+  function requiredUnfilled(node: Node): CatPort[] {
+    return (catalog[node.kind]?.inputs ?? []).filter((p) => p.required && !isFilled(node, p));
+  }
+  function graphHasUnfilled(g: Graph): boolean {
+    return g.nodes.some((n) => requiredUnfilled(n).length > 0);
+  }
+  // The open graph is runnable only when wired up AND every required input is set.
+  const graphReady = $derived(!!graph && canRun(graph) && !graphHasUnfilled(graph));
 
   // Property rows = the node's input ports (so wire-only ports like recipient /
   // image are always visible) + the legitimate static settings for that kind.
@@ -414,6 +443,18 @@
     const unNode = listen<{ graph: number; node: number }>("workflow-node", (e) => {
       if (e.payload.graph === selectedGraphId) markLive(e.payload.node);
     });
+    // Per-node debug logs (only emitted when the graph's debug flag is on).
+    const unLog = listen<{ graph: number; node: number; label: string; message: string }>(
+      "workflow-log",
+      (e) => {
+        if (e.payload.graph !== selectedGraphId) return; // only the open graph
+        const { label, message } = e.payload;
+        logs = [
+          { time: new Date().toLocaleTimeString(), name: label, ok: true, summary: message, debug: true },
+          ...logs,
+        ].slice(0, 200);
+      },
+    );
     // Poll run activity (running graphs + status) for the lock + list badges.
     const poll = setInterval(async () => {
       try {
@@ -426,6 +467,7 @@
       saveViewport(); // persist the viewport when leaving the page too
       un.then((u) => u());
       unNode.then((u) => u());
+      unLog.then((u) => u());
       clearInterval(poll);
     };
   });
@@ -485,6 +527,16 @@
       await reload();
     } catch (err) {
       g.run_orphans = !run_orphans; // roll back on failure
+      toast.error("Couldn't update", { description: String(err) });
+    }
+  }
+  async function toggleDebug(g: Graph, debug: boolean) {
+    g.debug = debug; // optimistic
+    try {
+      await invoke("set_graph_debug", { id: g.id, debug });
+      await reload();
+    } catch (err) {
+      g.debug = !debug; // roll back on failure
       toast.error("Couldn't update", { description: String(err) });
     }
   }
@@ -828,10 +880,12 @@
                             ? "Running…"
                             : triggerKind(g.trigger) === "cron"
                               ? "Runs on a schedule — use the editor to run manually"
-                              : canRun(g)
-                                ? "Run now"
-                                : "Nothing to run — connect nodes or enable orphans"}
-                          disabled={st === "running" || triggerKind(g.trigger) === "cron" || !canRun(g)}
+                              : graphHasUnfilled(g)
+                                ? "A node has a required input not filled"
+                                : canRun(g)
+                                  ? "Run now"
+                                  : "Nothing to run — connect nodes or enable orphans"}
+                          disabled={st === "running" || triggerKind(g.trigger) === "cron" || !canRun(g) || graphHasUnfilled(g)}
                           onclick={() => runNow(g)}
                         >
                           {#if st === "running"}
@@ -936,6 +990,7 @@
                 {@const h = nodeHeight(n)}
                 {@const sel = selectedNodeId === n.id}
                 {@const live = nodeLive(n.id)}
+                {@const invalid = requiredUnfilled(n).length > 0}
                 <!-- One transform moves the whole node; inner coords are local,
                      so dragging only updates this single attribute (no per-port
                      recompute). -->
@@ -944,12 +999,14 @@
                     width={NODE_W}
                     height={h}
                     rx="8"
-                    stroke-width={sel || live ? 2 : 1}
+                    stroke-width={sel || live || invalid ? 2 : 1}
                     class="fill-card transition-[stroke] {live
                       ? 'stroke-primary'
                       : sel
                         ? 'stroke-primary'
-                        : 'stroke-border hover:stroke-primary/50'}"
+                        : invalid
+                          ? 'stroke-destructive/70'
+                          : 'stroke-border hover:stroke-primary/50'}"
                   />
                   {#if live}
                     <!-- the executing node: a bright marching-ants emerald border
@@ -1000,6 +1057,14 @@
                     stroke-width="1"
                   />
 
+                  {#if invalid}
+                    <!-- required input(s) not filled — a red dot, the logo's signal -->
+                    <circle cx={NODE_W - 9} cy="9" r="5.5" class="pointer-events-none fill-destructive/20" />
+                    <circle cx={NODE_W - 9} cy="9" r="3" class="fill-destructive">
+                      <title>Required input not filled: {requiredUnfilled(n).map((p) => p.name).join(", ")}</title>
+                    </circle>
+                  {/if}
+
                   <!-- exec (control-flow) pins — white. exec_in on the left header. -->
                   <circle
                     cx="0"
@@ -1043,12 +1108,13 @@
                   <!-- input data ports -->
                   {#each dataPorts(k, "in") as p, i}
                     {@const wired = wiredInto(n.id, p.name)}
+                    {@const need = p.required && !isFilled(n, p)}
                     <circle
                       cx="0"
                       cy={dataPortY(i)}
                       r="5"
                       fill={wired ? portColor[p.type] : "#151c19"}
-                      stroke={portColor[p.type]}
+                      stroke={need ? "#ef4444" : portColor[p.type]}
                       stroke-width="2"
                       class="cursor-pointer"
                       onclick={() => clickInPort(n, p.name)}
@@ -1057,7 +1123,7 @@
                     <text
                       x="11"
                       y={dataPortY(i) + 3}
-                      class="pointer-events-none select-none fill-muted-foreground"
+                      class="pointer-events-none select-none {need ? 'fill-destructive' : 'fill-muted-foreground'}"
                       font-size="10"
                     >
                       {p.name}{p.required ? "*" : ""}
@@ -1134,8 +1200,12 @@
               variant="ghost"
               size="icon"
               class="size-8 text-primary hover:text-primary"
-              title={canRun(graph) ? "Run now" : "Nothing to run — connect nodes or enable orphans"}
-              disabled={running || !canRun(graph)}
+              title={graphHasUnfilled(graph)
+                ? "A node has a required input not filled"
+                : canRun(graph)
+                  ? "Run now"
+                  : "Nothing to run — connect nodes or enable orphans"}
+              disabled={running || !graphReady}
               onclick={() => runNow(graph)}
             >
               {#if running}<LoaderCircle class="size-4 animate-spin" />{:else}<Play class="size-4" />{/if}
@@ -1228,6 +1298,19 @@
                 </div>
                 <p class="text-[10px] leading-snug text-muted-foreground">
                   When off, nodes with no connections are skipped during a run.
+                </p>
+              </div>
+            </div>
+
+            <!-- Debug -->
+            <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">
+              <Label class="flex items-center gap-1.5 pt-2 text-xs text-muted-foreground"><Bug class="size-3.5" /> Debug</Label>
+              <div>
+                <div class="flex h-8 items-center">
+                  <Switch checked={graph.debug ?? false} onCheckedChange={(v) => toggleDebug(graph, v)} />
+                </div>
+                <p class="text-[10px] leading-snug text-muted-foreground">
+                  Log each node's result to the console during a run.
                 </p>
               </div>
             </div>
@@ -1487,8 +1570,13 @@
                 {#each logs as log, i (i)}
                   <div class="flex items-center gap-2">
                     <span class="shrink-0 text-muted-foreground">{log.time}</span>
-                    <StatusDot state={log.ok ? "online" : "danger"} />
-                    <span class="shrink-0 {log.ok ? 'text-primary' : 'text-destructive'}">{log.name}</span>
+                    {#if log.debug}
+                      <Bug class="size-3 shrink-0 text-muted-foreground/70" />
+                      <span class="shrink-0 text-muted-foreground">{log.name}</span>
+                    {:else}
+                      <StatusDot state={log.ok ? "online" : "danger"} />
+                      <span class="shrink-0 {log.ok ? 'text-primary' : 'text-destructive'}">{log.name}</span>
+                    {/if}
                     <span class="truncate text-muted-foreground">{log.summary}</span>
                   </div>
                 {/each}

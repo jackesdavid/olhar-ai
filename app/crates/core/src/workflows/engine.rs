@@ -17,15 +17,17 @@ use std::time::{Duration, Instant};
 /// Run the whole graph once in topological order. Each node runs at most once; inputs
 /// resolve from upstream outputs (wired edges) else config literals; stops on first error.
 pub fn run_dag(graph: &Graph, sys: &ToolContext) -> Result<HashMap<u32, PortValues>, String> {
-    run_dag_with(graph, sys, &mut |_| {})
+    run_dag_with(graph, sys, &mut |_| {}, &mut |_, _| {})
 }
 
-/// Like [`run_dag`], but calls `on_node(id)` just before each node executes — used
-/// by the shell to report the currently-running node for the live editor.
+/// Like [`run_dag`], but calls `on_node(id)` just before each node executes (so the
+/// shell can report the currently-running node) and, when the graph's `debug` flag
+/// is on, `on_log(id, summary)` just after each node runs.
 pub fn run_dag_with(
     graph: &Graph,
     sys: &ToolContext,
     on_node: &mut dyn FnMut(u32),
+    on_log: &mut dyn FnMut(u32, &str),
 ) -> Result<HashMap<u32, PortValues>, String> {
     let order = graph.topo_order()?;
     // Unless the graph opts in (`run_orphans`), only nodes wired into the graph
@@ -79,6 +81,10 @@ pub fn run_dag_with(
         }
         let o = node::run_node(n.kind, &n.config, &inputs, sys)
             .map_err(|e| format!("{}: {e}", n.kind.label()))?;
+
+        if graph.debug {
+            on_log(nid, &node::debug_summary(n.kind, &n.config, &inputs, &o));
+        }
 
         // Publish this node's live exec outputs so downstream nodes can activate.
         if n.kind == NodeKind::If {

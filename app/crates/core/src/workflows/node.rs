@@ -203,6 +203,64 @@ pub fn run_node(
     }
 }
 
+/// A short, human-readable line describing what a node did this run — shown in the
+/// editor console when the graph's `debug` flag is on. Reads the node's own outputs
+/// (and a couple of inputs/config) so each kind reports something useful.
+pub fn debug_summary(
+    kind: NodeKind,
+    config: &Value,
+    inputs: &PortValues,
+    outputs: &PortValues,
+) -> String {
+    let txt = |k: &str| outputs.get(k).and_then(PortValue::as_text);
+    let num = |k: &str| outputs.get(k).and_then(PortValue::as_num);
+    let flag = |k: &str| outputs.get(k).and_then(PortValue::as_bool) == Some(true);
+    let clip = |s: &str| {
+        if s.chars().count() > 80 {
+            format!("{}…", s.chars().take(80).collect::<String>())
+        } else {
+            s.to_string()
+        }
+    };
+    match kind {
+        NodeKind::GetLastAlert => match txt("message") {
+            Some(m) => format!("last alert: {}", clip(m)),
+            None => "no alert in store".into(),
+        },
+        NodeKind::GetRecipient => match txt("recipient") {
+            Some(r) if !r.is_empty() => format!("recipient: {r}"),
+            _ => "no recipient set".into(),
+        },
+        NodeKind::CreateAlert => txt("result").map(clip).unwrap_or_else(|| "alert created".into()),
+        NodeKind::DeliverAlert => txt("result").map(clip).unwrap_or_else(|| "delivered".into()),
+        NodeKind::CameraSnapshot => txt("result").map(clip).unwrap_or_else(|| "snapshot captured".into()),
+        NodeKind::DescribeImage => match txt("description") {
+            Some(d) => clip(d),
+            None => "described image".into(),
+        },
+        NodeKind::NotifyRecipient => txt("result").map(clip).unwrap_or_else(|| "notification sent".into()),
+        NodeKind::Format => format!("→ {}", clip(txt("text").unwrap_or(""))),
+        NodeKind::Wait => "delay complete".into(),
+        NodeKind::HttpPost => format!("HTTP {} {}", num("status").unwrap_or(0), if flag("ok") { "ok" } else { "failed" }),
+        NodeKind::If => {
+            let cond = inputs.get("condition").and_then(PortValue::as_bool).unwrap_or(false);
+            format!("condition {cond} → '{}' branch", if cond { "true" } else { "false" })
+        }
+        NodeKind::MotionDetection => {
+            let sens = config
+                .get("sensitivity")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+                .unwrap_or(2);
+            format!(
+                "score {}% (threshold {}%) → {}",
+                num("score").unwrap_or(0),
+                sens,
+                if flag("moved") { "moved" } else { "still" }
+            )
+        }
+    }
+}
+
 /// Control-flow branch: just validates the `condition` Bool is present. The engine
 /// reads the resolved condition to choose the live `true`/`false` exec branch.
 fn run_if(inputs: &PortValues) -> Result<PortValues, String> {

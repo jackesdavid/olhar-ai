@@ -422,6 +422,9 @@ pub struct Graph {
     /// orphans are skipped so leftover/experimental nodes don't fire.
     #[serde(default)]
     pub run_orphans: bool,
+    /// Emit a per-node debug log line during a run (for the editor console).
+    #[serde(default)]
+    pub debug: bool,
     #[serde(default = "one")]
     pub next_id: u32,
     #[serde(default)]
@@ -445,6 +448,7 @@ impl Graph {
             trigger: Trigger::Manual,
             concurrency: ConcurrencyPolicy::SkipIfRunning,
             run_orphans: false,
+            debug: false,
             next_id: 1,
             nodes: Vec::new(),
             edges: Vec::new(),

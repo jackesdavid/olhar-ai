@@ -1046,7 +1046,16 @@ fn spawn_graph_run(app: &tauri::AppHandle, graph_id: u32) {
                 let _ = progress_app
                     .emit("workflow-node", serde_json::json!({ "graph": graph_id, "node": nid }));
             };
-            workflows::run_dag_with(&graph, &ctx, &mut on_node)
+            let log_app = app.clone();
+            let log_graph = graph.clone();
+            let mut on_log = |nid: u32, msg: &str| {
+                let label = log_graph.node(nid).map(|n| n.kind.label()).unwrap_or("node");
+                let _ = log_app.emit(
+                    "workflow-log",
+                    serde_json::json!({ "graph": graph_id, "node": nid, "label": label, "message": msg }),
+                );
+            };
+            workflows::run_dag_with(&graph, &ctx, &mut on_node, &mut on_log)
             // ctx drops here → its drain thread ends.
         };
         let (ok, summary) = match &result {
@@ -1309,6 +1318,21 @@ fn set_graph_run_orphans(
     {
         let mut s = store.lock().unwrap();
         s.graph_mut(id).ok_or("graph not found")?.run_orphans = run_orphans;
+    }
+    persist_workflows(&app, &store);
+    Ok(())
+}
+
+#[tauri::command]
+fn set_graph_debug(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, WfStore>,
+    id: u32,
+    debug: bool,
+) -> Result<(), String> {
+    {
+        let mut s = store.lock().unwrap();
+        s.graph_mut(id).ok_or("graph not found")?.debug = debug;
     }
     persist_workflows(&app, &store);
     Ok(())
@@ -1625,6 +1649,7 @@ pub fn run() {
             set_graph_concurrency,
             set_graph_enabled,
             set_graph_run_orphans,
+            set_graph_debug,
             set_graph_viewport,
             add_node,
             remove_node,
