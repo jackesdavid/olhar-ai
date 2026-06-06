@@ -273,6 +273,21 @@ impl Default for ConcurrencyPolicy {
 // Graph
 // ---------------------------------------------------------------------------
 
+/// The editor's saved camera position — pan offset (px) + zoom — persisted per
+/// graph so re-opening it restores where the operator left off.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Viewport {
+    pub x: f64,
+    pub y: f64,
+    pub zoom: f64,
+}
+
+impl Default for Viewport {
+    fn default() -> Self {
+        Viewport { x: 40.0, y: 40.0, zoom: 1.0 }
+    }
+}
+
 /// One named automation: a trigger + a DAG of typed nodes/edges.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Graph {
@@ -290,6 +305,8 @@ pub struct Graph {
     pub nodes: Vec<GraphNode>,
     #[serde(default)]
     pub edges: Vec<Edge>,
+    #[serde(default)]
+    pub viewport: Viewport,
 }
 
 fn one() -> u32 {
@@ -307,6 +324,7 @@ impl Graph {
             next_id: 1,
             nodes: Vec::new(),
             edges: Vec::new(),
+            viewport: Viewport::default(),
         }
     }
 

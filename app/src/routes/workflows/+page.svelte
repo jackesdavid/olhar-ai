@@ -57,6 +57,7 @@
     concurrency: Concurrency;
     nodes: Node[];
     edges: Edge[];
+    viewport?: { x: number; y: number; zoom: number };
   };
   type LogLine = { time: string; name: string; ok: boolean; summary: string };
 
@@ -191,21 +192,32 @@
     bool: "#fbbf24",
     image: "#f472b6",
   };
+  // The colour of a port (used so a connection follows its data type).
+  function portColorOf(node: Node, port: string, side: "in" | "out"): string {
+    const list = side === "out" ? catalog[node.kind]?.outputs : catalog[node.kind]?.inputs;
+    const p = list?.find((x) => x.name === port);
+    return p ? portColor[p.type] : "#52796f";
+  }
 
   // ---- navigation ----------------------------------------------------------
-  // Remembered viewport (pan/zoom) per graph — restored when re-opening it.
-  const viewports = new Map<number, { pan: { x: number; y: number }; zoom: number }>();
+  // Persist the editor viewport (pan/zoom) to the store for the open graph, and
+  // mirror it locally so re-opening restores without a reload.
   function saveViewport() {
-    if (selectedGraphId != null) viewports.set(selectedGraphId, { pan: { ...pan }, zoom });
+    const id = selectedGraphId;
+    if (id == null) return;
+    const v = { x: pan.x, y: pan.y, zoom };
+    const g = graphs.find((x) => x.id === id);
+    if (g) g.viewport = v;
+    invoke("set_graph_viewport", { id, x: v.x, y: v.y, zoom: v.zoom }).catch(() => {});
   }
   function openGraph(id: number) {
     saveViewport();
     selectedGraphId = id;
     selectedNodeId = null;
     pending = null;
-    const v = viewports.get(id);
-    pan = v ? { ...v.pan } : { x: 40, y: 40 };
-    zoom = v ? v.zoom : 1;
+    const v = graphs.find((x) => x.id === id)?.viewport;
+    pan = v ? { x: v.x, y: v.y } : { x: 40, y: 40 };
+    zoom = v?.zoom ?? 1;
     clearLive();
     view = "editor";
   }
@@ -276,6 +288,7 @@
       }
     }, 700);
     return () => {
+      saveViewport(); // persist the viewport when leaving the page too
       un.then((u) => u());
       unNode.then((u) => u());
       clearInterval(poll);
@@ -706,13 +719,16 @@
                   {@const x2 = toN.x}
                   {@const y2 = inPortY(toN, Math.max(0, portIndex(toN, e.to_port, "in")))}
                   {@const eLive = nodeLive(e.to)}
+                  {@const eColor = portColorOf(fromN, e.from_port, "out")}
                   <path
                     d={`M ${x1} ${y1} C ${x1 + 60} ${y1}, ${x2 - 60} ${y2}, ${x2} ${y2}`}
                     fill="none"
+                    stroke={eColor}
                     stroke-width={eLive ? 3 : 2}
+                    stroke-opacity={eLive ? 1 : 0.55}
                     class="cursor-pointer transition-colors hover:stroke-destructive {eLive
-                      ? 'node-running stroke-primary'
-                      : 'stroke-primary/40'}"
+                      ? 'node-running'
+                      : ''}"
                     onclick={() => removeEdge(idx)}
                     role="presentation"
                   />
@@ -844,11 +860,13 @@
                 {#if pn}
                   {@const px = pn.x + NODE_W}
                   {@const py = outPortY(pn, Math.max(0, portIndex(pn, pending.port, "out")))}
+                  {@const pColor = portColorOf(pn, pending.port, "out")}
                   <path
                     d={`M ${px} ${py} C ${px + 60} ${py}, ${cursor.x - 60} ${cursor.y}, ${cursor.x} ${cursor.y}`}
                     fill="none"
+                    stroke={pColor}
                     stroke-width="2.5"
-                    class="node-running pointer-events-none stroke-primary"
+                    class="node-running pointer-events-none"
                   />
                 {/if}
               {/if}

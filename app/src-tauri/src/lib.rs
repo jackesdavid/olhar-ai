@@ -26,7 +26,7 @@ use app_core::onvif;
 use app_core::onvif::client::rtsp_url_with_creds;
 use app_core::onvif::DiscoveredDevice;
 use app_core::workflows::{
-    self, ConcurrencyPolicy, Fire, Graph as WfGraph, NodeKind as WfNodeKind, Trigger,
+    self, ConcurrencyPolicy, Fire, Graph as WfGraph, NodeKind as WfNodeKind, Trigger, Viewport,
     WorkflowEngine, Workflows,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
@@ -1263,6 +1263,24 @@ fn set_graph_concurrency(
     Ok(())
 }
 
+/// Persist the editor viewport (pan + zoom) for a graph so re-opening restores it.
+#[tauri::command]
+fn set_graph_viewport(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, WfStore>,
+    id: u32,
+    x: f64,
+    y: f64,
+    zoom: f64,
+) -> Result<(), String> {
+    {
+        let mut s = store.lock().unwrap();
+        s.graph_mut(id).ok_or("graph not found")?.viewport = Viewport { x, y, zoom };
+    }
+    persist_workflows(&app, &store);
+    Ok(())
+}
+
 #[tauri::command]
 fn set_graph_enabled(app: tauri::AppHandle, store: tauri::State<'_, WfStore>, id: u32, enabled: bool) -> Result<(), String> {
     {
@@ -1582,6 +1600,7 @@ pub fn run() {
             set_graph_trigger,
             set_graph_concurrency,
             set_graph_enabled,
+            set_graph_viewport,
             add_node,
             remove_node,
             move_node,

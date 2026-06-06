@@ -10,7 +10,7 @@ pub mod node;
 
 pub use domain::{
     load_workflows, save_workflows, ConcurrencyPolicy, Edge, Graph, GraphNode, NodeKind, Port,
-    PortType, Trigger, Workflows,
+    PortType, Trigger, Viewport, Workflows,
 };
 pub use engine::{run_dag, run_dag_with, Fire, WorkflowEngine};
 pub use node::{literal_for, run_node, PortValue, PortValues};
