@@ -18,6 +18,14 @@ use crate::notification;
 use serde_json::Value;
 use std::collections::HashMap;
 
+/// A file value: raw bytes plus the filename and MIME used for multipart uploads.
+#[derive(Debug, Clone)]
+pub struct FileVal {
+    pub name: String,
+    pub mime: String,
+    pub bytes: Vec<u8>,
+}
+
 /// A typed value flowing along an edge / sitting on a port.
 #[derive(Debug, Clone)]
 pub enum PortValue {
@@ -27,6 +35,10 @@ pub enum PortValue {
     Image(Vec<u8>),
     /// A notification recipient (the recipient's label).
     Recipient(String),
+    /// An arbitrary string→string map (HTTP headers / form fields).
+    Map(Vec<(String, String)>),
+    /// Any file (bytes + name + MIME).
+    File(FileVal),
 }
 
 impl PortValue {
@@ -60,6 +72,49 @@ impl PortValue {
             _ => None,
         }
     }
+    pub fn as_map(&self) -> Option<&[(String, String)]> {
+        match self {
+            PortValue::Map(m) => Some(m),
+            _ => None,
+        }
+    }
+    pub fn as_file(&self) -> Option<&FileVal> {
+        match self {
+            PortValue::File(f) => Some(f),
+            _ => None,
+        }
+    }
+}
+
+/// Read a file path into a `FileVal` (bytes + basename + guessed MIME).
+fn read_file_val(path: &str) -> Option<FileVal> {
+    let bytes = std::fs::read(path).ok()?;
+    let name = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file")
+        .to_string();
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        "json" => "application/json",
+        "txt" | "log" => "text/plain",
+        "csv" => "text/csv",
+        "zip" => "application/zip",
+        "mp4" => "video/mp4",
+        "mp3" => "audio/mpeg",
+        _ => "application/octet-stream",
+    }
+    .to_string();
+    Some(FileVal { name, mime, bytes })
 }
 
 /// One node's resolved port values (inputs the engine assembles, or outputs a node returns).
@@ -101,6 +156,25 @@ pub fn literal_for(config: &Value, port: Port) -> Option<PortValue> {
                 Some(PortValue::Recipient(s.to_string()))
             }
         }
+        // A map literal is a JSON object of string→string in config.
+        PortType::Map => {
+            let obj = v.as_object()?;
+            if obj.is_empty() {
+                return None;
+            }
+            let pairs = obj
+                .iter()
+                .map(|(k, val)| {
+                    let s = val.as_str().map(str::to_string).unwrap_or_else(|| val.to_string());
+                    (k.clone(), s)
+                })
+                .collect();
+            Some(PortValue::Map(pairs))
+        }
+        // A file literal is a path the user picked; read it at run time.
+        PortType::File => {
+            v.as_str().filter(|s| !s.trim().is_empty()).and_then(read_file_val).map(PortValue::File)
+        }
         // Control-flow ports never carry a value.
         PortType::Exec => None,
     }
@@ -127,30 +201,35 @@ pub fn run_node(
     }
 }
 
-/// POST `application/x-www-form-urlencoded` form data to `url`. Form fields are
-/// `key1..key3` (names, from config) paired with `value1..value3` (wired/literal
-/// inputs); empty-named fields are skipped. Outputs the HTTP status, body, and ok.
-fn run_http_post(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
-    let url = req_text(inputs, "url").map(str::to_string).or_else(|_| {
-        let u = config.get("url").and_then(Value::as_str).unwrap_or("").trim().to_string();
-        if u.is_empty() { Err("missing required input 'url'".to_string()) } else { Ok(u) }
-    })?;
-
-    let mut form: Vec<(String, String)> = Vec::new();
-    for i in 1..=3 {
-        let key = config.get(format!("key{i}")).and_then(Value::as_str).unwrap_or("").trim();
-        if key.is_empty() {
-            continue;
-        }
-        let val = inputs.get(&format!("value{i}")).and_then(PortValue::as_text).unwrap_or("");
-        form.push((key.to_string(), val.to_string()));
-    }
-    let form_refs: Vec<(&str, &str)> = form.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+/// POST form data to `url`. `fields` (a string map) are the form fields and
+/// `headers` (a string map) are extra request headers. If a `file` is provided
+/// the request is sent as `multipart/form-data` (fields as text parts + the file);
+/// otherwise as `application/x-www-form-urlencoded`. Outputs status, body, ok.
+fn run_http_post(_config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let url = req_text(inputs, "url")?.to_string();
+    let headers = inputs.get("headers").and_then(PortValue::as_map).unwrap_or(&[]);
+    let fields = inputs.get("fields").and_then(PortValue::as_map).unwrap_or(&[]);
+    let file = inputs.get("file").and_then(PortValue::as_file);
 
     let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(30))
         .build();
-    let (status, body, ok) = match agent.post(&url).send_form(&form_refs) {
+    let mut req = agent.post(&url);
+    for (k, v) in headers {
+        req = req.set(k, v);
+    }
+
+    let result = if let Some(f) = file {
+        let boundary = "----sentinelFormBoundary7MA4YWxkTrZu0gW";
+        let body = multipart_body(fields, f, boundary);
+        req.set("Content-Type", &format!("multipart/form-data; boundary={boundary}"))
+            .send_bytes(&body)
+    } else {
+        let form: Vec<(&str, &str)> = fields.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        req.send_form(&form)
+    };
+
+    let (status, body, ok) = match result {
         Ok(resp) => {
             let s = resp.status();
             (s as i64, resp.into_string().unwrap_or_default(), (200..300).contains(&s))
@@ -167,6 +246,32 @@ fn run_http_post(config: &Value, inputs: &PortValues) -> Result<PortValues, Stri
     o.insert("response".into(), PortValue::Text(body));
     o.insert("ok".into(), PortValue::Bool(ok));
     Ok(o)
+}
+
+/// Build a `multipart/form-data` body: each field as a text part, then the file.
+fn multipart_body(fields: &[(String, String)], file: &FileVal, boundary: &str) -> Vec<u8> {
+    let mut body = Vec::with_capacity(file.bytes.len() + 1024);
+    for (k, v) in fields {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{k}\"\r\n\r\n").as_bytes(),
+        );
+        body.extend_from_slice(v.as_bytes());
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!(
+            "Content-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\n",
+            file.name
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(format!("Content-Type: {}\r\n\r\n", file.mime).as_bytes());
+    body.extend_from_slice(&file.bytes);
+    body.extend_from_slice(b"\r\n");
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    body
 }
 
 /// Delay the run by `seconds` (clamped 0..=3600). A pure control-flow node: it
@@ -384,6 +489,18 @@ mod tests {
         assert_eq!(literal_for(&cfg, text).unwrap().as_text(), Some("front"));
         assert!(literal_for(&cfg, blank).is_none());
         assert_eq!(literal_for(&cfg, num).unwrap().as_num(), Some(7));
+    }
+
+    #[test]
+    fn literal_for_parses_a_string_map() {
+        let cfg = json!({ "headers": { "Authorization": "Bearer x", "X-Env": "prod" }, "empty": {} });
+        let map = Port { name: "headers", ty: PortType::Map, required: false };
+        let empty = Port { name: "empty", ty: PortType::Map, required: false };
+        let got = literal_for(&cfg, map).unwrap();
+        let pairs = got.as_map().unwrap();
+        assert_eq!(pairs.len(), 2);
+        assert!(pairs.contains(&("Authorization".into(), "Bearer x".into())));
+        assert!(literal_for(&cfg, empty).is_none()); // empty map → not provided
     }
 
     #[test]

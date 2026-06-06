@@ -29,6 +29,10 @@ pub enum PortType {
     Image,
     /// A notification recipient handle (carried as the recipient's label).
     Recipient,
+    /// An arbitrary string→string map (e.g. HTTP headers / form fields).
+    Map,
+    /// Any file (raw bytes + filename), like `Image` but for arbitrary types.
+    File,
     /// Control flow ("white") — carries no value; sequences node execution.
     Exec,
 }
@@ -136,13 +140,12 @@ const FORMAT_IN: [Port; 3] = [
 ];
 const FORMAT_OUT: [Port; 1] = [p("text", PortType::Text, false)];
 
-// HTTP POST: url + up to three form fields (each field's value is a wired/literal
-// input; its key name is static config `key1..key3`).
+// HTTP POST: url + arbitrary header/field maps + an optional file (→ multipart).
 const HTTP_POST_IN: [Port; 4] = [
     p("url", PortType::Text, true),
-    p("value1", PortType::Text, false),
-    p("value2", PortType::Text, false),
-    p("value3", PortType::Text, false),
+    p("headers", PortType::Map, false),
+    p("fields", PortType::Map, false),
+    p("file", PortType::File, false),
 ];
 const HTTP_POST_OUT: [Port; 3] = [
     p("status", PortType::Num, false),
@@ -278,12 +281,7 @@ impl NodeKind {
             NodeKind::NotifyRecipient => json!({ "message": "" }),
             NodeKind::Format => json!({ "template": "{p1} — {p2}", "p1": "", "p2": "", "p3": "" }),
             NodeKind::Wait => json!({ "seconds": "1" }),
-            NodeKind::HttpPost => json!({
-                "url": "",
-                "key1": "", "value1": "",
-                "key2": "", "value2": "",
-                "key3": "", "value3": "",
-            }),
+            NodeKind::HttpPost => json!({ "url": "", "headers": {}, "fields": {}, "file": "" }),
         }
     }
 }

@@ -25,6 +25,8 @@
   import Unplug from "@lucide/svelte/icons/unplug";
   import Upload from "@lucide/svelte/icons/upload";
   import ImageIcon from "@lucide/svelte/icons/image";
+  import FileIcon from "@lucide/svelte/icons/file";
+  import MapEditor from "$lib/components/map-editor.svelte";
 
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -39,7 +41,7 @@
   import StatusDot from "$lib/components/status-dot.svelte";
 
   // ---- types (the serialized core shapes) ----------------------------------
-  type PortType = "text" | "num" | "bool" | "image" | "recipient" | "exec";
+  type PortType = "text" | "num" | "bool" | "image" | "recipient" | "map" | "file" | "exec";
   type CatPort = { name: string; type: PortType; required: boolean };
   type CatKind = {
     slug: string;
@@ -303,6 +305,8 @@
     bool: "#fbbf24",
     image: "#f472b6",
     recipient: "#a78bfa",
+    map: "#2dd4bf",
+    file: "#fb923c",
     exec: "#f4f4f5",
   };
   // The colour of a port (used so a connection follows its data type).
@@ -601,6 +605,14 @@
       directory: false,
       filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] }],
     });
+    if (typeof picked === "string") {
+      await saveNodeConfig(n, { ...n.config, [key]: picked });
+    }
+  }
+  // Pick any file from disk for a file port (stored as a path literal).
+  async function pickFile(n: Node, key: string) {
+    if (isRunning) return;
+    const picked = await openFileDialog({ multiple: false, directory: false });
     if (typeof picked === "string") {
       await saveNodeConfig(n, { ...n.config, [key]: picked });
     }
@@ -1322,6 +1334,40 @@
                               {#each recipientOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
                             </Select.Content>
                           </Select.Root>
+                        {/if}
+                      {:else if port?.type === "map"}
+                        {#key selectedNode.id + ":" + key}
+                          <MapEditor
+                            value={(selectedNode.config[key] as Record<string, unknown>) ?? {}}
+                            disabled={isRunning}
+                            onchange={(obj) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: obj })}
+                          />
+                        {/key}
+                      {:else if port?.type === "file"}
+                        {@const file = String(selectedNode.config[key] ?? "")}
+                        {#if file}
+                          <div class="flex items-center gap-2 rounded-lg border border-border bg-card px-2 py-1.5">
+                            <FileIcon class="size-4 shrink-0 text-muted-foreground" />
+                            <span class="min-w-0 flex-1 truncate text-xs" title={file}>{fileName(file)}</span>
+                            <button
+                              class="interactive rounded-md border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground disabled:pointer-events-none disabled:opacity-50"
+                              disabled={isRunning}
+                              onclick={() => pickFile(selectedNode, key)}
+                            >
+                              Change
+                            </button>
+                            <button
+                              class="interactive rounded-md border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-destructive disabled:pointer-events-none disabled:opacity-50"
+                              disabled={isRunning}
+                              onclick={() => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: "" })}
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        {:else}
+                          <Button variant="outline" size="sm" class="h-8 w-full justify-start gap-2" disabled={isRunning} onclick={() => pickFile(selectedNode, key)}>
+                            <Upload class="size-3.5" /> Upload file…
+                          </Button>
                         {/if}
                       {:else if port?.type === "image"}
                         {@const img = String(selectedNode.config[key] ?? "")}
