@@ -176,6 +176,17 @@ impl NodeKind {
         }
     }
 
+    /// The module this node belongs to — used to group the editor's node palette.
+    pub fn category(self) -> &'static str {
+        match self {
+            NodeKind::GetLastAlert | NodeKind::CreateAlert | NodeKind::DeliverAlert => "Alerts",
+            NodeKind::GetRecipient | NodeKind::NotifyRecipient => "Recipients",
+            NodeKind::CameraSnapshot => "Cameras",
+            NodeKind::DescribeImage => "AI",
+            NodeKind::Format => "Text",
+        }
+    }
+
     pub fn input_ports(self) -> &'static [Port] {
         match self {
             NodeKind::GetLastAlert => &NO_PORTS,

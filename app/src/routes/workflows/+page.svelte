@@ -19,6 +19,7 @@
   import ArrowLeft from "@lucide/svelte/icons/arrow-left";
   import Terminal from "@lucide/svelte/icons/terminal";
   import X from "@lucide/svelte/icons/x";
+  import Search from "@lucide/svelte/icons/search";
 
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -38,6 +39,7 @@
   type CatKind = {
     slug: string;
     label: string;
+    category: string;
     inputs: CatPort[];
     outputs: CatPort[];
     default_config: Record<string, unknown>;
@@ -139,6 +141,36 @@
   const graph = $derived(graphs.find((g) => g.id === selectedGraphId) ?? null);
   const selectedNode = $derived(graph?.nodes.find((n) => n.id === selectedNodeId) ?? null);
   const kinds = $derived(Object.values(catalog));
+
+  // node palette: search + group by category
+  let nodeSearch = $state("");
+  const CATEGORY_ORDER = ["Cameras", "AI", "Alerts", "Recipients", "Text"];
+  const nodeCategories = $derived.by(() => {
+    const q = nodeSearch.trim().toLowerCase();
+    const matched = kinds.filter(
+      (k) =>
+        !q ||
+        k.label.toLowerCase().includes(q) ||
+        k.category.toLowerCase().includes(q) ||
+        k.slug.toLowerCase().includes(q),
+    );
+    const groups = new Map<string, CatKind[]>();
+    for (const k of matched) {
+      const list = groups.get(k.category) ?? [];
+      list.push(k);
+      groups.set(k.category, list);
+    }
+    const ordered: { name: string; kinds: CatKind[] }[] = [];
+    for (const name of CATEGORY_ORDER) {
+      const list = groups.get(name);
+      if (list) {
+        ordered.push({ name, kinds: list });
+        groups.delete(name);
+      }
+    }
+    for (const [name, list] of groups) ordered.push({ name, kinds: list });
+    return ordered;
+  });
 
   // run state for the open graph
   const act = $derived(selectedGraphId != null ? activity[selectedGraphId] : undefined);
@@ -878,7 +910,14 @@
           <!-- floating controls (over the canvas only) -->
           <!-- top-left: add node -->
           <div class="absolute left-3 top-3">
-            <Button class="shadow-lg" disabled={isRunning} onclick={() => (addOpen = true)}>
+            <Button
+              class="shadow-lg"
+              disabled={isRunning}
+              onclick={() => {
+                nodeSearch = "";
+                addOpen = true;
+              }}
+            >
               <Plus class="size-4" /> Add node
             </Button>
           </div>
@@ -1148,7 +1187,7 @@
       onclick={() => (addOpen = false)}
     ></button>
     <div
-      class="relative z-10 w-full max-w-lg rounded-2xl border border-border bg-popover/95 p-4 shadow-2xl duration-200 animate-in fade-in zoom-in-95"
+      class="relative z-10 flex max-h-[78vh] w-full max-w-md flex-col rounded-2xl border border-border bg-popover/95 p-4 shadow-2xl duration-200 animate-in fade-in zoom-in-95"
     >
       <div class="mb-3 flex items-center justify-between">
         <h3 class="flex items-center gap-2 text-sm font-semibold">
@@ -1158,20 +1197,44 @@
           <X class="size-4" />
         </Button>
       </div>
-      <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        {#each kinds as k (k.slug)}
-          <button
-            class="interactive group flex flex-col items-start gap-1 rounded-xl border border-border bg-card p-2.5 text-left"
-            onclick={() => addNodeKind(k.slug)}
-          >
-            <span class="flex items-center gap-2 text-sm font-medium">
-              <span class="size-1.5 rounded-full bg-primary transition-transform group-hover:scale-125"></span>
-              {k.label}
-            </span>
-            <span class="text-[10px] tabular-nums text-muted-foreground">
-              {k.inputs.length} in · {k.outputs.length} out
-            </span>
-          </button>
+      <div class="relative mb-3">
+        <Search class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <!-- svelte-ignore a11y_autofocus -->
+        <Input
+          autofocus
+          bind:value={nodeSearch}
+          placeholder="Search nodes…"
+          class="h-9 pl-8"
+        />
+      </div>
+      <div class="-mr-2 flex-1 space-y-4 overflow-y-auto pr-2">
+        {#each nodeCategories as cat (cat.name)}
+          <div>
+            <div class="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {cat.name}
+            </div>
+            <div class="space-y-1">
+              {#each cat.kinds as k (k.slug)}
+                <button
+                  class="interactive group flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2 text-left"
+                  onclick={() => addNodeKind(k.slug)}
+                >
+                  <span class="flex items-center gap-2 text-sm font-medium">
+                    <span class="size-1.5 rounded-full bg-primary transition-transform group-hover:scale-125"></span>
+                    {k.label}
+                  </span>
+                  <span class="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                    {k.inputs.length} in · {k.outputs.length} out
+                  </span>
+                </button>
+              {/each}
+            </div>
+          </div>
+        {:else}
+          <div class="flex flex-col items-center gap-2 py-10 text-center">
+            <Search class="size-6 text-muted-foreground/50" />
+            <p class="text-sm text-muted-foreground">No nodes match “{nodeSearch}”</p>
+          </div>
         {/each}
       </div>
     </div>

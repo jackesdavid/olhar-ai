@@ -1179,6 +1179,7 @@ fn node_catalog() -> serde_json::Value {
             serde_json::json!({
                 "slug": k.slug(),
                 "label": k.label(),
+                "category": k.category(),
                 "inputs": ports(k.input_ports()),
                 "outputs": ports(k.output_ports()),
                 "default_config": k.default_config(),
