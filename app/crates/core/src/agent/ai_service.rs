@@ -20,8 +20,18 @@ pub struct AiServiceConfig {
 impl AiServiceConfig {
     /// Read `AI_SERVICE_URL` (required) and `AI_SERVICE_KEY` (optional, blank for
     /// local dev) from the environment. `None` when no URL is configured.
+    ///
+    /// The URL is normalised to a `/runsync` endpoint: a bare host or RunPod base
+    /// (`http://localhost:8000`, `https://api.runpod.ai/v2/<id>`) gets `/runsync`
+    /// appended, while a URL already ending in `/runsync` or `/run` is left as-is.
     pub fn from_env() -> Option<Self> {
-        let url = std::env::var("AI_SERVICE_URL").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())?;
+        let raw = std::env::var("AI_SERVICE_URL").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())?;
+        let base = raw.trim_end_matches('/');
+        let url = if base.ends_with("/runsync") || base.ends_with("/run") {
+            base.to_string()
+        } else {
+            format!("{base}/runsync")
+        };
         let key = std::env::var("AI_SERVICE_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         Some(AiServiceConfig { url, key })
     }
