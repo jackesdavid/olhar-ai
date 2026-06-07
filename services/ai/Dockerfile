@@ -3,6 +3,9 @@
 # ultralytics pick up the GPU automatically.
 FROM python:3.11-slim
 
+# Link the GHCR package to the repo.
+LABEL org.opencontainers.image.source="https://github.com/jackesdavid/Sentinel"
+
 # OpenCV (pulled in by ultralytics) needs these shared libs at runtime.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
