@@ -45,8 +45,8 @@ pub fn image_b64(bytes: &[u8]) -> String {
 /// Call an op on the AI sidecar and return its `output` object.
 ///
 /// `input` should be a JSON object of the op's args (e.g. `{ "image_b64": ... }`);
-/// the `op` field is merged in here. A 30s+ timeout absorbs the occasional cold
-/// start (runsync completes synchronously for these short vision jobs).
+/// the `op` field is merged in here. If RunPod returns a queued/running job
+/// (a cold start outliving runsync's wait), we poll `/status` until it finishes.
 pub fn call(op: &str, mut input: Value) -> Result<Value, String> {
     let cfg = AiServiceConfig::from_env().ok_or(
         "AI service not configured — set AI_SERVICE_URL (and AI_SERVICE_KEY) in .env.",
@@ -72,19 +72,50 @@ pub fn call(op: &str, mut input: Value) -> Result<Value, String> {
     let v: Value =
         serde_json::from_str(&body).map_err(|e| format!("AI service returned invalid JSON: {e}"))?;
 
-    // RunPod runsync envelope: { status, output }. A FAILED/CANCELLED/TIMED_OUT
-    // status (or a missing output) is an error; local --rp_serve_api returns the
-    // same shape. IN_PROGRESS would mean the job outlived runsync's wait — not
-    // expected for these short jobs, so treat a missing output as an error.
-    if let Some(status) = v.get("status").and_then(Value::as_str) {
-        if status != "COMPLETED" {
-            let detail = v.get("error").and_then(Value::as_str).unwrap_or(status);
-            return Err(format!("AI service job {status}: {detail}"));
-        }
-    }
-    let out = v.get("output").cloned().unwrap_or(v);
+    let out = resolve_output(&cfg, &agent, v)?;
     if let Some(err) = out.get("error").and_then(Value::as_str) {
         return Err(format!("AI op '{op}': {err}"));
     }
     Ok(out)
+}
+
+/// Resolve the RunPod envelope to an `output`, polling `/status/<id>` while the job
+/// is `IN_QUEUE`/`IN_PROGRESS` (cold start). Local `--rp_serve_api` returns
+/// `COMPLETED` synchronously, so the loop runs zero times there.
+fn resolve_output(cfg: &AiServiceConfig, agent: &ureq::Agent, mut v: Value) -> Result<Value, String> {
+    // `<base>/runsync` → `<base>/status/<id>` for polling.
+    let base = cfg.url.trim_end_matches("/runsync").trim_end_matches("/run");
+    let mut tries = 0;
+    loop {
+        match v.get("status").and_then(Value::as_str).unwrap_or("COMPLETED") {
+            "COMPLETED" => break,
+            "IN_QUEUE" | "IN_PROGRESS" => {
+                let id = v
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or("AI service job is pending but returned no job id to poll")?;
+                if tries >= 90 {
+                    return Err("AI service timed out — job still pending (cold start?)".into());
+                }
+                tries += 1;
+                std::thread::sleep(Duration::from_secs(3));
+                let mut req = agent.get(&format!("{base}/status/{id}"));
+                if let Some(k) = &cfg.key {
+                    req = req.set("Authorization", &format!("Bearer {k}"));
+                }
+                let body = req
+                    .call()
+                    .map_err(|e| format!("AI service status poll failed: {e}"))?
+                    .into_string()
+                    .map_err(|e| format!("AI service: couldn't read status: {e}"))?;
+                v = serde_json::from_str(&body)
+                    .map_err(|e| format!("AI service returned invalid status JSON: {e}"))?;
+            }
+            other => {
+                let detail = v.get("error").and_then(Value::as_str).unwrap_or(other);
+                return Err(format!("AI service job {other}: {detail}"));
+            }
+        }
+    }
+    Ok(v.get("output").cloned().unwrap_or(v))
 }
