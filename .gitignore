@@ -1,6 +1,11 @@
 target/
 node_modules/
 
+# Python AI sidecar (services/ai) — local venv, caches, downloaded model weights
+.venv/
+__pycache__/
+*.pt
+
 # macOS
 .DS_Store
 

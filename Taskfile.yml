@@ -82,6 +82,22 @@ tasks:
         cfg="$HOME/Library/Application Support/com.jackesdavid.sentinel/go2rtc.yaml"
         if [ -f "$cfg" ]; then ./binaries/go2rtc -config "$cfg"; else ./binaries/go2rtc; fi
 
+  ai:
+    desc: Run the AI vision sidecar locally (services/ai) on :8000 — same contract as RunPod
+    dir: services/ai
+    cmds:
+      - |
+        set -e
+        command -v python3 >/dev/null 2>&1 || { echo "python3 not found — install Python 3.10+"; exit 1; }
+        if [ ! -d .venv ]; then
+          echo "First run: creating venv + installing deps (ultralytics/torch — a few minutes)…"
+          python3 -m venv .venv
+          ./.venv/bin/pip install --upgrade pip >/dev/null
+          ./.venv/bin/pip install -r requirements.txt
+        fi
+        echo "AI sidecar → http://localhost:8000  (set AI_SERVICE_URL=http://localhost:8000/runsync in .env, AI_SERVICE_KEY blank)"
+        exec ./.venv/bin/python handler.py --rp_serve_api
+
   doctor:
     desc: Check required system tools are installed (node, npm, cargo, ffmpeg)
     silent: true
