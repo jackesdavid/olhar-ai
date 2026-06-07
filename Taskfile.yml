@@ -112,6 +112,42 @@ tasks:
         echo "AI sidecar → http://localhost:8000  (set AI_SERVICE_URL=http://localhost:8000/runsync in .env, AI_SERVICE_KEY blank)"
         exec ./.venv/bin/python handler.py --rp_serve_api
 
+  ai-build:
+    desc: Build the AI sidecar Docker image for RunPod (linux/amd64). Set AI_IMAGE=<registry>/<repo>:<tag>
+    dir: services/ai
+    requires:
+      vars: [AI_IMAGE]
+    cmds:
+      - cmd: command -v docker >/dev/null 2>&1 || { echo "docker not found — install Docker Desktop"; exit 1; }
+        silent: true
+      # RunPod runs amd64; buildx --load puts the single-arch image in the local daemon.
+      - docker buildx build --platform linux/amd64 -t {{.AI_IMAGE}} --load .
+
+  ai-push:
+    desc: Push the AI sidecar image to its registry (run `docker login` first)
+    requires:
+      vars: [AI_IMAGE]
+    cmds:
+      - docker push {{.AI_IMAGE}}
+
+  ai-deploy:
+    desc: Build + push the AI sidecar image to RunPod's registry (set AI_IMAGE, `docker login`)
+    requires:
+      vars: [AI_IMAGE]
+    cmds:
+      - task: ai-build
+      - task: ai-push
+      - cmd: |
+          echo ""
+          echo "✅ Pushed {{.AI_IMAGE}}"
+          echo "Now in RunPod → Serverless:"
+          echo "  • First time: New Endpoint → container image {{.AI_IMAGE}}, flex workers (min 0),"
+          echo "    smallest GPU (or a CPU endpoint). Copy the Endpoint ID + an API key into .env:"
+          echo "      AI_SERVICE_URL=https://api.runpod.ai/v2/<endpoint_id>/runsync"
+          echo "      AI_SERVICE_KEY=<runpod_api_key>"
+          echo "  • Updates: bump the image tag (or release a new worker) so the endpoint pulls it."
+        silent: true
+
   doctor:
     desc: Check required system tools are installed (node, npm, cargo, ffmpeg)
     silent: true

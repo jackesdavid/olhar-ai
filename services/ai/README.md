@@ -49,12 +49,12 @@ curl -s localhost:8000/runsync -H 'content-type: application/json' \
 
 ## Deploy to RunPod Serverless
 
-1. **Build & push** the image to a registry (Docker Hub / GHCR):
+1. **Build & push** the image (linux/amd64) to a registry (Docker Hub / GHCR).
+   Set `AI_IMAGE` (in `.env` or inline), `docker login`, then:
    ```bash
-   docker build -t <user>/sentinel-ai:latest services/ai
-   docker push <user>/sentinel-ai:latest
+   AI_IMAGE=<user>/sentinel-ai:latest task ai-deploy   # = ai-build + ai-push
    ```
-   (Build on an `amd64` host, or `docker buildx build --platform linux/amd64`.)
+   (Or the steps by hand: `task ai-build`, `task ai-push`.)
 2. **RunPod → Serverless → New Endpoint**: set the container image to
    `<user>/sentinel-ai:latest`, pick the smallest GPU (or a CPU endpoint), leave
    workers **flex / scale‑to‑zero** (min 0). Container start command stays the
