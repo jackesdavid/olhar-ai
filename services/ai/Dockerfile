@@ -10,7 +10,15 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# Be patient/resilient on big wheel downloads.
+ENV PIP_DEFAULT_TIMEOUT=120 PIP_RETRIES=5
+
 COPY requirements.txt .
+# Install CPU-only torch FIRST so pip doesn't drag in the default CUDA build
+# (~2.5 GB of nvidia_* wheels) — keeps the serverless image small and the build
+# reliable. YOLOv8n runs fine on CPU. (For a GPU endpoint, base this image on
+# `runpod/pytorch:*` which already ships a CUDA torch, and drop this line.)
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Pre-download the YOLO weights into the image so workers don't fetch them on
