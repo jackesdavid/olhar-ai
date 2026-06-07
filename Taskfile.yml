@@ -88,10 +88,24 @@ tasks:
     cmds:
       - |
         set -e
-        command -v python3 >/dev/null 2>&1 || { echo "python3 not found — install Python 3.10+"; exit 1; }
-        if [ ! -d .venv ]; then
-          echo "First run: creating venv + installing deps (ultralytics/torch — a few minutes)…"
-          python3 -m venv .venv
+        # torch/numpy/ultralytics ship prebuilt wheels only for Python 3.10–3.12.
+        # Newer interpreters (3.13/3.14) fall back to compiling from source, which
+        # fails — so pick a supported one for the venv.
+        PY=""
+        for c in python3.12 python3.11 python3.10; do
+          command -v "$c" >/dev/null 2>&1 && { PY="$c"; break; }
+        done
+        if [ -z "$PY" ]; then
+          echo "Need Python 3.10–3.12 (3.13/3.14 have no prebuilt wheels for torch/numpy)."
+          echo "Install one, e.g.:  brew install python@3.12"
+          exit 1
+        fi
+        # (Re)create the venv if missing or unhealthy (e.g. a half-built one from a
+        # newer Python). Healthy == the deps import cleanly.
+        if [ ! -x .venv/bin/python ] || ! ./.venv/bin/python -c "import runpod, ultralytics, PIL" >/dev/null 2>&1; then
+          echo "Setting up venv with $PY + installing deps (ultralytics/torch — a few minutes)…"
+          rm -rf .venv
+          "$PY" -m venv .venv
           ./.venv/bin/pip install --upgrade pip >/dev/null
           ./.venv/bin/pip install -r requirements.txt
         fi
