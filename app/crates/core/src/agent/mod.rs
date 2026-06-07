@@ -9,6 +9,7 @@
 //!
 //! Rust has no official Anthropic SDK, so this uses raw HTTP (ureq) — the
 //! supported approach for unsupported-SDK languages.
+pub mod ai_service;
 pub mod client;
 pub mod domain;
 pub mod tools;

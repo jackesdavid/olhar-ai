@@ -80,6 +80,8 @@ pub enum NodeKind {
     If,
     /// Vision: compare two frames and report whether/how much they differ.
     MotionDetection,
+    /// Vision: detect whether a person is present in an image (via the AI sidecar).
+    PersonDetection,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -169,6 +171,15 @@ const MOTION_OUT: [Port; 3] = [
     p("ok", PortType::Bool, false),
 ];
 
+// Person detection: an image in → whether a person is present (via the AI sidecar).
+const PERSON_DETECTION_IN: [Port; 1] = [p("image", PortType::Image, true)];
+const PERSON_DETECTION_OUT: [Port; 4] = [
+    p("person", PortType::Bool, false),
+    p("count", PortType::Num, false),
+    p("confidence", PortType::Num, false), // percent 0..100
+    p("ok", PortType::Bool, false),
+];
+
 const NO_PORTS: [Port; 0] = [];
 
 // Universal control-flow ports — every node has an `exec_in` and, by default, an
@@ -182,7 +193,7 @@ const EXEC_OUT_DEFAULT: [Port; 1] = [EXEC_OUT];
 const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 12] = [
+    pub const ALL: [NodeKind; 13] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -195,6 +206,7 @@ impl NodeKind {
         NodeKind::HttpPost,
         NodeKind::If,
         NodeKind::MotionDetection,
+        NodeKind::PersonDetection,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -213,6 +225,7 @@ impl NodeKind {
             NodeKind::HttpPost => "http_post",
             NodeKind::If => "if",
             NodeKind::MotionDetection => "motion_detection",
+            NodeKind::PersonDetection => "person_detection",
         }
     }
 
@@ -234,6 +247,7 @@ impl NodeKind {
             NodeKind::HttpPost => "HTTP post",
             NodeKind::If => "If",
             NodeKind::MotionDetection => "Motion detection",
+            NodeKind::PersonDetection => "Person detection",
         }
     }
 
@@ -247,7 +261,7 @@ impl NodeKind {
             NodeKind::Format => "Text",
             NodeKind::Wait | NodeKind::If => "Flow",
             NodeKind::HttpPost => "Network",
-            NodeKind::MotionDetection => "Vision",
+            NodeKind::MotionDetection | NodeKind::PersonDetection => "Vision",
         }
     }
 
@@ -274,6 +288,7 @@ impl NodeKind {
             NodeKind::HttpPost => &HTTP_POST_IN,
             NodeKind::If => &IF_IN,
             NodeKind::MotionDetection => &MOTION_IN,
+            NodeKind::PersonDetection => &PERSON_DETECTION_IN,
         }
     }
 
@@ -291,6 +306,7 @@ impl NodeKind {
             NodeKind::HttpPost => &HTTP_POST_OUT,
             NodeKind::If => &NO_PORTS, // outputs are exec branches (true/false)
             NodeKind::MotionDetection => &MOTION_OUT,
+            NodeKind::PersonDetection => &PERSON_DETECTION_OUT,
         }
     }
 
@@ -325,6 +341,7 @@ impl NodeKind {
             NodeKind::HttpPost => json!({ "url": "", "headers": {}, "fields": {}, "file": "" }),
             NodeKind::If => json!({}),
             NodeKind::MotionDetection => json!({ "sensitivity": "2", "pixel_threshold": "25" }),
+            NodeKind::PersonDetection => json!({}),
         }
     }
 }

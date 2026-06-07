@@ -70,6 +70,7 @@ impl ToolRegistry {
                 list_devices(),
                 get_camera_snapshot(),
                 describe_camera(),
+                count_people(),
                 show_live_feed(),
                 delete_device(),
                 delete_device_by_index(),
@@ -178,6 +179,44 @@ fn describe_camera() -> ToolSpec {
             }
             let description = super::vision::describe_image(&bytes, &device.name)?;
             Ok(format!("Camera '{}' shows: {description}", device.name))
+        },
+    }
+}
+
+fn count_people() -> ToolSpec {
+    ToolSpec {
+        name: "count_people",
+        description: "Capture a still from a camera and detect whether any people are present, \
+            and how many, using the local AI vision service. Use this when the operator asks if \
+            someone/anyone is on a camera, or to count people at a location. Give the camera's \
+            name, or \"first\". The camera must have saved credentials, and the AI service must be \
+            configured (AI_SERVICE_URL). The snapshot is also shown to the operator.",
+        input_schema: json!({
+            "type": "object",
+            "properties": { "camera": { "type": "string", "description": "camera name, or \"first\"" } },
+            "required": ["camera"]
+        }),
+        run: |input, ctx| {
+            let camera = input.get("camera").and_then(Value::as_str).unwrap_or("first");
+            let device = {
+                let devices = ctx.devices.lock().unwrap();
+                let idx = actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
+                devices[idx].clone()
+            };
+            let bytes = actions::capture_snapshot_bytes(&device)?;
+            if let Ok(jpeg) = to_jpeg(&bytes) {
+                let _ = ctx.ui_tx.send(ToolUiEvent::Snapshot { camera: device.name.clone(), jpeg });
+            }
+            let out = super::ai_service::call(
+                "detect_person",
+                json!({ "image_b64": super::ai_service::image_b64(&bytes) }),
+            )?;
+            let count = out.get("count").and_then(Value::as_i64).unwrap_or(0);
+            if count > 0 {
+                Ok(format!("Camera '{}': {count} person(s) detected.", device.name))
+            } else {
+                Ok(format!("Camera '{}': no people detected.", device.name))
+            }
         },
     }
 }

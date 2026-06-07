@@ -200,7 +200,30 @@ pub fn run_node(
         NodeKind::HttpPost => run_http_post(config, inputs),
         NodeKind::If => run_if(inputs),
         NodeKind::MotionDetection => run_motion_detection(config, inputs),
+        NodeKind::PersonDetection => run_person_detection(inputs),
     }
+}
+
+/// Detect whether a person is present in the image via the AI sidecar.
+/// Outputs `person` (Bool), `count` (Num), `confidence` (Num %, 0..100), `ok`.
+fn run_person_detection(inputs: &PortValues) -> Result<PortValues, String> {
+    let bytes = inputs
+        .get("image")
+        .and_then(PortValue::as_image)
+        .ok_or("missing required input 'image'")?;
+    let out = crate::agent::ai_service::call(
+        "detect_person",
+        serde_json::json!({ "image_b64": crate::agent::ai_service::image_b64(bytes) }),
+    )?;
+    let person = out.get("person").and_then(Value::as_bool).unwrap_or(false);
+    let count = out.get("count").and_then(Value::as_i64).unwrap_or(0);
+    let confidence = out.get("confidence").and_then(Value::as_f64).unwrap_or(0.0);
+    let mut o = PortValues::new();
+    o.insert("person".into(), PortValue::Bool(person));
+    o.insert("count".into(), PortValue::Num(count));
+    o.insert("confidence".into(), PortValue::Num((confidence * 100.0).round() as i64));
+    o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
 }
 
 /// A short, human-readable line describing what a node did this run — shown in the
@@ -257,6 +280,13 @@ pub fn debug_summary(
                 sens,
                 if flag("moved") { "moved" } else { "still" }
             )
+        }
+        NodeKind::PersonDetection => {
+            if flag("person") {
+                format!("{} person(s) ({}% confidence)", num("count").unwrap_or(0), num("confidence").unwrap_or(0))
+            } else {
+                "no person detected".into()
+            }
         }
     }
 }
@@ -639,6 +669,13 @@ mod tests {
         let diff = run(&black, &white);
         assert_eq!(diff["moved"].as_bool(), Some(true));
         assert!(diff["score"].as_num().unwrap() > 90);
+    }
+
+    #[test]
+    fn person_detection_requires_an_image() {
+        let err = run_node(NodeKind::PersonDetection, &json!({}), &PortValues::new(), &test_ctx())
+            .unwrap_err();
+        assert!(err.contains("missing required input 'image'"), "got: {err}");
     }
 
     #[test]
