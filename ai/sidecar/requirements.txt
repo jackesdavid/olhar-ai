@@ -1,0 +1,14 @@
+runpod>=1.6
+ultralytics>=8.3
+pillow>=10
+# torch wheels are built against numpy 1.x; numpy 2 breaks them ("Numpy is not
+# available"). Pin <2 until we move to a torch built for numpy 2.
+numpy<2
+# Newer opencv-python demands numpy>=2; keep it on a numpy 1.x-compatible release.
+opencv-python<4.11
+# Face pipeline: SCRFD (detect) + ArcFace (512-d embed), the `buffalo_l` model pack.
+insightface>=0.7.3
+# GPU ONNX runtime for InsightFace. Keep its CUDA major aligned with the Docker
+# base image's CUDA (see Dockerfile). 1.17+ targets CUDA 12.x on PyPI.
+onnxruntime-gpu>=1.17
+# torch/torchvision intentionally omitted — provided (with CUDA) by the base image.
