@@ -17,6 +17,8 @@
   import Maximize from "@lucide/svelte/icons/maximize";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
+  import PanelRightOpen from "@lucide/svelte/icons/panel-right-open";
+  import PanelRightClose from "@lucide/svelte/icons/panel-right-close";
   import ArrowLeft from "@lucide/svelte/icons/arrow-left";
   import Terminal from "@lucide/svelte/icons/terminal";
   import X from "@lucide/svelte/icons/x";
@@ -27,6 +29,7 @@
   import ImageIcon from "@lucide/svelte/icons/image";
   import FileIcon from "@lucide/svelte/icons/file";
   import Bug from "@lucide/svelte/icons/bug";
+  import Printer from "@lucide/svelte/icons/printer";
   import DictionaryEditor from "$lib/components/dictionary-editor.svelte";
 
   import { Button } from "$lib/components/ui/button";
@@ -71,13 +74,24 @@
     edges: Edge[];
     viewport?: { x: number; y: number; zoom: number };
   };
-  type LogLine = { time: string; name: string; ok: boolean; summary: string; debug?: boolean };
+  type LogLine = {
+    time: string;
+    name: string;
+    ok: boolean;
+    summary: string;
+    debug?: boolean;
+    level?: string;
+    ms?: number; // per-node execution time (debug logs only)
+  };
 
   // ---- layout constants ----------------------------------------------------
   const NODE_W = 176;
   const HEAD_H = 26;
   const ROW_H = 22;
   const PAD = 8;
+  // ShowImage preview: a 16:9 thumbnail tucked below the node's ports.
+  const PREVIEW_W = NODE_W - 16;
+  const PREVIEW_H = Math.round((PREVIEW_W * 9) / 16);
 
   // ---- state ---------------------------------------------------------------
   let graphs = $state<Graph[]>([]);
@@ -92,11 +106,66 @@
   let consoleOpen = $state(false);
   let logs = $state<LogLine[]>([]);
 
+  // On-screen Print overlay (Unreal-style): transient text flashed over the canvas.
+  type ScreenMsg = { id: number; message: string; level: string };
+  let screenMsgs = $state<ScreenMsg[]>([]);
+  let msgSeq = 0;
+  const ON_SCREEN_MS = 4000;
+  const screenTimers = new Set<ReturnType<typeof setTimeout>>();
+  function flashOnScreen(message: string, level: string) {
+    const id = ++msgSeq;
+    screenMsgs = [{ id, message, level }, ...screenMsgs];
+    const t = setTimeout(() => {
+      screenMsgs = screenMsgs.filter((m) => m.id !== id);
+      screenTimers.delete(t);
+    }, ON_SCREEN_MS);
+    screenTimers.add(t);
+  }
+  // Colour classes for a severity level — kept out of the markup (house style).
+  function levelText(level?: string): string {
+    if (level === "error") return "text-destructive";
+    if (level === "warn") return "text-amber-500";
+    if (level === "debug") return "text-muted-foreground";
+    return "text-primary"; // info / default
+  }
+  function logLineClass(log: LogLine): string {
+    if (log.level) return levelText(log.level);
+    if (log.debug) return "text-muted-foreground";
+    return log.ok ? "text-primary" : "text-destructive";
+  }
+  function screenMsgClass(level: string): string {
+    if (level === "error") return "border-destructive/40 text-destructive";
+    if (level === "warn") return "border-amber-500/40 text-amber-500";
+    if (level === "debug") return "border-border text-muted-foreground";
+    return "border-primary/40 text-primary"; // info / default
+  }
+
+  // ShowImage debug node: the latest frame that flowed into each node, by node id.
+  // Persisted for the session so the preview stays inside the node after a run; an
+  // expand button opens it larger in a modal.
+  type NodeImage = { src: string; label: string };
+  let nodeImages = $state<Record<number, NodeImage>>({});
+  let imageModalOpen = $state(false);
+  let imageModal = $state<NodeImage | null>(null);
+  function openImageModal(img: NodeImage) {
+    imageModal = img;
+    imageModalOpen = true;
+  }
+
   // resizable right column (config/property panel)
   const PANEL_MIN = 240;
   const PANEL_MAX = 560;
   let panelW = $state(300);
+  let panelOpen = $state(true);
   let resizing = $state(false);
+  function togglePanel() {
+    panelOpen = !panelOpen;
+    try {
+      localStorage.setItem("wf.panelOpen", String(panelOpen));
+    } catch {
+      /* ignore */
+    }
+  }
   function startResize(e: PointerEvent) {
     resizing = true;
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
@@ -113,6 +182,36 @@
     (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
     try {
       localStorage.setItem("wf.panelW", String(panelW));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // resizable console (bottom row) — drag the splitter above it to grow/shrink
+  const CONSOLE_MIN = 96;
+  const CONSOLE_MAX = 720;
+  let consoleH = $state(280);
+  let resizingConsole = $state(false);
+  let consoleDragStartY = 0;
+  let consoleDragStartH = 0;
+  function startConsoleResize(e: PointerEvent) {
+    resizingConsole = true;
+    consoleDragStartY = e.clientY;
+    consoleDragStartH = consoleH;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }
+  function onConsoleResizeMove(e: PointerEvent) {
+    if (!resizingConsole) return;
+    // dragging the splitter up grows the console (it sits on the console's top edge)
+    const h = consoleDragStartH + (consoleDragStartY - e.clientY);
+    consoleH = Math.max(CONSOLE_MIN, Math.min(CONSOLE_MAX, h));
+  }
+  function endConsoleResize(e: PointerEvent) {
+    if (!resizingConsole) return;
+    resizingConsole = false;
+    (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    try {
+      localStorage.setItem("wf.consoleH", String(consoleH));
     } catch {
       /* ignore */
     }
@@ -362,12 +461,19 @@
     return (k?.outputs ?? []).filter((p) => p.type === "exec");
   }
 
-  function nodeHeight(n: Node): number {
+  // Y where a node's body ends and the optional ShowImage preview begins.
+  function portsBottom(n: Node): number {
     const k = catalog[n.kind];
-    // Extra exec outputs (beyond the first, which sits on the header) reserve rows.
     const execRows = Math.max(0, execOutPorts(k).length - 1);
     const rows = Math.max(dataPorts(k, "in").length, dataPorts(k, "out").length, execRows + 1, 1);
-    return HEAD_H + rows * ROW_H + PAD;
+    return HEAD_H + rows * ROW_H;
+  }
+  // A ShowImage node grows to fit its preview thumbnail once a frame has arrived.
+  function hasPreview(n: Node): boolean {
+    return n.kind === "show_image" && !!nodeImages[n.id];
+  }
+  function nodeHeight(n: Node): number {
+    return portsBottom(n) + PAD + (hasPreview(n) ? PREVIEW_H + PAD : 0);
   }
   // Local Y of the i-th data port within a node (the <g> is translated to n.x/n.y).
   function dataPortY(i: number) {
@@ -426,6 +532,7 @@
     selectedGraphId = id;
     selectedNodeId = null;
     pending = null;
+    nodeImages = {}; // node ids restart per graph — drop the previous graph's previews
     const v = graphs.find((x) => x.id === id)?.viewport;
     pan = v ? { x: v.x, y: v.y } : { x: 40, y: 40 };
     zoom = v?.zoom ?? 1;
@@ -464,6 +571,10 @@
   onMount(() => {
     const savedW = Number(localStorage.getItem("wf.panelW"));
     if (savedW >= PANEL_MIN && savedW <= PANEL_MAX) panelW = savedW;
+    const savedOpen = localStorage.getItem("wf.panelOpen");
+    if (savedOpen != null) panelOpen = savedOpen === "true";
+    const savedConsoleH = Number(localStorage.getItem("wf.consoleH"));
+    if (savedConsoleH >= CONSOLE_MIN && savedConsoleH <= CONSOLE_MAX) consoleH = savedConsoleH;
     (async () => {
       try {
         const cat = await invoke<{ kinds: CatKind[] }>("node_catalog");
@@ -493,15 +604,38 @@
       if (e.payload.graph === selectedGraphId) markLive(e.payload.node);
     });
     // Per-node debug logs (only emitted when the graph's debug flag is on).
-    const unLog = listen<{ graph: number; node: number; label: string; message: string }>(
+    const unLog = listen<{ graph: number; node: number; label: string; message: string; ms: number }>(
       "workflow-log",
       (e) => {
         if (e.payload.graph !== selectedGraphId) return; // only the open graph
-        const { label, message } = e.payload;
+        const { label, message, ms } = e.payload;
         logs = [
-          { time: new Date().toLocaleTimeString(), name: label, ok: true, summary: message, debug: true },
+          { time: new Date().toLocaleTimeString(), name: label, ok: true, summary: message, debug: true, ms },
           ...logs,
         ].slice(0, 200);
+      },
+    );
+    // Print node: always echo to the Console (independent of the debug flag) and,
+    // when on_screen, flash it over the canvas. Not graph-filtered — the payload
+    // carries no graph id (see plan); the editor shows one graph at a time.
+    const unPrint = listen<{ message: string; level: string; on_screen: boolean }>(
+      "workflow-print",
+      (e) => {
+        const { message, level, on_screen } = e.payload;
+        logs = [
+          { time: new Date().toLocaleTimeString(), name: "Print", ok: true, summary: message, level },
+          ...logs,
+        ].slice(0, 200);
+        if (on_screen) flashOnScreen(message, level);
+      },
+    );
+    // Show image node: stash the frame inside that node (debug-only, by node id).
+    const unImage = listen<{ graph: number; node: number; label: string; data: string }>(
+      "workflow-image",
+      (e) => {
+        const { graph: gid, node, label, data } = e.payload;
+        if (gid !== selectedGraphId) return; // node ids are per-graph — only the open one
+        nodeImages = { ...nodeImages, [node]: { src: `data:image/jpeg;base64,${data}`, label } };
       },
     );
     // Poll run activity (running graphs + status) for the lock + list badges.
@@ -517,6 +651,10 @@
       un.then((u) => u());
       unNode.then((u) => u());
       unLog.then((u) => u());
+      unPrint.then((u) => u());
+      unImage.then((u) => u());
+      screenTimers.forEach((t) => clearTimeout(t));
+      screenTimers.clear();
       clearInterval(poll);
     };
   });
@@ -664,6 +802,10 @@
     if (!graph) return;
     await invoke("remove_node", { graphId: graph.id, nodeId: n.id });
     if (selectedNodeId === n.id) selectedNodeId = null;
+    if (nodeImages[n.id]) {
+      const { [n.id]: _drop, ...rest } = nodeImages;
+      nodeImages = rest;
+    }
     await reload();
   }
   async function removeEdge(idx: number) {
@@ -1196,6 +1338,68 @@
                       {p.name}
                     </text>
                   {/each}
+
+                  <!-- ShowImage preview: the frame that passed through, drawn as a
+                       native SVG <image> so it honours this node's transform (a
+                       <foreignObject> would ignore it in WebKit and float to 0,0).
+                       Drag the thumbnail to move the node; the corner button enlarges. -->
+                  {#if hasPreview(n)}
+                    {@const pv = nodeImages[n.id]}
+                    {@const ix = 8}
+                    {@const iy = portsBottom(n) + 2}
+                    <clipPath id="preview-clip-{n.id}">
+                      <rect x={ix} y={iy} width={PREVIEW_W} height={PREVIEW_H} rx="6" />
+                    </clipPath>
+                    <image
+                      href={pv.src}
+                      x={ix}
+                      y={iy}
+                      width={PREVIEW_W}
+                      height={PREVIEW_H}
+                      preserveAspectRatio="xMidYMid slice"
+                      clip-path="url(#preview-clip-{n.id})"
+                      class="cursor-move"
+                      onpointerdown={(ev) => startDrag(ev, n)}
+                      role="presentation"
+                    />
+                    <rect
+                      x={ix}
+                      y={iy}
+                      width={PREVIEW_W}
+                      height={PREVIEW_H}
+                      rx="6"
+                      fill="none"
+                      class="pointer-events-none stroke-border"
+                      stroke-width="1"
+                    />
+                    <!-- enlarge button (top-right corner of the thumbnail) -->
+                    <g
+                      transform="translate({ix + PREVIEW_W - 22} {iy + 4})"
+                      class="cursor-pointer"
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        openImageModal(pv);
+                      }}
+                      role="presentation"
+                    >
+                      <title>Open larger</title>
+                      <rect width="18" height="18" rx="4" class="fill-background stroke-border" stroke-width="1" />
+                      <g
+                        transform="translate(3 3) scale(0.5)"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        class="pointer-events-none text-muted-foreground"
+                      >
+                        <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+                        <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+                        <path d="M3 16v3a2 2 0 0 0 2 2h3" />
+                        <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+                      </g>
+                    </g>
+                  {/if}
                 </g>
               {/each}
 
@@ -1233,6 +1437,20 @@
               <Plus class="size-4" /> Add node
             </Button>
           </div>
+
+          <!-- on-screen Print messages (Unreal-style debug text, newest on top) -->
+          {#if screenMsgs.length}
+            <div class="pointer-events-none absolute left-3 top-16 z-10 flex max-w-sm flex-col gap-1.5">
+              {#each screenMsgs as msg (msg.id)}
+                <div
+                  class="flex items-center gap-2 rounded-lg border bg-background/85 px-3 py-1.5 font-mono text-xs shadow-lg backdrop-blur duration-200 animate-in fade-in slide-in-from-left-2 {screenMsgClass(msg.level)}"
+                >
+                  <Printer class="size-3 shrink-0" />
+                  <span class="truncate">{msg.message}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
 
           <!-- top-center: transport -->
           <div
@@ -1281,6 +1499,17 @@
           </div>
         </div>
 
+        {#if !panelOpen}
+          <!-- collapsed: thin rail to reopen the panel -->
+          <button
+            class="interactive group flex w-7 shrink-0 items-center justify-center rounded-xl border border-border bg-card/40 hover:bg-muted/40"
+            title="Show panel"
+            aria-label="Show panel"
+            onclick={togglePanel}
+          >
+            <PanelRightOpen class="size-4 text-muted-foreground group-hover:text-foreground" />
+          </button>
+        {:else}
         <!-- splitter: drag to resize the side panel -->
         <div
           class="group relative flex w-2 shrink-0 cursor-col-resize items-center justify-center"
@@ -1308,9 +1537,14 @@
           <div class="space-y-3 rounded-xl border border-border bg-card/40 p-3">
             <div class="flex items-center justify-between gap-2">
               <span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Configuration</span>
-              <Button variant="ghost" size="icon" class="size-7" title="Delete workflow" onclick={() => openDelete(graph)}>
-                <Trash2 class="size-3.5" />
-              </Button>
+              <div class="flex items-center gap-1">
+                <Button variant="ghost" size="icon" class="size-7" title="Delete workflow" onclick={() => openDelete(graph)}>
+                  <Trash2 class="size-3.5" />
+                </Button>
+                <Button variant="ghost" size="icon" class="size-7" title="Hide panel" onclick={togglePanel}>
+                  <PanelRightClose class="size-3.5" />
+                </Button>
+              </div>
             </div>
 
             <!-- Name -->
@@ -1586,7 +1820,28 @@
             </div>
           {/if}
         </div>
+        {/if}
       </div>
+
+      {#if consoleOpen}
+        <!-- splitter: drag to resize the console height -->
+        <div
+          class="group relative flex h-2 shrink-0 cursor-row-resize items-center justify-center"
+          onpointerdown={startConsoleResize}
+          onpointermove={onConsoleResizeMove}
+          onpointerup={endConsoleResize}
+          onpointercancel={endConsoleResize}
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize console"
+        >
+          <div
+            class="h-1 w-10 rounded-full transition-colors {resizingConsole
+              ? 'bg-primary'
+              : 'bg-border group-hover:bg-primary/60'}"
+          ></div>
+        </div>
+      {/if}
 
       <!-- row 2: console (collapsed by default) -->
       <div class="shrink-0 overflow-hidden rounded-xl border border-border bg-card/40">
@@ -1603,20 +1858,26 @@
           <ChevronDown class="size-4 text-muted-foreground transition-transform {consoleOpen ? '' : '-rotate-90'}" />
         </button>
         {#if consoleOpen}
-          <div class="h-[28vh] overflow-y-auto border-t border-border p-3 font-mono text-xs">
+          <div class="overflow-y-auto border-t border-border p-4 font-mono text-sm" style="height: {consoleH}px">
             {#if logs.length === 0}
               <p class="text-muted-foreground">No runs yet — run the workflow to see node output here.</p>
             {:else}
-              <div class="space-y-0.5">
+              <div class="space-y-1">
                 {#each logs as log, i (i)}
                   <div class="flex items-center gap-2">
                     <span class="shrink-0 text-muted-foreground">{log.time}</span>
-                    {#if log.debug}
+                    {#if log.level}
+                      <Printer class="size-3 shrink-0 {logLineClass(log)}" />
+                    {:else if log.debug}
                       <Bug class="size-3 shrink-0 text-muted-foreground/70" />
-                      <span class="shrink-0 text-muted-foreground">{log.name}</span>
                     {:else}
                       <StatusDot state={log.ok ? "online" : "danger"} />
-                      <span class="shrink-0 {log.ok ? 'text-primary' : 'text-destructive'}">{log.name}</span>
+                    {/if}
+                    <span class="w-32 shrink-0 truncate {logLineClass(log)}">{log.name}</span>
+                    {#if log.ms !== undefined}
+                      <span class="w-16 shrink-0 text-right tabular-nums text-muted-foreground/70">{log.ms} ms</span>
+                    {:else}
+                      <span class="w-16 shrink-0"></span>
                     {/if}
                     <span class="truncate text-muted-foreground">{log.summary}</span>
                   </div>
@@ -1652,6 +1913,25 @@
       <Button variant="outline" onclick={() => (deleteOpen = false)}>Cancel</Button>
       <Button variant="destructive" onclick={confirmDelete}>Delete</Button>
     </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- ShowImage: the node's frame, enlarged -->
+<Dialog.Root bind:open={imageModalOpen}>
+  <Dialog.Content class="max-w-[90vw] sm:max-w-[80vw] lg:max-w-5xl">
+    <Dialog.Header>
+      <Dialog.Title class="flex items-center gap-2">
+        <ImageIcon class="size-4 text-muted-foreground" />
+        {imageModal?.label || "Show image"}
+      </Dialog.Title>
+    </Dialog.Header>
+    {#if imageModal}
+      <img
+        src={imageModal.src}
+        alt={imageModal.label || "frame"}
+        class="max-h-[80vh] w-full rounded-lg border border-border object-contain"
+      />
+    {/if}
   </Dialog.Content>
 </Dialog.Root>
 

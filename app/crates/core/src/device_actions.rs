@@ -85,10 +85,17 @@ pub fn resolve_device(devices: &[Device], query: &str) -> Result<usize, ResolveE
     }
 }
 
-/// Capture a snapshot from a camera and return the raw encoded JPEG bytes (over
-/// HTTP, or an MJPEG frame from the RTSP/ffmpeg fallback). Requires saved
-/// credentials. The web app base64-encodes these bytes for an `<img>` data URL.
+/// Capture a snapshot from a camera and return the raw encoded JPEG bytes. The web
+/// app base64-encodes these for an `<img>` data URL.
+///
+/// Fast path: grab the current frame from the shared go2rtc feed (one persistent
+/// RTSP connection per camera, already used by the Live page) — ~tens of ms when
+/// warm. Falls back to a from-scratch ONVIF/ffmpeg capture (slow but always works)
+/// when the sidecar isn't running or the stream isn't ready.
 pub fn capture_snapshot_bytes(d: &Device) -> Result<Vec<u8>, String> {
+    if let Ok(bytes) = crate::go2rtc::frame(&d.ip) {
+        return Ok(bytes);
+    }
     if !d.has_credentials() {
         return Err(format!("Camera '{}' has no saved credentials.", d.name));
     }

@@ -17,3 +17,21 @@ chrono = "0.4"
 # Agent vision + chat snapshots: decode/re-encode camera frames to bounded JPEG
 # (copied from the ratatui src/agent). JPEG-only to keep the build lean.
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+# Native person detection: YOLOX-Nano (Apache-2.0) run in-process with `tract`, a
+# pure-Rust ONNX engine — no native ONNX Runtime to compile or bundle, builds the
+# same on every target (ort ships no prebuilt ORT for x86_64 macOS). We use tract's
+# re-exported `tract_ndarray` to build the input tensor so the versions can't drift.
+tract-onnx = "0.23"
+# Postgres persistence (devices module). We use runtime queries (`query_as` + FromRow),
+# NOT the compile-checked `query!` macro, so the build needs no live DB / DATABASE_URL.
+# rustls TLS keeps the build pure-Rust (no OpenSSL); the Db wraps its own tokio runtime
+# so the otherwise-synchronous command/tool code can call sqlx without going async.
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "macros",
+    "migrate",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+log = "0.4"

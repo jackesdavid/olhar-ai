@@ -1,9 +1,0 @@
-runpod>=1.6
-ultralytics>=8.3
-pillow>=10
-# torch wheels (2.2.x) are built against numpy 1.x — numpy 2 breaks them with
-# "Numpy is not available". Pin <2 until we move to a torch built for numpy 2.
-numpy<2
-# Newer opencv-python demands numpy>=2; keep it on a numpy 1.x-compatible release
-# so a fresh install resolves without conflict.
-opencv-python<4.11

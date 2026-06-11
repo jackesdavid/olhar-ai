@@ -17,8 +17,9 @@ use std::sync::mpsc::Sender;
 use serde_json::{json, Value};
 
 use crate::alerts::{self, AlertLevel, AlertStore};
+use crate::db::Db;
 use crate::device_actions as actions;
-use crate::devices::{save_devices, DeviceStore};
+use crate::devices::DeviceStore;
 use crate::map;
 use crate::notification::{self, NotificationConfig, NotificationStore};
 
@@ -33,13 +34,22 @@ pub enum ToolUiEvent {
     AlertsChanged,
     /// Offer the operator a live feed for this device (chat shows an "open" action).
     OpenLive { ip: String },
+    /// A workflow `Print` node fired: show `message` in the editor Console (always) and,
+    /// when `on_screen`, flash it over the canvas. `level` tints both (info/warn/error/debug).
+    Print { message: String, level: String, on_screen: bool },
+    /// A workflow `ShowImage` (debug) node received a frame: render `jpeg` inside that
+    /// node (identified by `graph` + `node` id) on the editor canvas, captioned with
+    /// `label`. JPEG bytes → base64 data URL on the UI side.
+    ShowImage { graph: u32, node: u32, label: String, jpeg: Vec<u8> },
 }
 
 /// What a tool executor can touch. Built by the Tauri shell from the managed
 /// stores + app-data paths + the resolved Telegram config.
 pub struct ToolContext {
     pub devices: DeviceStore,
-    pub devices_path: PathBuf,
+    /// Postgres handle for persisting device changes (the in-memory `devices`
+    /// store stays the working set; this writes mutations through to the DB).
+    pub db: Db,
     pub alerts: AlertStore,
     pub alerts_path: PathBuf,
     pub notif: NotificationStore,
@@ -187,10 +197,10 @@ fn count_people() -> ToolSpec {
     ToolSpec {
         name: "count_people",
         description: "Capture a still from a camera and detect whether any people are present, \
-            and how many, using the local AI vision service. Use this when the operator asks if \
-            someone/anyone is on a camera, or to count people at a location. Give the camera's \
-            name, or \"first\". The camera must have saved credentials, and the AI service must be \
-            configured (AI_SERVICE_URL). The snapshot is also shown to the operator.",
+            and how many, using the on-device YOLOX vision model. Use this when the operator asks \
+            if someone/anyone is on a camera, or to count people at a location. Give the camera's \
+            name, or \"first\". The camera must have saved credentials. The snapshot is also shown \
+            to the operator.",
         input_schema: json!({
             "type": "object",
             "properties": { "camera": { "type": "string", "description": "camera name, or \"first\"" } },
@@ -207,11 +217,7 @@ fn count_people() -> ToolSpec {
             if let Ok(jpeg) = to_jpeg(&bytes) {
                 let _ = ctx.ui_tx.send(ToolUiEvent::Snapshot { camera: device.name.clone(), jpeg });
             }
-            let out = super::ai_service::call(
-                "detect_person",
-                json!({ "image_b64": super::ai_service::image_b64(&bytes) }),
-            )?;
-            let count = out.get("count").and_then(Value::as_i64).unwrap_or(0);
+            let count = super::detector::detect_person(&bytes)?.count;
             if count > 0 {
                 Ok(format!("Camera '{}': {count} person(s) detected.", device.name))
             } else {
@@ -263,7 +269,7 @@ fn delete_device() -> ToolSpec {
             let removed = {
                 let mut devices = ctx.devices.lock().unwrap();
                 let removed = actions::delete_by_name(&mut devices, name)?;
-                save_devices(&ctx.devices_path, &devices);
+                ctx.db.save_devices(&devices);
                 removed
             };
             let _ = ctx.ui_tx.send(ToolUiEvent::DevicesChanged);
@@ -288,7 +294,7 @@ fn delete_device_by_index() -> ToolSpec {
             let removed = {
                 let mut devices = ctx.devices.lock().unwrap();
                 let removed = actions::delete_by_index(&mut devices, index)?;
-                save_devices(&ctx.devices_path, &devices);
+                ctx.db.save_devices(&devices);
                 removed
             };
             let _ = ctx.ui_tx.send(ToolUiEvent::DevicesChanged);
@@ -321,7 +327,7 @@ fn rename_device() -> ToolSpec {
                 let mut devices = ctx.devices.lock().unwrap();
                 let idx = actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
                 devices[idx].name = trimmed.to_string();
-                save_devices(&ctx.devices_path, &devices);
+                ctx.db.save_devices(&devices);
                 trimmed.to_string()
             };
             let _ = ctx.ui_tx.send(ToolUiEvent::DevicesChanged);
@@ -638,7 +644,7 @@ mod tests {
     fn ctx(tx: Sender<ToolUiEvent>) -> ToolContext {
         ToolContext {
             devices: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            devices_path: std::env::temp_dir().join("app_core_chat_devices.json"),
+            db: Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
             alerts: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             alerts_path: std::env::temp_dir().join("app_core_chat_alerts.json"),
             notif: std::sync::Arc::new(std::sync::Mutex::new(vec![])),

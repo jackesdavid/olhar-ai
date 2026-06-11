@@ -82,6 +82,12 @@ pub enum NodeKind {
     MotionDetection,
     /// Vision: detect whether a person is present in an image (via the AI sidecar).
     PersonDetection,
+    /// Debug: print a `message` to the editor Console (always) and, unless `on_screen`
+    /// is off, flash it as on-screen text over the canvas — like Unreal's Print String.
+    Print,
+    /// Debug: show an `image` on the editor canvas — a sink for eyeballing a frame as
+    /// it flows through the graph. Like `Print`, but for pixels; emits no data.
+    ShowImage,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -180,6 +186,13 @@ const PERSON_DETECTION_OUT: [Port; 4] = [
     p("ok", PortType::Bool, false),
 ];
 
+// Print: a message to echo to the Console (+ optional on-screen flash).
+const PRINT_IN: [Port; 2] =
+    [p("message", PortType::Text, false), p("on_screen", PortType::Bool, false)];
+
+// Show image: a debug sink — an image in, flashed on the canvas. No data out.
+const SHOW_IMAGE_IN: [Port; 1] = [p("image", PortType::Image, true)];
+
 const NO_PORTS: [Port; 0] = [];
 
 // Universal control-flow ports — every node has an `exec_in` and, by default, an
@@ -193,7 +206,7 @@ const EXEC_OUT_DEFAULT: [Port; 1] = [EXEC_OUT];
 const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 13] = [
+    pub const ALL: [NodeKind; 15] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -207,6 +220,8 @@ impl NodeKind {
         NodeKind::If,
         NodeKind::MotionDetection,
         NodeKind::PersonDetection,
+        NodeKind::Print,
+        NodeKind::ShowImage,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -226,6 +241,8 @@ impl NodeKind {
             NodeKind::If => "if",
             NodeKind::MotionDetection => "motion_detection",
             NodeKind::PersonDetection => "person_detection",
+            NodeKind::Print => "print",
+            NodeKind::ShowImage => "show_image",
         }
     }
 
@@ -248,6 +265,8 @@ impl NodeKind {
             NodeKind::If => "If",
             NodeKind::MotionDetection => "Motion detection",
             NodeKind::PersonDetection => "Person detection",
+            NodeKind::Print => "Print",
+            NodeKind::ShowImage => "Show image",
         }
     }
 
@@ -259,7 +278,7 @@ impl NodeKind {
             NodeKind::CameraSnapshot => "Cameras",
             NodeKind::DescribeImage => "AI",
             NodeKind::Format => "Text",
-            NodeKind::Wait | NodeKind::If => "Flow",
+            NodeKind::Wait | NodeKind::If | NodeKind::Print | NodeKind::ShowImage => "Flow",
             NodeKind::HttpPost => "Network",
             NodeKind::MotionDetection | NodeKind::PersonDetection => "Vision",
         }
@@ -289,6 +308,8 @@ impl NodeKind {
             NodeKind::If => &IF_IN,
             NodeKind::MotionDetection => &MOTION_IN,
             NodeKind::PersonDetection => &PERSON_DETECTION_IN,
+            NodeKind::Print => &PRINT_IN,
+            NodeKind::ShowImage => &SHOW_IMAGE_IN,
         }
     }
 
@@ -307,6 +328,8 @@ impl NodeKind {
             NodeKind::If => &NO_PORTS, // outputs are exec branches (true/false)
             NodeKind::MotionDetection => &MOTION_OUT,
             NodeKind::PersonDetection => &PERSON_DETECTION_OUT,
+            NodeKind::Print => &NO_PORTS, // a sink — exec passes through, no data out
+            NodeKind::ShowImage => &NO_PORTS, // a sink — exec passes through, no data out
         }
     }
 
@@ -342,6 +365,8 @@ impl NodeKind {
             NodeKind::If => json!({}),
             NodeKind::MotionDetection => json!({ "sensitivity": "2", "pixel_threshold": "25" }),
             NodeKind::PersonDetection => json!({}),
+            NodeKind::Print => json!({ "message": "", "on_screen": true, "level": "info" }),
+            NodeKind::ShowImage => json!({ "label": "" }),
         }
     }
 }

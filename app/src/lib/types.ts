@@ -9,6 +9,7 @@ export type Settings = {
   typing_speed: number;
   stt_autosend: boolean;
   transport: Transport;
+  cameras_always_warm: boolean;
 };
 
 /** A saved camera (matches `app_core::devices::Device`). */
@@ -119,4 +120,5 @@ export const DEFAULT_SETTINGS: Settings = {
   typing_speed: 4,
   stt_autosend: false,
   transport: "auto",
+  cameras_always_warm: false,
 };

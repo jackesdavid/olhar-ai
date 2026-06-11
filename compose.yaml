@@ -1,0 +1,25 @@
+# Postgres + pgvector for the Sentinel web app.
+# Start it before the app:  task db-up   (stop: task db-down)
+# Connection string lives in .env as DATABASE_URL (see .env.example).
+services:
+  db:
+    # Latest Postgres (17) with the pgvector extension prebuilt.
+    image: pgvector/pgvector:pg17
+    container_name: sentinel-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sentinel
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: sentinel
+    ports:
+      - "5432:5432"
+    volumes:
+      - sentinel-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentinel -d sentinel"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  sentinel-pgdata:

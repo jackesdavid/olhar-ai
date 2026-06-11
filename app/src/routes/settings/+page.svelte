@@ -192,4 +192,28 @@
       </div>
     </Card.Content>
   </Card.Root>
+
+  <Card.Root>
+    <Card.Header>
+      <Card.Title>Cameras</Card.Title>
+      <Card.Description>How the shared live feed serves snapshots.</Card.Description>
+    </Card.Header>
+    <Card.Content>
+      <div class="flex items-center justify-between">
+        <div class="space-y-0.5">
+          <Label for="cameras-always-warm">Keep camera feeds always on</Label>
+          <p class="text-xs text-muted-foreground">
+            Snapshots are instant at any time. Otherwise feeds warm up on demand (the
+            first snapshot after an idle period takes about a second). Uses more
+            bandwidth when nothing is watching.
+          </p>
+        </div>
+        <Switch
+          id="cameras-always-warm"
+          bind:checked={settings.cameras_always_warm}
+          disabled={loading}
+        />
+      </div>
+    </Card.Content>
+  </Card.Root>
 </div>

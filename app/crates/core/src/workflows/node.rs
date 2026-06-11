@@ -201,27 +201,37 @@ pub fn run_node(
         NodeKind::If => run_if(inputs),
         NodeKind::MotionDetection => run_motion_detection(config, inputs),
         NodeKind::PersonDetection => run_person_detection(inputs),
+        NodeKind::Print => run_print(config, inputs, sys),
+        // ShowImage is a debug sink whose only effect — mirroring its input frame to
+        // the editor — is driven by the engine, which owns the node id the UI needs to
+        // place the preview. Here it's a pure pass-through (exec flows on, no data out).
+        NodeKind::ShowImage => Ok(PortValues::new()),
     }
 }
 
-/// Detect whether a person is present in the image via the AI sidecar.
+/// Debug sink: echo `message` to the editor Console (always, regardless of the graph's
+/// debug flag) and — unless `on_screen` is off — flash it over the canvas. Carries the
+/// `level` so the UI can tint both. Returns no data; exec passes through.
+fn run_print(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+    let message = inputs.get("message").and_then(PortValue::as_text).unwrap_or("").to_string();
+    let on_screen = inputs.get("on_screen").and_then(PortValue::as_bool).unwrap_or(true);
+    let level = config.get("level").and_then(Value::as_str).unwrap_or("info").to_string();
+    let _ = sys.ui_tx.send(ToolUiEvent::Print { message, level, on_screen });
+    Ok(PortValues::new())
+}
+
+/// Detect whether a person is present in the image with the local YOLOX-Nano model.
 /// Outputs `person` (Bool), `count` (Num), `confidence` (Num %, 0..100), `ok`.
 fn run_person_detection(inputs: &PortValues) -> Result<PortValues, String> {
     let bytes = inputs
         .get("image")
         .and_then(PortValue::as_image)
         .ok_or("missing required input 'image'")?;
-    let out = crate::agent::ai_service::call(
-        "detect_person",
-        serde_json::json!({ "image_b64": crate::agent::ai_service::image_b64(bytes) }),
-    )?;
-    let person = out.get("person").and_then(Value::as_bool).unwrap_or(false);
-    let count = out.get("count").and_then(Value::as_i64).unwrap_or(0);
-    let confidence = out.get("confidence").and_then(Value::as_f64).unwrap_or(0.0);
+    let r = crate::agent::detector::detect_person(bytes)?;
     let mut o = PortValues::new();
-    o.insert("person".into(), PortValue::Bool(person));
-    o.insert("count".into(), PortValue::Num(count));
-    o.insert("confidence".into(), PortValue::Num((confidence * 100.0).round() as i64));
+    o.insert("person".into(), PortValue::Bool(r.person));
+    o.insert("count".into(), PortValue::Num(r.count));
+    o.insert("confidence".into(), PortValue::Num((r.confidence * 100.0).round() as i64));
     o.insert("ok".into(), PortValue::Bool(true));
     Ok(o)
 }
@@ -286,6 +296,18 @@ pub fn debug_summary(
                 format!("{} person(s) ({}% confidence)", num("count").unwrap_or(0), num("confidence").unwrap_or(0))
             } else {
                 "no person detected".into()
+            }
+        }
+        NodeKind::Print => {
+            let msg = inputs.get("message").and_then(PortValue::as_text).unwrap_or("");
+            format!("print: {}", clip(msg))
+        }
+        NodeKind::ShowImage => {
+            let bytes = inputs.get("image").and_then(PortValue::as_image).map_or(0, <[u8]>::len);
+            if bytes > 0 {
+                format!("image shown ({} KB)", bytes / 1024)
+            } else {
+                "no image".into()
             }
         }
     }
@@ -586,7 +608,7 @@ fn run_format(config: &Value, inputs: &PortValues) -> Result<PortValues, String>
 }
 
 /// Re-encode snapshot bytes to JPEG for the UI event (same helper as the chat tool).
-fn to_jpeg(bytes: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn to_jpeg(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let img = image::load_from_memory(bytes).map_err(|e| format!("decode snapshot: {e}"))?;
     let mut out = Vec::new();
     img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
@@ -604,7 +626,7 @@ mod tests {
         let (tx, _rx) = std::sync::mpsc::channel();
         ToolContext {
             devices: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            devices_path: std::env::temp_dir().join("wf_test_devices.json"),
+            db: crate::db::Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
             alerts: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             alerts_path: std::env::temp_dir().join("wf_test_alerts.json"),
             notif: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
@@ -676,6 +698,18 @@ mod tests {
         let err = run_node(NodeKind::PersonDetection, &json!({}), &PortValues::new(), &test_ctx())
             .unwrap_err();
         assert!(err.contains("missing required input 'image'"), "got: {err}");
+    }
+
+    #[test]
+    fn show_image_is_a_sink_with_no_data_outputs() {
+        // The debug preview is emitted by the engine (it owns the node id); the node
+        // itself is a pure exec pass-through that yields no data ports.
+        let mut inputs = PortValues::new();
+        inputs.insert("image".into(), PortValue::Image(solid_jpeg(32, 24, 128)));
+        let out =
+            run_node(NodeKind::ShowImage, &json!({ "label": "frame" }), &inputs, &test_ctx())
+                .unwrap();
+        assert!(out.is_empty());
     }
 
     #[test]

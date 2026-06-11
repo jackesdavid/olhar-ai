@@ -82,72 +82,6 @@ tasks:
         cfg="$HOME/Library/Application Support/com.jackesdavid.sentinel/go2rtc.yaml"
         if [ -f "$cfg" ]; then ./binaries/go2rtc -config "$cfg"; else ./binaries/go2rtc; fi
 
-  ai:
-    desc: Run the AI vision sidecar locally (services/ai) on :8000 — same contract as RunPod
-    dir: services/ai
-    cmds:
-      - |
-        set -e
-        # torch/numpy/ultralytics ship prebuilt wheels only for Python 3.10–3.12.
-        # Newer interpreters (3.13/3.14) fall back to compiling from source, which
-        # fails — so pick a supported one for the venv.
-        PY=""
-        for c in python3.12 python3.11 python3.10; do
-          command -v "$c" >/dev/null 2>&1 && { PY="$c"; break; }
-        done
-        if [ -z "$PY" ]; then
-          echo "Need Python 3.10–3.12 (3.13/3.14 have no prebuilt wheels for torch/numpy)."
-          echo "Install one, e.g.:  brew install python@3.12"
-          exit 1
-        fi
-        # (Re)create the venv if missing or unhealthy (e.g. a half-built one from a
-        # newer Python). Healthy == the deps import cleanly.
-        if [ ! -x .venv/bin/python ] || ! ./.venv/bin/python -c "import runpod, ultralytics, PIL" >/dev/null 2>&1; then
-          echo "Setting up venv with $PY + installing deps (ultralytics/torch — a few minutes)…"
-          rm -rf .venv
-          "$PY" -m venv .venv
-          ./.venv/bin/pip install --upgrade pip >/dev/null
-          ./.venv/bin/pip install -r requirements.txt
-        fi
-        echo "AI sidecar → http://localhost:8000  (set AI_SERVICE_URL=http://localhost:8000/runsync in .env, AI_SERVICE_KEY blank)"
-        exec ./.venv/bin/python handler.py --rp_serve_api
-
-  ai-build:
-    desc: Build the AI sidecar Docker image for RunPod (linux/amd64). Set AI_IMAGE=<registry>/<repo>:<tag>
-    dir: services/ai
-    requires:
-      vars: [AI_IMAGE]
-    cmds:
-      - cmd: command -v docker >/dev/null 2>&1 || { echo "docker not found — install Docker Desktop"; exit 1; }
-        silent: true
-      # RunPod runs amd64; buildx --load puts the single-arch image in the local daemon.
-      - docker buildx build --platform linux/amd64 -t {{.AI_IMAGE}} --load .
-
-  ai-push:
-    desc: Push the AI sidecar image to its registry (run `docker login` first)
-    requires:
-      vars: [AI_IMAGE]
-    cmds:
-      - docker push {{.AI_IMAGE}}
-
-  ai-deploy:
-    desc: Build + push the AI sidecar image to RunPod's registry (set AI_IMAGE, `docker login`)
-    requires:
-      vars: [AI_IMAGE]
-    cmds:
-      - task: ai-build
-      - task: ai-push
-      - cmd: |
-          echo ""
-          echo "✅ Pushed {{.AI_IMAGE}}"
-          echo "Now in RunPod → Serverless:"
-          echo "  • First time: New Endpoint → container image {{.AI_IMAGE}}, flex workers (min 0),"
-          echo "    smallest GPU (or a CPU endpoint). Copy the Endpoint ID + an API key into .env:"
-          echo "      AI_SERVICE_URL=https://api.runpod.ai/v2/<endpoint_id>/runsync"
-          echo "      AI_SERVICE_KEY=<runpod_api_key>"
-          echo "  • Updates: bump the image tag (or release a new worker) so the endpoint pulls it."
-        silent: true
-
   doctor:
     desc: Check required system tools are installed (node, npm, cargo, ffmpeg)
     silent: true
@@ -168,9 +102,35 @@ tasks:
           exit 1
         fi
 
+  db-up:
+    desc: Start Postgres + pgvector (compose) and wait until it's healthy
+    cmds:
+      - docker compose up -d
+      - cmd: |
+          echo "Waiting for Postgres…"
+          for i in $(seq 1 30); do
+            if docker compose exec -T db pg_isready -U sentinel -d sentinel >/dev/null 2>&1; then
+              echo "✓ Postgres ready"; exit 0
+            fi
+            sleep 1
+          done
+          echo "✗ Postgres did not become ready in time"; exit 1
+        silent: true
+
+  db-down:
+    desc: Stop the Postgres container (data is kept in the named volume)
+    cmds:
+      - docker compose down
+
+  db-logs:
+    desc: Tail the Postgres container logs
+    cmds:
+      - docker compose logs -f db
+
   dev:
     desc: Run the desktop app (Tauri window + SvelteKit dev, hot-reload)
     dir: "{{.APP}}"
+    deps: [db-up] # bring Postgres up first — the app requires it
     env:
       RUST_BACKTRACE: "1" # full panic traces in the terminal
     cmds:

@@ -9,7 +9,7 @@
 //! the backend poller drives.
 use super::domain::{ConcurrencyPolicy, Graph, NodeKind, EXEC_IN};
 use super::node::{self, PortValue, PortValues};
-use crate::agent::tools::ToolContext;
+use crate::agent::tools::{ToolContext, ToolUiEvent};
 use crate::alerts::{Alert, AlertLevel};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -17,17 +17,18 @@ use std::time::{Duration, Instant};
 /// Run the whole graph once in topological order. Each node runs at most once; inputs
 /// resolve from upstream outputs (wired edges) else config literals; stops on first error.
 pub fn run_dag(graph: &Graph, sys: &ToolContext) -> Result<HashMap<u32, PortValues>, String> {
-    run_dag_with(graph, sys, &mut |_| {}, &mut |_, _| {})
+    run_dag_with(graph, sys, &mut |_| {}, &mut |_, _, _| {})
 }
 
 /// Like [`run_dag`], but calls `on_node(id)` just before each node executes (so the
 /// shell can report the currently-running node) and, when the graph's `debug` flag
-/// is on, `on_log(id, summary)` just after each node runs.
+/// is on, `on_log(id, summary, elapsed_ms)` just after each node runs (`elapsed_ms`
+/// is that node's own execution time).
 pub fn run_dag_with(
     graph: &Graph,
     sys: &ToolContext,
     on_node: &mut dyn FnMut(u32),
-    on_log: &mut dyn FnMut(u32, &str),
+    on_log: &mut dyn FnMut(u32, &str, u128),
 ) -> Result<HashMap<u32, PortValues>, String> {
     let order = graph.topo_order()?;
     // Unless the graph opts in (`run_orphans`), only nodes wired into the graph
@@ -67,23 +68,59 @@ pub fn run_dag_with(
             continue; // gated off by an inactive branch
         }
 
-        on_node(nid);
+        // Resolve inputs from wired upstream outputs (else config literals) BEFORE we
+        // signal/run the node. If a REQUIRED input is wired to a source node that never
+        // ran — gated off by an inactive branch — this node sits on a dead path too:
+        // skip it silently (no UI signal, no run, no exec outputs published) so its
+        // descendants gate off as well. This is distinct from a required input that's
+        // simply never set (no edge and no literal), which still errors at run time as
+        // a real misconfiguration.
         let mut inputs = PortValues::new();
+        let mut dead = false;
         for port in n.kind.input_ports() {
             if let Some(edge) = graph.edges.iter().find(|e| e.to == nid && e.to_port == port.name) {
-                // Wired: take the upstream node's output (already run, earlier in topo order).
-                if let Some(v) = outputs.get(&edge.from).and_then(|m| m.get(&edge.from_port)) {
-                    inputs.insert(port.name.to_string(), v.clone());
+                match outputs.get(&edge.from).and_then(|m| m.get(&edge.from_port)) {
+                    // Wired and the source produced a value (it ran, earlier in topo order).
+                    Some(v) => {
+                        inputs.insert(port.name.to_string(), v.clone());
+                    }
+                    // Wired to a source that never ran → dead path for a required input.
+                    None if port.required && !outputs.contains_key(&edge.from) => {
+                        dead = true;
+                        break;
+                    }
+                    None => {}
                 }
             } else if let Some(lit) = node::literal_for(&n.config, *port) {
                 inputs.insert(port.name.to_string(), lit);
             }
         }
+        if dead {
+            continue; // a required input came from a skipped branch — don't activate
+        }
+
+        on_node(nid);
+        let started = Instant::now();
         let o = node::run_node(n.kind, &n.config, &inputs, sys)
             .map_err(|e| format!("{}: {e}", n.kind.label()))?;
+        let elapsed_ms = started.elapsed().as_millis();
 
         if graph.debug {
-            on_log(nid, &node::debug_summary(n.kind, &n.config, &inputs, &o));
+            on_log(nid, &node::debug_summary(n.kind, &n.config, &inputs, &o), elapsed_ms);
+        }
+
+        // ShowImage (debug sink): mirror the resolved input frame to the editor so it
+        // renders inside the node. Done here because the UI needs the node id to place
+        // the preview, which the isolated node executor never sees.
+        if n.kind == NodeKind::ShowImage {
+            if let Some(jpeg) =
+                inputs.get("image").and_then(PortValue::as_image).and_then(|b| node::to_jpeg(b).ok())
+            {
+                let label =
+                    n.config.get("label").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let _ =
+                    sys.ui_tx.send(ToolUiEvent::ShowImage { graph: graph.id, node: nid, label, jpeg });
+            }
         }
 
         // Publish this node's live exec outputs so downstream nodes can activate.
@@ -243,7 +280,7 @@ mod tests {
         let (tx, _rx) = std::sync::mpsc::channel();
         ToolContext {
             devices: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            devices_path: std::env::temp_dir().join("wf_eng_devices.json"),
+            db: crate::db::Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
             alerts: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             alerts_path: std::env::temp_dir().join("wf_eng_alerts.json"),
             notif: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
@@ -283,6 +320,37 @@ mod tests {
             assert!(outs.contains_key(&gate), "If itself runs");
             assert!(outs.contains_key(&chosen), "live branch runs (cond={cond})");
             assert!(!outs.contains_key(&skipped), "dead branch is skipped (cond={cond})");
+        }
+    }
+
+    #[test]
+    fn show_image_mirrors_its_input_frame_to_the_ui() {
+        // A jpeg literal on the node's `image` port is read at run time; the engine
+        // should then emit a ShowImage UI event tagged with that node's id.
+        let path = std::env::temp_dir().join("wf_eng_show_image.jpg");
+        let img = image::RgbImage::from_pixel(16, 12, image::Rgb([10, 200, 120]));
+        image::DynamicImage::ImageRgb8(img)
+            .save_with_format(&path, image::ImageFormat::Jpeg)
+            .unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut ctx = test_ctx();
+        ctx.ui_tx = tx;
+        let mut g = Graph::new(1, "g");
+        let show = g.add_node(NodeKind::ShowImage, 0, 0);
+        g.node_mut(show).unwrap().config = json!({ "label": "cam", "image": path.to_str().unwrap() });
+        // run_orphans so the single, edgeless node participates in the run.
+        g.run_orphans = true;
+        run_dag(&g, &ctx).unwrap();
+
+        match rx.try_recv() {
+            Ok(ToolUiEvent::ShowImage { graph, node, label, jpeg }) => {
+                assert_eq!(graph, g.id);
+                assert_eq!(node, show);
+                assert_eq!(label, "cam");
+                assert!(!jpeg.is_empty());
+            }
+            _ => panic!("expected a ShowImage UI event"),
         }
     }
 
@@ -343,6 +411,38 @@ mod tests {
         let outs = run_dag(&g, &ctx).unwrap();
         assert!(outs.contains_key(&ca), "orphan runs when run_orphans is on");
         assert_eq!(ctx.alerts.lock().unwrap().len(), 2, "orphan created an alert");
+    }
+
+    #[test]
+    fn node_on_dead_branch_does_not_activate_or_error() {
+        // Repro of the reported bug: If1 goes false and its (only) true branch is the
+        // sole feeder of a *second* If's condition. The second If must NOT activate —
+        // its required `condition` is wired from a node the false branch gated off — so
+        // the run completes cleanly with no "missing required input 'condition'" error.
+        let ctx = test_ctx();
+        ctx.alerts.lock().unwrap().push(alert(1, AlertLevel::Info, "op", "hi"));
+        let mut g = Graph::new(1, "Test Workflow");
+        g.debug = true;
+
+        let if1 = g.add_node(NodeKind::If, 0, 0);
+        g.node_mut(if1).unwrap().config["condition"] = json!(false); // takes the false branch
+        let gla = g.add_node(NodeKind::GetLastAlert, 0, 0); // lives on if1's true branch
+        g.add_edge(if1, "true", gla, "exec_in").unwrap();
+
+        let if2 = g.add_node(NodeKind::If, 0, 0); // the "other if"
+        let pr = g.add_node(NodeKind::Print, 0, 0);
+        g.add_edge(gla, "ok", if2, "condition").unwrap(); // condition from the gated-off node
+        g.add_edge(if2, "true", pr, "exec_in").unwrap();
+
+        let activated = std::cell::RefCell::new(Vec::<u32>::new());
+        let res = run_dag_with(&g, &ctx, &mut |id| activated.borrow_mut().push(id), &mut |_, _, _| {});
+
+        let outs = res.expect("run must not error on a dead-branch dependency");
+        assert!(outs.contains_key(&if1), "if1 ran");
+        assert!(!outs.contains_key(&gla), "gla is gated off (if1 took false)");
+        assert!(!outs.contains_key(&if2), "if2 must NOT run — its condition source was gated off");
+        assert!(!activated.borrow().contains(&if2), "if2 must not even signal activation");
+        assert!(!outs.contains_key(&pr), "if2's downstream stays gated off");
     }
 
     #[test]

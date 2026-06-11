@@ -10,8 +10,10 @@
 pub mod agent;
 pub mod alerts;
 pub mod config;
+pub mod db;
 pub mod device_actions;
 pub mod devices;
+pub mod go2rtc;
 pub mod listen;
 pub mod map;
 pub mod notification;

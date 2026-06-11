@@ -16,8 +16,9 @@ use std::time::{Duration, Instant};
 
 use app_core::alerts::{self, load_alerts, Alert, AlertLevel, AlertStore};
 use app_core::config::{load_settings, save_settings, Settings};
+use app_core::db::Db;
 use app_core::device_actions::capture_snapshot_bytes;
-use app_core::devices::{load_devices, save_devices, Device, DeviceStore};
+use app_core::devices::{Device, DeviceStore};
 use app_core::map::{load_map as core_load_map, save_map as core_save_map, MapRoom};
 use app_core::notification::{
     self, load_targets, NotificationConfig, NotificationStore, NotificationTarget,
@@ -36,6 +37,11 @@ use tauri::Manager;
 /// Handle to the running go2rtc sidecar so a restart can kill the old one.
 /// Managed Tauri state; `None` until the first spawn.
 type Go2rtcHandle = Arc<Mutex<Option<Child>>>;
+
+/// Stop-flag for the keep-warm poller (pings each camera's go2rtc frame so the
+/// shared feed stays connected when "always warm" is on). `None` when off.
+/// Managed Tauri state.
+type WarmHandle = Arc<Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>>;
 
 /// The current pairing poller's stop flag, so a config change can restart it
 /// without an app restart. Managed Tauri state.
@@ -75,14 +81,48 @@ fn settings_file(app: &tauri::AppHandle) -> PathBuf {
     dir.join("settings.json")
 }
 
-/// The web app's saved-devices file, under the platform app-data dir (created if missing).
-fn devices_file(app: &tauri::AppHandle) -> PathBuf {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."));
-    let _ = std::fs::create_dir_all(&dir);
-    dir.join("devices.json")
+/// The Postgres handle (devices store). `None` until the splash's `boot_status`
+/// drives a successful connect; managed Tauri state.
+type DbState = Arc<Mutex<Option<Db>>>;
+
+/// Connect to Postgres + apply migrations (once), then hydrate the in-memory
+/// `DeviceStore` from the DB. Idempotent — a no-op if already connected. The
+/// splash retries this until it returns `Ok`, so the window stays on the splash
+/// while the database comes up (the app has no JSON fallback).
+fn try_connect_db(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<DbState>();
+    if state.lock().unwrap().is_some() {
+        return Ok(()); // already connected
+    }
+    let url = std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is not set".to_string())?;
+    let db = Db::connect(&url).map_err(|e| e.to_string())?;
+    let devices = db.load_devices();
+    log::info!(
+        "Postgres connected; migrations applied — {} device(s) loaded",
+        devices.len()
+    );
+    *app.state::<DeviceStore>().lock().unwrap() = devices;
+    *state.lock().unwrap() = Some(db);
+    Ok(())
+}
+
+/// Persist the full device list to Postgres. Errors if the DB isn't connected yet
+/// (a safety net — commands only run once the app is past the splash).
+fn persist_devices(app: &tauri::AppHandle, devices: &[Device]) -> Result<(), String> {
+    app.state::<DbState>()
+        .lock()
+        .unwrap()
+        .as_ref()
+        .ok_or("Database not ready")?
+        .save_devices(devices);
+    Ok(())
+}
+
+/// Splash boot probe: ensure Postgres is connected + migrated. The splash calls
+/// this on mount and retries until it returns `Ok`, then reveals the app.
+#[tauri::command]
+fn boot_status(app: tauri::AppHandle) -> Result<(), String> {
+    try_connect_db(&app)
 }
 
 /// The web app's alert log file, under the platform app-data dir (created if missing).
@@ -166,6 +206,8 @@ fn get_settings(app: tauri::AppHandle) -> Settings {
 #[tauri::command]
 fn set_settings(app: tauri::AppHandle, settings: Settings) {
     save_settings(&settings_file(&app), &settings);
+    // React to the "keep camera feeds always on" toggle without an app restart.
+    reconcile_keepwarm(&app);
 }
 
 // ---- Devices ---------------------------------------------------------------
@@ -178,29 +220,35 @@ fn list_devices(state: tauri::State<'_, DeviceStore>) -> Vec<Device> {
 
 /// Upsert a device by `ip` (replace in place if present, else append) and persist.
 #[tauri::command]
-fn save_device(app: tauri::AppHandle, state: tauri::State<'_, DeviceStore>, device: Device) {
-    {
-        let mut devices = state.lock().unwrap();
-        if let Some(existing) = devices.iter_mut().find(|d| d.ip == device.ip) {
-            *existing = device;
-        } else {
-            devices.push(device);
-        }
-        save_devices(&devices_file(&app), &devices);
+fn save_device(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DeviceStore>,
+    device: Device,
+) -> Result<(), String> {
+    let mut devices = state.lock().unwrap();
+    if let Some(existing) = devices.iter_mut().find(|d| d.ip == device.ip) {
+        *existing = device;
+    } else {
+        devices.push(device);
     }
+    persist_devices(&app, &devices)
 }
 
 /// Remove the device with the given `ip` and persist. Returns whether one was removed.
 #[tauri::command]
-fn delete_device(app: tauri::AppHandle, state: tauri::State<'_, DeviceStore>, ip: String) -> bool {
+fn delete_device(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DeviceStore>,
+    ip: String,
+) -> Result<bool, String> {
     let mut devices = state.lock().unwrap();
     let before = devices.len();
     devices.retain(|d| d.ip != ip);
     let removed = devices.len() != before;
     if removed {
-        save_devices(&devices_file(&app), &devices);
+        persist_devices(&app, &devices)?;
     }
-    removed
+    Ok(removed)
 }
 
 /// Rename the device with the given `ip` and persist.
@@ -221,7 +269,7 @@ fn rename_device(
         .find(|d| d.ip == ip)
         .ok_or("Device not found.")?;
     device.name = trimmed.to_string();
-    save_devices(&devices_file(&app), &devices);
+    persist_devices(&app, &devices)?;
     Ok(())
 }
 
@@ -267,7 +315,7 @@ fn reconcile_devices(app: &tauri::AppHandle, found: &[DiscoveredDevice]) {
             }
         }
         if changed {
-            save_devices(&devices_file(app), &devices);
+            let _ = persist_devices(app, &devices); // best-effort; rescan retries hourly
         }
     }
 
@@ -340,7 +388,7 @@ async fn capture_snapshot(
                 if let Some(d) = devices.iter_mut().find(|d| d.ip == ip) {
                     d.rtsp_url = Some(rtsp);
                 }
-                save_devices(&devices_file(&app), &devices);
+                let _ = persist_devices(&app, &devices); // best-effort self-heal
                 log::info!("capture_snapshot: resolved + persisted rtsp_url for ip={ip}");
             }
             Err(e) => log::warn!("capture_snapshot: could not resolve rtsp_url for ip={ip}: {e}"),
@@ -445,7 +493,7 @@ async fn validate_device(
         device.password = Some(password);
         device.rtsp_url = Some(rtsp.clone());
         let updated = device.clone();
-        save_devices(&devices_file(&app), &devices);
+        persist_devices(&app, &devices)?;
         updated
     };
 
@@ -711,11 +759,6 @@ fn go2rtc_config_file(app: &tauri::AppHandle) -> PathBuf {
     dir.join("go2rtc.yaml")
 }
 
-/// Sanitize an IP into a go2rtc stream-name suffix (dots → underscores).
-fn sanitize_ip(ip: &str) -> String {
-    ip.replace('.', "_")
-}
-
 /// Build a go2rtc YAML from the device store: one `cam_<sanitized_ip>` stream
 /// per device that has a non-empty `rtsp_url`, with credentials injected via
 /// `rtsp_url_with_creds`. Returns the YAML text (always includes a `streams:`
@@ -732,7 +775,7 @@ fn build_go2rtc_yaml(devices: &[Device]) -> String {
         let user = d.username.as_deref().unwrap_or("");
         let pass = d.password.as_deref().unwrap_or("");
         let url = rtsp_url_with_creds(rtsp, user, pass);
-        out.push_str(&format!("  cam_{}: {}\n", sanitize_ip(&d.ip), url));
+        out.push_str(&format!("  {}: {}\n", app_core::go2rtc::stream_name(&d.ip), url));
     }
     out
 }
@@ -830,7 +873,7 @@ async fn ensure_streams(
         .iter()
         .filter(|d| d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false))
         .map(|d| {
-            let name = format!("cam_{}", sanitize_ip(&d.ip));
+            let name = app_core::go2rtc::stream_name(&d.ip);
             StreamInfo {
                 ip: d.ip.clone(),
                 player_url: format!("http://localhost:1984/stream.html?src={name}"),
@@ -841,6 +884,43 @@ async fn ensure_streams(
 
     log::info!("ensure_streams: {} stream(s) configured", streams.len());
     Ok(streams)
+}
+
+/// Start or stop the keep-warm poller to match `Settings.cameras_always_warm`.
+/// When on, a background thread pings each camera's go2rtc frame every ~2s so the
+/// shared feed stays connected and snapshots are instant even after idle. When off,
+/// it signals the running poller to stop. Idempotent — safe to call repeatedly
+/// (from `setup` and whenever settings change).
+fn reconcile_keepwarm(app: &tauri::AppHandle) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let want = load_settings(&settings_file(app)).cameras_always_warm;
+    let handle = app.state::<WarmHandle>();
+    let running = handle.lock().unwrap().is_some();
+
+    if want && !running {
+        let stop = Arc::new(AtomicBool::new(false));
+        *handle.lock().unwrap() = Some(stop.clone());
+        let app = app.clone();
+        std::thread::spawn(move || {
+            log::info!("keep-warm: keeping camera feeds always on");
+            while !stop.load(Ordering::Relaxed) {
+                let devices = app.state::<DeviceStore>().lock().unwrap().clone();
+                for d in &devices {
+                    let has_stream =
+                        d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false);
+                    if has_stream {
+                        let _ = app_core::go2rtc::frame(&d.ip); // discard — just keep it warm
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(2));
+            }
+            log::info!("keep-warm: stopped");
+        });
+    } else if !want && running {
+        if let Some(stop) = handle.lock().unwrap().take() {
+            stop.store(true, Ordering::Relaxed);
+        }
+    }
 }
 
 // ---- Map (3D floor plan) ---------------------------------------------------
@@ -865,10 +945,15 @@ fn save_map(app: tauri::AppHandle, rooms: Vec<MapRoom>) {
 /// on a background thread (the thread ends when the returned context is dropped,
 /// closing the Sender). Shared by the chat agent and the workflows engine so tool
 /// side-effects — snapshots, store changes, open-live — surface identically.
-fn build_run_context(app: &tauri::AppHandle) -> app_core::agent::ToolContext {
+///
+/// Returns `None` if Postgres isn't connected yet (the device tools need the DB
+/// handle). In practice the app is past the splash before any tool runs; this
+/// guards the brief startup window where the workflow poller could fire first.
+fn build_run_context(app: &tauri::AppHandle) -> Option<app_core::agent::ToolContext> {
     use app_core::agent::ToolUiEvent;
     use tauri::Emitter;
 
+    let db = app.state::<DbState>().lock().unwrap().clone()?;
     let devices = app.state::<DeviceStore>().inner().clone();
     let alerts = app.state::<AlertStore>().inner().clone();
     let notif = app.state::<NotificationStore>().inner().clone();
@@ -892,20 +977,33 @@ fn build_run_context(app: &tauri::AppHandle) -> app_core::agent::ToolContext {
                 ToolUiEvent::OpenLive { ip } => {
                     let _ = emit_app.emit("chat-open-live", ip);
                 }
+                ToolUiEvent::Print { message, level, on_screen } => {
+                    let _ = emit_app.emit(
+                        "workflow-print",
+                        serde_json::json!({ "message": message, "level": level, "on_screen": on_screen }),
+                    );
+                }
+                ToolUiEvent::ShowImage { graph, node, label, jpeg } => {
+                    let data = B64.encode(&jpeg);
+                    let _ = emit_app.emit(
+                        "workflow-image",
+                        serde_json::json!({ "graph": graph, "node": node, "label": label, "data": data }),
+                    );
+                }
             }
         }
     });
 
-    app_core::agent::ToolContext {
+    Some(app_core::agent::ToolContext {
         devices,
-        devices_path: devices_file(app),
+        db,
         alerts,
         alerts_path: alerts_file(app),
         notif,
         map_path: map_file(app),
         notif_cfg: resolve_telegram_config(app),
         ui_tx: tx,
-    }
+    })
 }
 
 // ---- Chat / Bishop (agent) -------------------------------------------------
@@ -955,7 +1053,7 @@ async fn send_chat(
     };
 
     // Shared tool context: side-effects stream to the UI while the turn runs.
-    let ctx = build_run_context(&app);
+    let ctx = build_run_context(&app).ok_or("Sentinel's database isn't ready yet.")?;
 
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let registry = ToolRegistry::new();
@@ -1030,8 +1128,9 @@ fn spawn_graph_run(app: &tauri::AppHandle, graph_id: u32) {
         // Mark this graph as running for the live editor/list.
         app.state::<WfActivity>().lock().unwrap().entry(graph_id).or_default().running += 1;
 
-        let result = {
-            let ctx = build_run_context(&app);
+        let result = match build_run_context(&app) {
+            None => Err("database not ready".to_string()),
+            Some(ctx) => {
             let progress_app = app.clone();
             let mut on_node = |nid: u32| {
                 progress_app
@@ -1048,15 +1147,16 @@ fn spawn_graph_run(app: &tauri::AppHandle, graph_id: u32) {
             };
             let log_app = app.clone();
             let log_graph = graph.clone();
-            let mut on_log = |nid: u32, msg: &str| {
+            let mut on_log = |nid: u32, msg: &str, ms: u128| {
                 let label = log_graph.node(nid).map(|n| n.kind.label()).unwrap_or("node");
                 let _ = log_app.emit(
                     "workflow-log",
-                    serde_json::json!({ "graph": graph_id, "node": nid, "label": label, "message": msg }),
+                    serde_json::json!({ "graph": graph_id, "node": nid, "label": label, "message": msg, "ms": ms }),
                 );
             };
             workflows::run_dag_with(&graph, &ctx, &mut on_node, &mut on_log)
             // ctx drops here → its drain thread ends.
+            }
         };
         let (ok, summary) = match &result {
             Ok(outs) => (true, format!("ran {} node(s)", outs.len())),
@@ -1537,14 +1637,16 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let path = devices_file(&app.handle());
-            let store: DeviceStore = Arc::new(Mutex::new(load_devices(&path)));
-            log::info!(
-                "Sentinel backend started — {} device(s) loaded from {}",
-                store.lock().unwrap().len(),
-                path.display()
-            );
+            // Devices live in Postgres. The store starts empty and is hydrated by
+            // `try_connect_db` (here, best-effort) or by the splash's `boot_status`
+            // retry loop once the database is reachable — there is no JSON fallback.
+            let db_state: DbState = Arc::new(Mutex::new(None));
+            app.manage(db_state);
+            let store: DeviceStore = Arc::new(Mutex::new(Vec::new()));
             app.manage(store);
+            if let Err(e) = try_connect_db(&app.handle()) {
+                log::warn!("Postgres not ready at startup ({e}); splash will retry");
+            }
 
             // Alerts: managed log loaded from <app_data_dir>/alerts.json.
             let alerts_path = alerts_file(&app.handle());
@@ -1580,6 +1682,12 @@ pub fn run() {
             let go2rtc: Go2rtcHandle = Arc::new(Mutex::new(None));
             app.manage(go2rtc);
 
+            // Keep-warm: managed stop-flag for the optional "always warm" poller that
+            // keeps each camera's shared go2rtc feed connected (started below if the
+            // setting is on, and toggled live from `set_settings`).
+            let warm: WarmHandle = Arc::new(Mutex::new(None));
+            app.manage(warm);
+
             // Chat: a single managed conversation history for Bishop's agent.
             let history: ChatHistory = Arc::new(Mutex::new(Vec::new()));
             app.manage(history);
@@ -1612,9 +1720,13 @@ pub fn run() {
             let devices = handle.state::<DeviceStore>().lock().unwrap().clone();
             let config = go2rtc_config_file(&handle);
             spawn_go2rtc(&handle, &config, &build_go2rtc_yaml(&devices));
+
+            // Start the keep-warm poller if the user has "always warm" enabled.
+            reconcile_keepwarm(&app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            boot_status,
             get_settings,
             set_settings,
             list_devices,
