@@ -708,21 +708,16 @@ struct WorkflowsFile {
     graphs: Vec<Graph>,
 }
 
-/// Load the named graphs from `path`. Empty when the file is missing/unreadable.
+/// Read legacy named graphs from a `workflows.json` at `path` (empty if
+/// missing/unreadable). Kept only for the one-time JSON→Postgres import on first DB
+/// boot — graphs now live in the shared `workflows` table (see
+/// [`crate::db::Db::load_workflows`]).
 pub fn load_workflows(path: &Path) -> Vec<Graph> {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str::<WorkflowsFile>(&s).ok())
         .map(|f| f.graphs)
         .unwrap_or_default()
-}
-
-/// Persist the named graphs to `path`.
-pub fn save_workflows(path: &Path, graphs: &[Graph]) {
-    let file = WorkflowsFile { graphs: graphs.to_vec() };
-    if let Ok(json) = serde_json::to_string_pretty(&file) {
-        let _ = std::fs::write(path, json);
-    }
 }
 
 #[cfg(test)]

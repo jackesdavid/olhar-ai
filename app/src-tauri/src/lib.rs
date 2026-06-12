@@ -135,6 +135,19 @@ fn try_connect_db(app: &tauri::AppHandle) -> Result<(), String> {
     }
     log::info!("Beacons loaded from Postgres — {} target(s)", beacons.len());
     *app.state::<NotificationStore>().lock().unwrap() = beacons;
+    // Workflow graphs live in Postgres too — same hydrate + one-time import from a
+    // legacy workflows.json. Rebuild the whole store so `next_graph_id` is recomputed.
+    let mut graphs = db.load_workflows();
+    if graphs.is_empty() {
+        let from_json = workflows::load_workflows(&workflows_file(app));
+        if !from_json.is_empty() {
+            db.save_workflows(&from_json);
+            log::info!("Imported {} workflow graph(s) from workflows.json into Postgres", from_json.len());
+            graphs = db.load_workflows();
+        }
+    }
+    log::info!("Workflows loaded from Postgres — {} graph(s)", graphs.len());
+    *app.state::<WfStore>().lock().unwrap() = Workflows::from_graphs(graphs);
     *state.lock().unwrap() = Some(db);
     Ok(())
 }
@@ -1313,10 +1326,13 @@ fn workflows_file(app: &tauri::AppHandle) -> PathBuf {
         .join("workflows.json")
 }
 
-/// Persist the whole graph collection to `<app_data_dir>/workflows.json`.
+/// Persist the whole graph collection to Postgres (replace-all). Best-effort: if the
+/// DB isn't connected yet (can't happen past the splash) the editor edit is in-memory only.
 fn persist_workflows(app: &tauri::AppHandle, store: &WfStore) {
     let graphs = store.lock().unwrap().graphs.clone();
-    workflows::save_workflows(&workflows_file(app), &graphs);
+    if let Ok(db) = db_ref(app) {
+        db.save_workflows(&graphs);
+    }
 }
 
 /// Spawn one graph run on a background thread. The caller must have already
@@ -1882,6 +1898,11 @@ pub fn run() {
             let notif_store: NotificationStore = Arc::new(Mutex::new(Vec::new()));
             app.manage(notif_store);
 
+            // Workflow graphs live in Postgres; managed empty BEFORE the DB connect so
+            // try_connect_db hydrates them (with a one-time workflows.json import).
+            let wf_store: WfStore = Arc::new(Mutex::new(Workflows::from_graphs(Vec::new())));
+            app.manage(wf_store);
+
             if let Err(e) = try_connect_db(&app.handle()) {
                 log::warn!("Postgres not ready at startup ({e}); splash will retry");
             }
@@ -1909,13 +1930,10 @@ pub fn run() {
             let history: ChatHistory = Arc::new(Mutex::new(Vec::new()));
             app.manage(history);
 
-            // Workflows: named graphs + the trigger/concurrency engine (seeded
-            // from the current alert max so the backlog doesn't fire OnNewAlert),
-            // then the background poller that drives Cron / OnNewAlert.
-            let wf_graphs = workflows::load_workflows(&workflows_file(&app.handle()));
-            log::info!("Workflows loaded — {} graph(s)", wf_graphs.len());
-            let wf_store: WfStore = Arc::new(Mutex::new(Workflows::from_graphs(wf_graphs)));
-            app.manage(wf_store);
+            // Workflows: the trigger/concurrency engine (seeded from the current alert
+            // max so the backlog doesn't fire OnNewAlert), then the background poller
+            // that drives Cron / OnNewAlert. The graph store was managed + hydrated from
+            // Postgres above (try_connect_db).
             let alert_max = app
                 .handle()
                 .state::<AlertStore>()
