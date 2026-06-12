@@ -553,7 +553,7 @@ fn run_create_alert(
         }
         None => (None, None),
     };
-    let a = alerts::create(&sys.alerts, &sys.alerts_path, level, message, room_id, room_name, source);
+    let a = alerts::create(&sys.alerts, Some(&sys.db), level, message, room_id, room_name, source);
     let _ = sys.ui_tx.send(ToolUiEvent::AlertsChanged);
     let mut o = PortValues::new();
     o.insert("id".into(), PortValue::Num(a.id as i64));
@@ -574,7 +574,7 @@ fn run_deliver_alert(inputs: &PortValues, sys: &ToolContext) -> Result<PortValue
         .notif_cfg
         .as_ref()
         .ok_or("Notifications are not configured (set the Telegram bot token in Beacons).")?;
-    let result = alerts::deliver(&sys.alerts, &sys.alerts_path, &sys.notif, cfg, id)?;
+    let result = alerts::deliver(&sys.alerts, Some(&sys.db), &sys.notif, cfg, id)?;
     let _ = sys.ui_tx.send(ToolUiEvent::AlertsChanged);
     let mut o = PortValues::new();
     o.insert("result".into(), PortValue::Text(result));
@@ -670,7 +670,6 @@ mod tests {
             devices: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             db: crate::db::Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
             alerts: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            alerts_path: std::env::temp_dir().join("wf_test_alerts.json"),
             notif: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             map_path: std::env::temp_dir().join("wf_test_map.json"),
             notif_cfg: None,

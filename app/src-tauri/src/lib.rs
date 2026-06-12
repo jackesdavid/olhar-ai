@@ -106,6 +106,22 @@ fn try_connect_db(app: &tauri::AppHandle) -> Result<(), String> {
     let people = db.load_persons();
     log::info!("Persons loaded — {} person(s)", people.len());
     *app.state::<PersonStore>().lock().unwrap() = people;
+    // The alert log lives in Postgres — hydrate the in-memory store. One-time,
+    // non-destructive import: if the DB log is empty but a legacy alerts.json exists,
+    // seed the DB from it (ids preserved) so the history survives the move to the DB.
+    let mut alerts = db.load_alerts();
+    if alerts.is_empty() {
+        let from_json = load_alerts(&alerts_file(app));
+        if !from_json.is_empty() {
+            for a in &from_json {
+                db.insert_alert(a);
+            }
+            log::info!("Imported {} alert(s) from alerts.json into Postgres", from_json.len());
+            alerts = db.load_alerts();
+        }
+    }
+    log::info!("Alerts loaded from Postgres — {} alert(s)", alerts.len());
+    *app.state::<AlertStore>().lock().unwrap() = alerts;
     *state.lock().unwrap() = Some(db);
     Ok(())
 }
@@ -505,11 +521,11 @@ fn reconcile_devices(app: &tauri::AppHandle, found: &[DiscoveredDevice]) {
     }
     if !ip_changes.is_empty() {
         let alert_store = app.state::<AlertStore>().inner().clone();
-        let path = alerts_file(app);
+        let db = db_ref(app).ok();
         for (name, old, new) in ip_changes {
             let msg = format!("Camera '{name}' changed IP address: {old} → {new}");
             log::warn!("reconcile: {msg}");
-            alerts::create(&alert_store, &path, AlertLevel::Warn, msg, None, None, "scanner".into());
+            alerts::create(&alert_store, db.as_ref(), AlertLevel::Warn, msg, None, None, "scanner".into());
         }
         let _ = app.emit("alerts-changed", ());
     }
@@ -728,7 +744,7 @@ fn create_alert(
 
     let alert = alerts::create(
         &state,
-        &alerts_file(&app),
+        db_ref(&app).ok().as_ref(),
         level,
         message,
         None,
@@ -748,7 +764,7 @@ fn create_alert(
 /// Remove the alert with `id` and persist. Returns whether one was removed.
 #[tauri::command]
 fn delete_alert(app: tauri::AppHandle, state: tauri::State<'_, AlertStore>, id: u64) -> bool {
-    let removed = alerts::delete(&state, &alerts_file(&app), id);
+    let removed = alerts::delete(&state, db_ref(&app).ok().as_ref(), id);
     log::info!("delete_alert: id={id} removed={removed}");
     removed
 }
@@ -915,9 +931,9 @@ async fn deliver_alert(
         .ok_or("Telegram is not configured (set the bot token in Beacons).")?;
     let alert_store = alert_state.inner().clone();
     let notif_store = notif_state.inner().clone();
-    let path = alerts_file(&app);
+    let db = db_ref(&app).ok();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        alerts::deliver(&alert_store, &path, &notif_store, &cfg, id)
+        alerts::deliver(&alert_store, db.as_ref(), &notif_store, &cfg, id)
     })
     .await
     .map_err(|e| format!("Deliver task failed: {e}"))?;
@@ -1179,7 +1195,6 @@ fn build_run_context(app: &tauri::AppHandle) -> Option<app_core::agent::ToolCont
         devices,
         db,
         alerts,
-        alerts_path: alerts_file(app),
         notif,
         map_path: map_file(app),
         notif_cfg: resolve_telegram_config(app),
@@ -1841,19 +1856,16 @@ pub fn run() {
             // People: hydrated from the DB alongside devices by `try_connect_db`.
             let person_store: PersonStore = Arc::new(Mutex::new(Vec::new()));
             app.manage(person_store);
+
+            // Alerts live in Postgres. The store is managed empty BEFORE the DB connect so
+            // `try_connect_db` can hydrate it (with a one-time import from any legacy
+            // alerts.json) — same pattern as devices/persons.
+            let alert_store: AlertStore = Arc::new(Mutex::new(Vec::new()));
+            app.manage(alert_store);
+
             if let Err(e) = try_connect_db(&app.handle()) {
                 log::warn!("Postgres not ready at startup ({e}); splash will retry");
             }
-
-            // Alerts: managed log loaded from <app_data_dir>/alerts.json.
-            let alerts_path = alerts_file(&app.handle());
-            let alert_store: AlertStore = Arc::new(Mutex::new(load_alerts(&alerts_path)));
-            log::info!(
-                "Alerts loaded — {} alert(s) from {}",
-                alert_store.lock().unwrap().len(),
-                alerts_path.display()
-            );
-            app.manage(alert_store);
 
             // Beacons: managed target list loaded from <app_data_dir>/notifications.json.
             let notif_path = notifications_file(&app.handle());

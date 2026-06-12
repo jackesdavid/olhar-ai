@@ -51,7 +51,6 @@ pub struct ToolContext {
     /// store stays the working set; this writes mutations through to the DB).
     pub db: Db,
     pub alerts: AlertStore,
-    pub alerts_path: PathBuf,
     pub notif: NotificationStore,
     pub map_path: PathBuf,
     /// Resolved Telegram config (saved `telegram.json` else env), or `None` when
@@ -468,7 +467,7 @@ fn create_alert() -> ToolSpec {
 
             let a = alerts::create(
                 &ctx.alerts,
-                &ctx.alerts_path,
+                Some(&ctx.db),
                 level,
                 message.to_string(),
                 room_id,
@@ -597,7 +596,7 @@ fn deliver_alert() -> ToolSpec {
                 .notif_cfg
                 .as_ref()
                 .ok_or("Notifications are not configured (set the Telegram bot token in Recipients).")?;
-            let result = alerts::deliver(&ctx.alerts, &ctx.alerts_path, &ctx.notif, cfg, id)?;
+            let result = alerts::deliver(&ctx.alerts, Some(&ctx.db), &ctx.notif, cfg, id)?;
             let _ = ctx.ui_tx.send(ToolUiEvent::AlertsChanged);
             Ok(result)
         },
@@ -616,7 +615,7 @@ fn delete_alert() -> ToolSpec {
         }),
         run: |input, ctx| {
             let id = input.get("id").and_then(Value::as_u64).ok_or("Missing 'id'.")?;
-            if alerts::delete(&ctx.alerts, &ctx.alerts_path, id) {
+            if alerts::delete(&ctx.alerts, Some(&ctx.db), id) {
                 let _ = ctx.ui_tx.send(ToolUiEvent::AlertsChanged);
                 Ok(format!("Deleted alert {id}."))
             } else {
@@ -646,7 +645,6 @@ mod tests {
             devices: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             db: Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
             alerts: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            alerts_path: std::env::temp_dir().join("app_core_chat_alerts.json"),
             notif: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             map_path: std::env::temp_dir().join("app_core_chat_map.json"),
             notif_cfg: None,

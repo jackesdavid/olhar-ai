@@ -110,21 +110,15 @@ pub fn is_today(created_at: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Load the saved alert log from `path`. Returns an empty list if the file is
-/// missing or unreadable.
+/// Read a legacy `alerts.json` from `path` (empty if missing/unreadable). Kept only
+/// for the one-time JSON→Postgres import on first DB boot — alerts now live in the
+/// shared `alerts` table (see [`crate::db::Db::load_alerts`]); there is no JSON
+/// runtime backend any more.
 pub fn load_alerts(path: &Path) -> Vec<Alert> {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
-}
-
-/// Persist the alert log to `path` (pretty JSON). Best-effort: write errors are
-/// swallowed, matching the ratatui app's behavior.
-pub fn save_alerts(path: &Path, alerts: &[Alert]) {
-    if let Ok(json) = serde_json::to_string_pretty(alerts) {
-        let _ = std::fs::write(path, json);
-    }
 }
 
 /// Next monotonic id for a new alert.
@@ -136,7 +130,7 @@ pub fn next_id(alerts: &[Alert]) -> u64 {
 /// alert.
 pub fn create(
     store: &AlertStore,
-    path: &Path,
+    db: Option<&crate::db::Db>,
     level: AlertLevel,
     message: String,
     room_id: Option<u32>,
@@ -155,19 +149,23 @@ pub fn create(
         deliveries: Vec::new(),
     };
     alerts.push(alert.clone());
-    save_alerts(path, &alerts);
+    if let Some(db) = db {
+        db.insert_alert(&alert);
+    }
     alert
 }
 
-/// Remove the alert with `id` and persist to `path`. Returns true if one was
-/// removed.
-pub fn delete(store: &AlertStore, path: &Path, id: u64) -> bool {
+/// Remove the alert with `id` from the store and the DB. Returns true if one was
+/// removed. `db` is `None` only in the can't-happen pre-connect window / tests.
+pub fn delete(store: &AlertStore, db: Option<&crate::db::Db>, id: u64) -> bool {
     let mut alerts = store.lock().unwrap();
     let before = alerts.len();
     alerts.retain(|a| a.id != id);
     let removed = alerts.len() != before;
     if removed {
-        save_alerts(path, &alerts);
+        if let Some(db) = db {
+            db.delete_alert(id);
+        }
     }
     removed
 }
@@ -185,7 +183,7 @@ pub fn format_message(a: &Alert) -> String {
 /// from env here, so the Tauri shell can source it from a saved file).
 pub fn deliver(
     store: &AlertStore,
-    path: &Path,
+    db: Option<&crate::db::Db>,
     notif: &NotificationStore,
     cfg: &NotificationConfig,
     id: u64,
@@ -227,7 +225,9 @@ pub fn deliver(
         if let Some(a) = alerts.iter_mut().find(|a| a.id == id) {
             a.deliveries.extend(deliveries);
         }
-        save_alerts(path, &alerts);
+        if let (Some(db), Some(u)) = (db, alerts.iter().find(|a| a.id == id).cloned()) {
+            db.update_alert_deliveries(u.id, &u.deliveries);
+        }
     }
     Ok(format!("Delivered alert {id} to {ok_count}/{} beacon(s).", beacons.len()))
 }
@@ -264,16 +264,14 @@ mod tests {
     }
 
     #[test]
-    fn create_delete_round_trip_through_path() {
-        let dir = std::env::temp_dir().join("app_core_alerts_test");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("alerts.json");
-        let _ = std::fs::remove_file(&path);
-
-        let store: AlertStore = Arc::new(Mutex::new(load_alerts(&path)));
+    fn create_delete_mutate_the_store() {
+        // Pass `None` for the DB so the test stays hermetic — this exercises the
+        // in-memory store semantics (id assignment, push, retain); the Postgres
+        // round-trip is covered by the app's live verification, not a unit test.
+        let store: AlertStore = Arc::new(Mutex::new(Vec::new()));
         let a = create(
             &store,
-            &path,
+            None,
             AlertLevel::Warn,
             "hello".into(),
             None,
@@ -281,10 +279,9 @@ mod tests {
             "operator".into(),
         );
         assert_eq!(a.id, 1);
-        assert_eq!(load_alerts(&path).len(), 1);
-        assert!(delete(&store, &path, a.id));
-        assert!(!delete(&store, &path, a.id));
-        assert!(load_alerts(&path).is_empty());
-        let _ = std::fs::remove_file(&path);
+        assert_eq!(store.lock().unwrap().len(), 1);
+        assert!(delete(&store, None, a.id));
+        assert!(!delete(&store, None, a.id));
+        assert!(store.lock().unwrap().is_empty());
     }
 }

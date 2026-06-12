@@ -282,7 +282,6 @@ mod tests {
             devices: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             db: crate::db::Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
             alerts: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            alerts_path: std::env::temp_dir().join("wf_eng_alerts.json"),
             notif: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             map_path: std::env::temp_dir().join("wf_eng_map.json"),
             notif_cfg: None,
