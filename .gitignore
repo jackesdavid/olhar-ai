@@ -1,7 +1,7 @@
 target/
 node_modules/
 
-# Python AI sidecar (services/ai) — local venv, caches, downloaded model weights
+# Python AI sidecar (ai/sidecar) — local venv, caches, downloaded model weights
 .venv/
 __pycache__/
 *.pt

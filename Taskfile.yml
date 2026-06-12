@@ -100,11 +100,18 @@ tasks:
           exit 1
         fi
         [ -d .venv ] || "$PY" -m venv .venv
-        ./.venv/bin/pip install -q --upgrade pip
-        # Local dev runs on CPU — onnxruntime-gpu won't load without CUDA, so swap to
-        # the CPU build for the venv (the Docker image keeps onnxruntime-gpu).
-        ./.venv/bin/pip install -q $(sed 's/onnxruntime-gpu.*/onnxruntime/' requirements.txt | grep -v '^#' | grep -v '^$') torch torchvision --extra-index-url https://download.pytorch.org/whl/cpu
-        echo "AI sidecar → http://localhost:8000  (set AI_SERVICE_URL=http://localhost:8000/runsync in .env, AI_SERVICE_KEY blank)"
+        # Install CPU deps on first run only (the marker keeps later `task dev` starts fast).
+        if [ ! -f .venv/.deps-installed ]; then
+          ./.venv/bin/pip install -q --upgrade pip wheel
+          # cython + numpy<2 FIRST: insightface builds a Cython ext, and torch needs numpy 1.x.
+          ./.venv/bin/pip install -q cython 'numpy<2'
+          # Local dev runs on CPU — swap onnxruntime-gpu -> onnxruntime (the Docker image keeps -gpu).
+          ./.venv/bin/pip install -q $(sed 's/onnxruntime-gpu.*/onnxruntime/' requirements.txt | grep -v '^#' | grep -v '^$') torch torchvision
+          # Re-pin numpy<2: torch/ultralytics/onnxruntime pull in numpy 2, which breaks torch.
+          ./.venv/bin/pip install -q 'numpy<2'
+          touch .venv/.deps-installed
+        fi
+        echo "AI sidecar → http://localhost:8000  (point the app at AI_SERVICE_URL=http://localhost:8000/runsync)"
         exec ./.venv/bin/python handler.py --rp_serve_api
 
   ai-build:
@@ -189,13 +196,20 @@ tasks:
       - docker compose logs -f db
 
   dev:
-    desc: Run the desktop app (Tauri window + SvelteKit dev, hot-reload)
+    desc: Run the desktop app + local AI sidecar (Tauri + SvelteKit + vision service, hot-reload)
     dir: "{{.APP}}"
     deps: [db-up] # bring Postgres up first — the app requires it
     env:
       RUST_BACKTRACE: "1" # full panic traces in the terminal
     cmds:
-      - npm run tauri dev
+      # Start the local CPU vision sidecar in the background (best-effort — first run installs
+      # its venv via `task ai`; logs + per-op timings go to the file). `defer` stops it on exit.
+      - defer: pkill -f 'handler.py --rp_serve_api' >/dev/null 2>&1 || true
+      - nohup task ai > /tmp/sentinel-sidecar.log 2>&1 &
+      - 'echo "AI sidecar starting in background → logs: /tmp/sentinel-sidecar.log"'
+      # Force the app at the LOCAL sidecar for dev — overrides AI_SERVICE_URL from .env so
+      # development never bills RunPod. To use RunPod / the GPU box instead, change this URL.
+      - AI_SERVICE_URL=http://localhost:8000/runsync npm run tauri dev
 
   frontend:
     desc: Run only the SvelteKit dev server (no Tauri window) on :1420
