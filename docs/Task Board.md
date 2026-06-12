@@ -20,6 +20,7 @@ kanban-plugin: board
 
 ## ToDo
 
+- [ ] Add a 3 seconds at lest on splash screen
 
 
 ## In Progress
@@ -27,7 +28,6 @@ kanban-plugin: board
 - [ ] School Student Frequency Case
 	  - Plan: [[school-student-frequency]]
 	  - Use case: [[school-frequence]]
-
 
 
 ## Review
