@@ -114,6 +114,11 @@ tasks:
         echo "AI sidecar → http://localhost:8000  (point the app at AI_SERVICE_URL=http://localhost:8000/runsync)"
         exec ./.venv/bin/python handler.py --rp_serve_api
 
+  ai-stop:
+    desc: Stop the local AI sidecar (the one `task dev` / `task ai` started on :8000)
+    cmds:
+      - pkill -f 'handler.py --rp_serve_api' && echo "AI sidecar stopped" || echo "AI sidecar was not running"
+
   ai-build:
     desc: Build the AI sidecar Docker image for RunPod (linux/amd64). Set AI_IMAGE=<registry>/<repo>:<tag>
     dir: ai/sidecar
@@ -202,11 +207,14 @@ tasks:
     env:
       RUST_BACKTRACE: "1" # full panic traces in the terminal
     cmds:
-      # Start the local CPU vision sidecar in the background (best-effort — first run installs
-      # its venv via `task ai`; logs + per-op timings go to the file). `defer` stops it on exit.
-      - defer: pkill -f 'handler.py --rp_serve_api' >/dev/null 2>&1 || true
-      - nohup task ai > /tmp/sentinel-sidecar.log 2>&1 &
-      - 'echo "AI sidecar starting in background → logs: /tmp/sentinel-sidecar.log"'
+      # Ensure the local CPU vision sidecar is up — reuse it if already running, and let it
+      # OUTLIVE the app so a Tauri rebuild/restart (or a failed start) never drops it. First
+      # run installs its venv via `task ai`; logs + per-op timings → /tmp/sentinel-sidecar.log.
+      # Stop it with `task ai-stop`.
+      - >-
+        curl -s -m 1 -o /dev/null http://localhost:8000/ 2>/dev/null
+        && echo "AI sidecar already up on :8000"
+        || ( nohup task ai > /tmp/sentinel-sidecar.log 2>&1 & echo "AI sidecar starting in background → /tmp/sentinel-sidecar.log" )
       # Force the app at the LOCAL sidecar for dev — overrides AI_SERVICE_URL from .env so
       # development never bills RunPod. To use RunPod / the GPU box instead, change this URL.
       - AI_SERVICE_URL=http://localhost:8000/runsync npm run tauri dev
