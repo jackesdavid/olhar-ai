@@ -62,7 +62,7 @@ fn restart_pairing(app: &tauri::AppHandle, store: NotificationStore, handle: &Pa
             *handle.lock().unwrap() = Some(stop.clone());
             // On each new pairing, emit so an open Beacons view refreshes live.
             let emitter = app.clone();
-            notification::spawn_pairing(store, cfg, notifications_file(app), stop, move || {
+            notification::spawn_pairing(store, cfg, db_ref(app).ok(), stop, move || {
                 let _ = emitter.emit("beacons-changed", ());
             });
             log::info!("Pairing poller (re)started.");
@@ -122,6 +122,19 @@ fn try_connect_db(app: &tauri::AppHandle) -> Result<(), String> {
     }
     log::info!("Alerts loaded from Postgres — {} alert(s)", alerts.len());
     *app.state::<AlertStore>().lock().unwrap() = alerts;
+    // Beacons (Telegram targets) live in Postgres too — same hydrate + one-time
+    // non-destructive import from a legacy notifications.json when the DB is empty.
+    let mut beacons = db.load_beacons();
+    if beacons.is_empty() {
+        let from_json = load_targets(&notifications_file(app));
+        if !from_json.is_empty() {
+            db.save_beacons(&from_json);
+            log::info!("Imported {} beacon(s) from notifications.json into Postgres", from_json.len());
+            beacons = db.load_beacons();
+        }
+    }
+    log::info!("Beacons loaded from Postgres — {} target(s)", beacons.len());
+    *app.state::<NotificationStore>().lock().unwrap() = beacons;
     *state.lock().unwrap() = Some(db);
     Ok(())
 }
@@ -863,7 +876,7 @@ fn toggle_beacon(
     chat_id: i64,
     enabled: bool,
 ) -> Result<(), String> {
-    let (label, _) = notification::set_enabled_by_id(&state, &notifications_file(&app), chat_id, enabled)
+    let (label, _) = notification::set_enabled_by_id(&state, db_ref(&app).ok().as_ref(), chat_id, enabled)
         .ok_or("Beacon not found.")?;
     log::info!("toggle_beacon: '{label}' (chat_id={chat_id}) enabled={enabled}");
     Ok(())
@@ -877,7 +890,7 @@ fn rename_beacon(
     chat_id: i64,
     label: String,
 ) -> Result<(), String> {
-    let new_label = notification::rename_target(&state, &notifications_file(&app), chat_id, &label)?;
+    let new_label = notification::rename_target(&state, db_ref(&app).ok().as_ref(), chat_id, &label)?;
     log::info!("rename_beacon: chat_id={chat_id} -> '{new_label}'");
     Ok(())
 }
@@ -889,7 +902,7 @@ fn delete_beacon(
     state: tauri::State<'_, NotificationStore>,
     chat_id: i64,
 ) -> Result<(), String> {
-    let removed = notification::delete_target(&state, &notifications_file(&app), chat_id)
+    let removed = notification::delete_target(&state, db_ref(&app).ok().as_ref(), chat_id)
         .ok_or("Beacon not found.")?;
     log::info!("delete_beacon: removed '{removed}' (chat_id={chat_id})");
     Ok(())
@@ -1863,20 +1876,15 @@ pub fn run() {
             let alert_store: AlertStore = Arc::new(Mutex::new(Vec::new()));
             app.manage(alert_store);
 
+            // Beacons (Telegram targets) live in Postgres; managed empty BEFORE the DB
+            // connect so try_connect_db can hydrate them (with a one-time import from any
+            // legacy notifications.json) — same pattern as devices/persons/alerts.
+            let notif_store: NotificationStore = Arc::new(Mutex::new(Vec::new()));
+            app.manage(notif_store);
+
             if let Err(e) = try_connect_db(&app.handle()) {
                 log::warn!("Postgres not ready at startup ({e}); splash will retry");
             }
-
-            // Beacons: managed target list loaded from <app_data_dir>/notifications.json.
-            let notif_path = notifications_file(&app.handle());
-            let notif_store: NotificationStore =
-                Arc::new(Mutex::new(load_targets(&notif_path)));
-            log::info!(
-                "Beacons loaded — {} target(s) from {}",
-                notif_store.lock().unwrap().len(),
-                notif_path.display()
-            );
-            app.manage(notif_store);
 
             // Pairing poller: managed stop-handle so `set_telegram_config` can
             // restart the inbound `/pair <code>` listener without an app restart.

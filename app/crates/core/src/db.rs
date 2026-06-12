@@ -17,6 +17,7 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 
 use crate::alerts::{Alert, AlertLevel, Delivery};
 use crate::devices::Device;
+use crate::notification::NotificationTarget;
 use crate::persons::{Person, PersonEmbedding, RecognitionMatch};
 
 const SELECT_COLS: &str =
@@ -406,6 +407,55 @@ impl Db {
         });
         if let Err(e) = res {
             log::error!("update_alert_deliveries failed: {e}");
+        }
+    }
+
+    // ---- Notification targets / beacons (Phase 0) --------------------------
+
+    /// The saved beacons, ordered by label. Empty (and logged) on a query error.
+    pub fn load_beacons(&self) -> Vec<NotificationTarget> {
+        let pool = self.pool.clone();
+        self.block(async move {
+            sqlx::query_as::<_, (i64, String, bool)>(
+                "SELECT chat_id, label, enabled FROM notification_targets ORDER BY label",
+            )
+            .fetch_all(&pool)
+            .await
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|(chat_id, label, enabled)| NotificationTarget { label, chat_id, enabled })
+                    .collect()
+            })
+            .unwrap_or_else(|e| {
+                log::error!("load_beacons query failed: {e}");
+                Vec::new()
+            })
+        })
+    }
+
+    /// Replace the whole beacon set (delete-all + insert each), mirroring the
+    /// in-memory store's "full list after every mutation" semantics. Best-effort.
+    pub fn save_beacons(&self, beacons: &[NotificationTarget]) {
+        let pool = self.pool.clone();
+        let beacons = beacons.to_vec();
+        let res: Result<(), sqlx::Error> = self.block(async move {
+            let mut tx = pool.begin().await?;
+            sqlx::query("DELETE FROM notification_targets").execute(&mut *tx).await?;
+            for b in &beacons {
+                sqlx::query(
+                    "INSERT INTO notification_targets (chat_id, label, enabled) VALUES ($1, $2, $3)",
+                )
+                .bind(b.chat_id)
+                .bind(&b.label)
+                .bind(b.enabled)
+                .execute(&mut *tx)
+                .await?;
+            }
+            tx.commit().await?;
+            Ok(())
+        });
+        if let Err(e) = res {
+            log::error!("save_beacons transaction failed: {e}");
         }
     }
 

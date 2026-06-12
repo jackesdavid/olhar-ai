@@ -32,21 +32,14 @@ fn default_true() -> bool {
     true
 }
 
-/// Load the saved target list from `path`. Returns an empty list if the file is
-/// missing or unreadable.
+/// Read a legacy `notifications.json` from `path` (empty if missing/unreadable).
+/// Kept only for the one-time JSON→Postgres import on first DB boot — beacons now
+/// live in the shared `notification_targets` table (see [`crate::db::Db::load_beacons`]).
 pub fn load_targets(path: &Path) -> Vec<NotificationTarget> {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
-}
-
-/// Persist the target list to `path` (pretty JSON). Best-effort: write errors are
-/// swallowed, matching the ratatui app's behavior.
-pub fn save_targets(path: &Path, targets: &[NotificationTarget]) {
-    if let Ok(json) = serde_json::to_string_pretty(targets) {
-        let _ = std::fs::write(path, json);
-    }
 }
 
 /// Resolved Telegram configuration. `from_env` returns `None` when the bot token

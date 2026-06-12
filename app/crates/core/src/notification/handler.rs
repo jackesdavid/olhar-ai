@@ -6,14 +6,14 @@
 //! `BeaconsScreen` / `BeaconDetail` / `BeaconField` view state is DROPPED — the
 //! web app drives those from Svelte. Persistence is path-parameterized so the
 //! poller writes under the OS app-data dir.
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use super::client::{self, Update};
-use super::domain::{save_targets, NotificationConfig, NotificationStore, NotificationTarget};
+use super::domain::{NotificationConfig, NotificationStore, NotificationTarget};
+use crate::db::Db;
 
 /// Match an inbound message against the pairing code. Accepts either
 /// `/pair <CODE>` or the bare `<CODE>`, trimmed and exact (case-sensitive).
@@ -88,7 +88,7 @@ pub fn dispatch(
 pub fn spawn_pairing<F>(
     store: NotificationStore,
     cfg: NotificationConfig,
-    path: PathBuf,
+    db: Option<Db>,
     stop: Arc<AtomicBool>,
     on_change: F,
 ) where
@@ -111,7 +111,7 @@ pub fn spawn_pairing<F>(
                         if !parse_pairing_code(&u.text, &cfg.pairing_code) {
                             continue;
                         }
-                        if register_target(&store, &path, u) {
+                        if register_target(&store, db.as_ref(), u) {
                             on_change(); // notify the UI layer to refresh the beacon list
                             let _ = client::send_message(
                                 &cfg,
@@ -136,14 +136,16 @@ pub fn spawn_pairing<F>(
 }
 
 /// Register a paired chat if not already present. Returns true if newly added.
-fn register_target(store: &NotificationStore, path: &Path, u: &Update) -> bool {
+fn register_target(store: &NotificationStore, db: Option<&Db>, u: &Update) -> bool {
     let mut targets = store.lock().unwrap();
     if targets.iter().any(|t| t.chat_id == u.chat_id) {
         return false; // already paired — idempotent
     }
     let label = dedupe_label(&targets, &u.sender_label);
     targets.push(NotificationTarget { label, chat_id: u.chat_id, enabled: true });
-    save_targets(path, &targets);
+    if let Some(db) = db {
+        db.save_beacons(&targets);
+    }
     true
 }
 
@@ -160,11 +162,13 @@ fn dedupe_label(targets: &[NotificationTarget], base: &str) -> String {
 
 /// Remove the beacon identified by `chat_id` and persist to `path`. Returns the
 /// removed label, or `None` if no beacon matched.
-pub fn delete_target(store: &NotificationStore, path: &Path, chat_id: i64) -> Option<String> {
+pub fn delete_target(store: &NotificationStore, db: Option<&Db>, chat_id: i64) -> Option<String> {
     let mut targets = store.lock().unwrap();
     let pos = targets.iter().position(|t| t.chat_id == chat_id)?;
     let removed = targets.remove(pos);
-    save_targets(path, &targets);
+    if let Some(db) = db {
+        db.save_beacons(&targets);
+    }
     Some(removed.label)
 }
 
@@ -172,7 +176,7 @@ pub fn delete_target(store: &NotificationStore, path: &Path, chat_id: i64) -> Op
 /// `path`. Empty names are rejected. Returns the committed label on success.
 pub fn rename_target(
     store: &NotificationStore,
-    path: &Path,
+    db: Option<&Db>,
     chat_id: i64,
     new_label: &str,
 ) -> Result<String, String> {
@@ -183,7 +187,9 @@ pub fn rename_target(
     let mut targets = store.lock().unwrap();
     let t = targets.iter_mut().find(|t| t.chat_id == chat_id).ok_or("Beacon not found.")?;
     t.label = label.clone();
-    save_targets(path, &targets);
+    if let Some(db) = db {
+        db.save_beacons(&targets);
+    }
     Ok(label)
 }
 
@@ -191,7 +197,7 @@ pub fn rename_target(
 /// `path`. Returns `(label, new_state)`, or `None` if no beacon matched.
 pub fn set_enabled_by_id(
     store: &NotificationStore,
-    path: &Path,
+    db: Option<&Db>,
     chat_id: i64,
     enabled: bool,
 ) -> Option<(String, bool)> {
@@ -199,7 +205,9 @@ pub fn set_enabled_by_id(
     let t = targets.iter_mut().find(|t| t.chat_id == chat_id)?;
     t.enabled = enabled;
     let out = (t.label.clone(), t.enabled);
-    save_targets(path, &targets);
+    if let Some(db) = db {
+        db.save_beacons(&targets);
+    }
     Some(out)
 }
 
@@ -244,26 +252,22 @@ mod tests {
     }
 
     #[test]
-    fn rename_toggle_delete_round_trip_through_path() {
-        let dir = std::env::temp_dir().join("app_core_notif_test");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("notifications.json");
-        let _ = std::fs::remove_file(&path);
-
+    fn rename_toggle_delete_mutate_the_store() {
+        // `None` for the DB keeps the test hermetic — exercises the in-memory store
+        // semantics (find-by-chat_id, rename, toggle, remove). The Postgres round-trip
+        // is covered by the app's live verification, not a unit test.
         let store: NotificationStore =
             Arc::new(Mutex::new(vec![target("Dave", 42, true), target("Ripley", 7, true)]));
-        save_targets(&path, &store.lock().unwrap());
 
-        assert_eq!(rename_target(&store, &path, 42, "Phone").unwrap(), "Phone");
-        assert!(rename_target(&store, &path, 42, "  ").is_err());
-        assert_eq!(set_enabled_by_id(&store, &path, 7, false), Some(("Ripley".into(), false)));
-        assert_eq!(delete_target(&store, &path, 42), Some("Phone".into()));
-        assert!(delete_target(&store, &path, 999).is_none());
+        assert_eq!(rename_target(&store, None, 42, "Phone").unwrap(), "Phone");
+        assert!(rename_target(&store, None, 42, "  ").is_err());
+        assert_eq!(set_enabled_by_id(&store, None, 7, false), Some(("Ripley".into(), false)));
+        assert_eq!(delete_target(&store, None, 42), Some("Phone".into()));
+        assert!(delete_target(&store, None, 999).is_none());
 
-        let reloaded = super::super::domain::load_targets(&path);
-        assert_eq!(reloaded.len(), 1);
-        assert_eq!(reloaded[0].chat_id, 7);
-        assert!(!reloaded[0].enabled);
-        let _ = std::fs::remove_file(&path);
+        let remaining = store.lock().unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].chat_id, 7);
+        assert!(!remaining[0].enabled);
     }
 }

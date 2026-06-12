@@ -15,9 +15,7 @@ pub mod client;
 pub mod domain;
 pub mod handler;
 
-pub use domain::{
-    load_targets, save_targets, NotificationConfig, NotificationStore, NotificationTarget,
-};
+pub use domain::{load_targets, NotificationConfig, NotificationStore, NotificationTarget};
 pub use handler::{
     delete_target, dispatch, rename_target, set_enabled_by_id, spawn_pairing,
 };
