@@ -19,6 +19,7 @@ ArcFace recognizer); splitting them lets callers skip the half they don't need.
 
 import base64
 import io
+import time
 
 import cv2
 import numpy as np
@@ -179,9 +180,20 @@ def handler(job: dict) -> dict:
     fn = OPS.get(op)
     if fn is None:
         return {"error": f"unknown op '{op}'. known: {sorted(OPS)}"}
+    # Time the op (server-side, GPU + decode only — the first face call also pays the
+    # one-time model load). Compare against the app's wall-clock log to split GPU time
+    # from network / cold-start. `took_ms` is echoed in the response too.
+    t0 = time.perf_counter()
     try:
-        return fn(inp)
+        out = fn(inp)
+        ms = round((time.perf_counter() - t0) * 1000)
+        print(f"[ai] op={op} took {ms} ms", flush=True)
+        if isinstance(out, dict):
+            out.setdefault("took_ms", ms)
+        return out
     except Exception as e:  # surface a clean error to the caller
+        ms = round((time.perf_counter() - t0) * 1000)
+        print(f"[ai] op={op} FAILED in {ms} ms: {e}", flush=True)
         return {"error": f"{op}: {e}"}
 
 

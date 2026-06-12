@@ -6,7 +6,7 @@
 //! `.env` keys `AI_SERVICE_URL` and `AI_SERVICE_KEY`, mirroring how `vision.rs`
 //! reads `ANTHROPIC_API_KEY` — when unset, callers get a clear "not configured"
 //! error instead of a panic.
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde_json::{json, Value};
@@ -44,13 +44,31 @@ pub fn image_b64(bytes: &[u8]) -> String {
 
 /// Call an op on the AI sidecar and return its `output` object.
 ///
+/// Times the full round trip — request + any cold-start `/status` polling — and logs
+/// the start (with the target URL, so local-GPU vs RunPod is visible) and the elapsed
+/// milliseconds on finish. This is the wall-clock latency a detection/enrollment call
+/// actually costs.
+pub fn call(op: &str, input: Value) -> Result<Value, String> {
+    let started = Instant::now();
+    let result = call_inner(op, input);
+    let ms = started.elapsed().as_millis();
+    match &result {
+        Ok(_) => log::info!("ai_service: op '{op}' finished in {ms} ms"),
+        Err(e) => log::warn!("ai_service: op '{op}' failed after {ms} ms: {e}"),
+    }
+    result
+}
+
+/// Inner call: merge `op` into `input`, POST it, and resolve the RunPod envelope
+/// (polling `/status` while a cold-start job is `IN_QUEUE`/`IN_PROGRESS`).
+///
 /// `input` should be a JSON object of the op's args (e.g. `{ "image_b64": ... }`);
-/// the `op` field is merged in here. If RunPod returns a queued/running job
-/// (a cold start outliving runsync's wait), we poll `/status` until it finishes.
-pub fn call(op: &str, mut input: Value) -> Result<Value, String> {
+/// the `op` field is merged in here.
+fn call_inner(op: &str, mut input: Value) -> Result<Value, String> {
     let cfg = AiServiceConfig::from_env().ok_or(
         "AI service not configured — set AI_SERVICE_URL (and AI_SERVICE_KEY) in .env.",
     )?;
+    log::info!("ai_service: op '{op}' → {}", cfg.url);
 
     match input.as_object_mut() {
         Some(map) => {
