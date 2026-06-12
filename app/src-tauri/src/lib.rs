@@ -19,6 +19,7 @@ use app_core::config::{load_settings, save_settings, Settings};
 use app_core::db::Db;
 use app_core::device_actions::capture_snapshot_bytes;
 use app_core::devices::{Device, DeviceStore};
+use app_core::persons::{self, Person, PersonEmbedding, PersonStore, RecognitionResult};
 use app_core::map::{load_map as core_load_map, save_map as core_save_map, MapRoom};
 use app_core::notification::{
     self, load_targets, NotificationConfig, NotificationStore, NotificationTarget,
@@ -102,6 +103,9 @@ fn try_connect_db(app: &tauri::AppHandle) -> Result<(), String> {
         devices.len()
     );
     *app.state::<DeviceStore>().lock().unwrap() = devices;
+    let people = db.load_persons();
+    log::info!("Persons loaded — {} person(s)", people.len());
+    *app.state::<PersonStore>().lock().unwrap() = people;
     *state.lock().unwrap() = Some(db);
     Ok(())
 }
@@ -115,6 +119,29 @@ fn persist_devices(app: &tauri::AppHandle, devices: &[Device]) -> Result<(), Str
         .as_ref()
         .ok_or("Database not ready")?
         .save_devices(devices);
+    Ok(())
+}
+
+/// Borrow the connected DB as a cloned handle (cheap — shares pool + runtime), or
+/// error if the database isn't ready yet.
+fn db_ref(app: &tauri::AppHandle) -> Result<Db, String> {
+    app.state::<DbState>()
+        .lock()
+        .unwrap()
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| "Database not ready".to_string())
+}
+
+/// Persist the full person list to Postgres (upsert + prune). Errors if the DB
+/// isn't connected yet (commands only run once the app is past the splash).
+fn persist_persons(app: &tauri::AppHandle, people: &[Person]) -> Result<(), String> {
+    app.state::<DbState>()
+        .lock()
+        .unwrap()
+        .as_ref()
+        .ok_or("Database not ready")?
+        .save_persons(people);
     Ok(())
 }
 
@@ -271,6 +298,160 @@ fn rename_device(
     device.name = trimmed.to_string();
     persist_devices(&app, &devices)?;
     Ok(())
+}
+
+// ---- People ----------------------------------------------------------------
+
+/// The managed person list (the hierarchy + recipient links + permissions).
+#[tauri::command]
+fn list_people(state: tauri::State<'_, PersonStore>) -> Vec<Person> {
+    state.lock().unwrap().clone()
+}
+
+/// The permission actions a superior can be granted over its subtree — the single
+/// source of truth for the People UI's permission toggles.
+#[tauri::command]
+fn person_permission_kinds() -> Vec<String> {
+    persons::PERMISSIONS.iter().map(|s| s.to_string()).collect()
+}
+
+/// Upsert a person by `id` (the frontend assigns a UUID for new people) and
+/// persist. Validates the name, the recipient label, and guards the hierarchy
+/// against self/cycle parents before saving.
+#[tauri::command]
+fn save_person(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, PersonStore>,
+    person: Person,
+) -> Result<(), String> {
+    let mut person = person;
+    person.name = person.name.trim().to_string();
+    if person.id.trim().is_empty() {
+        return Err("Person id is required.".into());
+    }
+    if person.name.is_empty() {
+        return Err("Name cannot be empty.".into());
+    }
+    // Normalize an empty recipient/parent to None.
+    person.recipient_label =
+        person.recipient_label.filter(|r| !r.trim().is_empty());
+    person.parent_id = person.parent_id.filter(|p| !p.trim().is_empty());
+    // Drop unknown permission actions.
+    person.permissions.retain(|a| persons::PERMISSIONS.contains(&a.as_str()));
+
+    let mut people = state.lock().unwrap();
+    if let Some(parent) = person.parent_id.as_deref() {
+        if persons::find(&people, parent).is_none() {
+            return Err("Selected parent no longer exists.".into());
+        }
+        if persons::would_cycle(&people, &person.id, parent) {
+            return Err("That parent would create a cycle in the hierarchy.".into());
+        }
+    }
+    if let Some(existing) = people.iter_mut().find(|p| p.id == person.id) {
+        *existing = person;
+    } else {
+        people.push(person);
+    }
+    persist_persons(&app, &people)
+}
+
+/// Remove a person and detach any children that pointed to them (so the in-memory
+/// store mirrors the table's `ON DELETE SET NULL`). Returns whether one was removed.
+#[tauri::command]
+fn delete_person(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, PersonStore>,
+    id: String,
+) -> Result<bool, String> {
+    let mut people = state.lock().unwrap();
+    let before = people.len();
+    people.retain(|p| p.id != id);
+    let removed = people.len() != before;
+    if removed {
+        for child in people.iter_mut().filter(|p| p.parent_id.as_deref() == Some(id.as_str())) {
+            child.parent_id = None;
+        }
+        persist_persons(&app, &people)?;
+    }
+    Ok(removed)
+}
+
+/// Enroll one face for a person: compute an embedding from `image` (base64, optionally
+/// a `data:…;base64,` URL) and insert it as a new `person_embeddings` row. `source` is
+/// `"camera"` or `"upload"`; `approved` carries the per-sample consent toggle. Returns
+/// the new embedding's id.
+#[tauri::command]
+fn enroll_face(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, PersonStore>,
+    person_id: String,
+    image: String,
+    source: String,
+    approved: bool,
+) -> Result<String, String> {
+    {
+        let people = state.lock().unwrap();
+        if persons::find(&people, &person_id).is_none() {
+            return Err("Person not found.".into());
+        }
+    }
+    let b64 = image.rsplit(',').next().unwrap_or(&image);
+    let bytes = B64.decode(b64.trim()).map_err(|e| format!("decode image: {e}"))?;
+    let embedding = app_core::agent::face::embed(&bytes)?;
+    db_ref(&app)?.insert_embedding(&person_id, &embedding, approved, &source)
+}
+
+/// Every enrolled embedding for a person (with the raw vector, for the avatar).
+#[tauri::command]
+fn list_embeddings(app: tauri::AppHandle, person_id: String) -> Result<Vec<PersonEmbedding>, String> {
+    Ok(db_ref(&app)?.list_embeddings(&person_id))
+}
+
+/// Approve a single embedding (per-sample consent).
+#[tauri::command]
+fn approve_embedding(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    db_ref(&app)?.approve_embedding(&id)
+}
+
+/// Delete a single embedding.
+#[tauri::command]
+fn delete_embedding(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    db_ref(&app)?.delete_embedding(&id)
+}
+
+/// Ids of people with ≥1 approved embedding — the directory's "enrolled" badge.
+#[tauri::command]
+fn enrolled_person_ids(app: tauri::AppHandle) -> Vec<String> {
+    match app.state::<DbState>().lock().unwrap().as_ref() {
+        Some(db) => db.enrolled_person_ids(),
+        None => Vec::new(),
+    }
+}
+
+/// Result of a recognition probe: the **query** embedding (so the UI can draw the
+/// target's point-cloud), plus the best `match` within `max_distance` (or none).
+#[derive(Serialize)]
+struct RecognizeDetail {
+    query: Vec<f32>,
+    #[serde(rename = "match")]
+    matched: Option<RecognitionResult>,
+}
+
+/// Recognise a face: embed `image` (base64, optionally a data URL) and match it
+/// against the approved embeddings. Returns the query embedding + the best match.
+#[tauri::command]
+fn recognize_face(
+    app: tauri::AppHandle,
+    image: String,
+    max_distance: Option<f32>,
+) -> Result<RecognizeDetail, String> {
+    let b64 = image.rsplit(',').next().unwrap_or(&image);
+    let bytes = B64.decode(b64.trim()).map_err(|e| format!("decode image: {e}"))?;
+    let query = app_core::agent::face::embed(&bytes)?;
+    let matches = db_ref(&app)?.recognize(&query, 5);
+    let matched = persons::best_match(&matches, max_distance.unwrap_or(0.4));
+    Ok(RecognizeDetail { query, matched })
 }
 
 /// Run an ONVIF WS-Discovery sweep on a blocking task (it's a sync UDP collect).
@@ -1637,6 +1818,19 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // Face models (YOLOv8-face + ArcFace) load at runtime from here. Drop the
+            // ONNX files (`yolov8_face.onnx`, `arcface.onnx`) into this dir and
+            // recognition switches from the placeholder to real — no rebuild. Absent →
+            // placeholder fallback (see `app_core::agent::face`).
+            let models_dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join("models");
+            let _ = std::fs::create_dir_all(&models_dir);
+            std::env::set_var("SENTINEL_MODELS_DIR", &models_dir);
+            log::info!("Face models dir: {}", models_dir.display());
+
             // Devices live in Postgres. The store starts empty and is hydrated by
             // `try_connect_db` (here, best-effort) or by the splash's `boot_status`
             // retry loop once the database is reachable — there is no JSON fallback.
@@ -1644,6 +1838,9 @@ pub fn run() {
             app.manage(db_state);
             let store: DeviceStore = Arc::new(Mutex::new(Vec::new()));
             app.manage(store);
+            // People: hydrated from the DB alongside devices by `try_connect_db`.
+            let person_store: PersonStore = Arc::new(Mutex::new(Vec::new()));
+            app.manage(person_store);
             if let Err(e) = try_connect_db(&app.handle()) {
                 log::warn!("Postgres not ready at startup ({e}); splash will retry");
             }
@@ -1733,6 +1930,16 @@ pub fn run() {
             save_device,
             delete_device,
             rename_device,
+            list_people,
+            person_permission_kinds,
+            save_person,
+            delete_person,
+            enroll_face,
+            list_embeddings,
+            approve_embedding,
+            delete_embedding,
+            enrolled_person_ids,
+            recognize_face,
             discover_devices,
             capture_snapshot,
             test_credentials,

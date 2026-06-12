@@ -91,6 +91,44 @@ export type TelegramConfigState = {
   pairing_code: string;
 };
 
+/** A managed person (matches `app_core::persons::Person`). The hierarchy is
+ * expressed by `parent_id` (the superior); `permissions` are the actions this
+ * person may perform over the people beneath it. Face biometrics live in their own
+ * table (`PersonEmbedding`) — a person is "enrolled" when they have ≥1 approved row. */
+export type Person = {
+  id: string;
+  name: string;
+  parent_id: string | null;
+  recipient_label: string | null;
+  permissions: string[];
+};
+
+/** One enrolled face embedding (matches `app_core::persons::PersonEmbedding`). The
+ * raw `embedding` vector is returned only to render the privacy-safe point-cloud
+ * avatar — the source photo is never stored. */
+export type PersonEmbedding = {
+  id: string;
+  person_id: string;
+  approved: boolean;
+  source: string;
+  created_at: string;
+  embedding: number[];
+};
+
+/** A recognition result (matches `app_core::persons::RecognitionResult`). */
+export type RecognitionResult = {
+  person_id: string;
+  name: string;
+  confidence: number;
+};
+
+/** A recognition probe result: the query embedding (for the target point-cloud) plus
+ * the best match (matches the Tauri `recognize_face` command). */
+export type RecognizeDetail = {
+  query: number[];
+  match: RecognitionResult | null;
+};
+
 /** A camera assigned to a room (matches `app_core::map::RoomCamera`).
  * Positioned by an offset (`dx,dy`) in cells from the room's top-left. */
 export type RoomCamera = {

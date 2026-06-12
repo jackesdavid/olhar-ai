@@ -201,6 +201,7 @@ pub fn run_node(
         NodeKind::If => run_if(inputs),
         NodeKind::MotionDetection => run_motion_detection(config, inputs),
         NodeKind::PersonDetection => run_person_detection(inputs),
+        NodeKind::RecognizePerson => run_recognize_person(config, inputs, sys),
         NodeKind::Print => run_print(config, inputs, sys),
         // ShowImage is a debug sink whose only effect — mirroring its input frame to
         // the editor — is driven by the engine, which owns the node id the UI needs to
@@ -233,6 +234,40 @@ fn run_person_detection(inputs: &PortValues) -> Result<PortValues, String> {
     o.insert("count".into(), PortValue::Num(r.count));
     o.insert("confidence".into(), PortValue::Num((r.confidence * 100.0).round() as i64));
     o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
+}
+
+/// Recognise a face against the enrolled people: embed the frame, run a cosine kNN
+/// over approved embeddings, and pick the best person within `max_distance`. Outputs
+/// `person` (name), `person_id`, `confidence` (%), and `ok` (whether a match was found).
+fn run_recognize_person(
+    config: &Value,
+    inputs: &PortValues,
+    sys: &ToolContext,
+) -> Result<PortValues, String> {
+    let bytes = inputs
+        .get("image")
+        .and_then(PortValue::as_image)
+        .ok_or("missing required input 'image'")?;
+    let max_distance = config
+        .get("max_distance")
+        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+        .unwrap_or(0.4) as f32;
+    let embedding = crate::agent::face::embed(bytes)?;
+    let matches = sys.db.recognize(&embedding, 5);
+    let mut o = PortValues::new();
+    match crate::persons::best_match(&matches, max_distance) {
+        Some(m) => {
+            o.insert("person".into(), PortValue::Text(m.name));
+            o.insert("person_id".into(), PortValue::Text(m.person_id));
+            o.insert("confidence".into(), PortValue::Num(m.confidence));
+            o.insert("ok".into(), PortValue::Bool(true));
+        }
+        None => {
+            o.insert("confidence".into(), PortValue::Num(0));
+            o.insert("ok".into(), PortValue::Bool(false));
+        }
+    }
     Ok(o)
 }
 
@@ -301,6 +336,13 @@ pub fn debug_summary(
         NodeKind::Print => {
             let msg = inputs.get("message").and_then(PortValue::as_text).unwrap_or("");
             format!("print: {}", clip(msg))
+        }
+        NodeKind::RecognizePerson => {
+            if flag("ok") {
+                format!("recognised {} ({}%)", txt("person").unwrap_or("?"), num("confidence").unwrap_or(0))
+            } else {
+                "no match".into()
+            }
         }
         NodeKind::ShowImage => {
             let bytes = inputs.get("image").and_then(PortValue::as_image).map_or(0, <[u8]>::len);
@@ -696,6 +738,13 @@ mod tests {
     #[test]
     fn person_detection_requires_an_image() {
         let err = run_node(NodeKind::PersonDetection, &json!({}), &PortValues::new(), &test_ctx())
+            .unwrap_err();
+        assert!(err.contains("missing required input 'image'"), "got: {err}");
+    }
+
+    #[test]
+    fn recognize_person_requires_an_image() {
+        let err = run_node(NodeKind::RecognizePerson, &json!({}), &PortValues::new(), &test_ctx())
             .unwrap_err();
         assert!(err.contains("missing required input 'image'"), "got: {err}");
     }

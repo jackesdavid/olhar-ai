@@ -18,5 +18,6 @@ pub mod listen;
 pub mod map;
 pub mod notification;
 pub mod onvif;
+pub mod persons;
 pub mod voice;
 pub mod workflows;

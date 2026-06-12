@@ -82,6 +82,8 @@ pub enum NodeKind {
     MotionDetection,
     /// Vision: detect whether a person is present in an image (via the AI sidecar).
     PersonDetection,
+    /// Vision: match a face in an image against the enrolled people (pgvector kNN).
+    RecognizePerson,
     /// Debug: print a `message` to the editor Console (always) and, unless `on_screen`
     /// is off, flash it as on-screen text over the canvas — like Unreal's Print String.
     Print,
@@ -186,6 +188,15 @@ const PERSON_DETECTION_OUT: [Port; 4] = [
     p("ok", PortType::Bool, false),
 ];
 
+// Recognize person: a face image in → the matched person + confidence.
+const RECOGNIZE_PERSON_IN: [Port; 1] = [p("image", PortType::Image, true)];
+const RECOGNIZE_PERSON_OUT: [Port; 4] = [
+    p("person", PortType::Text, false),    // matched person's name
+    p("person_id", PortType::Text, false), // matched person's id
+    p("confidence", PortType::Num, false), // percent 0..100
+    p("ok", PortType::Bool, false),        // true when a match within threshold
+];
+
 // Print: a message to echo to the Console (+ optional on-screen flash).
 const PRINT_IN: [Port; 2] =
     [p("message", PortType::Text, false), p("on_screen", PortType::Bool, false)];
@@ -206,7 +217,7 @@ const EXEC_OUT_DEFAULT: [Port; 1] = [EXEC_OUT];
 const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 15] = [
+    pub const ALL: [NodeKind; 16] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -220,6 +231,7 @@ impl NodeKind {
         NodeKind::If,
         NodeKind::MotionDetection,
         NodeKind::PersonDetection,
+        NodeKind::RecognizePerson,
         NodeKind::Print,
         NodeKind::ShowImage,
     ];
@@ -241,6 +253,7 @@ impl NodeKind {
             NodeKind::If => "if",
             NodeKind::MotionDetection => "motion_detection",
             NodeKind::PersonDetection => "person_detection",
+            NodeKind::RecognizePerson => "recognize_person",
             NodeKind::Print => "print",
             NodeKind::ShowImage => "show_image",
         }
@@ -265,6 +278,7 @@ impl NodeKind {
             NodeKind::If => "If",
             NodeKind::MotionDetection => "Motion detection",
             NodeKind::PersonDetection => "Person detection",
+            NodeKind::RecognizePerson => "Recognize person",
             NodeKind::Print => "Print",
             NodeKind::ShowImage => "Show image",
         }
@@ -280,7 +294,9 @@ impl NodeKind {
             NodeKind::Format => "Text",
             NodeKind::Wait | NodeKind::If | NodeKind::Print | NodeKind::ShowImage => "Flow",
             NodeKind::HttpPost => "Network",
-            NodeKind::MotionDetection | NodeKind::PersonDetection => "Vision",
+            NodeKind::MotionDetection | NodeKind::PersonDetection | NodeKind::RecognizePerson => {
+                "Vision"
+            }
         }
     }
 
@@ -308,6 +324,7 @@ impl NodeKind {
             NodeKind::If => &IF_IN,
             NodeKind::MotionDetection => &MOTION_IN,
             NodeKind::PersonDetection => &PERSON_DETECTION_IN,
+            NodeKind::RecognizePerson => &RECOGNIZE_PERSON_IN,
             NodeKind::Print => &PRINT_IN,
             NodeKind::ShowImage => &SHOW_IMAGE_IN,
         }
@@ -328,6 +345,7 @@ impl NodeKind {
             NodeKind::If => &NO_PORTS, // outputs are exec branches (true/false)
             NodeKind::MotionDetection => &MOTION_OUT,
             NodeKind::PersonDetection => &PERSON_DETECTION_OUT,
+            NodeKind::RecognizePerson => &RECOGNIZE_PERSON_OUT,
             NodeKind::Print => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::ShowImage => &NO_PORTS, // a sink — exec passes through, no data out
         }
@@ -365,6 +383,7 @@ impl NodeKind {
             NodeKind::If => json!({}),
             NodeKind::MotionDetection => json!({ "sensitivity": "2", "pixel_threshold": "25" }),
             NodeKind::PersonDetection => json!({}),
+            NodeKind::RecognizePerson => json!({ "max_distance": "0.4" }),
             NodeKind::Print => json!({ "message": "", "on_screen": true, "level": "info" }),
             NodeKind::ShowImage => json!({ "label": "" }),
         }
