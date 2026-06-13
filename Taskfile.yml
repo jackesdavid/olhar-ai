@@ -200,6 +200,27 @@ tasks:
     cmds:
       - docker compose logs -f db
 
+  flow:
+    desc: Run sentinel-flow — the always-on workflow engine service (REST + SSE on :8787)
+    dir: sentinel-flow
+    deps: [db-up]
+    env:
+      FLOW_BIND: '{{.FLOW_BIND | default "127.0.0.1:8787"}}'
+    cmds:
+      - cargo run
+
+  flow-build:
+    desc: Build sentinel-flow (release)
+    dir: sentinel-flow
+    cmds:
+      - cargo build --release
+
+  flow-check:
+    desc: Type-check sentinel-flow
+    dir: sentinel-flow
+    cmds:
+      - cargo check
+
   dev:
     desc: Run the desktop app + local AI sidecar (Tauri + SvelteKit + vision service, hot-reload)
     dir: "{{.APP}}"

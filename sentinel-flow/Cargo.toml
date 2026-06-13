@@ -1,0 +1,26 @@
+[package]
+name = "sentinel-flow"
+version = "0.1.0"
+edition = "2021"
+description = "Always-on workflow engine service. Runs the Sentinel workflow DAGs, triggers, and persisted engine state out-of-process and exposes REST + SSE, so the UI/control-plane (Tauri app) can be stopped and restarted freely while automations keep firing 24/7."
+
+# Standalone crate (NOT a member of the app/ workspace) so it can live at the repo
+# root and ship/run independently. It links the same UI-agnostic `app-core` the
+# Tauri shell uses — engine, nodes, repos, ports — by path.
+[dependencies]
+app-core = { path = "../app/crates/core" }
+
+# Async HTTP for the REST + SSE control plane. The engine + poller + run executor
+# stay synchronous on dedicated std threads (mirroring the Tauri shell); axum only
+# serves the control plane. `app-core`'s Db owns its own runtime and bridges via a
+# channel (never block_on the current thread), so the two coexist safely.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures = "0.3"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+env_logger = "0.11"
