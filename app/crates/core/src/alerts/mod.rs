@@ -4,15 +4,17 @@
 //! other copied modules, persistence is path-parameterized (no hardcoded cwd
 //! `alerts.json`) so the Tauri shell writes under the OS app-data dir.
 //!
-//! `deliver` (which dispatches to beacons via the notification layer) was
-//! deferred to migration unit 017 and lands here, ported from the ratatui
-//! `src/alerts/actions.rs::deliver`. Persistence stays path-parameterized.
-use std::path::Path;
+//! `deliver` dispatches to beacons via the notification layer. The Postgres
+//! persistence lives in the [`repo`] adapter; this module holds the domain types
+//! (`Alert`, `AlertLevel`, `Delivery`) and the create/delete/deliver service fns
+//! that coordinate the in-memory store with the repo.
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
 use crate::notification::{self, NotificationConfig, NotificationStore, NotificationTarget};
+
+pub mod repo;
 
 /// The shared alert log — held by the Tauri managed state and cloned into
 /// background threads so commands read/mutate the same store.
@@ -110,17 +112,6 @@ pub fn is_today(created_at: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Read a legacy `alerts.json` from `path` (empty if missing/unreadable). Kept only
-/// for the one-time JSON→Postgres import on first DB boot — alerts now live in the
-/// shared `alerts` table (see [`crate::db::Db::load_alerts`]); there is no JSON
-/// runtime backend any more.
-pub fn load_alerts(path: &Path) -> Vec<Alert> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
 /// Next monotonic id for a new alert.
 pub fn next_id(alerts: &[Alert]) -> u64 {
     alerts.iter().map(|a| a.id).max().map_or(1, |m| m + 1)
@@ -150,7 +141,7 @@ pub fn create(
     };
     alerts.push(alert.clone());
     if let Some(db) = db {
-        db.insert_alert(&alert);
+        repo::insert(db, &alert);
     }
     alert
 }
@@ -164,7 +155,7 @@ pub fn delete(store: &AlertStore, db: Option<&crate::db::Db>, id: u64) -> bool {
     let removed = alerts.len() != before;
     if removed {
         if let Some(db) = db {
-            db.delete_alert(id);
+            repo::delete(db, id);
         }
     }
     removed
@@ -226,7 +217,7 @@ pub fn deliver(
             a.deliveries.extend(deliveries);
         }
         if let (Some(db), Some(u)) = (db, alerts.iter().find(|a| a.id == id).cloned()) {
-            db.update_alert_deliveries(u.id, &u.deliveries);
+            repo::update_deliveries(db, u.id, &u.deliveries);
         }
     }
     Ok(format!("Delivered alert {id} to {ok_count}/{} beacon(s).", beacons.len()))

@@ -13,7 +13,7 @@ use std::process::Child;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use app_core::alerts::{self, load_alerts, Alert, AlertLevel, AlertStore};
+use app_core::alerts::{self, Alert, AlertLevel, AlertStore};
 use app_core::config::{load_settings, save_settings, Settings};
 use app_core::db::Db;
 use app_core::device_actions::capture_snapshot_bytes;
@@ -107,15 +107,15 @@ fn try_connect_db(app: &tauri::AppHandle) -> Result<(), String> {
     // The alert log lives in Postgres — hydrate the in-memory store. One-time,
     // non-destructive import: if the DB log is empty but a legacy alerts.json exists,
     // seed the DB from it (ids preserved) so the history survives the move to the DB.
-    let mut alerts = db.load_alerts();
+    let mut alerts = alerts::repo::load(&db);
     if alerts.is_empty() {
-        let from_json = load_alerts(&alerts_file(app));
+        let from_json = alerts::repo::import_legacy_json(&alerts_file(app));
         if !from_json.is_empty() {
             for a in &from_json {
-                db.insert_alert(a);
+                alerts::repo::insert(&db, a);
             }
             log::info!("Imported {} alert(s) from alerts.json into Postgres", from_json.len());
-            alerts = db.load_alerts();
+            alerts = alerts::repo::load(&db);
         }
     }
     log::info!("Alerts loaded from Postgres — {} alert(s)", alerts.len());

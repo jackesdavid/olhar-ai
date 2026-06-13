@@ -15,7 +15,6 @@ use std::sync::Arc;
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
-use crate::alerts::{Alert, AlertLevel, Delivery};
 use crate::devices::Device;
 use crate::map::{self, MapRoom};
 use crate::notification::NotificationTarget;
@@ -317,105 +316,6 @@ impl Db {
             log::info!("recognize: pgvector kNN k={k} → {} rows in {:?}", rows.len(), t.elapsed());
             rows
         })
-    }
-
-    // ---- Alerts (Phase 0: alerts → Postgres) -------------------------------
-
-    /// The saved alert log, oldest id first (matching the in-memory append order).
-    /// Empty (and logged) on a query error — best-effort, like `load_devices`.
-    pub fn load_alerts(&self) -> Vec<Alert> {
-        let pool = self.pool.clone();
-        self.block(async move {
-            type Row = (i64, String, String, Option<i64>, Option<String>, String, String, serde_json::Value);
-            let rows = sqlx::query_as::<_, Row>(
-                "SELECT id, level, message, room_id, room_name, source, created_at, deliveries \
-                 FROM alerts ORDER BY id",
-            )
-            .fetch_all(&pool)
-            .await;
-            match rows {
-                Ok(rows) => rows
-                    .into_iter()
-                    .map(|(id, level, message, room_id, room_name, source, created_at, deliveries)| Alert {
-                        id: id as u64,
-                        level: AlertLevel::parse(&level).unwrap_or_default(),
-                        message,
-                        room_id: room_id.map(|r| r as u32),
-                        room_name,
-                        source,
-                        created_at,
-                        deliveries: serde_json::from_value::<Vec<Delivery>>(deliveries).unwrap_or_default(),
-                    })
-                    .collect(),
-                Err(e) => {
-                    log::error!("load_alerts query failed: {e}");
-                    Vec::new()
-                }
-            }
-        })
-    }
-
-    /// Insert one alert row (id is app-assigned). Best-effort; errors are logged.
-    pub fn insert_alert(&self, a: &Alert) {
-        let pool = self.pool.clone();
-        let id = a.id as i64;
-        let level = a.level.label().to_ascii_lowercase();
-        let message = a.message.clone();
-        let room_id = a.room_id.map(|r| r as i64);
-        let room_name = a.room_name.clone();
-        let source = a.source.clone();
-        let created_at = a.created_at.clone();
-        let deliveries = serde_json::to_value(&a.deliveries).unwrap_or_else(|_| serde_json::json!([]));
-        let res: Result<(), sqlx::Error> = self.block(async move {
-            sqlx::query(
-                "INSERT INTO alerts (id, level, message, room_id, room_name, source, created_at, deliveries) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING",
-            )
-            .bind(id)
-            .bind(&level)
-            .bind(&message)
-            .bind(room_id)
-            .bind(&room_name)
-            .bind(&source)
-            .bind(&created_at)
-            .bind(&deliveries)
-            .execute(&pool)
-            .await
-            .map(|_| ())
-        });
-        if let Err(e) = res {
-            log::error!("insert_alert failed: {e}");
-        }
-    }
-
-    /// Delete one alert row by id. Best-effort.
-    pub fn delete_alert(&self, id: u64) {
-        let pool = self.pool.clone();
-        let id = id as i64;
-        let res: Result<(), sqlx::Error> = self.block(async move {
-            sqlx::query("DELETE FROM alerts WHERE id = $1").bind(id).execute(&pool).await.map(|_| ())
-        });
-        if let Err(e) = res {
-            log::error!("delete_alert failed: {e}");
-        }
-    }
-
-    /// Replace an alert's delivery list (after a deliver run). Best-effort.
-    pub fn update_alert_deliveries(&self, id: u64, deliveries: &[Delivery]) {
-        let pool = self.pool.clone();
-        let id = id as i64;
-        let json = serde_json::to_value(deliveries).unwrap_or_else(|_| serde_json::json!([]));
-        let res: Result<(), sqlx::Error> = self.block(async move {
-            sqlx::query("UPDATE alerts SET deliveries = $2 WHERE id = $1")
-                .bind(id)
-                .bind(&json)
-                .execute(&pool)
-                .await
-                .map(|_| ())
-        });
-        if let Err(e) = res {
-            log::error!("update_alert_deliveries failed: {e}");
-        }
     }
 
     // ---- Notification targets / beacons (Phase 0) --------------------------
