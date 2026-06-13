@@ -75,3 +75,76 @@ pub fn save(db: &Db, graphs: &[Graph]) {
         log::error!("workflows::repo::save transaction failed: {e}");
     }
 }
+
+// ---- engine state (Phase 0.5) ----------------------------------------------
+
+/// The persisted new-alert high-water mark, or `None` if it was never written
+/// (first boot) or on a query error. The adapter falls back to the current alert
+/// max when this is `None` so an existing backlog still doesn't fire on first run.
+pub fn load_alert_seen_max(db: &Db) -> Option<u64> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_as::<_, (i64,)>("SELECT alert_seen_max FROM workflow_engine_state WHERE id = true")
+            .fetch_optional(&pool)
+            .await
+            .unwrap_or_else(|e| {
+                log::error!("workflows::repo::load_alert_seen_max query failed: {e}");
+                None
+            })
+            .map(|(v,)| v as u64)
+    })
+}
+
+/// Upsert the new-alert high-water mark (single-row table). Best-effort.
+pub fn save_alert_seen_max(db: &Db, max: u64) {
+    let pool = db.pool();
+    let res: Result<_, sqlx::Error> = db.block(async move {
+        sqlx::query(
+            "INSERT INTO workflow_engine_state (id, alert_seen_max) VALUES (true, $1)
+             ON CONFLICT (id) DO UPDATE SET alert_seen_max = EXCLUDED.alert_seen_max",
+        )
+        .bind(max as i64)
+        .execute(&pool)
+        .await
+    });
+    if let Err(e) = res {
+        log::error!("workflows::repo::save_alert_seen_max failed: {e}");
+    }
+}
+
+/// The persisted per-graph cron timers as `(graph_id, last_fired_ms)` (unix epoch
+/// millis). Empty on a query error.
+pub fn load_cron_state(db: &Db) -> Vec<(u32, u64)> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_as::<_, (i64, i64)>("SELECT graph_id, last_fired_ms FROM workflow_cron_state")
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_else(|e| {
+                log::error!("workflows::repo::load_cron_state query failed: {e}");
+                Vec::new()
+            })
+            .into_iter()
+            .map(|(id, ms)| (id as u32, ms as u64))
+            .collect()
+    })
+}
+
+/// Record that cron graph `graph_id` fired at `fired_ms` (unix epoch millis),
+/// upserting its timer. Best-effort.
+pub fn save_cron_fired(db: &Db, graph_id: u32, fired_ms: u64) {
+    let pool = db.pool();
+    let res: Result<_, sqlx::Error> = db.block(async move {
+        sqlx::query(
+            "INSERT INTO workflow_cron_state (graph_id, last_fired_ms) VALUES ($1, $2)
+             ON CONFLICT (graph_id) DO UPDATE SET last_fired_ms = EXCLUDED.last_fired_ms",
+        )
+        .bind(graph_id as i64)
+        .bind(fired_ms as i64)
+        .execute(&pool)
+        .await
+    });
+    if let Err(e) = res {
+        log::error!("workflows::repo::save_cron_fired failed: {e}");
+    }
+}

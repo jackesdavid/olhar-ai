@@ -74,18 +74,50 @@ pub fn hydrate(app: &tauri::AppHandle, db: &Db) {
     *app.state::<WfStore>().lock().unwrap() = Workflows::from_graphs(graphs);
 }
 
-/// Create the engine (seeded from the current alert max so the backlog doesn't fire
-/// `OnNewAlert` on startup) + the activity map, then spawn the trigger poller.
+/// Unix epoch millis now (the wall-clock basis for persisted cron timers).
+fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Create the engine + activity map, then spawn the trigger poller. The engine's
+/// timing state is restored from Postgres (Phase 0.5) so a restart neither replays
+/// the `OnNewAlert` backlog nor fires a long cron immediately:
+///   * `alert_seen_max` — the persisted high-water mark, falling back to the current
+///     alert-store max on first boot (no row yet), which is then persisted.
+///   * cron timers — each persisted wall-clock fire time is converted into a
+///     monotonic anchor so a mid-interval restart waits out the remainder.
 pub fn start(app: &tauri::AppHandle) {
-    let alert_max = app
-        .state::<AlertStore>()
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|a| a.id)
-        .max()
-        .unwrap_or(0);
-    let wf_engine: WfEngine = Arc::new(Mutex::new(WorkflowEngine::new(alert_max)));
+    let db = db_ref(app).ok();
+
+    // Restore the alert high-water mark (persisted → current alert max fallback).
+    let alert_max = db
+        .as_ref()
+        .and_then(workflows::repo::load_alert_seen_max)
+        .unwrap_or_else(|| {
+            app.state::<AlertStore>().lock().unwrap().iter().map(|a| a.id).max().unwrap_or(0)
+        });
+    let mut engine = WorkflowEngine::new(alert_max);
+
+    // Restore cron timers: anchor each persisted wall-clock fire to "now" on the
+    // monotonic clock so cron_due measures the real remaining interval.
+    if let Some(db) = db.as_ref() {
+        let now_ms = now_epoch_ms();
+        let now_inst = Instant::now();
+        for (graph_id, last_fired_ms) in workflows::repo::load_cron_state(db) {
+            let elapsed = Duration::from_millis(now_ms.saturating_sub(last_fired_ms));
+            // If the box was down longer than the monotonic clock can represent,
+            // fall back to "now" (waits one full interval — safe, never a burst).
+            let anchor = now_inst.checked_sub(elapsed).unwrap_or(now_inst);
+            engine.seed_cron_last(graph_id, anchor);
+        }
+        // Ensure a row exists so subsequent boots restore (instead of falling back).
+        workflows::repo::save_alert_seen_max(db, alert_max);
+    }
+
+    let wf_engine: WfEngine = Arc::new(Mutex::new(engine));
     app.manage(wf_engine);
     let wf_activity: WfActivity = Arc::new(Mutex::new(HashMap::new()));
     app.manage(wf_activity);
@@ -203,6 +235,9 @@ fn fire_graph(app: &tauri::AppHandle, graph_id: u32, policy: &ConcurrencyPolicy)
 /// `OnNewAlert` graphs, each under its concurrency policy. Started at setup.
 fn spawn_workflow_poller(app: &tauri::AppHandle) {
     let app = app.clone();
+    // The last watermark we wrote to Postgres — seeded from the engine's restored
+    // value so we only persist on a genuine advance (Phase 0.5).
+    let mut persisted_max = app.state::<WfEngine>().lock().unwrap().alert_seen_max();
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(1));
         let now = Instant::now();
@@ -224,6 +259,17 @@ fn spawn_workflow_poller(app: &tauri::AppHandle) {
             let alerts = app.state::<AlertStore>().lock().unwrap().clone();
             app.state::<WfEngine>().lock().unwrap().drain_new_alert_levels(&alerts)
         };
+        // Persist the watermark only when it advanced (Phase 0.5) so a restart
+        // doesn't replay the backlog. Cheap: a write only when new alerts arrived.
+        {
+            let max = app.state::<WfEngine>().lock().unwrap().alert_seen_max();
+            if max > persisted_max {
+                if let Ok(db) = db_ref(&app) {
+                    workflows::repo::save_alert_seen_max(&db, max);
+                }
+                persisted_max = max;
+            }
+        }
 
         for (id, trigger, policy) in graphs {
             if app.state::<WfEngine>().lock().unwrap().total_running() >= WF_GLOBAL_CAP {
@@ -239,6 +285,14 @@ fn spawn_workflow_poller(app: &tauri::AppHandle) {
                 }
             };
             if due {
+                // Persist the cron fire time (wall-clock) so a restart resumes the
+                // timer rather than firing immediately. OnNewAlert fires ride the
+                // watermark above, so only cron needs a per-fire write.
+                if matches!(trigger, Trigger::Cron { .. }) {
+                    if let Ok(db) = db_ref(&app) {
+                        workflows::repo::save_cron_fired(&db, id, now_epoch_ms());
+                    }
+                }
                 fire_graph(&app, id, &policy);
             }
         }

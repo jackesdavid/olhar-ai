@@ -222,6 +222,20 @@ impl WorkflowEngine {
         self.runs.values().map(|r| r.running).sum()
     }
 
+    /// Seed a graph's cron timer to a prior fire instant (Phase 0.5 restore). The
+    /// adapter computes this anchor from the persisted wall-clock fire time so a
+    /// mid-interval restart waits out the remainder instead of firing immediately.
+    /// Pure: the engine stays DB-free; persistence lives in `workflows::repo`.
+    pub fn seed_cron_last(&mut self, graph_id: u32, last: Instant) {
+        self.cron_last.insert(graph_id, last);
+    }
+
+    /// The current new-alert high-water mark — so the adapter can detect when a
+    /// tick advanced it and persist the new value.
+    pub fn alert_seen_max(&self) -> u64 {
+        self.alert_seen_max
+    }
+
     /// Cron: returns `true` (and re-arms the timer) when `every_secs` has elapsed.
     pub fn cron_due(&mut self, graph_id: u32, every_secs: u64, now: Instant) -> bool {
         let due = match self.cron_last.get(&graph_id) {
@@ -484,5 +498,32 @@ mod tests {
         assert!(!e.new_alert_fires(&alerts, AlertLevel::Info));
         let mut e2 = WorkflowEngine::new(5);
         assert!(!e2.new_alert_fires(&alerts, AlertLevel::Warn));
+    }
+
+    #[test]
+    fn alert_seen_max_getter_tracks_drain() {
+        let alerts = vec![
+            alert(5, AlertLevel::Error, "operator", "old"),
+            alert(9, AlertLevel::Info, "operator", "new"),
+        ];
+        let mut e = WorkflowEngine::new(5);
+        assert_eq!(e.alert_seen_max(), 5, "seeded watermark");
+        let _ = e.drain_new_alert_levels(&alerts);
+        assert_eq!(e.alert_seen_max(), 9, "watermark advanced to the max id seen");
+    }
+
+    #[test]
+    fn seeded_cron_waits_out_remaining_interval() {
+        // Phase 0.5: a restart seeds cron_last from the persisted fire time so a
+        // 30s cron that fired mid-interval does NOT fire immediately on boot.
+        let mut e = WorkflowEngine::new(0);
+        let base = Instant::now();
+        e.seed_cron_last(1, base);
+        // 10s after the last fire → not due yet.
+        assert!(!e.cron_due(1, 30, base + Duration::from_secs(10)));
+        // 40s after the last fire → due (and re-arms at that instant).
+        assert!(e.cron_due(1, 30, base + Duration::from_secs(40)));
+        // Just after re-arming → not due again.
+        assert!(!e.cron_due(1, 30, base + Duration::from_secs(50)));
     }
 }
