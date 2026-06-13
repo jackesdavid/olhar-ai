@@ -12,6 +12,7 @@
 //!      request that the Tauri shell drains off the channel and re-emits as Tauri
 //!      events while the turn runs.
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 
@@ -19,7 +20,8 @@ use crate::alerts::{self, AlertLevel, AlertStore};
 use crate::db::Db;
 use crate::device_actions as actions;
 use crate::devices::DeviceStore;
-use crate::notification::{self, NotificationConfig, NotificationStore};
+use crate::notification::{NotificationConfig, NotificationStore};
+use crate::ports::{FrameSource, Notifier, Recognizer, Vision};
 
 /// A side-effect a tool asks the UI layer to perform. The Tauri shell drains
 /// these off the channel during the turn and re-emits them as Tauri events.
@@ -54,6 +56,43 @@ pub struct ToolContext {
     /// notifications aren't configured — the `send_notification` tool errors then.
     pub notif_cfg: Option<NotificationConfig>,
     pub ui_tx: Sender<ToolUiEvent>,
+    /// Boundary ports (Phase 0.6). Tools + nodes reach cameras, vision, recognition,
+    /// and notifications only through these, so a later phase can swap one for a REST
+    /// client without touching a call-site. [`ToolContext::new_local`] wires the
+    /// in-process defaults.
+    pub frames: Arc<dyn FrameSource>,
+    pub vision: Arc<dyn Vision>,
+    pub recognizer: Arc<dyn Recognizer>,
+    pub notifier: Arc<dyn Notifier>,
+}
+
+impl ToolContext {
+    /// Build a context wired to the in-process (local) ports — today's behavior.
+    /// The recognizer holds a cheap `Db` clone (shared pool + runtime). Phases 1–3
+    /// swap individual ports for REST clients without changing any call-site.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_local(
+        devices: DeviceStore,
+        db: Db,
+        alerts: AlertStore,
+        notif: NotificationStore,
+        notif_cfg: Option<NotificationConfig>,
+        ui_tx: Sender<ToolUiEvent>,
+    ) -> Self {
+        let recognizer = Arc::new(crate::ports::LocalRecognizer { db: db.clone() });
+        ToolContext {
+            devices,
+            db,
+            alerts,
+            notif,
+            notif_cfg,
+            ui_tx,
+            frames: Arc::new(crate::ports::LocalFrameSource),
+            vision: Arc::new(crate::ports::LocalVision),
+            recognizer,
+            notifier: Arc::new(crate::ports::LocalNotifier),
+        }
+    }
 }
 
 type ToolFn = fn(&Value, &ToolContext) -> Result<String, String>;
@@ -150,7 +189,7 @@ fn get_camera_snapshot() -> ToolSpec {
                 let idx = actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
                 devices[idx].clone()
             };
-            let bytes = actions::capture_snapshot_bytes(&device)?;
+            let bytes = ctx.frames.snapshot(&device)?;
             let jpeg = to_jpeg(&bytes)?;
             let _ = ctx.ui_tx.send(ToolUiEvent::Snapshot { camera: device.name.clone(), jpeg });
             Ok(format!("Snapshot of '{}' captured and displayed.", device.name))
@@ -179,11 +218,11 @@ fn describe_camera() -> ToolSpec {
                 devices[idx].clone()
             };
             // Hit the camera once; show the still and feed the same bytes to vision.
-            let bytes = actions::capture_snapshot_bytes(&device)?;
+            let bytes = ctx.frames.snapshot(&device)?;
             if let Ok(jpeg) = to_jpeg(&bytes) {
                 let _ = ctx.ui_tx.send(ToolUiEvent::Snapshot { camera: device.name.clone(), jpeg });
             }
-            let description = super::vision::describe_image(&bytes, &device.name)?;
+            let description = ctx.vision.describe(&bytes, &device.name)?;
             Ok(format!("Camera '{}' shows: {description}", device.name))
         },
     }
@@ -209,11 +248,11 @@ fn count_people() -> ToolSpec {
                 let idx = actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
                 devices[idx].clone()
             };
-            let bytes = actions::capture_snapshot_bytes(&device)?;
+            let bytes = ctx.frames.snapshot(&device)?;
             if let Ok(jpeg) = to_jpeg(&bytes) {
                 let _ = ctx.ui_tx.send(ToolUiEvent::Snapshot { camera: device.name.clone(), jpeg });
             }
-            let count = super::detector::detect_person(&bytes)?.count;
+            let count = ctx.vision.detect_persons(&bytes)?.count;
             if count > 0 {
                 Ok(format!("Camera '{}': {count} person(s) detected.", device.name))
             } else {
@@ -395,12 +434,12 @@ fn send_notification() -> ToolSpec {
                         let idx = actions::resolve_device(&devices, name).map_err(|e| e.to_string())?;
                         devices[idx].clone()
                     };
-                    Some(to_jpeg(&actions::capture_snapshot_bytes(&device)?)?)
+                    Some(to_jpeg(&ctx.frames.snapshot(&device)?)?)
                 }
                 None => None,
             };
 
-            notification::dispatch(&ctx.notif, cfg, target, message, image)
+            ctx.notifier.dispatch(&ctx.notif, cfg, target, message, image)
         },
     }
 }
@@ -638,14 +677,14 @@ mod tests {
     use super::*;
 
     fn ctx(tx: Sender<ToolUiEvent>) -> ToolContext {
-        ToolContext {
-            devices: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            db: Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
-            alerts: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            notif: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            notif_cfg: None,
-            ui_tx: tx,
-        }
+        ToolContext::new_local(
+            std::sync::Arc::new(std::sync::Mutex::new(vec![])),
+            Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
+            std::sync::Arc::new(std::sync::Mutex::new(vec![])),
+            std::sync::Arc::new(std::sync::Mutex::new(vec![])),
+            None,
+            tx,
+        )
     }
 
     #[test]

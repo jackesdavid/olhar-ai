@@ -129,14 +129,14 @@ pub(crate) fn build_run_context(app: &tauri::AppHandle) -> Option<app_core::agen
         }
     });
 
-    Some(app_core::agent::ToolContext {
+    Some(app_core::agent::ToolContext::new_local(
         devices,
         db,
         alerts,
         notif,
-        notif_cfg: features::notifications::resolve_telegram_config(app),
-        ui_tx: tx,
-    })
+        features::notifications::resolve_telegram_config(app),
+        tx,
+    ))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

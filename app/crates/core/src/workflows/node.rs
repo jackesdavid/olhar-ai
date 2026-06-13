@@ -13,7 +13,6 @@ use super::domain::{NodeKind, Port, PortType};
 use crate::agent::tools::{ToolContext, ToolUiEvent};
 use crate::alerts::{self, AlertLevel};
 use crate::device_actions as dev_actions;
-use crate::notification;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -192,14 +191,14 @@ pub fn run_node(
         NodeKind::CreateAlert => run_create_alert(config, inputs, sys),
         NodeKind::DeliverAlert => run_deliver_alert(inputs, sys),
         NodeKind::CameraSnapshot => run_camera_snapshot(inputs, sys),
-        NodeKind::DescribeImage => run_describe_image(config, inputs),
+        NodeKind::DescribeImage => run_describe_image(config, inputs, sys),
         NodeKind::NotifyRecipient => run_notify_recipient(inputs, sys),
         NodeKind::Format => run_format(config, inputs),
         NodeKind::Wait => run_wait(config),
         NodeKind::HttpPost => run_http_post(config, inputs),
         NodeKind::If => run_if(inputs),
         NodeKind::MotionDetection => run_motion_detection(config, inputs),
-        NodeKind::PersonDetection => run_person_detection(inputs),
+        NodeKind::PersonDetection => run_person_detection(inputs, sys),
         NodeKind::RecognizePerson => run_recognize_person(config, inputs, sys),
         NodeKind::Print => run_print(config, inputs, sys),
         // ShowImage is a debug sink whose only effect — mirroring its input frame to
@@ -222,12 +221,12 @@ fn run_print(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<P
 
 /// Detect whether a person is present in the image with the local YOLOX-Nano model.
 /// Outputs `person` (Bool), `count` (Num), `confidence` (Num %, 0..100), `ok`.
-fn run_person_detection(inputs: &PortValues) -> Result<PortValues, String> {
+fn run_person_detection(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
     let bytes = inputs
         .get("image")
         .and_then(PortValue::as_image)
         .ok_or("missing required input 'image'")?;
-    let r = crate::agent::detector::detect_person(bytes)?;
+    let r = sys.vision.detect_persons(bytes)?;
     let mut o = PortValues::new();
     o.insert("person".into(), PortValue::Bool(r.person));
     o.insert("count".into(), PortValue::Num(r.count));
@@ -253,7 +252,7 @@ fn run_recognize_person(
         .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
         .unwrap_or(0.4) as f32;
     let embedding = crate::agent::face::embed(bytes)?;
-    let matches = crate::persons::repo::recognize(&sys.db, &embedding, 5);
+    let matches = sys.recognizer.recognize(&embedding, 5);
     let mut o = PortValues::new();
     match crate::persons::best_match(&matches, max_distance) {
         Some(m) => {
@@ -588,7 +587,7 @@ fn run_camera_snapshot(inputs: &PortValues, sys: &ToolContext) -> Result<PortVal
         let idx = dev_actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
         devices[idx].clone()
     };
-    let bytes = dev_actions::capture_snapshot_bytes(&device)?;
+    let bytes = sys.frames.snapshot(&device)?;
     // Mirror the chat tool: also surface the snapshot in the UI.
     if let Ok(jpeg) = to_jpeg(&bytes) {
         let _ = sys.ui_tx.send(ToolUiEvent::Snapshot { camera: device.name.clone(), jpeg });
@@ -600,7 +599,7 @@ fn run_camera_snapshot(inputs: &PortValues, sys: &ToolContext) -> Result<PortVal
     Ok(o)
 }
 
-fn run_describe_image(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+fn run_describe_image(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
     let bytes = inputs
         .get("image")
         .and_then(PortValue::as_image)
@@ -610,7 +609,7 @@ fn run_describe_image(config: &Value, inputs: &PortValues) -> Result<PortValues,
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty())
         .unwrap_or("camera");
-    let description = crate::agent::vision::describe_image(bytes, label)?;
+    let description = sys.vision.describe(bytes, label)?;
     let mut o = PortValues::new();
     o.insert("description".into(), PortValue::Text(description));
     o.insert("ok".into(), PortValue::Bool(true));
@@ -629,7 +628,7 @@ fn run_notify_recipient(inputs: &PortValues, sys: &ToolContext) -> Result<PortVa
         .notif_cfg
         .as_ref()
         .ok_or("Notifications are not configured (set the Telegram bot token in Beacons).")?;
-    let result = notification::dispatch(&sys.notif, cfg, target, message, image)?;
+    let result = sys.notifier.dispatch(&sys.notif, cfg, target, message, image)?;
     let mut o = PortValues::new();
     o.insert("result".into(), PortValue::Text(result));
     o.insert("ok".into(), PortValue::Bool(true));
@@ -665,14 +664,14 @@ mod tests {
 
     fn test_ctx() -> ToolContext {
         let (tx, _rx) = std::sync::mpsc::channel();
-        ToolContext {
-            devices: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            db: crate::db::Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
-            alerts: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            notif: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            notif_cfg: None,
-            ui_tx: tx,
-        }
+        ToolContext::new_local(
+            std::sync::Arc::new(std::sync::Mutex::new(vec![])),
+            crate::db::Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
+            std::sync::Arc::new(std::sync::Mutex::new(vec![])),
+            std::sync::Arc::new(std::sync::Mutex::new(vec![])),
+            None,
+            tx,
+        )
     }
 
     #[test]

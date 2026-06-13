@@ -292,14 +292,14 @@ mod tests {
 
     fn test_ctx() -> ToolContext {
         let (tx, _rx) = std::sync::mpsc::channel();
-        ToolContext {
-            devices: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            db: crate::db::Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
-            alerts: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            notif: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            notif_cfg: None,
-            ui_tx: tx,
-        }
+        ToolContext::new_local(
+            std::sync::Arc::new(std::sync::Mutex::new(vec![])),
+            crate::db::Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
+            std::sync::Arc::new(std::sync::Mutex::new(vec![])),
+            std::sync::Arc::new(std::sync::Mutex::new(vec![])),
+            None,
+            tx,
+        )
     }
 
     fn alert(id: u64, level: AlertLevel, source: &str, msg: &str) -> Alert {
