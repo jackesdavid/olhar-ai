@@ -13,7 +13,6 @@ use super::domain::{NodeKind, Port, PortType};
 use crate::agent::tools::{ToolContext, ToolUiEvent};
 use crate::alerts::{self, AlertLevel};
 use crate::device_actions as dev_actions;
-use crate::map;
 use crate::notification;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -545,7 +544,7 @@ fn run_create_alert(
         .filter(|s| !s.trim().is_empty())
     {
         Some(name) => {
-            let rooms = map::load_map(&sys.map_path);
+            let rooms = sys.db.load_map();
             match rooms.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim())) {
                 Some(r) => (Some(r.id), Some(r.name.clone())),
                 None => (None, Some(name.to_string())),
@@ -671,7 +670,6 @@ mod tests {
             db: crate::db::Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
             alerts: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             notif: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            map_path: std::env::temp_dir().join("wf_test_map.json"),
             notif_cfg: None,
             ui_tx: tx,
         }

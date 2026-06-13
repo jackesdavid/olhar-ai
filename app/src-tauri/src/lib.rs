@@ -20,7 +20,7 @@ use app_core::db::Db;
 use app_core::device_actions::capture_snapshot_bytes;
 use app_core::devices::{Device, DeviceStore};
 use app_core::persons::{self, Person, PersonEmbedding, PersonStore, RecognitionResult};
-use app_core::map::{load_map as core_load_map, save_map as core_save_map, MapRoom};
+use app_core::map::{load_map as core_load_map, MapRoom};
 use app_core::notification::{
     self, load_targets, NotificationConfig, NotificationStore, NotificationTarget,
 };
@@ -148,6 +148,28 @@ fn try_connect_db(app: &tauri::AppHandle) -> Result<(), String> {
     }
     log::info!("Workflows loaded from Postgres — {} graph(s)", graphs.len());
     *app.state::<WfStore>().lock().unwrap() = Workflows::from_graphs(graphs);
+
+    // Map rooms + Telegram config also live in Postgres (read on demand, no store).
+    // One-time non-destructive import from legacy JSON files when the DB is empty.
+    if db.load_map().is_empty() {
+        let from_json = core_load_map(&map_file(app));
+        if !from_json.is_empty() {
+            db.save_map(&from_json);
+            log::info!("Imported {} map room(s) from map.json into Postgres", from_json.len());
+        }
+    }
+    if db.load_telegram().is_none() {
+        if let Some(stored) = std::fs::read_to_string(telegram_file(app))
+            .ok()
+            .and_then(|raw| serde_json::from_str::<StoredTelegramConfig>(&raw).ok())
+        {
+            if !stored.bot_token.trim().is_empty() || !stored.pairing_code.trim().is_empty() {
+                db.save_telegram(&stored.bot_token, &stored.pairing_code);
+                log::info!("Imported Telegram config from telegram.json into Postgres");
+            }
+        }
+    }
+
     *state.lock().unwrap() = Some(db);
     Ok(())
 }
@@ -245,11 +267,11 @@ struct StoredTelegramConfig {
     pairing_code: String,
 }
 
-/// Load the saved Telegram config from `telegram.json`. Returns `None` if the
-/// file is missing/empty.
+/// Load the saved Telegram config from Postgres. Returns `None` if unset or the DB
+/// isn't connected yet.
 fn load_stored_telegram(app: &tauri::AppHandle) -> Option<StoredTelegramConfig> {
-    let raw = std::fs::read_to_string(telegram_file(app)).ok()?;
-    serde_json::from_str::<StoredTelegramConfig>(&raw).ok()
+    let (bot_token, pairing_code) = db_ref(app).ok()?.load_telegram()?;
+    Some(StoredTelegramConfig { bot_token, pairing_code })
 }
 
 /// Resolve the active `NotificationConfig`: the saved `telegram.json` if it has a
@@ -863,8 +885,7 @@ fn set_telegram_config(
         bot_token: token,
         pairing_code: pairing_code.trim().to_string(),
     };
-    let json = serde_json::to_string_pretty(&cfg).map_err(|e| format!("serialize failed: {e}"))?;
-    std::fs::write(telegram_file(&app), json).map_err(|e| format!("write failed: {e}"))?;
+    db_ref(&app)?.save_telegram(&cfg.bot_token, &cfg.pairing_code);
     log::info!(
         "set_telegram_config: token={} pairing_code={}",
         if cfg.bot_token.is_empty() { "unset" } else { "set" },
@@ -1152,14 +1173,15 @@ fn reconcile_keepwarm(app: &tauri::AppHandle) {
 /// the working copy and saves the whole array back.
 #[tauri::command]
 fn load_map(app: tauri::AppHandle) -> Vec<MapRoom> {
-    core_load_map(&map_file(&app))
+    db_ref(&app).map(|db| db.load_map()).unwrap_or_default()
 }
 
-/// Persist the whole floor-plan array to `<app_data_dir>/map.json`.
+/// Persist the whole floor-plan array to Postgres (replace-all).
 #[tauri::command]
-fn save_map(app: tauri::AppHandle, rooms: Vec<MapRoom>) {
-    core_save_map(&map_file(&app), &rooms);
+fn save_map(app: tauri::AppHandle, rooms: Vec<MapRoom>) -> Result<(), String> {
+    db_ref(&app)?.save_map(&rooms);
     log::info!("save_map: persisted {} room(s)", rooms.len());
+    Ok(())
 }
 
 // ---- Tool runtime (shared by chat + workflows) -----------------------------
@@ -1222,7 +1244,6 @@ fn build_run_context(app: &tauri::AppHandle) -> Option<app_core::agent::ToolCont
         db,
         alerts,
         notif,
-        map_path: map_file(app),
         notif_cfg: resolve_telegram_config(app),
         ui_tx: tx,
     })

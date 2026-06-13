@@ -90,29 +90,27 @@ pub fn next_id(rooms: &[MapRoom]) -> u32 {
     rooms.iter().map(|r| r.id).max().map_or(0, |m| m + 1)
 }
 
-/// Load the saved floor plan from `path`. Returns an empty list if the file is
-/// missing or unreadable. Camera offsets are normalized into their rooms
-/// (centers legacy/sentinel entries).
-pub fn load_map(path: &Path) -> Vec<MapRoom> {
-    let mut rooms: Vec<MapRoom> = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
-    for r in &mut rooms {
+/// Snap every room's camera offsets into its rectangle (centers legacy/sentinel
+/// entries). Applied after loading from any source (JSON file or Postgres).
+pub fn normalize_rooms(rooms: &mut [MapRoom]) {
+    for r in rooms {
         let (w, h) = (r.w, r.h);
         for cam in &mut r.cameras {
             clamp_cam(cam, w, h);
         }
     }
-    rooms
 }
 
-/// Persist the floor plan to `path` (pretty JSON). Best-effort: write errors are
-/// swallowed, matching the ratatui app's behavior.
-pub fn save_map(path: &Path, rooms: &[MapRoom]) {
-    if let Ok(json) = serde_json::to_string_pretty(rooms) {
-        let _ = std::fs::write(path, json);
-    }
+/// Read a legacy `map.json` from `path` (empty if missing/unreadable), normalized.
+/// Kept only for the one-time JSON→Postgres import on first DB boot — the floor plan
+/// now lives in the shared `map_rooms` table (see [`crate::db::Db::load_map`]).
+pub fn load_map(path: &Path) -> Vec<MapRoom> {
+    let mut rooms: Vec<MapRoom> = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    normalize_rooms(&mut rooms);
+    rooms
 }
 
 #[cfg(test)]
@@ -129,19 +127,6 @@ mod tests {
             h: DEFAULT_ROOM_H,
             cameras: vec![],
         }
-    }
-
-    #[test]
-    fn round_trips_through_a_path() {
-        let dir = std::env::temp_dir().join("app_core_map_test");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("map.json");
-        let rooms = vec![mk(0), mk(1)];
-        save_map(&path, &rooms);
-        let loaded = load_map(&path);
-        assert_eq!(loaded.len(), 2);
-        assert_eq!(loaded[1].id, 1);
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

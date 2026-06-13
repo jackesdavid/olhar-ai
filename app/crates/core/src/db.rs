@@ -17,6 +17,7 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 
 use crate::alerts::{Alert, AlertLevel, Delivery};
 use crate::devices::Device;
+use crate::map::{self, MapRoom};
 use crate::notification::NotificationTarget;
 use crate::persons::{Person, PersonEmbedding, RecognitionMatch};
 use crate::workflows::Graph;
@@ -512,6 +513,97 @@ impl Db {
         });
         if let Err(e) = res {
             log::error!("save_workflows transaction failed: {e}");
+        }
+    }
+
+    // ---- Floor-plan rooms (Phase 0) ----------------------------------------
+
+    /// The saved floor-plan rooms, ordered by id, with camera offsets normalized.
+    /// Malformed rows are skipped (logged). Empty on a query error.
+    pub fn load_map(&self) -> Vec<MapRoom> {
+        let pool = self.pool.clone();
+        self.block(async move {
+            let rows = sqlx::query_as::<_, (serde_json::Value,)>(
+                "SELECT data FROM map_rooms ORDER BY id",
+            )
+            .fetch_all(&pool)
+            .await;
+            let mut rooms: Vec<MapRoom> = match rows {
+                Ok(rows) => rows
+                    .into_iter()
+                    .filter_map(|(v,)| serde_json::from_value::<MapRoom>(v).ok())
+                    .collect(),
+                Err(e) => {
+                    log::error!("load_map query failed: {e}");
+                    Vec::new()
+                }
+            };
+            map::normalize_rooms(&mut rooms);
+            rooms
+        })
+    }
+
+    /// Replace the whole floor plan (delete-all + insert each room as a JSON row).
+    /// Best-effort.
+    pub fn save_map(&self, rooms: &[MapRoom]) {
+        let pool = self.pool.clone();
+        let rooms = rooms.to_vec();
+        let res: Result<(), sqlx::Error> = self.block(async move {
+            let mut tx = pool.begin().await?;
+            sqlx::query("DELETE FROM map_rooms").execute(&mut *tx).await?;
+            for r in &rooms {
+                let data = serde_json::to_value(r).unwrap_or_else(|_| serde_json::json!({}));
+                sqlx::query("INSERT INTO map_rooms (id, data) VALUES ($1, $2)")
+                    .bind(r.id as i64)
+                    .bind(&data)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            tx.commit().await?;
+            Ok(())
+        });
+        if let Err(e) = res {
+            log::error!("save_map transaction failed: {e}");
+        }
+    }
+
+    // ---- Telegram config (Phase 0) -----------------------------------------
+
+    /// The saved Telegram (bot_token, pairing_code), or `None` if unset.
+    pub fn load_telegram(&self) -> Option<(String, String)> {
+        let pool = self.pool.clone();
+        self.block(async move {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT bot_token, pairing_code FROM telegram_config WHERE id = 1",
+            )
+            .fetch_optional(&pool)
+            .await
+            .unwrap_or_else(|e| {
+                log::error!("load_telegram query failed: {e}");
+                None
+            })
+        })
+    }
+
+    /// Upsert the single Telegram config row. Best-effort.
+    pub fn save_telegram(&self, bot_token: &str, pairing_code: &str) {
+        let pool = self.pool.clone();
+        let bot_token = bot_token.to_string();
+        let pairing_code = pairing_code.to_string();
+        let res: Result<(), sqlx::Error> = self.block(async move {
+            sqlx::query(
+                "INSERT INTO telegram_config (id, bot_token, pairing_code) VALUES (1, $1, $2) \
+                 ON CONFLICT (id) DO UPDATE SET bot_token = EXCLUDED.bot_token, \
+                 pairing_code = EXCLUDED.pairing_code",
+            )
+            .bind(&bot_token)
+            .bind(&pairing_code)
+            .execute(&pool)
+            .await
+            .map(|_| ())
+        });
+        if let Err(e) = res {
+            log::error!("save_telegram failed: {e}");
         }
     }
 

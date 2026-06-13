@@ -283,7 +283,6 @@ mod tests {
             db: crate::db::Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
             alerts: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             notif: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            map_path: std::env::temp_dir().join("wf_eng_map.json"),
             notif_cfg: None,
             ui_tx: tx,
         }

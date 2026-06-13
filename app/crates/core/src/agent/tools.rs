@@ -11,7 +11,6 @@
 //!      styled block, it carries JPEG bytes + "changed" pokes + an open-live
 //!      request that the Tauri shell drains off the channel and re-emits as Tauri
 //!      events while the turn runs.
-use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
 use serde_json::{json, Value};
@@ -20,7 +19,6 @@ use crate::alerts::{self, AlertLevel, AlertStore};
 use crate::db::Db;
 use crate::device_actions as actions;
 use crate::devices::DeviceStore;
-use crate::map;
 use crate::notification::{self, NotificationConfig, NotificationStore};
 
 /// A side-effect a tool asks the UI layer to perform. The Tauri shell drains
@@ -52,8 +50,7 @@ pub struct ToolContext {
     pub db: Db,
     pub alerts: AlertStore,
     pub notif: NotificationStore,
-    pub map_path: PathBuf,
-    /// Resolved Telegram config (saved `telegram.json` else env), or `None` when
+    /// Resolved Telegram config (saved config else env), or `None` when
     /// notifications aren't configured — the `send_notification` tool errors then.
     pub notif_cfg: Option<NotificationConfig>,
     pub ui_tx: Sender<ToolUiEvent>,
@@ -449,7 +446,7 @@ fn create_alert() -> ToolSpec {
                 .filter(|s| !s.trim().is_empty())
             {
                 Some(name) => {
-                    let rooms = map::load_map(&ctx.map_path);
+                    let rooms = ctx.db.load_map();
                     match rooms.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim())) {
                         Some(r) => (Some(r.id), Some(r.name.clone())),
                         None => {
@@ -646,7 +643,6 @@ mod tests {
             db: Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
             alerts: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             notif: std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            map_path: std::env::temp_dir().join("app_core_chat_map.json"),
             notif_cfg: None,
             ui_tx: tx,
         }
