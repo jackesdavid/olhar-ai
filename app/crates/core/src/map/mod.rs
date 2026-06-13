@@ -12,6 +12,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+pub mod repo;
+
 /// Size of a freshly added room (used by the frontend "Add room" default).
 pub const DEFAULT_ROOM_W: i32 = 6;
 pub const DEFAULT_ROOM_H: i32 = 4;

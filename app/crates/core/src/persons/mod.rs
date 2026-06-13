@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+pub mod repo;
+
 /// The shared person list — held by the Tauri managed state, hydrated from the DB.
 pub type PersonStore = Arc<Mutex<Vec<Person>>>;
 

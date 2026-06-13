@@ -144,7 +144,7 @@ fn register_target(store: &NotificationStore, db: Option<&Db>, u: &Update) -> bo
     let label = dedupe_label(&targets, &u.sender_label);
     targets.push(NotificationTarget { label, chat_id: u.chat_id, enabled: true });
     if let Some(db) = db {
-        db.save_beacons(&targets);
+        super::repo::save_beacons(db, &targets);
     }
     true
 }
@@ -167,7 +167,7 @@ pub fn delete_target(store: &NotificationStore, db: Option<&Db>, chat_id: i64) -
     let pos = targets.iter().position(|t| t.chat_id == chat_id)?;
     let removed = targets.remove(pos);
     if let Some(db) = db {
-        db.save_beacons(&targets);
+        super::repo::save_beacons(db, &targets);
     }
     Some(removed.label)
 }
@@ -188,7 +188,7 @@ pub fn rename_target(
     let t = targets.iter_mut().find(|t| t.chat_id == chat_id).ok_or("Beacon not found.")?;
     t.label = label.clone();
     if let Some(db) = db {
-        db.save_beacons(&targets);
+        super::repo::save_beacons(db, &targets);
     }
     Ok(label)
 }
@@ -206,7 +206,7 @@ pub fn set_enabled_by_id(
     t.enabled = enabled;
     let out = (t.label.clone(), t.enabled);
     if let Some(db) = db {
-        db.save_beacons(&targets);
+        super::repo::save_beacons(db, &targets);
     }
     Some(out)
 }

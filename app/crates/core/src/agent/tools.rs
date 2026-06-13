@@ -265,7 +265,7 @@ fn delete_device() -> ToolSpec {
             let removed = {
                 let mut devices = ctx.devices.lock().unwrap();
                 let removed = actions::delete_by_name(&mut devices, name)?;
-                ctx.db.save_devices(&devices);
+                crate::devices::repo::save(&ctx.db, &devices);
                 removed
             };
             let _ = ctx.ui_tx.send(ToolUiEvent::DevicesChanged);
@@ -290,7 +290,7 @@ fn delete_device_by_index() -> ToolSpec {
             let removed = {
                 let mut devices = ctx.devices.lock().unwrap();
                 let removed = actions::delete_by_index(&mut devices, index)?;
-                ctx.db.save_devices(&devices);
+                crate::devices::repo::save(&ctx.db, &devices);
                 removed
             };
             let _ = ctx.ui_tx.send(ToolUiEvent::DevicesChanged);
@@ -323,7 +323,7 @@ fn rename_device() -> ToolSpec {
                 let mut devices = ctx.devices.lock().unwrap();
                 let idx = actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
                 devices[idx].name = trimmed.to_string();
-                ctx.db.save_devices(&devices);
+                crate::devices::repo::save(&ctx.db, &devices);
                 trimmed.to_string()
             };
             let _ = ctx.ui_tx.send(ToolUiEvent::DevicesChanged);
@@ -446,7 +446,7 @@ fn create_alert() -> ToolSpec {
                 .filter(|s| !s.trim().is_empty())
             {
                 Some(name) => {
-                    let rooms = ctx.db.load_map();
+                    let rooms = crate::map::repo::load(&ctx.db);
                     match rooms.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim())) {
                         Some(r) => (Some(r.id), Some(r.name.clone())),
                         None => {

@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::onvif::DiscoveredDevice;
 
+pub mod repo;
+
 /// The shared device list — held by the Tauri managed state and cloned into
 /// background threads so the network commands read/mutate the same store.
 pub type DeviceStore = Arc<Mutex<Vec<Device>>>;

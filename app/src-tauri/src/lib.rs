@@ -17,9 +17,9 @@ use app_core::alerts::{self, Alert, AlertLevel, AlertStore};
 use app_core::config::{load_settings, save_settings, Settings};
 use app_core::db::Db;
 use app_core::device_actions::capture_snapshot_bytes;
-use app_core::devices::{Device, DeviceStore};
+use app_core::devices::{self, Device, DeviceStore};
 use app_core::persons::{self, Person, PersonEmbedding, PersonStore, RecognitionResult};
-use app_core::map::{load_map as core_load_map, MapRoom};
+use app_core::map::{self, load_map as core_load_map, MapRoom};
 use app_core::notification::{
     self, load_targets, NotificationConfig, NotificationStore, NotificationTarget,
 };
@@ -95,13 +95,13 @@ fn try_connect_db(app: &tauri::AppHandle) -> Result<(), String> {
     }
     let url = std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is not set".to_string())?;
     let db = Db::connect(&url).map_err(|e| e.to_string())?;
-    let devices = db.load_devices();
+    let devices = devices::repo::load(&db);
     log::info!(
         "Postgres connected; migrations applied — {} device(s) loaded",
         devices.len()
     );
     *app.state::<DeviceStore>().lock().unwrap() = devices;
-    let people = db.load_persons();
+    let people = persons::repo::load(&db);
     log::info!("Persons loaded — {} person(s)", people.len());
     *app.state::<PersonStore>().lock().unwrap() = people;
     // The alert log lives in Postgres — hydrate the in-memory store. One-time,
@@ -122,13 +122,13 @@ fn try_connect_db(app: &tauri::AppHandle) -> Result<(), String> {
     *app.state::<AlertStore>().lock().unwrap() = alerts;
     // Beacons (Telegram targets) live in Postgres too — same hydrate + one-time
     // non-destructive import from a legacy notifications.json when the DB is empty.
-    let mut beacons = db.load_beacons();
+    let mut beacons = notification::repo::load_beacons(&db);
     if beacons.is_empty() {
         let from_json = load_targets(&notifications_file(app));
         if !from_json.is_empty() {
-            db.save_beacons(&from_json);
+            notification::repo::save_beacons(&db, &from_json);
             log::info!("Imported {} beacon(s) from notifications.json into Postgres", from_json.len());
-            beacons = db.load_beacons();
+            beacons = notification::repo::load_beacons(&db);
         }
     }
     log::info!("Beacons loaded from Postgres — {} target(s)", beacons.len());
@@ -138,20 +138,20 @@ fn try_connect_db(app: &tauri::AppHandle) -> Result<(), String> {
 
     // Map rooms + Telegram config also live in Postgres (read on demand, no store).
     // One-time non-destructive import from legacy JSON files when the DB is empty.
-    if db.load_map().is_empty() {
+    if map::repo::load(&db).is_empty() {
         let from_json = core_load_map(&map_file(app));
         if !from_json.is_empty() {
-            db.save_map(&from_json);
+            map::repo::save(&db, &from_json);
             log::info!("Imported {} map room(s) from map.json into Postgres", from_json.len());
         }
     }
-    if db.load_telegram().is_none() {
+    if notification::repo::load_telegram(&db).is_none() {
         if let Some(stored) = std::fs::read_to_string(telegram_file(app))
             .ok()
             .and_then(|raw| serde_json::from_str::<StoredTelegramConfig>(&raw).ok())
         {
             if !stored.bot_token.trim().is_empty() || !stored.pairing_code.trim().is_empty() {
-                db.save_telegram(&stored.bot_token, &stored.pairing_code);
+                notification::repo::save_telegram(&db, &stored.bot_token, &stored.pairing_code);
                 log::info!("Imported Telegram config from telegram.json into Postgres");
             }
         }
@@ -163,13 +163,8 @@ fn try_connect_db(app: &tauri::AppHandle) -> Result<(), String> {
 
 /// Persist the full device list to Postgres. Errors if the DB isn't connected yet
 /// (a safety net — commands only run once the app is past the splash).
-fn persist_devices(app: &tauri::AppHandle, devices: &[Device]) -> Result<(), String> {
-    app.state::<DbState>()
-        .lock()
-        .unwrap()
-        .as_ref()
-        .ok_or("Database not ready")?
-        .save_devices(devices);
+fn persist_devices(app: &tauri::AppHandle, list: &[Device]) -> Result<(), String> {
+    devices::repo::save(&db_ref(app)?, list);
     Ok(())
 }
 
@@ -188,12 +183,7 @@ pub(crate) fn db_ref(app: &tauri::AppHandle) -> Result<Db, String> {
 /// Persist the full person list to Postgres (upsert + prune). Errors if the DB
 /// isn't connected yet (commands only run once the app is past the splash).
 fn persist_persons(app: &tauri::AppHandle, people: &[Person]) -> Result<(), String> {
-    app.state::<DbState>()
-        .lock()
-        .unwrap()
-        .as_ref()
-        .ok_or("Database not ready")?
-        .save_persons(people);
+    persons::repo::save(&db_ref(app)?, people);
     Ok(())
 }
 
@@ -258,7 +248,7 @@ struct StoredTelegramConfig {
 /// Load the saved Telegram config from Postgres. Returns `None` if unset or the DB
 /// isn't connected yet.
 fn load_stored_telegram(app: &tauri::AppHandle) -> Option<StoredTelegramConfig> {
-    let (bot_token, pairing_code) = db_ref(app).ok()?.load_telegram()?;
+    let (bot_token, pairing_code) = notification::repo::load_telegram(&db_ref(app).ok()?)?;
     Some(StoredTelegramConfig { bot_token, pairing_code })
 }
 
@@ -451,32 +441,32 @@ fn enroll_face(
     let b64 = image.rsplit(',').next().unwrap_or(&image);
     let bytes = B64.decode(b64.trim()).map_err(|e| format!("decode image: {e}"))?;
     let embedding = app_core::agent::face::embed(&bytes)?;
-    db_ref(&app)?.insert_embedding(&person_id, &embedding, approved, &source)
+    persons::repo::insert_embedding(&db_ref(&app)?, &person_id, &embedding, approved, &source)
 }
 
 /// Every enrolled embedding for a person (with the raw vector, for the avatar).
 #[tauri::command]
 fn list_embeddings(app: tauri::AppHandle, person_id: String) -> Result<Vec<PersonEmbedding>, String> {
-    Ok(db_ref(&app)?.list_embeddings(&person_id))
+    Ok(persons::repo::list_embeddings(&db_ref(&app)?, &person_id))
 }
 
 /// Approve a single embedding (per-sample consent).
 #[tauri::command]
 fn approve_embedding(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    db_ref(&app)?.approve_embedding(&id)
+    persons::repo::approve_embedding(&db_ref(&app)?, &id)
 }
 
 /// Delete a single embedding.
 #[tauri::command]
 fn delete_embedding(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    db_ref(&app)?.delete_embedding(&id)
+    persons::repo::delete_embedding(&db_ref(&app)?, &id)
 }
 
 /// Ids of people with ≥1 approved embedding — the directory's "enrolled" badge.
 #[tauri::command]
 fn enrolled_person_ids(app: tauri::AppHandle) -> Vec<String> {
     match app.state::<DbState>().lock().unwrap().as_ref() {
-        Some(db) => db.enrolled_person_ids(),
+        Some(db) => persons::repo::enrolled_person_ids(db),
         None => Vec::new(),
     }
 }
@@ -501,7 +491,7 @@ fn recognize_face(
     let b64 = image.rsplit(',').next().unwrap_or(&image);
     let bytes = B64.decode(b64.trim()).map_err(|e| format!("decode image: {e}"))?;
     let query = app_core::agent::face::embed(&bytes)?;
-    let matches = db_ref(&app)?.recognize(&query, 5);
+    let matches = persons::repo::recognize(&db_ref(&app)?, &query, 5);
     let matched = persons::best_match(&matches, max_distance.unwrap_or(0.4));
     Ok(RecognizeDetail { query, matched })
 }
@@ -873,7 +863,7 @@ fn set_telegram_config(
         bot_token: token,
         pairing_code: pairing_code.trim().to_string(),
     };
-    db_ref(&app)?.save_telegram(&cfg.bot_token, &cfg.pairing_code);
+    notification::repo::save_telegram(&db_ref(&app)?, &cfg.bot_token, &cfg.pairing_code);
     log::info!(
         "set_telegram_config: token={} pairing_code={}",
         if cfg.bot_token.is_empty() { "unset" } else { "set" },
@@ -1161,13 +1151,13 @@ fn reconcile_keepwarm(app: &tauri::AppHandle) {
 /// the working copy and saves the whole array back.
 #[tauri::command]
 fn load_map(app: tauri::AppHandle) -> Vec<MapRoom> {
-    db_ref(&app).map(|db| db.load_map()).unwrap_or_default()
+    db_ref(&app).map(|db| map::repo::load(&db)).unwrap_or_default()
 }
 
 /// Persist the whole floor-plan array to Postgres (replace-all).
 #[tauri::command]
 fn save_map(app: tauri::AppHandle, rooms: Vec<MapRoom>) -> Result<(), String> {
-    db_ref(&app)?.save_map(&rooms);
+    map::repo::save(&db_ref(&app)?, &rooms);
     log::info!("save_map: persisted {} room(s)", rooms.len());
     Ok(())
 }

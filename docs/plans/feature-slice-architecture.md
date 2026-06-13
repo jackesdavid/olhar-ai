@@ -100,12 +100,21 @@ of state, and `generate_handler![features::workflows::create_graph, …]`.
 2. **`alerts`** → `alerts/{domain,repo}.rs` + `features/alerts.rs`.
 3. **`notification`** (beacons + telegram + pairing poller) → repo + `features/notifications.rs`.
 4. **`persons`** (+ embeddings/recognize, face) → `persons/{domain,repo}.rs` + `features/people.rs`.
-5. **`devices`** (+ `onvif`, `device_actions`, `go2rtc`, rescan/keepwarm pollers) →
-   `devices/{domain,repo,...}` + `features/devices.rs`. (Largest slice.)
-6. **`map`** → `map/{domain,repo}.rs` + `features/map.rs`.
-7. **`agent`** (chat) — already close; formalize ports (tools reach world via `ToolContext`
+5. **`devices`** — the device **registry** only: the `Device` type, ONVIF discovery,
+   credential validation, rescan. → `devices/{domain,repo}.rs` + `features/devices.rs`.
+   (No streaming/snapshots — those move to `stream`.)
+6. **`stream`** (NEW) — everything live-feed + frame related: the **go2rtc** bridge
+   (`go2rtc.rs` → `stream/`, a.k.a. `sentinel-rtc`), **snapshots** (`device_actions::capture_snapshot_bytes`
+   + the ONVIF/ffmpeg fallback), the **live-feed** open (`show_live_feed`/`ensure_streams`),
+   and the **keep-warm** poller. → `core/src/stream/` + `features/stream.rs`. This slice has
+   **no Postgres repo** — its "adapter" is the go2rtc child process + ONVIF/RTSP, so its
+   ports are `FrameSource`-shaped, not SQL. It maps to the **edge tier** (`sentinel-edge`
+   wrapping `sentinel-rtc`) and is the foundation the future **`sentinel-record`** module
+   builds on. `stream` depends on `devices` (reads a `Device` to find its RTSP URL).
+7. **`map`** → `map/{domain,repo}.rs` + `features/map.rs`.
+8. **`agent`** (chat) — already close; formalize ports (tools reach world via `ToolContext`
    which becomes the port bundle) + `features/chat.rs`.
-8. **small slices**: `settings`, `voice`, `listen` → `features/*.rs` adapters.
+9. **small slices**: `settings`, `voice`, `listen` → `features/*.rs` adapters.
 
 After each slice: `db.rs` loses that feature's methods; `lib.rs` loses that feature's commands.
 

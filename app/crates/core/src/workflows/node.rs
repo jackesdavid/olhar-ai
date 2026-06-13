@@ -253,7 +253,7 @@ fn run_recognize_person(
         .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
         .unwrap_or(0.4) as f32;
     let embedding = crate::agent::face::embed(bytes)?;
-    let matches = sys.db.recognize(&embedding, 5);
+    let matches = crate::persons::repo::recognize(&sys.db, &embedding, 5);
     let mut o = PortValues::new();
     match crate::persons::best_match(&matches, max_distance) {
         Some(m) => {
@@ -544,7 +544,7 @@ fn run_create_alert(
         .filter(|s| !s.trim().is_empty())
     {
         Some(name) => {
-            let rooms = sys.db.load_map();
+            let rooms = crate::map::repo::load(&sys.db);
             match rooms.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim())) {
                 Some(r) => (Some(r.id), Some(r.name.clone())),
                 None => (None, Some(name.to_string())),
