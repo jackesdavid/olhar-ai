@@ -20,7 +20,6 @@ use crate::devices::Device;
 use crate::map::{self, MapRoom};
 use crate::notification::NotificationTarget;
 use crate::persons::{Person, PersonEmbedding, RecognitionMatch};
-use crate::workflows::Graph;
 
 const SELECT_COLS: &str =
     "id, ip, xaddr, name, manufacturer, model, username, password, rtsp_url";
@@ -82,10 +81,17 @@ impl Db {
         Db { pool, rt: Arc::new(rt) }
     }
 
+    /// The connection pool (cheap clone). Feature repos use this to run their own
+    /// SQL — keeping per-feature queries out of this shared infra module.
+    pub(crate) fn pool(&self) -> PgPool {
+        self.pool.clone()
+    }
+
     /// Drive `fut` to completion on the owned runtime and block the calling thread
     /// until it finishes. Safe from inside another runtime (we `spawn`, not
-    /// `block_on`, on the current thread).
-    fn block<T, F>(&self, fut: F) -> T
+    /// `block_on`, on the current thread). `pub(crate)` so feature repos can reuse
+    /// the runtime without re-implementing the sync bridge.
+    pub(crate) fn block<T, F>(&self, fut: F) -> T
     where
         F: std::future::Future<Output = T> + Send + 'static,
         T: Send + 'static,
@@ -458,61 +464,6 @@ impl Db {
         });
         if let Err(e) = res {
             log::error!("save_beacons transaction failed: {e}");
-        }
-    }
-
-    // ---- Workflow graphs (Phase 0) -----------------------------------------
-
-    /// The saved workflow graphs, ordered by id. Rows that fail to deserialize are
-    /// skipped (logged). Empty on a query error.
-    pub fn load_workflows(&self) -> Vec<Graph> {
-        let pool = self.pool.clone();
-        self.block(async move {
-            let rows = sqlx::query_as::<_, (serde_json::Value,)>(
-                "SELECT data FROM workflows ORDER BY id",
-            )
-            .fetch_all(&pool)
-            .await;
-            match rows {
-                Ok(rows) => rows
-                    .into_iter()
-                    .filter_map(|(v,)| match serde_json::from_value::<Graph>(v) {
-                        Ok(g) => Some(g),
-                        Err(e) => {
-                            log::error!("load_workflows: skipping a malformed graph row: {e}");
-                            None
-                        }
-                    })
-                    .collect(),
-                Err(e) => {
-                    log::error!("load_workflows query failed: {e}");
-                    Vec::new()
-                }
-            }
-        })
-    }
-
-    /// Replace the whole graph set (delete-all + insert each as a JSON row),
-    /// mirroring the in-memory store after every editor mutation. Best-effort.
-    pub fn save_workflows(&self, graphs: &[Graph]) {
-        let pool = self.pool.clone();
-        let graphs = graphs.to_vec();
-        let res: Result<(), sqlx::Error> = self.block(async move {
-            let mut tx = pool.begin().await?;
-            sqlx::query("DELETE FROM workflows").execute(&mut *tx).await?;
-            for g in &graphs {
-                let data = serde_json::to_value(g).unwrap_or_else(|_| serde_json::json!({}));
-                sqlx::query("INSERT INTO workflows (id, data) VALUES ($1, $2)")
-                    .bind(g.id as i64)
-                    .bind(&data)
-                    .execute(&mut *tx)
-                    .await?;
-            }
-            tx.commit().await?;
-            Ok(())
-        });
-        if let Err(e) = res {
-            log::error!("save_workflows transaction failed: {e}");
         }
     }
 

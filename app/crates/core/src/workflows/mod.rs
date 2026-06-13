@@ -7,10 +7,11 @@
 pub mod domain;
 pub mod engine;
 pub mod node;
+pub mod repo;
 
 pub use domain::{
-    load_workflows, ConcurrencyPolicy, Edge, Graph, GraphNode, NodeKind, Port, PortType, Trigger,
-    Viewport, Workflows, EXEC_IN, EXEC_OUT,
+    ConcurrencyPolicy, Edge, Graph, GraphNode, NodeKind, Port, PortType, Trigger, Viewport,
+    Workflows, EXEC_IN, EXEC_OUT,
 };
 pub use engine::{run_dag, run_dag_with, Fire, WorkflowEngine};
 pub use node::{literal_for, run_node, PortValue, PortValues};

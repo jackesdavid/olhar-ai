@@ -12,7 +12,6 @@ pub use crate::alerts::AlertLevel;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 // ---------------------------------------------------------------------------
 // Ports
@@ -699,25 +698,6 @@ impl Workflows {
     pub fn graph_mut(&mut self, id: u32) -> Option<&mut Graph> {
         self.graphs.iter_mut().find(|g| g.id == id)
     }
-}
-
-/// On-disk shape: one object holding the named-graph array.
-#[derive(Default, Serialize, Deserialize)]
-struct WorkflowsFile {
-    #[serde(default)]
-    graphs: Vec<Graph>,
-}
-
-/// Read legacy named graphs from a `workflows.json` at `path` (empty if
-/// missing/unreadable). Kept only for the one-time JSON→Postgres import on first DB
-/// boot — graphs now live in the shared `workflows` table (see
-/// [`crate::db::Db::load_workflows`]).
-pub fn load_workflows(path: &Path) -> Vec<Graph> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<WorkflowsFile>(&s).ok())
-        .map(|f| f.graphs)
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

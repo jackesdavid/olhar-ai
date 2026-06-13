@@ -8,11 +8,10 @@
 //! credential validation, and JPEG snapshot commands. Network calls run on blocking
 //! tasks so the UI thread never stalls.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use app_core::alerts::{self, load_alerts, Alert, AlertLevel, AlertStore};
 use app_core::config::{load_settings, save_settings, Settings};
@@ -27,13 +26,12 @@ use app_core::notification::{
 use app_core::onvif;
 use app_core::onvif::client::rtsp_url_with_creds;
 use app_core::onvif::DiscoveredDevice;
-use app_core::workflows::{
-    self, ConcurrencyPolicy, Fire, Graph as WfGraph, NodeKind as WfNodeKind, Trigger, Viewport,
-    WorkflowEngine, Workflows,
-};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
+
+/// Per-feature Tauri adapters (commands + pollers + state lifecycle).
+mod features;
 
 /// Handle to the running go2rtc sidecar so a restart can kill the old one.
 /// Managed Tauri state; `None` until the first spawn.
@@ -135,19 +133,8 @@ fn try_connect_db(app: &tauri::AppHandle) -> Result<(), String> {
     }
     log::info!("Beacons loaded from Postgres — {} target(s)", beacons.len());
     *app.state::<NotificationStore>().lock().unwrap() = beacons;
-    // Workflow graphs live in Postgres too — same hydrate + one-time import from a
-    // legacy workflows.json. Rebuild the whole store so `next_graph_id` is recomputed.
-    let mut graphs = db.load_workflows();
-    if graphs.is_empty() {
-        let from_json = workflows::load_workflows(&workflows_file(app));
-        if !from_json.is_empty() {
-            db.save_workflows(&from_json);
-            log::info!("Imported {} workflow graph(s) from workflows.json into Postgres", from_json.len());
-            graphs = db.load_workflows();
-        }
-    }
-    log::info!("Workflows loaded from Postgres — {} graph(s)", graphs.len());
-    *app.state::<WfStore>().lock().unwrap() = Workflows::from_graphs(graphs);
+    // Workflow graphs live in Postgres too — the workflows slice owns its hydration.
+    features::workflows::hydrate(app, &db);
 
     // Map rooms + Telegram config also live in Postgres (read on demand, no store).
     // One-time non-destructive import from legacy JSON files when the DB is empty.
@@ -187,8 +174,9 @@ fn persist_devices(app: &tauri::AppHandle, devices: &[Device]) -> Result<(), Str
 }
 
 /// Borrow the connected DB as a cloned handle (cheap — shares pool + runtime), or
-/// error if the database isn't ready yet.
-fn db_ref(app: &tauri::AppHandle) -> Result<Db, String> {
+/// error if the database isn't ready yet. `pub(crate)` so per-feature adapters
+/// (under `features::`) can reach the shared DB.
+pub(crate) fn db_ref(app: &tauri::AppHandle) -> Result<Db, String> {
     app.state::<DbState>()
         .lock()
         .unwrap()
@@ -1194,7 +1182,7 @@ fn save_map(app: tauri::AppHandle, rooms: Vec<MapRoom>) -> Result<(), String> {
 /// Returns `None` if Postgres isn't connected yet (the device tools need the DB
 /// handle). In practice the app is past the splash before any tool runs; this
 /// guards the brief startup window where the workflow poller could fire first.
-fn build_run_context(app: &tauri::AppHandle) -> Option<app_core::agent::ToolContext> {
+pub(crate) fn build_run_context(app: &tauri::AppHandle) -> Option<app_core::agent::ToolContext> {
     use app_core::agent::ToolUiEvent;
     use tauri::Emitter;
 
@@ -1319,496 +1307,6 @@ async fn send_chat(
     }
 }
 
-// ---- Workflows (graph automation) ------------------------------------------
-
-/// The named-graph collection, managed state. All graph edits go through commands
-/// so Rust stays authoritative for ids + typed-edge validation.
-type WfStore = Arc<Mutex<Workflows>>;
-/// The trigger/concurrency engine (timers + in-flight counters + alert watermark).
-type WfEngine = Arc<Mutex<WorkflowEngine>>;
-
-/// Live run activity per graph, polled by the editor/list: how many runs are in
-/// flight and which node is currently executing.
-#[derive(Default, Clone, Serialize)]
-struct GraphActivity {
-    running: u32,
-    current: Option<u32>,
-}
-type WfActivity = Arc<Mutex<HashMap<u32, GraphActivity>>>;
-
-/// A safety backstop: never let more than this many workflow runs be in flight
-/// across all graphs at once.
-const WF_GLOBAL_CAP: u32 = 8;
-
-fn workflows_file(app: &tauri::AppHandle) -> PathBuf {
-    app.path()
-        .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("workflows.json")
-}
-
-/// Persist the whole graph collection to Postgres (replace-all). Best-effort: if the
-/// DB isn't connected yet (can't happen past the splash) the editor edit is in-memory only.
-fn persist_workflows(app: &tauri::AppHandle, store: &WfStore) {
-    let graphs = store.lock().unwrap().graphs.clone();
-    if let Ok(db) = db_ref(app) {
-        db.save_workflows(&graphs);
-    }
-}
-
-/// Spawn one graph run on a background thread. The caller must have already
-/// reserved a slot (`engine.on_spawn`). On finish it releases the slot and, if a
-/// queued fire is waiting (`QueueSingle`), reserves + spawns the next one.
-fn spawn_graph_run(app: &tauri::AppHandle, graph_id: u32) {
-    let graph: WfGraph = {
-        let store = app.state::<WfStore>();
-        let s = store.lock().unwrap();
-        match s.graph(graph_id) {
-            Some(g) => g.clone(),
-            None => return,
-        }
-    };
-    let app = app.clone();
-    std::thread::spawn(move || {
-        use tauri::Emitter;
-        // Mark this graph as running for the live editor/list.
-        app.state::<WfActivity>().lock().unwrap().entry(graph_id).or_default().running += 1;
-
-        let result = match build_run_context(&app) {
-            None => Err("database not ready".to_string()),
-            Some(ctx) => {
-            let progress_app = app.clone();
-            let mut on_node = |nid: u32| {
-                progress_app
-                    .state::<WfActivity>()
-                    .lock()
-                    .unwrap()
-                    .entry(graph_id)
-                    .or_default()
-                    .current = Some(nid);
-                // Per-node event so the editor highlights every node, even on a
-                // run faster than the poll interval.
-                let _ = progress_app
-                    .emit("workflow-node", serde_json::json!({ "graph": graph_id, "node": nid }));
-            };
-            let log_app = app.clone();
-            let log_graph = graph.clone();
-            let mut on_log = |nid: u32, msg: &str, ms: u128| {
-                let label = log_graph.node(nid).map(|n| n.kind.label()).unwrap_or("node");
-                let _ = log_app.emit(
-                    "workflow-log",
-                    serde_json::json!({ "graph": graph_id, "node": nid, "label": label, "message": msg, "ms": ms }),
-                );
-            };
-            workflows::run_dag_with(&graph, &ctx, &mut on_node, &mut on_log)
-            // ctx drops here → its drain thread ends.
-            }
-        };
-        let (ok, summary) = match &result {
-            Ok(outs) => (true, format!("ran {} node(s)", outs.len())),
-            Err(e) => (false, e.clone()),
-        };
-
-        // Release activity: decrement running, clear the current node when idle.
-        {
-            let activity = app.state::<WfActivity>();
-            let mut a = activity.lock().unwrap();
-            let e = a.entry(graph_id).or_default();
-            if e.running > 0 {
-                e.running -= 1;
-            }
-            if e.running == 0 {
-                e.current = None;
-            }
-        }
-        if ok {
-            log::info!("workflow '{}' ({graph_id}) ok: {summary}", graph.name);
-        } else {
-            log::warn!("workflow '{}' ({graph_id}) failed: {summary}", graph.name);
-        }
-        let _ = app.emit(
-            "workflow-run",
-            serde_json::json!({ "graph": graph_id, "name": graph.name, "ok": ok, "summary": summary }),
-        );
-
-        // Release the slot; drain a queued fire if the policy buffered one.
-        let drain = app.state::<WfEngine>().lock().unwrap().on_finish(graph_id);
-        if drain {
-            app.state::<WfEngine>().lock().unwrap().on_spawn(graph_id);
-            spawn_graph_run(&app, graph_id);
-        }
-    });
-}
-
-/// Apply a graph's concurrency policy to a fire: spawn, queue, or skip.
-fn fire_graph(app: &tauri::AppHandle, graph_id: u32, policy: &ConcurrencyPolicy) {
-    let decision = app.state::<WfEngine>().lock().unwrap().decide(graph_id, policy);
-    match decision {
-        Fire::Spawn => {
-            app.state::<WfEngine>().lock().unwrap().on_spawn(graph_id);
-            spawn_graph_run(app, graph_id);
-        }
-        Fire::Queue => app.state::<WfEngine>().lock().unwrap().on_queue(graph_id),
-        Fire::Skip => {}
-    }
-}
-
-/// The engine poller: ~1 s tick that fires due Cron graphs and qualifying
-/// `OnNewAlert` graphs, each under its concurrency policy. Started at setup.
-fn spawn_workflow_poller(app: &tauri::AppHandle) {
-    let app = app.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(1));
-        let now = Instant::now();
-
-        // Snapshot the enabled graphs' firing properties (don't hold the lock during runs).
-        let graphs: Vec<(u32, Trigger, ConcurrencyPolicy)> = {
-            let s = app.state::<WfStore>();
-            let s = s.lock().unwrap();
-            s.graphs
-                .iter()
-                .filter(|g| g.enabled)
-                .map(|g| (g.id, g.trigger.clone(), g.concurrency.clone()))
-                .collect()
-        };
-
-        // Drain new-alert levels ONCE per tick (advances the high-water mark so
-        // the backlog fires only once and workflow-made alerts can't loop).
-        let levels = {
-            let alerts = app.state::<AlertStore>().lock().unwrap().clone();
-            app.state::<WfEngine>().lock().unwrap().drain_new_alert_levels(&alerts)
-        };
-
-        for (id, trigger, policy) in graphs {
-            if app.state::<WfEngine>().lock().unwrap().total_running() >= WF_GLOBAL_CAP {
-                break; // global backstop
-            }
-            let due = match &trigger {
-                Trigger::Manual => false,
-                Trigger::Cron { every_secs } => {
-                    app.state::<WfEngine>().lock().unwrap().cron_due(id, *every_secs, now)
-                }
-                Trigger::OnNewAlert { min_level } => {
-                    WorkflowEngine::levels_qualify(&levels, *min_level)
-                }
-            };
-            if due {
-                fire_graph(&app, id, &policy);
-            }
-        }
-    });
-}
-
-/// All named graphs (with triggers, concurrency, nodes, typed edges).
-#[tauri::command]
-fn load_graphs(store: tauri::State<'_, WfStore>) -> Vec<WfGraph> {
-    store.lock().unwrap().graphs.clone()
-}
-
-/// Live run state per graph id (`{ running, current }`) — the editor/list poll
-/// this to show running/idle status and highlight the executing node.
-#[tauri::command]
-fn run_states(activity: tauri::State<'_, WfActivity>) -> HashMap<u32, GraphActivity> {
-    activity.lock().unwrap().clone()
-}
-
-/// Static node metadata (kinds + typed ports + default config) for the palette
-/// and the editor's client-side type hints. The backend stays authoritative on
-/// `add_edge`; this just lets the UI render and pre-filter.
-#[tauri::command]
-fn node_catalog() -> serde_json::Value {
-    let ports = |list: &[workflows::Port]| {
-        list.iter()
-            .map(|p| {
-                serde_json::json!({
-                    "name": p.name,
-                    "type": serde_json::to_value(p.ty).unwrap_or(serde_json::Value::Null),
-                    "required": p.required,
-                })
-            })
-            .collect::<Vec<_>>()
-    };
-    // Every node carries its control-flow ports up front, then its data ports.
-    let with_exec = |exec: &[workflows::Port], list: &[workflows::Port]| {
-        let mut v = ports(exec);
-        v.extend(ports(list));
-        v
-    };
-    let exec_in = [workflows::EXEC_IN];
-    let kinds = WfNodeKind::ALL
-        .iter()
-        .map(|k| {
-            serde_json::json!({
-                "slug": k.slug(),
-                "label": k.label(),
-                "category": k.category(),
-                "inputs": with_exec(&exec_in, k.input_ports()),
-                "outputs": with_exec(k.exec_out_ports(), k.output_ports()),
-                "default_config": k.default_config(),
-            })
-        })
-        .collect::<Vec<_>>();
-    serde_json::json!({ "kinds": kinds })
-}
-
-#[tauri::command]
-fn create_graph(app: tauri::AppHandle, store: tauri::State<'_, WfStore>, name: String) -> u32 {
-    let name = if name.trim().is_empty() { "Untitled".to_string() } else { name.trim().to_string() };
-    let id = store.lock().unwrap().create_graph(&name);
-    persist_workflows(&app, &store);
-    id
-}
-
-#[tauri::command]
-fn rename_graph(app: tauri::AppHandle, store: tauri::State<'_, WfStore>, id: u32, name: String) -> Result<(), String> {
-    {
-        let mut s = store.lock().unwrap();
-        let g = s.graph_mut(id).ok_or("graph not found")?;
-        g.name = name.trim().to_string();
-    }
-    persist_workflows(&app, &store);
-    Ok(())
-}
-
-#[tauri::command]
-fn delete_graph(app: tauri::AppHandle, store: tauri::State<'_, WfStore>, id: u32) {
-    store.lock().unwrap().remove_graph(id);
-    persist_workflows(&app, &store);
-}
-
-#[tauri::command]
-fn set_graph_trigger(
-    app: tauri::AppHandle,
-    store: tauri::State<'_, WfStore>,
-    id: u32,
-    kind: String,
-    every_secs: Option<u64>,
-    min_level: Option<String>,
-) -> Result<(), String> {
-    let trigger = match kind.as_str() {
-        "manual" => Trigger::Manual,
-        "cron" => Trigger::Cron { every_secs: every_secs.unwrap_or(60).max(1) },
-        "on_new_alert" => Trigger::OnNewAlert {
-            min_level: min_level
-                .as_deref()
-                .and_then(AlertLevel::parse)
-                .unwrap_or(AlertLevel::Info),
-        },
-        other => return Err(format!("unknown trigger kind '{other}'")),
-    };
-    {
-        let mut s = store.lock().unwrap();
-        let g = s.graph_mut(id).ok_or("graph not found")?;
-        g.trigger = trigger;
-        // Changing the trigger always stops the graph — it must never start firing
-        // automatically on a config change. The user explicitly presses play (Enable).
-        g.enabled = false;
-    }
-    persist_workflows(&app, &store);
-    Ok(())
-}
-
-#[tauri::command]
-fn set_graph_concurrency(
-    app: tauri::AppHandle,
-    store: tauri::State<'_, WfStore>,
-    id: u32,
-    kind: String,
-    max: Option<u32>,
-) -> Result<(), String> {
-    let policy = match kind.as_str() {
-        "skip" => ConcurrencyPolicy::SkipIfRunning,
-        "queue" => ConcurrencyPolicy::QueueSingle { max_queued: max.unwrap_or(1).max(1) },
-        "concurrent" => ConcurrencyPolicy::Concurrent { max_concurrent: max.unwrap_or(2).max(1) },
-        other => return Err(format!("unknown concurrency kind '{other}'")),
-    };
-    {
-        let mut s = store.lock().unwrap();
-        s.graph_mut(id).ok_or("graph not found")?.concurrency = policy;
-    }
-    persist_workflows(&app, &store);
-    Ok(())
-}
-
-/// Persist the editor viewport (pan + zoom) for a graph so re-opening restores it.
-#[tauri::command]
-fn set_graph_viewport(
-    app: tauri::AppHandle,
-    store: tauri::State<'_, WfStore>,
-    id: u32,
-    x: f64,
-    y: f64,
-    zoom: f64,
-) -> Result<(), String> {
-    {
-        let mut s = store.lock().unwrap();
-        s.graph_mut(id).ok_or("graph not found")?.viewport = Viewport { x, y, zoom };
-    }
-    persist_workflows(&app, &store);
-    Ok(())
-}
-
-#[tauri::command]
-fn set_graph_enabled(app: tauri::AppHandle, store: tauri::State<'_, WfStore>, id: u32, enabled: bool) -> Result<(), String> {
-    {
-        let mut s = store.lock().unwrap();
-        s.graph_mut(id).ok_or("graph not found")?.enabled = enabled;
-    }
-    persist_workflows(&app, &store);
-    Ok(())
-}
-
-#[tauri::command]
-fn set_graph_run_orphans(
-    app: tauri::AppHandle,
-    store: tauri::State<'_, WfStore>,
-    id: u32,
-    run_orphans: bool,
-) -> Result<(), String> {
-    {
-        let mut s = store.lock().unwrap();
-        s.graph_mut(id).ok_or("graph not found")?.run_orphans = run_orphans;
-    }
-    persist_workflows(&app, &store);
-    Ok(())
-}
-
-#[tauri::command]
-fn set_graph_debug(
-    app: tauri::AppHandle,
-    store: tauri::State<'_, WfStore>,
-    id: u32,
-    debug: bool,
-) -> Result<(), String> {
-    {
-        let mut s = store.lock().unwrap();
-        s.graph_mut(id).ok_or("graph not found")?.debug = debug;
-    }
-    persist_workflows(&app, &store);
-    Ok(())
-}
-
-#[tauri::command]
-fn add_node(
-    app: tauri::AppHandle,
-    store: tauri::State<'_, WfStore>,
-    graph_id: u32,
-    kind: String,
-    x: i32,
-    y: i32,
-) -> Result<u32, String> {
-    let kind = WfNodeKind::from_slug(&kind).ok_or_else(|| format!("unknown node kind '{kind}'"))?;
-    let id = {
-        let mut s = store.lock().unwrap();
-        let g = s.graph_mut(graph_id).ok_or("graph not found")?;
-        g.add_node(kind, x, y)
-    };
-    persist_workflows(&app, &store);
-    Ok(id)
-}
-
-#[tauri::command]
-fn remove_node(app: tauri::AppHandle, store: tauri::State<'_, WfStore>, graph_id: u32, node_id: u32) -> Result<(), String> {
-    {
-        let mut s = store.lock().unwrap();
-        s.graph_mut(graph_id).ok_or("graph not found")?.remove_node(node_id);
-    }
-    persist_workflows(&app, &store);
-    Ok(())
-}
-
-#[tauri::command]
-fn move_node(
-    app: tauri::AppHandle,
-    store: tauri::State<'_, WfStore>,
-    graph_id: u32,
-    node_id: u32,
-    x: i32,
-    y: i32,
-) -> Result<(), String> {
-    {
-        let mut s = store.lock().unwrap();
-        let g = s.graph_mut(graph_id).ok_or("graph not found")?;
-        let n = g.node_mut(node_id).ok_or("node not found")?;
-        n.x = x;
-        n.y = y;
-    }
-    persist_workflows(&app, &store);
-    Ok(())
-}
-
-#[tauri::command]
-fn set_node_config(
-    app: tauri::AppHandle,
-    store: tauri::State<'_, WfStore>,
-    graph_id: u32,
-    node_id: u32,
-    config: serde_json::Value,
-) -> Result<(), String> {
-    {
-        let mut s = store.lock().unwrap();
-        let g = s.graph_mut(graph_id).ok_or("graph not found")?;
-        g.node_mut(node_id).ok_or("node not found")?.config = config;
-    }
-    persist_workflows(&app, &store);
-    Ok(())
-}
-
-#[tauri::command]
-fn add_edge(
-    app: tauri::AppHandle,
-    store: tauri::State<'_, WfStore>,
-    graph_id: u32,
-    from: u32,
-    from_port: String,
-    to: u32,
-    to_port: String,
-) -> Result<(), String> {
-    {
-        let mut s = store.lock().unwrap();
-        let g = s.graph_mut(graph_id).ok_or("graph not found")?;
-        g.add_edge(from, &from_port, to, &to_port)?; // returns the typed-edge validation error
-    }
-    persist_workflows(&app, &store);
-    Ok(())
-}
-
-#[tauri::command]
-fn remove_edge(app: tauri::AppHandle, store: tauri::State<'_, WfStore>, graph_id: u32, idx: usize) -> Result<(), String> {
-    {
-        let mut s = store.lock().unwrap();
-        s.graph_mut(graph_id).ok_or("graph not found")?.remove_edge(idx);
-    }
-    persist_workflows(&app, &store);
-    Ok(())
-}
-
-/// Run-now: fire the graph immediately, bypassing `enabled`/trigger but still
-/// respecting its concurrency policy and the global cap.
-#[tauri::command]
-fn run_graph(app: tauri::AppHandle, store: tauri::State<'_, WfStore>, engine: tauri::State<'_, WfEngine>, id: u32) -> Result<String, String> {
-    let policy = {
-        let s = store.lock().unwrap();
-        s.graph(id).ok_or("graph not found")?.concurrency.clone()
-    };
-    if engine.lock().unwrap().total_running() >= WF_GLOBAL_CAP {
-        return Err("Too many workflows are running right now — try again shortly.".into());
-    }
-    let decision = engine.lock().unwrap().decide(id, &policy);
-    match decision {
-        Fire::Spawn => {
-            engine.lock().unwrap().on_spawn(id);
-            spawn_graph_run(&app, id);
-            Ok("Run started.".into())
-        }
-        Fire::Queue => {
-            engine.lock().unwrap().on_queue(id);
-            Ok("Queued — a run is already in progress.".into())
-        }
-        Fire::Skip => Err("Skipped — a run is already in progress (concurrency: skip).".into()),
-    }
-}
-
 // ---- Voice (TTS) + Speech-to-Text ------------------------------------------
 
 /// Whether voice is configured (an `ELEVENLABS_API_KEY` is set). The chat screen
@@ -1919,10 +1417,9 @@ pub fn run() {
             let notif_store: NotificationStore = Arc::new(Mutex::new(Vec::new()));
             app.manage(notif_store);
 
-            // Workflow graphs live in Postgres; managed empty BEFORE the DB connect so
-            // try_connect_db hydrates them (with a one-time workflows.json import).
-            let wf_store: WfStore = Arc::new(Mutex::new(Workflows::from_graphs(Vec::new())));
-            app.manage(wf_store);
+            // Workflow graph store, managed empty BEFORE the DB connect so
+            // try_connect_db can hydrate it (the workflows slice owns the details).
+            features::workflows::manage_empty_store(&app.handle());
 
             if let Err(e) = try_connect_db(&app.handle()) {
                 log::warn!("Postgres not ready at startup ({e}); splash will retry");
@@ -1951,24 +1448,9 @@ pub fn run() {
             let history: ChatHistory = Arc::new(Mutex::new(Vec::new()));
             app.manage(history);
 
-            // Workflows: the trigger/concurrency engine (seeded from the current alert
-            // max so the backlog doesn't fire OnNewAlert), then the background poller
-            // that drives Cron / OnNewAlert. The graph store was managed + hydrated from
-            // Postgres above (try_connect_db).
-            let alert_max = app
-                .handle()
-                .state::<AlertStore>()
-                .lock()
-                .unwrap()
-                .iter()
-                .map(|a| a.id)
-                .max()
-                .unwrap_or(0);
-            let wf_engine: WfEngine = Arc::new(Mutex::new(WorkflowEngine::new(alert_max)));
-            app.manage(wf_engine);
-            let wf_activity: WfActivity = Arc::new(Mutex::new(HashMap::new()));
-            app.manage(wf_activity);
-            spawn_workflow_poller(&app.handle());
+            // Workflows engine + activity map + trigger poller (the slice seeds the
+            // engine from the current alert max so the backlog doesn't fire OnNewAlert).
+            features::workflows::start(&app.handle());
 
             // Hourly ONVIF rescan → reconcile IP changes (DHCP / power-cycle).
             spawn_device_rescan(&app.handle());
@@ -2021,25 +1503,25 @@ pub fn run() {
             chat_ready,
             reset_chat,
             send_chat,
-            load_graphs,
-            run_states,
-            node_catalog,
-            create_graph,
-            rename_graph,
-            delete_graph,
-            set_graph_trigger,
-            set_graph_concurrency,
-            set_graph_enabled,
-            set_graph_run_orphans,
-            set_graph_debug,
-            set_graph_viewport,
-            add_node,
-            remove_node,
-            move_node,
-            set_node_config,
-            add_edge,
-            remove_edge,
-            run_graph,
+            features::workflows::load_graphs,
+            features::workflows::run_states,
+            features::workflows::node_catalog,
+            features::workflows::create_graph,
+            features::workflows::rename_graph,
+            features::workflows::delete_graph,
+            features::workflows::set_graph_trigger,
+            features::workflows::set_graph_concurrency,
+            features::workflows::set_graph_enabled,
+            features::workflows::set_graph_run_orphans,
+            features::workflows::set_graph_debug,
+            features::workflows::set_graph_viewport,
+            features::workflows::add_node,
+            features::workflows::remove_node,
+            features::workflows::move_node,
+            features::workflows::set_node_config,
+            features::workflows::add_edge,
+            features::workflows::remove_edge,
+            features::workflows::run_graph,
             voice_ready,
             speak,
             transcribe,
