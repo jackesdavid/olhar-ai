@@ -10,7 +10,8 @@ use app_core::alerts::{self, Alert, AlertLevel, AlertStore};
 use app_core::db::Db;
 use app_core::notification::NotificationStore;
 
-use crate::{db_ref, resolve_telegram_config};
+use crate::db_ref;
+use crate::features::notifications::resolve_telegram_config;
 
 /// The legacy `alerts.json` path (one-time import source on first DB boot only).
 fn alerts_file(app: &tauri::AppHandle) -> std::path::PathBuf {
