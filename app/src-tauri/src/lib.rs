@@ -9,38 +9,23 @@
 //! tasks so the UI thread never stalls.
 
 use std::path::PathBuf;
-use std::process::Child;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
-use app_core::alerts::{self, AlertLevel, AlertStore};
+use app_core::alerts::AlertStore;
 use app_core::config::{load_settings, save_settings, Settings};
 use app_core::db::Db;
-use app_core::device_actions::capture_snapshot_bytes;
-use app_core::devices::{self, Device, DeviceStore};
+use app_core::devices::DeviceStore;
 use app_core::map::{self, load_map as core_load_map, MapRoom};
 use app_core::notification::NotificationStore;
-use app_core::onvif;
-use app_core::onvif::client::rtsp_url_with_creds;
-use app_core::onvif::DiscoveredDevice;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use serde::Serialize;
 use tauri::Manager;
 
 /// Per-feature Tauri adapters (commands + pollers + state lifecycle).
 mod features;
 
-/// Handle to the running go2rtc sidecar so a restart can kill the old one.
-/// Managed Tauri state; `None` until the first spawn.
-type Go2rtcHandle = Arc<Mutex<Option<Child>>>;
-
-/// Stop-flag for the keep-warm poller (pings each camera's go2rtc frame so the
-/// shared feed stays connected when "always warm" is on). `None` when off.
-/// Managed Tauri state.
-type WarmHandle = Arc<Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>>;
-
 /// The web app's settings file, under the platform app-config dir (created if missing).
-fn settings_file(app: &tauri::AppHandle) -> PathBuf {
+/// `pub(crate)` so the `stream` slice's keep-warm poller can read `cameras_always_warm`.
+pub(crate) fn settings_file(app: &tauri::AppHandle) -> PathBuf {
     let dir = app
         .path()
         .app_config_dir()
@@ -64,12 +49,9 @@ fn try_connect_db(app: &tauri::AppHandle) -> Result<(), String> {
     }
     let url = std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is not set".to_string())?;
     let db = Db::connect(&url).map_err(|e| e.to_string())?;
-    let devices = devices::repo::load(&db);
-    log::info!(
-        "Postgres connected; migrations applied — {} device(s) loaded",
-        devices.len()
-    );
-    *app.state::<DeviceStore>().lock().unwrap() = devices;
+    log::info!("Postgres connected; migrations applied");
+    // Devices (camera registry) — the devices slice owns its hydration.
+    features::devices::hydrate(app, &db);
     // People (hierarchy + face embeddings) — the persons slice owns its hydration.
     features::people::hydrate(app, &db);
     // The alert log lives in Postgres — the alerts slice owns its hydration + import.
@@ -92,13 +74,6 @@ fn try_connect_db(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Persist the full device list to Postgres. Errors if the DB isn't connected yet
-/// (a safety net — commands only run once the app is past the splash).
-fn persist_devices(app: &tauri::AppHandle, list: &[Device]) -> Result<(), String> {
-    devices::repo::save(&db_ref(app)?, list);
-    Ok(())
-}
-
 /// Borrow the connected DB as a cloned handle (cheap — shares pool + runtime), or
 /// error if the database isn't ready yet. `pub(crate)` so per-feature adapters
 /// (under `features::`) can reach the shared DB.
@@ -118,7 +93,6 @@ fn boot_status(app: tauri::AppHandle) -> Result<(), String> {
     try_connect_db(&app)
 }
 
-
 /// The web app's floor-plan file, under the platform app-data dir (created if missing).
 fn map_file(app: &tauri::AppHandle) -> PathBuf {
     let dir = app
@@ -129,7 +103,6 @@ fn map_file(app: &tauri::AppHandle) -> PathBuf {
     dir.join("map.json")
 }
 
-
 #[tauri::command]
 fn get_settings(app: tauri::AppHandle) -> Settings {
     load_settings(&settings_file(&app))
@@ -139,477 +112,7 @@ fn get_settings(app: tauri::AppHandle) -> Settings {
 fn set_settings(app: tauri::AppHandle, settings: Settings) {
     save_settings(&settings_file(&app), &settings);
     // React to the "keep camera feeds always on" toggle without an app restart.
-    reconcile_keepwarm(&app);
-}
-
-// ---- Devices ---------------------------------------------------------------
-
-/// A snapshot of the saved device list.
-#[tauri::command]
-fn list_devices(state: tauri::State<'_, DeviceStore>) -> Vec<Device> {
-    state.lock().unwrap().clone()
-}
-
-/// Upsert a device by `ip` (replace in place if present, else append) and persist.
-#[tauri::command]
-fn save_device(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, DeviceStore>,
-    device: Device,
-) -> Result<(), String> {
-    let mut devices = state.lock().unwrap();
-    if let Some(existing) = devices.iter_mut().find(|d| d.ip == device.ip) {
-        *existing = device;
-    } else {
-        devices.push(device);
-    }
-    persist_devices(&app, &devices)
-}
-
-/// Remove the device with the given `ip` and persist. Returns whether one was removed.
-#[tauri::command]
-fn delete_device(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, DeviceStore>,
-    ip: String,
-) -> Result<bool, String> {
-    let mut devices = state.lock().unwrap();
-    let before = devices.len();
-    devices.retain(|d| d.ip != ip);
-    let removed = devices.len() != before;
-    if removed {
-        persist_devices(&app, &devices)?;
-    }
-    Ok(removed)
-}
-
-/// Rename the device with the given `ip` and persist.
-#[tauri::command]
-fn rename_device(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, DeviceStore>,
-    ip: String,
-    name: String,
-) -> Result<(), String> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err("Name cannot be empty.".into());
-    }
-    let mut devices = state.lock().unwrap();
-    let device = devices
-        .iter_mut()
-        .find(|d| d.ip == ip)
-        .ok_or("Device not found.")?;
-    device.name = trimmed.to_string();
-    persist_devices(&app, &devices)?;
-    Ok(())
-}
-
-/// Run an ONVIF WS-Discovery sweep on a blocking task (it's a sync UDP collect).
-#[tauri::command]
-async fn discover_devices(app: tauri::AppHandle) -> Vec<DiscoveredDevice> {
-    log::info!("discover_devices: starting ONVIF WS-Discovery…");
-    let found = tauri::async_runtime::spawn_blocking(onvif::discovery::discover)
-        .await
-        .unwrap_or_default();
-    log::info!("discover_devices: found {} device(s)", found.len());
-    reconcile_devices(&app, &found);
-    found
-}
-
-/// Reconcile saved devices against a fresh discovery. Match by the stable ONVIF
-/// id; when a camera's IP changed (DHCP / power-cycle) update its ip/xaddr/
-/// rtsp_url, persist, and raise a warning alert. Also backfills the stable id on
-/// devices saved before it existed (matched by current IP).
-fn reconcile_devices(app: &tauri::AppHandle, found: &[DiscoveredDevice]) {
-    use tauri::Emitter;
-    let store = app.state::<DeviceStore>();
-    let mut changed = false;
-    let mut ip_changes: Vec<(String, String, String)> = Vec::new(); // (name, old_ip, new_ip)
-
-    {
-        let mut devices = store.lock().unwrap();
-        for d in found {
-            if d.id.is_empty() {
-                continue; // can't reconcile a camera that didn't advertise an id
-            }
-            if let Some(saved) = devices.iter_mut().find(|s| s.id == d.id) {
-                if saved.ip != d.ip {
-                    let old = std::mem::replace(&mut saved.ip, d.ip.clone());
-                    saved.xaddr = d.xaddr.clone();
-                    saved.rtsp_url = saved.rtsp_url.clone().map(|u| u.replace(&old, &d.ip));
-                    ip_changes.push((saved.name.clone(), old, d.ip.clone()));
-                    changed = true;
-                }
-            } else if let Some(saved) = devices.iter_mut().find(|s| s.id.is_empty() && s.ip == d.ip) {
-                saved.id = d.id.clone(); // backfill the stable id on a pre-existing device
-                changed = true;
-            }
-        }
-        if changed {
-            let _ = persist_devices(app, &devices); // best-effort; rescan retries hourly
-        }
-    }
-
-    if changed {
-        let _ = app.emit("devices-changed", ());
-    }
-    if !ip_changes.is_empty() {
-        let alert_store = app.state::<AlertStore>().inner().clone();
-        let db = db_ref(app).ok();
-        for (name, old, new) in ip_changes {
-            let msg = format!("Camera '{name}' changed IP address: {old} → {new}");
-            log::warn!("reconcile: {msg}");
-            alerts::create(&alert_store, db.as_ref(), AlertLevel::Warn, msg, None, None, "scanner".into());
-        }
-        let _ = app.emit("alerts-changed", ());
-    }
-}
-
-/// Hourly background rescan: re-discover ONVIF cameras and reconcile the store so
-/// a camera that changed IP (DHCP / power-cycle) is found again automatically.
-fn spawn_device_rescan(app: &tauri::AppHandle) {
-    let app = app.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(3600));
-        let found = onvif::discovery::discover();
-        if !found.is_empty() {
-            reconcile_devices(&app, &found);
-        }
-    });
-}
-
-/// Capture a JPEG snapshot from the saved device with `ip`, returned as a
-/// `data:image/jpeg;base64,…` URL ready for an `<img src>`.
-#[tauri::command]
-async fn capture_snapshot(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, DeviceStore>,
-    ip: String,
-) -> Result<String, String> {
-    let mut device = state
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|d| d.ip == ip)
-        .cloned()
-        .ok_or("Device not found.")?;
-
-    // Self-heal: many cameras have no ONVIF GetSnapshotUri and need the RTSP fallback,
-    // which requires `rtsp_url`. If it's missing but we have creds, resolve it via
-    // ONVIF (GetStreamUri) and persist it onto the device — so snapshots + live "just work".
-    let needs_rtsp = device.rtsp_url.as_deref().unwrap_or("").trim().is_empty();
-    if needs_rtsp && device.has_credentials() {
-        log::info!("capture_snapshot: rtsp_url missing — resolving via ONVIF for ip={ip}");
-        let xaddr = if device.xaddr.is_empty() {
-            device.ip.clone()
-        } else {
-            device.xaddr.clone()
-        };
-        let user = device.username.clone().unwrap_or_default();
-        let pass = device.password.clone().unwrap_or_default();
-        match tauri::async_runtime::spawn_blocking(move || {
-            onvif::client::test_credentials(&xaddr, &user, &pass)
-        })
-        .await
-        .map_err(|e| format!("Resolve task failed: {e}"))?
-        {
-            Ok(rtsp) => {
-                device.rtsp_url = Some(rtsp.clone());
-                let mut devices = state.lock().unwrap();
-                if let Some(d) = devices.iter_mut().find(|d| d.ip == ip) {
-                    d.rtsp_url = Some(rtsp);
-                }
-                let _ = persist_devices(&app, &devices); // best-effort self-heal
-                log::info!("capture_snapshot: resolved + persisted rtsp_url for ip={ip}");
-            }
-            Err(e) => log::warn!("capture_snapshot: could not resolve rtsp_url for ip={ip}: {e}"),
-        }
-    }
-
-    log::info!(
-        "capture_snapshot: ip={ip} name='{}' xaddr={} has_creds={} rtsp_url={:?}",
-        device.name,
-        device.xaddr,
-        device.has_credentials(),
-        device.rtsp_url
-    );
-
-    let result = tauri::async_runtime::spawn_blocking(move || capture_snapshot_bytes(&device))
-        .await
-        .map_err(|e| format!("Snapshot task failed: {e}"))?;
-
-    match &result {
-        Ok(b) => log::info!("capture_snapshot: ok — {} bytes", b.len()),
-        Err(e) => log::error!("capture_snapshot failed for ip={ip}: {e}"),
-    }
-    let bytes = result?;
-    Ok(format!("data:image/jpeg;base64,{}", B64.encode(&bytes)))
-}
-
-/// Validate ONVIF credentials against the device service at `xaddr_or_ip`. On
-/// success returns the resolved RTSP stream URI.
-#[tauri::command]
-async fn test_credentials(
-    xaddr_or_ip: String,
-    username: String,
-    password: String,
-) -> Result<String, String> {
-    log::info!("test_credentials: target={xaddr_or_ip} user={username}");
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        onvif::client::test_credentials(&xaddr_or_ip, &username, &password)
-    })
-    .await
-    .map_err(|e| format!("Credential check task failed: {e}"))?;
-    match &result {
-        Ok(uri) => log::info!("test_credentials: ok — rtsp {uri}"),
-        Err(e) => log::error!("test_credentials failed: {e}"),
-    }
-    result
-}
-
-/// Validate a saved device's ONVIF credentials and persist them along with the
-/// resolved RTSP URL. Looks the device up by `ip` in the store (to reuse its
-/// `xaddr`), runs `test_credentials` on a blocking task, then writes
-/// `username`/`password`/`rtsp_url` back to `devices.json`. Returns the updated
-/// `Device`. This is what makes both live video and snapshots work (rtsp_url +
-/// creds get persisted instead of being lost after a one-shot test).
-#[tauri::command]
-async fn validate_device(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, DeviceStore>,
-    ip: String,
-    username: String,
-    password: String,
-) -> Result<Device, String> {
-    // Resolve the device's xaddr (fall back to its ip) from the store.
-    let xaddr = {
-        let devices = state.lock().unwrap();
-        let device = devices
-            .iter()
-            .find(|d| d.ip == ip)
-            .ok_or("Device not found.")?;
-        if device.xaddr.is_empty() {
-            device.ip.clone()
-        } else {
-            device.xaddr.clone()
-        }
-    };
-
-    log::info!("validate_device: ip={ip} xaddr={xaddr} user={username}");
-
-    let user = username.clone();
-    let pass = password.clone();
-    let rtsp = tauri::async_runtime::spawn_blocking(move || {
-        onvif::client::test_credentials(&xaddr, &user, &pass)
-    })
-    .await
-    .map_err(|e| format!("Credential check task failed: {e}"))?;
-
-    let rtsp = match rtsp {
-        Ok(uri) => uri,
-        Err(e) => {
-            log::error!("validate_device failed for ip={ip}: {e}");
-            return Err(e);
-        }
-    };
-
-    // Persist creds + rtsp_url onto the saved device.
-    let updated = {
-        let mut devices = state.lock().unwrap();
-        let device = devices
-            .iter_mut()
-            .find(|d| d.ip == ip)
-            .ok_or("Device not found.")?;
-        device.username = Some(username);
-        device.password = Some(password);
-        device.rtsp_url = Some(rtsp.clone());
-        let updated = device.clone();
-        persist_devices(&app, &devices)?;
-        updated
-    };
-
-    log::info!("validate_device: ok — ip={ip} rtsp_url={rtsp}");
-    Ok(updated)
-}
-
-// ---- Alerts: commands live in `features::alerts` ---------------------------
-
-
-// ---- Live video (go2rtc sidecar) -------------------------------------------
-
-/// The generated go2rtc config, under the platform app-data dir.
-fn go2rtc_config_file(app: &tauri::AppHandle) -> PathBuf {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."));
-    let _ = std::fs::create_dir_all(&dir);
-    dir.join("go2rtc.yaml")
-}
-
-/// Build a go2rtc YAML from the device store: one `cam_<sanitized_ip>` stream
-/// per device that has a non-empty `rtsp_url`, with credentials injected via
-/// `rtsp_url_with_creds`. Returns the YAML text (always includes a `streams:`
-/// key, even if empty, so go2rtc starts cleanly).
-fn build_go2rtc_yaml(devices: &[Device]) -> String {
-    let mut out = String::from("# Generated by Sentinel — do not edit by hand.\nstreams:\n");
-    for d in devices {
-        let Some(rtsp) = d.rtsp_url.as_deref() else {
-            continue;
-        };
-        if rtsp.trim().is_empty() {
-            continue;
-        }
-        let user = d.username.as_deref().unwrap_or("");
-        let pass = d.password.as_deref().unwrap_or("");
-        let url = rtsp_url_with_creds(rtsp, user, pass);
-        out.push_str(&format!("  {}: {}\n", app_core::go2rtc::stream_name(&d.ip), url));
-    }
-    out
-}
-
-/// Best-effort, **idempotent** (re)start of the bundled `binaries/go2rtc`
-/// (relative to the src-tauri cwd) for the desired `yaml` config.
-///
-/// Writes the config and (re)starts the sidecar **only when something actually
-/// changed** — the on-disk config differs from `yaml`, or the prior child has
-/// exited. If go2rtc is already running and serving the same streams, this is a
-/// no-op: re-entering the Live page must NOT kill a healthy sidecar out from
-/// under a connecting player (that left the iframe on a black screen).
-///
-/// If the binary is missing (it is never committed) it logs a warning and
-/// returns without failing — the rest of the app keeps working.
-fn spawn_go2rtc(app: &tauri::AppHandle, config: &std::path::Path, yaml: &str) {
-    let handle = app.state::<Go2rtcHandle>();
-    let mut guard = handle.lock().unwrap();
-
-    // Is the previously-spawned child still alive?
-    let alive = guard
-        .as_mut()
-        .map(|c| matches!(c.try_wait(), Ok(None)))
-        .unwrap_or(false);
-    // Does the on-disk config already match what we want to serve?
-    let unchanged = std::fs::read_to_string(config).map(|prev| prev == yaml).unwrap_or(false);
-
-    if alive && unchanged {
-        return; // already serving the right streams — leave the live sidecar untouched
-    }
-
-    if let Err(e) = std::fs::write(config, yaml) {
-        log::error!("failed to write go2rtc config: {e}");
-        return;
-    }
-
-    // Kill a prior instance so a restart doesn't leave an orphan on :1984.
-    if let Some(mut child) = guard.take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-
-    let bin = if cfg!(windows) {
-        std::path::Path::new("binaries/go2rtc.exe")
-    } else {
-        std::path::Path::new("binaries/go2rtc")
-    };
-    if !bin.exists() {
-        log::warn!(
-            "go2rtc not found at {bin:?} — live video disabled until you drop the binary in (see binaries/DOWNLOAD.md)"
-        );
-        return;
-    }
-
-    match std::process::Command::new(bin)
-        .args(["-config"])
-        .arg(config)
-        .spawn()
-    {
-        Ok(child) => {
-            log::info!("go2rtc started (pid {}) → http://localhost:1984", child.id());
-            *guard = Some(child);
-        }
-        Err(e) => log::error!("failed to start go2rtc: {e}"),
-    }
-}
-
-/// One playable stream for the Live screen.
-#[derive(Debug, Clone, Serialize)]
-struct StreamInfo {
-    ip: String,
-    /// go2rtc stream name, e.g. `cam_192_168_1_50`.
-    name: String,
-    /// go2rtc's ready-made auto-negotiating player URL for this stream
-    /// (`stream.html`: WebRTC → MSE → MJPEG fallback; MSE plays in WKWebView).
-    player_url: String,
-}
-
-/// Regenerate the go2rtc config from the current device store, (re)start the
-/// sidecar, and return one `StreamInfo` per device that has an `rtsp_url`.
-#[tauri::command]
-async fn ensure_streams(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, DeviceStore>,
-) -> Result<Vec<StreamInfo>, String> {
-    let devices = state.lock().unwrap().clone();
-
-    let yaml = build_go2rtc_yaml(&devices);
-    let config = go2rtc_config_file(&app);
-    // Idempotent: only (re)starts go2rtc if the stream set actually changed, so
-    // re-entering Live doesn't kill a healthy sidecar mid-connection.
-    spawn_go2rtc(&app, &config, &yaml);
-
-    let streams: Vec<StreamInfo> = devices
-        .iter()
-        .filter(|d| d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false))
-        .map(|d| {
-            let name = app_core::go2rtc::stream_name(&d.ip);
-            StreamInfo {
-                ip: d.ip.clone(),
-                player_url: format!("http://localhost:1984/stream.html?src={name}"),
-                name,
-            }
-        })
-        .collect();
-
-    log::info!("ensure_streams: {} stream(s) configured", streams.len());
-    Ok(streams)
-}
-
-/// Start or stop the keep-warm poller to match `Settings.cameras_always_warm`.
-/// When on, a background thread pings each camera's go2rtc frame every ~2s so the
-/// shared feed stays connected and snapshots are instant even after idle. When off,
-/// it signals the running poller to stop. Idempotent — safe to call repeatedly
-/// (from `setup` and whenever settings change).
-fn reconcile_keepwarm(app: &tauri::AppHandle) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    let want = load_settings(&settings_file(app)).cameras_always_warm;
-    let handle = app.state::<WarmHandle>();
-    let running = handle.lock().unwrap().is_some();
-
-    if want && !running {
-        let stop = Arc::new(AtomicBool::new(false));
-        *handle.lock().unwrap() = Some(stop.clone());
-        let app = app.clone();
-        std::thread::spawn(move || {
-            log::info!("keep-warm: keeping camera feeds always on");
-            while !stop.load(Ordering::Relaxed) {
-                let devices = app.state::<DeviceStore>().lock().unwrap().clone();
-                for d in &devices {
-                    let has_stream =
-                        d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false);
-                    if has_stream {
-                        let _ = app_core::go2rtc::frame(&d.ip); // discard — just keep it warm
-                    }
-                }
-                std::thread::sleep(Duration::from_secs(2));
-            }
-            log::info!("keep-warm: stopped");
-        });
-    } else if !want && running {
-        if let Some(stop) = handle.lock().unwrap().take() {
-            stop.store(true, Ordering::Relaxed);
-        }
-    }
+    features::stream::reconcile_keepwarm(&app);
 }
 
 // ---- Map (3D floor plan) ---------------------------------------------------
@@ -856,8 +359,9 @@ pub fn run() {
             // retry loop once the database is reachable — there is no JSON fallback.
             let db_state: DbState = Arc::new(Mutex::new(None));
             app.manage(db_state);
-            let store: DeviceStore = Arc::new(Mutex::new(Vec::new()));
-            app.manage(store);
+            // Devices (camera registry): managed empty BEFORE the DB connect so
+            // try_connect_db can hydrate it (the devices slice owns the details).
+            features::devices::manage_empty_store(&app.handle());
             // People: managed empty BEFORE the DB connect so try_connect_db can
             // hydrate it (the persons slice owns the details).
             features::people::manage_empty_store(&app.handle());
@@ -883,17 +387,9 @@ pub fn run() {
             // restart the inbound `/pair <code>` listener without an app restart.
             features::notifications::start_pairing(&app.handle());
 
-            // Live video: managed handle for the go2rtc sidecar, then a
-            // best-effort startup spawn so streams are ready on launch (no-op if
-            // the binary is absent or no devices have an rtsp_url yet).
-            let go2rtc: Go2rtcHandle = Arc::new(Mutex::new(None));
-            app.manage(go2rtc);
-
-            // Keep-warm: managed stop-flag for the optional "always warm" poller that
-            // keeps each camera's shared go2rtc feed connected (started below if the
-            // setting is on, and toggled live from `set_settings`).
-            let warm: WarmHandle = Arc::new(Mutex::new(None));
-            app.manage(warm);
+            // Live feed + keep-warm: the stream slice manages the go2rtc sidecar
+            // handle and the keep-warm stop-flag (started below via `stream::start`).
+            features::stream::manage(&app.handle());
 
             // Chat: a single managed conversation history for Bishop's agent.
             let history: ChatHistory = Arc::new(Mutex::new(Vec::new()));
@@ -904,24 +400,21 @@ pub fn run() {
             features::workflows::start(&app.handle());
 
             // Hourly ONVIF rescan → reconcile IP changes (DHCP / power-cycle).
-            spawn_device_rescan(&app.handle());
-            let handle = app.handle().clone();
-            let devices = handle.state::<DeviceStore>().lock().unwrap().clone();
-            let config = go2rtc_config_file(&handle);
-            spawn_go2rtc(&handle, &config, &build_go2rtc_yaml(&devices));
+            features::devices::spawn_device_rescan(&app.handle());
 
-            // Start the keep-warm poller if the user has "always warm" enabled.
-            reconcile_keepwarm(&app.handle());
+            // Best-effort startup: (re)start go2rtc for the current devices so
+            // streams are ready on launch, then start keep-warm if enabled.
+            features::stream::start(&app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             boot_status,
             get_settings,
             set_settings,
-            list_devices,
-            save_device,
-            delete_device,
-            rename_device,
+            features::devices::list_devices,
+            features::devices::save_device,
+            features::devices::delete_device,
+            features::devices::rename_device,
             features::people::list_people,
             features::people::person_permission_kinds,
             features::people::save_person,
@@ -932,11 +425,11 @@ pub fn run() {
             features::people::delete_embedding,
             features::people::enrolled_person_ids,
             features::people::recognize_face,
-            discover_devices,
-            capture_snapshot,
-            test_credentials,
-            validate_device,
-            ensure_streams,
+            features::devices::discover_devices,
+            features::devices::test_credentials,
+            features::devices::validate_device,
+            features::stream::capture_snapshot,
+            features::stream::ensure_streams,
             features::alerts::list_alerts,
             features::alerts::create_alert,
             features::alerts::delete_alert,
