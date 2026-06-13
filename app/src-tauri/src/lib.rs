@@ -12,27 +12,14 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use app_core::alerts::AlertStore;
-use app_core::config::{load_settings, save_settings, Settings};
 use app_core::db::Db;
 use app_core::devices::DeviceStore;
-use app_core::map::{self, load_map as core_load_map, MapRoom};
 use app_core::notification::NotificationStore;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use tauri::Manager;
 
 /// Per-feature Tauri adapters (commands + pollers + state lifecycle).
 mod features;
-
-/// The web app's settings file, under the platform app-config dir (created if missing).
-/// `pub(crate)` so the `stream` slice's keep-warm poller can read `cameras_always_warm`.
-pub(crate) fn settings_file(app: &tauri::AppHandle) -> PathBuf {
-    let dir = app
-        .path()
-        .app_config_dir()
-        .unwrap_or_else(|_| PathBuf::from("."));
-    let _ = std::fs::create_dir_all(&dir);
-    dir.join("settings.json")
-}
 
 /// The Postgres handle (devices store). `None` until the splash's `boot_status`
 /// drives a successful connect; managed Tauri state.
@@ -60,16 +47,10 @@ fn try_connect_db(app: &tauri::AppHandle) -> Result<(), String> {
     features::notifications::hydrate(app, &db);
     // Workflow graphs live in Postgres too — the workflows slice owns its hydration.
     features::workflows::hydrate(app, &db);
+    // Map rooms live in Postgres (read on demand, no store) — the map slice owns
+    // its one-time legacy-JSON import.
+    features::map::hydrate(app, &db);
 
-    // Map rooms + Telegram config also live in Postgres (read on demand, no store).
-    // One-time non-destructive import from legacy JSON files when the DB is empty.
-    if map::repo::load(&db).is_empty() {
-        let from_json = core_load_map(&map_file(app));
-        if !from_json.is_empty() {
-            map::repo::save(&db, &from_json);
-            log::info!("Imported {} map room(s) from map.json into Postgres", from_json.len());
-        }
-    }
     *state.lock().unwrap() = Some(db);
     Ok(())
 }
@@ -91,45 +72,6 @@ pub(crate) fn db_ref(app: &tauri::AppHandle) -> Result<Db, String> {
 #[tauri::command]
 fn boot_status(app: tauri::AppHandle) -> Result<(), String> {
     try_connect_db(&app)
-}
-
-/// The web app's floor-plan file, under the platform app-data dir (created if missing).
-fn map_file(app: &tauri::AppHandle) -> PathBuf {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."));
-    let _ = std::fs::create_dir_all(&dir);
-    dir.join("map.json")
-}
-
-#[tauri::command]
-fn get_settings(app: tauri::AppHandle) -> Settings {
-    load_settings(&settings_file(&app))
-}
-
-#[tauri::command]
-fn set_settings(app: tauri::AppHandle, settings: Settings) {
-    save_settings(&settings_file(&app), &settings);
-    // React to the "keep camera feeds always on" toggle without an app restart.
-    features::stream::reconcile_keepwarm(&app);
-}
-
-// ---- Map (3D floor plan) ---------------------------------------------------
-
-/// The saved floor plan (rooms + assigned cameras). Stateless: the frontend owns
-/// the working copy and saves the whole array back.
-#[tauri::command]
-fn load_map(app: tauri::AppHandle) -> Vec<MapRoom> {
-    db_ref(&app).map(|db| map::repo::load(&db)).unwrap_or_default()
-}
-
-/// Persist the whole floor-plan array to Postgres (replace-all).
-#[tauri::command]
-fn save_map(app: tauri::AppHandle, rooms: Vec<MapRoom>) -> Result<(), String> {
-    map::repo::save(&db_ref(&app)?, &rooms);
-    log::info!("save_map: persisted {} room(s)", rooms.len());
-    Ok(())
 }
 
 // ---- Tool runtime (shared by chat + workflows) -----------------------------
@@ -195,132 +137,6 @@ pub(crate) fn build_run_context(app: &tauri::AppHandle) -> Option<app_core::agen
         notif_cfg: features::notifications::resolve_telegram_config(app),
         ui_tx: tx,
     })
-}
-
-// ---- Chat / Bishop (agent) -------------------------------------------------
-
-/// The chat conversation history (with verbatim `tool_use`/`tool_result`
-/// blocks), held in managed state for a single ongoing conversation.
-type ChatHistory = Arc<Mutex<Vec<app_core::agent::Message>>>;
-
-/// Whether the agent is configured (an `ANTHROPIC_API_KEY` is set). The chat
-/// screen shows an offline notice when this is false.
-#[tauri::command]
-fn chat_ready() -> bool {
-    app_core::agent::AgentConfig::from_env().is_some()
-}
-
-/// Clear the conversation history.
-#[tauri::command]
-fn reset_chat(history: tauri::State<'_, ChatHistory>) {
-    history.lock().unwrap().clear();
-}
-
-/// Run one chat turn: append the operator's message, run Bishop's tool-use loop
-/// on a blocking task, splice the produced turns into history, and return the
-/// final reply. Tool side-effects (snapshots, store changes, open-live) stream
-/// to the UI as Tauri events drained off the tool channel while the turn runs.
-#[tauri::command]
-async fn send_chat(
-    app: tauri::AppHandle,
-    history_state: tauri::State<'_, ChatHistory>,
-    text: String,
-) -> Result<String, String> {
-    use app_core::agent::{client, Message, ToolRegistry};
-
-    let text = text.trim().to_string();
-    if text.is_empty() {
-        return Err("Say something first.".into());
-    }
-    if app_core::agent::AgentConfig::from_env().is_none() {
-        return Err("Bishop is offline — set ANTHROPIC_API_KEY to enable chat.".into());
-    }
-
-    // Optimistically append the user turn and snapshot the full history for the call.
-    let snapshot = {
-        let mut h = history_state.lock().unwrap();
-        h.push(Message::user(text));
-        h.clone()
-    };
-
-    // Shared tool context: side-effects stream to the UI while the turn runs.
-    let ctx = build_run_context(&app).ok_or("Sentinel's database isn't ready yet.")?;
-
-    let outcome = tauri::async_runtime::spawn_blocking(move || {
-        let registry = ToolRegistry::new();
-        client::ask(&snapshot, &registry, &ctx, false)
-    })
-    .await
-    .map_err(|e| format!("Chat task failed: {e}"))?;
-
-    match outcome {
-        Some(o) => {
-            history_state.lock().unwrap().extend(o.appended);
-            Ok(o.reply_text)
-        }
-        None => {
-            // The request failed — roll back the optimistic user turn so history
-            // stays valid (no two user turns in a row on the next request).
-            history_state.lock().unwrap().pop();
-            Err("Bishop didn't respond just now — check the API key and network, then retry.".into())
-        }
-    }
-}
-
-// ---- Voice (TTS) + Speech-to-Text ------------------------------------------
-
-/// Whether voice is configured (an `ELEVENLABS_API_KEY` is set). The chat screen
-/// hides/disables the mic + speak controls when false.
-#[tauri::command]
-fn voice_ready() -> bool {
-    app_core::voice::VoiceConfig::from_env().is_some()
-}
-
-/// Synthesize `text` to speech and return base64 MP3 for the WebView to play.
-#[tauri::command]
-async fn speak(text: String) -> Result<String, String> {
-    let text = text.trim().to_string();
-    if text.is_empty() {
-        return Err("Nothing to speak.".into());
-    }
-    let mp3 = tauri::async_runtime::spawn_blocking(move || app_core::voice::synthesize(&text))
-        .await
-        .map_err(|e| format!("Speak task failed: {e}"))?;
-    match mp3 {
-        Some(bytes) => Ok(B64.encode(&bytes)),
-        None => Err("Voice synthesis failed — check ELEVENLABS_API_KEY and network.".into()),
-    }
-}
-
-/// A filename for the Scribe multipart part, derived from the recorded MIME.
-fn audio_filename_for(mime: &str) -> String {
-    let ext = match mime.split(';').next().unwrap_or("").trim() {
-        "audio/webm" => "webm",
-        "audio/ogg" => "ogg",
-        "audio/mp4" | "audio/aac" => "mp4",
-        "audio/mpeg" => "mp3",
-        "audio/wav" | "audio/x-wav" => "wav",
-        _ => "webm",
-    };
-    format!("speech.{ext}")
-}
-
-/// Transcribe a base64-encoded audio clip (recorded in the WebView) via Scribe.
-#[tauri::command]
-async fn transcribe(audio_b64: String, mime: Option<String>) -> Result<String, String> {
-    let bytes = B64.decode(audio_b64.as_bytes()).map_err(|e| format!("Bad audio data: {e}"))?;
-    let mime = mime.unwrap_or_else(|| "audio/webm".into());
-    let filename = audio_filename_for(&mime);
-    let out = tauri::async_runtime::spawn_blocking(move || {
-        app_core::listen::transcribe(&bytes, &filename, &mime)
-    })
-    .await
-    .map_err(|e| format!("Transcribe task failed: {e}"))?;
-    match &out {
-        Ok(t) => log::info!("transcribe: {} chars", t.len()),
-        Err(e) => log::warn!("transcribe failed: {e}"),
-    }
-    out
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -392,8 +208,7 @@ pub fn run() {
             features::stream::manage(&app.handle());
 
             // Chat: a single managed conversation history for Bishop's agent.
-            let history: ChatHistory = Arc::new(Mutex::new(Vec::new()));
-            app.manage(history);
+            features::chat::manage(&app.handle());
 
             // Workflows engine + activity map + trigger poller (the slice seeds the
             // engine from the current alert max so the backlog doesn't fire OnNewAlert).
@@ -409,8 +224,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             boot_status,
-            get_settings,
-            set_settings,
+            features::settings::get_settings,
+            features::settings::set_settings,
             features::devices::list_devices,
             features::devices::save_device,
             features::devices::delete_device,
@@ -442,11 +257,11 @@ pub fn run() {
             features::notifications::delete_beacon,
             features::notifications::test_beacon,
             features::alerts::deliver_alert,
-            load_map,
-            save_map,
-            chat_ready,
-            reset_chat,
-            send_chat,
+            features::map::load_map,
+            features::map::save_map,
+            features::chat::chat_ready,
+            features::chat::reset_chat,
+            features::chat::send_chat,
             features::workflows::load_graphs,
             features::workflows::run_states,
             features::workflows::node_catalog,
@@ -466,9 +281,9 @@ pub fn run() {
             features::workflows::add_edge,
             features::workflows::remove_edge,
             features::workflows::run_graph,
-            voice_ready,
-            speak,
-            transcribe,
+            features::voice::voice_ready,
+            features::voice::speak,
+            features::voice::transcribe,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

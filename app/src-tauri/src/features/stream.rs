@@ -267,7 +267,8 @@ pub async fn ensure_streams(
 /// (from `setup` and whenever settings change). `pub(crate)` so `set_settings`
 /// (in lib.rs) can re-reconcile when the toggle changes live.
 pub(crate) fn reconcile_keepwarm(app: &tauri::AppHandle) {
-    let want = app_core::config::load_settings(&crate::settings_file(app)).cameras_always_warm;
+    let want = app_core::config::load_settings(&crate::features::settings::settings_file(app))
+        .cameras_always_warm;
     let handle = app.state::<WarmHandle>();
     let running = handle.lock().unwrap().is_some();
 
