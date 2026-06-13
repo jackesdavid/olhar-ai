@@ -4,4 +4,5 @@
 //! stays a thin assembler that wires these together.
 pub mod alerts;
 pub mod notifications;
+pub mod people;
 pub mod workflows;
