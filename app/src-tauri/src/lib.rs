@@ -13,7 +13,7 @@ use std::process::Child;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use app_core::alerts::{self, Alert, AlertLevel, AlertStore};
+use app_core::alerts::{self, AlertLevel, AlertStore};
 use app_core::config::{load_settings, save_settings, Settings};
 use app_core::db::Db;
 use app_core::device_actions::capture_snapshot_bytes;
@@ -104,22 +104,8 @@ fn try_connect_db(app: &tauri::AppHandle) -> Result<(), String> {
     let people = persons::repo::load(&db);
     log::info!("Persons loaded — {} person(s)", people.len());
     *app.state::<PersonStore>().lock().unwrap() = people;
-    // The alert log lives in Postgres — hydrate the in-memory store. One-time,
-    // non-destructive import: if the DB log is empty but a legacy alerts.json exists,
-    // seed the DB from it (ids preserved) so the history survives the move to the DB.
-    let mut alerts = alerts::repo::load(&db);
-    if alerts.is_empty() {
-        let from_json = alerts::repo::import_legacy_json(&alerts_file(app));
-        if !from_json.is_empty() {
-            for a in &from_json {
-                alerts::repo::insert(&db, a);
-            }
-            log::info!("Imported {} alert(s) from alerts.json into Postgres", from_json.len());
-            alerts = alerts::repo::load(&db);
-        }
-    }
-    log::info!("Alerts loaded from Postgres — {} alert(s)", alerts.len());
-    *app.state::<AlertStore>().lock().unwrap() = alerts;
+    // The alert log lives in Postgres — the alerts slice owns its hydration + import.
+    features::alerts::hydrate(app, &db);
     // Beacons (Telegram targets) live in Postgres too — same hydrate + one-time
     // non-destructive import from a legacy notifications.json when the DB is empty.
     let mut beacons = notification::repo::load_beacons(&db);
@@ -194,15 +180,6 @@ fn boot_status(app: tauri::AppHandle) -> Result<(), String> {
     try_connect_db(&app)
 }
 
-/// The web app's alert log file, under the platform app-data dir (created if missing).
-fn alerts_file(app: &tauri::AppHandle) -> PathBuf {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."));
-    let _ = std::fs::create_dir_all(&dir);
-    dir.join("alerts.json")
-}
 
 /// The web app's paired-beacons file, under the platform app-data dir (created if missing).
 fn notifications_file(app: &tauri::AppHandle) -> PathBuf {
@@ -255,7 +232,7 @@ fn load_stored_telegram(app: &tauri::AppHandle) -> Option<StoredTelegramConfig> 
 /// Resolve the active `NotificationConfig`: the saved `telegram.json` if it has a
 /// non-empty token, else the environment (`TELEGRAM_BOT_TOKEN` / `…_PAIRING_CODE`).
 /// Returns `None` when neither source provides a token.
-fn resolve_telegram_config(app: &tauri::AppHandle) -> Option<NotificationConfig> {
+pub(crate) fn resolve_telegram_config(app: &tauri::AppHandle) -> Option<NotificationConfig> {
     if let Some(stored) = load_stored_telegram(app) {
         if !stored.bot_token.trim().is_empty() {
             return Some(NotificationConfig {
@@ -724,93 +701,7 @@ async fn validate_device(
     Ok(updated)
 }
 
-// ---- Alerts ----------------------------------------------------------------
-
-/// Aggregate counts for the alerts dashboard.
-#[derive(Debug, Clone, Serialize)]
-struct AlertStats {
-    /// Total alerts in the log.
-    total: u32,
-    /// Alerts whose `created_at` falls on today's local date.
-    today: u32,
-    /// `(level label, count)` for every level in [`AlertLevel::ALL`] order.
-    by_level: Vec<(String, u32)>,
-    /// Alerts that have never been delivered (empty `deliveries`).
-    undelivered: u32,
-}
-
-/// The alert log, newest first.
-#[tauri::command]
-fn list_alerts(state: tauri::State<'_, AlertStore>) -> Vec<Alert> {
-    let mut alerts = state.lock().unwrap().clone();
-    alerts.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(b.id.cmp(&a.id)));
-    alerts
-}
-
-/// Create an alert (level defaults to Info, source defaults to "operator"),
-/// persist, and return it. `room` is free text stored as `room_name`; map
-/// lookup (`room_id`) lands in a later unit.
-#[tauri::command]
-fn create_alert(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AlertStore>,
-    level: String,
-    message: String,
-    room: Option<String>,
-    source: Option<String>,
-) -> Alert {
-    let level = AlertLevel::parse(&level).unwrap_or_default();
-    let source = source
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "operator".to_string());
-    let room_name = room
-        .map(|r| r.trim().to_string())
-        .filter(|r| !r.is_empty());
-
-    let alert = alerts::create(
-        &state,
-        db_ref(&app).ok().as_ref(),
-        level,
-        message,
-        None,
-        room_name,
-        source,
-    );
-    log::info!(
-        "create_alert: id={} level={} source={} room={:?}",
-        alert.id,
-        alert.level.label(),
-        alert.source,
-        alert.room_name
-    );
-    alert
-}
-
-/// Remove the alert with `id` and persist. Returns whether one was removed.
-#[tauri::command]
-fn delete_alert(app: tauri::AppHandle, state: tauri::State<'_, AlertStore>, id: u64) -> bool {
-    let removed = alerts::delete(&state, db_ref(&app).ok().as_ref(), id);
-    log::info!("delete_alert: id={id} removed={removed}");
-    removed
-}
-
-/// Aggregate counts over the alert log for the dashboard stat cards.
-#[tauri::command]
-fn alert_stats(state: tauri::State<'_, AlertStore>) -> AlertStats {
-    let alerts = state.lock().unwrap();
-    let total = alerts.len() as u32;
-    let today = alerts.iter().filter(|a| alerts::is_today(&a.created_at)).count() as u32;
-    let undelivered = alerts.iter().filter(|a| a.deliveries.is_empty()).count() as u32;
-    let by_level = AlertLevel::ALL
-        .iter()
-        .map(|&lvl| {
-            let n = alerts.iter().filter(|a| a.level == lvl).count() as u32;
-            (lvl.label().to_string(), n)
-        })
-        .collect();
-    AlertStats { total, today, by_level, undelivered }
-}
+// ---- Alerts: commands live in `features::alerts` ---------------------------
 
 // ---- Telegram config + Beacons ---------------------------------------------
 
@@ -939,32 +830,6 @@ async fn test_beacon(
     match &result {
         Ok(s) => log::info!("test_beacon: {s}"),
         Err(e) => log::error!("test_beacon failed: {e}"),
-    }
-    result
-}
-
-/// Deliver the alert with `id` to every enabled beacon and record the result.
-/// Network IO on a blocking task.
-#[tauri::command]
-async fn deliver_alert(
-    app: tauri::AppHandle,
-    alert_state: tauri::State<'_, AlertStore>,
-    notif_state: tauri::State<'_, NotificationStore>,
-    id: u64,
-) -> Result<String, String> {
-    let cfg = resolve_telegram_config(&app)
-        .ok_or("Telegram is not configured (set the bot token in Beacons).")?;
-    let alert_store = alert_state.inner().clone();
-    let notif_store = notif_state.inner().clone();
-    let db = db_ref(&app).ok();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        alerts::deliver(&alert_store, db.as_ref(), &notif_store, &cfg, id)
-    })
-    .await
-    .map_err(|e| format!("Deliver task failed: {e}"))?;
-    match &result {
-        Ok(s) => log::info!("deliver_alert: {s}"),
-        Err(e) => log::error!("deliver_alert failed for id={id}: {e}"),
     }
     result
 }
@@ -1395,11 +1260,9 @@ pub fn run() {
             let person_store: PersonStore = Arc::new(Mutex::new(Vec::new()));
             app.manage(person_store);
 
-            // Alerts live in Postgres. The store is managed empty BEFORE the DB connect so
-            // `try_connect_db` can hydrate it (with a one-time import from any legacy
-            // alerts.json) — same pattern as devices/persons.
-            let alert_store: AlertStore = Arc::new(Mutex::new(Vec::new()));
-            app.manage(alert_store);
+            // Alert store, managed empty BEFORE the DB connect so try_connect_db can
+            // hydrate it (the alerts slice owns the details).
+            features::alerts::manage_empty_store(&app.handle());
 
             // Beacons (Telegram targets) live in Postgres; managed empty BEFORE the DB
             // connect so try_connect_db can hydrate them (with a one-time import from any
@@ -1476,10 +1339,10 @@ pub fn run() {
             test_credentials,
             validate_device,
             ensure_streams,
-            list_alerts,
-            create_alert,
-            delete_alert,
-            alert_stats,
+            features::alerts::list_alerts,
+            features::alerts::create_alert,
+            features::alerts::delete_alert,
+            features::alerts::alert_stats,
             get_telegram_config,
             set_telegram_config,
             list_beacons,
@@ -1487,7 +1350,7 @@ pub fn run() {
             rename_beacon,
             delete_beacon,
             test_beacon,
-            deliver_alert,
+            features::alerts::deliver_alert,
             load_map,
             save_map,
             chat_ready,
