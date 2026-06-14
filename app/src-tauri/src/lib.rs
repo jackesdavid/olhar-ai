@@ -203,23 +203,18 @@ pub fn run() {
             // restart the inbound `/pair <code>` listener without an app restart.
             features::notifications::start_pairing(&app.handle());
 
-            // Live feed + keep-warm: the stream slice manages the go2rtc sidecar
-            // handle and the keep-warm stop-flag (started below via `stream::start`).
-            features::stream::manage(&app.handle());
+            // Live feed + snapshots: the on-prem sentinel-edge service owns go2rtc and
+            // is the only thing that touches cameras — the stream slice is a thin
+            // client of it (EDGE_URL), so there's nothing to start here.
 
             // Chat: a single managed conversation history for Bishop's agent.
             features::chat::manage(&app.handle());
 
-            // Workflows engine + activity map + trigger poller (the slice seeds the
-            // engine from the current alert max so the backlog doesn't fire OnNewAlert).
+            // Workflows: client of sentinel-flow — bridges its SSE to Tauri events.
             features::workflows::start(&app.handle());
 
             // Hourly ONVIF rescan → reconcile IP changes (DHCP / power-cycle).
             features::devices::spawn_device_rescan(&app.handle());
-
-            // Best-effort startup: (re)start go2rtc for the current devices so
-            // streams are ready on launch, then start keep-warm if enabled.
-            features::stream::start(&app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

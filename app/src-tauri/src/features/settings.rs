@@ -24,10 +24,9 @@ pub fn get_settings(app: tauri::AppHandle) -> Settings {
     load_settings(&settings_file(&app))
 }
 
-/// Persist settings, then react to the "keep camera feeds always on" toggle
-/// without an app restart.
+/// Persist the app settings. (Camera keep-warm now lives on the sentinel-edge box,
+/// which owns go2rtc — it's no longer the desktop's concern.)
 #[tauri::command]
 pub fn set_settings(app: tauri::AppHandle, settings: Settings) {
     save_settings(&settings_file(&app), &settings);
-    crate::features::stream::reconcile_keepwarm(&app);
 }
