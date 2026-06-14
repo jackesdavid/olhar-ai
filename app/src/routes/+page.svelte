@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { data } from "$lib/data";
 
   import Cpu from "@lucide/svelte/icons/cpu";
   import Bell from "@lucide/svelte/icons/bell";
@@ -41,9 +41,9 @@
   onMount(async () => {
     try {
       const [d, a, r] = await Promise.all([
-        invoke<Device[]>("list_devices").catch(() => []),
-        invoke<Alert[]>("list_alerts").catch(() => []),
-        invoke<Target[]>("list_beacons").catch(() => []),
+        data.listDevices().catch(() => []),
+        data.listAlerts().catch(() => []),
+        data.listBeacons().catch(() => []),
       ]);
       devices = d;
       alerts = a;

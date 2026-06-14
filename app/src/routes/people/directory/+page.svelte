@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { invoke } from "@tauri-apps/api/core";
+  import { data } from "$lib/data";
   import { toast } from "svelte-sonner";
 
   import Plus from "@lucide/svelte/icons/plus";
@@ -49,8 +49,8 @@
     loading = true;
     try {
       const [list, enrolled] = await Promise.all([
-        invoke<Person[]>("list_people"),
-        invoke<string[]>("enrolled_person_ids"),
+        data.listPeople(),
+        data.enrolledPersonIds(),
       ]);
       people = list;
       enrolledIds = new Set(enrolled);

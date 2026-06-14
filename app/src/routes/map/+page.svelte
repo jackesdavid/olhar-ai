@@ -3,7 +3,7 @@
   // editor panel on the right. The frontend owns the working copy of the rooms
   // array and saves the whole thing via `save_map`.
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { data } from "$lib/data";
   import { goto } from "$app/navigation";
   import { toast } from "svelte-sonner";
   import { Canvas } from "@threlte/core";
@@ -71,8 +71,8 @@
     loading = true;
     try {
       const [rs, ds] = await Promise.all([
-        invoke<MapRoom[]>("load_map"),
-        invoke<Device[]>("list_devices"),
+        data.loadMap(),
+        data.listDevices(),
       ]);
       rooms = rs;
       devices = ds;
@@ -145,7 +145,7 @@
   async function save() {
     saving = true;
     try {
-      await invoke("save_map", { rooms });
+      await data.saveMap(rooms);
       dirty = false;
       toast.success("Map saved.");
     } catch (err) {

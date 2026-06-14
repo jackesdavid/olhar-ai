@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
+  import { data, onEvent, isTauri } from "$lib/data";
   import { toast } from "svelte-sonner";
 
   import Radar from "@lucide/svelte/icons/radar";
@@ -61,7 +60,7 @@
   async function loadDevices() {
     loading = true;
     try {
-      devices = await invoke<Device[]>("list_devices");
+      devices = await data.listDevices();
     } catch (err) {
       console.error("Failed to list devices", err);
       toast.error("Failed to load devices", { description: String(err) });
@@ -73,17 +72,18 @@
   onMount(() => {
     loadDevices();
     // Live-refresh when the chat agent renames/removes a device.
-    const unlisten = listen("devices-changed", () => loadDevices());
+    const unlisten = onEvent("devices-changed", () => loadDevices());
     return () => {
       unlisten.then((un) => un());
     };
   });
 
   async function scan() {
+    if (!isTauri()) return;
     scanning = true;
     discovered = [];
     try {
-      const found = await invoke<DiscoveredDevice[]>("discover_devices");
+      const found = await data.discoverDevices();
       discovered = found;
       if (found.length === 0) {
         toast.info("No cameras found on the local network.");
@@ -113,7 +113,7 @@
       rtsp_url: null,
     };
     try {
-      await invoke("save_device", { device });
+      await data.saveDevice(device);
       toast.success(`Added ${device.name}.`);
       await loadDevices();
     } catch (err) {
@@ -141,7 +141,7 @@
       password: editPass.length > 0 ? editPass : null,
     };
     try {
-      await invoke("save_device", { device });
+      await data.saveDevice(device);
       detail = device;
       toast.success("Device saved.");
       await loadDevices();
@@ -155,6 +155,7 @@
 
   async function testCreds() {
     if (!detail) return;
+    if (!isTauri()) return;
     if (editUser.length === 0) {
       toast.error("Enter a username and password first.");
       return;
@@ -163,11 +164,7 @@
     try {
       // validate_device verifies the creds AND persists them + the resolved
       // rtsp_url onto the saved device (so snapshots and live video work).
-      const updated = await invoke<Device>("validate_device", {
-        ip: detail.ip,
-        username: editUser,
-        password: editPass,
-      });
+      const updated = await data.validateDevice(detail.ip, editUser, editPass);
       detail = updated;
       editUser = updated.username ?? editUser;
       editPass = updated.password ?? editPass;
@@ -188,7 +185,7 @@
     capturing = true;
     snapshotUrl = null;
     try {
-      snapshotUrl = await invoke<string>("capture_snapshot", { ip: detail.ip });
+      snapshotUrl = await data.captureSnapshot(detail.ip);
       toast.success("Snapshot captured.");
     } catch (err) {
       console.error("Snapshot failed", err);
@@ -207,7 +204,7 @@
     if (!deleteTarget) return;
     deleting = true;
     try {
-      await invoke<boolean>("delete_device", { ip: deleteTarget.ip });
+      await data.deleteDevice(deleteTarget.ip);
       toast.success(`Removed ${deleteTarget.name}.`);
       deleteOpen = false;
       deleteTarget = null;
@@ -229,15 +226,17 @@
         Discover, save, and manage ONVIF cameras on the local network.
       </p>
     </div>
-    <Button onclick={scan} disabled={scanning}>
-      {#if scanning}
-        <LoaderCircle class="size-4 animate-spin" />
-        Scanning…
-      {:else}
-        <Radar class="size-4" />
-        Scan network
-      {/if}
-    </Button>
+    {#if isTauri()}
+      <Button onclick={scan} disabled={scanning}>
+        {#if scanning}
+          <LoaderCircle class="size-4 animate-spin" />
+          Scanning…
+        {:else}
+          <Radar class="size-4" />
+          Scan network
+        {/if}
+      </Button>
+    {/if}
   </div>
 
   <!-- Saved devices -->
@@ -254,9 +253,11 @@
           title="No devices yet"
           description="Scan the local network to discover ONVIF cameras nearby."
         >
-          <Button onclick={scan} disabled={scanning}>
-            <Radar class="size-4" /> Scan network
-          </Button>
+          {#if isTauri()}
+            <Button onclick={scan} disabled={scanning}>
+              <Radar class="size-4" /> Scan network
+            </Button>
+          {/if}
         </EmptyState>
       {:else}
         <Table.Root>
@@ -398,14 +399,16 @@
           <Button onclick={saveDetail} disabled={savingDetail}>
             {savingDetail ? "Saving…" : "Save"}
           </Button>
-          <Button variant="outline" onclick={testCreds} disabled={testing}>
-            {#if testing}
-              <LoaderCircle class="size-4 animate-spin" />
-            {:else}
-              <KeyRound class="size-4" />
-            {/if}
-            Test credentials
-          </Button>
+          {#if isTauri()}
+            <Button variant="outline" onclick={testCreds} disabled={testing}>
+              {#if testing}
+                <LoaderCircle class="size-4 animate-spin" />
+              {:else}
+                <KeyRound class="size-4" />
+              {/if}
+              Test credentials
+            </Button>
+          {/if}
           <Button variant="outline" onclick={capture} disabled={capturing}>
             {#if capturing}
               <LoaderCircle class="size-4 animate-spin" />

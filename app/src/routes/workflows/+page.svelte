@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
+  import { data, onEvent } from "$lib/data";
   import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
   import { toast } from "svelte-sonner";
 
@@ -525,7 +524,7 @@
     const v = { x: pan.x, y: pan.y, zoom };
     const g = graphs.find((x) => x.id === id);
     if (g) g.viewport = v;
-    invoke("set_graph_viewport", { id, x: v.x, y: v.y, zoom: v.zoom }).catch(() => {});
+    data.setGraphViewport(id, v.x, v.y, v.zoom).catch(() => {});
   }
   function openGraph(id: number) {
     saveViewport();
@@ -549,7 +548,7 @@
 
   // ---- load ----------------------------------------------------------------
   async function reload() {
-    graphs = await invoke<Graph[]>("load_graphs");
+    graphs = await data.loadGraphs<Graph>();
     if (selectedGraphId !== null && !graphs.some((g) => g.id === selectedGraphId)) {
       selectedGraphId = null;
     }
@@ -557,10 +556,7 @@
 
   async function loadRefs() {
     try {
-      const [d, r] = await Promise.all([
-        invoke<{ name: string; rtsp_url?: string | null }[]>("list_devices"),
-        invoke<{ label: string; enabled: boolean }[]>("list_beacons"),
-      ]);
+      const [d, r] = await Promise.all([data.listDevices(), data.listBeacons()]);
       devices = d;
       recipients = r;
     } catch (err) {
@@ -577,7 +573,7 @@
     if (savedConsoleH >= CONSOLE_MIN && savedConsoleH <= CONSOLE_MAX) consoleH = savedConsoleH;
     (async () => {
       try {
-        const cat = await invoke<{ kinds: CatKind[] }>("node_catalog");
+        const cat = await data.nodeCatalog<{ kinds: CatKind[] }>();
         catalog = Object.fromEntries(cat.kinds.map((k) => [k.slug, k]));
         await reload();
         await loadRefs();
@@ -587,61 +583,61 @@
         loading = false;
       }
     })();
-    const un = listen<{ graph: number; name: string; ok: boolean; summary: string }>(
-      "workflow-run",
-      (e) => {
-        running = false;
-        const { graph: gid, name, ok, summary } = e.payload;
-        // Run finished (ok or error) → drain remaining highlights, then stop.
-        if (gid === selectedGraphId) endLive();
-        logs = [{ time: new Date().toLocaleTimeString(), name, ok, summary }, ...logs].slice(0, 200);
-        if (ok) toast.success(`Workflow "${name}"`, { description: summary });
-        else toast.error(`Workflow "${name}" failed`, { description: summary });
-      },
-    );
+    const un = onEvent("workflow-run", (payload) => {
+      running = false;
+      const { graph: gid, name, ok, summary } = payload as {
+        graph: number;
+        name: string;
+        ok: boolean;
+        summary: string;
+      };
+      // Run finished (ok or error) → drain remaining highlights, then stop.
+      if (gid === selectedGraphId) endLive();
+      logs = [{ time: new Date().toLocaleTimeString(), name, ok, summary }, ...logs].slice(0, 200);
+      if (ok) toast.success(`Workflow "${name}"`, { description: summary });
+      else toast.error(`Workflow "${name}" failed`, { description: summary });
+    });
     // Per-node execution events (real-time, catch every node).
-    const unNode = listen<{ graph: number; node: number }>("workflow-node", (e) => {
-      if (e.payload.graph === selectedGraphId) markLive(e.payload.node);
+    const unNode = onEvent("workflow-node", (payload) => {
+      const p = payload as { graph: number; node: number };
+      if (p.graph === selectedGraphId) markLive(p.node);
     });
     // Per-node debug logs (only emitted when the graph's debug flag is on).
-    const unLog = listen<{ graph: number; node: number; label: string; message: string; ms: number }>(
-      "workflow-log",
-      (e) => {
-        if (e.payload.graph !== selectedGraphId) return; // only the open graph
-        const { label, message, ms } = e.payload;
-        logs = [
-          { time: new Date().toLocaleTimeString(), name: label, ok: true, summary: message, debug: true, ms },
-          ...logs,
-        ].slice(0, 200);
-      },
-    );
+    const unLog = onEvent("workflow-log", (payload) => {
+      const p = payload as { graph: number; node: number; label: string; message: string; ms: number };
+      if (p.graph !== selectedGraphId) return; // only the open graph
+      const { label, message, ms } = p;
+      logs = [
+        { time: new Date().toLocaleTimeString(), name: label, ok: true, summary: message, debug: true, ms },
+        ...logs,
+      ].slice(0, 200);
+    });
     // Print node: always echo to the Console (independent of the debug flag) and,
     // when on_screen, flash it over the canvas. Not graph-filtered — the payload
     // carries no graph id (see plan); the editor shows one graph at a time.
-    const unPrint = listen<{ message: string; level: string; on_screen: boolean }>(
-      "workflow-print",
-      (e) => {
-        const { message, level, on_screen } = e.payload;
-        logs = [
-          { time: new Date().toLocaleTimeString(), name: "Print", ok: true, summary: message, level },
-          ...logs,
-        ].slice(0, 200);
-        if (on_screen) flashOnScreen(message, level);
-      },
-    );
+    const unPrint = onEvent("workflow-print", (payload) => {
+      const { message, level, on_screen } = payload as { message: string; level: string; on_screen: boolean };
+      logs = [
+        { time: new Date().toLocaleTimeString(), name: "Print", ok: true, summary: message, level },
+        ...logs,
+      ].slice(0, 200);
+      if (on_screen) flashOnScreen(message, level);
+    });
     // Show image node: stash the frame inside that node (debug-only, by node id).
-    const unImage = listen<{ graph: number; node: number; label: string; data: string }>(
-      "workflow-image",
-      (e) => {
-        const { graph: gid, node, label, data } = e.payload;
-        if (gid !== selectedGraphId) return; // node ids are per-graph — only the open one
-        nodeImages = { ...nodeImages, [node]: { src: `data:image/jpeg;base64,${data}`, label } };
-      },
-    );
+    const unImage = onEvent("workflow-image", (payload) => {
+      const { graph: gid, node, label, data: frame } = payload as {
+        graph: number;
+        node: number;
+        label: string;
+        data: string;
+      };
+      if (gid !== selectedGraphId) return; // node ids are per-graph — only the open one
+      nodeImages = { ...nodeImages, [node]: { src: `data:image/jpeg;base64,${frame}`, label } };
+    });
     // Poll run activity (running graphs + status) for the lock + list badges.
     const poll = setInterval(async () => {
       try {
-        activity = await invoke("run_states");
+        activity = await data.runStates<Record<number, { running: number; current: number | null }>>();
       } catch {
         /* ignore transient errors */
       }
@@ -662,7 +658,7 @@
   // ---- graph CRUD ----------------------------------------------------------
   async function createWorkflow() {
     try {
-      const id = await invoke<number>("create_graph", { name: "Untitled" });
+      const id = await data.createGraph("Untitled");
       await reload();
       openGraph(id); // opens the editor — rename it inline in Configuration
     } catch (err) {
@@ -674,7 +670,7 @@
     const n = name.trim();
     if (!n || n === graph.name) return;
     try {
-      await invoke("rename_graph", { id: graph.id, name: n });
+      await data.renameGraph(graph.id, n);
       await reload();
     } catch (err) {
       toast.error("Rename failed", { description: String(err) });
@@ -688,7 +684,7 @@
     if (!deleteTarget) return;
     const wasOpen = selectedGraphId === deleteTarget.id;
     try {
-      await invoke("delete_graph", { id: deleteTarget.id });
+      await data.deleteGraph(deleteTarget.id);
       deleteOpen = false;
       deleteTarget = null;
       await reload();
@@ -700,7 +696,7 @@
   async function toggleEnabled(g: Graph, enabled: boolean) {
     g.enabled = enabled; // optimistic — reflect the flip instantly
     try {
-      await invoke("set_graph_enabled", { id: g.id, enabled });
+      await data.setGraphEnabled(g.id, enabled);
       await reload();
     } catch (err) {
       g.enabled = !enabled; // roll back on failure
@@ -710,7 +706,7 @@
   async function toggleRunOrphans(g: Graph, run_orphans: boolean) {
     g.run_orphans = run_orphans; // optimistic
     try {
-      await invoke("set_graph_run_orphans", { id: g.id, runOrphans: run_orphans });
+      await data.setGraphRunOrphans(g.id, run_orphans);
       await reload();
     } catch (err) {
       g.run_orphans = !run_orphans; // roll back on failure
@@ -720,7 +716,7 @@
   async function toggleDebug(g: Graph, debug: boolean) {
     g.debug = debug; // optimistic
     try {
-      await invoke("set_graph_debug", { id: g.id, debug });
+      await data.setGraphDebug(g.id, debug);
       await reload();
     } catch (err) {
       g.debug = !debug; // roll back on failure
@@ -730,7 +726,7 @@
   async function runNow(g: Graph) {
     running = true;
     try {
-      const msg = await invoke<string>("run_graph", { id: g.id });
+      const msg = await data.runGraph(g.id);
       toast.info(msg);
     } catch (err) {
       running = false;
@@ -763,11 +759,11 @@
     return "QueueSingle" in c ? c.QueueSingle.max_queued : c.Concurrent.max_concurrent;
   }
   async function applyTrigger(g: Graph, kind: string, everySecs: number, minLevel: string) {
-    await invoke("set_graph_trigger", { id: g.id, kind, everySecs, minLevel });
+    await data.setGraphTrigger(g.id, kind, everySecs, minLevel);
     await reload();
   }
   async function applyConcurrency(g: Graph, kind: string, max: number) {
-    await invoke("set_graph_concurrency", { id: g.id, kind, max });
+    await data.setGraphConcurrency(g.id, kind, max);
     await reload();
   }
 
@@ -777,7 +773,7 @@
     const n = graph.nodes.length;
     const x = 80 + (n % 5) * 48;
     const y = 70 + (n % 5) * 40;
-    const id = await invoke<number>("add_node", { graphId: graph.id, kind: slug, x, y });
+    const id = await data.addNode(graph.id, slug, x, y);
     // Default camera/recipient configs to the actual first item in each list.
     const cfg = { ...(catalog[slug]?.default_config ?? {}) };
     let patched = false;
@@ -789,7 +785,7 @@
       cfg.recipient = recipients[0].label;
       patched = true;
     }
-    if (patched) await invoke("set_node_config", { graphId: graph.id, nodeId: id, config: cfg });
+    if (patched) await data.setNodeConfig(graph.id, id, cfg);
     selectedNodeId = id;
     addOpen = false;
     await reload();
@@ -800,7 +796,7 @@
   }
   async function removeNode(n: Node) {
     if (!graph) return;
-    await invoke("remove_node", { graphId: graph.id, nodeId: n.id });
+    await data.removeNode(graph.id, n.id);
     if (selectedNodeId === n.id) selectedNodeId = null;
     if (nodeImages[n.id]) {
       const { [n.id]: _drop, ...rest } = nodeImages;
@@ -810,7 +806,7 @@
   }
   async function removeEdge(idx: number) {
     if (!graph || editLocked) return;
-    await invoke("remove_edge", { graphId: graph.id, idx });
+    await data.removeEdge(graph.id, idx);
     await reload();
   }
   // Drop the wire feeding a node's input port so the user can fill it manually.
@@ -837,13 +833,7 @@
       return;
     }
     try {
-      await invoke("add_edge", {
-        graphId: graph.id,
-        from: pending.node,
-        fromPort: pending.port,
-        to: node.id,
-        toPort: port,
-      });
+      await data.addEdge(graph.id, pending.node, pending.port, node.id, port);
       pending = null;
       await reload();
     } catch (err) {
@@ -852,7 +842,7 @@
   }
   async function saveNodeConfig(n: Node, config: Record<string, unknown>) {
     if (!graph) return;
-    await invoke("set_node_config", { graphId: graph.id, nodeId: n.id, config });
+    await data.setNodeConfig(graph.id, n.id, config);
     await reload();
   }
   // Pick an image file from disk for an image port (stored as a path literal).
@@ -927,7 +917,7 @@
       const id = drag.id;
       const n = graph.nodes.find((x) => x.id === id);
       drag = null;
-      if (n) await invoke("move_node", { graphId: graph.id, nodeId: id, x: n.x, y: n.y });
+      if (n) await data.moveNode(graph.id, id, n.x, n.y);
     }
   }
   function clampZoom(z: number) {

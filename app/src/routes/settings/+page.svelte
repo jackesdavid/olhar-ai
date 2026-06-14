@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { data } from "$lib/data";
   import { toast } from "svelte-sonner";
 
   import * as Card from "$lib/components/ui/card";
@@ -37,7 +37,7 @@
 
   onMount(async () => {
     try {
-      const loaded = await invoke<Settings>("get_settings");
+      const loaded = await data.getSettings();
       settings = { ...DEFAULT_SETTINGS, ...loaded };
     } catch (err) {
       console.error("Failed to load settings", err);
@@ -52,7 +52,7 @@
   async function save() {
     saving = true;
     try {
-      await invoke("set_settings", { settings: $state.snapshot(settings) });
+      await data.setSettings($state.snapshot(settings));
       toast.success("Settings saved");
     } catch (err) {
       console.error("Failed to save settings", err);

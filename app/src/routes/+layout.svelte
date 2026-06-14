@@ -122,6 +122,29 @@
   // only once authenticated. The bare-render path (no shell) carries /login.
   const showShell = $derived(local || auth.me !== null);
 
+  // Per-page read permission (cloud mode filters the nav by these). `null` = always shown.
+  const NAV_PERM: Record<string, string | null> = {
+    "/": null,
+    "/devices": "devices.read",
+    "/live": "live.view",
+    "/alerts": "alerts.read",
+    "/beacons": "beacons.read",
+    "/people": "persons.read",
+    "/map": "map.read",
+    "/chat": null,
+    "/workflows": "workflows.read",
+    "/settings": "settings.read",
+  };
+  // Desktop-only features not yet wired for the cloud client (edge stream / local agent).
+  const CLOUD_HIDE = new Set(["/live", "/chat"]);
+  const mainNav = $derived(
+    local
+      ? navItems
+      : navItems.filter(
+          (i) => !CLOUD_HIDE.has(i.href) && (NAV_PERM[i.href] == null || hasPerm(NAV_PERM[i.href]!)),
+        ),
+  );
+
   // Tenant-admin screens, shown by permission (cloud mode only — `me` is null on desktop).
   const adminItems = $derived([
     ...(hasPerm("roles.manage") ? [{ label: "Roles", href: "/settings/roles", icon: ShieldCheck }] : []),
@@ -167,7 +190,7 @@
     </div>
 
     <nav class="flex-1 space-y-0.5 overflow-y-auto p-2">
-      {#each navItems as item (item.href)}
+      {#each mainNav as item (item.href)}
         {@const Icon = item.icon}
         {@const active = isActive(item.href)}
         <a

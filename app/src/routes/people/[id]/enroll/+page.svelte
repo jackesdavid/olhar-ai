@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
-  import { invoke } from "@tauri-apps/api/core";
+  import { data } from "$lib/data";
   import { toast } from "svelte-sonner";
 
   import ArrowLeft from "@lucide/svelte/icons/arrow-left";
@@ -25,7 +25,7 @@
 
   import type { Person, PersonEmbedding, Device } from "$lib/types";
 
-  const id = $derived($page.params.id);
+  const id = $derived($page.params.id ?? "");
 
   let person = $state<Person | null>(null);
   let cameras = $state<Device[]>([]);
@@ -43,15 +43,15 @@
   }
 
   async function loadEmbeddings() {
-    embeddings = await invoke<PersonEmbedding[]>("list_embeddings", { personId: id });
+    embeddings = await data.listEmbeddings(id);
   }
 
   async function load() {
     loading = true;
     try {
       const [people, devices] = await Promise.all([
-        invoke<Person[]>("list_people"),
-        invoke<Device[]>("list_devices"),
+        data.listPeople(),
+        data.listDevices(),
       ]);
       person = people.find((p) => p.id === id) ?? null;
       cameras = devices;
@@ -72,7 +72,7 @@
   async function enroll(image: string, source: string) {
     busy = true;
     try {
-      await invoke("enroll_face", { personId: id, image, source, approved: approveOnCapture });
+      await data.enrollFace(id, image, source, approveOnCapture);
       toast.success("Face enrolled.");
       await loadEmbeddings();
     } catch (err) {
@@ -90,7 +90,7 @@
     }
     busy = true;
     try {
-      const dataUrl = await invoke<string>("capture_snapshot", { ip: selectedIp });
+      const dataUrl = await data.captureSnapshot(selectedIp);
       await enroll(dataUrl, "camera");
     } catch (err) {
       console.error("Capture failed", err);
@@ -111,7 +111,7 @@
 
   async function approve(emb: PersonEmbedding) {
     try {
-      await invoke("approve_embedding", { id: emb.id });
+      await data.approveEmbedding(emb.id);
       await loadEmbeddings();
     } catch (err) {
       toast.error("Approve failed", { description: String(err) });
@@ -119,7 +119,7 @@
   }
   async function remove(emb: PersonEmbedding) {
     try {
-      await invoke("delete_embedding", { id: emb.id });
+      await data.deleteEmbedding(emb.id);
       await loadEmbeddings();
     } catch (err) {
       toast.error("Remove failed", { description: String(err) });

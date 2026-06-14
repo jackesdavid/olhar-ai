@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
+  import { data, onEvent, isTauri } from "$lib/data";
   import { toast } from "svelte-sonner";
 
   import Save from "@lucide/svelte/icons/save";
@@ -53,11 +52,11 @@
   let deleting = $state(false);
 
   async function loadBeacons() {
-    beacons = await invoke<NotificationTarget[]>("list_beacons");
+    beacons = await data.listBeacons();
   }
 
   async function loadConfig() {
-    config = await invoke<TelegramConfigState>("get_telegram_config");
+    config = await data.getTelegramConfig();
     pairingCode = config?.pairing_code ?? "";
   }
 
@@ -76,7 +75,7 @@
   onMount(() => {
     load();
     // Live-refresh when the backend pairing poller adds a beacon.
-    const unlisten = listen("beacons-changed", () => loadBeacons());
+    const unlisten = onEvent("beacons-changed", () => loadBeacons());
     return () => {
       unlisten.then((un) => un());
     };
@@ -85,10 +84,7 @@
   async function saveConfig() {
     savingConfig = true;
     try {
-      const msg = await invoke<string>("set_telegram_config", {
-        botToken,
-        pairingCode,
-      });
+      const msg = await data.setTelegramConfig(botToken, pairingCode);
       botToken = ""; // never keep the token in the field
       toast.success("Telegram config saved.", { description: msg });
       await loadConfig();
@@ -103,7 +99,7 @@
   async function toggle(b: NotificationTarget, enabled: boolean) {
     togglingId = b.chat_id;
     try {
-      await invoke("toggle_beacon", { chatId: b.chat_id, enabled });
+      await data.toggleBeacon(b.chat_id, enabled);
       await loadBeacons();
     } catch (err) {
       console.error("Failed to toggle beacon", err);
@@ -115,9 +111,10 @@
   }
 
   async function test(b: NotificationTarget) {
+    if (!isTauri()) return; // test_beacon is desktop-only
     testing = b.chat_id;
     try {
-      const msg = await invoke<string>("test_beacon", { label: b.label });
+      const msg = await data.testBeacon(b.label);
       toast.success(msg);
     } catch (err) {
       console.error("Test failed", err);
@@ -141,10 +138,7 @@
     }
     renaming = true;
     try {
-      await invoke("rename_beacon", {
-        chatId: renameTarget.chat_id,
-        label: renameValue.trim(),
-      });
+      await data.renameBeacon(renameTarget.chat_id, renameValue.trim());
       toast.success("Recipient renamed.");
       renameOpen = false;
       renameTarget = null;
@@ -166,7 +160,7 @@
     if (!deleteTarget) return;
     deleting = true;
     try {
-      await invoke("delete_beacon", { chatId: deleteTarget.chat_id });
+      await data.deleteBeacon(deleteTarget.chat_id);
       toast.success("Recipient removed.");
       deleteOpen = false;
       deleteTarget = null;
@@ -303,19 +297,21 @@
                 </Table.Cell>
                 <Table.Cell class="text-right">
                   <div class="flex items-center justify-end gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      title="Send a test message"
-                      disabled={testing === b.chat_id}
-                      onclick={() => test(b)}
-                    >
-                      {#if testing === b.chat_id}
-                        <LoaderCircle class="size-4 animate-spin" />
-                      {:else}
-                        <Send class="size-4" />
-                      {/if}
-                    </Button>
+                    {#if isTauri()}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        title="Send a test message"
+                        disabled={testing === b.chat_id}
+                        onclick={() => test(b)}
+                      >
+                        {#if testing === b.chat_id}
+                          <LoaderCircle class="size-4 animate-spin" />
+                        {:else}
+                          <Send class="size-4" />
+                        {/if}
+                      </Button>
+                    {/if}
                     <Button variant="ghost" size="sm" title="Rename" onclick={() => openRename(b)}>
                       <Pencil class="size-4" />
                     </Button>

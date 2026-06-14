@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { invoke } from "@tauri-apps/api/core";
+  import { data } from "$lib/data";
 
   import Users from "@lucide/svelte/icons/users";
   import ScanSearch from "@lucide/svelte/icons/scan-search";
@@ -18,8 +18,8 @@
   onMount(async () => {
     try {
       const [people, ids] = await Promise.all([
-        invoke<Person[]>("list_people"),
-        invoke<string[]>("enrolled_person_ids"),
+        data.listPeople(),
+        data.enrolledPersonIds(),
       ]);
       count = people.length;
       enrolled = ids.length;

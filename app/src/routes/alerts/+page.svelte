@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
+  import { data, onEvent } from "$lib/data";
   import { toast } from "svelte-sonner";
 
   import Plus from "@lucide/svelte/icons/plus";
@@ -105,8 +104,8 @@
     loading = true;
     try {
       const [a, s] = await Promise.all([
-        invoke<Alert[]>("list_alerts"),
-        invoke<AlertStats>("alert_stats"),
+        data.listAlerts(),
+        data.alertStats(),
       ]);
       alerts = a;
       stats = s;
@@ -121,7 +120,7 @@
   onMount(() => {
     load();
     // Live-refresh when the chat agent raises/delivers/deletes an alert.
-    const unlisten = listen("alerts-changed", () => load());
+    const unlisten = onEvent("alerts-changed", () => load());
     return () => {
       unlisten.then((un) => un());
     };
@@ -142,12 +141,12 @@
     }
     creating = true;
     try {
-      await invoke<Alert>("create_alert", {
-        level: formLevel,
-        message: formMessage.trim(),
-        room: formRoom.trim().length > 0 ? formRoom.trim() : null,
-        source: formSource.trim().length > 0 ? formSource.trim() : null,
-      });
+      await data.createAlert(
+        formLevel,
+        formMessage.trim(),
+        formRoom.trim().length > 0 ? formRoom.trim() : null,
+        formSource.trim().length > 0 ? formSource.trim() : null,
+      );
       toast.success("Alert created.");
       createOpen = false;
       await load();
@@ -168,7 +167,7 @@
     if (!deleteTarget) return;
     deleting = true;
     try {
-      await invoke<boolean>("delete_alert", { id: deleteTarget.id });
+      await data.deleteAlert(deleteTarget.id);
       toast.success("Alert deleted.");
       deleteOpen = false;
       deleteTarget = null;
@@ -189,7 +188,7 @@
   async function doDeliver(a: Alert) {
     deliveringId = a.id;
     try {
-      const msg = await invoke<string>("deliver_alert", { id: a.id });
+      const msg = await data.deliverAlert(a.id);
       toast.success(msg);
       await load(); // refresh so deliveries/delivered state updates
     } catch (err) {

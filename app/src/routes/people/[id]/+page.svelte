@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
-  import { invoke } from "@tauri-apps/api/core";
+  import { data } from "$lib/data";
   import { toast } from "svelte-sonner";
 
   import ArrowLeft from "@lucide/svelte/icons/arrow-left";
@@ -24,7 +24,7 @@
 
   import type { Person, PersonEmbedding, NotificationTarget } from "$lib/types";
 
-  const id = $derived($page.params.id);
+  const id = $derived($page.params.id ?? "");
   const isNew = $derived(id === "new");
 
   let people = $state<Person[]>([]);
@@ -76,9 +76,9 @@
     notFound = false;
     try {
       [people, recipients, permissionKinds] = await Promise.all([
-        invoke<Person[]>("list_people"),
-        invoke<NotificationTarget[]>("list_beacons"),
-        invoke<string[]>("person_permission_kinds"),
+        data.listPeople(),
+        data.listBeacons(),
+        data.personPermissionKinds(),
       ]);
       if (isNew) {
         form = blankPerson();
@@ -88,7 +88,7 @@
           notFound = true;
         } else {
           form = { ...found, permissions: [...found.permissions] };
-          embeddings = await invoke<PersonEmbedding[]>("list_embeddings", { personId: id });
+          embeddings = await data.listEmbeddings(id);
         }
       }
     } catch (err) {
@@ -113,7 +113,7 @@
         id: form.id || crypto.randomUUID(),
         name: form.name.trim(),
       };
-      await invoke("save_person", { person });
+      await data.savePerson(person);
       toast.success(isNew ? "Person added." : "Person updated.");
       await goto("/people/directory");
     } catch (err) {
@@ -127,7 +127,7 @@
   async function doDelete() {
     deleting = true;
     try {
-      await invoke("delete_person", { id: form.id });
+      await data.deletePerson(form.id);
       toast.success("Person removed.");
       await goto("/people/directory");
     } catch (err) {

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { invoke } from "@tauri-apps/api/core";
+  import { data } from "$lib/data";
   import { toast } from "svelte-sonner";
 
   import ArrowLeft from "@lucide/svelte/icons/arrow-left";
@@ -37,7 +37,7 @@
   async function load() {
     loading = true;
     try {
-      cameras = await invoke<Device[]>("list_devices");
+      cameras = await data.listDevices();
       if (!selectedIp && cameras.length > 0) selectedIp = cameras[0].ip;
     } catch (err) {
       console.error("Failed to load cameras", err);
@@ -54,11 +54,11 @@
     detail = null;
     matchFaces = [];
     try {
-      const d = await invoke<RecognizeDetail>("recognize_face", { image });
+      const d = await data.recognizeFace(image);
       detail = d;
       // Pull the matched person's enrolled samples to show their point-cloud beside the target.
       if (d.match) {
-        const faces = await invoke<PersonEmbedding[]>("list_embeddings", { personId: d.match.person_id });
+        const faces = await data.listEmbeddings(d.match.person_id);
         matchFaces = faces.filter((f) => f.approved);
         if (matchFaces.length === 0) matchFaces = faces;
       }
@@ -77,7 +77,7 @@
     }
     let dataUrl: string;
     try {
-      dataUrl = await invoke<string>("capture_snapshot", { ip: selectedIp });
+      dataUrl = await data.captureSnapshot(selectedIp);
     } catch (err) {
       toast.error("Capture failed", { description: String(err) });
       return;
