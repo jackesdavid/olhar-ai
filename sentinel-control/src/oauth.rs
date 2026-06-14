@@ -85,7 +85,7 @@ pub async fn google_callback(State(st): State<AppState>, Query(q): Query<Callbac
     }
 
     let http = reqwest::Client::new();
-    let token: TokenResp = match http
+    let resp = match http
         .post(TOKEN_URL)
         .form(&[
             ("code", q.code.as_str()),
@@ -96,13 +96,20 @@ pub async fn google_callback(State(st): State<AppState>, Query(q): Query<Callbac
         ])
         .send()
         .await
-        .and_then(|r| r.error_for_status())
     {
-        Ok(r) => match r.json().await {
-            Ok(t) => t,
-            Err(e) => return (StatusCode::BAD_GATEWAY, format!("token parse: {e}")).into_response(),
-        },
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("token exchange failed: {e}")).into_response(),
+        Ok(r) => r,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("token request failed: {e}")).into_response(),
+    };
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        // Surface Google's exact error (e.g. invalid_client / redirect_uri_mismatch).
+        log::error!("google token exchange {status}: {body}");
+        return (StatusCode::BAD_GATEWAY, format!("google token exchange {status}: {body}")).into_response();
+    }
+    let token: TokenResp = match serde_json::from_str(&body) {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("token parse: {e}")).into_response(),
     };
 
     let info: Userinfo = match http.get(USERINFO_URL).bearer_auth(&token.access_token).send().await {
