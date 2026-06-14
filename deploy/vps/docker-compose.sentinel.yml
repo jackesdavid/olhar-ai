@@ -1,0 +1,74 @@
+# Sentinel streaming-core overlay for the ibbf VPS (Traefik + Let's Encrypt already
+# running there). Additive — does not touch ibbf.life / api.ibbf.life.
+#
+#   sentinel-postgres  — dedicated pgvector DB (isolated from the church app)
+#   sentinel-control   — camera config API; TAILNET-ONLY (serves camera creds, so
+#                        never public — exposed to the edge via `tailscale serve`)
+#   sentinel-gateway   — public streaming bridge at stream.ibbf.life (MSE + snapshots),
+#                        reaches the LAN edge's go2rtc over the tailnet
+#
+# Placeholders to fill on the VPS (after `tailscale up`):
+#   __DB_PASS__     a generated Postgres password
+#   __EDGE_HOST__   the edge's MagicDNS name   (e.g. sentinel-edge.tailXXXX.ts.net)
+#   __EDGE_TS_IP__  the edge's tailnet IP      (`tailscale status` on the edge)
+#
+# Built from the Sentinel repo checked out on the VPS (context: repo root).
+services:
+  sentinel-postgres:
+    image: pgvector/pgvector:pg17
+    container_name: sentinel-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: __DB_PASS__
+      POSTGRES_DB: sentinel
+    volumes:
+      - sentinel_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentinel -d sentinel"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  sentinel-control:
+    build:
+      context: /opt/sentinel/Sentinel
+      args:
+        PACKAGE: sentinel-control
+    container_name: sentinel-control
+    restart: always
+    environment:
+      DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
+      CONTROL_BIND: 0.0.0.0:8790
+    depends_on:
+      sentinel-postgres:
+        condition: service_healthy
+    # TAILNET-ONLY: bind the published port to loopback, then `tailscale serve` it.
+    # NOT registered with Traefik → never reachable from the public internet.
+    ports:
+      - "127.0.0.1:8790:8790"
+
+  sentinel-gateway:
+    build:
+      context: /opt/sentinel/Sentinel
+      args:
+        PACKAGE: sentinel-gateway
+    container_name: sentinel-gateway
+    restart: always
+    environment:
+      GATEWAY_BIND: 0.0.0.0:8789
+      # The edge's go2rtc over the tailnet (TLS via the edge's MagicDNS cert).
+      EDGE_UPSTREAM: https://__EDGE_HOST__
+    # Resolve the edge's MagicDNS name to its tailnet IP inside the container (the VPS
+    # host is on the tailnet; the container routes to 100.64/10 via the host).
+    extra_hosts:
+      - "__EDGE_HOST__:__EDGE_TS_IP__"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sentinel-gw.rule=Host(`stream.ibbf.life`)"
+      - "traefik.http.routers.sentinel-gw.entrypoints=websecure"
+      - "traefik.http.routers.sentinel-gw.tls.certresolver=letsencrypt"
+      - "traefik.http.services.sentinel-gw.loadbalancer.server.port=8789"
+
+volumes:
+  sentinel_pgdata:

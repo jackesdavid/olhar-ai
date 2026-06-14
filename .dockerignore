@@ -1,0 +1,12 @@
+# Keep the build context small: exclude all build outputs, deps, and VCS.
+**/target
+**/node_modules
+.git
+app/build
+app/.svelte-kit
+app/dist
+**/cameras-cache.json
+**/go2rtc.yaml
+docs
+legacy
+.devtool
