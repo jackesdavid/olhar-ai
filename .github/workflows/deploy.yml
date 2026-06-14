@@ -15,6 +15,7 @@ on:
       - "Cargo.*"
       - "Dockerfile"
       - "deploy/app/**"
+      - "deploy/landing/**"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
@@ -37,6 +38,9 @@ jobs:
             build-args: PACKAGE=sentinel-gateway
           - service: sentinel-app
             file: deploy/app/Dockerfile
+            build-args: ""
+          - service: sentinel-landing
+            file: deploy/landing/Dockerfile
             build-args: ""
     steps:
       - uses: actions/checkout@v4
@@ -66,6 +70,6 @@ jobs:
           password: ${{ secrets.VPS_PASS }}
           script: |
             cd /ibbf
-            docker compose -f docker-compose.yml -f docker-compose.sentinel.yml pull sentinel-control sentinel-gateway sentinel-app
-            docker compose -f docker-compose.yml -f docker-compose.sentinel.yml up -d sentinel-control sentinel-gateway sentinel-app
+            docker compose -f docker-compose.yml -f docker-compose.sentinel.yml pull sentinel-control sentinel-gateway sentinel-app sentinel-landing
+            docker compose -f docker-compose.yml -f docker-compose.sentinel.yml up -d sentinel-control sentinel-gateway sentinel-app sentinel-landing
             docker image prune -f

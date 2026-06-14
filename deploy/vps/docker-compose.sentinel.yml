@@ -61,6 +61,17 @@ services:
       - "traefik.http.routers.sentinel-app.tls.certresolver=letsencrypt"
       - "traefik.http.services.sentinel-app.loadbalancer.server.port=80"
 
+  sentinel-landing:
+    image: ghcr.io/jackesdavid/sentinel-landing:latest
+    container_name: sentinel-landing
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sentinel-landing.rule=Host(`thesentinels.online`)"
+      - "traefik.http.routers.sentinel-landing.entrypoints=websecure"
+      - "traefik.http.routers.sentinel-landing.tls.certresolver=letsencrypt"
+      - "traefik.http.services.sentinel-landing.loadbalancer.server.port=80"
+
   sentinel-gateway:
     image: ghcr.io/jackesdavid/sentinel-gateway:latest
     container_name: sentinel-gateway
