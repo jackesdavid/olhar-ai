@@ -1,0 +1,392 @@
+//! Tenant-scoped workflow graph editor: CRUD on the graph collection (persisted to
+//! the shared Postgres, where `sentinel-flow` reads it), plus run / run-state which
+//! proxy to the always-on `sentinel-flow` engine. Rust stays authoritative for ids
+//! and typed-edge validation — each edit loads the tenant's graphs, mutates the
+//! in-memory `Workflows`, and saves replace-all, then pokes flow to re-read.
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::Json;
+use axum::routing::{get, post, put};
+use axum::Router;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use uuid::Uuid;
+
+use app_core::alerts::AlertLevel;
+use app_core::workflows::{
+    self, ConcurrencyPolicy, Graph as WfGraph, NodeKind as WfNodeKind, Trigger, Viewport, Workflows,
+};
+
+use super::{blocking, err, tenant_of, ApiErr};
+use crate::auth::{self, UserClaims};
+use crate::AppState;
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/workflows", get(list).post(create))
+        .route("/workflows/catalog", get(catalog))
+        .route("/workflows/runs", get(run_states))
+        .route("/workflows/:id", axum::routing::patch(rename).delete(remove))
+        .route("/workflows/:id/trigger", put(set_trigger))
+        .route("/workflows/:id/concurrency", put(set_concurrency))
+        .route("/workflows/:id/viewport", put(set_viewport))
+        .route("/workflows/:id/enabled", put(set_enabled))
+        .route("/workflows/:id/run-orphans", put(set_run_orphans))
+        .route("/workflows/:id/debug", put(set_debug))
+        .route("/workflows/:id/run", post(run))
+        .route("/workflows/:id/nodes", post(add_node))
+        .route("/workflows/:id/nodes/:nid", axum::routing::delete(remove_node))
+        .route("/workflows/:id/nodes/:nid/move", put(move_node))
+        .route("/workflows/:id/nodes/:nid/config", put(set_node_config))
+        .route("/workflows/:id/edges", post(add_edge))
+        .route("/workflows/:id/edges/:idx", axum::routing::delete(remove_edge))
+}
+
+// ---- sentinel-flow proxy ----------------------------------------------------
+
+/// The workflow engine service base URL (`FLOW_URL`, default `127.0.0.1:8787`).
+fn flow_base() -> String {
+    std::env::var("FLOW_URL")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:8787".to_string())
+}
+
+/// Poke the engine to re-read graphs after an edit (best-effort, fire-and-forget).
+async fn poke_reload() {
+    let _ = reqwest::Client::new().post(format!("{}/graphs/reload", flow_base())).send().await;
+}
+
+// ---- mutation helper --------------------------------------------------------
+
+/// Load the tenant's graphs, run `f` over the in-memory `Workflows`, persist
+/// replace-all, and poke the engine. `f`'s `Err` becomes a 400.
+async fn mutate<F, T>(st: &AppState, tid: Uuid, f: F) -> Result<T, ApiErr>
+where
+    F: FnOnce(&mut Workflows) -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    let db = st.db.clone();
+    let out = blocking(move || {
+        let mut wf = Workflows::from_graphs(workflows::repo::load(&db, tid));
+        let out = f(&mut wf)?;
+        workflows::repo::save(&db, tid, &wf.graphs);
+        Ok::<T, String>(out)
+    })
+    .await?
+    .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    poke_reload().await;
+    Ok(out)
+}
+
+// ---- read -------------------------------------------------------------------
+
+async fn list(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<WfGraph>>, ApiErr> {
+    auth::require(&c, "workflows.read")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    Ok(Json(blocking(move || workflows::repo::load(&db, tid)).await?))
+}
+
+/// Static node metadata (kinds + typed ports + default config) for the palette.
+async fn catalog(UserClaims(c): UserClaims) -> Result<Json<Value>, ApiErr> {
+    auth::require(&c, "workflows.read")?;
+    let ports = |list: &[workflows::Port]| {
+        list.iter()
+            .map(|p| json!({ "name": p.name, "type": serde_json::to_value(p.ty).unwrap_or(Value::Null), "required": p.required }))
+            .collect::<Vec<_>>()
+    };
+    let with_exec = |exec: &[workflows::Port], list: &[workflows::Port]| {
+        let mut v = ports(exec);
+        v.extend(ports(list));
+        v
+    };
+    let exec_in = [workflows::EXEC_IN];
+    let kinds = WfNodeKind::ALL
+        .iter()
+        .map(|k| {
+            json!({
+                "slug": k.slug(),
+                "label": k.label(),
+                "category": k.category(),
+                "inputs": with_exec(&exec_in, k.input_ports()),
+                "outputs": with_exec(k.exec_out_ports(), k.output_ports()),
+                "default_config": k.default_config(),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(json!({ "kinds": kinds })))
+}
+
+/// Live run state per graph id (`{ running, current }`) from sentinel-flow.
+async fn run_states(UserClaims(c): UserClaims) -> Result<Json<Value>, ApiErr> {
+    auth::require(&c, "workflows.read")?;
+    let v = reqwest::Client::new()
+        .get(format!("{}/runs", flow_base()))
+        .send()
+        .await
+        .ok()
+        .and_then(|r| if r.status().is_success() { Some(r) } else { None });
+    match v {
+        Some(r) => Ok(Json(r.json::<Value>().await.unwrap_or_else(|_| json!({})))),
+        None => Ok(Json(json!({}))),
+    }
+}
+
+// ---- graph lifecycle --------------------------------------------------------
+
+#[derive(Deserialize)]
+struct NameReq {
+    name: String,
+}
+
+async fn create(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): Json<NameReq>) -> Result<Json<u32>, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    let name = if b.name.trim().is_empty() { "Untitled".to_string() } else { b.name.trim().to_string() };
+    let id = mutate(&st, tid, move |wf| Ok(wf.create_graph(&name))).await?;
+    Ok(Json(id))
+}
+
+async fn rename(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<NameReq>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        wf.graph_mut(id).ok_or("graph not found")?.name = b.name.trim().to_string();
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        wf.remove_graph(id);
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct TriggerReq {
+    kind: String,
+    every_secs: Option<u64>,
+    min_level: Option<String>,
+}
+
+async fn set_trigger(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<TriggerReq>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        let trigger = match b.kind.as_str() {
+            "manual" => Trigger::Manual,
+            "cron" => Trigger::Cron { every_secs: b.every_secs.unwrap_or(60).max(1) },
+            "on_new_alert" => Trigger::OnNewAlert {
+                min_level: b.min_level.as_deref().and_then(AlertLevel::parse).unwrap_or(AlertLevel::Info),
+            },
+            other => return Err(format!("unknown trigger kind '{other}'")),
+        };
+        let g = wf.graph_mut(id).ok_or("graph not found")?;
+        g.trigger = trigger;
+        // A trigger change always stops the graph — it never starts firing on a config change.
+        g.enabled = false;
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct ConcurrencyReq {
+    kind: String,
+    max: Option<u32>,
+}
+
+async fn set_concurrency(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<ConcurrencyReq>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        let policy = match b.kind.as_str() {
+            "skip" => ConcurrencyPolicy::SkipIfRunning,
+            "queue" => ConcurrencyPolicy::QueueSingle { max_queued: b.max.unwrap_or(1).max(1) },
+            "concurrent" => ConcurrencyPolicy::Concurrent { max_concurrent: b.max.unwrap_or(2).max(1) },
+            other => return Err(format!("unknown concurrency kind '{other}'")),
+        };
+        wf.graph_mut(id).ok_or("graph not found")?.concurrency = policy;
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct ViewportReq {
+    x: f64,
+    y: f64,
+    zoom: f64,
+}
+
+async fn set_viewport(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<ViewportReq>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        wf.graph_mut(id).ok_or("graph not found")?.viewport = Viewport { x: b.x, y: b.y, zoom: b.zoom };
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct BoolReq {
+    value: bool,
+}
+
+async fn set_enabled(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<BoolReq>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        wf.graph_mut(id).ok_or("graph not found")?.enabled = b.value;
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_run_orphans(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<BoolReq>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        wf.graph_mut(id).ok_or("graph not found")?.run_orphans = b.value;
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_debug(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<BoolReq>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        wf.graph_mut(id).ok_or("graph not found")?.debug = b.value;
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---- nodes + edges ----------------------------------------------------------
+
+#[derive(Deserialize)]
+struct AddNodeReq {
+    kind: String,
+    x: i32,
+    y: i32,
+}
+
+async fn add_node(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<AddNodeReq>) -> Result<Json<u32>, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    let nid = mutate(&st, tid, move |wf| {
+        let kind = WfNodeKind::from_slug(&b.kind).ok_or_else(|| format!("unknown node kind '{}'", b.kind))?;
+        Ok(wf.graph_mut(id).ok_or("graph not found")?.add_node(kind, b.x, b.y))
+    })
+    .await?;
+    Ok(Json(nid))
+}
+
+async fn remove_node(UserClaims(c): UserClaims, State(st): State<AppState>, Path((id, nid)): Path<(u32, u32)>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        wf.graph_mut(id).ok_or("graph not found")?.remove_node(nid);
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct MoveReq {
+    x: i32,
+    y: i32,
+}
+
+async fn move_node(UserClaims(c): UserClaims, State(st): State<AppState>, Path((id, nid)): Path<(u32, u32)>, Json(b): Json<MoveReq>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        let g = wf.graph_mut(id).ok_or("graph not found")?;
+        let n = g.node_mut(nid).ok_or("node not found")?;
+        n.x = b.x;
+        n.y = b.y;
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_node_config(UserClaims(c): UserClaims, State(st): State<AppState>, Path((id, nid)): Path<(u32, u32)>, Json(config): Json<Value>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        let g = wf.graph_mut(id).ok_or("graph not found")?;
+        g.node_mut(nid).ok_or("node not found")?.config = config;
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct AddEdgeReq {
+    from: u32,
+    from_port: String,
+    to: u32,
+    to_port: String,
+}
+
+async fn add_edge(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<AddEdgeReq>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        wf.graph_mut(id).ok_or("graph not found")?.add_edge(b.from, &b.from_port, b.to, &b.to_port)
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_edge(UserClaims(c): UserClaims, State(st): State<AppState>, Path((id, idx)): Path<(u32, usize)>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        wf.graph_mut(id).ok_or("graph not found")?.remove_edge(idx);
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---- run --------------------------------------------------------------------
+
+/// Run-now: ask sentinel-flow to fire the graph immediately. (Phase 5 makes flow
+/// tenant-aware; today it serves the single default tenant.)
+async fn run(UserClaims(c): UserClaims, Path(id): Path<u32>) -> Result<Json<String>, ApiErr> {
+    auth::require(&c, "workflows.run")?;
+    let _ = tenant_of(&c)?;
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", flow_base()))
+        .json(&json!({ "graph_id": id }))
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => Ok(Json("Run accepted.".into())),
+        Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => Err(err(StatusCode::NOT_FOUND, "graph not found")),
+        Ok(r) => Err(err(StatusCode::BAD_GATEWAY, format!("sentinel-flow error: {}", r.status()))),
+        Err(e) => Err(err(StatusCode::BAD_GATEWAY, format!("sentinel-flow unreachable: {e}"))),
+    }
+}

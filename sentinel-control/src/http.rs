@@ -17,6 +17,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/config/cameras", get(cameras))
         .merge(handlers::router())
+        .merge(crate::domain::router())
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

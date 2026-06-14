@@ -17,6 +17,7 @@ use sqlx::PgPool;
 use app_core::db::Db;
 
 mod auth;
+mod domain;
 mod handlers;
 mod http;
 mod oauth;
