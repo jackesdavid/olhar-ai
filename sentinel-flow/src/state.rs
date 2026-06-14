@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use app_core::alerts::AlertStore;
 use app_core::db::Db;
+use app_core::tenancy::DEFAULT_TENANT_ID;
 use app_core::workflows::{self, WorkflowEngine, Workflows};
 
 use crate::events::{self, EventBus};
@@ -53,11 +54,11 @@ impl AppState {
         let db = Db::connect(database_url).map_err(|e| format!("connect Postgres: {e}"))?;
         log::info!("Postgres connected; migrations applied");
 
-        let graphs = workflows::repo::load(&db);
+        let graphs = workflows::repo::load(&db, DEFAULT_TENANT_ID);
         log::info!("Loaded {} workflow graph(s) from Postgres", graphs.len());
         let store: WfStore = Arc::new(Mutex::new(Workflows::from_graphs(graphs)));
 
-        let alerts = app_core::alerts::repo::load(&db);
+        let alerts = app_core::alerts::repo::load(&db, DEFAULT_TENANT_ID);
         log::info!("Loaded {} alert(s) from Postgres", alerts.len());
         let alerts: AlertStore = Arc::new(Mutex::new(alerts));
 
@@ -76,13 +77,13 @@ impl AppState {
     /// Reload the graph set from Postgres (the UI edits land there). Cheap; called on
     /// demand so a freshly-saved graph fires without restarting the service.
     pub fn reload_graphs(&self) {
-        let graphs = workflows::repo::load(&self.db);
+        let graphs = workflows::repo::load(&self.db, DEFAULT_TENANT_ID);
         *self.store.lock().unwrap() = Workflows::from_graphs(graphs);
     }
 
     /// Refresh the in-memory alert mirror from Postgres (the trigger source of truth).
     pub fn refresh_alerts(&self) {
-        let fresh = app_core::alerts::repo::load(&self.db);
+        let fresh = app_core::alerts::repo::load(&self.db, DEFAULT_TENANT_ID);
         *self.alerts.lock().unwrap() = fresh;
     }
 }
@@ -93,18 +94,18 @@ impl AppState {
 ///   * cron timers — each persisted wall-clock fire is anchored to "now" on the
 ///     monotonic clock so a mid-interval restart waits out the remainder.
 fn restore_engine(db: &Db, alerts: &AlertStore) -> WorkflowEngine {
-    let alert_max = workflows::repo::load_alert_seen_max(db).unwrap_or_else(|| {
+    let alert_max = workflows::repo::load_alert_seen_max(db, DEFAULT_TENANT_ID).unwrap_or_else(|| {
         alerts.lock().unwrap().iter().map(|a| a.id).max().unwrap_or(0)
     });
     let mut engine = WorkflowEngine::new(alert_max);
 
     let now_ms = crate::now_epoch_ms();
     let now_inst = Instant::now();
-    for (graph_id, last_fired_ms) in workflows::repo::load_cron_state(db) {
+    for (graph_id, last_fired_ms) in workflows::repo::load_cron_state(db, DEFAULT_TENANT_ID) {
         let elapsed = Duration::from_millis(now_ms.saturating_sub(last_fired_ms));
         let anchor = now_inst.checked_sub(elapsed).unwrap_or(now_inst);
         engine.seed_cron_last(graph_id, anchor);
     }
-    workflows::repo::save_alert_seen_max(db, alert_max);
+    workflows::repo::save_alert_seen_max(db, DEFAULT_TENANT_ID, alert_max);
     engine
 }

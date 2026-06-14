@@ -20,5 +20,6 @@ pub mod notification;
 pub mod onvif;
 pub mod persons;
 pub mod ports;
+pub mod tenancy;
 pub mod voice;
 pub mod workflows;

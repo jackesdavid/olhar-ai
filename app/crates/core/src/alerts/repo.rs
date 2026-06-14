@@ -1,20 +1,22 @@
 //! Postgres adapter for the alerts slice — the persistence port for the alert log.
 //! Owns the alert SQL (moved out of the shared `db.rs`); the domain (`Alert`) stays
-//! pure. Functions take the shared [`Db`] infra handle (pool + runtime).
+//! pure. Tenant-scoped: alert ids are per-tenant (PK `(tenant_id, id)`).
+use uuid::Uuid;
+
 use crate::db::Db;
 
 use super::{Alert, AlertLevel, Delivery};
 
-/// The saved alert log, oldest id first (matching the in-memory append order).
-/// Empty (and logged) on a query error — best-effort, like the devices repo.
-pub fn load(db: &Db) -> Vec<Alert> {
+/// The tenant's alert log, oldest id first. Empty (and logged) on a query error.
+pub fn load(db: &Db, tenant_id: Uuid) -> Vec<Alert> {
     let pool = db.pool();
     db.block(async move {
         type Row = (i64, String, String, Option<i64>, Option<String>, String, String, serde_json::Value);
         let rows = sqlx::query_as::<_, Row>(
             "SELECT id, level, message, room_id, room_name, source, created_at, deliveries \
-             FROM alerts ORDER BY id",
+             FROM alerts WHERE tenant_id = $1 ORDER BY id",
         )
+        .bind(tenant_id)
         .fetch_all(&pool)
         .await;
         match rows {
@@ -39,8 +41,8 @@ pub fn load(db: &Db) -> Vec<Alert> {
     })
 }
 
-/// Insert one alert row (id is app-assigned). Best-effort; errors are logged.
-pub fn insert(db: &Db, a: &Alert) {
+/// Insert one alert row for the tenant (id is app-assigned per-tenant). Best-effort.
+pub fn insert(db: &Db, tenant_id: Uuid, a: &Alert) {
     let pool = db.pool();
     let id = a.id as i64;
     let level = a.level.label().to_ascii_lowercase();
@@ -52,9 +54,10 @@ pub fn insert(db: &Db, a: &Alert) {
     let deliveries = serde_json::to_value(&a.deliveries).unwrap_or_else(|_| serde_json::json!([]));
     let res: Result<(), sqlx::Error> = db.block(async move {
         sqlx::query(
-            "INSERT INTO alerts (id, level, message, room_id, room_name, source, created_at, deliveries) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING",
+            "INSERT INTO alerts (tenant_id, id, level, message, room_id, room_name, source, created_at, deliveries) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (tenant_id, id) DO NOTHING",
         )
+        .bind(tenant_id)
         .bind(id)
         .bind(&level)
         .bind(&message)
@@ -72,12 +75,17 @@ pub fn insert(db: &Db, a: &Alert) {
     }
 }
 
-/// Delete one alert row by id. Best-effort.
-pub fn delete(db: &Db, id: u64) {
+/// Delete one of the tenant's alert rows by id. Best-effort.
+pub fn delete(db: &Db, tenant_id: Uuid, id: u64) {
     let pool = db.pool();
     let id = id as i64;
     let res: Result<(), sqlx::Error> = db.block(async move {
-        sqlx::query("DELETE FROM alerts WHERE id = $1").bind(id).execute(&pool).await.map(|_| ())
+        sqlx::query("DELETE FROM alerts WHERE tenant_id = $1 AND id = $2")
+            .bind(tenant_id)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .map(|_| ())
     });
     if let Err(e) = res {
         log::error!("alerts::repo::delete failed: {e}");
@@ -85,12 +93,13 @@ pub fn delete(db: &Db, id: u64) {
 }
 
 /// Replace an alert's delivery list (after a deliver run). Best-effort.
-pub fn update_deliveries(db: &Db, id: u64, deliveries: &[Delivery]) {
+pub fn update_deliveries(db: &Db, tenant_id: Uuid, id: u64, deliveries: &[Delivery]) {
     let pool = db.pool();
     let id = id as i64;
     let json = serde_json::to_value(deliveries).unwrap_or_else(|_| serde_json::json!([]));
     let res: Result<(), sqlx::Error> = db.block(async move {
-        sqlx::query("UPDATE alerts SET deliveries = $2 WHERE id = $1")
+        sqlx::query("UPDATE alerts SET deliveries = $3 WHERE tenant_id = $1 AND id = $2")
+            .bind(tenant_id)
             .bind(id)
             .bind(&json)
             .execute(&pool)

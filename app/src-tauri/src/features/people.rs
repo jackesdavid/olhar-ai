@@ -10,6 +10,7 @@ use tauri::Manager;
 
 use app_core::db::Db;
 use app_core::persons::{self, Person, PersonEmbedding, PersonStore, RecognitionResult};
+use app_core::tenancy::DEFAULT_TENANT_ID;
 
 use crate::db_ref;
 
@@ -23,7 +24,7 @@ pub fn manage_empty_store(app: &tauri::AppHandle) {
 
 /// Hydrate the in-memory person store from Postgres.
 pub fn hydrate(app: &tauri::AppHandle, db: &Db) {
-    let people = persons::repo::load(db);
+    let people = persons::repo::load(db, DEFAULT_TENANT_ID);
     log::info!("Persons loaded — {} person(s)", people.len());
     *app.state::<PersonStore>().lock().unwrap() = people;
 }
@@ -31,7 +32,7 @@ pub fn hydrate(app: &tauri::AppHandle, db: &Db) {
 /// Persist the full person list to Postgres (upsert + prune). Errors if the DB
 /// isn't connected yet (commands only run once the app is past the splash).
 fn persist_persons(app: &tauri::AppHandle, people: &[Person]) -> Result<(), String> {
-    persons::repo::save(&db_ref(app)?, people);
+    persons::repo::save(&db_ref(app)?, DEFAULT_TENANT_ID, people);
     Ok(())
 }
 
@@ -134,32 +135,32 @@ pub fn enroll_face(
     let b64 = image.rsplit(',').next().unwrap_or(&image);
     let bytes = B64.decode(b64.trim()).map_err(|e| format!("decode image: {e}"))?;
     let embedding = app_core::agent::face::embed(&bytes)?;
-    persons::repo::insert_embedding(&db_ref(&app)?, &person_id, &embedding, approved, &source)
+    persons::repo::insert_embedding(&db_ref(&app)?, DEFAULT_TENANT_ID, &person_id, &embedding, approved, &source)
 }
 
 /// Every enrolled embedding for a person (with the raw vector, for the avatar).
 #[tauri::command]
 pub fn list_embeddings(app: tauri::AppHandle, person_id: String) -> Result<Vec<PersonEmbedding>, String> {
-    Ok(persons::repo::list_embeddings(&db_ref(&app)?, &person_id))
+    Ok(persons::repo::list_embeddings(&db_ref(&app)?, DEFAULT_TENANT_ID, &person_id))
 }
 
 /// Approve a single embedding (per-sample consent).
 #[tauri::command]
 pub fn approve_embedding(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    persons::repo::approve_embedding(&db_ref(&app)?, &id)
+    persons::repo::approve_embedding(&db_ref(&app)?, DEFAULT_TENANT_ID, &id)
 }
 
 /// Delete a single embedding.
 #[tauri::command]
 pub fn delete_embedding(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    persons::repo::delete_embedding(&db_ref(&app)?, &id)
+    persons::repo::delete_embedding(&db_ref(&app)?, DEFAULT_TENANT_ID, &id)
 }
 
 /// Ids of people with ≥1 approved embedding — the directory's "enrolled" badge.
 #[tauri::command]
 pub fn enrolled_person_ids(app: tauri::AppHandle) -> Vec<String> {
     match db_ref(&app) {
-        Ok(db) => persons::repo::enrolled_person_ids(&db),
+        Ok(db) => persons::repo::enrolled_person_ids(&db, DEFAULT_TENANT_ID),
         Err(_) => Vec::new(),
     }
 }
@@ -184,7 +185,7 @@ pub fn recognize_face(
     let b64 = image.rsplit(',').next().unwrap_or(&image);
     let bytes = B64.decode(b64.trim()).map_err(|e| format!("decode image: {e}"))?;
     let query = app_core::agent::face::embed(&bytes)?;
-    let matches = persons::repo::recognize(&db_ref(&app)?, &query, 5);
+    let matches = persons::repo::recognize(&db_ref(&app)?, DEFAULT_TENANT_ID, &query, 5);
     let matched = persons::best_match(&matches, max_distance.unwrap_or(0.4));
     Ok(RecognizeDetail { query, matched })
 }

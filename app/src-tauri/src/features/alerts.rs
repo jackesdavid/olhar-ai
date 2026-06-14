@@ -9,6 +9,7 @@ use tauri::Manager;
 use app_core::alerts::{self, Alert, AlertLevel, AlertStore};
 use app_core::db::Db;
 use app_core::notification::NotificationStore;
+use app_core::tenancy::DEFAULT_TENANT_ID;
 
 use crate::db_ref;
 use crate::features::notifications::resolve_telegram_config;
@@ -31,15 +32,15 @@ pub fn manage_empty_store(app: &tauri::AppHandle) {
 /// Hydrate the in-memory store from Postgres, with a one-time non-destructive import
 /// from a legacy `alerts.json` (ids preserved) when the DB log is empty.
 pub fn hydrate(app: &tauri::AppHandle, db: &Db) {
-    let mut alerts = alerts::repo::load(db);
+    let mut alerts = alerts::repo::load(db, DEFAULT_TENANT_ID);
     if alerts.is_empty() {
         let from_json = alerts::repo::import_legacy_json(&alerts_file(app));
         if !from_json.is_empty() {
             for a in &from_json {
-                alerts::repo::insert(db, a);
+                alerts::repo::insert(db, DEFAULT_TENANT_ID, a);
             }
             log::info!("Imported {} alert(s) from alerts.json into Postgres", from_json.len());
-            alerts = alerts::repo::load(db);
+            alerts = alerts::repo::load(db, DEFAULT_TENANT_ID);
         }
     }
     log::info!("Alerts loaded from Postgres — {} alert(s)", alerts.len());
@@ -83,7 +84,7 @@ pub fn create_alert(
         .unwrap_or_else(|| "operator".to_string());
     let room_name = room.map(|r| r.trim().to_string()).filter(|r| !r.is_empty());
 
-    let alert = alerts::create(&state, db_ref(&app).ok().as_ref(), level, message, None, room_name, source);
+    let alert = alerts::create(&state, db_ref(&app).ok().as_ref(), DEFAULT_TENANT_ID, level, message, None, room_name, source);
     log::info!(
         "create_alert: id={} level={} source={} room={:?}",
         alert.id,
@@ -97,7 +98,7 @@ pub fn create_alert(
 /// Remove the alert with `id` and persist. Returns whether one was removed.
 #[tauri::command]
 pub fn delete_alert(app: tauri::AppHandle, state: tauri::State<'_, AlertStore>, id: u64) -> bool {
-    let removed = alerts::delete(&state, db_ref(&app).ok().as_ref(), id);
+    let removed = alerts::delete(&state, db_ref(&app).ok().as_ref(), DEFAULT_TENANT_ID, id);
     log::info!("delete_alert: id={id} removed={removed}");
     removed
 }
@@ -134,7 +135,7 @@ pub async fn deliver_alert(
     let notif_store = notif_state.inner().clone();
     let db = db_ref(&app).ok();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        alerts::deliver(&alert_store, db.as_ref(), &notif_store, &cfg, id)
+        alerts::deliver(&alert_store, db.as_ref(), DEFAULT_TENANT_ID, &notif_store, &cfg, id)
     })
     .await
     .map_err(|e| format!("Deliver task failed: {e}"))?;

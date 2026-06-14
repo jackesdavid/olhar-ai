@@ -132,6 +132,7 @@ pub(crate) fn build_run_context(app: &tauri::AppHandle) -> Option<app_core::agen
     Some(app_core::agent::ToolContext::new_local(
         devices,
         db,
+        app_core::tenancy::DEFAULT_TENANT_ID,
         alerts,
         notif,
         features::notifications::resolve_telegram_config(app),

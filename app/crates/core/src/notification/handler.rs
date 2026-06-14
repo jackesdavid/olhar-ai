@@ -89,6 +89,7 @@ pub fn spawn_pairing<F>(
     store: NotificationStore,
     cfg: NotificationConfig,
     db: Option<Db>,
+    tenant_id: uuid::Uuid,
     stop: Arc<AtomicBool>,
     on_change: F,
 ) where
@@ -111,7 +112,7 @@ pub fn spawn_pairing<F>(
                         if !parse_pairing_code(&u.text, &cfg.pairing_code) {
                             continue;
                         }
-                        if register_target(&store, db.as_ref(), u) {
+                        if register_target(&store, db.as_ref(), tenant_id, u) {
                             on_change(); // notify the UI layer to refresh the beacon list
                             let _ = client::send_message(
                                 &cfg,
@@ -136,7 +137,7 @@ pub fn spawn_pairing<F>(
 }
 
 /// Register a paired chat if not already present. Returns true if newly added.
-fn register_target(store: &NotificationStore, db: Option<&Db>, u: &Update) -> bool {
+fn register_target(store: &NotificationStore, db: Option<&Db>, tenant_id: uuid::Uuid, u: &Update) -> bool {
     let mut targets = store.lock().unwrap();
     if targets.iter().any(|t| t.chat_id == u.chat_id) {
         return false; // already paired — idempotent
@@ -144,7 +145,7 @@ fn register_target(store: &NotificationStore, db: Option<&Db>, u: &Update) -> bo
     let label = dedupe_label(&targets, &u.sender_label);
     targets.push(NotificationTarget { label, chat_id: u.chat_id, enabled: true });
     if let Some(db) = db {
-        super::repo::save_beacons(db, &targets);
+        super::repo::save_beacons(db, tenant_id, &targets);
     }
     true
 }
@@ -162,12 +163,12 @@ fn dedupe_label(targets: &[NotificationTarget], base: &str) -> String {
 
 /// Remove the beacon identified by `chat_id` and persist to `path`. Returns the
 /// removed label, or `None` if no beacon matched.
-pub fn delete_target(store: &NotificationStore, db: Option<&Db>, chat_id: i64) -> Option<String> {
+pub fn delete_target(store: &NotificationStore, db: Option<&Db>, tenant_id: uuid::Uuid, chat_id: i64) -> Option<String> {
     let mut targets = store.lock().unwrap();
     let pos = targets.iter().position(|t| t.chat_id == chat_id)?;
     let removed = targets.remove(pos);
     if let Some(db) = db {
-        super::repo::save_beacons(db, &targets);
+        super::repo::save_beacons(db, tenant_id, &targets);
     }
     Some(removed.label)
 }
@@ -177,6 +178,7 @@ pub fn delete_target(store: &NotificationStore, db: Option<&Db>, chat_id: i64) -
 pub fn rename_target(
     store: &NotificationStore,
     db: Option<&Db>,
+    tenant_id: uuid::Uuid,
     chat_id: i64,
     new_label: &str,
 ) -> Result<String, String> {
@@ -188,7 +190,7 @@ pub fn rename_target(
     let t = targets.iter_mut().find(|t| t.chat_id == chat_id).ok_or("Beacon not found.")?;
     t.label = label.clone();
     if let Some(db) = db {
-        super::repo::save_beacons(db, &targets);
+        super::repo::save_beacons(db, tenant_id, &targets);
     }
     Ok(label)
 }
@@ -198,6 +200,7 @@ pub fn rename_target(
 pub fn set_enabled_by_id(
     store: &NotificationStore,
     db: Option<&Db>,
+    tenant_id: uuid::Uuid,
     chat_id: i64,
     enabled: bool,
 ) -> Option<(String, bool)> {
@@ -206,7 +209,7 @@ pub fn set_enabled_by_id(
     t.enabled = enabled;
     let out = (t.label.clone(), t.enabled);
     if let Some(db) = db {
-        super::repo::save_beacons(db, &targets);
+        super::repo::save_beacons(db, tenant_id, &targets);
     }
     Some(out)
 }
@@ -259,11 +262,12 @@ mod tests {
         let store: NotificationStore =
             Arc::new(Mutex::new(vec![target("Dave", 42, true), target("Ripley", 7, true)]));
 
-        assert_eq!(rename_target(&store, None, 42, "Phone").unwrap(), "Phone");
-        assert!(rename_target(&store, None, 42, "  ").is_err());
-        assert_eq!(set_enabled_by_id(&store, None, 7, false), Some(("Ripley".into(), false)));
-        assert_eq!(delete_target(&store, None, 42), Some("Phone".into()));
-        assert!(delete_target(&store, None, 999).is_none());
+        let t = uuid::Uuid::nil();
+        assert_eq!(rename_target(&store, None, t, 42, "Phone").unwrap(), "Phone");
+        assert!(rename_target(&store, None, t, 42, "  ").is_err());
+        assert_eq!(set_enabled_by_id(&store, None, t, 7, false), Some(("Ripley".into(), false)));
+        assert_eq!(delete_target(&store, None, t, 42), Some("Phone".into()));
+        assert!(delete_target(&store, None, t, 999).is_none());
 
         let remaining = store.lock().unwrap();
         assert_eq!(remaining.len(), 1);

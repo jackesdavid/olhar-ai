@@ -70,13 +70,14 @@ impl Vision for LocalVision {
     }
 }
 
-/// Recognition via the shared Postgres + pgvector handle.
+/// Recognition via the shared Postgres + pgvector handle, scoped to a tenant.
 pub struct LocalRecognizer {
     pub db: Db,
+    pub tenant_id: uuid::Uuid,
 }
 impl Recognizer for LocalRecognizer {
     fn recognize(&self, embedding: &[f32], k: i64) -> Vec<RecognitionMatch> {
-        crate::persons::repo::recognize(&self.db, embedding, k)
+        crate::persons::repo::recognize(&self.db, self.tenant_id, embedding, k)
     }
 }
 

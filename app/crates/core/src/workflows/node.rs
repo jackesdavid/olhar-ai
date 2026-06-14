@@ -543,7 +543,7 @@ fn run_create_alert(
         .filter(|s| !s.trim().is_empty())
     {
         Some(name) => {
-            let rooms = crate::map::repo::load(&sys.db);
+            let rooms = crate::map::repo::load(&sys.db, sys.tenant_id);
             match rooms.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim())) {
                 Some(r) => (Some(r.id), Some(r.name.clone())),
                 None => (None, Some(name.to_string())),
@@ -551,7 +551,7 @@ fn run_create_alert(
         }
         None => (None, None),
     };
-    let a = alerts::create(&sys.alerts, Some(&sys.db), level, message, room_id, room_name, source);
+    let a = alerts::create(&sys.alerts, Some(&sys.db), sys.tenant_id, level, message, room_id, room_name, source);
     let _ = sys.ui_tx.send(ToolUiEvent::AlertsChanged);
     let mut o = PortValues::new();
     o.insert("id".into(), PortValue::Num(a.id as i64));
@@ -572,7 +572,7 @@ fn run_deliver_alert(inputs: &PortValues, sys: &ToolContext) -> Result<PortValue
         .notif_cfg
         .as_ref()
         .ok_or("Notifications are not configured (set the Telegram bot token in Beacons).")?;
-    let result = alerts::deliver(&sys.alerts, Some(&sys.db), &sys.notif, cfg, id)?;
+    let result = alerts::deliver(&sys.alerts, Some(&sys.db), sys.tenant_id, &sys.notif, cfg, id)?;
     let _ = sys.ui_tx.send(ToolUiEvent::AlertsChanged);
     let mut o = PortValues::new();
     o.insert("result".into(), PortValue::Text(result));
@@ -667,6 +667,7 @@ mod tests {
         ToolContext::new_local(
             std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             crate::db::Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
+            crate::tenancy::DEFAULT_TENANT_ID,
             std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             None,

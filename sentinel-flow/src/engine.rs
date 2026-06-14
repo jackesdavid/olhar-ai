@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use app_core::agent::{ToolContext, ToolUiEvent};
 use app_core::notification::{NotificationConfig, NotificationStore};
+use app_core::tenancy::DEFAULT_TENANT_ID;
 use app_core::workflows::{self, ConcurrencyPolicy, Fire, Graph as WfGraph, Trigger, WorkflowEngine};
 
 use crate::events;
@@ -49,7 +50,7 @@ pub fn spawn_poller(state: Arc<AppState>) {
         {
             let max = state.engine.lock().unwrap().alert_seen_max();
             if max > persisted_max {
-                workflows::repo::save_alert_seen_max(&state.db, max);
+                workflows::repo::save_alert_seen_max(&state.db, DEFAULT_TENANT_ID, max);
                 persisted_max = max;
             }
         }
@@ -69,7 +70,7 @@ pub fn spawn_poller(state: Arc<AppState>) {
             };
             if due {
                 if matches!(trigger, Trigger::Cron { .. }) {
-                    workflows::repo::save_cron_fired(&state.db, id, crate::now_epoch_ms());
+                    workflows::repo::save_cron_fired(&state.db, DEFAULT_TENANT_ID, id, crate::now_epoch_ms());
                 }
                 fire_graph(&state, id, &policy);
             }
@@ -170,9 +171,9 @@ pub fn spawn_graph_run(state: &Arc<AppState>, graph_id: u32) {
 /// returned `JoinHandle` is the thread draining UI side-effects to the SSE bus; it
 /// ends when the context (and its `Sender`) is dropped.
 fn build_run_context(state: &Arc<AppState>) -> (ToolContext, std::thread::JoinHandle<()>) {
-    let devices = Arc::new(std::sync::Mutex::new(app_core::devices::repo::load(&state.db)));
+    let devices = Arc::new(std::sync::Mutex::new(app_core::devices::repo::load(&state.db, DEFAULT_TENANT_ID)));
     let notif: NotificationStore =
-        Arc::new(std::sync::Mutex::new(app_core::notification::repo::load_beacons(&state.db)));
+        Arc::new(std::sync::Mutex::new(app_core::notification::repo::load_beacons(&state.db, DEFAULT_TENANT_ID)));
     let notif_cfg = resolve_telegram_config(state);
 
     let (tx, rx) = std::sync::mpsc::channel::<ToolUiEvent>();
@@ -186,6 +187,7 @@ fn build_run_context(state: &Arc<AppState>) -> (ToolContext, std::thread::JoinHa
     let ctx = ToolContext::new_local(
         devices,
         state.db.clone(),
+        DEFAULT_TENANT_ID,
         Arc::clone(&state.alerts),
         notif,
         notif_cfg,
@@ -197,7 +199,7 @@ fn build_run_context(state: &Arc<AppState>) -> (ToolContext, std::thread::JoinHa
 /// Resolve the active Telegram config: the saved config (Postgres) if it has a
 /// non-empty token, else the environment.
 fn resolve_telegram_config(state: &Arc<AppState>) -> Option<NotificationConfig> {
-    if let Some((bot_token, pairing_code)) = app_core::notification::repo::load_telegram(&state.db) {
+    if let Some((bot_token, pairing_code)) = app_core::notification::repo::load_telegram(&state.db, DEFAULT_TENANT_ID) {
         if !bot_token.trim().is_empty() {
             return Some(NotificationConfig { bot_token, pairing_code });
         }

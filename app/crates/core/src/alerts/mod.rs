@@ -119,9 +119,11 @@ pub fn next_id(alerts: &[Alert]) -> u64 {
 
 /// Append a new alert to the store and persist to `path`. Returns the created
 /// alert.
+#[allow(clippy::too_many_arguments)]
 pub fn create(
     store: &AlertStore,
     db: Option<&crate::db::Db>,
+    tenant_id: uuid::Uuid,
     level: AlertLevel,
     message: String,
     room_id: Option<u32>,
@@ -141,21 +143,21 @@ pub fn create(
     };
     alerts.push(alert.clone());
     if let Some(db) = db {
-        repo::insert(db, &alert);
+        repo::insert(db, tenant_id, &alert);
     }
     alert
 }
 
 /// Remove the alert with `id` from the store and the DB. Returns true if one was
 /// removed. `db` is `None` only in the can't-happen pre-connect window / tests.
-pub fn delete(store: &AlertStore, db: Option<&crate::db::Db>, id: u64) -> bool {
+pub fn delete(store: &AlertStore, db: Option<&crate::db::Db>, tenant_id: uuid::Uuid, id: u64) -> bool {
     let mut alerts = store.lock().unwrap();
     let before = alerts.len();
     alerts.retain(|a| a.id != id);
     let removed = alerts.len() != before;
     if removed {
         if let Some(db) = db {
-            repo::delete(db, id);
+            repo::delete(db, tenant_id, id);
         }
     }
     removed
@@ -172,9 +174,11 @@ pub fn format_message(a: &Alert) -> String {
 /// inline, so callers run it on a background thread. Ported from the ratatui
 /// `src/alerts/actions.rs::deliver` (the config is passed in rather than read
 /// from env here, so the Tauri shell can source it from a saved file).
+#[allow(clippy::too_many_arguments)]
 pub fn deliver(
     store: &AlertStore,
     db: Option<&crate::db::Db>,
+    tenant_id: uuid::Uuid,
     notif: &NotificationStore,
     cfg: &NotificationConfig,
     id: u64,
@@ -217,7 +221,7 @@ pub fn deliver(
             a.deliveries.extend(deliveries);
         }
         if let (Some(db), Some(u)) = (db, alerts.iter().find(|a| a.id == id).cloned()) {
-            repo::update_deliveries(db, u.id, &u.deliveries);
+            repo::update_deliveries(db, tenant_id, u.id, &u.deliveries);
         }
     }
     Ok(format!("Delivered alert {id} to {ok_count}/{} beacon(s).", beacons.len()))
@@ -260,9 +264,11 @@ mod tests {
         // in-memory store semantics (id assignment, push, retain); the Postgres
         // round-trip is covered by the app's live verification, not a unit test.
         let store: AlertStore = Arc::new(Mutex::new(Vec::new()));
+        let t = crate::tenancy::DEFAULT_TENANT_ID;
         let a = create(
             &store,
             None,
+            t,
             AlertLevel::Warn,
             "hello".into(),
             None,
@@ -271,8 +277,8 @@ mod tests {
         );
         assert_eq!(a.id, 1);
         assert_eq!(store.lock().unwrap().len(), 1);
-        assert!(delete(&store, None, a.id));
-        assert!(!delete(&store, None, a.id));
+        assert!(delete(&store, None, t, a.id));
+        assert!(!delete(&store, None, t, a.id));
         assert!(store.lock().unwrap().is_empty());
     }
 }

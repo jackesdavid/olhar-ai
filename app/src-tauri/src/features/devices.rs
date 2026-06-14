@@ -12,6 +12,7 @@ use app_core::alerts::{self, AlertLevel, AlertStore};
 use app_core::db::Db;
 use app_core::devices::{self, Device, DeviceStore};
 use app_core::onvif::{self, DiscoveredDevice};
+use app_core::tenancy::DEFAULT_TENANT_ID;
 
 use crate::db_ref;
 
@@ -25,7 +26,7 @@ pub fn manage_empty_store(app: &tauri::AppHandle) {
 
 /// Hydrate the in-memory device store from Postgres.
 pub fn hydrate(app: &tauri::AppHandle, db: &Db) {
-    let devices = devices::repo::load(db);
+    let devices = devices::repo::load(db, DEFAULT_TENANT_ID);
     log::info!("Devices loaded from Postgres — {} device(s)", devices.len());
     *app.state::<DeviceStore>().lock().unwrap() = devices;
 }
@@ -34,7 +35,7 @@ pub fn hydrate(app: &tauri::AppHandle, db: &Db) {
 /// (a safety net — commands only run once the app is past the splash). `pub(crate)`
 /// so the `stream` slice can self-heal a device's `rtsp_url`.
 pub(crate) fn persist_devices(app: &tauri::AppHandle, list: &[Device]) -> Result<(), String> {
-    devices::repo::save(&db_ref(app)?, list);
+    devices::repo::save(&db_ref(app)?, DEFAULT_TENANT_ID, list);
     Ok(())
 }
 
@@ -155,7 +156,7 @@ fn reconcile_devices(app: &tauri::AppHandle, found: &[DiscoveredDevice]) {
         for (name, old, new) in ip_changes {
             let msg = format!("Camera '{name}' changed IP address: {old} → {new}");
             log::warn!("reconcile: {msg}");
-            alerts::create(&alert_store, db.as_ref(), AlertLevel::Warn, msg, None, None, "scanner".into());
+            alerts::create(&alert_store, db.as_ref(), DEFAULT_TENANT_ID, AlertLevel::Warn, msg, None, None, "scanner".into());
         }
         let _ = app.emit("alerts-changed", ());
     }

@@ -19,6 +19,7 @@ use tauri::{Emitter, Manager};
 
 use app_core::alerts::AlertLevel;
 use app_core::db::Db;
+use app_core::tenancy::DEFAULT_TENANT_ID;
 use app_core::workflows::{
     self, ConcurrencyPolicy, Graph as WfGraph, NodeKind as WfNodeKind, Trigger, Viewport, Workflows,
 };
@@ -145,13 +146,13 @@ pub fn manage_empty_store(app: &tauri::AppHandle) {
 /// `next_graph_id` is recomputed), with a one-time non-destructive import from any
 /// legacy `workflows.json` when the DB is empty.
 pub fn hydrate(app: &tauri::AppHandle, db: &Db) {
-    let mut graphs = workflows::repo::load(db);
+    let mut graphs = workflows::repo::load(db, DEFAULT_TENANT_ID);
     if graphs.is_empty() {
         let from_json = workflows::repo::import_legacy_json(&workflows_file(app));
         if !from_json.is_empty() {
-            workflows::repo::save(db, &from_json);
+            workflows::repo::save(db, DEFAULT_TENANT_ID, &from_json);
             log::info!("Imported {} workflow graph(s) from workflows.json into Postgres", from_json.len());
-            graphs = workflows::repo::load(db);
+            graphs = workflows::repo::load(db, DEFAULT_TENANT_ID);
         }
     }
     log::info!("Workflows loaded from Postgres — {} graph(s)", graphs.len());
@@ -177,7 +178,7 @@ pub fn start(app: &tauri::AppHandle) {
 fn persist(app: &tauri::AppHandle, store: &WfStore) {
     let graphs = store.lock().unwrap().graphs.clone();
     if let Ok(db) = db_ref(app) {
-        workflows::repo::save(&db, &graphs);
+        workflows::repo::save(&db, DEFAULT_TENANT_ID, &graphs);
     }
     poke_reload(&flow_base());
 }

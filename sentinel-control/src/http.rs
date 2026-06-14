@@ -8,6 +8,7 @@ use serde_json::json;
 use tower_http::cors::CorsLayer;
 
 use app_core::devices;
+use app_core::tenancy::DEFAULT_TENANT_ID;
 
 use crate::{handlers, AppState};
 
@@ -21,11 +22,11 @@ pub fn router(state: AppState) -> Router {
 }
 
 async fn health(State(st): State<AppState>) -> impl IntoResponse {
-    let n = devices::repo::load(&st.db).len();
+    let n = devices::repo::load(&st.db, DEFAULT_TENANT_ID).len();
     Json(json!({ "status": "ok", "service": "sentinel-control", "cameras": n }))
 }
 
 /// The camera list an edge box pulls. (Phase 2 scopes this by the box's tenant.)
 async fn cameras(State(st): State<AppState>) -> impl IntoResponse {
-    Json(devices::repo::load(&st.db))
+    Json(devices::repo::load(&st.db, DEFAULT_TENANT_ID))
 }

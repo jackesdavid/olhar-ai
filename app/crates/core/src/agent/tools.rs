@@ -50,6 +50,8 @@ pub struct ToolContext {
     /// Postgres handle for persisting device changes (the in-memory `devices`
     /// store stays the working set; this writes mutations through to the DB).
     pub db: Db,
+    /// The tenant all this run's data is scoped to (every repo call uses it).
+    pub tenant_id: uuid::Uuid,
     pub alerts: AlertStore,
     pub notif: NotificationStore,
     /// Resolved Telegram config (saved config else env), or `None` when
@@ -74,15 +76,17 @@ impl ToolContext {
     pub fn new_local(
         devices: DeviceStore,
         db: Db,
+        tenant_id: uuid::Uuid,
         alerts: AlertStore,
         notif: NotificationStore,
         notif_cfg: Option<NotificationConfig>,
         ui_tx: Sender<ToolUiEvent>,
     ) -> Self {
-        let recognizer = Arc::new(crate::ports::LocalRecognizer { db: db.clone() });
+        let recognizer = Arc::new(crate::ports::LocalRecognizer { db: db.clone(), tenant_id });
         ToolContext {
             devices,
             db,
+            tenant_id,
             alerts,
             notif,
             notif_cfg,
@@ -304,7 +308,7 @@ fn delete_device() -> ToolSpec {
             let removed = {
                 let mut devices = ctx.devices.lock().unwrap();
                 let removed = actions::delete_by_name(&mut devices, name)?;
-                crate::devices::repo::save(&ctx.db, &devices);
+                crate::devices::repo::save(&ctx.db, ctx.tenant_id, &devices);
                 removed
             };
             let _ = ctx.ui_tx.send(ToolUiEvent::DevicesChanged);
@@ -329,7 +333,7 @@ fn delete_device_by_index() -> ToolSpec {
             let removed = {
                 let mut devices = ctx.devices.lock().unwrap();
                 let removed = actions::delete_by_index(&mut devices, index)?;
-                crate::devices::repo::save(&ctx.db, &devices);
+                crate::devices::repo::save(&ctx.db, ctx.tenant_id, &devices);
                 removed
             };
             let _ = ctx.ui_tx.send(ToolUiEvent::DevicesChanged);
@@ -362,7 +366,7 @@ fn rename_device() -> ToolSpec {
                 let mut devices = ctx.devices.lock().unwrap();
                 let idx = actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
                 devices[idx].name = trimmed.to_string();
-                crate::devices::repo::save(&ctx.db, &devices);
+                crate::devices::repo::save(&ctx.db, ctx.tenant_id, &devices);
                 trimmed.to_string()
             };
             let _ = ctx.ui_tx.send(ToolUiEvent::DevicesChanged);
@@ -485,7 +489,7 @@ fn create_alert() -> ToolSpec {
                 .filter(|s| !s.trim().is_empty())
             {
                 Some(name) => {
-                    let rooms = crate::map::repo::load(&ctx.db);
+                    let rooms = crate::map::repo::load(&ctx.db, ctx.tenant_id);
                     match rooms.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim())) {
                         Some(r) => (Some(r.id), Some(r.name.clone())),
                         None => {
@@ -504,6 +508,7 @@ fn create_alert() -> ToolSpec {
             let a = alerts::create(
                 &ctx.alerts,
                 Some(&ctx.db),
+                ctx.tenant_id,
                 level,
                 message.to_string(),
                 room_id,
@@ -632,7 +637,7 @@ fn deliver_alert() -> ToolSpec {
                 .notif_cfg
                 .as_ref()
                 .ok_or("Notifications are not configured (set the Telegram bot token in Recipients).")?;
-            let result = alerts::deliver(&ctx.alerts, Some(&ctx.db), &ctx.notif, cfg, id)?;
+            let result = alerts::deliver(&ctx.alerts, Some(&ctx.db), ctx.tenant_id, &ctx.notif, cfg, id)?;
             let _ = ctx.ui_tx.send(ToolUiEvent::AlertsChanged);
             Ok(result)
         },
@@ -651,7 +656,7 @@ fn delete_alert() -> ToolSpec {
         }),
         run: |input, ctx| {
             let id = input.get("id").and_then(Value::as_u64).ok_or("Missing 'id'.")?;
-            if alerts::delete(&ctx.alerts, Some(&ctx.db), id) {
+            if alerts::delete(&ctx.alerts, Some(&ctx.db), ctx.tenant_id, id) {
                 let _ = ctx.ui_tx.send(ToolUiEvent::AlertsChanged);
                 Ok(format!("Deleted alert {id}."))
             } else {
@@ -680,6 +685,7 @@ mod tests {
         ToolContext::new_local(
             std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
+            crate::tenancy::DEFAULT_TENANT_ID,
             std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             None,

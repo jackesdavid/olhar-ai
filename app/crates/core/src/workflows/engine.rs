@@ -295,6 +295,7 @@ mod tests {
         ToolContext::new_local(
             std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             crate::db::Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
+            crate::tenancy::DEFAULT_TENANT_ID,
             std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             None,

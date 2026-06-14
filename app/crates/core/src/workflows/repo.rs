@@ -3,6 +3,8 @@
 //! This owns the workflow SQL (moved out of the shared `db.rs`): the domain
 //! (`Graph`) stays pure, and this adapter is the only place that touches the DB on
 //! its behalf. Functions take the shared [`Db`] infra handle (pool + runtime).
+use uuid::Uuid;
+
 use crate::db::Db;
 
 use super::domain::Graph;
@@ -25,14 +27,17 @@ pub fn import_legacy_json(path: &std::path::Path) -> Vec<Graph> {
         .unwrap_or_default()
 }
 
-/// The saved workflow graphs, ordered by id. Rows that fail to deserialize are
+/// The tenant's workflow graphs, ordered by id. Rows that fail to deserialize are
 /// skipped (logged). Empty on a query error.
-pub fn load(db: &Db) -> Vec<Graph> {
+pub fn load(db: &Db, tenant_id: Uuid) -> Vec<Graph> {
     let pool = db.pool();
     db.block(async move {
-        let rows = sqlx::query_as::<_, (serde_json::Value,)>("SELECT data FROM workflows ORDER BY id")
-            .fetch_all(&pool)
-            .await;
+        let rows = sqlx::query_as::<_, (serde_json::Value,)>(
+            "SELECT data FROM workflows WHERE tenant_id = $1 ORDER BY id",
+        )
+        .bind(tenant_id)
+        .fetch_all(&pool)
+        .await;
         match rows {
             Ok(rows) => rows
                 .into_iter()
@@ -54,15 +59,16 @@ pub fn load(db: &Db) -> Vec<Graph> {
 
 /// Replace the whole graph set (delete-all + insert each as a JSON row), mirroring
 /// the in-memory store after every editor mutation. Best-effort.
-pub fn save(db: &Db, graphs: &[Graph]) {
+pub fn save(db: &Db, tenant_id: Uuid, graphs: &[Graph]) {
     let pool = db.pool();
     let graphs = graphs.to_vec();
     let res: Result<(), sqlx::Error> = db.block(async move {
         let mut tx = pool.begin().await?;
-        sqlx::query("DELETE FROM workflows").execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM workflows WHERE tenant_id = $1").bind(tenant_id).execute(&mut *tx).await?;
         for g in &graphs {
             let data = serde_json::to_value(g).unwrap_or_else(|_| serde_json::json!({}));
-            sqlx::query("INSERT INTO workflows (id, data) VALUES ($1, $2)")
+            sqlx::query("INSERT INTO workflows (tenant_id, id, data) VALUES ($1, $2, $3)")
+                .bind(tenant_id)
                 .bind(g.id as i64)
                 .bind(&data)
                 .execute(&mut *tx)
@@ -81,10 +87,11 @@ pub fn save(db: &Db, graphs: &[Graph]) {
 /// The persisted new-alert high-water mark, or `None` if it was never written
 /// (first boot) or on a query error. The adapter falls back to the current alert
 /// max when this is `None` so an existing backlog still doesn't fire on first run.
-pub fn load_alert_seen_max(db: &Db) -> Option<u64> {
+pub fn load_alert_seen_max(db: &Db, tenant_id: Uuid) -> Option<u64> {
     let pool = db.pool();
     db.block(async move {
-        sqlx::query_as::<_, (i64,)>("SELECT alert_seen_max FROM workflow_engine_state WHERE id = true")
+        sqlx::query_as::<_, (i64,)>("SELECT alert_seen_max FROM workflow_engine_state WHERE tenant_id = $1")
+            .bind(tenant_id)
             .fetch_optional(&pool)
             .await
             .unwrap_or_else(|e| {
@@ -95,14 +102,15 @@ pub fn load_alert_seen_max(db: &Db) -> Option<u64> {
     })
 }
 
-/// Upsert the new-alert high-water mark (single-row table). Best-effort.
-pub fn save_alert_seen_max(db: &Db, max: u64) {
+/// Upsert the tenant's new-alert high-water mark. Best-effort.
+pub fn save_alert_seen_max(db: &Db, tenant_id: Uuid, max: u64) {
     let pool = db.pool();
     let res: Result<_, sqlx::Error> = db.block(async move {
         sqlx::query(
-            "INSERT INTO workflow_engine_state (id, alert_seen_max) VALUES (true, $1)
-             ON CONFLICT (id) DO UPDATE SET alert_seen_max = EXCLUDED.alert_seen_max",
+            "INSERT INTO workflow_engine_state (tenant_id, id, alert_seen_max) VALUES ($1, true, $2)
+             ON CONFLICT (tenant_id) DO UPDATE SET alert_seen_max = EXCLUDED.alert_seen_max",
         )
+        .bind(tenant_id)
         .bind(max as i64)
         .execute(&pool)
         .await
@@ -112,33 +120,35 @@ pub fn save_alert_seen_max(db: &Db, max: u64) {
     }
 }
 
-/// The persisted per-graph cron timers as `(graph_id, last_fired_ms)` (unix epoch
-/// millis). Empty on a query error.
-pub fn load_cron_state(db: &Db) -> Vec<(u32, u64)> {
+/// The tenant's per-graph cron timers as `(graph_id, last_fired_ms)`. Empty on error.
+pub fn load_cron_state(db: &Db, tenant_id: Uuid) -> Vec<(u32, u64)> {
     let pool = db.pool();
     db.block(async move {
-        sqlx::query_as::<_, (i64, i64)>("SELECT graph_id, last_fired_ms FROM workflow_cron_state")
-            .fetch_all(&pool)
-            .await
-            .unwrap_or_else(|e| {
-                log::error!("workflows::repo::load_cron_state query failed: {e}");
-                Vec::new()
-            })
-            .into_iter()
-            .map(|(id, ms)| (id as u32, ms as u64))
-            .collect()
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT graph_id, last_fired_ms FROM workflow_cron_state WHERE tenant_id = $1",
+        )
+        .bind(tenant_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            log::error!("workflows::repo::load_cron_state query failed: {e}");
+            Vec::new()
+        })
+        .into_iter()
+        .map(|(id, ms)| (id as u32, ms as u64))
+        .collect()
     })
 }
 
-/// Record that cron graph `graph_id` fired at `fired_ms` (unix epoch millis),
-/// upserting its timer. Best-effort.
-pub fn save_cron_fired(db: &Db, graph_id: u32, fired_ms: u64) {
+/// Record that the tenant's cron graph `graph_id` fired at `fired_ms`. Best-effort.
+pub fn save_cron_fired(db: &Db, tenant_id: Uuid, graph_id: u32, fired_ms: u64) {
     let pool = db.pool();
     let res: Result<_, sqlx::Error> = db.block(async move {
         sqlx::query(
-            "INSERT INTO workflow_cron_state (graph_id, last_fired_ms) VALUES ($1, $2)
-             ON CONFLICT (graph_id) DO UPDATE SET last_fired_ms = EXCLUDED.last_fired_ms",
+            "INSERT INTO workflow_cron_state (tenant_id, graph_id, last_fired_ms) VALUES ($1, $2, $3)
+             ON CONFLICT (tenant_id, graph_id) DO UPDATE SET last_fired_ms = EXCLUDED.last_fired_ms",
         )
+        .bind(tenant_id)
         .bind(graph_id as i64)
         .bind(fired_ms as i64)
         .execute(&pool)

@@ -11,6 +11,7 @@ use app_core::db::Db;
 use app_core::notification::{
     self, load_targets, NotificationConfig, NotificationStore, NotificationTarget,
 };
+use app_core::tenancy::DEFAULT_TENANT_ID;
 
 use crate::db_ref;
 
@@ -49,7 +50,7 @@ fn telegram_file(app: &tauri::AppHandle) -> std::path::PathBuf {
 
 /// Load the saved Telegram config from Postgres. `None` if unset or DB not ready.
 fn load_stored_telegram(app: &tauri::AppHandle) -> Option<StoredTelegramConfig> {
-    let (bot_token, pairing_code) = notification::repo::load_telegram(&db_ref(app).ok()?)?;
+    let (bot_token, pairing_code) = notification::repo::load_telegram(&db_ref(app).ok()?, DEFAULT_TENANT_ID)?;
     Some(StoredTelegramConfig { bot_token, pairing_code })
 }
 
@@ -79,7 +80,7 @@ fn restart_pairing(app: &tauri::AppHandle, store: NotificationStore, handle: &Pa
             let stop = Arc::new(AtomicBool::new(false));
             *handle.lock().unwrap() = Some(stop.clone());
             let emitter = app.clone();
-            notification::spawn_pairing(store, cfg, db_ref(app).ok(), stop, move || {
+            notification::spawn_pairing(store, cfg, db_ref(app).ok(), DEFAULT_TENANT_ID, stop, move || {
                 let _ = emitter.emit("beacons-changed", ());
             });
             log::info!("Pairing poller (re)started.");
@@ -102,25 +103,25 @@ pub fn manage(app: &tauri::AppHandle) {
 /// Hydrate beacons from Postgres (with a one-time import from legacy
 /// notifications.json) and import any legacy telegram.json config.
 pub fn hydrate(app: &tauri::AppHandle, db: &Db) {
-    let mut beacons = notification::repo::load_beacons(db);
+    let mut beacons = notification::repo::load_beacons(db, DEFAULT_TENANT_ID);
     if beacons.is_empty() {
         let from_json = load_targets(&notifications_file(app));
         if !from_json.is_empty() {
-            notification::repo::save_beacons(db, &from_json);
+            notification::repo::save_beacons(db, DEFAULT_TENANT_ID, &from_json);
             log::info!("Imported {} beacon(s) from notifications.json into Postgres", from_json.len());
-            beacons = notification::repo::load_beacons(db);
+            beacons = notification::repo::load_beacons(db, DEFAULT_TENANT_ID);
         }
     }
     log::info!("Beacons loaded from Postgres — {} target(s)", beacons.len());
     *app.state::<NotificationStore>().lock().unwrap() = beacons;
 
-    if notification::repo::load_telegram(db).is_none() {
+    if notification::repo::load_telegram(db, DEFAULT_TENANT_ID).is_none() {
         if let Some(stored) = std::fs::read_to_string(telegram_file(app))
             .ok()
             .and_then(|raw| serde_json::from_str::<StoredTelegramConfig>(&raw).ok())
         {
             if !stored.bot_token.trim().is_empty() || !stored.pairing_code.trim().is_empty() {
-                notification::repo::save_telegram(db, &stored.bot_token, &stored.pairing_code);
+                notification::repo::save_telegram(db, DEFAULT_TENANT_ID, &stored.bot_token, &stored.pairing_code);
                 log::info!("Imported Telegram config from telegram.json into Postgres");
             }
         }
@@ -167,7 +168,7 @@ pub fn set_telegram_config(
         }
     };
     let cfg = StoredTelegramConfig { bot_token: token, pairing_code: pairing_code.trim().to_string() };
-    notification::repo::save_telegram(&db_ref(&app)?, &cfg.bot_token, &cfg.pairing_code);
+    notification::repo::save_telegram(&db_ref(&app)?, DEFAULT_TENANT_ID, &cfg.bot_token, &cfg.pairing_code);
     log::info!(
         "set_telegram_config: token={} pairing_code={}",
         if cfg.bot_token.is_empty() { "unset" } else { "set" },
@@ -191,7 +192,7 @@ pub fn toggle_beacon(
     chat_id: i64,
     enabled: bool,
 ) -> Result<(), String> {
-    let (label, _) = notification::set_enabled_by_id(&state, db_ref(&app).ok().as_ref(), chat_id, enabled)
+    let (label, _) = notification::set_enabled_by_id(&state, db_ref(&app).ok().as_ref(), DEFAULT_TENANT_ID, chat_id, enabled)
         .ok_or("Beacon not found.")?;
     log::info!("toggle_beacon: '{label}' (chat_id={chat_id}) enabled={enabled}");
     Ok(())
@@ -205,7 +206,7 @@ pub fn rename_beacon(
     chat_id: i64,
     label: String,
 ) -> Result<(), String> {
-    let new_label = notification::rename_target(&state, db_ref(&app).ok().as_ref(), chat_id, &label)?;
+    let new_label = notification::rename_target(&state, db_ref(&app).ok().as_ref(), DEFAULT_TENANT_ID, chat_id, &label)?;
     log::info!("rename_beacon: chat_id={chat_id} -> '{new_label}'");
     Ok(())
 }
@@ -217,7 +218,7 @@ pub fn delete_beacon(
     state: tauri::State<'_, NotificationStore>,
     chat_id: i64,
 ) -> Result<(), String> {
-    let removed = notification::delete_target(&state, db_ref(&app).ok().as_ref(), chat_id)
+    let removed = notification::delete_target(&state, db_ref(&app).ok().as_ref(), DEFAULT_TENANT_ID, chat_id)
         .ok_or("Beacon not found.")?;
     log::info!("delete_beacon: removed '{removed}' (chat_id={chat_id})");
     Ok(())
