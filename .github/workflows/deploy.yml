@@ -16,6 +16,7 @@ on:
       - "Dockerfile"
       - "deploy/app/**"
       - "deploy/landing/**"
+      - "landing/**"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
 

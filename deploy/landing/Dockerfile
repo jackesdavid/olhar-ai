@@ -1,7 +1,14 @@
 # syntax=docker/dockerfile:1
-# The Sentinel marketing landing page (static, single file) served by nginx at the
-# apex thesentinels.online. Build context is the repo root (matches CI).
+# The Sentinel marketing landing — a SvelteKit static site (prerendered) served by
+# nginx at the apex thesentinels.online. Build context is the repo root (matches CI).
+FROM node:22-alpine AS build
+WORKDIR /app
+COPY landing/package.json landing/package-lock.json ./
+RUN npm ci
+COPY landing/ ./
+RUN npm run build
+
 FROM nginx:alpine
 COPY deploy/landing/nginx.conf /etc/nginx/conf.d/default.conf
-COPY deploy/landing/index.html /usr/share/nginx/html/index.html
+COPY --from=build /app/build /usr/share/nginx/html
 EXPOSE 80

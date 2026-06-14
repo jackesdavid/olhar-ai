@@ -89,6 +89,11 @@
       return;
     }
     finish();
+    // A master's own token has no tenant context — tenant-scoped pages would 400.
+    // Send them to the console to pick a tenant to operate inside (Navigate as tenant).
+    if (auth.me?.is_master && !auth.me.tenant_id && path !== "/admin/tenants") {
+      await goto("/admin/tenants");
+    }
   }
 
   let navCollapsed = $state(false);
@@ -138,19 +143,24 @@
   };
   // Desktop-only features not yet wired for the cloud client (edge stream / local agent).
   const CLOUD_HIDE = new Set(["/live", "/chat"]);
+  // A tenant context exists for normal users always, and for the master only while
+  // "acting as" a tenant (assume sets tenant_id). Tenant-scoped pages require it.
+  const inTenant = $derived(local || auth.me?.tenant_id != null);
   const mainNav = $derived(
     local
       ? navItems
-      : navItems.filter(
-          (i) => !CLOUD_HIDE.has(i.href) && (NAV_PERM[i.href] == null || hasPerm(NAV_PERM[i.href]!)),
-        ),
+      : !inTenant
+        ? []
+        : navItems.filter(
+            (i) => !CLOUD_HIDE.has(i.href) && (NAV_PERM[i.href] == null || hasPerm(NAV_PERM[i.href]!)),
+          ),
   );
 
   // Tenant-admin screens, shown by permission (cloud mode only — `me` is null on desktop).
   const adminItems = $derived([
-    ...(hasPerm("devices.write") ? [{ label: "Edge boxes", href: "/settings/boxes", icon: HardDrive }] : []),
-    ...(hasPerm("roles.manage") ? [{ label: "Roles", href: "/settings/roles", icon: ShieldCheck }] : []),
-    ...(hasPerm("users.manage") ? [{ label: "Users", href: "/settings/users", icon: UsersRound }] : []),
+    ...(inTenant && hasPerm("devices.write") ? [{ label: "Edge boxes", href: "/settings/boxes", icon: HardDrive }] : []),
+    ...(inTenant && hasPerm("roles.manage") ? [{ label: "Roles", href: "/settings/roles", icon: ShieldCheck }] : []),
+    ...(inTenant && hasPerm("users.manage") ? [{ label: "Users", href: "/settings/users", icon: UsersRound }] : []),
     ...(auth.me?.is_master ? [{ label: "Tenants", href: "/admin/tenants", icon: Building2 }] : []),
   ]);
 
