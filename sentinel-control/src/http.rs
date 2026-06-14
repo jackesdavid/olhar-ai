@@ -43,17 +43,21 @@ async fn health(State(st): State<AppState>) -> impl IntoResponse {
 /// The camera list an edge box pulls, scoped to the box's tenant. The edge presents
 /// its box token as `Authorization: Bearer <token>` and (optionally) its tailnet host
 /// as `X-Box-Host`. A valid token → that tenant's cameras (and last_seen/host are
-/// stamped); an unknown token → 401; no token → the default tenant (single-tenant /
-/// dev edges that predate enrollment).
+/// stamped); a missing/unknown token → 401.
+///
+/// **Security:** this returns camera RTSP credentials, so a box token is REQUIRED —
+/// control is public (the SPA's API), and there is no untenanted fallback. A dev box
+/// can opt back into the default tenant by setting `ALLOW_UNTENANTED_CONFIG=1`.
 async fn cameras(State(st): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let token = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|s| s.trim().to_string());
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     let tenant = match token {
-        Some(tok) if !tok.is_empty() => {
+        Some(tok) => {
             let host = headers.get("x-box-host").and_then(|v| v.to_str().ok());
             let hash = hex::encode(Sha256::digest(tok.as_bytes()));
             match store::touch_box_by_token(&st.pool, &hash, host).await {
@@ -65,7 +69,16 @@ async fn cameras(State(st): State<AppState>, headers: HeaderMap) -> impl IntoRes
                 }
             }
         }
-        _ => DEFAULT_TENANT_ID,
+        None => {
+            let dev_fallback = std::env::var("ALLOW_UNTENANTED_CONFIG")
+                .map(|v| matches!(v.trim(), "1" | "true" | "yes"))
+                .unwrap_or(false);
+            if dev_fallback {
+                DEFAULT_TENANT_ID
+            } else {
+                return (StatusCode::UNAUTHORIZED, "box token required").into_response();
+            }
+        }
     };
     Json(devices::repo::load(&st.db, tenant)).into_response()
 }

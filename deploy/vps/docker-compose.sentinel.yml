@@ -1,18 +1,17 @@
-# Sentinel streaming-core overlay for the ibbf VPS (Traefik + Let's Encrypt already
-# running there). Additive — does not touch ibbf.life / api.ibbf.life.
+# Sentinel cloud overlay for the ibbf VPS (Traefik + Let's Encrypt already running).
+# Pulls prebuilt images from GHCR (CI builds them). Additive — does not touch the
+# church app (ibbf.life / api.ibbf.life).
 #
-#   sentinel-postgres  — dedicated pgvector DB (isolated from the church app)
-#   sentinel-control   — camera config API; TAILNET-ONLY (serves camera creds, so
-#                        never public — exposed to the edge via `tailscale serve`)
-#   sentinel-gateway   — public streaming bridge at stream.ibbf.life (MSE + snapshots),
-#                        reaches the LAN edge's go2rtc over the tailnet
+#   sentinel-postgres  — dedicated pgvector DB
+#   sentinel-control   — cloud API/backend at control.thesentinels.online (auth, RBAC,
+#                        tenant-scoped domain APIs, /config/cameras [box-token gated])
+#   sentinel-app       — the web client (SPA) at app.thesentinels.online
+#   sentinel-gateway   — public streaming bridge (live.view-gated) at
+#                        gateway.thesentinels.online (+ legacy gateway.ibbf.life)
 #
-# Placeholders to fill on the VPS (after `tailscale up`):
-#   __DB_PASS__     a generated Postgres password
-#   __EDGE_HOST__   the edge's MagicDNS name   (e.g. sentinel-edge.tailXXXX.ts.net)
-#   __EDGE_TS_IP__  the edge's tailnet IP      (`tailscale status` on the edge)
-#
-# Built from the Sentinel repo checked out on the VPS (context: repo root).
+# Secrets live in /ibbf/sentinel.env on the VPS (NOT committed):
+#   JWT_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, MASTER_EMAIL, MASTER_PASSWORD
+# Placeholders filled on the VPS: __DB_PASS__, __EDGE_HOST__, __EDGE_TS_IP__
 services:
   sentinel-postgres:
     image: pgvector/pgvector:pg17
@@ -34,32 +33,51 @@ services:
     image: ghcr.io/jackesdavid/sentinel-control:latest
     container_name: sentinel-control
     restart: always
+    env_file:
+      - sentinel.env   # JWT_SECRET, GOOGLE_*, MASTER_*
     environment:
       DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
       CONTROL_BIND: 0.0.0.0:8790
+      OAUTH_REDIRECT_BASE: https://control.thesentinels.online
+      OAUTH_SUCCESS_REDIRECT: https://app.thesentinels.online/login
     depends_on:
       sentinel-postgres:
         condition: service_healthy
-    # TAILNET-ONLY: bind the published port to loopback, then `tailscale serve` it.
-    # NOT registered with Traefik → never reachable from the public internet.
-    ports:
-      - "127.0.0.1:8790:8790"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sentinel-control.rule=Host(`control.thesentinels.online`)"
+      - "traefik.http.routers.sentinel-control.entrypoints=websecure"
+      - "traefik.http.routers.sentinel-control.tls.certresolver=letsencrypt"
+      - "traefik.http.services.sentinel-control.loadbalancer.server.port=8790"
+
+  sentinel-app:
+    image: ghcr.io/jackesdavid/sentinel-app:latest
+    container_name: sentinel-app
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sentinel-app.rule=Host(`app.thesentinels.online`)"
+      - "traefik.http.routers.sentinel-app.entrypoints=websecure"
+      - "traefik.http.routers.sentinel-app.tls.certresolver=letsencrypt"
+      - "traefik.http.services.sentinel-app.loadbalancer.server.port=80"
 
   sentinel-gateway:
     image: ghcr.io/jackesdavid/sentinel-gateway:latest
     container_name: sentinel-gateway
     restart: always
+    env_file:
+      - sentinel.env   # JWT_SECRET (shared with control — verifies live.view)
     environment:
       GATEWAY_BIND: 0.0.0.0:8789
       # The edge's go2rtc over the tailnet (TLS via the edge's MagicDNS cert).
       EDGE_UPSTREAM: https://__EDGE_HOST__
-    # Resolve the edge's MagicDNS name to its tailnet IP inside the container (the VPS
-    # host is on the tailnet; the container routes to 100.64/10 via the host).
+      # Internal control lookup for the tenant's box upstream (/internal/box-upstream).
+      CONTROL_URL: http://sentinel-control:8790
     extra_hosts:
       - "__EDGE_HOST__:__EDGE_TS_IP__"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.sentinel-gw.rule=Host(`stream.ibbf.life`)"
+      - "traefik.http.routers.sentinel-gw.rule=Host(`gateway.thesentinels.online`) || Host(`gateway.ibbf.life`)"
       - "traefik.http.routers.sentinel-gw.entrypoints=websecure"
       - "traefik.http.routers.sentinel-gw.tls.certresolver=letsencrypt"
       - "traefik.http.services.sentinel-gw.loadbalancer.server.port=8789"
