@@ -1,0 +1,77 @@
+//! `sentinel-gateway` — the public streaming bridge.
+//!
+//! Phase 2 of the cloud decomposition. End-user browsers connect here; the gateway
+//! proxies live video (MSE over WebSocket) and JPEG snapshots through to a client's
+//! on-prem `sentinel-edge` go2rtc over the Tailscale tailnet. The edge's go2rtc is
+//! localhost-only + `tailscale serve`'d, so it's never exposed directly.
+//!
+//! Single-tenant for now: one configured upstream (`EDGE_UPSTREAM`). The per-tenant
+//! registry + JWT slot into `AppState::resolve_upstream` later (no transport change).
+//!
+//! Run:
+//!   EDGE_UPSTREAM=http://127.0.0.1:1984 GATEWAY_BIND=0.0.0.0:8789 \
+//!   cargo run -p sentinel-gateway        # or: task gateway
+//!
+//! Optional env: `TS_AUTHKEY`/`TS_HOSTNAME`/`TS_TAGS` to join the tailnet at startup.
+mod http;
+mod proxy;
+mod state;
+mod tailscale;
+
+use std::sync::Arc;
+
+use state::AppState;
+
+#[tokio::main]
+async fn main() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    let bind = std::env::var("GATEWAY_BIND").unwrap_or_else(|_| "0.0.0.0:8789".to_string());
+    let upstream = std::env::var("EDGE_UPSTREAM")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:1984".to_string());
+
+    // Join the tailnet if configured (so MagicDNS upstreams resolve over the VPN).
+    tailscale::ensure_up();
+
+    let state = Arc::new(AppState::new(upstream.clone()));
+    log::info!("sentinel-gateway upstream = {upstream}");
+
+    let app = http::router(state);
+    let listener = match tokio::net::TcpListener::bind(&bind).await {
+        Ok(l) => l,
+        Err(e) => {
+            log::error!("failed to bind {bind}: {e}");
+            std::process::exit(1);
+        }
+    };
+    log::info!("sentinel-gateway listening on http://{bind} (MSE /api/ws, snapshots /api/frame.jpeg, /player)");
+
+    if let Err(e) = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await {
+        log::error!("server error: {e}");
+        std::process::exit(1);
+    }
+    log::info!("sentinel-gateway shut down");
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let term = async {
+        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            s.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = term => {},
+    }
+    log::info!("shutdown signal received");
+}

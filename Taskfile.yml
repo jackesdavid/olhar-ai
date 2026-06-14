@@ -221,6 +221,32 @@ tasks:
     cmds:
       - cargo check
 
+  edge:
+    desc: Run sentinel-edge — the on-prem camera gateway (go2rtc + snapshots, REST on :8788)
+    dir: sentinel-edge
+    deps: [db-up]
+    env:
+      EDGE_BIND: '{{.EDGE_BIND | default "127.0.0.1:8788"}}'
+      # The edge owns go2rtc; point it at the bundled binary the desktop app fetches.
+      GO2RTC_BIN: '{{.GO2RTC_BIN | default "../app/src-tauri/binaries/go2rtc"}}'
+    cmds:
+      - cargo run
+
+  gateway:
+    desc: Run sentinel-gateway — the public streaming bridge (MSE WS + snapshots on :8789)
+    dir: sentinel-gateway
+    env:
+      GATEWAY_BIND: '{{.GATEWAY_BIND | default "127.0.0.1:8789"}}'
+      EDGE_UPSTREAM: '{{.EDGE_UPSTREAM | default "http://127.0.0.1:1984"}}'
+    cmds:
+      - cargo run
+
+  edge-check:
+    desc: Type-check sentinel-edge + sentinel-gateway
+    cmds:
+      - cd sentinel-edge && cargo check
+      - cd sentinel-gateway && cargo check
+
   dev:
     desc: Run the desktop app + local AI sidecar (Tauri + SvelteKit + vision service, hot-reload)
     dir: "{{.APP}}"

@@ -1,0 +1,20 @@
+[package]
+name = "sentinel-edge"
+version = "0.1.0"
+edition = "2021"
+description = "The edge gateway — the ONLY thing that touches cameras. Wraps go2rtc (sentinel-rtc) + ONVIF and serves on-demand JPEG snapshots over REST so out-of-process services (sentinel-flow, the UI) reach the LAN-bound cameras without speaking RTSP/ONVIF themselves. Cameras are LAN-bound, so this tier is mandatory however cloud the rest becomes."
+
+# Standalone crate (NOT in the app/ workspace) so it ships/runs independently at the
+# edge. Links the same UI-agnostic `app-core` (device repo, go2rtc helpers, ONVIF +
+# snapshot capture) by path.
+[dependencies]
+app-core = { path = "../app/crates/core" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+env_logger = "0.11"
