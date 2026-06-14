@@ -26,5 +26,8 @@ log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+# Blocking HTTP client for CLIENT mode: proxy run/run-state to sentinel-flow and
+# bridge its SSE stream back to Tauri events (see features/workflows.rs).
+ureq = { version = "2", features = ["json"] }
 app-core = { path = "../crates/core" }
 

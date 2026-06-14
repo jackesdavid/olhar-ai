@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
 use app_core::alerts::{AlertLevel, AlertStore};
@@ -30,7 +30,7 @@ pub type WfEngine = Arc<Mutex<WorkflowEngine>>;
 
 /// Live run activity per graph, polled by the editor/list: how many runs are in
 /// flight and which node is currently executing.
-#[derive(Default, Clone, Serialize)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 pub struct GraphActivity {
     running: u32,
     current: Option<u32>,
@@ -40,6 +40,94 @@ pub type WfActivity = Arc<Mutex<HashMap<u32, GraphActivity>>>;
 /// A safety backstop: never let more than this many workflow runs be in flight
 /// across all graphs at once.
 const WF_GLOBAL_CAP: u32 = 8;
+
+// ---- client mode (Phase 1 cutover) ------------------------------------------
+
+/// When `FLOW_URL` is set, the shell runs in **client mode**: the always-on
+/// `sentinel-flow` service is authoritative, so the embedded engine + poller are NOT
+/// started here (no double-firing). Runs + run-state proxy to the service, graph
+/// edits poke it to reload, and its SSE stream is bridged back to the same Tauri
+/// events the editor already listens for. Unset → embedded engine (today's
+/// behavior). The cutover is a single env var — fully reversible.
+fn flow_url() -> Option<String> {
+    std::env::var("FLOW_URL")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// A short-timeout agent for the proxy calls so a down service never hangs the UI.
+fn flow_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+}
+
+/// Proxy a run-now to the service (`POST /runs`). Maps its 202 to the editor's
+/// expected message; surfaces connection errors as a friendly string.
+fn proxy_run(base: &str, id: u32) -> Result<String, String> {
+    match flow_agent().post(&format!("{base}/runs")).send_json(serde_json::json!({ "graph_id": id })) {
+        Ok(_) => Ok("Run accepted.".into()),
+        Err(ureq::Error::Status(404, _)) => Err("graph not found".into()),
+        Err(e) => Err(format!("sentinel-flow unreachable: {e}")),
+    }
+}
+
+/// Proxy live run-state from the service (`GET /runs`). Empty map on any error so
+/// the editor degrades gracefully when the service is down.
+fn proxy_run_states(base: &str) -> HashMap<u32, GraphActivity> {
+    flow_agent()
+        .get(&format!("{base}/runs"))
+        .call()
+        .ok()
+        .and_then(|r| r.into_json::<HashMap<u32, GraphActivity>>().ok())
+        .unwrap_or_default()
+}
+
+/// Poke the service to re-read graphs after a local edit (best-effort, fire-and-forget).
+fn poke_reload(base: &str) {
+    let _ = flow_agent().post(&format!("{base}/graphs/reload")).call();
+}
+
+/// Bridge the service's SSE stream to Tauri events: subscribe to `{base}/events` and
+/// re-emit each `{event, …}` line as the matching Tauri event the editor already
+/// listens for (`workflow-run`/`-node`/`-log`/`-print`/`-image`, plus the
+/// store-changed pokes). Reconnects on drop. Started once at setup in client mode.
+fn spawn_sse_bridge(app: &tauri::AppHandle, base: String) {
+    use std::io::BufRead;
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let url = format!("{base}/events");
+        loop {
+            // Default agent: NO read timeout — the SSE stream is long-lived (axum
+            // sends keep-alive comment lines, which we skip).
+            match ureq::get(&url).call() {
+                Ok(resp) => {
+                    log::info!("flow SSE connected: {url}");
+                    let reader = std::io::BufReader::new(resp.into_reader());
+                    for line in reader.lines() {
+                        let Ok(line) = line else { break };
+                        let Some(data) = line.strip_prefix("data:") else { continue };
+                        let data = data.trim();
+                        if data.is_empty() {
+                            continue;
+                        }
+                        if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(data) {
+                            let name = v.get("event").and_then(|e| e.as_str()).map(str::to_string);
+                            if let (Some(name), Some(obj)) = (name, v.as_object_mut()) {
+                                obj.remove("event");
+                                let _ = app.emit(&name, v);
+                            }
+                        }
+                    }
+                    log::warn!("flow SSE stream ended; reconnecting in 2s…");
+                }
+                Err(e) => log::warn!("flow SSE connect failed ({e}); retrying in 2s…"),
+            }
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+    });
+}
 
 /// The legacy `workflows.json` path (one-time import source on first DB boot only).
 fn workflows_file(app: &tauri::AppHandle) -> std::path::PathBuf {
@@ -82,14 +170,28 @@ fn now_epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Create the engine + activity map, then spawn the trigger poller. The engine's
-/// timing state is restored from Postgres (Phase 0.5) so a restart neither replays
-/// the `OnNewAlert` backlog nor fires a long cron immediately:
+/// Start the workflow runtime. In **client mode** (`FLOW_URL` set) the embedded
+/// engine + poller are NOT started — `sentinel-flow` is authoritative — but the
+/// engine/activity state is still managed (so commands resolve) and the service's
+/// SSE stream is bridged to Tauri events. Otherwise the **embedded** engine runs:
+/// create the engine + activity map and spawn the trigger poller, restoring the
+/// engine's timing state from Postgres (Phase 0.5) so a restart neither replays the
+/// `OnNewAlert` backlog nor fires a long cron immediately:
 ///   * `alert_seen_max` — the persisted high-water mark, falling back to the current
 ///     alert-store max on first boot (no row yet), which is then persisted.
 ///   * cron timers — each persisted wall-clock fire time is converted into a
 ///     monotonic anchor so a mid-interval restart waits out the remainder.
 pub fn start(app: &tauri::AppHandle) {
+    if let Some(base) = flow_url() {
+        // Client mode: sentinel-flow owns the engine. Manage placeholder state so the
+        // run/run-state commands resolve, but never spawn the poller (no double-fire).
+        app.manage::<WfEngine>(Arc::new(Mutex::new(WorkflowEngine::new(0))));
+        app.manage::<WfActivity>(Arc::new(Mutex::new(HashMap::new())));
+        log::info!("Workflows in CLIENT mode — engine at {base}; embedded poller disabled");
+        spawn_sse_bridge(app, base);
+        return;
+    }
+
     let db = db_ref(app).ok();
 
     // Restore the alert high-water mark (persisted → current alert max fallback).
@@ -128,10 +230,15 @@ pub fn start(app: &tauri::AppHandle) {
 
 /// Persist the whole graph collection to Postgres (replace-all). Best-effort: if the
 /// DB isn't connected yet (can't happen past the splash) the edit is in-memory only.
+/// In client mode, also poke `sentinel-flow` to re-read so a freshly-edited trigger
+/// fires without restarting the service.
 fn persist(app: &tauri::AppHandle, store: &WfStore) {
     let graphs = store.lock().unwrap().graphs.clone();
     if let Ok(db) = db_ref(app) {
         workflows::repo::save(&db, &graphs);
+    }
+    if let Some(base) = flow_url() {
+        poke_reload(&base);
     }
 }
 
@@ -311,6 +418,9 @@ pub fn load_graphs(store: tauri::State<'_, WfStore>) -> Vec<WfGraph> {
 /// this to show running/idle status and highlight the executing node.
 #[tauri::command]
 pub fn run_states(activity: tauri::State<'_, WfActivity>) -> HashMap<u32, GraphActivity> {
+    if let Some(base) = flow_url() {
+        return proxy_run_states(&base); // client mode: live state from the service
+    }
     activity.lock().unwrap().clone()
 }
 
@@ -590,6 +700,9 @@ pub fn run_graph(app: tauri::AppHandle, store: tauri::State<'_, WfStore>, engine
         let s = store.lock().unwrap();
         s.graph(id).ok_or("graph not found")?.concurrency.clone()
     };
+    if let Some(base) = flow_url() {
+        return proxy_run(&base, id); // client mode: the service runs it (its concurrency policy applies)
+    }
     if engine.lock().unwrap().total_running() >= WF_GLOBAL_CAP {
         return Err("Too many workflows are running right now — try again shortly.".into());
     }
