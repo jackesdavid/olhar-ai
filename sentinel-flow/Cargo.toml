@@ -22,5 +22,7 @@ futures = "0.3"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The tenant this flow instance is scoped to (TENANT_ID env; defaults to the single-tenant id).
+uuid = "1"
 log = "0.4"
 env_logger = "0.11"

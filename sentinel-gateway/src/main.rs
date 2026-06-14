@@ -33,6 +33,12 @@ async fn main() {
         .map(|s| s.trim().trim_end_matches('/').to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "http://127.0.0.1:1984".to_string());
+    // Control plane base for the per-tenant box-host lookup (/internal/box-upstream).
+    let control_url = std::env::var("CONTROL_URL")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:8790".to_string());
 
     // Shared with sentinel-control: the live endpoints require a JWT carrying
     // `live.view`. Falls back to the same insecure dev default control uses so a local
@@ -45,8 +51,8 @@ async fn main() {
     // Join the tailnet if configured (so MagicDNS upstreams resolve over the VPN).
     tailscale::ensure_up();
 
-    let state = Arc::new(AppState::new(upstream.clone(), jwt_secret));
-    log::info!("sentinel-gateway upstream = {upstream}");
+    let state = Arc::new(AppState::new(upstream.clone(), control_url.clone(), jwt_secret));
+    log::info!("sentinel-gateway upstream = {upstream} (fallback), control = {control_url}");
 
     let app = http::router(state);
     let listener = match tokio::net::TcpListener::bind(&bind).await {

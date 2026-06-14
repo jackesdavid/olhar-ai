@@ -11,6 +11,7 @@ use crate::AppState;
 
 mod alerts;
 mod beacons;
+mod boxes;
 mod devices;
 mod map;
 mod persons;
@@ -28,6 +29,7 @@ pub fn router() -> Router<AppState> {
         .merge(beacons::router())
         .merge(map::router())
         .merge(workflows::router())
+        .merge(boxes::router())
 }
 
 /// The tenant this token operates in. The master's own (un-assumed) token carries no

@@ -70,11 +70,15 @@ fn extract_token(headers: &HeaderMap, query: Option<&str>) -> Option<String> {
     None
 }
 
-/// True iff the request carries a valid JWT granting `live.view`. (Per-tenant camera
-/// ownership lands with the `tenant_boxes` registry; today there is one upstream.)
-pub fn live_authorized(secret: &str, headers: &HeaderMap, query: Option<&str>) -> bool {
-    extract_token(headers, query)
-        .and_then(|t| verify(secret, &t))
-        .map(|c| c.may_view_live())
-        .unwrap_or(false)
+/// Authorize a live request: returns `(token, claims)` iff it carries a valid JWT
+/// granting `live.view`. The token is returned so the gateway can forward it to control
+/// to resolve the tenant's box upstream. `None` → reject (401).
+pub fn authorize_live(secret: &str, headers: &HeaderMap, query: Option<&str>) -> Option<(String, Claims)> {
+    let token = extract_token(headers, query)?;
+    let claims = verify(secret, &token)?;
+    if claims.may_view_live() {
+        Some((token, claims))
+    } else {
+        None
+    }
 }

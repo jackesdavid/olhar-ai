@@ -100,14 +100,30 @@ fn load_cameras(control_url: &str, cache_path: &PathBuf) -> Vec<Device> {
     }
 }
 
-/// GET `{control_url}/config/cameras` → the camera list.
+/// GET `{control_url}/config/cameras` → the camera list, scoped to this box's tenant.
+/// Presents `BOX_TOKEN` (set by the installer) as a bearer so control returns only this
+/// tenant's cameras, and reports `EDGE_PUBLIC_HOST` (this box's tailnet URL) so the
+/// gateway can resolve the tenant's live upstream. Without a token, control falls back
+/// to the default tenant (single-tenant / dev edges).
 fn fetch_cameras(control_url: &str) -> Result<Vec<Device>, String> {
     let url = format!("{control_url}/config/cameras");
-    ureq::AgentBuilder::new()
+    let mut req = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(8))
         .build()
-        .get(&url)
-        .call()
+        .get(&url);
+    if let Ok(token) = std::env::var("BOX_TOKEN") {
+        let token = token.trim();
+        if !token.is_empty() {
+            req = req.set("Authorization", &format!("Bearer {token}"));
+        }
+    }
+    if let Ok(host) = std::env::var("EDGE_PUBLIC_HOST") {
+        let host = host.trim();
+        if !host.is_empty() {
+            req = req.set("X-Box-Host", host);
+        }
+    }
+    req.call()
         .map_err(|e| format!("{e}"))?
         .into_json::<Vec<Device>>()
         .map_err(|e| format!("parse cameras: {e}"))

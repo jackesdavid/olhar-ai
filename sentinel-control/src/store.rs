@@ -117,6 +117,81 @@ pub async fn grant_role(pool: &PgPool, user_id: Uuid, role_id: Uuid) -> sqlx::Re
     Ok(())
 }
 
+// ---- boxes (edge appliances) ------------------------------------------------
+
+#[derive(sqlx::FromRow, serde::Serialize)]
+pub struct BoxRow {
+    pub id: Uuid,
+    pub name: String,
+    pub magicdns_host: Option<String>,
+    pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub async fn create_box(pool: &PgPool, tenant_id: Uuid, name: &str, token_hash: &str) -> sqlx::Result<Uuid> {
+    let (id,): (Uuid,) = sqlx::query_as(
+        "INSERT INTO tenant_boxes (tenant_id, name, token_hash) VALUES ($1,$2,$3) RETURNING id",
+    )
+    .bind(tenant_id)
+    .bind(name)
+    .bind(token_hash)
+    .fetch_one(pool)
+    .await?;
+    Ok(id)
+}
+
+pub async fn list_boxes(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<BoxRow>> {
+    sqlx::query_as::<_, BoxRow>(
+        "SELECT id, name, magicdns_host, last_seen, created_at FROM tenant_boxes WHERE tenant_id = $1 ORDER BY name",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn delete_box(pool: &PgPool, tenant_id: Uuid, id: Uuid) -> sqlx::Result<bool> {
+    let r = sqlx::query("DELETE FROM tenant_boxes WHERE tenant_id = $1 AND id = $2")
+        .bind(tenant_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(r.rows_affected() > 0)
+}
+
+/// Resolve a presented box token (already hashed) to its tenant, stamping last_seen and
+/// (optionally) the reported tailnet host. Returns the tenant id, or None if unknown.
+pub async fn touch_box_by_token(
+    pool: &PgPool,
+    token_hash: &str,
+    host: Option<&str>,
+) -> sqlx::Result<Option<Uuid>> {
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "UPDATE tenant_boxes
+            SET last_seen = now(),
+                magicdns_host = COALESCE($2, magicdns_host)
+          WHERE token_hash = $1
+        RETURNING tenant_id",
+    )
+    .bind(token_hash)
+    .bind(host)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(t,)| t))
+}
+
+/// The most-recently-seen box host for a tenant (the gateway's live upstream).
+pub async fn box_host_for_tenant(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Option<String>> {
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT magicdns_host FROM tenant_boxes
+          WHERE tenant_id = $1 AND magicdns_host IS NOT NULL
+       ORDER BY last_seen DESC NULLS LAST LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.and_then(|(h,)| h))
+}
+
 // ---- tenants ----------------------------------------------------------------
 
 pub async fn list_tenants(pool: &PgPool) -> sqlx::Result<Vec<TenantRow>> {

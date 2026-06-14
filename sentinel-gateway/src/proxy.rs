@@ -26,10 +26,11 @@ pub async fn ws_handler(
     RawQuery(query): RawQuery,
 ) -> Response {
     let q = query.unwrap_or_default();
-    if !crate::auth::live_authorized(&state.jwt_secret, &headers, Some(&q)) {
+    let Some((token, claims)) = crate::auth::authorize_live(&state.jwt_secret, &headers, Some(&q)) else {
         return (StatusCode::UNAUTHORIZED, "live.view required").into_response();
-    }
-    let upstream = format!("{}/api/ws?{}", state.ws_upstream(), strip_token(&q));
+    };
+    let base = state.upstream_for(claims.tid.as_deref(), &token).await;
+    let upstream = format!("{}/api/ws?{}", AppState::ws_origin(&base), strip_token(&q));
     ws.on_upgrade(move |client| bridge_ws(client, upstream))
 }
 
@@ -128,14 +129,28 @@ fn is_live_media(path: &str) -> bool {
 /// Credential-leaking go2rtc endpoints are blocked (see [`is_blocked`]); live media is
 /// gated by `live.view` (see [`is_live_media`]).
 pub async fn passthrough(State(state): State<Arc<AppState>>, headers: HeaderMap, uri: Uri) -> Response {
-    let pq = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
     if is_blocked(uri.path()) {
         return (StatusCode::FORBIDDEN, "blocked").into_response();
     }
-    if is_live_media(uri.path()) && !crate::auth::live_authorized(&state.jwt_secret, &headers, uri.query()) {
-        return (StatusCode::UNAUTHORIZED, "live.view required").into_response();
-    }
-    let url = format!("{}{pq}", state.resolve_upstream());
+    // Live media is gated + routed to the requester's tenant box; the (identical) player
+    // UI assets come from the static fallback upstream.
+    let base = if is_live_media(uri.path()) {
+        let Some((token, claims)) = crate::auth::authorize_live(&state.jwt_secret, &headers, uri.query()) else {
+            return (StatusCode::UNAUTHORIZED, "live.view required").into_response();
+        };
+        state.upstream_for(claims.tid.as_deref(), &token).await
+    } else {
+        state.resolve_upstream().to_string()
+    };
+    // Forward path + query, but never leak our `token` param to the upstream.
+    let fwd = match uri.query() {
+        Some(q) => {
+            let s = strip_token(q);
+            if s.is_empty() { uri.path().to_string() } else { format!("{}?{}", uri.path(), s) }
+        }
+        None => uri.path().to_string(),
+    };
+    let url = format!("{base}{fwd}");
 
     let resp = match state.http.get(&url).send().await {
         Ok(r) => r,
