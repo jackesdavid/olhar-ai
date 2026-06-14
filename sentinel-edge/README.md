@@ -14,7 +14,26 @@ Each client site runs one edge box. It:
 It links `app-core` (device repo, go2rtc config, ONVIF + snapshot capture) and reads
 the shared on-prem Postgres for the device list.
 
-## Run
+## Install (client appliance — one command)
+
+The client runs this once on their box; it installs Tailscale, fetches the
+`sentinel-edge` + go2rtc binaries, installs a systemd/launchd service that joins the
+tailnet + serves go2rtc, and starts it (`install.sh`):
+
+```sh
+curl -fsSL https://github.com/jackesdavid/Sentinel/releases/latest/download/install.sh \
+  | sudo sh -s -- \
+      --authkey tskey-auth-xxxx \
+      --hostname tenant-001 \
+      --tags tag:tenant-001 \
+      --control https://control.example.com
+```
+
+Binaries + `install.sh` are published per platform by `.github/workflows/release.yml`
+on a version tag (`git tag v0.1.0 && git push --tags`): Linux x86_64/aarch64 (static
+musl) and macOS arm64/x86_64.
+
+## Run (from source, dev)
 
 ```sh
 task db-up

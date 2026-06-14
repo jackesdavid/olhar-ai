@@ -1,0 +1,101 @@
+name: release
+
+# Build the sentinel-edge appliance binary for the platforms install.sh fetches and
+# publish them (plus install.sh) to a GitHub Release. Triggered by a version tag
+# (`git tag v0.1.0 && git push --tags`) or manually.
+#
+# Linux targets are static musl builds (no glibc coupling → run on any client box);
+# app-core is pure-Rust + rustls so there's no OpenSSL to cross-compile.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create/update (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+            asset: sentinel-edge-linux-x86_64
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+            asset: sentinel-edge-linux-aarch64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            cross: false
+            asset: sentinel-edge-macos-arm64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            cross: false
+            asset: sentinel-edge-macos-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross --locked
+
+      - name: Build (cross / linux-musl)
+        if: matrix.cross
+        run: cross build --release --locked --target ${{ matrix.target }} -p sentinel-edge
+
+      - name: Build (native / macOS)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --locked --target ${{ matrix.target }} -p sentinel-edge
+
+      - name: Stage asset
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/sentinel-edge" "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Ship the installer alongside the binaries so the client can:
+      #   curl -fsSL .../releases/latest/download/install.sh | sudo sh -s -- ...
+      - name: Add installer
+        run: cp sentinel-edge/install.sh dist/install.sh
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
