@@ -66,9 +66,11 @@ export type Box = {
   created_at: string;
 };
 
+export type NewBox = { id: string; token: string; hostname: string; tailscale_key: string | null };
+
 export const boxes = {
   list: () => api.get<Box[]>("/boxes"),
-  create: (name: string) => api.post<{ id: string; token: string }>("/boxes", { name }),
+  create: (name: string) => api.post<NewBox>("/boxes", { name }),
   del: (id: string) => api.del<void>(`/boxes/${id}`),
 };
 

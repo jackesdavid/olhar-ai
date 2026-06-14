@@ -24,6 +24,7 @@ mod oauth;
 mod rbac;
 mod seed;
 mod store;
+mod tailscale;
 
 /// Shared state. `db` (app-core) owns migrations + the domain repos; `pool` is this
 /// service's own async pool for auth/tenancy queries (runs on this runtime).
@@ -36,6 +37,10 @@ pub struct AppState {
     pub google: Option<oauth::GoogleOauth>,
     /// In-flight OAuth CSRF states (state → issued-at), pruned on use.
     pub oauth_states: Arc<Mutex<HashMap<String, Instant>>>,
+    /// Tailscale enrollment broker (None → tenants supply their own auth key).
+    pub tailscale: Option<tailscale::TailscaleConfig>,
+    /// Shared HTTP client (Tailscale key minting, etc.).
+    pub http: reqwest::Client,
 }
 
 fn main() {
@@ -70,7 +75,14 @@ fn main() {
         log::info!("Google login: {}", if google.is_some() { "enabled" } else { "disabled (set GOOGLE_CLIENT_ID/SECRET)" });
         let oauth_states = Arc::new(Mutex::new(HashMap::new()));
 
-        let state = AppState { db, pool, jwt_secret, google, oauth_states };
+        let tailscale = tailscale::TailscaleConfig::from_env();
+        log::info!(
+            "Tailscale edge enrollment: {}",
+            if tailscale.is_some() { "enabled (auto-mint auth keys)" } else { "disabled (tenants supply their own key)" }
+        );
+        let http = reqwest::Client::new();
+
+        let state = AppState { db, pool, jwt_secret, google, oauth_states, tailscale, http };
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {
             Ok(l) => l,

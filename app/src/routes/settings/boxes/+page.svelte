@@ -7,6 +7,7 @@
   import Copy from "@lucide/svelte/icons/copy";
   import HardDrive from "@lucide/svelte/icons/hard-drive";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
+  import Check from "@lucide/svelte/icons/check";
 
   import * as Card from "$lib/components/ui/card";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -34,6 +35,7 @@
   let createdOpen = $state(false);
   let createdToken = $state("");
   let createdCmd = $state("");
+  let createdAuto = $state(false); // Tailscale key was auto-minted (transparent)
 
   // Delete confirm
   let deleteTarget = $state<Box | null>(null);
@@ -54,18 +56,15 @@
     else loading = false;
   });
 
-  function slug(s: string): string {
-    return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "edge";
-  }
-
-  function buildCommand(token: string, boxName: string): string {
-    const key = authkey.trim() || "<YOUR_TAILSCALE_AUTHKEY>";
+  function buildCommand(token: string, hostname: string, tsKey: string | null): string {
+    // Prefer the auto-minted key (transparent enrollment); else a manual override; else a placeholder.
+    const key = tsKey || authkey.trim() || "<YOUR_TAILSCALE_AUTHKEY>";
     return [
       `curl -fsSL ${API_BASE}/install.sh | sudo sh -s -- \\`,
       `  --control ${API_BASE} \\`,
       `  --box-token ${token} \\`,
       `  --authkey ${key} \\`,
-      `  --hostname ${slug(boxName)}`,
+      `  --hostname ${hostname}`,
     ].join("\n");
   }
 
@@ -74,9 +73,10 @@
     if (creating || !name.trim()) return;
     creating = true;
     try {
-      const { token } = await boxApi.create(name.trim());
-      createdToken = token;
-      createdCmd = buildCommand(token, name.trim());
+      const box = await boxApi.create(name.trim());
+      createdToken = box.token;
+      createdAuto = !!box.tailscale_key;
+      createdCmd = buildCommand(box.token, box.hostname, box.tailscale_key);
       createdOpen = true;
       name = "";
       authkey = "";
@@ -182,7 +182,7 @@
       <Card.Header>
         <Card.Title>Add an edge box</Card.Title>
         <Card.Description>
-          Name it, optionally paste a Tailscale auth key, and run the generated command on the on-site machine.
+          Name it and run the generated command on the on-site machine — private networking is handled for you.
         </Card.Description>
       </Card.Header>
       <Card.Content>
@@ -193,8 +193,8 @@
               <Input id="box-name" bind:value={name} placeholder="Front office" />
             </div>
             <div class="space-y-1.5">
-              <Label for="box-key">Tailscale auth key <span class="text-muted-foreground">(optional)</span></Label>
-              <Input id="box-key" bind:value={authkey} placeholder="tskey-auth-…" />
+              <Label for="box-key">Tailscale auth key <span class="text-muted-foreground">(only if auto-enrollment is off)</span></Label>
+              <Input id="box-key" bind:value={authkey} placeholder="usually leave blank" />
             </div>
           </div>
           <Button type="submit" disabled={!name.trim() || creating}>
@@ -239,10 +239,15 @@
         </div>
       </div>
 
-      {#if !authkey.trim()}
+      {#if createdAuto}
+        <p class="flex items-center gap-2 text-xs text-primary">
+          <Check class="size-3.5" /> Private networking is set up automatically — just run the command. The box joins
+          securely with no Tailscale account needed.
+        </p>
+      {:else if !authkey.trim()}
         <p class="text-xs text-muted-foreground">
-          No Tailscale key was provided, so the command has a <code>&lt;YOUR_TAILSCALE_AUTHKEY&gt;</code> placeholder —
-          replace it with a key from your tailnet before running, or the box won't join the private network.
+          Automatic enrollment isn't configured, so the command has a <code>&lt;YOUR_TAILSCALE_AUTHKEY&gt;</code>
+          placeholder — replace it with a key from your tailnet before running, or the box won't join the private network.
         </p>
       {/if}
     </div>
