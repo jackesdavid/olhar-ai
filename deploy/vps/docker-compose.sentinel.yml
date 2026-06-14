@@ -31,10 +31,7 @@ services:
       retries: 5
 
   sentinel-control:
-    build:
-      context: /opt/sentinel/Sentinel
-      args:
-        PACKAGE: sentinel-control
+    image: ghcr.io/jackesdavid/sentinel-control:latest
     container_name: sentinel-control
     restart: always
     environment:
@@ -49,10 +46,7 @@ services:
       - "127.0.0.1:8790:8790"
 
   sentinel-gateway:
-    build:
-      context: /opt/sentinel/Sentinel
-      args:
-        PACKAGE: sentinel-gateway
+    image: ghcr.io/jackesdavid/sentinel-gateway:latest
     container_name: sentinel-gateway
     restart: always
     environment:

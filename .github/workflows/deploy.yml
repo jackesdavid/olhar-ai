@@ -1,0 +1,62 @@
+name: deploy
+
+# Build the cloud streaming services and push to GHCR, then tell the VPS to pull +
+# restart — so the VPS never builds. Mirrors the ibbf-service pattern.
+#
+# GHCR push uses the built-in GITHUB_TOKEN (no PAT needed — packages live under the
+# repo owner). The deploy step needs repo secrets: VPS_HOST, VPS_USER, VPS_PASS.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "sentinel-control/**"
+      - "sentinel-gateway/**"
+      - "app/crates/core/**"
+      - "Cargo.*"
+      - "Dockerfile"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [sentinel-control, sentinel-gateway]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: PACKAGE=${{ matrix.service }}
+          push: true
+          tags: ghcr.io/jackesdavid/${{ matrix.service }}:latest
+          cache-from: type=registry,ref=ghcr.io/jackesdavid/${{ matrix.service }}:cache
+          cache-to: type=registry,ref=ghcr.io/jackesdavid/${{ matrix.service }}:cache,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull + restart on the VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASS }}
+          script: |
+            cd /ibbf
+            docker compose -f docker-compose.yml -f docker-compose.sentinel.yml pull sentinel-control sentinel-gateway
+            docker compose -f docker-compose.yml -f docker-compose.sentinel.yml up -d sentinel-control sentinel-gateway
+            docker image prune -f

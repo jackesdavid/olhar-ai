@@ -92,11 +92,23 @@ async fn bridge_ws(client: WebSocket, upstream: String) {
 
 // ---- HTTP passthrough -------------------------------------------------------
 
+/// go2rtc API paths that must NEVER be exposed publicly: they leak the camera RTSP
+/// credentials / full config, or allow inspecting the box. The gateway is a public
+/// edge, so we block these even though the gateway only forwards GET. The player needs
+/// only `/api/frame.jpeg`, `/api/ws` (its own route), and the static UI — all allowed.
+fn is_blocked(path: &str) -> bool {
+    const BLOCKED: &[&str] = &["/api/streams", "/api/config", "/api/log", "/api/exec"];
+    path == "/api" || path == "/api/" || BLOCKED.iter().any(|p| path == *p || path.starts_with(&format!("{p}/")))
+}
+
 /// Stream any other GET through to the upstream go2rtc, preserving path + query
-/// (snapshots `/api/frame.jpeg`, `/api/streams`, the player `/stream.html` + assets).
-/// No buffering — the response body is streamed straight back.
+/// (snapshots `/api/frame.jpeg`, the player `/stream.html` + assets). No buffering.
+/// Credential-leaking go2rtc endpoints are blocked (see [`is_blocked`]).
 pub async fn passthrough(State(state): State<Arc<AppState>>, uri: Uri) -> Response {
     let pq = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+    if is_blocked(uri.path()) {
+        return (StatusCode::FORBIDDEN, "blocked").into_response();
+    }
     let url = format!("{}{pq}", state.resolve_upstream());
 
     let resp = match state.http.get(&url).send().await {
