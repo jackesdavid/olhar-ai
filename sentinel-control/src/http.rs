@@ -17,11 +17,22 @@ use crate::{handlers, store, AppState};
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/install.sh", get(install_script))
         .route("/config/cameras", get(cameras))
         .merge(handlers::router())
         .merge(crate::domain::router())
         .layer(CorsLayer::permissive())
         .with_state(state)
+}
+
+/// Serve the edge appliance installer so a tenant admin's one-liner
+/// (`curl -fsSL <control>/install.sh | sudo sh -s -- …`) works. Public; the box token
+/// passed to it is what binds the appliance to a tenant.
+async fn install_script() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")],
+        include_str!("../../sentinel-edge/install.sh"),
+    )
 }
 
 async fn health(State(st): State<AppState>) -> impl IntoResponse {

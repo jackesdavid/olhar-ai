@@ -58,6 +58,20 @@ export const rbac = {
   setUserRoles: (id: string, roleIds: string[]) => api.put<void>(`/users/${id}/roles`, { role_ids: roleIds }),
 };
 
+export type Box = {
+  id: string;
+  name: string;
+  magicdns_host: string | null;
+  last_seen: string | null;
+  created_at: string;
+};
+
+export const boxes = {
+  list: () => api.get<Box[]>("/boxes"),
+  create: (name: string) => api.post<{ id: string; token: string }>("/boxes", { name }),
+  del: (id: string) => api.del<void>(`/boxes/${id}`),
+};
+
 export const admin = {
   tenants: () => api.get<Tenant[]>("/admin/tenants"),
   createTenant: (tenantName: string, adminEmail: string, adminPassword: string) =>

@@ -14,6 +14,7 @@
   import ShieldCheck from "@lucide/svelte/icons/shield-check";
   import UsersRound from "@lucide/svelte/icons/users-round";
   import Building2 from "@lucide/svelte/icons/building-2";
+  import HardDrive from "@lucide/svelte/icons/hard-drive";
   import LogOut from "@lucide/svelte/icons/log-out";
   import Undo2 from "@lucide/svelte/icons/undo-2";
 
@@ -147,6 +148,7 @@
 
   // Tenant-admin screens, shown by permission (cloud mode only — `me` is null on desktop).
   const adminItems = $derived([
+    ...(hasPerm("devices.write") ? [{ label: "Edge boxes", href: "/settings/boxes", icon: HardDrive }] : []),
     ...(hasPerm("roles.manage") ? [{ label: "Roles", href: "/settings/roles", icon: ShieldCheck }] : []),
     ...(hasPerm("users.manage") ? [{ label: "Users", href: "/settings/users", icon: UsersRound }] : []),
     ...(auth.me?.is_master ? [{ label: "Tenants", href: "/admin/tenants", icon: Building2 }] : []),

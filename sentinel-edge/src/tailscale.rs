@@ -53,4 +53,24 @@ pub fn ensure_up() {
         Ok(s) => log::warn!("`tailscale serve` exited with {s}"),
         Err(e) => log::warn!("`tailscale serve` failed: {e}"),
     }
+
+    // Report this box's tailnet go2rtc URL to control (so the gateway can resolve the
+    // tenant's live upstream) — unless it was supplied explicitly at install time.
+    if std::env::var("EDGE_PUBLIC_HOST").map(|v| v.trim().is_empty()).unwrap_or(true) {
+        if let Some(dns) = detect_dns_name() {
+            let url = format!("https://{}", dns.trim_end_matches('.'));
+            log::info!("detected EDGE_PUBLIC_HOST={url}");
+            std::env::set_var("EDGE_PUBLIC_HOST", url);
+        }
+    }
+}
+
+/// This node's MagicDNS name from `tailscale status --json` (`Self.DNSName`), if up.
+fn detect_dns_name() -> Option<String> {
+    let out = Command::new("tailscale").args(["status", "--json"]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    v.get("Self")?.get("DNSName")?.as_str().filter(|s| !s.is_empty()).map(str::to_string)
 }

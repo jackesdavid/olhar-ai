@@ -27,6 +27,10 @@ fn main() {
 
     let bind = std::env::var("EDGE_BIND").unwrap_or_else(|_| "0.0.0.0:8788".to_string());
 
+    // Join the tailnet + expose go2rtc over it (opt-in via TS_AUTHKEY) FIRST, so the
+    // detected EDGE_PUBLIC_HOST is reported to control on the very first camera pull.
+    tailscale::ensure_up();
+
     // Config-light boot: pull the camera list from the control plane (cache fallback).
     // No database — the appliance carries no Postgres.
     let state = AppState::boot();
@@ -37,9 +41,6 @@ fn main() {
     } else {
         log::info!("edge using external go2rtc on :1984 (+ ONVIF fallback)");
     }
-
-    // Join the tailnet + expose go2rtc over it (opt-in via TS_AUTHKEY).
-    tailscale::ensure_up();
 
     let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");
     rt.block_on(async move {
