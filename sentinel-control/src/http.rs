@@ -1,6 +1,5 @@
-//! Control-plane REST. The edge appliance pulls its camera config from here.
-use std::sync::Arc;
-
+//! Control-plane REST: auth + RBAC + master console (see `handlers`), plus the edge
+//! camera-config pull and health.
 use axum::extract::State;
 use axum::response::{IntoResponse, Json};
 use axum::routing::get;
@@ -10,25 +9,23 @@ use tower_http::cors::CorsLayer;
 
 use app_core::devices;
 
-use crate::AppState;
+use crate::{handlers, AppState};
 
-pub fn router(state: Arc<AppState>) -> Router {
+pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/config/cameras", get(cameras))
+        .merge(handlers::router())
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
 
-async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let n = devices::repo::load(&state.db).len();
+async fn health(State(st): State<AppState>) -> impl IntoResponse {
+    let n = devices::repo::load(&st.db).len();
     Json(json!({ "status": "ok", "service": "sentinel-control", "cameras": n }))
 }
 
-/// The full camera list (incl. creds + rtsp_url) for an edge box to build its go2rtc
-/// config and serve snapshots. The edge is trusted (on-prem, over the tailnet).
-async fn cameras(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let cameras = devices::repo::load(&state.db);
-    log::info!("config/cameras → {} camera(s)", cameras.len());
-    Json(cameras)
+/// The camera list an edge box pulls. (Phase 2 scopes this by the box's tenant.)
+async fn cameras(State(st): State<AppState>) -> impl IntoResponse {
+    Json(devices::repo::load(&st.db))
 }
