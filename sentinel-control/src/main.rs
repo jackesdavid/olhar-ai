@@ -7,6 +7,10 @@
 //! Run:
 //!   DATABASE_URL=postgres://… JWT_SECRET=… CONTROL_BIND=0.0.0.0:8790 \
 //!   cargo run -p sentinel-control   # or: task control
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
@@ -15,6 +19,7 @@ use app_core::db::Db;
 mod auth;
 mod handlers;
 mod http;
+mod oauth;
 mod rbac;
 mod seed;
 mod store;
@@ -26,6 +31,10 @@ pub struct AppState {
     pub db: Db,
     pub pool: PgPool,
     pub jwt_secret: String,
+    /// Google OAuth config (None when unconfigured — social login disabled).
+    pub google: Option<oauth::GoogleOauth>,
+    /// In-flight OAuth CSRF states (state → issued-at), pruned on use.
+    pub oauth_states: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
 fn main() {
@@ -56,7 +65,11 @@ fn main() {
             log::error!("seed failed: {e}");
         }
 
-        let state = AppState { db, pool, jwt_secret };
+        let google = oauth::GoogleOauth::from_env();
+        log::info!("Google login: {}", if google.is_some() { "enabled" } else { "disabled (set GOOGLE_CLIENT_ID/SECRET)" });
+        let oauth_states = Arc::new(Mutex::new(HashMap::new()));
+
+        let state = AppState { db, pool, jwt_secret, google, oauth_states };
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {
             Ok(l) => l,

@@ -20,6 +20,8 @@ pub fn router() -> Router<AppState> {
         .route("/auth/signup", post(signup))
         .route("/auth/login", post(login))
         .route("/auth/me", get(me))
+        .route("/auth/oauth/google/start", get(crate::oauth::google_start))
+        .route("/auth/oauth/google/callback", get(crate::oauth::google_callback))
         .route("/permissions", get(list_permissions))
         .route("/roles", get(list_roles).post(create_role))
         .route("/roles/:id/permissions", get(get_role_perms).put(set_role_perms))
