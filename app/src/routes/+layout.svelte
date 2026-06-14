@@ -291,7 +291,7 @@
   <div class="flex min-w-0 flex-1 flex-col">
     {#if isAssuming()}
       <div class="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-600 dark:text-amber-400">
-        <span>Acting as another tenant — live camera feeds remain private and are not accessible.</span>
+        <span>Acting as another tenant — you have full access to this workspace, including live feeds.</span>
         <button class="interactive ml-auto inline-flex items-center gap-1 rounded-md px-2 py-0.5 font-medium hover:bg-amber-500/15" onclick={leaveTenant}>
           <Undo2 class="size-3.5" /> Exit
         </button>

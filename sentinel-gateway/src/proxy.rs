@@ -17,14 +17,29 @@ use crate::state::AppState;
 
 /// Upgrade the client WS and bridge it to the upstream go2rtc MSE WebSocket
 /// (`{ws_upstream}/api/ws?<query>`), piping both directions until either side closes.
+/// Gated by `live.view` — browsers can't set WS headers, so the token rides the query
+/// (`?token=<jwt>`); the upstream never sees it (we forward only go2rtc's own params).
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     RawQuery(query): RawQuery,
 ) -> Response {
     let q = query.unwrap_or_default();
-    let upstream = format!("{}/api/ws?{q}", state.ws_upstream());
+    if !crate::auth::live_authorized(&state.jwt_secret, &headers, Some(&q)) {
+        return (StatusCode::UNAUTHORIZED, "live.view required").into_response();
+    }
+    let upstream = format!("{}/api/ws?{}", state.ws_upstream(), strip_token(&q));
     ws.on_upgrade(move |client| bridge_ws(client, upstream))
+}
+
+/// Drop our `token` query param so it's never forwarded to the upstream go2rtc.
+fn strip_token(query: &str) -> String {
+    query
+        .split('&')
+        .filter(|p| !p.is_empty() && !p.starts_with("token="))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 /// Connect to the upstream go2rtc WS and pipe frames both ways. Best-effort: any
@@ -101,13 +116,24 @@ fn is_blocked(path: &str) -> bool {
     path == "/api" || path == "/api/" || BLOCKED.iter().any(|p| path == *p || path.starts_with(&format!("{p}/")))
 }
 
+/// Live media that carries actual frames — gated by `live.view`. Player UI assets
+/// (stream.html, JS/CSS) are NOT gated: they carry no video, and the stream itself
+/// flows through these endpoints + `/api/ws`, which are all gated.
+fn is_live_media(path: &str) -> bool {
+    path == "/api/frame.jpeg" || path == "/api/frame.mp4" || path.starts_with("/api/stream")
+}
+
 /// Stream any other GET through to the upstream go2rtc, preserving path + query
 /// (snapshots `/api/frame.jpeg`, the player `/stream.html` + assets). No buffering.
-/// Credential-leaking go2rtc endpoints are blocked (see [`is_blocked`]).
-pub async fn passthrough(State(state): State<Arc<AppState>>, uri: Uri) -> Response {
+/// Credential-leaking go2rtc endpoints are blocked (see [`is_blocked`]); live media is
+/// gated by `live.view` (see [`is_live_media`]).
+pub async fn passthrough(State(state): State<Arc<AppState>>, headers: HeaderMap, uri: Uri) -> Response {
     let pq = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
     if is_blocked(uri.path()) {
         return (StatusCode::FORBIDDEN, "blocked").into_response();
+    }
+    if is_live_media(uri.path()) && !crate::auth::live_authorized(&state.jwt_secret, &headers, uri.query()) {
+        return (StatusCode::UNAUTHORIZED, "live.view required").into_response();
     }
     let url = format!("{}{pq}", state.resolve_upstream());
 

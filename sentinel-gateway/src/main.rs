@@ -13,6 +13,7 @@
 //!   cargo run -p sentinel-gateway        # or: task gateway
 //!
 //! Optional env: `TS_AUTHKEY`/`TS_HOSTNAME`/`TS_TAGS` to join the tailnet at startup.
+mod auth;
 mod http;
 mod proxy;
 mod state;
@@ -33,10 +34,18 @@ async fn main() {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "http://127.0.0.1:1984".to_string());
 
+    // Shared with sentinel-control: the live endpoints require a JWT carrying
+    // `live.view`. Falls back to the same insecure dev default control uses so a local
+    // end-to-end setup works; both MUST set a real JWT_SECRET in production.
+    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| {
+        log::warn!("JWT_SECRET unset — using an insecure dev secret (must match control)");
+        "dev-insecure-secret-change-me".to_string()
+    });
+
     // Join the tailnet if configured (so MagicDNS upstreams resolve over the VPN).
     tailscale::ensure_up();
 
-    let state = Arc::new(AppState::new(upstream.clone()));
+    let state = Arc::new(AppState::new(upstream.clone(), jwt_secret));
     log::info!("sentinel-gateway upstream = {upstream}");
 
     let app = http::router(state);

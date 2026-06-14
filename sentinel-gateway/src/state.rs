@@ -11,15 +11,17 @@ pub struct AppState {
     pub upstream: String,
     /// Shared HTTP client for snapshot/asset passthrough (rustls, connect timeout).
     pub http: reqwest::Client,
+    /// Shared with sentinel-control — verifies the `live.view` JWT on live endpoints.
+    pub jwt_secret: String,
 }
 
 impl AppState {
-    pub fn new(upstream: String) -> Self {
+    pub fn new(upstream: String, jwt_secret: String) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .build()
             .expect("build reqwest client");
-        AppState { upstream, http }
+        AppState { upstream, http, jwt_secret }
     }
 
     /// The upstream go2rtc base URL for this request. **The tenancy seam:** later

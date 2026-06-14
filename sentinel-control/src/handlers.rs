@@ -9,7 +9,7 @@ use axum::Router;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::auth::{self, Claims, UserClaims, LIVE_VIEW};
+use crate::auth::{self, Claims, UserClaims};
 use crate::store;
 use crate::AppState;
 
@@ -287,12 +287,15 @@ struct AssumeResp {
     tenant_id: Uuid,
 }
 
-/// Master "navigate as tenant": mint a tenant-scoped token with all tenant actions
-/// EXCEPT `live.view` (the master can never watch a tenant's live feeds).
+/// Master "navigate as tenant": mint a tenant-scoped token with ALL tenant actions,
+/// including `live.view` — while explicitly acting as a tenant the master may watch
+/// that tenant's live feeds. (The master's own un-assumed token still cannot: it has
+/// no tenant context and the `master` bypass excludes `live.view`.) A future tenant
+/// admin approval will gate this assume.
 async fn assume_tenant(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<Uuid>) -> Result<Json<AssumeResp>, ApiErr> {
     require_master(&c)?;
     let tenant = store::find_tenant(&st.pool, id).await.map_err(db_err)?.ok_or(err(StatusCode::NOT_FOUND, "no such tenant"))?;
-    let perms: Vec<String> = crate::rbac::all_perms().into_iter().filter(|p| *p != LIVE_VIEW).map(String::from).collect();
+    let perms: Vec<String> = crate::rbac::all_perms().into_iter().map(String::from).collect();
     let claims = Claims {
         sub: c.sub,
         tid: Some(tenant.id.to_string()),

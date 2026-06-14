@@ -19,5 +19,8 @@ tower-http = { version = "0.5", features = ["cors"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Verify the control plane's JWT on the live endpoints (live.view gate). Shares
+# JWT_SECRET with sentinel-control; no DB, no app-core — just decode + check perms.
+jsonwebtoken = "9"
 log = "0.4"
 env_logger = "0.11"
