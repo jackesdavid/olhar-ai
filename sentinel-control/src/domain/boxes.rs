@@ -76,7 +76,7 @@ async fn create(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): 
     // Transparent enrollment: mint a Tailscale auth key for this box (best-effort —
     // if the broker isn't configured or the API fails, fall back to a manual key).
     let tailscale_key = match &st.tailscale {
-        Some(ts) => match ts.mint_auth_key(&st.http, &format!("sentinel-edge · {name}")).await {
+        Some(ts) => match ts.mint_auth_key(&st.http, &format!("sentinel-edge {name}")).await {
             Ok(k) => Some(k),
             Err(e) => {
                 log::warn!("tailscale key mint failed for box {id}: {e}");

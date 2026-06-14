@@ -44,6 +44,11 @@ impl TailscaleConfig {
     /// `description` shows in the Tailscale admin (e.g. the box name). Short-lived: the
     /// key only needs to live long enough for the box to come up once.
     pub async fn mint_auth_key(&self, http: &reqwest::Client, description: &str) -> Result<String, String> {
+        // Tailscale rejects non-ASCII / odd chars in key descriptions — sanitize.
+        let description: String = description
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || " -_.".contains(c) { c } else { '-' })
+            .collect();
         // 1. OAuth client-credentials → short-lived access token.
         let token: TokenResp = http
             .post(TOKEN_URL)
