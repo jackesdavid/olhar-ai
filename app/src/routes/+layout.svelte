@@ -3,6 +3,7 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { page } from "$app/stores";
+  import { goto } from "$app/navigation";
   import { navItems } from "$lib/nav";
   import { Toaster } from "$lib/components/ui/sonner";
   import SentinelMark from "$lib/components/sentinel-mark.svelte";
@@ -10,12 +11,32 @@
   import Splash from "$lib/components/splash.svelte";
   import PanelLeftOpen from "@lucide/svelte/icons/panel-left-open";
   import PanelLeftClose from "@lucide/svelte/icons/panel-left-close";
+  import ShieldCheck from "@lucide/svelte/icons/shield-check";
+  import UsersRound from "@lucide/svelte/icons/users-round";
+  import Building2 from "@lucide/svelte/icons/building-2";
+  import LogOut from "@lucide/svelte/icons/log-out";
+  import Undo2 from "@lucide/svelte/icons/undo-2";
+
+  import {
+    auth,
+    isTauri,
+    loadToken,
+    loadMe,
+    logout,
+    hasPerm,
+    isAssuming,
+    exitAssume,
+  } from "$lib/auth.svelte";
 
   let { children } = $props();
 
-  // Boot gate: the app requires Postgres (no JSON fallback), so we hold the splash
-  // until `boot_status` confirms the DB is connected + migrated. The app mounts
-  // only after that, so first-load data fetches see the real device list.
+  // The desktop (Tauri) shell talks to local commands; the browser is a cloud client
+  // that logs in. `local` selects which boot path runs.
+  const local = isTauri();
+
+  // Boot gate: the desktop app requires Postgres (no JSON fallback), so we hold the
+  // splash until `boot_status` confirms the DB is connected + migrated. In cloud mode
+  // the splash covers the auth check instead.
   let ready = $state(false); // app content mounted
   let showSplash = $state(true); // splash present
   let leaving = $state(false); // splash fading out
@@ -23,6 +44,7 @@
 
   const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+  // ---- desktop (local) boot: gate on Postgres ------------------------------
   async function bootSequence() {
     const started = Date.now();
     for (;;) {
@@ -42,6 +64,32 @@
     showSplash = false;
   }
 
+  // ---- cloud boot: require a valid JWT session -----------------------------
+  async function cloudBoot() {
+    loadToken();
+    const path = $page.url.pathname;
+    const finish = () => {
+      ready = true;
+      leaving = true;
+      showSplash = false;
+    };
+    if (!auth.token) {
+      auth.ready = true;
+      finish();
+      if (path !== "/login") await goto("/login");
+      return;
+    }
+    const ok = await loadMe();
+    auth.ready = true;
+    if (!ok) {
+      logout();
+      finish();
+      if (path !== "/login") await goto("/login");
+      return;
+    }
+    finish();
+  }
+
   let navCollapsed = $state(false);
   function toggleNav() {
     navCollapsed = !navCollapsed;
@@ -53,7 +101,8 @@
   }
   onMount(() => {
     if (localStorage.getItem("sentinel.navCollapsed") === "true") navCollapsed = true;
-    bootSequence();
+    if (local) bootSequence();
+    else cloudBoot();
   });
 
   function isActive(href: string): boolean {
@@ -68,11 +117,32 @@
   const fullBleed = $derived(
     FULL_BLEED.some((p) => $page.url.pathname === p || $page.url.pathname.startsWith(p + "/")),
   );
+
+  // The app shell (sidebar + chrome) shows for the desktop app, and in cloud mode
+  // only once authenticated. The bare-render path (no shell) carries /login.
+  const showShell = $derived(local || auth.me !== null);
+
+  // Tenant-admin screens, shown by permission (cloud mode only — `me` is null on desktop).
+  const adminItems = $derived([
+    ...(hasPerm("roles.manage") ? [{ label: "Roles", href: "/settings/roles", icon: ShieldCheck }] : []),
+    ...(hasPerm("users.manage") ? [{ label: "Users", href: "/settings/users", icon: UsersRound }] : []),
+    ...(auth.me?.is_master ? [{ label: "Tenants", href: "/admin/tenants", icon: Building2 }] : []),
+  ]);
+
+  async function signOut() {
+    logout();
+    await goto("/login");
+  }
+  async function leaveTenant() {
+    await exitAssume();
+    await goto("/admin/tenants");
+  }
 </script>
 
 <SensorField />
 
 {#if ready}
+{#if showShell}
 <div class="flex h-screen w-screen overflow-hidden text-foreground">
   <aside
     class="flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 {navCollapsed
@@ -117,7 +187,53 @@
           {#if !navCollapsed}<span>{item.label}</span>{/if}
         </a>
       {/each}
+
+      {#if adminItems.length > 0}
+        <div class="px-3 pb-1 pt-3 {navCollapsed ? 'hidden' : ''}">
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Admin</span>
+        </div>
+        {#each adminItems as item (item.href)}
+          {@const Icon = item.icon}
+          {@const active = isActive(item.href)}
+          <a
+            href={item.href}
+            data-active={active}
+            title={navCollapsed ? item.label : undefined}
+            class="group relative flex items-center gap-3 rounded-md py-2 text-sm font-medium text-muted-foreground transition-colors duration-200 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground data-[active=true]:bg-sidebar-accent data-[active=true]:text-foreground {navCollapsed
+              ? 'justify-center px-0'
+              : 'px-3'}"
+          >
+            <span
+              class="absolute left-0 top-1/2 h-5 -translate-y-1/2 rounded-r-full bg-primary transition-all duration-200 {active
+                ? 'w-1 opacity-100'
+                : 'w-0 opacity-0'}"
+            ></span>
+            <Icon class="size-4 shrink-0 transition-colors group-data-[active=true]:text-primary" />
+            {#if !navCollapsed}<span>{item.label}</span>{/if}
+          </a>
+        {/each}
+      {/if}
     </nav>
+
+    {#if auth.me}
+      <div class="border-t border-sidebar-border p-2">
+        {#if !navCollapsed}
+          <div class="truncate px-2 py-1 text-[11px] text-muted-foreground" title={auth.me.email ?? auth.me.user_id}>
+            {auth.me.email ?? "Signed in"}
+          </div>
+        {/if}
+        <button
+          class="interactive flex w-full items-center gap-3 rounded-md py-2 text-sm font-medium text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground {navCollapsed
+            ? 'justify-center px-0'
+            : 'px-3'}"
+          title="Sign out"
+          onclick={signOut}
+        >
+          <LogOut class="size-4 shrink-0" />
+          {#if !navCollapsed}<span>Sign out</span>{/if}
+        </button>
+      </div>
+    {/if}
 
     <div
       class="flex items-center border-t border-sidebar-border p-3 text-[11px] text-muted-foreground {navCollapsed
@@ -150,6 +266,14 @@
   </aside>
 
   <div class="flex min-w-0 flex-1 flex-col">
+    {#if isAssuming()}
+      <div class="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-600 dark:text-amber-400">
+        <span>Acting as another tenant — live camera feeds remain private and are not accessible.</span>
+        <button class="interactive ml-auto inline-flex items-center gap-1 rounded-md px-2 py-0.5 font-medium hover:bg-amber-500/15" onclick={leaveTenant}>
+          <Undo2 class="size-3.5" /> Exit
+        </button>
+      </div>
+    {/if}
     <main class="flex-1 overflow-y-auto">
       {#key $page.url.pathname}
         {#if fullBleed}
@@ -167,6 +291,9 @@
     </main>
   </div>
 </div>
+{:else}
+  {@render children()}
+{/if}
 {/if}
 
 {#if showSplash}

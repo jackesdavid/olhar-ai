@@ -26,6 +26,16 @@ pub struct RoleRow {
     pub is_system: bool,
 }
 
+/// A tenant member for the user-management screen: identity + their assigned role ids
+/// (so the UI can pre-check the role toggles).
+#[derive(serde::Serialize)]
+pub struct UserListRow {
+    pub id: Uuid,
+    pub email: String,
+    pub is_master: bool,
+    pub role_ids: Vec<Uuid>,
+}
+
 // ---- users ------------------------------------------------------------------
 
 pub async fn find_user_by_email(pool: &PgPool, email: &str) -> sqlx::Result<Option<UserRow>> {
@@ -77,6 +87,25 @@ pub async fn effective_perms(pool: &PgPool, user_id: Uuid) -> sqlx::Result<Vec<S
     .fetch_all(pool)
     .await?;
     Ok(rows.into_iter().map(|(k,)| k).collect())
+}
+
+/// The tenant's members with their assigned role ids.
+pub async fn list_users(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<UserListRow>> {
+    let users: Vec<(Uuid, String, bool)> = sqlx::query_as(
+        "SELECT id, email, is_master FROM users WHERE tenant_id = $1 ORDER BY email",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+    let mut out = Vec::with_capacity(users.len());
+    for (id, email, is_master) in users {
+        let roles: Vec<(Uuid,)> = sqlx::query_as("SELECT role_id FROM user_roles WHERE user_id = $1")
+            .bind(id)
+            .fetch_all(pool)
+            .await?;
+        out.push(UserListRow { id, email, is_master, role_ids: roles.into_iter().map(|(r,)| r).collect() });
+    }
+    Ok(out)
 }
 
 pub async fn grant_role(pool: &PgPool, user_id: Uuid, role_id: Uuid) -> sqlx::Result<()> {

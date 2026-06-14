@@ -121,7 +121,16 @@ pub async fn google_callback(State(st): State<AppState>, Query(q): Query<Callbac
     };
 
     match resolve_user(&st, &info).await {
-        Ok(resp) => Json(resp).into_response(),
+        // For the SPA flow, bounce back to the frontend carrying the token in the URL
+        // fragment (so it never reaches a server log). Falls back to JSON when no
+        // frontend redirect is configured (curl / dev probing).
+        Ok(resp) => match std::env::var("OAUTH_SUCCESS_REDIRECT").ok().filter(|s| !s.is_empty()) {
+            Some(base) => {
+                let url = format!("{}#token={}", base.trim_end_matches('/'), urlencoding::encode(&resp.token));
+                Redirect::temporary(&url).into_response()
+            }
+            None => Json(resp).into_response(),
+        },
         Err(e) => {
             log::error!("google callback: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, "login failed").into_response()

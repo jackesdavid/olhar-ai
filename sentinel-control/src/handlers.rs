@@ -25,7 +25,7 @@ pub fn router() -> Router<AppState> {
         .route("/permissions", get(list_permissions))
         .route("/roles", get(list_roles).post(create_role))
         .route("/roles/:id/permissions", get(get_role_perms).put(set_role_perms))
-        .route("/users", post(invite_user))
+        .route("/users", get(list_users).post(invite_user))
         .route("/users/:id/roles", put(set_user_roles))
         .route("/admin/tenants", get(list_tenants).post(create_tenant))
         .route("/admin/tenants/:id/assume", post(assume_tenant))
@@ -204,6 +204,12 @@ async fn set_role_perms(UserClaims(c): UserClaims, State(st): State<AppState>, P
     auth::require(&c, "roles.manage")?;
     store::set_role_permissions(&st.pool, id, &b.keys).await.map_err(db_err)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_users(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<store::UserListRow>>, ApiErr> {
+    auth::require(&c, "users.manage")?;
+    let tid = tenant_ctx(&c)?;
+    Ok(Json(store::list_users(&st.pool, tid).await.map_err(db_err)?))
 }
 
 #[derive(Deserialize)]
