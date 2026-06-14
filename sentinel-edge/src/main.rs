@@ -25,13 +25,11 @@ use state::AppState;
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://sentinel:sentinel@localhost/sentinel".to_string());
     let bind = std::env::var("EDGE_BIND").unwrap_or_else(|_| "0.0.0.0:8788".to_string());
 
-    // Boot synchronously, before any tokio runtime (Db::connect drives its own
-    // runtime with block_on — nesting would panic). Retry until Postgres is up.
-    let state = boot_with_retry(&database_url);
+    // Config-light boot: pull the camera list from the control plane (cache fallback).
+    // No database — the appliance carries no Postgres.
+    let state = AppState::boot();
 
     if state.own_go2rtc {
         go2rtc::respawn(&state);
@@ -60,18 +58,6 @@ fn main() {
         }
     });
     log::info!("sentinel-edge shut down");
-}
-
-fn boot_with_retry(database_url: &str) -> std::sync::Arc<AppState> {
-    loop {
-        match AppState::boot(database_url) {
-            Ok(state) => return state,
-            Err(e) => {
-                log::warn!("boot failed ({e}); retrying in 2s…");
-                std::thread::sleep(std::time::Duration::from_secs(2));
-            }
-        }
-    }
 }
 
 async fn shutdown_signal() {

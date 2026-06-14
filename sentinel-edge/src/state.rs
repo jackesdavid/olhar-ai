@@ -1,39 +1,45 @@
-//! Shared edge state + go2rtc lifecycle. The device list is the edge's view of which
-//! cameras exist (read from the shared Postgres); go2rtc holds the persistent RTSP
-//! connections it grabs frames from.
+//! Shared edge state + go2rtc lifecycle. The edge is **config-light**: it has no
+//! local database. Its camera list is pulled from the control plane (`CONTROL_URL`)
+//! and cached to a local file so it survives a control-plane outage / offline boot.
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use app_core::db::Db;
-use app_core::devices::{self, Device};
+use app_core::devices::Device;
 
 /// Everything the HTTP handlers + go2rtc manager share.
 pub struct AppState {
-    pub db: Db,
-    /// The edge's device list (resolved by ip on each snapshot), refreshed from
-    /// Postgres at boot and on `POST /reload`.
+    /// The control-plane base URL the camera list is pulled from.
+    pub control_url: String,
+    /// The edge's cached camera list (resolved by ip on each snapshot), refreshed
+    /// from the control plane at boot and on `POST /reload`.
     pub devices: Mutex<Vec<Device>>,
-    /// The managed go2rtc child (when the edge owns the sidecar — `EDGE_OWN_GO2RTC`).
+    /// Where the camera list is cached on disk (offline fallback).
+    pub cache_path: PathBuf,
+    /// The managed go2rtc child (when the edge owns the sidecar).
     pub go2rtc: Mutex<Option<Child>>,
-    /// Whether the edge owns/spawns go2rtc (vs. using one already on :1984).
     pub own_go2rtc: bool,
-    /// Where to write the generated go2rtc config + find the binary.
     pub go2rtc_config: PathBuf,
     pub go2rtc_bin: PathBuf,
 }
 
 impl AppState {
-    /// Connect to Postgres (applies migrations) and hydrate the device list.
-    pub fn boot(database_url: &str) -> Result<Arc<AppState>, String> {
-        let db = Db::connect(database_url).map_err(|e| format!("connect Postgres: {e}"))?;
-        log::info!("Postgres connected; migrations applied");
-        let devices = devices::repo::load(&db);
-        log::info!("Loaded {} device(s) from Postgres", devices.len());
+    /// Build the edge: pull the camera list from the control plane (falling back to
+    /// the local cache when it's unreachable). No database connection.
+    pub fn boot() -> Arc<AppState> {
+        let control_url = std::env::var("CONTROL_URL")
+            .ok()
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "http://127.0.0.1:8790".to_string());
+        let cache_path = std::env::var("EDGE_CACHE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("cameras-cache.json"));
 
-        // The edge IS the camera host, so it owns go2rtc by default. Set
-        // EDGE_OWN_GO2RTC=0 only when another process on the box already serves :1984
-        // (e.g. running alongside the desktop app in dev).
+        let devices = load_cameras(&control_url, &cache_path);
+        log::info!("Edge has {} camera(s) (control={control_url})", devices.len());
+
         let own_go2rtc = std::env::var("EDGE_OWN_GO2RTC")
             .map(|v| !matches!(v.trim(), "0" | "false" | "no"))
             .unwrap_or(true);
@@ -44,25 +50,25 @@ impl AppState {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("go2rtc"));
 
-        let state = Arc::new(AppState {
-            db,
+        Arc::new(AppState {
+            control_url,
             devices: Mutex::new(devices),
+            cache_path,
             go2rtc: Mutex::new(None),
             own_go2rtc,
             go2rtc_config,
             go2rtc_bin,
-        });
-        Ok(state)
+        })
     }
 
-    /// Resolve a saved device by exact IP.
+    /// Resolve a saved camera by exact IP.
     pub fn device_by_ip(&self, ip: &str) -> Option<Device> {
         self.devices.lock().unwrap().iter().find(|d| d.ip == ip).cloned()
     }
 
-    /// Re-read the device list from Postgres (and, if owned, restart go2rtc to match).
+    /// Re-pull the camera list from the control plane (and restart go2rtc if owned).
     pub fn reload(&self) -> usize {
-        let fresh = devices::repo::load(&self.db);
+        let fresh = load_cameras(&self.control_url, &self.cache_path);
         let n = fresh.len();
         *self.devices.lock().unwrap() = fresh;
         if self.own_go2rtc {
@@ -70,4 +76,39 @@ impl AppState {
         }
         n
     }
+}
+
+/// Pull the camera list from the control plane; on success refresh the on-disk cache,
+/// on failure fall back to the cache (so an offline boot still serves the last list).
+fn load_cameras(control_url: &str, cache_path: &PathBuf) -> Vec<Device> {
+    match fetch_cameras(control_url) {
+        Ok(devices) => {
+            if let Ok(json) = serde_json::to_vec_pretty(&devices) {
+                if let Err(e) = std::fs::write(cache_path, json) {
+                    log::warn!("could not write camera cache {cache_path:?}: {e}");
+                }
+            }
+            devices
+        }
+        Err(e) => {
+            log::warn!("control plane unreachable ({e}); using cached camera list");
+            std::fs::read(cache_path)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<Vec<Device>>(&b).ok())
+                .unwrap_or_default()
+        }
+    }
+}
+
+/// GET `{control_url}/config/cameras` → the camera list.
+fn fetch_cameras(control_url: &str) -> Result<Vec<Device>, String> {
+    let url = format!("{control_url}/config/cameras");
+    ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .get(&url)
+        .call()
+        .map_err(|e| format!("{e}"))?
+        .into_json::<Vec<Device>>()
+        .map_err(|e| format!("parse cameras: {e}"))
 }

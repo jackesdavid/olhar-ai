@@ -1,0 +1,13 @@
+# Root workspace for the detachable cloud services. They share ONE target/ dir so
+# the heavy `app-core` (tract/ONNX, image, sqlx) builds once instead of once per
+# crate. They remain independently shippable binaries; `app-core` is pulled in by
+# path from the separate `app/` workspace (the Tauri shell), which is intentionally
+# NOT a member here.
+[workspace]
+members = [
+    "sentinel-flow",
+    "sentinel-edge",
+    "sentinel-gateway",
+    "sentinel-control",
+]
+resolver = "2"

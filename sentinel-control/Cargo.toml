@@ -1,0 +1,19 @@
+[package]
+name = "sentinel-control"
+version = "0.1.0"
+edition = "2021"
+description = "The control plane. Owns the central source of truth (cameras now; tenants, boxes, enrollment broker later) and serves it to edge appliances so they can be config-light — no Postgres on the box. Keeps the streaming gateway thin (media only)."
+
+# Standalone crate (NOT in the app/ workspace). Links app-core for the device model +
+# the shared Db.
+[dependencies]
+app-core = { path = "../app/crates/core" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+env_logger = "0.11"
