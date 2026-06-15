@@ -37,6 +37,9 @@ jobs:
           - service: sentinel-gateway
             file: Dockerfile
             build-args: PACKAGE=sentinel-gateway
+          - service: sentinel-flow
+            file: Dockerfile
+            build-args: PACKAGE=sentinel-flow
           - service: sentinel-app
             file: deploy/app/Dockerfile
             build-args: ""
@@ -86,6 +89,6 @@ jobs:
           script: |
             cd /ibbf
             sed -i -E "s/(LATEST_EDGE_VERSION: ).*/\1\"${EDGE_VERSION}\"/" docker-compose.sentinel.yml
-            docker compose -f docker-compose.yml -f docker-compose.sentinel.yml pull sentinel-control sentinel-gateway sentinel-app sentinel-landing
-            docker compose -f docker-compose.yml -f docker-compose.sentinel.yml up -d sentinel-control sentinel-gateway sentinel-app sentinel-landing
+            docker compose -f docker-compose.yml -f docker-compose.sentinel.yml pull sentinel-control sentinel-gateway sentinel-flow sentinel-app sentinel-landing
+            docker compose -f docker-compose.yml -f docker-compose.sentinel.yml up -d sentinel-control sentinel-gateway sentinel-flow sentinel-app sentinel-landing
             docker image prune -f

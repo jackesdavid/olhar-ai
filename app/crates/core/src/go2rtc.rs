@@ -12,6 +12,17 @@ use crate::onvif::client::rtsp_url_with_creds;
 /// The go2rtc sidecar's local HTTP API (also the WebRTC/MSE player + frame API).
 pub const BASE: &str = "http://127.0.0.1:1984";
 
+/// The go2rtc API base for frame grabs. Defaults to the local sidecar ([`BASE`]); override
+/// with `GO2RTC_URL` so an off-box consumer (e.g. `sentinel-flow` on the VPS) can reach a
+/// remote edge's go2rtc over the tailnet (`https://<edge-host>`, served by `tailscale serve`).
+pub fn base() -> String {
+    std::env::var("GO2RTC_URL")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| BASE.to_string())
+}
+
 /// Build a go2rtc YAML config from the device list. For each device with a non-empty
 /// `rtsp_url` we emit up to two streams (credentials injected, audio dropped via
 /// `#media=video` for lower latency):
@@ -78,7 +89,7 @@ pub fn stream_name(ip: &str) -> String {
 /// the localhost request fails immediately (connection refused), so callers can fall
 /// back to a from-scratch capture without paying a timeout.
 pub fn frame(ip: &str) -> Result<Vec<u8>, String> {
-    let url = format!("{BASE}/api/frame.jpeg?src={}", stream_name(ip));
+    let url = format!("{}/api/frame.jpeg?src={}", base(), stream_name(ip));
     let resp = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(3))
         .build()

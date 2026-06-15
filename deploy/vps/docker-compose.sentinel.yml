@@ -125,5 +125,31 @@ services:
       - "traefik.http.routers.sentinel-gw.tls.certresolver=letsencrypt"
       - "traefik.http.services.sentinel-gw.loadbalancer.server.port=8789"
 
+  sentinel-flow:
+    # The always-on workflow engine + trigger poller. Internal only (no Traefik — its REST
+    # is unauthenticated; the poller fires Cron/OnNewAlert + event workflows on its own).
+    # Camera nodes reach the tenant edge's go2rtc over the tailnet (GO2RTC_URL), the same
+    # way the gateway does; face recognition uses the in-cluster CPU sidecar.
+    image: ghcr.io/jackesdavid/sentinel-flow:latest
+    container_name: sentinel-flow
+    restart: always
+    env_file:
+      - sentinel.env   # TELEGRAM_* fallback, etc.
+    environment:
+      DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
+      FLOW_BIND: 0.0.0.0:8787
+      AI_SERVICE_URL: http://sentinel-ai:8000/runsync
+      # The tenant edge's go2rtc over the tailnet (frame grabs for camera/vision nodes).
+      GO2RTC_URL: https://__EDGE_HOST__
+      # TENANT_ID defaults to the single/default tenant; set it to the edge's tenant for
+      # multi-tenant camera workflows.
+    extra_hosts:
+      - "__EDGE_HOST__:__EDGE_TS_IP__"
+    depends_on:
+      sentinel-postgres:
+        condition: service_healthy
+      sentinel-ai:
+        condition: service_started
+
 volumes:
   sentinel_pgdata:
