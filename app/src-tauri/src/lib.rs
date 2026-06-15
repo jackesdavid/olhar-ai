@@ -283,6 +283,7 @@ pub fn run() {
             features::workflows::remove_node,
             features::workflows::move_node,
             features::workflows::set_node_config,
+            features::workflows::set_node_memoize,
             features::workflows::add_edge,
             features::workflows::remove_edge,
             features::workflows::run_graph,

@@ -126,7 +126,9 @@ pub fn spawn_graph_run(state: &Arc<AppState>, graph_id: u32) {
                 serde_json::json!({ "graph": graph_id, "node": nid, "label": label, "message": msg, "ms": ms as u64 }),
             );
         };
-        let result = workflows::run_dag_with(&graph, &ctx, &mut on_node, &mut on_log);
+        let emit_state = Arc::clone(&state);
+        let mut emit = |ev: &str| fire_event(&emit_state, graph_id, ev.to_string());
+        let result = workflows::run_dag_eventful(&graph, &ctx, &mut on_node, &mut on_log, &mut emit);
         drop(ctx); // closes the UI channel → its drain thread ends
         let _ = drain.join();
 
@@ -162,6 +164,60 @@ pub fn spawn_graph_run(state: &Arc<AppState>, graph_id: u32) {
             state.engine.lock().unwrap().on_spawn(graph_id);
             spawn_graph_run(&state, graph_id);
         }
+    });
+}
+
+/// Fire an in-graph event: (re)run the matching `OnEvent` handler subtree as a decoupled,
+/// concurrent sub-run — UNLESS that `(graph, event)` handler is already running, in which
+/// case the fire is dropped (coalesced). This is the async "skip if the path is still
+/// running" behavior `EmitEvent` provides. Nested `EmitEvent`s inside a handler recurse here.
+pub fn fire_event(state: &Arc<AppState>, graph_id: u32, event: String) {
+    // Resolve the subscriber; no `OnEvent` for this name → nothing to do.
+    let (graph, entry) = {
+        let s = state.store.lock().unwrap();
+        let Some(g) = s.graph(graph_id) else { return };
+        match workflows::on_event_node(g, &event) {
+            Some(entry) => (g.clone(), entry),
+            None => return,
+        }
+    };
+    // Guard: one handler run per (graph, event) at a time — coalesce-drop.
+    let key = (graph_id, event.clone());
+    {
+        let mut guard = state.event_runs.lock().unwrap();
+        if !guard.insert(key.clone()) {
+            log::debug!("event '{event}' (graph {graph_id}) dropped — handler still running");
+            return;
+        }
+    }
+
+    let state = Arc::clone(state);
+    std::thread::spawn(move || {
+        events::publish(&state.events, "workflow-event", serde_json::json!({ "graph": graph_id, "event": event }));
+        let (ctx, drain) = build_run_context(&state);
+        let prog = Arc::clone(&state);
+        let mut on_node = |nid: u32| {
+            events::publish(&prog.events, "workflow-node", serde_json::json!({ "graph": graph_id, "node": nid }));
+        };
+        let log_state = Arc::clone(&state);
+        let log_graph = graph.clone();
+        let mut on_log = |nid: u32, msg: &str, ms: u128| {
+            let label = log_graph.node(nid).map(|n| n.kind.label()).unwrap_or("node");
+            events::publish(
+                &log_state.events,
+                "workflow-log",
+                serde_json::json!({ "graph": graph_id, "node": nid, "label": label, "message": msg, "ms": ms as u64 }),
+            );
+        };
+        let emit_state = Arc::clone(&state);
+        let mut emit = |ev: &str| fire_event(&emit_state, graph_id, ev.to_string());
+        let result = workflows::run_subpath_eventful(&graph, &ctx, entry, &mut on_node, &mut on_log, &mut emit);
+        drop(ctx);
+        let _ = drain.join();
+        if let Err(e) = &result {
+            log::warn!("event handler '{event}' (graph {graph_id}) failed: {e}");
+        }
+        state.event_runs.lock().unwrap().remove(&key);
     });
 }
 

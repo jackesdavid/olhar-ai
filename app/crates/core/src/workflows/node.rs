@@ -201,6 +201,10 @@ pub fn run_node(
         NodeKind::MotionDetection => run_motion_detection(config, inputs),
         NodeKind::PersonDetection => run_person_detection(inputs, sys),
         NodeKind::RecognizePerson => run_recognize_person(config, inputs, sys),
+        // EmitEvent/OnEvent are exec-flow markers: the engine handles the event fire
+        // (spawning the guarded sub-run) and the OnEvent entry, like the If/ShowImage
+        // special-cases. Here they're no-ops that just pass exec through.
+        NodeKind::EmitEvent | NodeKind::OnEvent => Ok(PortValues::new()),
         NodeKind::Print => run_print(config, inputs, sys),
         // ShowImage is a debug sink whose only effect — mirroring its input frame to
         // the editor — is driven by the engine, which owns the node id the UI needs to
@@ -346,6 +350,14 @@ pub fn debug_summary(
             } else {
                 "no match".into()
             }
+        }
+        NodeKind::EmitEvent => {
+            let ev = config.get("event").and_then(|v| v.as_str()).unwrap_or("");
+            format!("emit '{ev}'")
+        }
+        NodeKind::OnEvent => {
+            let ev = config.get("event").and_then(|v| v.as_str()).unwrap_or("");
+            format!("on '{ev}'")
         }
         NodeKind::ShowImage => {
             let bytes = inputs.get("image").and_then(PortValue::as_image).map_or(0, <[u8]>::len);

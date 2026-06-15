@@ -54,7 +54,7 @@
     outputs: CatPort[];
     default_config: Record<string, unknown>;
   };
-  type Node = { id: number; kind: string; x: number; y: number; config: Record<string, unknown> };
+  type Node = { id: number; kind: string; x: number; y: number; config: Record<string, unknown>; memoize?: boolean };
   type Edge = { from: number; from_port: string; to: number; to_port: string };
   type Trigger = "Manual" | { Cron: { every_secs: number } } | { OnNewAlert: { min_level: string } };
   type Concurrency =
@@ -843,6 +843,11 @@
   async function saveNodeConfig(n: Node, config: Record<string, unknown>) {
     if (!graph) return;
     await data.setNodeConfig(graph.id, n.id, config);
+    await reload();
+  }
+  async function saveNodeMemoize(n: Node, memoize: boolean) {
+    if (!graph) return;
+    await data.setNodeMemoize(graph.id, n.id, memoize);
     await reload();
   }
   // Pick an image file from disk for an image port (stored as a path literal).
@@ -1803,6 +1808,21 @@
                   {/each}
                 </div>
               {/if}
+              <!-- Memoize: cache the node's output for the run (default) vs recompute each
+                   time it's reached. Turn OFF for loop bodies / live sources so loops iterate. -->
+              <div class="flex items-center justify-between gap-2 border-t border-border pt-2.5">
+                <Label
+                  class="flex items-center gap-1.5 text-xs text-muted-foreground"
+                  title="On: cache this node's output for the run and reuse it. Off: recompute every time the node runs — required for loop bodies and live sources (e.g. Get current frame)."
+                >
+                  Memoize output
+                </Label>
+                <Switch
+                  checked={selectedNode.memoize !== false}
+                  disabled={editLocked}
+                  onCheckedChange={(v) => saveNodeMemoize(selectedNode, v)}
+                />
+              </div>
             </div>
           {:else}
             <div class="rounded-xl border border-dashed border-border p-4 text-center text-xs text-muted-foreground">

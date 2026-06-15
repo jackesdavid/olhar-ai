@@ -14,6 +14,13 @@ use crate::alerts::{Alert, AlertLevel};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
+/// Hard ceiling on node EXECUTIONS in a single run — the backstop against an infinite
+/// loop (a `memoize=false` cycle / event storm). Far above any real acyclic graph, so it
+/// never trips on a normal DAG. Exceeding it fails the run with a clear error.
+pub const WF_MAX_STEPS: u32 = 10_000;
+/// Wall-clock ceiling per run — covers `Wait`-heavy loops that stay under the step cap.
+pub const WF_MAX_RUNTIME: Duration = Duration::from_secs(60);
+
 /// Run the whole graph once in topological order. Each node runs at most once; inputs
 /// resolve from upstream outputs (wired edges) else config literals; stops on first error.
 pub fn run_dag(graph: &Graph, sys: &ToolContext) -> Result<HashMap<u32, PortValues>, String> {
@@ -30,61 +37,210 @@ pub fn run_dag_with(
     on_node: &mut dyn FnMut(u32),
     on_log: &mut dyn FnMut(u32, &str, u128),
 ) -> Result<HashMap<u32, PortValues>, String> {
-    let order = graph.topo_order()?;
-    // Unless the graph opts in (`run_orphans`), only nodes wired into the graph
-    // participate in a run — a node with no edges (in or out) is an orphan on the
-    // canvas; running it would just do work whose output goes nowhere, so skip it
-    // (and don't highlight it as executing).
-    let connected: std::collections::HashSet<u32> = if graph.run_orphans {
-        order.iter().copied().collect()
+    run_driver(graph, sys, true, &HashSet::new(), on_node, on_log, &mut |_| {})
+}
+
+/// Like [`run_dag_with`], but `emit(event)` is called whenever an `EmitEvent` node fires,
+/// so the host can spawn a decoupled, guarded sub-run of the matching `OnEvent` subtree
+/// (see [`run_subpath_eventful`]). `run_dag`/`run_dag_with` pass a no-op emit.
+pub fn run_dag_eventful(
+    graph: &Graph,
+    sys: &ToolContext,
+    on_node: &mut dyn FnMut(u32),
+    on_log: &mut dyn FnMut(u32, &str, u128),
+    emit: &mut dyn FnMut(&str),
+) -> Result<HashMap<u32, PortValues>, String> {
+    run_driver(graph, sys, true, &HashSet::new(), on_node, on_log, emit)
+}
+
+/// Run ONLY the subtree rooted at `entry` (an `OnEvent` node) — the body of a fired event,
+/// as its own decoupled run. Loops + nested `EmitEvent`s inside the handler work the same.
+pub fn run_subpath_eventful(
+    graph: &Graph,
+    sys: &ToolContext,
+    entry: u32,
+    on_node: &mut dyn FnMut(u32),
+    on_log: &mut dyn FnMut(u32, &str, u128),
+    emit: &mut dyn FnMut(&str),
+) -> Result<HashMap<u32, PortValues>, String> {
+    let mut forced = HashSet::new();
+    forced.insert(entry);
+    run_driver(graph, sys, false, &forced, on_node, on_log, emit)
+}
+
+/// Find the `OnEvent` node subscribing to `event`, if any (first match in node order).
+pub fn on_event_node(graph: &Graph, event: &str) -> Option<u32> {
+    graph.nodes.iter().find(|n| {
+        n.kind == NodeKind::OnEvent
+            && n.config.get("event").and_then(|v| v.as_str()) == Some(event)
+    }).map(|n| n.id)
+}
+
+/// Multi-epoch work-list scheduler (replaces the old single `topo_order()` sweep).
+///
+/// Each epoch is a forward, settling Kahn pass over the **ordering edges** (all distinct
+/// `(from,to)` pairs MINUS the exec back-edges) — so nodes run producer-before-consumer
+/// exactly as `topo_order` did, but loops are possible: an exec back-edge that fires
+/// re-enters its target on the NEXT epoch. `outputs`/`ran` persist across epochs (so
+/// `memoize=true` nodes keep their value); a step + wall-clock budget bounds runaway loops.
+/// `seed_entries` activates natural entry nodes (a normal run); `initial_forced` seeds a
+/// sub-run at a specific node. With no back-edges + entry seeding this is a single epoch
+/// identical to the old behavior.
+#[allow(clippy::too_many_arguments)]
+fn run_driver(
+    graph: &Graph,
+    sys: &ToolContext,
+    seed_entries: bool,
+    initial_forced: &HashSet<u32>,
+    on_node: &mut dyn FnMut(u32),
+    on_log: &mut dyn FnMut(u32, &str, u128),
+    emit: &mut dyn FnMut(&str),
+) -> Result<HashMap<u32, PortValues>, String> {
+    let connected: HashSet<u32> = if graph.run_orphans {
+        graph.nodes.iter().map(|n| n.id).collect()
     } else {
         graph.edges.iter().flat_map(|e| [e.from, e.to]).collect()
     };
+    let back = graph.back_edges();
+
+    // Ordering indegree + adjacency over DISTINCT non-back `(from,to)` pairs (same de-dup
+    // as `topo_order`), so the forward graph is acyclic.
+    let mut indeg_tmpl: HashMap<u32, usize> = graph.nodes.iter().map(|n| (n.id, 0)).collect();
+    let mut adj: HashMap<u32, Vec<u32>> = graph.nodes.iter().map(|n| (n.id, Vec::new())).collect();
+    let mut seen_pair = HashSet::new();
+    for e in &graph.edges {
+        if back.contains(&(e.from, e.to)) {
+            continue;
+        }
+        if seen_pair.insert((e.from, e.to)) {
+            if let Some(v) = adj.get_mut(&e.from) {
+                v.push(e.to);
+            }
+            if let Some(d) = indeg_tmpl.get_mut(&e.to) {
+                *d += 1;
+            }
+        }
+    }
+
     let mut outputs: HashMap<u32, PortValues> = HashMap::new();
-    // Live exec output pins published so far — `(node_id, out_pin_name)`. Drives
-    // conditional execution: a node activates only when fed by a live exec source.
+    let mut ran: HashSet<u32> = HashSet::new();
+    let mut steps: u32 = 0;
+    let run_started = Instant::now();
+
+    let mut reentries = forward_epoch(
+        graph, sys, &indeg_tmpl, &adj, &back, &connected, seed_entries, initial_forced,
+        &mut outputs, &mut ran, &mut steps, run_started, on_node, on_log, emit,
+    )?;
+    // Later epochs: re-enter loops at the back-edge targets until none fire (or budget hits).
+    while !reentries.is_empty() {
+        let forced: HashSet<u32> = reentries.into_iter().collect();
+        reentries = forward_epoch(
+            graph, sys, &indeg_tmpl, &adj, &back, &connected, false, &forced,
+            &mut outputs, &mut ran, &mut steps, run_started, on_node, on_log, emit,
+        )?;
+    }
+    Ok(outputs)
+}
+
+/// One forward Kahn pass over the ordering (non-back) edges. `seed_entries` activates the
+/// natural entry nodes (epoch 0 only); `forced` activates loop re-entry targets. Returns
+/// the back-edge targets that fired this epoch (the next epoch's re-entry points).
+#[allow(clippy::too_many_arguments)]
+fn forward_epoch(
+    graph: &Graph,
+    sys: &ToolContext,
+    indeg_tmpl: &HashMap<u32, usize>,
+    adj: &HashMap<u32, Vec<u32>>,
+    back: &HashSet<(u32, u32)>,
+    connected: &HashSet<u32>,
+    seed_entries: bool,
+    forced: &HashSet<u32>,
+    outputs: &mut HashMap<u32, PortValues>,
+    ran: &mut HashSet<u32>,
+    steps: &mut u32,
+    run_started: Instant,
+    on_node: &mut dyn FnMut(u32),
+    on_log: &mut dyn FnMut(u32, &str, u128),
+    emit: &mut dyn FnMut(&str),
+) -> Result<Vec<u32>, String> {
+    let mut indeg = indeg_tmpl.clone();
+    let mut settled: HashSet<u32> = HashSet::new();
     let mut live_out: HashSet<(u32, String)> = HashSet::new();
-    for nid in order {
+    let mut reentries: Vec<u32> = Vec::new();
+    let total = graph.nodes.len();
+
+    while settled.len() < total {
+        // Earliest unsettled node with ordering-indegree 0 (the `topo_order` tie-break).
+        let Some(nid) = graph
+            .nodes
+            .iter()
+            .map(|n| n.id)
+            .find(|id| !settled.contains(id) && indeg.get(id).copied().unwrap_or(0) == 0)
+        else {
+            break; // remaining nodes are reachable only via a back-edge not seeded this epoch
+        };
+
+        let settle = |settled: &mut HashSet<u32>, indeg: &mut HashMap<u32, usize>| {
+            settled.insert(nid);
+            if let Some(children) = adj.get(&nid) {
+                for c in children {
+                    if let Some(d) = indeg.get_mut(c) {
+                        *d = d.saturating_sub(1);
+                    }
+                }
+            }
+        };
+
         if !connected.contains(&nid) {
+            settle(&mut settled, &mut indeg);
             continue;
         }
         let n = graph.node(nid).ok_or("node vanished mid-run")?;
 
-        // Exec-activation: a node runs if it has NO incoming exec edge (an entry
-        // node — unchanged behaviour for non-branching graphs) OR at least one
-        // incoming exec edge from a LIVE upstream exec output. An `If` lights only
-        // one branch, so the other branch (and its exec-descendants) never activates.
-        let incoming_exec = || graph.edges.iter().filter(|e| e.to == nid && e.to_port == EXEC_IN.name);
-        let mut has_exec_in = false;
+        // Activation: a forced re-entry target is active; otherwise a node with incoming
+        // ORDERING exec edges activates when fed by a live one; a node with none is an
+        // entry node, active only when we're seeding entries (epoch 0). An `If` lights one
+        // branch, gating the other off — unchanged.
+        let mut has_ord_exec = false;
         let mut fed_live = false;
-        for e in incoming_exec() {
-            has_exec_in = true;
+        for e in graph
+            .edges
+            .iter()
+            .filter(|e| e.to == nid && e.to_port == EXEC_IN.name && !back.contains(&(e.from, nid)))
+        {
+            has_ord_exec = true;
             if live_out.contains(&(e.from, e.from_port.clone())) {
                 fed_live = true;
                 break;
             }
         }
-        if has_exec_in && !fed_live {
-            continue; // gated off by an inactive branch
+        let active = if n.kind == NodeKind::OnEvent {
+            // An OnEvent entry NEVER runs on the normal trigger — only when its event fires
+            // (the host seeds a sub-run with it in `forced`).
+            forced.contains(&nid)
+        } else if forced.contains(&nid) {
+            true
+        } else if has_ord_exec {
+            fed_live
+        } else {
+            seed_entries
+        };
+        if !active {
+            settle(&mut settled, &mut indeg);
+            continue;
         }
 
-        // Resolve inputs from wired upstream outputs (else config literals) BEFORE we
-        // signal/run the node. If a REQUIRED input is wired to a source node that never
-        // ran — gated off by an inactive branch — this node sits on a dead path too:
-        // skip it silently (no UI signal, no run, no exec outputs published) so its
-        // descendants gate off as well. This is distinct from a required input that's
-        // simply never set (no edge and no literal), which still errors at run time as
-        // a real misconfiguration.
+        // Resolve inputs from wired upstream outputs (else config literals); a required
+        // input wired to a source that never ran (gated off) → dead path, skip. (Every
+        // ordering predecessor has settled by now, so `outputs` reflects which ran.)
         let mut inputs = PortValues::new();
         let mut dead = false;
         for port in n.kind.input_ports() {
             if let Some(edge) = graph.edges.iter().find(|e| e.to == nid && e.to_port == port.name) {
                 match outputs.get(&edge.from).and_then(|m| m.get(&edge.from_port)) {
-                    // Wired and the source produced a value (it ran, earlier in topo order).
                     Some(v) => {
                         inputs.insert(port.name.to_string(), v.clone());
                     }
-                    // Wired to a source that never ran → dead path for a required input.
                     None if port.required && !outputs.contains_key(&edge.from) => {
                         dead = true;
                         break;
@@ -96,7 +252,26 @@ pub fn run_dag_with(
             }
         }
         if dead {
-            continue; // a required input came from a skipped branch — don't activate
+            settle(&mut settled, &mut indeg);
+            continue;
+        }
+
+        // A node that already ran with memoize ON, re-entered by a loop: reuse its cached
+        // output and STOP (don't re-publish exec) so a memoized loop terminates after one
+        // pass. Warn so the operator knows to turn memoize off to actually iterate.
+        if ran.contains(&nid) && n.memoize {
+            if graph.debug {
+                on_log(nid, "memoize on for a node on a loop — it won't iterate (turn memoize off to loop)", 0);
+            }
+            settle(&mut settled, &mut indeg);
+            continue;
+        }
+
+        if *steps >= WF_MAX_STEPS {
+            return Err(format!("workflow exceeded step budget ({WF_MAX_STEPS} steps) — possible infinite loop"));
+        }
+        if run_started.elapsed() > WF_MAX_RUNTIME {
+            return Err(format!("workflow exceeded time budget ({}s)", WF_MAX_RUNTIME.as_secs()));
         }
 
         on_node(nid);
@@ -104,26 +279,28 @@ pub fn run_dag_with(
         let o = node::run_node(n.kind, &n.config, &inputs, sys)
             .map_err(|e| format!("{}: {e}", n.kind.label()))?;
         let elapsed_ms = started.elapsed().as_millis();
+        *steps += 1;
 
         if graph.debug {
             on_log(nid, &node::debug_summary(n.kind, &n.config, &inputs, &o), elapsed_ms);
         }
 
-        // ShowImage (debug sink): mirror the resolved input frame to the editor so it
-        // renders inside the node. Done here because the UI needs the node id to place
-        // the preview, which the isolated node executor never sees.
         if n.kind == NodeKind::ShowImage {
             if let Some(jpeg) =
                 inputs.get("image").and_then(PortValue::as_image).and_then(|b| node::to_jpeg(b).ok())
             {
-                let label =
-                    n.config.get("label").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let _ =
-                    sys.ui_tx.send(ToolUiEvent::ShowImage { graph: graph.id, node: nid, label, jpeg });
+                let label = n.config.get("label").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let _ = sys.ui_tx.send(ToolUiEvent::ShowImage { graph: graph.id, node: nid, label, jpeg });
             }
         }
 
-        // Publish this node's live exec outputs so downstream nodes can activate.
+        // EmitEvent: fire the event so the host spawns the (guarded) handler sub-run.
+        if n.kind == NodeKind::EmitEvent {
+            if let Some(ev) = n.config.get("event").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                emit(ev);
+            }
+        }
+
         if n.kind == NodeKind::If {
             let cond = inputs.get("condition").and_then(PortValue::as_bool).unwrap_or(false);
             live_out.insert((nid, if cond { "true" } else { "false" }.to_string()));
@@ -133,8 +310,22 @@ pub fn run_dag_with(
             }
         }
         outputs.insert(nid, o);
+        ran.insert(nid);
+
+        // Any live exec out pin firing along a back-edge re-enters that target next epoch.
+        for e in graph
+            .edges
+            .iter()
+            .filter(|e| e.from == nid && e.to_port == EXEC_IN.name && back.contains(&(nid, e.to)))
+        {
+            if live_out.contains(&(nid, e.from_port.clone())) && !reentries.contains(&e.to) {
+                reentries.push(e.to);
+            }
+        }
+
+        settle(&mut settled, &mut indeg);
     }
-    Ok(outputs)
+    Ok(reentries)
 }
 
 /// What to do when a graph's trigger fires.
@@ -380,6 +571,25 @@ mod tests {
     }
 
     #[test]
+    fn fan_out_runs_the_source_once_and_both_consumers_see_its_value() {
+        // One source (GetLastAlert) feeding two Format consumers: the source must run
+        // exactly once (work-list settles it once) and both consumers read its output.
+        let ctx = test_ctx();
+        ctx.alerts.lock().unwrap().push(alert(1, AlertLevel::Info, "operator", "boom"));
+        let mut g = Graph::new(1, "g");
+        let gla = g.add_node(NodeKind::GetLastAlert, 0, 0);
+        let f1 = g.add_node(NodeKind::Format, 0, 0);
+        let f2 = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(f1).unwrap().config["template"] = json!("1:{p1}");
+        g.node_mut(f2).unwrap().config["template"] = json!("2:{p1}");
+        g.add_edge(gla, "message", f1, "p1").unwrap();
+        g.add_edge(gla, "message", f2, "p1").unwrap();
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert_eq!(outs[&f1]["text"].as_text(), Some("1:boom"));
+        assert_eq!(outs[&f2]["text"].as_text(), Some("2:boom"));
+    }
+
+    #[test]
     fn run_dag_resolves_wired_input_in_topo_order() {
         let ctx = test_ctx();
         ctx.alerts.lock().unwrap().push(alert(1, AlertLevel::Info, "operator", "hi there"));
@@ -456,6 +666,79 @@ mod tests {
         assert!(!outs.contains_key(&if2), "if2 must NOT run — its condition source was gated off");
         assert!(!activated.borrow().contains(&if2), "if2 must not even signal activation");
         assert!(!outs.contains_key(&pr), "if2's downstream stays gated off");
+    }
+
+    #[test]
+    fn exec_back_edge_loops_until_step_budget() {
+        // A -exec-> B -exec(back)-> A, both memoize=false → infinite loop, bounded by the
+        // step budget (it must error, not hang).
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "loop");
+        let a = g.add_node(NodeKind::Format, 0, 0);
+        let b = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(a).unwrap().memoize = false;
+        g.node_mut(b).unwrap().memoize = false;
+        g.add_edge(a, "exec_out", b, "exec_in").unwrap();
+        g.add_edge(b, "exec_out", a, "exec_in").unwrap(); // exec back-edge (allowed)
+        let err = run_dag(&g, &ctx).unwrap_err();
+        assert!(err.contains("step budget"), "got: {err}");
+    }
+
+    #[test]
+    fn memoized_node_on_a_loop_runs_once_and_does_not_error() {
+        // Same loop but memoize ON (default): the re-entered node reuses its output and
+        // stops — the run completes cleanly (warn only), no infinite loop.
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "loop");
+        let a = g.add_node(NodeKind::Format, 0, 0);
+        let b = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(a, "exec_out", b, "exec_in").unwrap();
+        g.add_edge(b, "exec_out", a, "exec_in").unwrap();
+        let outs = run_dag(&g, &ctx).expect("memoized loop must terminate");
+        assert!(outs.contains_key(&a) && outs.contains_key(&b));
+    }
+
+    #[test]
+    fn add_edge_allows_exec_back_edge_but_rejects_data_cycle() {
+        let mut g = Graph::new(1, "g");
+        let a = g.add_node(NodeKind::Format, 0, 0); // text out
+        let b = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(a, "exec_out", b, "exec_in").unwrap();
+        // exec back-edge → allowed (a loop).
+        assert!(g.add_edge(b, "exec_out", a, "exec_in").is_ok());
+        // data back-edge (b.text → a.p1) would create a data cycle → rejected.
+        let err = g.add_edge(b, "text", a, "p1").unwrap_err();
+        assert!(err.contains("data cycle"), "got: {err}");
+    }
+
+    #[test]
+    fn emit_event_calls_the_sink_and_on_event_is_inert_on_a_normal_run() {
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "g");
+        // EmitEvent("seen") (entry) → Print, so it's connected and runs on a normal trigger.
+        let em = g.add_node(NodeKind::EmitEvent, 0, 0);
+        g.node_mut(em).unwrap().config["event"] = json!("seen");
+        let pr = g.add_node(NodeKind::Print, 0, 0);
+        g.add_edge(em, "exec_out", pr, "exec_in").unwrap();
+        // OnEvent("seen") → Format: must NOT run on a normal trigger.
+        let on = g.add_node(NodeKind::OnEvent, 0, 0);
+        g.node_mut(on).unwrap().config["event"] = json!("seen");
+        let fmt = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(on, "exec_out", fmt, "exec_in").unwrap();
+
+        let mut fired: Vec<String> = Vec::new();
+        let outs = run_dag_eventful(&g, &ctx, &mut |_| {}, &mut |_, _, _| {}, &mut |ev| fired.push(ev.to_string())).unwrap();
+        assert_eq!(fired, vec!["seen"], "EmitEvent calls the emit sink");
+        assert!(outs.contains_key(&em), "EmitEvent ran");
+        assert!(!outs.contains_key(&on), "OnEvent must NOT run on a normal trigger");
+        assert!(!outs.contains_key(&fmt), "the OnEvent handler is inert on a normal run");
+
+        // The handler runs only when its event fires (a sub-run seeded at the OnEvent node).
+        let entry = on_event_node(&g, "seen").expect("OnEvent found by name");
+        assert_eq!(entry, on);
+        let outs2 = run_subpath_eventful(&g, &ctx, entry, &mut |_| {}, &mut |_, _, _| {}, &mut |_| {}).unwrap();
+        assert!(outs2.contains_key(&on) && outs2.contains_key(&fmt), "handler subtree runs on its event");
+        assert!(!outs2.contains_key(&em), "the sub-run runs ONLY the handler subtree");
     }
 
     #[test]

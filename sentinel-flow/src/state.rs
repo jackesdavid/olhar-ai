@@ -58,6 +58,10 @@ pub struct AppState {
     /// This pod's warm frame cache — ONE per instance, shared across every graph run so
     /// a high-rate `GetCurrentFrame` reads the latest frame for free (see [`app_core::frames`]).
     pub frame_hub: Arc<app_core::frames::FrameHub>,
+    /// In-flight event handlers, keyed `(graph_id, event_name)`. An `EmitEvent` fire whose
+    /// `OnEvent` handler is already running here is DROPPED (coalesced) — "skip if the path
+    /// is still running". Cleared when the handler sub-run finishes.
+    pub event_runs: Arc<Mutex<std::collections::HashSet<(u32, String)>>>,
 }
 
 impl AppState {
@@ -90,6 +94,7 @@ impl AppState {
             alerts,
             events: events::channel(),
             frame_hub: Arc::new(app_core::frames::FrameHub::new()),
+            event_runs: Arc::new(Mutex::new(std::collections::HashSet::new())),
         }))
     }
 

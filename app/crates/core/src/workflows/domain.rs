@@ -87,6 +87,13 @@ pub enum NodeKind {
     PersonDetection,
     /// Vision: match a face in an image against the enrolled people (pgvector kNN).
     RecognizePerson,
+    /// Events: fire the named event → (re)runs the matching `OnEvent` subtree as a
+    /// decoupled, concurrent sub-run. Dropped while that subtree is already running
+    /// (coalesce). Exec passes through so the main flow continues. Carries no data (v1).
+    EmitEvent,
+    /// Events: entry point for a named event — its `exec_out` drives a handler subtree.
+    /// It NEVER runs on the graph's normal trigger; only when a matching `EmitEvent` fires.
+    OnEvent,
     /// Debug: print a `message` to the editor Console (always) and, unless `on_screen`
     /// is off, flash it as on-screen text over the canvas — like Unreal's Print String.
     Print,
@@ -227,7 +234,7 @@ const EXEC_OUT_DEFAULT: [Port; 1] = [EXEC_OUT];
 const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 17] = [
+    pub const ALL: [NodeKind; 19] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -243,6 +250,8 @@ impl NodeKind {
         NodeKind::MotionDetection,
         NodeKind::PersonDetection,
         NodeKind::RecognizePerson,
+        NodeKind::EmitEvent,
+        NodeKind::OnEvent,
         NodeKind::Print,
         NodeKind::ShowImage,
     ];
@@ -266,6 +275,8 @@ impl NodeKind {
             NodeKind::MotionDetection => "motion_detection",
             NodeKind::PersonDetection => "person_detection",
             NodeKind::RecognizePerson => "recognize_person",
+            NodeKind::EmitEvent => "emit_event",
+            NodeKind::OnEvent => "on_event",
             NodeKind::Print => "print",
             NodeKind::ShowImage => "show_image",
         }
@@ -292,6 +303,8 @@ impl NodeKind {
             NodeKind::MotionDetection => "Motion detection",
             NodeKind::PersonDetection => "Person detection",
             NodeKind::RecognizePerson => "Recognize person",
+            NodeKind::EmitEvent => "Emit event",
+            NodeKind::OnEvent => "On event",
             NodeKind::Print => "Print",
             NodeKind::ShowImage => "Show image",
         }
@@ -305,7 +318,12 @@ impl NodeKind {
             NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame => "Cameras",
             NodeKind::DescribeImage => "AI",
             NodeKind::Format => "Text",
-            NodeKind::Wait | NodeKind::If | NodeKind::Print | NodeKind::ShowImage => "Flow",
+            NodeKind::Wait
+            | NodeKind::If
+            | NodeKind::Print
+            | NodeKind::ShowImage
+            | NodeKind::EmitEvent
+            | NodeKind::OnEvent => "Flow",
             NodeKind::HttpPost => "Network",
             NodeKind::MotionDetection | NodeKind::PersonDetection | NodeKind::RecognizePerson => {
                 "Vision"
@@ -339,6 +357,8 @@ impl NodeKind {
             NodeKind::MotionDetection => &MOTION_IN,
             NodeKind::PersonDetection => &PERSON_DETECTION_IN,
             NodeKind::RecognizePerson => &RECOGNIZE_PERSON_IN,
+            NodeKind::EmitEvent => &NO_PORTS, // exec-only (universal exec_in/out); event name in config
+            NodeKind::OnEvent => &NO_PORTS,   // entry: only an exec_out; activated by the event
             NodeKind::Print => &PRINT_IN,
             NodeKind::ShowImage => &SHOW_IMAGE_IN,
         }
@@ -361,6 +381,8 @@ impl NodeKind {
             NodeKind::MotionDetection => &MOTION_OUT,
             NodeKind::PersonDetection => &PERSON_DETECTION_OUT,
             NodeKind::RecognizePerson => &RECOGNIZE_PERSON_OUT,
+            NodeKind::EmitEvent => &NO_PORTS, // exec passes through, no data out
+            NodeKind::OnEvent => &NO_PORTS,   // drives its subtree via exec_out only
             NodeKind::Print => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::ShowImage => &NO_PORTS, // a sink — exec passes through, no data out
         }
@@ -400,6 +422,8 @@ impl NodeKind {
             NodeKind::MotionDetection => json!({ "sensitivity": "2", "pixel_threshold": "25" }),
             NodeKind::PersonDetection => json!({}),
             NodeKind::RecognizePerson => json!({ "max_distance": "0.4" }),
+            NodeKind::EmitEvent => json!({ "event": "" }),
+            NodeKind::OnEvent => json!({ "event": "" }),
             NodeKind::Print => json!({ "message": "", "on_screen": true, "level": "info" }),
             NodeKind::ShowImage => json!({ "label": "" }),
         }
@@ -420,6 +444,17 @@ pub struct GraphNode {
     /// Static settings + literal fallbacks for unconnected input ports.
     #[serde(default)]
     pub config: Value,
+    /// Whether this node's output is cached for the duration of a run (default) or
+    /// recomputed every time the node is reached. `true` = today's behavior (runs once,
+    /// reused on fan-out). Set `false` for loop bodies and time-varying sources
+    /// (e.g. `GetCurrentFrame`) so re-activation actually re-runs them. Old graphs
+    /// (no field) deserialize to `true`.
+    #[serde(default = "default_true")]
+    pub memoize: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// A typed, directed wire: source node's `from_port` → target node's `to_port`.
@@ -545,7 +580,7 @@ impl Graph {
     pub fn add_node(&mut self, kind: NodeKind, x: i32, y: i32) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
-        self.nodes.push(GraphNode { id, kind, x, y, config: kind.default_config() });
+        self.nodes.push(GraphNode { id, kind, x, y, config: kind.default_config(), memoize: true });
         id
     }
 
@@ -621,8 +656,13 @@ impl Graph {
         if self.edges.iter().any(|e| e.to == to && e.to_port == to_port) {
             return Err(format!("input '{to_port}' is already wired"));
         }
-        if self.reaches(to, from) {
-            return Err("that link would create a cycle".into());
+        // Cycles are allowed ONLY through an **exec** back-edge (a loop): the engine runs
+        // the forward graph in order and re-enters the loop along the back-edge, bounded by
+        // a step/time budget. A **data** cycle has no defined value (the input would depend
+        // on an output not yet produced), so it's still rejected.
+        let is_exec = to_port == EXEC_IN.name;
+        if self.reaches(to, from) && !is_exec {
+            return Err("that link would create a data cycle".into());
         }
         self.edges.push(Edge {
             from,
@@ -677,6 +717,53 @@ impl Graph {
             }
         }
         Ok(order)
+    }
+
+    /// The exec **back-edges** (loop-closing edges) as `(from,to)` node pairs, found by a
+    /// DFS in node order (an edge to a node still on the recursion stack is a back-edge).
+    /// Only exec edges can close a cycle — data cycles are rejected by [`Self::add_edge`].
+    /// The engine excludes these from its forward ordering and uses them to re-enter loops.
+    pub fn back_edges(&self) -> HashSet<(u32, u32)> {
+        let mut color: HashMap<u32, u8> = self.nodes.iter().map(|n| (n.id, 0u8)).collect(); // 0 white · 1 gray (on stack) · 2 black
+        let mut back: HashSet<(u32, u32)> = HashSet::new();
+        for root in self.nodes.iter().map(|n| n.id) {
+            if color.get(&root).copied().unwrap_or(2) != 0 {
+                continue;
+            }
+            color.insert(root, 1);
+            let mut stack: Vec<(u32, Vec<u32>, usize)> = vec![(root, self.children(root), 0)];
+            loop {
+                let action = {
+                    let Some(frame) = stack.last_mut() else { break };
+                    if frame.2 < frame.1.len() {
+                        let c = frame.1[frame.2];
+                        frame.2 += 1;
+                        Some((frame.0, c))
+                    } else {
+                        None
+                    }
+                };
+                match action {
+                    Some((parent, c)) => match color.get(&c).copied().unwrap_or(2) {
+                        0 => {
+                            color.insert(c, 1);
+                            let cc = self.children(c);
+                            stack.push((c, cc, 0));
+                        }
+                        1 => {
+                            back.insert((parent, c)); // child still on the stack → back-edge
+                        }
+                        _ => {}
+                    },
+                    None => {
+                        if let Some((node, _, _)) = stack.pop() {
+                            color.insert(node, 2);
+                        }
+                    }
+                }
+            }
+        }
+        back
     }
 }
 
@@ -820,6 +907,25 @@ mod tests {
         let s = serde_json::to_string(&g).unwrap();
         let g2: Graph = serde_json::from_str(&s).unwrap();
         assert_eq!(g, g2);
+    }
+
+    #[test]
+    fn memoize_defaults_true_for_old_blobs_and_round_trips() {
+        // New nodes default to memoize=true.
+        let mut g = Graph::new(1, "g");
+        let n = g.add_node(NodeKind::Format, 0, 0);
+        assert!(g.node(n).unwrap().memoize, "new node defaults to memoize=true");
+
+        // An old persisted node JSON without the `memoize` key deserializes to true.
+        let old = r#"{"id":7,"kind":"format","x":0,"y":0,"config":{}}"#;
+        let node: GraphNode = serde_json::from_str(old).unwrap();
+        assert!(node.memoize, "missing memoize → true (back-compat)");
+
+        // memoize=false round-trips.
+        g.node_mut(n).unwrap().memoize = false;
+        let s = serde_json::to_string(&g).unwrap();
+        let g2: Graph = serde_json::from_str(&s).unwrap();
+        assert!(!g2.node(n).unwrap().memoize);
     }
 
     #[test]

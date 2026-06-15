@@ -259,6 +259,10 @@ export const data = {
     if (TAURI) return invoke("set_node_config", { graphId, nodeId, config });
     await api.put<void>(`/workflows/${graphId}/nodes/${nodeId}/config`, config);
   },
+  setNodeMemoize: async (graphId: number, nodeId: number, memoize: boolean): Promise<void> => {
+    if (TAURI) return invoke("set_node_memoize", { graphId, nodeId, memoize });
+    await api.put<void>(`/workflows/${graphId}/nodes/${nodeId}/memoize`, { memoize });
+  },
   addEdge: async (graphId: number, from: number, fromPort: string, to: number, toPort: string): Promise<void> => {
     if (TAURI) return invoke("add_edge", { graphId, from, fromPort, to, toPort });
     await api.post<void>(`/workflows/${graphId}/edges`, { from, from_port: fromPort, to, to_port: toPort });

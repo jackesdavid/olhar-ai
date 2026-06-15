@@ -13,5 +13,8 @@ pub use domain::{
     ConcurrencyPolicy, Edge, Graph, GraphNode, NodeKind, Port, PortType, Trigger, Viewport,
     Workflows, EXEC_IN, EXEC_OUT,
 };
-pub use engine::{run_dag, run_dag_with, Fire, WorkflowEngine};
+pub use engine::{
+    on_event_node, run_dag, run_dag_eventful, run_dag_with, run_subpath_eventful, Fire,
+    WorkflowEngine,
+};
 pub use node::{literal_for, run_node, PortValue, PortValues};

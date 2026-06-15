@@ -438,6 +438,25 @@ pub fn set_node_config(
     Ok(())
 }
 
+/// Toggle a node's memoization. `true` (default) caches the node's output for the run;
+/// `false` re-runs it every time it's reached (loop bodies / time-varying sources).
+#[tauri::command]
+pub fn set_node_memoize(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, WfStore>,
+    graph_id: u32,
+    node_id: u32,
+    memoize: bool,
+) -> Result<(), String> {
+    {
+        let mut s = store.lock().unwrap();
+        let g = s.graph_mut(graph_id).ok_or("graph not found")?;
+        g.node_mut(node_id).ok_or("node not found")?.memoize = memoize;
+    }
+    persist(&app, &store);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn add_edge(
     app: tauri::AppHandle,
