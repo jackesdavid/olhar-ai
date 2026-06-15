@@ -45,6 +45,10 @@ pub enum ToolUiEvent {
 
 /// What a tool executor can touch. Built by the Tauri shell from the managed
 /// stores + app-data paths + the resolved Telegram config.
+///
+/// `Clone` is cheap (every field is an `Arc`/handle/`Copy`) and lets the engine run a
+/// node on a watchdog worker thread under a deadline (see `workflows::node::run_node_timed`).
+#[derive(Clone)]
 pub struct ToolContext {
     pub devices: DeviceStore,
     /// Postgres handle for persisting device changes (the in-memory `devices`

@@ -351,8 +351,13 @@ fn forward_epoch(
         }
 
         let started = Instant::now();
-        let o = node::run_node(n.kind, &n.config, &inputs, sys)
-            .map_err(|e| format!("{}: {e}", n.kind.label()))?;
+        // IO-bound kinds run under a per-node deadline (watchdog thread) so a stuck call
+        // aborts the run instead of hanging forever; pure/instant kinds run inline.
+        let o = match node::node_timeout(n.kind, &n.config) {
+            Some(deadline) => node::run_node_timed(n.kind, &n.config, &inputs, sys, deadline),
+            None => node::run_node(n.kind, &n.config, &inputs, sys),
+        }
+        .map_err(|e| format!("{}: {e}", n.kind.label()))?;
         let elapsed_ms = started.elapsed().as_millis();
         *steps += 1;
 

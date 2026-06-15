@@ -252,6 +252,82 @@ pub fn run_node(
     }
 }
 
+/// The per-node execution deadline. `None` ⇒ the node runs inline with no watchdog —
+/// pure/instant kinds (nothing to hang on) and `Wait` (a deliberate sleep that must not be
+/// killed). `Some(d)` ⇒ an IO-bound kind that could block on the network/DB: a sensible
+/// per-kind default, overridable per node via a numeric `timeout_secs` in its config
+/// (`0` disables the watchdog for that node). The engine wraps these via [`run_node_timed`]
+/// so a stuck node aborts the run (and frees its concurrency slot) instead of hanging forever.
+pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duration> {
+    let default_secs = match kind {
+        NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame => 10,
+        NodeKind::PersonDetection | NodeKind::MotionDetection => 30,
+        NodeKind::RecognizePerson => 30,
+        NodeKind::DescribeImage => 65,
+        NodeKind::HttpPost | NodeKind::NotifyRecipient | NodeKind::DeliverAlert => 35,
+        NodeKind::CreateAlert => 15,
+        // Inline (no watchdog): instant/pure nodes + the deliberate `Wait` sleep + the
+        // engine-driven markers (ForEach/EmitEvent/OnEvent/ShowImage).
+        NodeKind::Wait
+        | NodeKind::Format
+        | NodeKind::If
+        | NodeKind::Print
+        | NodeKind::GetRecipient
+        | NodeKind::GetLastAlert
+        | NodeKind::BreakPersonDetection
+        | NodeKind::BreakFaceDetection
+        | NodeKind::EmitEvent
+        | NodeKind::OnEvent
+        | NodeKind::ShowImage
+        | NodeKind::ForEach => return None,
+    };
+    let secs = config_u64(config, "timeout_secs").unwrap_or(default_secs);
+    if secs == 0 {
+        None
+    } else {
+        Some(std::time::Duration::from_secs(secs))
+    }
+}
+
+/// Read a non-negative integer config value, accepting both a JSON number and a numeric
+/// string (the editor often stores config fields as strings).
+fn config_u64(config: &Value, key: &str) -> Option<u64> {
+    config
+        .get(key)
+        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+}
+
+/// Run a node under a hard deadline (see [`node_timeout`]). The body runs on a detached
+/// worker thread; if it doesn't finish within `deadline` we return a timeout error so the
+/// engine aborts the run instead of blocking forever. The orphaned worker keeps running
+/// until its own IO returns — every node's IO path is bounded (frame source / ONVIF /
+/// recognize), so it ends promptly rather than leaking indefinitely.
+pub fn run_node_timed(
+    kind: NodeKind,
+    config: &Value,
+    inputs: &PortValues,
+    sys: &ToolContext,
+    deadline: std::time::Duration,
+) -> Result<PortValues, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let config = config.clone();
+    let inputs = inputs.clone();
+    let sys = sys.clone();
+    std::thread::spawn(move || {
+        // The receiver may already be gone (we timed out) — ignore the send error.
+        let _ = tx.send(run_node(kind, &config, &inputs, &sys));
+    });
+    match rx.recv_timeout(deadline) {
+        Ok(out) => out,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            Err(format!("timed out after {}s", deadline.as_secs()))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err("node worker thread died before returning".into())
+        }
+    }
+}
+
 /// Debug sink: echo `message` to the editor Console (always, regardless of the graph's
 /// debug flag) and — unless `on_screen` is off — flash it over the canvas. Carries the
 /// `level` so the UI can tint both. Returns no data; exec passes through.
@@ -792,6 +868,51 @@ mod tests {
             None,
             tx,
         )
+    }
+
+    #[test]
+    fn node_timeout_maps_io_vs_pure_kinds() {
+        use std::time::Duration;
+        // Pure/instant kinds + the deliberate `Wait` sleep + engine-driven markers ⇒ inline.
+        for k in [NodeKind::Wait, NodeKind::Format, NodeKind::If, NodeKind::Print, NodeKind::ForEach, NodeKind::ShowImage] {
+            assert_eq!(node_timeout(k, &json!({})), None, "{k:?} should run inline");
+        }
+        // IO-bound kinds ⇒ a positive per-kind deadline.
+        assert_eq!(node_timeout(NodeKind::CameraSnapshot, &json!({})), Some(Duration::from_secs(10)));
+        assert_eq!(node_timeout(NodeKind::DescribeImage, &json!({})), Some(Duration::from_secs(65)));
+        assert_eq!(node_timeout(NodeKind::RecognizePerson, &json!({})), Some(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn node_timeout_config_override_wins_and_zero_disables() {
+        use std::time::Duration;
+        // A per-node override (string or number) beats the default…
+        assert_eq!(node_timeout(NodeKind::CameraSnapshot, &json!({ "timeout_secs": "3" })), Some(Duration::from_secs(3)));
+        assert_eq!(node_timeout(NodeKind::CameraSnapshot, &json!({ "timeout_secs": 3 })), Some(Duration::from_secs(3)));
+        // …and 0 disables the watchdog for that node.
+        assert_eq!(node_timeout(NodeKind::CameraSnapshot, &json!({ "timeout_secs": "0" })), None);
+    }
+
+    #[test]
+    fn run_node_timed_aborts_a_slow_node_promptly() {
+        use std::time::{Duration, Instant};
+        // `Wait` sleeps for its configured 5s, but a 200ms deadline must cut it short.
+        let cfg = json!({ "seconds": "5" });
+        let start = Instant::now();
+        let err = run_node_timed(NodeKind::Wait, &cfg, &PortValues::new(), &test_ctx(), Duration::from_millis(200))
+            .unwrap_err();
+        let elapsed = start.elapsed();
+        assert!(err.contains("timed out"), "expected a timeout error, got: {err}");
+        assert!(elapsed < Duration::from_secs(2), "should return at the deadline, not after the 5s body: {elapsed:?}");
+    }
+
+    #[test]
+    fn run_node_timed_returns_a_fast_nodes_output() {
+        use std::time::Duration;
+        // A fast node finishes well within its deadline and returns its real output.
+        let cfg = json!({ "template": "hello" });
+        let out = run_node_timed(NodeKind::Format, &cfg, &PortValues::new(), &test_ctx(), Duration::from_secs(5)).unwrap();
+        assert_eq!(out.get("text").and_then(PortValue::as_text), Some("hello"));
     }
 
     #[test]

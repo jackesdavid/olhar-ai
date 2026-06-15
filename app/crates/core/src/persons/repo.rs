@@ -155,24 +155,39 @@ pub fn recognize(db: &Db, tenant_id: Uuid, embedding: &[f32], k: i64) -> Vec<Rec
     let literal = vector_literal(embedding);
     db.block(async move {
         let t = std::time::Instant::now();
-        let rows = sqlx::query_as::<_, RecognitionMatch>(
-            "SELECT pe.person_id AS person_id, p.name AS name, \
-                    (pe.embedding <=> $1::vector)::float4 AS distance \
-             FROM person_embeddings pe \
-             JOIN persons p ON p.id = pe.person_id AND p.tenant_id = pe.tenant_id \
-             WHERE pe.approved AND pe.tenant_id = $2 ORDER BY distance LIMIT $3",
-        )
-        .bind(&literal)
-        .bind(tenant_id)
-        .bind(k)
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_else(|e| {
-            log::error!("recognize query failed: {e}");
-            Vec::new()
-        });
-        log::info!("recognize: pgvector kNN k={k} → {} rows in {:?}", rows.len(), t.elapsed());
-        rows
+        // Run the kNN inside a short tx that first bounds it with a statement timeout, so a
+        // slow/locked query aborts and releases the connection instead of hanging forever
+        // (scoped per-query via SET LOCAL — never a global pool setting that could break
+        // migrations or long admin queries).
+        let result: Result<Vec<RecognitionMatch>, sqlx::Error> = async {
+            let mut tx = pool.begin().await?;
+            sqlx::query("SET LOCAL statement_timeout = 15000").execute(&mut *tx).await?;
+            let rows = sqlx::query_as::<_, RecognitionMatch>(
+                "SELECT pe.person_id AS person_id, p.name AS name, \
+                        (pe.embedding <=> $1::vector)::float4 AS distance \
+                 FROM person_embeddings pe \
+                 JOIN persons p ON p.id = pe.person_id AND p.tenant_id = pe.tenant_id \
+                 WHERE pe.approved AND pe.tenant_id = $2 ORDER BY distance LIMIT $3",
+            )
+            .bind(&literal)
+            .bind(tenant_id)
+            .bind(k)
+            .fetch_all(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            Ok(rows)
+        }
+        .await;
+        match result {
+            Ok(rows) => {
+                log::info!("recognize: pgvector kNN k={k} → {} rows in {:?}", rows.len(), t.elapsed());
+                rows
+            }
+            Err(e) => {
+                log::error!("recognize query failed: {e}");
+                Vec::new()
+            }
+        }
     })
 }
 

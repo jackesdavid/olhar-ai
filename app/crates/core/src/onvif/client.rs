@@ -2,8 +2,8 @@
 //! resolving the RTSP stream URI, and fetch a JPEG snapshot. Copied verbatim
 //! from the ratatui `src/onvif/client.rs`.
 use std::io::Read;
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use rand::RngCore;
@@ -14,6 +14,9 @@ use super::xml::{
 };
 
 const SOAP_TIMEOUT: Duration = Duration::from_secs(5);
+/// Hard wall-clock cap on the ffmpeg RTSP snapshot fallback — a stalled camera/RTSP pull
+/// is killed rather than allowed to hang the caller (the engine also bounds the node).
+const FFMPEG_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Validate `username`/`password` against the camera at `xaddr`. On success
 /// returns the RTSP stream URI (proof the credentials work). On failure returns
@@ -231,8 +234,12 @@ fn snapshot_from_rtsp(rtsp: &str, user: &str, pass: &str) -> Result<Vec<u8>, Str
     }
     let url = rtsp_url_with_creds(rtsp, user, pass);
 
-    let out = Command::new("ffmpeg")
+    // `-rw_timeout` (µs) makes ffmpeg abort a stalled RTSP socket read on its own; the
+    // wall-clock kill below is a belt-and-suspenders guard in case the handshake itself
+    // wedges, so an unreachable/hung camera can never block the caller forever.
+    let mut child = Command::new("ffmpeg")
         .args([
+            "-rw_timeout", "8000000", // 8s socket I/O timeout (microseconds)
             "-rtsp_transport", "tcp",
             "-i", &url,
             "-frames:v", "1",
@@ -241,16 +248,50 @@ fn snapshot_from_rtsp(rtsp: &str, user: &str, pass: &str) -> Result<Vec<u8>, Str
             "-loglevel", "error",
             "pipe:1",
         ])
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("ffmpeg not available: {e}"))?;
 
-    if !out.status.success() {
-        return Err(format!("ffmpeg failed: {}", String::from_utf8_lossy(&out.stderr)));
+    // Drain stdout/stderr on threads so a full pipe buffer can't deadlock the wait.
+    let mut child_out = child.stdout.take().expect("piped stdout");
+    let mut child_err = child.stderr.take().expect("piped stderr");
+    let out_h = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        let _ = child_out.read_to_end(&mut b);
+        b
+    });
+    let err_h = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        let _ = child_err.read_to_end(&mut b);
+        b
+    });
+
+    let deadline = Instant::now() + FFMPEG_SNAPSHOT_TIMEOUT;
+    let status = loop {
+        match child.try_wait().map_err(|e| format!("ffmpeg wait failed: {e}"))? {
+            Some(s) => break s,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "ffmpeg snapshot timed out after {}s",
+                    FFMPEG_SNAPSHOT_TIMEOUT.as_secs()
+                ));
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    };
+    let stdout = out_h.join().unwrap_or_default();
+    let stderr = err_h.join().unwrap_or_default();
+
+    if !status.success() {
+        return Err(format!("ffmpeg failed: {}", String::from_utf8_lossy(&stderr)));
     }
-    if out.stdout.is_empty() {
+    if stdout.is_empty() {
         return Err("ffmpeg produced no frame".into());
     }
-    Ok(out.stdout)
+    Ok(stdout)
 }
 
 #[cfg(test)]

@@ -65,6 +65,10 @@ impl Db {
         let pool = {
             let _guard = rt.enter();
             PgPoolOptions::new()
+                // Fail fast when the (test) DB is unreachable instead of stalling on the
+                // 30s default — best-effort writes return quickly, well within a node's
+                // watchdog deadline, so timeout tests stay fast and deterministic.
+                .acquire_timeout(std::time::Duration::from_secs(3))
                 .connect_lazy(database_url)
                 .expect("lazy pool")
         };

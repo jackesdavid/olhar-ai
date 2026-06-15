@@ -39,6 +39,15 @@ is computed once per run and reused on fan-out. When **off**, the node **recompu
 time it's reached** — required for **loop bodies** and **live sources** like
 `Get current frame` (otherwise a loop runs once / a frame is stale).
 
+### Per-node timeout (IO nodes)
+Nodes that reach the network/DB (cameras, vision/AI, recognize, HTTP, notify/deliver, create
+alert) run under a **per-node deadline** so a hung call can't stall a run forever — exceeding it
+fails the run with `"<Node> timed out after Ns"` (freeing its concurrency slot). Sensible
+per-kind defaults apply (snapshot/get-frame 10 s, detection/recognize 30 s, HTTP/notify/deliver
+35 s, describe 65 s, create alert 15 s); override per node with a `timeout_secs` config value
+(`0` disables it). Pure/instant nodes and `Wait` (a deliberate sleep) are never watched. This is
+the per-node complement to the run-wide 60 s budget below.
+
 ### Loops
 You may wire an **exec back-edge** (an `exec_out` back to an upstream `exec_in`) to form a
 loop, or use the **For each** node for list iteration. (Data back-edges are rejected — they'd

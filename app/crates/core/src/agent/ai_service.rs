@@ -112,7 +112,10 @@ fn resolve_output(cfg: &AiServiceConfig, agent: &ureq::Agent, mut v: Value) -> R
                     .get("id")
                     .and_then(Value::as_str)
                     .ok_or("AI service job is pending but returned no job id to poll")?;
-                if tries >= 90 {
+                // Cap the cold-start poll (~2 min) so a stuck job can't keep an orphaned
+                // worker thread alive far past its node's deadline. The always-warm VPS
+                // sidecar returns COMPLETED synchronously, so this loop runs zero times there.
+                if tries >= 40 {
                     return Err("AI service timed out — job still pending (cold start?)".into());
                 }
                 tries += 1;
