@@ -63,14 +63,29 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      # The VPS copy of the compose file has real secrets substituted into its
+      # placeholders, so we never overwrite it. But LATEST_EDGE_VERSION (drives the
+      # "update available" badge) must track the edge crate, so we read it from
+      # sentinel-edge/Cargo.toml and sed it on the VPS in place — preserving the
+      # filled-in placeholders while keeping the version honest on every deploy.
+      - name: Read edge version
+        id: edgever
+        run: |
+          VER=$(grep -m1 '^version' sentinel-edge/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
       - name: Pull + restart on the VPS
         uses: appleboy/ssh-action@v1
+        env:
+          EDGE_VERSION: ${{ steps.edgever.outputs.version }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASS }}
+          envs: EDGE_VERSION
           script: |
             cd /ibbf
+            sed -i -E "s/(LATEST_EDGE_VERSION: ).*/\1\"${EDGE_VERSION}\"/" docker-compose.sentinel.yml
             docker compose -f docker-compose.yml -f docker-compose.sentinel.yml pull sentinel-control sentinel-gateway sentinel-app sentinel-landing
             docker compose -f docker-compose.yml -f docker-compose.sentinel.yml up -d sentinel-control sentinel-gateway sentinel-app sentinel-landing
             docker image prune -f
