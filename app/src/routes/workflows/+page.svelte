@@ -462,11 +462,18 @@
     return (k?.outputs ?? []).filter((p) => p.type === "exec");
   }
 
+  // Output data ports stack BELOW the exec-out pins (which occupy the first rows from the
+  // header). Without this a node with >1 exec out (For each: loop_body/completed) overlaps
+  // its data outputs (item/index). Single-exec nodes get offset 0 (unchanged).
+  function outDataOffset(k: CatKind | undefined): number {
+    return Math.max(0, execOutPorts(k).length - 1);
+  }
   // Y where a node's body ends and the optional ShowImage preview begins.
   function portsBottom(n: Node): number {
     const k = catalog[n.kind];
-    const execRows = Math.max(0, execOutPorts(k).length - 1);
-    const rows = Math.max(dataPorts(k, "in").length, dataPorts(k, "out").length, execRows + 1, 1);
+    const execCount = execOutPorts(k).length;
+    const outRows = dataPorts(k, "out").length + outDataOffset(k);
+    const rows = Math.max(dataPorts(k, "in").length, outRows, execCount, 1);
     return HEAD_H + rows * ROW_H;
   }
   // A ShowImage node grows to fit its preview thumbnail once a frame has arrived.
@@ -489,7 +496,8 @@
       return HEAD_H / 2 + Math.max(0, i) * ROW_H;
     }
     const i = dataPorts(catalog[node.kind], side).findIndex((p) => p.name === port);
-    return dataPortY(Math.max(0, i));
+    const off = side === "out" ? outDataOffset(catalog[node.kind]) : 0;
+    return dataPortY(Math.max(0, i) + off);
   }
   // Absolute port Y (for drawing edges between nodes).
   function inPortY(n: Node, port: string) {
@@ -519,8 +527,26 @@
     face: "#fb7185",
     any: "#94a3b8",
   };
-  // The colour of a port (used so a connection follows its data type).
+  // The element colour for an array type (so a ForEach `item` mirrors the wired array).
+  function arrayElementColor(t: PortType): string {
+    switch (t) {
+      case "person_array": return portColor.person;
+      case "face_array": return portColor.face;
+      case "num_array": return portColor.num;
+      case "text_array": return portColor.text;
+      default: return portColor[t] ?? portColor.any; // already an element type, else wildcard
+    }
+  }
+  // The colour of a port (so a connection follows its data type). Special case: a ForEach
+  // `item` output takes the element colour of whatever array is wired into `items` — e.g. a
+  // pink PersonDetection[] in → a pink `item` (and pink outgoing edges).
   function portColorOf(node: Node, port: string, side: "in" | "out"): string {
+    if (node.kind === "for_each" && side === "out" && port === "item") {
+      const e = wiredInto(node.id, "items");
+      const src = e ? graph?.nodes.find((n) => n.id === e.from) : undefined;
+      const srcType = src && e ? portOf(src, e.from_port, "out")?.type : undefined;
+      return srcType ? arrayElementColor(srcType) : portColor.any;
+    }
     const p = portOf(node, port, side);
     return p ? portColor[p.type] : "#52796f";
   }
@@ -1319,15 +1345,17 @@
                     </text>
                   {/each}
 
-                  <!-- output data ports -->
+                  <!-- output data ports (stacked below the exec-out pins) -->
                   {#each dataPorts(k, "out") as p, i}
                     {@const isPending = pending && pending.node === n.id && pending.port === p.name}
+                    {@const dy = dataPortY(i + outDataOffset(k))}
+                    {@const pc = portColorOf(n, p.name, "out")}
                     <circle
                       cx={NODE_W}
-                      cy={dataPortY(i)}
+                      cy={dy}
                       r={isPending ? 6 : 5}
-                      fill={isPending ? portColor[p.type] : "#151c19"}
-                      stroke={portColor[p.type]}
+                      fill={isPending ? pc : "#151c19"}
+                      stroke={pc}
                       stroke-width="2"
                       class="cursor-pointer transition-all"
                       onclick={() => clickOutPort(n, p.name)}
@@ -1335,7 +1363,7 @@
                     />
                     <text
                       x={NODE_W - 11}
-                      y={dataPortY(i) + 3}
+                      y={dy + 3}
                       text-anchor="end"
                       class="pointer-events-none select-none fill-muted-foreground"
                       font-size="10"

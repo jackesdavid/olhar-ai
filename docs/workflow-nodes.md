@@ -81,7 +81,7 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 
 | Node | Inputs | Outputs | Config | Behavior | Sample usage |
 |---|---|---|---|---|---|
-| **Person detection** | `image*` | `person` (bool), `count`, `confidence` %, `persons` (**PersonDetection[]**), `ok` | — | Detects people locally (on-device, no sidecar). `persons` is one detection (box + confidence) per person. | `Get current frame → Person detection → (persons) → For each` |
+| **Person detection** | `image*` | `count`, `confidence` %, `persons` (**PersonDetection[]**), `ok` | — | Detects people locally (on-device, no sidecar). `persons` is one detection (box + confidence) per person — iterate it (a single person = a loop of 1). | `Get current frame → Person detection → (persons) → For each` |
 | **Break person detection** | `person` (Person) | `bbox` (Number[]), `confidence` % | — | Destructures a `PersonDetection` element into its fields (Unreal-style "Break"). | `For each(persons) → item → Break person detection → bbox / confidence` |
 | **Break face detection** | `face` (Face) | `bbox` (Number[]), `confidence` %, `landmarks` (count) | — | Destructures a `FaceDetection` element into its fields. | `For each(faces) → item → Break face detection` |
 | **Recognize person** | `image*` | `person`, `person_id`, `confidence` %, `ok` | `max_distance` (0.4) | Embeds the largest face (AI sidecar) + kNN over enrolled people (pgvector). `ok` = match within threshold. | `Camera snapshot → Recognize person → If(ok) → Notify recipient` |
@@ -114,10 +114,10 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 
 | Node | Inputs | Outputs | Config | Behavior | Sample usage |
 |---|---|---|---|---|---|
-| **If** | `condition*` (bool) | exec: `true` / `false` | — | Routes the run down the true/false exec branch; the other branch is gated off. | `Person detection → If(person) →true Notify recipient` |
+| **If** | `condition*` (bool) | exec: `true` / `false` | — | Routes the run down the true/false exec branch; the other branch is gated off. | `Recognize person → If(ok) →true Notify recipient` |
 | **For each** | `items` (**any array** — `String[]`/`Number[]`/`PersonDetection[]`/…, or a text list) | `item` (the element, any type), `index`; exec: `loop_body` / `completed` | `items` (CSV `a,b` or JSON `["a",1]` when not wired) | Iterates the array **synchronously**: `loop_body` once per element (with `item`+`index`), then `completed` once. Empty → just `completed`. | `Person detection → (persons) → For each →loop_body Break person detection; →completed Print("done")` |
 | **Wait** | — (exec only) | — | `seconds` | Delays the run by N seconds, staying active until it elapses. | `Create alert → Wait(5s) → Deliver alert` |
-| **Emit event** | — (exec only) | — | `event` | Fires a named in-graph event → concurrent guarded `On event` handler; **dropped if that handler is still running**. Exec passes through. | `If(person) → Emit event("seen")` |
+| **Emit event** | — (exec only) | — | `event` | Fires a named in-graph event → concurrent guarded `On event` handler; **dropped if that handler is still running**. Exec passes through. | `If(ok) → Emit event("seen")` |
 | **On event** | — | exec: `exec_out` (entry) | `event` | Entry for a named event. **Never runs on the normal trigger** — only when a matching `Emit event` fires. | `On event("seen") → Get current frame → Recognize person` |
 | **Print** | `message`, `on_screen` (bool) | — | `message`, `on_screen`, `level` | Prints to the editor console (+ on-screen flash unless off). Debug sink. | `Recognize person → Print("Saw {p1}", message=person)` |
 | **Show image** | `image*` | — | `label` | Renders the input frame on the canvas. Debug sink; emits no data. | `Camera snapshot → Show image` |
@@ -133,9 +133,9 @@ Events let a fast path trigger a slower, decoupled handler without blocking it o
    re-acquire its own data (events carry no payload in v1):
    `On event("person_seen") → Get current frame → Recognize person → Notify recipient`.
 2. **Fire it.** On your main flow, add an **Emit event** node with the **same** `event`
-   name on the exec chain, e.g. after an `If`:
-   `Cron 1s → Get current frame (memoize off) → Person detection → If(person) →(true)
-   Emit event("person_seen")`.
+   name on the exec chain, e.g. inside a per-person loop:
+   `Cron 1s → Get current frame (memoize off) → Person detection → (persons) → For each
+   →loop_body Emit event("person_seen")`.
 3. **Behavior at runtime.** Each second the loop emits `person_seen`; the handler runs
    concurrently. If a previous `person_seen` handler is still running, the new fire is
    **dropped** — so detections coalesce instead of queueing.
@@ -158,10 +158,10 @@ Trigger: Cron { every_secs: 1 }, Concurrency: SkipIfRunning
       │ image
       ▼
 [Person detection]
-      │ person (bool)
+      │ persons (PersonDetection[])
       ▼
-[If] ──true──▶ [Emit event "person_seen"]
-      └─false─▶ (idle)
+[For each] ──loop_body──▶ [Emit event "person_seen"]
+      └─completed─▶ (idle)
 
 [On event "person_seen"]
       │ exec
@@ -175,9 +175,9 @@ Trigger: Cron { every_secs: 1 }, Concurrency: SkipIfRunning
 [If ok] ──true──▶ [Notify recipient]  message: "Seen {person}"
 ```
 
-The 1 Hz loop stays cheap (warm frame + local person detection) and only kicks off the
-heavier recognize-and-notify handler when a person is present — and never more than one
-handler at a time.
+The 1 Hz loop stays cheap (warm frame + local person detection); it fires `person_seen`
+per detected person, and the heavier recognize-and-notify handler runs concurrently —
+never more than one at a time (repeat fires coalesce).
 
 ---
 

@@ -239,11 +239,10 @@ const MOTION_OUT: [Port; 3] = [
 
 // Person detection: an image in → whether a person is present (via the AI sidecar).
 const PERSON_DETECTION_IN: [Port; 1] = [p("image", PortType::Image, true)];
-const PERSON_DETECTION_OUT: [Port; 5] = [
-    p("person", PortType::Bool, false),
+const PERSON_DETECTION_OUT: [Port; 4] = [
     p("count", PortType::Num, false),
     p("confidence", PortType::Num, false), // percent 0..100 (top person)
-    p("persons", PortType::PersonArray, false), // one PersonDetection per person
+    p("persons", PortType::PersonArray, false), // one PersonDetection per person — loop this
     p("ok", PortType::Bool, false),
 ];
 

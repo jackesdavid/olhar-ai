@@ -277,7 +277,6 @@ fn run_person_detection(inputs: &PortValues, sys: &ToolContext) -> Result<PortVa
     let confidence = people.iter().map(|p| p.confidence).fold(0.0_f32, f32::max);
     let persons: Vec<PortValue> = people.into_iter().map(PortValue::Person).collect();
     let mut o = PortValues::new();
-    o.insert("person".into(), PortValue::Bool(count > 0));
     o.insert("count".into(), PortValue::Num(count));
     o.insert("confidence".into(), PortValue::Num((confidence * 100.0).round() as i64));
     o.insert("persons".into(), PortValue::List(persons));
@@ -414,13 +413,10 @@ pub fn debug_summary(
                 if flag("moved") { "moved" } else { "still" }
             )
         }
-        NodeKind::PersonDetection => {
-            if flag("person") {
-                format!("{} person(s) ({}% confidence)", num("count").unwrap_or(0), num("confidence").unwrap_or(0))
-            } else {
-                "no person detected".into()
-            }
-        }
+        NodeKind::PersonDetection => match num("count").unwrap_or(0) {
+            0 => "no person detected".into(),
+            c => format!("{c} person(s) ({}% confidence)", num("confidence").unwrap_or(0)),
+        },
         NodeKind::BreakPersonDetection | NodeKind::BreakFaceDetection => {
             format!("bbox + {}% confidence", num("confidence").unwrap_or(0))
         }
