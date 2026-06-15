@@ -129,7 +129,7 @@ pub(crate) fn build_run_context(app: &tauri::AppHandle) -> Option<app_core::agen
         }
     });
 
-    Some(app_core::agent::ToolContext::new_local(
+    let mut ctx = app_core::agent::ToolContext::new_local(
         devices,
         db,
         app_core::tenancy::DEFAULT_TENANT_ID,
@@ -137,7 +137,16 @@ pub(crate) fn build_run_context(app: &tauri::AppHandle) -> Option<app_core::agen
         notif,
         features::notifications::resolve_telegram_config(app),
         tx,
-    ))
+    );
+    // The desktop app is a single instance = one "pod", so its warm-frame hub is a
+    // process-lifetime singleton here in the binary (NOT in app-core, where it would
+    // wrongly become a hidden global shared by the scalable flow pods). Shared across
+    // every embedded graph run so `GetCurrentFrame` reads the latest cached frame.
+    static FRAME_HUB: std::sync::OnceLock<std::sync::Arc<app_core::frames::FrameHub>> =
+        std::sync::OnceLock::new();
+    let hub = FRAME_HUB.get_or_init(|| std::sync::Arc::new(app_core::frames::FrameHub::new()));
+    ctx.frames = std::sync::Arc::new(app_core::ports::WarmFrameSource { hub: hub.clone() });
+    Some(ctx)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

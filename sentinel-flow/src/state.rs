@@ -55,6 +55,9 @@ pub struct AppState {
     /// created by ANY service are seen.
     pub alerts: AlertStore,
     pub events: EventBus,
+    /// This pod's warm frame cache — ONE per instance, shared across every graph run so
+    /// a high-rate `GetCurrentFrame` reads the latest frame for free (see [`app_core::frames`]).
+    pub frame_hub: Arc<app_core::frames::FrameHub>,
 }
 
 impl AppState {
@@ -86,6 +89,7 @@ impl AppState {
             activity: Arc::new(Mutex::new(HashMap::new())),
             alerts,
             events: events::channel(),
+            frame_hub: Arc::new(app_core::frames::FrameHub::new()),
         }))
     }
 

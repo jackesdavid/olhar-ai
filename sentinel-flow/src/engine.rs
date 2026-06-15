@@ -183,7 +183,7 @@ fn build_run_context(state: &Arc<AppState>) -> (ToolContext, std::thread::JoinHa
         }
     });
 
-    let ctx = ToolContext::new_local(
+    let mut ctx = ToolContext::new_local(
         devices,
         state.db.clone(),
         state.tenant_id,
@@ -192,6 +192,9 @@ fn build_run_context(state: &Arc<AppState>) -> (ToolContext, std::thread::JoinHa
         notif_cfg,
         tx,
     );
+    // Swap the default snapshot-only frame source for one backed by THIS pod's shared
+    // warm-frame hub, so `GetCurrentFrame` reads the latest cached frame across runs.
+    ctx.frames = Arc::new(app_core::ports::WarmFrameSource { hub: state.frame_hub.clone() });
     (ctx, drain)
 }
 

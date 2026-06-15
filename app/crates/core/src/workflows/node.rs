@@ -191,6 +191,7 @@ pub fn run_node(
         NodeKind::CreateAlert => run_create_alert(config, inputs, sys),
         NodeKind::DeliverAlert => run_deliver_alert(inputs, sys),
         NodeKind::CameraSnapshot => run_camera_snapshot(inputs, sys),
+        NodeKind::GetCurrentFrame => run_get_current_frame(config, inputs, sys),
         NodeKind::DescribeImage => run_describe_image(config, inputs, sys),
         NodeKind::NotifyRecipient => run_notify_recipient(inputs, sys),
         NodeKind::Format => run_format(config, inputs),
@@ -300,6 +301,10 @@ pub fn debug_summary(
         NodeKind::CreateAlert => txt("result").map(clip).unwrap_or_else(|| "alert created".into()),
         NodeKind::DeliverAlert => txt("result").map(clip).unwrap_or_else(|| "delivered".into()),
         NodeKind::CameraSnapshot => txt("result").map(clip).unwrap_or_else(|| "snapshot captured".into()),
+        NodeKind::GetCurrentFrame => {
+            let kb = inputs.get("image").and_then(PortValue::as_image).map_or(0, <[u8]>::len) / 1024;
+            format!("current frame ({} KB, {} ms old)", kb, num("age_ms").unwrap_or(0))
+        }
         NodeKind::DescribeImage => match txt("description") {
             Some(d) => clip(d),
             None => "described image".into(),
@@ -595,6 +600,28 @@ fn run_camera_snapshot(inputs: &PortValues, sys: &ToolContext) -> Result<PortVal
     let mut o = PortValues::new();
     o.insert("image".into(), PortValue::Image(bytes));
     o.insert("result".into(), PortValue::Text(format!("Snapshot of '{}' captured", device.name)));
+    o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
+}
+
+/// Fast frame source: return the camera's most-recent warm in-memory frame (no per-call
+/// camera round trip), starting/keeping a background grabber. For high-rate loops like a
+/// 1 Hz recognition graph. Falls back to an on-demand snapshot until the cache is warm.
+fn run_get_current_frame(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+    let camera = req_text(inputs, "camera")?;
+    let device = {
+        let devices = sys.devices.lock().unwrap();
+        let idx = dev_actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
+        devices[idx].clone()
+    };
+    let max_age_ms = config
+        .get("max_age_ms")
+        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+        .unwrap_or(2000);
+    let (bytes, age_ms) = sys.frames.current(&device, max_age_ms)?;
+    let mut o = PortValues::new();
+    o.insert("image".into(), PortValue::Image(bytes));
+    o.insert("age_ms".into(), PortValue::Num(age_ms as i64));
     o.insert("ok".into(), PortValue::Bool(true));
     Ok(o)
 }

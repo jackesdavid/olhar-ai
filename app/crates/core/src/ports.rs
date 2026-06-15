@@ -21,7 +21,16 @@ use crate::persons::RecognitionMatch;
 /// Capture a still frame from a camera. The local impl grabs from the shared
 /// go2rtc feed (fast) and falls back to ONVIF/ffmpeg.
 pub trait FrameSource: Send + Sync {
+    /// On-demand still capture — best freshness/quality; may connect a cold camera.
     fn snapshot(&self, device: &Device) -> Result<Vec<u8>, String>;
+
+    /// The most-recent already-acquired frame (~zero latency) plus its age in ms. Warms a
+    /// background grabber for this camera (see [`crate::frames`]) and returns its latest
+    /// frame within `max_age_ms`, falling back to [`Self::snapshot`] when no warm frame is
+    /// available yet. Default impl has no cache → always a fresh `snapshot` at age 0.
+    fn current(&self, device: &Device, _max_age_ms: u64) -> Result<(Vec<u8>, u64), String> {
+        Ok((self.snapshot(device)?, 0))
+    }
 }
 
 /// Local computer-vision over a frame: person detection + a vision-model caption.
@@ -51,11 +60,36 @@ pub trait Notifier: Send + Sync {
 
 // ---- local (in-process) implementations — today's behavior ------------------
 
-/// Frames from the local go2rtc feed / ONVIF fallback.
+/// Frames from the local go2rtc feed / ONVIF fallback. Snapshot-only: `current()` uses
+/// the trait default (a fresh snapshot), so there's no warm cache. The safe default for
+/// tests and any caller that doesn't own a pod [`FrameHub`].
 pub struct LocalFrameSource;
 impl FrameSource for LocalFrameSource {
     fn snapshot(&self, device: &Device) -> Result<Vec<u8>, String> {
         crate::device_actions::capture_snapshot_bytes(device)
+    }
+}
+
+/// A frame source backed by a pod-owned [`FrameHub`] (see [`crate::frames`]). `current()`
+/// returns the camera's warm in-memory frame (~zero latency), keeping a background grabber
+/// alive; `snapshot()` is still the on-demand path. The pod creates ONE hub at boot and
+/// injects this into every run's `ToolContext` (sharing the `Arc`), so all runs/graphs/
+/// instances in the pod share one grabber per camera.
+pub struct WarmFrameSource {
+    pub hub: std::sync::Arc<crate::frames::FrameHub>,
+}
+impl FrameSource for WarmFrameSource {
+    fn snapshot(&self, device: &Device) -> Result<Vec<u8>, String> {
+        crate::device_actions::capture_snapshot_bytes(device)
+    }
+
+    fn current(&self, device: &Device, max_age_ms: u64) -> Result<(Vec<u8>, u64), String> {
+        let max_age = std::time::Duration::from_millis(max_age_ms.max(1));
+        if let Some((bytes, age)) = self.hub.current(&device.ip, max_age) {
+            return Ok(((*bytes).clone(), age.as_millis() as u64));
+        }
+        // Cache cold (first read) → on-demand snapshot; the grabber warms for next time.
+        Ok((self.snapshot(device)?, 0))
     }
 }
 

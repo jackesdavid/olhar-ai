@@ -65,6 +65,10 @@ pub enum NodeKind {
     CreateAlert,
     DeliverAlert,
     CameraSnapshot,
+    /// Source: the most-recent frame from the camera's warm in-memory feed (~zero
+    /// latency, no per-call round trip) — for high-rate loops (e.g. recognise every
+    /// second). `CameraSnapshot` is the on-demand/quality path.
+    GetCurrentFrame,
     DescribeImage,
     /// Renamed from `notify_beacon`; the alias keeps old `workflows.json` loadable.
     #[serde(alias = "notify_beacon")]
@@ -122,6 +126,13 @@ const CAMERA_SNAPSHOT_IN: [Port; 1] = [p("camera", PortType::Text, true)];
 const CAMERA_SNAPSHOT_OUT: [Port; 3] = [
     p("image", PortType::Image, false),
     p("result", PortType::Text, false),
+    p("ok", PortType::Bool, false),
+];
+
+const GET_CURRENT_FRAME_IN: [Port; 1] = [p("camera", PortType::Text, true)];
+const GET_CURRENT_FRAME_OUT: [Port; 3] = [
+    p("image", PortType::Image, false),
+    p("age_ms", PortType::Num, false), // how old the returned frame is (0 = fresh capture)
     p("ok", PortType::Bool, false),
 ];
 
@@ -216,12 +227,13 @@ const EXEC_OUT_DEFAULT: [Port; 1] = [EXEC_OUT];
 const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 16] = [
+    pub const ALL: [NodeKind; 17] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
         NodeKind::DeliverAlert,
         NodeKind::CameraSnapshot,
+        NodeKind::GetCurrentFrame,
         NodeKind::DescribeImage,
         NodeKind::NotifyRecipient,
         NodeKind::Format,
@@ -244,6 +256,7 @@ impl NodeKind {
             NodeKind::CreateAlert => "create_alert",
             NodeKind::DeliverAlert => "deliver_alert",
             NodeKind::CameraSnapshot => "camera_snapshot",
+            NodeKind::GetCurrentFrame => "get_current_frame",
             NodeKind::DescribeImage => "describe_image",
             NodeKind::NotifyRecipient => "notify_recipient",
             NodeKind::Format => "format",
@@ -269,6 +282,7 @@ impl NodeKind {
             NodeKind::CreateAlert => "Create alert",
             NodeKind::DeliverAlert => "Deliver alert",
             NodeKind::CameraSnapshot => "Camera snapshot",
+            NodeKind::GetCurrentFrame => "Get current frame",
             NodeKind::DescribeImage => "Describe image",
             NodeKind::NotifyRecipient => "Notify recipient",
             NodeKind::Format => "Format",
@@ -288,7 +302,7 @@ impl NodeKind {
         match self {
             NodeKind::GetLastAlert | NodeKind::CreateAlert | NodeKind::DeliverAlert => "Alerts",
             NodeKind::GetRecipient | NodeKind::NotifyRecipient => "Recipients",
-            NodeKind::CameraSnapshot => "Cameras",
+            NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame => "Cameras",
             NodeKind::DescribeImage => "AI",
             NodeKind::Format => "Text",
             NodeKind::Wait | NodeKind::If | NodeKind::Print | NodeKind::ShowImage => "Flow",
@@ -315,6 +329,7 @@ impl NodeKind {
             NodeKind::CreateAlert => &CREATE_ALERT_IN,
             NodeKind::DeliverAlert => &DELIVER_ALERT_IN,
             NodeKind::CameraSnapshot => &CAMERA_SNAPSHOT_IN,
+            NodeKind::GetCurrentFrame => &GET_CURRENT_FRAME_IN,
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_IN,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_IN,
             NodeKind::Format => &FORMAT_IN,
@@ -336,6 +351,7 @@ impl NodeKind {
             NodeKind::CreateAlert => &CREATE_ALERT_OUT,
             NodeKind::DeliverAlert => &DELIVER_ALERT_OUT,
             NodeKind::CameraSnapshot => &CAMERA_SNAPSHOT_OUT,
+            NodeKind::GetCurrentFrame => &GET_CURRENT_FRAME_OUT,
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_OUT,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_OUT,
             NodeKind::Format => &FORMAT_OUT,
@@ -374,6 +390,7 @@ impl NodeKind {
             }
             NodeKind::DeliverAlert => json!({ "id": "" }),
             NodeKind::CameraSnapshot => json!({ "camera": "first" }),
+            NodeKind::GetCurrentFrame => json!({ "camera": "first", "max_age_ms": "2000" }),
             NodeKind::DescribeImage => json!({}),
             NodeKind::NotifyRecipient => json!({ "message": "" }),
             NodeKind::Format => json!({ "template": "{p1} — {p2}", "p1": "", "p2": "", "p3": "" }),
