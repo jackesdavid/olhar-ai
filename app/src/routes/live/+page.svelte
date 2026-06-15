@@ -72,6 +72,26 @@
     }
   }
 
+  // After each append: go2rtc's fMP4 timestamps aren't zero-based, so the playhead
+  // starts OUTSIDE the buffered range (→ black). Seek into the range / to the live edge,
+  // trim old data, and start playback.
+  function onUpdateEnd() {
+    flushBuf();
+    if (!sourceBuffer || !videoEl || sourceBuffer.buffered.length === 0) return;
+    const b = sourceBuffer.buffered;
+    const start = b.start(0);
+    const end = b.end(b.length - 1);
+    if (videoEl.currentTime < start || videoEl.currentTime > end) {
+      try { videoEl.currentTime = Math.max(start, end - 0.5); } catch { /* ignore */ }
+    } else if (end - videoEl.currentTime > 1.5) {
+      try { videoEl.currentTime = end - 0.3; } catch { /* ignore */ } // keep near live
+    }
+    if (end - start > 12 && !sourceBuffer.updating) {
+      try { sourceBuffer.remove(start, end - 8); } catch { /* ignore */ }
+    }
+    if (videoEl.paused) videoEl.play().catch(() => {});
+  }
+
   function stopStream() {
     if (ws) {
       ws.onmessage = ws.onclose = ws.onerror = null;
@@ -109,7 +129,7 @@
           if (msg.type === "mse" && mediaSource?.readyState === "open" && !sourceBuffer) {
             sourceBuffer = mediaSource.addSourceBuffer(msg.value);
             sourceBuffer.mode = "segments";
-            sourceBuffer.addEventListener("updateend", flushBuf);
+            sourceBuffer.addEventListener("updateend", onUpdateEnd);
           }
         } else {
           bufQueue.push(ev.data as ArrayBuffer);
