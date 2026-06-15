@@ -119,11 +119,12 @@ async fn catalog(UserClaims(c): UserClaims) -> Result<Json<Value>, ApiErr> {
     Ok(Json(json!({ "kinds": kinds })))
 }
 
-/// Live run state per graph id (`{ running, current }`) from sentinel-flow.
+/// Live run state per graph id (`{ running, current }`) for this tenant from sentinel-flow.
 async fn run_states(UserClaims(c): UserClaims) -> Result<Json<Value>, ApiErr> {
     auth::require(&c, "workflows.read")?;
+    let tid = tenant_of(&c)?;
     let v = reqwest::Client::new()
-        .get(format!("{}/runs", flow_base()))
+        .get(format!("{}/runs?tenant={}", flow_base(), tid))
         .send()
         .await
         .ok()
@@ -373,14 +374,15 @@ async fn remove_edge(UserClaims(c): UserClaims, State(st): State<AppState>, Path
 
 // ---- run --------------------------------------------------------------------
 
-/// Run-now: ask sentinel-flow to fire the graph immediately. (Phase 5 makes flow
-/// tenant-aware; today it serves the single default tenant.)
+/// Run-now: ask sentinel-flow to fire this tenant's graph immediately. The flow pod is
+/// multi-tenant, so the caller's tenant id is passed through and the run is bound to that
+/// tenant's edge.
 async fn run(UserClaims(c): UserClaims, Path(id): Path<u32>) -> Result<Json<String>, ApiErr> {
     auth::require(&c, "workflows.run")?;
-    let _ = tenant_of(&c)?;
+    let tid = tenant_of(&c)?;
     let resp = reqwest::Client::new()
         .post(format!("{}/runs", flow_base()))
-        .json(&json!({ "graph_id": id }))
+        .json(&json!({ "graph_id": id, "tenant_id": tid }))
         .send()
         .await;
     match resp {

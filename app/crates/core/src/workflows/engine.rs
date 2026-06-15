@@ -417,23 +417,31 @@ struct GraphRun {
     queued: u32,
 }
 
-/// Per-graph trigger timers + concurrency counters + the new-alert high-water mark.
+/// Per-(tenant, graph) trigger timers + concurrency counters + per-tenant new-alert
+/// high-water mark. Keyed by `(tenant_id, graph_id)` because graph ids are per-tenant — a
+/// single pod serving multiple tenants would otherwise collide graph 1 of tenant A with
+/// graph 1 of tenant B.
+#[derive(Default)]
 pub struct WorkflowEngine {
-    cron_last: HashMap<u32, Instant>,
-    runs: HashMap<u32, GraphRun>,
-    alert_seen_max: u64,
+    cron_last: HashMap<(uuid::Uuid, u32), Instant>,
+    runs: HashMap<(uuid::Uuid, u32), GraphRun>,
+    alert_seen_max: HashMap<uuid::Uuid, u64>,
 }
 
 impl WorkflowEngine {
-    /// `alert_seen_max` should be seeded from the current alert-store max at boot so the
-    /// existing backlog doesn't fire `OnNewAlert` graphs on startup.
-    pub fn new(alert_seen_max: u64) -> Self {
-        WorkflowEngine { cron_last: HashMap::new(), runs: HashMap::new(), alert_seen_max }
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Decide whether a fresh fire of `graph_id` should spawn, queue, or be skipped.
-    pub fn decide(&self, graph_id: u32, policy: &ConcurrencyPolicy) -> Fire {
-        let r = self.runs.get(&graph_id).copied().unwrap_or_default();
+    /// Seed a tenant's new-alert high-water mark at boot (from the current alert-store max)
+    /// so the existing backlog doesn't fire `OnNewAlert` graphs on startup.
+    pub fn seed_alert_seen_max(&mut self, tenant: uuid::Uuid, max: u64) {
+        self.alert_seen_max.insert(tenant, max);
+    }
+
+    /// Decide whether a fresh fire of `(tenant, graph_id)` should spawn, queue, or be skipped.
+    pub fn decide(&self, tenant: uuid::Uuid, graph_id: u32, policy: &ConcurrencyPolicy) -> Fire {
+        let r = self.runs.get(&(tenant, graph_id)).copied().unwrap_or_default();
         match policy {
             ConcurrencyPolicy::SkipIfRunning => {
                 if r.running == 0 {
@@ -461,17 +469,17 @@ impl WorkflowEngine {
         }
     }
 
-    pub fn on_spawn(&mut self, graph_id: u32) {
-        self.runs.entry(graph_id).or_default().running += 1;
+    pub fn on_spawn(&mut self, tenant: uuid::Uuid, graph_id: u32) {
+        self.runs.entry((tenant, graph_id)).or_default().running += 1;
     }
 
-    pub fn on_queue(&mut self, graph_id: u32) {
-        self.runs.entry(graph_id).or_default().queued += 1;
+    pub fn on_queue(&mut self, tenant: uuid::Uuid, graph_id: u32) {
+        self.runs.entry((tenant, graph_id)).or_default().queued += 1;
     }
 
     /// Call when a run finishes. Returns `true` if a queued fire should now spawn.
-    pub fn on_finish(&mut self, graph_id: u32) -> bool {
-        let r = self.runs.entry(graph_id).or_default();
+    pub fn on_finish(&mut self, tenant: uuid::Uuid, graph_id: u32) -> bool {
+        let r = self.runs.entry((tenant, graph_id)).or_default();
         if r.running > 0 {
             r.running -= 1;
         }
@@ -483,52 +491,53 @@ impl WorkflowEngine {
         }
     }
 
-    /// Total in-flight runs across all graphs (the global safety backstop reads this).
+    /// Total in-flight runs across all tenants/graphs (the global safety backstop reads this).
     pub fn total_running(&self) -> u32 {
         self.runs.values().map(|r| r.running).sum()
     }
 
-    /// Seed a graph's cron timer to a prior fire instant (Phase 0.5 restore). The
-    /// adapter computes this anchor from the persisted wall-clock fire time so a
-    /// mid-interval restart waits out the remainder instead of firing immediately.
-    /// Pure: the engine stays DB-free; persistence lives in `workflows::repo`.
-    pub fn seed_cron_last(&mut self, graph_id: u32, last: Instant) {
-        self.cron_last.insert(graph_id, last);
+    /// Seed a graph's cron timer to a prior fire instant (Phase 0.5 restore). The adapter
+    /// computes this anchor from the persisted wall-clock fire time so a mid-interval restart
+    /// waits out the remainder. Pure: persistence lives in `workflows::repo`.
+    pub fn seed_cron_last(&mut self, tenant: uuid::Uuid, graph_id: u32, last: Instant) {
+        self.cron_last.insert((tenant, graph_id), last);
     }
 
-    /// The current new-alert high-water mark — so the adapter can detect when a
-    /// tick advanced it and persist the new value.
-    pub fn alert_seen_max(&self) -> u64 {
-        self.alert_seen_max
+    /// A tenant's current new-alert high-water mark (0 if unseen) — so the adapter can
+    /// detect when a tick advanced it and persist the new value.
+    pub fn alert_seen_max(&self, tenant: uuid::Uuid) -> u64 {
+        self.alert_seen_max.get(&tenant).copied().unwrap_or(0)
     }
 
     /// Cron: returns `true` (and re-arms the timer) when `every_secs` has elapsed.
-    pub fn cron_due(&mut self, graph_id: u32, every_secs: u64, now: Instant) -> bool {
-        let due = match self.cron_last.get(&graph_id) {
+    pub fn cron_due(&mut self, tenant: uuid::Uuid, graph_id: u32, every_secs: u64, now: Instant) -> bool {
+        let key = (tenant, graph_id);
+        let due = match self.cron_last.get(&key) {
             Some(last) => now.duration_since(*last) >= Duration::from_secs(every_secs),
             None => true,
         };
         if due {
-            self.cron_last.insert(graph_id, now);
+            self.cron_last.insert(key, now);
         }
         due
     }
 
-    /// Collect the levels of all NEW non-workflow alerts (id past the high-water mark) and
-    /// advance the high-water mark ONCE to the max id seen (so the backlog only fires once and
-    /// workflow-made alerts can't loop). Call this **once per tick**.
-    pub fn drain_new_alert_levels(&mut self, alerts: &[Alert]) -> Vec<AlertLevel> {
+    /// Collect the levels of all NEW non-workflow alerts for `tenant` (id past its high-water
+    /// mark) and advance that tenant's mark ONCE to the max id seen (so the backlog fires once
+    /// and workflow-made alerts can't loop). Call this **once per tenant per tick**.
+    pub fn drain_new_alert_levels(&mut self, tenant: uuid::Uuid, alerts: &[Alert]) -> Vec<AlertLevel> {
+        let seen = self.alert_seen_max.get(&tenant).copied().unwrap_or(0);
         let mut levels = Vec::new();
-        let mut max_id = self.alert_seen_max;
+        let mut max_id = seen;
         for a in alerts {
-            if a.id > self.alert_seen_max {
+            if a.id > seen {
                 max_id = max_id.max(a.id);
                 if a.source != "workflow" {
                     levels.push(a.level);
                 }
             }
         }
-        self.alert_seen_max = max_id;
+        self.alert_seen_max.insert(tenant, max_id);
         levels
     }
 
@@ -538,9 +547,9 @@ impl WorkflowEngine {
         levels.iter().any(|l| level_rank(*l) >= min_rank)
     }
 
-    /// Single-graph convenience (drains + checks).
-    pub fn new_alert_fires(&mut self, alerts: &[Alert], min_level: AlertLevel) -> bool {
-        let levels = self.drain_new_alert_levels(alerts);
+    /// Single-graph convenience (drains + checks) for one tenant.
+    pub fn new_alert_fires(&mut self, tenant: uuid::Uuid, alerts: &[Alert], min_level: AlertLevel) -> bool {
+        let levels = self.drain_new_alert_levels(tenant, alerts);
         Self::levels_qualify(&levels, min_level)
     }
 }
@@ -904,71 +913,94 @@ mod tests {
 
     #[test]
     fn concurrency_policies_spawn_queue_skip() {
-        let mut e = WorkflowEngine::new(0);
+        let t = uuid::Uuid::nil();
+        let mut e = WorkflowEngine::new();
         let p = ConcurrencyPolicy::SkipIfRunning;
-        assert_eq!(e.decide(1, &p), Fire::Spawn);
-        e.on_spawn(1);
-        assert_eq!(e.decide(1, &p), Fire::Skip);
-        assert!(!e.on_finish(1));
-        assert_eq!(e.decide(1, &p), Fire::Spawn);
+        assert_eq!(e.decide(t, 1, &p), Fire::Spawn);
+        e.on_spawn(t, 1);
+        assert_eq!(e.decide(t, 1, &p), Fire::Skip);
+        assert!(!e.on_finish(t, 1));
+        assert_eq!(e.decide(t, 1, &p), Fire::Spawn);
 
-        let mut q = WorkflowEngine::new(0);
+        let mut q = WorkflowEngine::new();
         let qp = ConcurrencyPolicy::QueueSingle { max_queued: 1 };
-        assert_eq!(q.decide(1, &qp), Fire::Spawn);
-        q.on_spawn(1);
-        assert_eq!(q.decide(1, &qp), Fire::Queue);
-        q.on_queue(1);
-        assert_eq!(q.decide(1, &qp), Fire::Skip);
-        assert!(q.on_finish(1));
+        assert_eq!(q.decide(t, 1, &qp), Fire::Spawn);
+        q.on_spawn(t, 1);
+        assert_eq!(q.decide(t, 1, &qp), Fire::Queue);
+        q.on_queue(t, 1);
+        assert_eq!(q.decide(t, 1, &qp), Fire::Skip);
+        assert!(q.on_finish(t, 1));
 
-        let mut c = WorkflowEngine::new(0);
+        let mut c = WorkflowEngine::new();
         let cp = ConcurrencyPolicy::Concurrent { max_concurrent: 2 };
-        assert_eq!(c.decide(2, &cp), Fire::Spawn);
-        c.on_spawn(2);
-        assert_eq!(c.decide(2, &cp), Fire::Spawn);
-        c.on_spawn(2);
-        assert_eq!(c.decide(2, &cp), Fire::Skip);
+        assert_eq!(c.decide(t, 2, &cp), Fire::Spawn);
+        c.on_spawn(t, 2);
+        assert_eq!(c.decide(t, 2, &cp), Fire::Spawn);
+        c.on_spawn(t, 2);
+        assert_eq!(c.decide(t, 2, &cp), Fire::Skip);
+    }
+
+    #[test]
+    fn same_graph_id_under_different_tenants_is_isolated() {
+        // Graph id 1 of tenant A must not share run/cron state with graph id 1 of tenant B.
+        let a = uuid::Uuid::from_u128(1);
+        let b = uuid::Uuid::from_u128(2);
+        let mut e = WorkflowEngine::new();
+        let p = ConcurrencyPolicy::SkipIfRunning;
+        e.on_spawn(a, 1);
+        assert_eq!(e.decide(a, 1, &p), Fire::Skip, "A's graph 1 is running");
+        assert_eq!(e.decide(b, 1, &p), Fire::Spawn, "B's graph 1 is independent");
+        let base = Instant::now();
+        e.seed_cron_last(a, 1, base);
+        assert!(!e.cron_due(a, 1, 30, base + Duration::from_secs(10)));
+        assert!(e.cron_due(b, 1, 30, base + Duration::from_secs(10)), "B's cron is independent");
     }
 
     #[test]
     fn new_alert_watcher_filters_and_advances_high_water() {
+        let t = uuid::Uuid::nil();
         let alerts = vec![
             alert(5, AlertLevel::Error, "operator", "old"),
             alert(6, AlertLevel::Error, "workflow", "loop"),
             alert(7, AlertLevel::Info, "operator", "new info"),
             alert(8, AlertLevel::Debug, "operator", "noise"),
         ];
-        let mut e = WorkflowEngine::new(5);
-        assert!(e.new_alert_fires(&alerts, AlertLevel::Info));
-        assert!(!e.new_alert_fires(&alerts, AlertLevel::Info));
-        let mut e2 = WorkflowEngine::new(5);
-        assert!(!e2.new_alert_fires(&alerts, AlertLevel::Warn));
+        let mut e = WorkflowEngine::new();
+        e.seed_alert_seen_max(t, 5);
+        assert!(e.new_alert_fires(t, &alerts, AlertLevel::Info));
+        assert!(!e.new_alert_fires(t, &alerts, AlertLevel::Info));
+        let mut e2 = WorkflowEngine::new();
+        e2.seed_alert_seen_max(t, 5);
+        assert!(!e2.new_alert_fires(t, &alerts, AlertLevel::Warn));
     }
 
     #[test]
     fn alert_seen_max_getter_tracks_drain() {
+        let t = uuid::Uuid::nil();
         let alerts = vec![
             alert(5, AlertLevel::Error, "operator", "old"),
             alert(9, AlertLevel::Info, "operator", "new"),
         ];
-        let mut e = WorkflowEngine::new(5);
-        assert_eq!(e.alert_seen_max(), 5, "seeded watermark");
-        let _ = e.drain_new_alert_levels(&alerts);
-        assert_eq!(e.alert_seen_max(), 9, "watermark advanced to the max id seen");
+        let mut e = WorkflowEngine::new();
+        e.seed_alert_seen_max(t, 5);
+        assert_eq!(e.alert_seen_max(t), 5, "seeded watermark");
+        let _ = e.drain_new_alert_levels(t, &alerts);
+        assert_eq!(e.alert_seen_max(t), 9, "watermark advanced to the max id seen");
     }
 
     #[test]
     fn seeded_cron_waits_out_remaining_interval() {
         // Phase 0.5: a restart seeds cron_last from the persisted fire time so a
         // 30s cron that fired mid-interval does NOT fire immediately on boot.
-        let mut e = WorkflowEngine::new(0);
+        let t = uuid::Uuid::nil();
+        let mut e = WorkflowEngine::new();
         let base = Instant::now();
-        e.seed_cron_last(1, base);
+        e.seed_cron_last(t, 1, base);
         // 10s after the last fire → not due yet.
-        assert!(!e.cron_due(1, 30, base + Duration::from_secs(10)));
+        assert!(!e.cron_due(t, 1, 30, base + Duration::from_secs(10)));
         // 40s after the last fire → due (and re-arms at that instant).
-        assert!(e.cron_due(1, 30, base + Duration::from_secs(40)));
+        assert!(e.cron_due(t, 1, 30, base + Duration::from_secs(40)));
         // Just after re-arming → not due again.
-        assert!(!e.cron_due(1, 30, base + Duration::from_secs(50)));
+        assert!(!e.cron_due(t, 1, 30, base + Duration::from_secs(50)));
     }
 }

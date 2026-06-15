@@ -57,6 +57,35 @@ pub fn load(db: &Db, tenant_id: Uuid) -> Vec<Graph> {
     })
 }
 
+/// EVERY tenant's graphs as `(tenant_id, Graph)`, ordered by tenant then id — for a
+/// multi-tenant flow pod that polls/runs all tenants. Malformed rows are skipped.
+pub fn load_all(db: &Db) -> Vec<(Uuid, Graph)> {
+    let pool = db.pool();
+    db.block(async move {
+        let rows = sqlx::query_as::<_, (Uuid, serde_json::Value)>(
+            "SELECT tenant_id, data FROM workflows ORDER BY tenant_id, id",
+        )
+        .fetch_all(&pool)
+        .await;
+        match rows {
+            Ok(rows) => rows
+                .into_iter()
+                .filter_map(|(tid, v)| match serde_json::from_value::<Graph>(v) {
+                    Ok(g) => Some((tid, g)),
+                    Err(e) => {
+                        log::error!("workflows::repo::load_all: skipping a malformed graph row: {e}");
+                        None
+                    }
+                })
+                .collect(),
+            Err(e) => {
+                log::error!("workflows::repo::load_all query failed: {e}");
+                Vec::new()
+            }
+        }
+    })
+}
+
 /// Replace the whole graph set (delete-all + insert each as a JSON row), mirroring
 /// the in-memory store after every editor mutation. Best-effort.
 pub fn save(db: &Db, tenant_id: Uuid, graphs: &[Graph]) {

@@ -46,6 +46,8 @@ services:
       LATEST_EDGE_VERSION: "0.1.3"
       # Face recognition sidecar (CPU, in-cluster). No key needed on the private network.
       AI_SERVICE_URL: http://sentinel-ai:8000/runsync
+      # The workflow engine — control proxies Run / run-state / the SSE event relay to it.
+      FLOW_URL: http://sentinel-flow:8787
     volumes:
       # Edge appliance binaries (shipped here by the release CI) served at /edge/<asset>.
       - /ibbf/edge-dist:/edge-dist:ro
@@ -126,10 +128,11 @@ services:
       - "traefik.http.services.sentinel-gw.loadbalancer.server.port=8789"
 
   sentinel-flow:
-    # The always-on workflow engine + trigger poller. Internal only (no Traefik — its REST
-    # is unauthenticated; the poller fires Cron/OnNewAlert + event workflows on its own).
-    # Camera nodes reach the tenant edge's go2rtc over the tailnet (GO2RTC_URL), the same
-    # way the gateway does; face recognition uses the in-cluster CPU sidecar.
+    # The always-on, MULTI-TENANT workflow engine + trigger poller. Internal only (no
+    # Traefik — its REST is unauthenticated; the poller fires Cron/OnNewAlert + event
+    # workflows for every tenant on its own). Each run resolves its tenant's edge go2rtc
+    # from the box registry (tenant_boxes.magicdns_host) and grabs frames bound to that
+    # edge; face recognition uses the in-cluster CPU sidecar.
     image: ghcr.io/jackesdavid/sentinel-flow:latest
     container_name: sentinel-flow
     restart: always
@@ -139,10 +142,10 @@ services:
       DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
       FLOW_BIND: 0.0.0.0:8787
       AI_SERVICE_URL: http://sentinel-ai:8000/runsync
-      # The tenant edge's go2rtc over the tailnet (frame grabs for camera/vision nodes).
+      # FALLBACK go2rtc base for a tenant with no resolved box host. Per-tenant edges are
+      # resolved from the registry at run time; reaching ARBITRARY tenant edges needs the
+      # pod on the tailnet (deferred) — until then the single edge below is reachable.
       GO2RTC_URL: https://__EDGE_HOST__
-      # TENANT_ID defaults to the single/default tenant; set it to the edge's tenant for
-      # multi-tenant camera workflows.
     extra_hosts:
       - "__EDGE_HOST__:__EDGE_TS_IP__"
     depends_on:

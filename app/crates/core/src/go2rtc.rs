@@ -89,14 +89,17 @@ pub fn stream_name(ip: &str) -> String {
 /// the localhost request fails immediately (connection refused), so callers can fall
 /// back to a from-scratch capture without paying a timeout.
 pub fn frame(ip: &str) -> Result<Vec<u8>, String> {
-    let url = format!("{}/api/frame.jpeg?src={}", base(), stream_name(ip));
-    let resp = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(3))
-        .build()
-        .get(&url)
-        .call()
-        .map_err(|e| format!("go2rtc frame request failed: {e}"))?;
+    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(3)).build();
+    frame_from(&agent, &base(), ip)
+}
 
+/// Like [`frame`], but against a SPECIFIC go2rtc `base` using a caller-provided `agent`.
+/// The agent's connection pool keeps the HTTP connection warm across calls, so a workflow
+/// run can re-grab a fresh frame cheaply without re-handshaking — and an off-box consumer
+/// (sentinel-flow) can target a particular tenant's edge go2rtc (`https://<edge-host>`).
+pub fn frame_from(agent: &ureq::Agent, base: &str, ip: &str) -> Result<Vec<u8>, String> {
+    let url = format!("{}/api/frame.jpeg?src={}", base.trim_end_matches('/'), stream_name(ip));
+    let resp = agent.get(&url).call().map_err(|e| format!("go2rtc frame request failed: {e}"))?;
     let mut bytes = Vec::new();
     resp.into_reader()
         .read_to_end(&mut bytes)

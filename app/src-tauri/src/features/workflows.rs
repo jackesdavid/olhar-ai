@@ -63,18 +63,20 @@ fn flow_agent() -> ureq::Agent {
 /// Proxy a run-now to the service (`POST /runs`). Maps its 202 to the editor's
 /// expected message; surfaces connection errors as a friendly string.
 fn proxy_run(base: &str, id: u32) -> Result<String, String> {
-    match flow_agent().post(&format!("{base}/runs")).send_json(serde_json::json!({ "graph_id": id })) {
+    let body = serde_json::json!({ "graph_id": id, "tenant_id": DEFAULT_TENANT_ID });
+    match flow_agent().post(&format!("{base}/runs")).send_json(body) {
         Ok(_) => Ok("Run accepted.".into()),
         Err(ureq::Error::Status(404, _)) => Err("graph not found".into()),
         Err(e) => Err(format!("sentinel-flow unreachable: {e}")),
     }
 }
 
-/// Proxy live run-state from the service (`GET /runs`). Empty map on any error so
-/// the editor degrades gracefully when the service is down.
+/// Proxy live run-state for the desktop's single (default) tenant from the service
+/// (`GET /runs?tenant=…`). Empty map on any error so the editor degrades gracefully
+/// when the service is down.
 fn proxy_run_states(base: &str) -> HashMap<u32, GraphActivity> {
     flow_agent()
-        .get(&format!("{base}/runs"))
+        .get(&format!("{base}/runs?tenant={DEFAULT_TENANT_ID}"))
         .call()
         .ok()
         .and_then(|r| r.into_json::<HashMap<u32, GraphActivity>>().ok())

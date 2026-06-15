@@ -62,9 +62,9 @@ pub trait Notifier: Send + Sync {
 
 // ---- local (in-process) implementations — today's behavior ------------------
 
-/// Frames from the local go2rtc feed / ONVIF fallback. Snapshot-only: `current()` uses
-/// the trait default (a fresh snapshot), so there's no warm cache. The safe default for
-/// tests and any caller that doesn't own a pod [`FrameHub`].
+/// Frames from the local go2rtc feed / ONVIF fallback (localhost). Snapshot-only:
+/// `current()` uses the trait default (a fresh snapshot). The default for the desktop shell
+/// and tests, where go2rtc runs on `127.0.0.1`.
 pub struct LocalFrameSource;
 impl FrameSource for LocalFrameSource {
     fn snapshot(&self, device: &Device) -> Result<Vec<u8>, String> {
@@ -72,25 +72,29 @@ impl FrameSource for LocalFrameSource {
     }
 }
 
-/// A frame source backed by a pod-owned [`FrameHub`] (see [`crate::frames`]). `current()`
-/// returns the camera's warm in-memory frame (~zero latency), keeping a background grabber
-/// alive; `snapshot()` is still the on-demand path. The pod creates ONE hub at boot and
-/// injects this into every run's `ToolContext` (sharing the `Arc`), so all runs/graphs/
-/// instances in the pod share one grabber per camera.
-pub struct WarmFrameSource {
-    pub hub: std::sync::Arc<crate::frames::FrameHub>,
+/// Frames from a SPECIFIC go2rtc `base` (a tenant's edge), with a per-instance keep-alive
+/// agent. Built once per workflow run and held in that run's `ToolContext.frames`, so every
+/// `GetFrame` / `Snapshot` call in the run reuses the **warm** connection and gets a **fresh**
+/// frame each call (a `memoize=false` node in a loop re-grabs without re-setup). Nothing is
+/// pod-shared, so concurrent runs of different tenants never collide — each targets its own
+/// edge. Dropped when the run ends (connection closed).
+pub struct EdgeFrameSource {
+    base: String,
+    agent: ureq::Agent,
 }
-impl FrameSource for WarmFrameSource {
-    fn snapshot(&self, device: &Device) -> Result<Vec<u8>, String> {
-        crate::device_actions::capture_snapshot_bytes(device)
-    }
-
-    fn current(&self, device: &Device, max_age_ms: u64) -> Result<(Vec<u8>, u64), String> {
-        let max_age = std::time::Duration::from_millis(max_age_ms.max(1));
-        if let Some((bytes, age)) = self.hub.current(&device.ip, max_age) {
-            return Ok(((*bytes).clone(), age.as_millis() as u64));
+impl EdgeFrameSource {
+    pub fn new(base: impl Into<String>) -> Self {
+        EdgeFrameSource {
+            base: base.into(),
+            agent: ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(5)).build(),
         }
-        // Cache cold (first read) → on-demand snapshot; the grabber warms for next time.
+    }
+}
+impl FrameSource for EdgeFrameSource {
+    fn snapshot(&self, device: &Device) -> Result<Vec<u8>, String> {
+        crate::go2rtc::frame_from(&self.agent, &self.base, &device.ip)
+    }
+    fn current(&self, device: &Device, _max_age_ms: u64) -> Result<(Vec<u8>, u64), String> {
         Ok((self.snapshot(device)?, 0))
     }
 }

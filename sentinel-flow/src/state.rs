@@ -1,135 +1,158 @@
 //! Shared service state + boot/hydration. The engine, store, activity map, and a
-//! refreshable alert mirror live here behind `Arc<AppState>` so the HTTP layer and
-//! the engine threads share one source of truth.
+//! per-tenant edge cache live here behind `Arc<AppState>` so the HTTP layer and the
+//! engine threads share one source of truth.
+//!
+//! This pod is **multi-tenant**: it loads EVERY tenant's graphs (`repo::load_all`) and
+//! the poller fires each `(tenant, graph)` under the engine's `(tenant, graph_id)`
+//! keying. Camera frames are grabbed per-run, bound to the run's tenant edge (resolved
+//! via the box registry + a short-lived cache), so concurrent runs of different tenants
+//! never collide on a pod-global cache.
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use uuid::Uuid;
 
-use app_core::alerts::AlertStore;
 use app_core::db::Db;
-use app_core::tenancy::DEFAULT_TENANT_ID;
-use app_core::workflows::{self, WorkflowEngine, Workflows};
+use app_core::workflows::{self, Graph, WorkflowEngine};
 
 use crate::events::{self, EventBus};
 
-/// The named-graph collection (the working set; edits are owned by the UI/Tauri side
-/// and land in Postgres — this service reloads them, see [`AppState::reload_graphs`]).
-pub type WfStore = Arc<Mutex<Workflows>>;
-/// The trigger/concurrency engine (cron timers + in-flight counters + alert watermark).
+/// The named-graph collection, each tagged with its tenant. Edits are owned by the
+/// control plane and land in Postgres — this service reloads them (see
+/// [`AppState::reload_graphs`]).
+pub type WfStore = Arc<Mutex<Vec<(Uuid, Graph)>>>;
+/// The trigger/concurrency engine (cron timers + in-flight counters + per-tenant alert
+/// watermark), keyed by `(tenant, graph_id)`.
 pub type WfEngine = Arc<Mutex<WorkflowEngine>>;
 
-/// Live run activity per graph id, polled by the UI: how many runs are in flight and
-/// which node is currently executing. Mirrors the Tauri shell's `GraphActivity`.
+/// Live run activity per `(tenant, graph_id)`, polled by the UI: how many runs are in
+/// flight and which node is currently executing.
 #[derive(Default, Clone, Serialize)]
 pub struct GraphActivity {
     pub running: u32,
     pub current: Option<u32>,
 }
-pub type Activity = Arc<Mutex<HashMap<u32, GraphActivity>>>;
+pub type Activity = Arc<Mutex<HashMap<(Uuid, u32), GraphActivity>>>;
 
 /// A safety backstop: never let more than this many workflow runs be in flight
-/// across all graphs at once (mirrors the Tauri shell).
+/// across all tenants/graphs at once.
 pub const WF_GLOBAL_CAP: u32 = 8;
 
-/// The tenant this flow instance runs for (`TENANT_ID` env), defaulting to the
-/// single-tenant id so existing/dev deployments keep working unchanged.
-pub fn tenant_id() -> uuid::Uuid {
-    std::env::var("TENANT_ID")
-        .ok()
-        .and_then(|s| uuid::Uuid::parse_str(s.trim()).ok())
-        .unwrap_or(DEFAULT_TENANT_ID)
-}
+/// How long a resolved tenant→edge-base mapping is cached before re-resolving from the
+/// box registry (mirrors the gateway's upstream cache TTL).
+const EDGE_TTL: Duration = Duration::from_secs(30);
 
 /// Everything the engine threads + HTTP handlers share.
 pub struct AppState {
     pub db: Db,
-    /// The tenant all repo/service calls in this instance are scoped to.
-    pub tenant_id: uuid::Uuid,
+    /// All tenants' graphs (`(tenant_id, Graph)`), reloaded from Postgres on demand.
     pub store: WfStore,
     pub engine: WfEngine,
     pub activity: Activity,
-    /// An in-memory mirror of the alert log (the trigger source for `OnNewAlert` and
-    /// the `GetLastAlert` node), refreshed from Postgres each poller tick so alerts
-    /// created by ANY service are seen.
-    pub alerts: AlertStore,
     pub events: EventBus,
-    /// This pod's warm frame cache — ONE per instance, shared across every graph run so
-    /// a high-rate `GetCurrentFrame` reads the latest frame for free (see [`app_core::frames`]).
-    pub frame_hub: Arc<app_core::frames::FrameHub>,
-    /// In-flight event handlers, keyed `(graph_id, event_name)`. An `EmitEvent` fire whose
-    /// `OnEvent` handler is already running here is DROPPED (coalesced) — "skip if the path
-    /// is still running". Cleared when the handler sub-run finishes.
-    pub event_runs: Arc<Mutex<std::collections::HashSet<(u32, String)>>>,
+    /// Resolved tenant → edge go2rtc base (`https://<host>`) with a short TTL, so each
+    /// run's `EdgeFrameSource` targets that tenant's own edge without a DB hit per frame.
+    pub edge_cache: Arc<Mutex<HashMap<Uuid, (String, Instant)>>>,
+    /// In-flight event handlers, keyed `(tenant, graph_id, event_name)`. An `EmitEvent`
+    /// fire whose `OnEvent` handler is already running here is DROPPED (coalesced) — "skip
+    /// if the path is still running". Cleared when the handler sub-run finishes.
+    pub event_runs: Arc<Mutex<std::collections::HashSet<(Uuid, u32, String)>>>,
 }
 
 impl AppState {
-    /// Connect to Postgres (applies migrations), hydrate the graph store + alert
-    /// mirror, and restore the engine's persisted timing state (Phase 0.5) so a
+    /// Connect to Postgres (applies migrations), hydrate every tenant's graph store,
+    /// and restore the engine's persisted timing state (Phase 0.5) per tenant so a
     /// restart neither replays the `OnNewAlert` backlog nor fires a long cron at once.
     pub fn boot(database_url: &str) -> Result<Arc<AppState>, String> {
         let db = Db::connect(database_url).map_err(|e| format!("connect Postgres: {e}"))?;
         log::info!("Postgres connected; migrations applied");
 
-        let tid = tenant_id();
-        log::info!("sentinel-flow scoped to tenant {tid}");
+        let graphs = workflows::repo::load_all(&db);
+        let tenants = distinct_tenants(&graphs);
+        log::info!(
+            "Loaded {} workflow graph(s) across {} tenant(s) from Postgres",
+            graphs.len(),
+            tenants.len()
+        );
+        let store: WfStore = Arc::new(Mutex::new(graphs));
 
-        let graphs = workflows::repo::load(&db, tid);
-        log::info!("Loaded {} workflow graph(s) from Postgres", graphs.len());
-        let store: WfStore = Arc::new(Mutex::new(Workflows::from_graphs(graphs)));
-
-        let alerts = app_core::alerts::repo::load(&db, tid);
-        log::info!("Loaded {} alert(s) from Postgres", alerts.len());
-        let alerts: AlertStore = Arc::new(Mutex::new(alerts));
-
-        let engine = restore_engine(&db, tid, &alerts);
+        let engine = restore_engine(&db, &tenants);
 
         Ok(Arc::new(AppState {
             db,
-            tenant_id: tid,
             store,
             engine: Arc::new(Mutex::new(engine)),
             activity: Arc::new(Mutex::new(HashMap::new())),
-            alerts,
             events: events::channel(),
-            frame_hub: Arc::new(app_core::frames::FrameHub::new()),
+            edge_cache: Arc::new(Mutex::new(HashMap::new())),
             event_runs: Arc::new(Mutex::new(std::collections::HashSet::new())),
         }))
     }
 
-    /// Reload the graph set from Postgres (the UI edits land there). Cheap; called on
-    /// demand so a freshly-saved graph fires without restarting the service.
+    /// Reload the graph set (all tenants) from Postgres (the control plane edits land
+    /// there). Cheap; called on demand so a freshly-saved graph fires without a restart.
     pub fn reload_graphs(&self) {
-        let graphs = workflows::repo::load(&self.db, self.tenant_id);
-        *self.store.lock().unwrap() = Workflows::from_graphs(graphs);
+        *self.store.lock().unwrap() = workflows::repo::load_all(&self.db);
     }
 
-    /// Refresh the in-memory alert mirror from Postgres (the trigger source of truth).
-    pub fn refresh_alerts(&self) {
-        let fresh = app_core::alerts::repo::load(&self.db, self.tenant_id);
-        *self.alerts.lock().unwrap() = fresh;
+    /// This tenant's go2rtc base for frame grabs (`https://<edge-host>`), cached for
+    /// [`EDGE_TTL`]. Resolves the tenant's most-recent box host from the registry; falls
+    /// back to the configured `GO2RTC_URL` / localhost (see [`app_core::go2rtc::base`])
+    /// when the tenant has no known box yet.
+    pub fn edge_base(&self, tenant: Uuid) -> String {
+        if let Some((base, at)) = self.edge_cache.lock().unwrap().get(&tenant) {
+            if at.elapsed() < EDGE_TTL {
+                return base.clone();
+            }
+        }
+        let base = match app_core::tenancy::box_host_for_tenant(&self.db, tenant) {
+            Some(host) => format!("https://{}", host.trim().trim_end_matches('/')),
+            None => app_core::go2rtc::base(),
+        };
+        self.edge_cache.lock().unwrap().insert(tenant, (base.clone(), Instant::now()));
+        base
     }
 }
 
-/// Build the engine with its timing state restored from Postgres (Phase 0.5):
-///   * `alert_seen_max` — persisted high-water mark, falling back to the current
+/// Find a tenant's graph by id in the multi-tenant store (cloned for use outside the lock).
+pub fn find_graph(store: &WfStore, tenant: Uuid, graph_id: u32) -> Option<Graph> {
+    store
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(t, g)| *t == tenant && g.id == graph_id)
+        .map(|(_, g)| g.clone())
+}
+
+/// The distinct tenants present in a `(tenant, graph)` list, order-stable.
+pub fn distinct_tenants(graphs: &[(Uuid, Graph)]) -> Vec<Uuid> {
+    let mut seen = std::collections::HashSet::new();
+    graphs.iter().map(|(t, _)| *t).filter(|t| seen.insert(*t)).collect()
+}
+
+/// Build the engine with each tenant's timing state restored from Postgres (Phase 0.5):
+///   * `alert_seen_max` — persisted high-water mark, falling back to the tenant's current
 ///     alert max on first boot (then persisted), so the backlog doesn't fire.
 ///   * cron timers — each persisted wall-clock fire is anchored to "now" on the
 ///     monotonic clock so a mid-interval restart waits out the remainder.
-fn restore_engine(db: &Db, tenant_id: uuid::Uuid, alerts: &AlertStore) -> WorkflowEngine {
-    let alert_max = workflows::repo::load_alert_seen_max(db, tenant_id).unwrap_or_else(|| {
-        alerts.lock().unwrap().iter().map(|a| a.id).max().unwrap_or(0)
-    });
-    let mut engine = WorkflowEngine::new(alert_max);
-
+fn restore_engine(db: &Db, tenants: &[Uuid]) -> WorkflowEngine {
+    let mut engine = WorkflowEngine::new();
     let now_ms = crate::now_epoch_ms();
     let now_inst = Instant::now();
-    for (graph_id, last_fired_ms) in workflows::repo::load_cron_state(db, tenant_id) {
-        let elapsed = Duration::from_millis(now_ms.saturating_sub(last_fired_ms));
-        let anchor = now_inst.checked_sub(elapsed).unwrap_or(now_inst);
-        engine.seed_cron_last(graph_id, anchor);
+    for &tenant in tenants {
+        let alert_max = workflows::repo::load_alert_seen_max(db, tenant).unwrap_or_else(|| {
+            app_core::alerts::repo::load(db, tenant).iter().map(|a| a.id).max().unwrap_or(0)
+        });
+        engine.seed_alert_seen_max(tenant, alert_max);
+        workflows::repo::save_alert_seen_max(db, tenant, alert_max);
+
+        for (graph_id, last_fired_ms) in workflows::repo::load_cron_state(db, tenant) {
+            let elapsed = Duration::from_millis(now_ms.saturating_sub(last_fired_ms));
+            let anchor = now_inst.checked_sub(elapsed).unwrap_or(now_inst);
+            engine.seed_cron_last(tenant, graph_id, anchor);
+        }
     }
-    workflows::repo::save_alert_seen_max(db, tenant_id, alert_max);
     engine
 }

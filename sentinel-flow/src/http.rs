@@ -6,7 +6,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Json};
@@ -15,6 +15,7 @@ use axum::Router;
 use futures::Stream;
 use serde::Deserialize;
 use serde_json::json;
+use uuid::Uuid;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use tower_http::cors::CorsLayer;
@@ -36,54 +37,73 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 /// Liveness — and a count of loaded graphs so a probe can confirm hydration.
 async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let graphs = state.store.lock().unwrap().graphs.len();
+    let graphs = state.store.lock().unwrap().len();
     Json(json!({ "status": "ok", "service": "sentinel-flow", "graphs": graphs }))
 }
 
-/// All named graphs (triggers, concurrency, nodes, typed edges) — the working set.
+/// All named graphs across all tenants (`{ tenant, graph }`) — the working set.
 async fn graphs(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let graphs = state.store.lock().unwrap().graphs.clone();
+    let graphs: Vec<_> = state
+        .store
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(t, g)| json!({ "tenant": t, "graph": g }))
+        .collect();
     Json(graphs)
 }
 
 /// Reload the graph set from Postgres (the UI edits land there out-of-band).
 async fn reload_graphs(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     state.reload_graphs();
-    let n = state.store.lock().unwrap().graphs.len();
+    let n = state.store.lock().unwrap().len();
     log::info!("graphs reloaded on request — {n} graph(s)");
     (StatusCode::OK, Json(json!({ "reloaded": n })))
 }
 
-/// Live run state per graph id (`{ running, current }`).
-async fn run_states(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let map = state.activity.lock().unwrap().clone();
+#[derive(Deserialize)]
+struct TenantQuery {
+    tenant: Uuid,
+}
+
+/// Live run state for one tenant's graphs, keyed by graph id (`{ running, current }`).
+/// The control plane passes `?tenant=<uuid>` (from the caller's JWT) so a tenant only
+/// sees its own runs.
+async fn run_states(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<TenantQuery>,
+) -> impl IntoResponse {
+    let map: std::collections::HashMap<u32, crate::state::GraphActivity> = state
+        .activity
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|((t, _), _)| *t == q.tenant)
+        .map(|((_, id), a)| (*id, a.clone()))
+        .collect();
     Json(map)
 }
 
 #[derive(Deserialize)]
 struct CreateRun {
+    tenant_id: Uuid,
     graph_id: u32,
 }
 
-/// Request a manual run of a graph. Async-job style: the engine applies the graph's
-/// concurrency policy and runs on a background thread; we return `202 Accepted`
+/// Request a manual run of a tenant's graph. Async-job style: the engine applies the
+/// graph's concurrency policy and runs on a background thread; we return `202 Accepted`
 /// immediately and progress streams over `/events`.
 async fn create_run(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateRun>,
 ) -> impl IntoResponse {
-    let exists = state.store.lock().unwrap().graph(body.graph_id).is_some();
-    if !exists {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": "no such graph" })));
-    }
     // Manual fire honors the graph's concurrency policy (spawn/queue/skip).
-    let policy = {
-        let s = state.store.lock().unwrap();
-        s.graph(body.graph_id).map(|g| g.concurrency.clone())
+    let policy = crate::state::find_graph(&state.store, body.tenant_id, body.graph_id)
+        .map(|g| g.concurrency.clone());
+    let Some(policy) = policy else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "no such graph" })));
     };
-    if let Some(policy) = policy {
-        engine::fire_graph(&state, body.graph_id, &policy);
-    }
+    engine::fire_graph(&state, body.tenant_id, body.graph_id, &policy);
     (StatusCode::ACCEPTED, Json(json!({ "graph_id": body.graph_id, "accepted": true })))
 }
 

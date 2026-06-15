@@ -13,7 +13,6 @@ pub mod config;
 pub mod db;
 pub mod device_actions;
 pub mod devices;
-pub mod frames;
 pub mod go2rtc;
 pub mod listen;
 pub mod map;
