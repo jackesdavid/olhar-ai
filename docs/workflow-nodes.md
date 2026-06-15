@@ -32,13 +32,14 @@ time it's reached** — required for **loop bodies** and **live sources** like
 
 ### Loops
 You may wire an **exec back-edge** (an `exec_out` back to an upstream `exec_in`) to form a
-loop. (Data back-edges are rejected — they'd have no defined value.) Loop-body nodes must
-be **memoize = off** to iterate. Every run is bounded by a **step budget (10,000 node
-runs)** and a **wall-clock budget (60 s)**; exceeding either fails the run with an error.
+loop, or use the **For each** node for list iteration. (Data back-edges are rejected — they'd
+have no defined value.) Loop-body nodes must be **memoize = off** to iterate. Every run is
+bounded by a **step budget (10,000 node runs)** and a **wall-clock budget (60 s)**; exceeding
+either fails the run with an error.
 
-### Events (in-graph, async) — see `EmitEvent` / `OnEvent` below
-There are **no built-in events** — you define them by name. `EmitEvent("x")` fires the
-`OnEvent("x")` handler subtree as a **decoupled, concurrent sub-run**, **dropped while that
+### Events (in-graph, async) — see `Emit event` / `On event` below
+There are **no built-in events** — you define them by name. `Emit event("x")` fires the
+`On event("x")` handler subtree as a **decoupled, concurrent sub-run**, **dropped while that
 handler is still running** (coalesce-drop). Scope is the **same graph** (cross-graph is not
 available yet).
 
@@ -54,136 +55,61 @@ What happens when a graph fires while a previous run is in flight:
 
 ---
 
-## Nodes by category
+## Nodes
 
-Legend: **In** = data input ports, **Out** = data output ports (every node also has
-`exec_in`/`exec_out` unless noted). `*` = required.
+Legend: every node also has `exec_in` / `exec_out` (control flow) **unless** the Outputs
+column lists explicit exec pins. `*` = required input. All nodes have a **Memoize** toggle
+(default on; turn off for loop bodies / live sources).
 
 ### Cameras
 
-#### Camera snapshot
-- **In:** `camera*` (text) · **Out:** `image`, `result`, `ok`
-- **Config:** `camera` (name/ip/"first")
-- **Behavior:** Grabs a still **on demand** — fast from the warm go2rtc feed, falling back
-  to ONVIF/ffmpeg if the stream is cold. Best freshness/quality; may connect a cold camera.
-- **Use for:** one-off captures (a snapshot in an alert, a manual grab).
-
-#### Get current frame
-- **In:** `camera*` (text) · **Out:** `image`, `age_ms` (num), `ok`
-- **Config:** `camera`, `max_age_ms` (default 2000)
-- **Behavior:** Returns the **most recent frame from a warm in-memory grabber** (~zero
-  latency, no per-call round trip). Starts the grabber on first use; falls back to a
-  snapshot until warm. `age_ms` is how old the returned frame is.
-- **Use for:** high-rate loops (e.g. recognize every second). **Set memoize = off** so each
-  pass/tick gets a fresh frame.
+| Node | Inputs | Outputs | Config | Behavior | Sample usage |
+|---|---|---|---|---|---|
+| **Camera snapshot** | `camera*` | `image`, `result`, `ok` | `camera` (name/ip/"first") | On-demand still from the warm go2rtc feed (ONVIF/ffmpeg fallback). Best quality; may wake a cold camera. | `Camera snapshot(camera="Front") → Describe image` |
+| **Get current frame** | `camera*` | `image`, `age_ms`, `ok` | `camera`, `max_age_ms` (2000) | Most-recent frame from a warm in-memory grabber (~0 latency); falls back to a snapshot until warm. | `Cron 1s → Get current frame (memoize off) → Person detection` |
 
 ### Vision / AI
 
-#### Person detection
-- **In:** `image*` · **Out:** `person` (bool), `count` (num), `confidence` (num %), `ok`
-- **Behavior:** Detects whether a person is present (runs **locally** via the on-device
-  detector, no sidecar).
-
-#### Recognize person
-- **In:** `image*` · **Out:** `person` (name), `person_id`, `confidence` (num %), `ok`
-- **Config:** `max_distance` (default 0.4 — cosine threshold for a match)
-- **Behavior:** Embeds the largest face (AI sidecar) and runs a kNN over the enrolled
-  people (pgvector). `ok` is true when a match within `max_distance` is found.
-
-#### Describe image
-- **In:** `image*` · **Out:** `description` (text), `ok`
-- **Config:** `label` (what it is, for context)
-- **Behavior:** A natural-language caption of the frame via the vision model.
-
-#### Motion detection
-- **In:** `image_a*`, `image_b*` · **Out:** `moved` (bool), `score` (num %), `ok`
-- **Config:** `sensitivity`, `pixel_threshold`
-- **Behavior:** Compares two frames and reports whether/how much they differ.
+| Node | Inputs | Outputs | Config | Behavior | Sample usage |
+|---|---|---|---|---|---|
+| **Person detection** | `image*` | `person` (bool), `count`, `confidence` %, `ok` | — | Is a person present? Runs locally (on-device), no sidecar. | `Get current frame → Person detection → If(person)` |
+| **Recognize person** | `image*` | `person`, `person_id`, `confidence` %, `ok` | `max_distance` (0.4) | Embeds the largest face (AI sidecar) + kNN over enrolled people (pgvector). `ok` = match within threshold. | `Camera snapshot → Recognize person → If(ok) → Notify recipient` |
+| **Describe image** | `image*` | `description`, `ok` | `label` | Natural-language caption of the frame via the vision model. | `Camera snapshot → Describe image → Notify(message=description)` |
+| **Motion detection** | `image_a*`, `image_b*` | `moved` (bool), `score` %, `ok` | `sensitivity`, `pixel_threshold` | Compares two frames; reports whether/how much they differ. | `snapshot A + snapshot B → Motion detection → If(moved)` |
 
 ### Alerts
 
-#### Get last alert
-- **Out:** `id`, `level`, `message`, `room`, `source`, `created_at`, `ok` · (no inputs)
-- **Behavior:** Source node — reads the most-recent alert into typed outputs.
-
-#### Create alert
-- **In:** `message*`, `room` · **Out:** `id`, `result`, `ok`
-- **Config:** `message`, `room`, `level` (info/warn/…), `source`
-- **Behavior:** Writes a new alert.
-
-#### Deliver alert
-- **In:** `id*` · **Out:** `result`, `ok`
-- **Behavior:** Delivers an existing alert (by id) to its recipients.
+| Node | Inputs | Outputs | Config | Behavior | Sample usage |
+|---|---|---|---|---|---|
+| **Get last alert** | — | `id`, `level`, `message`, `room`, `source`, `created_at`, `ok` | — | Source node: reads the most-recent alert into typed outputs. | `Get last alert → Format("[{p1}] {p2}", p1=level, p2=message)` |
+| **Create alert** | `message*`, `room` | `id`, `result`, `ok` | `message`, `room`, `level`, `source` | Writes a new alert. | `If(motion) → Create alert(message="Motion", level="warn")` |
+| **Deliver alert** | `id*` | `result`, `ok` | — | Delivers an existing alert (by id) to its recipients. | `Get last alert → Deliver alert(id)` |
 
 ### Recipients / notifications
 
-#### Get recipient
-- **Out:** `recipient`, `ok` · (no inputs) · **Config:** `recipient`
-- **Behavior:** Source node — picks a notification recipient as a typed `recipient` value.
-
-#### Notify recipient
-- **In:** `message*`, `recipient`, `image` · **Out:** `result`, `ok`
-- **Config:** `message`
-- **Behavior:** Sends a notification (Telegram). An unwired `recipient` auto-targets the
-  sole enabled recipient; an optional `image` attaches a frame.
+| Node | Inputs | Outputs | Config | Behavior | Sample usage |
+|---|---|---|---|---|---|
+| **Get recipient** | — | `recipient`, `ok` | `recipient` | Source node: picks a notification recipient as a typed value. | `Get recipient → Notify recipient(recipient)` |
+| **Notify recipient** | `message*`, `recipient`, `image` | `result`, `ok` | `message` | Sends a Telegram notification. Unwired `recipient` = the sole enabled one; optional `image` attaches a frame. | `Recognize person → Notify recipient(message="Seen {person}", image)` |
 
 ### Text / network
 
-#### Format
-- **In:** `p1`, `p2`, `p3` (text) · **Out:** `text`
-- **Config:** `template` (e.g. `"{p1} — {p2}"`), `p1`–`p3`
-- **Behavior:** Substitutes `{p1..p3}` into the template. Pure text composition.
-
-#### HTTP post
-- **In:** `url*`, `headers` (dict), `fields` (dict), `file` · **Out:** `status` (num),
-  `response` (text), `ok`
-- **Behavior:** POSTs form data (multipart when a `file` is wired) to a URL.
+| Node | Inputs | Outputs | Config | Behavior | Sample usage |
+|---|---|---|---|---|---|
+| **Format** | `p1`, `p2`, `p3` | `text` | `template`, `p1`–`p3` | Substitutes `{p1..p3}` into the template. Pure text composition. | `Get last alert → Format("Alert: {p1}", p1=message)` |
+| **HTTP post** | `url*`, `headers`, `fields`, `file` | `status`, `response`, `ok` | `url`, `headers`, `fields`, `file` | POSTs form data (multipart when a `file` is wired) to a URL. | `Camera snapshot → HTTP post(url=…, file=image)` |
 
 ### Flow control
 
-#### If
-- **In:** `condition*` (bool) · **Exec out:** `true` / `false` (instead of `exec_out`)
-- **Behavior:** Routes the run down the `true` or `false` exec branch. The other branch
-  (and everything downstream of it) is gated off.
-
-#### For each
-- **In:** `items` (text) · **Out:** `item` (text), `index` (num) · **Exec out:** `loop_body`
-  / `completed` (instead of `exec_out`)
-- **Config:** `items` — the list, as a comma-separated string (`alice, bob`) or a JSON array
-  (`["a","b"]` / `[1,2,3]`). May also be wired from a text output.
-- **Behavior:** Iterates the list **synchronously**. Fires `loop_body` once per element —
-  exposing the current `item` and 0-based `index` — and runs that branch to completion
-  before the next element. After the last element, fires `completed` exactly once. Empty
-  list → just `completed`. Type-agnostic: elements arrive as text (numbers as their text
-  form, e.g. `"42"`).
-- **Use for:** processing a list (recipients, rooms, detected names…). **Body nodes must be
-  memoize = off** so they re-run each iteration. Bounded by the run's step/time budget
-  (very large lists will hit it).
-
-#### Wait
-- No data ports (exec-only) · **Config:** `seconds`
-- **Behavior:** Delays the run by `seconds`, staying active until it elapses.
-
-#### Emit event
-- No data ports (exec-only; `exec_in` + pass-through `exec_out`) · **Config:** `event`
-- **Behavior:** Fires the named event → (re)runs the matching `On event` subtree as a
-  **decoupled, concurrent sub-run**. **Dropped while that handler is already running**
-  (coalesce). Exec passes through so the main flow continues immediately. Carries no data.
-
-#### On event
-- **Exec out only** (entry node) · **Config:** `event`
-- **Behavior:** Entry point for a named event. **Never runs on the graph's normal
-  trigger** — only when a matching `Emit event` fires. Its `exec_out` drives the handler.
-
-#### Print
-- **In:** `message`, `on_screen` (bool) · **Config:** `message`, `on_screen`, `level`
-- **Behavior:** Prints to the editor console (always) and, unless `on_screen` is off,
-  flashes the text over the canvas. Debug sink.
-
-#### Show image
-- **In:** `image*` · **Config:** `label`
-- **Behavior:** Renders the input frame inside the node on the canvas. Debug sink for
-  eyeballing a frame; emits no data.
+| Node | Inputs | Outputs | Config | Behavior | Sample usage |
+|---|---|---|---|---|---|
+| **If** | `condition*` (bool) | exec: `true` / `false` | — | Routes the run down the true/false exec branch; the other branch is gated off. | `Person detection → If(person) →true Notify recipient` |
+| **For each** | `items` (text) | `item`, `index`; exec: `loop_body` / `completed` | `items` (CSV `a,b` or JSON `["a","b"]`) | Iterates the list **synchronously**: `loop_body` once per element (with `item`+`index`), then `completed` once. Empty → just `completed`. | `For each(items="lobby,roof") →loop_body Format("{p1}", p1=item) → Notify; →completed Print("done")` |
+| **Wait** | — (exec only) | — | `seconds` | Delays the run by N seconds, staying active until it elapses. | `Create alert → Wait(5s) → Deliver alert` |
+| **Emit event** | — (exec only) | — | `event` | Fires a named in-graph event → concurrent guarded `On event` handler; **dropped if that handler is still running**. Exec passes through. | `If(person) → Emit event("seen")` |
+| **On event** | — | exec: `exec_out` (entry) | `event` | Entry for a named event. **Never runs on the normal trigger** — only when a matching `Emit event` fires. | `On event("seen") → Get current frame → Recognize person` |
+| **Print** | `message`, `on_screen` (bool) | — | `message`, `on_screen`, `level` | Prints to the editor console (+ on-screen flash unless off). Debug sink. | `Recognize person → Print("Saw {p1}", message=person)` |
+| **Show image** | `image*` | — | `label` | Renders the input frame on the canvas. Debug sink; emits no data. | `Camera snapshot → Show image` |
 
 ---
 
@@ -265,5 +191,5 @@ must be **memoize = off** to re-run per item.
    (+ a port-table const if it has data ports).
 2. `node.rs`: add a `run_node` match arm (and a `debug_summary` arm).
 3. The editor palette + inspector pick it up automatically from the catalog. No TS change.
-4. Engine-level special behavior (like `If` / `ShowImage` / `Emit event`) lives in
-   `engine.rs` (`forward_epoch`), not in `run_node`.
+4. Engine-level special behavior (like `If` / `ShowImage` / `Emit event` / `For each`) lives
+   in `engine.rs` (`forward_epoch`), not in `run_node`.
