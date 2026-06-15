@@ -92,7 +92,7 @@ async fn snapshot(State(state): State<Arc<AppState>>, Path(ip): Path<String>) ->
 
 /// Re-read the device list from Postgres (and restart go2rtc if owned).
 async fn reload(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let n = state.reload();
+    let n = state.reload(0);
     log::info!("devices reloaded on request — {n} device(s)");
     Json(json!({ "reloaded": n }))
 }

@@ -52,13 +52,12 @@ fn main() {
         });
     }
 
-    // Config re-pull loop: pick up cameras added/edited in the cloud (every 60s) and
-    // resolve RTSP for newly-credentialed cameras, without a manual reload.
+    // Config long-poll: block on control until the web changes a camera (or 25s), then
+    // apply immediately — so cloud edits (e.g. setting credentials) take effect in ~1s.
     {
         let sync = std::sync::Arc::clone(&state);
         std::thread::spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_secs(60));
-            sync.reload();
+            sync.reload(25);
         });
     }
 

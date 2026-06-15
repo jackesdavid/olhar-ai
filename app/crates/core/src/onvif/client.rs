@@ -10,7 +10,7 @@ use rand::RngCore;
 use sha1::{Digest, Sha1};
 
 use super::xml::{
-    parse_first_profile_token, parse_media_url, parse_uri, scan_open_tag,
+    parse_first_profile_token, parse_media_url, parse_profiles, parse_uri, scan_open_tag,
 };
 
 const SOAP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -28,6 +28,44 @@ pub fn test_credentials(xaddr: &str, username: &str, password: &str) -> Result<S
 
     let stream = get_stream_uri_soap(&media, &token, username, password)?;
     parse_uri(&stream).ok_or_else(|| "Invalid credentials or no stream available".to_string())
+}
+
+/// Resolve both the **main** (highest-resolution) and **sub** (lowest-resolution) RTSP
+/// stream URIs for a camera. The substream powers the low-latency preview feed; the main
+/// stream backs the HD toggle. Cameras with a single profile return `(main, None)`.
+///
+/// Edge-only: these URIs embed nothing the cloud needs (they live on the LAN and the edge
+/// injects credentials into them for go2rtc), so they're never reported to control.
+pub fn resolve_stream_uris(
+    xaddr: &str,
+    username: &str,
+    password: &str,
+) -> Result<(String, Option<String>), String> {
+    let caps = get_capabilities(xaddr, username, password)?;
+    let media = parse_media_url(&caps, xaddr);
+
+    let profiles_xml = get_profiles(&media, username, password)?;
+    let profiles = parse_profiles(&profiles_xml);
+    if profiles.is_empty() {
+        return Err("No media profiles — credentials likely rejected".to_string());
+    }
+
+    // Highest-area profile is the main stream; lowest-area is the substream. With ties (or
+    // missing resolutions) both can resolve to the same token → no distinct substream.
+    let main = profiles.iter().max_by_key(|p| p.area()).unwrap();
+    let sub = profiles.iter().min_by_key(|p| p.area()).unwrap();
+
+    let main_uri = parse_uri(&get_stream_uri_soap(&media, &main.token, username, password)?)
+        .ok_or_else(|| "Invalid credentials or no stream available".to_string())?;
+
+    let sub_uri = if sub.token != main.token {
+        parse_uri(&get_stream_uri_soap(&media, &sub.token, username, password)?)
+            .filter(|u| u != &main_uri)
+    } else {
+        None
+    };
+
+    Ok((main_uri, sub_uri))
 }
 
 /// Fetch a JPEG snapshot. Tries ONVIF `GetSnapshotUri` + HTTP Basic GET; falls

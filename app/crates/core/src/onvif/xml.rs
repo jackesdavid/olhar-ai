@@ -97,6 +97,124 @@ pub fn parse_uri(xml: &str) -> Option<String> {
     extract_tag(xml, "Uri").map(|s| s.to_string())
 }
 
+/// One media profile from a `GetProfiles` response: its `token` (needed for
+/// `GetStreamUri`) plus the encoder resolution (0×0 if the profile has none), used to
+/// rank profiles main (highest) vs sub (lowest).
+#[derive(Debug, Clone)]
+pub struct ProfileInfo {
+    pub token: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl ProfileInfo {
+    /// Pixel area — the ranking key for picking the main (largest) / sub (smallest)
+    /// profile. Unknown resolutions sort as 0.
+    pub fn area(&self) -> u64 {
+        self.width as u64 * self.height as u64
+    }
+}
+
+/// Enumerate **all** media profiles (token + resolution) from a `GetProfiles` response.
+/// Profiles are siblings (not nested), so each runs from its `<…:Profiles token="…">`
+/// open tag to the next `</…:Profiles>`. The resolution is read from the profile's
+/// `VideoEncoderConfiguration/Resolution` (`Width`/`Height`).
+pub fn parse_profiles(xml: &str) -> Vec<ProfileInfo> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < xml.len() {
+        let Some(lt) = xml[i..].find('<').map(|p| p + i) else { break };
+        let rest = &xml[lt + 1..];
+        if rest.starts_with('/') || rest.starts_with('!') || rest.starts_with('?') {
+            i = lt + 1;
+            continue;
+        }
+        let name_end = rest
+            .find(|c: char| c == '>' || c == ' ' || c == '/')
+            .unwrap_or(rest.len());
+        if local_name(&rest[..name_end]) != "Profiles" {
+            i = lt + 1;
+            continue;
+        }
+        let Some(tag_end) = xml[lt..].find('>').map(|p| p + lt) else { break };
+        let attrs = &xml[lt..tag_end];
+        let token = attrs.find("token=\"").and_then(|p| {
+            let s = p + 7;
+            attrs[s..].find('"').map(|e| attrs[s..s + e].to_string())
+        });
+        let content_start = tag_end + 1;
+        let close = scan_close_tag(xml, "Profiles", content_start).unwrap_or(xml.len());
+        let block = &xml[content_start..close];
+        let (width, height) = parse_resolution(block);
+        if let Some(token) = token {
+            out.push(ProfileInfo { token, width, height });
+        }
+        i = close;
+    }
+    out
+}
+
+/// `<…:Resolution><…:Width>1920</…:Width><…:Height>1080</…:Height></…:Resolution>`
+/// → `(1920, 1080)`; `(0, 0)` when absent or unparseable.
+fn parse_resolution(block: &str) -> (u32, u32) {
+    let Some(res) = extract_tag(block, "Resolution") else { return (0, 0) };
+    let w = extract_tag(res, "Width").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let h = extract_tag(res, "Height").and_then(|s| s.parse().ok()).unwrap_or(0);
+    (w, h)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A trimmed two-profile GetProfiles response (main 1080p + sub 640×360), with the
+    // typical `trt:`/`tt:` namespace prefixes a real camera uses.
+    const PROFILES: &str = r#"<trt:GetProfilesResponse>
+      <trt:Profiles token="MainProfile">
+        <tt:VideoEncoderConfiguration>
+          <tt:Resolution><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:Resolution>
+        </tt:VideoEncoderConfiguration>
+      </trt:Profiles>
+      <trt:Profiles token="SubProfile">
+        <tt:VideoEncoderConfiguration>
+          <tt:Resolution><tt:Width>640</tt:Width><tt:Height>360</tt:Height></tt:Resolution>
+        </tt:VideoEncoderConfiguration>
+      </trt:Profiles>
+    </trt:GetProfilesResponse>"#;
+
+    #[test]
+    fn parse_profiles_enumerates_tokens_and_resolutions() {
+        let p = parse_profiles(PROFILES);
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0].token, "MainProfile");
+        assert_eq!((p[0].width, p[0].height), (1920, 1080));
+        assert_eq!(p[1].token, "SubProfile");
+        assert_eq!((p[1].width, p[1].height), (640, 360));
+
+        // main = largest area, sub = smallest area
+        let main = p.iter().max_by_key(|x| x.area()).unwrap();
+        let sub = p.iter().min_by_key(|x| x.area()).unwrap();
+        assert_eq!(main.token, "MainProfile");
+        assert_eq!(sub.token, "SubProfile");
+    }
+
+    #[test]
+    fn parse_profiles_single_profile() {
+        let xml = r#"<trt:Profiles token="Only">
+          <tt:VideoEncoderConfiguration>
+            <tt:Resolution><tt:Width>1280</tt:Width><tt:Height>720</tt:Height></tt:Resolution>
+          </tt:VideoEncoderConfiguration>
+        </trt:Profiles>"#;
+        let p = parse_profiles(xml);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].token, "Only");
+        // main == sub when there's only one profile (caller emits no distinct substream).
+        let main = p.iter().max_by_key(|x| x.area()).unwrap();
+        let sub = p.iter().min_by_key(|x| x.area()).unwrap();
+        assert_eq!(main.token, sub.token);
+    }
+}
+
 /// The stable device id from a ProbeMatch — the WS-Addressing
 /// `EndpointReference/Address` (typically `urn:uuid:…`), which survives DHCP/IP
 /// changes. Reads *inside* the EndpointReference element so it never picks up the

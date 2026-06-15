@@ -34,9 +34,17 @@ pub struct Device {
     pub username: Option<String>,
     #[serde(default)]
     pub password: Option<String>,
-    /// RTSP URL returned when the credentials were validated.
+    /// RTSP URL returned when the credentials were validated. This is the **main**
+    /// (highest-resolution) profile's stream.
     #[serde(default)]
     pub rtsp_url: Option<String>,
+    /// RTSP URL of the camera's **substream** (lowest-resolution profile), used for the
+    /// low-latency preview feed. `None` for single-profile cameras. Edge-only (resolved
+    /// via ONVIF, never persisted in the cloud) — `#[sqlx(default)]` so control's
+    /// `devices` table needs no column for it.
+    #[serde(default)]
+    #[sqlx(default)]
+    pub rtsp_sub_url: Option<String>,
 }
 
 impl Device {
@@ -51,6 +59,7 @@ impl Device {
             username: None,
             password: None,
             rtsp_url: None,
+            rtsp_sub_url: None,
         }
     }
 

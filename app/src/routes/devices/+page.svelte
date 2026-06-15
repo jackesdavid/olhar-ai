@@ -34,6 +34,12 @@
 
   // Cloud mode: cameras the tenant's edge found on its LAN and pushed up.
   let edgeFound = $state<EdgeDiscovered[]>([]);
+  // Cloud mode: IPs whose credentials are set (the cloud never stores the creds, only this flag).
+  let configuredIps = $state<Set<string>>(new Set());
+  // A camera is "configured" if it has creds (desktop) or its flag is set (cloud).
+  function isConfigured(d: Device): boolean {
+    return isTauri() ? !!d.username : configuredIps.has(d.ip);
+  }
 
   // ---- Detail dialog (edit name + credentials, test, snapshot) -------------
   let detailOpen = $state(false);
@@ -75,7 +81,10 @@
   async function loadEdgeFound() {
     if (isTauri()) return; // desktop uses the live ONVIF scan below
     try {
-      edgeFound = await data.listDiscovered();
+      [edgeFound, configuredIps] = await Promise.all([
+        data.listDiscovered(),
+        data.listConfigured().then((ips) => new Set(ips)),
+      ]);
     } catch {
       edgeFound = [];
     }
@@ -196,6 +205,7 @@
       }
       if (isTauri()) toast.success("Device saved.");
       await loadDevices();
+      await loadEdgeFound(); // refresh the "configured" flags (cloud)
     } catch (err) {
       console.error("Failed to save device", err);
       toast.error("Failed to save device", { description: String(err) });
@@ -333,15 +343,15 @@
                 <Table.Cell class="tabular-nums text-muted-foreground">{d.ip}</Table.Cell>
                 <Table.Cell class="text-muted-foreground">{makeModel(d)}</Table.Cell>
                 <Table.Cell>
-                  {#if d.username}
+                  {#if isConfigured(d)}
                     <Badge
                       variant="outline"
                       class="border-primary/30 bg-primary/10 text-primary"
                     >
-                      Saved
+                      {isTauri() ? "Saved" : "Configured"}
                     </Badge>
                   {:else}
-                    <Badge variant="outline">None</Badge>
+                    <Badge variant="outline">{isTauri() ? "None" : "Setup needed"}</Badge>
                   {/if}
                 </Table.Cell>
                 <Table.Cell class="text-right">

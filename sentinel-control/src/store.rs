@@ -234,6 +234,35 @@ pub async fn list_discovered(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec
     .await
 }
 
+/// Mark a camera as configured (its credentials were relayed to the edge). The creds
+/// themselves are never stored — only this flag.
+pub async fn mark_configured(pool: &PgPool, tenant_id: Uuid, ip: &str) -> sqlx::Result<()> {
+    sqlx::query("INSERT INTO configured_cameras (tenant_id, ip) VALUES ($1,$2) ON CONFLICT DO NOTHING")
+        .bind(tenant_id)
+        .bind(ip)
+        .execute(pool)
+        .await
+        .map(|_| ())
+}
+
+pub async fn unmark_configured(pool: &PgPool, tenant_id: Uuid, ip: &str) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM configured_cameras WHERE tenant_id = $1 AND ip = $2")
+        .bind(tenant_id)
+        .bind(ip)
+        .execute(pool)
+        .await
+        .map(|_| ())
+}
+
+pub async fn list_configured(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<String>> {
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT ip FROM configured_cameras WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().map(|(ip,)| ip).collect())
+}
+
 /// The most-recently-seen box host for a tenant (the gateway's live upstream).
 pub async fn box_host_for_tenant(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Option<String>> {
     let row: Option<(Option<String>,)> = sqlx::query_as(

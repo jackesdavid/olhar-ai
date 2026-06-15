@@ -12,11 +12,20 @@ use crate::onvif::client::rtsp_url_with_creds;
 /// The go2rtc sidecar's local HTTP API (also the WebRTC/MSE player + frame API).
 pub const BASE: &str = "http://127.0.0.1:1984";
 
-/// Build a go2rtc YAML config from the device list: one `cam_<sanitized_ip>` stream
-/// per device that has a non-empty `rtsp_url`, with credentials injected. Always
-/// emits a `streams:` key (even if empty) so go2rtc starts cleanly. Pure + shared so
-/// both the Tauri shell and `sentinel-edge` generate identical names (which the
-/// snapshot `src` + Live player rely on).
+/// Build a go2rtc YAML config from the device list. For each device with a non-empty
+/// `rtsp_url` we emit up to two streams (credentials injected, audio dropped via
+/// `#media=video` for lower latency):
+///
+/// - `cam_<ip>` — the **preview** feed: the camera's substream (`rtsp_sub_url`) when it
+///   has one, else the main stream. Low-res = fast to start and cheap to relay.
+/// - `cam_<ip>_hd` — the **main** (highest-res) stream, behind the Live page's HD toggle.
+///   Always emitted so the toggle works on every camera; go2rtc connects lazily (only when
+///   a consumer attaches), so for single-profile cameras this duplicate costs nothing until
+///   someone actually requests HD.
+///
+/// Always emits a `streams:` key (even if empty) so go2rtc starts cleanly. Pure + shared
+/// so both the Tauri shell and `sentinel-edge` generate identical names (which the snapshot
+/// `src` + Live player rely on).
 ///
 /// The API binds **localhost only** (`127.0.0.1:1984`) — go2rtc is never exposed on
 /// the LAN or public internet directly; reach it via `tailscale serve` (the edge) or
@@ -33,10 +42,27 @@ pub fn config_yaml(devices: &[Device]) -> String {
         }
         let user = d.username.as_deref().unwrap_or("");
         let pass = d.password.as_deref().unwrap_or("");
-        let url = rtsp_url_with_creds(rtsp, user, pass);
-        out.push_str(&format!("  {}: {}\n", stream_name(&d.ip), url));
+        let main = rtsp_url_with_creds(rtsp, user, pass);
+
+        // Preview = substream if the camera exposes one, else the main stream.
+        let sub = d
+            .rtsp_sub_url
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| rtsp_url_with_creds(s, user, pass));
+        let preview = sub.as_deref().unwrap_or(&main);
+
+        let name = stream_name(&d.ip);
+        out.push_str(&format!("  {name}: {preview}#media=video\n"));
+        out.push_str(&format!("  {name}_hd: {main}#media=video\n"));
     }
     out
+}
+
+/// The go2rtc stream name for a camera `ip`'s **HD** (main) feed — the high-resolution
+/// variant the Live page's HD toggle requests. Mirrors [`stream_name`].
+pub fn stream_name_hd(ip: &str) -> String {
+    format!("{}_hd", stream_name(ip))
 }
 
 /// The go2rtc stream name for a camera `ip`. MUST match the names written into the

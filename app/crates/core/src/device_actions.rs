@@ -136,6 +136,7 @@ mod tests {
             username: creds.then(|| "u".to_string()),
             password: creds.then(|| "p".to_string()),
             rtsp_url: None,
+            rtsp_sub_url: None,
         }
     }
 

@@ -101,6 +101,9 @@ export const data = {
   /** Cameras the tenant's edge found on its LAN and pushed to the cloud (cloud mode). */
   listDiscovered: (): Promise<EdgeDiscovered[]> =>
     TAURI ? Promise.resolve([]) : api.get<EdgeDiscovered[]>("/devices/discovered"),
+  /** IPs of cameras whose credentials have been set/relayed to the edge (cloud mode). */
+  listConfigured: (): Promise<string[]> =>
+    TAURI ? Promise.resolve([]) : api.get<string[]>("/devices/configured"),
   testCredentials: (xaddrOrIp: string, username: string, password: string): Promise<string> =>
     TAURI ? invoke<string>("test_credentials", { xaddrOrIp, username, password }) : cloudOnly("Credential test"),
   validateDevice: (ip: string, username: string, password: string): Promise<Device> =>

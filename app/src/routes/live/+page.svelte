@@ -26,6 +26,7 @@
   let loading = $state(true);
   let rescanning = $state(false);
   let selectedIp = $state<string>("");
+  let hd = $state(false); // cloud: SD substream (default) vs HD main stream
 
   // Desktop: a camera is playable once go2rtc has a validated stream. Cloud: credentials
   // live on the edge (never in the cloud), so we list all cameras — the frame loads if
@@ -39,8 +40,9 @@
   const selectedLabel = $derived(selected ? selected.name : "Select a camera");
 
   // go2rtc stream name for an IP (matches the edge: cam_<ip with dots→underscores>).
+  // The edge serves a low-latency substream by default and an `_hd` main variant.
   function streamName(ip: string): string {
-    return "cam_" + ip.replaceAll(".", "_");
+    return "cam_" + ip.replaceAll(".", "_") + (hd ? "_hd" : "");
   }
 
   // ---- Cloud live video: MSE over the gateway WebSocket (smooth H.264) -----------
@@ -156,10 +158,11 @@
     socket.onerror = () => {};
   }
 
-  // (Re)start the stream whenever the selected camera changes (cloud only).
+  // (Re)start the stream whenever the selected camera — or the HD toggle — changes (cloud only).
   $effect(() => {
     if (!cloud) return;
     const ip = selected?.ip;
+    hd; // track: re-subscribe on quality change
     if (ip && videoEl) startStream(ip);
     else stopStream();
   });
@@ -227,19 +230,37 @@
             <Button href="/devices" variant="outline">Go to Devices</Button>
           </EmptyState>
         {:else}
-          <div class="space-y-2">
-            <Label>Camera</Label>
-            <Select.Root type="single" bind:value={selectedIp}>
-              <Select.Trigger class="w-72">{selectedLabel}</Select.Trigger>
-              <Select.Content>
-                {#each playable as d (d.ip)}
-                  <Select.Item value={d.ip} label={d.name}>
-                    {d.name}
-                    <span class="ml-2 text-xs text-muted-foreground tabular-nums">{d.ip}</span>
-                  </Select.Item>
-                {/each}
-              </Select.Content>
-            </Select.Root>
+          <div class="flex flex-wrap items-end justify-between gap-4">
+            <div class="space-y-2">
+              <Label>Camera</Label>
+              <Select.Root type="single" bind:value={selectedIp}>
+                <Select.Trigger class="w-72">{selectedLabel}</Select.Trigger>
+                <Select.Content>
+                  {#each playable as d (d.ip)}
+                    <Select.Item value={d.ip} label={d.name}>
+                      {d.name}
+                      <span class="ml-2 text-xs text-muted-foreground tabular-nums">{d.ip}</span>
+                    </Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
+            </div>
+
+            {#if cloud && selected}
+              <!-- Quality: SD = low-latency substream (default), HD = main stream -->
+              <div class="inline-flex items-center rounded-full border border-border bg-muted/40 p-0.5 text-xs font-medium">
+                <button
+                  type="button"
+                  class="rounded-full px-3 py-1 transition-colors {!hd ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:text-foreground'}"
+                  onclick={() => (hd = false)}
+                >SD</button>
+                <button
+                  type="button"
+                  class="rounded-full px-3 py-1 transition-colors {hd ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:text-foreground'}"
+                  onclick={() => (hd = true)}
+                >HD</button>
+              </div>
+            {/if}
           </div>
 
           <div class="frame relative">

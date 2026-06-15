@@ -45,6 +45,20 @@ pub struct AppState {
     /// next config pull, then they're discarded. Keyed by (tenant_id, camera ip) →
     /// (username, password, set-at). **Never persisted** — camera creds never touch the DB.
     pub pending_creds: Arc<Mutex<HashMap<(uuid::Uuid, String), (String, String, Instant)>>>,
+    /// Per-tenant config-change notifiers — the edge long-polls /config/cameras and is
+    /// woken the instant the web changes a camera (so edits apply in ~1s, not on a timer).
+    pub notifiers: Arc<Mutex<HashMap<uuid::Uuid, Arc<tokio::sync::Notify>>>>,
+}
+
+impl AppState {
+    /// The change-notifier for a tenant (created on first use).
+    pub fn notifier(&self, tid: uuid::Uuid) -> Arc<tokio::sync::Notify> {
+        self.notifiers.lock().unwrap().entry(tid).or_default().clone()
+    }
+    /// Wake any edge long-polling this tenant's config (a camera was added/edited).
+    pub fn bump(&self, tid: uuid::Uuid) {
+        self.notifier(tid).notify_waiters();
+    }
 }
 
 fn main() {
@@ -87,7 +101,8 @@ fn main() {
         let http = reqwest::Client::new();
 
         let pending_creds = Arc::new(Mutex::new(HashMap::new()));
-        let state = AppState { db, pool, jwt_secret, google, oauth_states, tailscale, http, pending_creds };
+        let notifiers = Arc::new(Mutex::new(HashMap::new()));
+        let state = AppState { db, pool, jwt_secret, google, oauth_states, tailscale, http, pending_creds, notifiers };
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {
             Ok(l) => l,

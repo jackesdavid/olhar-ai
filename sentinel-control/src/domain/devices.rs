@@ -17,8 +17,23 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/devices", get(list).put(upsert))
         .route("/devices/discovered", get(discovered))
+        .route("/devices/configured", get(configured))
         .route("/devices/:ip/credentials", post(set_credentials))
         .route("/devices/:ip", axum::routing::delete(remove))
+}
+
+/// IPs of cameras whose credentials have been set (relayed to the edge). Lets the UI
+/// show "Configured" without the cloud ever holding the credentials.
+async fn configured(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<String>>, ApiErr> {
+    auth::require(&c, "devices.read")?;
+    let tid = tenant_of(&c)?;
+    store::list_configured(&st.pool, tid)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            log::error!("list_configured failed: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+        })
 }
 
 #[derive(Deserialize)]
@@ -35,7 +50,10 @@ async fn set_credentials(UserClaims(c): UserClaims, State(st): State<AppState>, 
     st.pending_creds
         .lock()
         .unwrap()
-        .insert((tid, ip), (b.username, b.password, std::time::Instant::now()));
+        .insert((tid, ip.clone()), (b.username, b.password, std::time::Instant::now()));
+    // Mark configured (non-sensitive flag for the UI) + wake the edge's long-poll now.
+    let _ = store::mark_configured(&st.pool, tid, &ip).await;
+    st.bump(tid);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -83,6 +101,7 @@ async fn upsert(UserClaims(c): UserClaims, State(st): State<AppState>, Json(devi
         devices::repo::save(&db, tid, &list);
     })
     .await?;
+    st.bump(tid); // wake the edge's long-poll
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -90,12 +109,15 @@ async fn upsert(UserClaims(c): UserClaims, State(st): State<AppState>, Json(devi
 async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip): Path<String>) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "devices.write")?;
     let tid = tenant_of(&c)?;
+    let ipc = ip.clone();
     let db = st.db.clone();
     blocking(move || {
         let mut list = devices::repo::load(&db, tid);
-        list.retain(|d| d.ip != ip);
+        list.retain(|d| d.ip != ipc);
         devices::repo::save(&db, tid, &list);
     })
     .await?;
+    let _ = store::unmark_configured(&st.pool, tid, &ip).await;
+    st.bump(tid); // wake the edge's long-poll
     Ok(StatusCode::NO_CONTENT)
 }

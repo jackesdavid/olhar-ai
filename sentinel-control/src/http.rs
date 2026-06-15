@@ -1,6 +1,6 @@
 //! Control-plane REST: auth + RBAC + master console (see `handlers`), the edge
 //! camera-config pull / discovery push, the edge installer + binaries, and health.
-use axum::extract::State;
+use axum::extract::{RawQuery, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
@@ -82,7 +82,7 @@ async fn box_tenant(st: &AppState, headers: &HeaderMap) -> Result<Option<uuid::U
 /// The camera list an edge box pulls, scoped to the box's tenant (box token required —
 /// this returns RTSP credentials and control is public). A dev box can opt into the
 /// default tenant with `ALLOW_UNTENANTED_CONFIG=1`.
-async fn cameras(State(st): State<AppState>, headers: HeaderMap) -> Response {
+async fn cameras(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): RawQuery) -> Response {
     let tenant = match box_tenant(&st, &headers).await {
         Ok(Some(tid)) => tid,
         Ok(None) => {
@@ -97,6 +97,23 @@ async fn cameras(State(st): State<AppState>, headers: HeaderMap) -> Response {
         }
         Err(resp) => return resp,
     };
+
+    // Long-poll: if `?wait=<secs>` and nothing is already staged, hold the request until
+    // the web changes a camera (or the timeout), so edge edits apply in ~1s, not on a
+    // timer (and idle edges don't re-pull/re-resolve).
+    let wait: u64 = q
+        .unwrap_or_default()
+        .split('&')
+        .find_map(|p| p.strip_prefix("wait="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+        .min(60);
+    let has_pending = st.pending_creds.lock().unwrap().keys().any(|(t, _)| *t == tenant);
+    if wait > 0 && !has_pending {
+        let n = st.notifier(tenant);
+        let _ = tokio::time::timeout(Duration::from_secs(wait), n.notified()).await;
+    }
+
     let mut list = devices::repo::load(&st.db, tenant);
     // Hand over any credentials the web staged for this tenant's cameras — ONCE — then
     // discard them. Camera credentials are never persisted in the control DB.
