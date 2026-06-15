@@ -1,0 +1,13 @@
+# dlib / face_recognition variant (A/B experiment). CPU.
+runpod>=1.6
+pillow>=10
+# face_recognition's encoder/landmark code expects numpy 1.x semantics.
+numpy<2
+click
+# Prebuilt dlib wheel — avoids the slow/fragile C++ source build (`pip install dlib`).
+# Provides the importable `dlib` module that face_recognition needs.
+dlib-bin
+# The trained dlib models face_recognition loads at import (detector/predictor/resnet).
+face-recognition-models
+# NOTE: face_recognition itself is installed with --no-deps in the Dockerfile so pip
+# doesn't try to pull source `dlib` over dlib-bin.

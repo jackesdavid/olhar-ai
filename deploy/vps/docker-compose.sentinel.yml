@@ -71,6 +71,16 @@ services:
     restart: always
     command: ["python", "-u", "handler.py", "--rp_serve_api", "--rp_api_host", "0.0.0.0", "--rp_api_port", "8000"]
 
+  sentinel-ai-dlib:
+    # A/B experiment: dlib / face_recognition variant, same /runsync contract + op names
+    # (128-d embeddings, NOT compatible with the 512-d pgvector column). Internal only.
+    # Compare with bench.py; to make it live, repoint control's AI_SERVICE_URL at
+    # http://sentinel-ai-dlib:8000/runsync. Optional — start it explicitly when testing.
+    image: ghcr.io/jackesdavid/sentinel-ai:dlib
+    container_name: sentinel-ai-dlib
+    restart: unless-stopped
+    command: ["python", "-u", "handler_dlib.py", "--rp_serve_api", "--rp_api_host", "0.0.0.0", "--rp_api_port", "8000"]
+
   sentinel-app:
     image: ghcr.io/jackesdavid/sentinel-app:latest
     container_name: sentinel-app

@@ -31,6 +31,8 @@ jobs:
             file: Dockerfile
           - tag: cpu
             file: Dockerfile.cpu
+          - tag: dlib
+            file: Dockerfile.dlib
     steps:
       - uses: actions/checkout@v4
 

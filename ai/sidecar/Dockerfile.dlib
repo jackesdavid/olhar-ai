@@ -1,0 +1,28 @@
+# Sentinel AI sidecar — dlib / face_recognition variant (A/B experiment, CPU).
+#
+# Same /runsync contract + op names as the InsightFace images, so it's a drop-in swap
+# for benchmarking (bench.py --url / AI_SERVICE_URL). Uses prebuilt dlib (dlib-bin) so
+# there's no slow C++ source build. Embeddings are 128-d (NOT compatible with the 512-d
+# InsightFace pgvector column) — this is for detection/latency/accuracy comparison.
+FROM python:3.11-slim
+
+LABEL org.opencontainers.image.source="https://github.com/jackesdavid/Sentinel"
+
+# libgomp1: dlib uses OpenMP at runtime. (No opencv here — face_recognition uses PIL.)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+ENV PIP_DEFAULT_TIMEOUT=120 PIP_RETRIES=5
+
+COPY requirements.dlib.txt .
+RUN pip install --no-cache-dir -r requirements.dlib.txt \
+    # --no-deps so pip doesn't pull source `dlib` (we use dlib-bin) or duplicate models.
+    && pip install --no-cache-dir --no-deps face_recognition
+
+COPY handler_dlib.py .
+
+# Serve the RunPod /runsync HTTP contract on 0.0.0.0:8000 (reachable in-cluster).
+CMD ["python", "-u", "handler_dlib.py", "--rp_serve_api", "--rp_api_host", "0.0.0.0", "--rp_api_port", "8000"]
