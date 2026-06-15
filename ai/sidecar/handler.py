@@ -216,4 +216,14 @@ def handler(job: dict) -> dict:
 
 
 if __name__ == "__main__":
+    # Warm the face pipeline before serving so the FIRST enroll/recognize isn't slow
+    # (InsightFace model load is ~10-20s on CPU). Applies to both RunPod workers and the
+    # local --rp_serve_api server. Best-effort — a warmup failure must not stop the
+    # server from starting (it would just load lazily on first use, as before).
+    try:
+        t0 = time.perf_counter()
+        _face_app()
+        print(f"[ai] face pipeline warmed at startup in {round((time.perf_counter()-t0)*1000)} ms", flush=True)
+    except Exception as e:
+        print(f"[ai] startup warmup failed (will load lazily): {e}", flush=True)
     runpod.serverless.start({"handler": handler})
