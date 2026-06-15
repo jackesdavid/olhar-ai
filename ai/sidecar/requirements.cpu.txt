@@ -5,8 +5,10 @@ runpod>=1.6
 pillow>=10
 # InsightFace/opencv torch-era pins: numpy 2 + new opencv break the wheels.
 numpy<2
-# Headless OpenCV — no GUI libs needed on a server (smaller, no libGL dependency).
-opencv-python-headless<4.11
+# InsightFace hard-depends on opencv-python (full); pin it <4.11 so the constraint
+# applies to that transitive pull too (newer opencv wants numpy>=2). Needs libGL at
+# runtime — installed in the Dockerfile.
+opencv-python<4.11
 # Face pipeline: SCRFD (detect) + ArcFace (512-d embed), the `buffalo_l` model pack.
 insightface>=0.7.3
 # CPU ONNX runtime (NOT onnxruntime-gpu) — runs SCRFD + ArcFace on the CPU.

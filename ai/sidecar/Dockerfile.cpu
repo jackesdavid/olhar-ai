@@ -14,9 +14,10 @@ FROM python:3.11-slim
 LABEL org.opencontainers.image.source="https://github.com/jackesdavid/Sentinel"
 
 # build-essential: InsightFace builds a small Cython extension at install time.
-# libglib2.0-0: required by opencv at runtime (headless still needs glib).
+# libgl1 + libglib2.0-0: opencv-python (pulled in by InsightFace) needs them at runtime
+# (libGL.so.1) — same as the GPU image.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential libglib2.0-0 \
+    && apt-get install -y --no-install-recommends build-essential libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
