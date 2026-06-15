@@ -16,6 +16,17 @@ use crate::agent::ai_service;
 /// ArcFace embedding dimensionality (the pgvector column is `vector(512)`).
 pub const EMBED_DIM: usize = 512;
 
+/// One detected face: source-pixel box `[x1,y1,x2,y2]`, detector confidence, and the 5
+/// facial landmarks (eyes, nose, mouth corners). The element type of a `FaceDetection[]`
+/// (workflow `FaceArray` port). Produced by the sidecar `face_detect` op (a producer node
+/// is TBD — the type exists so downstream graphs can be built against it).
+#[derive(Debug, Clone)]
+pub struct FaceDetection {
+    pub bbox: [f32; 4],
+    pub confidence: f32,
+    pub landmarks: Vec<[f32; 2]>,
+}
+
 /// Embed the most prominent face in `image_bytes` via the GPU sidecar.
 ///
 /// Returns a 512-d L2-normalized vector ready for cosine matching. Errors when the

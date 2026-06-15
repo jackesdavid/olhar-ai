@@ -24,6 +24,15 @@ exec edge) **and** its required inputs resolve. Data inputs come from a wired up
 output, else from the node's config literal. A required input wired to a node that didn't
 run (e.g. a dead `If` branch) puts this node on a dead path — it's skipped.
 
+### Typed arrays & detection elements
+Beyond the scalar port types there are **typed arrays** — `String[]`, `Number[]`,
+`PersonDetection[]`, `FaceDetection[]` — and the struct **elements** `PersonDetection` /
+`FaceDetection`. Producer nodes emit arrays (e.g. Person detection → `persons:
+PersonDetection[]`); **For each** iterates any of them and yields the element on `item`;
+**Break** nodes destructure an element into its fields. `For each`'s `items`/`item` use the
+**`Any`** wildcard so one loop handles every type — which means an element wired into a
+type-specific port isn't checked at edit time (a mismatch just reads as empty at run time).
+
 ### Memoize (per node, default ON)
 Each node has a **Memoize** toggle (inspector). When **on** (default), the node's output
 is computed once per run and reused on fan-out. When **off**, the node **recomputes every
@@ -72,7 +81,9 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 
 | Node | Inputs | Outputs | Config | Behavior | Sample usage |
 |---|---|---|---|---|---|
-| **Person detection** | `image*` | `person` (bool), `count`, `confidence` %, `ok` | — | Is a person present? Runs locally (on-device), no sidecar. | `Get current frame → Person detection → If(person)` |
+| **Person detection** | `image*` | `person` (bool), `count`, `confidence` %, `persons` (**PersonDetection[]**), `ok` | — | Detects people locally (on-device, no sidecar). `persons` is one detection (box + confidence) per person. | `Get current frame → Person detection → (persons) → For each` |
+| **Break person detection** | `person` (Person) | `bbox` (Number[]), `confidence` % | — | Destructures a `PersonDetection` element into its fields (Unreal-style "Break"). | `For each(persons) → item → Break person detection → bbox / confidence` |
+| **Break face detection** | `face` (Face) | `bbox` (Number[]), `confidence` %, `landmarks` (count) | — | Destructures a `FaceDetection` element into its fields. | `For each(faces) → item → Break face detection` |
 | **Recognize person** | `image*` | `person`, `person_id`, `confidence` %, `ok` | `max_distance` (0.4) | Embeds the largest face (AI sidecar) + kNN over enrolled people (pgvector). `ok` = match within threshold. | `Camera snapshot → Recognize person → If(ok) → Notify recipient` |
 | **Describe image** | `image*` | `description`, `ok` | `label` | Natural-language caption of the frame via the vision model. | `Camera snapshot → Describe image → Notify(message=description)` |
 | **Motion detection** | `image_a*`, `image_b*` | `moved` (bool), `score` %, `ok` | `sensitivity`, `pixel_threshold` | Compares two frames; reports whether/how much they differ. | `snapshot A + snapshot B → Motion detection → If(moved)` |
@@ -104,7 +115,7 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 | Node | Inputs | Outputs | Config | Behavior | Sample usage |
 |---|---|---|---|---|---|
 | **If** | `condition*` (bool) | exec: `true` / `false` | — | Routes the run down the true/false exec branch; the other branch is gated off. | `Person detection → If(person) →true Notify recipient` |
-| **For each** | `items` (text) | `item`, `index`; exec: `loop_body` / `completed` | `items` (CSV `a,b` or JSON `["a","b"]`) | Iterates the list **synchronously**: `loop_body` once per element (with `item`+`index`), then `completed` once. Empty → just `completed`. | `For each(items="lobby,roof") →loop_body Format("{p1}", p1=item) → Notify; →completed Print("done")` |
+| **For each** | `items` (**any array** — `String[]`/`Number[]`/`PersonDetection[]`/…, or a text list) | `item` (the element, any type), `index`; exec: `loop_body` / `completed` | `items` (CSV `a,b` or JSON `["a",1]` when not wired) | Iterates the array **synchronously**: `loop_body` once per element (with `item`+`index`), then `completed` once. Empty → just `completed`. | `Person detection → (persons) → For each →loop_body Break person detection; →completed Print("done")` |
 | **Wait** | — (exec only) | — | `seconds` | Delays the run by N seconds, staying active until it elapses. | `Create alert → Wait(5s) → Deliver alert` |
 | **Emit event** | — (exec only) | — | `event` | Fires a named in-graph event → concurrent guarded `On event` handler; **dropped if that handler is still running**. Exec passes through. | `If(person) → Emit event("seen")` |
 | **On event** | — | exec: `exec_out` (entry) | `event` | Entry for a named event. **Never runs on the normal trigger** — only when a matching `Emit event` fires. | `On event("seen") → Get current frame → Recognize person` |

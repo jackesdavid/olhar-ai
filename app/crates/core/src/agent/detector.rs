@@ -55,6 +55,14 @@ pub struct PersonResult {
     pub confidence: f32,
 }
 
+/// One detected person: its source-pixel box `[x1,y1,x2,y2]` + detection confidence.
+/// The element type of a `PersonDetection[]` (workflow `PersonArray` port).
+#[derive(Debug, Clone, Copy)]
+pub struct PersonDetection {
+    pub bbox: [f32; 4],
+    pub confidence: f32,
+}
+
 /// Detect every COCO object in a JPEG/PNG frame, post-NMS, in source pixels.
 pub fn detect(image_bytes: &[u8]) -> Result<Vec<Detection>, String> {
     let (input, ratio) = preprocess(image_bytes)?;
@@ -68,6 +76,16 @@ pub fn detect_person(image_bytes: &[u8]) -> Result<PersonResult, String> {
         detect(image_bytes)?.into_iter().filter(|d| d.class == PERSON_CLASS).collect();
     let confidence = people.iter().map(|d| d.score).fold(0.0_f32, f32::max);
     Ok(PersonResult { person: !people.is_empty(), count: people.len() as i64, confidence })
+}
+
+/// Detect people and return one [`PersonDetection`] per person (box + confidence) — the
+/// `PersonDetection[]` the workflow node emits.
+pub fn detect_persons_detailed(image_bytes: &[u8]) -> Result<Vec<PersonDetection>, String> {
+    Ok(detect(image_bytes)?
+        .into_iter()
+        .filter(|d| d.class == PERSON_CLASS)
+        .map(|d| PersonDetection { bbox: d.xyxy, confidence: d.score })
+        .collect())
 }
 
 /// Process-lifetime YOLOX plan, built once on first use. The build result (ok or the

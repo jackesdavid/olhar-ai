@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 /// The value kinds that flow along edges. An edge is valid only if its source
 /// output port and target input port share the same `PortType`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum PortType {
     Text,
     Num,
@@ -34,6 +34,22 @@ pub enum PortType {
     File,
     /// Control flow ("white") — carries no value; sequences node execution.
     Exec,
+    // ---- Typed arrays (iterated by `ForEach`) + their element types ----
+    /// `String[]`.
+    TextArray,
+    /// `Number[]`.
+    NumArray,
+    /// `PersonDetection[]` (e.g. the Person detection node's `persons` output).
+    PersonArray,
+    /// `FaceDetection[]`.
+    FaceArray,
+    /// A single `PersonDetection` (e.g. a `ForEach` element).
+    Person,
+    /// A single `FaceDetection`.
+    Face,
+    /// Wildcard — compatible with ANY type at wire time. Used by `ForEach` (`items`/`item`)
+    /// so one loop node handles every array/element type. See [`Graph::compatible`].
+    Any,
 }
 
 /// A static port declaration on a `NodeKind` (not persisted — derived from the kind).
@@ -89,6 +105,10 @@ pub enum NodeKind {
     MotionDetection,
     /// Vision: detect whether a person is present in an image (via the AI sidecar).
     PersonDetection,
+    /// Destructure a `PersonDetection` element → `bbox` + `confidence` (like Unreal's Break).
+    BreakPersonDetection,
+    /// Destructure a `FaceDetection` element → `bbox` + `confidence` + `landmarks`.
+    BreakFaceDetection,
     /// Vision: match a face in an image against the enrolled people (pgvector kNN).
     RecognizePerson,
     /// Events: fire the named event → (re)runs the matching `OnEvent` subtree as a
@@ -191,10 +211,22 @@ const HTTP_POST_OUT: [Port; 3] = [
 // If: a Bool condition routes the run down one of two exec branches.
 const IF_IN: [Port; 1] = [p("condition", PortType::Bool, true)];
 
-// For each: a list (text — comma-separated or a JSON array) iterated element by element.
-const FOR_EACH_IN: [Port; 1] = [p("items", PortType::Text, false)];
+// For each: iterate ANY array (a wired `*Array`, or a text list authored in config).
+// `items`/`item` are `Any` so one loop node handles every element type.
+const FOR_EACH_IN: [Port; 1] = [p("items", PortType::Any, false)];
 const FOR_EACH_OUT: [Port; 2] =
-    [p("item", PortType::Text, false), p("index", PortType::Num, false)];
+    [p("item", PortType::Any, false), p("index", PortType::Num, false)];
+
+// Break (destructure) nodes — split a struct element into its fields, like Unreal's Break.
+const BREAK_PERSON_IN: [Port; 1] = [p("person", PortType::Person, true)];
+const BREAK_PERSON_OUT: [Port; 2] =
+    [p("bbox", PortType::NumArray, false), p("confidence", PortType::Num, false)];
+const BREAK_FACE_IN: [Port; 1] = [p("face", PortType::Face, true)];
+const BREAK_FACE_OUT: [Port; 3] = [
+    p("bbox", PortType::NumArray, false),
+    p("confidence", PortType::Num, false),
+    p("landmarks", PortType::Num, false), // count of the 5-point landmark set
+];
 
 // Motion detection: compare two frames; report whether/how much they differ.
 const MOTION_IN: [Port; 2] =
@@ -207,10 +239,11 @@ const MOTION_OUT: [Port; 3] = [
 
 // Person detection: an image in → whether a person is present (via the AI sidecar).
 const PERSON_DETECTION_IN: [Port; 1] = [p("image", PortType::Image, true)];
-const PERSON_DETECTION_OUT: [Port; 4] = [
+const PERSON_DETECTION_OUT: [Port; 5] = [
     p("person", PortType::Bool, false),
     p("count", PortType::Num, false),
-    p("confidence", PortType::Num, false), // percent 0..100
+    p("confidence", PortType::Num, false), // percent 0..100 (top person)
+    p("persons", PortType::PersonArray, false), // one PersonDetection per person
     p("ok", PortType::Bool, false),
 ];
 
@@ -247,7 +280,7 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 20] = [
+    pub const ALL: [NodeKind; 22] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -263,6 +296,8 @@ impl NodeKind {
         NodeKind::ForEach,
         NodeKind::MotionDetection,
         NodeKind::PersonDetection,
+        NodeKind::BreakPersonDetection,
+        NodeKind::BreakFaceDetection,
         NodeKind::RecognizePerson,
         NodeKind::EmitEvent,
         NodeKind::OnEvent,
@@ -289,6 +324,8 @@ impl NodeKind {
             NodeKind::ForEach => "for_each",
             NodeKind::MotionDetection => "motion_detection",
             NodeKind::PersonDetection => "person_detection",
+            NodeKind::BreakPersonDetection => "break_person_detection",
+            NodeKind::BreakFaceDetection => "break_face_detection",
             NodeKind::RecognizePerson => "recognize_person",
             NodeKind::EmitEvent => "emit_event",
             NodeKind::OnEvent => "on_event",
@@ -318,6 +355,8 @@ impl NodeKind {
             NodeKind::ForEach => "For each",
             NodeKind::MotionDetection => "Motion detection",
             NodeKind::PersonDetection => "Person detection",
+            NodeKind::BreakPersonDetection => "Break person detection",
+            NodeKind::BreakFaceDetection => "Break face detection",
             NodeKind::RecognizePerson => "Recognize person",
             NodeKind::EmitEvent => "Emit event",
             NodeKind::OnEvent => "On event",
@@ -342,9 +381,11 @@ impl NodeKind {
             | NodeKind::EmitEvent
             | NodeKind::OnEvent => "Flow",
             NodeKind::HttpPost => "Network",
-            NodeKind::MotionDetection | NodeKind::PersonDetection | NodeKind::RecognizePerson => {
-                "Vision"
-            }
+            NodeKind::MotionDetection
+            | NodeKind::PersonDetection
+            | NodeKind::RecognizePerson
+            | NodeKind::BreakPersonDetection
+            | NodeKind::BreakFaceDetection => "Vision",
         }
     }
 
@@ -375,6 +416,8 @@ impl NodeKind {
             NodeKind::ForEach => &FOR_EACH_IN,
             NodeKind::MotionDetection => &MOTION_IN,
             NodeKind::PersonDetection => &PERSON_DETECTION_IN,
+            NodeKind::BreakPersonDetection => &BREAK_PERSON_IN,
+            NodeKind::BreakFaceDetection => &BREAK_FACE_IN,
             NodeKind::RecognizePerson => &RECOGNIZE_PERSON_IN,
             NodeKind::EmitEvent => &NO_PORTS, // exec-only (universal exec_in/out); event name in config
             NodeKind::OnEvent => &NO_PORTS,   // entry: only an exec_out; activated by the event
@@ -400,6 +443,8 @@ impl NodeKind {
             NodeKind::ForEach => &FOR_EACH_OUT, // item + index (exec outs are loop_body/completed)
             NodeKind::MotionDetection => &MOTION_OUT,
             NodeKind::PersonDetection => &PERSON_DETECTION_OUT,
+            NodeKind::BreakPersonDetection => &BREAK_PERSON_OUT,
+            NodeKind::BreakFaceDetection => &BREAK_FACE_OUT,
             NodeKind::RecognizePerson => &RECOGNIZE_PERSON_OUT,
             NodeKind::EmitEvent => &NO_PORTS, // exec passes through, no data out
             NodeKind::OnEvent => &NO_PORTS,   // drives its subtree via exec_out only
@@ -442,6 +487,8 @@ impl NodeKind {
             NodeKind::ForEach => json!({ "items": "" }),
             NodeKind::MotionDetection => json!({ "sensitivity": "2", "pixel_threshold": "25" }),
             NodeKind::PersonDetection => json!({}),
+            NodeKind::BreakPersonDetection => json!({}),
+            NodeKind::BreakFaceDetection => json!({}),
             NodeKind::RecognizePerson => json!({ "max_distance": "0.4" }),
             NodeKind::EmitEvent => json!({ "event": "" }),
             NodeKind::OnEvent => json!({ "event": "" }),
@@ -649,6 +696,13 @@ impl Graph {
         false
     }
 
+    /// Whether an output of type `from` may feed an input of type `to`: an exact match, or
+    /// either side is the `Any` wildcard (so `ForEach` accepts any array and yields any
+    /// element). Keeps every other pair strictly typed.
+    fn compatible(from: PortType, to: PortType) -> bool {
+        from == to || from == PortType::Any || to == PortType::Any
+    }
+
     /// Validate and add a typed edge. Rejects: self-loop · unknown port ·
     /// type mismatch · an already-fed input port · a cycle · an exact duplicate.
     pub fn add_edge(
@@ -671,7 +725,7 @@ impl Graph {
             .input_port(to_port)
             .ok_or_else(|| format!("{} has no input port '{to_port}'", tk.label()))?
             .ty;
-        if ft != tt {
+        if !Self::compatible(ft, tt) {
             return Err(format!("type mismatch: {ft:?} → {tt:?}"));
         }
         if self.edges.iter().any(|e| e.to == to && e.to_port == to_port) {

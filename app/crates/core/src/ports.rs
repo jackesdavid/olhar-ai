@@ -12,7 +12,7 @@
 //! | [`Vision`] | `agent::detector` / `agent::vision` | Edge Gateway vision |
 //! | [`Recognizer`] | `persons::repo::recognize` | REST kNN |
 //! | [`Notifier`] | `notification::dispatch` | Telegram ingress |
-use crate::agent::detector::PersonResult;
+use crate::agent::detector::{PersonDetection, PersonResult};
 use crate::db::Db;
 use crate::devices::Device;
 use crate::notification::{NotificationConfig, NotificationStore};
@@ -37,6 +37,8 @@ pub trait FrameSource: Send + Sync {
 /// Both are stateless and read-only — trivially relocatable to the edge.
 pub trait Vision: Send + Sync {
     fn detect_persons(&self, jpeg: &[u8]) -> Result<PersonResult, String>;
+    /// Per-person detections (box + confidence) — backs the `PersonDetection[]` output.
+    fn detect_persons_detailed(&self, jpeg: &[u8]) -> Result<Vec<PersonDetection>, String>;
     fn describe(&self, jpeg: &[u8], label: &str) -> Result<String, String>;
 }
 
@@ -98,6 +100,9 @@ pub struct LocalVision;
 impl Vision for LocalVision {
     fn detect_persons(&self, jpeg: &[u8]) -> Result<PersonResult, String> {
         crate::agent::detector::detect_person(jpeg)
+    }
+    fn detect_persons_detailed(&self, jpeg: &[u8]) -> Result<Vec<PersonDetection>, String> {
+        crate::agent::detector::detect_persons_detailed(jpeg)
     }
     fn describe(&self, jpeg: &[u8], label: &str) -> Result<String, String> {
         crate::agent::vision::describe_image(jpeg, label)

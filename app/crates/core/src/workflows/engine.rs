@@ -21,27 +21,38 @@ pub const WF_MAX_STEPS: u32 = 10_000;
 /// Wall-clock ceiling per run — covers `Wait`-heavy loops that stay under the step cap.
 pub const WF_MAX_RUNTIME: Duration = Duration::from_secs(60);
 
-/// Parse a `For each` items value (text) into a list of elements. A JSON array
-/// (`["a","b"]` / `[1,2,3]`) maps each element to its string form; any other text is split
-/// on commas (trimmed, blanks dropped). Empty/absent → an empty list (loop fires `completed`).
-fn parse_items(v: Option<&PortValue>) -> Vec<String> {
-    let Some(text) = v.and_then(PortValue::as_text) else { return Vec::new() };
+/// Parse a `For each` **text** items value (config field or a wired text) into element
+/// values. A JSON array (`["a","b"]` / `[1,2,3]`) maps each element to a typed `PortValue`
+/// (string→Text, number→Num, bool→Bool, float/other→Text); any other text is split on
+/// commas into `Text` elements. Empty → an empty list (the loop fires `completed`).
+fn parse_text_items(text: &str) -> Vec<PortValue> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Vec::new();
     }
     if trimmed.starts_with('[') {
         if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            return arr
-                .iter()
-                .map(|e| match e {
-                    serde_json::Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                })
-                .collect();
+            return arr.iter().map(json_to_port_value).collect();
         }
     }
-    trimmed.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    trimmed
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| PortValue::Text(s.to_string()))
+        .collect()
+}
+
+fn json_to_port_value(v: &serde_json::Value) -> PortValue {
+    match v {
+        serde_json::Value::String(s) => PortValue::Text(s.clone()),
+        serde_json::Value::Bool(b) => PortValue::Bool(*b),
+        serde_json::Value::Number(n) => match n.as_i64() {
+            Some(i) => PortValue::Num(i),
+            None => PortValue::Text(n.to_string()), // floats: no float PortValue → text
+        },
+        other => PortValue::Text(other.to_string()),
+    }
 }
 
 /// Run the whole graph once in topological order. Each node runs at most once; inputs
@@ -309,12 +320,19 @@ fn forward_epoch(
         // epoch (so the body runs once per element, synchronously); fire `completed` once
         // the list is exhausted. No run_node — outputs are built here.
         if n.kind == NodeKind::ForEach {
-            let items = parse_items(inputs.get("items"));
+            // Items come from a wired array (`List`), a wired text list, a single wired
+            // value (one iteration), or the config text (CSV / JSON) when nothing is wired.
+            let items: Vec<PortValue> = match inputs.get("items") {
+                Some(PortValue::List(v)) => v.clone(),
+                Some(PortValue::Text(t)) => parse_text_items(t),
+                Some(other) => vec![other.clone()],
+                None => parse_text_items(n.config.get("items").and_then(|v| v.as_str()).unwrap_or("")),
+            };
             let i = loop_state.get(&nid).copied().unwrap_or(0);
             let mut o = PortValues::new();
             o.insert("index".into(), PortValue::Num(i as i64));
             if i < items.len() {
-                o.insert("item".into(), PortValue::Text(items[i].clone()));
+                o.insert("item".into(), items[i].clone());
                 live_out.insert((nid, "loop_body".into()));
                 loop_state.insert(nid, i + 1);
                 reentries.push(nid); // self re-entry → next epoch runs the next element
@@ -826,23 +844,33 @@ mod tests {
     }
 
     #[test]
-    fn for_each_parses_a_json_array() {
+    fn for_each_iterates_a_json_number_array() {
+        // A JSON number array yields Num elements (not text). Verify the body runs once per
+        // element (3×) — the element type is checked directly in `parse_text_items_typing`.
         let ctx = test_ctx();
         let mut g = Graph::new(1, "loop");
-        g.debug = true;
         let fe = g.add_node(NodeKind::ForEach, 0, 0);
         g.node_mut(fe).unwrap().config["items"] = json!("[1, 2, 3]");
-        let body = g.add_node(NodeKind::Format, 0, 0);
+        let body = g.add_node(NodeKind::Print, 0, 0);
         g.node_mut(body).unwrap().memoize = false;
-        g.node_mut(body).unwrap().config["template"] = json!("{p1}");
         g.add_edge(fe, "loop_body", body, "exec_in").unwrap();
-        g.add_edge(fe, "item", body, "p1").unwrap();
-
-        let (_, logs) = run_capture(&g, &ctx);
-        let body_logs: Vec<String> =
-            logs.iter().filter(|(id, _)| *id == body).map(|(_, m)| m.clone()).collect();
-        assert_eq!(body_logs, vec!["→ 1", "→ 2", "→ 3"], "JSON array elements iterate");
+        let (acts, _) = run_capture(&g, &ctx);
+        assert_eq!(acts.iter().filter(|&&x| x == body).count(), 3, "3 JSON elements iterate");
     }
+
+    #[test]
+    fn parse_text_items_typing() {
+        // CSV → Text elements; JSON array → typed (string→Text, number→Num, bool→Bool).
+        let csv = parse_text_items("a, b ,c");
+        assert_eq!(csv.len(), 3);
+        assert_eq!(csv[0].as_text(), Some("a"));
+        let jsonv = parse_text_items(r#"["x", 7, true]"#);
+        assert_eq!(jsonv[0].as_text(), Some("x"));
+        assert_eq!(jsonv[1].as_num(), Some(7));
+        assert_eq!(jsonv[2].as_bool(), Some(true));
+        assert!(parse_text_items("  ").is_empty());
+    }
+
 
     #[test]
     fn emit_event_calls_the_sink_and_on_event_is_inert_on_a_normal_run() {

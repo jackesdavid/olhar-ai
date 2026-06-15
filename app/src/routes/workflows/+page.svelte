@@ -44,7 +44,9 @@
   import StatusDot from "$lib/components/status-dot.svelte";
 
   // ---- types (the serialized core shapes) ----------------------------------
-  type PortType = "text" | "num" | "bool" | "image" | "recipient" | "dictionary" | "file" | "exec";
+  type PortType =
+    | "text" | "num" | "bool" | "image" | "recipient" | "dictionary" | "file" | "exec"
+    | "text_array" | "num_array" | "person_array" | "face_array" | "person" | "face" | "any";
   type CatPort = { name: string; type: PortType; required: boolean };
   type CatKind = {
     slug: string;
@@ -508,6 +510,14 @@
     dictionary: "#2dd4bf",
     file: "#fb923c",
     exec: "#f4f4f5",
+    // Typed arrays (brighter shades of their element color) + detection elements + wildcard.
+    text_array: "#93c5fd",
+    num_array: "#6ee7b7",
+    person_array: "#f0abfc",
+    face_array: "#fda4af",
+    person: "#e879f9",
+    face: "#fb7185",
+    any: "#94a3b8",
   };
   // The colour of a port (used so a connection follows its data type).
   function portColorOf(node: Node, port: string, side: "in" | "out"): string {

@@ -37,6 +37,13 @@ pub enum PortValue {
     Dict(Vec<(String, String)>),
     /// Any file (bytes + name + MIME).
     File(FileVal),
+    /// A typed array — elements are themselves `PortValue`s. Carried by the `*Array`
+    /// ports and iterated by `ForEach`.
+    List(Vec<PortValue>),
+    /// A detected person (element of a `PersonDetection[]`).
+    Person(crate::agent::detector::PersonDetection),
+    /// A detected face (element of a `FaceDetection[]`).
+    Face(crate::agent::face::FaceDetection),
 }
 
 impl PortValue {
@@ -79,6 +86,24 @@ impl PortValue {
     pub fn as_file(&self) -> Option<&FileVal> {
         match self {
             PortValue::File(f) => Some(f),
+            _ => None,
+        }
+    }
+    pub fn as_list(&self) -> Option<&[PortValue]> {
+        match self {
+            PortValue::List(v) => Some(v),
+            _ => None,
+        }
+    }
+    pub fn as_person(&self) -> Option<&crate::agent::detector::PersonDetection> {
+        match self {
+            PortValue::Person(p) => Some(p),
+            _ => None,
+        }
+    }
+    pub fn as_face(&self) -> Option<&crate::agent::face::FaceDetection> {
+        match self {
+            PortValue::Face(f) => Some(f),
             _ => None,
         }
     }
@@ -175,6 +200,15 @@ pub fn literal_for(config: &Value, port: Port) -> Option<PortValue> {
         }
         // Control-flow ports never carry a value.
         PortType::Exec => None,
+        // Arrays / detection elements / the Any wildcard are produced by upstream nodes
+        // (or, for ForEach `items`, parsed from text in the engine) — never a config literal.
+        PortType::TextArray
+        | PortType::NumArray
+        | PortType::PersonArray
+        | PortType::FaceArray
+        | PortType::Person
+        | PortType::Face
+        | PortType::Any => None,
     }
 }
 
@@ -203,6 +237,8 @@ pub fn run_node(
         NodeKind::ForEach => Ok(PortValues::new()),
         NodeKind::MotionDetection => run_motion_detection(config, inputs),
         NodeKind::PersonDetection => run_person_detection(inputs, sys),
+        NodeKind::BreakPersonDetection => run_break_person_detection(inputs),
+        NodeKind::BreakFaceDetection => run_break_face_detection(inputs),
         NodeKind::RecognizePerson => run_recognize_person(config, inputs, sys),
         // EmitEvent/OnEvent are exec-flow markers: the engine handles the event fire
         // (spawning the guarded sub-run) and the OnEvent entry, like the If/ShowImage
@@ -234,12 +270,47 @@ fn run_person_detection(inputs: &PortValues, sys: &ToolContext) -> Result<PortVa
         .get("image")
         .and_then(PortValue::as_image)
         .ok_or("missing required input 'image'")?;
-    let r = sys.vision.detect_persons(bytes)?;
+    // Per-person boxes → a `PersonDetection[]` (the `persons` output), with the scalar
+    // summary derived from it (count, top confidence) for convenience / back-compat.
+    let people = sys.vision.detect_persons_detailed(bytes)?;
+    let count = people.len() as i64;
+    let confidence = people.iter().map(|p| p.confidence).fold(0.0_f32, f32::max);
+    let persons: Vec<PortValue> = people.into_iter().map(PortValue::Person).collect();
     let mut o = PortValues::new();
-    o.insert("person".into(), PortValue::Bool(r.person));
-    o.insert("count".into(), PortValue::Num(r.count));
-    o.insert("confidence".into(), PortValue::Num((r.confidence * 100.0).round() as i64));
+    o.insert("person".into(), PortValue::Bool(count > 0));
+    o.insert("count".into(), PortValue::Num(count));
+    o.insert("confidence".into(), PortValue::Num((confidence * 100.0).round() as i64));
+    o.insert("persons".into(), PortValue::List(persons));
     o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
+}
+
+/// Break a `PersonDetection` element into its fields: `bbox` (a `[x1,y1,x2,y2]` NumArray)
+/// and `confidence` (percent 0..100). Like Unreal's "Break" struct node.
+fn run_break_person_detection(inputs: &PortValues) -> Result<PortValues, String> {
+    let p = inputs
+        .get("person")
+        .and_then(PortValue::as_person)
+        .ok_or("missing required input 'person'")?;
+    let bbox = p.bbox.iter().map(|v| PortValue::Num(v.round() as i64)).collect();
+    let mut o = PortValues::new();
+    o.insert("bbox".into(), PortValue::List(bbox));
+    o.insert("confidence".into(), PortValue::Num((p.confidence * 100.0).round() as i64));
+    Ok(o)
+}
+
+/// Break a `FaceDetection` element into `bbox` (NumArray), `confidence` (percent), and
+/// `landmarks` (count of the 5-point landmark set).
+fn run_break_face_detection(inputs: &PortValues) -> Result<PortValues, String> {
+    let f = inputs
+        .get("face")
+        .and_then(PortValue::as_face)
+        .ok_or("missing required input 'face'")?;
+    let bbox = f.bbox.iter().map(|v| PortValue::Num(v.round() as i64)).collect();
+    let mut o = PortValues::new();
+    o.insert("bbox".into(), PortValue::List(bbox));
+    o.insert("confidence".into(), PortValue::Num((f.confidence * 100.0).round() as i64));
+    o.insert("landmarks".into(), PortValue::Num(f.landmarks.len() as i64));
     Ok(o)
 }
 
@@ -324,9 +395,12 @@ pub fn debug_summary(
             let cond = inputs.get("condition").and_then(PortValue::as_bool).unwrap_or(false);
             format!("condition {cond} → '{}' branch", if cond { "true" } else { "false" })
         }
-        NodeKind::ForEach => match (txt("item"), num("index")) {
-            (Some(it), Some(i)) => format!("item[{i}] = {}", clip(it)),
-            _ => "loop complete".into(),
+        NodeKind::ForEach => match num("index") {
+            Some(i) => match txt("item") {
+                Some(it) => format!("item[{i}] = {}", clip(it)),
+                None => format!("item[{i}]"), // non-text element (num / detection)
+            },
+            None => "loop complete".into(),
         },
         NodeKind::MotionDetection => {
             let sens = config
@@ -346,6 +420,9 @@ pub fn debug_summary(
             } else {
                 "no person detected".into()
             }
+        }
+        NodeKind::BreakPersonDetection | NodeKind::BreakFaceDetection => {
+            format!("bbox + {}% confidence", num("confidence").unwrap_or(0))
         }
         NodeKind::Print => {
             let msg = inputs.get("message").and_then(PortValue::as_text).unwrap_or("");
