@@ -239,7 +239,7 @@ fn build_run_context(state: &Arc<AppState>, tenant: Uuid) -> (ToolContext, std::
     let bus = state.events.clone();
     let drain = std::thread::spawn(move || {
         while let Ok(ev) = rx.recv() {
-            events::publish_tool_event(&bus, ev);
+            events::publish_tool_event(&bus, tenant, ev);
         }
     });
 

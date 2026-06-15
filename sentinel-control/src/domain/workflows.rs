@@ -3,11 +3,16 @@
 //! proxy to the always-on `sentinel-flow` engine. Rust stays authoritative for ids
 //! and typed-edge validation — each edit loads the tenant's graphs, mutates the
 //! in-memory `Workflows`, and saves replace-all, then pokes flow to re-read.
-use axum::extract::{Path, State};
+use std::convert::Infallible;
+use std::time::Duration;
+
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::Json;
 use axum::routing::{get, post, put};
 use axum::Router;
+use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -26,6 +31,7 @@ pub fn router() -> Router<AppState> {
         .route("/workflows", get(list).post(create))
         .route("/workflows/catalog", get(catalog))
         .route("/workflows/runs", get(run_states))
+        .route("/workflows/events", get(events_stream))
         .route("/workflows/:id", axum::routing::patch(rename).delete(remove))
         .route("/workflows/:id/trigger", put(set_trigger))
         .route("/workflows/:id/concurrency", put(set_concurrency))
@@ -133,6 +139,68 @@ async fn run_states(UserClaims(c): UserClaims) -> Result<Json<Value>, ApiErr> {
         Some(r) => Ok(Json(r.json::<Value>().await.unwrap_or_else(|_| json!({})))),
         None => Ok(Json(json!({}))),
     }
+}
+
+// ---- live event relay (SSE) -------------------------------------------------
+
+#[derive(Deserialize)]
+struct EventsQuery {
+    token: String,
+}
+
+/// Relay sentinel-flow's run-progress SSE to the browser, **scoped to the caller's
+/// tenant**. The editor opens an `EventSource` here (which can't send headers, so the JWT
+/// rides the `token` query param). We subscribe to flow's pod-wide `/events` stream, parse
+/// each `data:<json>` line, and forward only those whose `tenant` matches — so one tenant
+/// never sees another's run progress. Lossy by design (final state is re-fetchable via REST).
+async fn events_stream(
+    State(st): State<AppState>,
+    Query(q): Query<EventsQuery>,
+) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, ApiErr> {
+    let claims = auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    auth::require(&claims, "workflows.read")?;
+    let tid = tenant_of(&claims)?.to_string();
+
+    let resp = st
+        .http
+        .get(format!("{}/events", flow_base()))
+        .send()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, format!("sentinel-flow unreachable: {e}")))?;
+    let mut upstream = resp.bytes_stream();
+
+    // Pump the filtered events through a channel the SSE response drains. The task ends
+    // when flow's stream closes or the browser disconnects (the send fails).
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
+    tokio::spawn(async move {
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = upstream.next().await {
+            let Ok(bytes) = chunk else { break };
+            buf.extend_from_slice(&bytes);
+            // Flow frames events as `data:<json>\n\n`; split on the (ASCII) newline so a
+            // line is always a whole UTF-8 string before we parse it.
+            while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = buf.drain(..=pos).collect();
+                let line = String::from_utf8_lossy(&line);
+                let Some(payload) = line.trim().strip_prefix("data:") else { continue };
+                let payload = payload.trim();
+                if payload.is_empty() {
+                    continue;
+                }
+                // Tenant isolation: forward only this tenant's events.
+                let same_tenant = serde_json::from_str::<Value>(payload)
+                    .ok()
+                    .and_then(|v| v.get("tenant").and_then(|t| t.as_str()).map(|t| t == tid))
+                    .unwrap_or(false);
+                if same_tenant && tx.send(Ok(Event::default().data(payload.to_string()))).await.is_err() {
+                    return; // browser disconnected
+                }
+            }
+        }
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
 
 // ---- graph lifecycle --------------------------------------------------------

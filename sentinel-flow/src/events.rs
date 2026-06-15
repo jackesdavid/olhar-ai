@@ -31,23 +31,25 @@ pub fn publish(bus: &EventBus, name: &str, mut fields: Value) {
     let _ = bus.send(fields.to_string());
 }
 
-/// Translate a tool/node UI side-effect into an SSE event, dropping image bytes.
-pub fn publish_tool_event(bus: &EventBus, ev: ToolUiEvent) {
+/// Translate a tool/node UI side-effect into an SSE event, dropping image bytes. Every
+/// event carries the run's `tenant` so the control relay can forward it only to that
+/// tenant's browser clients (tenant isolation on the shared multi-tenant stream).
+pub fn publish_tool_event(bus: &EventBus, tenant: uuid::Uuid, ev: ToolUiEvent) {
     match ev {
         ToolUiEvent::Snapshot { camera, .. } => {
-            publish(bus, "snapshot", json!({ "camera": camera }));
+            publish(bus, "snapshot", json!({ "tenant": tenant, "camera": camera }));
         }
-        ToolUiEvent::DevicesChanged => publish(bus, "devices-changed", json!({})),
-        ToolUiEvent::AlertsChanged => publish(bus, "alerts-changed", json!({})),
-        ToolUiEvent::OpenLive { ip } => publish(bus, "open-live", json!({ "ip": ip })),
+        ToolUiEvent::DevicesChanged => publish(bus, "devices-changed", json!({ "tenant": tenant })),
+        ToolUiEvent::AlertsChanged => publish(bus, "alerts-changed", json!({ "tenant": tenant })),
+        ToolUiEvent::OpenLive { ip } => publish(bus, "open-live", json!({ "tenant": tenant, "ip": ip })),
         ToolUiEvent::Print { message, level, on_screen } => publish(
             bus,
             "workflow-print",
-            json!({ "message": message, "level": level, "on_screen": on_screen }),
+            json!({ "tenant": tenant, "message": message, "level": level, "on_screen": on_screen }),
         ),
         // Reference only — the bytes are fetched out of band (see module note).
         ToolUiEvent::ShowImage { graph, node, label, .. } => {
-            publish(bus, "workflow-image", json!({ "graph": graph, "node": node, "label": label }))
+            publish(bus, "workflow-image", json!({ "tenant": tenant, "graph": graph, "node": node, "label": label }))
         }
     }
 }

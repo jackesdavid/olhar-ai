@@ -10,7 +10,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { api } from "./api";
-import { isTauri } from "./auth.svelte";
+import { API_BASE } from "./config";
+import { auth, isTauri } from "./auth.svelte";
 import {
   DEFAULT_SETTINGS,
   type Alert,
@@ -47,11 +48,54 @@ function cloudOnly(feature: string): never {
   throw new Error(`${feature} is only available in the desktop app.`);
 }
 
-/** Subscribe to a backend push event. In cloud mode there is no push channel yet, so
- * this is a no-op (pages re-fetch after mutations). Returns an unlisten function. */
+// ---- cloud push: one shared SSE stream from the control relay ----------------
+// The browser can't use Tauri's event bus, so in cloud mode we open a SINGLE
+// `EventSource` to control's `/workflows/events` (which relays sentinel-flow's run
+// progress, tenant-scoped) and demultiplex it by the event's `event` field to the
+// per-name subscribers below — mirroring the desktop `listen(name, …)` shape.
+const cloudSubs = new Map<string, Set<(payload?: unknown) => void>>();
+let cloudStream: EventSource | null = null;
+
+function ensureCloudStream(): void {
+  if (cloudStream || typeof EventSource === "undefined" || !auth.token) return;
+  const url = `${API_BASE}/workflows/events?token=${encodeURIComponent(auth.token)}`;
+  const es = new EventSource(url);
+  es.onmessage = (e) => {
+    let msg: { event?: string };
+    try {
+      msg = JSON.parse(e.data);
+    } catch {
+      return;
+    }
+    if (!msg.event) return;
+    cloudSubs.get(msg.event)?.forEach((cb) => cb(msg));
+  };
+  // EventSource auto-reconnects on error; keep it open.
+  cloudStream = es;
+}
+
+function closeCloudStreamIfIdle(): void {
+  if (cloudStream && [...cloudSubs.values()].every((s) => s.size === 0)) {
+    cloudStream.close();
+    cloudStream = null;
+  }
+}
+
+/** Subscribe to a backend push event. Desktop uses the Tauri event bus; cloud uses the
+ * relayed SSE stream (control → sentinel-flow). Returns an unlisten function. */
 export async function onEvent(name: string, cb: (payload?: unknown) => void): Promise<UnlistenFn> {
-  if (!TAURI) return () => {};
-  return listen(name, (e) => cb(e.payload));
+  if (TAURI) return listen(name, (e) => cb(e.payload));
+  let set = cloudSubs.get(name);
+  if (!set) {
+    set = new Set();
+    cloudSubs.set(name, set);
+  }
+  set.add(cb);
+  ensureCloudStream();
+  return () => {
+    cloudSubs.get(name)?.delete(cb);
+    closeCloudStreamIfIdle();
+  };
 }
 
 export const data = {

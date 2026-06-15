@@ -12,6 +12,9 @@ app-core = { path = "../app/crates/core" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
 axum = "0.7"
 tower-http = { version = "0.5", features = ["cors", "fs"] }
+# Stream sentinel-flow's SSE through to browser clients (workflow run progress relay).
+tokio-stream = "0.1"
+futures = "0.3"
 
 # Auth + tenancy: own async pool for users/tenants/roles (separate from app-core's Db,
 # so queries run on this service's runtime), JWT sessions, argon2 password hashing.
@@ -23,7 +26,7 @@ argon2 = "0.5"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 # Social login (Google now; Apple later) — hand-rolled OAuth2 code flow over reqwest.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 urlencoding = "2"
 
 serde = { version = "1", features = ["derive"] }
