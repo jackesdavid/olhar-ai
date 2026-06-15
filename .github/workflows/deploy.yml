@@ -11,11 +11,13 @@ on:
     paths:
       - "sentinel-control/**"
       - "sentinel-gateway/**"
+      - "sentinel-flow/**"
       - "app/**"
       - "Cargo.*"
       - "Dockerfile"
       - "deploy/app/**"
       - "deploy/landing/**"
+      - "deploy/vps/**"
       - "landing/**"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
