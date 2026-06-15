@@ -146,6 +146,20 @@ Legend: **In** = data input ports, **Out** = data output ports (every node also 
 - **Behavior:** Routes the run down the `true` or `false` exec branch. The other branch
   (and everything downstream of it) is gated off.
 
+#### For each
+- **In:** `items` (text) · **Out:** `item` (text), `index` (num) · **Exec out:** `loop_body`
+  / `completed` (instead of `exec_out`)
+- **Config:** `items` — the list, as a comma-separated string (`alice, bob`) or a JSON array
+  (`["a","b"]` / `[1,2,3]`). May also be wired from a text output.
+- **Behavior:** Iterates the list **synchronously**. Fires `loop_body` once per element —
+  exposing the current `item` and 0-based `index` — and runs that branch to completion
+  before the next element. After the last element, fires `completed` exactly once. Empty
+  list → just `completed`. Type-agnostic: elements arrive as text (numbers as their text
+  form, e.g. `"42"`).
+- **Use for:** processing a list (recipients, rooms, detected names…). **Body nodes must be
+  memoize = off** so they re-run each iteration. Bounded by the run's step/time budget
+  (very large lists will hit it).
+
 #### Wait
 - No data ports (exec-only) · **Config:** `seconds`
 - **Behavior:** Delays the run by `seconds`, staying active until it elapses.
@@ -227,6 +241,20 @@ Trigger: Cron { every_secs: 1 }, Concurrency: SkipIfRunning
 The 1 Hz loop stays cheap (warm frame + local person detection) and only kicks off the
 heavier recognize-and-notify handler when a person is present — and never more than one
 handler at a time.
+
+---
+
+## Worked example: notify a list of rooms
+
+```
+[For each]  items = "lobby, garage, roof"
+  ├─ loop_body ─▶ [Format] "Sweep {p1}"  (p1 = item, memoize OFF) ─▶ [Notify recipient]
+  └─ completed ─▶ [Print] "sweep done"
+```
+
+`loop_body` fires 3× (item = lobby, garage, roof; index = 0,1,2), each running the
+Format→Notify branch to completion; then `completed` fires once. The Format/Notify nodes
+must be **memoize = off** to re-run per item.
 
 ---
 

@@ -21,6 +21,29 @@ pub const WF_MAX_STEPS: u32 = 10_000;
 /// Wall-clock ceiling per run — covers `Wait`-heavy loops that stay under the step cap.
 pub const WF_MAX_RUNTIME: Duration = Duration::from_secs(60);
 
+/// Parse a `For each` items value (text) into a list of elements. A JSON array
+/// (`["a","b"]` / `[1,2,3]`) maps each element to its string form; any other text is split
+/// on commas (trimmed, blanks dropped). Empty/absent → an empty list (loop fires `completed`).
+fn parse_items(v: Option<&PortValue>) -> Vec<String> {
+    let Some(text) = v.and_then(PortValue::as_text) else { return Vec::new() };
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    if trimmed.starts_with('[') {
+        if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            return arr
+                .iter()
+                .map(|e| match e {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                })
+                .collect();
+        }
+    }
+    trimmed.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+}
+
 /// Run the whole graph once in topological order. Each node runs at most once; inputs
 /// resolve from upstream outputs (wired edges) else config literals; stops on first error.
 pub fn run_dag(graph: &Graph, sys: &ToolContext) -> Result<HashMap<u32, PortValues>, String> {
@@ -125,18 +148,21 @@ fn run_driver(
     let mut outputs: HashMap<u32, PortValues> = HashMap::new();
     let mut ran: HashSet<u32> = HashSet::new();
     let mut steps: u32 = 0;
+    // Per-run iteration state for `ForEach` nodes (node id → next index), persisted across
+    // epochs so each epoch advances the loop one element.
+    let mut loop_state: HashMap<u32, usize> = HashMap::new();
     let run_started = Instant::now();
 
     let mut reentries = forward_epoch(
         graph, sys, &indeg_tmpl, &adj, &back, &connected, seed_entries, initial_forced,
-        &mut outputs, &mut ran, &mut steps, run_started, on_node, on_log, emit,
+        &mut outputs, &mut ran, &mut loop_state, &mut steps, run_started, on_node, on_log, emit,
     )?;
-    // Later epochs: re-enter loops at the back-edge targets until none fire (or budget hits).
+    // Later epochs: re-enter loops at the back-edge / ForEach targets until none fire.
     while !reentries.is_empty() {
         let forced: HashSet<u32> = reentries.into_iter().collect();
         reentries = forward_epoch(
             graph, sys, &indeg_tmpl, &adj, &back, &connected, false, &forced,
-            &mut outputs, &mut ran, &mut steps, run_started, on_node, on_log, emit,
+            &mut outputs, &mut ran, &mut loop_state, &mut steps, run_started, on_node, on_log, emit,
         )?;
     }
     Ok(outputs)
@@ -157,6 +183,7 @@ fn forward_epoch(
     forced: &HashSet<u32>,
     outputs: &mut HashMap<u32, PortValues>,
     ran: &mut HashSet<u32>,
+    loop_state: &mut HashMap<u32, usize>,
     steps: &mut u32,
     run_started: Instant,
     on_node: &mut dyn FnMut(u32),
@@ -259,7 +286,8 @@ fn forward_epoch(
         // A node that already ran with memoize ON, re-entered by a loop: reuse its cached
         // output and STOP (don't re-publish exec) so a memoized loop terminates after one
         // pass. Warn so the operator knows to turn memoize off to actually iterate.
-        if ran.contains(&nid) && n.memoize {
+        // `ForEach` is exempt — it's the loop DRIVER and must re-run each epoch to advance.
+        if ran.contains(&nid) && n.memoize && n.kind != NodeKind::ForEach {
             if graph.debug {
                 on_log(nid, "memoize on for a node on a loop — it won't iterate (turn memoize off to loop)", 0);
             }
@@ -275,6 +303,35 @@ fn forward_epoch(
         }
 
         on_node(nid);
+
+        // ForEach: engine-driven iteration. Each epoch advances the index by one; fire
+        // `loop_body` (with `item`+`index`) while elements remain and re-enter self next
+        // epoch (so the body runs once per element, synchronously); fire `completed` once
+        // the list is exhausted. No run_node — outputs are built here.
+        if n.kind == NodeKind::ForEach {
+            let items = parse_items(inputs.get("items"));
+            let i = loop_state.get(&nid).copied().unwrap_or(0);
+            let mut o = PortValues::new();
+            o.insert("index".into(), PortValue::Num(i as i64));
+            if i < items.len() {
+                o.insert("item".into(), PortValue::Text(items[i].clone()));
+                live_out.insert((nid, "loop_body".into()));
+                loop_state.insert(nid, i + 1);
+                reentries.push(nid); // self re-entry → next epoch runs the next element
+            } else {
+                live_out.insert((nid, "completed".into()));
+                loop_state.remove(&nid);
+            }
+            *steps += 1;
+            if graph.debug {
+                on_log(nid, &node::debug_summary(n.kind, &n.config, &inputs, &o), 0);
+            }
+            outputs.insert(nid, o);
+            ran.insert(nid);
+            settle(&mut settled, &mut indeg);
+            continue;
+        }
+
         let started = Instant::now();
         let o = node::run_node(n.kind, &n.config, &inputs, sys)
             .map_err(|e| format!("{}: {e}", n.kind.label()))?;
@@ -709,6 +766,82 @@ mod tests {
         // data back-edge (b.text → a.p1) would create a data cycle → rejected.
         let err = g.add_edge(b, "text", a, "p1").unwrap_err();
         assert!(err.contains("data cycle"), "got: {err}");
+    }
+
+    // Run a graph capturing the node-activation order + per-node debug summaries (no DB).
+    fn run_capture(g: &Graph, ctx: &ToolContext) -> (Vec<u32>, Vec<(u32, String)>) {
+        let acts = std::cell::RefCell::new(Vec::<u32>::new());
+        let logs = std::cell::RefCell::new(Vec::<(u32, String)>::new());
+        run_dag_with(
+            g,
+            ctx,
+            &mut |id| acts.borrow_mut().push(id),
+            &mut |id, m, _| logs.borrow_mut().push((id, m.to_string())),
+        )
+        .unwrap();
+        (acts.into_inner(), logs.into_inner())
+    }
+
+    #[test]
+    fn for_each_iterates_in_order_then_fires_completed_once() {
+        // ForEach("a,b,c") → loop_body → Format("{p1}", p1=item, memoize off)
+        //                  → completed → Format("done").
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "loop");
+        g.debug = true;
+        let fe = g.add_node(NodeKind::ForEach, 0, 0);
+        g.node_mut(fe).unwrap().config["items"] = json!("a,b,c");
+        let body = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(body).unwrap().memoize = false; // re-run each iteration
+        g.node_mut(body).unwrap().config["template"] = json!("{p1}");
+        let done = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(done).unwrap().config["template"] = json!("done");
+        g.add_edge(fe, "loop_body", body, "exec_in").unwrap();
+        g.add_edge(fe, "item", body, "p1").unwrap();
+        g.add_edge(fe, "completed", done, "exec_in").unwrap();
+
+        let (acts, logs) = run_capture(&g, &ctx);
+        assert_eq!(acts.iter().filter(|&&x| x == body).count(), 3, "body runs once per element");
+        assert_eq!(acts.iter().filter(|&&x| x == done).count(), 1, "completed fires once");
+        assert_eq!(acts.iter().filter(|&&x| x == fe).count(), 4, "fe: 3 elements + final");
+        let body_logs: Vec<String> =
+            logs.iter().filter(|(id, _)| *id == body).map(|(_, m)| m.clone()).collect();
+        assert_eq!(body_logs, vec!["→ a", "→ b", "→ c"], "item flows in order");
+    }
+
+    #[test]
+    fn for_each_empty_list_only_fires_completed() {
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "loop");
+        let fe = g.add_node(NodeKind::ForEach, 0, 0); // items defaults to ""
+        let body = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(body).unwrap().memoize = false;
+        g.add_edge(fe, "loop_body", body, "exec_in").unwrap();
+        let done = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(fe, "completed", done, "exec_in").unwrap();
+
+        let (acts, _) = run_capture(&g, &ctx);
+        assert_eq!(acts.iter().filter(|&&x| x == body).count(), 0, "no body on empty list");
+        assert_eq!(acts.iter().filter(|&&x| x == done).count(), 1, "completed fires once");
+    }
+
+    #[test]
+    fn for_each_parses_a_json_array() {
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "loop");
+        g.debug = true;
+        let fe = g.add_node(NodeKind::ForEach, 0, 0);
+        g.node_mut(fe).unwrap().config["items"] = json!("[1, 2, 3]");
+        let body = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(body).unwrap().memoize = false;
+        g.node_mut(body).unwrap().config["template"] = json!("{p1}");
+        g.add_edge(fe, "loop_body", body, "exec_in").unwrap();
+        g.add_edge(fe, "item", body, "p1").unwrap();
+
+        let (_, logs) = run_capture(&g, &ctx);
+        let body_logs: Vec<String> =
+            logs.iter().filter(|(id, _)| *id == body).map(|(_, m)| m.clone()).collect();
+        assert_eq!(body_logs, vec!["→ 1", "→ 2", "→ 3"], "JSON array elements iterate");
     }
 
     #[test]

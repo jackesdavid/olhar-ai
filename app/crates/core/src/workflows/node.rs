@@ -198,6 +198,9 @@ pub fn run_node(
         NodeKind::Wait => run_wait(config),
         NodeKind::HttpPost => run_http_post(config, inputs),
         NodeKind::If => run_if(inputs),
+        // ForEach is engine-driven (like If/EmitEvent): the scheduler parses `items`,
+        // advances the index across epochs, sets item/index, and fires loop_body/completed.
+        NodeKind::ForEach => Ok(PortValues::new()),
         NodeKind::MotionDetection => run_motion_detection(config, inputs),
         NodeKind::PersonDetection => run_person_detection(inputs, sys),
         NodeKind::RecognizePerson => run_recognize_person(config, inputs, sys),
@@ -321,6 +324,10 @@ pub fn debug_summary(
             let cond = inputs.get("condition").and_then(PortValue::as_bool).unwrap_or(false);
             format!("condition {cond} → '{}' branch", if cond { "true" } else { "false" })
         }
+        NodeKind::ForEach => match (txt("item"), num("index")) {
+            (Some(it), Some(i)) => format!("item[{i}] = {}", clip(it)),
+            _ => "loop complete".into(),
+        },
         NodeKind::MotionDetection => {
             let sens = config
                 .get("sensitivity")

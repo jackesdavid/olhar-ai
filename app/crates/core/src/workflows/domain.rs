@@ -81,6 +81,10 @@ pub enum NodeKind {
     HttpPost,
     /// Flow control: route the run down `true`/`false` exec branches on a Bool condition.
     If,
+    /// Flow control: iterate a list (text: comma-separated or a JSON array). Fires
+    /// `loop_body` once per element (with `item` + `index`), synchronously, then fires
+    /// `completed` once after the last. Body nodes should be memoize=off so they re-run.
+    ForEach,
     /// Vision: compare two frames and report whether/how much they differ.
     MotionDetection,
     /// Vision: detect whether a person is present in an image (via the AI sidecar).
@@ -187,6 +191,11 @@ const HTTP_POST_OUT: [Port; 3] = [
 // If: a Bool condition routes the run down one of two exec branches.
 const IF_IN: [Port; 1] = [p("condition", PortType::Bool, true)];
 
+// For each: a list (text — comma-separated or a JSON array) iterated element by element.
+const FOR_EACH_IN: [Port; 1] = [p("items", PortType::Text, false)];
+const FOR_EACH_OUT: [Port; 2] =
+    [p("item", PortType::Text, false), p("index", PortType::Num, false)];
+
 // Motion detection: compare two frames; report whether/how much they differ.
 const MOTION_IN: [Port; 2] =
     [p("image_a", PortType::Image, true), p("image_b", PortType::Image, true)];
@@ -230,11 +239,15 @@ pub const EXEC_IN: Port = p("exec_in", PortType::Exec, false);
 pub const EXEC_OUT: Port = p("exec_out", PortType::Exec, false);
 pub const EXEC_TRUE: Port = p("true", PortType::Exec, false);
 pub const EXEC_FALSE: Port = p("false", PortType::Exec, false);
+/// `For each` exec outs: `loop_body` fires once per element; `completed` fires once after.
+pub const EXEC_LOOP_BODY: Port = p("loop_body", PortType::Exec, false);
+pub const EXEC_COMPLETED: Port = p("completed", PortType::Exec, false);
 const EXEC_OUT_DEFAULT: [Port; 1] = [EXEC_OUT];
 const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
+const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 19] = [
+    pub const ALL: [NodeKind; 20] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -247,6 +260,7 @@ impl NodeKind {
         NodeKind::Wait,
         NodeKind::HttpPost,
         NodeKind::If,
+        NodeKind::ForEach,
         NodeKind::MotionDetection,
         NodeKind::PersonDetection,
         NodeKind::RecognizePerson,
@@ -272,6 +286,7 @@ impl NodeKind {
             NodeKind::Wait => "wait",
             NodeKind::HttpPost => "http_post",
             NodeKind::If => "if",
+            NodeKind::ForEach => "for_each",
             NodeKind::MotionDetection => "motion_detection",
             NodeKind::PersonDetection => "person_detection",
             NodeKind::RecognizePerson => "recognize_person",
@@ -300,6 +315,7 @@ impl NodeKind {
             NodeKind::Wait => "Wait",
             NodeKind::HttpPost => "HTTP post",
             NodeKind::If => "If",
+            NodeKind::ForEach => "For each",
             NodeKind::MotionDetection => "Motion detection",
             NodeKind::PersonDetection => "Person detection",
             NodeKind::RecognizePerson => "Recognize person",
@@ -320,6 +336,7 @@ impl NodeKind {
             NodeKind::Format => "Text",
             NodeKind::Wait
             | NodeKind::If
+            | NodeKind::ForEach
             | NodeKind::Print
             | NodeKind::ShowImage
             | NodeKind::EmitEvent
@@ -336,6 +353,7 @@ impl NodeKind {
     pub fn exec_out_ports(self) -> &'static [Port] {
         match self {
             NodeKind::If => &EXEC_OUT_IF,
+            NodeKind::ForEach => &EXEC_OUT_FOR_EACH,
             _ => &EXEC_OUT_DEFAULT,
         }
     }
@@ -354,6 +372,7 @@ impl NodeKind {
             NodeKind::Wait => &NO_PORTS, // control-flow only — sequenced via exec ports
             NodeKind::HttpPost => &HTTP_POST_IN,
             NodeKind::If => &IF_IN,
+            NodeKind::ForEach => &FOR_EACH_IN,
             NodeKind::MotionDetection => &MOTION_IN,
             NodeKind::PersonDetection => &PERSON_DETECTION_IN,
             NodeKind::RecognizePerson => &RECOGNIZE_PERSON_IN,
@@ -378,6 +397,7 @@ impl NodeKind {
             NodeKind::Wait => &NO_PORTS, // control-flow only — sequenced via exec ports
             NodeKind::HttpPost => &HTTP_POST_OUT,
             NodeKind::If => &NO_PORTS, // outputs are exec branches (true/false)
+            NodeKind::ForEach => &FOR_EACH_OUT, // item + index (exec outs are loop_body/completed)
             NodeKind::MotionDetection => &MOTION_OUT,
             NodeKind::PersonDetection => &PERSON_DETECTION_OUT,
             NodeKind::RecognizePerson => &RECOGNIZE_PERSON_OUT,
@@ -419,6 +439,7 @@ impl NodeKind {
             NodeKind::Wait => json!({ "seconds": "1" }),
             NodeKind::HttpPost => json!({ "url": "", "headers": {}, "fields": {}, "file": "" }),
             NodeKind::If => json!({}),
+            NodeKind::ForEach => json!({ "items": "" }),
             NodeKind::MotionDetection => json!({ "sensitivity": "2", "pixel_threshold": "25" }),
             NodeKind::PersonDetection => json!({}),
             NodeKind::RecognizePerson => json!({ "max_distance": "0.4" }),
