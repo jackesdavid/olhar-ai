@@ -74,8 +74,9 @@ services:
   sentinel-ai-dlib:
     # A/B experiment: dlib / face_recognition variant, same /runsync contract + op names
     # (128-d embeddings, NOT compatible with the 512-d pgvector column). Internal only.
-    # Compare with bench.py; to make it live, repoint control's AI_SERVICE_URL at
-    # http://sentinel-ai-dlib:8000/runsync. Optional — start it explicitly when testing.
+    # Behind the "experiment" profile so normal `up`/deploys NEVER start it. To run the
+    # A/B: docker compose --profile experiment up -d sentinel-ai-dlib, then bench.py.
+    profiles: ["experiment"]
     image: ghcr.io/jackesdavid/sentinel-ai:dlib
     container_name: sentinel-ai-dlib
     restart: unless-stopped
