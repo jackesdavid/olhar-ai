@@ -22,6 +22,12 @@ on:
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
+# Serialize deploys per branch: a newer push cancels an in-flight build/deploy so two
+# runs never race on the VPS docker compose (and a superseded build isn't wasted).
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: write
