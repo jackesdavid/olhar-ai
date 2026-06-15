@@ -43,14 +43,90 @@
     return "cam_" + ip.replaceAll(".", "_");
   }
 
-  // Cloud live frame URL through the gateway (live.view-gated; token in the query since
-  // <img> can't send headers). `tick` busts the cache to refresh.
-  let tick = $state(0);
-  const cloudFrameUrl = $derived(
-    selected && auth.token
-      ? `${GATEWAY_BASE}/api/frame.jpeg?src=${streamName(selected.ip)}&token=${encodeURIComponent(auth.token)}&t=${tick}`
-      : "",
-  );
+  // ---- Cloud live video: MSE over the gateway WebSocket (smooth H.264) -----------
+  // The token rides the WS query (browsers can't set headers on a WebSocket, and this
+  // also avoids third-party cookies). go2rtc speaks fMP4-over-WS; we feed MediaSource.
+  let videoEl = $state<HTMLVideoElement>();
+  let ws: WebSocket | null = null;
+  let mediaSource: MediaSource | null = null;
+  let sourceBuffer: SourceBuffer | null = null;
+  let bufQueue: ArrayBuffer[] = [];
+
+  function probeCodecs(): string {
+    const v = ["avc1.640029", "avc1.64002A", "avc1.640033", "avc1.42E01E", "hvc1.1.6.L153.B0"];
+    const a = ["mp4a.40.2", "mp4a.40.5", "flac", "opus"];
+    const ok = (mime: string) => "MediaSource" in window && MediaSource.isTypeSupported(mime);
+    const out = [
+      ...v.filter((c) => ok(`video/mp4; codecs="${c}"`)),
+      ...a.filter((c) => ok(`audio/mp4; codecs="${c}"`)),
+    ];
+    return out.join(",");
+  }
+
+  function flushBuf() {
+    if (!sourceBuffer || sourceBuffer.updating || bufQueue.length === 0) return;
+    try {
+      sourceBuffer.appendBuffer(bufQueue.shift()!);
+    } catch {
+      bufQueue = [];
+    }
+  }
+
+  function stopStream() {
+    if (ws) {
+      ws.onmessage = ws.onclose = ws.onerror = null;
+      try { ws.close(); } catch { /* ignore */ }
+      ws = null;
+    }
+    sourceBuffer = null;
+    bufQueue = [];
+    mediaSource = null;
+    if (videoEl) {
+      videoEl.removeAttribute("src");
+      try { videoEl.load(); } catch { /* ignore */ }
+    }
+  }
+
+  function startStream(ip: string) {
+    stopStream();
+    if (!videoEl || !auth.token || !("MediaSource" in window)) return;
+    const wsBase = GATEWAY_BASE.replace(/^http/, "ws");
+    const url = `${wsBase}/api/ws?src=${streamName(ip)}&token=${encodeURIComponent(auth.token)}`;
+    const socket = new WebSocket(url);
+    socket.binaryType = "arraybuffer";
+    ws = socket;
+
+    const ms = new MediaSource();
+    mediaSource = ms;
+    videoEl.src = URL.createObjectURL(ms);
+
+    ms.addEventListener("sourceopen", () => {
+      if (ws !== socket) return;
+      socket.send(JSON.stringify({ type: "mse", value: probeCodecs() }));
+      socket.onmessage = (ev) => {
+        if (typeof ev.data === "string") {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === "mse" && mediaSource?.readyState === "open" && !sourceBuffer) {
+            sourceBuffer = mediaSource.addSourceBuffer(msg.value);
+            sourceBuffer.mode = "segments";
+            sourceBuffer.addEventListener("updateend", flushBuf);
+          }
+        } else {
+          bufQueue.push(ev.data as ArrayBuffer);
+          flushBuf();
+        }
+      };
+    });
+    socket.onerror = () => toast.error("Live stream connection failed.");
+  }
+
+  // (Re)start the stream whenever the selected camera changes (cloud only).
+  $effect(() => {
+    if (!cloud) return;
+    const ip = selected?.ip;
+    if (ip && videoEl) startStream(ip);
+    else stopStream();
+  });
 
   async function refresh(announce = false, prefer = "") {
     try {
@@ -74,11 +150,7 @@
     loading = true;
     const cam = $page.url.searchParams.get("cam") ?? "";
     refresh(false, cam).finally(() => (loading = false));
-    // Cloud: refresh the live frame ~1/s.
-    const timer = cloud ? setInterval(() => (tick = Date.now()), 1000) : undefined;
-    return () => {
-      if (timer) clearInterval(timer);
-    };
+    return () => stopStream();
   });
 
   async function rescan() {
@@ -140,8 +212,8 @@
                 <StatusDot state="online" /> LIVE
               </div>
               {#if cloud}
-                <!-- gateway live frame (token-gated), refreshed ~1/s -->
-                <img src={cloudFrameUrl} alt="Live from {selected.name}" class="h-full w-full object-contain" />
+                <!-- MSE video over the gateway WS (token-gated, smooth H.264) -->
+                <video bind:this={videoEl} class="h-full w-full bg-black object-contain" autoplay muted playsinline></video>
               {:else if selectedStream}
                 {#key selectedStream.name}
                   <iframe title="Live camera {selected.name}" src={selectedStream.player_url} allow="autoplay; fullscreen"></iframe>
