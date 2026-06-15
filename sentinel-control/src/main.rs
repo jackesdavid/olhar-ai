@@ -100,6 +100,14 @@ fn main() {
         );
         let http = reqwest::Client::new();
 
+        // Face recognition (enroll + recognize) needs the AI sidecar. Log its config at
+        // boot — like Google/Tailscale above — so a missing AI_SERVICE_URL is obvious
+        // instead of only surfacing as a per-request "not configured" error.
+        match app_core::agent::ai_service::AiServiceConfig::from_env() {
+            Some(cfg) => log::info!("AI recognition: enabled (sidecar {})", cfg.url),
+            None => log::warn!("AI recognition: disabled — set AI_SERVICE_URL (+ AI_SERVICE_KEY) to enable enroll/recognize"),
+        }
+
         let pending_creds = Arc::new(Mutex::new(HashMap::new()));
         let notifiers = Arc::new(Mutex::new(HashMap::new()));
         let state = AppState { db, pool, jwt_secret, google, oauth_states, tailscale, http, pending_creds, notifiers };

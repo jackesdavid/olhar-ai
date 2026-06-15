@@ -1,0 +1,41 @@
+# Sentinel AI sidecar — CPU, face-only image for the VPS (no GPU).
+#
+# Runs the SAME /runsync contract as the GPU/RunPod image, but on the CPU and without
+# torch/ultralytics — it serves only the face ops (SCRFD detect + ArcFace embed), which
+# is all the cloud recognition path needs (person detection runs in the Rust app via
+# tract). Much smaller + builds fast (no CUDA, no torch).
+#
+# Deployed next to sentinel-control via deploy/vps/docker-compose.sentinel.yml; control
+# reaches it internally at http://sentinel-ai:8000/runsync. Face embeds take ~hundreds
+# of ms on CPU — fine for occasional enroll/recognize.
+FROM python:3.11-slim
+
+# Link the GHCR package to the repo.
+LABEL org.opencontainers.image.source="https://github.com/jackesdavid/Sentinel"
+
+# build-essential: InsightFace builds a small Cython extension at install time.
+# libglib2.0-0: required by opencv at runtime (headless still needs glib).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+ENV PIP_DEFAULT_TIMEOUT=120 PIP_RETRIES=5
+
+# InsightFace needs cython to build its extension at install time.
+RUN pip install --no-cache-dir cython
+
+COPY requirements.cpu.txt .
+RUN pip install --no-cache-dir -r requirements.cpu.txt
+
+# Bake the InsightFace detection + recognition models into the image (ctx_id=-1 = CPU)
+# so the first request doesn't download them. YOLO is intentionally NOT baked (this is
+# a face-only image).
+RUN python -c "import insightface; a=insightface.app.FaceAnalysis(name='buffalo_l', allowed_modules=['detection','recognition']); a.prepare(ctx_id=-1)"
+
+COPY handler.py .
+
+# Serve the RunPod /runsync HTTP contract (RunPod's built-in API server). Bound to
+# 0.0.0.0 so sentinel-control can reach it over the compose network.
+CMD ["python", "-u", "handler.py", "--rp_serve_api", "--rp_api_host", "0.0.0.0", "--rp_api_port", "8000"]

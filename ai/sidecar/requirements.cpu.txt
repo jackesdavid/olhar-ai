@@ -1,0 +1,13 @@
+# CPU, face-only deps for the VPS sidecar (no GPU). Deliberately omits torch +
+# ultralytics — the `detect_person` op is unused in the cloud (the Rust app detects
+# people locally via tract), so this image only serves the SCRFD+ArcFace face ops.
+runpod>=1.6
+pillow>=10
+# InsightFace/opencv torch-era pins: numpy 2 + new opencv break the wheels.
+numpy<2
+# Headless OpenCV — no GUI libs needed on a server (smaller, no libGL dependency).
+opencv-python-headless<4.11
+# Face pipeline: SCRFD (detect) + ArcFace (512-d embed), the `buffalo_l` model pack.
+insightface>=0.7.3
+# CPU ONNX runtime (NOT onnxruntime-gpu) — runs SCRFD + ArcFace on the CPU.
+onnxruntime>=1.17

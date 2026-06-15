@@ -1,9 +1,10 @@
 name: AI sidecar image
 
-# Builds the GPU vision sidecar (ai/sidecar) on a native linux/amd64 runner and
-# pushes it to GHCR — no QEMU, so the heavy CUDA image builds reliably. The image
-# runs the same on RunPod Serverless and on a local NVIDIA box (see
-# ai/sidecar/compose.gpu.yml).
+# Builds the vision sidecar (ai/sidecar) on a native linux/amd64 runner and pushes it
+# to GHCR — no QEMU, so the heavy image builds reliably. Two variants:
+#   • gpu (Dockerfile)     — CUDA + torch + onnxruntime-gpu; RunPod Serverless / NVIDIA box.
+#   • cpu (Dockerfile.cpu) — face-only, CPU onnxruntime, no torch; runs on the VPS next
+#     to sentinel-control (deploy/vps/docker-compose.sentinel.yml).
 
 on:
   push:
@@ -11,11 +12,6 @@ on:
       - "ai/sidecar/**"
       - ".github/workflows/ai-sidecar.yml"
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Image tag under ghcr.io/jackesdavid/sentinel-ai"
-        required: false
-        default: "gpu"
 
 concurrency:
   group: ai-sidecar-${{ github.ref }}
@@ -27,6 +23,14 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag: gpu
+            file: Dockerfile
+          - tag: cpu
+            file: Dockerfile.cpu
     steps:
       - uses: actions/checkout@v4
 
@@ -50,7 +54,8 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ai/sidecar
+          file: ai/sidecar/${{ matrix.file }}
           platforms: linux/amd64
           push: true
-          tags: ghcr.io/jackesdavid/sentinel-ai:${{ github.event.inputs.tag || 'gpu' }}
+          tags: ghcr.io/jackesdavid/sentinel-ai:${{ matrix.tag }}
           provenance: false

@@ -25,17 +25,32 @@ import cv2
 import numpy as np
 import runpod
 from PIL import Image
-from ultralytics import YOLO
-
-# Loaded once per worker (cached in the image at build time — see Dockerfile).
-_MODEL = YOLO("yolov8n.pt")
 
 # COCO class 0 == "person".
 _PERSON_CLASS = 0
 
-# InsightFace pipeline (SCRFD + ArcFace), lazily initialised on first face call so
-# workers that only do `detect_person` don't pay the GPU init cost.
+# Models are lazily initialised on first use. The face pipeline (InsightFace) and the
+# YOLO person detector load independently so a **face-only** deployment — the CPU
+# sidecar on the VPS, which omits torch/ultralytics to stay small — never needs YOLO.
 _FACE_APP = None
+_MODEL = None
+
+
+def _yolo():
+    """YOLOv8-Nano person detector, lazily imported. Face-only images (no torch/
+    ultralytics) never call this; if `detect_person` is invoked there, raise a clear
+    error instead of failing at import time. (The Rust app detects people locally via
+    tract, so the cloud path never hits this op.)"""
+    global _MODEL
+    if _MODEL is None:
+        try:
+            from ultralytics import YOLO
+        except ImportError as e:
+            raise RuntimeError(
+                "detect_person needs ultralytics+torch, which this face-only image omits"
+            ) from e
+        _MODEL = YOLO("yolov8n.pt")
+    return _MODEL
 
 
 def _decode_bgr(inp: dict) -> np.ndarray:
@@ -53,19 +68,22 @@ def _face_app():
     """InsightFace `buffalo_l` — SCRFD detector + ArcFace w600k_r50 embedder.
 
     Only the detection + recognition models are loaded (genderage / landmark models
-    in the pack are skipped). `ctx_id=0` selects the first CUDA device; InsightFace
-    picks the GPU automatically when onnxruntime-gpu is available, else falls back to
-    CPU. Exposes the sub-models via `.models['detection']` / `.models['recognition']`
+    in the pack are skipped). `ctx_id` selects the device: a CUDA device (0) when
+    onnxruntime exposes the CUDA provider (GPU image), else -1 for CPU (the VPS
+    sidecar). Exposes the sub-models via `.models['detection']` / `.models['recognition']`
     so the detect-only and embed-only ops can run just their half.
     """
     global _FACE_APP
     if _FACE_APP is None:
         import insightface
+        import onnxruntime as ort
 
+        ctx_id = 0 if "CUDAExecutionProvider" in ort.get_available_providers() else -1
+        print(f"[ai] InsightFace ctx_id={ctx_id} ({'GPU' if ctx_id >= 0 else 'CPU'})", flush=True)
         app = insightface.app.FaceAnalysis(
             name="buffalo_l", allowed_modules=["detection", "recognition"]
         )
-        app.prepare(ctx_id=0, det_size=(640, 640))
+        app.prepare(ctx_id=ctx_id, det_size=(640, 640))
         _FACE_APP = app
     return _FACE_APP
 
@@ -84,7 +102,7 @@ def _kps(kps) -> list:
 def detect_person(inp: dict) -> dict:
     """Detect people in an image. -> { person, count, confidence }."""
     img = Image.fromarray(_decode_bgr(inp)[:, :, ::-1])  # YOLO takes RGB
-    results = _MODEL.predict(img, classes=[_PERSON_CLASS], verbose=False)
+    results = _yolo().predict(img, classes=[_PERSON_CLASS], verbose=False)
     boxes = results[0].boxes
     count = int(len(boxes))
     confidence = float(boxes.conf.max()) if count else 0.0
