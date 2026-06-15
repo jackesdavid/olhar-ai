@@ -120,24 +120,40 @@
     mediaSource = ms;
     videoEl.src = URL.createObjectURL(ms);
 
-    ms.addEventListener("sourceopen", () => {
+    // The handshake must be sent only once BOTH the WebSocket is open AND MediaSource is
+    // open — sourceopen often fires before the WS finishes connecting (send-on-CONNECTING
+    // would throw and we'd get no data → black video).
+    let wsReady = false;
+    let msReady = false;
+    let sent = false;
+    const maybeHandshake = () => {
+      if (wsReady && msReady && !sent && ws === socket) {
+        sent = true;
+        try { socket.send(JSON.stringify({ type: "mse", value: probeCodecs() })); } catch { /* ignore */ }
+      }
+    };
+
+    socket.onopen = () => { wsReady = true; maybeHandshake(); };
+    ms.addEventListener("sourceopen", () => { msReady = true; maybeHandshake(); });
+    socket.onmessage = (ev) => {
       if (ws !== socket) return;
-      socket.send(JSON.stringify({ type: "mse", value: probeCodecs() }));
-      socket.onmessage = (ev) => {
-        if (typeof ev.data === "string") {
-          const msg = JSON.parse(ev.data);
-          if (msg.type === "mse" && mediaSource?.readyState === "open" && !sourceBuffer) {
+      if (typeof ev.data === "string") {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "mse" && mediaSource?.readyState === "open" && !sourceBuffer) {
+          try {
             sourceBuffer = mediaSource.addSourceBuffer(msg.value);
             sourceBuffer.mode = "segments";
             sourceBuffer.addEventListener("updateend", onUpdateEnd);
+          } catch (e) {
+            console.error("addSourceBuffer failed", e);
           }
-        } else {
-          bufQueue.push(ev.data as ArrayBuffer);
-          flushBuf();
         }
-      };
-    });
-    socket.onerror = () => toast.error("Live stream connection failed.");
+      } else {
+        bufQueue.push(ev.data as ArrayBuffer);
+        flushBuf();
+      }
+    };
+    socket.onerror = () => {};
   }
 
   // (Re)start the stream whenever the selected camera changes (cloud only).
