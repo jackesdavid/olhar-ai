@@ -15,9 +15,11 @@ Usage:
   # other ops / image:
   python ai/sidecar/bench.py --op face_detect --image some_face.jpg
 
-Baselines (record new numbers here as you measure them):
-  CPU  (VPS sentinel-ai, in-container)  face_detect_embed : server p50 ~390-475 ms  (2026-06-15)
-  GPU  (RTX 2060)                       face_detect_embed : TBD
+Baselines — face_detect_embed, the testdata face (record new numbers as you measure):
+  InsightFace CPU  (VPS sentinel-ai, in-container)  server p50 ~409 ms, wall ~414 ms      (2026-06-15)
+  dlib/face_recog  CPU (VPS sentinel-ai-dlib, HOG)  server p50 ~552 ms, wall ~562 ms, 128-d (2026-06-15)
+  InsightFace GPU  (RunPod serverless, from a Mac)  server p50 ~250 ms, wall ~1454 ms, cold-start ~74 s (2026-06-15)
+  InsightFace GPU  (RTX 2060, on tailnet)           TBD  ← expected: GPU compute + low LAN latency, no cold start
 """
 import argparse
 import base64
