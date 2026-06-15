@@ -8,6 +8,7 @@ use axum::Router;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
 
 use app_core::devices;
 use app_core::tenancy::DEFAULT_TENANT_ID;
@@ -15,12 +16,17 @@ use app_core::tenancy::DEFAULT_TENANT_ID;
 use crate::{handlers, store, AppState};
 
 pub fn router(state: AppState) -> Router {
+    // Edge appliance binaries (the repo is private, so they're served here, publicly,
+    // instead of GitHub releases). CI ships them to EDGE_DIST_DIR on the VPS.
+    let edge_dist = std::env::var("EDGE_DIST_DIR").unwrap_or_else(|_| "/edge-dist".to_string());
+
     Router::new()
         .route("/health", get(health))
         .route("/install.sh", get(install_script))
         .route("/config/cameras", get(cameras))
         .merge(handlers::router())
         .merge(crate::domain::router())
+        .nest_service("/edge", ServeDir::new(edge_dist))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

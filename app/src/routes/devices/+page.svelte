@@ -99,6 +99,12 @@
   }
 
   const savedIps = $derived(new Set(devices.map((d) => d.ip)));
+  const savedByIp = $derived(new Map(devices.map((d) => [d.ip, d])));
+  // For a discovered camera, prefer the name you saved it under (less confusing than
+  // the camera's advertised name once it's in your list).
+  function discoveredName(d: DiscoveredDevice): string {
+    return savedByIp.get(d.ip)?.name ?? d.name;
+  }
 
   async function addDiscovered(d: DiscoveredDevice) {
     const device: Device = {
@@ -344,7 +350,12 @@
             <Table.Body>
               {#each discovered as d (d.ip)}
                 <Table.Row>
-                  <Table.Cell class="font-medium">{d.name}</Table.Cell>
+                  <Table.Cell class="font-medium">
+                    {discoveredName(d)}
+                    {#if savedByIp.has(d.ip) && savedByIp.get(d.ip)?.name !== d.name}
+                      <span class="ml-1 text-xs font-normal text-muted-foreground">· camera: {d.name}</span>
+                    {/if}
+                  </Table.Cell>
                   <Table.Cell class="tabular-nums text-muted-foreground">{d.ip}</Table.Cell>
                   <Table.Cell class="text-muted-foreground">{makeModel(d)}</Table.Cell>
                   <Table.Cell class="text-right">

@@ -28,7 +28,9 @@ TAGS="${SENTINEL_TS_TAGS:-}"
 CONTROL_URL="${SENTINEL_CONTROL_URL:-}"
 BOX_TOKEN="${SENTINEL_BOX_TOKEN:-}"
 PUBLIC_HOST="${SENTINEL_PUBLIC_HOST:-}"
-RELEASE_BASE="${SENTINEL_RELEASE_BASE:-https://github.com/jackesdavid/Sentinel/releases/latest/download}"
+# Where to fetch the sentinel-edge binary. Defaults to the control plane (the repo is
+# private, so control serves the binaries at /edge/<asset>); override if self-hosting.
+RELEASE_BASE="${SENTINEL_RELEASE_BASE:-}"
 GO2RTC_BASE="${SENTINEL_GO2RTC_BASE:-https://github.com/AlexxIT/go2rtc/releases/latest/download}"
 PREFIX="${SENTINEL_PREFIX:-/opt/sentinel-edge}"
 ENV_DIR="${SENTINEL_ENV_DIR:-/etc/sentinel-edge}"
@@ -49,6 +51,8 @@ done
 [ "$(id -u)" -eq 0 ] || { echo "Please run as root (sudo)." >&2; exit 1; }
 [ -n "$CONTROL_URL" ] || { echo "Missing --control <url> (the control-plane base URL)." >&2; exit 1; }
 [ -n "$BOX_TOKEN" ] || echo "Note: no --box-token given; this edge will use the default tenant." >&2
+# Default the binary source to the control plane (serves them at /edge/<asset>).
+[ -n "$RELEASE_BASE" ] || RELEASE_BASE="$CONTROL_URL/edge"
 
 # ---- detect platform --------------------------------------------------------
 os="$(uname -s)"; arch="$(uname -m)"

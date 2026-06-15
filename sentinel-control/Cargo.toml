@@ -11,7 +11,7 @@ app-core = { path = "../app/crates/core" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
 axum = "0.7"
-tower-http = { version = "0.5", features = ["cors"] }
+tower-http = { version = "0.5", features = ["cors", "fs"] }
 
 # Auth + tenancy: own async pool for users/tenants/roles (separate from app-core's Db,
 # so queries run on this service's runtime), JWT sessions, argon2 password hashing.

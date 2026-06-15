@@ -99,3 +99,15 @@ jobs:
           files: dist/*
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+      # The repo is private, so tenants can't download release assets directly. Ship the
+      # edge binaries + installer to the VPS; control serves them at /edge/<asset>.
+      - name: Ship edge binaries to the VPS (control serves /edge)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASS }}
+          source: "dist/*"
+          target: "/ibbf/edge-dist"
+          strip_components: 1
