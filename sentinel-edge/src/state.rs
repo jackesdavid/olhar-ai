@@ -76,6 +76,34 @@ impl AppState {
         }
         n
     }
+
+    /// Run an ONVIF WS-Discovery sweep on the LAN and push the results up to control,
+    /// so the cloud Devices page can surface them. The edge dials OUT — no inbound to
+    /// the box is ever needed. Best-effort; tagged with the box token + edge version.
+    pub fn push_discovered(&self) {
+        let found = app_core::onvif::discovery::discover();
+        let n = found.len();
+        let url = format!("{}/config/discovered", self.control_url);
+        let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(15)).build();
+        let mut req = agent.post(&url);
+        if let Ok(t) = std::env::var("BOX_TOKEN") {
+            let t = t.trim();
+            if !t.is_empty() {
+                req = req.set("Authorization", &format!("Bearer {t}"));
+            }
+        }
+        if let Ok(h) = std::env::var("EDGE_PUBLIC_HOST") {
+            let h = h.trim();
+            if !h.is_empty() {
+                req = req.set("X-Box-Host", h);
+            }
+        }
+        req = req.set("X-Edge-Version", env!("CARGO_PKG_VERSION"));
+        match req.send_json(&found) {
+            Ok(_) => log::info!("discovery: pushed {n} camera(s) to control"),
+            Err(e) => log::warn!("discovery push failed: {e}"),
+        }
+    }
 }
 
 /// Pull the camera list from the control plane; on success refresh the on-disk cache,
@@ -123,6 +151,7 @@ fn fetch_cameras(control_url: &str) -> Result<Vec<Device>, String> {
             req = req.set("X-Box-Host", host);
         }
     }
+    req = req.set("X-Edge-Version", env!("CARGO_PKG_VERSION"));
     req.call()
         .map_err(|e| format!("{e}"))?
         .into_json::<Vec<Device>>()

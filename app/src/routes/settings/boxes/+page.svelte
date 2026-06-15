@@ -8,6 +8,7 @@
   import HardDrive from "@lucide/svelte/icons/hard-drive";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
   import Check from "@lucide/svelte/icons/check";
+  import ArrowUpCircle from "@lucide/svelte/icons/arrow-up-circle";
 
   import * as Card from "$lib/components/ui/card";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -41,10 +42,20 @@
   let deleteTarget = $state<Box | null>(null);
   let deleting = $state(false);
 
+  // Edge versioning
+  let latest = $state<string>("");
+  const updateCmd = `curl -fsSL ${API_BASE}/install.sh | sudo sh -s -- --update --control ${API_BASE}`;
+  function outdated(b: Box): boolean {
+    return !!b.version && !!latest && b.version !== latest;
+  }
+
   async function load() {
     loading = true;
     try {
-      list = await boxApi.list();
+      [list, latest] = await Promise.all([
+        boxApi.list(),
+        boxApi.latestVersion().then((r) => r.version).catch(() => ""),
+      ]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load boxes");
     } finally {
@@ -144,6 +155,7 @@
           <thead>
             <tr class="border-b border-border">
               <th class="py-2 pr-4 text-left font-medium">Name</th>
+              <th class="px-3 py-2 text-left font-medium">Version</th>
               <th class="px-3 py-2 text-left font-medium">Tailnet host</th>
               <th class="px-3 py-2 text-left font-medium">Last seen</th>
               <th class="px-3 py-2 text-right font-medium"></th>
@@ -153,6 +165,22 @@
             {#each list as b (b.id)}
               <tr class="border-b border-border/50 last:border-0">
                 <td class="py-2 pr-4 font-medium">{b.name}</td>
+                <td class="px-3 py-2">
+                  {#if b.version}
+                    <span class="font-mono text-xs tabular-nums text-muted-foreground">v{b.version}</span>
+                    {#if outdated(b)}
+                      <button
+                        class="interactive ml-2 inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400"
+                        title="Copy the update command"
+                        onclick={() => copy(updateCmd)}
+                      >
+                        <ArrowUpCircle class="size-3" /> Update → v{latest}
+                      </button>
+                    {/if}
+                  {:else}
+                    <span class="text-xs text-muted-foreground">—</span>
+                  {/if}
+                </td>
                 <td class="px-3 py-2 font-mono text-xs text-muted-foreground">
                   {b.magicdns_host ?? "—"}
                 </td>
@@ -171,7 +199,7 @@
               </tr>
             {/each}
             {#if list.length === 0}
-              <tr><td colspan={4} class="py-8 text-center text-muted-foreground">No edge boxes yet.</td></tr>
+              <tr><td colspan={5} class="py-8 text-center text-muted-foreground">No edge boxes yet.</td></tr>
             {/if}
           </tbody>
         </table>

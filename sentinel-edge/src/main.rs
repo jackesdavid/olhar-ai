@@ -42,6 +42,16 @@ fn main() {
         log::info!("edge using external go2rtc on :1984 (+ ONVIF fallback)");
     }
 
+    // Discovery loop: sweep the LAN for ONVIF cameras and push them to control (on boot
+    // + every 5 min) so the cloud Devices page can surface them.
+    {
+        let disco = std::sync::Arc::clone(&state);
+        std::thread::spawn(move || loop {
+            disco.push_discovered();
+            std::thread::sleep(std::time::Duration::from_secs(300));
+        });
+    }
+
     let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");
     rt.block_on(async move {
         let app = http::router(state);

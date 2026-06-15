@@ -29,6 +29,17 @@ import {
 
 export { isTauri };
 
+/** A camera the tenant's edge found on its LAN (pushed up to the cloud). */
+export type EdgeDiscovered = {
+  ip: string;
+  name: string;
+  xaddr: string;
+  manufacturer: string | null;
+  model: string | null;
+  onvif_id: string | null;
+  last_seen: string;
+};
+
 const TAURI = isTauri();
 const SETTINGS_KEY = "sentinel.settings";
 
@@ -81,6 +92,9 @@ export const data = {
   },
   discoverDevices: (): Promise<DiscoveredDevice[]> =>
     TAURI ? invoke<DiscoveredDevice[]>("discover_devices") : cloudOnly("Camera discovery"),
+  /** Cameras the tenant's edge found on its LAN and pushed to the cloud (cloud mode). */
+  listDiscovered: (): Promise<EdgeDiscovered[]> =>
+    TAURI ? Promise.resolve([]) : api.get<EdgeDiscovered[]>("/devices/discovered"),
   testCredentials: (xaddrOrIp: string, username: string, password: string): Promise<string> =>
     TAURI ? invoke<string>("test_credentials", { xaddrOrIp, username, password }) : cloudOnly("Credential test"),
   validateDevice: (ip: string, username: string, password: string): Promise<Device> =>

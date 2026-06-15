@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { data, onEvent, isTauri } from "$lib/data";
+  import { data, onEvent, isTauri, type EdgeDiscovered } from "$lib/data";
   import { toast } from "svelte-sonner";
 
   import Radar from "@lucide/svelte/icons/radar";
@@ -31,6 +31,9 @@
 
   let discovered = $state<DiscoveredDevice[]>([]);
   let scanning = $state(false);
+
+  // Cloud mode: cameras the tenant's edge found on its LAN and pushed up.
+  let edgeFound = $state<EdgeDiscovered[]>([]);
 
   // ---- Detail dialog (edit name + credentials, test, snapshot) -------------
   let detailOpen = $state(false);
@@ -69,14 +72,44 @@
     }
   }
 
+  async function loadEdgeFound() {
+    if (isTauri()) return; // desktop uses the live ONVIF scan below
+    try {
+      edgeFound = await data.listDiscovered();
+    } catch {
+      edgeFound = [];
+    }
+  }
+
   onMount(() => {
     loadDevices();
+    loadEdgeFound();
     // Live-refresh when the chat agent renames/removes a device.
     const unlisten = onEvent("devices-changed", () => loadDevices());
     return () => {
       unlisten.then((un) => un());
     };
   });
+
+  // Promote an edge-discovered camera into the device list (admin adds credentials next).
+  async function addEdgeFound(d: EdgeDiscovered) {
+    try {
+      await data.saveDevice({
+        id: d.onvif_id ?? "",
+        ip: d.ip,
+        xaddr: d.xaddr,
+        name: d.name || d.ip,
+        manufacturer: d.manufacturer,
+        model: d.model,
+      });
+      toast.success(`Added ${d.name || d.ip} — open it to add credentials.`);
+      await loadDevices();
+    } catch (err) {
+      toast.error("Failed to add camera", { description: String(err) });
+    }
+  }
+  // Edge-found cameras not already saved.
+  const edgeUnsaved = $derived(edgeFound.filter((d) => !devices.some((s) => s.ip === d.ip)));
 
   async function scan() {
     if (!isTauri()) return;
@@ -326,6 +359,42 @@
       {/if}
     </Card.Content>
   </Card.Root>
+
+  <!-- Found on your edge (cloud: cameras the edge discovered on its LAN) -->
+  {#if edgeUnsaved.length > 0}
+    <Card.Root>
+      <Card.Header>
+        <Card.Title class="flex items-center gap-2"><Radar class="size-4 text-primary" /> Found on your edge</Card.Title>
+        <Card.Description>Cameras your edge appliance discovered on its network. Add one, then open it to set credentials.</Card.Description>
+      </Card.Header>
+      <Card.Content>
+        <Table.Root>
+          <Table.Header>
+            <Table.Row>
+              <Table.Head>Name</Table.Head>
+              <Table.Head>IP</Table.Head>
+              <Table.Head>Make / Model</Table.Head>
+              <Table.Head class="text-right">Action</Table.Head>
+            </Table.Row>
+          </Table.Header>
+          <Table.Body>
+            {#each edgeUnsaved as d (d.ip)}
+              <Table.Row>
+                <Table.Cell class="font-medium">{d.name || d.ip}</Table.Cell>
+                <Table.Cell class="tabular-nums text-muted-foreground">{d.ip}</Table.Cell>
+                <Table.Cell class="text-muted-foreground">{[d.manufacturer, d.model].filter(Boolean).join(" ") || "—"}</Table.Cell>
+                <Table.Cell class="text-right">
+                  <Button variant="outline" size="sm" onclick={() => addEdgeFound(d)}>
+                    <Plus class="size-4" /> Add
+                  </Button>
+                </Table.Cell>
+              </Table.Row>
+            {/each}
+          </Table.Body>
+        </Table.Root>
+      </Card.Content>
+    </Card.Root>
+  {/if}
 
   <!-- Discovered devices -->
   {#if scanning || discovered.length > 0}

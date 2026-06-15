@@ -62,6 +62,7 @@ export type Box = {
   id: string;
   name: string;
   magicdns_host: string | null;
+  version: string | null;
   last_seen: string | null;
   created_at: string;
 };
@@ -72,6 +73,8 @@ export const boxes = {
   list: () => api.get<Box[]>("/boxes"),
   create: (name: string) => api.post<NewBox>("/boxes", { name }),
   del: (id: string) => api.del<void>(`/boxes/${id}`),
+  /** The latest edge build the operator has published (for "update available"). */
+  latestVersion: () => api.get<{ version: string }>("/edge-latest"),
 };
 
 export const admin = {

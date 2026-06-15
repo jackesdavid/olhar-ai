@@ -34,6 +34,7 @@ RELEASE_BASE="${SENTINEL_RELEASE_BASE:-}"
 GO2RTC_BASE="${SENTINEL_GO2RTC_BASE:-https://github.com/AlexxIT/go2rtc/releases/latest/download}"
 PREFIX="${SENTINEL_PREFIX:-/opt/sentinel-edge}"
 ENV_DIR="${SENTINEL_ENV_DIR:-/etc/sentinel-edge}"
+UPDATE=0   # --update: only swap the binary + restart (keep env, Tailscale, service)
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -44,13 +45,18 @@ while [ $# -gt 0 ]; do
     --box-token) BOX_TOKEN="$2"; shift 2 ;;
     --public-host) PUBLIC_HOST="$2"; shift 2 ;;
     --release-base) RELEASE_BASE="$2"; shift 2 ;;
+    --update) UPDATE=1; shift ;;
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
 done
 
 [ "$(id -u)" -eq 0 ] || { echo "Please run as root (sudo)." >&2; exit 1; }
+# In update mode, inherit the control URL from the existing install if not passed.
+if [ "$UPDATE" = "1" ] && [ -z "$CONTROL_URL" ] && [ -f "$ENV_DIR/edge.env" ]; then
+  CONTROL_URL="$(grep '^CONTROL_URL=' "$ENV_DIR/edge.env" | cut -d= -f2-)"
+fi
 [ -n "$CONTROL_URL" ] || { echo "Missing --control <url> (the control-plane base URL)." >&2; exit 1; }
-[ -n "$BOX_TOKEN" ] || echo "Note: no --box-token given; this edge will use the default tenant." >&2
+[ "$UPDATE" = "1" ] || [ -n "$BOX_TOKEN" ] || echo "Note: no --box-token given; this edge will use the default tenant." >&2
 # Default the binary source to the control plane (serves them at /edge/<asset>).
 [ -n "$RELEASE_BASE" ] || RELEASE_BASE="$CONTROL_URL/edge"
 
@@ -68,6 +74,25 @@ case "$os-$arch" in
   Darwin-x86_64)  GO2RTC_ASSET="go2rtc_mac_amd64.zip" ;;
   *) echo "Unsupported platform: $os-$arch" >&2; exit 1 ;;
 esac
+
+# ---- update mode: swap the binary + restart; keep env / Tailscale / service ---
+if [ "$UPDATE" = "1" ]; then
+  [ -x "$PREFIX/sentinel-edge" ] || { echo "Not installed at $PREFIX — run the full installer first." >&2; exit 1; }
+  echo "▸ Updating sentinel-edge ($os-$arch) from $RELEASE_BASE…"
+  curl -fSL "$RELEASE_BASE/$EDGE_ASSET" -o "$PREFIX/sentinel-edge.new"
+  chmod +x "$PREFIX/sentinel-edge.new"
+  mv "$PREFIX/sentinel-edge.new" "$PREFIX/sentinel-edge"
+  if [ "$os" = "Linux" ]; then
+    systemctl restart sentinel-edge
+    echo "✓ Updated. Status: systemctl status sentinel-edge"
+  else
+    launchctl kickstart -k system/io.sentinel.edge 2>/dev/null \
+      || { launchctl bootout system /Library/LaunchDaemons/io.sentinel.edge.plist 2>/dev/null; \
+           launchctl bootstrap system /Library/LaunchDaemons/io.sentinel.edge.plist; }
+    echo "✓ Updated."
+  fi
+  exit 0
+fi
 
 echo "▸ Installing sentinel-edge ($os-$arch) → $PREFIX"
 mkdir -p "$PREFIX" "$ENV_DIR"

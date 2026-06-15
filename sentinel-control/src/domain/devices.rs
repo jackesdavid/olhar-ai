@@ -8,12 +8,29 @@ use axum::Router;
 
 use app_core::devices::{self, Device};
 
-use super::{blocking, tenant_of, ApiErr};
+use super::{blocking, err, tenant_of, ApiErr};
 use crate::auth::{self, UserClaims};
-use crate::AppState;
+use crate::{store, AppState};
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/devices", get(list).put(upsert)).route("/devices/:ip", axum::routing::delete(remove))
+    Router::new()
+        .route("/devices", get(list).put(upsert))
+        .route("/devices/discovered", get(discovered))
+        .route("/devices/:ip", axum::routing::delete(remove))
+}
+
+/// Cameras the tenant's edge found on its LAN (ONVIF), pushed up by the edge. The admin
+/// promotes one into the device list (with credentials) via PUT /devices.
+async fn discovered(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<store::DiscoveredRow>>, ApiErr> {
+    auth::require(&c, "devices.read")?;
+    let tid = tenant_of(&c)?;
+    store::list_discovered(&st.pool, tid)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            log::error!("list_discovered failed: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+        })
 }
 
 /// All cameras for the caller's tenant.

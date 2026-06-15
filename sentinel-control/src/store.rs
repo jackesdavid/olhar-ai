@@ -124,8 +124,21 @@ pub struct BoxRow {
     pub id: Uuid,
     pub name: String,
     pub magicdns_host: Option<String>,
+    pub version: Option<String>,
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A camera the edge found via ONVIF WS-Discovery (surfaced in the cloud UI).
+#[derive(sqlx::FromRow, serde::Serialize)]
+pub struct DiscoveredRow {
+    pub ip: String,
+    pub name: String,
+    pub xaddr: String,
+    pub manufacturer: Option<String>,
+    pub model: Option<String>,
+    pub onvif_id: Option<String>,
+    pub last_seen: chrono::DateTime<chrono::Utc>,
 }
 
 pub async fn create_box(pool: &PgPool, tenant_id: Uuid, name: &str, token_hash: &str) -> sqlx::Result<Uuid> {
@@ -142,7 +155,7 @@ pub async fn create_box(pool: &PgPool, tenant_id: Uuid, name: &str, token_hash: 
 
 pub async fn list_boxes(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<BoxRow>> {
     sqlx::query_as::<_, BoxRow>(
-        "SELECT id, name, magicdns_host, last_seen, created_at FROM tenant_boxes WHERE tenant_id = $1 ORDER BY name",
+        "SELECT id, name, magicdns_host, version, last_seen, created_at FROM tenant_boxes WHERE tenant_id = $1 ORDER BY name",
     )
     .bind(tenant_id)
     .fetch_all(pool)
@@ -164,19 +177,61 @@ pub async fn touch_box_by_token(
     pool: &PgPool,
     token_hash: &str,
     host: Option<&str>,
+    version: Option<&str>,
 ) -> sqlx::Result<Option<Uuid>> {
     let row: Option<(Uuid,)> = sqlx::query_as(
         "UPDATE tenant_boxes
             SET last_seen = now(),
-                magicdns_host = COALESCE($2, magicdns_host)
+                magicdns_host = COALESCE($2, magicdns_host),
+                version = COALESCE($3, version)
           WHERE token_hash = $1
         RETURNING tenant_id",
     )
     .bind(token_hash)
     .bind(host)
+    .bind(version)
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|(t,)| t))
+}
+
+/// Replace the tenant's discovered-camera set (the edge pushes its full current sweep).
+pub async fn upsert_discovered(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    cams: &[app_core::onvif::DiscoveredDevice],
+) -> sqlx::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM discovered_cameras WHERE tenant_id = $1").bind(tenant_id).execute(&mut *tx).await?;
+    for c in cams {
+        sqlx::query(
+            "INSERT INTO discovered_cameras (tenant_id, ip, name, xaddr, manufacturer, model, onvif_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)
+             ON CONFLICT (tenant_id, ip) DO UPDATE SET
+               name = EXCLUDED.name, xaddr = EXCLUDED.xaddr, manufacturer = EXCLUDED.manufacturer,
+               model = EXCLUDED.model, onvif_id = EXCLUDED.onvif_id, last_seen = now()",
+        )
+        .bind(tenant_id)
+        .bind(&c.ip)
+        .bind(&c.name)
+        .bind(&c.xaddr)
+        .bind(&c.manufacturer)
+        .bind(&c.model)
+        .bind(&c.id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await
+}
+
+pub async fn list_discovered(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<DiscoveredRow>> {
+    sqlx::query_as::<_, DiscoveredRow>(
+        "SELECT ip, name, xaddr, manufacturer, model, onvif_id, last_seen
+           FROM discovered_cameras WHERE tenant_id = $1 ORDER BY ip",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
 }
 
 /// The most-recently-seen box host for a tenant (the gateway's live upstream).
