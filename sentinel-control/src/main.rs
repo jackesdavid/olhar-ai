@@ -41,6 +41,10 @@ pub struct AppState {
     pub tailscale: Option<tailscale::TailscaleConfig>,
     /// Shared HTTP client (Tailscale key minting, etc.).
     pub http: reqwest::Client,
+    /// Camera credentials in transit: the web sets them, the edge collects them on its
+    /// next config pull, then they're discarded. Keyed by (tenant_id, camera ip) →
+    /// (username, password, set-at). **Never persisted** — camera creds never touch the DB.
+    pub pending_creds: Arc<Mutex<HashMap<(uuid::Uuid, String), (String, String, Instant)>>>,
 }
 
 fn main() {
@@ -82,7 +86,8 @@ fn main() {
         );
         let http = reqwest::Client::new();
 
-        let state = AppState { db, pool, jwt_secret, google, oauth_states, tailscale, http };
+        let pending_creds = Arc::new(Mutex::new(HashMap::new()));
+        let state = AppState { db, pool, jwt_secret, google, oauth_states, tailscale, http, pending_creds };
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {
             Ok(l) => l,

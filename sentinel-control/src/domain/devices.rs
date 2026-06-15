@@ -3,8 +3,9 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Json;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
+use serde::Deserialize;
 
 use app_core::devices::{self, Device};
 
@@ -16,7 +17,26 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/devices", get(list).put(upsert))
         .route("/devices/discovered", get(discovered))
+        .route("/devices/:ip/credentials", post(set_credentials))
         .route("/devices/:ip", axum::routing::delete(remove))
+}
+
+#[derive(Deserialize)]
+struct CredsReq {
+    username: String,
+    password: String,
+}
+
+/// Stage camera credentials for the tenant's edge to collect on its next config pull.
+/// **Never stored in the DB** — held in memory only until delivered, then discarded.
+async fn set_credentials(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip): Path<String>, Json(b): Json<CredsReq>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "devices.write")?;
+    let tid = tenant_of(&c)?;
+    st.pending_creds
+        .lock()
+        .unwrap()
+        .insert((tid, ip), (b.username, b.password, std::time::Instant::now()));
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Cameras the tenant's edge found on its LAN (ONVIF), pushed up by the edge. The admin
@@ -46,6 +66,12 @@ async fn list(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<J
 async fn upsert(UserClaims(c): UserClaims, State(st): State<AppState>, Json(device): Json<Device>) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "devices.write")?;
     let tid = tenant_of(&c)?;
+    // Camera credentials are NEVER persisted in the cloud — they go to the edge via
+    // POST /devices/:ip/credentials. Strip any that slipped into the device payload.
+    let mut device = device;
+    device.username = None;
+    device.password = None;
+    device.rtsp_url = None;
     let db = st.db.clone();
     blocking(move || {
         let mut list = devices::repo::load(&db, tid);

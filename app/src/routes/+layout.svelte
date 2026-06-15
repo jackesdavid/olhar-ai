@@ -141,8 +141,8 @@
     "/workflows": "workflows.read",
     "/settings": "settings.read",
   };
-  // Desktop-only features not yet wired for the cloud client (edge stream / local agent).
-  const CLOUD_HIDE = new Set(["/live", "/chat"]);
+  // Desktop-only features not yet wired for the cloud client (the local AI agent).
+  const CLOUD_HIDE = new Set(["/chat"]);
   // A tenant context exists for normal users always, and for the master only while
   // "acting as" a tenant (assume sets tenant_id). Tenant-scoped pages require it.
   const inTenant = $derived(local || auth.me?.tenant_id != null);

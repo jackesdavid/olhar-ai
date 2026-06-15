@@ -37,7 +37,8 @@ impl AppState {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("cameras-cache.json"));
 
-        let devices = load_cameras(&control_url, &cache_path);
+        let mut devices = load_cameras(&control_url, &cache_path);
+        resolve_rtsp(&mut devices);
         log::info!("Edge has {} camera(s) (control={control_url})", devices.len());
 
         let own_go2rtc = std::env::var("EDGE_OWN_GO2RTC")
@@ -68,7 +69,8 @@ impl AppState {
 
     /// Re-pull the camera list from the control plane (and restart go2rtc if owned).
     pub fn reload(&self) -> usize {
-        let fresh = load_cameras(&self.control_url, &self.cache_path);
+        let mut fresh = load_cameras(&self.control_url, &self.cache_path);
+        resolve_rtsp(&mut fresh);
         let n = fresh.len();
         *self.devices.lock().unwrap() = fresh;
         if self.own_go2rtc {
@@ -108,9 +110,29 @@ impl AppState {
 
 /// Pull the camera list from the control plane; on success refresh the on-disk cache,
 /// on failure fall back to the cache (so an offline boot still serves the last list).
+///
+/// **Credentials live on the edge.** Control hands them over only once (the moment the
+/// web sets them); thereafter its config has none. So we MERGE creds from our local
+/// cache into any freshly-pulled camera that arrives without them — the edge is the
+/// durable home for camera credentials, the cloud never persists them.
 fn load_cameras(control_url: &str, cache_path: &PathBuf) -> Vec<Device> {
+    let cached: Vec<Device> = std::fs::read(cache_path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Vec<Device>>(&b).ok())
+        .unwrap_or_default();
     match fetch_cameras(control_url) {
-        Ok(devices) => {
+        Ok(mut devices) => {
+            for d in devices.iter_mut() {
+                let lacks = d.username.as_deref().map(|u| u.trim().is_empty()).unwrap_or(true);
+                if lacks {
+                    if let Some(prev) = cached.iter().find(|p| p.ip == d.ip) {
+                        if prev.username.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false) {
+                            d.username = prev.username.clone();
+                            d.password = prev.password.clone();
+                        }
+                    }
+                }
+            }
             if let Ok(json) = serde_json::to_vec_pretty(&devices) {
                 if let Err(e) = std::fs::write(cache_path, json) {
                     log::warn!("could not write camera cache {cache_path:?}: {e}");
@@ -120,10 +142,31 @@ fn load_cameras(control_url: &str, cache_path: &PathBuf) -> Vec<Device> {
         }
         Err(e) => {
             log::warn!("control plane unreachable ({e}); using cached camera list");
-            std::fs::read(cache_path)
-                .ok()
-                .and_then(|b| serde_json::from_slice::<Vec<Device>>(&b).ok())
-                .unwrap_or_default()
+            cached
+        }
+    }
+}
+
+/// For any camera that has credentials but no RTSP URL yet, resolve the RTSP stream URL
+/// via ONVIF so go2rtc can serve it. The RTSP URL is **kept on the edge only** (it's a
+/// LAN concern and embeds credentials) — never reported to the cloud. Best-effort.
+fn resolve_rtsp(devices: &mut [Device]) {
+    for d in devices.iter_mut() {
+        let needs = d.rtsp_url.as_deref().map(|u| u.trim().is_empty()).unwrap_or(true);
+        let has_creds = d.username.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false)
+            && d.password.as_deref().map(|p| !p.is_empty()).unwrap_or(false);
+        if !(needs && has_creds) {
+            continue;
+        }
+        let target = if d.xaddr.trim().is_empty() { d.ip.clone() } else { d.xaddr.clone() };
+        let user = d.username.clone().unwrap_or_default();
+        let pass = d.password.clone().unwrap_or_default();
+        match app_core::onvif::client::test_credentials(&target, &user, &pass) {
+            Ok(rtsp) => {
+                log::info!("resolved rtsp for {} (edge-local)", d.ip);
+                d.rtsp_url = Some(rtsp);
+            }
+            Err(e) => log::warn!("rtsp resolve failed for {}: {}", d.ip, e),
         }
     }
 }

@@ -17,3 +17,15 @@ function resolveBase(): string {
 }
 
 export const API_BASE = resolveBase();
+
+/** The public streaming gateway base URL (live feeds, `live.view`-gated). */
+function resolveGateway(): string {
+  const env = (import.meta as { env?: Record<string, string> }).env?.VITE_GATEWAY_URL;
+  if (env) return env.replace(/\/+$/, "");
+  if (typeof window !== "undefined" && window.location.hostname.endsWith("thesentinels.online")) {
+    return "https://gateway.thesentinels.online";
+  }
+  return "http://127.0.0.1:8789";
+}
+
+export const GATEWAY_BASE = resolveGateway();

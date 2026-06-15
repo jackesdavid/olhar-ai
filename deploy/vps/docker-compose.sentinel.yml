@@ -41,7 +41,7 @@ services:
       OAUTH_REDIRECT_BASE: https://control.thesentinels.online
       OAUTH_SUCCESS_REDIRECT: https://app.thesentinels.online/login
       EDGE_DIST_DIR: /edge-dist
-      LATEST_EDGE_VERSION: "0.1.1"
+      LATEST_EDGE_VERSION: "0.1.2"
     volumes:
       # Edge appliance binaries (shipped here by the release CI) served at /edge/<asset>.
       - /ibbf/edge-dist:/edge-dist:ro

@@ -52,6 +52,16 @@ fn main() {
         });
     }
 
+    // Config re-pull loop: pick up cameras added/edited in the cloud (every 60s) and
+    // resolve RTSP for newly-credentialed cameras, without a manual reload.
+    {
+        let sync = std::sync::Arc::clone(&state);
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            sync.reload();
+        });
+    }
+
     let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");
     rt.block_on(async move {
         let app = http::router(state);

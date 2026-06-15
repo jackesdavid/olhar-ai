@@ -82,6 +82,12 @@ export const data = {
     await api.del<void>(`/devices/${encodeURIComponent(ip)}`);
     return true;
   },
+  /** Relay camera credentials to the tenant's edge (cloud). They are NOT stored in the
+   * cloud — control holds them in memory until the edge collects them, then discards. */
+  setCredentials: async (ip: string, username: string, password: string): Promise<void> => {
+    if (TAURI) return; // desktop stores creds in its local DB via saveDevice
+    await api.post<void>(`/devices/${encodeURIComponent(ip)}/credentials`, { username, password });
+  },
   renameDevice: async (ip: string, name: string): Promise<void> => {
     if (TAURI) return invoke("rename_device", { ip, name });
     // Cloud has no targeted rename — upsert the device with the new name.

@@ -173,16 +173,28 @@
   async function saveDetail() {
     if (!detail) return;
     savingDetail = true;
-    const device: Device = {
-      ...detail,
-      name: editName.trim() || detail.name,
-      username: editUser.length > 0 ? editUser : null,
-      password: editPass.length > 0 ? editPass : null,
-    };
     try {
-      await data.saveDevice(device);
-      detail = device;
-      toast.success("Device saved.");
+      if (isTauri()) {
+        // Desktop: creds live in the local DB.
+        const device: Device = {
+          ...detail,
+          name: editName.trim() || detail.name,
+          username: editUser.length > 0 ? editUser : null,
+          password: editPass.length > 0 ? editPass : null,
+        };
+        await data.saveDevice(device);
+        detail = device;
+      } else {
+        // Cloud: save the name only; relay credentials to the edge (never stored here).
+        const device: Device = { ...detail, name: editName.trim() || detail.name, username: null, password: null };
+        await data.saveDevice(device);
+        if (editUser.length > 0) {
+          await data.setCredentials(detail.ip, editUser, editPass);
+          toast.success("Saved — credentials sent to your edge.");
+        }
+        detail = device;
+      }
+      if (isTauri()) toast.success("Device saved.");
       await loadDevices();
     } catch (err) {
       console.error("Failed to save device", err);
@@ -475,6 +487,12 @@
           </div>
         </div>
 
+        {#if !isTauri()}
+          <p class="text-xs text-muted-foreground">
+            Set the camera's credentials — your edge resolves the stream on its own network. The RTSP URL stays on the edge.
+          </p>
+        {/if}
+
         <div class="flex flex-wrap gap-2">
           <Button onclick={saveDetail} disabled={savingDetail}>
             {savingDetail ? "Saving…" : "Save"}
@@ -488,15 +506,15 @@
               {/if}
               Test credentials
             </Button>
+            <Button variant="outline" onclick={capture} disabled={capturing}>
+              {#if capturing}
+                <LoaderCircle class="size-4 animate-spin" />
+              {:else}
+                <Camera class="size-4" />
+              {/if}
+              Capture snapshot
+            </Button>
           {/if}
-          <Button variant="outline" onclick={capture} disabled={capturing}>
-            {#if capturing}
-              <LoaderCircle class="size-4 animate-spin" />
-            {:else}
-              <Camera class="size-4" />
-            {/if}
-            Capture snapshot
-          </Button>
         </div>
 
         {#if snapshotUrl}

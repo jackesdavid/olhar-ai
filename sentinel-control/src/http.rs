@@ -7,6 +7,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::time::Duration;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
@@ -96,7 +97,20 @@ async fn cameras(State(st): State<AppState>, headers: HeaderMap) -> Response {
         }
         Err(resp) => return resp,
     };
-    Json(devices::repo::load(&st.db, tenant)).into_response()
+    let mut list = devices::repo::load(&st.db, tenant);
+    // Hand over any credentials the web staged for this tenant's cameras — ONCE — then
+    // discard them. Camera credentials are never persisted in the control DB.
+    {
+        let mut pend = st.pending_creds.lock().unwrap();
+        pend.retain(|_, (_, _, t)| t.elapsed() < Duration::from_secs(1800)); // drop stale
+        for d in list.iter_mut() {
+            if let Some((u, p, _)) = pend.remove(&(tenant, d.ip.clone())) {
+                d.username = Some(u);
+                d.password = Some(p);
+            }
+        }
+    }
+    Json(list).into_response()
 }
 
 /// The edge pushes its latest ONVIF discovery sweep here (box token required); control
