@@ -52,7 +52,7 @@ jobs:
             build-args: PACKAGE=sentinel-flow
           - service: sentinel-app
             file: deploy/app/Dockerfile
-            build-args: ""
+            build-args: VITE_COMMIT=${{ github.sha }}
           - service: sentinel-landing
             file: deploy/landing/Dockerfile
             build-args: ""

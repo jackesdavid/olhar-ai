@@ -26,3 +26,8 @@ function resolveGateway(): string {
 }
 
 export const GATEWAY_BASE = resolveGateway();
+
+/** The deploying commit (short SHA), baked in at build time via `VITE_COMMIT` (CI passes
+ * `github.sha`). Shown in the UI footer so a new version is visible at a glance; "dev"
+ * for local builds. */
+export const COMMIT = ((import.meta as { env?: Record<string, string> }).env?.VITE_COMMIT ?? "dev").slice(0, 7);

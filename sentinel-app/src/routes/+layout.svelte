@@ -5,6 +5,7 @@
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
   import { data, onEvent } from "$lib/data";
+  import { COMMIT } from "$lib/config";
   import type { Alert } from "$lib/types";
   import { navItems } from "$lib/nav";
   import { Toaster } from "$lib/components/ui/sonner";
@@ -277,7 +278,7 @@
       {#if !navCollapsed}
         <span class="size-1.5 rounded-full bg-primary status-live"></span>
         <span class="font-mono">v0.1.0</span>
-        <span>· ready</span>
+        <span class="font-mono" title="Deployed commit">· {COMMIT}</span>
         <button
           class="interactive ml-auto rounded-md p-1 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
           title="Collapse sidebar"

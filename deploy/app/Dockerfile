@@ -5,6 +5,10 @@
 # env is needed.
 FROM node:22-alpine AS build
 WORKDIR /app
+# The deploying commit SHA (CI passes github.sha) → baked into the build and shown in the
+# UI footer so a new version is visible at a glance. Defaults to "dev" for local builds.
+ARG VITE_COMMIT=dev
+ENV VITE_COMMIT=$VITE_COMMIT
 COPY sentinel-app/package.json sentinel-app/package-lock.json ./
 RUN npm ci
 COPY sentinel-app/ ./
