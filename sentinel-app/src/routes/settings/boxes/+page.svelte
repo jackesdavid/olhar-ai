@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from "$app/navigation";
   import { toast } from "svelte-sonner";
 
   import LoaderCircle from "@lucide/svelte/icons/loader-circle";
@@ -17,10 +18,9 @@
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import { Badge } from "$lib/components/ui/badge";
-  import { Switch } from "$lib/components/ui/switch";
   import Loader from "$lib/components/loader.svelte";
 
-  import { boxes as boxApi, type Box, type BoxLog } from "$lib/api";
+  import { boxes as boxApi, type Box } from "$lib/api";
   import { API_BASE } from "$lib/config";
   import { hasPerm } from "$lib/auth.svelte";
 
@@ -130,61 +130,6 @@
     const d = new Date(b.last_seen);
     return Number.isNaN(d.getTime()) ? b.last_seen : d.toLocaleString();
   }
-
-  // ---- per-box log viewer (recent tail + live SSE) -------------------------
-  let logsBox = $state<Box | null>(null);
-  let logLines = $state<BoxLog[]>([]);
-  let logLevel = $state<string>("all"); // all | info | warn | error
-  let logFollow = $state(true);
-  let logEl = $state<HTMLDivElement | null>(null);
-  let logEs: EventSource | null = null;
-  const LOG_CAP = 4000;
-
-  const shownLogs = $derived(
-    logLevel === "all" ? logLines : logLines.filter((l) => l.level.toLowerCase() === logLevel),
-  );
-
-  function logColor(level: string): string {
-    const l = level.toLowerCase();
-    if (l === "error") return "text-destructive";
-    if (l === "warn") return "text-amber-500";
-    if (l === "debug") return "text-muted-foreground/70";
-    return "text-foreground/80";
-  }
-
-  async function openLogs(b: Box) {
-    logsBox = b;
-    logLines = [];
-    logLevel = "all";
-    logFollow = true;
-    try {
-      logLines = await boxApi.logs(b.id, 1000);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load logs");
-    }
-    // Live tail (EventSource — token rides the query string).
-    logEs?.close();
-    logEs = new EventSource(boxApi.logsStreamUrl(b.id));
-    logEs.onmessage = (ev) => {
-      try {
-        const l = JSON.parse(ev.data) as BoxLog;
-        logLines = [...logLines, l].slice(-LOG_CAP);
-      } catch {
-        /* ignore malformed frames */
-      }
-    };
-  }
-  function closeLogs() {
-    logEs?.close();
-    logEs = null;
-    logsBox = null;
-  }
-
-  // Auto-scroll to the newest line while following.
-  $effect(() => {
-    void shownLogs.length;
-    if (logFollow && logEl) logEl.scrollTop = logEl.scrollHeight;
-  });
 </script>
 
 <div class="space-y-6">
@@ -249,7 +194,7 @@
                   {/if}
                 </td>
                 <td class="px-3 py-2 text-right">
-                  <Button variant="ghost" size="icon" title="View logs" onclick={() => openLogs(b)}>
+                  <Button variant="ghost" size="icon" title="View logs" onclick={() => goto(`/logs?box=${b.id}`)}>
                     <ScrollText class="size-4" />
                   </Button>
                   <Button variant="ghost" size="icon" title="Remove" onclick={() => (deleteTarget = b)}>
@@ -342,54 +287,6 @@
 
     <Dialog.Footer>
       <Button onclick={() => (createdOpen = false)}>Done</Button>
-    </Dialog.Footer>
-  </Dialog.Content>
-</Dialog.Root>
-
-<!-- Per-box log viewer (recent tail + live SSE) -->
-<Dialog.Root open={logsBox !== null} onOpenChange={(o) => { if (!o) closeLogs(); }}>
-  <Dialog.Content class="max-w-3xl">
-    <Dialog.Header>
-      <Dialog.Title class="flex items-center gap-2"><ScrollText class="size-4" /> Logs — {logsBox?.name ?? ""}</Dialog.Title>
-      <Dialog.Description>Live tail of the edge box (sentinel-edge + go2rtc). Newest at the bottom.</Dialog.Description>
-    </Dialog.Header>
-
-    <div class="flex items-center gap-3 text-xs">
-      <div class="flex items-center gap-1.5">
-        <Label class="text-muted-foreground">Level</Label>
-        <select class="h-7 rounded-md border border-border bg-background px-2 text-xs" bind:value={logLevel}>
-          <option value="all">all</option>
-          <option value="info">info</option>
-          <option value="warn">warn</option>
-          <option value="error">error</option>
-        </select>
-      </div>
-      <div class="ml-auto flex items-center gap-1.5">
-        <Label class="text-muted-foreground">Follow</Label>
-        <Switch checked={logFollow} onCheckedChange={(v) => (logFollow = v)} />
-      </div>
-    </div>
-
-    <div
-      bind:this={logEl}
-      class="h-[55vh] overflow-y-auto rounded-md border border-border bg-muted/30 p-2 font-mono text-[11px] leading-relaxed"
-    >
-      {#if shownLogs.length === 0}
-        <p class="py-8 text-center text-muted-foreground">No logs yet. New lines stream in as the box reports them.</p>
-      {:else}
-        {#each shownLogs as l, i (i)}
-          <div class="flex gap-2 whitespace-pre-wrap break-words">
-            <span class="shrink-0 text-muted-foreground/50">{l.ts.slice(11, 19)}</span>
-            <span class="w-12 shrink-0 uppercase {logColor(l.level)}">{l.level}</span>
-            {#if l.target}<span class="shrink-0 text-muted-foreground/60">{l.target}</span>{/if}
-            <span class="{logColor(l.level)}">{l.message}</span>
-          </div>
-        {/each}
-      {/if}
-    </div>
-
-    <Dialog.Footer>
-      <Button variant="outline" onclick={closeLogs}>Close</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

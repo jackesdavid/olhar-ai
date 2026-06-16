@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { goto } from "$app/navigation";
   import { data, onEvent, type EdgeDiscovered } from "$lib/data";
   import { toast } from "svelte-sonner";
 
@@ -7,6 +8,7 @@
   import Plus from "@lucide/svelte/icons/plus";
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import Pencil from "@lucide/svelte/icons/pencil";
+  import ScrollText from "@lucide/svelte/icons/scroll-text";
 
   import * as Card from "$lib/components/ui/card";
   import * as Table from "$lib/components/ui/table";
@@ -273,6 +275,14 @@
                 </Table.Cell>
                 <Table.Cell class="text-right">
                   <div class="flex justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title="View this camera's edge logs"
+                      onclick={() => goto(`/logs?device=${encodeURIComponent(d.ip)}`)}
+                    >
+                      <ScrollText class="size-4" />
+                    </Button>
                     <Button
                       variant="ghost"
                       size="sm"
