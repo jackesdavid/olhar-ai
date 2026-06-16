@@ -48,6 +48,12 @@ pub struct AppState {
     /// Per-tenant config-change notifiers — the edge long-polls /config/cameras and is
     /// woken the instant the web changes a camera (so edits apply in ~1s, not on a timer).
     pub notifiers: Arc<Mutex<HashMap<uuid::Uuid, Arc<tokio::sync::Notify>>>>,
+    /// Tenants with a pending "rescan cameras" command — set by the UI, consumed by the
+    /// edge on its next poll (see /config/commands). Rescan is idempotent + cheap.
+    pub pending_rescan: Arc<Mutex<std::collections::HashSet<uuid::Uuid>>>,
+    /// Live edge-log fan-out: the edge pushes lines to /config/logs, control persists +
+    /// re-broadcasts here; the per-box log SSE relay subscribes and filters by tenant+box.
+    pub log_bus: tokio::sync::broadcast::Sender<String>,
 }
 
 impl AppState {
@@ -58,6 +64,15 @@ impl AppState {
     /// Wake any edge long-polling this tenant's config (a camera was added/edited).
     pub fn bump(&self, tid: uuid::Uuid) {
         self.notifier(tid).notify_waiters();
+    }
+    /// Queue a rescan for the tenant's edge and wake its long-poll so it acts now.
+    pub fn request_rescan(&self, tid: uuid::Uuid) {
+        self.pending_rescan.lock().unwrap().insert(tid);
+        self.bump(tid);
+    }
+    /// Consume the tenant's pending rescan flag (true if one was queued).
+    pub fn take_rescan(&self, tid: uuid::Uuid) -> bool {
+        self.pending_rescan.lock().unwrap().remove(&tid)
     }
 }
 
@@ -110,7 +125,12 @@ fn main() {
 
         let pending_creds = Arc::new(Mutex::new(HashMap::new()));
         let notifiers = Arc::new(Mutex::new(HashMap::new()));
-        let state = AppState { db, pool, jwt_secret, google, oauth_states, tailscale, http, pending_creds, notifiers };
+        let pending_rescan = Arc::new(Mutex::new(std::collections::HashSet::new()));
+        let (log_bus, _) = tokio::sync::broadcast::channel::<String>(1024);
+        let state = AppState {
+            db, pool, jwt_secret, google, oauth_states, tailscale, http, pending_creds, notifiers,
+            pending_rescan, log_bus,
+        };
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {
             Ok(l) => l,

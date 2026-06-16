@@ -55,3 +55,48 @@ pub fn save(db: &Db, tenant_id: Uuid, devices: &[Device]) {
         log::error!("devices::repo::save transaction failed: {e}");
     }
 }
+
+/// Reconcile a camera that changed IP (matched by its stable ONVIF `id`): repoint its row
+/// at the new ip/xaddr and carry the `configured_cameras` flag over. If a different row
+/// already occupies `new_ip`, it's dropped first (the moved camera wins the address).
+/// Returns true if a device row was updated. Best-effort.
+pub fn move_ip(db: &Db, tenant_id: Uuid, onvif_id: &str, old_ip: &str, new_ip: &str, xaddr: &str) -> bool {
+    if onvif_id.trim().is_empty() || new_ip.trim().is_empty() {
+        return false;
+    }
+    let pool = db.pool();
+    let onvif_id = onvif_id.to_string();
+    let old_ip = old_ip.to_string();
+    let new_ip = new_ip.to_string();
+    let xaddr = xaddr.to_string();
+    let res: Result<bool, sqlx::Error> = db.block(async move {
+        let mut tx = pool.begin().await?;
+        // Free the destination ip if a different camera holds it.
+        sqlx::query("DELETE FROM devices WHERE tenant_id = $1 AND ip = $2 AND id <> $3")
+            .bind(tenant_id)
+            .bind(&new_ip)
+            .bind(&onvif_id)
+            .execute(&mut *tx)
+            .await?;
+        let r = sqlx::query("UPDATE devices SET ip = $2, xaddr = $3 WHERE tenant_id = $1 AND id = $4")
+            .bind(tenant_id)
+            .bind(&new_ip)
+            .bind(&xaddr)
+            .bind(&onvif_id)
+            .execute(&mut *tx)
+            .await?;
+        // Keep the "configured" flag pointing at the new ip (table lives in the same DB).
+        sqlx::query("UPDATE configured_cameras SET ip = $2 WHERE tenant_id = $1 AND ip = $3")
+            .bind(tenant_id)
+            .bind(&new_ip)
+            .bind(&old_ip)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(r.rows_affected() > 0)
+    });
+    res.unwrap_or_else(|e| {
+        log::error!("devices::repo::move_ip failed: {e}");
+        false
+    })
+}

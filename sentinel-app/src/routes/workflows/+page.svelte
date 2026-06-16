@@ -980,19 +980,19 @@
     }
   }
 
-  // Commit the `event` field on an Emit/On-event node. If the name isn't registered yet,
-  // register it (under the typed category, default "General") so it becomes a palette entry.
-  async function commitEventField(node: Node, name: string) {
+  // Register the (already-saved) event name into the tenant registry under the typed
+  // category (default "General") — so other graphs can listen for it and it appears in the
+  // palette grouped by category. Explicit (a button), not coupled to typing the name.
+  async function registerEvent(name: string) {
     const ev = name.trim();
-    await saveNodeConfig(node, { ...node.config, event: ev });
-    if (ev && !events.some((e) => e.name === ev)) {
-      try {
-        await data.createEvent(ev, newEventCategory.trim() || "General");
-        await loadEvents();
-        newEventCategory = "";
-      } catch (err) {
-        toast.error("Couldn't register event", { description: String(err) });
-      }
+    if (!ev) return;
+    try {
+      await data.createEvent(ev, newEventCategory.trim() || "General");
+      await loadEvents();
+      newEventCategory = "";
+      toast.success(`Event “${ev}” registered`);
+    } catch (err) {
+      toast.error("Couldn't register event", { description: String(err) });
     }
   }
 
@@ -2057,30 +2057,43 @@
                           </Select.Content>
                         </Select.Root>
                       {:else if key === "event"}
-                        <!-- Event name: free-text with autocomplete over registered events;
-                             committing a new name registers it (under the typed category). -->
+                        <!-- Event name persists like any other field (onchange → saveNodeConfig).
+                             Registration into the tenant registry (so other graphs can listen +
+                             it appears in the palette under its category) is an explicit step. -->
+                        {@const evName = String(selectedNode.config[key] ?? "").trim()}
+                        {@const known = events.find((e) => e.name === evName)}
                         <Input
                           class="h-8"
                           list="wf-events"
                           disabled={editLocked}
                           placeholder="EventName (e.g. Foo)"
                           value={String(selectedNode.config[key] ?? "")}
-                          onchange={(e) => commitEventField(selectedNode, e.currentTarget.value)}
+                          onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value.trim() })}
                         />
                         <datalist id="wf-events">
                           {#each events as e (e.name)}<option value={e.name}>{e.category}</option>{/each}
                         </datalist>
-                        {#if !events.some((e) => e.name === String(selectedNode?.config[key] ?? "").trim()) && String(selectedNode.config[key] ?? "").trim()}
-                          <Input
-                            class="mt-1.5 h-8"
-                            list="wf-event-cats"
-                            disabled={editLocked}
-                            placeholder="Category for new event (default General)"
-                            bind:value={newEventCategory}
-                          />
+                        {#if evName && known}
+                          <p class="mt-1 text-[10px] text-muted-foreground">Registered · category “{known.category}”</p>
+                        {:else if evName}
+                          <div class="mt-1.5 flex items-center gap-1.5">
+                            <Input
+                              class="h-8"
+                              list="wf-event-cats"
+                              disabled={editLocked}
+                              placeholder="Category (default General)"
+                              bind:value={newEventCategory}
+                            />
+                            <Button size="sm" class="h-8 shrink-0" disabled={editLocked} onclick={() => registerEvent(evName)}>
+                              Register
+                            </Button>
+                          </div>
                           <datalist id="wf-event-cats">
                             {#each eventCategories as c (c.name)}<option value={c.name}></option>{/each}
                           </datalist>
+                          <p class="mt-1 text-[10px] text-muted-foreground">
+                            New event — Register it so other graphs can listen and it shows in the palette.
+                          </p>
                         {/if}
                       {:else}
                         <Input class="h-8" disabled={editLocked} value={String(selectedNode.config[key] ?? "")} onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })} />

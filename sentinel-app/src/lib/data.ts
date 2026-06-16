@@ -130,6 +130,11 @@ export const data = {
   listDiscovered: (): Promise<EdgeDiscovered[]> => api.get<EdgeDiscovered[]>("/devices/discovered"),
   /** IPs of cameras whose credentials have been set/relayed to the edge. */
   listConfigured: (): Promise<string[]> => api.get<string[]>("/devices/configured"),
+  /** Ask the tenant's edge box(es) to re-run ONVIF discovery now (e.g. after a camera
+   * changed IP). The edge reconciles moves by stable ONVIF id and pushes corrections back. */
+  rescan: async (): Promise<void> => {
+    await api.post<void>("/devices/rescan");
+  },
   testCredentials: (): Promise<never> => cloudOnly("Credential test"),
   validateDevice: (): Promise<never> => cloudOnly("Credential validation"),
 

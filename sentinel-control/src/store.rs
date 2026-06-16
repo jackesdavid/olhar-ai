@@ -195,6 +195,119 @@ pub async fn touch_box_by_token(
     Ok(row.map(|(t,)| t))
 }
 
+/// Like [`touch_box_by_token`] but also returns the box id — needed to tag pushed logs
+/// to the right box. Returns `(tenant_id, box_id)`, or None for an unknown token.
+pub async fn touch_box_identity(
+    pool: &PgPool,
+    token_hash: &str,
+    host: Option<&str>,
+    version: Option<&str>,
+) -> sqlx::Result<Option<(Uuid, Uuid)>> {
+    let row: Option<(Uuid, Uuid)> = sqlx::query_as(
+        "UPDATE tenant_boxes
+            SET last_seen = now(),
+                magicdns_host = COALESCE($2, magicdns_host),
+                version = COALESCE($3, version)
+          WHERE token_hash = $1
+        RETURNING tenant_id, id",
+    )
+    .bind(token_hash)
+    .bind(host)
+    .bind(version)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// One log line pushed up by an edge box.
+#[derive(serde::Deserialize)]
+pub struct LogLineIn {
+    pub ts: String,
+    pub level: String,
+    #[serde(default)]
+    pub target: String,
+    pub message: String,
+}
+
+/// A persisted box log line, as returned to the UI.
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct BoxLogRow {
+    pub ts: String,
+    pub level: String,
+    pub target: String,
+    pub message: String,
+}
+
+/// Persist a batch of log lines for a box, then prune to the newest `keep` rows for it.
+pub async fn insert_box_logs(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    box_id: Uuid,
+    lines: &[LogLineIn],
+    keep: i64,
+) -> sqlx::Result<()> {
+    if lines.is_empty() {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    for l in lines {
+        sqlx::query(
+            "INSERT INTO box_logs (tenant_id, box_id, ts, level, target, message)
+             VALUES ($1,$2,$3,$4,$5,$6)",
+        )
+        .bind(tenant_id)
+        .bind(box_id)
+        .bind(&l.ts)
+        .bind(&l.level)
+        .bind(&l.target)
+        .bind(&l.message)
+        .execute(&mut *tx)
+        .await?;
+    }
+    // Keep only the newest `keep` rows for this box (bounded retention).
+    sqlx::query(
+        "DELETE FROM box_logs WHERE box_id = $1 AND id <= (
+            SELECT id FROM box_logs WHERE box_id = $1 ORDER BY id DESC OFFSET $2 LIMIT 1
+         )",
+    )
+    .bind(box_id)
+    .bind(keep)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await
+}
+
+/// The newest `limit` log lines for a box, returned oldest-first (ready to append).
+pub async fn list_box_logs(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    box_id: Uuid,
+    limit: i64,
+) -> sqlx::Result<Vec<BoxLogRow>> {
+    let mut rows: Vec<BoxLogRow> = sqlx::query_as::<_, BoxLogRow>(
+        "SELECT ts, level, target, message FROM box_logs
+          WHERE tenant_id = $1 AND box_id = $2 ORDER BY id DESC LIMIT $3",
+    )
+    .bind(tenant_id)
+    .bind(box_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    rows.reverse();
+    Ok(rows)
+}
+
+/// Confirm a box id belongs to a tenant (guards the per-box log routes).
+pub async fn box_belongs_to(pool: &PgPool, tenant_id: Uuid, box_id: Uuid) -> sqlx::Result<bool> {
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tenant_boxes WHERE tenant_id = $1 AND id = $2")
+            .bind(tenant_id)
+            .bind(box_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.is_some())
+}
+
 /// Replace the tenant's discovered-camera set (the edge pushes its full current sweep).
 pub async fn upsert_discovered(
     pool: &PgPool,

@@ -73,12 +73,19 @@ export type Box = {
 
 export type NewBox = { id: string; token: string; hostname: string; tailscale_key: string | null };
 
+export type BoxLog = { ts: string; level: string; target: string; message: string };
+
 export const boxes = {
   list: () => api.get<Box[]>("/boxes"),
   create: (name: string) => api.post<NewBox>("/boxes", { name }),
   del: (id: string) => api.del<void>(`/boxes/${id}`),
   /** The latest edge build the operator has published (for "update available"). */
   latestVersion: () => api.get<{ version: string }>("/edge-latest"),
+  /** Recent persisted log tail for a box (oldest-first). */
+  logs: (id: string, limit = 500) => api.get<BoxLog[]>(`/boxes/${id}/logs?limit=${limit}`),
+  /** EventSource URL for a box's live log tail (token in query — EventSource can't set headers). */
+  logsStreamUrl: (id: string) =>
+    `${API_BASE}/boxes/${encodeURIComponent(id)}/logs/stream?token=${encodeURIComponent(auth.token ?? "")}`,
 };
 
 export const admin = {

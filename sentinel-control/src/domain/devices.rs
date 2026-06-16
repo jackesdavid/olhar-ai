@@ -19,7 +19,18 @@ pub fn router() -> Router<AppState> {
         .route("/devices/discovered", get(discovered))
         .route("/devices/configured", get(configured))
         .route("/devices/:ip/credentials", post(set_credentials))
+        .route("/devices/rescan", post(rescan))
         .route("/devices/:ip", axum::routing::delete(remove))
+}
+
+/// Ask the tenant's edge box(es) to re-run ONVIF discovery now (e.g. after a camera got a
+/// new DHCP IP). Queues a command the edge consumes on its next poll (woken immediately);
+/// moved cameras are reconciled by stable ONVIF id on the edge + pushed back.
+async fn rescan(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "devices.write")?;
+    let tid = tenant_of(&c)?;
+    st.request_rescan(tid);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// IPs of cameras whose credentials have been set (relayed to the edge). Lets the UI

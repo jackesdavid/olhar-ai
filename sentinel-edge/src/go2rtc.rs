@@ -40,12 +40,36 @@ pub fn respawn(state: &AppState) {
     match std::process::Command::new(&state.go2rtc_bin)
         .arg("-config")
         .arg(&state.go2rtc_config)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
     {
-        Ok(child) => {
+        Ok(mut child) => {
             log::info!("go2rtc started (pid {}) → {}", child.id(), go2rtc::BASE);
+            // Tee the sidecar's stdout/stderr into the shared log ring (target "go2rtc")
+            // so stream connect/disconnect + codec issues show up in the cloud log view.
+            if let Some(out) = child.stdout.take() {
+                pipe_into_ring(out);
+            }
+            if let Some(err) = child.stderr.take() {
+                pipe_into_ring(err);
+            }
             *guard = Some(child);
         }
         Err(e) => log::error!("start go2rtc: {e}"),
     }
+}
+
+/// Spawn a reader thread that forwards each line of a go2rtc pipe into the log ring.
+fn pipe_into_ring<R: std::io::Read + Send + 'static>(reader: R) {
+    use std::io::BufRead;
+    let buf = crate::logbuf::LogBuf::global();
+    std::thread::spawn(move || {
+        let mut lines = std::io::BufReader::new(reader).lines();
+        while let Some(Ok(line)) = lines.next() {
+            if !line.trim().is_empty() {
+                buf.push("info", "go2rtc", line);
+            }
+        }
+    });
 }

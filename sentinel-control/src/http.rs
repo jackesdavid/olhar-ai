@@ -27,7 +27,10 @@ pub fn router(state: AppState) -> Router {
         .route("/install.sh", get(install_script))
         .route("/edge-latest", get(edge_latest))
         .route("/config/cameras", get(cameras))
+        .route("/config/commands", get(commands))
         .route("/config/discovered", post(discovered_push))
+        .route("/config/device-moved", post(device_moved))
+        .route("/config/logs", post(box_logs_push))
         .merge(handlers::router())
         .merge(crate::domain::router())
         .nest_service("/edge", ServeDir::new(edge_dist))
@@ -128,6 +131,101 @@ async fn cameras(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Ra
         }
     }
     Json(list).into_response()
+}
+
+/// Like [`box_tenant`] but also resolves the box id (for log tagging).
+async fn box_identity(st: &AppState, headers: &HeaderMap) -> Result<Option<(uuid::Uuid, uuid::Uuid)>, Response> {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let Some(tok) = token else { return Ok(None) };
+    let host = headers.get("x-box-host").and_then(|v| v.to_str().ok());
+    let version = headers.get("x-edge-version").and_then(|v| v.to_str().ok());
+    let hash = hex::encode(Sha256::digest(tok.as_bytes()));
+    match store::touch_box_identity(&st.pool, &hash, host, version).await {
+        Ok(Some(pair)) => Ok(Some(pair)),
+        Ok(None) => Err((StatusCode::UNAUTHORIZED, "unknown box token").into_response()),
+        Err(e) => {
+            log::error!("box token lookup failed: {e}");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "lookup failed").into_response())
+        }
+    }
+}
+
+/// The edge polls this each cycle (box token) for pending commands; the rescan flag is
+/// consumed here so the next poll won't re-trigger it.
+async fn commands(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let tenant = match box_tenant(&st, &headers).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
+        Err(resp) => return resp,
+    };
+    Json(json!({ "rescan": st.take_rescan(tenant) })).into_response()
+}
+
+/// A camera that changed IP, reported by the edge (matched on its stable ONVIF id).
+#[derive(serde::Deserialize)]
+struct DeviceMove {
+    onvif_id: String,
+    #[serde(default)]
+    old_ip: String,
+    new_ip: String,
+    #[serde(default)]
+    xaddr: String,
+}
+
+/// The edge reports cameras whose IP changed so the cloud device rows + Live page follow
+/// the move (box token required). Keyed by stable ONVIF id.
+async fn device_moved(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<Vec<DeviceMove>>>) -> Response {
+    let tenant = match box_tenant(&st, &headers).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
+        Err(resp) => return resp,
+    };
+    let moves = body.map(|Json(m)| m).unwrap_or_default();
+    if moves.is_empty() {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    let db = st.db.clone();
+    let n = moves.len();
+    let _ = tokio::task::spawn_blocking(move || {
+        for m in &moves {
+            devices::repo::move_ip(&db, tenant, &m.onvif_id, &m.old_ip, &m.new_ip, &m.xaddr);
+        }
+    })
+    .await;
+    log::info!("box reconciled {n} camera IP change(s) for tenant {tenant}");
+    st.bump(tenant); // wake the edge so it re-pulls the corrected list
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// Newest box-log rows kept per box (bounded retention; the edge keeps its own ring + stdout).
+const BOX_LOG_KEEP: i64 = 5000;
+
+/// The edge pushes a batch of its recent log lines here (box token). Control persists a
+/// bounded tail and re-broadcasts each line for any live per-box log viewer.
+async fn box_logs_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<Vec<store::LogLineIn>>>) -> Response {
+    let (tenant, box_id) = match box_identity(&st, &headers).await {
+        Ok(Some(pair)) => pair,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
+        Err(resp) => return resp,
+    };
+    let lines = body.map(|Json(l)| l).unwrap_or_default();
+    if lines.is_empty() {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    // Live fan-out (tagged with tenant+box so the per-box SSE relay can filter).
+    for l in &lines {
+        let msg = json!({ "tenant": tenant, "box": box_id, "ts": l.ts, "level": l.level, "target": l.target, "message": l.message });
+        let _ = st.log_bus.send(msg.to_string());
+    }
+    if let Err(e) = store::insert_box_logs(&st.pool, tenant, box_id, &lines, BOX_LOG_KEEP).await {
+        log::error!("insert_box_logs failed: {e}");
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// The edge pushes its latest ONVIF discovery sweep here (box token required); control

@@ -74,6 +74,27 @@
     }
   }
 
+  // Ask the edge to re-run ONVIF discovery now (e.g. after a camera changed IP). The edge
+  // reconciles moves by stable ONVIF id + pushes corrections back; refresh shortly after.
+  let rescanning = $state(false);
+  async function rescan() {
+    rescanning = true;
+    try {
+      await data.rescan();
+      toast.success("Rescan requested", {
+        description: "Your edge box is re-running discovery — moved cameras self-heal by ONVIF id.",
+      });
+      setTimeout(() => {
+        loadDevices();
+        loadEdgeFound();
+      }, 4000);
+    } catch (err) {
+      toast.error("Rescan failed", { description: String(err) });
+    } finally {
+      rescanning = false;
+    }
+  }
+
   onMount(() => {
     loadDevices();
     loadEdgeFound();
@@ -160,13 +181,16 @@
 </script>
 
 <div class="space-y-6">
-  <div class="flex items-center justify-between">
+  <div class="flex items-center justify-between gap-3">
     <div>
       <h1 class="text-2xl font-semibold tracking-tight">Devices</h1>
       <p class="text-sm text-muted-foreground">
         Save and manage the cameras your edge appliance finds on its local network.
       </p>
     </div>
+    <Button variant="outline" onclick={rescan} disabled={rescanning} title="Re-run ONVIF discovery on your edge box now (fixes cameras that changed IP)">
+      <Radar class="size-4" /> {rescanning ? "Rescanning…" : "Rescan"}
+    </Button>
   </div>
 
   <!-- Saved devices -->

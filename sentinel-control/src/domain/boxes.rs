@@ -2,12 +2,17 @@
 //! box token to put in the edge installer. The edge presents that token to
 //! `/config/cameras` (see `http.rs`) and control returns only that box's tenant's
 //! cameras. `/internal/box-upstream` lets the gateway resolve a tenant's live host.
-use axum::extract::{Path, State};
+use std::convert::Infallible;
+use std::time::Duration;
+
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::Json;
 use axum::routing::get;
 use axum::Router;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -19,6 +24,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/boxes", get(list).post(create))
         .route("/boxes/:id", axum::routing::delete(remove))
+        .route("/boxes/:id/logs", get(box_logs))
+        .route("/boxes/:id/logs/stream", get(box_logs_stream))
         .route("/internal/box-upstream", get(box_upstream))
 }
 
@@ -110,4 +117,76 @@ struct UpstreamResp {
 async fn box_upstream(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<UpstreamResp>, ApiErr> {
     let tid = tenant_of(&c)?;
     Ok(Json(UpstreamResp { host: store::box_host_for_tenant(&st.pool, tid).await.map_err(db_err)? }))
+}
+
+// ---- per-box logs -----------------------------------------------------------
+
+#[derive(Deserialize)]
+struct LogsQuery {
+    limit: Option<i64>,
+}
+
+/// The recent persisted log tail for a box (oldest-first), so the viewer has history on open.
+async fn box_logs(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(q): Query<LogsQuery>,
+) -> Result<Json<Vec<store::BoxLogRow>>, ApiErr> {
+    auth::require(&c, "devices.read")?;
+    let tid = tenant_of(&c)?;
+    if !store::box_belongs_to(&st.pool, tid, id).await.map_err(db_err)? {
+        return Err(err(StatusCode::NOT_FOUND, "box not found"));
+    }
+    let limit = q.limit.unwrap_or(500).clamp(1, 5000);
+    Ok(Json(store::list_box_logs(&st.pool, tid, id, limit).await.map_err(db_err)?))
+}
+
+#[derive(Deserialize)]
+struct TokenQuery {
+    token: String,
+}
+
+/// Live SSE tail of a box's logs, scoped to the caller's tenant + this box. JWT rides the
+/// `token` query param (EventSource can't set headers). Subscribes to the control-wide
+/// `log_bus` (fed by the edge's /config/logs pushes) and forwards only matching lines.
+async fn box_logs_stream(
+    State(st): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(q): Query<TokenQuery>,
+) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, ApiErr> {
+    let claims = auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    auth::require(&claims, "devices.read")?;
+    let tid = tenant_of(&claims)?;
+    if !store::box_belongs_to(&st.pool, tid, id).await.map_err(db_err)? {
+        return Err(err(StatusCode::NOT_FOUND, "box not found"));
+    }
+    let tid_s = tid.to_string();
+    let box_s = id.to_string();
+
+    let mut rx = st.log_bus.subscribe();
+    let (tx, out) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(line) => {
+                    let matches = serde_json::from_str::<Value>(&line)
+                        .ok()
+                        .map(|v| {
+                            v.get("tenant").and_then(|t| t.as_str()) == Some(tid_s.as_str())
+                                && v.get("box").and_then(|b| b.as_str()) == Some(box_s.as_str())
+                        })
+                        .unwrap_or(false);
+                    if matches && tx.send(Ok(Event::default().data(line))).await.is_err() {
+                        return; // browser disconnected
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue, // dropped some — keep going
+                Err(_) => return,                                                      // sender gone
+            }
+        }
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(out);
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }

@@ -83,15 +83,117 @@ impl AppState {
         n
     }
 
-    /// Run an ONVIF WS-Discovery sweep on the LAN and push the results up to control,
-    /// so the cloud Devices page can surface them. The edge dials OUT — no inbound to
-    /// the box is ever needed. Best-effort; tagged with the box token + edge version.
-    pub fn push_discovered(&self) {
+    /// Re-run discovery AND reconcile cameras that changed IP (e.g. after a DHCP lease
+    /// flip on reboot): for any cached camera whose stable ONVIF `id` is now seen at a
+    /// different IP, repoint it, re-resolve its RTSP, regenerate go2rtc (`cam_<newip>`),
+    /// and push the correction up so the cloud device row + Live page follow the move.
+    /// Then push the full sweep to control's discovered list. Best-effort throughout.
+    pub fn rediscover(&self) {
         let found = app_core::onvif::discovery::discover();
+        let by_id: std::collections::HashMap<&str, (&str, &str)> = found
+            .iter()
+            .filter(|d| !d.id.trim().is_empty())
+            .map(|d| (d.id.as_str(), (d.ip.as_str(), d.xaddr.as_str())))
+            .collect();
+
+        let mut moves: Vec<serde_json::Value> = Vec::new();
+        {
+            let mut devices = self.devices.lock().unwrap();
+            for dev in devices.iter_mut() {
+                if dev.id.trim().is_empty() {
+                    continue;
+                }
+                if let Some((new_ip, new_xaddr)) = by_id.get(dev.id.as_str()) {
+                    if !new_ip.is_empty() && *new_ip != dev.ip {
+                        let old_ip = dev.ip.clone();
+                        log::info!(
+                            "camera '{}' moved {} -> {} (onvif id {})",
+                            dev.name, old_ip, new_ip, dev.id
+                        );
+                        moves.push(serde_json::json!({
+                            "onvif_id": dev.id,
+                            "old_ip": old_ip,
+                            "new_ip": new_ip,
+                            "xaddr": new_xaddr,
+                        }));
+                        dev.ip = new_ip.to_string();
+                        dev.xaddr = new_xaddr.to_string();
+                        dev.rtsp_url = None; // force re-resolve at the new address
+                        dev.rtsp_sub_url = None;
+                    }
+                }
+            }
+            if !moves.is_empty() {
+                resolve_rtsp(devices.as_mut_slice());
+                write_cache(&self.cache_path, &devices);
+            }
+        }
+        if !moves.is_empty() && self.own_go2rtc {
+            crate::go2rtc::respawn(self);
+        }
+        if !moves.is_empty() {
+            self.push_device_moves(&moves);
+        }
+        self.post_discovered(&found);
+    }
+
+    /// POST the current ONVIF sweep to control's discovered list (box-authed). Best-effort.
+    fn post_discovered(&self, found: &[app_core::onvif::DiscoveredDevice]) {
         let n = found.len();
         let url = format!("{}/config/discovered", self.control_url);
-        let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(15)).build();
-        let mut req = agent.post(&url);
+        match self.box_agent().post(&url).send_json(found) {
+            Ok(_) => log::info!("discovery: pushed {n} camera(s) to control"),
+            Err(e) => log::warn!("discovery push failed: {e}"),
+        }
+    }
+
+    /// Report cameras whose IP changed so the cloud follows the move (box-authed). Best-effort.
+    fn push_device_moves(&self, moves: &[serde_json::Value]) {
+        let url = format!("{}/config/device-moved", self.control_url);
+        match self.box_agent().post(&url).send_json(moves) {
+            Ok(_) => log::info!("reported {} camera IP move(s) to control", moves.len()),
+            Err(e) => log::warn!("device-moved push failed: {e}"),
+        }
+    }
+
+    /// Poll control for a pending rescan command (box-authed). Returns true if one is queued.
+    pub fn check_rescan_command(&self) -> bool {
+        let url = format!("{}/config/commands", self.control_url);
+        match self.box_agent().get(&url).call() {
+            Ok(resp) => resp
+                .into_json::<serde_json::Value>()
+                .ok()
+                .and_then(|v| v.get("rescan").and_then(|r| r.as_bool()))
+                .unwrap_or(false),
+            Err(_) => false, // network hiccup — try again next cycle
+        }
+    }
+
+    /// Push a batch of recent log lines to control (box-authed). Returns true on success.
+    pub fn push_logs(&self, lines: &[crate::logbuf::LogLine]) -> bool {
+        let url = format!("{}/config/logs", self.control_url);
+        self.box_agent().post(&url).send_json(lines).is_ok()
+    }
+
+    /// A short-timeout ureq agent + request stamped with this box's token + tailnet host +
+    /// edge version — the standard headers control uses to resolve the box's tenant.
+    fn box_agent(&self) -> BoxReq {
+        BoxReq { agent: ureq::AgentBuilder::new().timeout(Duration::from_secs(15)).build() }
+    }
+}
+
+/// Tiny builder that stamps the box auth headers onto each edge→control request.
+struct BoxReq {
+    agent: ureq::Agent,
+}
+impl BoxReq {
+    fn get(&self, url: &str) -> ureq::Request {
+        Self::auth(self.agent.get(url))
+    }
+    fn post(&self, url: &str) -> ureq::Request {
+        Self::auth(self.agent.post(url))
+    }
+    fn auth(mut req: ureq::Request) -> ureq::Request {
         if let Ok(t) = std::env::var("BOX_TOKEN") {
             let t = t.trim();
             if !t.is_empty() {
@@ -104,11 +206,7 @@ impl AppState {
                 req = req.set("X-Box-Host", h);
             }
         }
-        req = req.set("X-Edge-Version", env!("CARGO_PKG_VERSION"));
-        match req.send_json(&found) {
-            Ok(_) => log::info!("discovery: pushed {n} camera(s) to control"),
-            Err(e) => log::warn!("discovery push failed: {e}"),
-        }
+        req.set("X-Edge-Version", env!("CARGO_PKG_VERSION"))
     }
 }
 
