@@ -33,6 +33,30 @@
     return configuredIps.has(d.ip);
   }
 
+  // IPs the edge currently sees on the LAN (its latest ONVIF discovery sweep, pushed up).
+  const discoveredIps = $derived(new Set(edgeFound.map((c) => c.ip)));
+
+  // The status dot reflects what the CLOUD actually knows about a saved camera (the cloud
+  // never holds the RTSP URL — that's edge-local — so the old rtsp_url check was always gray):
+  //   online (green) = credentials set AND the edge sees it on the network now → ready to stream
+  //   warn   (amber) = creds set but not seen now (offline / changed IP), OR seen but no creds yet
+  //   offline (gray) = neither set up nor seen
+  function cameraState(d: Device): "online" | "warn" | "offline" {
+    const onLan = discoveredIps.has(d.ip);
+    const configured = isConfigured(d);
+    if (configured && onLan) return "online";
+    if (configured || onLan) return "warn";
+    return "offline";
+  }
+  function cameraTitle(d: Device): string {
+    const onLan = discoveredIps.has(d.ip);
+    const configured = isConfigured(d);
+    if (configured && onLan) return "Online — credentials set and the camera is visible on the network";
+    if (configured && !onLan) return "Credentials set, but the camera isn't visible on the network now (offline, or its IP changed — try Rescan)";
+    if (onLan && !configured) return "Visible on the network — set its credentials to start streaming";
+    return "Not set up, and not visible on the network";
+  }
+
   // ---- Detail dialog (edit name + credentials, test, snapshot) -------------
   let detailOpen = $state(false);
   let detail = $state<Device | null>(null);
@@ -222,8 +246,8 @@
             {#each devices as d (d.ip)}
               <Table.Row class="transition-colors hover:bg-primary/5">
                 <Table.Cell class="font-medium">
-                  <span class="flex items-center gap-2">
-                    <StatusDot state={d.rtsp_url && d.rtsp_url.trim() ? "online" : "offline"} />
+                  <span class="flex items-center gap-2" title={cameraTitle(d)}>
+                    <StatusDot state={cameraState(d)} />
                     {d.name}
                   </span>
                 </Table.Cell>
