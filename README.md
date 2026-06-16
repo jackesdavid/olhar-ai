@@ -1,23 +1,25 @@
 # Sentinel
 
-A desktop **monitoring & automation assistant** for the home and the workplace.
-Discover ONVIF cameras, watch live video, raise and deliver alerts, lay out a 3D
-floor plan, talk to an AI assistant that can act on your devices, and automate it
-all with graph-based workflows — voice in and out.
+A multi-tenant cloud **monitoring & automation assistant** for the home and the
+workplace. Discover ONVIF cameras (via your edge appliance), watch live video, raise
+and deliver alerts, lay out a 3D floor plan, and automate it all with graph-based
+workflows.
 
-Built with **Tauri + SvelteKit (Svelte 5) + Rust**. UI: shadcn-svelte + Threlte
-(Three.js). AI: Claude (Anthropic). Voice: ElevenLabs (TTS + Scribe STT). Live
-video via a bundled go2rtc sidecar (RTSP → WebRTC/MSE).
+Built with **SvelteKit (Svelte 5) + Rust**. UI: shadcn-svelte + Threlte (Three.js).
+AI: Claude (Anthropic). Live video via go2rtc on the edge (RTSP → WebRTC/MSE),
+bridged to the browser by the streaming gateway.
 
 ## Repository layout
 
-| Path        | What it is                                                              |
-|-------------|-------------------------------------------------------------------------|
-| `app/`      | **The product.** Tauri shell + `app-core` Rust crate + SvelteKit UI.    |
-| `legacy/`   | The original **ratatui** terminal prototype (`bishop`), frozen.         |
-| `ai/`       | Spec-driven-development specs/roles (`001…013` retro, `014…022` web).    |
-| `docs/`     | Web-stack feasibility study + the feature-by-feature migration plan.    |
-| `Taskfile.yml` | [go-task](https://taskfile.dev) runner for the web app.              |
+| Path             | What it is                                                          |
+|------------------|--------------------------------------------------------------------|
+| `sentinel-app/`  | **The web app.** SvelteKit UI (served static via nginx).           |
+| `crates/app-core/` | Shared UI-agnostic Rust lib (engine, nodes, repos, ports).       |
+| `sentinel-control/` `-gateway/` `-flow/` `-edge/` | The cloud services + on-prem edge. |
+| `legacy/`        | The original **ratatui** terminal prototype (`bishop`), frozen.    |
+| `ai/`            | Spec-driven-development specs/roles + the vision sidecar.          |
+| `docs/`          | Feasibility study + the feature-by-feature migration plan.         |
+| `Taskfile.yml`   | [go-task](https://taskfile.dev) runner.                            |
 
 ## Run
 

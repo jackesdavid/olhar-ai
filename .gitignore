@@ -22,3 +22,6 @@ map.json
 mapview.json
 alerts.json
 workflows.json
+
+# Local go2rtc binary fetched by 'task fetch-go2rtc'
+/bin/

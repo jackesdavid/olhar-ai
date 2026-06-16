@@ -1,15 +1,14 @@
-# Task runner (https://taskfile.dev) for the NEW web app (Tauri + SvelteKit) in ./app.
-# The ratatui app at the repo root is unaffected. Install Task: `brew install go-task`.
-# Run `task` to list, `task dev` to launch the desktop app.
+# Task runner (https://taskfile.dev) for Sentinel: the SvelteKit web app in ./sentinel-app
+# plus the cloud services (control/gateway/flow) and the on-prem edge. Install Task:
+# `brew install go-task`. Run `task` to list, `task dev` for the web dev server.
 version: "3"
 
 # Load secrets from the gitignored root .env (ANTHROPIC_API_KEY, ELEVENLABS_*,
-# TELEGRAM_*). Copy .env.example → .env and fill it in. Single source of truth,
-# shared with the ratatui debugger (VS Code launch.json envFile).
+# TELEGRAM_*). Copy .env.example → .env and fill it in.
 dotenv: [".env"]
 
 vars:
-  APP: app # the web app directory
+  APP: sentinel-app # the web app directory
 
 tasks:
   default:
@@ -20,9 +19,8 @@ tasks:
 
   setup:
     desc: One-shot — fetch & install ALL deps (npm + Rust crates + go2rtc sidecar)
-    dir: "{{.APP}}"
     cmds:
-      - npm install
+      - task: install
       - cargo fetch
       - task: fetch-go2rtc
       - cmd: echo "✅ Setup complete. Run 'task doctor' to check system tools, then 'task dev'."
@@ -35,14 +33,13 @@ tasks:
       - npm install
 
   fetch-go2rtc:
-    desc: Download the go2rtc live-video sidecar into src-tauri/binaries (skips if present)
-    dir: "{{.APP}}"
+    desc: Download the go2rtc live-video sidecar into ./bin (for local `task edge`; skips if present)
     status:
-      - test -x src-tauri/binaries/go2rtc
+      - test -x bin/go2rtc
     cmds:
       - |
         set -e
-        mkdir -p src-tauri/binaries
+        mkdir -p bin
         os=$(uname -s); arch=$(uname -m)
         # NOTE: macOS assets are .zip (extract the binary); Linux assets are bare.
         case "$os-$arch" in
@@ -50,7 +47,7 @@ tasks:
           Darwin-x86_64)              asset=go2rtc_mac_amd64.zip ;;
           Linux-x86_64)               asset=go2rtc_linux_amd64 ;;
           Linux-aarch64|Linux-arm64)  asset=go2rtc_linux_arm64 ;;
-          *) echo "Unsupported $os-$arch — fetch go2rtc manually (see src-tauri/binaries/DOWNLOAD.md)"; exit 1 ;;
+          *) echo "Unsupported $os-$arch — fetch go2rtc manually"; exit 1 ;;
         esac
         url="https://github.com/AlexxIT/go2rtc/releases/latest/download/$asset"
         echo "Fetching $asset (latest)…"
@@ -60,27 +57,22 @@ tasks:
             curl -fL -o "$tmp/go2rtc.zip" "$url"
             unzip -o "$tmp/go2rtc.zip" -d "$tmp" >/dev/null
             bin=$(find "$tmp" -type f ! -name '*.zip' | head -1)
-            mv "$bin" src-tauri/binaries/go2rtc
+            mv "$bin" bin/go2rtc
             rm -rf "$tmp"
             ;;
           *)
-            curl -fL -o src-tauri/binaries/go2rtc "$url"
+            curl -fL -o bin/go2rtc "$url"
             ;;
         esac
-        chmod +x src-tauri/binaries/go2rtc
-        echo "✓ go2rtc → src-tauri/binaries/go2rtc"
+        chmod +x bin/go2rtc
+        echo "✓ go2rtc → bin/go2rtc"
 
   go2rtc:
     desc: Run the go2rtc sidecar standalone for debugging (web UI at http://localhost:1984)
-    dir: "{{.APP}}/src-tauri"
     cmds:
-      - cmd: test -x binaries/go2rtc || (echo "go2rtc missing — run 'task fetch-go2rtc'"; exit 1)
+      - cmd: test -x bin/go2rtc || (echo "go2rtc missing — run 'task fetch-go2rtc'"; exit 1)
         silent: true
-      # Uses the app's generated config if present (validate a camera in-app first),
-      # otherwise starts empty — add streams via the web UI at :1984.
-      - |
-        cfg="$HOME/Library/Application Support/com.jackesdavid.sentinel/go2rtc.yaml"
-        if [ -f "$cfg" ]; then ./binaries/go2rtc -config "$cfg"; else ./binaries/go2rtc; fi
+      - ./bin/go2rtc
 
   ai:
     desc: Run the AI vision sidecar locally (ai/sidecar) on :8000 — same contract as RunPod
@@ -236,8 +228,8 @@ tasks:
     env:
       EDGE_BIND: '{{.EDGE_BIND | default "127.0.0.1:8788"}}'
       CONTROL_URL: '{{.CONTROL_URL | default "http://127.0.0.1:8790"}}'
-      # The edge owns go2rtc; point it at the bundled binary the desktop app fetches.
-      GO2RTC_BIN: '{{.GO2RTC_BIN | default "../app/src-tauri/binaries/go2rtc"}}'
+      # The edge owns go2rtc; point it at the binary `task fetch-go2rtc` drops in ./bin.
+      GO2RTC_BIN: '{{.GO2RTC_BIN | default "../bin/go2rtc"}}'
     cmds:
       - cargo run
 
@@ -256,26 +248,7 @@ tasks:
       - cargo check --workspace
 
   dev:
-    desc: Run the desktop app + local AI sidecar (Tauri + SvelteKit + vision service, hot-reload)
-    dir: "{{.APP}}"
-    deps: [db-up] # bring Postgres up first — the app requires it
-    env:
-      RUST_BACKTRACE: "1" # full panic traces in the terminal
-    cmds:
-      # Ensure the local CPU vision sidecar is up — reuse it if already running, and let it
-      # OUTLIVE the app so a Tauri rebuild/restart (or a failed start) never drops it. First
-      # run installs its venv via `task ai`; logs + per-op timings → /tmp/sentinel-sidecar.log.
-      # Stop it with `task ai-stop`.
-      - >-
-        curl -s -m 1 -o /dev/null http://localhost:8000/ 2>/dev/null
-        && echo "AI sidecar already up on :8000"
-        || ( nohup task ai > /tmp/sentinel-sidecar.log 2>&1 & echo "AI sidecar starting in background → /tmp/sentinel-sidecar.log" )
-      # Force the app at the LOCAL sidecar for dev — overrides AI_SERVICE_URL from .env so
-      # development never bills RunPod. To use RunPod / the GPU box instead, change this URL.
-      - AI_SERVICE_URL=http://localhost:8000/runsync npm run tauri dev
-
-  frontend:
-    desc: Run only the SvelteKit dev server (no Tauri window) on :1420
+    desc: Run the SvelteKit web dev server (hot-reload) on :5173
     dir: "{{.APP}}"
     cmds:
       - npm run dev
@@ -286,12 +259,6 @@ tasks:
     cmds:
       - npm run build
 
-  bundle:
-    desc: Build the distributable Tauri desktop bundle (installers)
-    dir: "{{.APP}}"
-    cmds:
-      - npm run tauri build
-
   check:
     desc: Type-check the frontend (svelte-check)
     dir: "{{.APP}}"
@@ -299,23 +266,20 @@ tasks:
       - npm run check
 
   cargo:
-    desc: cargo check the app workspace (Rust backend + crates/core)
-    dir: "{{.APP}}"
+    desc: cargo check the whole Rust workspace (services + app-core)
     cmds:
-      - cargo check
+      - cargo check --workspace
 
   fmt:
-    desc: Format the Rust backend
-    dir: "{{.APP}}"
+    desc: Format the Rust workspace
     cmds:
-      - cargo fmt
+      - cargo fmt --all
 
   verify:
     desc: Full verify — Rust cargo check + SvelteKit build (what CI should gate on)
     deps: [cargo, build]
 
   clean:
-    desc: Remove web app build artifacts (build/, .svelte-kit/, target/)
-    dir: "{{.APP}}"
+    desc: Remove build artifacts (web build/, .svelte-kit/, Rust target/)
     cmds:
-      - rm -rf build .svelte-kit src-tauri/target target
+      - rm -rf {{.APP}}/build {{.APP}}/.svelte-kit target

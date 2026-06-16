@@ -5,9 +5,9 @@
 # env is needed.
 FROM node:22-alpine AS build
 WORKDIR /app
-COPY app/package.json app/package-lock.json ./
+COPY sentinel-app/package.json sentinel-app/package-lock.json ./
 RUN npm ci
-COPY app/ ./
+COPY sentinel-app/ ./
 RUN npm run build
 
 FROM nginx:alpine

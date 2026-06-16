@@ -37,10 +37,11 @@ musl) and macOS arm64/x86_64.
 
 ```sh
 task db-up
-task edge        # GO2RTC_BIN defaults to the desktop app's bundled binary
+task fetch-go2rtc  # drops the go2rtc binary in ./bin
+task edge          # GO2RTC_BIN defaults to ../bin/go2rtc
 # or:
 DATABASE_URL=postgres://sentinel:sentinel@localhost/sentinel \
-EDGE_BIND=127.0.0.1:8788 GO2RTC_BIN=../app/src-tauri/binaries/go2rtc \
+EDGE_BIND=127.0.0.1:8788 GO2RTC_BIN=../bin/go2rtc \
 cargo run -p sentinel-edge
 ```
 

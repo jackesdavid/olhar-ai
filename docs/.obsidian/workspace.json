@@ -196,6 +196,7 @@
   },
   "active": "5b0327e1d4fd2370",
   "lastOpenFiles": [
+    "workflow-nodes.md",
     "plans/multi-tenant-gateway-edge.md",
     "plans/feature-slice-architecture.md",
     "plans/foreach-and-fanout-notification.md",

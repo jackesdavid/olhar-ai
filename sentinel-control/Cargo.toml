@@ -7,7 +7,7 @@ description = "The control plane. Owns the central source of truth (cameras now;
 # Standalone crate (NOT in the app/ workspace). Links app-core for the device model +
 # the shared Db.
 [dependencies]
-app-core = { path = "../app/crates/core" }
+app-core = { path = "../crates/app-core" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
 axum = "0.7"

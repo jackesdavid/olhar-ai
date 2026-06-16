@@ -2,9 +2,9 @@
 **/target
 **/node_modules
 .git
-app/build
-app/.svelte-kit
-app/dist
+sentinel-app/build
+sentinel-app/.svelte-kit
+sentinel-app/dist
 **/cameras-cache.json
 **/go2rtc.yaml
 docs

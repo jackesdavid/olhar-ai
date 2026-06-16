@@ -1,10 +1,10 @@
-# Root workspace for the detachable cloud services. They share ONE target/ dir so
-# the heavy `app-core` (tract/ONNX, image, sqlx) builds once instead of once per
-# crate. They remain independently shippable binaries; `app-core` is pulled in by
-# path from the separate `app/` workspace (the Tauri shell), which is intentionally
-# NOT a member here.
+# Root workspace for the cloud services + the shared `app-core` lib. One target/ dir so
+# the heavy `app-core` (tract/ONNX, image, sqlx) builds once instead of once per crate.
+# The Tauri desktop shell was removed (the product is web-only now); `app-core` moved here
+# from the old `app/` workspace and the SvelteKit UI lives in `sentinel-app/` (no Rust).
 [workspace]
 members = [
+    "crates/app-core",
     "sentinel-flow",
     "sentinel-edge",
     "sentinel-gateway",

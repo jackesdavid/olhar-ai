@@ -8,7 +8,7 @@ description = "Always-on workflow engine service. Runs the Sentinel workflow DAG
 # root and ship/run independently. It links the same UI-agnostic `app-core` the
 # Tauri shell uses — engine, nodes, repos, ports — by path.
 [dependencies]
-app-core = { path = "../app/crates/core" }
+app-core = { path = "../crates/app-core" }
 
 # Async HTTP for the REST + SSE control plane. The engine + poller + run executor
 # stay synchronous on dedicated std threads (mirroring the Tauri shell); axum only

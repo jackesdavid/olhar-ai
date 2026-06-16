@@ -8,7 +8,7 @@ description = "The edge gateway — the ONLY thing that touches cameras. Wraps g
 # edge. Links the same UI-agnostic `app-core` (device repo, go2rtc helpers, ONVIF +
 # snapshot capture) by path.
 [dependencies]
-app-core = { path = "../app/crates/core" }
+app-core = { path = "../crates/app-core" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 axum = "0.7"
