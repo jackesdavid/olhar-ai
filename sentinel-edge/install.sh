@@ -98,14 +98,42 @@ echo "▸ Installing sentinel-edge ($os-$arch) → $PREFIX"
 mkdir -p "$PREFIX" "$ENV_DIR"
 
 # ---- 1. Tailscale -----------------------------------------------------------
-if ! command -v tailscale >/dev/null 2>&1; then
+# A working `tailscale version` is the real test (a leftover GUI-app shim resolves on PATH
+# but is broken once the app is gone).
+if ! tailscale version >/dev/null 2>&1; then
   echo "▸ Installing Tailscale…"
   if [ "$os" = "Linux" ]; then
     curl -fsSL https://tailscale.com/install.sh | sh
   else
-    echo "  Install Tailscale for macOS (https://tailscale.com/download) then re-run." >&2
-    exit 1
+    # macOS: headless install — the open-source tailscaled (NOT the GUI app), so the edge
+    # joins the tailnet from the CLI exactly like a Linux appliance. Homebrew refuses root,
+    # so install as the invoking user; drop any stale GUI-app shim first.
+    rm -f /usr/local/bin/tailscale 2>/dev/null || true
+    if [ -n "${SUDO_USER:-}" ] && sudo -u "$SUDO_USER" command -v brew >/dev/null 2>&1; then
+      sudo -u "$SUDO_USER" brew install tailscale
+    elif command -v brew >/dev/null 2>&1; then
+      brew install tailscale
+    else
+      echo "  Homebrew not found — install it (https://brew.sh), or Tailscale, then re-run." >&2
+      exit 1
+    fi
   fi
+fi
+
+# macOS: register + start the tailscaled system daemon (launchd) so `tailscale up` works
+# headlessly. Idempotent — safe to re-run. (Linux's installer already sets up tailscaled.)
+if [ "$os" = "Darwin" ]; then
+  TAILSCALED="$(command -v tailscaled || echo /usr/local/bin/tailscaled)"
+  "$TAILSCALED" install-system-daemon >/dev/null 2>&1 || true
+fi
+
+# Join the tailnet now (best-effort) so the box is reachable the moment install finishes;
+# the edge service also re-asserts this on boot. Needs a key (auto-minted or --authkey).
+if [ -n "$AUTHKEY" ]; then
+  echo "▸ Joining the tailnet (hostname=$HOSTNAME_)…"
+  # shellcheck disable=SC2086
+  tailscale up --authkey="$AUTHKEY" --hostname="$HOSTNAME_" ${TAGS:+--advertise-tags="$TAGS"} \
+    || echo "  'tailscale up' failed — check the auth key; the edge service will retry on boot." >&2
 fi
 
 # ---- 1b. ffmpeg -------------------------------------------------------------
