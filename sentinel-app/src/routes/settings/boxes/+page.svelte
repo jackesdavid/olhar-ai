@@ -11,6 +11,7 @@
   import Check from "@lucide/svelte/icons/check";
   import ArrowUpCircle from "@lucide/svelte/icons/arrow-up-circle";
   import ScrollText from "@lucide/svelte/icons/scroll-text";
+  import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
 
   import * as Card from "$lib/components/ui/card";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -130,6 +131,41 @@
     const d = new Date(b.last_seen);
     return Number.isNaN(d.getTime()) ? b.last_seen : d.toLocaleString();
   }
+
+  // ---- health (Tailscale + ffmpeg, reported on the heartbeat) --------------
+  function tsLabel(s: string | null): string {
+    return { serving: "serving", up: "up · not serving", offline: "offline", disabled: "no tailnet" }[s ?? ""] ?? "unknown";
+  }
+  function tsClass(s: string | null): string {
+    if (s === "serving") return "border-primary/30 bg-primary/10 text-primary";
+    if (s === "up") return "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400";
+    if (s === "offline") return "border-destructive/30 bg-destructive/10 text-destructive";
+    return "border-border bg-muted text-muted-foreground"; // disabled / unknown
+  }
+  // Boxes whose Live path can't work: tailnet offline or not serving, or ffmpeg missing.
+  const unhealthy = $derived(
+    list.filter((b) => b.tailscale_state === "offline" || b.tailscale_state === "up" || b.ffmpeg_ok === false),
+  );
+  function healthHint(b: Box): string {
+    if (b.tailscale_state === "offline") return `${b.name}: offline on the tailnet — Live can't reach it (check Tailscale on the box).`;
+    if (b.tailscale_state === "up") return `${b.name}: on the tailnet but not serving go2rtc yet — try Restart.`;
+    if (b.ffmpeg_ok === false) return `${b.name}: ffmpeg missing — snapshots / GetCurrentFrame will fail (install ffmpeg).`;
+    return "";
+  }
+
+  // ---- restart -------------------------------------------------------------
+  let restartingId = $state<string | null>(null);
+  async function restartBox(b: Box) {
+    restartingId = b.id;
+    try {
+      await boxApi.restart(b.id);
+      toast.success(`Restart requested for "${b.name}"`, { description: "It relaunches and reconnects within ~30s." });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to request restart");
+    } finally {
+      restartingId = null;
+    }
+  }
 </script>
 
 <div class="space-y-6">
@@ -150,6 +186,14 @@
   {:else if loading}
     <Loader />
   {:else}
+    {#if unhealthy.length > 0}
+      <div class="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
+        <TriangleAlert class="mt-0.5 size-4 shrink-0" />
+        <div class="space-y-0.5">
+          {#each unhealthy as b (b.id)}<p>{healthHint(b)}</p>{/each}
+        </div>
+      </div>
+    {/if}
     <Card.Root>
       <Card.Header><Card.Title>Your boxes</Card.Title></Card.Header>
       <Card.Content class="overflow-x-auto">
@@ -159,6 +203,7 @@
               <th class="py-2 pr-4 text-left font-medium">Name</th>
               <th class="px-3 py-2 text-left font-medium">Version</th>
               <th class="px-3 py-2 text-left font-medium">Tailnet host</th>
+              <th class="px-3 py-2 text-left font-medium">Health</th>
               <th class="px-3 py-2 text-left font-medium">Last seen</th>
               <th class="px-3 py-2 text-right font-medium"></th>
             </tr>
@@ -187,6 +232,18 @@
                   {b.magicdns_host ?? "—"}
                 </td>
                 <td class="px-3 py-2">
+                  <span class="flex flex-wrap items-center gap-1">
+                    <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium {tsClass(b.tailscale_state)}" title="Tailscale state — go2rtc must be 'serving' over the tailnet for Live to work">
+                      {tsLabel(b.tailscale_state)}
+                    </span>
+                    {#if b.ffmpeg_ok === false}
+                      <span class="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive" title="ffmpeg missing — snapshots / GetCurrentFrame will fail">
+                        no ffmpeg
+                      </span>
+                    {/if}
+                  </span>
+                </td>
+                <td class="px-3 py-2">
                   {#if b.last_seen}
                     <span class="text-muted-foreground">{seen(b)}</span>
                   {:else}
@@ -197,6 +254,9 @@
                   <Button variant="ghost" size="icon" title="View logs" onclick={() => goto(`/logs?box=${b.id}`)}>
                     <ScrollText class="size-4" />
                   </Button>
+                  <Button variant="ghost" size="icon" title="Restart (reconnect tailnet + re-serve)" disabled={restartingId === b.id} onclick={() => restartBox(b)}>
+                    {#if restartingId === b.id}<LoaderCircle class="size-4 animate-spin" />{:else}<RotateCcw class="size-4" />{/if}
+                  </Button>
                   <Button variant="ghost" size="icon" title="Remove" onclick={() => (deleteTarget = b)}>
                     <Trash2 class="size-4" />
                   </Button>
@@ -204,7 +264,7 @@
               </tr>
             {/each}
             {#if list.length === 0}
-              <tr><td colspan={5} class="py-8 text-center text-muted-foreground">No edge boxes yet.</td></tr>
+              <tr><td colspan={6} class="py-8 text-center text-muted-foreground">No edge boxes yet.</td></tr>
             {/if}
           </tbody>
         </table>

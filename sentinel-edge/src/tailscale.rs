@@ -33,26 +33,23 @@ pub fn ensure_up() {
     if let Some(tags) = &tags {
         up.arg(format!("--advertise-tags={tags}"));
     }
+    // Best-effort: on a macOS GUI-app install the daemon is owned by the Tailscale app, so
+    // CLI `up --authkey` can exit non-zero even though the node is (or can be) up. So we do
+    // NOT bail on a non-zero `up` — we still try to `serve`, which succeeds whenever the node
+    // is up however it got there. Only a missing CLI is fatal to bring-up.
     match up.status() {
         Ok(s) if s.success() => log::info!("tailscale up — hostname={hostname} tags={tags:?}"),
-        Ok(s) => {
-            log::warn!("`tailscale up` exited with {s}; continuing without the tailnet");
-            return;
-        }
+        Ok(s) => log::warn!(
+            "`tailscale up` exited with {s} (daemon may be app-managed / not logged in) — still trying serve"
+        ),
         Err(e) => {
-            log::warn!("`tailscale` not available ({e}); continuing without the tailnet");
+            log::warn!("`tailscale` CLI not available ({e}); skipping tailnet setup");
             return;
         }
     }
 
     // Expose the localhost-only go2rtc API over the tailnet (TLS via MagicDNS).
-    match Command::new("tailscale").args(["serve", "--bg", "1984"]).status() {
-        Ok(s) if s.success() => {
-            log::info!("tailscale serve --bg 1984 → https://{hostname}.<tailnet>.ts.net")
-        }
-        Ok(s) => log::warn!("`tailscale serve` exited with {s}"),
-        Err(e) => log::warn!("`tailscale serve` failed: {e}"),
-    }
+    serve_go2rtc();
 
     // Report this box's tailnet go2rtc URL to control (so the gateway can resolve the
     // tenant's live upstream) — unless it was supplied explicitly at install time.
@@ -62,6 +59,51 @@ pub fn ensure_up() {
             log::info!("detected EDGE_PUBLIC_HOST={url}");
             std::env::set_var("EDGE_PUBLIC_HOST", url);
         }
+    }
+}
+
+/// Expose the localhost-only go2rtc API (`:1984`) over the tailnet (TLS via MagicDNS).
+/// Best-effort + idempotent — safe to re-run periodically; a no-op (logged at debug) when
+/// Tailscale is stopped. Output is captured so a stopped daemon doesn't spam stderr.
+pub fn serve_go2rtc() {
+    match Command::new("tailscale").args(["serve", "--bg", "1984"]).output() {
+        Ok(o) if o.status.success() => log::debug!("tailscale serve --bg 1984 ok"),
+        Ok(o) => log::debug!("tailscale serve --bg 1984: {}", String::from_utf8_lossy(&o.stderr).trim()),
+        Err(e) => log::debug!("tailscale serve unavailable: {e}"),
+    }
+}
+
+/// A coarse Tailscale health string for the cloud Boxes page:
+///   `disabled` — no `TS_AUTHKEY` (LAN/dev box, tailnet not used)
+///   `offline`  — CLI missing or the node isn't `Running` (Live can't work)
+///   `up`       — node Running but go2rtc isn't served over the tailnet yet
+///   `serving`  — node Running AND go2rtc exposed (Live should work)
+pub fn tailscale_state() -> &'static str {
+    if std::env::var("TS_AUTHKEY").map(|v| v.trim().is_empty()).unwrap_or(true) {
+        return "disabled";
+    }
+    let running = Command::new("tailscale")
+        .args(["status", "--json"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())
+        .and_then(|v| v.get("BackendState").and_then(|s| s.as_str()).map(|s| s == "Running"))
+        .unwrap_or(false);
+    if !running {
+        return "offline";
+    }
+    let serving = Command::new("tailscale")
+        .args(["serve", "status"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("1984"))
+        .unwrap_or(false);
+    if serving {
+        "serving"
+    } else {
+        "up"
     }
 }
 

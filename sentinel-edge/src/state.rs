@@ -176,16 +176,19 @@ impl AppState {
         }
     }
 
-    /// Poll control for a pending rescan command (box-authed). Returns true if one is queued.
-    pub fn check_rescan_command(&self) -> bool {
+    /// Poll control for pending commands (box-authed), consumed once per cycle.
+    pub fn check_commands(&self) -> EdgeCommands {
         let url = format!("{}/config/commands", self.control_url);
         match self.box_agent().get(&url).call() {
             Ok(resp) => resp
                 .into_json::<serde_json::Value>()
                 .ok()
-                .and_then(|v| v.get("rescan").and_then(|r| r.as_bool()))
-                .unwrap_or(false),
-            Err(_) => false, // network hiccup — try again next cycle
+                .map(|v| EdgeCommands {
+                    rescan: v.get("rescan").and_then(|r| r.as_bool()).unwrap_or(false),
+                    restart: v.get("restart").and_then(|r| r.as_bool()).unwrap_or(false),
+                })
+                .unwrap_or_default(),
+            Err(_) => EdgeCommands::default(), // network hiccup — try again next cycle
         }
     }
 
@@ -200,6 +203,34 @@ impl AppState {
     fn box_agent(&self) -> BoxReq {
         BoxReq { agent: ureq::AgentBuilder::new().timeout(Duration::from_secs(15)).build() }
     }
+}
+
+/// Pending cloud→edge commands, fetched from `/config/commands` each poll cycle.
+#[derive(Default)]
+pub struct EdgeCommands {
+    pub rescan: bool,
+    pub restart: bool,
+}
+
+/// Whether `ffmpeg` is on PATH (go2rtc needs it for JPEG frames). Computed once + cached —
+/// presence is effectively static for a process lifetime. Reported to the cloud for the
+/// Boxes health badge.
+pub fn ffmpeg_ok() -> bool {
+    static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OK.get_or_init(|| {
+        std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
+}
+
+/// Stamp the box's health (Tailscale state + ffmpeg presence) onto a request so control can
+/// surface it on the Boxes page. Used on the ~25s config poll (not the high-rate pushes).
+fn with_health(req: ureq::Request) -> ureq::Request {
+    req.set("X-Edge-Tailscale", crate::tailscale::tailscale_state())
+        .set("X-Edge-Ffmpeg", if ffmpeg_ok() { "1" } else { "0" })
 }
 
 /// Tiny builder that stamps the box auth headers onto each edge→control request.
@@ -337,6 +368,7 @@ fn fetch_cameras(control_url: &str, wait: u64) -> Result<Vec<Device>, String> {
         }
     }
     req = req.set("X-Edge-Version", env!("CARGO_PKG_VERSION"));
+    req = with_health(req); // report Tailscale + ffmpeg health on the regular heartbeat
     req.call()
         .map_err(|e| format!("{e}"))?
         .into_json::<Vec<Device>>()

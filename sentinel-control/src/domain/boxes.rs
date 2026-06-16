@@ -24,6 +24,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/boxes", get(list).post(create))
         .route("/boxes/:id", axum::routing::delete(remove))
+        .route("/boxes/:id/restart", axum::routing::post(restart))
         .route("/boxes/:id/logs", get(box_logs))
         .route("/boxes/:id/logs/stream", get(box_logs_stream))
         .route("/internal/box-upstream", get(box_upstream))
@@ -104,6 +105,18 @@ async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id):
     } else {
         Err(err(StatusCode::NOT_FOUND, "box not found"))
     }
+}
+
+/// Queue a restart for a box: the edge picks it up on its next poll and exits, so the
+/// service manager relaunches it (re-running `tailscale up` + re-serving go2rtc).
+async fn restart(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<Uuid>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "devices.write")?;
+    let tid = tenant_of(&c)?;
+    if !store::box_belongs_to(&st.pool, tid, id).await.map_err(db_err)? {
+        return Err(err(StatusCode::NOT_FOUND, "box not found"));
+    }
+    st.request_restart(id);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Serialize)]

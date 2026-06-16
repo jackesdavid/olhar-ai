@@ -69,6 +69,10 @@ export type Box = {
   version: string | null;
   last_seen: string | null;
   created_at: string;
+  /** Edge health (reported on the heartbeat): serving | up | offline | disabled. */
+  tailscale_state: string | null;
+  ffmpeg_ok: boolean | null;
+  health_at: string | null;
 };
 
 export type NewBox = { id: string; token: string; hostname: string; tailscale_key: string | null };
@@ -79,6 +83,8 @@ export const boxes = {
   list: () => api.get<Box[]>("/boxes"),
   create: (name: string) => api.post<NewBox>("/boxes", { name }),
   del: (id: string) => api.del<void>(`/boxes/${id}`),
+  /** Queue a restart for a box (it relaunches → reconnects tailnet + re-serves go2rtc). */
+  restart: (id: string) => api.post<void>(`/boxes/${id}/restart`),
   /** The latest edge build the operator has published (for "update available"). */
   latestVersion: () => api.get<{ version: string }>("/edge-latest"),
   /** Recent persisted log tail for a box (oldest-first). */

@@ -39,8 +39,9 @@ fn main() {
     let state = AppState::boot();
 
     // go2rtc shells out to ffmpeg for JPEG frames (snapshots + the GetCurrentFrame node).
-    // Surface a missing ffmpeg loudly at boot — it now also rides the cloud log viewer.
-    if std::process::Command::new("ffmpeg").arg("-version").output().map(|o| o.status.success()).unwrap_or(false) {
+    // Surface a missing ffmpeg loudly at boot — it now also rides the cloud log viewer +
+    // the Boxes health badge. `ffmpeg_ok()` caches the check (reported on every heartbeat).
+    if state::ffmpeg_ok() {
         log::info!("ffmpeg found on PATH");
     } else {
         log::warn!(
@@ -65,21 +66,29 @@ fn main() {
         let disco = std::sync::Arc::clone(&state);
         std::thread::spawn(move || loop {
             disco.rediscover();
+            // Re-assert the tailnet serve so go2rtc stays reachable if the daemon blipped
+            // (idempotent; a no-op when Tailscale is down). Keeps Live healthy unattended.
+            tailscale::serve_go2rtc();
             std::thread::sleep(std::time::Duration::from_secs(300));
         });
     }
 
     // Config long-poll: block on control until the web changes a camera (or 25s), then
     // apply immediately — so cloud edits (e.g. setting credentials) take effect in ~1s.
-    // After each cycle, check for a pending rescan command (the UI's "Rediscover" button)
-    // and run it now (woken via the same long-poll bump).
+    // After each cycle, drain pending cloud commands: rescan (re-run discovery now) and
+    // restart (exit so the service manager relaunches us → re-runs tailscale up + serve).
     {
         let sync = std::sync::Arc::clone(&state);
         std::thread::spawn(move || loop {
             sync.reload(25);
-            if sync.check_rescan_command() {
+            let cmd = sync.check_commands();
+            if cmd.rescan {
                 log::info!("rescan requested from the cloud — running discovery now");
                 sync.rediscover();
+            }
+            if cmd.restart {
+                log::warn!("restart requested from the cloud — exiting for the service manager to relaunch");
+                std::process::exit(0);
             }
         });
     }

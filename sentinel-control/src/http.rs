@@ -72,8 +72,9 @@ async fn box_tenant(st: &AppState, headers: &HeaderMap) -> Result<Option<uuid::U
 
     let host = headers.get("x-box-host").and_then(|v| v.to_str().ok());
     let version = headers.get("x-edge-version").and_then(|v| v.to_str().ok());
+    let (ts, ff) = box_health_headers(headers);
     let hash = hex::encode(Sha256::digest(tok.as_bytes()));
-    match store::touch_box_by_token(&st.pool, &hash, host, version).await {
+    match store::touch_box_by_token(&st.pool, &hash, host, version, ts, ff).await {
         Ok(Some(tid)) => Ok(Some(tid)),
         Ok(None) => Err((StatusCode::UNAUTHORIZED, "unknown box token").into_response()),
         Err(e) => {
@@ -81,6 +82,14 @@ async fn box_tenant(st: &AppState, headers: &HeaderMap) -> Result<Option<uuid::U
             Err((StatusCode::INTERNAL_SERVER_ERROR, "lookup failed").into_response())
         }
     }
+}
+
+/// Extract the edge health headers (`X-Edge-Tailscale`, `X-Edge-Ffmpeg`) — present only on
+/// the box's regular config poll, absent on the high-rate pushes (then `None` keeps prior).
+fn box_health_headers(headers: &HeaderMap) -> (Option<&str>, Option<bool>) {
+    let ts = headers.get("x-edge-tailscale").and_then(|v| v.to_str().ok());
+    let ff = headers.get("x-edge-ffmpeg").and_then(|v| v.to_str().ok()).map(|v| v.trim() == "1");
+    (ts, ff)
 }
 
 /// The camera list an edge box pulls, scoped to the box's tenant (box token required —
@@ -145,8 +154,9 @@ async fn box_identity(st: &AppState, headers: &HeaderMap) -> Result<Option<(uuid
     let Some(tok) = token else { return Ok(None) };
     let host = headers.get("x-box-host").and_then(|v| v.to_str().ok());
     let version = headers.get("x-edge-version").and_then(|v| v.to_str().ok());
+    let (ts, ff) = box_health_headers(headers);
     let hash = hex::encode(Sha256::digest(tok.as_bytes()));
-    match store::touch_box_identity(&st.pool, &hash, host, version).await {
+    match store::touch_box_identity(&st.pool, &hash, host, version, ts, ff).await {
         Ok(Some(pair)) => Ok(Some(pair)),
         Ok(None) => Err((StatusCode::UNAUTHORIZED, "unknown box token").into_response()),
         Err(e) => {
@@ -159,12 +169,13 @@ async fn box_identity(st: &AppState, headers: &HeaderMap) -> Result<Option<(uuid
 /// The edge polls this each cycle (box token) for pending commands; the rescan flag is
 /// consumed here so the next poll won't re-trigger it.
 async fn commands(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let tenant = match box_tenant(&st, &headers).await {
-        Ok(Some(t)) => t,
+    let (tenant, box_id) = match box_identity(&st, &headers).await {
+        Ok(Some(pair)) => pair,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
         Err(resp) => return resp,
     };
-    Json(json!({ "rescan": st.take_rescan(tenant) })).into_response()
+    // rescan is tenant-wide (Devices "Rescan"); restart targets this specific box.
+    Json(json!({ "rescan": st.take_rescan(tenant), "restart": st.take_restart(box_id) })).into_response()
 }
 
 /// A camera that changed IP, reported by the edge (matched on its stable ONVIF id).
