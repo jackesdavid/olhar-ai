@@ -1,6 +1,6 @@
 {
   "name": "sentinel-app",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Sentinel web app (SvelteKit).",
   "type": "module",
   "scripts": {

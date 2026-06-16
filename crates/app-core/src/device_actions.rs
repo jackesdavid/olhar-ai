@@ -69,10 +69,13 @@ pub fn resolve_device(devices: &[Device], query: &str) -> Result<usize, ResolveE
             Ok(0)
         };
     }
+    // Match by stable ONVIF id first (what workflows store, so a rename or IP change can't
+    // silently re-point the node), then by IP, then by name (back-compat: older configs +
+    // the chat agent still pass a name).
     let matches: Vec<usize> = devices
         .iter()
         .enumerate()
-        .filter(|(_, d)| d.name.eq_ignore_ascii_case(q) || d.ip == q)
+        .filter(|(_, d)| (!d.id.is_empty() && d.id == q) || d.ip == q || d.name.eq_ignore_ascii_case(q))
         .map(|(i, _)| i)
         .collect();
     match matches.len() {

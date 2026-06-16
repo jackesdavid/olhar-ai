@@ -244,7 +244,7 @@
   let cursor = $state({ x: 0, y: 0 });
 
   // live references for node dropdowns + per-graph run activity (polled)
-  let devices = $state<{ name: string; rtsp_url?: string | null }[]>([]);
+  let devices = $state<{ id?: string; ip?: string; name: string; rtsp_url?: string | null }[]>([]);
   let recipients = $state<{ label: string; enabled: boolean }[]>([]);
   type Activity = {
     running: number;
@@ -400,8 +400,17 @@
   });
 
   // option lists for camera / recipient node dropdowns (the real items)
-  const cameraOptions = $derived(devices.map((d) => ({ value: d.name, label: d.name })));
+  // Cameras bind by the STABLE device id (fall back to ip for legacy rows with no id), NOT
+  // the name — so renaming a camera doesn't silently re-point the node. The label stays the
+  // (current) name. `cameraValue` maps a stored ref (id | ip | name) to its canonical value.
+  const cameraKey = (d: { id?: string; ip?: string }) => d.id || d.ip || "";
+  const cameraOptions = $derived(devices.map((d) => ({ value: cameraKey(d), label: d.name })));
   const recipientOptions = $derived(recipients.map((r) => ({ value: r.label, label: r.label })));
+  function cameraValue(stored: string): string {
+    const s = String(stored ?? "");
+    const d = devices.find((x) => (x.id && x.id === s) || x.ip === s || x.name === s);
+    return d ? cameraKey(d) : (cameraOptions[0]?.value ?? "");
+  }
   // Resolve a stored value to a real option — falls back to the FIRST item in the
   // list (what "default to first" means) when the stored value is empty/missing.
   function resolveOpt(opts: { value: string; label: string }[], stored: string) {
@@ -932,7 +941,7 @@
     const cfg = { ...(catalog[slug]?.default_config ?? {}) };
     let patched = false;
     if ("camera" in cfg && devices[0]) {
-      cfg.camera = devices[0].name;
+      cfg.camera = cameraKey(devices[0]); // bind by stable id (not name)
       patched = true;
     }
     if ("recipient" in cfg && recipients[0]) {
@@ -1951,9 +1960,10 @@
                             No cameras — add one in Devices.
                           </p>
                         {:else}
-                          {@const cv = resolveOpt(cameraOptions, String(selectedNode.config[key] ?? ""))}
+                          {@const cv = cameraValue(String(selectedNode.config[key] ?? ""))}
+                          {@const clabel = cameraOptions.find((o) => o.value === cv)?.label ?? cv}
                           <Select.Root type="single" disabled={editLocked} value={cv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? cv })}>
-                            <Select.Trigger class="h-8 w-full">{cv}</Select.Trigger>
+                            <Select.Trigger class="h-8 w-full">{clabel}</Select.Trigger>
                             <Select.Content>
                               {#each cameraOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
                             </Select.Content>
