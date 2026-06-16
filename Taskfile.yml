@@ -242,6 +242,11 @@ tasks:
     cmds:
       - cargo run
 
+  cloud-deploy:
+    desc: "Build cloud images locally → push to GHCR → roll the VPS (manual deploy.yml; needs Docker + gh login). Subset: task cloud-deploy -- sentinel-control sentinel-flow"
+    cmds:
+      - ./deploy/push-local.sh {{.CLI_ARGS}}
+
   services-check:
     desc: Type-check all detachable services (shared workspace)
     cmds:
