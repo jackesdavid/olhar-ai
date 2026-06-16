@@ -92,13 +92,22 @@
   onMount(() => {
     if (localStorage.getItem("sentinel.navCollapsed") === "true") navCollapsed = true;
     cloudBoot();
+  });
 
+  // App-wide alert toasts — only once authenticated. Subscribing earlier would fire
+  // unauthenticated `/alerts` calls that 401; the api layer's 401 handler then clears the
+  // session and bounces to /login, which on an OAuth return clobbers the token that the
+  // login page just set (it races the same mount). Gate on `auth.me` so nothing
+  // authenticated runs until we have a session.
+  $effect(() => {
+    if (!auth.me) return;
     let lastAlertId = 0;
-    // Baseline at mount so we only toast alerts that arrive after this page load.
+    // Baseline now so we only toast alerts that arrive after this point.
     data.listAlerts().then((a) => {
       lastAlertId = a.reduce((m, x) => Math.max(m, x.id), 0);
     }).catch(() => {});
-    const unAlert = onEvent("alerts-changed", async () => {
+    let unsub: (() => void) | null = null;
+    onEvent("alerts-changed", async () => {
       try {
         const alerts = await data.listAlerts();
         const newest = alerts.reduce<Alert | null>((m, x) => (!m || x.id > m.id ? x : m), null);
@@ -109,8 +118,10 @@
       } catch {
         /* ignore */
       }
+    }).then((u) => {
+      unsub = u;
     });
-    return () => unAlert.then((u) => u());
+    return () => unsub?.();
   });
 
   function isActive(href: string): boolean {

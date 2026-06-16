@@ -18,8 +18,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   });
 
   if (r.status === 401) {
-    logout();
-    void goto("/login");
+    // While on /login the page manages auth itself (an OAuth return sets the token here).
+    // A stray unauthenticated call racing that must NOT clear the session or redirect.
+    if (typeof window === "undefined" || window.location.pathname !== "/login") {
+      logout();
+      void goto("/login");
+    }
     throw new Error("Session expired — please sign in again.");
   }
   if (!r.ok) {
