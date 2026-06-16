@@ -61,9 +61,24 @@ impl AppState {
                 None
             }
         };
-        let base = host.filter(|h| !h.is_empty()).unwrap_or_else(|| self.upstream.clone());
+        let base = host
+            .filter(|h| !h.is_empty())
+            .map(|h| Self::ensure_scheme(&h))
+            .unwrap_or_else(|| self.upstream.clone());
         self.cache.lock().unwrap().insert(tid.to_string(), (base.clone(), Instant::now()));
         base
+    }
+
+    /// Normalize a box host to a base URL with exactly one scheme — the edge may report it
+    /// with or without `https://`. Prepend `https://` only when absent (keep explicit `http://`),
+    /// so `ws_origin`/passthrough always get a valid URL.
+    fn ensure_scheme(host: &str) -> String {
+        let h = host.trim().trim_end_matches('/');
+        if h.starts_with("http://") || h.starts_with("https://") {
+            h.to_string()
+        } else {
+            format!("https://{h}")
+        }
     }
 
     /// Convert an `http(s)://` base to its WebSocket origin (`ws(s)://`).

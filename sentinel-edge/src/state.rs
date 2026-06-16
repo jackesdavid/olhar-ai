@@ -80,6 +80,7 @@ impl AppState {
         if self.own_go2rtc {
             crate::go2rtc::respawn(self);
         }
+        self.push_streaming();
         n
     }
 
@@ -135,6 +136,7 @@ impl AppState {
             self.push_device_moves(&moves);
         }
         self.post_discovered(&found);
+        self.push_streaming();
     }
 
     /// POST the current ONVIF sweep to control's discovered list (box-authed). Best-effort.
@@ -153,6 +155,24 @@ impl AppState {
         match self.box_agent().post(&url).send_json(moves) {
             Ok(_) => log::info!("reported {} camera IP move(s) to control", moves.len()),
             Err(e) => log::warn!("device-moved push failed: {e}"),
+        }
+    }
+
+    /// Report which cameras the edge currently has a resolved stream for (rtsp_url set →
+    /// creds valid + camera reachable). Drives the cloud's "online & correct" status dot.
+    /// Best-effort.
+    pub fn push_streaming(&self) {
+        let ips: Vec<String> = self
+            .devices
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|d| d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false))
+            .map(|d| d.ip.clone())
+            .collect();
+        let url = format!("{}/config/streaming", self.control_url);
+        if let Err(e) = self.box_agent().post(&url).send_json(&ips) {
+            log::debug!("streaming push failed: {e}");
         }
     }
 

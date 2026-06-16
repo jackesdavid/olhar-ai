@@ -18,6 +18,7 @@ pub fn router() -> Router<AppState> {
         .route("/devices", get(list).put(upsert))
         .route("/devices/discovered", get(discovered))
         .route("/devices/configured", get(configured))
+        .route("/devices/streaming", get(streaming))
         .route("/devices/:ip/credentials", post(set_credentials))
         .route("/devices/rescan", post(rescan))
         .route("/devices/:ip", axum::routing::delete(remove))
@@ -43,6 +44,20 @@ async fn configured(UserClaims(c): UserClaims, State(st): State<AppState>) -> Re
         .map(Json)
         .map_err(|e| {
             log::error!("list_configured failed: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+        })
+}
+
+/// IPs the tenant's edge currently has a resolved stream for — drives the "online" status
+/// dot (creds valid + camera reachable). The cloud never holds the RTSP URL itself.
+async fn streaming(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<String>>, ApiErr> {
+    auth::require(&c, "devices.read")?;
+    let tid = tenant_of(&c)?;
+    store::list_streaming(&st.pool, tid)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            log::error!("list_streaming failed: {e}");
             err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
         })
 }

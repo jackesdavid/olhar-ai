@@ -130,6 +130,9 @@ export const data = {
   listDiscovered: (): Promise<EdgeDiscovered[]> => api.get<EdgeDiscovered[]>("/devices/discovered"),
   /** IPs of cameras whose credentials have been set/relayed to the edge. */
   listConfigured: (): Promise<string[]> => api.get<string[]>("/devices/configured"),
+  /** IPs the edge currently has a RESOLVED stream for (creds valid + camera reachable) —
+   * the precise "online & correct" signal for the status dot. */
+  listStreaming: (): Promise<string[]> => api.get<string[]>("/devices/streaming"),
   /** Ask the tenant's edge box(es) to re-run ONVIF discovery now (e.g. after a camera
    * changed IP). The edge reconciles moves by stable ONVIF id and pushes corrections back. */
   rescan: async (): Promise<void> => {

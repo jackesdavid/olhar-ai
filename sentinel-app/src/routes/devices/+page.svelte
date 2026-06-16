@@ -35,25 +35,27 @@
 
   // IPs the edge currently sees on the LAN (its latest ONVIF discovery sweep, pushed up).
   const discoveredIps = $derived(new Set(edgeFound.map((c) => c.ip)));
+  // IPs the edge has a RESOLVED stream for (creds valid + reachable) — the precise signal.
+  let streamingIps = $state<Set<string>>(new Set());
 
-  // The status dot reflects what the CLOUD actually knows about a saved camera (the cloud
-  // never holds the RTSP URL — that's edge-local — so the old rtsp_url check was always gray):
-  //   online (green) = credentials set AND the edge sees it on the network now → ready to stream
-  //   warn   (amber) = creds set but not seen now (offline / changed IP), OR seen but no creds yet
-  //   offline (gray) = neither set up nor seen
+  // The status dot, using what the CLOUD actually knows (it never holds the RTSP URL — that's
+  // edge-local — so the old rtsp_url check was always gray):
+  //   online (green) = the edge resolved a working stream (valid creds + camera reachable)
+  //   warn   (amber) = creds set but no stream yet (wrong creds / camera down / still resolving),
+  //                    or the camera is visible on the LAN but has no credentials yet
+  //   offline (gray) = not set up and not visible
   function cameraState(d: Device): "online" | "warn" | "offline" {
-    const onLan = discoveredIps.has(d.ip);
-    const configured = isConfigured(d);
-    if (configured && onLan) return "online";
-    if (configured || onLan) return "warn";
+    if (streamingIps.has(d.ip)) return "online";
+    if (isConfigured(d) || discoveredIps.has(d.ip)) return "warn";
     return "offline";
   }
   function cameraTitle(d: Device): string {
+    if (streamingIps.has(d.ip)) return "Online — the edge has a working stream (credentials valid, camera reachable)";
     const onLan = discoveredIps.has(d.ip);
     const configured = isConfigured(d);
-    if (configured && onLan) return "Online — credentials set and the camera is visible on the network";
-    if (configured && !onLan) return "Credentials set, but the camera isn't visible on the network now (offline, or its IP changed — try Rescan)";
-    if (onLan && !configured) return "Visible on the network — set its credentials to start streaming";
+    if (configured && onLan) return "Credentials set and camera visible, but no stream yet — check credentials, or it's still resolving";
+    if (configured) return "Credentials set, but no stream and not visible on the network (offline, or its IP changed — try Rescan)";
+    if (onLan) return "Visible on the network — set its credentials to start streaming";
     return "Not set up, and not visible on the network";
   }
 
@@ -89,10 +91,14 @@
 
   async function loadEdgeFound() {
     try {
-      [edgeFound, configuredIps] = await Promise.all([
+      const [found, configured, streaming] = await Promise.all([
         data.listDiscovered(),
-        data.listConfigured().then((ips) => new Set(ips)),
+        data.listConfigured(),
+        data.listStreaming().catch(() => [] as string[]),
       ]);
+      edgeFound = found;
+      configuredIps = new Set(configured);
+      streamingIps = new Set(streaming);
     } catch {
       edgeFound = [];
     }

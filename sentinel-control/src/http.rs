@@ -30,6 +30,7 @@ pub fn router(state: AppState) -> Router {
         .route("/config/commands", get(commands))
         .route("/config/discovered", post(discovered_push))
         .route("/config/device-moved", post(device_moved))
+        .route("/config/streaming", post(streaming_push))
         .route("/config/logs", post(box_logs_push))
         .merge(handlers::router())
         .merge(crate::domain::router())
@@ -199,6 +200,22 @@ async fn device_moved(State(st): State<AppState>, headers: HeaderMap, body: Opti
     .await;
     log::info!("box reconciled {n} camera IP change(s) for tenant {tenant}");
     st.bump(tenant); // wake the edge so it re-pulls the corrected list
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// The edge reports which cameras it currently has a resolved stream for (box token). Drives
+/// the precise "online & correct" status dot on the Devices page.
+async fn streaming_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<Vec<String>>>) -> Response {
+    let tenant = match box_tenant(&st, &headers).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
+        Err(resp) => return resp,
+    };
+    let ips = body.map(|Json(v)| v).unwrap_or_default();
+    if let Err(e) = store::upsert_streaming(&st.pool, tenant, &ips).await {
+        log::error!("upsert_streaming failed: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "store failed").into_response();
+    }
     StatusCode::NO_CONTENT.into_response()
 }
 

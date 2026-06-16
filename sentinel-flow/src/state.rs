@@ -127,11 +127,23 @@ impl AppState {
             }
         }
         let base = match app_core::tenancy::box_host_for_tenant(&self.db, tenant) {
-            Some(host) => format!("https://{}", host.trim().trim_end_matches('/')),
+            Some(host) => https_base(&host),
             None => app_core::go2rtc::base(),
         };
         self.edge_cache.lock().unwrap().insert(tenant, (base.clone(), Instant::now()));
         base
+    }
+}
+
+/// Normalize a stored box host into a usable base URL with exactly one scheme. The edge may
+/// report its host with a scheme (`https://sentinel-x.ts.net`) or bare — so prepend `https://`
+/// only when absent (and keep an explicit `http://` for dev). Prevents `https://https://…`.
+fn https_base(host: &str) -> String {
+    let h = host.trim().trim_end_matches('/');
+    if h.starts_with("http://") || h.starts_with("https://") {
+        h.to_string()
+    } else {
+        format!("https://{h}")
     }
 }
 

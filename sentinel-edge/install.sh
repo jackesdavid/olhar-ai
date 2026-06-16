@@ -226,7 +226,15 @@ else
     printf '%s\n' '  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>'
     printf '%s\n' '</dict></plist>'
   } > "$PLIST"
-  launchctl bootstrap system "$PLIST" 2>/dev/null || launchctl load "$PLIST"
+  # Re-bootstrap cleanly: boot out any prior instance first, or a fresh install over an
+  # existing service fails with "Load failed: 5: Input/output error". `load` is deprecated.
+  launchctl bootout system "$PLIST" 2>/dev/null || true
+  if ! launchctl bootstrap system "$PLIST"; then
+    echo "  launchctl bootstrap failed — retrying after bootout…" >&2
+    launchctl bootout system "$PLIST" 2>/dev/null || true
+    launchctl bootstrap system "$PLIST" || echo "  Still failing — run: sudo launchctl bootstrap system $PLIST" >&2
+  fi
+  launchctl kickstart -k system/io.sentinel.edge 2>/dev/null || true
   echo "✓ Installed. Logs:  log stream --predicate 'process == \"sentinel-edge\"'"
 fi
 

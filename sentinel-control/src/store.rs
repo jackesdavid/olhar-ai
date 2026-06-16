@@ -376,6 +376,31 @@ pub async fn list_configured(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec
     Ok(rows.into_iter().map(|(ip,)| ip).collect())
 }
 
+/// Replace the tenant's "streaming" set — the IPs the edge currently has a resolved stream
+/// for (the edge pushes its full current set on each reload/rediscover). Best-effort.
+pub async fn upsert_streaming(pool: &PgPool, tenant_id: Uuid, ips: &[String]) -> sqlx::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM streaming_cameras WHERE tenant_id = $1").bind(tenant_id).execute(&mut *tx).await?;
+    for ip in ips {
+        sqlx::query("INSERT INTO streaming_cameras (tenant_id, ip) VALUES ($1,$2) ON CONFLICT DO NOTHING")
+            .bind(tenant_id)
+            .bind(ip)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await
+}
+
+/// IPs the tenant's edge currently has a resolved stream for (the "online & correct" set).
+pub async fn list_streaming(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<String>> {
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT ip FROM streaming_cameras WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().map(|(ip,)| ip).collect())
+}
+
 /// The most-recently-seen box host for a tenant (the gateway's live upstream).
 pub async fn box_host_for_tenant(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Option<String>> {
     let row: Option<(Option<String>,)> = sqlx::query_as(

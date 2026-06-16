@@ -55,6 +55,8 @@ fn main() {
     } else {
         log::info!("edge using external go2rtc on :1984 (+ ONVIF fallback)");
     }
+    // Report the initially-resolved stream set so the Devices dot is correct from boot.
+    state.push_streaming();
 
     // Discovery loop: sweep the LAN for ONVIF cameras every 5 min — reconciling any camera
     // that changed IP (matched by stable ONVIF id) and pushing the sweep to control so the
