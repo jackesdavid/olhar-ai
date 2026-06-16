@@ -209,8 +209,8 @@ export const data = {
   deleteGraph: async (id: number): Promise<void> => {
     await api.del<void>(`/workflows/${id}`);
   },
-  setGraphTrigger: async (id: number, kind: string, everySecs?: number, minLevel?: string): Promise<void> => {
-    await api.put<void>(`/workflows/${id}/trigger`, { kind, every_secs: everySecs, min_level: minLevel });
+  setGraphTrigger: async (id: number, kind: string, everySecs?: number): Promise<void> => {
+    await api.put<void>(`/workflows/${id}/trigger`, { kind, every_secs: everySecs });
   },
   setGraphConcurrency: async (id: number, kind: string, max?: number): Promise<void> => {
     await api.put<void>(`/workflows/${id}/concurrency`, { kind, max });
@@ -248,4 +248,26 @@ export const data = {
     await api.del<void>(`/workflows/${graphId}/edges/${idx}`);
   },
   runGraph: (id: number): Promise<string> => api.post<string>(`/workflows/${id}/run`),
+
+  // ---- workflow events + run history --------------------------------------
+  listEvents: <T = unknown>(): Promise<T> => api.get<T>("/workflows/event-registry"),
+  createEvent: async (name: string, category?: string, description?: string): Promise<void> => {
+    await api.post<void>("/workflows/event-registry", { name, category, description });
+  },
+  deleteEvent: async (name: string): Promise<void> => {
+    await api.del<void>(`/workflows/event-registry/${encodeURIComponent(name)}`);
+  },
+  listEventCategories: <T = unknown>(): Promise<T> => api.get<T>("/workflows/event-categories"),
+  createEventCategory: async (name: string): Promise<void> => {
+    await api.post<void>("/workflows/event-categories", { name });
+  },
+  runHistory: <T = unknown>(graphId?: number, limit?: number): Promise<T> => {
+    const qs = new URLSearchParams();
+    if (graphId != null) qs.set("graph", String(graphId));
+    if (limit != null) qs.set("limit", String(limit));
+    const tail = qs.toString();
+    return api.get<T>(`/workflows/runs/history${tail ? `?${tail}` : ""}`);
+  },
+  runLogs: <T = unknown>(runId: string): Promise<T> =>
+    api.get<T>(`/workflows/runs/${encodeURIComponent(runId)}/logs`),
 };

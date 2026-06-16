@@ -30,6 +30,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/graphs", get(graphs))
         .route("/graphs/reload", post(reload_graphs))
         .route("/runs", get(run_states).post(create_run))
+        .route("/runs/history", get(run_history))
+        .route("/runs/:run_id/logs", get(run_logs))
         .route("/events", get(events))
         .layer(CorsLayer::permissive())
         .with_state(state)
@@ -64,6 +66,15 @@ async fn reload_graphs(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 #[derive(Deserialize)]
 struct TenantQuery {
     tenant: Uuid,
+}
+
+#[derive(Deserialize)]
+struct HistoryQuery {
+    tenant: Uuid,
+    #[serde(default)]
+    graph: Option<u32>,
+    #[serde(default)]
+    limit: Option<i64>,
 }
 
 /// Live run state for one tenant's graphs, keyed by graph id (`{ running, current }`).
@@ -103,8 +114,35 @@ async fn create_run(
     let Some(policy) = policy else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "no such graph" })));
     };
-    engine::fire_graph(&state, body.tenant_id, body.graph_id, &policy);
+    engine::fire_graph(
+        &state,
+        body.tenant_id,
+        body.graph_id,
+        &policy,
+        app_core::workflows::TriggerSource::Manual,
+    );
     (StatusCode::ACCEPTED, Json(json!({ "graph_id": body.graph_id, "accepted": true })))
+}
+
+/// Recent run history for a tenant (newest first), optionally filtered to one graph
+/// (`?tenant=<uuid>&graph=<id>&limit=<n>`). Persisted, so it survives restarts.
+async fn run_history(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<HistoryQuery>,
+) -> impl IntoResponse {
+    let limit = q.limit.unwrap_or(50).clamp(1, 500);
+    let runs = app_core::workflows::repo::list_runs(&state.db, q.tenant, q.graph, limit);
+    Json(runs)
+}
+
+/// All persisted signal lines for one run of a tenant (`?tenant=<uuid>`).
+async fn run_logs(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(run_id): axum::extract::Path<Uuid>,
+    Query(q): Query<TenantQuery>,
+) -> impl IntoResponse {
+    let logs = app_core::workflows::repo::list_run_logs(&state.db, q.tenant, run_id);
+    Json(logs)
 }
 
 /// SSE stream of engine events (`workflow-run`/`-node`/`-log`/`-print`/`-image`,

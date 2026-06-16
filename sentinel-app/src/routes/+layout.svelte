@@ -288,7 +288,7 @@
     >
       {#if !navCollapsed}
         <span class="size-1.5 rounded-full bg-primary status-live"></span>
-        <span class="font-mono">v0.1.0</span>
+        <span class="font-mono">v0.2.0</span>
         <span class="font-mono" title="Deployed commit">· {COMMIT}</span>
         <button
           class="interactive ml-auto rounded-md p-1 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"

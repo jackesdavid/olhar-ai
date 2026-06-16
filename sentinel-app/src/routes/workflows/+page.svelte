@@ -28,6 +28,7 @@
   import FileIcon from "@lucide/svelte/icons/file";
   import Bug from "@lucide/svelte/icons/bug";
   import Printer from "@lucide/svelte/icons/printer";
+  import History from "@lucide/svelte/icons/history";
   import DictionaryEditor from "$lib/components/dictionary-editor.svelte";
 
   import { Button } from "$lib/components/ui/button";
@@ -57,7 +58,26 @@
   };
   type Node = { id: number; kind: string; x: number; y: number; config: Record<string, unknown>; memoize?: boolean };
   type Edge = { from: number; from_port: string; to: number; to_port: string };
-  type Trigger = "Manual" | { Cron: { every_secs: number } } | { OnNewAlert: { min_level: string } };
+  type Trigger = "Manual" | { Cron: { every_secs: number } };
+  type WorkflowEvent = { name: string; category: string; source: string };
+  type EventCategory = { name: string; source: string };
+  // A palette entry: a node kind, optionally pre-bound to an event name (for the
+  // synthesized "On event: Foo" / "Emit event: Foo" entries).
+  type PaletteKind = CatKind & { presetEvent?: string };
+  type RunRecord = {
+    id: string;
+    graph_id: number;
+    graph_name: string;
+    trigger_source: string;
+    source_graph_name?: string | null;
+    event_name?: string | null;
+    pod_name: string;
+    status: string;
+    result_summary?: string | null;
+    started_at: string;
+    ended_at?: string | null;
+  };
+  type RunLog = { node_id?: number | null; label?: string | null; kind: string; message: string };
   type Concurrency =
     | "SkipIfRunning"
     | { QueueSingle: { max_queued: number } }
@@ -226,7 +246,31 @@
   // live references for node dropdowns + per-graph run activity (polled)
   let devices = $state<{ name: string; rtsp_url?: string | null }[]>([]);
   let recipients = $state<{ label: string; enabled: boolean }[]>([]);
-  let activity = $state<Record<number, { running: number; current: number | null }>>({});
+  type Activity = {
+    running: number;
+    current: number | null;
+    run_id?: string | null;
+    trigger?: string | null;
+    pod_name?: string | null;
+  };
+  let activity = $state<Record<number, Activity>>({});
+
+  // tenant event registry + categories (for the palette + the property combobox)
+  let events = $state<WorkflowEvent[]>([]);
+  let eventCategories = $state<EventCategory[]>([]);
+  // category typed when registering a brand-new event from the property field
+  let newEventCategory = $state("");
+
+  // live cursor world position (for the `n`-to-add-here shortcut) + pending drop point
+  let hoverWorld = $state<{ x: number; y: number } | null>(null);
+  let dropAt: { x: number; y: number } | null = null;
+
+  // recent-runs drawer (per graph in the list)
+  let runsOpen = $state(false);
+  let runsGraph = $state<Graph | null>(null);
+  let runsList = $state<RunRecord[]>([]);
+  let runsLogs = $state<Record<string, RunLog[]>>({});
+  let runsExpanded = $state<string | null>(null);
 
   // Per-node highlight controller (driven by workflow-node events): exactly ONE
   // node is "live" at a time, shown for at least MIN_HIGHLIGHT_MS, in sequence.
@@ -280,22 +324,41 @@
   // node palette: search + group by category
   let nodeSearch = $state("");
   const CATEGORY_ORDER = ["Cameras", "Vision", "AI", "Alerts", "Recipients", "Text", "Network", "Flow"];
+  // Synthesize per-event palette entries from the tenant registry: each registered event
+  // becomes a droppable "On event: <name>" + "Emit event: <name>", grouped under its
+  // category (prefixed so the groups sort together). The generic On/Emit event entries
+  // stay in "Flow" for authoring a brand-new name.
+  const EVENT_GROUP_PREFIX = "Events · ";
+  const eventPaletteGroups = $derived.by(() => {
+    const onBase = catalog["on_event"];
+    const emitBase = catalog["emit_event"];
+    if (!onBase || !emitBase) return [] as { name: string; kinds: PaletteKind[] }[];
+    const byCat = new Map<string, PaletteKind[]>();
+    for (const e of events) {
+      const list = byCat.get(e.category) ?? [];
+      list.push({ ...onBase, label: `On event: ${e.name}`, presetEvent: e.name });
+      list.push({ ...emitBase, label: `Emit event: ${e.name}`, presetEvent: e.name });
+      byCat.set(e.category, list);
+    }
+    return [...byCat.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([cat, kinds]) => ({ name: `${EVENT_GROUP_PREFIX}${cat}`, kinds }));
+  });
   const nodeCategories = $derived.by(() => {
     const q = nodeSearch.trim().toLowerCase();
-    const matched = kinds.filter(
-      (k) =>
-        !q ||
-        k.label.toLowerCase().includes(q) ||
-        k.category.toLowerCase().includes(q) ||
-        k.slug.toLowerCase().includes(q),
-    );
-    const groups = new Map<string, CatKind[]>();
+    const matchKind = (k: PaletteKind) =>
+      !q ||
+      k.label.toLowerCase().includes(q) ||
+      k.category.toLowerCase().includes(q) ||
+      k.slug.toLowerCase().includes(q);
+    const matched = (kinds as PaletteKind[]).filter(matchKind);
+    const groups = new Map<string, PaletteKind[]>();
     for (const k of matched) {
       const list = groups.get(k.category) ?? [];
       list.push(k);
       groups.set(k.category, list);
     }
-    const ordered: { name: string; kinds: CatKind[] }[] = [];
+    const ordered: { name: string; kinds: PaletteKind[] }[] = [];
     for (const name of CATEGORY_ORDER) {
       const list = groups.get(name);
       if (list) {
@@ -304,6 +367,11 @@
       }
     }
     for (const [name, list] of groups) ordered.push({ name, kinds: list });
+    // Event groups last, filtered by the same search query.
+    for (const g of eventPaletteGroups) {
+      const ks = g.kinds.filter(matchKind);
+      if (ks.length) ordered.push({ name: g.name, kinds: ks });
+    }
     return ordered;
   });
 
@@ -598,6 +666,18 @@
       console.error("Failed to load devices/recipients", err);
     }
   }
+  async function loadEvents() {
+    try {
+      const [ev, cats] = await Promise.all([
+        data.listEvents<WorkflowEvent[]>(),
+        data.listEventCategories<EventCategory[]>(),
+      ]);
+      events = ev ?? [];
+      eventCategories = cats ?? [];
+    } catch (err) {
+      console.error("Failed to load events", err);
+    }
+  }
 
   onMount(() => {
     const savedW = Number(localStorage.getItem("wf.panelW"));
@@ -612,6 +692,7 @@
         catalog = Object.fromEntries(cat.kinds.map((k) => [k.slug, k]));
         await reload();
         await loadRefs();
+        await loadEvents();
       } catch (err) {
         toast.error("Failed to load workflows", { description: String(err) });
       } finally {
@@ -669,10 +750,29 @@
       if (gid !== selectedGraphId) return; // node ids are per-graph — only the open one
       nodeImages = { ...nodeImages, [node]: { src: `data:image/jpeg;base64,${frame}`, label } };
     });
+    // Cross-graph events: dispatched on the emitter, triggered/skipped on each listener.
+    // Show the line in whichever graph's run view is open (matched by `graph`).
+    const unEvent = onEvent("workflow-event", (payload) => {
+      const p = payload as {
+        graph: number | null;
+        event: string;
+        kind?: string;
+        by_graph?: string;
+        count?: number;
+        reason?: string;
+      };
+      if (p.graph !== selectedGraphId) return;
+      const summary = eventLogSummary(p);
+      if (!summary) return;
+      logs = [
+        { time: new Date().toLocaleTimeString(), name: "Event", ok: p.kind !== "skip", summary, level: p.kind === "skip" ? "warn" : "info" },
+        ...logs,
+      ].slice(0, 200);
+    });
     // Poll run activity (running graphs + status) for the lock + list badges.
     const poll = setInterval(async () => {
       try {
-        activity = await data.runStates<Record<number, { running: number; current: number | null }>>();
+        activity = await data.runStates<Record<number, Activity>>();
       } catch {
         /* ignore transient errors */
       }
@@ -684,11 +784,24 @@
       unLog.then((u) => u());
       unPrint.then((u) => u());
       unImage.then((u) => u());
+      unEvent.then((u) => u());
       screenTimers.forEach((t) => clearTimeout(t));
       screenTimers.clear();
       clearInterval(poll);
     };
   });
+
+  // A console line for a cross-graph event signal.
+  function eventLogSummary(p: { event: string; kind?: string; by_graph?: string; count?: number; reason?: string }): string {
+    if (p.kind === "dispatch") return `Dispatched '${p.event}' to ${p.count ?? 0} listener(s)`;
+    if (p.kind === "trigger") return `Event '${p.event}' triggered by ${p.by_graph ?? "another graph"}`;
+    if (p.kind === "skip") {
+      return p.reason === "capacity"
+        ? `Event '${p.event}' skipped — pod at capacity`
+        : `Event '${p.event}' skipped — handler already running`;
+    }
+    return `Event '${p.event}'`;
+  }
 
   // ---- graph CRUD ----------------------------------------------------------
   async function createWorkflow() {
@@ -770,20 +883,16 @@
   }
 
   // ---- trigger / concurrency ----------------------------------------------
-  function triggerKind(t: Trigger): "manual" | "cron" | "on_new_alert" {
+  function triggerKind(t: Trigger): "manual" | "cron" {
     if (t === "Manual") return "manual";
-    return "Cron" in t ? "cron" : "on_new_alert";
+    return "cron";
   }
   function triggerSecs(t: Trigger): number {
     return typeof t === "object" && "Cron" in t ? t.Cron.every_secs : 60;
   }
-  function triggerLevel(t: Trigger): string {
-    return typeof t === "object" && "OnNewAlert" in t ? t.OnNewAlert.min_level : "info";
-  }
   function triggerSummary(t: Trigger): string {
     if (t === "Manual") return "Manual";
-    if ("Cron" in t) return `Every ${t.Cron.every_secs}s`;
-    return `On alert ≥ ${t.OnNewAlert.min_level}`;
+    return `Every ${t.Cron.every_secs}s`;
   }
   function concKind(c: Concurrency): "skip" | "queue" | "concurrent" {
     if (c === "SkipIfRunning") return "skip";
@@ -793,8 +902,8 @@
     if (typeof c !== "object") return 1;
     return "QueueSingle" in c ? c.QueueSingle.max_queued : c.Concurrent.max_concurrent;
   }
-  async function applyTrigger(g: Graph, kind: string, everySecs: number, minLevel: string) {
-    await data.setGraphTrigger(g.id, kind, everySecs, minLevel);
+  async function applyTrigger(g: Graph, kind: string, everySecs: number) {
+    await data.setGraphTrigger(g.id, kind, everySecs);
     await reload();
   }
   async function applyConcurrency(g: Graph, kind: string, max: number) {
@@ -803,13 +912,23 @@
   }
 
   // ---- node + edge ops -----------------------------------------------------
-  async function addNodeKind(slug: string) {
+  async function addNodeKind(slug: string, presetEvent?: string) {
     if (!graph || editLocked) return;
-    const n = graph.nodes.length;
-    const x = 80 + (n % 5) * 48;
-    const y = 70 + (n % 5) * 40;
+    // Place at the cursor (when opened via the `n` shortcut), else cascade.
+    let x: number;
+    let y: number;
+    if (dropAt) {
+      x = Math.round(dropAt.x);
+      y = Math.round(dropAt.y);
+      dropAt = null;
+    } else {
+      const n = graph.nodes.length;
+      x = 80 + (n % 5) * 48;
+      y = 70 + (n % 5) * 40;
+    }
     const id = await data.addNode(graph.id, slug, x, y);
-    // Default camera/recipient configs to the actual first item in each list.
+    // Default camera/recipient configs to the actual first item in each list; for a
+    // synthesized event entry, pre-bind its event name.
     const cfg = { ...(catalog[slug]?.default_config ?? {}) };
     let patched = false;
     if ("camera" in cfg && devices[0]) {
@@ -820,10 +939,100 @@
       cfg.recipient = recipients[0].label;
       patched = true;
     }
+    if (presetEvent) {
+      cfg.event = presetEvent;
+      patched = true;
+    }
     if (patched) await data.setNodeConfig(graph.id, id, cfg);
     selectedNodeId = id;
     addOpen = false;
     await reload();
+  }
+
+  // Press `n` over the canvas → open the palette and drop the next node at the cursor.
+  // Ignored while typing in a field or while the graph is active (editLocked).
+  function onWindowKey(e: KeyboardEvent) {
+    if (e.key !== "n" && e.key !== "N") return;
+    if (view !== "editor" || editLocked || addOpen) return;
+    const el = document.activeElement as HTMLElement | null;
+    const tag = el?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
+    e.preventDefault();
+    dropAt = hoverWorld;
+    nodeSearch = "";
+    addOpen = true;
+  }
+
+  // Unreal-Blueprint-style header tint by category, so node families read at a glance and
+  // events POP. Returns a hex colour; the header band is drawn at low alpha behind the label.
+  function headerColor(kind: string): string {
+    if (kind === "emit_event" || kind === "on_event") return "#f43f5e"; // event red — stands out
+    switch (catalog[kind]?.category) {
+      case "Flow": return "#94a3b8"; // slate
+      case "Vision": return portColor.person; // violet/magenta
+      case "AI": return portColor.dictionary; // teal
+      case "Alerts": return portColor.bool; // amber
+      case "Cameras": return portColor.text; // blue
+      case "Recipients": return portColor.recipient; // purple
+      case "Text": return portColor.num; // green
+      case "Network": return "#22d3ee"; // cyan
+      default: return "#64748b";
+    }
+  }
+
+  // Commit the `event` field on an Emit/On-event node. If the name isn't registered yet,
+  // register it (under the typed category, default "General") so it becomes a palette entry.
+  async function commitEventField(node: Node, name: string) {
+    const ev = name.trim();
+    await saveNodeConfig(node, { ...node.config, event: ev });
+    if (ev && !events.some((e) => e.name === ev)) {
+      try {
+        await data.createEvent(ev, newEventCategory.trim() || "General");
+        await loadEvents();
+        newEventCategory = "";
+      } catch (err) {
+        toast.error("Couldn't register event", { description: String(err) });
+      }
+    }
+  }
+
+  // ---- recent-runs drawer (list view) --------------------------------------
+  async function openRuns(g: Graph) {
+    runsGraph = g;
+    runsOpen = true;
+    runsList = [];
+    runsLogs = {};
+    runsExpanded = null;
+    try {
+      runsList = await data.runHistory<RunRecord[]>(g.id, 50);
+    } catch (err) {
+      toast.error("Couldn't load run history", { description: String(err) });
+    }
+  }
+  async function toggleRunLogs(runId: string) {
+    if (runsExpanded === runId) {
+      runsExpanded = null;
+      return;
+    }
+    runsExpanded = runId;
+    if (!runsLogs[runId]) {
+      try {
+        runsLogs = { ...runsLogs, [runId]: await data.runLogs<RunLog[]>(runId) };
+      } catch (err) {
+        toast.error("Couldn't load run logs", { description: String(err) });
+      }
+    }
+  }
+  function runStatusClass(status: string): string {
+    if (status === "ok") return "text-primary";
+    if (status === "failed") return "text-destructive";
+    return "text-amber-500"; // running
+  }
+  function triggerSourceLabel(src?: string | null): string {
+    if (src === "cron") return "Cron";
+    if (src === "event") return "Event";
+    if (src === "manual") return "Manual";
+    return "Running";
   }
 
   function comingSoon(what: string) {
@@ -936,6 +1145,7 @@
     svgEl?.setPointerCapture?.(e.pointerId);
   }
   function onCanvasMove(e: PointerEvent) {
+    hoverWorld = worldPoint(e); // track the cursor for the `n`-to-add-here shortcut
     if (pending) cursor = worldPoint(e); // drag the open wire end with the cursor
     if (panning) {
       pan = { x: panning.ox + (e.clientX - panning.sx), y: panning.oy + (e.clientY - panning.sy) };
@@ -1007,7 +1217,6 @@
   const TRIGGER_OPTS = [
     { value: "manual", label: "Manual (Run-now only)" },
     { value: "cron", label: "Cron (every N seconds)" },
-    { value: "on_new_alert", label: "On new alert" },
   ];
   const CONC_OPTS = [
     { value: "skip", label: "Skip if running" },
@@ -1018,6 +1227,8 @@
     return opts.find((o) => o.value === v)?.label ?? v;
   }
 </script>
+
+<svelte:window onkeydown={onWindowKey} />
 
 <div class="h-full">
   {#if loading}
@@ -1079,11 +1290,17 @@
                     </Table.Cell>
                     <Table.Cell>
                       {#if st === "running"}
-                        <span
-                          class="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
-                        >
-                          <LoaderCircle class="size-3 animate-spin" /> Running
-                        </span>
+                        <div class="flex flex-col gap-0.5">
+                          <span
+                            class="inline-flex w-fit items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
+                          >
+                            <LoaderCircle class="size-3 animate-spin" />
+                            {#if activity[g.id]?.trigger}{triggerSourceLabel(activity[g.id]?.trigger)}{:else}Running{/if}
+                          </span>
+                          {#if activity[g.id]?.pod_name}
+                            <span class="text-[10px] text-muted-foreground">on {activity[g.id]?.pod_name}</span>
+                          {/if}
+                        </div>
                       {:else if st === "idle"}
                         <span class="text-xs text-muted-foreground">Idle</span>
                       {:else}
@@ -1108,6 +1325,9 @@
                           {:else}
                             <Play class="size-4" />
                           {/if}
+                        </Button>
+                        <Button variant="ghost" size="icon" class="size-8" title="Recent runs" onclick={() => openRuns(g)}>
+                          <History class="size-4" />
                         </Button>
                         <Button variant="ghost" size="icon" class="size-8" title="Delete" onclick={() => openDelete(g)}>
                           <Trash2 class="size-4" />
@@ -1244,6 +1464,15 @@
                       class="node-running stroke-primary"
                     />
                   {/if}
+                  <!-- Category-tinted header band (Unreal-Blueprint style): a top-rounded
+                       band behind the label so node families read at a glance and events pop.
+                       Drawn before the drag handle so the handle stays on top for clicks. -->
+                  <path
+                    d="M0 8 a8 8 0 0 1 8 -8 h{NODE_W - 16} a8 8 0 0 1 8 8 v{HEAD_H - 8} h-{NODE_W} z"
+                    fill={headerColor(n.kind)}
+                    fill-opacity={n.kind === "emit_event" || n.kind === "on_event" ? 0.32 : 0.18}
+                    class="pointer-events-none"
+                  />
                   <!-- Drag handle covers the whole node body; ports render after
                        this rect, so they stay clickable on top of it. -->
                   <rect
@@ -1629,7 +1858,7 @@
                   type="single"
                   disabled={editLocked}
                   value={triggerKind(graph.trigger)}
-                  onValueChange={(v) => applyTrigger(graph, v ?? "manual", triggerSecs(graph.trigger), triggerLevel(graph.trigger))}
+                  onValueChange={(v) => applyTrigger(graph, v ?? "manual", triggerSecs(graph.trigger))}
                 >
                   <Select.Trigger class="h-8 w-full">{labelOf(TRIGGER_OPTS, triggerKind(graph.trigger))}</Select.Trigger>
                   <Select.Content>
@@ -1640,21 +1869,9 @@
                 </Select.Root>
                 {#if triggerKind(graph.trigger) === "cron"}
                   <div class="flex items-center gap-2">
-                    <Input type="number" min="1" disabled={editLocked} value={triggerSecs(graph.trigger)} class="h-8" onchange={(e) => applyTrigger(graph, "cron", Number(e.currentTarget.value), "info")} />
+                    <Input type="number" min="1" disabled={editLocked} value={triggerSecs(graph.trigger)} class="h-8" onchange={(e) => applyTrigger(graph, "cron", Number(e.currentTarget.value))} />
                     <span class="text-xs text-muted-foreground">sec</span>
                   </div>
-                {:else if triggerKind(graph.trigger) === "on_new_alert"}
-                  <Select.Root
-                    type="single"
-                    disabled={editLocked}
-                    value={triggerLevel(graph.trigger)}
-                    onValueChange={(v) => applyTrigger(graph, "on_new_alert", 60, v ?? "info")}
-                  >
-                    <Select.Trigger class="h-8 w-full">≥ {triggerLevel(graph.trigger)}</Select.Trigger>
-                    <Select.Content>
-                      {#each LEVELS as l (l)}<Select.Item value={l} label={`≥ ${l}`}>≥ {l}</Select.Item>{/each}
-                    </Select.Content>
-                  </Select.Root>
                 {/if}
               </div>
             </div>
@@ -1839,6 +2056,32 @@
                             {#each LEVELS as l (l)}<Select.Item value={l} label={l} class="capitalize">{l}</Select.Item>{/each}
                           </Select.Content>
                         </Select.Root>
+                      {:else if key === "event"}
+                        <!-- Event name: free-text with autocomplete over registered events;
+                             committing a new name registers it (under the typed category). -->
+                        <Input
+                          class="h-8"
+                          list="wf-events"
+                          disabled={editLocked}
+                          placeholder="EventName (e.g. Foo)"
+                          value={String(selectedNode.config[key] ?? "")}
+                          onchange={(e) => commitEventField(selectedNode, e.currentTarget.value)}
+                        />
+                        <datalist id="wf-events">
+                          {#each events as e (e.name)}<option value={e.name}>{e.category}</option>{/each}
+                        </datalist>
+                        {#if !events.some((e) => e.name === String(selectedNode?.config[key] ?? "").trim()) && String(selectedNode.config[key] ?? "").trim()}
+                          <Input
+                            class="mt-1.5 h-8"
+                            list="wf-event-cats"
+                            disabled={editLocked}
+                            placeholder="Category for new event (default General)"
+                            bind:value={newEventCategory}
+                          />
+                          <datalist id="wf-event-cats">
+                            {#each eventCategories as c (c.name)}<option value={c.name}></option>{/each}
+                          </datalist>
+                        {/if}
                       {:else}
                         <Input class="h-8" disabled={editLocked} value={String(selectedNode.config[key] ?? "")} onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })} />
                       {/if}
@@ -2020,10 +2263,10 @@
               {cat.name}
             </div>
             <div class="space-y-1">
-              {#each cat.kinds as k (k.slug)}
+              {#each cat.kinds as k (k.label)}
                 <button
                   class="interactive group flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2 text-left"
-                  onclick={() => addNodeKind(k.slug)}
+                  onclick={() => addNodeKind(k.slug, k.presetEvent)}
                 >
                   <span class="flex items-center gap-2 text-sm font-medium">
                     <span class="size-1.5 rounded-full bg-primary transition-transform group-hover:scale-125"></span>
@@ -2046,3 +2289,59 @@
     </div>
   </div>
 {/if}
+
+<!-- Recent runs drawer — persisted run history for one graph (trigger, pod, status). -->
+<Dialog.Root bind:open={runsOpen}>
+  <Dialog.Content class="max-w-2xl">
+    <Dialog.Header>
+      <Dialog.Title class="flex items-center gap-2">
+        <History class="size-4" /> Recent runs — {runsGraph?.name ?? ""}
+      </Dialog.Title>
+      <Dialog.Description>Manual, scheduled, and event-triggered runs, newest first.</Dialog.Description>
+    </Dialog.Header>
+    <div class="max-h-[60vh] space-y-1.5 overflow-y-auto">
+      {#if runsList.length === 0}
+        <p class="py-8 text-center text-sm text-muted-foreground">No runs recorded yet.</p>
+      {:else}
+        {#each runsList as r (r.id)}
+          <div class="rounded-lg border border-border bg-card/40">
+            <button
+              class="interactive flex w-full items-center gap-2 px-3 py-2 text-left"
+              onclick={() => toggleRunLogs(r.id)}
+            >
+              {#if runsExpanded === r.id}<ChevronDown class="size-3.5 shrink-0 text-muted-foreground" />{:else}<ChevronRight class="size-3.5 shrink-0 text-muted-foreground" />{/if}
+              <span class="inline-flex w-16 shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-medium capitalize {runStatusClass(r.status)}">
+                {r.status}
+              </span>
+              <span class="text-xs font-medium">{triggerSourceLabel(r.trigger_source)}</span>
+              {#if r.trigger_source === "event" && r.event_name}
+                <span class="truncate text-[11px] text-muted-foreground">
+                  '{r.event_name}'{#if r.source_graph_name} ← {r.source_graph_name}{/if}
+                </span>
+              {/if}
+              <span class="ml-auto shrink-0 text-[10px] text-muted-foreground">{r.started_at}</span>
+              <span class="shrink-0 text-[10px] text-muted-foreground/70">· {r.pod_name}</span>
+            </button>
+            {#if runsExpanded === r.id}
+              <div class="border-t border-border px-3 py-2">
+                {#if r.result_summary}<p class="mb-1.5 text-[11px] text-muted-foreground">{r.result_summary}</p>{/if}
+                {#if (runsLogs[r.id]?.length ?? 0) === 0}
+                  <p class="text-[11px] text-muted-foreground/60">No detailed signals recorded.</p>
+                {:else}
+                  <div class="space-y-0.5 font-mono text-[10px] leading-relaxed">
+                    {#each runsLogs[r.id] as line (line)}
+                      <div class="flex gap-2">
+                        <span class="shrink-0 uppercase text-muted-foreground/60">{line.kind}</span>
+                        <span class="text-muted-foreground">{line.label ? `${line.label}: ` : ""}{line.message}</span>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/each}
+      {/if}
+    </div>
+  </Dialog.Content>
+</Dialog.Root>

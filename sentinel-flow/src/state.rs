@@ -28,11 +28,17 @@ pub type WfStore = Arc<Mutex<Vec<(Uuid, Graph)>>>;
 pub type WfEngine = Arc<Mutex<WorkflowEngine>>;
 
 /// Live run activity per `(tenant, graph_id)`, polled by the UI: how many runs are in
-/// flight and which node is currently executing.
+/// flight, which node is currently executing, and (for the most recent live run) its id
+/// + trigger source so the list can show how/why a graph is running.
 #[derive(Default, Clone, Serialize)]
 pub struct GraphActivity {
     pub running: u32,
     pub current: Option<u32>,
+    pub run_id: Option<Uuid>,
+    /// Trigger source of the current run: "manual" | "cron" | "event".
+    pub trigger: Option<String>,
+    /// The flow instance (pod) executing the current run.
+    pub pod_name: Option<String>,
 }
 pub type Activity = Arc<Mutex<HashMap<(Uuid, u32), GraphActivity>>>;
 
@@ -59,15 +65,27 @@ pub struct AppState {
     /// fire whose `OnEvent` handler is already running here is DROPPED (coalesced) — "skip
     /// if the path is still running". Cleared when the handler sub-run finishes.
     pub event_runs: Arc<Mutex<std::collections::HashSet<(Uuid, u32, String)>>>,
+    /// This flow instance's name, shown in the UI as the "pod" executing a run. Resolved
+    /// once at boot from `FLOW_INSTANCE_NAME`, else `HOSTNAME`, else `"flow"`.
+    pub pod_name: String,
 }
 
 impl AppState {
     /// Connect to Postgres (applies migrations), hydrate every tenant's graph store,
-    /// and restore the engine's persisted timing state (Phase 0.5) per tenant so a
-    /// restart neither replays the `OnNewAlert` backlog nor fires a long cron at once.
+    /// and restore the engine's persisted cron timing (Phase 0.5) per tenant so a
+    /// restart doesn't fire a long cron immediately.
     pub fn boot(database_url: &str) -> Result<Arc<AppState>, String> {
         let db = Db::connect(database_url).map_err(|e| format!("connect Postgres: {e}"))?;
         log::info!("Postgres connected; migrations applied");
+
+        let pod_name = std::env::var("FLOW_INSTANCE_NAME")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| std::env::var("HOSTNAME").ok().filter(|s| !s.trim().is_empty()))
+            .unwrap_or_else(|| "flow".to_string());
+        log::info!("flow instance (pod) name: {pod_name}");
+        // Runs die with the process; reconcile this pod's rows left 'running' by a crash.
+        workflows::repo::mark_orphaned_runs(&db, &pod_name);
 
         let graphs = workflows::repo::load_all(&db);
         let tenants = distinct_tenants(&graphs);
@@ -88,6 +106,7 @@ impl AppState {
             events: events::channel(),
             edge_cache: Arc::new(Mutex::new(HashMap::new())),
             event_runs: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            pod_name,
         }))
     }
 
@@ -132,22 +151,14 @@ pub fn distinct_tenants(graphs: &[(Uuid, Graph)]) -> Vec<Uuid> {
     graphs.iter().map(|(t, _)| *t).filter(|t| seen.insert(*t)).collect()
 }
 
-/// Build the engine with each tenant's timing state restored from Postgres (Phase 0.5):
-///   * `alert_seen_max` — persisted high-water mark, falling back to the tenant's current
-///     alert max on first boot (then persisted), so the backlog doesn't fire.
-///   * cron timers — each persisted wall-clock fire is anchored to "now" on the
-///     monotonic clock so a mid-interval restart waits out the remainder.
+/// Build the engine with each tenant's cron timing restored from Postgres (Phase 0.5):
+/// each persisted wall-clock fire is anchored to "now" on the monotonic clock so a
+/// mid-interval restart waits out the remainder instead of firing immediately.
 fn restore_engine(db: &Db, tenants: &[Uuid]) -> WorkflowEngine {
     let mut engine = WorkflowEngine::new();
     let now_ms = crate::now_epoch_ms();
     let now_inst = Instant::now();
     for &tenant in tenants {
-        let alert_max = workflows::repo::load_alert_seen_max(db, tenant).unwrap_or_else(|| {
-            app_core::alerts::repo::load(db, tenant).iter().map(|a| a.id).max().unwrap_or(0)
-        });
-        engine.seed_alert_seen_max(tenant, alert_max);
-        workflows::repo::save_alert_seen_max(db, tenant, alert_max);
-
         for (graph_id, last_fired_ms) in workflows::repo::load_cron_state(db, tenant) {
             let elapsed = Duration::from_millis(now_ms.saturating_sub(last_fired_ms));
             let anchor = now_inst.checked_sub(elapsed).unwrap_or(now_inst);

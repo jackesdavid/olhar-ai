@@ -10,7 +10,6 @@
 //! Runs on dedicated std threads (blocking), exactly like the Tauri version; the
 //! axum server runs on the tokio runtime alongside. `Db::block` bridges sqlx safely
 //! from either.
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,18 +17,18 @@ use uuid::Uuid;
 
 use app_core::agent::{ToolContext, ToolUiEvent};
 use app_core::notification::{NotificationConfig, NotificationStore};
-use app_core::workflows::{self, ConcurrencyPolicy, Fire, Graph as WfGraph, Trigger, WorkflowEngine};
+use app_core::workflows::{
+    self, ConcurrencyPolicy, EventSource, Fire, Graph as WfGraph, RunLogLine, RunStatus, Trigger,
+    TriggerSource,
+};
 
 use crate::events;
 use crate::state::{self, AppState, WF_GLOBAL_CAP};
 
 /// Spawn the 1 s trigger poller on a background thread. Across ALL tenants: fires due
-/// Cron graphs and qualifying `OnNewAlert` graphs, each under its concurrency policy,
-/// persisting the engine's per-tenant timing state (Phase 0.5) as it goes.
+/// Cron graphs under each graph's concurrency policy, persisting the cron timing state
+/// (Phase 0.5) as it goes. (Alert reactivity moved to the cross-graph event system.)
 pub fn spawn_poller(state: Arc<AppState>) {
-    // The last new-alert watermark we persisted, per tenant — so we only write on a
-    // genuine advance.
-    let mut persisted_max: HashMap<Uuid, u64> = HashMap::new();
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(1));
         let now = Instant::now();
@@ -43,23 +42,6 @@ pub fn spawn_poller(state: Arc<AppState>) {
                 .collect()
         };
 
-        // Drain new-alert levels ONCE per tenant per tick (advances + persist on advance).
-        // The alert log is shared state — reload per tenant so alerts created by any
-        // service drive `OnNewAlert` here too.
-        let mut tenant_seen = std::collections::HashSet::new();
-        let tenants: Vec<Uuid> = graphs.iter().map(|(t, ..)| *t).filter(|t| tenant_seen.insert(*t)).collect();
-        let mut levels_by_tenant: HashMap<Uuid, Vec<app_core::alerts::AlertLevel>> = HashMap::new();
-        for tenant in tenants {
-            let alerts = app_core::alerts::repo::load(&state.db, tenant);
-            let levels = state.engine.lock().unwrap().drain_new_alert_levels(tenant, &alerts);
-            levels_by_tenant.insert(tenant, levels);
-            let max = state.engine.lock().unwrap().alert_seen_max(tenant);
-            if max > persisted_max.get(&tenant).copied().unwrap_or(0) {
-                workflows::repo::save_alert_seen_max(&state.db, tenant, max);
-                persisted_max.insert(tenant, max);
-            }
-        }
-
         for (tenant, id, trigger, policy) in graphs {
             if state.engine.lock().unwrap().total_running() >= WF_GLOBAL_CAP {
                 break; // global backstop
@@ -69,28 +51,29 @@ pub fn spawn_poller(state: Arc<AppState>) {
                 Trigger::Cron { every_secs } => {
                     state.engine.lock().unwrap().cron_due(tenant, id, *every_secs, now)
                 }
-                Trigger::OnNewAlert { min_level } => {
-                    let levels = levels_by_tenant.get(&tenant).map(|v| v.as_slice()).unwrap_or(&[]);
-                    WorkflowEngine::levels_qualify(levels, *min_level)
-                }
             };
             if due {
-                if matches!(trigger, Trigger::Cron { .. }) {
-                    workflows::repo::save_cron_fired(&state.db, tenant, id, crate::now_epoch_ms());
-                }
-                fire_graph(&state, tenant, id, &policy);
+                workflows::repo::save_cron_fired(&state.db, tenant, id, crate::now_epoch_ms());
+                fire_graph(&state, tenant, id, &policy, TriggerSource::Cron);
             }
         }
     });
 }
 
-/// Apply a graph's concurrency policy to a fire: spawn, queue, or skip.
-pub fn fire_graph(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, policy: &ConcurrencyPolicy) {
+/// Apply a graph's concurrency policy to a fire: spawn, queue, or skip. `source` records
+/// what kicked it off (manual / cron) on the run record.
+pub fn fire_graph(
+    state: &Arc<AppState>,
+    tenant: Uuid,
+    graph_id: u32,
+    policy: &ConcurrencyPolicy,
+    source: TriggerSource,
+) {
     let decision = state.engine.lock().unwrap().decide(tenant, graph_id, policy);
     match decision {
         Fire::Spawn => {
             state.engine.lock().unwrap().on_spawn(tenant, graph_id);
-            spawn_graph_run(state, tenant, graph_id);
+            spawn_graph_run(state, tenant, graph_id, source);
         }
         Fire::Queue => state.engine.lock().unwrap().on_queue(tenant, graph_id),
         Fire::Skip => {}
@@ -99,58 +82,29 @@ pub fn fire_graph(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, policy: &C
 
 /// Spawn one graph run on a background thread. The caller must have already reserved
 /// a slot (`engine.on_spawn`). On finish it releases the slot and, if a queued fire
-/// is waiting (`QueueSingle`), reserves + spawns the next one.
-pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: u32) {
+/// is waiting (`QueueSingle`), reserves + spawns the next one. `source` (manual/cron) is
+/// recorded on the run.
+pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, source: TriggerSource) {
     let graph: WfGraph = match state::find_graph(&state.store, tenant, graph_id) {
         Some(g) => g,
         None => return,
     };
     let state = Arc::clone(state);
     std::thread::spawn(move || {
-        state.activity.lock().unwrap().entry((tenant, graph_id)).or_default().running += 1;
+        let run_id = Uuid::new_v4();
+        mark_run_started(&state, tenant, graph_id, run_id, source.as_str());
+        workflows::repo::insert_run(
+            &state.db, tenant, run_id, graph_id, &graph.name, source, None, None, None, &state.pod_name,
+        );
         events::publish(
             &state.events,
             "workflow-run-start",
-            serde_json::json!({ "tenant": tenant, "graph": graph_id, "name": graph.name }),
+            serde_json::json!({ "tenant": tenant, "graph": graph_id, "name": graph.name, "run_id": run_id, "trigger": source.as_str() }),
         );
 
-        let (ctx, drain) = build_run_context(&state, tenant);
-        let progress = Arc::clone(&state);
-        let mut on_node = |nid: u32| {
-            progress.activity.lock().unwrap().entry((tenant, graph_id)).or_default().current = Some(nid);
-            events::publish(&progress.events, "workflow-node", serde_json::json!({ "tenant": tenant, "graph": graph_id, "node": nid }));
-        };
-        let log_state = Arc::clone(&state);
-        let log_graph = graph.clone();
-        let mut on_log = |nid: u32, msg: &str, ms: u128| {
-            let label = log_graph.node(nid).map(|n| n.kind.label()).unwrap_or("node");
-            events::publish(
-                &log_state.events,
-                "workflow-log",
-                serde_json::json!({ "tenant": tenant, "graph": graph_id, "node": nid, "label": label, "message": msg, "ms": ms as u64 }),
-            );
-        };
-        let emit_state = Arc::clone(&state);
-        let mut emit = |ev: &str| fire_event(&emit_state, tenant, graph_id, ev.to_string());
-        let result = workflows::run_dag_eventful(&graph, &ctx, &mut on_node, &mut on_log, &mut emit);
-        drop(ctx); // closes the UI channel → its drain thread ends
-        let _ = drain.join();
+        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, None);
 
-        let (ok, summary) = match &result {
-            Ok(outs) => (true, format!("ran {} node(s)", outs.len())),
-            Err(e) => (false, e.clone()),
-        };
-
-        {
-            let mut a = state.activity.lock().unwrap();
-            let e = a.entry((tenant, graph_id)).or_default();
-            if e.running > 0 {
-                e.running -= 1;
-            }
-            if e.running == 0 {
-                e.current = None;
-            }
-        }
+        mark_run_finished(&state, tenant, graph_id);
         if ok {
             log::info!("workflow '{}' ({tenant}/{graph_id}) ok: {summary}", graph.name);
         } else {
@@ -159,65 +113,285 @@ pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: u32) {
         events::publish(
             &state.events,
             "workflow-run",
-            serde_json::json!({ "tenant": tenant, "graph": graph_id, "name": graph.name, "ok": ok, "summary": summary }),
+            serde_json::json!({ "tenant": tenant, "graph": graph_id, "name": graph.name, "ok": ok, "summary": summary, "run_id": run_id }),
         );
 
         // Release the slot; drain a queued fire if the policy buffered one.
         let drain_queued = state.engine.lock().unwrap().on_finish(tenant, graph_id);
         if drain_queued {
             state.engine.lock().unwrap().on_spawn(tenant, graph_id);
-            spawn_graph_run(&state, tenant, graph_id);
+            spawn_graph_run(&state, tenant, graph_id, source);
         }
     });
 }
 
-/// Fire an in-graph event: (re)run the matching `OnEvent` handler subtree as a decoupled,
-/// concurrent sub-run — UNLESS that `(tenant, graph, event)` handler is already running, in
-/// which case the fire is dropped (coalesced). This is the async "skip if the path is still
-/// running" behavior `EmitEvent` provides. Nested `EmitEvent`s inside a handler recurse here.
-pub fn fire_event(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, event: String) {
-    // Resolve the subscriber; no `OnEvent` for this name → nothing to do.
-    let Some(graph) = state::find_graph(&state.store, tenant, graph_id) else { return };
-    let entry = match workflows::on_event_node(&graph, &event) {
-        Some(entry) => entry,
-        None => return,
-    };
-    // Guard: one handler run per (tenant, graph, event) at a time — coalesce-drop.
-    let key = (tenant, graph_id, event.clone());
-    {
-        let mut guard = state.event_runs.lock().unwrap();
-        if !guard.insert(key.clone()) {
-            log::debug!("event '{event}' ({tenant}/{graph_id}) dropped — handler still running");
-            return;
+/// Mark a run started in the live activity map: bump the in-flight count and record the
+/// current run id + trigger source (shown in the graph list).
+fn mark_run_started(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, run_id: Uuid, trigger: &str) {
+    let mut a = state.activity.lock().unwrap();
+    let e = a.entry((tenant, graph_id)).or_default();
+    e.running += 1;
+    e.run_id = Some(run_id);
+    e.trigger = Some(trigger.to_string());
+    e.pod_name = Some(state.pod_name.clone());
+}
+
+/// Mark a run finished in the live activity map: drop the in-flight count, clearing the
+/// current node / run id / trigger once the last run of this graph completes.
+fn mark_run_finished(state: &Arc<AppState>, tenant: Uuid, graph_id: u32) {
+    let mut a = state.activity.lock().unwrap();
+    let e = a.entry((tenant, graph_id)).or_default();
+    if e.running > 0 {
+        e.running -= 1;
+    }
+    if e.running == 0 {
+        e.current = None;
+        e.run_id = None;
+        e.trigger = None;
+        e.pod_name = None;
+    }
+}
+
+/// The shared run body: builds the tenant run context, wires SSE progress + run-log
+/// persistence (per-node lines only when the graph has debug on; the run-level summary
+/// always), runs either the full DAG (`entry = None`) or an `OnEvent` subtree, finalizes
+/// the run record, and returns `(ok, summary)`.
+fn execute_run(
+    state: &Arc<AppState>,
+    tenant: Uuid,
+    graph: &WfGraph,
+    run_id: Uuid,
+    entry: Option<u32>,
+) -> (bool, String) {
+    let (ctx, drain) = build_run_context(state, tenant);
+    let graph_id = graph.id;
+    let debug = graph.debug;
+    let labels: std::collections::HashMap<u32, &'static str> =
+        graph.nodes.iter().map(|n| (n.id, n.kind.label())).collect();
+    let logs = std::rc::Rc::new(std::cell::RefCell::new(Vec::<RunLogLine>::new()));
+
+    let prog = Arc::clone(state);
+    let node_logs = logs.clone();
+    let node_labels = labels.clone();
+    let mut on_node = |nid: u32| {
+        prog.activity.lock().unwrap().entry((tenant, graph_id)).or_default().current = Some(nid);
+        events::publish(&prog.events, "workflow-node", serde_json::json!({ "tenant": tenant, "graph": graph_id, "node": nid, "run_id": run_id }));
+        if debug {
+            node_logs.borrow_mut().push(RunLogLine {
+                node_id: Some(nid),
+                label: node_labels.get(&nid).map(|s| s.to_string()),
+                kind: "node".into(),
+                message: node_labels.get(&nid).copied().unwrap_or("node").to_string(),
+            });
         }
+    };
+    let log_state = Arc::clone(state);
+    let log_logs = logs.clone();
+    let mut on_log = |nid: u32, msg: &str, ms: u128| {
+        let label = labels.get(&nid).copied().unwrap_or("node");
+        events::publish(
+            &log_state.events,
+            "workflow-log",
+            serde_json::json!({ "tenant": tenant, "graph": graph_id, "node": nid, "label": label, "message": msg, "ms": ms as u64, "run_id": run_id }),
+        );
+        log_logs.borrow_mut().push(RunLogLine {
+            node_id: Some(nid),
+            label: Some(label.to_string()),
+            kind: "log".into(),
+            message: msg.to_string(),
+        });
+    };
+    let emit_state = Arc::clone(state);
+    let emit_name = graph.name.clone();
+    let mut emit = |ev: &str| {
+        fire_event(
+            &emit_state,
+            tenant,
+            EventSource::Graph { id: graph_id, name: emit_name.clone() },
+            ev.to_string(),
+            Some(run_id),
+        )
+    };
+
+    let result = match entry {
+        Some(e) => workflows::run_subpath_eventful(graph, &ctx, e, &mut on_node, &mut on_log, &mut emit),
+        None => workflows::run_dag_eventful(graph, &ctx, &mut on_node, &mut on_log, &mut emit),
+    };
+    drop(ctx); // closes the UI channel → its drain thread ends
+    let _ = drain.join();
+
+    let (ok, summary) = match &result {
+        Ok(outs) => (true, format!("ran {} node(s)", outs.len())),
+        Err(e) => (false, e.clone()),
+    };
+    let buffered = logs.borrow().clone();
+    workflows::repo::insert_run_logs(&state.db, run_id, &buffered);
+    workflows::repo::finish_run(
+        &state.db,
+        run_id,
+        if ok { RunStatus::Ok } else { RunStatus::Failed },
+        &summary,
+    );
+    (ok, summary)
+}
+
+/// Fire an event into the tenant bus. Every ENABLED graph in `tenant` with an `OnEvent`
+/// for `event` spawns its handler subtree as a decoupled, concurrent sub-run — unless that
+/// listening graph's `(tenant, graph, event)` handler is already running, in which case the
+/// fire is dropped for that graph (coalesced) and logged as a skip. The emitter logs the
+/// dispatch; each listener logs that it was triggered (by which graph) or skipped.
+/// `emitting_run_id` is the emitter's run, so the dispatch line attaches to its history.
+pub fn fire_event(
+    state: &Arc<AppState>,
+    tenant: Uuid,
+    source: EventSource,
+    event: String,
+    emitting_run_id: Option<Uuid>,
+) {
+    // Snapshot listeners (don't hold the store lock while spawning).
+    let listeners: Vec<(u32, String, u32)> = {
+        let s = state.store.lock().unwrap();
+        s.iter()
+            .filter(|(t, g)| *t == tenant && g.enabled)
+            .filter_map(|(_, g)| workflows::on_event_node(g, &event).map(|e| (g.id, g.name.clone(), e)))
+            .collect()
+    };
+    let (emitter_id, emitter_name) = match &source {
+        EventSource::Graph { id, name } => (Some(*id), name.clone()),
+        EventSource::System { label } => (None, format!("system:{label}")),
+    };
+
+    // Dispatch log on the emitter (live + history).
+    let names: Vec<String> = listeners.iter().map(|(_, n, _)| n.clone()).collect();
+    events::publish(
+        &state.events,
+        "workflow-event",
+        serde_json::json!({ "tenant": tenant, "graph": emitter_id, "event": event, "kind": "dispatch", "by_graph": emitter_name, "dispatched_to": names, "count": listeners.len() }),
+    );
+    if let Some(rid) = emitting_run_id {
+        workflows::repo::insert_run_logs(
+            &state.db,
+            rid,
+            &[RunLogLine {
+                node_id: None,
+                label: None,
+                kind: "dispatch".into(),
+                message: format!("Dispatched '{}' to {} listener(s)", event, listeners.len()),
+            }],
+        );
     }
 
+    for (listener_id, listener_name, entry) in listeners {
+        // Global backstop: don't let an event storm exceed the pod's run ceiling.
+        if state.engine.lock().unwrap().total_running() >= WF_GLOBAL_CAP {
+            events::publish(
+                &state.events,
+                "workflow-event",
+                serde_json::json!({ "tenant": tenant, "graph": listener_id, "event": event, "kind": "skip", "by_graph": emitter_name, "reason": "capacity" }),
+            );
+            continue;
+        }
+        // Coalesce-drop per listening graph: skip if its handler is already running.
+        let key = (tenant, listener_id, event.clone());
+        {
+            let mut guard = state.event_runs.lock().unwrap();
+            if !guard.insert(key.clone()) {
+                events::publish(
+                    &state.events,
+                    "workflow-event",
+                    serde_json::json!({ "tenant": tenant, "graph": listener_id, "event": event, "kind": "skip", "by_graph": emitter_name }),
+                );
+                if let Some(rid) = emitting_run_id {
+                    workflows::repo::insert_run_logs(
+                        &state.db,
+                        rid,
+                        &[RunLogLine {
+                            node_id: None,
+                            label: None,
+                            kind: "skip".into(),
+                            message: format!("Listener '{listener_name}' skipped '{event}' — handler still running"),
+                        }],
+                    );
+                }
+                continue;
+            }
+        }
+        let _ = listener_name; // listener's display name comes from its graph in the handler
+        spawn_event_handler(
+            state, tenant, listener_id, entry, event.clone(), emitter_id, emitter_name.clone(), key,
+        );
+    }
+}
+
+/// Emit a tenant event from system code (login, user-create, chat, alerts…). The seam for
+/// future `System-*` events — drives the same fan-out as a graph emit, with no emitting run.
+/// Unused today; wired up when system emitters land.
+#[allow(dead_code)]
+pub fn fire_system_event(state: &Arc<AppState>, tenant: Uuid, label: &str, event: String) {
+    fire_event(state, tenant, EventSource::System { label: label.to_string() }, event, None);
+}
+
+/// Spawn one `OnEvent` handler sub-run for a listening graph (the coalesce key is already
+/// reserved by the caller and released here on finish). Visible like any other run: it gets
+/// a run record (trigger = event, source = the emitter) and live activity.
+#[allow(clippy::too_many_arguments)]
+fn spawn_event_handler(
+    state: &Arc<AppState>,
+    tenant: Uuid,
+    listener_id: u32,
+    entry: u32,
+    event: String,
+    emitter_id: Option<u32>,
+    emitter_name: String,
+    key: (Uuid, u32, String),
+) {
+    let graph: WfGraph = match state::find_graph(&state.store, tenant, listener_id) {
+        Some(g) => g,
+        None => {
+            state.event_runs.lock().unwrap().remove(&key);
+            return;
+        }
+    };
     let state = Arc::clone(state);
     std::thread::spawn(move || {
-        events::publish(&state.events, "workflow-event", serde_json::json!({ "tenant": tenant, "graph": graph_id, "event": event }));
-        let (ctx, drain) = build_run_context(&state, tenant);
-        let prog = Arc::clone(&state);
-        let mut on_node = |nid: u32| {
-            events::publish(&prog.events, "workflow-node", serde_json::json!({ "tenant": tenant, "graph": graph_id, "node": nid }));
-        };
-        let log_state = Arc::clone(&state);
-        let log_graph = graph.clone();
-        let mut on_log = |nid: u32, msg: &str, ms: u128| {
-            let label = log_graph.node(nid).map(|n| n.kind.label()).unwrap_or("node");
-            events::publish(
-                &log_state.events,
-                "workflow-log",
-                serde_json::json!({ "tenant": tenant, "graph": graph_id, "node": nid, "label": label, "message": msg, "ms": ms as u64 }),
-            );
-        };
-        let emit_state = Arc::clone(&state);
-        let mut emit = |ev: &str| fire_event(&emit_state, tenant, graph_id, ev.to_string());
-        let result = workflows::run_subpath_eventful(&graph, &ctx, entry, &mut on_node, &mut on_log, &mut emit);
-        drop(ctx);
-        let _ = drain.join();
-        if let Err(e) = &result {
-            log::warn!("event handler '{event}' ({tenant}/{graph_id}) failed: {e}");
+        let run_id = Uuid::new_v4();
+        mark_run_started(&state, tenant, listener_id, run_id, "event");
+        workflows::repo::insert_run(
+            &state.db, tenant, run_id, listener_id, &graph.name, TriggerSource::Event, emitter_id,
+            Some(&emitter_name), Some(&event), &state.pod_name,
+        );
+        events::publish(
+            &state.events,
+            "workflow-event",
+            serde_json::json!({ "tenant": tenant, "graph": listener_id, "event": event, "kind": "trigger", "by_graph": emitter_name, "run_id": run_id }),
+        );
+        events::publish(
+            &state.events,
+            "workflow-run-start",
+            serde_json::json!({ "tenant": tenant, "graph": listener_id, "name": graph.name, "run_id": run_id, "trigger": "event" }),
+        );
+        workflows::repo::insert_run_logs(
+            &state.db,
+            run_id,
+            &[RunLogLine {
+                node_id: None,
+                label: None,
+                kind: "trigger".into(),
+                message: format!("Triggered by {emitter_name} via event '{event}'"),
+            }],
+        );
+
+        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, Some(entry));
+
+        mark_run_finished(&state, tenant, listener_id);
+        if !ok {
+            log::warn!("event handler '{event}' ({tenant}/{listener_id}) failed: {summary}");
         }
+        events::publish(
+            &state.events,
+            "workflow-run",
+            serde_json::json!({ "tenant": tenant, "graph": listener_id, "name": graph.name, "ok": ok, "summary": summary, "run_id": run_id }),
+        );
         state.event_runs.lock().unwrap().remove(&key);
     });
 }

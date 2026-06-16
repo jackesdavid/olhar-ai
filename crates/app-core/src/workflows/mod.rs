@@ -10,9 +10,10 @@ pub mod node;
 pub mod repo;
 
 pub use domain::{
-    ConcurrencyPolicy, Edge, Graph, GraphNode, NodeKind, Port, PortType, Trigger, Viewport,
-    Workflows, EXEC_IN, EXEC_OUT,
+    ConcurrencyPolicy, Edge, EventSource, Graph, GraphNode, NodeKind, Port, PortType, RunStatus,
+    Trigger, TriggerSource, Viewport, Workflows, EXEC_IN, EXEC_OUT,
 };
+pub use repo::{EventCategory, RunLogLine, RunRecord, TenantEvent};
 pub use engine::{
     on_event_node, run_dag, run_dag_eventful, run_dag_with, run_subpath_eventful, Fire,
     WorkflowEngine,

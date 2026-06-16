@@ -17,7 +17,6 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use app_core::alerts::AlertLevel;
 use app_core::workflows::{
     self, ConcurrencyPolicy, Graph as WfGraph, NodeKind as WfNodeKind, Trigger, Viewport, Workflows,
 };
@@ -31,7 +30,12 @@ pub fn router() -> Router<AppState> {
         .route("/workflows", get(list).post(create))
         .route("/workflows/catalog", get(catalog))
         .route("/workflows/runs", get(run_states))
+        .route("/workflows/runs/history", get(run_history))
+        .route("/workflows/runs/:run_id/logs", get(run_logs))
         .route("/workflows/events", get(events_stream))
+        .route("/workflows/event-registry", get(list_events).post(create_event))
+        .route("/workflows/event-registry/:name", axum::routing::delete(delete_event))
+        .route("/workflows/event-categories", get(list_categories).post(create_category))
         .route("/workflows/:id", axum::routing::patch(rename).delete(remove))
         .route("/workflows/:id/trigger", put(set_trigger))
         .route("/workflows/:id/concurrency", put(set_concurrency))
@@ -141,6 +145,119 @@ async fn run_states(UserClaims(c): UserClaims) -> Result<Json<Value>, ApiErr> {
     }
 }
 
+#[derive(Deserialize)]
+struct HistoryQuery {
+    graph: Option<u32>,
+    limit: Option<i64>,
+}
+
+/// Recent run history for this tenant (newest first), optionally filtered to one graph.
+/// Proxies sentinel-flow's persisted run log.
+async fn run_history(
+    UserClaims(c): UserClaims,
+    Query(q): Query<HistoryQuery>,
+) -> Result<Json<Value>, ApiErr> {
+    auth::require(&c, "workflows.read")?;
+    let tid = tenant_of(&c)?;
+    let mut url = format!("{}/runs/history?tenant={}", flow_base(), tid);
+    if let Some(g) = q.graph {
+        url.push_str(&format!("&graph={g}"));
+    }
+    if let Some(l) = q.limit {
+        url.push_str(&format!("&limit={l}"));
+    }
+    Ok(Json(flow_get_json(&url).await))
+}
+
+/// All persisted signal lines for one of this tenant's runs. Proxies sentinel-flow.
+async fn run_logs(UserClaims(c): UserClaims, Path(run_id): Path<Uuid>) -> Result<Json<Value>, ApiErr> {
+    auth::require(&c, "workflows.read")?;
+    let tid = tenant_of(&c)?;
+    let url = format!("{}/runs/{}/logs?tenant={}", flow_base(), run_id, tid);
+    Ok(Json(flow_get_json(&url).await))
+}
+
+/// GET a sentinel-flow URL and parse its JSON body, defaulting to `[]` on any failure
+/// (history/logs are best-effort views).
+async fn flow_get_json(url: &str) -> Value {
+    match reqwest::Client::new().get(url).send().await {
+        Ok(r) if r.status().is_success() => r.json::<Value>().await.unwrap_or_else(|_| json!([])),
+        _ => json!([]),
+    }
+}
+
+// ---- event registry + categories (per tenant) ------------------------------
+
+/// The tenant's registered events (name + category + source), for the editor palette.
+async fn list_events(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Value>, ApiErr> {
+    auth::require(&c, "workflows.read")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let events = blocking(move || workflows::repo::list_events(&db, tid)).await?;
+    Ok(Json(serde_json::to_value(events).unwrap_or_else(|_| json!([]))))
+}
+
+#[derive(Deserialize)]
+struct CreateEventReq {
+    name: String,
+    category: Option<String>,
+    description: Option<String>,
+}
+
+/// Register a new tenant event (idempotent), creating its category if needed.
+async fn create_event(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(b): Json<CreateEventReq>,
+) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    let name = b.name.trim().to_string();
+    if name.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "event name is required"));
+    }
+    let category = b.category.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("General").to_string();
+    let description = b.description.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let db = st.db.clone();
+    blocking(move || workflows::repo::create_event(&db, tid, &name, &category, description.as_deref(), None)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Remove a registered tenant event.
+async fn delete_event(UserClaims(c): UserClaims, State(st): State<AppState>, Path(name): Path<String>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    blocking(move || workflows::repo::delete_event(&db, tid, &name)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The tenant's event categories (name + source).
+async fn list_categories(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Value>, ApiErr> {
+    auth::require(&c, "workflows.read")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let cats = blocking(move || workflows::repo::list_categories(&db, tid)).await?;
+    Ok(Json(serde_json::to_value(cats).unwrap_or_else(|_| json!([]))))
+}
+
+/// Create a (user) event category, idempotently.
+async fn create_category(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(b): Json<NameReq>,
+) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    let name = b.name.trim().to_string();
+    if name.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "category name is required"));
+    }
+    let db = st.db.clone();
+    blocking(move || workflows::repo::create_category(&db, tid, &name, "user")).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // ---- live event relay (SSE) -------------------------------------------------
 
 #[derive(Deserialize)]
@@ -244,7 +361,6 @@ async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id):
 struct TriggerReq {
     kind: String,
     every_secs: Option<u64>,
-    min_level: Option<String>,
 }
 
 async fn set_trigger(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<TriggerReq>) -> Result<StatusCode, ApiErr> {
@@ -254,9 +370,6 @@ async fn set_trigger(UserClaims(c): UserClaims, State(st): State<AppState>, Path
         let trigger = match b.kind.as_str() {
             "manual" => Trigger::Manual,
             "cron" => Trigger::Cron { every_secs: b.every_secs.unwrap_or(60).max(1) },
-            "on_new_alert" => Trigger::OnNewAlert {
-                min_level: b.min_level.as_deref().and_then(AlertLevel::parse).unwrap_or(AlertLevel::Info),
-            },
             other => return Err(format!("unknown trigger kind '{other}'")),
         };
         let g = wf.graph_mut(id).ok_or("graph not found")?;

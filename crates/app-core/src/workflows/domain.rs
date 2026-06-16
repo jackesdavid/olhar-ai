@@ -534,20 +534,66 @@ pub struct Edge {
 }
 
 /// How a graph fires. A property of the engine/graph — NOT a node.
+///
+/// Alert reactivity used to live here as `OnNewAlert`; it was retired in favor of the
+/// cross-graph event system (a future `System-Alerts` event an `OnEvent` can listen for).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Trigger {
     /// Only fired by Run-now.
     Manual,
     /// Engine poller starts a fresh one-shot run every `every_secs`.
     Cron { every_secs: u64 },
-    /// Engine starts one run per new alert at or above `min_level`.
-    OnNewAlert { min_level: AlertLevel },
 }
 
 impl Default for Trigger {
     fn default() -> Self {
         Trigger::Manual
     }
+}
+
+/// What kicked off a run — recorded on every run so the UI can show who/what triggered it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TriggerSource {
+    Manual,
+    Cron,
+    /// A cross-graph (or future system) event fired this graph's `OnEvent` handler.
+    Event,
+}
+
+impl TriggerSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TriggerSource::Manual => "manual",
+            TriggerSource::Cron => "cron",
+            TriggerSource::Event => "event",
+        }
+    }
+}
+
+/// Terminal state of a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RunStatus {
+    Running,
+    Ok,
+    Failed,
+}
+
+impl RunStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunStatus::Running => "running",
+            RunStatus::Ok => "ok",
+            RunStatus::Failed => "failed",
+        }
+    }
+}
+
+/// Who emitted an event into the tenant bus. A graph today; system code (login,
+/// user-create, chat, alerts…) in the future via the same fan-out.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EventSource {
+    Graph { id: u32, name: String },
+    System { label: String },
 }
 
 /// What happens when a graph fires while a previous run of the same graph is in flight.

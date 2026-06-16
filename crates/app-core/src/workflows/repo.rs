@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::db::Db;
 
-use super::domain::Graph;
+use super::domain::{Graph, RunStatus, TriggerSource};
 
 /// On-disk shape of the legacy `workflows.json` — one object holding the graph array.
 #[derive(serde::Deserialize)]
@@ -185,5 +185,392 @@ pub fn save_cron_fired(db: &Db, tenant_id: Uuid, graph_id: u32, fired_ms: u64) {
     });
     if let Err(e) = res {
         log::error!("workflows::repo::save_cron_fired failed: {e}");
+    }
+}
+
+// ---- event registry + categories (per tenant) ------------------------------
+
+/// A tenant-scoped event category. `source` is `user` or `system`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EventCategory {
+    pub name: String,
+    pub source: String,
+}
+
+/// A registered event other graphs can emit/listen for, grouped by `category`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TenantEvent {
+    pub name: String,
+    pub category: String,
+    pub source: String,
+    pub description: Option<String>,
+    pub created_by_graph: Option<u32>,
+}
+
+/// The tenant's event categories, ordered by name. Empty on error.
+pub fn list_categories(db: &Db, tenant_id: Uuid) -> Vec<EventCategory> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT name, source FROM tenant_event_categories WHERE tenant_id = $1 ORDER BY name",
+        )
+        .bind(tenant_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            log::error!("workflows::repo::list_categories query failed: {e}");
+            Vec::new()
+        })
+        .into_iter()
+        .map(|(name, source)| EventCategory { name, source })
+        .collect()
+    })
+}
+
+/// Create a tenant event category (idempotent). Best-effort.
+pub fn create_category(db: &Db, tenant_id: Uuid, name: &str, source: &str) {
+    let pool = db.pool();
+    let name = name.to_string();
+    let source = source.to_string();
+    let res: Result<_, sqlx::Error> = db.block(async move {
+        sqlx::query(
+            "INSERT INTO tenant_event_categories (tenant_id, name, source) VALUES ($1, $2, $3)
+             ON CONFLICT (tenant_id, name) DO NOTHING",
+        )
+        .bind(tenant_id)
+        .bind(name)
+        .bind(source)
+        .execute(&pool)
+        .await
+    });
+    if let Err(e) = res {
+        log::error!("workflows::repo::create_category failed: {e}");
+    }
+}
+
+/// The tenant's registered events, ordered by category then name. Empty on error.
+pub fn list_events(db: &Db, tenant_id: Uuid) -> Vec<TenantEvent> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_as::<_, (String, String, String, Option<String>, Option<i64>)>(
+            "SELECT name, category, source, description, created_by_graph
+             FROM tenant_events WHERE tenant_id = $1 ORDER BY category, name",
+        )
+        .bind(tenant_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            log::error!("workflows::repo::list_events query failed: {e}");
+            Vec::new()
+        })
+        .into_iter()
+        .map(|(name, category, source, description, gid)| TenantEvent {
+            name,
+            category,
+            source,
+            description,
+            created_by_graph: gid.map(|v| v as u32),
+        })
+        .collect()
+    })
+}
+
+/// Register an event (idempotent on name); also ensures its category row exists.
+/// Best-effort.
+pub fn create_event(
+    db: &Db,
+    tenant_id: Uuid,
+    name: &str,
+    category: &str,
+    description: Option<&str>,
+    created_by_graph: Option<u32>,
+) {
+    let pool = db.pool();
+    let name = name.to_string();
+    let category = category.to_string();
+    let description = description.map(|s| s.to_string());
+    let res: Result<(), sqlx::Error> = db.block(async move {
+        let mut tx = pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO tenant_event_categories (tenant_id, name, source) VALUES ($1, $2, 'user')
+             ON CONFLICT (tenant_id, name) DO NOTHING",
+        )
+        .bind(tenant_id)
+        .bind(&category)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO tenant_events (tenant_id, name, category, source, description, created_by_graph)
+             VALUES ($1, $2, $3, 'user', $4, $5)
+             ON CONFLICT (tenant_id, name) DO UPDATE SET category = EXCLUDED.category, description = EXCLUDED.description",
+        )
+        .bind(tenant_id)
+        .bind(&name)
+        .bind(&category)
+        .bind(&description)
+        .bind(created_by_graph.map(|v| v as i64))
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    });
+    if let Err(e) = res {
+        log::error!("workflows::repo::create_event failed: {e}");
+    }
+}
+
+/// Remove a registered event. Best-effort.
+pub fn delete_event(db: &Db, tenant_id: Uuid, name: &str) {
+    let pool = db.pool();
+    let name = name.to_string();
+    let res: Result<_, sqlx::Error> = db.block(async move {
+        sqlx::query("DELETE FROM tenant_events WHERE tenant_id = $1 AND name = $2")
+            .bind(tenant_id)
+            .bind(name)
+            .execute(&pool)
+            .await
+    });
+    if let Err(e) = res {
+        log::error!("workflows::repo::delete_event failed: {e}");
+    }
+}
+
+// ---- run history + per-run logs --------------------------------------------
+
+/// A persisted workflow run. Event-triggered runs carry the source graph + event.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RunRecord {
+    pub id: Uuid,
+    pub graph_id: u32,
+    pub graph_name: String,
+    pub trigger_source: String,
+    pub source_graph_id: Option<u32>,
+    pub source_graph_name: Option<String>,
+    pub event_name: Option<String>,
+    pub pod_name: String,
+    pub status: String,
+    pub result_summary: Option<String>,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+}
+
+/// One buffered signal line for a run (node activity, log, or event dispatch/trigger/skip).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RunLogLine {
+    pub node_id: Option<u32>,
+    pub label: Option<String>,
+    pub kind: String,
+    pub message: String,
+}
+
+/// Insert a freshly-started run (`status='running'`). Best-effort.
+#[allow(clippy::too_many_arguments)]
+pub fn insert_run(
+    db: &Db,
+    tenant_id: Uuid,
+    id: Uuid,
+    graph_id: u32,
+    graph_name: &str,
+    trigger: TriggerSource,
+    source_graph_id: Option<u32>,
+    source_graph_name: Option<&str>,
+    event_name: Option<&str>,
+    pod_name: &str,
+) {
+    let pool = db.pool();
+    let graph_name = graph_name.to_string();
+    let source_graph_name = source_graph_name.map(|s| s.to_string());
+    let event_name = event_name.map(|s| s.to_string());
+    let pod_name = pod_name.to_string();
+    let res: Result<_, sqlx::Error> = db.block(async move {
+        sqlx::query(
+            "INSERT INTO workflow_runs
+                (id, tenant_id, graph_id, graph_name, trigger_source,
+                 source_graph_id, source_graph_name, event_name, pod_name, status, started_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running', $10)",
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .bind(graph_id as i64)
+        .bind(graph_name)
+        .bind(trigger.as_str())
+        .bind(source_graph_id.map(|v| v as i64))
+        .bind(source_graph_name)
+        .bind(event_name)
+        .bind(pod_name)
+        .bind(crate::alerts::now_rfc3339())
+        .execute(&pool)
+        .await
+    });
+    if let Err(e) = res {
+        log::error!("workflows::repo::insert_run failed: {e}");
+    }
+}
+
+/// Mark a run finished with its terminal status + summary. Best-effort.
+pub fn finish_run(db: &Db, run_id: Uuid, status: RunStatus, summary: &str) {
+    let pool = db.pool();
+    let summary = summary.to_string();
+    let res: Result<_, sqlx::Error> = db.block(async move {
+        sqlx::query(
+            "UPDATE workflow_runs SET status = $2, result_summary = $3, ended_at = $4 WHERE id = $1",
+        )
+        .bind(run_id)
+        .bind(status.as_str())
+        .bind(summary)
+        .bind(crate::alerts::now_rfc3339())
+        .execute(&pool)
+        .await
+    });
+    if let Err(e) = res {
+        log::error!("workflows::repo::finish_run failed: {e}");
+    }
+}
+
+/// Batch-insert buffered signal lines for a run. Best-effort.
+pub fn insert_run_logs(db: &Db, run_id: Uuid, batch: &[RunLogLine]) {
+    if batch.is_empty() {
+        return;
+    }
+    let pool = db.pool();
+    let batch = batch.to_vec();
+    let res: Result<(), sqlx::Error> = db.block(async move {
+        let mut qb = sqlx::QueryBuilder::new(
+            "INSERT INTO workflow_run_logs (run_id, node_id, label, kind, message) ",
+        );
+        qb.push_values(batch.iter(), |mut b, line| {
+            b.push_bind(run_id)
+                .push_bind(line.node_id.map(|v| v as i64))
+                .push_bind(line.label.clone())
+                .push_bind(line.kind.clone())
+                .push_bind(line.message.clone());
+        });
+        qb.build().execute(&pool).await?;
+        Ok(())
+    });
+    if let Err(e) = res {
+        log::error!("workflows::repo::insert_run_logs failed: {e}");
+    }
+}
+
+/// Recent runs for a tenant, newest first; optionally filtered to one graph. Empty on error.
+pub fn list_runs(db: &Db, tenant_id: Uuid, graph_id: Option<u32>, limit: i64) -> Vec<RunRecord> {
+    let pool = db.pool();
+    db.block(async move {
+        let rows = if let Some(gid) = graph_id {
+            sqlx::query_as::<_, RunRow>(
+                "SELECT id, graph_id, graph_name, trigger_source, source_graph_id, source_graph_name,
+                        event_name, pod_name, status, result_summary, started_at, ended_at
+                 FROM workflow_runs WHERE tenant_id = $1 AND graph_id = $2
+                 ORDER BY started_at DESC LIMIT $3",
+            )
+            .bind(tenant_id)
+            .bind(gid as i64)
+            .bind(limit)
+            .fetch_all(&pool)
+            .await
+        } else {
+            sqlx::query_as::<_, RunRow>(
+                "SELECT id, graph_id, graph_name, trigger_source, source_graph_id, source_graph_name,
+                        event_name, pod_name, status, result_summary, started_at, ended_at
+                 FROM workflow_runs WHERE tenant_id = $1
+                 ORDER BY started_at DESC LIMIT $2",
+            )
+            .bind(tenant_id)
+            .bind(limit)
+            .fetch_all(&pool)
+            .await
+        };
+        rows.unwrap_or_else(|e| {
+            log::error!("workflows::repo::list_runs query failed: {e}");
+            Vec::new()
+        })
+        .into_iter()
+        .map(RunRow::into_record)
+        .collect()
+    })
+}
+
+/// All signal lines for one run, oldest first. Empty on error or if the run isn't this tenant's.
+pub fn list_run_logs(db: &Db, tenant_id: Uuid, run_id: Uuid) -> Vec<RunLogLine> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_as::<_, (Option<i64>, Option<String>, String, String)>(
+            "SELECT l.node_id, l.label, l.kind, l.message
+             FROM workflow_run_logs l JOIN workflow_runs r ON r.id = l.run_id
+             WHERE l.run_id = $1 AND r.tenant_id = $2 ORDER BY l.id",
+        )
+        .bind(run_id)
+        .bind(tenant_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            log::error!("workflows::repo::list_run_logs query failed: {e}");
+            Vec::new()
+        })
+        .into_iter()
+        .map(|(node_id, label, kind, message)| RunLogLine {
+            node_id: node_id.map(|v| v as u32),
+            label,
+            kind,
+            message,
+        })
+        .collect()
+    })
+}
+
+/// On boot, reconcile this pod's runs left `running` by a crash (runs die with the
+/// process). Scoped to `pod_name` so a sibling pod's live runs aren't clobbered.
+pub fn mark_orphaned_runs(db: &Db, pod_name: &str) {
+    let pool = db.pool();
+    let pod_name = pod_name.to_string();
+    let res: Result<_, sqlx::Error> = db.block(async move {
+        sqlx::query(
+            "UPDATE workflow_runs SET status = 'failed', result_summary = 'interrupted (pod restart)', ended_at = $2
+             WHERE status = 'running' AND pod_name = $1",
+        )
+        .bind(pod_name)
+        .bind(crate::alerts::now_rfc3339())
+        .execute(&pool)
+        .await
+    });
+    if let Err(e) = res {
+        log::error!("workflows::repo::mark_orphaned_runs failed: {e}");
+    }
+}
+
+/// Row shape for `workflow_runs` reads; converted to the public [`RunRecord`].
+#[derive(sqlx::FromRow)]
+struct RunRow {
+    id: Uuid,
+    graph_id: i64,
+    graph_name: String,
+    trigger_source: String,
+    source_graph_id: Option<i64>,
+    source_graph_name: Option<String>,
+    event_name: Option<String>,
+    pod_name: String,
+    status: String,
+    result_summary: Option<String>,
+    started_at: String,
+    ended_at: Option<String>,
+}
+
+impl RunRow {
+    fn into_record(self) -> RunRecord {
+        RunRecord {
+            id: self.id,
+            graph_id: self.graph_id as u32,
+            graph_name: self.graph_name,
+            trigger_source: self.trigger_source,
+            source_graph_id: self.source_graph_id.map(|v| v as u32),
+            source_graph_name: self.source_graph_name,
+            event_name: self.event_name,
+            pod_name: self.pod_name,
+            status: self.status,
+            result_summary: self.result_summary,
+            started_at: self.started_at,
+            ended_at: self.ended_at,
+        }
     }
 }
