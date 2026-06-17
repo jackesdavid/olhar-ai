@@ -17,6 +17,10 @@ matches your task:
   discovery + IP auto-reconcile, health reporting, the restart command, and `install.sh`.
 - **[Workflows engine](docs/ref/workflows.md)** — `sentinel-flow`: graph execution, loops,
   cross-graph events, run history, camera binding. (Node catalog: [docs/workflow-nodes.md](docs/workflow-nodes.md).)
+- **[Map (floor plan)](docs/ref/map.md)** — the Map page: top-down 3D blueprint editor (rooms as
+  zones, drawn walls + SVG furniture markers, camera FOV), the `RecordPresence` node + live
+  categorized presence pulse, the vertical file layout, and build status. (Active: branch
+  `feat/map-redesign`. Use the `/map-feature` skill to continue it.)
 
 ## Repo layout
 
@@ -52,7 +56,8 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
 - **Timestamps are RFC3339 `text`**, not `timestamptz` — sqlx is built without the chrono/time
   feature, so it can't decode `timestamptz`. Generate with `app_core::alerts::now_rfc3339()`.
 - **Migrations**: `crates/app-core/migrations/NNNN_*.sql`, embedded via `sqlx::migrate!`, applied
-  on `Db::connect` (control + flow boot). Additive; next number is 0019.
+  on `Db::connect` (control + flow boot). Additive; next number is 0021 (0019 = map_walls +
+  map_markers, 0020 = presence).
 - **Versioning**: web app = `sentinel-app/package.json` + the footer in `routes/+layout.svelte`;
   edge = `sentinel-edge/Cargo.toml` (drives `LATEST_EDGE_VERSION` + the `v*` release tag). Bump
   together for a release. Current: web **0.4.1**, edge **0.4.0**.
