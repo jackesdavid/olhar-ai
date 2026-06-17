@@ -36,7 +36,12 @@ export class PresenceStore {
     this.unsub = await onEvent("presence", (p) => this.add(p as PresenceEvent));
     this.timer = setInterval(() => this.prune(), 500);
     // Seed from recent history so presence fired just before the map opened still shows.
+    // Wait for the map's rooms to load first — otherwise locate() can't resolve a
+    // position and the replay is dropped.
     try {
+      for (let i = 0; i < 100 && this.map.loading; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
       const recent = await data.loadPresence(50);
       const now = Date.now();
       for (const r of recent) {
@@ -58,8 +63,12 @@ export class PresenceStore {
   /** Where to draw the pulse: the detecting camera, else the room centre. */
   private locate(p: PresenceEvent): { x: number; z: number } | null {
     if (p.camera) {
+      // p.camera may be a device id (uuid, how workflow nodes bind cameras) or an ip;
+      // rooms store cameras by ip, so resolve through the device list first.
+      const dev = this.map.devices.find((d) => d.id === p.camera || d.ip === p.camera);
+      const ip = dev?.ip ?? p.camera;
       for (const r of this.map.rooms) {
-        const c = r.cameras.find((cam) => cam.ip === p.camera);
+        const c = r.cameras.find((cam) => cam.ip === ip);
         if (c) return { x: r.x + c.dx, z: r.y + c.dy };
       }
     }

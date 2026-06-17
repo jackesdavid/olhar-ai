@@ -9,7 +9,9 @@
 // hinge), so they align onto walls correctly. Future swapped-in assets just declare it.
 export type IconDef = { key: string; label: string; svg: string; anchor?: [number, number] };
 
-const VB = (body: string) => `<svg viewBox="0 0 24 24" fill="currentColor">${body}</svg>`;
+// The fill value is irrelevant (MarkerGlyph overrides it with the emerald material) — use
+// a concrete colour, not `currentColor`, which SVGLoader can't parse (warns on every load).
+const VB = (body: string) => `<svg viewBox="0 0 24 24" fill="#9ca3af">${body}</svg>`;
 
 const CENTER: [number, number] = [12, 12];
 
