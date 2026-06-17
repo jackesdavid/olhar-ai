@@ -1,42 +1,55 @@
 <script lang="ts">
-  // A camera on the plan: a small emerald glyph plus a translucent field-of-view
-  // wedge fanning out along its yaw. Reads correctly from straight above. Clicking
-  // it jumps to the Live view for that camera.
+  // A camera on the plan: a small emerald body glyph plus its field-of-view rendered as a
+  // wall-occluded line-of-sight polygon (it stops at walls, like light). Coordinates are
+  // WORLD XZ (this renders in a world-space layer, not inside a room group). Clicking the
+  // body jumps to Live.
   import { T } from "@threlte/core";
-  import { DoubleSide } from "three";
+  import { DoubleSide, BufferGeometry, Float32BufferAttribute } from "three";
+  import type { MapWall } from "$lib/types";
+  import { fovPolygon } from "$lib/map/visibility";
 
   let {
     x,
     z,
     rot = 0,
-    fov: fovDeg = 62,
+    fov = 62,
     range = 4.2,
+    walls = [],
     onClick,
   }: {
     x: number;
     z: number;
-    rot?: number;
+    rot?: number; // world facing, degrees (0 = +z)
     fov?: number;
     range?: number;
+    walls?: MapWall[];
     onClick?: () => void;
   } = $props();
 
-  const RANGE = $derived(range); // grid units
-  const fov = $derived((fovDeg * Math.PI) / 180);
-
-  // rot is degrees, 0 = facing +y (down on the plan / world +z). Base offset of
-  // -90° makes the wedge's local 0-angle point along +z; rot then turns it.
-  const yaw = $derived(-Math.PI / 2 - (rot * Math.PI) / 180);
+  // Build the FOV polygon as a flat triangle-fan on the floor, occluded by walls.
+  const fovGeo = $derived.by(() => {
+    const facing = (rot * Math.PI) / 180;
+    const cone = (fov * Math.PI) / 180;
+    const steps = Math.max(48, Math.min(Math.round(fov), 180));
+    const ring = fovPolygon(x, z, facing, cone, range, walls, steps);
+    const verts: number[] = [x, 0.06, z]; // apex (camera)
+    for (const p of ring) verts.push(p.x, 0.06, p.z);
+    const idx: number[] = [];
+    for (let i = 1; i < ring.length; i++) idx.push(0, i, i + 1);
+    const g = new BufferGeometry();
+    g.setAttribute("position", new Float32BufferAttribute(verts, 3));
+    g.setIndex(idx);
+    return g;
+  });
 
   function pointer(on: boolean) {
     document.body.style.cursor = on ? "pointer" : "default";
   }
 </script>
 
-<!-- field-of-view wedge: a flat circular sector on the floor -->
-<T.Mesh position={[x, 0.06, z]} rotation={[-Math.PI / 2, 0, yaw]}>
-  <T.CircleGeometry args={[RANGE, 28, -fov / 2, fov]} />
-  <T.MeshBasicMaterial color="#34d399" transparent opacity={0.12} depthWrite={false} side={DoubleSide} />
+<!-- field-of-view: a flat polygon clipped by walls (line of sight) -->
+<T.Mesh geometry={fovGeo}>
+  <T.MeshBasicMaterial color="#34d399" transparent opacity={0.14} depthWrite={false} side={DoubleSide} />
 </T.Mesh>
 
 <!-- camera body glyph -->

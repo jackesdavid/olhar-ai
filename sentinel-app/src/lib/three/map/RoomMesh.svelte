@@ -7,16 +7,13 @@
   import { Text } from "@threlte/extras";
   import { DoubleSide } from "three";
   import type { MapRoom } from "$lib/types";
-  import CameraMarker from "./CameraMarker.svelte";
 
   let {
     room,
     selected = false,
-    onCameraClick,
   }: {
     room: MapRoom;
     selected?: boolean;
-    onCameraClick?: (ip: string) => void;
   } = $props();
 
   // Boundary stroke: a thin flat bar lying on the floor (a drawn line, not a wall).
@@ -70,15 +67,4 @@
     anchorY="middle"
   />
 
-  <!-- cameras (positioned relative to the room centre) -->
-  {#each room.cameras as cam (cam.ip)}
-    <CameraMarker
-      x={cam.dx - room.w / 2}
-      z={cam.dy - room.h / 2}
-      rot={cam.rot ?? 0}
-      fov={cam.fov}
-      range={cam.range}
-      onClick={() => onCameraClick?.(cam.ip)}
-    />
-  {/each}
 </T.Group>

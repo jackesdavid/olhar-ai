@@ -18,6 +18,7 @@
   import RoomMesh from "./RoomMesh.svelte";
   import WallLayer from "./WallLayer.svelte";
   import MarkerLayer from "./MarkerLayer.svelte";
+  import CameraLayer from "./CameraLayer.svelte";
   import DrawPreview from "./DrawPreview.svelte";
   import PresencePulse from "./PresencePulse.svelte";
 
@@ -216,11 +217,12 @@
 <GroundGrid />
 
 {#each store.rooms as room (room.id)}
-  <RoomMesh {room} selected={room.id === store.selectedRoomId} {onCameraClick} />
+  <RoomMesh {room} selected={room.id === store.selectedRoomId} />
 {/each}
 
 <WallLayer {store} />
 <MarkerLayer {store} />
+<CameraLayer {store} {onCameraClick} />
 
 {#if presence}
   {#each presence.pulses as p (p.id)}
