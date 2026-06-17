@@ -132,7 +132,7 @@
 
   // Routes that manage their own full-width/height canvas (no centered max-width
   // container, no page padding) — e.g. the workflow editor.
-  const FULL_BLEED = ["/workflows"];
+  const FULL_BLEED = ["/workflows", "/map"];
   const fullBleed = $derived(
     FULL_BLEED.some((p) => $page.url.pathname === p || $page.url.pathname.startsWith(p + "/")),
   );

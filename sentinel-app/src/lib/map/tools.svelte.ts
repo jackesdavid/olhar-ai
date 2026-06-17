@@ -8,6 +8,7 @@ export type Pt = { x: number; z: number };
 
 const GRID = 1; // snap step in grid units
 const VERTEX_SNAP = 0.4; // world-units radius to grab an existing endpoint
+const WALL_SNAP = 0.5; // world-units distance to snap a marker onto a wall line
 
 /** Round a point to the grid. */
 export function snapToGrid(p: Pt, step = GRID): Pt {
@@ -59,6 +60,38 @@ export function resolvePoint(
   const v = snapToVertex(p, opts.verts);
   if (v) return v;
   return snapToGrid(p);
+}
+
+/** Project `p` onto a segment, clamped to its ends. */
+function projectOnSegment(p: Pt, ax: number, az: number, bx: number, bz: number): Pt {
+  const dx = bx - ax;
+  const dz = bz - az;
+  const len2 = dx * dx + dz * dz;
+  if (len2 < 1e-9) return { x: ax, z: az };
+  let t = ((p.x - ax) * dx + (p.z - az) * dz) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return { x: ax + t * dx, z: az + t * dz };
+}
+
+/** Snap onto the nearest wall line within the threshold (so a door/marker sits flush
+ * on a wall), else null. */
+export function snapToWall(p: Pt, walls: MapWall[], threshold = WALL_SNAP): Pt | null {
+  let best: Pt | null = null;
+  let bestD = threshold;
+  for (const w of walls) {
+    const proj = projectOnSegment(p, w.x1, w.y1, w.x2, w.y2);
+    const d = Math.hypot(p.x - proj.x, p.z - proj.z);
+    if (d <= bestD) {
+      bestD = d;
+      best = proj;
+    }
+  }
+  return best;
+}
+
+/** Marker placement snap: prefer landing flush on a nearby wall, else vertex/grid. */
+export function resolveMarkerPoint(raw: Pt, walls: MapWall[]): Pt {
+  return snapToWall(raw, walls) ?? resolvePoint(raw, { from: null, ortho: false, verts: wallVertices(walls) });
 }
 
 /** Editor tool + in-progress draw state (Svelte 5 runes). */

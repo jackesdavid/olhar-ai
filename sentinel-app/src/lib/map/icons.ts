@@ -3,9 +3,15 @@
 // and rendered as an emerald glyph on the floor — vector-crisp at any zoom and
 // trivially extensible: add an entry here and it shows up in the picker.
 
-export type IconDef = { key: string; label: string; svg: string };
+// `anchor` is the icon's logical origin in viewBox (0–24) coords — the point that lands
+// on the placement target and that the marker rotates around. Defaults to the center
+// [12, 12]; override it for icons whose meaningful pivot is off-center (e.g. a door's
+// hinge), so they align onto walls correctly. Future swapped-in assets just declare it.
+export type IconDef = { key: string; label: string; svg: string; anchor?: [number, number] };
 
 const VB = (body: string) => `<svg viewBox="0 0 24 24" fill="currentColor">${body}</svg>`;
+
+const CENTER: [number, number] = [12, 12];
 
 export const MARKER_ICONS: IconDef[] = [
   {
@@ -59,15 +65,19 @@ export const MARKER_ICONS: IconDef[] = [
     key: "door",
     label: "Door swing",
     // Architectural door symbol: a leaf (the open door) + a quarter-circle swing arc.
+    // Anchor = the hinge (top of the leaf), so the door pivots + aligns there onto a wall.
     svg: VB(
       '<rect x="4.4" y="4" width="1.7" height="15.3"/><path d="M5.3 4 A15 15 0 0 1 20.3 19.3 L18.5 19.3 A13.2 13.2 0 0 0 5.3 6.1 Z"/>',
     ),
+    anchor: [5.25, 4.5],
   },
   {
     key: "arc",
     label: "Swing arc",
-    // A generic semicircle band — a movement / opening indicator.
+    // A generic semicircle band — a movement / opening indicator. Anchor = the centre of
+    // the flat base (the edge that sits against a wall).
     svg: VB('<path d="M3 18 A9 9 0 0 1 21 18 L19 18 A7 7 0 0 0 5 18 Z"/>'),
+    anchor: [12, 18],
   },
 ];
 
@@ -79,4 +89,9 @@ export function iconSvg(key: string): string {
 
 export function iconLabel(key: string): string {
   return (BY_KEY.get(key) ?? MARKER_ICONS[0]).label;
+}
+
+/** The icon's logical origin in viewBox coords (defaults to the center). */
+export function iconAnchor(key: string): [number, number] {
+  return (BY_KEY.get(key) ?? MARKER_ICONS[0]).anchor ?? CENTER;
 }

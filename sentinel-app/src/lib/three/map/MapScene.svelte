@@ -11,7 +11,7 @@
   import type { MapStore } from "$lib/map/store.svelte";
   import type { PresenceStore } from "$lib/map/presence.svelte";
   import type { Viewport } from "$lib/map/view3d.svelte";
-  import { resolvePoint, wallVertices, type Pt, type ToolState } from "$lib/map/tools.svelte";
+  import { resolvePoint, resolveMarkerPoint, wallVertices, type Pt, type ToolState } from "$lib/map/tools.svelte";
   import { hitTest, nearWallEndpoint } from "$lib/map/pick";
   import { categoryColor } from "$lib/map/categories";
   import GroundGrid from "./GroundGrid.svelte";
@@ -83,7 +83,7 @@
       return;
     }
     if (tools.mode === "marker") {
-      const sp = snap(worldAt(e), null, false);
+      const sp = resolveMarkerPoint(worldAt(e), store.walls);
       store.addMarker(tools.markerIcon, sp.x, sp.z);
       return;
     }
@@ -111,7 +111,7 @@
   function onMove(e: PointerEvent) {
     // live snapped cursor for the draw preview
     if (tools.mode === "wall") tools.hover = snap(worldAt(e), tools.draft, e.shiftKey);
-    else if (tools.mode === "marker") tools.hover = snap(worldAt(e), null, false);
+    else if (tools.mode === "marker") tools.hover = resolveMarkerPoint(worldAt(e), store.walls);
     else tools.hover = null;
 
     if (!drag) return;
@@ -135,6 +135,21 @@
       return;
     }
 
+    // Markers snap absolutely (onto a wall when near one, else grid) so they stay aligned.
+    if (drag.mode === "marker") {
+      const mid = drag.id;
+      const mp = resolveMarkerPoint(worldAt(e), store.walls);
+      const m = store.markers.find((x) => x.id === mid);
+      if (m && (m.x !== mp.x || m.y !== mp.z)) {
+        if (!drag.started) {
+          store.checkpoint();
+          drag.started = true;
+        }
+        store.updateMarker(m.id, { x: mp.x, y: mp.z });
+      }
+      return;
+    }
+
     const ddx = sp.x - drag.last.x;
     const ddz = sp.z - drag.last.z;
     if (ddx === 0 && ddz === 0) return;
@@ -149,9 +164,6 @@
     } else if (drag.mode === "wall") {
       const w = store.walls.find((x) => x.id === id);
       if (w) store.updateWall(w.id, { x1: w.x1 + ddx, y1: w.y1 + ddz, x2: w.x2 + ddx, y2: w.y2 + ddz });
-    } else {
-      const m = store.markers.find((x) => x.id === id);
-      if (m) store.updateMarker(m.id, { x: m.x + ddx, y: m.y + ddz });
     }
     drag.last = sp;
   }

@@ -8,7 +8,7 @@
   import { DoubleSide, ShapeGeometry } from "three";
   import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
   import type { MapMarker } from "$lib/types";
-  import { iconSvg } from "$lib/map/icons";
+  import { iconSvg, iconAnchor } from "$lib/map/icons";
 
   let { marker, selected = false }: { marker: MapMarker; selected?: boolean } = $props();
 
@@ -21,11 +21,12 @@
     if (hit) return hit;
     const out: ShapeGeometry[] = [];
     try {
+      const [ax, ay] = iconAnchor(key);
       const data = new SVGLoader().parse(iconSvg(key));
       for (const path of data.paths) {
         for (const shape of SVGLoader.createShapes(path)) {
           const g = new ShapeGeometry(shape);
-          g.translate(-12, -12, 0); // centre the 24×24 viewBox
+          g.translate(-ax, -ay, 0); // put the icon's logical origin at the marker position
           g.scale(1, -1, 1); // SVG y-down → y-up
           out.push(g);
         }
