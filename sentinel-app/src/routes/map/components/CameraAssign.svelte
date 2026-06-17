@@ -81,6 +81,26 @@
                 {cam.rot ?? 0}°
               </span>
             </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div class="space-y-1">
+                <Label class="text-xs text-muted-foreground">dx</Label>
+                <Input
+                  type="number"
+                  class="h-8"
+                  value={cam.dx}
+                  oninput={(e) => store.setCameraPosition(cam.ip, e.currentTarget.valueAsNumber, cam.dy)}
+                />
+              </div>
+              <div class="space-y-1">
+                <Label class="text-xs text-muted-foreground">dy</Label>
+                <Input
+                  type="number"
+                  class="h-8"
+                  value={cam.dy}
+                  oninput={(e) => store.setCameraPosition(cam.ip, cam.dx, e.currentTarget.valueAsNumber)}
+                />
+              </div>
+            </div>
           </div>
         {/each}
       </div>

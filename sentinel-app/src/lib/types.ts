@@ -211,6 +211,8 @@ export type PresenceEvent = {
   room_name?: string | null;
   label?: string | null;
   camera?: string | null;
+  /** How long the pulse should stay on the map, in seconds (RecordPresence config). */
+  duration_secs?: number;
   created_at: string;
 };
 

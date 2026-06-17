@@ -49,6 +49,8 @@ pub enum ToolUiEvent {
         room_name: Option<String>,
         label: Option<String>,
         camera: Option<String>,
+        /// How long the map should keep the pulse alive, in seconds (from node config).
+        duration_secs: u32,
         created_at: String,
     },
 }

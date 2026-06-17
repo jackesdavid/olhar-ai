@@ -221,6 +221,15 @@ export class MapStore {
     this.updateRoom({ cameras: sel.cameras.map((c) => (c.ip === ip ? { ...c, rot } : c)) });
   }
 
+  /** Move an assigned camera within its room (offset from the room's top-left), clamped. */
+  setCameraPosition(ip: string, dx: number, dy: number): void {
+    const sel = this.selectedRoom;
+    if (!sel) return;
+    const cx = Math.max(0, Math.min(Number.isFinite(dx) ? dx : 0, sel.w));
+    const cy = Math.max(0, Math.min(Number.isFinite(dy) ? dy : 0, sel.h));
+    this.updateRoom({ cameras: sel.cameras.map((c) => (c.ip === ip ? { ...c, dx: cx, dy: cy } : c)) });
+  }
+
   unassignCamera(ip: string): void {
     const sel = this.selectedRoom;
     if (!sel) return;

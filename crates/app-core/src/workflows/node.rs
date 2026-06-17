@@ -762,6 +762,19 @@ fn run_record_presence(config: &Value, inputs: &PortValues, sys: &ToolContext) -
         .map(|s| s.to_string())
         .filter(|s| !s.trim().is_empty());
 
+    // How long the map keeps the pulse alive (seconds). Input overrides config; default 8.
+    let duration_secs = inputs
+        .get("duration_secs")
+        .and_then(PortValue::as_num)
+        .or_else(|| {
+            config
+                .get("duration_secs")
+                .and_then(Value::as_str)
+                .and_then(|s| s.trim().parse::<i64>().ok())
+        })
+        .filter(|n| *n > 0)
+        .unwrap_or(8) as u32;
+
     let (room_id, room_name) = match inputs
         .get("room")
         .and_then(PortValue::as_text)
@@ -795,6 +808,7 @@ fn run_record_presence(config: &Value, inputs: &PortValues, sys: &ToolContext) -
         room_name,
         label,
         camera,
+        duration_secs,
         created_at: p.created_at.clone(),
     });
 

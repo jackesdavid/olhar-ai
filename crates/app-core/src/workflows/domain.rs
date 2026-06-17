@@ -509,7 +509,7 @@ impl NodeKind {
             NodeKind::BreakPersonDetection => json!({}),
             NodeKind::BreakFaceDetection => json!({}),
             NodeKind::RecognizePerson => json!({ "max_distance": "0.4", "timeout_secs": "30" }),
-            NodeKind::RecordPresence => json!({ "category": "person", "room": "", "label": "", "timeout_secs": "15" }),
+            NodeKind::RecordPresence => json!({ "category": "person", "room": "", "label": "", "duration_secs": "8", "timeout_secs": "15" }),
             NodeKind::EmitEvent => json!({ "event": "" }),
             NodeKind::OnEvent => json!({ "event": "" }),
             NodeKind::Print => json!({ "message": "", "on_screen": true, "level": "info" }),

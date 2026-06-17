@@ -51,7 +51,7 @@ pub fn publish_tool_event(bus: &EventBus, tenant: uuid::Uuid, ev: ToolUiEvent) {
         ToolUiEvent::ShowImage { graph, node, label, .. } => {
             publish(bus, "workflow-image", json!({ "tenant": tenant, "graph": graph, "node": node, "label": label }))
         }
-        ToolUiEvent::Presence { category, room_id, room_name, label, camera, created_at } => publish(
+        ToolUiEvent::Presence { category, room_id, room_name, label, camera, duration_secs, created_at } => publish(
             bus,
             "presence",
             json!({
@@ -61,6 +61,7 @@ pub fn publish_tool_event(bus: &EventBus, tenant: uuid::Uuid, ev: ToolUiEvent) {
                 "room_name": room_name,
                 "label": label,
                 "camera": camera,
+                "duration_secs": duration_secs,
                 "created_at": created_at,
             }),
         ),

@@ -6,7 +6,10 @@ import { data, onEvent } from "$lib/data";
 import type { PresenceCategory, PresenceEvent } from "$lib/types";
 import type { MapStore } from "./store.svelte";
 
-const TTL_MS = 6000;
+const DEFAULT_TTL_MS = 6000;
+// How far ahead of a camera (grid units) to drop the pulse — inside its FOV wedge, not
+// on the lens. ~half the marker's FOV range so it sits in the watched area.
+const CAM_AHEAD = 2.4;
 // On open, replay presence recorded in the last window as a fresh pulse — so a detection
 // fired moments before you opened the map still shows (the live SSE only covers events
 // that arrive while the page is mounted).
@@ -18,6 +21,7 @@ export type Pulse = {
   x: number;
   z: number;
   born: number;
+  ttl: number;
 };
 
 export class PresenceStore {
@@ -69,7 +73,15 @@ export class PresenceStore {
       const ip = dev?.ip ?? p.camera;
       for (const r of this.map.rooms) {
         const c = r.cameras.find((cam) => cam.ip === ip);
-        if (c) return { x: r.x + c.dx, z: r.y + c.dy };
+        if (c) {
+          // Drop the pulse ahead in the camera's field of view, not on the lens. The
+          // facing convention matches CameraMarker: rot=0 → +z; forward = (-sin, cos).
+          const a = ((c.rot ?? 0) * Math.PI) / 180;
+          return {
+            x: r.x + c.dx - Math.sin(a) * CAM_AHEAD,
+            z: r.y + c.dy + Math.cos(a) * CAM_AHEAD,
+          };
+        }
       }
     }
     if (p.room_id != null) {
@@ -91,16 +103,17 @@ export class PresenceStore {
       console.warn("[presence] dropped — no map location for", p);
       return;
     }
-    console.debug("[presence] pulse", p.category, "at", at);
+    const ttl = p.duration_secs && p.duration_secs > 0 ? p.duration_secs * 1000 : DEFAULT_TTL_MS;
+    console.debug("[presence] pulse", p.category, "at", at, "for", ttl / 1000, "s");
     this.pulses = [
       ...this.pulses,
-      { id: this.seq++, category: p.category, x: at.x, z: at.z, born: Date.now() },
+      { id: this.seq++, category: p.category, x: at.x, z: at.z, born: Date.now(), ttl },
     ];
   }
 
   private prune(): void {
     const now = Date.now();
-    const live = this.pulses.filter((x) => now - x.born < TTL_MS);
+    const live = this.pulses.filter((x) => now - x.born < x.ttl);
     if (live.length !== this.pulses.length) this.pulses = live;
   }
 }
