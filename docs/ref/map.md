@@ -79,8 +79,16 @@ Grid `(x, y)` maps **1:1 to world `(x, 0, z)`** (the floor is the world XZ plane
   (`agent/tools.rs`) → `sentinel-flow/src/events.rs` publishes a `presence` SSE line → control
   relay → browser.
 - Frontend: `PresenceStore` subscribes via `onEvent("presence")` (`lib/data.ts`), places the pulse
-  at the detecting **camera** (else room centre), expires after ~6s. Baseline:
-  `GET /map/presence` (`data.loadPresence`). Pulse colour/legend from `categories.ts`.
+  **ahead in the detecting camera's FOV** (resolves camera id→ip + room rotation; else room centre),
+  and expires after the event's **`duration_secs`** — persisted on the node + presence row (migration
+  `0021_presence_duration`, fallback 8s). Baseline replays the last 30s from `GET /map/presence`
+  (`data.loadPresence`). Pulse colour/legend from `categories.ts`. **Debug:** `[presence]
+  pulse/dropped` `console` lines in `presence.svelte.ts` — remove once live presence is confirmed.
+- Camera **FOV is a wall-occluded line-of-sight polygon** (`lib/map/visibility.ts`): rays across the
+  cone clipped at the nearest wall or `range`. Cameras render in world-space `CameraLayer` (out of the
+  rotated room group); per-camera `fov`/`range`/`rot`. The ortho camera is driven by ONE `$size`
+  effect in `MapScene` (re-applies on every resize), and zoom/pan persist to localStorage
+  (`map.viewport`). Workflow node config **saves as you type** (debounced).
 
 ## Conventions / gotchas
 
@@ -88,23 +96,26 @@ Grid `(x, y)` maps **1:1 to world `(x, 0, z)`** (the floor is the world XZ plane
   `ToolUiEvent::Presence` in `agent/tools.rs` is the one required `tools.rs` touch (the UI event
   channel, not the catalog).
 - Timestamps are **RFC3339 text** (never `timestamptz`). Migrations are additive; **next number is
-  0021**.
+  0022** (0019 map geometry, 0020 presence, 0021 presence `duration_secs`). Note: `duration_secs` is
+  `integer`/INT4 → decode/bind as **`i32`** in `presence/repo.rs`.
 - House style holds: helpers over template logic, no nested ternaries, emerald `--primary`, dot-field
   identity, web-only.
 - The scene's default frameloop renders continuously (needed for the pulse animation).
 
 ## Build status
 
-- **Branch `feat/map-redesign`** (off `main`). All five phases done, committed, pushed; `svelte-check`
-  + production build clean (the only 7 svelte-check errors are pre-existing `sensor-field` /
-  `workflows`, untouched). Not yet merged to `new-ui`.
+- **Branch `feat/map-redesign`** (off `main`), **deployed to prod** incrementally (`592a3da`→
+  `c885862`). `svelte-check` + web build clean (only the 7 pre-existing `sensor-field`/`workflows`
+  errors); `cargo check` clean (app-core/control/flow). Not yet merged to `new-ui`.
   1. Decompose + blueprint render · 2. Wall + marker drawing + undo/redo · 3. Keyboard ·
-  4. Presence backend (node + migrations + SSE) · 5. Live pulse + legend.
-- **Pending:** production deploy via `task cloud-deploy` (local Docker build → GHCR → VPS; applies
-  `0019`+`0020` on control/flow boot) — blocked at last attempt on Docker Desktop engine not ready
-  (UI password). Re-run once Docker responds. See [deploy ref](deploy.md).
-- **Not done (deliberately):** version bump for release (web `sentinel-app/package.json` + footer);
-  merge to `new-ui`; visual QA in a running app.
+  4. Presence backend · 5. Live pulse + legend · **6. Polish:** full-bleed + canvas overlays;
+  Properties|Explorer tabs + shortcuts overlay; top-down **wireframe** markers + outlined walls;
+  per-icon anchor + marker→wall snap; rotate rooms/walls/markers; camera **FOV width/length** +
+  editable position; **FOV = wall-occluded line-of-sight** (Option B); **zoom fix + persisted
+  zoom/pan**; presence dropdowns + FOV-ahead + **persisted `duration_secs`** + save-as-you-type.
+- **Pending:** (1) confirm `c885862` (i32 fix) deploy finished; (2) **verify presence live** (run a
+  workflow, console shows `[presence] pulse …`); (3) **remove the `[presence]` debug `console` lines**
+  once confirmed; (4) release: web version bump + merge to `new-ui`.
 - **Backlog:** presence history/heatmap, per-camera FOV tuning beyond yaw, multi-floor maps,
   doors/windows + curved walls + auto-room-detect, optional true 3D wireframe models for hero
   landmarks.

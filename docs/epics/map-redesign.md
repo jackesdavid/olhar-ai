@@ -1,7 +1,8 @@
 # Epic — Map redesign (top-down 3D blueprint editor + live presence)
 
-**Status:** in progress (build complete; production deploy pending) · **Branch:** `feat/map-redesign`
-· **Ref:** [docs/ref/map.md](../ref/map.md) · **Board:** card "Map redesign" in `docs/Task Board.md`
+**Status:** in progress (deployed to prod; verifying presence-live + cleanup before release) ·
+**Branch:** `feat/map-redesign` · **Ref:** [docs/ref/map.md](../ref/map.md) · **Board:** card "Map
+redesign" in `docs/Task Board.md`
 
 ## Goal
 
@@ -24,9 +25,17 @@ categorized detections live. Vertical, maintainable file structure throughout.
   (`0020_presence`), `ToolUiEvent::Presence` → flow SSE relay, `GET /map/presence`.
 - [x] **Phase 5 — Live pulse.** `PresenceStore` (SSE subscribe + decay), `PresencePulse` ping,
   category legend, `categories.ts` single source of truth.
-- [ ] **Deploy to production** — `task cloud-deploy` (applies `0019`+`0020` on control/flow boot).
-  *Blocked:* Docker Desktop engine not ready (macOS UI password). Re-run once `docker info` responds.
-- [ ] **Visual QA** in a running app (drawing, presence pulse, save round-trip).
+- [x] **Deploy to production** — shipped incrementally via `task cloud-deploy` (applied `0019`–`0021`
+  on control/flow boot). Last: `c885862`.
+- [x] **Phase 6 — Polish (this session).** Full-bleed layout; canvas overlays (undo/redo, tools,
+  zoom); collapsible Properties|Explorer tabs + shortcuts overlay; top-down wireframe markers +
+  outlined walls; per-icon anchor + marker→wall snap; rotate rooms/walls/markers; camera FOV
+  width/length + editable position; **camera FOV as wall-occluded line-of-sight** (Option B); zoom
+  fix + persisted zoom/pan; presence dropdowns, FOV-ahead pulse, **persisted `duration_secs`
+  (migration 0021)**, save-as-you-type config, removed `timeout_secs`.
+- [ ] **Verify presence live** — run a workflow with the console open; expect `[presence] pulse …`
+  (no `dropped`). If `dropped`, the room/camera doesn't match a saved room.
+- [ ] **Remove `[presence]` debug `console` lines** (`lib/map/presence.svelte.ts`) once confirmed.
 - [ ] **Release** (when asked): bump web version (`package.json` + `+layout.svelte` footer); merge
   `feat/map-redesign` → `new-ui`.
 
