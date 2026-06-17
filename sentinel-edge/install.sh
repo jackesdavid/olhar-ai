@@ -109,10 +109,13 @@ if ! tailscale version >/dev/null 2>&1; then
     # joins the tailnet from the CLI exactly like a Linux appliance. Homebrew refuses root,
     # so install as the invoking user; drop any stale GUI-app shim first.
     rm -f /usr/local/bin/tailscale 2>/dev/null || true
+    # Non-interactive: skip the slow formula auto-update + the tap-trust prompt (either can
+    # hang/abort a headless install on a box with extra taps).
+    BREW_ENV="HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_REQUIRE_TAP_TRUST=1 HOMEBREW_NO_ENV_HINTS=1"
     if [ -n "${SUDO_USER:-}" ] && sudo -u "$SUDO_USER" command -v brew >/dev/null 2>&1; then
-      sudo -u "$SUDO_USER" brew install tailscale
+      sudo -u "$SUDO_USER" env $BREW_ENV brew install tailscale && sudo -u "$SUDO_USER" env $BREW_ENV brew link --overwrite tailscale
     elif command -v brew >/dev/null 2>&1; then
-      brew install tailscale
+      env $BREW_ENV brew install tailscale && env $BREW_ENV brew link --overwrite tailscale
     else
       echo "  Homebrew not found — install it (https://brew.sh), or Tailscale, then re-run." >&2
       exit 1
