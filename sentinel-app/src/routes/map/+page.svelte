@@ -80,6 +80,8 @@
       tools.setMode("select");
     } else if (e.key === "w" || e.key === "W") {
       tools.setMode("wall");
+    } else if (e.key === "m" || e.key === "M") {
+      tools.setMode("marker");
     } else if (e.key === "f" || e.key === "F") {
       fit();
     } else if ((e.metaKey || e.ctrlKey) && (e.key === "z" || e.key === "Z")) {

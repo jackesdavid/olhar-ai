@@ -15,6 +15,8 @@
   import RoomForm from "./RoomForm.svelte";
   import CameraAssign from "./CameraAssign.svelte";
   import WallProps from "./WallProps.svelte";
+  import MarkerProps from "./MarkerProps.svelte";
+  import MarkerPicker from "./MarkerPicker.svelte";
 
   let {
     store,
@@ -46,13 +48,24 @@
       </div>
     {/if}
 
+    {#if tools.mode === "marker"}
+      <div class="space-y-2">
+        <p class="text-xs text-muted-foreground">Pick an item, then click the floor to place it.</p>
+        <MarkerPicker {tools} />
+      </div>
+      <Separator />
+    {/if}
+
     {#if store.rooms.length === 0}
       <p class="text-sm text-muted-foreground">No rooms yet. Add a zone, or draw walls.</p>
     {:else}
       <RoomList {store} />
     {/if}
 
-    {#if store.selectedWall}
+    {#if store.selectedMarker}
+      <Separator />
+      <MarkerProps {store} />
+    {:else if store.selectedWall}
       <Separator />
       <WallProps {store} />
     {:else if store.selectedRoom}

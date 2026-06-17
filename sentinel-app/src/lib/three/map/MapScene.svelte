@@ -15,6 +15,7 @@
   import GroundGrid from "./GroundGrid.svelte";
   import RoomMesh from "./RoomMesh.svelte";
   import WallLayer from "./WallLayer.svelte";
+  import MarkerLayer from "./MarkerLayer.svelte";
   import DrawPreview from "./DrawPreview.svelte";
 
   let {
@@ -202,7 +203,10 @@
 {/each}
 
 <WallLayer {store} />
+<MarkerLayer {store} />
 
 {#if tools.mode === "wall"}
   <DrawPreview from={tools.draft} to={tools.hover} />
+{:else if tools.mode === "marker"}
+  <DrawPreview to={tools.hover} />
 {/if}
