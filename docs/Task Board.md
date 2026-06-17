@@ -25,6 +25,10 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] Map redesign — top-down 3D blueprint editor + live presence
+	  - Epic: [[map-redesign]]
+	  - Ref: docs/ref/map.md · Branch: feat/map-redesign
+	  - Phases 1–5 done (build clean, pushed). Pending: production deploy (blocked on Docker engine), visual QA.
 - [ ] School Student Frequency Case
 	  - Plan: [[school-student-frequency]]
 	  - Use case: [[school-frequence]]

@@ -20,8 +20,20 @@ Keep work resumable across sessions. The artifacts:
   durable, scannable memory of what happened and what's next.
 - **`docs/ref/<area>.md`** — the deep per-area reference (architecture, conventions, file layout,
   and a living **Build status** section). Linked from `CLAUDE.md`.
+- **`docs/epics/<epic>.md`** — an epic + its task checklist for a multi-phase project (status,
+  branch, links). Mirrored as a card on the board.
+- **`docs/Task Board.md`** — the Obsidian Kanban (ToDo → In Progress → Review → Done; plus Bugs /
+  Backlog). The at-a-glance state of all work. (The `/board` skill moves cards.)
 
 Default to **save** unless the user clearly means **resume**.
+
+## At the start of every task — check the board
+
+Before working, **read `docs/Task Board.md`** (the In Progress + ToDo columns) and any linked
+`docs/epics/*.md`, plus the top `docs/HANDOFF.md` entry. Surface the pending/in-progress items and
+confirm what to pick up. As work progresses, **keep the board and the epic current**: tick the
+epic's task checkboxes, update the card's notes, and move the card across columns (In Progress →
+Review → Done) — use the `/board` skill for the moves.
 
 ## Save a handoff
 
@@ -31,10 +43,13 @@ Default to **save** unless the user clearly means **resume**.
    `docs/ref/<area>.md` (mirror the style of existing refs — overview, file layout, conventions,
    and a **Build status** section: done / pending / not-done / backlog). Add a one-line pointer in
    `CLAUDE.md`'s index if the doc is new.
-3. **Rolling log**: prepend a new entry to `docs/HANDOFF.md` using the template below. Convert
+3. **Epic + board**: if it's a multi-phase project, create/update `docs/epics/<epic>.md` (tick the
+   task checkboxes) and update its card in `docs/Task Board.md` (notes + column). New epic → add a
+   card. Pending/blocked work stays In Progress (or ToDo) — never silently drop it.
+4. **Rolling log**: prepend a new entry to `docs/HANDOFF.md` using the template below. Convert
    relative dates to absolute. Be honest — pending and blockers matter more than what's done.
-4. **Verify claims** you record (build/tests/deploy) actually ran; if you skipped something, say so.
-5. **Commit + push** the docs (no Claude attribution; end PR/commit bodies per project rules). Do
+5. **Verify claims** you record (build/tests/deploy) actually ran; if you skipped something, say so.
+6. **Commit + push** the docs (no Claude attribution; end PR/commit bodies per project rules). Do
    **not** deploy or merge as part of a handoff unless explicitly asked.
 
 ### Entry template (prepend to docs/HANDOFF.md)
@@ -53,10 +68,11 @@ Default to **save** unless the user clearly means **resume**.
 
 ## Resume a session
 
-1. Read the **top entry** of `docs/HANDOFF.md` and the **Refs** it names (per-area `docs/ref/*.md`).
+1. Read the **top entry** of `docs/HANDOFF.md`, the **Refs** it names (per-area `docs/ref/*.md`),
+   the **board** (`docs/Task Board.md` In Progress + ToDo), and any linked `docs/epics/*.md`.
 2. `git status --short` + `git log --oneline -10`; check out the named branch if needed.
-3. Re-state the current position and the next pending item, then continue it. If the build state is
-   unknown, re-verify before changing code.
+3. Re-state the current position and the next pending item (call out blockers), then continue it.
+   If the build state is unknown, re-verify before changing code.
 
 ## Conventions (all sessions)
 
