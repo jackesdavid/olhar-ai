@@ -1114,6 +1114,21 @@
     await data.setNodeConfig(graph.id, n.id, config);
     await reload();
   }
+
+  // Live-save a single config field as the user types: update locally at once (so the
+  // value sticks + downstream reads it without pressing Enter) and debounce the backend
+  // write (config-only, no reload — that would fight the input mid-type).
+  let cfgSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  function liveSaveConfig(n: Node, key: string, value: unknown) {
+    if (!graph) return;
+    const gid = graph.id;
+    n.config = { ...n.config, [key]: value };
+    const cfg = n.config;
+    clearTimeout(cfgSaveTimer);
+    cfgSaveTimer = setTimeout(() => {
+      data.setNodeConfig(gid, n.id, cfg).catch((err) => console.error("Failed to save node config", err));
+    }, 400);
+  }
   async function saveNodeMemoize(n: Node, memoize: boolean) {
     if (!graph) return;
     await data.setNodeMemoize(graph.id, n.id, memoize);
@@ -2162,7 +2177,7 @@
                           </p>
                         {/if}
                       {:else}
-                        <Input class="h-8" disabled={editLocked} value={String(selectedNode.config[key] ?? "")} onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })} />
+                        <Input class="h-8" disabled={editLocked} value={String(selectedNode.config[key] ?? "")} oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)} />
                       {/if}
                       </div>
                     </div>
