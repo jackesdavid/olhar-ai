@@ -1,0 +1,66 @@
+# Sentinel — project guide for Claude
+
+Sentinel is a multi-tenant SaaS for camera monitoring + automation. Cameras are LAN-bound,
+so an on-prem **edge appliance** is the only thing that touches them; everything else is
+cloud. The web app is **"Sentinel"** — a calm assistant for home + business (no Alien IP;
+plain terms: Recipients / site / zones).
+
+This file is the index. Detailed knowledge lives in focused references — read the one that
+matches your task:
+
+- **[Architecture & services](docs/ref/architecture.md)** — the services, ports, data flow,
+  multi-tenancy, and the tailnet (how the cloud reaches LAN cameras).
+- **[Deploy & ops](docs/ref/deploy.md)** — how to ship: local build → GHCR → VPS (`task
+  cloud-deploy`), the GitHub Actions billing block, the VPS, migrations, versioning, and how
+  the edge installer + binary are served.
+- **[Edge appliance](docs/ref/edge.md)** — `sentinel-edge`: Tailscale, ffmpeg, go2rtc,
+  discovery + IP auto-reconcile, health reporting, the restart command, and `install.sh`.
+- **[Workflows engine](docs/ref/workflows.md)** — `sentinel-flow`: graph execution, loops,
+  cross-graph events, run history, camera binding. (Node catalog: [docs/workflow-nodes.md](docs/workflow-nodes.md).)
+
+## Repo layout
+
+| Path | What |
+|---|---|
+| `sentinel-control/` | Control plane / SaaS backend (Axum, :8790) — auth/RBAC/JWT, tenants, the camera config the edge pulls, box registry, workflow CRUD, event registry, run history + box-log relay |
+| `sentinel-flow/` | Always-on workflow engine (Axum + SSE, :8787) — runs graphs, cross-graph events, run history. Multi-tenant (one pod, all tenants) |
+| `sentinel-gateway/` | Public streaming bridge (:8789) — relays live video (MSE/WS) + snapshots to the tenant's edge go2rtc over the tailnet |
+| `sentinel-edge/` | On-prem appliance (:8788, localhost) — ONLY thing touching cameras: ONVIF discovery, go2rtc sidecar, snapshots, tailnet. Standalone crate (not in a workspace) |
+| `sentinel-app/` | The web UI (SvelteKit / Svelte 5). Talks to control (API) + gateway (live) |
+| `sentinel-landing/`, `landing/` | Marketing landing site |
+| `crates/app-core/` | Shared domain lib: devices, workflows, alerts, ONVIF, go2rtc, agent/vision, ports, `db` + **migrations** |
+| `ai/sidecar/` | Face recognition GPU/CPU sidecar (RunPod) |
+| `deploy/` | Dockerfiles (`app/`, `landing/`) + `push-local.sh` (local deploy) |
+| `legacy/` | Dead Tauri-era code — ignore |
+
+## Build / run / check (Taskfile)
+
+`brew install go-task`, then:
+- `task dev` — web dev server; `task control` / `task flow` / `task edge` / `task gateway` — run a service
+- `task db-up` — local Postgres (compose); `task build` / `task check` — web build / svelte-check
+- `task cargo` — `cargo check` the workspace; `task fmt`
+- `task cloud-deploy [-- <services>]` — **the deploy path** (see [deploy ref](docs/ref/deploy.md))
+
+Backend is Rust (Axum + sqlx, runtime queries — no compile-checked `query!`, so no live DB
+needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + shadcn-svelte.
+
+## Conventions that bite if ignored
+
+- **The edge is the only camera-touching component.** Camera **credentials + RTSP URLs live
+  only on the edge** (`cameras-cache.json`); they are NEVER persisted in the cloud DB (control
+  stages creds in memory and hands them over once). Don't add cloud persistence for creds.
+- **Timestamps are RFC3339 `text`**, not `timestamptz` — sqlx is built without the chrono/time
+  feature, so it can't decode `timestamptz`. Generate with `app_core::alerts::now_rfc3339()`.
+- **Migrations**: `crates/app-core/migrations/NNNN_*.sql`, embedded via `sqlx::migrate!`, applied
+  on `Db::connect` (control + flow boot). Additive; next number is 0019.
+- **Versioning**: web app = `sentinel-app/package.json` + the footer in `routes/+layout.svelte`;
+  edge = `sentinel-edge/Cargo.toml` (drives `LATEST_EDGE_VERSION` + the `v*` release tag). Bump
+  together for a release. Current: web **0.4.1**, edge **0.4.0**.
+- **GitHub Actions is billing-blocked** — deploy locally with `task cloud-deploy`; release the
+  edge binary by building locally + scp (see [deploy ref](docs/ref/deploy.md)).
+- **No Claude attribution** in commits/PRs (no `Co-Authored-By: Claude`, no "Generated with").
+- UI house style: keep markup logic out of templates (named helpers returning bool/string), no
+  nested ternaries; emerald "Emerald Guardian" theme; web-only (no Tauri `prompt`/`confirm`).
+- When workflow node kinds/capabilities change, the catalog auto-derives from
+  `NodeKind::ALL` — `crates/app-core/src/agent/tools.rs` does NOT list workflow nodes (it's the
+  chat agent's `ToolUiEvent`), so no change needed there.
