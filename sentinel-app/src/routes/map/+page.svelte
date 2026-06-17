@@ -18,6 +18,8 @@
   import { MapStore } from "$lib/map/store.svelte";
   import { Viewport } from "$lib/map/view3d";
   import { ToolState } from "$lib/map/tools";
+  import { PresenceStore } from "$lib/map/presence.svelte";
+  import { CATEGORY_ORDER, CATEGORY_STYLE } from "$lib/map/categories";
   import { handleMapKey } from "$lib/map/keyboard";
   import MapScene from "$lib/three/map/MapScene.svelte";
   import Toolbar from "./components/Toolbar.svelte";
@@ -26,6 +28,7 @@
   const store = new MapStore();
   const viewport = new Viewport();
   const tools = new ToolState();
+  const presence = new PresenceStore(store);
 
   function bounds() {
     if (store.rooms.length === 0 && store.walls.length === 0) return null;
@@ -77,6 +80,11 @@
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  $effect(() => {
+    presence.start();
+    return () => presence.stop();
+  });
+
   onMount(async () => {
     try {
       await store.load();
@@ -99,7 +107,7 @@
       <Card.Root class="relative min-h-[24rem] overflow-hidden p-0">
         <div class="h-full w-full bg-[oklch(0.165_0.006_160)]">
           <Canvas>
-            <MapScene {store} {viewport} {tools} onCameraClick={goLive} />
+            <MapScene {store} {viewport} {tools} {presence} onCameraClick={goLive} />
           </Canvas>
         </div>
 
@@ -119,6 +127,18 @@
           <Button variant="ghost" size="icon" class="size-8" title="Fit to view" onclick={fit}>
             <Maximize class="size-4" />
           </Button>
+        </div>
+
+        <!-- presence legend -->
+        <div
+          class="absolute bottom-3 left-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border bg-background/75 px-2.5 py-1.5 text-[11px] text-muted-foreground shadow-lg backdrop-blur"
+        >
+          {#each CATEGORY_ORDER as cat (cat)}
+            <span class="flex items-center gap-1.5">
+              <span class="size-2 rounded-full" style="background:{CATEGORY_STYLE[cat].color}"></span>
+              {CATEGORY_STYLE[cat].label}
+            </span>
+          {/each}
         </div>
       </Card.Root>
 

@@ -9,24 +9,29 @@
   import { interactivity } from "@threlte/extras";
   import { PCFSoftShadowMap, type OrthographicCamera } from "three";
   import type { MapStore } from "$lib/map/store.svelte";
+  import type { PresenceStore } from "$lib/map/presence.svelte";
   import type { Viewport } from "$lib/map/view3d";
   import { resolvePoint, wallVertices, type Pt, type ToolState } from "$lib/map/tools";
   import { hitTest, nearWallEndpoint } from "$lib/map/pick";
+  import { categoryColor } from "$lib/map/categories";
   import GroundGrid from "./GroundGrid.svelte";
   import RoomMesh from "./RoomMesh.svelte";
   import WallLayer from "./WallLayer.svelte";
   import MarkerLayer from "./MarkerLayer.svelte";
   import DrawPreview from "./DrawPreview.svelte";
+  import PresencePulse from "./PresencePulse.svelte";
 
   let {
     store,
     viewport,
     tools,
+    presence,
     onCameraClick,
   }: {
     store: MapStore;
     viewport: Viewport;
     tools: ToolState;
+    presence?: PresenceStore;
     onCameraClick?: (ip: string) => void;
   } = $props();
 
@@ -204,6 +209,12 @@
 
 <WallLayer {store} />
 <MarkerLayer {store} />
+
+{#if presence}
+  {#each presence.pulses as p (p.id)}
+    <PresencePulse x={p.x} z={p.z} color={categoryColor(p.category)} />
+  {/each}
+{/if}
 
 {#if tools.mode === "wall"}
   <DrawPreview from={tools.draft} to={tools.hover} />
