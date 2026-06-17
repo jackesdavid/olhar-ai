@@ -689,11 +689,13 @@ impl Graph {
         self.nodes.iter_mut().find(|n| n.id == id)
     }
 
-    /// Add a node at (x, y); returns its new id.
+    /// Add a node at (x, y); returns its new id. Event entry/emit nodes never memoize
+    /// (they're no-op signal nodes — caching is meaningless and confusing), so default off.
     pub fn add_node(&mut self, kind: NodeKind, x: i32, y: i32) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
-        self.nodes.push(GraphNode { id, kind, x, y, config: kind.default_config(), memoize: true });
+        let memoize = !matches!(kind, NodeKind::EmitEvent | NodeKind::OnEvent);
+        self.nodes.push(GraphNode { id, kind, x, y, config: kind.default_config(), memoize });
         id
     }
 

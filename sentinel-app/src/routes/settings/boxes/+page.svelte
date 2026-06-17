@@ -47,7 +47,7 @@
 
   // Edge versioning
   let latest = $state<string>("");
-  const updateCmd = `curl -fsSL ${API_BASE}/install.sh | sudo sh -s -- --update --control ${API_BASE}`;
+  const updateCmd = `curl -fsSL ${API_BASE}/edge/install.sh | sudo sh -s -- --update --control ${API_BASE}`;
   function outdated(b: Box): boolean {
     return !!b.version && !!latest && b.version !== latest;
   }
@@ -74,7 +74,7 @@
     // Prefer the auto-minted key (transparent enrollment); else a manual override; else a placeholder.
     const key = tsKey || authkey.trim() || "<YOUR_TAILSCALE_AUTHKEY>";
     return [
-      `curl -fsSL ${API_BASE}/install.sh | sudo sh -s -- \\`,
+      `curl -fsSL ${API_BASE}/edge/install.sh | sudo sh -s -- \\`,
       `  --control ${API_BASE} \\`,
       `  --box-token ${token} \\`,
       `  --authkey ${key} \\`,

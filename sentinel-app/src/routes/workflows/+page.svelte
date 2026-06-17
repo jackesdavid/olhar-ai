@@ -1510,6 +1510,21 @@
                     class="pointer-events-none stroke-border"
                     stroke-width="1"
                   />
+                  <!-- Event nodes show their bound event name in the body (Unreal-style), so
+                       you can read which event a node fires/listens for at a glance. -->
+                  {#if n.kind === "emit_event" || n.kind === "on_event"}
+                    {@const ev = String(n.config.event ?? "").trim()}
+                    <text
+                      x={NODE_W / 2}
+                      y={HEAD_H + 20}
+                      text-anchor="middle"
+                      class="pointer-events-none select-none {ev ? 'fill-foreground' : 'fill-muted-foreground'}"
+                      font-size="12"
+                      font-weight="600"
+                    >
+                      {ev || "(no event)"}
+                    </text>
+                  {/if}
 
                   {#if invalid}
                     <!-- required input(s) not filled — a red dot, the logo's signal -->
@@ -2114,20 +2129,23 @@
                 </div>
               {/if}
               <!-- Memoize: cache the node's output for the run (default) vs recompute each
-                   time it's reached. Turn OFF for loop bodies / live sources so loops iterate. -->
-              <div class="flex items-center justify-between gap-2 border-t border-border pt-2.5">
-                <Label
-                  class="flex items-center gap-1.5 text-xs text-muted-foreground"
-                  title="On: cache this node's output for the run and reuse it. Off: recompute every time the node runs — required for loop bodies and live sources (e.g. Get current frame)."
-                >
-                  Memoize output
-                </Label>
-                <Switch
-                  checked={selectedNode.memoize !== false}
-                  disabled={editLocked}
-                  onCheckedChange={(v) => saveNodeMemoize(selectedNode, v)}
-                />
-              </div>
+                   time it's reached. Turn OFF for loop bodies / live sources so loops iterate.
+                   Hidden for event nodes — they're no-op signals that never memoize. -->
+              {#if selectedNode.kind !== "emit_event" && selectedNode.kind !== "on_event"}
+                <div class="flex items-center justify-between gap-2 border-t border-border pt-2.5">
+                  <Label
+                    class="flex items-center gap-1.5 text-xs text-muted-foreground"
+                    title="On: cache this node's output for the run and reuse it. Off: recompute every time the node runs — required for loop bodies and live sources (e.g. Get current frame)."
+                  >
+                    Memoize output
+                  </Label>
+                  <Switch
+                    checked={selectedNode.memoize !== false}
+                    disabled={editLocked}
+                    onCheckedChange={(v) => saveNodeMemoize(selectedNode, v)}
+                  />
+                </div>
+              {/if}
             </div>
           {:else}
             <div class="rounded-xl border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
