@@ -57,8 +57,17 @@ export const MARKER_ICONS: IconDef[] = [
   },
   {
     key: "door",
-    label: "Door",
-    svg: VB('<rect x="6" y="3" width="2" height="18"/><path d="M8 3 a13 13 0 0 1 12.5 12.5 h-2.2 A10.8 10.8 0 0 0 8 5.2 z"/>'),
+    label: "Door swing",
+    // Architectural door symbol: a leaf (the open door) + a quarter-circle swing arc.
+    svg: VB(
+      '<rect x="4.4" y="4" width="1.7" height="15.3"/><path d="M5.3 4 A15 15 0 0 1 20.3 19.3 L18.5 19.3 A13.2 13.2 0 0 0 5.3 6.1 Z"/>',
+    ),
+  },
+  {
+    key: "arc",
+    label: "Swing arc",
+    // A generic semicircle band — a movement / opening indicator.
+    svg: VB('<path d="M3 18 A9 9 0 0 1 21 18 L19 18 A7 7 0 0 0 5 18 Z"/>'),
   },
 ];
 
