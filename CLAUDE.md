@@ -20,7 +20,9 @@ matches your task:
 - **[Map (floor plan)](docs/ref/map.md)** — the Map page: top-down 3D blueprint editor (rooms as
   zones, drawn walls + SVG furniture markers, camera FOV), the `RecordPresence` node + live
   categorized presence pulse, the vertical file layout, and build status. (Active: branch
-  `feat/map-redesign`. Use the `/map-feature` skill to continue it.)
+  `feat/map-redesign`.)
+- **[Handoff log](docs/HANDOFF.md)** — rolling session memory (newest first): what changed, branch,
+  pending, blockers. Save/resume it with the `/handoff` skill.
 
 ## Repo layout
 
