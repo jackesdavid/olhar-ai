@@ -11,23 +11,14 @@
             "id": "5b0327e1d4fd2370",
             "type": "leaf",
             "state": {
-              "type": "kanban",
+              "type": "markdown",
               "state": {
-                "file": "Task Board.md",
-                "kanbanViewState": {
-                  "kanban-plugin": "board",
-                  "list-collapse": [
-                    true,
-                    true,
-                    false,
-                    false,
-                    false,
-                    false
-                  ]
-                }
+                "file": "plans/school-student-frequency.md",
+                "mode": "source",
+                "source": false
               },
-              "icon": "lucide-trello",
-              "title": "Task Board"
+              "icon": "lucide-file",
+              "title": "school-student-frequency"
             }
           }
         ]
@@ -196,13 +187,14 @@
   },
   "active": "5b0327e1d4fd2370",
   "lastOpenFiles": [
+    "Task Board.md",
+    "web-migration-plan.md",
     "workflow-nodes.md",
     "plans/multi-tenant-gateway-edge.md",
     "plans/feature-slice-architecture.md",
     "plans/foreach-and-fanout-notification.md",
     "plans/school-student-frequency.md.tmp.52330.52b8dd281b83",
     "plans/school-student-frequency.md",
-    "Task Board.md",
     "use-cases/parent-chatbot.md",
     "plans",
     "use-cases/school-frequence.md",

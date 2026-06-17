@@ -10,7 +10,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Separator } from "$lib/components/ui/separator";
   import type { MapStore } from "$lib/map/store.svelte";
-  import type { ToolState } from "$lib/map/tools";
+  import type { ToolState } from "$lib/map/tools.svelte";
   import RoomList from "./RoomList.svelte";
   import RoomForm from "./RoomForm.svelte";
   import CameraAssign from "./CameraAssign.svelte";

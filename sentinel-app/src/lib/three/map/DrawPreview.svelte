@@ -3,7 +3,7 @@
   // the pending start point to the snapped cursor, plus dots at both ends. Shown
   // only by the Wall tool.
   import { T } from "@threlte/core";
-  import type { Pt } from "$lib/map/tools";
+  import type { Pt } from "$lib/map/tools.svelte";
 
   let { from = null, to = null }: { from?: Pt | null; to?: Pt | null } = $props();
 

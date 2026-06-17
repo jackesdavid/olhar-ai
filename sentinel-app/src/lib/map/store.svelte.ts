@@ -8,7 +8,7 @@
 // as one { rooms, walls, markers } document.
 import { data } from "$lib/data";
 import type { Device, MapDoc, MapMarker, MapRoom, MapWall } from "$lib/types";
-import { History } from "./history";
+import { History } from "./history.svelte";
 
 const DEFAULT_ROOM_W = 6;
 const DEFAULT_ROOM_H = 4;

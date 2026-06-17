@@ -1,7 +1,7 @@
 // Keyboard commands for the map editor. Kept out of the page so the route shell
 // stays thin. Returns true if the event was handled (so the caller can stop here).
 import type { MapStore } from "./store.svelte";
-import type { ToolState } from "./tools";
+import type { ToolState } from "./tools.svelte";
 
 type Ctx = { store: MapStore; tools: ToolState; fit: () => void };
 

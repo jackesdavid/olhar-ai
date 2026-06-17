@@ -9,7 +9,7 @@
   import Redo2 from "@lucide/svelte/icons/redo-2";
   import { Button } from "$lib/components/ui/button";
   import type { MapStore } from "$lib/map/store.svelte";
-  import type { ToolMode, ToolState } from "$lib/map/tools";
+  import type { ToolMode, ToolState } from "$lib/map/tools.svelte";
 
   let {
     store,

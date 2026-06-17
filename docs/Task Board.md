@@ -13,7 +13,7 @@ kanban-plugin: board
 ## Backlog
 
 - [ ] Document camera onboarding flow (ONVIF discovery → go2rtc feed)
-- [ ] Pricing simulator: surface managed vs self-hosted AI in Settings UI
+- [x] Pricing simulator: surface managed vs self-hosted AI in Settings UI
 - [ ] Recipients management UI (add/edit/remove notification targets)
 - [ ] Define site/zones model in workflows domain
 
@@ -53,6 +53,6 @@ kanban-plugin: board
 
 %% kanban:settings
 ```
-{"kanban-plugin":"board","list-collapse":[true,true,false,false,false,false],"show-checkboxes":true,"date-display-format":"YYYY-MM-DD","hide-date-in-title":true}
+{"kanban-plugin":"board","list-collapse":[true,false,false,false,false,false],"show-checkboxes":true,"date-display-format":"YYYY-MM-DD","hide-date-in-title":true}
 ```
 %%

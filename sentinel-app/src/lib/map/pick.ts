@@ -2,7 +2,7 @@
 // done here in JS (not via three raycasting) so selection, drag and the draw tools
 // share one consistent coordinate model (the Viewport's screen→world).
 import type { MapMarker, MapRoom, MapWall } from "$lib/types";
-import type { Pt } from "./tools";
+import type { Pt } from "./tools.svelte";
 
 export type Hit = { kind: "room" | "wall" | "marker"; id: number } | null;
 export type EndpointHit = { id: number; which: 1 | 2 } | null;

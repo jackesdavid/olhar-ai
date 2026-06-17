@@ -10,8 +10,8 @@
   import { PCFSoftShadowMap, type OrthographicCamera } from "three";
   import type { MapStore } from "$lib/map/store.svelte";
   import type { PresenceStore } from "$lib/map/presence.svelte";
-  import type { Viewport } from "$lib/map/view3d";
-  import { resolvePoint, wallVertices, type Pt, type ToolState } from "$lib/map/tools";
+  import type { Viewport } from "$lib/map/view3d.svelte";
+  import { resolvePoint, wallVertices, type Pt, type ToolState } from "$lib/map/tools.svelte";
   import { hitTest, nearWallEndpoint } from "$lib/map/pick";
   import { categoryColor } from "$lib/map/categories";
   import GroundGrid from "./GroundGrid.svelte";

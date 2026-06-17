@@ -16,8 +16,8 @@
   import Loader from "$lib/components/loader.svelte";
 
   import { MapStore } from "$lib/map/store.svelte";
-  import { Viewport } from "$lib/map/view3d";
-  import { ToolState } from "$lib/map/tools";
+  import { Viewport } from "$lib/map/view3d.svelte";
+  import { ToolState } from "$lib/map/tools.svelte";
   import { PresenceStore } from "$lib/map/presence.svelte";
   import { CATEGORY_ORDER, CATEGORY_STYLE } from "$lib/map/categories";
   import { handleMapKey } from "$lib/map/keyboard";
