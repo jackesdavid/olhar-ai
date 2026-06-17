@@ -5,10 +5,8 @@
   import LoaderCircle from "@lucide/svelte/icons/loader-circle";
   import Plus from "@lucide/svelte/icons/plus";
   import Trash2 from "@lucide/svelte/icons/trash-2";
-  import Copy from "@lucide/svelte/icons/copy";
   import HardDrive from "@lucide/svelte/icons/hard-drive";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
-  import Check from "@lucide/svelte/icons/check";
   import ArrowUpCircle from "@lucide/svelte/icons/arrow-up-circle";
   import ScrollText from "@lucide/svelte/icons/scroll-text";
   import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
@@ -24,6 +22,7 @@
   import { boxes as boxApi, type Box } from "$lib/api";
   import { API_BASE } from "$lib/config";
   import { hasPerm } from "$lib/auth.svelte";
+  import { pendingInstall } from "$lib/box-install.svelte";
 
   const allowed = hasPerm("devices.write");
 
@@ -34,12 +33,6 @@
   let name = $state("");
   let authkey = $state("");
   let creating = $state(false);
-
-  // "Just created" — token shown ONCE + the ready-to-run install command.
-  let createdOpen = $state(false);
-  let createdToken = $state("");
-  let createdCmd = $state("");
-  let createdAuto = $state(false); // Tailscale key was auto-minted (transparent)
 
   // Delete confirm
   let deleteTarget = $state<Box | null>(null);
@@ -87,14 +80,21 @@
     if (creating || !name.trim()) return;
     creating = true;
     try {
-      const box = await boxApi.create(name.trim());
-      createdToken = box.token;
-      createdAuto = !!box.tailscale_key;
-      createdCmd = buildCommand(box.token, box.hostname, box.tailscale_key);
-      createdOpen = true;
+      const boxName = name.trim();
+      const box = await boxApi.create(boxName);
+      // Hand the one-time token + command to the dedicated install view (not a modal —
+      // the command is long and gets copied to another machine).
+      pendingInstall.value = {
+        name: boxName,
+        token: box.token,
+        command: buildCommand(box.token, box.hostname, box.tailscale_key),
+        auto: !!box.tailscale_key,
+        needsKey: !box.tailscale_key && !authkey.trim(),
+      };
       name = "";
       authkey = "";
       await load();
+      goto("/settings/boxes/install");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to create box");
     } finally {
@@ -299,57 +299,6 @@
     </Card.Root>
   {/if}
 </div>
-
-<!-- Token shown once + install command -->
-<Dialog.Root bind:open={createdOpen}>
-  <Dialog.Content class="max-w-xl">
-    <Dialog.Header>
-      <Dialog.Title>Install your edge box</Dialog.Title>
-      <Dialog.Description>Run this on the on-site machine. The token is shown only once.</Dialog.Description>
-    </Dialog.Header>
-
-    <div class="space-y-3">
-      <div class="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-600 dark:text-amber-400">
-        <TriangleAlert class="mt-0.5 size-4 shrink-0" />
-        <span>Copy this now — for security the box token can't be shown again. You can always create a new box.</span>
-      </div>
-
-      <div class="space-y-1.5">
-        <Label>Install command</Label>
-        <div class="relative">
-          <pre class="overflow-x-auto rounded-md border border-border bg-muted/40 p-3 pr-10 font-mono text-xs leading-relaxed">{createdCmd}</pre>
-          <Button variant="ghost" size="icon" class="absolute right-1.5 top-1.5" title="Copy command" onclick={() => copy(createdCmd)}>
-            <Copy class="size-4" />
-          </Button>
-        </div>
-      </div>
-
-      <div class="space-y-1.5">
-        <Label>Box token</Label>
-        <div class="flex items-center gap-2">
-          <code class="flex-1 truncate rounded-md border border-border bg-muted/40 px-2.5 py-1.5 font-mono text-xs">{createdToken}</code>
-          <Button variant="outline" size="sm" onclick={() => copy(createdToken)}><Copy class="size-3.5" /> Copy</Button>
-        </div>
-      </div>
-
-      {#if createdAuto}
-        <p class="flex items-center gap-2 text-xs text-primary">
-          <Check class="size-3.5" /> Private networking is set up automatically — just run the command. The box joins
-          securely with no Tailscale account needed.
-        </p>
-      {:else if !authkey.trim()}
-        <p class="text-xs text-muted-foreground">
-          Automatic enrollment isn't configured, so the command has a <code>&lt;YOUR_TAILSCALE_AUTHKEY&gt;</code>
-          placeholder — replace it with a key from your tailnet before running, or the box won't join the private network.
-        </p>
-      {/if}
-    </div>
-
-    <Dialog.Footer>
-      <Button onclick={() => (createdOpen = false)}>Done</Button>
-    </Dialog.Footer>
-  </Dialog.Content>
-</Dialog.Root>
 
 <!-- Delete confirm -->
 <Dialog.Root open={deleteTarget !== null} onOpenChange={(o) => { if (!o) deleteTarget = null; }}>

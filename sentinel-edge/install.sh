@@ -75,6 +75,26 @@ case "$os-$arch" in
   *) echo "Unsupported platform: $os-$arch" >&2; exit 1 ;;
 esac
 
+# macOS: ensure the open-source tailscaled is registered as a launchd system daemon AND
+# actually running, so `tailscale up` can reach it headlessly. Idempotent — safe to re-run.
+# (Linux's installer wires up tailscaled itself.) A binary-only `--update` can leave a box
+# without it (that's how a box ends up "offline on the tailnet"), so BOTH paths call this.
+ensure_tailscaled_macos() {
+  [ "$os" = "Darwin" ] || return 0
+  TAILSCALED="$(command -v tailscaled || echo /usr/local/bin/tailscaled)"
+  echo "▸ Ensuring tailscaled system daemon…"
+  "$TAILSCALED" install-system-daemon 2>&1 \
+    || echo "  ⚠ 'tailscaled install-system-daemon' failed — the box will be off the tailnet (Live won't work)." >&2
+  # Wait for the daemon to come up so a 'tailscale up' right after can reach it.
+  i=0
+  while [ "$i" -lt 10 ] && ! pgrep -x tailscaled >/dev/null 2>&1; do sleep 1; i=$((i+1)); done
+  if pgrep -x tailscaled >/dev/null 2>&1; then
+    echo "✓ tailscaled running"
+  else
+    echo "  ⚠ tailscaled not running after install — Live will be offline until it is. Re-run: sudo $TAILSCALED install-system-daemon" >&2
+  fi
+}
+
 # ---- update mode: swap the binary + restart; keep env / Tailscale / service ---
 if [ "$UPDATE" = "1" ]; then
   [ -x "$PREFIX/sentinel-edge" ] || { echo "Not installed at $PREFIX — run the full installer first." >&2; exit 1; }
@@ -86,6 +106,9 @@ if [ "$UPDATE" = "1" ]; then
     systemctl restart sentinel-edge
     echo "✓ Updated. Status: systemctl status sentinel-edge"
   else
+    # A binary-only update can have lost the tailscaled daemon — re-assert it before the
+    # restart so the box rejoins the tailnet (the edge's ensure_up runs `tailscale up`).
+    ensure_tailscaled_macos
     launchctl kickstart -k system/io.sentinel.edge 2>/dev/null \
       || { launchctl bootout system /Library/LaunchDaemons/io.sentinel.edge.plist 2>/dev/null; \
            launchctl bootstrap system /Library/LaunchDaemons/io.sentinel.edge.plist; }
@@ -124,11 +147,8 @@ if ! tailscale version >/dev/null 2>&1; then
 fi
 
 # macOS: register + start the tailscaled system daemon (launchd) so `tailscale up` works
-# headlessly. Idempotent — safe to re-run. (Linux's installer already sets up tailscaled.)
-if [ "$os" = "Darwin" ]; then
-  TAILSCALED="$(command -v tailscaled || echo /usr/local/bin/tailscaled)"
-  "$TAILSCALED" install-system-daemon >/dev/null 2>&1 || true
-fi
+# headlessly. (Linux's installer already sets up tailscaled.)
+ensure_tailscaled_macos
 
 # Join the tailnet now (best-effort) so the box is reachable the moment install finishes;
 # the edge service also re-asserts this on boot. Needs a key (auto-minted or --authkey).
