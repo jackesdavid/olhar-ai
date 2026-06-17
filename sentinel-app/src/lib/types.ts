@@ -130,11 +130,14 @@ export type RecognizeDetail = {
 };
 
 /** A camera assigned to a room (matches `app_core::map::RoomCamera`).
- * Positioned by an offset (`dx,dy`) in cells from the room's top-left. */
+ * Positioned by an offset (`dx,dy`) in cells from the room's top-left.
+ * `rot` is the yaw in degrees (0 = facing +y / "down" on the plan) used to
+ * orient the field-of-view wedge; optional + defaulted for back-compat. */
 export type RoomCamera = {
   ip: string;
   dx: number;
   dy: number;
+  rot?: number;
 };
 
 /** One room on the floor plan (matches `app_core::map::MapRoom`).
@@ -147,6 +150,36 @@ export type MapRoom = {
   w: number;
   h: number;
   cameras: RoomCamera[];
+};
+
+/** A free-form wall (matches `app_core::map::MapWall`): a segment on the grid with
+ * a thickness. Thin = a drawn line; thick = a solid wall. Independent of rooms. */
+export type MapWall = {
+  id: number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  thickness: number;
+};
+
+/** A placeable furniture / landmark marker (matches `app_core::map::MapMarker`),
+ * rendered as a flat SVG glyph on the floor. `icon` keys the icon library. */
+export type MapMarker = {
+  id: number;
+  icon: string;
+  x: number;
+  y: number;
+  rot: number;
+  scale: number;
+  label?: string | null;
+};
+
+/** The whole floor-plan document exchanged with `/map` (matches `app_core::map::MapDoc`). */
+export type MapDoc = {
+  rooms: MapRoom[];
+  walls: MapWall[];
+  markers: MapMarker[];
 };
 
 export const DEFAULT_SETTINGS: Settings = {

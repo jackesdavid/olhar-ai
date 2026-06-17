@@ -87,6 +87,57 @@ impl MapRoom {
     }
 }
 
+/// A free-form wall: a segment from `(x1,y1)` to `(x2,y2)` on the grid with a
+/// `thickness`. A thin thickness reads as a drawn line; a thicker one as a solid
+/// wall — one primitive covers both. Walls are independent of rooms.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MapWall {
+    pub id: u32,
+    pub x1: f64,
+    pub y1: f64,
+    pub x2: f64,
+    pub y2: f64,
+    #[serde(default = "default_thickness")]
+    pub thickness: f64,
+}
+
+fn default_thickness() -> f64 {
+    0.12
+}
+
+/// A placeable furniture / landmark marker, rendered as a flat SVG glyph on the
+/// floor. `icon` is a key into the frontend icon library; `rot` is degrees,
+/// `scale` a multiplier; `label` is an optional caption.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MapMarker {
+    pub id: u32,
+    pub icon: String,
+    pub x: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub rot: f64,
+    #[serde(default = "default_scale")]
+    pub scale: f64,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+fn default_scale() -> f64 {
+    1.0
+}
+
+/// The whole floor-plan document the API exchanges in one round-trip: labeled
+/// room zones, free-form walls, and markers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MapDoc {
+    #[serde(default)]
+    pub rooms: Vec<MapRoom>,
+    #[serde(default)]
+    pub walls: Vec<MapWall>,
+    #[serde(default)]
+    pub markers: Vec<MapMarker>,
+}
+
 /// The next free room id (max existing + 1), for the frontend's "Add room".
 pub fn next_id(rooms: &[MapRoom]) -> u32 {
     rooms.iter().map(|r| r.id).max().map_or(0, |m| m + 1)

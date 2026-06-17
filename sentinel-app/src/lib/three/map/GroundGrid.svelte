@@ -1,0 +1,49 @@
+<script lang="ts">
+  // The dot-field floor: a dark plane (catches shadows from the low wall/marker
+  // extrusions), a tiled emerald dot texture (the logo atom), and a soft radial
+  // emerald glow that makes the dots read brighter toward the focal centre.
+  import { onMount } from "svelte";
+  import { T } from "@threlte/core";
+  import { DoubleSide, type Texture } from "three";
+  import { dotFieldTexture, radialGlowTexture } from "./textures";
+
+  // World extent of the floor. Big enough to feel infinite at normal zoom; the
+  // dot tile repeats once per grid unit so it always lines up with the grid.
+  const SIZE = 400;
+
+  let dots = $state<Texture | null>(null);
+  let glow = $state<Texture | null>(null);
+
+  onMount(() => {
+    const d = dotFieldTexture();
+    d.repeat.set(SIZE, SIZE); // one dot per world (grid) unit
+    dots = d;
+    glow = radialGlowTexture();
+    return () => {
+      d.dispose();
+      glow?.dispose();
+    };
+  });
+</script>
+
+<!-- base floor: near-black green-neutral, one step above the canvas background -->
+<T.Mesh rotation.x={-Math.PI / 2} position.y={0} receiveShadow>
+  <T.PlaneGeometry args={[SIZE, SIZE]} />
+  <T.MeshStandardMaterial color="#16201d" roughness={0.95} metalness={0} />
+</T.Mesh>
+
+<!-- emerald dot field -->
+{#if dots}
+  <T.Mesh rotation.x={-Math.PI / 2} position.y={0.02}>
+    <T.PlaneGeometry args={[SIZE, SIZE]} />
+    <T.MeshBasicMaterial map={dots} transparent opacity={0.5} depthWrite={false} side={DoubleSide} />
+  </T.Mesh>
+{/if}
+
+<!-- focal radial glow (dot-field falloff) -->
+{#if glow}
+  <T.Mesh rotation.x={-Math.PI / 2} position.y={0.03}>
+    <T.PlaneGeometry args={[SIZE * 0.5, SIZE * 0.5]} />
+    <T.MeshBasicMaterial map={glow} transparent depthWrite={false} />
+  </T.Mesh>
+{/if}

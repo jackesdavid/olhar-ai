@@ -11,7 +11,7 @@ import {
   type Alert,
   type AlertStats,
   type Device,
-  type MapRoom,
+  type MapDoc,
   type NotificationTarget,
   type Person,
   type PersonEmbedding,
@@ -201,9 +201,10 @@ export const data = {
   testBeacon: (): Promise<never> => cloudOnly("Beacon test"),
 
   // ---- map ----------------------------------------------------------------
-  loadMap: (): Promise<MapRoom[]> => api.get<MapRoom[]>("/map"),
-  saveMap: async (rooms: MapRoom[]): Promise<void> => {
-    await api.put<void>("/map", rooms);
+  // The whole floor plan is one document (rooms + walls + markers), replace-all.
+  loadMap: (): Promise<MapDoc> => api.get<MapDoc>("/map"),
+  saveMap: async (doc: MapDoc): Promise<void> => {
+    await api.put<void>("/map", doc);
   },
 
   // ---- workflows ----------------------------------------------------------
