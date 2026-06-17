@@ -1,6 +1,8 @@
 <script lang="ts">
-  // Properties for the selected wall: thickness (line ↔ solid wall) and delete.
+  // Properties for the selected wall: thickness (line ↔ solid wall), rotation, delete.
   import Trash2 from "@lucide/svelte/icons/trash-2";
+  import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
+  import RotateCw from "@lucide/svelte/icons/rotate-cw";
   import { Button } from "$lib/components/ui/button";
   import { Label } from "$lib/components/ui/label";
   import type { MapStore } from "$lib/map/store.svelte";
@@ -37,6 +39,18 @@
         onpointerdown={() => store.checkpoint()}
         oninput={(e) => store.updateWall(wall.id, { thickness: e.currentTarget.valueAsNumber })}
       />
+    </div>
+
+    <div class="space-y-1.5">
+      <Label class="text-xs text-muted-foreground">Rotate (about centre)</Label>
+      <div class="flex items-center gap-2">
+        <Button variant="outline" size="sm" class="flex-1" onclick={() => store.rotateSelected(-15)}>
+          <RotateCcw class="size-4" /> −15°
+        </Button>
+        <Button variant="outline" size="sm" class="flex-1" onclick={() => store.rotateSelected(15)}>
+          <RotateCw class="size-4" /> +15°
+        </Button>
+      </div>
     </div>
 
     <Button variant="destructive" size="sm" class="w-full" onclick={() => store.deleteWall(wall.id)}>

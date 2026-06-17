@@ -56,5 +56,21 @@
         />
       </div>
     </div>
+
+    <div class="space-y-1.5">
+      <div class="flex items-center justify-between">
+        <Label class="text-xs text-muted-foreground">Rotation</Label>
+        <span class="text-xs tabular-nums text-muted-foreground">{Math.round(store.selectedRoom.rot ?? 0)}°</span>
+      </div>
+      <input
+        type="range"
+        min="0"
+        max="359"
+        value={store.selectedRoom.rot ?? 0}
+        class="h-1.5 w-full accent-primary"
+        onpointerdown={() => store.checkpoint()}
+        oninput={(e) => store.updateRoom({ rot: e.currentTarget.valueAsNumber })}
+      />
+    </div>
   </div>
 {/if}

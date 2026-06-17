@@ -9,17 +9,20 @@
     x,
     z,
     rot = 0,
+    fov: fovDeg = 62,
+    range = 4.2,
     onClick,
   }: {
     x: number;
     z: number;
     rot?: number;
+    fov?: number;
+    range?: number;
     onClick?: () => void;
   } = $props();
 
-  const FOV_DEG = 62;
-  const RANGE = 4.2; // grid units
-  const fov = (FOV_DEG * Math.PI) / 180;
+  const RANGE = $derived(range); // grid units
+  const fov = $derived((fovDeg * Math.PI) / 180);
 
   // rot is degrees, 0 = facing +y (down on the plan / world +z). Base offset of
   // -90° makes the wedge's local 0-angle point along +z; rot then turns it.

@@ -3,7 +3,7 @@
 import type { MapStore } from "./store.svelte";
 import type { ToolState } from "./tools.svelte";
 
-type Ctx = { store: MapStore; tools: ToolState; fit: () => void };
+type Ctx = { store: MapStore; tools: ToolState; fit: () => void; toggleHelp?: () => void };
 
 const ARROW: Record<string, { dx: number; dy: number; edge: "left" | "right" | "top" | "bottom" }> = {
   ArrowLeft: { dx: -1, dy: 0, edge: "left" },
@@ -20,7 +20,22 @@ function typingInto(): boolean {
 
 export function handleMapKey(e: KeyboardEvent, ctx: Ctx): boolean {
   if (typingInto()) return false;
-  const { store, tools, fit } = ctx;
+  const { store, tools, fit, toggleHelp } = ctx;
+
+  // rotate the selection: [ = CCW, ] = CW (Shift = fine 1° step)
+  if (e.key === "[" || e.key === "]") {
+    e.preventDefault();
+    const step = e.shiftKey ? 1 : 15;
+    store.rotateSelected(e.key === "[" ? -step : step);
+    return true;
+  }
+
+  // shortcuts overlay
+  if (e.key === "?") {
+    e.preventDefault();
+    toggleHelp?.();
+    return true;
+  }
 
   // undo / redo
   if ((e.metaKey || e.ctrlKey) && (e.key === "z" || e.key === "Z")) {

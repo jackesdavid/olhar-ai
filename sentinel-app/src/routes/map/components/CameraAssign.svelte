@@ -101,6 +101,31 @@
                 />
               </div>
             </div>
+            <div class="flex items-center gap-2">
+              <Label class="w-16 shrink-0 text-xs text-muted-foreground">FOV</Label>
+              <input
+                type="range"
+                min="20"
+                max="170"
+                value={cam.fov ?? 62}
+                class="h-1.5 w-full accent-primary"
+                oninput={(e) => store.setCameraFov(cam.ip, e.currentTarget.valueAsNumber)}
+              />
+              <span class="w-10 text-right text-xs tabular-nums text-muted-foreground">{Math.round(cam.fov ?? 62)}°</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <Label class="w-16 shrink-0 text-xs text-muted-foreground">Length</Label>
+              <input
+                type="range"
+                min="1"
+                max="20"
+                step="0.5"
+                value={cam.range ?? 4.2}
+                class="h-1.5 w-full accent-primary"
+                oninput={(e) => store.setCameraRange(cam.ip, e.currentTarget.valueAsNumber)}
+              />
+              <span class="w-10 text-right text-xs tabular-nums text-muted-foreground">{(cam.range ?? 4.2).toFixed(1)}</span>
+            </div>
           </div>
         {/each}
       </div>

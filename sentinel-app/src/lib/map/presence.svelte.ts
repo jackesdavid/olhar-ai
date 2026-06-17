@@ -7,9 +7,6 @@ import type { PresenceCategory, PresenceEvent } from "$lib/types";
 import type { MapStore } from "./store.svelte";
 
 const DEFAULT_TTL_MS = 6000;
-// How far ahead of a camera (grid units) to drop the pulse — inside its FOV wedge, not
-// on the lens. ~half the marker's FOV range so it sits in the watched area.
-const CAM_AHEAD = 2.4;
 // On open, replay presence recorded in the last window as a fresh pulse — so a detection
 // fired moments before you opened the map still shows (the live SSE only covers events
 // that arrive while the page is mounted).
@@ -74,13 +71,19 @@ export class PresenceStore {
       for (const r of this.map.rooms) {
         const c = r.cameras.find((cam) => cam.ip === ip);
         if (c) {
-          // Drop the pulse ahead in the camera's field of view, not on the lens. The
-          // facing convention matches CameraMarker: rot=0 → +z; forward = (-sin, cos).
-          const a = ((c.rot ?? 0) * Math.PI) / 180;
-          return {
-            x: r.x + c.dx - Math.sin(a) * CAM_AHEAD,
-            z: r.y + c.dy + Math.cos(a) * CAM_AHEAD,
-          };
+          // Camera world position: rotate its in-room offset about the room centre.
+          const rrad = ((r.rot ?? 0) * Math.PI) / 180;
+          const cwx = Math.cos(rrad);
+          const swx = Math.sin(rrad);
+          const lx = c.dx - r.w / 2;
+          const lz = c.dy - r.h / 2;
+          const camX = r.x + r.w / 2 + lx * cwx + lz * swx;
+          const camZ = r.y + r.h / 2 - lx * swx + lz * cwx;
+          // Drop the pulse ahead in the camera's field of view (facing = cam.rot + room.rot;
+          // forward = (-sin, cos), matching CameraMarker), scaled to the camera's range.
+          const a = (((c.rot ?? 0) + (r.rot ?? 0)) * Math.PI) / 180;
+          const ahead = Math.max(1, (c.range ?? 4.2) * 0.55);
+          return { x: camX - Math.sin(a) * ahead, z: camZ + Math.cos(a) * ahead };
         }
       }
     }

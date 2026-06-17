@@ -138,6 +138,10 @@ export type RoomCamera = {
   dx: number;
   dy: number;
   rot?: number;
+  /** Field-of-view angle in degrees (wedge width). */
+  fov?: number;
+  /** View distance in grid units (wedge length). */
+  range?: number;
 };
 
 /** One room on the floor plan (matches `app_core::map::MapRoom`).
@@ -149,6 +153,8 @@ export type MapRoom = {
   y: number;
   w: number;
   h: number;
+  /** Rotation of the room rectangle in degrees (about its centre). */
+  rot?: number;
   cameras: RoomCamera[];
 };
 

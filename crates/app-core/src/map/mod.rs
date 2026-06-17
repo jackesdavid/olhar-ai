@@ -28,6 +28,23 @@ pub struct RoomCamera {
     pub dx: i32,
     #[serde(default)]
     pub dy: i32,
+    /// Facing yaw in degrees (0 = +y / "down" on the plan); orients the FOV wedge.
+    #[serde(default)]
+    pub rot: f64,
+    /// Field-of-view angle in degrees.
+    #[serde(default = "default_fov")]
+    pub fov: f64,
+    /// View distance in grid units.
+    #[serde(default = "default_range")]
+    pub range: f64,
+}
+
+fn default_fov() -> f64 {
+    62.0
+}
+
+fn default_range() -> f64 {
+    4.2
 }
 
 /// One room on the floor plan: an axis-aligned rectangle (grid units, y-down,
@@ -40,6 +57,9 @@ pub struct MapRoom {
     pub y: i32,
     pub w: i32,
     pub h: i32,
+    /// Rotation of the room rectangle in degrees (about its centre).
+    #[serde(default)]
+    pub rot: f64,
     /// Accepts both the new `[{ip,dx,dy}]` form and the legacy `["ip"]` form;
     /// legacy entries get centered in the room on load.
     #[serde(default, deserialize_with = "de_cameras")]
@@ -63,7 +83,8 @@ where
     Ok(entries
         .into_iter()
         .map(|e| match e {
-            Entry::Ip(ip) => RoomCamera { ip, dx: -1, dy: -1 }, // sentinel → centered on load
+            // sentinel offset → centered on load
+            Entry::Ip(ip) => RoomCamera { ip, dx: -1, dy: -1, rot: 0.0, fov: default_fov(), range: default_range() },
             Entry::Full(c) => c,
         })
         .collect())
@@ -178,6 +199,7 @@ mod tests {
             y: 0,
             w: DEFAULT_ROOM_W,
             h: DEFAULT_ROOM_H,
+            rot: 0.0,
             cameras: vec![],
         }
     }

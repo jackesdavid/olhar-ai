@@ -230,6 +230,51 @@ export class MapStore {
     this.updateRoom({ cameras: sel.cameras.map((c) => (c.ip === ip ? { ...c, dx: cx, dy: cy } : c)) });
   }
 
+  /** Set a camera's FOV width (degrees) or view length (grid units). */
+  setCameraFov(ip: string, fov: number): void {
+    const sel = this.selectedRoom;
+    if (!sel) return;
+    const v = Math.max(10, Math.min(Number.isFinite(fov) ? fov : 62, 180));
+    this.updateRoom({ cameras: sel.cameras.map((c) => (c.ip === ip ? { ...c, fov: v } : c)) });
+  }
+  setCameraRange(ip: string, range: number): void {
+    const sel = this.selectedRoom;
+    if (!sel) return;
+    const v = Math.max(0.5, Math.min(Number.isFinite(range) ? range : 4.2, 30));
+    this.updateRoom({ cameras: sel.cameras.map((c) => (c.ip === ip ? { ...c, range: v } : c)) });
+  }
+
+  /** Rotate the current selection by `deltaDeg` (room rot / marker rot / wall endpoints). */
+  rotateSelected(deltaDeg: number): void {
+    if (this.sel?.kind === "room") {
+      const r = this.selectedRoom;
+      if (!r) return;
+      this.checkpoint();
+      this.updateRoom({ rot: (((r.rot ?? 0) + deltaDeg) % 360 + 360) % 360 });
+    } else if (this.sel?.kind === "marker") {
+      const m = this.selectedMarker;
+      if (!m) return;
+      this.checkpoint();
+      this.updateMarker(m.id, { rot: ((m.rot + deltaDeg) % 360 + 360) % 360 });
+    } else if (this.sel?.kind === "wall") {
+      const w = this.selectedWall;
+      if (!w) return;
+      this.checkpoint();
+      const mx = (w.x1 + w.x2) / 2;
+      const mz = (w.y1 + w.y2) / 2;
+      const rad = (deltaDeg * Math.PI) / 180;
+      const c = Math.cos(rad);
+      const s = Math.sin(rad);
+      const rot = (px: number, pz: number) => ({
+        x: mx + (px - mx) * c - (pz - mz) * s,
+        z: mz + (px - mx) * s + (pz - mz) * c,
+      });
+      const a = rot(w.x1, w.y1);
+      const b = rot(w.x2, w.y2);
+      this.updateWall(w.id, { x1: a.x, y1: a.z, x2: b.x, y2: b.z });
+    }
+  }
+
   unassignCamera(ip: string): void {
     const sel = this.selectedRoom;
     if (!sel) return;

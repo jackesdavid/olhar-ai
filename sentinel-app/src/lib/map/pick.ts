@@ -49,7 +49,17 @@ export function hitTest(
   }
   for (let i = rooms.length - 1; i >= 0; i--) {
     const r = rooms[i];
-    if (p.x >= r.x && p.x <= r.x + r.w && p.z >= r.y && p.z <= r.y + r.h) {
+    // Transform the point into the room's local (un-rotated) frame, then AABB test.
+    const cx = r.x + r.w / 2;
+    const cz = r.y + r.h / 2;
+    const rad = ((r.rot ?? 0) * Math.PI) / 180;
+    const dx = p.x - cx;
+    const dz = p.z - cz;
+    const c = Math.cos(rad);
+    const s = Math.sin(rad);
+    const lx = dx * c - dz * s;
+    const lz = dx * s + dz * c;
+    if (Math.abs(lx) <= r.w / 2 && Math.abs(lz) <= r.h / 2) {
       return { kind: "room", id: r.id };
     }
   }

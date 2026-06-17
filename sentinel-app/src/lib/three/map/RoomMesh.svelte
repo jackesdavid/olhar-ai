@@ -1,8 +1,8 @@
 <script lang="ts">
-  // One room as a labeled ZONE — not a walled box. A faint floor fill + a thin
-  // boundary outline (brighter when selected) + a flat label + its cameras. Walls
-  // are NOT implied: real walls are drawn separately (Phase 2), so open spaces like
-  // a backyard or open garage simply have no walls. Grid (x,y,w,h) → world XZ 1:1.
+  // One room as a labeled ZONE — a faint floor fill + a thin boundary outline + a flat
+  // label + its cameras. The whole room rotates about its centre via a group (room.rot),
+  // so children are positioned relative to the centre. Walls are NOT implied — real walls
+  // are drawn separately. Grid (x,y,w,h) → world XZ 1:1.
   import { T } from "@threlte/core";
   import { Text } from "@threlte/extras";
   import { DoubleSide } from "three";
@@ -25,54 +25,60 @@
 
   const cx = $derived(room.x + room.w / 2);
   const cz = $derived(room.y + room.h / 2);
+  const rad = $derived(((room.rot ?? 0) * Math.PI) / 180);
   const labelSize = $derived(Math.max(0.5, Math.min(room.w, room.h) * 0.22));
 
   const strokeColor = $derived(selected ? "#34d399" : "#2f5147");
   const strokeOpacity = $derived(selected ? 0.95 : 0.4);
 </script>
 
-<!-- floor fill -->
-<T.Mesh rotation.x={-Math.PI / 2} position={[cx, 0.04, cz]} receiveShadow>
-  <T.PlaneGeometry args={[room.w, room.h]} />
-  <T.MeshStandardMaterial
-    color={selected ? "#10b981" : "#1c2a26"}
-    transparent
-    opacity={selected ? 0.16 : 0.42}
-    roughness={0.9}
-    side={DoubleSide}
-  />
-</T.Mesh>
-
-<!-- boundary outline (flat strokes on the floor — shows the zone, not walls) -->
-{#snippet stroke(px: number, pz: number, sx: number, sz: number)}
-  <T.Mesh position={[px, STROKE_Y, pz]}>
-    <T.BoxGeometry args={[sx, 0.03, sz]} />
-    <T.MeshBasicMaterial color={strokeColor} transparent opacity={strokeOpacity} />
+<!-- everything sits in a group centred on the room, rotated by room.rot -->
+<T.Group position={[cx, 0, cz]} rotation.y={rad}>
+  <!-- floor fill -->
+  <T.Mesh rotation.x={-Math.PI / 2} position={[0, 0.04, 0]} receiveShadow>
+    <T.PlaneGeometry args={[room.w, room.h]} />
+    <T.MeshStandardMaterial
+      color={selected ? "#10b981" : "#1c2a26"}
+      transparent
+      opacity={selected ? 0.16 : 0.42}
+      roughness={0.9}
+      side={DoubleSide}
+    />
   </T.Mesh>
-{/snippet}
 
-{@render stroke(cx, room.y, room.w + STROKE, STROKE)}
-{@render stroke(cx, room.y + room.h, room.w + STROKE, STROKE)}
-{@render stroke(room.x, cz, STROKE, room.h)}
-{@render stroke(room.x + room.w, cz, STROKE, room.h)}
+  <!-- boundary outline (flat strokes on the floor — shows the zone, not walls) -->
+  {#snippet stroke(px: number, pz: number, sx: number, sz: number)}
+    <T.Mesh position={[px, STROKE_Y, pz]}>
+      <T.BoxGeometry args={[sx, 0.03, sz]} />
+      <T.MeshBasicMaterial color={strokeColor} transparent opacity={strokeOpacity} />
+    </T.Mesh>
+  {/snippet}
 
-<!-- flat floor label -->
-<Text
-  text={room.name}
-  position={[cx, 0.08, cz]}
-  rotation={[-Math.PI / 2, 0, 0]}
-  fontSize={labelSize}
-  color={selected ? "#d1fae5" : "#7c9a8f"}
-  anchorX="center"
-  anchorY="middle"
-/>
+  {@render stroke(0, -room.h / 2, room.w + STROKE, STROKE)}
+  {@render stroke(0, room.h / 2, room.w + STROKE, STROKE)}
+  {@render stroke(-room.w / 2, 0, STROKE, room.h)}
+  {@render stroke(room.w / 2, 0, STROKE, room.h)}
 
-<!-- cameras -->
-{#each room.cameras as cam (cam.ip)}
-  <CameraMarker
-    x={room.x + cam.dx}
-    z={room.y + cam.dy}
-    rot={cam.rot ?? 0}
-    onClick={() => onCameraClick?.(cam.ip)}
+  <!-- flat floor label -->
+  <Text
+    text={room.name}
+    position={[0, 0.08, 0]}
+    rotation={[-Math.PI / 2, 0, 0]}
+    fontSize={labelSize}
+    color={selected ? "#d1fae5" : "#7c9a8f"}
+    anchorX="center"
+    anchorY="middle"
   />
-{/each}
+
+  <!-- cameras (positioned relative to the room centre) -->
+  {#each room.cameras as cam (cam.ip)}
+    <CameraMarker
+      x={cam.dx - room.w / 2}
+      z={cam.dy - room.h / 2}
+      rot={cam.rot ?? 0}
+      fov={cam.fov}
+      range={cam.range}
+      onClick={() => onCameraClick?.(cam.ip)}
+    />
+  {/each}
+</T.Group>

@@ -19,6 +19,7 @@
   import Armchair from "@lucide/svelte/icons/armchair";
   import Save from "@lucide/svelte/icons/save";
   import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import Keyboard from "@lucide/svelte/icons/keyboard";
 
   import { Button } from "$lib/components/ui/button";
   import Loader from "$lib/components/loader.svelte";
@@ -31,6 +32,7 @@
   import { handleMapKey } from "$lib/map/keyboard";
   import MapScene from "$lib/three/map/MapScene.svelte";
   import SidePanel from "./components/SidePanel.svelte";
+  import ShortcutsOverlay from "./components/ShortcutsOverlay.svelte";
 
   const store = new MapStore();
   const viewport = new Viewport();
@@ -82,8 +84,10 @@
     }
   }
 
+  let showHelp = $state(false);
+
   function onKey(e: KeyboardEvent) {
-    handleMapKey(e, { store, tools, fit });
+    handleMapKey(e, { store, tools, fit, toggleHelp: () => (showHelp = !showHelp) });
   }
 
   $effect(() => {
@@ -158,6 +162,9 @@
           <Button variant="ghost" size="icon" class="size-8" title="Redo (⇧⌘Z)" disabled={!store.canRedo} onclick={() => store.redo()}>
             <Redo2 class="size-4" />
           </Button>
+          <Button variant="ghost" size="icon" class="size-8" title="Keyboard shortcuts (?)" onclick={() => (showHelp = !showHelp)}>
+            <Keyboard class="size-4" />
+          </Button>
         </div>
 
         <!-- zoom / fit (top-right) -->
@@ -198,6 +205,8 @@
             </span>
           {/each}
         </div>
+
+        <ShortcutsOverlay open={showHelp} onClose={() => (showHelp = false)} />
       </div>
 
       <SidePanel {store} {tools} onGoLive={goLive} />
