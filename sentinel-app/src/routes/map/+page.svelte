@@ -18,6 +18,7 @@
   import { MapStore } from "$lib/map/store.svelte";
   import { Viewport } from "$lib/map/view3d";
   import { ToolState } from "$lib/map/tools";
+  import { handleMapKey } from "$lib/map/keyboard";
   import MapScene from "$lib/three/map/MapScene.svelte";
   import Toolbar from "./components/Toolbar.svelte";
   import EditorPanel from "./components/EditorPanel.svelte";
@@ -68,27 +69,7 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    const el = document.activeElement as HTMLElement | null;
-    const tag = el?.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
-    if (e.key === "Escape") {
-      tools.cancel();
-      store.clearSelection();
-    } else if (e.key === "Delete" || e.key === "Backspace") {
-      store.deleteSelected();
-    } else if (e.key === "v" || e.key === "V") {
-      tools.setMode("select");
-    } else if (e.key === "w" || e.key === "W") {
-      tools.setMode("wall");
-    } else if (e.key === "m" || e.key === "M") {
-      tools.setMode("marker");
-    } else if (e.key === "f" || e.key === "F") {
-      fit();
-    } else if ((e.metaKey || e.ctrlKey) && (e.key === "z" || e.key === "Z")) {
-      e.preventDefault();
-      if (e.shiftKey) store.redo();
-      else store.undo();
-    }
+    handleMapKey(e, { store, tools, fit });
   }
 
   $effect(() => {

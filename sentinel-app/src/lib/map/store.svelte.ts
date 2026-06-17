@@ -276,4 +276,34 @@ export class MapStore {
     if (this.sel?.kind === "wall") this.deleteWall(this.sel.id);
     else if (this.sel?.kind === "marker") this.deleteMarker(this.sel.id);
   }
+
+  /** Nudge the current selection by whole grid cells (keyboard arrows). */
+  nudgeSelected(dx: number, dy: number): void {
+    if (this.sel?.kind === "room") {
+      this.moveSelectedRoom(dx, dy);
+    } else if (this.sel?.kind === "wall") {
+      const w = this.selectedWall;
+      if (!w) return;
+      this.checkpoint();
+      this.updateWall(w.id, { x1: w.x1 + dx, y1: w.y1 + dy, x2: w.x2 + dx, y2: w.y2 + dy });
+    } else if (this.sel?.kind === "marker") {
+      const m = this.selectedMarker;
+      if (!m) return;
+      this.checkpoint();
+      this.updateMarker(m.id, { x: m.x + dx, y: m.y + dy });
+    }
+  }
+
+  /** Cycle selection across all entities (rooms → walls → markers); dir ±1. */
+  cycleSelection(dir: 1 | -1): void {
+    const items: Selection[] = [
+      ...this.rooms.map((r) => ({ kind: "room" as const, id: r.id })),
+      ...this.walls.map((w) => ({ kind: "wall" as const, id: w.id })),
+      ...this.markers.map((m) => ({ kind: "marker" as const, id: m.id })),
+    ];
+    if (items.length === 0) return;
+    const cur = items.findIndex((i) => i!.kind === this.sel?.kind && i!.id === this.sel?.id);
+    const next = (cur + dir + items.length) % items.length;
+    this.sel = items[next];
+  }
 }
