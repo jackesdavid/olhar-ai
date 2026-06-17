@@ -12,12 +12,10 @@
   let {
     room,
     selected = false,
-    onSelect,
     onCameraClick,
   }: {
     room: MapRoom;
     selected?: boolean;
-    onSelect?: () => void;
     onCameraClick?: (ip: string) => void;
   } = $props();
 
@@ -31,26 +29,10 @@
 
   const strokeColor = $derived(selected ? "#34d399" : "#2f5147");
   const strokeOpacity = $derived(selected ? 0.95 : 0.4);
-
-  function pointer(on: boolean) {
-    document.body.style.cursor = on ? "pointer" : "default";
-  }
-
-  function pick(e: { stopPropagation: () => void }) {
-    e.stopPropagation();
-    onSelect?.();
-  }
 </script>
 
-<!-- floor fill / click target -->
-<T.Mesh
-  rotation.x={-Math.PI / 2}
-  position={[cx, 0.04, cz]}
-  receiveShadow
-  onclick={pick}
-  onpointerenter={() => pointer(true)}
-  onpointerleave={() => pointer(false)}
->
+<!-- floor fill -->
+<T.Mesh rotation.x={-Math.PI / 2} position={[cx, 0.04, cz]} receiveShadow>
   <T.PlaneGeometry args={[room.w, room.h]} />
   <T.MeshStandardMaterial
     color={selected ? "#10b981" : "#1c2a26"}
@@ -63,7 +45,7 @@
 
 <!-- boundary outline (flat strokes on the floor — shows the zone, not walls) -->
 {#snippet stroke(px: number, pz: number, sx: number, sz: number)}
-  <T.Mesh position={[px, STROKE_Y, pz]} onclick={pick}>
+  <T.Mesh position={[px, STROKE_Y, pz]}>
     <T.BoxGeometry args={[sx, 0.03, sz]} />
     <T.MeshBasicMaterial color={strokeColor} transparent opacity={strokeOpacity} />
   </T.Mesh>

@@ -17,24 +17,34 @@
 
   import { MapStore } from "$lib/map/store.svelte";
   import { Viewport } from "$lib/map/view3d";
+  import { ToolState } from "$lib/map/tools";
   import MapScene from "$lib/three/map/MapScene.svelte";
   import Toolbar from "./components/Toolbar.svelte";
   import EditorPanel from "./components/EditorPanel.svelte";
 
   const store = new MapStore();
   const viewport = new Viewport();
+  const tools = new ToolState();
 
   function bounds() {
-    if (store.rooms.length === 0) return null;
+    if (store.rooms.length === 0 && store.walls.length === 0) return null;
     let minX = Infinity,
       maxX = -Infinity,
       minZ = Infinity,
       maxZ = -Infinity;
+    const ext = (x: number, z: number) => {
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minZ = Math.min(minZ, z);
+      maxZ = Math.max(maxZ, z);
+    };
     for (const r of store.rooms) {
-      minX = Math.min(minX, r.x);
-      maxX = Math.max(maxX, r.x + r.w);
-      minZ = Math.min(minZ, r.y);
-      maxZ = Math.max(maxZ, r.y + r.h);
+      ext(r.x, r.y);
+      ext(r.x + r.w, r.y + r.h);
+    }
+    for (const w of store.walls) {
+      ext(w.x1, w.y1);
+      ext(w.x2, w.y2);
     }
     return { minX, maxX, minZ, maxZ };
   }
@@ -57,6 +67,33 @@
     }
   }
 
+  function onKey(e: KeyboardEvent) {
+    const el = document.activeElement as HTMLElement | null;
+    const tag = el?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
+    if (e.key === "Escape") {
+      tools.cancel();
+      store.clearSelection();
+    } else if (e.key === "Delete" || e.key === "Backspace") {
+      store.deleteSelected();
+    } else if (e.key === "v" || e.key === "V") {
+      tools.setMode("select");
+    } else if (e.key === "w" || e.key === "W") {
+      tools.setMode("wall");
+    } else if (e.key === "f" || e.key === "F") {
+      fit();
+    } else if ((e.metaKey || e.ctrlKey) && (e.key === "z" || e.key === "Z")) {
+      e.preventDefault();
+      if (e.shiftKey) store.redo();
+      else store.undo();
+    }
+  }
+
+  $effect(() => {
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   onMount(async () => {
     try {
       await store.load();
@@ -69,7 +106,7 @@
 </script>
 
 <div class="flex h-[calc(100vh-7rem)] flex-col gap-4">
-  <Toolbar {store} onSave={save} />
+  <Toolbar {store} {tools} onSave={save} />
 
   {#if store.loading}
     <Loader label="Loading map…" />
@@ -79,13 +116,7 @@
       <Card.Root class="relative min-h-[24rem] overflow-hidden p-0">
         <div class="h-full w-full bg-[oklch(0.165_0.006_160)]">
           <Canvas>
-            <MapScene
-              rooms={store.rooms}
-              selectedId={store.selectedId}
-              {viewport}
-              onSelect={(id) => store.select(id)}
-              onCameraClick={goLive}
-            />
+            <MapScene {store} {viewport} {tools} onCameraClick={goLive} />
           </Canvas>
         </div>
 
@@ -108,7 +139,7 @@
         </div>
       </Card.Root>
 
-      <EditorPanel {store} onGoLive={goLive} />
+      <EditorPanel {store} {tools} onGoLive={goLive} />
     </div>
   {/if}
 </div>

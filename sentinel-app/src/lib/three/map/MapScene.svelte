@@ -1,28 +1,31 @@
 <script lang="ts">
-  // Scene root for the Map. Renders the floor plan top-down through an orthographic
-  // camera with flat 2D navigation (pan + wheel-zoom), so it reads like a blueprint
-  // while still being the 3D engine — soft shadows on the low wall extrusions give
-  // the gentle depth. Camera framing is owned by the shared `Viewport`.
+  // Scene root for the Map. Top-down orthographic view with flat 2D navigation, and
+  // tool-aware pointer handling: Select (pick / drag entities, pan empty space) and
+  // Wall (click-chain segments with grid + vertex + ortho snapping). All picking and
+  // screen→world go through the shared Viewport, so everything shares one coordinate
+  // model. Soft shadows on the wall extrusions give the gentle 3D depth.
   import { onMount } from "svelte";
   import { T, useThrelte } from "@threlte/core";
   import { interactivity } from "@threlte/extras";
   import { PCFSoftShadowMap, type OrthographicCamera } from "three";
-  import type { MapRoom } from "$lib/types";
+  import type { MapStore } from "$lib/map/store.svelte";
   import type { Viewport } from "$lib/map/view3d";
+  import { resolvePoint, wallVertices, type Pt, type ToolState } from "$lib/map/tools";
+  import { hitTest, nearWallEndpoint } from "$lib/map/pick";
   import GroundGrid from "./GroundGrid.svelte";
   import RoomMesh from "./RoomMesh.svelte";
+  import WallLayer from "./WallLayer.svelte";
+  import DrawPreview from "./DrawPreview.svelte";
 
   let {
-    rooms,
-    selectedId = null,
+    store,
     viewport,
-    onSelect,
+    tools,
     onCameraClick,
   }: {
-    rooms: MapRoom[];
-    selectedId?: number | null;
+    store: MapStore;
     viewport: Viewport;
-    onSelect?: (id: number) => void;
+    tools: ToolState;
     onCameraClick?: (ip: string) => void;
   } = $props();
 
@@ -31,50 +34,130 @@
 
   let cam = $state<OrthographicCamera | undefined>(undefined);
 
-  // Keep the viewport's notion of the canvas size current.
   $effect(() => {
     viewport.width = $size.width || 1;
     viewport.height = $size.height || 1;
   });
-
-  // Push the viewport onto the real camera whenever it (or the size) changes.
   $effect(() => {
     if (!cam) return;
     viewport.apply(cam);
     invalidate();
   });
 
-  // Soft shadows for the gentle 3D relief.
   onMount(() => {
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = PCFSoftShadowMap;
   });
 
-  // ---- flat 2D navigation: pan (drag) + zoom (wheel) ----------------------
-  let drag: { x: number; y: number } | null = null;
-
-  function local(e: PointerEvent | WheelEvent): { x: number; y: number } {
+  // ---- pointer → world ----------------------------------------------------
+  function worldAt(e: PointerEvent): Pt {
     const r = renderer.domElement.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top };
+    return viewport.screenToWorld(e.clientX - r.left, e.clientY - r.top);
   }
+  function snap(raw: Pt, from: Pt | null, ortho: boolean): Pt {
+    return resolvePoint(raw, { from, ortho, verts: wallVertices(store.walls) });
+  }
+
+  type Drag =
+    | { mode: "pan"; sx: number; sy: number }
+    | { mode: "endpoint"; id: number; which: 1 | 2; started: boolean }
+    | { mode: "room" | "wall" | "marker"; id: number; last: Pt; started: boolean };
+  let drag: Drag | null = null;
 
   function onDown(e: PointerEvent) {
-    drag = { x: e.clientX, y: e.clientY };
     renderer.domElement.setPointerCapture?.(e.pointerId);
+
+    if (tools.mode === "wall") {
+      const sp = snap(worldAt(e), tools.draft, e.shiftKey);
+      if (!tools.draft) tools.draft = sp;
+      else {
+        store.addWall(tools.draft.x, tools.draft.z, sp.x, sp.z);
+        tools.draft = sp; // chain
+      }
+      return;
+    }
+    if (tools.mode === "marker") {
+      const sp = snap(worldAt(e), null, false);
+      store.addMarker(tools.markerIcon, sp.x, sp.z);
+      return;
+    }
+
+    // select mode
+    const raw = worldAt(e);
+    const ep = nearWallEndpoint(raw, store.walls);
+    if (ep) {
+      store.selectWall(ep.id);
+      drag = { mode: "endpoint", id: ep.id, which: ep.which, started: false };
+      return;
+    }
+    const hit = hitTest(raw, store.rooms, store.walls, store.markers);
+    if (hit) {
+      if (hit.kind === "room") store.selectRoom(hit.id);
+      else if (hit.kind === "wall") store.selectWall(hit.id);
+      else store.selectMarker(hit.id);
+      drag = { mode: hit.kind, id: hit.id, last: snap(raw, null, false), started: false };
+      return;
+    }
+    store.clearSelection();
+    drag = { mode: "pan", sx: e.clientX, sy: e.clientY };
   }
+
   function onMove(e: PointerEvent) {
+    // live snapped cursor for the draw preview
+    if (tools.mode === "wall") tools.hover = snap(worldAt(e), tools.draft, e.shiftKey);
+    else if (tools.mode === "marker") tools.hover = snap(worldAt(e), null, false);
+    else tools.hover = null;
+
     if (!drag) return;
-    viewport.panByPixels(e.clientX - drag.x, e.clientY - drag.y);
-    drag = { x: e.clientX, y: e.clientY };
+
+    if (drag.mode === "pan") {
+      viewport.panByPixels(e.clientX - drag.sx, e.clientY - drag.sy);
+      drag.sx = e.clientX;
+      drag.sy = e.clientY;
+      return;
+    }
+
+    const sp = snap(worldAt(e), null, e.shiftKey);
+
+    if (drag.mode === "endpoint") {
+      if (!drag.started) {
+        store.checkpoint();
+        drag.started = true;
+      }
+      if (drag.which === 1) store.updateWall(drag.id, { x1: sp.x, y1: sp.z });
+      else store.updateWall(drag.id, { x2: sp.x, y2: sp.z });
+      return;
+    }
+
+    const ddx = sp.x - drag.last.x;
+    const ddz = sp.z - drag.last.z;
+    if (ddx === 0 && ddz === 0) return;
+    if (!drag.started) {
+      store.checkpoint();
+      drag.started = true;
+    }
+    const id = drag.id;
+    if (drag.mode === "room") {
+      const r = store.rooms.find((x) => x.id === id);
+      if (r) store.updateRoom({ x: r.x + ddx, y: r.y + ddz });
+    } else if (drag.mode === "wall") {
+      const w = store.walls.find((x) => x.id === id);
+      if (w) store.updateWall(w.id, { x1: w.x1 + ddx, y1: w.y1 + ddz, x2: w.x2 + ddx, y2: w.y2 + ddz });
+    } else {
+      const m = store.markers.find((x) => x.id === id);
+      if (m) store.updateMarker(m.id, { x: m.x + ddx, y: m.y + ddz });
+    }
+    drag.last = sp;
   }
+
   function onUp(e: PointerEvent) {
     drag = null;
     renderer.domElement.releasePointerCapture?.(e.pointerId);
   }
   function onWheel(e: WheelEvent) {
     e.preventDefault();
-    const p = local(e);
-    viewport.zoomAt(p.x, p.y, e.deltaY < 0 ? 1.1 : 1 / 1.1);
+    const r = renderer.domElement.getBoundingClientRect();
+    viewport.zoomAt(e.clientX - r.left, e.clientY - r.top, e.deltaY < 0 ? 1.1 : 1 / 1.1);
   }
 
   onMount(() => {
@@ -96,7 +179,6 @@
 
 <T.OrthographicCamera makeDefault bind:ref={cam} position={[0, 200, 0]} />
 
-<!-- lighting: soft ambient + an angled key light casting soft shadows -->
 <T.AmbientLight intensity={0.85} />
 <T.DirectionalLight
   position={[40, 70, 24]}
@@ -111,16 +193,16 @@
   shadow.camera.near={1}
   shadow.camera.far={400}
 />
-<!-- faint emerald rim from below the horizon to stay on-brand -->
 <T.DirectionalLight position={[-30, 18, -40]} intensity={0.35} color="#34d399" />
 
 <GroundGrid />
 
-{#each rooms as room (room.id)}
-  <RoomMesh
-    {room}
-    selected={room.id === selectedId}
-    onSelect={() => onSelect?.(room.id)}
-    {onCameraClick}
-  />
+{#each store.rooms as room (room.id)}
+  <RoomMesh {room} selected={room.id === store.selectedRoomId} {onCameraClick} />
 {/each}
+
+<WallLayer {store} />
+
+{#if tools.mode === "wall"}
+  <DrawPreview from={tools.draft} to={tools.hover} />
+{/if}

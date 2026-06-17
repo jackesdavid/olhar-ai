@@ -7,13 +7,13 @@
   let { store }: { store: MapStore } = $props();
 </script>
 
-{#if store.selected}
+{#if store.selectedRoom}
   <div class="space-y-3">
     <div class="space-y-1.5">
       <Label for="room-name">Name</Label>
       <Input
         id="room-name"
-        value={store.selected.name}
+        value={store.selectedRoom.name}
         oninput={(e) => store.setRoomField("name", e.currentTarget.value)}
       />
     </div>
@@ -24,7 +24,7 @@
         <Input
           id="room-x"
           type="number"
-          value={store.selected.x}
+          value={store.selectedRoom.x}
           oninput={(e) => store.setRoomField("x", e.currentTarget.valueAsNumber)}
         />
       </div>
@@ -33,7 +33,7 @@
         <Input
           id="room-y"
           type="number"
-          value={store.selected.y}
+          value={store.selectedRoom.y}
           oninput={(e) => store.setRoomField("y", e.currentTarget.valueAsNumber)}
         />
       </div>
@@ -42,7 +42,7 @@
         <Input
           id="room-w"
           type="number"
-          value={store.selected.w}
+          value={store.selectedRoom.w}
           oninput={(e) => store.setRoomField("w", e.currentTarget.valueAsNumber)}
         />
       </div>
@@ -51,7 +51,7 @@
         <Input
           id="room-h"
           type="number"
-          value={store.selected.h}
+          value={store.selectedRoom.h}
           oninput={(e) => store.setRoomField("h", e.currentTarget.valueAsNumber)}
         />
       </div>

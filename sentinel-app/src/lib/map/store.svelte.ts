@@ -1,11 +1,14 @@
-// MapStore — the editor's working copy of the floor plan. Owns the rooms array,
-// the device list (for camera assignment), selection, and the dirty/saving flags.
-// Pulled out of the page so the route shell stays thin and the logic is testable.
+// MapStore — the editor's working copy of the floor plan: room zones, free-form
+// walls, furniture/landmark markers, plus the device list, selection, undo/redo,
+// and the dirty/saving flags. Pulled out of the page so the route shell stays thin.
 //
-// Mutations go through small methods that re-assign `rooms` (so Svelte 5 reactivity
-// fires) and set `dirty`. The whole plan is saved as one document via `data.saveMap`.
+// Mutations re-assign the relevant array (so Svelte 5 reactivity fires) and set
+// `dirty`. Discrete actions checkpoint history first; continuous gestures (drag,
+// sliders) checkpoint once at the start via `beginGesture()`. The whole plan saves
+// as one { rooms, walls, markers } document.
 import { data } from "$lib/data";
-import type { Device, MapMarker, MapRoom, MapWall } from "$lib/types";
+import type { Device, MapDoc, MapMarker, MapRoom, MapWall } from "$lib/types";
+import { History } from "./history";
 
 const DEFAULT_ROOM_W = 6;
 const DEFAULT_ROOM_H = 4;
@@ -14,34 +17,102 @@ function clampInt(v: number, min: number): number {
   return Number.isFinite(v) ? Math.max(min, Math.round(v)) : min;
 }
 
+export type SelKind = "room" | "wall" | "marker";
+export type Selection = { kind: SelKind; id: number } | null;
+
 export class MapStore {
   rooms = $state<MapRoom[]>([]);
   walls = $state<MapWall[]>([]);
   markers = $state<MapMarker[]>([]);
   devices = $state<Device[]>([]);
-  selectedId = $state<number | null>(null);
+
+  sel = $state<Selection>(null);
   loading = $state(true);
   saving = $state(false);
   dirty = $state(false);
+  canUndo = $state(false);
+  canRedo = $state(false);
 
-  selected = $derived(this.rooms.find((r) => r.id === this.selectedId) ?? null);
+  private history = new History();
+
+  // ---- selection ----------------------------------------------------------
+  selectedRoom = $derived(
+    this.sel?.kind === "room" ? (this.rooms.find((r) => r.id === this.sel!.id) ?? null) : null,
+  );
+  selectedWall = $derived(
+    this.sel?.kind === "wall" ? (this.walls.find((w) => w.id === this.sel!.id) ?? null) : null,
+  );
+  selectedMarker = $derived(
+    this.sel?.kind === "marker" ? (this.markers.find((m) => m.id === this.sel!.id) ?? null) : null,
+  );
+  selectedRoomId = $derived(this.sel?.kind === "room" ? this.sel.id : null);
+  selectedWallId = $derived(this.sel?.kind === "wall" ? this.sel.id : null);
+  selectedMarkerId = $derived(this.sel?.kind === "marker" ? this.sel.id : null);
+
+  selectRoom(id: number | null): void {
+    this.sel = id === null ? null : { kind: "room", id };
+  }
+  selectWall(id: number): void {
+    this.sel = { kind: "wall", id };
+  }
+  selectMarker(id: number): void {
+    this.sel = { kind: "marker", id };
+  }
+  clearSelection(): void {
+    this.sel = null;
+  }
+
+  // ---- devices ------------------------------------------------------------
   deviceByIp = $derived(new Map(this.devices.map((d) => [d.ip, d])));
-
   deviceName(ip: string): string {
     return this.deviceByIp.get(ip)?.name ?? ip;
   }
-
-  /** Devices not yet assigned to the selected room — candidates for the picker. */
   get assignable(): Device[] {
-    const sel = this.selected;
+    const sel = this.selectedRoom;
     if (!sel) return [];
     return this.devices.filter((d) => !sel.cameras.some((c) => c.ip === d.ip));
   }
 
-  private nextRoomId(): number {
-    return this.rooms.reduce((m, r) => Math.max(m, r.id), -1) + 1;
+  // ---- history ------------------------------------------------------------
+  private doc(): MapDoc {
+    return { rooms: this.rooms, walls: this.walls, markers: this.markers };
+  }
+  private apply(doc: MapDoc): void {
+    this.rooms = doc.rooms;
+    this.walls = doc.walls;
+    this.markers = doc.markers;
+    this.dirty = true;
+  }
+  private syncHistory(): void {
+    this.canUndo = this.history.canUndo;
+    this.canRedo = this.history.canRedo;
+  }
+  /** Record a restore point before a mutation (or at a gesture's start). */
+  checkpoint(): void {
+    this.history.push(this.doc());
+    this.dirty = true;
+    this.syncHistory();
+  }
+  /** Alias used by the scene at drag pointerdown — one checkpoint per gesture. */
+  beginGesture(): void {
+    this.checkpoint();
+  }
+  undo(): void {
+    const d = this.history.undo(this.doc());
+    if (d) this.apply(d);
+    this.syncHistory();
+  }
+  redo(): void {
+    const d = this.history.redo(this.doc());
+    if (d) this.apply(d);
+    this.syncHistory();
   }
 
+  private nextId(items: { id: number }[]): number {
+    return items.reduce((m, x) => Math.max(m, x.id), -1) + 1;
+  }
+
+  // ---- load / save --------------------------------------------------------
   async load(): Promise<void> {
     this.loading = true;
     try {
@@ -50,19 +121,29 @@ export class MapStore {
       this.walls = doc.walls ?? [];
       this.markers = doc.markers ?? [];
       this.devices = ds;
-      this.selectedId = this.rooms.length > 0 ? this.rooms[0].id : null;
+      this.sel = this.rooms.length > 0 ? { kind: "room", id: this.rooms[0].id } : null;
       this.dirty = false;
+      this.history = new History();
+      this.syncHistory();
     } finally {
       this.loading = false;
     }
   }
 
-  select(id: number | null): void {
-    this.selectedId = id;
+  async save(): Promise<void> {
+    this.saving = true;
+    try {
+      await data.saveMap(this.doc());
+      this.dirty = false;
+    } finally {
+      this.saving = false;
+    }
   }
 
+  // ---- rooms --------------------------------------------------------------
   addRoom(): MapRoom {
-    const id = this.nextRoomId();
+    this.checkpoint();
+    const id = this.nextId(this.rooms);
     const room: MapRoom = {
       id,
       name: `Room ${id + 1}`,
@@ -73,90 +154,126 @@ export class MapStore {
       cameras: [],
     };
     this.rooms = [...this.rooms, room];
-    this.selectedId = id;
-    this.dirty = true;
+    this.sel = { kind: "room", id };
     return room;
   }
 
   deleteRoom(id: number): void {
+    this.checkpoint();
     this.rooms = this.rooms.filter((r) => r.id !== id);
-    if (this.selectedId === id) {
-      this.selectedId = this.rooms.length > 0 ? this.rooms[0].id : null;
-    }
+    if (this.sel?.kind === "room" && this.sel.id === id) this.sel = null;
+  }
+
+  /** Patch the selected room in place (no checkpoint — used by form typing + drag). */
+  updateRoom(patch: Partial<MapRoom>): void {
+    const id = this.selectedRoom?.id;
+    if (id === undefined) return;
+    this.rooms = this.rooms.map((r) => (r.id === id ? { ...r, ...patch } : r));
     this.dirty = true;
   }
 
-  /** Patch the selected room in place (re-assigns rooms + flags dirty). */
-  updateSelected(patch: Partial<MapRoom>): void {
-    if (this.selectedId === null) return;
-    this.rooms = this.rooms.map((r) => (r.id === this.selectedId ? { ...r, ...patch } : r));
-    this.dirty = true;
+  moveSelectedRoom(dx: number, dy: number): void {
+    const sel = this.selectedRoom;
+    if (!sel) return;
+    this.checkpoint();
+    this.updateRoom({ x: sel.x + dx, y: sel.y + dy });
   }
 
-  /** Nudge the selected room by whole grid cells (keyboard move). */
-  moveSelected(dx: number, dy: number): void {
-    const sel = this.selected;
+  resizeSelectedRoom(edge: "left" | "right" | "top" | "bottom", grow: boolean): void {
+    const sel = this.selectedRoom;
     if (!sel) return;
-    this.updateSelected({ x: sel.x + dx, y: sel.y + dy });
-  }
-
-  /** Grow/shrink the selected room toward one edge by one cell (keyboard resize).
-   * Growing left/top moves the origin so the opposite edge stays put. */
-  resizeSelected(edge: "left" | "right" | "top" | "bottom", grow: boolean): void {
-    const sel = this.selected;
-    if (!sel) return;
+    this.checkpoint();
     const d = grow ? 1 : -1;
-    if (edge === "right") this.updateSelected({ w: clampInt(sel.w + d, 1) });
-    else if (edge === "bottom") this.updateSelected({ h: clampInt(sel.h + d, 1) });
+    if (edge === "right") this.updateRoom({ w: clampInt(sel.w + d, 1) });
+    else if (edge === "bottom") this.updateRoom({ h: clampInt(sel.h + d, 1) });
     else if (edge === "left") {
       const w = clampInt(sel.w + d, 1);
-      this.updateSelected({ x: sel.x - (w - sel.w), w });
+      this.updateRoom({ x: sel.x - (w - sel.w), w });
     } else {
       const h = clampInt(sel.h + d, 1);
-      this.updateSelected({ y: sel.y - (h - sel.h), h });
+      this.updateRoom({ y: sel.y - (h - sel.h), h });
     }
   }
 
   setRoomField(field: "name" | "x" | "y" | "w" | "h", value: string | number): void {
     if (field === "name") {
-      this.updateSelected({ name: String(value) });
+      this.updateRoom({ name: String(value) });
     } else {
       const min = field === "w" || field === "h" ? 1 : -1000;
-      this.updateSelected({ [field]: clampInt(Number(value), min) } as Partial<MapRoom>);
+      this.updateRoom({ [field]: clampInt(Number(value), min) } as Partial<MapRoom>);
     }
   }
 
   assignCamera(ip: string, dx: number, dy: number): boolean {
-    const sel = this.selected;
+    const sel = this.selectedRoom;
     if (!sel || !ip) return false;
     if (sel.cameras.some((c) => c.ip === ip)) return false;
+    this.checkpoint();
     const cx = Math.max(0, Math.min(dx, sel.w - 1));
     const cy = Math.max(0, Math.min(dy, sel.h - 1));
-    this.updateSelected({ cameras: [...sel.cameras, { ip, dx: cx, dy: cy, rot: 0 }] });
+    this.updateRoom({ cameras: [...sel.cameras, { ip, dx: cx, dy: cy, rot: 0 }] });
     return true;
   }
 
   setCameraRotation(ip: string, rot: number): void {
-    const sel = this.selected;
+    const sel = this.selectedRoom;
     if (!sel) return;
-    this.updateSelected({
-      cameras: sel.cameras.map((c) => (c.ip === ip ? { ...c, rot } : c)),
-    });
+    this.updateRoom({ cameras: sel.cameras.map((c) => (c.ip === ip ? { ...c, rot } : c)) });
   }
 
   unassignCamera(ip: string): void {
-    const sel = this.selected;
+    const sel = this.selectedRoom;
     if (!sel) return;
-    this.updateSelected({ cameras: sel.cameras.filter((c) => c.ip !== ip) });
+    this.checkpoint();
+    this.updateRoom({ cameras: sel.cameras.filter((c) => c.ip !== ip) });
   }
 
-  async save(): Promise<void> {
-    this.saving = true;
-    try {
-      await data.saveMap({ rooms: this.rooms, walls: this.walls, markers: this.markers });
-      this.dirty = false;
-    } finally {
-      this.saving = false;
-    }
+  // ---- walls --------------------------------------------------------------
+  addWall(x1: number, y1: number, x2: number, y2: number, thickness = 0.12): MapWall {
+    this.checkpoint();
+    const id = this.nextId(this.walls);
+    const wall: MapWall = { id, x1, y1, x2, y2, thickness };
+    this.walls = [...this.walls, wall];
+    this.sel = { kind: "wall", id };
+    return wall;
+  }
+
+  /** Patch a wall in place (no checkpoint — used by drag + thickness slider). */
+  updateWall(id: number, patch: Partial<MapWall>): void {
+    this.walls = this.walls.map((w) => (w.id === id ? { ...w, ...patch } : w));
+    this.dirty = true;
+  }
+
+  deleteWall(id: number): void {
+    this.checkpoint();
+    this.walls = this.walls.filter((w) => w.id !== id);
+    if (this.sel?.kind === "wall" && this.sel.id === id) this.sel = null;
+  }
+
+  // ---- markers ------------------------------------------------------------
+  addMarker(icon: string, x: number, y: number): MapMarker {
+    this.checkpoint();
+    const id = this.nextId(this.markers);
+    const marker: MapMarker = { id, icon, x, y, rot: 0, scale: 1, label: null };
+    this.markers = [...this.markers, marker];
+    this.sel = { kind: "marker", id };
+    return marker;
+  }
+
+  updateMarker(id: number, patch: Partial<MapMarker>): void {
+    this.markers = this.markers.map((m) => (m.id === id ? { ...m, ...patch } : m));
+    this.dirty = true;
+  }
+
+  deleteMarker(id: number): void {
+    this.checkpoint();
+    this.markers = this.markers.filter((m) => m.id !== id);
+    if (this.sel?.kind === "marker" && this.sel.id === id) this.sel = null;
+  }
+
+  /** Delete whatever is currently selected. */
+  deleteSelected(): void {
+    if (this.sel?.kind === "wall") this.deleteWall(this.sel.id);
+    else if (this.sel?.kind === "marker") this.deleteMarker(this.sel.id);
   }
 }

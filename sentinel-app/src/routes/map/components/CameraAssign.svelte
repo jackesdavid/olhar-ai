@@ -29,15 +29,15 @@
   }
 </script>
 
-{#if store.selected}
+{#if store.selectedRoom}
   <div class="space-y-3">
     <Label>Cameras</Label>
 
-    {#if store.selected.cameras.length === 0}
+    {#if store.selectedRoom.cameras.length === 0}
       <p class="text-sm text-muted-foreground">No cameras assigned.</p>
     {:else}
       <div class="flex flex-col gap-2">
-        {#each store.selected.cameras as cam (cam.ip)}
+        {#each store.selectedRoom.cameras as cam (cam.ip)}
           <div class="space-y-2 rounded-md border border-border px-2 py-1.5">
             <div class="flex items-center justify-between gap-2">
               <div class="min-w-0">
