@@ -13,53 +13,73 @@ const VB = (body: string) => `<svg viewBox="0 0 24 24" fill="currentColor">${bod
 
 const CENTER: [number, number] = [12, 12];
 
+// All icons are authored as TOP-DOWN architectural plan symbols, composed of closed
+// shapes (rects / circles / paths). The renderer draws each shape as a thin emerald
+// outline with a faint fill — the wireframe look from the references.
 export const MARKER_ICONS: IconDef[] = [
   {
     key: "sofa",
     label: "Sofa",
+    // back rail + seat + two arms (seen from above)
     svg: VB(
-      '<rect x="3" y="10" width="18" height="7" rx="2"/><rect x="2.5" y="7" width="4" height="8" rx="2"/><rect x="17.5" y="7" width="4" height="8" rx="2"/>',
+      '<rect x="3" y="6" width="18" height="3" rx="1"/><rect x="5" y="8.5" width="14" height="8.5" rx="1.5"/><rect x="3" y="8.5" width="2.5" height="8.5" rx="1"/><rect x="18.5" y="8.5" width="2.5" height="8.5" rx="1"/>',
     ),
   },
   {
     key: "bed",
     label: "Bed",
-    svg: VB('<rect x="3" y="11" width="18" height="6" rx="1"/><rect x="5" y="7.5" width="7" height="4.5" rx="1"/>'),
+    // mattress + headboard band + two pillows
+    svg: VB(
+      '<rect x="4" y="3.5" width="16" height="17" rx="1.5"/><rect x="5.5" y="5" width="13" height="4.5" rx="1"/><rect x="5.5" y="10.5" width="6" height="4" rx="0.8"/><rect x="12.5" y="10.5" width="6" height="4" rx="0.8"/>',
+    ),
   },
   {
     key: "table",
     label: "Table",
-    svg: VB('<rect x="4" y="9" width="16" height="3" rx="1"/><rect x="5" y="12" width="2" height="6"/><rect x="17" y="12" width="2" height="6"/>'),
+    // dining table + four chairs around it
+    svg: VB(
+      '<rect x="6.5" y="7.5" width="11" height="9" rx="1"/><rect x="8.5" y="3.5" width="7" height="2.5" rx="0.6"/><rect x="8.5" y="18" width="7" height="2.5" rx="0.6"/><rect x="3.5" y="9" width="2.5" height="6" rx="0.6"/><rect x="18" y="9" width="2.5" height="6" rx="0.6"/>',
+    ),
   },
   {
     key: "tv",
     label: "TV",
-    svg: VB('<rect x="3" y="5" width="18" height="11" rx="1"/><rect x="9" y="18" width="6" height="1.6" rx="0.5"/>'),
+    // a thin unit against the wall (top-down), with its screen line
+    svg: VB('<rect x="4" y="10.5" width="16" height="3" rx="0.6"/><rect x="5" y="11.3" width="14" height="1.4" rx="0.4"/>'),
   },
   {
     key: "plant",
     label: "Plant",
-    svg: VB('<circle cx="12" cy="9" r="6"/><rect x="11" y="14" width="2" height="6"/>'),
+    // canopy + pot rim
+    svg: VB('<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.6"/>'),
   },
   {
     key: "car",
     label: "Car",
-    svg: VB('<rect x="3" y="11" width="18" height="5" rx="2"/><path d="M6 11 l2 -3.5 h8 l2 3.5 z"/><circle cx="7.5" cy="17" r="2"/><circle cx="16.5" cy="17" r="2"/>'),
+    // body + cabin + four wheels (top-down)
+    svg: VB(
+      '<rect x="4.5" y="2.5" width="15" height="19" rx="4"/><rect x="6.5" y="7.5" width="11" height="8" rx="2"/><rect x="3" y="5.5" width="2" height="3.5" rx="0.6"/><rect x="3" y="15" width="2" height="3.5" rx="0.6"/><rect x="19" y="5.5" width="2" height="3.5" rx="0.6"/><rect x="19" y="15" width="2" height="3.5" rx="0.6"/>',
+    ),
   },
   {
     key: "sink",
     label: "Sink / bath",
-    svg: VB('<rect x="3" y="10" width="18" height="7" rx="3.5"/><circle cx="12" cy="7.5" r="1.4"/>'),
+    // counter + basin + tap
+    svg: VB('<rect x="3" y="7" width="18" height="10" rx="1.5"/><rect x="6" y="9" width="12" height="6" rx="3"/><rect x="11" y="6" width="2" height="2" rx="0.5"/>'),
   },
   {
     key: "stairs",
     label: "Stairs",
-    svg: VB('<rect x="4" y="16" width="16" height="3"/><rect x="8" y="12" width="12" height="3"/><rect x="12" y="8" width="8" height="3"/><rect x="16" y="4" width="4" height="3"/>'),
+    // run outline + treads
+    svg: VB(
+      '<rect x="5" y="3" width="14" height="18"/><rect x="6" y="6" width="12" height="0.8"/><rect x="6" y="9" width="12" height="0.8"/><rect x="6" y="12" width="12" height="0.8"/><rect x="6" y="15" width="12" height="0.8"/><rect x="6" y="18" width="12" height="0.8"/>',
+    ),
   },
   {
     key: "fridge",
     label: "Fridge",
-    svg: VB('<rect x="7" y="3" width="10" height="18" rx="1.5"/><rect x="14" y="6" width="1.6" height="3" rx="0.5" fill="#fff"/>'),
+    // unit + door divider + handle
+    svg: VB('<rect x="6" y="3.5" width="12" height="17" rx="1.5"/><rect x="6" y="10.5" width="12" height="1"/><rect x="14.5" y="6" width="1.2" height="3" rx="0.4"/>'),
   },
   {
     key: "door",
