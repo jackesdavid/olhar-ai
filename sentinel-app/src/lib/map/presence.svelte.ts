@@ -6,7 +6,8 @@ import { data, onEvent } from "$lib/data";
 import type { PresenceCategory, PresenceEvent } from "$lib/types";
 import type { MapStore } from "./store.svelte";
 
-const DEFAULT_TTL_MS = 6000;
+// Fallback lifetime only if an event somehow carries no duration (matches the node default).
+const FALLBACK_TTL_MS = 8000;
 // On open, replay presence recorded in the last window as a fresh pulse — so a detection
 // fired moments before you opened the map still shows (the live SSE only covers events
 // that arrive while the page is mounted).
@@ -106,7 +107,7 @@ export class PresenceStore {
       console.warn("[presence] dropped — no map location for", p);
       return;
     }
-    const ttl = p.duration_secs && p.duration_secs > 0 ? p.duration_secs * 1000 : DEFAULT_TTL_MS;
+    const ttl = p.duration_secs && p.duration_secs > 0 ? p.duration_secs * 1000 : FALLBACK_TTL_MS;
     console.debug("[presence] pulse", p.category, "at", at, "for", ttl / 1000, "s");
     this.pulses = [
       ...this.pulses,

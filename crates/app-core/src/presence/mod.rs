@@ -64,8 +64,15 @@ pub struct Presence {
     /// The camera/IP that detected it, if known (used to place the pulse).
     #[serde(default)]
     pub camera: Option<String>,
+    /// How long the map keeps the pulse alive, in seconds.
+    #[serde(default = "default_duration")]
+    pub duration_secs: u32,
     pub source: String,
     pub created_at: String, // RFC3339
+}
+
+fn default_duration() -> u32 {
+    8
 }
 
 /// Persist a new presence event for the tenant and return the stored record (with
@@ -80,6 +87,7 @@ pub fn create(
     room_id: Option<u32>,
     room_name: Option<String>,
     camera: Option<String>,
+    duration_secs: u32,
     source: String,
 ) -> Presence {
     let created_at = crate::alerts::now_rfc3339();
@@ -91,9 +99,10 @@ pub fn create(
         room_id,
         room_name.as_deref(),
         camera.as_deref(),
+        duration_secs,
         &source,
         &created_at,
     )
     .unwrap_or(0);
-    Presence { id, category, label, room_id, room_name, camera, source, created_at }
+    Presence { id, category, label, room_id, room_name, camera, duration_secs, source, created_at }
 }

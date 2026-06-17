@@ -206,6 +206,8 @@ export type Presence = {
   room_id?: number | null;
   room_name?: string | null;
   camera?: string | null;
+  /** How long the pulse stays on the map, in seconds. */
+  duration_secs?: number;
   source: string;
   created_at: string;
 };

@@ -799,6 +799,7 @@ fn run_record_presence(config: &Value, inputs: &PortValues, sys: &ToolContext) -
         room_id,
         room_name.clone(),
         camera.clone(),
+        duration_secs,
         "workflow".to_string(),
     );
 

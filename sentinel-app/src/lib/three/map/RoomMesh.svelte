@@ -26,7 +26,7 @@
   const labelSize = $derived(Math.max(0.5, Math.min(room.w, room.h) * 0.22));
 
   const strokeColor = $derived(selected ? "#34d399" : "#2f5147");
-  const strokeOpacity = $derived(selected ? 0.95 : 0.4);
+  const strokeOpacity = $derived(selected ? 0.6 : 0.3);
 </script>
 
 <!-- everything sits in a group centred on the room, rotated by room.rot -->

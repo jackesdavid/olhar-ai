@@ -17,6 +17,7 @@ pub fn insert(
     room_id: Option<u32>,
     room_name: Option<&str>,
     camera: Option<&str>,
+    duration_secs: u32,
     source: &str,
     created_at: &str,
 ) -> Option<u64> {
@@ -28,10 +29,11 @@ pub fn insert(
     let source = source.to_string();
     let created_at = created_at.to_string();
     let room_id = room_id.map(|r| r as i64);
+    let duration_secs = duration_secs as i64;
     db.block(async move {
         let row: Result<(i64,), sqlx::Error> = sqlx::query_as(
-            "INSERT INTO presence (tenant_id, id, category, label, room_id, room_name, camera, source, created_at) \
-             VALUES ($1, (SELECT COALESCE(MAX(id), 0) + 1 FROM presence WHERE tenant_id = $1), $2, $3, $4, $5, $6, $7, $8) \
+            "INSERT INTO presence (tenant_id, id, category, label, room_id, room_name, camera, duration_secs, source, created_at) \
+             VALUES ($1, (SELECT COALESCE(MAX(id), 0) + 1 FROM presence WHERE tenant_id = $1), $2, $3, $4, $5, $6, $7, $8, $9) \
              RETURNING id",
         )
         .bind(tenant_id)
@@ -40,6 +42,7 @@ pub fn insert(
         .bind(room_id)
         .bind(&room_name)
         .bind(&camera)
+        .bind(duration_secs)
         .bind(&source)
         .bind(&created_at)
         .fetch_one(&pool)
@@ -58,9 +61,9 @@ pub fn insert(
 pub fn load_recent(db: &Db, tenant_id: Uuid, limit: i64) -> Vec<Presence> {
     let pool = db.pool();
     db.block(async move {
-        type Row = (i64, String, Option<String>, Option<i64>, Option<String>, Option<String>, String, String);
+        type Row = (i64, String, Option<String>, Option<i64>, Option<String>, Option<String>, i64, String, String);
         let rows = sqlx::query_as::<_, Row>(
-            "SELECT id, category, label, room_id, room_name, camera, source, created_at \
+            "SELECT id, category, label, room_id, room_name, camera, duration_secs, source, created_at \
              FROM presence WHERE tenant_id = $1 ORDER BY id DESC LIMIT $2",
         )
         .bind(tenant_id)
@@ -71,13 +74,14 @@ pub fn load_recent(db: &Db, tenant_id: Uuid, limit: i64) -> Vec<Presence> {
             Ok(mut rows) => {
                 rows.reverse(); // chronological
                 rows.into_iter()
-                    .map(|(id, category, label, room_id, room_name, camera, source, created_at)| Presence {
+                    .map(|(id, category, label, room_id, room_name, camera, duration_secs, source, created_at)| Presence {
                         id: id as u64,
                         category: Category::parse(&category),
                         label,
                         room_id: room_id.map(|r| r as u32),
                         room_name,
                         camera,
+                        duration_secs: duration_secs as u32,
                         source,
                         created_at,
                     })
