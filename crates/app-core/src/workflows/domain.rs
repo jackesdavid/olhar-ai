@@ -111,6 +111,9 @@ pub enum NodeKind {
     BreakFaceDetection,
     /// Vision: match a face in an image against the enrolled people (pgvector kNN).
     RecognizePerson,
+    /// Presence: record a categorized detection (person/known person/car/cat/dog/
+    /// unknown) in a room — persisted and pulsed live on the map. Exec passes through.
+    RecordPresence,
     /// Events: fire the named event → (re)runs the matching `OnEvent` subtree as a
     /// decoupled, concurrent sub-run. Dropped while that subtree is already running
     /// (coalesce). Exec passes through so the main flow continues. Carries no data (v1).
@@ -144,6 +147,17 @@ const CREATE_ALERT_IN: [Port; 2] = [
 const CREATE_ALERT_OUT: [Port; 3] = [
     p("id", PortType::Num, false),
     p("result", PortType::Text, false),
+    p("ok", PortType::Bool, false),
+];
+
+const RECORD_PRESENCE_IN: [Port; 4] = [
+    p("room", PortType::Text, false),
+    p("category", PortType::Text, false),
+    p("label", PortType::Text, false),
+    p("camera", PortType::Text, false),
+];
+const RECORD_PRESENCE_OUT: [Port; 2] = [
+    p("id", PortType::Num, false),
     p("ok", PortType::Bool, false),
 ];
 
@@ -279,7 +293,7 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 22] = [
+    pub const ALL: [NodeKind; 23] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -298,6 +312,7 @@ impl NodeKind {
         NodeKind::BreakPersonDetection,
         NodeKind::BreakFaceDetection,
         NodeKind::RecognizePerson,
+        NodeKind::RecordPresence,
         NodeKind::EmitEvent,
         NodeKind::OnEvent,
         NodeKind::Print,
@@ -326,6 +341,7 @@ impl NodeKind {
             NodeKind::BreakPersonDetection => "break_person_detection",
             NodeKind::BreakFaceDetection => "break_face_detection",
             NodeKind::RecognizePerson => "recognize_person",
+            NodeKind::RecordPresence => "record_presence",
             NodeKind::EmitEvent => "emit_event",
             NodeKind::OnEvent => "on_event",
             NodeKind::Print => "print",
@@ -357,6 +373,7 @@ impl NodeKind {
             NodeKind::BreakPersonDetection => "Break person detection",
             NodeKind::BreakFaceDetection => "Break face detection",
             NodeKind::RecognizePerson => "Recognize person",
+            NodeKind::RecordPresence => "Record presence",
             NodeKind::EmitEvent => "Emit event",
             NodeKind::OnEvent => "On event",
             NodeKind::Print => "Print",
@@ -385,6 +402,7 @@ impl NodeKind {
             | NodeKind::RecognizePerson
             | NodeKind::BreakPersonDetection
             | NodeKind::BreakFaceDetection => "Vision",
+            NodeKind::RecordPresence => "Presence",
         }
     }
 
@@ -418,6 +436,7 @@ impl NodeKind {
             NodeKind::BreakPersonDetection => &BREAK_PERSON_IN,
             NodeKind::BreakFaceDetection => &BREAK_FACE_IN,
             NodeKind::RecognizePerson => &RECOGNIZE_PERSON_IN,
+            NodeKind::RecordPresence => &RECORD_PRESENCE_IN,
             NodeKind::EmitEvent => &NO_PORTS, // exec-only (universal exec_in/out); event name in config
             NodeKind::OnEvent => &NO_PORTS,   // entry: only an exec_out; activated by the event
             NodeKind::Print => &PRINT_IN,
@@ -445,6 +464,7 @@ impl NodeKind {
             NodeKind::BreakPersonDetection => &BREAK_PERSON_OUT,
             NodeKind::BreakFaceDetection => &BREAK_FACE_OUT,
             NodeKind::RecognizePerson => &RECOGNIZE_PERSON_OUT,
+            NodeKind::RecordPresence => &RECORD_PRESENCE_OUT,
             NodeKind::EmitEvent => &NO_PORTS, // exec passes through, no data out
             NodeKind::OnEvent => &NO_PORTS,   // drives its subtree via exec_out only
             NodeKind::Print => &NO_PORTS, // a sink — exec passes through, no data out
@@ -489,6 +509,7 @@ impl NodeKind {
             NodeKind::BreakPersonDetection => json!({}),
             NodeKind::BreakFaceDetection => json!({}),
             NodeKind::RecognizePerson => json!({ "max_distance": "0.4", "timeout_secs": "30" }),
+            NodeKind::RecordPresence => json!({ "category": "person", "room": "", "label": "", "timeout_secs": "15" }),
             NodeKind::EmitEvent => json!({ "event": "" }),
             NodeKind::OnEvent => json!({ "event": "" }),
             NodeKind::Print => json!({ "message": "", "on_screen": true, "level": "info" }),

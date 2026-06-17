@@ -182,6 +182,38 @@ export type MapDoc = {
   markers: MapMarker[];
 };
 
+/** What a presence detection was (matches `app_core::presence::Category`). */
+export type PresenceCategory =
+  | "person"
+  | "known_person"
+  | "car"
+  | "cat"
+  | "dog"
+  | "unknown";
+
+/** A recorded presence event (matches `app_core::presence::Presence`). Written by
+ * the RecordPresence workflow node; pulsed live on the map. */
+export type Presence = {
+  id: number;
+  category: PresenceCategory;
+  label?: string | null;
+  room_id?: number | null;
+  room_name?: string | null;
+  camera?: string | null;
+  source: string;
+  created_at: string;
+};
+
+/** A live presence push over SSE (the `presence` event from sentinel-flow). */
+export type PresenceEvent = {
+  category: PresenceCategory;
+  room_id?: number | null;
+  room_name?: string | null;
+  label?: string | null;
+  camera?: string | null;
+  created_at: string;
+};
+
 export const DEFAULT_SETTINGS: Settings = {
   master: 0.8,
   voice: 0.8,

@@ -12,6 +12,7 @@ import {
   type AlertStats,
   type Device,
   type MapDoc,
+  type Presence,
   type NotificationTarget,
   type Person,
   type PersonEmbedding,
@@ -206,6 +207,9 @@ export const data = {
   saveMap: async (doc: MapDoc): Promise<void> => {
     await api.put<void>("/map", doc);
   },
+  /** Recent presence events (baseline for the map's live pulse). */
+  loadPresence: (limit = 100): Promise<Presence[]> =>
+    api.get<Presence[]>(`/map/presence?limit=${limit}`),
 
   // ---- workflows ----------------------------------------------------------
   loadGraphs: <T = unknown>(): Promise<T[]> => api.get<T[]>("/workflows"),

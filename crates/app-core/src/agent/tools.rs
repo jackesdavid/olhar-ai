@@ -41,6 +41,16 @@ pub enum ToolUiEvent {
     /// node (identified by `graph` + `node` id) on the editor canvas, captioned with
     /// `label`. JPEG bytes → base64 data URL on the UI side.
     ShowImage { graph: u32, node: u32, label: String, jpeg: Vec<u8> },
+    /// A workflow `RecordPresence` node fired: the map pulses a categorized dot in the
+    /// room. Carries no image — just where/what/when, relayed to the browser over SSE.
+    Presence {
+        category: String,
+        room_id: Option<u32>,
+        room_name: Option<String>,
+        label: Option<String>,
+        camera: Option<String>,
+        created_at: String,
+    },
 }
 
 /// What a tool executor can touch. Built by the Tauri shell from the managed

@@ -240,6 +240,7 @@ pub fn run_node(
         NodeKind::BreakPersonDetection => run_break_person_detection(inputs),
         NodeKind::BreakFaceDetection => run_break_face_detection(inputs),
         NodeKind::RecognizePerson => run_recognize_person(config, inputs, sys),
+        NodeKind::RecordPresence => run_record_presence(config, inputs, sys),
         // EmitEvent/OnEvent are exec-flow markers: the engine handles the event fire
         // (spawning the guarded sub-run) and the OnEvent entry, like the If/ShowImage
         // special-cases. Here they're no-ops that just pass exec through.
@@ -265,7 +266,7 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         NodeKind::RecognizePerson => 30,
         NodeKind::DescribeImage => 65,
         NodeKind::HttpPost | NodeKind::NotifyRecipient | NodeKind::DeliverAlert => 35,
-        NodeKind::CreateAlert => 15,
+        NodeKind::CreateAlert | NodeKind::RecordPresence => 15,
         // Inline (no watchdog): instant/pure nodes + the deliberate `Wait` sleep + the
         // engine-driven markers (ForEach/EmitEvent/OnEvent/ShowImage).
         NodeKind::Wait
@@ -507,6 +508,7 @@ pub fn debug_summary(
                 "no match".into()
             }
         }
+        NodeKind::RecordPresence => format!("presence recorded (#{})", num("id").unwrap_or(0)),
         NodeKind::EmitEvent => {
             let ev = config.get("event").and_then(|v| v.as_str()).unwrap_or("");
             format!("emit '{ev}'")
@@ -732,6 +734,72 @@ fn run_create_alert(
         "result".into(),
         PortValue::Text(format!("Raised alert {} [{}]", a.id, a.level.label())),
     );
+    o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
+}
+
+/// Record a categorized presence in a room: persist it and pulse it live on the map
+/// (via the `Presence` UI event → SSE relay). Inputs override config; the room name
+/// resolves to a `room_id` like `CreateAlert`.
+fn run_record_presence(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+    let cat_str = inputs
+        .get("category")
+        .and_then(PortValue::as_text)
+        .or_else(|| config.get("category").and_then(Value::as_str))
+        .unwrap_or("person");
+    let category = crate::presence::Category::parse(cat_str);
+
+    let label = inputs
+        .get("label")
+        .and_then(PortValue::as_text)
+        .or_else(|| config.get("label").and_then(Value::as_str))
+        .map(|s| s.to_string())
+        .filter(|s| !s.trim().is_empty());
+
+    let camera = inputs
+        .get("camera")
+        .and_then(PortValue::as_text)
+        .map(|s| s.to_string())
+        .filter(|s| !s.trim().is_empty());
+
+    let (room_id, room_name) = match inputs
+        .get("room")
+        .and_then(PortValue::as_text)
+        .or_else(|| config.get("room").and_then(Value::as_str))
+        .filter(|s| !s.trim().is_empty())
+    {
+        Some(name) => {
+            let rooms = crate::map::repo::load(&sys.db, sys.tenant_id);
+            match rooms.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim())) {
+                Some(r) => (Some(r.id), Some(r.name.clone())),
+                None => (None, Some(name.to_string())),
+            }
+        }
+        None => (None, None),
+    };
+
+    let p = crate::presence::create(
+        &sys.db,
+        sys.tenant_id,
+        category,
+        label.clone(),
+        room_id,
+        room_name.clone(),
+        camera.clone(),
+        "workflow".to_string(),
+    );
+
+    let _ = sys.ui_tx.send(ToolUiEvent::Presence {
+        category: category.slug().to_string(),
+        room_id,
+        room_name,
+        label,
+        camera,
+        created_at: p.created_at.clone(),
+    });
+
+    let mut o = PortValues::new();
+    o.insert("id".into(), PortValue::Num(p.id as i64));
     o.insert("ok".into(), PortValue::Bool(true));
     Ok(o)
 }
