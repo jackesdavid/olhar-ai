@@ -96,6 +96,17 @@
     return () => presence.stop();
   });
 
+  // The initial fit() in onMount runs before the Threlte canvas is measured (its size
+  // reports 1×1, so the aspect/zoom is wrong until the first interaction). Re-fit once
+  // real dimensions arrive — reading viewport.width/height makes this re-run on resize.
+  let fitted = false;
+  $effect(() => {
+    if (!fitted && !store.loading && viewport.width > 1 && viewport.height > 1) {
+      fit();
+      fitted = true;
+    }
+  });
+
   onMount(async () => {
     try {
       await store.load();

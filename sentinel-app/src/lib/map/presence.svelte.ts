@@ -2,11 +2,15 @@
 // stream's `presence` events (relayed from sentinel-flow's RecordPresence node),
 // places each on the floor (at the detecting camera, else the room centre), and
 // expires it after a few seconds so the map "breathes" then settles.
-import { onEvent } from "$lib/data";
+import { data, onEvent } from "$lib/data";
 import type { PresenceCategory, PresenceEvent } from "$lib/types";
 import type { MapStore } from "./store.svelte";
 
 const TTL_MS = 6000;
+// On open, replay presence recorded in the last window as a fresh pulse — so a detection
+// fired moments before you opened the map still shows (the live SSE only covers events
+// that arrive while the page is mounted).
+const REPLAY_WINDOW_MS = 30000;
 
 export type Pulse = {
   id: number;
@@ -31,6 +35,17 @@ export class PresenceStore {
   async start(): Promise<void> {
     this.unsub = await onEvent("presence", (p) => this.add(p as PresenceEvent));
     this.timer = setInterval(() => this.prune(), 500);
+    // Seed from recent history so presence fired just before the map opened still shows.
+    try {
+      const recent = await data.loadPresence(50);
+      const now = Date.now();
+      for (const r of recent) {
+        const age = now - Date.parse(r.created_at);
+        if (Number.isFinite(age) && age >= 0 && age <= REPLAY_WINDOW_MS) this.add(r);
+      }
+    } catch (err) {
+      console.warn("[presence] baseline load failed", err);
+    }
   }
 
   stop(): void {
@@ -62,7 +77,12 @@ export class PresenceStore {
 
   private add(p: PresenceEvent): void {
     const at = this.locate(p);
-    if (!at) return;
+    if (!at) {
+      // Most common cause: the room/camera on the event doesn't match any on the map.
+      console.warn("[presence] dropped — no map location for", p);
+      return;
+    }
+    console.debug("[presence] pulse", p.category, "at", at);
     this.pulses = [
       ...this.pulses,
       { id: this.seq++, category: p.category, x: at.x, z: at.z, born: Date.now() },
