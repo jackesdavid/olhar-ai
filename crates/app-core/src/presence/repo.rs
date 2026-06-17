@@ -29,7 +29,7 @@ pub fn insert(
     let source = source.to_string();
     let created_at = created_at.to_string();
     let room_id = room_id.map(|r| r as i64);
-    let duration_secs = duration_secs as i64;
+    let duration_secs = duration_secs as i32; // column is INT4
     db.block(async move {
         let row: Result<(i64,), sqlx::Error> = sqlx::query_as(
             "INSERT INTO presence (tenant_id, id, category, label, room_id, room_name, camera, duration_secs, source, created_at) \
@@ -61,7 +61,7 @@ pub fn insert(
 pub fn load_recent(db: &Db, tenant_id: Uuid, limit: i64) -> Vec<Presence> {
     let pool = db.pool();
     db.block(async move {
-        type Row = (i64, String, Option<String>, Option<i64>, Option<String>, Option<String>, i64, String, String);
+        type Row = (i64, String, Option<String>, Option<i64>, Option<String>, Option<String>, i32, String, String);
         let rows = sqlx::query_as::<_, Row>(
             "SELECT id, category, label, room_id, room_name, camera, duration_secs, source, created_at \
              FROM presence WHERE tenant_id = $1 ORDER BY id DESC LIMIT $2",

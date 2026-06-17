@@ -4,17 +4,30 @@
     "type": "split",
     "children": [
       {
-        "id": "b71eb6fa1cb1a96a",
+        "id": "16b9082db26672c8",
         "type": "tabs",
         "children": [
           {
-            "id": "6d3cb5c4f1efe733",
+            "id": "2a01b811859ea626",
             "type": "leaf",
             "state": {
-              "type": "empty",
-              "state": {},
-              "icon": "lucide-file",
-              "title": "New tab"
+              "type": "kanban",
+              "state": {
+                "file": "Task Board.md",
+                "kanbanViewState": {
+                  "kanban-plugin": "board",
+                  "list-collapse": [
+                    true,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false
+                  ]
+                }
+              },
+              "icon": "lucide-trello",
+              "title": "Task Board"
             }
           }
         ]
@@ -181,8 +194,9 @@
       "obsidian-excalidraw-plugin:New drawing": false
     }
   },
-  "active": "6d3cb5c4f1efe733",
+  "active": "2a01b811859ea626",
   "lastOpenFiles": [
+    "HANDOFF.md",
     "plans/school-student-frequency.md",
     "Task Board.md",
     "web-migration-plan.md",
