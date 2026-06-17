@@ -41,14 +41,17 @@
 
   let cam = $state<OrthographicCamera | undefined>(undefined);
 
+  // One effect drives the camera: reading $size directly guarantees a re-apply on every
+  // canvas resize (e.g. collapsing the side panel), and apply() reads zoom/pan so it also
+  // re-runs on manual zoom/pan. (Splitting size and apply into two effects let the resize
+  // case slip through — the view reset until the next manual zoom.)
   $effect(() => {
     viewport.width = $size.width || 1;
     viewport.height = $size.height || 1;
-  });
-  $effect(() => {
-    if (!cam) return;
-    viewport.apply(cam);
-    invalidate();
+    if (cam) {
+      viewport.apply(cam);
+      invalidate();
+    }
   });
 
   onMount(() => {

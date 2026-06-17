@@ -100,21 +100,57 @@
     return () => presence.stop();
   });
 
-  // The initial fit() in onMount runs before the Threlte canvas is measured (its size
-  // reports 1×1, so the aspect/zoom is wrong until the first interaction). Re-fit once
-  // real dimensions arrive — reading viewport.width/height makes this re-run on resize.
-  let fitted = false;
-  $effect(() => {
-    if (!fitted && !store.loading && viewport.width > 1 && viewport.height > 1) {
-      fit();
-      fitted = true;
+  // Camera zoom/pan are preserved across sessions (localStorage). On first load: restore
+  // the saved view if present, else fit once the canvas has real dimensions (the initial
+  // fit can't run before the Threlte canvas is measured). After that the view is the
+  // user's to control — F re-fits on demand.
+  const VIEW_KEY = "map.viewport";
+  let viewInit = false;
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function readSavedView(): { zoom: number; panX: number; panZ: number } | null {
+    try {
+      const v = JSON.parse(localStorage.getItem(VIEW_KEY) ?? "null");
+      if (v && typeof v.zoom === "number" && typeof v.panX === "number" && typeof v.panZ === "number") return v;
+    } catch {
+      // ignore parse / storage errors
     }
+    return null;
+  }
+
+  $effect(() => {
+    if (viewInit || store.loading) return;
+    const saved = readSavedView();
+    if (saved) {
+      viewport.zoom = saved.zoom;
+      viewport.panX = saved.panX;
+      viewport.panZ = saved.panZ;
+      viewInit = true;
+    } else if (viewport.width > 1 && viewport.height > 1) {
+      fit();
+      viewInit = true;
+    }
+  });
+
+  // Persist the view (debounced) once it's initialized, so it survives reloads.
+  $effect(() => {
+    const snapshot = { zoom: viewport.zoom, panX: viewport.panX, panZ: viewport.panZ };
+    if (!viewInit) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      try {
+        localStorage.setItem(VIEW_KEY, JSON.stringify(snapshot));
+      } catch {
+        // ignore storage errors
+      }
+    }, 400);
   });
 
   onMount(async () => {
     try {
       await store.load();
-      fit();
+      // Initial framing (restore saved view or fit) is handled reactively once the
+      // canvas has real dimensions — see the view-init effect above.
     } catch (err) {
       console.error("Failed to load map", err);
       toast.error("Failed to load map", { description: String(err) });
