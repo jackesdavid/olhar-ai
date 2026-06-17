@@ -44,7 +44,7 @@
     {#if tools.mode === "wall"}
       <div class="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 p-2 text-xs text-muted-foreground">
         <Spline class="mt-0.5 size-4 shrink-0 text-primary" />
-        <span>Click to drop points and chain a wall. Hold <kbd>Shift</kbd> to lock to 90°. Drag a thin wall thicker to make it solid.</span>
+        <span>Click to drop points and chain a wall. Hold <kbd>Shift</kbd> to snap to 45°/90° (diagonals). Drag a thin wall thicker to make it solid.</span>
       </div>
     {/if}
 

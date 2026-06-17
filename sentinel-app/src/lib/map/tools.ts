@@ -37,11 +37,16 @@ export function snapToVertex(p: Pt, verts: Pt[], threshold = VERTEX_SNAP): Pt | 
   return best;
 }
 
-/** Constrain `to` to a horizontal or vertical line from `from` (whichever is closer). */
+/** Constrain `to` to the nearest 45° direction from `from` (so Shift gives clean
+ * horizontal, vertical AND diagonal walls — like the reference's angled walls). */
 export function orthoLock(from: Pt, to: Pt): Pt {
-  return Math.abs(to.x - from.x) >= Math.abs(to.z - from.z)
-    ? { x: to.x, z: from.z }
-    : { x: from.x, z: to.z };
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  const len = Math.hypot(dx, dz);
+  if (len < 1e-6) return { ...to };
+  const step = Math.PI / 4;
+  const ang = Math.round(Math.atan2(dz, dx) / step) * step;
+  return { x: from.x + Math.cos(ang) * len, z: from.z + Math.sin(ang) * len };
 }
 
 /** Full snap pipeline: ortho-lock (if drawing + shift) → vertex → grid. */
