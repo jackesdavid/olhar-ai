@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { data, onEvent } from "$lib/data";
+  import {
+    CATEGORY_ORDER as PRESENCE_CATEGORIES,
+    CATEGORY_STYLE as PRESENCE_CATEGORY_STYLE,
+  } from "$lib/map/categories";
   import { toast } from "svelte-sonner";
 
   import Plus from "@lucide/svelte/icons/plus";
@@ -246,6 +250,7 @@
   // live references for node dropdowns + per-graph run activity (polled)
   let devices = $state<{ id?: string; ip?: string; name: string; rtsp_url?: string | null }[]>([]);
   let recipients = $state<{ label: string; enabled: boolean }[]>([]);
+  let rooms = $state<{ id: number; name: string }[]>([]);
   type Activity = {
     running: number;
     current: number | null;
@@ -406,6 +411,16 @@
   const cameraKey = (d: { id?: string; ip?: string }) => d.id || d.ip || "";
   const cameraOptions = $derived(devices.map((d) => ({ value: cameraKey(d), label: d.name })));
   const recipientOptions = $derived(recipients.map((r) => ({ value: r.label, label: r.label })));
+  // Rooms for the `room` node dropdown (CreateAlert / RecordPresence). Stored BY NAME —
+  // the flow node resolves the name to a room_id, and the map pulse locates by it. A
+  // blank "(no room)" option keeps room optional (e.g. CreateAlert without a room).
+  const NO_ROOM = "__none__"; // sentinel — bits-ui Select doesn't take an empty-string value
+  const roomOptions = $derived([
+    { value: NO_ROOM, label: "(no room)" },
+    ...rooms.map((r) => ({ value: r.name, label: r.name })),
+  ]);
+  // Presence categories for the `category` dropdown (slug → friendly label).
+  const categoryOptions = PRESENCE_CATEGORIES.map((c) => ({ value: c, label: PRESENCE_CATEGORY_STYLE[c].label }));
   function cameraValue(stored: string): string {
     const s = String(stored ?? "");
     const d = devices.find((x) => (x.id && x.id === s) || x.ip === s || x.name === s);
@@ -668,11 +683,12 @@
 
   async function loadRefs() {
     try {
-      const [d, r] = await Promise.all([data.listDevices(), data.listBeacons()]);
+      const [d, r, m] = await Promise.all([data.listDevices(), data.listBeacons(), data.loadMap()]);
       devices = d;
       recipients = r;
+      rooms = (m.rooms ?? []).map((rm) => ({ id: rm.id, name: rm.name }));
     } catch (err) {
-      console.error("Failed to load devices/recipients", err);
+      console.error("Failed to load devices/recipients/rooms", err);
     }
   }
   async function loadEvents() {
@@ -2079,6 +2095,31 @@
                           <Select.Trigger class="h-8 w-full capitalize">{String(selectedNode.config[key] ?? "info")}</Select.Trigger>
                           <Select.Content>
                             {#each LEVELS as l (l)}<Select.Item value={l} label={l} class="capitalize">{l}</Select.Item>{/each}
+                          </Select.Content>
+                        </Select.Root>
+                      {:else if key === "room"}
+                        {#if rooms.length === 0}
+                          <p class="rounded border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">
+                            No rooms — add zones on the Map.
+                          </p>
+                        {:else}
+                          {@const rmStored = String(selectedNode.config[key] ?? "")}
+                          {@const rmv = rmStored === "" ? NO_ROOM : rmStored}
+                          {@const rmlabel = roomOptions.find((o) => o.value === rmv)?.label ?? rmStored}
+                          <Select.Root type="single" disabled={editLocked} value={rmv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v === NO_ROOM ? "" : (v ?? "") })}>
+                            <Select.Trigger class="h-8 w-full">{rmlabel}</Select.Trigger>
+                            <Select.Content>
+                              {#each roomOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                            </Select.Content>
+                          </Select.Root>
+                        {/if}
+                      {:else if key === "category"}
+                        {@const cv2 = String(selectedNode.config[key] ?? "person")}
+                        {@const clabel2 = categoryOptions.find((o) => o.value === cv2)?.label ?? cv2}
+                        <Select.Root type="single" disabled={editLocked} value={cv2} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "person" })}>
+                          <Select.Trigger class="h-8 w-full">{clabel2}</Select.Trigger>
+                          <Select.Content>
+                            {#each categoryOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
                           </Select.Content>
                         </Select.Root>
                       {:else if key === "event"}
