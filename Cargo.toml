@@ -6,8 +6,12 @@
 members = [
     "crates/app-core",
     "sentinel-flow",
-    "sentinel-edge",
     "sentinel-gateway",
     "sentinel-control",
 ]
+# sentinel-edge is built + shipped independently and links a NATIVE dep (OpenCV, for the
+# motion watcher). Keeping it OUT of the workspace stops its native deps from entering the
+# cloud image build (cargo-chef cooks the whole workspace) — the cloud crates stay pure-Rust.
+# Build the edge from its own dir: `cd sentinel-edge && cargo build --release` (needs libopencv).
+exclude = ["sentinel-edge"]
 resolver = "2"
