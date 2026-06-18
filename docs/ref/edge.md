@@ -21,6 +21,13 @@ tailnet. `tailscale::ensure_up()` runs `tailscale up --authkey …` then `serve_
 and **always attempts serve even if `up` fails** (a macOS GUI-app daemon makes `up` exit
 non-zero though the node is up). `serve_go2rtc()` is idempotent + re-asserted every 5 min.
 
+**Enrollment key (per box):** control mints the `--authkey` when a box is created
+(`sentinel-control/src/tailscale.rs`, OAuth client → Tailscale API). The key is
+**reusable + non-ephemeral**, ~90 days (`TS_KEY_EXPIRY_SECS`) — so the edge re-auths on
+every reboot from the key baked into `edge.env`, and the node keeps a stable MagicDNS name.
+(It used to be single-use + ephemeral + 30 min, which dropped boxes off the tailnet on the
+first reboot.) Re-keying an existing box = recreate it in Settings → Boxes and reinstall.
+
 `install.sh` installs Tailscale headlessly so the appliance joins from the CLI:
 - **Linux**: `curl -fsSL https://tailscale.com/install.sh | sh` (installs `tailscaled`).
 - **macOS**: `brew install tailscale` (the open-source `tailscaled`, NOT the GUI app) as the
