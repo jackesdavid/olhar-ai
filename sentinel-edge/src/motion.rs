@@ -1,15 +1,16 @@
 //! Continuous motion detection on the edge (OpenCV MOG2 adaptive background subtraction).
 //!
 //! A core edge capability: the edge is the only thing near the cameras, so it owns
-//! continuous motion. One background thread per camera reads that camera's stream locally
-//! (no tailnet cost), runs MOG2 → denoise → contours every frame, and POSTs ONE normalized
-//! motion event to control when motion clears a small floor (+ a min-interval throttle). It
+//! continuous motion. One background thread per camera polls the LATEST frame from the local
+//! go2rtc (`/api/frame.jpeg` — always fresh, no RTSP buffer lag), runs MOG2 → denoise →
+//! contours, and POSTs ONE normalized motion event to control when motion clears a small floor
+//! (+ a min-interval throttle). It
 //! is graph-agnostic — per-graph sensitivity is applied in the cloud (control → Redis →
 //! `OnEvent("motion")`). A manager thread reconciles the per-camera watcher set against the
 //! live device list.
 //!
 //! Requires libopencv on the host (see `install.sh`). Tunables (env): `MOTION_FPS` (6),
-//! `MOTION_FLOOR_PCT` (0.5), `MOTION_MIN_INTERVAL_SECS` (10), `MOTION_MIN_AREA` (300),
+//! `MOTION_FLOOR_PCT` (0.5), `MOTION_MIN_INTERVAL_SECS` (4), `MOTION_MIN_AREA` (300),
 //! `MOTION_PROC_W`/`MOTION_PROC_H` (480×270), `MOTION_MOG2_HISTORY` (500), `MOTION_MOG2_VAR` (16).
 
 use std::collections::{HashMap, HashSet};
@@ -17,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use opencv::{core, imgproc, prelude::*, video, videoio};
+use opencv::{core, imgcodecs, imgproc, prelude::*, video};
 
 use crate::state::{AppState, MotionEvent};
 
@@ -43,7 +44,7 @@ impl Params {
         Params {
             fps: num("MOTION_FPS", 6.0).max(1.0) as u32,
             floor_pct: num("MOTION_FLOOR_PCT", 0.5),
-            min_interval: Duration::from_secs(num("MOTION_MIN_INTERVAL_SECS", 10.0) as u64),
+            min_interval: Duration::from_secs(num("MOTION_MIN_INTERVAL_SECS", 4.0) as u64),
             min_area: num("MOTION_MIN_AREA", 300.0),
             proc_w: num("MOTION_PROC_W", 480.0) as i32,
             proc_h: num("MOTION_PROC_H", 270.0) as i32,
@@ -61,13 +62,11 @@ pub fn spawn(state: &Arc<AppState>) {
         log::info!("motion watcher: manager started (OpenCV MOG2)");
         let mut running: HashMap<String, Arc<AtomicBool>> = HashMap::new();
         loop {
-            let desired: Vec<(String, String)> = {
+            let desired: Vec<String> = {
                 let devs = state.devices.lock().unwrap();
-                devs.iter()
-                    .filter_map(|d| stream_url(d).map(|u| (d.ip.clone(), u)))
-                    .collect()
+                devs.iter().filter(|d| has_stream(d)).map(|d| d.ip.clone()).collect()
             };
-            let want: HashSet<&String> = desired.iter().map(|(ip, _)| ip).collect();
+            let want: HashSet<&String> = desired.iter().collect();
             // Stop watchers for cameras that disappeared.
             running.retain(|ip, stop| {
                 let keep = want.contains(ip);
@@ -77,12 +76,12 @@ pub fn spawn(state: &Arc<AppState>) {
                 keep
             });
             // Start watchers for new cameras.
-            for (ip, url) in &desired {
+            for ip in &desired {
                 if !running.contains_key(ip) {
                     let stop = Arc::new(AtomicBool::new(false));
                     running.insert(ip.clone(), Arc::clone(&stop));
-                    let (st, ip2, url2) = (Arc::clone(&state), ip.clone(), url.clone());
-                    std::thread::spawn(move || watch(st, ip2, url2, stop));
+                    let (st, ip2) = (Arc::clone(&state), ip.clone());
+                    std::thread::spawn(move || watch(st, ip2, stop));
                 }
             }
             std::thread::sleep(Duration::from_secs(30));
@@ -90,24 +89,14 @@ pub fn spawn(state: &Arc<AppState>) {
     });
 }
 
-/// The local go2rtc RTSP re-stream for a camera go2rtc is serving — `cam_<ip>` is the preview
-/// (substream) feed, ALREADY authenticated to the camera by go2rtc, so we open it with no
-/// creds and never touch the camera directly. Returns `None` for cameras without a resolved
-/// stream. Base overridable via `MOTION_GO2RTC_RTSP` (default `rtsp://127.0.0.1:8554`).
-fn stream_url(d: &app_core::devices::Device) -> Option<String> {
-    let has_stream = d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false);
-    if !has_stream {
-        return None;
-    }
-    let base = std::env::var("MOTION_GO2RTC_RTSP")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "rtsp://127.0.0.1:8554".to_string());
-    Some(format!("{}/{}", base.trim_end_matches('/'), app_core::go2rtc::stream_name(&d.ip)))
+/// True when go2rtc is serving this camera (its RTSP resolved) — the watcher reads motion
+/// frames from the LOCAL go2rtc, never the camera directly, so a resolved stream is the gate.
+fn has_stream(d: &app_core::devices::Device) -> bool {
+    d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false)
 }
 
-/// One camera's supervised loop: (re)connect + run the capture until stopped.
-fn watch(state: Arc<AppState>, ip: String, url: String, stop: Arc<AtomicBool>) {
+/// One camera's supervised loop: run the capture until stopped, retrying on error.
+fn watch(state: Arc<AppState>, ip: String, stop: Arc<AtomicBool>) {
     let p = Params::from_env();
     log::info!(
         "motion watcher[{ip}]: starting (fps={}, floor={}%, min_interval={}s)",
@@ -116,8 +105,8 @@ fn watch(state: Arc<AppState>, ip: String, url: String, stop: Arc<AtomicBool>) {
         p.min_interval.as_secs()
     );
     while !stop.load(Ordering::Relaxed) {
-        if let Err(e) = run_capture(&state, &ip, &url, &p, &stop) {
-            log::warn!("motion watcher[{ip}]: {e}; reconnecting in 5s");
+        if let Err(e) = run_capture(&state, &ip, &p, &stop) {
+            log::warn!("motion watcher[{ip}]: {e}; retrying in 5s");
         }
         if stop.load(Ordering::Relaxed) {
             break;
@@ -127,28 +116,16 @@ fn watch(state: Arc<AppState>, ip: String, url: String, stop: Arc<AtomicBool>) {
     log::info!("motion watcher[{ip}]: stopped");
 }
 
-fn err(msg: impl Into<String>) -> opencv::Error {
-    opencv::Error::new(core::StsError, msg.into())
-}
-
-/// Open the stream and run the MOG2 motion pipeline frame-by-frame until the stream ends
-/// (returns an error to trigger a reconnect) or the stop flag is set.
-fn run_capture(
-    state: &Arc<AppState>,
-    ip: &str,
-    url: &str,
-    p: &Params,
-    stop: &AtomicBool,
-) -> opencv::Result<()> {
-    let mut cap = videoio::VideoCapture::from_file(url, videoio::CAP_FFMPEG)?;
-    if !cap.is_opened()? {
-        return Err(err(format!("cannot open stream {url}")));
-    }
-    // Keep only the latest frame so reads stay REAL-TIME — without this the RTSP buffer fills
-    // and read() returns progressively older frames, so the watcher falls behind live motion.
-    let _ = cap.set(videoio::CAP_PROP_BUFFERSIZE, 1.0);
-    // `MOTION_DEBUG=1` logs the live score + measured fps every ~2s (even below the floor /
-    // throttle) so detection can be verified in real time against movement.
+/// Run the MOG2 motion pipeline, polling the LATEST frame from the local go2rtc each tick,
+/// until the stop flag is set (or an OpenCV op errors → the supervisor retries).
+fn run_capture(state: &Arc<AppState>, ip: &str, p: &Params, stop: &AtomicBool) -> opencv::Result<()> {
+    // Pull the latest decoded frame from the local go2rtc (`/api/frame.jpeg`) — always fresh,
+    // with NO RTSP client buffer that can fall behind live motion (the buffer was why
+    // VideoCapture lagged). Reuses go2rtc's authenticated decode; never touches the camera.
+    let base = app_core::go2rtc::base();
+    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(3)).build();
+    // `MOTION_DEBUG=1` logs the live peak score + measured fps every ~2s (even below the floor
+    // / throttle) so detection can be verified in real time against movement.
     let debug = std::env::var("MOTION_DEBUG").map(|v| matches!(v.trim(), "1" | "true" | "yes")).unwrap_or(false);
     let mut dbg_at = Instant::now();
     let mut dbg_frames = 0u32;
@@ -160,7 +137,6 @@ fn run_capture(
         core::Size::new(3, 3),
         core::Point::new(-1, -1),
     )?;
-    let mut frame = core::Mat::default();
     let mut small = core::Mat::default();
     let mut mask = core::Mat::default();
     let mut opened = core::Mat::default();
@@ -170,9 +146,23 @@ fn run_capture(
 
     while !stop.load(Ordering::Relaxed) {
         let t0 = Instant::now();
-        if !cap.read(&mut frame)? || frame.empty() {
-            return Err(err("stream read failed / ended"));
-        }
+        // Latest go2rtc frame; transient errors (stream warming, a dropped frame) skip this
+        // tick — keep the background model and try again, never tear the watcher down.
+        let jpeg = match app_core::go2rtc::frame_from(&agent, &base, ip) {
+            Ok(b) => b,
+            Err(_) => {
+                std::thread::sleep(frame_gap);
+                continue;
+            }
+        };
+        let buf = core::Vector::<u8>::from_slice(&jpeg);
+        let frame = match imgcodecs::imdecode(&buf, imgcodecs::IMREAD_COLOR) {
+            Ok(f) if !f.empty() => f,
+            _ => {
+                std::thread::sleep(frame_gap);
+                continue;
+            }
+        };
         // Downscale to a fixed processing resolution (cheap + stable thresholds).
         imgproc::resize(
             &frame,
