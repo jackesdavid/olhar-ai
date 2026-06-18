@@ -145,6 +145,10 @@ pub enum NodeKind {
     ForEach,
     /// Vision: compare two frames and report whether/how much they differ.
     MotionDetection,
+    /// Vision: a camera-bound motion detector — picks its own camera, grabs two frames a
+    /// short gap apart, and reports `moved`/`score`. Put it in a Cron graph to watch a feed
+    /// continuously; wire `moved` → If → Emit event to act only on motion.
+    MotionWatch,
     /// Vision: detect whether a person is present in an image (via the AI sidecar).
     PersonDetection,
     /// Destructure a `PersonDetection` element → `bbox` + `confidence` (like Unreal's Break).
@@ -292,6 +296,7 @@ const MOTION_OUT: [Port; 3] = [
     p("score", PortType::Num, false),
     p("ok", PortType::Bool, false),
 ];
+const MOTION_WATCH_IN: [Port; 1] = [p("camera", PortType::Text, true)];
 
 // Person detection: an image in → whether a person is present (via the AI sidecar).
 const PERSON_DETECTION_IN: [Port; 1] = [p("image", PortType::Image, true)];
@@ -335,7 +340,7 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 23] = [
+    pub const ALL: [NodeKind; 24] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -350,6 +355,7 @@ impl NodeKind {
         NodeKind::If,
         NodeKind::ForEach,
         NodeKind::MotionDetection,
+        NodeKind::MotionWatch,
         NodeKind::PersonDetection,
         NodeKind::BreakPersonDetection,
         NodeKind::BreakFaceDetection,
@@ -379,6 +385,7 @@ impl NodeKind {
             NodeKind::If => "if",
             NodeKind::ForEach => "for_each",
             NodeKind::MotionDetection => "motion_detection",
+            NodeKind::MotionWatch => "motion_watch",
             NodeKind::PersonDetection => "person_detection",
             NodeKind::BreakPersonDetection => "break_person_detection",
             NodeKind::BreakFaceDetection => "break_face_detection",
@@ -411,6 +418,7 @@ impl NodeKind {
             NodeKind::If => "If",
             NodeKind::ForEach => "For each",
             NodeKind::MotionDetection => "Motion detection",
+            NodeKind::MotionWatch => "Motion watch",
             NodeKind::PersonDetection => "Person detection",
             NodeKind::BreakPersonDetection => "Break person detection",
             NodeKind::BreakFaceDetection => "Break face detection",
@@ -440,6 +448,7 @@ impl NodeKind {
             | NodeKind::OnEvent => "Flow",
             NodeKind::HttpPost => "Network",
             NodeKind::MotionDetection
+            | NodeKind::MotionWatch
             | NodeKind::PersonDetection
             | NodeKind::RecognizePerson
             | NodeKind::BreakPersonDetection
@@ -474,6 +483,7 @@ impl NodeKind {
             NodeKind::If => &IF_IN,
             NodeKind::ForEach => &FOR_EACH_IN,
             NodeKind::MotionDetection => &MOTION_IN,
+            NodeKind::MotionWatch => &MOTION_WATCH_IN,
             NodeKind::PersonDetection => &PERSON_DETECTION_IN,
             NodeKind::BreakPersonDetection => &BREAK_PERSON_IN,
             NodeKind::BreakFaceDetection => &BREAK_FACE_IN,
@@ -502,6 +512,7 @@ impl NodeKind {
             NodeKind::If => &NO_PORTS, // outputs are exec branches (true/false)
             NodeKind::ForEach => &FOR_EACH_OUT, // item + index (exec outs are loop_body/completed)
             NodeKind::MotionDetection => &MOTION_OUT,
+            NodeKind::MotionWatch => &MOTION_OUT,
             NodeKind::PersonDetection => &PERSON_DETECTION_OUT,
             NodeKind::BreakPersonDetection => &BREAK_PERSON_OUT,
             NodeKind::BreakFaceDetection => &BREAK_FACE_OUT,
@@ -547,6 +558,7 @@ impl NodeKind {
             NodeKind::If => json!({}),
             NodeKind::ForEach => json!({ "items": "" }),
             NodeKind::MotionDetection => json!({ "sensitivity": "2", "pixel_threshold": "25", "timeout_secs": "30" }),
+            NodeKind::MotionWatch => json!({ "camera": "first", "sensitivity": "2", "pixel_threshold": "25", "sample_gap_ms": "400", "timeout_secs": "15" }),
             NodeKind::PersonDetection => json!({ "timeout_secs": "30" }),
             NodeKind::BreakPersonDetection => json!({}),
             NodeKind::BreakFaceDetection => json!({}),

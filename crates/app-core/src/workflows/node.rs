@@ -243,6 +243,7 @@ pub fn run_node(
         // advances the index across epochs, sets item/index, and fires loop_body/completed.
         NodeKind::ForEach => Ok(PortValues::new()),
         NodeKind::MotionDetection => run_motion_detection(config, inputs),
+        NodeKind::MotionWatch => run_motion_watch(config, inputs, sys),
         NodeKind::PersonDetection => run_person_detection(inputs, sys),
         NodeKind::BreakPersonDetection => run_break_person_detection(inputs),
         NodeKind::BreakFaceDetection => run_break_face_detection(inputs),
@@ -270,6 +271,7 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
     let default_secs = match kind {
         NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame => 10,
         NodeKind::PersonDetection | NodeKind::MotionDetection => 30,
+        NodeKind::MotionWatch => 20, // two camera grabs + the sample gap
         NodeKind::RecognizePerson => 30,
         NodeKind::DescribeImage => 65,
         NodeKind::HttpPost | NodeKind::NotifyRecipient | NodeKind::DeliverAlert => 35,
@@ -497,6 +499,12 @@ pub fn debug_summary(
                 if flag("moved") { "moved" } else { "still" }
             )
         }
+        NodeKind::MotionWatch => format!(
+            "{} · score {}% → {}",
+            config.get("camera").and_then(|v| v.as_str()).unwrap_or("first"),
+            num("score").unwrap_or(0),
+            if flag("moved") { "moved" } else { "still" }
+        ),
         NodeKind::PersonDetection => match num("count").unwrap_or(0) {
             0 => "no person detected".into(),
             c => format!("{c} person(s) ({}% confidence)", num("confidence").unwrap_or(0)),
@@ -547,15 +555,9 @@ fn run_if(inputs: &PortValues) -> Result<PortValues, String> {
 
 /// Compare two frames (resized to a common small grayscale) and report how much
 /// they differ. `moved` = changed% >= `sensitivity`; `score` = changed% (0..100).
-fn run_motion_detection(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
-    let a = inputs.get("image_a").and_then(PortValue::as_image).ok_or("missing required input 'image_a'")?;
-    let b = inputs.get("image_b").and_then(PortValue::as_image).ok_or("missing required input 'image_b'")?;
-    let cfg_num = |k: &str, d: i64| -> i64 {
-        config.get(k).and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).unwrap_or(d)
-    };
-    let pixel_threshold = cfg_num("pixel_threshold", 25).clamp(0, 255) as i16;
-    let sensitivity = cfg_num("sensitivity", 2).clamp(0, 100) as f64;
-
+/// Percent of pixels that changed between two JPEG frames: both are downscaled to a fixed
+/// 320×240 grayscale, then counted where the absolute luma difference exceeds `pixel_threshold`.
+fn motion_score(a: &[u8], b: &[u8], pixel_threshold: i16) -> Result<f64, String> {
     const W: u32 = 320;
     const H: u32 = 240;
     let gray = |raw: &[u8]| -> Result<Vec<u8>, String> {
@@ -570,7 +572,45 @@ fn run_motion_detection(config: &Value, inputs: &PortValues) -> Result<PortValue
         .zip(gb.iter())
         .filter(|(x, y)| (**x as i16 - **y as i16).abs() > pixel_threshold)
         .count();
-    let score = (changed as f64 / total as f64) * 100.0;
+    Ok((changed as f64 / total as f64) * 100.0)
+}
+
+fn cfg_i64(config: &Value, k: &str, d: i64) -> i64 {
+    config.get(k).and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).unwrap_or(d)
+}
+
+fn run_motion_detection(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let a = inputs.get("image_a").and_then(PortValue::as_image).ok_or("missing required input 'image_a'")?;
+    let b = inputs.get("image_b").and_then(PortValue::as_image).ok_or("missing required input 'image_b'")?;
+    let pixel_threshold = cfg_i64(config, "pixel_threshold", 25).clamp(0, 255) as i16;
+    let sensitivity = cfg_i64(config, "sensitivity", 2).clamp(0, 100) as f64;
+    let score = motion_score(a, b, pixel_threshold)?;
+
+    let mut o = PortValues::new();
+    o.insert("moved".into(), PortValue::Bool(score >= sensitivity));
+    o.insert("score".into(), PortValue::Num(score.round() as i64));
+    o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
+}
+
+/// Camera-bound motion detector: resolves its own camera, grabs two frames `sample_gap_ms`
+/// apart, and reports `moved`/`score`. Self-contained per run — drop it in a Cron graph to
+/// watch a feed continuously and wire `moved` → If → Emit event to act only on motion.
+fn run_motion_watch(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+    let camera = req_text(inputs, "camera")?;
+    let device = {
+        let devices = sys.devices.lock().unwrap();
+        let idx = dev_actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
+        devices[idx].clone()
+    };
+    let pixel_threshold = cfg_i64(config, "pixel_threshold", 25).clamp(0, 255) as i16;
+    let sensitivity = cfg_i64(config, "sensitivity", 2).clamp(0, 100) as f64;
+    let gap_ms = cfg_i64(config, "sample_gap_ms", 400).clamp(0, 5000) as u64;
+
+    let a = sys.frames.snapshot(&device)?;
+    std::thread::sleep(std::time::Duration::from_millis(gap_ms));
+    let b = sys.frames.snapshot(&device)?;
+    let score = motion_score(&a, &b, pixel_threshold)?;
 
     let mut o = PortValues::new();
     o.insert("moved".into(), PortValue::Bool(score >= sensitivity));

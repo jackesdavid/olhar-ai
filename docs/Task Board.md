@@ -26,10 +26,6 @@ kanban-plugin: board
 
 ## ToDo
 
-- [ ] Motion Detection Node v2
-	  - Plan: [[motion-detection-node-v2]]
-- [ ] Add a 3 seconds at lest on splash screen
-- [ ] The Console Logs should be for the current workflow Not All
 
 
 ## In Progress
@@ -44,6 +40,10 @@ kanban-plugin: board
 	  - Plan: [[map-redesign-2]]
 - [ ] Map redesign — top-down 3D blueprint editor + live presence
 	  - Epic: [[map-redesign]]
+- [ ] Motion Detection Node v2 (camera-bound; emit+throttle deferred)
+	  - Plan: [[motion-detection-node-v2]]
+- [ ] Add a 3 seconds at lest on splash screen
+- [ ] The Console Logs should be for the current workflow Not All
 
 
 ## Done

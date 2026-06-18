@@ -4,7 +4,17 @@
 **Depends on:** [[event-payload-data]] (the v2 node emits an event carrying the motion result)
 **Goal:** A self-contained motion node that **picks its own camera**, watches that camera's stream, and **emits an event only when motion is detected** — with a configurable **minimum interval between emissions** to throttle signal throughput.
 
-## What's wrong with v1
+## Shipped (v1) — camera-bound `MotionWatch`
+
+Implemented the camera-bound detector (the headline ask) on existing rails, **no engine/execution-model change**:
+- New `NodeKind::MotionWatch` (`crates/app-core/src/workflows/domain.rs`) — Vision category. Config: `camera`, `sensitivity`, `pixel_threshold`, `sample_gap_ms`, `timeout_secs`. Outputs `moved` (Bool) + `score` (Num).
+- `run_motion_watch` (`node.rs`): resolves its own camera, grabs **two frames `sample_gap_ms` apart**, diffs via the shared `motion_score` helper (refactored out of v1's `run_motion_detection`). IO-bound (20s watchdog).
+- Frontend auto-derives from `NodeKind::ALL`; the `camera` config reuses the existing device picker — zero FE changes.
+- **Compose to emit:** wire `moved` → `If` → `Emit event` (now payload-capable via [[event-payload-data]], e.g. carry `score`). Put the graph on a **Cron** trigger to watch continuously; the cron interval sets the cadence.
+
+**Deferred (needs a decision + plumbing):** the *built-in* emit + the **min-interval throttle** the use case asks for. Both need **per-node cross-run state** (last-emit timestamp), which the node can't reach today — `run_node` gets only `ToolContext` (no node/graph id, no persistent store). That's the Route A vs B fork below; v1 ships the detection half and composes the rest. True always-on streaming (Route A) is the eventual upgrade.
+
+## What's wrong with v1 (original MotionDetection)
 
 `MotionDetection` (`crates/app-core/src/workflows/domain.rs:105`, exec `node.rs:543-573`) is a pure function: it takes **two `image` inputs** (`image_a`, `image_b`), resizes to 320×240 grayscale, counts pixels whose luma differs by > `pixel_threshold`, and outputs `moved`/`score`/`ok`. The graph author must wire two `GetCurrentFrame` nodes, time them, and loop — it doesn't own a camera, doesn't watch continuously, and doesn't emit. The user wants a **camera-bound, continuously-watching emitter**.
 
