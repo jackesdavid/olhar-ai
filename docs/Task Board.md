@@ -21,6 +21,10 @@ kanban-plugin: board
 ## ToDo
 
 - [ ] Add a 3 seconds at lest on splash screen
+- [ ] Box re-key / rotate enrollment action (Boxes page)
+	  - Re-mint a reusable Tailscale auth key for an existing box **without recreating it** (keep box id/token/cameras); push the new key into `edge.env` + restart. Optionally disable node-key expiry so appliances survive past the ~90-day key lifetime.
+	  - Why: enrollment keys now mint reusable + non-ephemeral + 90d (`sentinel-control/src/tailscale.rs`, fixed `20814c1`), so reboots recover — but after 90d a box still needs re-enrollment, and today the only recovery is delete + recreate + reinstall.
+	  - Ref: docs/ref/edge.md (Install / env → enrollment key)
 
 
 ## In Progress
@@ -53,6 +57,6 @@ kanban-plugin: board
 
 %% kanban:settings
 ```
-{"kanban-plugin":"board","list-collapse":[true,false,false,false,false,false],"show-checkboxes":true,"date-display-format":"YYYY-MM-DD","hide-date-in-title":true}
+{"kanban-plugin":"board","list-collapse":[false,false,false,false,false,false],"show-checkboxes":true,"date-display-format":"YYYY-MM-DD","hide-date-in-title":true}
 ```
 %%
