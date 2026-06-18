@@ -144,6 +144,15 @@ fn run_capture(
     if !cap.is_opened()? {
         return Err(err(format!("cannot open stream {url}")));
     }
+    // Keep only the latest frame so reads stay REAL-TIME — without this the RTSP buffer fills
+    // and read() returns progressively older frames, so the watcher falls behind live motion.
+    let _ = cap.set(videoio::CAP_PROP_BUFFERSIZE, 1.0);
+    // `MOTION_DEBUG=1` logs the live score + measured fps every ~2s (even below the floor /
+    // throttle) so detection can be verified in real time against movement.
+    let debug = std::env::var("MOTION_DEBUG").map(|v| matches!(v.trim(), "1" | "true" | "yes")).unwrap_or(false);
+    let mut dbg_at = Instant::now();
+    let mut dbg_frames = 0u32;
+    let mut dbg_max = 0.0f64;
     // history, varThreshold, detectShadows=false (we don't want shadow pixels as motion).
     let mut bg = video::create_background_subtractor_mog2(p.history, p.var_threshold, false)?;
     let kernel = imgproc::get_structuring_element(
@@ -188,6 +197,20 @@ fn run_capture(
         )?;
 
         let pct = core::count_non_zero(&opened)? as f64 / total * 100.0;
+
+        // Live debug heartbeat: ~every 2s, the peak score + measured fps over the window, so
+        // we can see detection track movement in real time (independent of the emit throttle).
+        if debug {
+            dbg_frames += 1;
+            dbg_max = dbg_max.max(pct);
+            if dbg_at.elapsed() >= Duration::from_secs(2) {
+                let fps = dbg_frames as f64 / dbg_at.elapsed().as_secs_f64();
+                log::info!("motion watcher[{ip}]: live peak {dbg_max:.2}% over 2s @ {fps:.1}fps");
+                dbg_at = Instant::now();
+                dbg_frames = 0;
+                dbg_max = 0.0;
+            }
+        }
 
         // Connected components → keep blobs above min area; track count + largest bbox.
         let mut contours: core::Vector<core::Vector<core::Point>> = core::Vector::new();
