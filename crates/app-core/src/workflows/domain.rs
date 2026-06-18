@@ -181,6 +181,11 @@ pub enum NodeKind {
     /// Both operands (`a`, `b`) can be wired from upstream or typed as literals in the
     /// inspector. Feeds directly into `If` for conditional routing.
     Compare,
+    /// Flow control: rate-limit gate — lets exec through only when at least `window_secs`
+    /// have elapsed since the node last fired. Persists `last_fired_at` across runs via
+    /// node state. Outputs `elapsed_secs` (how long since last fire, or window+1 on first
+    /// run) and `ok` (true = gate opened). Engine-driven (not `run_node`).
+    Cooldown,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -342,6 +347,11 @@ const FLIP_FLOP_OUT: [Port; 1] = [p("is_a", PortType::Bool, false)];
 const COMPARE_IN: [Port; 2] = [p("a", PortType::Num, false), p("b", PortType::Num, false)];
 const COMPARE_OUT: [Port; 1] = [p("result", PortType::Bool, false)];
 
+const COOLDOWN_OUT: [Port; 2] = [
+    p("elapsed_secs", PortType::Num, false),
+    p("ok", PortType::Bool, false),
+];
+
 const NO_PORTS: [Port; 0] = [];
 
 // Universal control-flow ports — every node has an `exec_in` and, by default, an
@@ -359,7 +369,7 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 26] = [
+    pub const ALL: [NodeKind; 27] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -386,6 +396,7 @@ impl NodeKind {
         NodeKind::OnEvent,
         NodeKind::Print,
         NodeKind::ShowImage,
+        NodeKind::Cooldown,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -418,6 +429,7 @@ impl NodeKind {
             NodeKind::ShowImage => "show_image",
             NodeKind::FlipFlop => "flip_flop",
             NodeKind::Compare => "compare",
+            NodeKind::Cooldown => "cooldown",
         }
     }
 
@@ -453,6 +465,7 @@ impl NodeKind {
             NodeKind::ShowImage => "Show image",
             NodeKind::FlipFlop => "Flip flop",
             NodeKind::Compare => "Compare",
+            NodeKind::Cooldown => "Cooldown",
         }
     }
 
@@ -469,6 +482,7 @@ impl NodeKind {
             | NodeKind::ForEach
             | NodeKind::FlipFlop
             | NodeKind::Compare
+            | NodeKind::Cooldown
             | NodeKind::Print
             | NodeKind::ShowImage
             | NodeKind::EmitEvent
@@ -523,6 +537,7 @@ impl NodeKind {
             NodeKind::ShowImage => &SHOW_IMAGE_IN,
             NodeKind::FlipFlop => &NO_PORTS, // engine-driven; no data inputs
             NodeKind::Compare => &COMPARE_IN,
+            NodeKind::Cooldown => &NO_PORTS, // engine-driven; window_secs is config
         }
     }
 
@@ -554,6 +569,7 @@ impl NodeKind {
             NodeKind::ShowImage => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::FlipFlop => &FLIP_FLOP_OUT,
             NodeKind::Compare => &COMPARE_OUT,
+            NodeKind::Cooldown => &COOLDOWN_OUT,
         }
     }
 
@@ -602,6 +618,7 @@ impl NodeKind {
             NodeKind::ShowImage => json!({ "label": "" }),
             NodeKind::FlipFlop => json!({}),
             NodeKind::Compare => json!({ "operator": "==", "a": "0", "b": "0" }),
+            NodeKind::Cooldown => json!({ "window_secs": "60" }),
         }
     }
 }

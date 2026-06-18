@@ -262,6 +262,8 @@ pub fn run_node(
         // Never called directly — the engine handles it before reaching run_node.
         NodeKind::FlipFlop => Ok(PortValues::new()),
         NodeKind::Compare => run_compare(config, inputs),
+        // Cooldown is engine-driven (reads/writes cross-run node state).
+        NodeKind::Cooldown => Ok(PortValues::new()),
     }
 }
 
@@ -287,6 +289,7 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::If
         | NodeKind::Compare
         | NodeKind::FlipFlop
+        | NodeKind::Cooldown
         | NodeKind::Print
         | NodeKind::GetRecipient
         | NodeKind::GetLastAlert
@@ -556,6 +559,12 @@ pub fn debug_summary(
             let op = config.get("operator").and_then(|v| v.as_str()).unwrap_or("==");
             let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
             format!("{a} {op} {b} → {result}")
+        }
+        NodeKind::Cooldown => {
+            let elapsed = outputs.get("elapsed_secs").and_then(PortValue::as_num).unwrap_or(0);
+            let ok = outputs.get("ok").and_then(PortValue::as_bool).unwrap_or(false);
+            let window = config.get("window_secs").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).unwrap_or(60);
+            format!("{elapsed}s elapsed / {window}s → {}", if ok { "pass" } else { "blocked" })
         }
     }
 }

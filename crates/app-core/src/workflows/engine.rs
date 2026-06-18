@@ -388,6 +388,50 @@ fn forward_epoch(
             continue;
         }
 
+        // Cooldown: pass exec through only when `window_secs` have elapsed since last fire.
+        // Stores last-fired Unix-ms in node state; first run always passes.
+        if n.kind == NodeKind::Cooldown {
+            let window_secs = n.config
+                .get("window_secs")
+                .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+                .unwrap_or(60);
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let state = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid);
+            let last_ms = state
+                .as_ref()
+                .and_then(|v| v.get("last_ms"))
+                .and_then(|v| v.as_u64());
+            let elapsed_secs = match last_ms {
+                None => window_secs + 1, // never fired → always open
+                Some(t) => now_ms.saturating_sub(t) / 1000,
+            };
+            let ok = elapsed_secs >= window_secs;
+            if ok {
+                repo::set_node_state(
+                    &sys.db,
+                    sys.tenant_id,
+                    graph.id,
+                    nid,
+                    &serde_json::json!({ "last_ms": now_ms }),
+                );
+                live_out.insert((nid, "exec_out".to_string()));
+            }
+            let mut o = PortValues::new();
+            o.insert("elapsed_secs".into(), PortValue::Num(elapsed_secs as i64));
+            o.insert("ok".into(), PortValue::Bool(ok));
+            *steps += 1;
+            if graph.debug {
+                on_log(nid, &format!("Cooldown: {elapsed_secs}s elapsed / {window_secs}s window → {}", if ok { "pass" } else { "blocked" }), 0);
+            }
+            outputs.insert(nid, o);
+            ran.insert(nid);
+            settle(&mut settled, &mut indeg);
+            continue;
+        }
+
         let started = Instant::now();
         // IO-bound kinds run under a per-node deadline (watchdog thread) so a stuck call
         // aborts the run instead of hanging forever; pure/instant kinds run inline.
