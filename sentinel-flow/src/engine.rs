@@ -23,7 +23,7 @@ use app_core::workflows::{
 };
 
 use crate::events;
-use crate::state::{self, AppState, WF_GLOBAL_CAP};
+use crate::state::{self, AppState, GraphActivity, WF_GLOBAL_CAP};
 
 /// Spawn the 1 s trigger poller on a background thread. Across ALL tenants: fires due
 /// Cron graphs under each graph's concurrency policy, persisting the cron timing state
@@ -126,30 +126,52 @@ pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, sourc
 }
 
 /// Mark a run started in the live activity map: bump the in-flight count and record the
-/// current run id + trigger source (shown in the graph list).
+/// current run id + trigger source (shown in the graph list). Pushes the new snapshot to
+/// the UI over SSE (`workflow-activity`) so the list badges update without polling.
 fn mark_run_started(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, run_id: Uuid, trigger: &str) {
-    let mut a = state.activity.lock().unwrap();
-    let e = a.entry((tenant, graph_id)).or_default();
-    e.running += 1;
-    e.run_id = Some(run_id);
-    e.trigger = Some(trigger.to_string());
-    e.pod_name = Some(state.pod_name.clone());
+    let snapshot = {
+        let mut a = state.activity.lock().unwrap();
+        let e = a.entry((tenant, graph_id)).or_default();
+        e.running += 1;
+        e.run_id = Some(run_id);
+        e.trigger = Some(trigger.to_string());
+        e.pod_name = Some(state.pod_name.clone());
+        e.clone()
+    };
+    publish_activity(state, tenant, graph_id, &snapshot);
 }
 
 /// Mark a run finished in the live activity map: drop the in-flight count, clearing the
-/// current node / run id / trigger once the last run of this graph completes.
+/// current node / run id / trigger once the last run of this graph completes. Pushes the
+/// new snapshot to the UI over SSE (`workflow-activity`).
 fn mark_run_finished(state: &Arc<AppState>, tenant: Uuid, graph_id: u32) {
-    let mut a = state.activity.lock().unwrap();
-    let e = a.entry((tenant, graph_id)).or_default();
-    if e.running > 0 {
-        e.running -= 1;
+    let snapshot = {
+        let mut a = state.activity.lock().unwrap();
+        let e = a.entry((tenant, graph_id)).or_default();
+        if e.running > 0 {
+            e.running -= 1;
+        }
+        if e.running == 0 {
+            e.current = None;
+            e.run_id = None;
+            e.trigger = None;
+            e.pod_name = None;
+        }
+        e.clone()
+    };
+    publish_activity(state, tenant, graph_id, &snapshot);
+}
+
+/// Push one graph's live activity snapshot to the UI over the SSE bus as `workflow-activity`
+/// (`{ tenant, graph, running, current, run_id, trigger, pod_name }`). This replaces the old
+/// 700 ms `GET /runs` poll: the UI seeds once on connect (REST) then updates from these deltas.
+fn publish_activity(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, snapshot: &GraphActivity) {
+    let mut payload = serde_json::to_value(snapshot).unwrap_or_else(|_| serde_json::json!({}));
+    if let serde_json::Value::Object(ref mut map) = payload {
+        map.insert("tenant".into(), serde_json::json!(tenant));
+        map.insert("graph".into(), serde_json::json!(graph_id));
     }
-    if e.running == 0 {
-        e.current = None;
-        e.run_id = None;
-        e.trigger = None;
-        e.pod_name = None;
-    }
+    events::publish(&state.events, "workflow-activity", payload);
 }
 
 /// The shared run body: builds the tenant run context, wires SSE progress + run-log
@@ -174,7 +196,13 @@ fn execute_run(
     let node_logs = logs.clone();
     let node_labels = labels.clone();
     let mut on_node = |nid: u32| {
-        prog.activity.lock().unwrap().entry((tenant, graph_id)).or_default().current = Some(nid);
+        let snapshot = {
+            let mut a = prog.activity.lock().unwrap();
+            let e = a.entry((tenant, graph_id)).or_default();
+            e.current = Some(nid);
+            e.clone()
+        };
+        publish_activity(&prog, tenant, graph_id, &snapshot);
         events::publish(&prog.events, "workflow-node", serde_json::json!({ "tenant": tenant, "graph": graph_id, "node": nid, "run_id": run_id }));
         if debug {
             node_logs.borrow_mut().push(RunLogLine {

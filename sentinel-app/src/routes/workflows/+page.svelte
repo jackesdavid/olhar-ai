@@ -704,6 +704,16 @@
     }
   }
 
+  // Seed the live activity map from REST. Called once on mount and again on every SSE
+  // (re)connect — between connects we'd miss `workflow-activity` deltas, so re-fetch.
+  async function refreshActivity() {
+    try {
+      activity = await data.runStates<Record<number, Activity>>();
+    } catch {
+      /* ignore transient errors */
+    }
+  }
+
   onMount(() => {
     const savedW = Number(localStorage.getItem("wf.panelW"));
     if (savedW >= PANEL_MIN && savedW <= PANEL_MAX) panelW = savedW;
@@ -718,6 +728,7 @@
         await reload();
         await loadRefs();
         await loadEvents();
+        await refreshActivity();
       } catch (err) {
         toast.error("Failed to load workflows", { description: String(err) });
       } finally {
@@ -794,14 +805,33 @@
         ...logs,
       ].slice(0, 200);
     });
-    // Poll run activity (running graphs + status) for the lock + list badges.
-    const poll = setInterval(async () => {
-      try {
-        activity = await data.runStates<Record<number, Activity>>();
-      } catch {
-        /* ignore transient errors */
-      }
-    }, 700);
+    // Live run activity (running graphs + current node) for the lock + list badges —
+    // pushed from the engine over SSE (replaces the old 700 ms poll). Each delta is one
+    // graph's snapshot; merge it into the map.
+    const unActivity = onEvent("workflow-activity", (payload) => {
+      const p = payload as {
+        graph: number;
+        running: number;
+        current: number | null;
+        run_id?: string | null;
+        trigger?: string | null;
+        pod_name?: string | null;
+      };
+      activity = {
+        ...activity,
+        [p.graph]: {
+          running: p.running,
+          current: p.current,
+          run_id: p.run_id,
+          trigger: p.trigger,
+          pod_name: p.pod_name,
+        },
+      };
+    });
+    // Re-seed from REST on every (re)connect — deltas emitted while disconnected are missed.
+    const unOpen = onEvent("stream-open", () => {
+      void refreshActivity();
+    });
     return () => {
       saveViewport(); // persist the viewport when leaving the page too
       un.then((u) => u());
@@ -810,9 +840,10 @@
       unPrint.then((u) => u());
       unImage.then((u) => u());
       unEvent.then((u) => u());
+      unActivity.then((u) => u());
+      unOpen.then((u) => u());
       screenTimers.forEach((t) => clearTimeout(t));
       screenTimers.clear();
-      clearInterval(poll);
     };
   });
 

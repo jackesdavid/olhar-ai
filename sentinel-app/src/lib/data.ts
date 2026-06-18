@@ -52,6 +52,12 @@ function ensureCloudStream(): void {
   if (cloudStream || typeof EventSource === "undefined" || !auth.token) return;
   const url = `${API_BASE}/workflows/events?token=${encodeURIComponent(auth.token)}`;
   const es = new EventSource(url);
+  // Fired on first connect AND on every auto-reconnect. Subscribers to the synthetic
+  // "stream-open" event use it to re-seed state that arrives only as deltas (e.g. run
+  // activity), since deltas emitted while disconnected are missed.
+  es.onopen = () => {
+    cloudSubs.get("stream-open")?.forEach((cb) => cb());
+  };
   es.onmessage = (e) => {
     let msg: { event?: string };
     try {

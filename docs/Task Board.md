@@ -12,6 +12,17 @@ kanban-plugin: board
 
 ## Backlog
 
+- [ ] School Student Frequency Case
+	  - Plan: [[school-student-frequency]]
+	  - Use case: [[school-frequence]]
+- [ ] Box re-key / rotate enrollment action (Boxes page)
+	  - Re-mint a reusable Tailscale auth key for an existing box **without recreating it** (keep box id/token/cameras); push the new key into `edge.env` + restart. Optionally disable node-key expiry so appliances survive past the ~90-day key lifetime.
+	  - Why: enrollment keys now mint reusable + non-ephemeral + 90d (`sentinel-control/src/tailscale.rs`, fixed `20814c1`), so reboots recover — but after 90d a box still needs re-enrollment, and today the only recovery is delete + recreate + reinstall.
+	  - Ref: docs/ref/edge.md (Install / env → enrollment key)
+- [ ] Multi-pod sentinel-flow: shared event fabric for SSE + activity
+	  - Today flow is a single multi-tenant pod; control's relay opens ONE connection to `FLOW_URL/events` and the activity map + event bus are per-pod, in-memory (`state.rs`, `events.rs`). Scaling flow to N replicas would mean the relay only sees one pod's runs (affects ALL SSE: run/node/log/activity — and the old poll had the same blindness).
+	  - Fix when needed: shared pub-sub (Redis/NATS) for the event bus + shared/queryable activity state, and a relay that fans in from all replicas.
+	  - Note: orthogonal to the SSE-vs-poll work — surfaced while doing [[workflow-runs-realtime]].
 - [ ] Document camera onboarding flow (ONVIF discovery → go2rtc feed)
 - [x] Pricing simulator: surface managed vs self-hosted AI in Settings UI
 - [ ] Recipients management UI (add/edit/remove notification targets)
@@ -20,30 +31,29 @@ kanban-plugin: board
 
 ## ToDo
 
+- [ ] The Node Show Image is not Showing the image correctly  
+	and on full screen click the image is not showing
 - [ ] Add a 3 seconds at lest on splash screen
-- [ ] Box re-key / rotate enrollment action (Boxes page)
-	  - Re-mint a reusable Tailscale auth key for an existing box **without recreating it** (keep box id/token/cameras); push the new key into `edge.env` + restart. Optionally disable node-key expiry so appliances survive past the ~90-day key lifetime.
-	  - Why: enrollment keys now mint reusable + non-ephemeral + 90d (`sentinel-control/src/tailscale.rs`, fixed `20814c1`), so reboots recover — but after 90d a box still needs re-enrollment, and today the only recovery is delete + recreate + reinstall.
-	  - Ref: docs/ref/edge.md (Install / env → enrollment key)
+- [ ] The Console Logs should be for the current workflow Not All
 
 
 ## In Progress
 
-- [ ] Map redesign — top-down 3D blueprint editor + live presence
-	  - Epic: [[map-redesign]]
-	  - Ref: docs/ref/map.md · Branch: feat/map-redesign
-	  - Phases 1–6 done + deployed to prod (592a3da→c885862). Pending: verify presence live, remove [presence] debug logs, then release (version bump + merge to new-ui).
-- [ ] School Student Frequency Case
-	  - Plan: [[school-student-frequency]]
-	  - Use case: [[school-frequence]]
-- [ ] Map Redesign 2 — wall style property + architectural-neutral pass
-	  - Plan: [[map-redesign-2]]
-	  - Wall `style` (wireframe vs solid) now distinct from thickness; map shifted to blue-slate + near-white, emerald only for live accents.
-	  - Ref: docs/ref/map.md · Branch: feat/map-redesign
+- [ ] Workflow runs: kill the 700 ms poll, go real-time over SSE
+	  - Plan: [[workflow-runs-realtime]]
+	  - Root cause: workflows page polls `GET /workflows/runs` every 700ms for the live activity map, but the SSE bus + tenant relay + frontend EventSource already exist — the `GraphActivity` map just was never published. Publish it, drop the poll. SSE not WebSocket (server→client only).
 
 
 ## Review
 
+- [x] Map Redesign 2 — wall style property + architectural-neutral pass
+	  - Plan: [[map-redesign-2]]
+	  - Wall `style` (wireframe vs solid) now distinct from thickness; map shifted to blue-slate + near-white, emerald only for live accents.
+	  - Ref: docs/ref/map.md · Branch: feat/map-redesign
+- [ ] Map redesign — top-down 3D blueprint editor + live presence
+	  - Epic: [[map-redesign]]
+	  - Ref: docs/ref/map.md · Branch: feat/map-redesign
+	  - Phases 1–6 done + deployed to prod (592a3da→c885862). Pending: verify presence live, remove [presence] debug logs, then release (version bump + merge to new-ui).
 
 
 ## Done
