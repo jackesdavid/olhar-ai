@@ -21,7 +21,7 @@
 
   const solid = $derived((wall.style ?? "solid") === "solid");
   // solid → raised wall that catches the key light; wireframe → flat footprint outline.
-  const height = $derived(solid ? Math.max(0.05, wall.thickness * 2) : 0.04);
+  const height = $derived(solid ? Math.max(0.2, wall.thickness * 4) : 0.04);
   const depth = $derived(Math.max(wall.thickness, 0.03));
 
   const geo = $derived(new BoxGeometry(len, height, depth));
@@ -36,7 +36,7 @@
   <!-- filled body: solid walls only (wireframe is the outline alone) -->
   {#if solid}
     <T.Mesh position={[midX, height / 2, midZ]} rotation.y={-angle} geometry={geo} castShadow receiveShadow>
-      <T.MeshStandardMaterial color={fillColor} roughness={0.8} />
+      <T.MeshStandardMaterial color={fillColor} roughness={0.65} metalness={0.06} />
     </T.Mesh>
   {/if}
   <T.LineSegments position={[midX, height / 2, midZ]} rotation.y={-angle} geometry={edges}>

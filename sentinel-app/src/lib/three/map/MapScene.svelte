@@ -201,17 +201,17 @@
 
 <T.OrthographicCamera makeDefault bind:ref={cam} position={[0, 200, 0]} />
 
-<T.AmbientLight intensity={0.85} />
+<T.AmbientLight intensity={0.5} />
 <T.DirectionalLight
   position={[40, 70, 24]}
-  intensity={1.15}
+  intensity={1.7}
   castShadow
-  shadow.mapSize.width={2048}
-  shadow.mapSize.height={2048}
-  shadow.camera.left={-120}
-  shadow.camera.right={120}
-  shadow.camera.top={120}
-  shadow.camera.bottom={-120}
+  shadow.mapSize.width={4096}
+  shadow.mapSize.height={4096}
+  shadow.camera.left={-80}
+  shadow.camera.right={80}
+  shadow.camera.top={80}
+  shadow.camera.bottom={-80}
   shadow.camera.near={1}
   shadow.camera.far={400}
 />

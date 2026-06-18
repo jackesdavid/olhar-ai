@@ -8,6 +8,7 @@ kanban-plugin: board
 
 - [ ] Splash should retry on transient `boot_status` DB errors instead of hanging
 - [ ] We should encrypt the passwords in the db column level too
+- [ ] Pricing simulator: surface managed vs self-hosted AI in Settings UI
 
 
 ## Backlog
@@ -15,11 +16,10 @@ kanban-plugin: board
 - [ ] School Student Frequency Case
 	  - Plan: [[school-student-frequency]]
 	  - Use case: [[school-frequence]]
-- [ ] Box re-key / rotate enrollment action
-	  - Plan: [[box-rekey-enrollment]]
 - [ ] Multi-pod sentinel-flow: shared event fabric
 	  - Plan: [[multi-pod-flow-event-fabric]]
-- [ ] Pricing simulator: surface managed vs self-hosted AI in Settings UI
+- [ ] Box re-key / rotate enrollment action
+	  - Plan: [[box-rekey-enrollment]]
 - [ ] Recipients management UI (add/edit/remove notification targets)
 - [ ] Define site/zones model in workflows domain
 
@@ -30,9 +30,17 @@ kanban-plugin: board
 	  - Plan: [[node-animation-timing]]
 - [ ] Workflow list improvements: last run, search, description, duplicate
 	  - Plan: [[workflow-list-improvements]]
+- [ ] Draw BBox node — annotate image with bounding box
+	  - Plan: [[draw-bbox-node]]
+- [ ] Comment node — canvas organizer
+	  - Plan: [[comment-node]]
+
 
 
 ## In Progress
+
+- [ ] Map: solid walls taller, richer material, deeper shadows
+	  - Plan: [[map-walls-3d-depth]]
 
 
 
