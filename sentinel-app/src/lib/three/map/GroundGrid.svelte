@@ -5,7 +5,7 @@
   import { onMount } from "svelte";
   import { T } from "@threlte/core";
   import { DoubleSide, type Texture } from "three";
-  import { dotFieldTexture, radialGlowTexture } from "./textures";
+  import { boxGridTexture, radialGlowTexture } from "./textures";
   import { FLOOR_BASE } from "$lib/map/palette";
 
   // World extent of the floor. Big enough to feel infinite at normal zoom; the
@@ -16,8 +16,8 @@
   let glow = $state<Texture | null>(null);
 
   onMount(() => {
-    const d = dotFieldTexture();
-    d.repeat.set(SIZE, SIZE); // one dot per world (grid) unit
+    const d = boxGridTexture();
+    d.repeat.set(SIZE, SIZE); // one cell per world (grid) unit
     dots = d;
     glow = radialGlowTexture();
     return () => {
@@ -33,11 +33,11 @@
   <T.MeshStandardMaterial color={FLOOR_BASE} roughness={0.95} metalness={0} />
 </T.Mesh>
 
-<!-- cool dot field -->
+<!-- box grid -->
 {#if dots}
   <T.Mesh rotation.x={-Math.PI / 2} position.y={0.02}>
     <T.PlaneGeometry args={[SIZE, SIZE]} />
-    <T.MeshBasicMaterial map={dots} transparent opacity={0.4} depthWrite={false} side={DoubleSide} />
+    <T.MeshBasicMaterial map={dots} transparent opacity={1} depthWrite={false} side={DoubleSide} />
   </T.Mesh>
 {/if}
 

@@ -36,7 +36,7 @@
     {#if solid}
       <!-- Solid: opaque, no edge overlay -->
       <T.Mesh position={[len / 2, height / 2, 0]} geometry={geo} castShadow receiveShadow>
-        <T.MeshStandardMaterial color={fillColor} roughness={0.65} metalness={0.06} />
+        <T.MeshStandardMaterial color={fillColor} roughness={0.8} metalness={0} />
       </T.Mesh>
     {:else}
       <!-- Wireframe: flat footprint outline only -->

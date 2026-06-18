@@ -208,7 +208,7 @@
   castShadow
   shadow.mapSize.width={2048}
   shadow.mapSize.height={2048}
-  shadow.radius={12}
+  shadow.radius={4}
   shadow.camera.left={-80}
   shadow.camera.right={80}
   shadow.camera.top={80}
