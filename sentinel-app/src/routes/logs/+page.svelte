@@ -5,11 +5,15 @@
   import ScrollText from "@lucide/svelte/icons/scroll-text";
   import Search from "@lucide/svelte/icons/search";
   import X from "@lucide/svelte/icons/x";
+  import ArrowDown from "@lucide/svelte/icons/arrow-down";
+  import ArrowUp from "@lucide/svelte/icons/arrow-up";
+  import ChevronLeft from "@lucide/svelte/icons/chevron-left";
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
 
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
-  import { Switch } from "$lib/components/ui/switch";
+  import * as Table from "$lib/components/ui/table";
   import Loader from "$lib/components/loader.svelte";
   import EmptyState from "$lib/components/empty-state.svelte";
 
@@ -18,6 +22,7 @@
   import { hasPerm } from "$lib/auth.svelte";
 
   const allowed = hasPerm("devices.read");
+  const PER_PAGE = 50;
 
   let loading = $state(true);
   let boxesList = $state<Box[]>([]);
@@ -28,10 +33,12 @@
   let deviceFilter = $state<string>(""); // camera ip, or "" = all
   let level = $state<string>("all"); // all | info | warn | error | debug
   let search = $state<string>("");
-  let follow = $state(true);
+
+  // table state
+  let sortDesc = $state(true); // newest-first by default
+  let page = $state(1);
 
   let lines = $state<BoxLog[]>([]);
-  let logEl = $state<HTMLDivElement | null>(null);
   let es: EventSource | null = null;
   const CAP = 6000;
 
@@ -52,6 +59,25 @@
     }),
   );
 
+  // Sort by creation time (ts is RFC3339 text → lexicographic order matches chronological).
+  const sorted = $derived(
+    [...shown].sort((a, b) => (sortDesc ? b.ts.localeCompare(a.ts) : a.ts.localeCompare(b.ts))),
+  );
+  const totalPages = $derived(Math.max(1, Math.ceil(sorted.length / PER_PAGE)));
+  const pageRows = $derived(sorted.slice((page - 1) * PER_PAGE, page * PER_PAGE));
+
+  // Reset to the first page whenever the filter set changes.
+  $effect(() => {
+    void deviceFilter;
+    void level;
+    void search;
+    page = 1;
+  });
+  // Keep the page in range as rows stream in or filters narrow.
+  $effect(() => {
+    if (page > totalPages) page = totalPages;
+  });
+
   function logColor(lvl: string): string {
     const l = lvl.toLowerCase();
     if (l === "error") return "text-destructive";
@@ -59,11 +85,16 @@
     if (l === "debug") return "text-muted-foreground/70";
     return "text-foreground/80";
   }
+  // RFC3339 → "YYYY-MM-DD HH:MM:SS" for the table cell.
+  function fmtTs(ts: string): string {
+    return ts.slice(0, 19).replace("T", " ");
+  }
 
   async function selectBox(id: string) {
     if (!id) return;
     selectedBoxId = id;
     lines = [];
+    page = 1;
     es?.close();
     es = null;
     try {
@@ -84,6 +115,7 @@
 
   function clearView() {
     lines = [];
+    page = 1;
   }
 
   onMount(() => {
@@ -109,12 +141,6 @@
     })();
   });
   onDestroy(() => es?.close());
-
-  // Auto-scroll to newest while following.
-  $effect(() => {
-    void shown.length;
-    if (follow && logEl) logEl.scrollTop = logEl.scrollHeight;
-  });
 </script>
 
 <div class="flex h-full flex-col gap-3 p-4">
@@ -181,32 +207,68 @@
         {/if}
       </div>
       <span class="text-xs tabular-nums text-muted-foreground">{shown.length} / {lines.length}</span>
-      <div class="flex items-center gap-1.5">
-        <Label class="text-xs text-muted-foreground">Follow</Label>
-        <Switch checked={follow} onCheckedChange={(v) => (follow = v)} />
-      </div>
       <Button variant="outline" size="sm" class="h-8" onclick={clearView}>Clear</Button>
     </div>
 
-    <!-- log stream (fills the page) -->
-    <div
-      bind:this={logEl}
-      class="min-h-0 flex-1 overflow-y-auto rounded-lg border border-border bg-muted/30 p-3 font-mono text-[11px] leading-relaxed"
-    >
-      {#if shown.length === 0}
-        <p class="py-10 text-center text-muted-foreground">
-          {lines.length === 0 ? "No logs yet — new lines stream in as the box reports them." : "No lines match the current filters."}
-        </p>
-      {:else}
-        {#each shown as l, i (i)}
-          <div class="flex gap-2 whitespace-pre-wrap break-words hover:bg-primary/5">
-            <span class="shrink-0 text-muted-foreground/50">{l.ts.slice(11, 19)}</span>
-            <span class="w-12 shrink-0 uppercase {logColor(l.level)}">{l.level}</span>
-            {#if l.target}<span class="max-w-40 shrink-0 truncate text-muted-foreground/60" title={l.target}>{l.target}</span>{/if}
-            <span class="{logColor(l.level)}">{l.message}</span>
-          </div>
-        {/each}
-      {/if}
+    <!-- data table (full width, fills the page) -->
+    <div class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border">
+      <div class="min-h-0 flex-1 overflow-auto">
+        <Table.Root class="w-full">
+          <Table.Header class="sticky top-0 z-10 bg-card">
+            <Table.Row>
+              <Table.Head class="w-44">
+                <button class="interactive inline-flex items-center gap-1" onclick={() => (sortDesc = !sortDesc)}>
+                  Time
+                  {#if sortDesc}<ArrowDown class="size-3" />{:else}<ArrowUp class="size-3" />{/if}
+                </button>
+              </Table.Head>
+              <Table.Head class="w-16">Level</Table.Head>
+              <Table.Head class="w-40">Source</Table.Head>
+              <Table.Head>Message</Table.Head>
+            </Table.Row>
+          </Table.Header>
+          <Table.Body>
+            {#if pageRows.length === 0}
+              <Table.Row>
+                <Table.Cell colspan={4} class="py-10 text-center text-muted-foreground">
+                  {lines.length === 0
+                    ? "No logs yet — new lines stream in as the box reports them."
+                    : "No lines match the current filters."}
+                </Table.Cell>
+              </Table.Row>
+            {:else}
+              {#each pageRows as l (l.ts + l.message)}
+                <Table.Row class="align-top">
+                  <Table.Cell class="whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground">
+                    {fmtTs(l.ts)}
+                  </Table.Cell>
+                  <Table.Cell class="font-mono text-[11px] uppercase {logColor(l.level)}">{l.level}</Table.Cell>
+                  <Table.Cell class="max-w-40 truncate font-mono text-[11px] text-muted-foreground/70" title={l.target}>
+                    {l.target}
+                  </Table.Cell>
+                  <Table.Cell class="whitespace-pre-wrap break-words font-mono text-[11px] {logColor(l.level)}">
+                    {l.message}
+                  </Table.Cell>
+                </Table.Row>
+              {/each}
+            {/if}
+          </Table.Body>
+        </Table.Root>
+      </div>
+
+      <!-- pagination -->
+      <div class="flex items-center justify-between border-t border-border bg-card/40 px-3 py-1.5 text-xs text-muted-foreground">
+        <span class="tabular-nums">{sorted.length} line(s) · page {page} / {totalPages}</span>
+        <div class="flex items-center gap-1">
+          <Button variant="outline" size="sm" class="h-7 px-2" disabled={page <= 1} onclick={() => (page = 1)}>First</Button>
+          <Button variant="outline" size="icon" class="size-7" disabled={page <= 1} onclick={() => (page -= 1)}>
+            <ChevronLeft class="size-4" />
+          </Button>
+          <Button variant="outline" size="icon" class="size-7" disabled={page >= totalPages} onclick={() => (page += 1)}>
+            <ChevronRight class="size-4" />
+          </Button>
+        </div>
+      </div>
     </div>
   {/if}
 </div>
