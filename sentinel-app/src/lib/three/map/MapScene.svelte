@@ -206,8 +206,9 @@
   position={[90, 38, 20]}
   intensity={1.7}
   castShadow
-  shadow.mapSize.width={4096}
-  shadow.mapSize.height={4096}
+  shadow.mapSize.width={2048}
+  shadow.mapSize.height={2048}
+  shadow.radius={12}
   shadow.camera.left={-80}
   shadow.camera.right={80}
   shadow.camera.top={80}
