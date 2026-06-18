@@ -22,6 +22,7 @@ futures = "0.3"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
 # `serde` is required: this pod is multi-tenant and serializes/deserializes tenant Uuids
 # in the REST/SSE layer (the run API + event payloads). It must be enabled here because the
 # release image builds `-p sentinel-flow` in isolation (no workspace feature unification).

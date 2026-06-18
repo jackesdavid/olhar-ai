@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
 use opencv::{core, imgcodecs, imgproc, prelude::*, video};
 
 use crate::state::{AppState, MotionEvent};
@@ -231,6 +232,7 @@ fn run_capture(state: &Arc<AppState>, ip: &str, p: &Params, stop: &AtomicBool) -
             .unwrap_or(true);
         if qualifies && throttle_ok {
             last_emit = Some(Instant::now());
+            let frame_b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg);
             let ev = MotionEvent {
                 camera_ip: ip.to_string(),
                 score: (pct * 100.0).round() / 100.0,
@@ -243,6 +245,7 @@ fn run_capture(state: &Arc<AppState>, ip: &str, p: &Params, stop: &AtomicBool) -
                     largest_rect.height,
                 ],
                 at: app_core::alerts::now_rfc3339(),
+                frame_b64: Some(frame_b64),
             };
             log::info!(
                 "motion watcher[{ip}]: motion {pct:.2}% area={} blobs={blobs}",

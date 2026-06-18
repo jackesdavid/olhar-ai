@@ -1983,6 +1983,7 @@ version = "0.5.3"
 dependencies = [
  "app-core",
  "axum",
+ "base64",
  "env_logger",
  "log",
  "opencv",

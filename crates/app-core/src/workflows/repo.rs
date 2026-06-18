@@ -236,6 +236,7 @@ pub fn system_events() -> Vec<TenantEvent> {
             field("area", PortType::Num),
             field("blobs", PortType::Num),
             field("bbox", PortType::Text),
+            field("frame", PortType::Image),
         ],
     }]
 }

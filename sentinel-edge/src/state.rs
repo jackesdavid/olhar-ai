@@ -259,6 +259,10 @@ pub struct MotionEvent {
     pub bbox: [i32; 4],
     /// RFC3339 observation time.
     pub at: String,
+    /// The JPEG frame that triggered this event (base64), so the cloud can deliver it
+    /// as an `Image` port on `OnEvent("motion")` without a second round-trip to the edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_b64: Option<String>,
 }
 
 /// Whether `ffmpeg` is on PATH (go2rtc needs it for JPEG frames). Computed once + cached —

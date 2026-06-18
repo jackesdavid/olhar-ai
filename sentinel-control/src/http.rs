@@ -246,6 +246,10 @@ struct MotionIn {
     #[allow(dead_code)]
     #[serde(default)]
     at: String,
+    /// The JPEG frame that triggered detection (base64). Relayed to flow so `OnEvent("motion")`
+    /// can expose it as an Image output without a second round-trip to the edge.
+    #[serde(default)]
+    frame_b64: Option<String>,
 }
 
 /// The edge reports a motion observation (box token → tenant). We publish it onto the Redis
@@ -264,16 +268,20 @@ async fn motion_push(State(st): State<AppState>, headers: HeaderMap, body: Optio
 
     if let Some(mut conn) = st.redis.clone() {
         let bbox = format!("{},{},{},{}", ev.bbox[0], ev.bbox[1], ev.bbox[2], ev.bbox[3]);
+        let mut payload = serde_json::json!({
+            "camera": ev.camera_ip,
+            "score": ev.score.round() as i64,
+            "area": ev.area,
+            "blobs": ev.blobs,
+            "bbox": bbox,
+        });
+        if let (Some(obj), Some(f)) = (payload.as_object_mut(), ev.frame_b64) {
+            obj.insert("frame".to_string(), serde_json::Value::String(f));
+        }
         let msg = json!({
             "tenant": tenant.to_string(),
             "event": "motion",
-            "payload": {
-                "camera": ev.camera_ip,
-                "score": ev.score.round() as i64,
-                "area": ev.area,
-                "blobs": ev.blobs,
-                "bbox": bbox,
-            }
+            "payload": payload,
         });
         let _: Result<i64, _> = redis::cmd("PUBLISH")
             .arg("flow:inject")

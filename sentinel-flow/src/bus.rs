@@ -104,15 +104,26 @@ async fn run_injector(state: &Arc<AppState>, url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Map an injected JSON payload object to typed `PortValues` (string→Text, integer/float→Num,
-/// bool→Bool). Other shapes are skipped. Empty when there's no payload object.
+/// Map an injected JSON payload object to typed `PortValues` (string→Text or Image,
+/// integer/float→Num, bool→Bool). Strings that decode as a JPEG (FFD8FF magic) become
+/// `Image` — this lets the edge embed the triggering frame inline without a second round-trip.
 fn payload_to_portvalues(payload: Option<&serde_json::Value>) -> app_core::workflows::PortValues {
     use app_core::workflows::PortValue;
+    use base64::Engine as _;
     let mut pv = app_core::workflows::PortValues::new();
     if let Some(obj) = payload.and_then(|p| p.as_object()) {
         for (k, v) in obj {
             let val = if let Some(s) = v.as_str() {
-                PortValue::Text(s.to_string())
+                // Attempt base64 decode; if the result starts with JPEG magic it's an image.
+                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(s.as_bytes()) {
+                    if bytes.len() > 3 && bytes[0] == 0xFF_u8 && bytes[1] == 0xD8 && bytes[2] == 0xFF {
+                        PortValue::Image(bytes)
+                    } else {
+                        PortValue::Text(s.to_string())
+                    }
+                } else {
+                    PortValue::Text(s.to_string())
+                }
             } else if let Some(n) = v.as_i64() {
                 PortValue::Num(n)
             } else if let Some(f) = v.as_f64() {
