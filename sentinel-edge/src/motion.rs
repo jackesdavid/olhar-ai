@@ -90,13 +90,20 @@ pub fn spawn(state: &Arc<AppState>) {
     });
 }
 
-/// Prefer the cheap substream; fall back to the main stream.
+/// The local go2rtc RTSP re-stream for a camera go2rtc is serving — `cam_<ip>` is the preview
+/// (substream) feed, ALREADY authenticated to the camera by go2rtc, so we open it with no
+/// creds and never touch the camera directly. Returns `None` for cameras without a resolved
+/// stream. Base overridable via `MOTION_GO2RTC_RTSP` (default `rtsp://127.0.0.1:8554`).
 fn stream_url(d: &app_core::devices::Device) -> Option<String> {
-    d.rtsp_sub_url
-        .as_ref()
-        .or(d.rtsp_url.as_ref())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    let has_stream = d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false);
+    if !has_stream {
+        return None;
+    }
+    let base = std::env::var("MOTION_GO2RTC_RTSP")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "rtsp://127.0.0.1:8554".to_string());
+    Some(format!("{}/{}", base.trim_end_matches('/'), app_core::go2rtc::stream_name(&d.ip)))
 }
 
 /// One camera's supervised loop: (re)connect + run the capture until stopped.

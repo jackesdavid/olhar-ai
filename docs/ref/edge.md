@@ -62,9 +62,12 @@ go2rtc streams are named `cam_<ip-with-underscores>` (preview/substream) + `cam_
 
 The edge owns **continuous** motion detection (it's the only thing near the cameras). A
 manager thread reconciles **one watcher thread per camera** (every 30s, against the live
-device list). Each watcher opens the camera's `rtsp_sub_url` via OpenCV `VideoCapture` and, per
-frame: downscale → **MOG2** adaptive background subtraction → `morphologyEx(OPEN)` denoise →
-`findContours`. When the foreground share clears `MOTION_FLOOR_PCT` **and** a blob ≥
+device list). Each watcher opens **go2rtc's local RTSP re-stream** (`rtsp://127.0.0.1:8554/cam_<ip>`
+— the preview/substream, already authenticated to the camera by go2rtc, so the watcher needs no
+creds and never touches the camera directly) via OpenCV `VideoCapture`, and per frame: downscale
+→ **MOG2** adaptive background subtraction → `morphologyEx(OPEN)` denoise → `findContours`.
+(go2rtc's RTSP is bound localhost-only in the generated config; override the base with
+`MOTION_GO2RTC_RTSP`.) When the foreground share clears `MOTION_FLOOR_PCT` **and** a blob ≥
 `MOTION_MIN_AREA` exists **and** `MOTION_MIN_INTERVAL_SECS` has elapsed since the last emit, it
 `POST /config/motion`s a normalized event `{camera_ip, score, area, blobs, bbox}` (box-token).
 
