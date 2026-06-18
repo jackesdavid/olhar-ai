@@ -6,6 +6,29 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-06-18 — Map 3D wall depth polish + no-Docker deploy path
+
+- **Branch:** `feat/map-redesign` (off `main`); pushed. Not merged to `new-ui`.
+- **Commits:** `022dbb5`, `9526caa`, `c28f792` (this session, on top of `c885862`).
+- **Done (all deployed to prod via no-Docker path):**
+  - **Wall height:** uniform `0.8` for all solid walls regardless of thickness — CAD/AutoCAD feel; wireframe stays `0.04` (`WallSegment.svelte:24`).
+  - **Wall material:** `roughness 0.8→0.65`, `metalness 0.06` added — painted-plaster/concrete surface feel (`WallSegment.svelte:39`).
+  - **Lighting:** ambient `0.85→0.5`, key light `1.15→1.7`, shadow map `2048→4096`, frustum `±120→±80`, sun inclined `[40,70,24]→[90,38,20]` — deep one-sided shadows from the right (`MapScene.svelte`).
+  - **Vertex snap:** `0.4→0.65` — wider magnetic zone so wall endpoints connect cleanly (`tools.svelte.ts`).
+  - **Board:** "Map: solid walls taller, richer material, deeper shadows" card created (ToDo → In Progress); plan at `docs/plans/map-walls-3d-depth.md`.
+  - **No-Docker deploy path confirmed:** `npm run build` → `scp` tarball to VPS → `docker cp` into running `sentinel-app` container → `nginx -s reload`. Used twice this session (Docker Desktop was down). HTTP 200 confirmed via public URL.
+- **State:** web build clean (same 7 pre-existing warnings); not cargo-checked this session (no backend changes). Deployed to prod; `app.thesentinels.online` returning 200.
+- **Pending / next:**
+  1. Run `task cloud-deploy -- sentinel-app` once Docker Desktop is back (proper image rebuild so the no-Docker inject is superseded by a clean image).
+  2. Confirm `c885862` (i32 presence fix) deploy is still live.
+  3. Verify presence live in browser console (`[presence] pulse …`).
+  4. Remove `[presence]` debug console lines in `lib/map/presence.svelte.ts` once confirmed.
+  5. Release: bump web version + merge `feat/map-redesign` → `new-ui`.
+- **Blockers:** Docker Desktop needs a restart before `task cloud-deploy` can run.
+- **Refs:** `docs/ref/map.md` (Build status §7), `docs/plans/map-walls-3d-depth.md`.
+
+---
+
 ## 2026-06-17 — Map polish + presence end-to-end + edge install fix (deployed)
 
 - **Branch:** `feat/map-redesign` (off `main`); pushed. **Not** merged to `new-ui`.
@@ -45,6 +68,29 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 - **Blockers:** none code-side. Transient GHCR/Docker-Hub TLS/network hiccups during deploys (retry
   worked). SSH to prod for debugging is **not authorized** (classifier-blocked) — diagnose from code.
 - **Refs:** `docs/ref/map.md` (Build status), `docs/ref/edge.md`, `docs/epics/map-redesign.md`.
+
+---
+
+## 2026-06-18 — Map 3D wall depth polish + no-Docker deploy path
+
+- **Branch:** `feat/map-redesign` (off `main`); pushed. Not merged to `new-ui`.
+- **Commits:** `022dbb5`, `9526caa`, `c28f792` (this session, on top of `c885862`).
+- **Done (all deployed to prod via no-Docker path):**
+  - **Wall height:** uniform `0.8` for all solid walls regardless of thickness — CAD/AutoCAD feel; wireframe stays `0.04` (`WallSegment.svelte:24`).
+  - **Wall material:** `roughness 0.8→0.65`, `metalness 0.06` added — painted-plaster/concrete surface feel (`WallSegment.svelte:39`).
+  - **Lighting:** ambient `0.85→0.5`, key light `1.15→1.7`, shadow map `2048→4096`, frustum `±120→±80`, sun inclined `[40,70,24]→[90,38,20]` — deep one-sided shadows from the right (`MapScene.svelte`).
+  - **Vertex snap:** `0.4→0.65` — wider magnetic zone so wall endpoints connect cleanly (`tools.svelte.ts`).
+  - **Board:** "Map: solid walls taller, richer material, deeper shadows" card created (ToDo → In Progress); plan at `docs/plans/map-walls-3d-depth.md`.
+  - **No-Docker deploy path confirmed:** `npm run build` → `scp` tarball to VPS → `docker cp` into running `sentinel-app` container → `nginx -s reload`. Used twice this session (Docker Desktop was down). HTTP 200 confirmed via public URL.
+- **State:** web build clean (same 7 pre-existing warnings); not cargo-checked this session (no backend changes). Deployed to prod; `app.thesentinels.online` returning 200.
+- **Pending / next:**
+  1. Run `task cloud-deploy -- sentinel-app` once Docker Desktop is back (proper image rebuild so the no-Docker inject is superseded by a clean image).
+  2. Confirm `c885862` (i32 presence fix) deploy is still live.
+  3. Verify presence live in browser console (`[presence] pulse …`).
+  4. Remove `[presence]` debug console lines in `lib/map/presence.svelte.ts` once confirmed.
+  5. Release: bump web version + merge `feat/map-redesign` → `new-ui`.
+- **Blockers:** Docker Desktop needs a restart before `task cloud-deploy` can run.
+- **Refs:** `docs/ref/map.md` (Build status §7), `docs/plans/map-walls-3d-depth.md`.
 
 ---
 

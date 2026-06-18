@@ -104,18 +104,16 @@ Grid `(x, y)` maps **1:1 to world `(x, 0, z)`** (the floor is the world XZ plane
 
 ## Build status
 
-- **Branch `feat/map-redesign`** (off `main`), **deployed to prod** incrementally (`592a3da`→
-  `c885862`). `svelte-check` + web build clean (only the 7 pre-existing `sensor-field`/`workflows`
-  errors); `cargo check` clean (app-core/control/flow). Not yet merged to `new-ui`.
+- **Branch `feat/map-redesign`** (off `main`), **deployed to prod** (`592a3da`→`c28f792`). `svelte-check` + web build clean (only the 7 pre-existing `sensor-field`/`workflows` errors); `cargo check` clean (app-core/control/flow). Not yet merged to `new-ui`.
   1. Decompose + blueprint render · 2. Wall + marker drawing + undo/redo · 3. Keyboard ·
   4. Presence backend · 5. Live pulse + legend · **6. Polish:** full-bleed + canvas overlays;
   Properties|Explorer tabs + shortcuts overlay; top-down **wireframe** markers + outlined walls;
   per-icon anchor + marker→wall snap; rotate rooms/walls/markers; camera **FOV width/length** +
   editable position; **FOV = wall-occluded line-of-sight** (Option B); **zoom fix + persisted
   zoom/pan**; presence dropdowns + FOV-ahead + **persisted `duration_secs`** + save-as-you-type.
-- **Pending:** (1) confirm `c885862` (i32 fix) deploy finished; (2) **verify presence live** (run a
-  workflow, console shows `[presence] pulse …`); (3) **remove the `[presence]` debug `console` lines**
-  once confirmed; (4) release: web version bump + merge to `new-ui`.
+  **7. 3D wall depth:** solid walls uniform height 0.8 (CAD-style, thickness-independent); roughness 0.65 + metalness 0.06 (plaster feel); ambient 0.5 + key light 1.7 + shadow map 4096 + frustum ±80 (deep one-sided shadows); sun inclined from right `[90,38,20]`; vertex snap widened 0.4→0.65.
+- **Deploy note:** no-Docker path works — `npm run build` → scp tarball → `docker cp` into running `sentinel-app` container → `nginx -s reload`. Use when Docker Desktop is unavailable locally.
+- **Pending:** (1) confirm `c885862` (i32 fix) deployed; (2) **verify presence live** (run a workflow, console shows `[presence] pulse …`); (3) **remove `[presence]` debug `console` lines** once confirmed; (4) proper Docker deploy via `task cloud-deploy -- sentinel-app` once Docker Desktop is back; (5) release: web version bump + merge to `new-ui`.
 - **Backlog:** presence history/heatmap, per-camera FOV tuning beyond yaw, multi-floor maps,
   doors/windows + curved walls + auto-room-detect, optional true 3D wireframe models for hero
   landmarks.
