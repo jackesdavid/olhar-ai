@@ -1,11 +1,12 @@
 <script lang="ts">
-  // The dot-field floor: a dark plane (catches shadows from the low wall/marker
-  // extrusions), a tiled emerald dot texture (the logo atom), and a soft radial
-  // emerald glow that makes the dots read brighter toward the focal centre.
+  // The dot-field floor: a cool blue-slate plane (the "paper" the plan is drawn on;
+  // catches shadows from the wall extrusions), a tiled cool dot texture, and a soft
+  // radial glow that makes the dots read brighter toward the focal centre.
   import { onMount } from "svelte";
   import { T } from "@threlte/core";
   import { DoubleSide, type Texture } from "three";
   import { dotFieldTexture, radialGlowTexture } from "./textures";
+  import { FLOOR_BASE } from "$lib/map/palette";
 
   // World extent of the floor. Big enough to feel infinite at normal zoom; the
   // dot tile repeats once per grid unit so it always lines up with the grid.
@@ -26,17 +27,17 @@
   });
 </script>
 
-<!-- base floor: near-black green-neutral, one step above the canvas background -->
+<!-- base floor: cool blue-slate — the paper the plan sits on -->
 <T.Mesh rotation.x={-Math.PI / 2} position.y={0} receiveShadow>
   <T.PlaneGeometry args={[SIZE, SIZE]} />
-  <T.MeshStandardMaterial color="#16201d" roughness={0.95} metalness={0} />
+  <T.MeshStandardMaterial color={FLOOR_BASE} roughness={0.95} metalness={0} />
 </T.Mesh>
 
-<!-- emerald dot field -->
+<!-- cool dot field -->
 {#if dots}
   <T.Mesh rotation.x={-Math.PI / 2} position.y={0.02}>
     <T.PlaneGeometry args={[SIZE, SIZE]} />
-    <T.MeshBasicMaterial map={dots} transparent opacity={0.5} depthWrite={false} side={DoubleSide} />
+    <T.MeshBasicMaterial map={dots} transparent opacity={0.4} depthWrite={false} side={DoubleSide} />
   </T.Mesh>
 {/if}
 

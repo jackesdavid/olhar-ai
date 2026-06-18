@@ -215,7 +215,8 @@
   shadow.camera.near={1}
   shadow.camera.far={400}
 />
-<T.DirectionalLight position={[-30, 18, -40]} intensity={0.35} color="#34d399" />
+<!-- cool neutral fill — keeps the plan reading as paper-white, not green-tinted -->
+<T.DirectionalLight position={[-30, 18, -40]} intensity={0.3} color="#aab9c7" />
 
 <GroundGrid />
 

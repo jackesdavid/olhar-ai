@@ -36,6 +36,10 @@ kanban-plugin: board
 - [ ] School Student Frequency Case
 	  - Plan: [[school-student-frequency]]
 	  - Use case: [[school-frequence]]
+- [ ] Map Redesign 2 — wall style property + architectural-neutral pass
+	  - Plan: [[map-redesign-2]]
+	  - Wall `style` (wireframe vs solid) now distinct from thickness; map shifted to blue-slate + near-white, emerald only for live accents.
+	  - Ref: docs/ref/map.md · Branch: feat/map-redesign
 
 
 ## Review

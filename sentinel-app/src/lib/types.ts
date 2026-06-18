@@ -158,8 +158,12 @@ export type MapRoom = {
   cameras: RoomCamera[];
 };
 
-/** A free-form wall (matches `app_core::map::MapWall`): a segment on the grid with
- * a thickness. Thin = a drawn line; thick = a solid wall. Independent of rooms. */
+/** Wall render style — independent of thickness. `solid` = filled, raised wall that
+ * casts a shadow; `wireframe` = a flat footprint outline (just the edges). */
+export type WallStyle = "solid" | "wireframe";
+
+/** A free-form wall (matches `app_core::map::MapWall`): a segment on the grid with a
+ * thickness (its width) and a style (filled vs outline). Independent of rooms. */
 export type MapWall = {
   id: number;
   x1: number;
@@ -167,6 +171,7 @@ export type MapWall = {
   x2: number;
   y2: number;
   thickness: number;
+  style?: WallStyle;
 };
 
 /** A placeable furniture / landmark marker (matches `app_core::map::MapMarker`),

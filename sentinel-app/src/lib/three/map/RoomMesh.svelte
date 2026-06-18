@@ -7,6 +7,7 @@
   import { Text } from "@threlte/extras";
   import { DoubleSide } from "three";
   import type { MapRoom } from "$lib/types";
+  import { SLATE_LINE, SLATE_FILL, LABEL, ACCENT, ACCENT_SOFT, ACCENT_LABEL } from "$lib/map/palette";
 
   let {
     room,
@@ -25,8 +26,13 @@
   const rad = $derived(((room.rot ?? 0) * Math.PI) / 180);
   const labelSize = $derived(Math.max(0.5, Math.min(room.w, room.h) * 0.22));
 
-  const strokeColor = $derived(selected ? "#34d399" : "#2f5147");
-  const strokeOpacity = $derived(selected ? 0.6 : 0.3);
+  // Uppercase room labels read like a printed plan ("COCINA", "DORMITORIO").
+  const labelText = $derived(room.name.toUpperCase());
+
+  const fillColor = $derived(selected ? ACCENT_SOFT : SLATE_FILL);
+  const strokeColor = $derived(selected ? ACCENT : SLATE_LINE);
+  const strokeOpacity = $derived(selected ? 0.6 : 0.35);
+  const labelColor = $derived(selected ? ACCENT_LABEL : LABEL);
 </script>
 
 <!-- everything sits in a group centred on the room, rotated by room.rot -->
@@ -35,9 +41,9 @@
   <T.Mesh rotation.x={-Math.PI / 2} position={[0, 0.04, 0]} receiveShadow>
     <T.PlaneGeometry args={[room.w, room.h]} />
     <T.MeshStandardMaterial
-      color={selected ? "#10b981" : "#1c2a26"}
+      color={fillColor}
       transparent
-      opacity={selected ? 0.16 : 0.42}
+      opacity={selected ? 0.16 : 0.32}
       roughness={0.9}
       side={DoubleSide}
     />
@@ -56,13 +62,13 @@
   {@render stroke(-room.w / 2, 0, STROKE, room.h)}
   {@render stroke(room.w / 2, 0, STROKE, room.h)}
 
-  <!-- flat floor label -->
+  <!-- flat floor label (uppercase, like a printed plan) -->
   <Text
-    text={room.name}
+    text={labelText}
     position={[0, 0.08, 0]}
     rotation={[-Math.PI / 2, 0, 0]}
     fontSize={labelSize}
-    color={selected ? "#d1fae5" : "#7c9a8f"}
+    color={labelColor}
     anchorX="center"
     anchorY="middle"
   />

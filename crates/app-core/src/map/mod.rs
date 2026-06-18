@@ -109,8 +109,9 @@ impl MapRoom {
 }
 
 /// A free-form wall: a segment from `(x1,y1)` to `(x2,y2)` on the grid with a
-/// `thickness`. A thin thickness reads as a drawn line; a thicker one as a solid
-/// wall — one primitive covers both. Walls are independent of rooms.
+/// `thickness` (its width) and a `style` (filled vs outline). Thickness and style
+/// are independent: a thin solid wall and a thick wireframe are both valid. Walls
+/// are independent of rooms.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MapWall {
     pub id: u32,
@@ -120,10 +121,18 @@ pub struct MapWall {
     pub y2: f64,
     #[serde(default = "default_thickness")]
     pub thickness: f64,
+    /// "solid" (filled, shadow-casting wall) or "wireframe" (flat footprint outline).
+    /// Defaults to solid so walls saved before this field load filled.
+    #[serde(default = "default_wall_style")]
+    pub style: String,
 }
 
 fn default_thickness() -> f64 {
     0.12
+}
+
+fn default_wall_style() -> String {
+    "solid".to_string()
 }
 
 /// A placeable furniture / landmark marker, rendered as a flat SVG glyph on the

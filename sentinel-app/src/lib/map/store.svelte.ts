@@ -286,7 +286,7 @@ export class MapStore {
   addWall(x1: number, y1: number, x2: number, y2: number, thickness = 0.12): MapWall {
     this.checkpoint();
     const id = this.nextId(this.walls);
-    const wall: MapWall = { id, x1, y1, x2, y2, thickness };
+    const wall: MapWall = { id, x1, y1, x2, y2, thickness, style: "solid" };
     this.walls = [...this.walls, wall];
     this.sel = { kind: "wall", id };
     return wall;

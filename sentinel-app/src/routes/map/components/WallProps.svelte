@@ -1,19 +1,33 @@
 <script lang="ts">
-  // Properties for the selected wall: thickness (line ↔ solid wall), rotation, delete.
+  // Properties for the selected wall — two independent controls: style (filled solid
+  // vs flat wireframe outline) and thickness (the wall's width), plus rotate + delete.
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
   import RotateCw from "@lucide/svelte/icons/rotate-cw";
   import { Button } from "$lib/components/ui/button";
   import { Label } from "$lib/components/ui/label";
+  import * as Select from "$lib/components/ui/select";
   import type { MapStore } from "$lib/map/store.svelte";
+  import type { WallStyle } from "$lib/types";
 
   let { store }: { store: MapStore } = $props();
 
   const wall = $derived(store.selectedWall);
   const length = $derived(wall ? Math.hypot(wall.x2 - wall.x1, wall.y2 - wall.y1) : 0);
 
-  function kindLabel(t: number): string {
-    return t >= 0.22 ? "Solid wall" : "Line";
+  const STYLE_LABELS: Record<WallStyle, string> = { solid: "Solid", wireframe: "Wireframe" };
+  const style = $derived((wall?.style ?? "solid") as WallStyle);
+
+  function widthLabel(t: number): string {
+    if (t >= 0.3) return "Thick";
+    if (t >= 0.15) return "Medium";
+    return "Thin";
+  }
+
+  function setStyle(value: string) {
+    if (!wall) return;
+    store.checkpoint();
+    store.updateWall(wall.id, { style: value as WallStyle });
   }
 </script>
 
@@ -25,9 +39,20 @@
     </div>
 
     <div class="space-y-1.5">
+      <Label class="text-xs text-muted-foreground">Style</Label>
+      <Select.Root type="single" value={style} onValueChange={setStyle}>
+        <Select.Trigger class="w-full">{STYLE_LABELS[style]}</Select.Trigger>
+        <Select.Content>
+          <Select.Item value="solid" label="Solid">Solid</Select.Item>
+          <Select.Item value="wireframe" label="Wireframe">Wireframe</Select.Item>
+        </Select.Content>
+      </Select.Root>
+    </div>
+
+    <div class="space-y-1.5">
       <div class="flex items-center justify-between">
         <Label class="text-xs text-muted-foreground">Thickness</Label>
-        <span class="text-xs tabular-nums text-muted-foreground">{kindLabel(wall.thickness)}</span>
+        <span class="text-xs tabular-nums text-muted-foreground">{widthLabel(wall.thickness)}</span>
       </div>
       <input
         type="range"

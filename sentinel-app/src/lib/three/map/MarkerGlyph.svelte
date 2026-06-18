@@ -1,8 +1,8 @@
 <script lang="ts">
   // One furniture / landmark marker, drawn as a top-down architectural plan symbol:
-  // each SVG shape becomes a thin emerald outline (line loop) over a faint emerald
-  // fill — the wireframe look from the references. Oriented by yaw, sized by scale,
-  // pivoted on the icon's logical anchor. Geometry is cached per icon key.
+  // each SVG shape becomes a thin near-white outline (line loop) over a faint fill —
+  // the wireframe look from the references. Selected markers go emerald. Oriented by
+  // yaw, sized by scale, pivoted on the icon's logical anchor. Cached per icon key.
   import { onMount } from "svelte";
   import { T } from "@threlte/core";
   import { Text } from "@threlte/extras";
@@ -10,6 +10,7 @@
   import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
   import type { MapMarker } from "$lib/types";
   import { iconSvg, iconAnchor } from "$lib/map/icons";
+  import { INK, LABEL, ACCENT_BRIGHT, ACCENT_LABEL } from "$lib/map/palette";
 
   let { marker, selected = false }: { marker: MapMarker; selected?: boolean } = $props();
 
@@ -58,9 +59,10 @@
   });
 
   const yaw = $derived((-marker.rot * Math.PI) / 180);
-  const lineColor = $derived(selected ? "#6ee7b7" : "#34d399");
+  const lineColor = $derived(selected ? ACCENT_BRIGHT : INK);
   const lineOpacity = $derived(selected ? 1 : 0.85);
   const fillOpacity = $derived(selected ? 0.18 : 0.1);
+  const labelColor = $derived(selected ? ACCENT_LABEL : LABEL);
 </script>
 
 <T.Group position={[marker.x, 0.08, marker.y]} rotation.y={yaw} scale={marker.scale}>
@@ -84,7 +86,7 @@
     position={[marker.x, 0.09, marker.y + BASE * marker.scale * 0.62]}
     rotation={[-Math.PI / 2, 0, 0]}
     fontSize={0.42}
-    color={selected ? "#d1fae5" : "#7c9a8f"}
+    color={labelColor}
     anchorX="center"
     anchorY="middle"
   />
