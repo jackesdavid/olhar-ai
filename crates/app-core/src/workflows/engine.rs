@@ -8,6 +8,7 @@
 //! first node error. The trigger/concurrency methods are the pure decision logic
 //! the backend poller drives.
 use super::domain::{ConcurrencyPolicy, Graph, NodeKind, EXEC_IN};
+use super::repo;
 use super::node::{self, PortValue, PortValues};
 use crate::agent::tools::{ToolContext, ToolUiEvent};
 use crate::alerts::{Alert, AlertLevel};
@@ -350,6 +351,36 @@ fn forward_epoch(
             *steps += 1;
             if graph.debug {
                 on_log(nid, &node::debug_summary(n.kind, &n.config, &inputs, &o), 0);
+            }
+            outputs.insert(nid, o);
+            ran.insert(nid);
+            settle(&mut settled, &mut indeg);
+            continue;
+        }
+
+        // FlipFlop: read cross-run state, fire `a` or `b`, write toggled state back.
+        // Engine-driven (like ForEach) — no run_node call.
+        if n.kind == NodeKind::FlipFlop {
+            let state = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid);
+            // State stores the branch to fire next. Missing = first run → fire A (is_a=true).
+            let is_a = state
+                .as_ref()
+                .and_then(|v| v.get("is_a"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            repo::set_node_state(
+                &sys.db,
+                sys.tenant_id,
+                graph.id,
+                nid,
+                &serde_json::json!({ "is_a": !is_a }),
+            );
+            live_out.insert((nid, if is_a { "a" } else { "b" }.to_string()));
+            let mut o = PortValues::new();
+            o.insert("is_a".into(), PortValue::Bool(is_a));
+            *steps += 1;
+            if graph.debug {
+                on_log(nid, &format!("Flip Flop → {}", if is_a { "a" } else { "b" }), 0);
             }
             outputs.insert(nid, o);
             ran.insert(nid);

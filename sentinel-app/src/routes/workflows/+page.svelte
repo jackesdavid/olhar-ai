@@ -2295,6 +2295,15 @@
                             {#each categoryOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
                           </Select.Content>
                         </Select.Root>
+                      {:else if key === "operator"}
+                        {@const ops = [">", ">=", "<", "<=", "==", "!="]}
+                        {@const opv = String(selectedNode.config[key] ?? "==")}
+                        <Select.Root type="single" disabled={editLocked} value={opv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "==" })}>
+                          <Select.Trigger class="h-8 w-full font-mono">{opv}</Select.Trigger>
+                          <Select.Content>
+                            {#each ops as op (op)}<Select.Item value={op} label={op} class="font-mono">{op}</Select.Item>{/each}
+                          </Select.Content>
+                        </Select.Root>
                       {:else if key === "event"}
                         <!-- Event name persists like any other field (onchange → saveNodeConfig).
                              Registration into the tenant registry (so other graphs can listen +

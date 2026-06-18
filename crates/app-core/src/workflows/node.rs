@@ -258,6 +258,10 @@ pub fn run_node(
         // the editor — is driven by the engine, which owns the node id the UI needs to
         // place the preview. Here it's a pure pass-through (exec flows on, no data out).
         NodeKind::ShowImage => Ok(PortValues::new()),
+        // FlipFlop is engine-driven (reads/writes cross-run state + routes exec).
+        // Never called directly — the engine handles it before reaching run_node.
+        NodeKind::FlipFlop => Ok(PortValues::new()),
+        NodeKind::Compare => run_compare(config, inputs),
     }
 }
 
@@ -277,10 +281,12 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         NodeKind::HttpPost | NodeKind::NotifyRecipient | NodeKind::DeliverAlert => 35,
         NodeKind::CreateAlert | NodeKind::RecordPresence => 15,
         // Inline (no watchdog): instant/pure nodes + the deliberate `Wait` sleep + the
-        // engine-driven markers (ForEach/EmitEvent/OnEvent/ShowImage).
+        // engine-driven markers (ForEach/EmitEvent/OnEvent/ShowImage/FlipFlop).
         NodeKind::Wait
         | NodeKind::Format
         | NodeKind::If
+        | NodeKind::Compare
+        | NodeKind::FlipFlop
         | NodeKind::Print
         | NodeKind::GetRecipient
         | NodeKind::GetLastAlert
@@ -540,6 +546,17 @@ pub fn debug_summary(
                 "no image".into()
             }
         }
+        NodeKind::FlipFlop => {
+            let branch = outputs.get("is_a").and_then(PortValue::as_bool).map(|b| if b { "a" } else { "b" }).unwrap_or("?");
+            format!("flip flop → {branch}")
+        }
+        NodeKind::Compare => {
+            let a = inputs.get("a").and_then(PortValue::as_num).unwrap_or(0);
+            let b = inputs.get("b").and_then(PortValue::as_num).unwrap_or(0);
+            let op = config.get("operator").and_then(|v| v.as_str()).unwrap_or("==");
+            let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            format!("{a} {op} {b} → {result}")
+        }
     }
 }
 
@@ -551,6 +568,26 @@ fn run_if(inputs: &PortValues) -> Result<PortValues, String> {
         .and_then(PortValue::as_bool)
         .ok_or("missing required input 'condition'")?;
     Ok(PortValues::new())
+}
+
+/// Compare two integers using a configurable operator → `result` bool.
+/// Both `a` and `b` fall back to 0 when not wired and no config literal is set.
+fn run_compare(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let a = inputs.get("a").and_then(PortValue::as_num).unwrap_or(0);
+    let b = inputs.get("b").and_then(PortValue::as_num).unwrap_or(0);
+    let op = config.get("operator").and_then(Value::as_str).unwrap_or("==");
+    let result = match op {
+        ">"  => a > b,
+        ">=" => a >= b,
+        "<"  => a < b,
+        "<=" => a <= b,
+        "==" => a == b,
+        "!=" => a != b,
+        _ => return Err(format!("Compare: unknown operator '{op}' (use >, >=, <, <=, ==, !=)")),
+    };
+    let mut o = PortValues::new();
+    o.insert("result".into(), PortValue::Bool(result));
+    Ok(o)
 }
 
 /// Compare two frames (resized to a common small grayscale) and report how much

@@ -188,6 +188,45 @@ pub fn save_cron_fired(db: &Db, tenant_id: Uuid, graph_id: u32, fired_ms: u64) {
     }
 }
 
+/// Returns the persisted JSON state for a node, or `None` if never set.
+pub fn get_node_state(db: &Db, tenant_id: Uuid, graph_id: u32, node_id: u32) -> Option<serde_json::Value> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_as::<_, (String,)>(
+            "SELECT state_json FROM workflow_node_state WHERE tenant_id = $1 AND graph_id = $2 AND node_id = $3",
+        )
+        .bind(tenant_id)
+        .bind(graph_id as i64)
+        .bind(node_id as i64)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|(s,)| serde_json::from_str(&s).ok())
+    })
+}
+
+/// Upserts the JSON state for a node. Best-effort (errors are logged, not propagated).
+pub fn set_node_state(db: &Db, tenant_id: Uuid, graph_id: u32, node_id: u32, state: &serde_json::Value) {
+    let pool = db.pool();
+    let json_str = state.to_string();
+    let res: Result<_, sqlx::Error> = db.block(async move {
+        sqlx::query(
+            "INSERT INTO workflow_node_state (tenant_id, graph_id, node_id, state_json) VALUES ($1, $2, $3, $4)
+             ON CONFLICT (tenant_id, graph_id, node_id) DO UPDATE SET state_json = EXCLUDED.state_json",
+        )
+        .bind(tenant_id)
+        .bind(graph_id as i64)
+        .bind(node_id as i64)
+        .bind(json_str)
+        .execute(&pool)
+        .await
+    });
+    if let Err(e) = res {
+        log::error!("workflows::repo::set_node_state failed: {e}");
+    }
+}
+
 // ---- event registry + categories (per tenant) ------------------------------
 
 /// A tenant-scoped event category. `source` is `user` or `system`.

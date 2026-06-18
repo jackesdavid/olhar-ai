@@ -173,6 +173,14 @@ pub enum NodeKind {
     /// Debug: show an `image` on the editor canvas — a sink for eyeballing a frame as
     /// it flows through the graph. Like `Print`, but for pixels; emits no data.
     ShowImage,
+    /// Flow control: alternates exec between `a` and `b` on each graph run, with
+    /// cross-run persistent state. `is_a` (bool data output) tells which branch just
+    /// fired — true = A. Like Unreal's Flip Flop node. Engine-driven (not `run_node`).
+    FlipFlop,
+    /// Data: compare two integers with a configurable operator → `result` bool.
+    /// Both operands (`a`, `b`) can be wired from upstream or typed as literals in the
+    /// inspector. Feeds directly into `If` for conditional routing.
+    Compare,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -323,6 +331,17 @@ const PRINT_IN: [Port; 2] =
 // Show image: a debug sink — an image in, flashed on the canvas. No data out.
 const SHOW_IMAGE_IN: [Port; 1] = [p("image", PortType::Image, true)];
 
+// Flip Flop: exec a/b outputs (alternating), plus is_a bool data output.
+const EXEC_OUT_FLIP_FLOP: [Port; 2] = [
+    p("a", PortType::Exec, false),
+    p("b", PortType::Exec, false),
+];
+const FLIP_FLOP_OUT: [Port; 1] = [p("is_a", PortType::Bool, false)];
+
+// Compare: two numeric inputs (wired or literal) → a bool result.
+const COMPARE_IN: [Port; 2] = [p("a", PortType::Num, false), p("b", PortType::Num, false)];
+const COMPARE_OUT: [Port; 1] = [p("result", PortType::Bool, false)];
+
 const NO_PORTS: [Port; 0] = [];
 
 // Universal control-flow ports — every node has an `exec_in` and, by default, an
@@ -340,7 +359,7 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 24] = [
+    pub const ALL: [NodeKind; 26] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -354,6 +373,8 @@ impl NodeKind {
         NodeKind::HttpPost,
         NodeKind::If,
         NodeKind::ForEach,
+        NodeKind::FlipFlop,
+        NodeKind::Compare,
         NodeKind::MotionDetection,
         NodeKind::MotionWatch,
         NodeKind::PersonDetection,
@@ -395,6 +416,8 @@ impl NodeKind {
             NodeKind::OnEvent => "on_event",
             NodeKind::Print => "print",
             NodeKind::ShowImage => "show_image",
+            NodeKind::FlipFlop => "flip_flop",
+            NodeKind::Compare => "compare",
         }
     }
 
@@ -428,6 +451,8 @@ impl NodeKind {
             NodeKind::OnEvent => "On event",
             NodeKind::Print => "Print",
             NodeKind::ShowImage => "Show image",
+            NodeKind::FlipFlop => "Flip flop",
+            NodeKind::Compare => "Compare",
         }
     }
 
@@ -442,6 +467,8 @@ impl NodeKind {
             NodeKind::Wait
             | NodeKind::If
             | NodeKind::ForEach
+            | NodeKind::FlipFlop
+            | NodeKind::Compare
             | NodeKind::Print
             | NodeKind::ShowImage
             | NodeKind::EmitEvent
@@ -463,6 +490,7 @@ impl NodeKind {
         match self {
             NodeKind::If => &EXEC_OUT_IF,
             NodeKind::ForEach => &EXEC_OUT_FOR_EACH,
+            NodeKind::FlipFlop => &EXEC_OUT_FLIP_FLOP,
             _ => &EXEC_OUT_DEFAULT,
         }
     }
@@ -493,6 +521,8 @@ impl NodeKind {
             NodeKind::OnEvent => &NO_PORTS,   // entry: only an exec_out; activated by the event
             NodeKind::Print => &PRINT_IN,
             NodeKind::ShowImage => &SHOW_IMAGE_IN,
+            NodeKind::FlipFlop => &NO_PORTS, // engine-driven; no data inputs
+            NodeKind::Compare => &COMPARE_IN,
         }
     }
 
@@ -522,6 +552,8 @@ impl NodeKind {
             NodeKind::OnEvent => &NO_PORTS,   // drives its subtree via exec_out only
             NodeKind::Print => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::ShowImage => &NO_PORTS, // a sink — exec passes through, no data out
+            NodeKind::FlipFlop => &FLIP_FLOP_OUT,
+            NodeKind::Compare => &COMPARE_OUT,
         }
     }
 
@@ -568,6 +600,8 @@ impl NodeKind {
             NodeKind::OnEvent => json!({ "event": "" }),
             NodeKind::Print => json!({ "message": "", "on_screen": true, "level": "info" }),
             NodeKind::ShowImage => json!({ "label": "" }),
+            NodeKind::FlipFlop => json!({}),
+            NodeKind::Compare => json!({ "operator": "==", "a": "0", "b": "0" }),
         }
     }
 }
