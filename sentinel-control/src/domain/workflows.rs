@@ -222,12 +222,20 @@ async fn flow_get_json(url: &str) -> Value {
 
 // ---- event registry + categories (per tenant) ------------------------------
 
-/// The tenant's registered events (name + category + source), for the editor palette.
+/// The events the editor palette offers: the platform's system events (always available, with
+/// payload schema) merged with this tenant's own registered events. System events win on a
+/// name clash (they're platform-defined).
 async fn list_events(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Value>, ApiErr> {
     auth::require(&c, "workflows.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    let events = blocking(move || workflows::repo::list_events(&db, tid)).await?;
+    let events = blocking(move || {
+        let mut out = workflows::repo::system_events();
+        let sys: std::collections::HashSet<String> = out.iter().map(|e| e.name.clone()).collect();
+        out.extend(workflows::repo::list_events(&db, tid).into_iter().filter(|e| !sys.contains(&e.name)));
+        out
+    })
+    .await?;
     Ok(Json(serde_json::to_value(events).unwrap_or_else(|_| json!([]))))
 }
 

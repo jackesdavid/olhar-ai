@@ -262,8 +262,6 @@ async fn motion_push(State(st): State<AppState>, headers: HeaderMap, body: Optio
         return (StatusCode::BAD_REQUEST, "motion body required").into_response();
     };
 
-    ensure_motion_event(&st, tenant).await;
-
     if let Some(mut conn) = st.redis.clone() {
         let bbox = format!("{},{},{},{}", ev.bbox[0], ev.bbox[1], ev.bbox[2], ev.bbox[3]);
         let msg = json!({
@@ -286,39 +284,6 @@ async fn motion_push(State(st): State<AppState>, headers: HeaderMap, body: Optio
         log::warn!("motion event dropped: REDIS_URL not configured");
     }
     StatusCode::NO_CONTENT.into_response()
-}
-
-/// Register the `motion` event with its typed payload schema for `tenant`, deduped per process
-/// (one DB upsert). Best-effort — so `OnEvent("motion")` graphs render camera/score/… ports.
-async fn ensure_motion_event(st: &AppState, tenant: uuid::Uuid) {
-    static DONE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<uuid::Uuid>>> =
-        std::sync::OnceLock::new();
-    let set = DONE.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
-    if !set.lock().unwrap().insert(tenant) {
-        return;
-    }
-    let db = st.db.clone();
-    let _ = tokio::task::spawn_blocking(move || {
-        use app_core::workflows::repo::EventField;
-        use app_core::workflows::PortType;
-        let fields = vec![
-            EventField { name: "camera".into(), ty: PortType::Text },
-            EventField { name: "score".into(), ty: PortType::Num },
-            EventField { name: "area".into(), ty: PortType::Num },
-            EventField { name: "blobs".into(), ty: PortType::Num },
-            EventField { name: "bbox".into(), ty: PortType::Text },
-        ];
-        app_core::workflows::repo::create_event(
-            &db,
-            tenant,
-            "motion",
-            "System",
-            Some("Edge motion detection"),
-            None,
-            &fields,
-        );
-    })
-    .await;
 }
 
 /// Newest box-log rows kept per box (bounded retention; the edge keeps its own ring + stdout).

@@ -218,6 +218,28 @@ pub struct TenantEvent {
     pub fields: Vec<EventField>,
 }
 
+/// Platform-defined events available to EVERY tenant, with their payload schema. Merged into
+/// the event list the editor fetches, so `OnEvent` nodes expose typed outputs immediately —
+/// no per-tenant registration and no first-event chicken-and-egg. System events are emitted
+/// by the platform (e.g. `motion` by the edge), not user `EmitEvent` nodes. Add new ones here.
+pub fn system_events() -> Vec<TenantEvent> {
+    let field = |name: &str, ty: PortType| EventField { name: name.to_string(), ty };
+    vec![TenantEvent {
+        name: "motion".to_string(),
+        category: "System".to_string(),
+        source: "system".to_string(),
+        description: Some("Edge motion detection".to_string()),
+        created_by_graph: None,
+        fields: vec![
+            field("camera", PortType::Text),
+            field("score", PortType::Num),
+            field("area", PortType::Num),
+            field("blobs", PortType::Num),
+            field("bbox", PortType::Text),
+        ],
+    }]
+}
+
 /// The tenant's event categories, ordered by name. Empty on error.
 pub fn list_categories(db: &Db, tenant_id: Uuid) -> Vec<EventCategory> {
     let pool = db.pool();

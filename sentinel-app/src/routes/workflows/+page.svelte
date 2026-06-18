@@ -2329,7 +2329,16 @@
               {#if selectedNode.kind === "emit_event" || selectedNode.kind === "on_event"}
                 {@const evName = String(selectedNode.config.event ?? "").trim()}
                 {@const knownEv = events.find((e) => e.name === evName)}
-                {#if evName}
+                {#if evName && knownEv && knownEv.source === "system"}
+                  <!-- Platform-defined event: read-only (its payload schema ships with the
+                       app, available to every tenant — no registration needed). -->
+                  <div class="space-y-1 border-t border-border pt-2.5">
+                    <p class="text-[10px] font-medium text-muted-foreground">System event · “{knownEv.category}” (read-only)</p>
+                    {#if (knownEv.fields ?? []).length > 0}
+                      <p class="text-[10px] text-muted-foreground">Payload: {(knownEv.fields ?? []).map((f) => `${f.name} (${f.type})`).join(", ")}</p>
+                    {/if}
+                  </div>
+                {:else if evName}
                   <div class="space-y-2.5 border-t border-border pt-2.5">
                     <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">
                       <Label class="pt-2 text-xs text-muted-foreground">Category</Label>
