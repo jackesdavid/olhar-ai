@@ -262,6 +262,12 @@ pub fn run_node(
         // Never called directly — the engine handles it before reaching run_node.
         NodeKind::FlipFlop => Ok(PortValues::new()),
         NodeKind::Compare => run_compare(config, inputs),
+        NodeKind::NumLt => run_num_cmp(config, inputs, |a, b| a < b),
+        NodeKind::NumLte => run_num_cmp(config, inputs, |a, b| a <= b),
+        NodeKind::NumGt => run_num_cmp(config, inputs, |a, b| a > b),
+        NodeKind::NumGte => run_num_cmp(config, inputs, |a, b| a >= b),
+        NodeKind::NumEq => run_num_cmp(config, inputs, |a, b| a == b),
+        NodeKind::NumNe => run_num_cmp(config, inputs, |a, b| a != b),
         // Cooldown is engine-driven (reads/writes cross-run node state).
         NodeKind::Cooldown => Ok(PortValues::new()),
     }
@@ -288,6 +294,12 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::Format
         | NodeKind::If
         | NodeKind::Compare
+        | NodeKind::NumLt
+        | NodeKind::NumLte
+        | NodeKind::NumGt
+        | NodeKind::NumGte
+        | NodeKind::NumEq
+        | NodeKind::NumNe
         | NodeKind::FlipFlop
         | NodeKind::Cooldown
         | NodeKind::Print
@@ -560,6 +572,12 @@ pub fn debug_summary(
             let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
             format!("{a} {op} {b} → {result}")
         }
+        NodeKind::NumLt => num_cmp_summary("<", inputs, outputs),
+        NodeKind::NumLte => num_cmp_summary("<=", inputs, outputs),
+        NodeKind::NumGt => num_cmp_summary(">", inputs, outputs),
+        NodeKind::NumGte => num_cmp_summary(">=", inputs, outputs),
+        NodeKind::NumEq => num_cmp_summary("==", inputs, outputs),
+        NodeKind::NumNe => num_cmp_summary("!=", inputs, outputs),
         NodeKind::Cooldown => {
             let elapsed = outputs.get("elapsed_secs").and_then(PortValue::as_num).unwrap_or(0);
             let ok = outputs.get("ok").and_then(PortValue::as_bool).unwrap_or(false);
@@ -597,6 +615,26 @@ fn run_compare(config: &Value, inputs: &PortValues) -> Result<PortValues, String
     let mut o = PortValues::new();
     o.insert("result".into(), PortValue::Bool(result));
     Ok(o)
+}
+
+/// Numeric comparison with a fixed operator — shared by the six Num: </<=/>/>==/!= nodes.
+fn run_num_cmp(config: &Value, inputs: &PortValues, op: impl FnOnce(i64, i64) -> bool) -> Result<PortValues, String> {
+    let a = inputs.get("a").and_then(PortValue::as_num)
+        .or_else(|| config.get("a").and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))))
+        .unwrap_or(0);
+    let b = inputs.get("b").and_then(PortValue::as_num)
+        .or_else(|| config.get("b").and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))))
+        .unwrap_or(0);
+    let mut o = PortValues::new();
+    o.insert("result".into(), PortValue::Bool(op(a, b)));
+    Ok(o)
+}
+
+fn num_cmp_summary(op: &str, inputs: &PortValues, outputs: &PortValues) -> String {
+    let a = inputs.get("a").and_then(PortValue::as_num).unwrap_or(0);
+    let b = inputs.get("b").and_then(PortValue::as_num).unwrap_or(0);
+    let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+    format!("{a} {op} {b} → {result}")
 }
 
 /// Compare two frames (resized to a common small grayscale) and report how much

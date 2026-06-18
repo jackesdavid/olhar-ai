@@ -181,6 +181,18 @@ pub enum NodeKind {
     /// Both operands (`a`, `b`) can be wired from upstream or typed as literals in the
     /// inspector. Feeds directly into `If` for conditional routing.
     Compare,
+    /// Data: `a < b` (Num × Num → Bool). Operator baked in — no config needed.
+    NumLt,
+    /// Data: `a <= b` (Num × Num → Bool).
+    NumLte,
+    /// Data: `a > b` (Num × Num → Bool).
+    NumGt,
+    /// Data: `a >= b` (Num × Num → Bool).
+    NumGte,
+    /// Data: `a == b` (Num × Num → Bool).
+    NumEq,
+    /// Data: `a != b` (Num × Num → Bool).
+    NumNe,
     /// Flow control: rate-limit gate — lets exec through only when at least `window_secs`
     /// have elapsed since the node last fired. Persists `last_fired_at` across runs via
     /// node state. Outputs `elapsed_secs` (how long since last fire, or window+1 on first
@@ -369,7 +381,7 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 27] = [
+    pub const ALL: [NodeKind; 33] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -385,6 +397,12 @@ impl NodeKind {
         NodeKind::ForEach,
         NodeKind::FlipFlop,
         NodeKind::Compare,
+        NodeKind::NumLt,
+        NodeKind::NumLte,
+        NodeKind::NumGt,
+        NodeKind::NumGte,
+        NodeKind::NumEq,
+        NodeKind::NumNe,
         NodeKind::MotionDetection,
         NodeKind::MotionWatch,
         NodeKind::PersonDetection,
@@ -429,6 +447,12 @@ impl NodeKind {
             NodeKind::ShowImage => "show_image",
             NodeKind::FlipFlop => "flip_flop",
             NodeKind::Compare => "compare",
+            NodeKind::NumLt => "num_lt",
+            NodeKind::NumLte => "num_lte",
+            NodeKind::NumGt => "num_gt",
+            NodeKind::NumGte => "num_gte",
+            NodeKind::NumEq => "num_eq",
+            NodeKind::NumNe => "num_ne",
             NodeKind::Cooldown => "cooldown",
         }
     }
@@ -465,6 +489,12 @@ impl NodeKind {
             NodeKind::ShowImage => "Show image",
             NodeKind::FlipFlop => "Flip flop",
             NodeKind::Compare => "Compare",
+            NodeKind::NumLt => "Num: <",
+            NodeKind::NumLte => "Num: <=",
+            NodeKind::NumGt => "Num: >",
+            NodeKind::NumGte => "Num: >=",
+            NodeKind::NumEq => "Num: ==",
+            NodeKind::NumNe => "Num: !=",
             NodeKind::Cooldown => "Cooldown",
         }
     }
@@ -487,6 +517,12 @@ impl NodeKind {
             | NodeKind::ShowImage
             | NodeKind::EmitEvent
             | NodeKind::OnEvent => "Flow",
+            NodeKind::NumLt
+            | NodeKind::NumLte
+            | NodeKind::NumGt
+            | NodeKind::NumGte
+            | NodeKind::NumEq
+            | NodeKind::NumNe => "Logic",
             NodeKind::HttpPost => "Network",
             NodeKind::MotionDetection
             | NodeKind::MotionWatch
@@ -536,7 +572,13 @@ impl NodeKind {
             NodeKind::Print => &PRINT_IN,
             NodeKind::ShowImage => &SHOW_IMAGE_IN,
             NodeKind::FlipFlop => &NO_PORTS, // engine-driven; no data inputs
-            NodeKind::Compare => &COMPARE_IN,
+            NodeKind::Compare
+            | NodeKind::NumLt
+            | NodeKind::NumLte
+            | NodeKind::NumGt
+            | NodeKind::NumGte
+            | NodeKind::NumEq
+            | NodeKind::NumNe => &COMPARE_IN,
             NodeKind::Cooldown => &NO_PORTS, // engine-driven; window_secs is config
         }
     }
@@ -568,7 +610,13 @@ impl NodeKind {
             NodeKind::Print => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::ShowImage => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::FlipFlop => &FLIP_FLOP_OUT,
-            NodeKind::Compare => &COMPARE_OUT,
+            NodeKind::Compare
+            | NodeKind::NumLt
+            | NodeKind::NumLte
+            | NodeKind::NumGt
+            | NodeKind::NumGte
+            | NodeKind::NumEq
+            | NodeKind::NumNe => &COMPARE_OUT,
             NodeKind::Cooldown => &COOLDOWN_OUT,
         }
     }
@@ -618,6 +666,12 @@ impl NodeKind {
             NodeKind::ShowImage => json!({ "label": "" }),
             NodeKind::FlipFlop => json!({}),
             NodeKind::Compare => json!({ "operator": "==", "a": "0", "b": "0" }),
+            NodeKind::NumLt
+            | NodeKind::NumLte
+            | NodeKind::NumGt
+            | NodeKind::NumGte
+            | NodeKind::NumEq
+            | NodeKind::NumNe => json!({ "a": "0", "b": "0" }),
             NodeKind::Cooldown => json!({ "window_secs": "60" }),
         }
     }
