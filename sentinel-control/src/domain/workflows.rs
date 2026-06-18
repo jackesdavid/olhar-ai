@@ -326,12 +326,11 @@ struct EventsQuery {
     token: String,
 }
 
-/// Relay run-progress SSE to the browser, **scoped to the caller's tenant**. The editor
-/// opens an `EventSource` here (which can't send headers, so the JWT rides the `token`
-/// query param). When the Redis fabric is configured we subscribe to `events:<tenant>` —
-/// which carries EVERY flow pod's events (multi-pod). Otherwise we fall back to proxying a
-/// single flow pod's `/events` stream and filter by tenant. Lossy by design (final state is
-/// re-fetchable via REST).
+/// Relay run-progress SSE to the browser, **scoped to the caller's tenant**, off the Redis
+/// event fabric. The editor opens an `EventSource` here (which can't send headers, so the JWT
+/// rides the `token` query param). We subscribe to `events:<tenant>`, which carries EVERY flow
+/// pod's events (multi-pod). The channel name isolates the tenant, so no per-message filter is
+/// needed. Lossy by design (final state is re-fetchable via REST).
 async fn events_stream(
     State(st): State<AppState>,
     Query(q): Query<EventsQuery>,
@@ -340,66 +339,32 @@ async fn events_stream(
     auth::require(&claims, "workflows.read")?;
     let tid = tenant_of(&claims)?.to_string();
 
+    let Some(url) = st.redis_url.clone() else {
+        return Err(err(StatusCode::BAD_GATEWAY, "event fabric unavailable (REDIS_URL not set)"));
+    };
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
-
-    if let Some(url) = st.redis_url.clone() {
-        // Redis path: subscribe to this tenant's channel (every pod publishes here). The
-        // channel name already isolates the tenant, so no per-message filter is needed.
-        let chan = format!("events:{tid}");
-        tokio::spawn(async move {
-            let client = match redis::Client::open(url) {
-                Ok(c) => c,
-                Err(e) => { log::warn!("events relay: bad redis url: {e}"); return; }
-            };
-            let mut pubsub = match client.get_async_pubsub().await {
-                Ok(p) => p,
-                Err(e) => { log::warn!("events relay: redis pubsub connect failed: {e}"); return; }
-            };
-            if let Err(e) = pubsub.subscribe(&chan).await {
-                log::warn!("events relay: subscribe {chan} failed: {e}");
-                return;
+    let chan = format!("events:{tid}");
+    tokio::spawn(async move {
+        let client = match redis::Client::open(url) {
+            Ok(c) => c,
+            Err(e) => { log::warn!("events relay: bad redis url: {e}"); return; }
+        };
+        let mut pubsub = match client.get_async_pubsub().await {
+            Ok(p) => p,
+            Err(e) => { log::warn!("events relay: redis pubsub connect failed: {e}"); return; }
+        };
+        if let Err(e) = pubsub.subscribe(&chan).await {
+            log::warn!("events relay: subscribe {chan} failed: {e}");
+            return;
+        }
+        let mut on_msg = pubsub.on_message();
+        while let Some(msg) = on_msg.next().await {
+            let Ok(payload) = msg.get_payload::<String>() else { continue };
+            if tx.send(Ok(Event::default().data(payload))).await.is_err() {
+                return; // browser disconnected
             }
-            let mut on_msg = pubsub.on_message();
-            while let Some(msg) = on_msg.next().await {
-                let Ok(payload) = msg.get_payload::<String>() else { continue };
-                if tx.send(Ok(Event::default().data(payload))).await.is_err() {
-                    return; // browser disconnected
-                }
-            }
-        });
-    } else {
-        // Fallback: proxy a single flow pod's pod-wide `/events`, filtering by tenant.
-        let resp = st
-            .http
-            .get(format!("{}/events", flow_base()))
-            .send()
-            .await
-            .map_err(|e| err(StatusCode::BAD_GATEWAY, format!("sentinel-flow unreachable: {e}")))?;
-        let mut upstream = resp.bytes_stream();
-        tokio::spawn(async move {
-            let mut buf: Vec<u8> = Vec::new();
-            while let Some(chunk) = upstream.next().await {
-                let Ok(bytes) = chunk else { break };
-                buf.extend_from_slice(&bytes);
-                while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-                    let line: Vec<u8> = buf.drain(..=pos).collect();
-                    let line = String::from_utf8_lossy(&line);
-                    let Some(payload) = line.trim().strip_prefix("data:") else { continue };
-                    let payload = payload.trim();
-                    if payload.is_empty() {
-                        continue;
-                    }
-                    let same_tenant = serde_json::from_str::<Value>(payload)
-                        .ok()
-                        .and_then(|v| v.get("tenant").and_then(|t| t.as_str()).map(|t| t == tid))
-                        .unwrap_or(false);
-                    if same_tenant && tx.send(Ok(Event::default().data(payload.to_string()))).await.is_err() {
-                        return; // browser disconnected
-                    }
-                }
-            }
-        });
-    }
+        }
+    });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))

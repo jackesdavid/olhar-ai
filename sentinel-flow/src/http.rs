@@ -2,22 +2,16 @@
 //! run state, asks for a manual run (`POST /runs` → 202, async-job style), and
 //! subscribes to the live event stream. The engine remains authoritative; SSE is an
 //! optimization layered over re-fetchable REST state.
-use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
 use axum::Router;
-use futures::Stream;
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::StreamExt;
 use tower_http::cors::CorsLayer;
 
 use crate::engine;
@@ -33,7 +27,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/runs/history", get(run_history))
         .route("/runs/frame", get(run_frame))
         .route("/runs/:run_id/logs", get(run_logs))
-        .route("/events", get(events))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -170,18 +163,4 @@ async fn run_logs(
 ) -> impl IntoResponse {
     let logs = app_core::workflows::repo::list_run_logs(&state.db, q.tenant, run_id);
     Json(logs)
-}
-
-/// SSE stream of engine events (`workflow-run`/`-node`/`-log`/`-print`/`-image`,
-/// plus snapshot/alerts/devices pokes). Lossy on a slow client; final state is
-/// always re-fetchable via the REST routes above.
-async fn events(
-    State(state): State<Arc<AppState>>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let rx = state.events.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(|msg| match msg {
-        Ok(line) => Some(Ok(Event::default().data(line))),
-        Err(_) => None, // lagged: drop, keep streaming
-    });
-    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
