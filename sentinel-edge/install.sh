@@ -98,7 +98,7 @@ ensure_tailscaled_macos() {
 # ---- update mode: swap the binary + restart; keep env / Tailscale / service ---
 if [ "$UPDATE" = "1" ]; then
   [ -x "$PREFIX/sentinel-edge" ] || { echo "Not installed at $PREFIX — run the full installer first." >&2; exit 1; }
-  echo "▸ Updating sentinel-edge ($os-$arch) from $RELEASE_BASE…"
+  echo "▸ Updating sentinel-edge ($os-$arch) from ${RELEASE_BASE}…"
   curl -fSL "$RELEASE_BASE/$EDGE_ASSET" -o "$PREFIX/sentinel-edge.new"
   chmod +x "$PREFIX/sentinel-edge.new"
   mv "$PREFIX/sentinel-edge.new" "$PREFIX/sentinel-edge"
