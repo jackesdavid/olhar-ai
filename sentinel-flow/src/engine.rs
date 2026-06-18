@@ -186,7 +186,7 @@ fn execute_run(
     entry: Option<u32>,
     entry_payload: PortValues,
 ) -> (bool, String) {
-    let (ctx, drain) = build_run_context(state, tenant);
+    let (ctx, drain) = build_run_context(state, tenant, graph.id);
     let graph_id = graph.id;
     let debug = graph.debug;
     let labels: std::collections::HashMap<u32, &'static str> =
@@ -435,7 +435,7 @@ fn spawn_event_handler(
 /// keep-alive agent), so concurrent runs of different tenants never collide. The returned
 /// `JoinHandle` is the thread draining UI side-effects to the SSE bus; it ends when the
 /// context (and its `Sender`) is dropped.
-fn build_run_context(state: &Arc<AppState>, tenant: Uuid) -> (ToolContext, std::thread::JoinHandle<()>) {
+fn build_run_context(state: &Arc<AppState>, tenant: Uuid, graph_id: u32) -> (ToolContext, std::thread::JoinHandle<()>) {
     let devices = Arc::new(std::sync::Mutex::new(app_core::devices::repo::load(&state.db, tenant)));
     let alerts = Arc::new(std::sync::Mutex::new(app_core::alerts::repo::load(&state.db, tenant)));
     let notif: NotificationStore =
@@ -452,7 +452,7 @@ fn build_run_context(state: &Arc<AppState>, tenant: Uuid) -> (ToolContext, std::
             if let ToolUiEvent::ShowImage { graph, node, jpeg, .. } = &ev {
                 node_frames.lock().unwrap().insert((tenant, *graph, *node), jpeg.clone());
             }
-            events::publish_tool_event(&bus, tenant, ev);
+            events::publish_tool_event(&bus, tenant, graph_id, ev);
         }
     });
 

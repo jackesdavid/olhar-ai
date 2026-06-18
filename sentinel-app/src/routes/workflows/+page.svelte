@@ -708,6 +708,7 @@
     selectedNodeId = null;
     pending = null;
     nodeImages = {}; // node ids restart per graph — drop the previous graph's previews
+    logs = []; // the console is per-graph — clear the previous graph's lines
     const v = graphs.find((x) => x.id === id)?.viewport;
     pan = v ? { x: v.x, y: v.y } : { x: 40, y: 40 };
     zoom = v?.zoom ?? 1;
@@ -793,9 +794,12 @@
         ok: boolean;
         summary: string;
       };
-      // Run finished (ok or error) → drain remaining highlights, then stop.
-      if (gid === selectedGraphId) endLive();
-      logs = [{ time: new Date().toLocaleTimeString(), name, ok, summary }, ...logs].slice(0, 200);
+      // Run finished (ok or error) → drain remaining highlights, then stop. The console
+      // shows only the open graph; other graphs' completions still surface as toasts.
+      if (gid === selectedGraphId) {
+        endLive();
+        logs = [{ time: new Date().toLocaleTimeString(), name, ok, summary }, ...logs].slice(0, 200);
+      }
       if (ok) toast.success(`Workflow "${name}"`, { description: summary });
       else toast.error(`Workflow "${name}" failed`, { description: summary });
     });
@@ -814,16 +818,16 @@
         ...logs,
       ].slice(0, 200);
     });
-    // Print node: always echo to the Console (independent of the debug flag) and,
-    // when on_screen, flash it over the canvas. Not graph-filtered — the payload
-    // carries no graph id (see plan); the editor shows one graph at a time.
+    // Print node: echo to the Console (independent of the debug flag) for the OPEN graph
+    // only, and when on_screen flash it over the canvas.
     const unPrint = onEvent("workflow-print", (payload) => {
-      const { message, level, on_screen } = payload as { message: string; level: string; on_screen: boolean };
+      const p = payload as { graph?: number; message: string; level: string; on_screen: boolean };
+      if (p.graph !== selectedGraphId) return; // only the open graph
       logs = [
-        { time: new Date().toLocaleTimeString(), name: "Print", ok: true, summary: message, level },
+        { time: new Date().toLocaleTimeString(), name: "Print", ok: true, summary: p.message, level: p.level },
         ...logs,
       ].slice(0, 200);
-      if (on_screen) flashOnScreen(message, level);
+      if (p.on_screen) flashOnScreen(p.message, p.level);
     });
     // Show image node: the event is a reference (bytes never ride SSE) — fetch the frame
     // out of band from the control relay, cache-busting so each new frame reloads.

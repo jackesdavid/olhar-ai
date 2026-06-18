@@ -40,14 +40,24 @@
   let leaving = $state(false); // splash fading out
   let bootState = $state<"connecting" | "error">("connecting");
 
+  // Minimum time the splash stays up so the brand mark reads as deliberate, not a flicker.
+  const MIN_SPLASH_MS = 3000;
+  const SPLASH_FADE_MS = 500; // matches the splash's transition-opacity duration
+
   // ---- boot: require a valid JWT session ----------------------------------
   async function cloudBoot() {
+    const bootStart = Date.now();
     loadToken();
     const path = $page.url.pathname;
+    // Mount the app behind the splash immediately, but hold the splash for at least
+    // MIN_SPLASH_MS, then fade it out (so a fast boot doesn't flash the mark).
     const finish = () => {
       ready = true;
-      leaving = true;
-      showSplash = false;
+      const wait = Math.max(0, MIN_SPLASH_MS - (Date.now() - bootStart));
+      setTimeout(() => {
+        leaving = true;
+        setTimeout(() => (showSplash = false), SPLASH_FADE_MS);
+      }, wait);
     };
     if (!auth.token) {
       auth.ready = true;
