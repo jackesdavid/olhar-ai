@@ -1,6 +1,6 @@
 ---
 name: board
-description: "Drive the Kanban board in docs/Task Board.md: turn a use case in docs/use-cases/ into a planned ToDo card, and move cards across columns as work progresses (copying the plan into the card's notes). Use when planning a use case, starting implementation (→ In Progress + paste plan), starting visual/UI review (→ Review), or finishing with no more changes (→ Done). Triggers: 'plan this use case', 'move the card', 'start implementation', 'this is in review now', 'mark it done on the board', '/board'."
+description: "Drive the Kanban board in docs/Task Board.md: turn a use case in docs/use-cases/ into a planned ToDo card, and move cards across columns as work progresses. Every card is a short, significant title linked to a plan note under docs/plans/ — all detail lives in the note, never inline on the card. Use when planning a use case, starting implementation (→ In Progress), starting visual/UI review (→ Review), or finishing with no more changes (→ Done). Triggers: 'plan this use case', 'move the card', 'start implementation', 'this is in review now', 'mark it done on the board', '/board'."
 user-invocable: true
 argument-hint: "[plan|implement|review|done] [use-case name | card title or keyword]"
 allowed-tools:
@@ -13,8 +13,8 @@ allowed-tools:
 # Task Board — card lifecycle
 
 Advances a card through the Kanban board at `docs/Task Board.md` as a task moves through its
-stages, and pastes the agreed implementation plan into the card. This is a repeated, hands-off
-chore: invoke it at each transition and it edits the board for you.
+stages, keeping each card a short title linked to a plan note in `docs/plans/`. This is a
+repeated, hands-off chore: invoke it at each transition and it edits the board for you.
 
 ## The board
 
@@ -25,11 +25,35 @@ checkbox list items under them. The lifecycle columns this skill touches, in ord
 ## ToDo          →  ## In Progress  →  ## Review  →  ## Done
 ```
 
-A **card** is one list item line — `- [ ] <title>` — plus any 2-space-indented note lines
-beneath it. Moving a card means moving the whole block (title **and** its notes).
+A **card** is one list item line — `- [ ] <title>` — plus its 2-space-indented link line(s)
+beneath it. Moving a card means moving the whole block (title **and** its links).
 
 Other columns (`## Bugs`, `## Backlog`) and the `**Complete**` marker under `## Done` exist too;
 leave them alone unless a card you're moving lives there.
+
+## What a card holds — title + links only
+
+**This is the cardinal rule.** A card is a **short, significant title** plus, indented beneath
+it, **only wikilinks** — never prose, context, rationale, or steps. All of that knowledge lives
+in the card's **plan note** under `docs/plans/`.
+
+A well-formed card:
+
+```
+- [ ] Workflow runs: real-time over SSE
+	  - Plan: [[workflow-runs-realtime]]
+```
+
+…optionally with a `- Use case: [[<slug>]]` line when one exists. That's the whole card.
+
+- **Title**: one line, the significant essence — what it *is*, not how/why. Skimmable.
+- **No inline knowledge**: root cause, phases, refs, "why", branch notes, file paths — none of
+  it goes on the card. It goes in the plan note.
+- **Whenever you create or touch a card** and find detail that belongs to it, write that detail
+  into its `docs/plans/<slug>.md` note and leave only the `[[…]]` link on the card. If the card
+  has no note yet, create one (see "The plan note").
+- The only per-card text besides the title is the wikilink line(s). Keep `Ref:`/`Branch:`/`Why:`
+  lines **inside the plan note**, never on the card.
 
 ## Stages (the argument)
 
@@ -130,7 +154,9 @@ The note is a normal markdown document. Recommended shape:
 - Preserve the existing blank-line spacing: columns are separated by blank lines, and there are
   two blank lines before the next `## ` heading. Match the surrounding style.
 - Move the card by **removing** its block from the source column and **inserting** it at the end
-  of the target column's card list. Carry its note lines with it.
+  of the target column's card list. Carry its link line(s) with it.
+- **Never leave inline knowledge on a card.** If you encounter a card carrying prose/notes,
+  migrate that text into its `docs/plans/<slug>.md` note and reduce the card to title + `[[…]]`.
 - Keep the card title text byte-for-byte across a move (only `[ ]`→`[x]` may change, for `done`).
 - Use `Edit` against `docs/Task Board.md`. After editing, confirm to the user in one line which
   card moved and to where (e.g. "Moved 'Image node' → Review").
@@ -138,7 +164,7 @@ The note is a normal markdown document. Recommended shape:
 ## Flow recap
 
 0. `/board plan <use-case>` — read the use case, create a planned card in ToDo.
-1. `/board implement` — card → In Progress, plan pasted/refreshed into its notes.
+1. `/board implement` — card → In Progress, plan written/refreshed in its linked note.
 2. (you write the code) …
 3. `/board review` — card → Review when visual/UI review begins.
 4. (you eyeball the UI, tweak if needed) …
