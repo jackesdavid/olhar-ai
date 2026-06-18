@@ -10,7 +10,8 @@ in a workspace) so it ships independently; links `app-core` by path.
 2. `tailscale::ensure_up()` — join the tailnet + `serve` go2rtc (see Tailscale below).
 3. `AppState::boot()` — pull cameras from control (cache fallback), resolve RTSP, write cache.
 4. ffmpeg check (`state::ffmpeg_ok()`), go2rtc respawn, initial `push_streaming()`.
-5. Threads: **discovery loop** (every 5 min: `rediscover()` + re-assert `tailscale serve`);
+5. `motion::spawn()` — the continuous motion watcher manager (see Motion below).
+6. Threads: **discovery loop** (every 5 min: `rediscover()` + re-assert `tailscale serve`);
    **config long-poll** (`reload(25)`, then drain `check_commands()` → rescan/restart);
    **log push** (every 3s, ships new ring lines to `/config/logs`).
 
@@ -57,6 +58,30 @@ repoints ip/xaddr, re-resolves RTSP, regenerates the `cam_<ip>` go2rtc streams, 
 go2rtc streams are named `cam_<ip-with-underscores>` (preview/substream) + `cam_<ip>_hd`
 (main). `crates/app-core/src/go2rtc.rs` is the single source of truth for naming + config.
 
+## Motion detection (OpenCV MOG2) — `src/motion.rs`
+
+The edge owns **continuous** motion detection (it's the only thing near the cameras). A
+manager thread reconciles **one watcher thread per camera** (every 30s, against the live
+device list). Each watcher opens the camera's `rtsp_sub_url` via OpenCV `VideoCapture` and, per
+frame: downscale → **MOG2** adaptive background subtraction → `morphologyEx(OPEN)` denoise →
+`findContours`. When the foreground share clears `MOTION_FLOOR_PCT` **and** a blob ≥
+`MOTION_MIN_AREA` exists **and** `MOTION_MIN_INTERVAL_SECS` has elapsed since the last emit, it
+`POST /config/motion`s a normalized event `{camera_ip, score, area, blobs, bbox}` (box-token).
+
+The edge is a **pure sensor** — it emits ONE normalized signal per camera, graph-agnostic.
+Per-graph **sensitivity** is a cloud-side threshold (`OnEvent("motion") → If score >= …`), so
+many graphs at different sensitivities share the same single MOG2 pass. Tunables (env):
+`MOTION_FPS` (6), `MOTION_FLOOR_PCT` (0.5), `MOTION_MIN_INTERVAL_SECS` (10), `MOTION_MIN_AREA`
+(300), `MOTION_PROC_W`/`MOTION_PROC_H` (480×270), `MOTION_MOG2_HISTORY` (500), `MOTION_MOG2_VAR` (16).
+
+**OpenCV is a native dep** (the only one) → the edge is NOT in the cargo workspace (keeps the
+cloud image build pure-Rust). Build it from its own dir: `cd sentinel-edge && cargo build
+--release`, needing libopencv + libclang. macOS: `brew install opencv` and pass
+`LIBCLANG_PATH`/`DYLD_FALLBACK_LIBRARY_PATH=/Library/Developer/CommandLineTools/usr/lib` (also
+baked into `task edge`). Linux: `apt install libopencv-dev libclang-dev`. The binary links
+OpenCV **dynamically**, so the run host's OpenCV major must match the build host's — build on
+the distro you run (see [deploy ref](deploy.md) for the Linux build/publish path).
+
 ## Health reporting + Restart
 
 On the heartbeat the edge sends `X-Edge-Tailscale` (`serving|up|offline|disabled`, from
@@ -77,7 +102,8 @@ tail with device/level/text filters; deep-linkable `?device=<ip>` / `?box=<id>`)
 
 ## Install / env
 
-`install.sh` (served at `control/edge/install.sh`) installs Tailscale + ffmpeg + the edge
+`install.sh` (served at `control/edge/install.sh`, embedded in the control binary via
+`include_str!`) installs Tailscale + ffmpeg + **OpenCV** (motion watcher runtime) + the edge
 binary + go2rtc, writes `/etc/sentinel-edge/edge.env`, and registers a service (systemd on
 Linux, launchd on macOS — bootout-before-bootstrap so a fresh install over an old one doesn't
 fail with `Load failed: 5`). Key env: `CONTROL_URL`, `BOX_TOKEN` (binds the box to its

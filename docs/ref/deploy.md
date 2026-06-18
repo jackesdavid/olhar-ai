@@ -34,7 +34,7 @@ stamps `LATEST_EDGE_VERSION`). Prereqs: **Docker Desktop running**; `gh` logged 
 - **Edge**: `sentinel-edge/Cargo.toml` `version`. This drives `LATEST_EDGE_VERSION` (the
   Boxes "update available" badge) and the `v*` release tag. Tags track the edge version.
 - A "release" = bump web + edge together, commit, `task cloud-deploy`, and ship the edge
-  binary (below). Current: **web 0.4.1, edge 0.4.0**.
+  binary (below). Current: **web 0.4.1, edge 0.5.0**.
 
 ## The edge installer + binary (served by control)
 
@@ -48,14 +48,25 @@ control (the repo is private, so not GitHub Releases):
   installer tweaks ship by scp, not a heavy control rebuild). `install.sh`'s `RELEASE_BASE`
   defaults to `$CONTROL_URL/edge`, so it fetches the binary from `/edge-dist` too.
 
-**Shipping a new edge binary while Actions is down** (build locally + scp):
+**Shipping a new edge binary while Actions is down** (build locally + scp). The edge now links
+**OpenCV** (the motion watcher) and is **out of the cargo workspace** — build it from its own
+dir, with libopencv + libclang present:
 ```sh
-cargo build --release -p sentinel-edge      # native macOS-x86_64 (the current test box)
+cd sentinel-edge
+# macOS (the current test box) — brew install opencv; pass libclang for the opencv bindgen:
+LIBCLANG_PATH=/Library/Developer/CommandLineTools/usr/lib \
+DYLD_FALLBACK_LIBRARY_PATH=/Library/Developer/CommandLineTools/usr/lib \
+cargo build --release          # (or just `task edge`, which sets these)
 scp -i ~/.ssh/id_contab_ed25519 -o IdentitiesOnly=yes \
   target/release/sentinel-edge root@85.239.248.86:/ibbf/edge-dist/sentinel-edge-macos-x86_64
 ```
-(Linux appliance binaries need cross-compilation — `release.yml` does all 4 platforms when
-Actions is restored; locally you'd need `cross`.)
+**Linux appliance binaries:** the old static-musl `cross` path no longer works — OpenCV is a
+native C++ lib that needs glibc + dynamic linking. Build on the **same Debian release** the
+appliance runs (native box, container, or `cross` with a custom image) with `apt install
+libopencv-dev libclang-dev clang pkg-config`, then `cargo build --release` and scp the binary
+as `sentinel-edge-linux-<arch>`. The binary links OpenCV dynamically, so the run host's OpenCV
+major must match the build host's (`install.sh` apt-installs the matching `libopencv-dev`).
+`release.yml` needs updating from `-musl` → `-gnu` + OpenCV before CI can build Linux edges.
 
 **Shipping a new install.sh without a control rebuild**:
 ```sh

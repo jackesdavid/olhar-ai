@@ -29,16 +29,35 @@ evaluates Cron; manual fires come from `POST /runs`.
 ## Cross-graph events (tenant event bus)
 
 `EmitEvent` / `OnEvent` nodes carry an event name in `config.event`. When an `EmitEvent`
-fires, `sentinel-flow::fire_event(tenant, EventSource, event, emitting_run_id)` **fans out to
-every ENABLED graph in the tenant** with a matching `OnEvent`, spawning each handler subtree
-as a decoupled run — **coalesce-dropped per `(tenant, listener_graph, event)`** (skip if that
-listener's handler is already running). The emitter logs a `dispatch`; each listener logs
-`trigger` (by which graph) or `skip`. `fire_system_event` is the (unused) seam for future
-`System-*` emitters. Events live in a per-tenant **registry** (`tenant_events` +
-`tenant_event_categories`); the editor palette synthesizes per-event "On event: Foo" /
-"Emit event: Foo" entries grouped by category, and new events are registered from the node
-property field (name + category). Event nodes show their bound event name in the node body
-(Unreal-style), and event-node headers are tinted (crimson) so they stand out.
+fires, `sentinel-flow::fire_event(tenant, EventSource, event, emitting_run_id, payload)` **fans
+out to every ENABLED graph in the tenant** with a matching `OnEvent`, spawning each handler
+subtree as a decoupled run — **coalesce-dropped per `(tenant, listener_graph, event)`** (skip
+if that listener's handler is already running). The emitter logs a `dispatch`; each listener
+logs `trigger` (by which graph) or `skip`. Event-node headers are tinted (crimson) and show the
+bound name (`Emit event: Foo`).
+
+**Typed payloads.** An event may declare any number of typed fields (`{name, type}`). An
+`EmitEvent` for it gets one **input port** per field; the matching `OnEvent` exposes one
+**output port** per field (same/other graph). Ports are **config-derived** — the schema is
+baked onto `node.config.payload` when the event is chosen; `GraphNode::input_ports/
+output_ports` resolve them (`EmitEvent`→inputs, `OnEvent`→outputs), `add_edge` validates
+against them, and `run_subpath_eventful` **seeds the OnEvent entry's outputs** with the
+delivered payload so downstream nodes read each field by name. Value-flow is edge-driven, so
+only port *declaration* is dynamic. (Frontend: a fields editor on registration; the open graph
+re-bakes payloads on open via `reconcileEventNodes`.)
+
+**System events.** `repo::system_events()` is a **code-defined catalog** of platform events
+(currently `motion`, with payload `camera/score/area/blobs/bbox`), merged into control's
+`list_events` for every tenant (system wins on a name clash; read-only in the editor). So
+`OnEvent("motion")` is available — with typed ports — before any event fires, and shipping a
+new system event reaches all tenants on deploy. **`fire_system_event` is now live**: edge
+motion arrives via control → Redis `flow:inject` → flow's injector → `fire_event(System,
+"motion", payload)`. Per-graph sensitivity is a cloud-side `If score >= …`. The Redis fabric
+also makes the fan-out + the SSE relay multi-pod (see [architecture ref](architecture.md)).
+
+Events live in a per-tenant **registry** (`tenant_events` + `tenant_event_categories`) plus the
+system catalog; the editor palette synthesizes per-event "On event: Foo" / "Emit event: Foo"
+entries grouped by category.
 
 ## Run history + visibility
 
