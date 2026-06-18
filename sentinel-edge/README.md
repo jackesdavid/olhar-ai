@@ -77,6 +77,29 @@ go2rtc is then reachable **only** over the tailnet at
 Tailscale (LAN/one-box dev). Needs `tailscaled` installed + MagicDNS & HTTPS certs
 enabled on the tailnet.
 
+## Motion detection (OpenCV MOG2)
+
+The edge runs one continuous **OpenCV MOG2** background-subtraction watcher per camera
+(`src/motion.rs`), reads each stream locally, and POSTs a normalized motion event to control
+(`/config/motion`, box-token). The edge is a pure sensor — per-graph sensitivity is applied
+in the cloud. Tunables (env): `MOTION_FPS` (6), `MOTION_FLOOR_PCT` (0.5),
+`MOTION_MIN_INTERVAL_SECS` (10), `MOTION_MIN_AREA` (300), `MOTION_PROC_W`/`MOTION_PROC_H`
+(480×270), `MOTION_MOG2_HISTORY` (500), `MOTION_MOG2_VAR` (16).
+
+**Build needs OpenCV** (native). Runtime needs the OpenCV dylibs (standard paths); the
+build additionally needs **libclang** (bindgen):
+
+- Linux: `apt install libopencv-dev libclang-dev` (or distro equivalents) — `install.sh`
+  installs the runtime OpenCV automatically.
+- macOS: `brew install opencv pkg-config`. Building also needs libclang on dyld's path —
+  cargo's clang-sys loads it at build-script runtime, so pass it explicitly:
+  ```sh
+  LIBCLANG_PATH=/Library/Developer/CommandLineTools/usr/lib \
+  DYLD_FALLBACK_LIBRARY_PATH=/Library/Developer/CommandLineTools/usr/lib \
+  cargo build --release -p sentinel-edge
+  ```
+  (Runtime needs no env — the binary links the brew OpenCV dylibs via their install path.)
+
 ## Not yet (later phases)
 
 Dynamic per-tenant enrollment broker (gateway mints short-lived auth keys),

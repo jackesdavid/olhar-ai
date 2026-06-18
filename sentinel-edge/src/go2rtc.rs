@@ -16,8 +16,13 @@ pub fn respawn(state: &AppState) {
     };
     let mut guard = state.go2rtc.lock().unwrap();
 
-    let alive = guard.as_mut().map(|c| matches!(c.try_wait(), Ok(None))).unwrap_or(false);
-    let unchanged = std::fs::read_to_string(&state.go2rtc_config).map(|p| p == yaml).unwrap_or(false);
+    let alive = guard
+        .as_mut()
+        .map(|c| matches!(c.try_wait(), Ok(None)))
+        .unwrap_or(false);
+    let unchanged = std::fs::read_to_string(&state.go2rtc_config)
+        .map(|p| p == yaml)
+        .unwrap_or(false);
     if alive && unchanged {
         return; // already serving the right streams
     }

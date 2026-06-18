@@ -230,6 +230,10 @@ tasks:
       CONTROL_URL: '{{.CONTROL_URL | default "http://127.0.0.1:8790"}}'
       # The edge owns go2rtc; point it at the binary `task fetch-go2rtc` drops in ./bin.
       GO2RTC_BIN: '{{.GO2RTC_BIN | default "../bin/go2rtc"}}'
+      # OpenCV (motion watcher) build needs libclang on dyld's path (macOS). Override on
+      # other hosts; harmless where libclang is already found via standard paths.
+      LIBCLANG_PATH: '{{.LIBCLANG_PATH | default "/Library/Developer/CommandLineTools/usr/lib"}}'
+      DYLD_FALLBACK_LIBRARY_PATH: '{{.DYLD_FALLBACK_LIBRARY_PATH | default "/Library/Developer/CommandLineTools/usr/lib"}}'
     cmds:
       - cargo run
 
@@ -249,6 +253,10 @@ tasks:
 
   services-check:
     desc: Type-check all detachable services (shared workspace)
+    env:
+      # sentinel-edge links OpenCV → its build needs libclang on dyld's path (macOS).
+      LIBCLANG_PATH: '{{.LIBCLANG_PATH | default "/Library/Developer/CommandLineTools/usr/lib"}}'
+      DYLD_FALLBACK_LIBRARY_PATH: '{{.DYLD_FALLBACK_LIBRARY_PATH | default "/Library/Developer/CommandLineTools/usr/lib"}}'
     cmds:
       - cargo check --workspace
 
@@ -272,6 +280,10 @@ tasks:
 
   cargo:
     desc: cargo check the whole Rust workspace (services + app-core)
+    env:
+      # sentinel-edge links OpenCV → its build needs libclang on dyld's path (macOS).
+      LIBCLANG_PATH: '{{.LIBCLANG_PATH | default "/Library/Developer/CommandLineTools/usr/lib"}}'
+      DYLD_FALLBACK_LIBRARY_PATH: '{{.DYLD_FALLBACK_LIBRARY_PATH | default "/Library/Developer/CommandLineTools/usr/lib"}}'
     cmds:
       - cargo check --workspace
 

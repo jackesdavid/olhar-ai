@@ -33,7 +33,13 @@ static RING: OnceLock<LogBuf> = OnceLock::new();
 impl LogBuf {
     /// The process-global buffer (created on first use).
     pub fn global() -> LogBuf {
-        RING.get_or_init(|| LogBuf(Arc::new(Mutex::new(Ring { buf: VecDeque::new(), next_seq: 1 })))).clone()
+        RING.get_or_init(|| {
+            LogBuf(Arc::new(Mutex::new(Ring {
+                buf: VecDeque::new(),
+                next_seq: 1,
+            })))
+        })
+        .clone()
     }
 
     /// Append a line (oldest dropped past [`CAP`]).
@@ -82,14 +88,17 @@ impl log::Log for RingLogger {
         let message = format!("{}", record.args());
         let ts = app_core::alerts::now_rfc3339();
         eprintln!("[{ts} {level} {target}] {message}");
-        self.buf.push(&level.to_string().to_lowercase(), &target, message);
+        self.buf
+            .push(&level.to_string().to_lowercase(), &target, message);
     }
     fn flush(&self) {}
 }
 
 /// Take the level word out of `RUST_LOG` (handles `info`, `module=debug,info`, …), else info.
 fn level_from_env() -> log::LevelFilter {
-    let v = std::env::var("RUST_LOG").unwrap_or_default().to_ascii_lowercase();
+    let v = std::env::var("RUST_LOG")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     if v.contains("trace") {
         log::LevelFilter::Trace
     } else if v.contains("debug") {
@@ -109,6 +118,9 @@ pub fn init() -> LogBuf {
     let buf = LogBuf::global();
     let level = level_from_env();
     log::set_max_level(level);
-    let _ = log::set_boxed_logger(Box::new(RingLogger { level, buf: buf.clone() }));
+    let _ = log::set_boxed_logger(Box::new(RingLogger {
+        level,
+        buf: buf.clone(),
+    }));
     buf
 }

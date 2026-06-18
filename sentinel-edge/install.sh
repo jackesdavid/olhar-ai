@@ -194,6 +194,36 @@ else
   echo "⚠ ffmpeg NOT found — live snapshots / GetCurrentFrame will fail until it is installed." >&2
 fi
 
+# ---- 1c. OpenCV (continuous motion detection) -------------------------------
+# The edge runs a per-camera MOG2 motion watcher (links OpenCV). Required — the runtime
+# OpenCV major must match the build host's (the binary links dynamically); on a self-built
+# box (build + run on the same machine) they match by construction.
+echo "▸ Installing OpenCV (motion detection)…"
+if [ "$os" = "Linux" ]; then
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq && apt-get install -y libopencv-dev
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y opencv opencv-devel
+  elif command -v apk >/dev/null 2>&1; then
+    apk add --no-cache opencv
+  else
+    echo "  No supported package manager found — install OpenCV manually, then re-run." >&2
+  fi
+else
+  if [ -n "${SUDO_USER:-}" ] && command -v sudo >/dev/null 2>&1 && sudo -u "$SUDO_USER" command -v brew >/dev/null 2>&1; then
+    sudo -u "$SUDO_USER" brew install opencv || true
+  elif command -v brew >/dev/null 2>&1; then
+    brew install opencv || true
+  else
+    echo "  Install OpenCV first:  brew install opencv  — then re-run." >&2
+  fi
+fi
+if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists opencv4 2>/dev/null; then
+  echo "✓ OpenCV present ($(pkg-config --modversion opencv4))"
+else
+  echo "⚠ OpenCV not detected via pkg-config — the motion watcher will fail to start until it is installed." >&2
+fi
+
 # ---- 2. binaries ------------------------------------------------------------
 echo "▸ Downloading sentinel-edge…"
 curl -fSL "$RELEASE_BASE/$EDGE_ASSET" -o "$PREFIX/sentinel-edge"
