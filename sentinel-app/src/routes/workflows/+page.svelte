@@ -1122,6 +1122,22 @@
   function payloadTypeLabel(t: PortType): string {
     return PAYLOAD_TYPES.find((x) => x.value === t)?.label ?? t;
   }
+  // Seed the payload-fields editor whenever the selected event node points at a different
+  // event: load that event's saved fields (empty for a brand-new name) so the editor always
+  // reflects the current schema and can edit it — not just define a new one.
+  let payloadEditorFor = $state<string | null>(null);
+  $effect(() => {
+    const ev =
+      selectedNode && (selectedNode.kind === "emit_event" || selectedNode.kind === "on_event")
+        ? String(selectedNode.config.event ?? "").trim()
+        : "";
+    if (ev !== payloadEditorFor) {
+      payloadEditorFor = ev;
+      const known = events.find((e) => e.name === ev);
+      newEventFields = known?.fields?.map((f) => ({ ...f })) ?? [];
+      newEventCategory = known?.category ?? "";
+    }
+  });
 
   // ---- recent-runs drawer (list view) --------------------------------------
   async function openRuns(g: Graph) {
@@ -2256,14 +2272,9 @@
                         <datalist id="wf-events">
                           {#each events as e (e.name)}<option value={e.name}>{e.category}</option>{/each}
                         </datalist>
-                        {#if evName && known}
-                          <p class="mt-1 text-[10px] text-muted-foreground">Registered · category “{known.category}”</p>
-                          {#if (known.fields ?? []).length > 0}
-                            <p class="mt-1 text-[10px] text-muted-foreground">
-                              Payload: {(known.fields ?? []).map((f) => `${f.name} (${f.type})`).join(", ")}
-                            </p>
-                          {/if}
-                        {:else if evName}
+                        {#if evName}
+                          <!-- Category + save. Works for a brand-new name (Register) and an
+                               already-registered event (Update its category/payload). -->
                           <div class="mt-1.5 flex items-center gap-1.5">
                             <Input
                               class="h-8"
@@ -2273,15 +2284,17 @@
                               bind:value={newEventCategory}
                             />
                             <Button size="sm" class="h-8 shrink-0" disabled={editLocked} onclick={() => registerEvent(evName)}>
-                              Register
+                              {known ? "Update" : "Register"}
                             </Button>
                           </div>
                           <datalist id="wf-event-cats">
                             {#each eventCategories as c (c.name)}<option value={c.name}></option>{/each}
                           </datalist>
                           <!-- Payload schema: each field becomes a typed port (input on Emit,
-                               output on On event). Optional — zero fields = a plain signal. -->
-                          <div class="mt-1.5 space-y-1.5">
+                               output on On event). Optional — zero fields = a plain signal.
+                               Always editable, so you can add fields to an existing event too. -->
+                          <p class="mt-1.5 text-[10px] font-medium text-muted-foreground">Payload fields</p>
+                          <div class="mt-1 space-y-1.5">
                             {#each newEventFields as f, i (i)}
                               <div class="flex items-center gap-1.5">
                                 <Input
@@ -2305,7 +2318,7 @@
                             </Button>
                           </div>
                           <p class="mt-1 text-[10px] text-muted-foreground">
-                            New event — add payload fields (optional), then Register so other graphs can listen.
+                            {#if known}Registered · “{known.category}”. Edit fields then Update — re-pick the event on nodes to refresh their ports.{:else}New event — add fields (optional), then Register so other graphs can listen.{/if}
                           </p>
                         {/if}
                       {:else}
