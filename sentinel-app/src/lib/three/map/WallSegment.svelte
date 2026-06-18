@@ -21,7 +21,7 @@
 
   const solid = $derived((wall.style ?? "solid") === "solid");
   // solid → raised wall that catches the key light; wireframe → flat footprint outline.
-  const height = $derived(solid ? Math.max(0.2, wall.thickness * 4) : 0.04);
+  const height = $derived(solid ? 0.8 : 0.04);
   const depth = $derived(Math.max(wall.thickness, 0.03));
 
   const geo = $derived(new BoxGeometry(len, height, depth));
