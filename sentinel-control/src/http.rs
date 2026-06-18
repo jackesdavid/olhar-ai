@@ -32,6 +32,7 @@ pub fn router(state: AppState) -> Router {
         .route("/config/device-moved", post(device_moved))
         .route("/config/streaming", post(streaming_push))
         .route("/config/logs", post(box_logs_push))
+        .route("/config/motion", post(motion_push))
         .merge(handlers::router())
         .merge(crate::domain::router())
         .nest_service("/edge", ServeDir::new(edge_dist))
@@ -228,6 +229,96 @@ async fn streaming_push(State(st): State<AppState>, headers: HeaderMap, body: Op
         return (StatusCode::INTERNAL_SERVER_ERROR, "store failed").into_response();
     }
     StatusCode::NO_CONTENT.into_response()
+}
+
+/// One motion observation reported by the edge.
+#[derive(serde::Deserialize)]
+struct MotionIn {
+    camera_ip: String,
+    #[serde(default)]
+    score: f64,
+    #[serde(default)]
+    area: i64,
+    #[serde(default)]
+    blobs: i64,
+    #[serde(default)]
+    bbox: [i32; 4],
+    #[allow(dead_code)]
+    #[serde(default)]
+    at: String,
+}
+
+/// The edge reports a motion observation (box token → tenant). We publish it onto the Redis
+/// fabric (`flow:inject`) so flow fires a `motion` System event to that tenant's `OnEvent`
+/// handler graphs, and (once per tenant per process) ensure the `motion` event is registered
+/// with its typed payload so OnEvent nodes expose camera/score/area/blobs/bbox outputs.
+async fn motion_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<MotionIn>>) -> Response {
+    let tenant = match box_tenant(&st, &headers).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
+        Err(resp) => return resp,
+    };
+    let Some(Json(ev)) = body else {
+        return (StatusCode::BAD_REQUEST, "motion body required").into_response();
+    };
+
+    ensure_motion_event(&st, tenant).await;
+
+    if let Some(mut conn) = st.redis.clone() {
+        let bbox = format!("{},{},{},{}", ev.bbox[0], ev.bbox[1], ev.bbox[2], ev.bbox[3]);
+        let msg = json!({
+            "tenant": tenant.to_string(),
+            "event": "motion",
+            "payload": {
+                "camera": ev.camera_ip,
+                "score": ev.score.round() as i64,
+                "area": ev.area,
+                "blobs": ev.blobs,
+                "bbox": bbox,
+            }
+        });
+        let _: Result<i64, _> = redis::cmd("PUBLISH")
+            .arg("flow:inject")
+            .arg(msg.to_string())
+            .query_async(&mut conn)
+            .await;
+    } else {
+        log::warn!("motion event dropped: REDIS_URL not configured");
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// Register the `motion` event with its typed payload schema for `tenant`, deduped per process
+/// (one DB upsert). Best-effort — so `OnEvent("motion")` graphs render camera/score/… ports.
+async fn ensure_motion_event(st: &AppState, tenant: uuid::Uuid) {
+    static DONE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<uuid::Uuid>>> =
+        std::sync::OnceLock::new();
+    let set = DONE.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    if !set.lock().unwrap().insert(tenant) {
+        return;
+    }
+    let db = st.db.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        use app_core::workflows::repo::EventField;
+        use app_core::workflows::PortType;
+        let fields = vec![
+            EventField { name: "camera".into(), ty: PortType::Text },
+            EventField { name: "score".into(), ty: PortType::Num },
+            EventField { name: "area".into(), ty: PortType::Num },
+            EventField { name: "blobs".into(), ty: PortType::Num },
+            EventField { name: "bbox".into(), ty: PortType::Text },
+        ];
+        app_core::workflows::repo::create_event(
+            &db,
+            tenant,
+            "motion",
+            "System",
+            Some("Edge motion detection"),
+            None,
+            &fields,
+        );
+    })
+    .await;
 }
 
 /// Newest box-log rows kept per box (bounded retention; the edge keeps its own ring + stdout).

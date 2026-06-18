@@ -54,8 +54,10 @@ fn main() {
     // Now build the tokio runtime for the HTTP control plane.
     let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");
     rt.block_on(async move {
-        // Bridge this pod's events onto the Redis fabric (multi-pod SSE relay).
+        // Bridge this pod's events onto the Redis fabric (multi-pod SSE relay) + consume
+        // externally-injected events (edge motion via control) into the engine.
         bus::spawn_republisher(state.clone());
+        bus::spawn_injector(state.clone());
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {
             Ok(l) => l,
