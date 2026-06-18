@@ -10,7 +10,8 @@
   import { navItems } from "$lib/nav";
   import { Toaster } from "$lib/components/ui/sonner";
   import SentinelMark from "$lib/components/sentinel-mark.svelte";
-  import SensorField from "$lib/components/sensor-field.svelte";
+  // Animated dot-field backdrop — disabled for now; kept for a future feature.
+  // import SensorField from "$lib/components/sensor-field.svelte";
   import Splash from "$lib/components/splash.svelte";
   import PanelLeftOpen from "@lucide/svelte/icons/panel-left-open";
   import PanelLeftClose from "@lucide/svelte/icons/panel-left-close";
@@ -186,7 +187,7 @@
   }
 </script>
 
-<SensorField />
+<!-- <SensorField /> — animated backdrop disabled for now; re-enable for a future feature -->
 
 {#if ready}
 {#if showShell}

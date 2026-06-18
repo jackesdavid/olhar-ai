@@ -278,14 +278,6 @@
   let newEventCategory = $state("");
   // Draft payload fields while registering a new event (name + wire type each).
   let newEventFields = $state<EventField[]>([]);
-  // Confirm dialog for an event update that drops/retypes fields wired in other graphs.
-  let eventUpdateOpen = $state(false);
-  let eventUpdate = $state<{
-    ev: string;
-    fields: EventField[];
-    stale: string[];
-    graphs: { name: string; count: number }[];
-  } | null>(null);
 
   // live cursor world position (for the `n`-to-add-here shortcut) + pending drop point
   let hoverWorld = $state<{ x: number; y: number } | null>(null);
@@ -540,8 +532,10 @@
   const configRows = $derived.by(() => {
     if (!selectedNode) return [] as { key: string; port: CatPort | null }[];
     const nk = effectiveKind(selectedNode);
-    // Exec pins are pure wiring — never editable settings, so exclude them.
-    const inputs = (nk?.inputs ?? []).filter((p) => p.type !== "exec");
+    // Exec pins are pure wiring — never editable settings, so exclude them. Event payload
+    // ports are managed by the Payload editor (and wired on the canvas), not as value rows.
+    const payloadNames = new Set(payloadFields(selectedNode).map((f) => f.name));
+    const inputs = (nk?.inputs ?? []).filter((p) => p.type !== "exec" && !payloadNames.has(p.name));
     const rows: { key: string; port: CatPort | null }[] = inputs.map((p) => ({ key: p.name, port: p }));
     for (const key of Object.keys(nk?.default_config ?? {})) {
       if (!inputs.some((p) => p.name === key)) rows.push({ key, port: null });
@@ -719,6 +713,7 @@
     zoom = v?.zoom ?? 1;
     clearLive();
     view = "editor";
+    void reconcileEventNodes(id); // self-heal event nodes against the current registry
   }
   function backToList() {
     saveViewport();
@@ -1092,53 +1087,20 @@
     }
   }
 
-  // Register the (already-saved) event name into the tenant registry under the typed
-  // category (default "General") — so other graphs can listen for it and it appears in the
-  // palette grouped by category. Explicit (a button), not coupled to typing the name.
-  // Graphs with Emit/On nodes bound to `ev` (across the whole tenant, incl. the open one).
-  function affectedByEvent(ev: string): { id: number; name: string; nodes: Node[] }[] {
-    const out: { id: number; name: string; nodes: Node[] }[] = [];
-    for (const g of graphs) {
-      const nodes = g.nodes.filter(
-        (n) => (n.kind === "emit_event" || n.kind === "on_event") && String(n.config.event ?? "").trim() === ev,
-      );
-      if (nodes.length) out.push({ id: g.id, name: g.name, nodes });
-    }
-    return out;
-  }
-  // Old field names whose (name, type) isn't preserved in the new schema — their wires
-  // become invalid and must be dropped so the ports can be re-wired.
+  // Old field names whose (name, type) isn't preserved in the other schema — their wires
+  // are invalid and get pruned so the ports can be re-wired.
   function staleFields(oldFields: EventField[], newFields: EventField[]): string[] {
     return oldFields.filter((o) => !newFields.some((n) => n.name === o.name && n.type === o.type)).map((f) => f.name);
   }
   const draftFields = (): EventField[] =>
     newEventFields.map((f) => ({ name: f.name.trim(), type: f.type })).filter((f) => f.name);
 
-  // Save/register the event. If the change drops or retypes a field that other graphs
-  // already wired, confirm first (showing the affected graphs) then prune those wires.
+  // Save the event's schema to the registry + bake it onto the open node. Other graphs that
+  // use this event self-heal when next opened (see `reconcileEventNodes`) — no manual step.
   async function registerEvent(name: string) {
     const ev = name.trim();
     if (!ev) return;
     const fields = draftFields();
-    const known = events.find((e) => e.name === ev);
-    const stale = known ? staleFields(known.fields ?? [], fields) : [];
-    const affected = affectedByEvent(ev);
-    if (stale.length > 0 && affected.length > 0) {
-      eventUpdate = {
-        ev,
-        fields,
-        stale,
-        graphs: affected.map((a) => ({ name: a.name, count: a.nodes.length })),
-      };
-      eventUpdateOpen = true;
-      return;
-    }
-    await doRegister(ev, fields);
-  }
-
-  // Persist the event schema + bake it onto the open node. No wires are touched (used when
-  // nothing breaks: brand-new event, or only ADDING fields).
-  async function doRegister(ev: string, fields: EventField[]) {
     try {
       await data.createEvent(ev, newEventCategory.trim() || "General", undefined, fields);
       await loadEvents();
@@ -1152,40 +1114,38 @@
     }
   }
 
-  // Confirmed update: persist the schema, then across EVERY graph re-bake the payload onto
-  // each Emit/On node bound to this event and drop the wires on stale ports so they re-wire.
-  async function applyEventUpdate() {
-    if (!eventUpdate) return;
-    const { ev, fields, stale } = eventUpdate;
-    const staleSet = new Set(stale);
+  // On opening a graph, bring its Emit/On nodes in line with the current event registry:
+  // re-bake each node's payload schema and drop wires on any port that was removed/retyped.
+  // Silent when nothing changed; otherwise alerts how many nodes were updated.
+  async function reconcileEventNodes(graphId: number) {
+    const g = graphs.find((x) => x.id === graphId);
+    if (!g) return;
+    const removeIdx: number[] = [];
+    const updates: { id: number; config: Record<string, unknown> }[] = [];
+    for (const n of g.nodes) {
+      if (n.kind !== "emit_event" && n.kind !== "on_event") continue;
+      const ev = String(n.config.event ?? "").trim();
+      const known = events.find((e) => e.name === ev);
+      if (!ev || !known) continue;
+      const want = known.fields ?? [];
+      const have = (Array.isArray(n.config.payload) ? n.config.payload : []) as EventField[];
+      if (staleFields(have, want).length === 0 && staleFields(want, have).length === 0) continue; // in sync
+      const stale = new Set(staleFields(have, want));
+      g.edges.forEach((e, idx) => {
+        const emitHit = n.kind === "emit_event" && e.to === n.id && stale.has(e.to_port);
+        const onHit = n.kind === "on_event" && e.from === n.id && stale.has(e.from_port);
+        if (emitHit || onHit) removeIdx.push(idx);
+      });
+      updates.push({ id: n.id, config: { ...n.config, payload: want } });
+    }
+    if (updates.length === 0) return;
     try {
-      await data.createEvent(ev, newEventCategory.trim() || "General", undefined, fields);
-      for (const g of affectedByEvent(ev)) {
-        const ids = new Set(g.nodes.map((n) => n.id));
-        const kindOf = new Map(g.nodes.map((n) => [n.id, n.kind] as const));
-        const full = graphs.find((x) => x.id === g.id);
-        // Drop stale-port wires: into Emit inputs, out of On outputs. Remove by descending
-        // index so earlier indices stay valid as the server re-indexes.
-        const removeIdx: number[] = [];
-        (full?.edges ?? []).forEach((e, idx) => {
-          const emitHit = ids.has(e.to) && kindOf.get(e.to) === "emit_event" && staleSet.has(e.to_port);
-          const onHit = ids.has(e.from) && kindOf.get(e.from) === "on_event" && staleSet.has(e.from_port);
-          if (emitHit || onHit) removeIdx.push(idx);
-        });
-        for (const idx of removeIdx.sort((a, b) => b - a)) await data.removeEdge(g.id, idx);
-        // Re-bake the new schema onto each affected node.
-        for (const n of g.nodes) {
-          await data.setNodeConfig(g.id, n.id, { ...n.config, event: ev, payload: fields });
-        }
-      }
-      await loadEvents();
-      await reload(); // refreshes the full graphs list (nodes/edges) too
-      payloadEditorFor = null;
-      eventUpdateOpen = false;
-      eventUpdate = null;
-      toast.success(`Event “${ev}” updated — stale links removed; re-wire the new ports`);
+      for (const idx of removeIdx.sort((a, b) => b - a)) await data.removeEdge(graphId, idx);
+      for (const u of updates) await data.setNodeConfig(graphId, u.id, u.config);
+      await reload();
+      toast.info(`Updated ${updates.length} event node(s) to the latest payload`);
     } catch (err) {
-      toast.error("Couldn't update event", { description: String(err) });
+      console.error("reconcile event nodes failed", err);
     }
   }
 
@@ -2348,54 +2308,8 @@
                         <datalist id="wf-events">
                           {#each events as e (e.name)}<option value={e.name}>{e.category}</option>{/each}
                         </datalist>
-                        {#if evName}
-                          <!-- Category + save. Works for a brand-new name (Register) and an
-                               already-registered event (Update its category/payload). -->
-                          <div class="mt-1.5 flex items-center gap-1.5">
-                            <Input
-                              class="h-8"
-                              list="wf-event-cats"
-                              disabled={editLocked}
-                              placeholder="Category (default General)"
-                              bind:value={newEventCategory}
-                            />
-                            <Button size="sm" class="h-8 shrink-0" disabled={editLocked} onclick={() => registerEvent(evName)}>
-                              {known ? "Update" : "Register"}
-                            </Button>
-                          </div>
-                          <datalist id="wf-event-cats">
-                            {#each eventCategories as c (c.name)}<option value={c.name}></option>{/each}
-                          </datalist>
-                          <!-- Payload schema: each field becomes a typed port (input on Emit,
-                               output on On event). Optional — zero fields = a plain signal.
-                               Always editable, so you can add fields to an existing event too. -->
-                          <p class="mt-1.5 text-[10px] font-medium text-muted-foreground">Payload fields</p>
-                          <div class="mt-1 space-y-1.5">
-                            {#each newEventFields as f, i (i)}
-                              <div class="flex items-center gap-1.5">
-                                <Input
-                                  class="h-8"
-                                  disabled={editLocked}
-                                  placeholder="field (e.g. Message)"
-                                  value={f.name}
-                                  oninput={(e) => setEventFieldName(i, e.currentTarget.value)}
-                                />
-                                <Select.Root type="single" disabled={editLocked} value={f.type} onValueChange={(v) => setEventFieldType(i, (v ?? "text") as PortType)}>
-                                  <Select.Trigger class="h-8 w-28 shrink-0">{payloadTypeLabel(f.type)}</Select.Trigger>
-                                  <Select.Content>
-                                    {#each PAYLOAD_TYPES as t (t.value)}<Select.Item value={t.value} label={t.label}>{t.label}</Select.Item>{/each}
-                                  </Select.Content>
-                                </Select.Root>
-                                <Button size="icon" variant="ghost" class="h-8 w-8 shrink-0" disabled={editLocked} onclick={() => removeEventField(i)} title="Remove field">×</Button>
-                              </div>
-                            {/each}
-                            <Button size="sm" variant="outline" class="h-8" disabled={editLocked} onclick={addEventField}>
-                              + Payload field
-                            </Button>
-                          </div>
-                          <p class="mt-1 text-[10px] text-muted-foreground">
-                            {#if known}Registered · “{known.category}”. Edit fields then Update — re-pick the event on nodes to refresh their ports.{:else}New event — add fields (optional), then Register so other graphs can listen.{/if}
-                          </p>
+                        {#if evName && known}
+                          <p class="mt-1 text-[10px] text-muted-foreground">Registered · “{known.category}”</p>
                         {/if}
                       {:else}
                         <Input class="h-8" disabled={editLocked} value={String(selectedNode.config[key] ?? "")} oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)} />
@@ -2404,6 +2318,46 @@
                     </div>
                   {/each}
                 </div>
+              {/if}
+              <!-- Event payload form: category, the typed fields (label on the left like every
+                   other row), and a Save at the bottom. Saving updates the registry; graphs
+                   using this event self-heal when next opened. -->
+              {#if selectedNode.kind === "emit_event" || selectedNode.kind === "on_event"}
+                {@const evName = String(selectedNode.config.event ?? "").trim()}
+                {@const knownEv = events.find((e) => e.name === evName)}
+                {#if evName}
+                  <div class="space-y-2.5 border-t border-border pt-2.5">
+                    <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">
+                      <Label class="pt-2 text-xs text-muted-foreground">Category</Label>
+                      <div>
+                        <Input class="h-8" list="wf-event-cats" disabled={editLocked} placeholder="General" bind:value={newEventCategory} />
+                        <datalist id="wf-event-cats">{#each eventCategories as c (c.name)}<option value={c.name}></option>{/each}</datalist>
+                      </div>
+                    </div>
+                    <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">
+                      <Label class="pt-2 text-xs text-muted-foreground">Payload</Label>
+                      <div class="space-y-1.5">
+                        {#each newEventFields as f, i (i)}
+                          <div class="flex items-center gap-1.5">
+                            <Input class="h-8 min-w-0" disabled={editLocked} placeholder="field (e.g. Message)" value={f.name} oninput={(e) => setEventFieldName(i, e.currentTarget.value)} />
+                            <Select.Root type="single" disabled={editLocked} value={f.type} onValueChange={(v) => setEventFieldType(i, (v ?? "text") as PortType)}>
+                              <Select.Trigger class="h-8 w-24 shrink-0">{payloadTypeLabel(f.type)}</Select.Trigger>
+                              <Select.Content>
+                                {#each PAYLOAD_TYPES as t (t.value)}<Select.Item value={t.value} label={t.label}>{t.label}</Select.Item>{/each}
+                              </Select.Content>
+                            </Select.Root>
+                            <Button size="icon" variant="ghost" class="h-8 w-8 shrink-0" disabled={editLocked} onclick={() => removeEventField(i)} title="Remove field">×</Button>
+                          </div>
+                        {/each}
+                        <Button size="sm" variant="outline" class="h-8 w-full" disabled={editLocked} onclick={addEventField}>+ Payload field</Button>
+                      </div>
+                    </div>
+                    <Button size="sm" class="h-8 w-full" disabled={editLocked} onclick={() => registerEvent(evName)}>Save</Button>
+                    <p class="text-[10px] text-muted-foreground">
+                      {#if knownEv}Saved · “{knownEv.category}”. Saving updates graphs using this event when they next open.{:else}New event — Save so other graphs can listen.{/if}
+                    </p>
+                  </div>
+                {/if}
               {/if}
               <!-- Memoize: cache the node's output for the run (default) vs recompute each
                    time it's reached. Turn OFF for loop bodies / live sources so loops iterate.
@@ -2522,32 +2476,6 @@
     <Dialog.Footer>
       <Button variant="outline" onclick={() => (deleteOpen = false)}>Cancel</Button>
       <Button variant="destructive" onclick={confirmDelete}>Delete</Button>
-    </Dialog.Footer>
-  </Dialog.Content>
-</Dialog.Root>
-
-<!-- Event update impact: dropping/retyping a field breaks wires in other graphs -->
-<Dialog.Root bind:open={eventUpdateOpen}>
-  <Dialog.Content class="sm:max-w-md">
-    <Dialog.Header>
-      <Dialog.Title>Update event “{eventUpdate?.ev}”?</Dialog.Title>
-      <Dialog.Description>
-        {eventUpdate?.stale.length} field(s) changed
-        (<span class="font-medium text-foreground">{(eventUpdate?.stale ?? []).join(", ")}</span>).
-        Existing links to those ports will be removed so you can re-wire them. Affected:
-      </Dialog.Description>
-    </Dialog.Header>
-    <ul class="max-h-48 space-y-1 overflow-auto text-sm">
-      {#each eventUpdate?.graphs ?? [] as g (g.name)}
-        <li class="flex items-center justify-between rounded border border-border px-2 py-1">
-          <span class="font-medium text-foreground">{g.name}</span>
-          <span class="text-xs text-muted-foreground">{g.count} node(s)</span>
-        </li>
-      {/each}
-    </ul>
-    <Dialog.Footer>
-      <Button variant="outline" onclick={() => (eventUpdateOpen = false)}>Cancel</Button>
-      <Button variant="destructive" onclick={applyEventUpdate}>Update &amp; remove links</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
