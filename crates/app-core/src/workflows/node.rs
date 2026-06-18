@@ -268,6 +268,18 @@ pub fn run_node(
         NodeKind::NumGte => run_num_cmp(config, inputs, |a, b| a >= b),
         NodeKind::NumEq => run_num_cmp(config, inputs, |a, b| a == b),
         NodeKind::NumNe => run_num_cmp(config, inputs, |a, b| a != b),
+        NodeKind::NumToText => {
+            let v = inputs.get("value").and_then(PortValue::as_num).unwrap_or(0);
+            let mut o = PortValues::new();
+            o.insert("text".into(), PortValue::Text(v.to_string()));
+            Ok(o)
+        }
+        NodeKind::BoolToText => {
+            let v = inputs.get("value").and_then(PortValue::as_bool).unwrap_or(false);
+            let mut o = PortValues::new();
+            o.insert("text".into(), PortValue::Text(if v { "true" } else { "false" }.into()));
+            Ok(o)
+        }
         // Cooldown is engine-driven (reads/writes cross-run node state).
         NodeKind::Cooldown => Ok(PortValues::new()),
     }
@@ -300,6 +312,8 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::NumGte
         | NodeKind::NumEq
         | NodeKind::NumNe
+        | NodeKind::NumToText
+        | NodeKind::BoolToText
         | NodeKind::FlipFlop
         | NodeKind::Cooldown
         | NodeKind::Print
@@ -578,6 +592,16 @@ pub fn debug_summary(
         NodeKind::NumGte => num_cmp_summary(">=", inputs, outputs),
         NodeKind::NumEq => num_cmp_summary("==", inputs, outputs),
         NodeKind::NumNe => num_cmp_summary("!=", inputs, outputs),
+        NodeKind::NumToText => {
+            let v = inputs.get("value").and_then(PortValue::as_num).unwrap_or(0);
+            let text = outputs.get("text").and_then(PortValue::as_text).unwrap_or("");
+            format!("{v} → \"{text}\"")
+        }
+        NodeKind::BoolToText => {
+            let v = inputs.get("value").and_then(PortValue::as_bool).unwrap_or(false);
+            let text = outputs.get("text").and_then(PortValue::as_text).unwrap_or("");
+            format!("{v} → \"{text}\"")
+        }
         NodeKind::Cooldown => {
             let elapsed = outputs.get("elapsed_secs").and_then(PortValue::as_num).unwrap_or(0);
             let ok = outputs.get("ok").and_then(PortValue::as_bool).unwrap_or(false);

@@ -193,6 +193,10 @@ pub enum NodeKind {
     NumEq,
     /// Data: `a != b` (Num × Num → Bool).
     NumNe,
+    /// Data: cast a Num to its decimal Text representation.
+    NumToText,
+    /// Data: cast a Bool to "true" or "false" Text.
+    BoolToText,
     /// Flow control: rate-limit gate — lets exec through only when at least `window_secs`
     /// have elapsed since the node last fired. Persists `last_fired_at` across runs via
     /// node state. Outputs `elapsed_secs` (how long since last fire, or window+1 on first
@@ -359,6 +363,11 @@ const FLIP_FLOP_OUT: [Port; 1] = [p("is_a", PortType::Bool, false)];
 const COMPARE_IN: [Port; 2] = [p("a", PortType::Num, false), p("b", PortType::Num, false)];
 const COMPARE_OUT: [Port; 1] = [p("result", PortType::Bool, false)];
 
+// Type cast nodes.
+const NUM_TO_TEXT_IN: [Port; 1] = [p("value", PortType::Num, true)];
+const BOOL_TO_TEXT_IN: [Port; 1] = [p("value", PortType::Bool, true)];
+const CAST_TEXT_OUT: [Port; 1] = [p("text", PortType::Text, false)];
+
 const COOLDOWN_OUT: [Port; 2] = [
     p("elapsed_secs", PortType::Num, false),
     p("ok", PortType::Bool, false),
@@ -381,7 +390,7 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 33] = [
+    pub const ALL: [NodeKind; 35] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -403,6 +412,8 @@ impl NodeKind {
         NodeKind::NumGte,
         NodeKind::NumEq,
         NodeKind::NumNe,
+        NodeKind::NumToText,
+        NodeKind::BoolToText,
         NodeKind::MotionDetection,
         NodeKind::MotionWatch,
         NodeKind::PersonDetection,
@@ -453,6 +464,8 @@ impl NodeKind {
             NodeKind::NumGte => "num_gte",
             NodeKind::NumEq => "num_eq",
             NodeKind::NumNe => "num_ne",
+            NodeKind::NumToText => "num_to_text",
+            NodeKind::BoolToText => "bool_to_text",
             NodeKind::Cooldown => "cooldown",
         }
     }
@@ -495,6 +508,8 @@ impl NodeKind {
             NodeKind::NumGte => "Num: >=",
             NodeKind::NumEq => "Num: ==",
             NodeKind::NumNe => "Num: !=",
+            NodeKind::NumToText => "Num → Text",
+            NodeKind::BoolToText => "Bool → Text",
             NodeKind::Cooldown => "Cooldown",
         }
     }
@@ -522,7 +537,9 @@ impl NodeKind {
             | NodeKind::NumGt
             | NodeKind::NumGte
             | NodeKind::NumEq
-            | NodeKind::NumNe => "Logic",
+            | NodeKind::NumNe
+            | NodeKind::NumToText
+            | NodeKind::BoolToText => "Logic",
             NodeKind::HttpPost => "Network",
             NodeKind::MotionDetection
             | NodeKind::MotionWatch
@@ -579,6 +596,8 @@ impl NodeKind {
             | NodeKind::NumGte
             | NodeKind::NumEq
             | NodeKind::NumNe => &COMPARE_IN,
+            NodeKind::NumToText => &NUM_TO_TEXT_IN,
+            NodeKind::BoolToText => &BOOL_TO_TEXT_IN,
             NodeKind::Cooldown => &NO_PORTS, // engine-driven; window_secs is config
         }
     }
@@ -617,6 +636,7 @@ impl NodeKind {
             | NodeKind::NumGte
             | NodeKind::NumEq
             | NodeKind::NumNe => &COMPARE_OUT,
+            NodeKind::NumToText | NodeKind::BoolToText => &CAST_TEXT_OUT,
             NodeKind::Cooldown => &COOLDOWN_OUT,
         }
     }
@@ -672,6 +692,7 @@ impl NodeKind {
             | NodeKind::NumGte
             | NodeKind::NumEq
             | NodeKind::NumNe => json!({ "a": "0", "b": "0" }),
+            NodeKind::NumToText | NodeKind::BoolToText => json!({}),
             NodeKind::Cooldown => json!({ "window_secs": "60" }),
         }
     }
