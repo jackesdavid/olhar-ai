@@ -42,6 +42,9 @@ pub struct GraphActivity {
 }
 pub type Activity = Arc<Mutex<HashMap<(Uuid, u32), GraphActivity>>>;
 
+/// Latest `ShowImage` frame bytes per `(tenant, graph_id, node_id)`, fetched out of band.
+pub type NodeFrames = Arc<Mutex<HashMap<(Uuid, u32, u32), Vec<u8>>>>;
+
 /// A safety backstop: never let more than this many workflow runs be in flight
 /// across all tenants/graphs at once.
 pub const WF_GLOBAL_CAP: u32 = 8;
@@ -58,6 +61,10 @@ pub struct AppState {
     pub engine: WfEngine,
     pub activity: Activity,
     pub events: EventBus,
+    /// Latest `ShowImage` debug frame per `(tenant, graph, node)`, served out of band by
+    /// `GET /runs/frame` (raw bytes never go on the SSE stream — see [`crate::events`]).
+    /// One small entry per debug node, overwritten on each run; bounded by node count.
+    pub node_frames: NodeFrames,
     /// Resolved tenant → edge go2rtc base (`https://<host>`) with a short TTL, so each
     /// run's `EdgeFrameSource` targets that tenant's own edge without a DB hit per frame.
     pub edge_cache: Arc<Mutex<HashMap<Uuid, (String, Instant)>>>,
@@ -104,6 +111,7 @@ impl AppState {
             engine: Arc::new(Mutex::new(engine)),
             activity: Arc::new(Mutex::new(HashMap::new())),
             events: events::channel(),
+            node_frames: Arc::new(Mutex::new(HashMap::new())),
             edge_cache: Arc::new(Mutex::new(HashMap::new())),
             event_runs: Arc::new(Mutex::new(std::collections::HashSet::new())),
             pod_name,

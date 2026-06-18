@@ -9,7 +9,7 @@ use std::time::Duration;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::Json;
+use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post, put};
 use axum::Router;
 use futures::StreamExt;
@@ -31,6 +31,7 @@ pub fn router() -> Router<AppState> {
         .route("/workflows/catalog", get(catalog))
         .route("/workflows/runs", get(run_states))
         .route("/workflows/runs/history", get(run_history))
+        .route("/workflows/runs/frame", get(run_frame))
         .route("/workflows/runs/:run_id/logs", get(run_logs))
         .route("/workflows/events", get(events_stream))
         .route("/workflows/event-registry", get(list_events).post(create_event))
@@ -168,6 +169,38 @@ async fn run_history(
         url.push_str(&format!("&limit={l}"));
     }
     Ok(Json(flow_get_json(&url).await))
+}
+
+#[derive(Deserialize)]
+struct FrameQuery {
+    token: String,
+    graph: u32,
+    node: u32,
+}
+
+/// The latest `ShowImage` debug frame for one of this tenant's `(graph, node)` as
+/// `image/jpeg`. The token rides the query param (not a header) so an `<img src>` can
+/// authenticate, mirroring [`events_stream`]. Proxies sentinel-flow's out-of-band
+/// `/runs/frame`; `404` when no frame is cached for that node.
+async fn run_frame(
+    State(st): State<AppState>,
+    Query(q): Query<FrameQuery>,
+) -> Result<axum::response::Response, ApiErr> {
+    let claims = auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    auth::require(&claims, "workflows.read")?;
+    let tid = tenant_of(&claims)?;
+    let url = format!("{}/runs/frame?tenant={}&graph={}&node={}", flow_base(), tid, q.graph, q.node);
+    let resp = st
+        .http
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, format!("sentinel-flow unreachable: {e}")))?;
+    if !resp.status().is_success() {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+    let bytes = resp.bytes().await.map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
+    Ok(([(axum::http::header::CONTENT_TYPE, "image/jpeg")], bytes).into_response())
 }
 
 /// All persisted signal lines for one of this tenant's runs. Proxies sentinel-flow.

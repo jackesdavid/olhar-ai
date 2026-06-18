@@ -439,8 +439,14 @@ fn build_run_context(state: &Arc<AppState>, tenant: Uuid) -> (ToolContext, std::
 
     let (tx, rx) = std::sync::mpsc::channel::<ToolUiEvent>();
     let bus = state.events.clone();
+    let node_frames = state.node_frames.clone();
     let drain = std::thread::spawn(move || {
         while let Ok(ev) = rx.recv() {
+            // ShowImage carries raw jpeg bytes — stash them for out-of-band fetch
+            // (`GET /runs/frame`); the SSE event itself only carries a reference.
+            if let ToolUiEvent::ShowImage { graph, node, jpeg, .. } = &ev {
+                node_frames.lock().unwrap().insert((tenant, *graph, *node), jpeg.clone());
+            }
             events::publish_tool_event(&bus, tenant, ev);
         }
     });

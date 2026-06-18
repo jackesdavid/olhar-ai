@@ -289,4 +289,13 @@ export const data = {
   },
   runLogs: <T = unknown>(runId: string): Promise<T> =>
     api.get<T>(`/workflows/runs/${encodeURIComponent(runId)}/logs`),
+  /** Out-of-band URL for a ShowImage node's latest debug frame (image/jpeg). The token
+   * rides the query so it works as an `<img src>`; pass `bust` (e.g. Date.now()) to force
+   * a reload when a new frame arrives. */
+  runFrameUrl: (graph: number, node: number, bust?: number): string => {
+    const qs = new URLSearchParams({ graph: String(graph), node: String(node) });
+    if (auth.token) qs.set("token", auth.token);
+    if (bust != null) qs.set("t", String(bust));
+    return `${API_BASE}/workflows/runs/frame?${qs.toString()}`;
+  },
 };

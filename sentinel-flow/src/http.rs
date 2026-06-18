@@ -31,6 +31,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/graphs/reload", post(reload_graphs))
         .route("/runs", get(run_states).post(create_run))
         .route("/runs/history", get(run_history))
+        .route("/runs/frame", get(run_frame))
         .route("/runs/:run_id/logs", get(run_logs))
         .route("/events", get(events))
         .layer(CorsLayer::permissive())
@@ -133,6 +134,32 @@ async fn run_history(
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
     let runs = app_core::workflows::repo::list_runs(&state.db, q.tenant, q.graph, limit);
     Json(runs)
+}
+
+#[derive(Deserialize)]
+struct FrameQuery {
+    tenant: Uuid,
+    graph: u32,
+    node: u32,
+}
+
+/// The latest `ShowImage` debug frame for a tenant's `(graph, node)` as raw `image/jpeg`
+/// (`?tenant=<uuid>&graph=<id>&node=<id>`), or `404` if none cached. Served out of band so
+/// the bytes never head-of-line-block the SSE stream (see [`crate::events`]).
+async fn run_frame(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<FrameQuery>,
+) -> impl IntoResponse {
+    let bytes = state.node_frames.lock().unwrap().get(&(q.tenant, q.graph, q.node)).cloned();
+    match bytes {
+        Some(jpeg) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "image/jpeg")],
+            jpeg,
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// All persisted signal lines for one run of a tenant (`?tenant=<uuid>`).

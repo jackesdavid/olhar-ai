@@ -775,16 +775,16 @@
       ].slice(0, 200);
       if (on_screen) flashOnScreen(message, level);
     });
-    // Show image node: stash the frame inside that node (debug-only, by node id).
+    // Show image node: the event is a reference (bytes never ride SSE) — fetch the frame
+    // out of band from the control relay, cache-busting so each new frame reloads.
     const unImage = onEvent("workflow-image", (payload) => {
-      const { graph: gid, node, label, data: frame } = payload as {
+      const { graph: gid, node, label } = payload as {
         graph: number;
         node: number;
         label: string;
-        data: string;
       };
       if (gid !== selectedGraphId) return; // node ids are per-graph — only the open one
-      nodeImages = { ...nodeImages, [node]: { src: `data:image/jpeg;base64,${frame}`, label } };
+      nodeImages = { ...nodeImages, [node]: { src: data.runFrameUrl(gid, node, Date.now()), label } };
     });
     // Cross-graph events: dispatched on the emitter, triggered/skipped on each listener.
     // Show the line in whichever graph's run view is open (matched by `graph`).
