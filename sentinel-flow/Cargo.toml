@@ -28,3 +28,6 @@ serde_json = "1"
 uuid = { version = "1", features = ["serde"] }
 log = "0.4"
 env_logger = "0.11"
+# Shared event fabric (pub/sub): republish run-progress events to Redis (multi-pod SSE
+# relay) + subscribe for externally-injected events (edge motion). Pure-Rust, no native dep.
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager"] }

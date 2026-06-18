@@ -38,3 +38,6 @@ sha2 = "0.10"
 hex = "0.4"
 log = "0.4"
 env_logger = "0.11"
+# Shared event fabric (pub/sub): the SSE relay subscribes to Redis (sees every flow pod's
+# events) + the edge motion endpoint publishes injected events. Pure-Rust, no native dep.
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager"] }

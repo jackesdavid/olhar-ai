@@ -13,6 +13,7 @@
 //!
 //! Optional env: `SENTINEL_MODELS_DIR` (face/vision models), `TELEGRAM_BOT_TOKEN`
 //! / `TELEGRAM_PAIRING_CODE` (notification fallback when not set in Postgres).
+mod bus;
 mod engine;
 mod events;
 mod http;
@@ -53,6 +54,8 @@ fn main() {
     // Now build the tokio runtime for the HTTP control plane.
     let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");
     rt.block_on(async move {
+        // Bridge this pod's events onto the Redis fabric (multi-pod SSE relay).
+        bus::spawn_republisher(state.clone());
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {
             Ok(l) => l,
