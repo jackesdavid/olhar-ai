@@ -203,7 +203,7 @@
 
 <T.AmbientLight intensity={0.5} />
 <T.DirectionalLight
-  position={[40, 70, 24]}
+  position={[90, 38, 20]}
   intensity={1.7}
   castShadow
   shadow.mapSize.width={4096}

@@ -7,7 +7,7 @@ export type ToolMode = "select" | "wall" | "marker";
 export type Pt = { x: number; z: number };
 
 const GRID = 1; // snap step in grid units
-const VERTEX_SNAP = 0.4; // world-units radius to grab an existing endpoint
+const VERTEX_SNAP = 0.65; // world-units radius to grab an existing endpoint
 const WALL_SNAP = 0.5; // world-units distance to snap a marker onto a wall line
 
 /** Round a point to the grid. */
