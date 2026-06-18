@@ -18,8 +18,8 @@ export const INK_FILL = "#cdd6dc";
 
 /** Muted slate for secondary geometry — room zones + labels. */
 export const SLATE_LINE = "#5b6770";
-export const SLATE_FILL = "#3a464e";
-export const LABEL = "#8a97a0";
+export const SLATE_FILL = "#ffffff";
+export const LABEL = "#5b646a";
 
 /** Emerald — LIVE / interactive accents only (selection highlight, FOV, pulses). */
 export const ACCENT = "#34d399";

@@ -4,11 +4,11 @@
     "type": "split",
     "children": [
       {
-        "id": "16b9082db26672c8",
+        "id": "66096778ab0c1e83",
         "type": "tabs",
         "children": [
           {
-            "id": "2a01b811859ea626",
+            "id": "9bef662de5d0e2dd",
             "type": "leaf",
             "state": {
               "type": "kanban",
@@ -194,24 +194,43 @@
       "obsidian-excalidraw-plugin:New drawing": false
     }
   },
-  "active": "2a01b811859ea626",
+  "active": "9bef662de5d0e2dd",
   "lastOpenFiles": [
-    "use-cases/school-frequence.md",
-    "plans/map-redesign-2.md",
-    "use-cases/parent-chatbot.md",
+    "plans/missing-comparison-nodes.md",
+    "plans/workflow-list-improvements.md",
     "Task Board.md",
-    "web-migration-plan.md",
+    "plans/map-walls-3d-depth.md",
     "HANDOFF.md",
+    "web-migration-plan.md",
+    "plans/comment-node.md",
+    "Task Board.md.tmp.7228.8354f9aee768",
+    "plans/draw-bbox-node.md",
+    "plans/draw-bbox-node.md.tmp.7228.03e081ee10bd",
+    "ref/edge.md.tmp.7228.2066da191aad",
+    "plans/node-animation-timing.md",
+    "Task Board.md.tmp.5859.d8da5e1728a7",
+    "Task Board.md.tmp.5859.71abc85d7a83",
+    "Task Board.md.tmp.5859.1b88fc4dac0c",
+    "Task Board.md.tmp.5859.42251129362b",
+    "plans/motion-detection-node-v2.md",
+    "plans/event-payload-data.md",
+    "plans/show-image-node-rendering.md",
+    "plans/multi-pod-flow-event-fabric.md",
+    "Task Board.md.tmp.5859.a29c55edf154",
+    "Task Board.md.tmp.5859.c4739b7dd78a",
+    "plans/multi-pod-flow-event-fabric.md.tmp.5859.a4d8ec891382",
+    "plans/box-rekey-enrollment.md",
+    "plans/workflow-runs-realtime.md",
     "plans/school-student-frequency.md",
-    "workflow-nodes.md",
     "plans/multi-tenant-gateway-edge.md",
+    "plans/map-redesign-2.md",
+    "epics/map-redesign.md",
+    "use-cases/school-frequence.md",
+    "use-cases/parent-chatbot.md",
+    "workflow-nodes.md",
     "plans/feature-slice-architecture.md",
     "plans/foreach-and-fanout-notification.md",
-    "plans/school-student-frequency.md.tmp.52330.52b8dd281b83",
-    "plans",
     "use-cases/Use cases.md",
-    "Use cases.md",
-    "use-cases",
-    "Task Board.md.tmp.52330.0453e522a21c"
+    "Use cases.md"
   ]
 }

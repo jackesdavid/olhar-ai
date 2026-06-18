@@ -3,5 +3,8 @@
   "rust-analyzer.linkedProjects": [
     "Cargo.toml",
     "legacy/Cargo.toml"
+  ],
+  "cSpell.words": [
+    "Cooldown"
   ]
 }

@@ -34,14 +34,15 @@ kanban-plugin: board
 	  - Plan: [[draw-bbox-node]]
 - [ ] Comment node — canvas organizer
 	  - Plan: [[comment-node]]
-
+- [ ] Missing comparison nodes: TextCompare + And / Or / Not
+	  - Plan: [[missing-comparison-nodes]]
+- [ ] Free text ( filled and wireframe) tool map
 
 
 ## In Progress
 
 - [ ] Map: solid walls taller, richer material, deeper shadows
 	  - Plan: [[map-walls-3d-depth]]
-
 
 
 ## Review
@@ -78,6 +79,6 @@ kanban-plugin: board
 
 %% kanban:settings
 ```
-{"kanban-plugin":"board","list-collapse":[false,false,false,false,false,true],"show-checkboxes":true,"date-display-format":"YYYY-MM-DD","hide-date-in-title":true}
+{"kanban-plugin":"board","list-collapse":[false,false,false,false,false,false],"show-checkboxes":true,"date-display-format":"YYYY-MM-DD","hide-date-in-title":true}
 ```
 %%

@@ -20,7 +20,10 @@
   const height = $derived(solid ? 0.8 : 0.04);
   const depth = $derived(Math.max(wall.thickness, 0.03));
 
-  const geo = $derived(new BoxGeometry(len, height, depth));
+  // Extend solid walls by depth/2 at each end so corners fill seamlessly at 90°.
+  // Wireframe stays exact (it's a drawn line, extensions look odd).
+  const geoLen = $derived(solid ? len + depth : len);
+  const geo = $derived(new BoxGeometry(geoLen, height, depth));
   const edges = $derived(new EdgesGeometry(geo));
 
   const fillColor = $derived(selected ? ACCENT_SOFT : INK_FILL);
