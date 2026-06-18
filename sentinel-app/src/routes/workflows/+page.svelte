@@ -278,6 +278,14 @@
   let newEventCategory = $state("");
   // Draft payload fields while registering a new event (name + wire type each).
   let newEventFields = $state<EventField[]>([]);
+  // Confirm dialog for an event update that drops/retypes fields wired in other graphs.
+  let eventUpdateOpen = $state(false);
+  let eventUpdate = $state<{
+    ev: string;
+    fields: EventField[];
+    stale: string[];
+    graphs: { name: string; count: number }[];
+  } | null>(null);
 
   // live cursor world position (for the `n`-to-add-here shortcut) + pending drop point
   let hoverWorld = $state<{ x: number; y: number } | null>(null);
@@ -577,6 +585,17 @@
     if (node.kind === "emit_event") return { ...k, inputs: [...k.inputs, ...ports] };
     if (node.kind === "on_event") return { ...k, outputs: [...k.outputs, ...ports] };
     return k;
+  }
+
+  // Node header title: the kind label, plus the bound event name for event nodes
+  // (e.g. "Emit event: Foo") so it reads in the header instead of clashing with ports.
+  function nodeTitle(n: Node, k: CatKind | undefined): string {
+    const base = k?.label ?? n.kind;
+    if (n.kind === "emit_event" || n.kind === "on_event") {
+      const ev = String(n.config.event ?? "").trim();
+      return ev ? `${base}: ${ev}` : base;
+    }
+    return base;
   }
 
   // Data ports = everything except the white exec pins.
@@ -1076,24 +1095,97 @@
   // Register the (already-saved) event name into the tenant registry under the typed
   // category (default "General") — so other graphs can listen for it and it appears in the
   // palette grouped by category. Explicit (a button), not coupled to typing the name.
+  // Graphs with Emit/On nodes bound to `ev` (across the whole tenant, incl. the open one).
+  function affectedByEvent(ev: string): { id: number; name: string; nodes: Node[] }[] {
+    const out: { id: number; name: string; nodes: Node[] }[] = [];
+    for (const g of graphs) {
+      const nodes = g.nodes.filter(
+        (n) => (n.kind === "emit_event" || n.kind === "on_event") && String(n.config.event ?? "").trim() === ev,
+      );
+      if (nodes.length) out.push({ id: g.id, name: g.name, nodes });
+    }
+    return out;
+  }
+  // Old field names whose (name, type) isn't preserved in the new schema — their wires
+  // become invalid and must be dropped so the ports can be re-wired.
+  function staleFields(oldFields: EventField[], newFields: EventField[]): string[] {
+    return oldFields.filter((o) => !newFields.some((n) => n.name === o.name && n.type === o.type)).map((f) => f.name);
+  }
+  const draftFields = (): EventField[] =>
+    newEventFields.map((f) => ({ name: f.name.trim(), type: f.type })).filter((f) => f.name);
+
+  // Save/register the event. If the change drops or retypes a field that other graphs
+  // already wired, confirm first (showing the affected graphs) then prune those wires.
   async function registerEvent(name: string) {
     const ev = name.trim();
     if (!ev) return;
-    const fields = newEventFields
-      .map((f) => ({ name: f.name.trim(), type: f.type }))
-      .filter((f) => f.name);
+    const fields = draftFields();
+    const known = events.find((e) => e.name === ev);
+    const stale = known ? staleFields(known.fields ?? [], fields) : [];
+    const affected = affectedByEvent(ev);
+    if (stale.length > 0 && affected.length > 0) {
+      eventUpdate = {
+        ev,
+        fields,
+        stale,
+        graphs: affected.map((a) => ({ name: a.name, count: a.nodes.length })),
+      };
+      eventUpdateOpen = true;
+      return;
+    }
+    await doRegister(ev, fields);
+  }
+
+  // Persist the event schema + bake it onto the open node. No wires are touched (used when
+  // nothing breaks: brand-new event, or only ADDING fields).
+  async function doRegister(ev: string, fields: EventField[]) {
     try {
       await data.createEvent(ev, newEventCategory.trim() || "General", undefined, fields);
       await loadEvents();
-      // Bake the just-registered schema onto the node so its payload ports render now.
       if (selectedNode && String(selectedNode.config.event ?? "").trim() === ev) {
-        saveNodeConfig(selectedNode, { ...selectedNode.config, payload: fields });
+        await saveNodeConfig(selectedNode, { ...selectedNode.config, event: ev, payload: fields });
       }
-      newEventCategory = "";
-      newEventFields = [];
-      toast.success(`Event “${ev}” registered`);
+      payloadEditorFor = null; // let the effect re-seed the editor from the saved schema
+      toast.success(`Event “${ev}” saved`);
     } catch (err) {
-      toast.error("Couldn't register event", { description: String(err) });
+      toast.error("Couldn't save event", { description: String(err) });
+    }
+  }
+
+  // Confirmed update: persist the schema, then across EVERY graph re-bake the payload onto
+  // each Emit/On node bound to this event and drop the wires on stale ports so they re-wire.
+  async function applyEventUpdate() {
+    if (!eventUpdate) return;
+    const { ev, fields, stale } = eventUpdate;
+    const staleSet = new Set(stale);
+    try {
+      await data.createEvent(ev, newEventCategory.trim() || "General", undefined, fields);
+      for (const g of affectedByEvent(ev)) {
+        const ids = new Set(g.nodes.map((n) => n.id));
+        const kindOf = new Map(g.nodes.map((n) => [n.id, n.kind] as const));
+        const full = graphs.find((x) => x.id === g.id);
+        // Drop stale-port wires: into Emit inputs, out of On outputs. Remove by descending
+        // index so earlier indices stay valid as the server re-indexes.
+        const removeIdx: number[] = [];
+        (full?.edges ?? []).forEach((e, idx) => {
+          const emitHit = ids.has(e.to) && kindOf.get(e.to) === "emit_event" && staleSet.has(e.to_port);
+          const onHit = ids.has(e.from) && kindOf.get(e.from) === "on_event" && staleSet.has(e.from_port);
+          if (emitHit || onHit) removeIdx.push(idx);
+        });
+        for (const idx of removeIdx.sort((a, b) => b - a)) await data.removeEdge(g.id, idx);
+        // Re-bake the new schema onto each affected node.
+        for (const n of g.nodes) {
+          await data.setNodeConfig(g.id, n.id, { ...n.config, event: ev, payload: fields });
+        }
+      }
+      await loadEvents();
+      await reload(); // refreshes the full graphs list (nodes/edges) too
+      payloadEditorFor = null;
+      eventUpdateOpen = false;
+      eventUpdate = null;
+      toast.success(`Event “${ev}” updated — stale links removed; re-wire the new ports`);
+    } catch (err) {
+      toast.error("Couldn't update event", { description: String(err) });
     }
   }
 
@@ -1649,7 +1741,7 @@
                     font-size="11"
                     font-weight="600"
                   >
-                    {k?.label ?? n.kind}
+                    {nodeTitle(n, k)}
                   </text>
                   <line
                     x1="0"
@@ -1659,22 +1751,6 @@
                     class="pointer-events-none stroke-border"
                     stroke-width="1"
                   />
-                  <!-- Event nodes show their bound event name in the body (Unreal-style), so
-                       you can read which event a node fires/listens for at a glance. -->
-                  {#if n.kind === "emit_event" || n.kind === "on_event"}
-                    {@const ev = String(n.config.event ?? "").trim()}
-                    <text
-                      x={NODE_W / 2}
-                      y={HEAD_H + 20}
-                      text-anchor="middle"
-                      class="pointer-events-none select-none {ev ? 'fill-foreground' : 'fill-muted-foreground'}"
-                      font-size="12"
-                      font-weight="600"
-                    >
-                      {ev || "(no event)"}
-                    </text>
-                  {/if}
-
                   {#if invalid}
                     <!-- required input(s) not filled — a red dot, the logo's signal -->
                     <circle cx={NODE_W - 9} cy="9" r="5.5" class="pointer-events-none fill-destructive/20" />
@@ -2446,6 +2522,32 @@
     <Dialog.Footer>
       <Button variant="outline" onclick={() => (deleteOpen = false)}>Cancel</Button>
       <Button variant="destructive" onclick={confirmDelete}>Delete</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- Event update impact: dropping/retyping a field breaks wires in other graphs -->
+<Dialog.Root bind:open={eventUpdateOpen}>
+  <Dialog.Content class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Update event “{eventUpdate?.ev}”?</Dialog.Title>
+      <Dialog.Description>
+        {eventUpdate?.stale.length} field(s) changed
+        (<span class="font-medium text-foreground">{(eventUpdate?.stale ?? []).join(", ")}</span>).
+        Existing links to those ports will be removed so you can re-wire them. Affected:
+      </Dialog.Description>
+    </Dialog.Header>
+    <ul class="max-h-48 space-y-1 overflow-auto text-sm">
+      {#each eventUpdate?.graphs ?? [] as g (g.name)}
+        <li class="flex items-center justify-between rounded border border-border px-2 py-1">
+          <span class="font-medium text-foreground">{g.name}</span>
+          <span class="text-xs text-muted-foreground">{g.count} node(s)</span>
+        </li>
+      {/each}
+    </ul>
+    <Dialog.Footer>
+      <Button variant="outline" onclick={() => (eventUpdateOpen = false)}>Cancel</Button>
+      <Button variant="destructive" onclick={applyEventUpdate}>Update &amp; remove links</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

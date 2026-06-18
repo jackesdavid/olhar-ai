@@ -26,18 +26,14 @@ kanban-plugin: board
 
 ## ToDo
 
-- [ ] Add a 3 seconds at lest on splash screen
-- [ ] The Console Logs should be for the current workflow Not All
 - [ ] Motion Detection Node v2
 	  - Plan: [[motion-detection-node-v2]]
+- [ ] Add a 3 seconds at lest on splash screen
+- [ ] The Console Logs should be for the current workflow Not All
 
 
 ## In Progress
 
-- [ ] Workflow runs: real-time over SSE
-	  - Plan: [[workflow-runs-realtime]]
-- [ ] Show Image node: image not rendering (inline + fullscreen)
-	  - Plan: [[show-image-node-rendering]]
 - [ ] Events carry typed payload data
 	  - Plan: [[event-payload-data]]
 
@@ -53,6 +49,10 @@ kanban-plugin: board
 ## Done
 
 **Complete**
+- [x] Workflow runs: real-time over SSE
+	  - Plan: [[workflow-runs-realtime]]
+- [x] Show Image node: image not rendering (inline + fullscreen)
+	  - Plan: [[show-image-node-rendering]]
 - [x] Devices → Postgres + pgvector migration follow-ups
 - [x] Show image (debug) node: renders the input frame inside the node + a button to enlarge in a modal
 - [x] Vision detector: local person detection via tract + YOLOX
