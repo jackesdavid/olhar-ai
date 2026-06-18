@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::db::Db;
 
-use super::domain::{Graph, RunStatus, TriggerSource};
+use super::domain::{Graph, PortType, RunStatus, TriggerSource};
 
 /// On-disk shape of the legacy `workflows.json` — one object holding the graph array.
 #[derive(serde::Deserialize)]
@@ -197,6 +197,15 @@ pub struct EventCategory {
     pub source: String,
 }
 
+/// One typed field an event carries. `EmitEvent` gets an input port per field; the
+/// matching `OnEvent` an output port per field. Serializes as `{ "name", "type" }`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EventField {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub ty: PortType,
+}
+
 /// A registered event other graphs can emit/listen for, grouped by `category`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TenantEvent {
@@ -205,6 +214,8 @@ pub struct TenantEvent {
     pub source: String,
     pub description: Option<String>,
     pub created_by_graph: Option<u32>,
+    /// The typed payload schema (possibly empty).
+    pub fields: Vec<EventField>,
 }
 
 /// The tenant's event categories, ordered by name. Empty on error.
@@ -252,8 +263,8 @@ pub fn create_category(db: &Db, tenant_id: Uuid, name: &str, source: &str) {
 pub fn list_events(db: &Db, tenant_id: Uuid) -> Vec<TenantEvent> {
     let pool = db.pool();
     db.block(async move {
-        sqlx::query_as::<_, (String, String, String, Option<String>, Option<i64>)>(
-            "SELECT name, category, source, description, created_by_graph
+        sqlx::query_as::<_, (String, String, String, Option<String>, Option<i64>, serde_json::Value)>(
+            "SELECT name, category, source, description, created_by_graph, payload
              FROM tenant_events WHERE tenant_id = $1 ORDER BY category, name",
         )
         .bind(tenant_id)
@@ -264,12 +275,13 @@ pub fn list_events(db: &Db, tenant_id: Uuid) -> Vec<TenantEvent> {
             Vec::new()
         })
         .into_iter()
-        .map(|(name, category, source, description, gid)| TenantEvent {
+        .map(|(name, category, source, description, gid, payload)| TenantEvent {
             name,
             category,
             source,
             description,
             created_by_graph: gid.map(|v| v as u32),
+            fields: serde_json::from_value(payload).unwrap_or_default(),
         })
         .collect()
     })
@@ -284,11 +296,13 @@ pub fn create_event(
     category: &str,
     description: Option<&str>,
     created_by_graph: Option<u32>,
+    fields: &[EventField],
 ) {
     let pool = db.pool();
     let name = name.to_string();
     let category = category.to_string();
     let description = description.map(|s| s.to_string());
+    let payload = serde_json::to_value(fields).unwrap_or_else(|_| serde_json::json!([]));
     let res: Result<(), sqlx::Error> = db.block(async move {
         let mut tx = pool.begin().await?;
         sqlx::query(
@@ -300,15 +314,16 @@ pub fn create_event(
         .execute(&mut *tx)
         .await?;
         sqlx::query(
-            "INSERT INTO tenant_events (tenant_id, name, category, source, description, created_by_graph)
-             VALUES ($1, $2, $3, 'user', $4, $5)
-             ON CONFLICT (tenant_id, name) DO UPDATE SET category = EXCLUDED.category, description = EXCLUDED.description",
+            "INSERT INTO tenant_events (tenant_id, name, category, source, description, created_by_graph, payload)
+             VALUES ($1, $2, $3, 'user', $4, $5, $6)
+             ON CONFLICT (tenant_id, name) DO UPDATE SET category = EXCLUDED.category, description = EXCLUDED.description, payload = EXCLUDED.payload",
         )
         .bind(tenant_id)
         .bind(&name)
         .bind(&category)
         .bind(&description)
         .bind(created_by_graph.map(|v| v as i64))
+        .bind(payload)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;

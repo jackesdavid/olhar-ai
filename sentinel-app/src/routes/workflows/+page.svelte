@@ -63,8 +63,19 @@
   type Node = { id: number; kind: string; x: number; y: number; config: Record<string, unknown>; memoize?: boolean };
   type Edge = { from: number; from_port: string; to: number; to_port: string };
   type Trigger = "Manual" | { Cron: { every_secs: number } };
-  type WorkflowEvent = { name: string; category: string; source: string };
+  type EventField = { name: string; type: PortType };
+  type WorkflowEvent = { name: string; category: string; source: string; fields?: EventField[] };
   type EventCategory = { name: string; source: string };
+  // The payload types an event field may carry (the wire-able data types; no exec/arrays in v1).
+  const PAYLOAD_TYPES: { value: PortType; label: string }[] = [
+    { value: "text", label: "Text" },
+    { value: "num", label: "Number" },
+    { value: "bool", label: "Bool" },
+    { value: "image", label: "Image" },
+    { value: "recipient", label: "Recipient" },
+    { value: "file", label: "File" },
+    { value: "dictionary", label: "Dictionary" },
+  ];
   // A palette entry: a node kind, optionally pre-bound to an event name (for the
   // synthesized "On event: Foo" / "Emit event: Foo" entries).
   type PaletteKind = CatKind & { presetEvent?: string };
@@ -265,6 +276,8 @@
   let eventCategories = $state<EventCategory[]>([]);
   // category typed when registering a brand-new event from the property field
   let newEventCategory = $state("");
+  // Draft payload fields while registering a new event (name + wire type each).
+  let newEventFields = $state<EventField[]>([]);
 
   // live cursor world position (for the `n`-to-add-here shortcut) + pending drop point
   let hoverWorld = $state<{ x: number; y: number } | null>(null);
@@ -518,7 +531,7 @@
   // are never rendered.
   const configRows = $derived.by(() => {
     if (!selectedNode) return [] as { key: string; port: CatPort | null }[];
-    const nk = catalog[selectedNode.kind];
+    const nk = effectiveKind(selectedNode);
     // Exec pins are pure wiring — never editable settings, so exclude them.
     const inputs = (nk?.inputs ?? []).filter((p) => p.type !== "exec");
     const rows: { key: string; port: CatPort | null }[] = inputs.map((p) => ({ key: p.name, port: p }));
@@ -538,12 +551,34 @@
   // down the right edge from the header.
   const EXEC_IN_NAME = "exec_in";
   function portOf(node: Node, port: string, side: "in" | "out"): CatPort | undefined {
-    const list = side === "out" ? catalog[node.kind]?.outputs : catalog[node.kind]?.inputs;
+    const k = effectiveKind(node);
+    const list = side === "out" ? k?.outputs : k?.inputs;
     return list?.find((p) => p.name === port);
   }
   function isExec(node: Node, port: string, side: "in" | "out"): boolean {
     return portOf(node, port, side)?.type === "exec";
   }
+  // Event payload ports: EmitEvent/OnEvent carry one port per field of their configured
+  // event's schema, baked onto `config.payload` when the event is chosen. EmitEvent takes
+  // them as inputs, OnEvent exposes them as outputs.
+  function payloadFields(node: Node): EventField[] {
+    if (node.kind !== "emit_event" && node.kind !== "on_event") return [];
+    const p = node.config?.payload;
+    return Array.isArray(p) ? (p as EventField[]).filter((f) => f && f.name) : [];
+  }
+  // The catalog kind for a node, augmented with its dynamic payload ports (if any), so the
+  // existing render/wire/validate helpers see EmitEvent inputs / OnEvent outputs.
+  function effectiveKind(node: Node): CatKind | undefined {
+    const k = catalog[node.kind];
+    if (!k) return k;
+    const fields = payloadFields(node);
+    if (fields.length === 0) return k;
+    const ports: CatPort[] = fields.map((f) => ({ name: f.name, type: f.type, required: false }));
+    if (node.kind === "emit_event") return { ...k, inputs: [...k.inputs, ...ports] };
+    if (node.kind === "on_event") return { ...k, outputs: [...k.outputs, ...ports] };
+    return k;
+  }
+
   // Data ports = everything except the white exec pins.
   function dataPorts(k: CatKind | undefined, side: "in" | "out"): CatPort[] {
     const list = side === "in" ? k?.inputs : k?.outputs;
@@ -561,7 +596,7 @@
   }
   // Y where a node's body ends and the optional ShowImage preview begins.
   function portsBottom(n: Node): number {
-    const k = catalog[n.kind];
+    const k = effectiveKind(n);
     const execCount = execOutPorts(k).length;
     const outRows = dataPorts(k, "out").length + outDataOffset(k);
     const rows = Math.max(dataPorts(k, "in").length, outRows, execCount, 1);
@@ -583,11 +618,12 @@
   function portLocalY(node: Node, port: string, side: "in" | "out") {
     if (isExec(node, port, side)) {
       if (side === "in") return HEAD_H / 2;
-      const i = execOutPorts(catalog[node.kind]).findIndex((p) => p.name === port);
+      const i = execOutPorts(effectiveKind(node)).findIndex((p) => p.name === port);
       return HEAD_H / 2 + Math.max(0, i) * ROW_H;
     }
-    const i = dataPorts(catalog[node.kind], side).findIndex((p) => p.name === port);
-    const off = side === "out" ? outDataOffset(catalog[node.kind]) : 0;
+    const k = effectiveKind(node);
+    const i = dataPorts(k, side).findIndex((p) => p.name === port);
+    const off = side === "out" ? outDataOffset(k) : 0;
     return dataPortY(Math.max(0, i) + off);
   }
   // Absolute port Y (for drawing edges between nodes).
@@ -997,6 +1033,7 @@
     }
     if (presetEvent) {
       cfg.event = presetEvent;
+      cfg.payload = eventFields(presetEvent); // bake payload ports onto the new event node
       patched = true;
     }
     if (patched) await data.setNodeConfig(graph.id, id, cfg);
@@ -1042,14 +1079,48 @@
   async function registerEvent(name: string) {
     const ev = name.trim();
     if (!ev) return;
+    const fields = newEventFields
+      .map((f) => ({ name: f.name.trim(), type: f.type }))
+      .filter((f) => f.name);
     try {
-      await data.createEvent(ev, newEventCategory.trim() || "General");
+      await data.createEvent(ev, newEventCategory.trim() || "General", undefined, fields);
       await loadEvents();
+      // Bake the just-registered schema onto the node so its payload ports render now.
+      if (selectedNode && String(selectedNode.config.event ?? "").trim() === ev) {
+        saveNodeConfig(selectedNode, { ...selectedNode.config, payload: fields });
+      }
       newEventCategory = "";
+      newEventFields = [];
       toast.success(`Event “${ev}” registered`);
     } catch (err) {
       toast.error("Couldn't register event", { description: String(err) });
     }
+  }
+
+  // Payload schema of a registered event (empty if unknown / payload-less).
+  function eventFields(name: string): EventField[] {
+    return events.find((e) => e.name === name)?.fields ?? [];
+  }
+  // Choose an event for an EmitEvent/OnEvent node: persist the name AND bake the event's
+  // payload schema onto the node so its dynamic ports (one per field) render + wire.
+  function chooseEvent(node: Node, raw: string) {
+    const ev = raw.trim();
+    saveNodeConfig(node, { ...node.config, event: ev, payload: eventFields(ev) });
+  }
+  function addEventField() {
+    newEventFields = [...newEventFields, { name: "", type: "text" }];
+  }
+  function removeEventField(i: number) {
+    newEventFields = newEventFields.filter((_, idx) => idx !== i);
+  }
+  function setEventFieldName(i: number, name: string) {
+    newEventFields = newEventFields.map((f, idx) => (idx === i ? { ...f, name } : f));
+  }
+  function setEventFieldType(i: number, type: PortType) {
+    newEventFields = newEventFields.map((f, idx) => (idx === i ? { ...f, type } : f));
+  }
+  function payloadTypeLabel(t: PortType): string {
+    return PAYLOAD_TYPES.find((x) => x.value === t)?.label ?? t;
   }
 
   // ---- recent-runs drawer (list view) --------------------------------------
@@ -1499,7 +1570,7 @@
 
               <!-- nodes -->
               {#each graph.nodes as n (n.id)}
-                {@const k = catalog[n.kind]}
+                {@const k = effectiveKind(n)}
                 {@const h = nodeHeight(n)}
                 {@const sel = selectedNodeId === n.id}
                 {@const live = nodeLive(n.id)}
@@ -2180,13 +2251,18 @@
                           disabled={editLocked}
                           placeholder="EventName (e.g. Foo)"
                           value={String(selectedNode.config[key] ?? "")}
-                          onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value.trim() })}
+                          onchange={(e) => chooseEvent(selectedNode, e.currentTarget.value)}
                         />
                         <datalist id="wf-events">
                           {#each events as e (e.name)}<option value={e.name}>{e.category}</option>{/each}
                         </datalist>
                         {#if evName && known}
                           <p class="mt-1 text-[10px] text-muted-foreground">Registered · category “{known.category}”</p>
+                          {#if (known.fields ?? []).length > 0}
+                            <p class="mt-1 text-[10px] text-muted-foreground">
+                              Payload: {(known.fields ?? []).map((f) => `${f.name} (${f.type})`).join(", ")}
+                            </p>
+                          {/if}
                         {:else if evName}
                           <div class="mt-1.5 flex items-center gap-1.5">
                             <Input
@@ -2203,8 +2279,33 @@
                           <datalist id="wf-event-cats">
                             {#each eventCategories as c (c.name)}<option value={c.name}></option>{/each}
                           </datalist>
+                          <!-- Payload schema: each field becomes a typed port (input on Emit,
+                               output on On event). Optional — zero fields = a plain signal. -->
+                          <div class="mt-1.5 space-y-1.5">
+                            {#each newEventFields as f, i (i)}
+                              <div class="flex items-center gap-1.5">
+                                <Input
+                                  class="h-8"
+                                  disabled={editLocked}
+                                  placeholder="field (e.g. Message)"
+                                  value={f.name}
+                                  oninput={(e) => setEventFieldName(i, e.currentTarget.value)}
+                                />
+                                <Select.Root type="single" disabled={editLocked} value={f.type} onValueChange={(v) => setEventFieldType(i, (v ?? "text") as PortType)}>
+                                  <Select.Trigger class="h-8 w-28 shrink-0">{payloadTypeLabel(f.type)}</Select.Trigger>
+                                  <Select.Content>
+                                    {#each PAYLOAD_TYPES as t (t.value)}<Select.Item value={t.value} label={t.label}>{t.label}</Select.Item>{/each}
+                                  </Select.Content>
+                                </Select.Root>
+                                <Button size="icon" variant="ghost" class="h-8 w-8 shrink-0" disabled={editLocked} onclick={() => removeEventField(i)} title="Remove field">×</Button>
+                              </div>
+                            {/each}
+                            <Button size="sm" variant="outline" class="h-8" disabled={editLocked} onclick={addEventField}>
+                              + Payload field
+                            </Button>
+                          </div>
                           <p class="mt-1 text-[10px] text-muted-foreground">
-                            New event — Register it so other graphs can listen and it shows in the palette.
+                            New event — add payload fields (optional), then Register so other graphs can listen.
                           </p>
                         {/if}
                       {:else}

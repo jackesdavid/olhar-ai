@@ -146,8 +146,15 @@ pub type PortValues = HashMap<String, PortValue>;
 /// Convert a node's config literal into a typed value for an UNCONNECTED input port.
 /// Empty text / missing keys / `Image` ports yield `None` (treated as "not provided").
 pub fn literal_for(config: &Value, port: Port) -> Option<PortValue> {
-    let v = config.get(port.name)?;
-    match port.ty {
+    literal_for_named(config, port.name, port.ty)
+}
+
+/// As [`literal_for`], but by port name + type — so config-derived ports (with owned
+/// names, e.g. EmitEvent payload inputs) resolve a literal too. Payload ports carry no
+/// config literal (their value arrives by wire), so this returns `None` for them.
+pub fn literal_for_named(config: &Value, name: &str, ty: PortType) -> Option<PortValue> {
+    let v = config.get(name)?;
+    match ty {
         PortType::Text => {
             let s = v.as_str()?;
             if s.trim().is_empty() {

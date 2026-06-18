@@ -71,7 +71,7 @@ pub fn run_dag_with(
     on_node: &mut dyn FnMut(u32),
     on_log: &mut dyn FnMut(u32, &str, u128),
 ) -> Result<HashMap<u32, PortValues>, String> {
-    run_driver(graph, sys, true, &HashSet::new(), on_node, on_log, &mut |_| {})
+    run_driver(graph, sys, true, &HashSet::new(), &PortValues::new(), on_node, on_log, &mut |_, _| {})
 }
 
 /// Like [`run_dag_with`], but `emit(event)` is called whenever an `EmitEvent` node fires,
@@ -82,24 +82,27 @@ pub fn run_dag_eventful(
     sys: &ToolContext,
     on_node: &mut dyn FnMut(u32),
     on_log: &mut dyn FnMut(u32, &str, u128),
-    emit: &mut dyn FnMut(&str),
+    emit: &mut dyn FnMut(&str, &PortValues),
 ) -> Result<HashMap<u32, PortValues>, String> {
-    run_driver(graph, sys, true, &HashSet::new(), on_node, on_log, emit)
+    run_driver(graph, sys, true, &HashSet::new(), &PortValues::new(), on_node, on_log, emit)
 }
 
 /// Run ONLY the subtree rooted at `entry` (an `OnEvent` node) — the body of a fired event,
-/// as its own decoupled run. Loops + nested `EmitEvent`s inside the handler work the same.
+/// as its own decoupled run. `entry_payload` seeds the `OnEvent`'s outputs (the event's
+/// typed payload), so downstream nodes read each field by port name. Loops + nested
+/// `EmitEvent`s inside the handler work the same.
 pub fn run_subpath_eventful(
     graph: &Graph,
     sys: &ToolContext,
     entry: u32,
+    entry_payload: PortValues,
     on_node: &mut dyn FnMut(u32),
     on_log: &mut dyn FnMut(u32, &str, u128),
-    emit: &mut dyn FnMut(&str),
+    emit: &mut dyn FnMut(&str, &PortValues),
 ) -> Result<HashMap<u32, PortValues>, String> {
     let mut forced = HashSet::new();
     forced.insert(entry);
-    run_driver(graph, sys, false, &forced, on_node, on_log, emit)
+    run_driver(graph, sys, false, &forced, &entry_payload, on_node, on_log, emit)
 }
 
 /// Find the `OnEvent` node subscribing to `event`, if any (first match in node order).
@@ -126,9 +129,10 @@ fn run_driver(
     sys: &ToolContext,
     seed_entries: bool,
     initial_forced: &HashSet<u32>,
+    entry_payload: &PortValues,
     on_node: &mut dyn FnMut(u32),
     on_log: &mut dyn FnMut(u32, &str, u128),
-    emit: &mut dyn FnMut(&str),
+    emit: &mut dyn FnMut(&str, &PortValues),
 ) -> Result<HashMap<u32, PortValues>, String> {
     let connected: HashSet<u32> = if graph.run_orphans {
         graph.nodes.iter().map(|n| n.id).collect()
@@ -165,14 +169,14 @@ fn run_driver(
     let run_started = Instant::now();
 
     let mut reentries = forward_epoch(
-        graph, sys, &indeg_tmpl, &adj, &back, &connected, seed_entries, initial_forced,
+        graph, sys, &indeg_tmpl, &adj, &back, &connected, seed_entries, initial_forced, entry_payload,
         &mut outputs, &mut ran, &mut loop_state, &mut steps, run_started, on_node, on_log, emit,
     )?;
     // Later epochs: re-enter loops at the back-edge / ForEach targets until none fire.
     while !reentries.is_empty() {
         let forced: HashSet<u32> = reentries.into_iter().collect();
         reentries = forward_epoch(
-            graph, sys, &indeg_tmpl, &adj, &back, &connected, false, &forced,
+            graph, sys, &indeg_tmpl, &adj, &back, &connected, false, &forced, entry_payload,
             &mut outputs, &mut ran, &mut loop_state, &mut steps, run_started, on_node, on_log, emit,
         )?;
     }
@@ -192,6 +196,7 @@ fn forward_epoch(
     connected: &HashSet<u32>,
     seed_entries: bool,
     forced: &HashSet<u32>,
+    entry_payload: &PortValues,
     outputs: &mut HashMap<u32, PortValues>,
     ran: &mut HashSet<u32>,
     loop_state: &mut HashMap<u32, usize>,
@@ -199,7 +204,7 @@ fn forward_epoch(
     run_started: Instant,
     on_node: &mut dyn FnMut(u32),
     on_log: &mut dyn FnMut(u32, &str, u128),
-    emit: &mut dyn FnMut(&str),
+    emit: &mut dyn FnMut(&str, &PortValues),
 ) -> Result<Vec<u32>, String> {
     let mut indeg = indeg_tmpl.clone();
     let mut settled: HashSet<u32> = HashSet::new();
@@ -273,11 +278,13 @@ fn forward_epoch(
         // ordering predecessor has settled by now, so `outputs` reflects which ran.)
         let mut inputs = PortValues::new();
         let mut dead = false;
-        for port in n.kind.input_ports() {
+        // Node-aware ports: most kinds are static, but EmitEvent's inputs are its
+        // configured event's payload fields (one per field). Gather wired values by name.
+        for port in n.input_ports() {
             if let Some(edge) = graph.edges.iter().find(|e| e.to == nid && e.to_port == port.name) {
                 match outputs.get(&edge.from).and_then(|m| m.get(&edge.from_port)) {
                     Some(v) => {
-                        inputs.insert(port.name.to_string(), v.clone());
+                        inputs.insert(port.name.clone(), v.clone());
                     }
                     None if port.required && !outputs.contains_key(&edge.from) => {
                         dead = true;
@@ -285,8 +292,8 @@ fn forward_epoch(
                     }
                     None => {}
                 }
-            } else if let Some(lit) = node::literal_for(&n.config, *port) {
-                inputs.insert(port.name.to_string(), lit);
+            } else if let Some(lit) = node::literal_for_named(&n.config, &port.name, port.ty) {
+                inputs.insert(port.name.clone(), lit);
             }
         }
         if dead {
@@ -353,7 +360,7 @@ fn forward_epoch(
         let started = Instant::now();
         // IO-bound kinds run under a per-node deadline (watchdog thread) so a stuck call
         // aborts the run instead of hanging forever; pure/instant kinds run inline.
-        let o = match node::node_timeout(n.kind, &n.config) {
+        let mut o = match node::node_timeout(n.kind, &n.config) {
             Some(deadline) => node::run_node_timed(n.kind, &n.config, &inputs, sys, deadline),
             None => node::run_node(n.kind, &n.config, &inputs, sys),
         }
@@ -375,10 +382,17 @@ fn forward_epoch(
         }
 
         // EmitEvent: fire the event so the host spawns the (guarded) handler sub-run.
+        // The node's gathered inputs ARE the event's typed payload (one per field).
         if n.kind == NodeKind::EmitEvent {
             if let Some(ev) = n.config.get("event").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
-                emit(ev);
+                emit(ev, &inputs);
             }
+        }
+
+        // OnEvent entry: seed its outputs with the delivered payload so downstream nodes
+        // read each field by port name (run_node returned an empty map for it).
+        if n.kind == NodeKind::OnEvent {
+            o = entry_payload.clone();
         }
 
         if n.kind == NodeKind::If {
@@ -565,7 +579,7 @@ fn level_rank(l: AlertLevel) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::super::domain::{Graph, NodeKind};
+    use super::super::domain::{Graph, NodeKind, PortType};
     use super::*;
     use crate::alerts::{Alert, AlertLevel};
     use serde_json::json;
@@ -902,7 +916,7 @@ mod tests {
         g.add_edge(on, "exec_out", fmt, "exec_in").unwrap();
 
         let mut fired: Vec<String> = Vec::new();
-        let outs = run_dag_eventful(&g, &ctx, &mut |_| {}, &mut |_, _, _| {}, &mut |ev| fired.push(ev.to_string())).unwrap();
+        let outs = run_dag_eventful(&g, &ctx, &mut |_| {}, &mut |_, _, _| {}, &mut |ev, _| fired.push(ev.to_string())).unwrap();
         assert_eq!(fired, vec!["seen"], "EmitEvent calls the emit sink");
         assert!(outs.contains_key(&em), "EmitEvent ran");
         assert!(!outs.contains_key(&on), "OnEvent must NOT run on a normal trigger");
@@ -911,9 +925,43 @@ mod tests {
         // The handler runs only when its event fires (a sub-run seeded at the OnEvent node).
         let entry = on_event_node(&g, "seen").expect("OnEvent found by name");
         assert_eq!(entry, on);
-        let outs2 = run_subpath_eventful(&g, &ctx, entry, &mut |_| {}, &mut |_, _, _| {}, &mut |_| {}).unwrap();
+        let outs2 = run_subpath_eventful(&g, &ctx, entry, PortValues::new(), &mut |_| {}, &mut |_, _, _| {}, &mut |_, _| {}).unwrap();
         assert!(outs2.contains_key(&on) && outs2.contains_key(&fmt), "handler subtree runs on its event");
         assert!(!outs2.contains_key(&em), "the sub-run runs ONLY the handler subtree");
+    }
+
+    #[test]
+    fn event_payload_makes_dynamic_ports_and_seeds_the_on_event_output() {
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "g");
+        // An event "seen" carrying a Text field "msg" — baked onto both nodes' config.
+        let schema = json!({ "event": "seen", "payload": [{ "name": "msg", "type": "text" }] });
+        let em = g.add_node(NodeKind::EmitEvent, 0, 0);
+        g.node_mut(em).unwrap().config = schema.clone();
+        let on = g.add_node(NodeKind::OnEvent, 0, 0);
+        g.node_mut(on).unwrap().config = schema;
+
+        // EmitEvent gains a Text INPUT port "msg"; OnEvent a Text OUTPUT port "msg".
+        assert_eq!(g.node(em).unwrap().input_port("msg").unwrap().ty, PortType::Text);
+        assert_eq!(g.node(on).unwrap().output_port("msg").unwrap().ty, PortType::Text);
+
+        // The dynamic ports wire by type: Format.text → EmitEvent.msg, OnEvent.msg → Format.p1.
+        let src = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(src, "text", em, "msg").expect("payload INPUT port wires by type");
+        let sink = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(on, "exec_out", sink, "exec_in").unwrap();
+        g.add_edge(on, "msg", sink, "p1").expect("payload OUTPUT port wires by type");
+
+        // Firing the handler with a payload seeds the OnEvent's "msg" output for downstream.
+        let entry = on_event_node(&g, "seen").unwrap();
+        let mut payload = PortValues::new();
+        payload.insert("msg".into(), PortValue::Text("hello".into()));
+        let outs = run_subpath_eventful(&g, &ctx, entry, payload, &mut |_| {}, &mut |_, _, _| {}, &mut |_, _| {}).unwrap();
+        assert_eq!(
+            outs.get(&on).and_then(|m| m.get("msg")).and_then(PortValue::as_text),
+            Some("hello"),
+            "OnEvent exposes the delivered payload on its named output"
+        );
     }
 
     #[test]

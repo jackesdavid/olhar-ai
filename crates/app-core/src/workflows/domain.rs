@@ -65,6 +65,48 @@ const fn p(name: &'static str, ty: PortType, required: bool) -> Port {
     Port { name, ty, required }
 }
 
+/// An owned port declaration — like [`Port`] but with an owned name, for ports that are
+/// **derived from a node's config** rather than static on the kind (today: the payload
+/// ports of `EmitEvent`/`OnEvent`, one per field of the configured event). See
+/// [`GraphNode::input_ports`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedPort {
+    pub name: String,
+    pub ty: PortType,
+    pub required: bool,
+}
+
+impl From<&Port> for ResolvedPort {
+    fn from(p: &Port) -> Self {
+        ResolvedPort { name: p.name.to_string(), ty: p.ty, required: p.required }
+    }
+}
+
+/// The payload ports baked into an `EmitEvent`/`OnEvent` node's config (`config.payload`
+/// is `[{ name, type }]`, copied from the event's registry schema at config time). Empty
+/// when the event is payload-less or unset. Used as inputs on `EmitEvent`, outputs on
+/// `OnEvent`.
+fn payload_ports(config: &Value) -> Vec<ResolvedPort> {
+    config
+        .get("payload")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|f| {
+                    let name = f.get("name").and_then(|v| v.as_str())?.trim().to_string();
+                    if name.is_empty() {
+                        return None;
+                    }
+                    let ty = f
+                        .get("type")
+                        .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())?;
+                    Some(ResolvedPort { name, ty, required: false })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 // ---------------------------------------------------------------------------
 // Node kinds + their port declarations
 // ---------------------------------------------------------------------------
@@ -545,6 +587,42 @@ fn default_true() -> bool {
     true
 }
 
+impl GraphNode {
+    /// This node's **effective** input ports. Static for every kind except `EmitEvent`,
+    /// whose inputs are one-per-payload-field derived from its config (see [`payload_ports`]).
+    pub fn input_ports(&self) -> Vec<ResolvedPort> {
+        match self.kind {
+            NodeKind::EmitEvent => payload_ports(&self.config),
+            k => k.input_ports().iter().map(ResolvedPort::from).collect(),
+        }
+    }
+
+    /// This node's **effective** output ports. Static for every kind except `OnEvent`,
+    /// whose outputs are one-per-payload-field derived from its config.
+    pub fn output_ports(&self) -> Vec<ResolvedPort> {
+        match self.kind {
+            NodeKind::OnEvent => payload_ports(&self.config),
+            k => k.output_ports().iter().map(ResolvedPort::from).collect(),
+        }
+    }
+
+    /// Look up one input port by name (config-aware), incl. the universal `exec_in`.
+    pub fn input_port(&self, name: &str) -> Option<ResolvedPort> {
+        if name == EXEC_IN.name {
+            return Some(ResolvedPort::from(&EXEC_IN));
+        }
+        self.input_ports().into_iter().find(|p| p.name == name)
+    }
+
+    /// Look up one output port by name (config-aware), incl. the kind's exec_out pins.
+    pub fn output_port(&self, name: &str) -> Option<ResolvedPort> {
+        if let Some(e) = self.kind.exec_out_ports().iter().find(|p| p.name == name) {
+            return Some(ResolvedPort::from(e));
+        }
+        self.output_ports().into_iter().find(|p| p.name == name)
+    }
+}
+
 /// A typed, directed wire: source node's `from_port` → target node's `to_port`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Edge {
@@ -783,15 +861,17 @@ impl Graph {
         if from == to {
             return Err("a node cannot link to itself".into());
         }
-        let fk = self.node(from).ok_or("source node not found")?.kind;
-        let tk = self.node(to).ok_or("target node not found")?.kind;
-        let ft = fk
+        // Resolve port types from the NODES (config-aware), so payload ports on
+        // EmitEvent/OnEvent — derived from the configured event's schema — validate too.
+        let fnode = self.node(from).ok_or("source node not found")?;
+        let tnode = self.node(to).ok_or("target node not found")?;
+        let ft = fnode
             .output_port(from_port)
-            .ok_or_else(|| format!("{} has no output port '{from_port}'", fk.label()))?
+            .ok_or_else(|| format!("{} has no output port '{from_port}'", fnode.kind.label()))?
             .ty;
-        let tt = tk
+        let tt = tnode
             .input_port(to_port)
-            .ok_or_else(|| format!("{} has no input port '{to_port}'", tk.label()))?
+            .ok_or_else(|| format!("{} has no input port '{to_port}'", tnode.kind.label()))?
             .ty;
         if !Self::compatible(ft, tt) {
             return Err(format!("type mismatch: {ft:?} → {tt:?}"));

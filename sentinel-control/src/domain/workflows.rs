@@ -236,6 +236,9 @@ struct CreateEventReq {
     name: String,
     category: Option<String>,
     description: Option<String>,
+    /// Typed payload schema: `[{ name, type }]`. Optional (empty = payload-less).
+    #[serde(default)]
+    fields: Vec<workflows::repo::EventField>,
 }
 
 /// Register a new tenant event (idempotent), creating its category if needed.
@@ -252,9 +255,33 @@ async fn create_event(
     }
     let category = b.category.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("General").to_string();
     let description = b.description.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let fields = sanitize_event_fields(b.fields)?;
     let db = st.db.clone();
-    blocking(move || workflows::repo::create_event(&db, tid, &name, &category, description.as_deref(), None)).await?;
+    blocking(move || workflows::repo::create_event(&db, tid, &name, &category, description.as_deref(), None, &fields)).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Validate a payload schema: trim names, drop empties, reject the reserved `exec` name,
+/// and reject duplicates (each field becomes a port — names must be unique + non-reserved).
+fn sanitize_event_fields(
+    fields: Vec<workflows::repo::EventField>,
+) -> Result<Vec<workflows::repo::EventField>, ApiErr> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(fields.len());
+    for mut f in fields {
+        f.name = f.name.trim().to_string();
+        if f.name.is_empty() {
+            continue;
+        }
+        if f.name.eq_ignore_ascii_case("exec") {
+            return Err(err(StatusCode::BAD_REQUEST, "'exec' is a reserved field name"));
+        }
+        if !seen.insert(f.name.to_lowercase()) {
+            return Err(err(StatusCode::BAD_REQUEST, format!("duplicate payload field '{}'", f.name)));
+        }
+        out.push(f);
+    }
+    Ok(out)
 }
 
 /// Remove a registered tenant event.

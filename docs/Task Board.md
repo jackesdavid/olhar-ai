@@ -28,6 +28,8 @@ kanban-plugin: board
 
 - [ ] Add a 3 seconds at lest on splash screen
 - [ ] The Console Logs should be for the current workflow Not All
+- [ ] Motion Detection Node v2
+	  - Plan: [[motion-detection-node-v2]]
 
 
 ## In Progress
@@ -36,6 +38,8 @@ kanban-plugin: board
 	  - Plan: [[workflow-runs-realtime]]
 - [ ] Show Image node: image not rendering (inline + fullscreen)
 	  - Plan: [[show-image-node-rendering]]
+- [ ] Events carry typed payload data
+	  - Plan: [[event-payload-data]]
 
 
 ## Review

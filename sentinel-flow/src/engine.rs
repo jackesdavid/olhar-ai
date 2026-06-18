@@ -18,8 +18,8 @@ use uuid::Uuid;
 use app_core::agent::{ToolContext, ToolUiEvent};
 use app_core::notification::{NotificationConfig, NotificationStore};
 use app_core::workflows::{
-    self, ConcurrencyPolicy, EventSource, Fire, Graph as WfGraph, RunLogLine, RunStatus, Trigger,
-    TriggerSource,
+    self, ConcurrencyPolicy, EventSource, Fire, Graph as WfGraph, PortValues, RunLogLine, RunStatus,
+    Trigger, TriggerSource,
 };
 
 use crate::events;
@@ -102,7 +102,7 @@ pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, sourc
             serde_json::json!({ "tenant": tenant, "graph": graph_id, "name": graph.name, "run_id": run_id, "trigger": source.as_str() }),
         );
 
-        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, None);
+        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, None, PortValues::new());
 
         mark_run_finished(&state, tenant, graph_id);
         if ok {
@@ -184,6 +184,7 @@ fn execute_run(
     graph: &WfGraph,
     run_id: Uuid,
     entry: Option<u32>,
+    entry_payload: PortValues,
 ) -> (bool, String) {
     let (ctx, drain) = build_run_context(state, tenant);
     let graph_id = graph.id;
@@ -231,18 +232,19 @@ fn execute_run(
     };
     let emit_state = Arc::clone(state);
     let emit_name = graph.name.clone();
-    let mut emit = |ev: &str| {
+    let mut emit = |ev: &str, payload: &PortValues| {
         fire_event(
             &emit_state,
             tenant,
             EventSource::Graph { id: graph_id, name: emit_name.clone() },
             ev.to_string(),
             Some(run_id),
+            payload.clone(),
         )
     };
 
     let result = match entry {
-        Some(e) => workflows::run_subpath_eventful(graph, &ctx, e, &mut on_node, &mut on_log, &mut emit),
+        Some(e) => workflows::run_subpath_eventful(graph, &ctx, e, entry_payload, &mut on_node, &mut on_log, &mut emit),
         None => workflows::run_dag_eventful(graph, &ctx, &mut on_node, &mut on_log, &mut emit),
     };
     drop(ctx); // closes the UI channel → its drain thread ends
@@ -275,6 +277,7 @@ pub fn fire_event(
     source: EventSource,
     event: String,
     emitting_run_id: Option<Uuid>,
+    payload: PortValues,
 ) {
     // Snapshot listeners (don't hold the store lock while spawning).
     let listeners: Vec<(u32, String, u32)> = {
@@ -347,6 +350,7 @@ pub fn fire_event(
         let _ = listener_name; // listener's display name comes from its graph in the handler
         spawn_event_handler(
             state, tenant, listener_id, entry, event.clone(), emitter_id, emitter_name.clone(), key,
+            payload.clone(),
         );
     }
 }
@@ -356,7 +360,7 @@ pub fn fire_event(
 /// Unused today; wired up when system emitters land.
 #[allow(dead_code)]
 pub fn fire_system_event(state: &Arc<AppState>, tenant: Uuid, label: &str, event: String) {
-    fire_event(state, tenant, EventSource::System { label: label.to_string() }, event, None);
+    fire_event(state, tenant, EventSource::System { label: label.to_string() }, event, None, PortValues::new());
 }
 
 /// Spawn one `OnEvent` handler sub-run for a listening graph (the coalesce key is already
@@ -372,6 +376,7 @@ fn spawn_event_handler(
     emitter_id: Option<u32>,
     emitter_name: String,
     key: (Uuid, u32, String),
+    payload: PortValues,
 ) {
     let graph: WfGraph = match state::find_graph(&state.store, tenant, listener_id) {
         Some(g) => g,
@@ -409,7 +414,7 @@ fn spawn_event_handler(
             }],
         );
 
-        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, Some(entry));
+        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, Some(entry), payload);
 
         mark_run_finished(&state, tenant, listener_id);
         if !ok {

@@ -270,8 +270,13 @@ export const data = {
 
   // ---- workflow events + run history --------------------------------------
   listEvents: <T = unknown>(): Promise<T> => api.get<T>("/workflows/event-registry"),
-  createEvent: async (name: string, category?: string, description?: string): Promise<void> => {
-    await api.post<void>("/workflows/event-registry", { name, category, description });
+  createEvent: async (
+    name: string,
+    category?: string,
+    description?: string,
+    fields?: { name: string; type: string }[],
+  ): Promise<void> => {
+    await api.post<void>("/workflows/event-registry", { name, category, description, fields });
   },
   deleteEvent: async (name: string): Promise<void> => {
     await api.del<void>(`/workflows/event-registry/${encodeURIComponent(name)}`);
