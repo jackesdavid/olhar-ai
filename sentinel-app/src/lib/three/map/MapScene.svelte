@@ -285,10 +285,10 @@
 
 <T.OrthographicCamera makeDefault bind:ref={cam} position={[0, 200, 0]} />
 
-<T.AmbientLight intensity={0.5} />
+<T.AmbientLight intensity={1.4} />
 <T.DirectionalLight
   position={[90, 38, 20]}
-  intensity={1.7}
+  intensity={2.4}
   castShadow
   shadow.mapSize.width={2048}
   shadow.mapSize.height={2048}
@@ -300,7 +300,7 @@
   shadow.camera.near={1}
   shadow.camera.far={400}
 />
-<T.DirectionalLight position={[-30, 18, -40]} intensity={0.3} color="#aab9c7" />
+<T.DirectionalLight position={[-30, 18, -40]} intensity={0.8} color="#aab9c7" />
 
 <GroundGrid />
 
