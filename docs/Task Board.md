@@ -52,6 +52,8 @@ kanban-plugin: board
 	  - Plan: [[string-switch-node]]
 - [ ] Missing comparison nodes: TextCompare + And / Or / Not
 	  - Plan: [[missing-comparison-nodes]]
+- [ ] Camera typed port + GetCameraByName node
+	  - Plan: [[camera-typed-port]]
 
 
 ## Review

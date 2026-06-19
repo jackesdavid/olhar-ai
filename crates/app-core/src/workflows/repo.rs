@@ -270,7 +270,7 @@ pub fn system_events() -> Vec<TenantEvent> {
         description: Some("Edge motion detection".to_string()),
         created_by_graph: None,
         fields: vec![
-            field("camera", PortType::Text),
+            field("camera", PortType::Camera),
             field("score", PortType::Num),
             field("area", PortType::Num),
             field("blobs", PortType::Num),

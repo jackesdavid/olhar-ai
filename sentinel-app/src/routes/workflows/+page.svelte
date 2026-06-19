@@ -52,7 +52,7 @@
   // ---- types (the serialized core shapes) ----------------------------------
   type PortType =
     | "text" | "num" | "bool" | "image" | "recipient" | "dictionary" | "file" | "exec"
-    | "text_array" | "num_array" | "person_array" | "face_array" | "person" | "face" | "any";
+    | "text_array" | "num_array" | "person_array" | "face_array" | "person" | "face" | "camera" | "any";
   type CatPort = { name: string; type: PortType; required: boolean };
   type CatKind = {
     slug: string;
@@ -74,6 +74,7 @@
     { value: "num", label: "Number" },
     { value: "bool", label: "Bool" },
     { value: "image", label: "Image" },
+    { value: "camera", label: "Camera" },
     { value: "recipient", label: "Recipient" },
     { value: "file", label: "File" },
     { value: "dictionary", label: "Dictionary" },
@@ -730,6 +731,7 @@
     face_array: "#fda4af",
     person: "#e879f9",
     face: "#fb7185",
+    camera: "#38bdf8",
     any: "#94a3b8",
   };
   // The element colour for an array type (so a ForEach `item` mirrors the wired array).
@@ -1148,7 +1150,7 @@
       case "Vision": return portColor.person; // violet/magenta
       case "AI": return portColor.dictionary; // teal
       case "Alerts": return portColor.bool; // amber
-      case "Cameras": return portColor.text; // blue
+      case "Cameras": return portColor.camera; // sky
       case "Recipients": return portColor.recipient; // purple
       case "Text": return portColor.num; // green
       case "Network": return "#22d3ee"; // cyan

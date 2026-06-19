@@ -207,6 +207,15 @@ pub fn literal_for_named(config: &Value, name: &str, ty: PortType) -> Option<Por
         }
         // Control-flow ports never carry a value.
         PortType::Exec => None,
+        // A camera literal is the stable device id stored in config by the editor dropdown.
+        PortType::Camera => {
+            let s = v.as_str()?;
+            if s.trim().is_empty() {
+                None
+            } else {
+                Some(PortValue::Text(s.to_string()))
+            }
+        }
         // Arrays / detection elements / the Any wildcard are produced by upstream nodes
         // (or, for ForEach `items`, parsed from text in the engine) — never a config literal.
         PortType::TextArray
@@ -233,6 +242,7 @@ pub fn run_node(
         NodeKind::DeliverAlert => run_deliver_alert(inputs, sys),
         NodeKind::CameraSnapshot => run_camera_snapshot(inputs, sys),
         NodeKind::GetCurrentFrame => run_get_current_frame(config, inputs, sys),
+        NodeKind::GetCameraByName => run_get_camera_by_name(config),
         NodeKind::DescribeImage => run_describe_image(config, inputs, sys),
         NodeKind::NotifyRecipient => run_notify_recipient(inputs, sys),
         NodeKind::Format => run_format(config, inputs),
@@ -343,7 +353,8 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::Not
         | NodeKind::TextCompare
         | NodeKind::ForEach
-        | NodeKind::StringSwitch => return None,
+        | NodeKind::StringSwitch
+        | NodeKind::GetCameraByName => return None,
     };
     let secs = config_u64(config, "timeout_secs").unwrap_or(default_secs);
     if secs == 0 {
@@ -722,6 +733,10 @@ pub fn debug_summary(
                 .unwrap_or("");
             let answer = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
             format!("AI: \"{}\" → {}", clip(q), if answer { "true" } else { "false" })
+        }
+        NodeKind::GetCameraByName => {
+            let id = outputs.get("camera").and_then(PortValue::as_text).unwrap_or("");
+            format!("camera: {id}")
         }
     }
 }
@@ -1225,6 +1240,18 @@ fn run_get_current_frame(config: &Value, inputs: &PortValues, sys: &ToolContext)
     o.insert("image".into(), PortValue::Image(bytes));
     o.insert("age_ms".into(), PortValue::Num(age_ms as i64));
     o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
+}
+
+fn run_get_camera_by_name(config: &Value) -> Result<PortValues, String> {
+    let id = config
+        .get("camera")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or("No camera selected — pick one in the node config.")?;
+    let mut o = PortValues::new();
+    o.insert("camera".into(), PortValue::Text(id.to_string()));
     Ok(o)
 }
 

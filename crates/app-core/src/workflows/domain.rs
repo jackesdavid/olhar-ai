@@ -47,6 +47,9 @@ pub enum PortType {
     Person,
     /// A single `FaceDetection`.
     Face,
+    /// A camera device reference (stable device id, carried as a string on the wire).
+    /// Distinct from `Text` so the editor enforces camera-to-camera wiring.
+    Camera,
     /// Wildcard — compatible with ANY type at wire time. Used by `ForEach` (`items`/`item`)
     /// so one loop node handles every array/element type. See [`Graph::compatible`].
     Any,
@@ -127,6 +130,10 @@ pub enum NodeKind {
     /// latency, no per-call round trip) — for high-rate loops (e.g. recognise every
     /// second). `CameraSnapshot` is the on-demand/quality path.
     GetCurrentFrame,
+    /// Pure data: pick a camera by name from a dropdown and output it as a `Camera`
+    /// value. No exec pins — activates whenever its output is demanded. Use this to
+    /// inject a static camera reference into any part of a graph without exec flow.
+    GetCameraByName,
     DescribeImage,
     /// Renamed from `notify_beacon`; the alias keeps old `workflows.json` loadable.
     #[serde(alias = "notify_beacon")]
@@ -261,7 +268,7 @@ const RECORD_PRESENCE_IN: [Port; 4] = [
     p("room", PortType::Text, false),
     p("category", PortType::Text, false),
     p("label", PortType::Text, false),
-    p("camera", PortType::Text, false),
+    p("camera", PortType::Camera, false),
 ];
 const RECORD_PRESENCE_OUT: [Port; 2] = [
     p("id", PortType::Num, false),
@@ -274,14 +281,14 @@ const DELIVER_ALERT_OUT: [Port; 2] = [
     p("ok", PortType::Bool, false),
 ];
 
-const CAMERA_SNAPSHOT_IN: [Port; 1] = [p("camera", PortType::Text, true)];
+const CAMERA_SNAPSHOT_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
 const CAMERA_SNAPSHOT_OUT: [Port; 3] = [
     p("image", PortType::Image, false),
     p("result", PortType::Text, false),
     p("ok", PortType::Bool, false),
 ];
 
-const GET_CURRENT_FRAME_IN: [Port; 1] = [p("camera", PortType::Text, true)];
+const GET_CURRENT_FRAME_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
 const GET_CURRENT_FRAME_OUT: [Port; 3] = [
     p("image", PortType::Image, false),
     p("age_ms", PortType::Num, false), // how old the returned frame is (0 = fresh capture)
@@ -370,7 +377,7 @@ const MOTION_OUT: [Port; 3] = [
     p("score", PortType::Num, false),
     p("ok", PortType::Bool, false),
 ];
-const MOTION_WATCH_IN: [Port; 1] = [p("camera", PortType::Text, true)];
+const MOTION_WATCH_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
 
 // Person detection: an image in → whether a person is present (via the AI sidecar).
 const PERSON_DETECTION_IN: [Port; 1] = [p("image", PortType::Image, true)];
@@ -437,6 +444,8 @@ const STRING_SWITCH_IN: [Port; 1] = [p("value", PortType::Text, true)];
 const ASK_AI_IN: [Port; 2] =
     [p("image", PortType::Image, false), p("question", PortType::Text, false)];
 
+const GET_CAMERA_BY_NAME_OUT: [Port; 1] = [p("camera", PortType::Camera, false)];
+
 const NO_PORTS: [Port; 0] = [];
 
 // Universal control-flow ports — every node has an `exec_in` and, by default, an
@@ -454,13 +463,14 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 44] = [
+    pub const ALL: [NodeKind; 45] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
         NodeKind::DeliverAlert,
         NodeKind::CameraSnapshot,
         NodeKind::GetCurrentFrame,
+        NodeKind::GetCameraByName,
         NodeKind::DescribeImage,
         NodeKind::NotifyRecipient,
         NodeKind::Format,
@@ -511,6 +521,7 @@ impl NodeKind {
             NodeKind::DeliverAlert => "deliver_alert",
             NodeKind::CameraSnapshot => "camera_snapshot",
             NodeKind::GetCurrentFrame => "get_current_frame",
+            NodeKind::GetCameraByName => "get_camera_by_name",
             NodeKind::DescribeImage => "describe_image",
             NodeKind::NotifyRecipient => "notify_recipient",
             NodeKind::Format => "format",
@@ -564,6 +575,7 @@ impl NodeKind {
             NodeKind::DeliverAlert => "Deliver alert",
             NodeKind::CameraSnapshot => "Camera snapshot",
             NodeKind::GetCurrentFrame => "Get current frame",
+            NodeKind::GetCameraByName => "Get camera",
             NodeKind::DescribeImage => "Describe image",
             NodeKind::NotifyRecipient => "Notify recipient",
             NodeKind::Format => "Format",
@@ -610,7 +622,7 @@ impl NodeKind {
         match self {
             NodeKind::GetLastAlert | NodeKind::CreateAlert | NodeKind::DeliverAlert => "Alerts",
             NodeKind::GetRecipient | NodeKind::NotifyRecipient => "Recipients",
-            NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame => "Cameras",
+            NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame | NodeKind::GetCameraByName => "Cameras",
             NodeKind::DescribeImage | NodeKind::AskAi => "AI",
             NodeKind::Format => "Text",
             NodeKind::Wait
@@ -656,7 +668,8 @@ impl NodeKind {
     pub fn is_pure(self) -> bool {
         matches!(
             self,
-            NodeKind::Compare
+            NodeKind::GetCameraByName
+                | NodeKind::Compare
                 | NodeKind::NumLt
                 | NodeKind::NumLte
                 | NodeKind::NumGt
@@ -697,6 +710,7 @@ impl NodeKind {
             NodeKind::DeliverAlert => &DELIVER_ALERT_IN,
             NodeKind::CameraSnapshot => &CAMERA_SNAPSHOT_IN,
             NodeKind::GetCurrentFrame => &GET_CURRENT_FRAME_IN,
+            NodeKind::GetCameraByName => &NO_PORTS,
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_IN,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_IN,
             NodeKind::Format => &FORMAT_IN,
@@ -745,6 +759,7 @@ impl NodeKind {
             NodeKind::DeliverAlert => &DELIVER_ALERT_OUT,
             NodeKind::CameraSnapshot => &CAMERA_SNAPSHOT_OUT,
             NodeKind::GetCurrentFrame => &GET_CURRENT_FRAME_OUT,
+            NodeKind::GetCameraByName => &GET_CAMERA_BY_NAME_OUT,
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_OUT,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_OUT,
             NodeKind::Format => &FORMAT_OUT,
@@ -807,6 +822,7 @@ impl NodeKind {
             NodeKind::DeliverAlert => json!({ "id": "", "timeout_secs": "35" }),
             NodeKind::CameraSnapshot => json!({ "camera": "first", "timeout_secs": "10" }),
             NodeKind::GetCurrentFrame => json!({ "camera": "first", "max_age_ms": "2000", "timeout_secs": "10" }),
+            NodeKind::GetCameraByName => json!({ "camera": "" }),
             NodeKind::DescribeImage => json!({ "timeout_secs": "65" }),
             NodeKind::NotifyRecipient => json!({ "message": "", "timeout_secs": "35" }),
             NodeKind::Format => json!({ "template": "{p1} — {p2}", "p1": "", "p2": "", "p3": "" }),
