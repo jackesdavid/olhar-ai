@@ -537,11 +537,14 @@
     const nk = effectiveKind(selectedNode);
     // Exec pins are pure wiring — never editable settings, so exclude them. Event payload
     // ports are managed by the Payload editor (and wired on the canvas), not as value rows.
+    // StringSwitch arms are managed by the Arms editor below, not as a generic text row.
     const payloadNames = new Set(payloadFields(selectedNode).map((f) => f.name));
     const inputs = (nk?.inputs ?? []).filter((p) => p.type !== "exec" && !payloadNames.has(p.name));
     const rows: { key: string; port: CatPort | null }[] = inputs.map((p) => ({ key: p.name, port: p }));
+    const MANAGED_KEYS: Record<string, string[]> = { string_switch: ["arms"] };
+    const managedForKind = new Set(MANAGED_KEYS[selectedNode.kind] ?? []);
     for (const key of Object.keys(nk?.default_config ?? {})) {
-      if (!inputs.some((p) => p.name === key)) rows.push({ key, port: null });
+      if (!inputs.some((p) => p.name === key) && !managedForKind.has(key)) rows.push({ key, port: null });
     }
     return rows;
   });
@@ -571,11 +574,21 @@
     const p = node.config?.payload;
     return Array.isArray(p) ? (p as EventField[]).filter((f) => f && f.name) : [];
   }
-  // The catalog kind for a node, augmented with its dynamic payload ports (if any), so the
-  // existing render/wire/validate helpers see EmitEvent inputs / OnEvent outputs.
+  // The catalog kind for a node, augmented with its dynamic ports (if any), so the
+  // existing render/wire/validate helpers see EmitEvent inputs / OnEvent outputs /
+  // StringSwitch per-arm exec outputs.
   function effectiveKind(node: Node): CatKind | undefined {
     const k = catalog[node.kind];
     if (!k) return k;
+    // StringSwitch: exec outputs are the user-defined arm labels + built-in "default".
+    if (node.kind === "string_switch") {
+      const arms: string[] = Array.isArray(node.config?.arms) ? (node.config.arms as string[]) : [];
+      const armPorts: CatPort[] = [
+        ...arms.map((a) => ({ name: String(a), type: "exec" as CatPort["type"], required: false })),
+        { name: "default", type: "exec" as CatPort["type"], required: false },
+      ];
+      return { ...k, outputs: armPorts };
+    }
     const fields = payloadFields(node);
     if (fields.length === 0) return k;
     const ports: CatPort[] = fields.map((f) => ({ name: f.name, type: f.type, required: false }));
@@ -595,6 +608,10 @@
     if (n.kind === "object_detection") {
       const cls = String(n.config.class ?? "person").trim();
       return cls ? `${base}: ${cls}` : base;
+    }
+    if (n.kind === "string_switch") {
+      const arms: string[] = Array.isArray(n.config?.arms) ? (n.config.arms as string[]) : [];
+      return arms.length > 0 ? `${base} (${arms.length})` : base;
     }
     return base;
   }
@@ -2501,6 +2518,53 @@
                     </p>
                   </div>
                 {/if}
+              {/if}
+              <!-- String switch: user-defined match arms. Each arm becomes an exec output
+                   port. A built-in "default" arm always fires when no arm matches. -->
+              {#if selectedNode.kind === "string_switch"}
+                {@const swArms = Array.isArray(selectedNode.config?.arms) ? (selectedNode.config.arms as string[]) : []}
+                <div class="space-y-2.5 border-t border-border pt-2.5">
+                  <p class="text-xs font-medium text-muted-foreground">Match arms</p>
+                  <div class="space-y-1.5">
+                    {#each swArms as arm, i (i)}
+                      <div class="flex items-center gap-1.5">
+                        <Input
+                          class="h-8 min-w-0 flex-1"
+                          disabled={editLocked}
+                          placeholder="arm label (e.g. red)"
+                          value={arm}
+                          oninput={(e) => {
+                            const updated = [...swArms];
+                            updated[i] = e.currentTarget.value;
+                            saveNodeConfig(selectedNode, { ...selectedNode.config, arms: updated });
+                          }}
+                        />
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          class="h-8 w-8 shrink-0"
+                          disabled={editLocked || swArms.length <= 1}
+                          onclick={() => {
+                            const updated = swArms.filter((_, j) => j !== i);
+                            saveNodeConfig(selectedNode, { ...selectedNode.config, arms: updated });
+                          }}
+                          title="Remove arm"
+                        >×</Button>
+                      </div>
+                    {/each}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      class="h-8 w-full"
+                      disabled={editLocked}
+                      onclick={() => {
+                        const updated = [...swArms, `arm_${swArms.length + 1}`];
+                        saveNodeConfig(selectedNode, { ...selectedNode.config, arms: updated });
+                      }}
+                    >+ Add arm</Button>
+                  </div>
+                  <p class="text-[10px] text-muted-foreground">A built-in <strong>default</strong> arm always fires when no label matches.</p>
+                </div>
               {/if}
               <!-- Memoize: cache the node's output for the run (default) vs recompute each
                    time it's reached. Turn OFF for loop bodies / live sources so loops iterate.

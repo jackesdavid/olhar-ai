@@ -7,7 +7,7 @@
 //! resolving inputs from upstream outputs else config literals), stopping on the
 //! first node error. The trigger/concurrency methods are the pure decision logic
 //! the backend poller drives.
-use super::domain::{ConcurrencyPolicy, Graph, NodeKind, EXEC_IN};
+use super::domain::{string_switch_arms, ConcurrencyPolicy, Graph, NodeKind, EXEC_IN};
 use super::repo;
 use super::node::{self, PortValue, PortValues};
 use crate::agent::tools::{ToolContext, ToolUiEvent};
@@ -489,6 +489,18 @@ fn forward_epoch(
         if n.kind == NodeKind::If {
             let cond = inputs.get("condition").and_then(PortValue::as_bool).unwrap_or(false);
             live_out.insert((nid, if cond { "true" } else { "false" }.to_string()));
+        } else if n.kind == NodeKind::AskAi {
+            // AskAi: run_node computed the answer and stored it in `o["result"]`.
+            let answer = o.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            live_out.insert((nid, if answer { "true" } else { "false" }.to_string()));
+        } else if n.kind == NodeKind::StringSwitch {
+            let val = inputs.get("value").and_then(PortValue::as_text).unwrap_or_default();
+            let arms = string_switch_arms(&n.config);
+            if arms.iter().any(|a| a == val) {
+                live_out.insert((nid, val.to_string()));
+            } else {
+                live_out.insert((nid, "default".to_string()));
+            }
         } else {
             for p in n.kind.exec_out_ports() {
                 live_out.insert((nid, p.name.to_string()));
@@ -673,6 +685,8 @@ mod tests {
     use super::super::domain::{Graph, NodeKind, PortType};
     use super::*;
     use crate::alerts::{Alert, AlertLevel};
+    use crate::ports::Vision;
+    use crate::agent::detector::{PersonDetection, PersonResult};
     use serde_json::json;
 
     fn test_ctx() -> ToolContext {
@@ -686,6 +700,25 @@ mod tests {
             None,
             tx,
         )
+    }
+
+    /// A Vision stub whose `ask_yes_no` returns a fixed answer. Used to test `AskAi`
+    /// routing without hitting the Anthropic API.
+    struct StubVision(bool);
+    impl Vision for StubVision {
+        fn detect_persons(&self, _: &[u8]) -> Result<PersonResult, String> { Ok(PersonResult { person: false, count: 0, confidence: 0.0 }) }
+        fn detect_persons_detailed(&self, _: &[u8]) -> Result<Vec<PersonDetection>, String> { Ok(vec![]) }
+        fn detect_objects_detailed(&self, _: &[u8], _: u32) -> Result<Vec<PersonDetection>, String> { Ok(vec![]) }
+        fn describe(&self, _: &[u8], _: &str) -> Result<String, String> { Ok("stub".into()) }
+        fn ask_yes_no(&self, _: &str, _: Option<&[u8]>) -> Result<bool, String> { Ok(self.0) }
+    }
+
+    fn ctx_with_vision(answer: bool) -> ToolContext {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut ctx = test_ctx();
+        ctx.ui_tx = tx;
+        ctx.vision = std::sync::Arc::new(StubVision(answer));
+        ctx
     }
 
     fn alert(id: u64, level: AlertLevel, source: &str, msg: &str) -> Alert {
@@ -1132,6 +1165,131 @@ mod tests {
         assert_eq!(e.alert_seen_max(t), 5, "seeded watermark");
         let _ = e.drain_new_alert_levels(t, &alerts);
         assert_eq!(e.alert_seen_max(t), 9, "watermark advanced to the max id seen");
+    }
+
+    #[test]
+    fn ask_ai_routes_true_branch_on_yes_answer() {
+        let ctx = ctx_with_vision(true);
+        let mut g = Graph::new(1, "g");
+        let ai = g.add_node(NodeKind::AskAi, 0, 0);
+        g.node_mut(ai).unwrap().config = json!({ "question": "Is someone there?", "timeout_secs": "65" });
+        let yes = g.add_node(NodeKind::Format, 0, 0);
+        let no = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(ai, "true", yes, "exec_in").unwrap();
+        g.add_edge(ai, "false", no, "exec_in").unwrap();
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(outs.contains_key(&ai), "AI If ran");
+        assert!(outs.contains_key(&yes), "'true' branch ran (answer = YES)");
+        assert!(!outs.contains_key(&no), "'false' branch skipped");
+    }
+
+    #[test]
+    fn ask_ai_routes_false_branch_on_no_answer() {
+        let ctx = ctx_with_vision(false);
+        let mut g = Graph::new(1, "g");
+        let ai = g.add_node(NodeKind::AskAi, 0, 0);
+        g.node_mut(ai).unwrap().config = json!({ "question": "Is someone there?", "timeout_secs": "65" });
+        let yes = g.add_node(NodeKind::Format, 0, 0);
+        let no = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(ai, "true", yes, "exec_in").unwrap();
+        g.add_edge(ai, "false", no, "exec_in").unwrap();
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(!outs.contains_key(&yes), "'true' branch skipped");
+        assert!(outs.contains_key(&no), "'false' branch ran (answer = NO)");
+    }
+
+    #[test]
+    fn ask_ai_errors_without_question() {
+        let ctx = ctx_with_vision(false);
+        let mut g = Graph::new(1, "g");
+        let ai = g.add_node(NodeKind::AskAi, 0, 0);
+        // No question in config or wired
+        g.node_mut(ai).unwrap().config = json!({ "question": "" });
+        g.run_orphans = true;
+        let err = run_dag(&g, &ctx).unwrap_err();
+        assert!(err.contains("question is required"), "got: {err}");
+    }
+
+    #[test]
+    fn ask_ai_wires_true_false_exec_ports() {
+        let mut g = Graph::new(1, "g");
+        let ai = g.add_node(NodeKind::AskAi, 0, 0);
+        let t = g.add_node(NodeKind::Format, 0, 0);
+        let f = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(ai, "true", t, "exec_in").expect("true port wires");
+        g.add_edge(ai, "false", f, "exec_in").expect("false port wires");
+        // image and question wire correctly
+        let snap = g.add_node(NodeKind::CameraSnapshot, 0, 0);
+        g.add_edge(snap, "image", ai, "image").expect("image wires");
+    }
+
+    #[test]
+    fn string_switch_routes_to_matching_arm() {
+        // StringSwitch("red") → fires the "red" arm; "blue" and "default" are skipped.
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "g");
+        let sw = g.add_node(NodeKind::StringSwitch, 0, 0);
+        g.node_mut(sw).unwrap().config = json!({ "arms": ["red", "blue", "green"], "value": "red" });
+        let red = g.add_node(NodeKind::Format, 0, 0);
+        let blue = g.add_node(NodeKind::Format, 0, 0);
+        let def = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(sw, "red", red, "exec_in").unwrap();
+        g.add_edge(sw, "blue", blue, "exec_in").unwrap();
+        g.add_edge(sw, "default", def, "exec_in").unwrap();
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(outs.contains_key(&sw), "switch ran");
+        assert!(outs.contains_key(&red), "matching arm 'red' ran");
+        assert!(!outs.contains_key(&blue), "'blue' skipped");
+        assert!(!outs.contains_key(&def), "'default' skipped when a match fires");
+    }
+
+    #[test]
+    fn string_switch_fires_default_when_no_arm_matches() {
+        // StringSwitch("purple") → no arm matches → "default" fires, named arms skip.
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "g");
+        let sw = g.add_node(NodeKind::StringSwitch, 0, 0);
+        g.node_mut(sw).unwrap().config = json!({ "arms": ["red", "blue"], "value": "purple" });
+        let red = g.add_node(NodeKind::Format, 0, 0);
+        let def = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(sw, "red", red, "exec_in").unwrap();
+        g.add_edge(sw, "default", def, "exec_in").unwrap();
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(!outs.contains_key(&red), "'red' skipped");
+        assert!(outs.contains_key(&def), "'default' fires on no match");
+    }
+
+    #[test]
+    fn string_switch_value_from_upstream_node() {
+        // Wired value: Format → "blue" → StringSwitch routes to blue arm.
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "g");
+        let fmt = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(fmt).unwrap().config = json!({ "template": "blue", "p1": "", "p2": "", "p3": "" });
+        let sw = g.add_node(NodeKind::StringSwitch, 0, 0);
+        g.node_mut(sw).unwrap().config = json!({ "arms": ["red", "blue", "green"] });
+        g.add_edge(fmt, "exec_out", sw, "exec_in").unwrap();
+        g.add_edge(fmt, "text", sw, "value").unwrap();
+        let blue = g.add_node(NodeKind::Format, 0, 0);
+        let def = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(sw, "blue", blue, "exec_in").unwrap();
+        g.add_edge(sw, "default", def, "exec_in").unwrap();
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(outs.contains_key(&blue), "'blue' arm fires (wired value = \"blue\")");
+        assert!(!outs.contains_key(&def), "'default' skipped");
+    }
+
+    #[test]
+    fn string_switch_missing_value_errors() {
+        // No wired value and no config literal → run errors on missing required input.
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "g");
+        let sw = g.add_node(NodeKind::StringSwitch, 0, 0);
+        // arms set but no value literal or wire
+        g.node_mut(sw).unwrap().config = json!({ "arms": ["red"] });
+        g.run_orphans = true;
+        let err = run_dag(&g, &ctx).unwrap_err();
+        assert!(err.contains("missing required input 'value'"), "got: {err}");
     }
 
     #[test]

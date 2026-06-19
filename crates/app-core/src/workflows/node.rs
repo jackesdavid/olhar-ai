@@ -289,6 +289,10 @@ pub fn run_node(
         }
         // Cooldown is engine-driven (reads/writes cross-run node state).
         NodeKind::Cooldown => Ok(PortValues::new()),
+        // StringSwitch is engine-driven (the engine reads `value` and fires the matching
+        // arm in forward_epoch). Here we just validate the required input is present.
+        NodeKind::StringSwitch => run_string_switch(inputs),
+        NodeKind::AskAi => run_ask_ai(config, inputs, sys),
     }
 }
 
@@ -301,6 +305,7 @@ pub fn run_node(
 pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duration> {
     let default_secs = match kind {
         NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame => 10,
+        NodeKind::AskAi => 65,
         NodeKind::PersonDetection | NodeKind::ObjectDetection | NodeKind::MotionDetection => 30,
         NodeKind::MotionWatch => 20, // two camera grabs + the sample gap
         NodeKind::RecognizePerson => 30,
@@ -337,7 +342,8 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::Or
         | NodeKind::Not
         | NodeKind::TextCompare
-        | NodeKind::ForEach => return None,
+        | NodeKind::ForEach
+        | NodeKind::StringSwitch => return None,
     };
     let secs = config_u64(config, "timeout_secs").unwrap_or(default_secs);
     if secs == 0 {
@@ -704,6 +710,19 @@ pub fn debug_summary(
             let clip = |s: &str| if s.chars().count() > 20 { format!("{}…", s.chars().take(19).collect::<String>()) } else { s.to_string() };
             format!("\"{}\" {op} \"{}\" → {result}", clip(a), clip(b))
         }
+        NodeKind::StringSwitch => {
+            let val = inputs.get("value").and_then(PortValue::as_text).unwrap_or("");
+            let arms = super::domain::string_switch_arms(config);
+            let fired = if arms.iter().any(|a| a == val) { val } else { "default" };
+            format!("\"{}\" → arm '{fired}'", clip(val))
+        }
+        NodeKind::AskAi => {
+            let q = inputs.get("question").and_then(PortValue::as_text)
+                .or_else(|| config.get("question").and_then(|v| v.as_str()))
+                .unwrap_or("");
+            let answer = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            format!("AI: \"{}\" → {}", clip(q), if answer { "true" } else { "false" })
+        }
     }
 }
 
@@ -715,6 +734,33 @@ fn run_if(inputs: &PortValues) -> Result<PortValues, String> {
         .and_then(PortValue::as_bool)
         .ok_or("missing required input 'condition'")?;
     Ok(PortValues::new())
+}
+
+/// String switch: validates the required `value` Text input is present. The engine's
+/// `forward_epoch` handles the actual arm routing — exactly one arm fires.
+fn run_string_switch(inputs: &PortValues) -> Result<PortValues, String> {
+    inputs
+        .get("value")
+        .and_then(PortValue::as_text)
+        .ok_or("missing required input 'value'")?;
+    Ok(PortValues::new())
+}
+
+/// AI If: asks the vision model a yes/no question about an optional image and returns
+/// `result: Bool`. The engine routes exec to `true` or `false` based on this result,
+/// identically to how it handles the `If` node but reading from outputs instead of inputs.
+fn run_ask_ai(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+    let question = inputs
+        .get("question")
+        .and_then(PortValue::as_text)
+        .or_else(|| config.get("question").and_then(|v| v.as_str()))
+        .filter(|s| !s.trim().is_empty())
+        .ok_or("AI If: question is required (wire it or set it in config)")?;
+    let image = inputs.get("image").and_then(PortValue::as_image);
+    let answer = sys.vision.ask_yes_no(question, image)?;
+    let mut o = PortValues::new();
+    o.insert("result".into(), PortValue::Bool(answer));
+    Ok(o)
 }
 
 /// Compare two integers using a configurable operator → `result` bool.
@@ -1504,5 +1550,18 @@ mod tests {
         let err = run_node(NodeKind::CreateAlert, &cfg, &PortValues::new(), &ctx).unwrap_err();
         assert!(err.contains("missing required input 'message'"), "got: {err}");
         assert!(ctx.alerts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn ask_ai_requires_a_question() {
+        // Neither wired question nor config literal → should error without touching the API.
+        let err = run_node(NodeKind::AskAi, &json!({ "question": "" }), &PortValues::new(), &test_ctx())
+            .unwrap_err();
+        assert!(err.contains("question is required"), "got: {err}");
+    }
+
+    #[test]
+    fn ask_ai_timeout_is_65s() {
+        assert_eq!(node_timeout(NodeKind::AskAi, &json!({})), Some(std::time::Duration::from_secs(65)));
     }
 }

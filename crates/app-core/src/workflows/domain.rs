@@ -224,6 +224,16 @@ pub enum NodeKind {
     /// `b` can be wired from upstream or typed as a literal in the inspector.
     /// Operators: `eq`, `ne`, `contains`, `starts_with`, `ends_with`.
     TextCompare,
+    /// Flow control: routes exec to the arm whose label exactly matches the incoming
+    /// `value` string. Arms are user-defined in the inspector (one or more labels).
+    /// A built-in `default` arm fires whenever no arm label matches. Engine-driven (like
+    /// `If`) — the exec routing happens in `forward_epoch`, not in `run_node`.
+    StringSwitch,
+    /// AI flow control: asks the vision model a yes/no question about an optional image
+    /// and routes exec down `true` or `false` — exactly like `If` but powered by Claude.
+    /// `question` can be wired (Text) or set as a config literal; `image` is optional
+    /// (text-only questions like "Is it past 18:00?" work without an image).
+    AskAi,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -419,6 +429,14 @@ const NOT_IN: [Port; 1] = [p("a", PortType::Bool, false)];
 const TEXT_COMPARE_IN: [Port; 2] =
     [p("a", PortType::Text, false), p("b", PortType::Text, false)];
 
+// String switch: one required text input (the value to match against the arms).
+const STRING_SWITCH_IN: [Port; 1] = [p("value", PortType::Text, true)];
+
+// AI If: optional image + question text. Both are optional at the port level so a
+// text-only question (no image wired) works. The node errors at runtime if no question.
+const ASK_AI_IN: [Port; 2] =
+    [p("image", PortType::Image, false), p("question", PortType::Text, false)];
+
 const NO_PORTS: [Port; 0] = [];
 
 // Universal control-flow ports — every node has an `exec_in` and, by default, an
@@ -436,7 +454,7 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 42] = [
+    pub const ALL: [NodeKind; 44] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -479,6 +497,8 @@ impl NodeKind {
         NodeKind::Or,
         NodeKind::Not,
         NodeKind::TextCompare,
+        NodeKind::StringSwitch,
+        NodeKind::AskAi,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -527,6 +547,8 @@ impl NodeKind {
             NodeKind::Or => "or",
             NodeKind::Not => "not",
             NodeKind::TextCompare => "text_compare",
+            NodeKind::StringSwitch => "string_switch",
+            NodeKind::AskAi => "ask_ai",
         }
     }
 
@@ -578,6 +600,8 @@ impl NodeKind {
             NodeKind::Or => "Or",
             NodeKind::Not => "Not",
             NodeKind::TextCompare => "Text compare",
+            NodeKind::StringSwitch => "String switch",
+            NodeKind::AskAi => "AI If",
         }
     }
 
@@ -587,7 +611,7 @@ impl NodeKind {
             NodeKind::GetLastAlert | NodeKind::CreateAlert | NodeKind::DeliverAlert => "Alerts",
             NodeKind::GetRecipient | NodeKind::NotifyRecipient => "Recipients",
             NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame => "Cameras",
-            NodeKind::DescribeImage => "AI",
+            NodeKind::DescribeImage | NodeKind::AskAi => "AI",
             NodeKind::Format => "Text",
             NodeKind::Wait
             | NodeKind::If
@@ -598,7 +622,8 @@ impl NodeKind {
             | NodeKind::Print
             | NodeKind::ShowImage
             | NodeKind::EmitEvent
-            | NodeKind::OnEvent => "Flow",
+            | NodeKind::OnEvent
+            | NodeKind::StringSwitch => "Flow",
             NodeKind::NumLt
             | NodeKind::NumLte
             | NodeKind::NumGt
@@ -648,15 +673,18 @@ impl NodeKind {
     }
 
     /// Exec OUTPUT pins for this kind. Pure nodes have none; `If` splits into
-    /// `true`/`false` branches; everything else gets a single `exec_out`.
+    /// `true`/`false` branches; `StringSwitch` has user-defined arms (dynamic, see
+    /// [`GraphNode::output_port`]); everything else gets a single `exec_out`.
     pub fn exec_out_ports(self) -> &'static [Port] {
         if self.is_pure() {
             return &NO_PORTS;
         }
         match self {
-            NodeKind::If => &EXEC_OUT_IF,
+            NodeKind::If | NodeKind::AskAi => &EXEC_OUT_IF,
             NodeKind::ForEach => &EXEC_OUT_FOR_EACH,
             NodeKind::FlipFlop => &EXEC_OUT_FLIP_FLOP,
+            // Dynamic: arms come from config, not a static slice. See GraphNode::output_port.
+            NodeKind::StringSwitch => &NO_PORTS,
             _ => &EXEC_OUT_DEFAULT,
         }
     }
@@ -704,6 +732,8 @@ impl NodeKind {
             NodeKind::NumToText => &NUM_TO_TEXT_IN,
             NodeKind::BoolToText => &BOOL_TO_TEXT_IN,
             NodeKind::Cooldown => &NO_PORTS, // engine-driven; window_secs is config
+            NodeKind::StringSwitch => &STRING_SWITCH_IN,
+            NodeKind::AskAi => &ASK_AI_IN,
         }
     }
 
@@ -747,6 +777,8 @@ impl NodeKind {
             | NodeKind::NumNe => &COMPARE_OUT,
             NodeKind::NumToText | NodeKind::BoolToText => &CAST_TEXT_OUT,
             NodeKind::Cooldown => &COOLDOWN_OUT,
+            NodeKind::StringSwitch => &NO_PORTS, // exec outputs are dynamic arms (+ "default")
+            NodeKind::AskAi => &NO_PORTS, // exec outputs are true/false branches only
         }
     }
 
@@ -809,6 +841,8 @@ impl NodeKind {
             NodeKind::And | NodeKind::Or => json!({ "a": false, "b": false }),
             NodeKind::Not => json!({ "a": false }),
             NodeKind::TextCompare => json!({ "operator": "eq", "b": "" }),
+            NodeKind::StringSwitch => json!({ "arms": ["arm_1", "arm_2"] }),
+            NodeKind::AskAi => json!({ "question": "", "timeout_secs": "65" }),
         }
     }
 }
@@ -869,11 +903,32 @@ impl GraphNode {
 
     /// Look up one output port by name (config-aware), incl. the kind's exec_out pins.
     pub fn output_port(&self, name: &str) -> Option<ResolvedPort> {
+        // StringSwitch: exec outputs are user-defined arm labels + the fixed "default" arm.
+        // These are instance-level (stored in config), not on the static kind.
+        if self.kind == NodeKind::StringSwitch {
+            let arms = string_switch_arms(&self.config);
+            if arms.iter().any(|a| a == name) || name == "default" {
+                return Some(ResolvedPort { name: name.to_string(), ty: PortType::Exec, required: false });
+            }
+            return None;
+        }
         if let Some(e) = self.kind.exec_out_ports().iter().find(|p| p.name == name) {
             return Some(ResolvedPort::from(e));
         }
         self.output_ports().into_iter().find(|p| p.name == name)
     }
+}
+
+/// Extract the arm labels from a `StringSwitch` node's config. The "default" arm is
+/// implicit — it fires when no arm label matches — and is NOT included in this list.
+pub fn string_switch_arms(config: &Value) -> Vec<String> {
+    config
+        .get("arms")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A typed, directed wire: source node's `from_port` → target node's `to_port`.
@@ -1419,5 +1474,44 @@ mod tests {
         for k in NodeKind::ALL {
             assert_eq!(NodeKind::from_slug(k.slug()), Some(k));
         }
+    }
+
+    #[test]
+    fn string_switch_wires_arm_and_default_exec_ports() {
+        let mut g = Graph::new(1, "g");
+        let sw = g.add_node(NodeKind::StringSwitch, 0, 0);
+        g.node_mut(sw).unwrap().config = json!({ "arms": ["red", "blue"] });
+        let a = g.add_node(NodeKind::Format, 0, 0);
+        let b = g.add_node(NodeKind::Format, 0, 0);
+        let d = g.add_node(NodeKind::Format, 0, 0);
+        // Named arm ports resolve and wire correctly.
+        g.add_edge(sw, "red", a, "exec_in").expect("'red' arm wires");
+        g.add_edge(sw, "blue", b, "exec_in").expect("'blue' arm wires");
+        // The built-in default arm also wires.
+        g.add_edge(sw, "default", d, "exec_in").expect("'default' arm wires");
+        // An arm not in config is rejected.
+        let c = g.add_node(NodeKind::Format, 0, 0);
+        let err = g.add_edge(sw, "green", c, "exec_in").unwrap_err();
+        assert!(err.contains("no output port"), "unknown arm rejected: {err}");
+    }
+
+    #[test]
+    fn string_switch_value_port_is_required_text() {
+        let k = NodeKind::StringSwitch;
+        let p = k.input_port("value").expect("value port exists");
+        assert_eq!(p.ty, PortType::Text);
+        assert!(p.required);
+        // exec_out_ports is empty (dynamic); output_ports is empty.
+        assert!(k.exec_out_ports().is_empty());
+        assert!(k.output_ports().is_empty());
+    }
+
+    #[test]
+    fn string_switch_default_config_has_two_arms() {
+        let cfg = NodeKind::StringSwitch.default_config();
+        let arms = cfg["arms"].as_array().expect("arms is an array");
+        assert_eq!(arms.len(), 2);
+        assert_eq!(arms[0].as_str(), Some("arm_1"));
+        assert_eq!(arms[1].as_str(), Some("arm_2"));
     }
 }

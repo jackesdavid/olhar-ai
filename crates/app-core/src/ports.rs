@@ -46,6 +46,8 @@ pub trait Vision: Send + Sync {
         class_id: u32,
     ) -> Result<Vec<PersonDetection>, String>;
     fn describe(&self, jpeg: &[u8], label: &str) -> Result<String, String>;
+    /// Ask a yes/no question about an optional image. Returns `true` for YES, `false` for NO.
+    fn ask_yes_no(&self, question: &str, image: Option<&[u8]>) -> Result<bool, String>;
 }
 
 /// Face recognition: a cosine kNN over the approved enrolled embeddings.
@@ -123,6 +125,9 @@ impl Vision for LocalVision {
     }
     fn describe(&self, jpeg: &[u8], label: &str) -> Result<String, String> {
         crate::agent::vision::describe_image(jpeg, label)
+    }
+    fn ask_yes_no(&self, question: &str, image: Option<&[u8]>) -> Result<bool, String> {
+        crate::agent::vision::ask_yes_no(question, image)
     }
 }
 

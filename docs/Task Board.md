@@ -44,6 +44,8 @@ kanban-plugin: board
 
 - [ ] Generic Object Detection node — configurable COCO class
 	  - Plan: [[generic-object-detection-node]]
+- [ ] String Switch node — multi-arm exec router on string value
+	  - Plan: [[string-switch-node]]
 - [ ] Missing comparison nodes: TextCompare + And / Or / Not
 	  - Plan: [[missing-comparison-nodes]]
 
