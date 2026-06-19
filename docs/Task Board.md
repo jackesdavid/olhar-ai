@@ -32,18 +32,17 @@ kanban-plugin: board
 	  - Plan: [[node-animation-timing]]
 - [ ] Workflow list improvements: last run, search, description, duplicate
 	  - Plan: [[workflow-list-improvements]]
-- [ ] Draw BBox node — annotate image with bounding box
-	  - Plan: [[draw-bbox-node]]
 - [ ] Comment node — canvas organizer
 	  - Plan: [[comment-node]]
 - [ ] In the (Record Presence) node is not possible to change the room in the property panel
 - [ ] Missing comparison nodes: TextCompare + And / Or / Not
 	  - Plan: [[missing-comparison-nodes]]
-- [ ] Free text ( filled and wireframe) tool map
 
 
 ## In Progress
 
+- [ ] Draw BBox node — annotate image with bounding box
+	  - Plan: [[draw-bbox-node]]
 - [ ] Map: solid walls taller, richer material, deeper shadows
 	  - Plan: [[map-walls-3d-depth]]
 
@@ -52,6 +51,7 @@ kanban-plugin: board
 
 - [x] Map Redesign 2 — wall style + architectural-neutral pass
 	  - Plan: [[map-redesign-2]]
+- [ ] Free text ( filled and wireframe) tool map
 - [ ] Map redesign — top-down 3D blueprint editor + live presence
 	  - Epic: [[map-redesign]]
 

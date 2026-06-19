@@ -202,6 +202,9 @@ pub enum NodeKind {
     /// node state. Outputs `elapsed_secs` (how long since last fire, or window+1 on first
     /// run) and `ok` (true = gate opened). Engine-driven (not `run_node`).
     Cooldown,
+    /// Vision: draw a bounding box rectangle on an image → annotated JPEG out.
+    /// Accepts `xyxy` (x1,y1,x2,y2) or `xywh` (x,y,width,height) via `format` config.
+    DrawBbox,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -373,6 +376,11 @@ const COOLDOWN_OUT: [Port; 2] = [
     p("ok", PortType::Bool, false),
 ];
 
+const DRAW_BBOX_IN: [Port; 2] =
+    [p("image", PortType::Image, true), p("bbox", PortType::NumArray, true)];
+const DRAW_BBOX_OUT: [Port; 2] =
+    [p("image", PortType::Image, false), p("ok", PortType::Bool, false)];
+
 const NO_PORTS: [Port; 0] = [];
 
 // Universal control-flow ports — every node has an `exec_in` and, by default, an
@@ -390,7 +398,7 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 35] = [
+    pub const ALL: [NodeKind; 36] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -426,6 +434,7 @@ impl NodeKind {
         NodeKind::Print,
         NodeKind::ShowImage,
         NodeKind::Cooldown,
+        NodeKind::DrawBbox,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -467,6 +476,7 @@ impl NodeKind {
             NodeKind::NumToText => "num_to_text",
             NodeKind::BoolToText => "bool_to_text",
             NodeKind::Cooldown => "cooldown",
+            NodeKind::DrawBbox => "draw_bbox",
         }
     }
 
@@ -511,6 +521,7 @@ impl NodeKind {
             NodeKind::NumToText => "Num → Text",
             NodeKind::BoolToText => "Bool → Text",
             NodeKind::Cooldown => "Cooldown",
+            NodeKind::DrawBbox => "Draw BBox",
         }
     }
 
@@ -546,7 +557,8 @@ impl NodeKind {
             | NodeKind::PersonDetection
             | NodeKind::RecognizePerson
             | NodeKind::BreakPersonDetection
-            | NodeKind::BreakFaceDetection => "Vision",
+            | NodeKind::BreakFaceDetection
+            | NodeKind::DrawBbox => "Vision",
             NodeKind::RecordPresence => "Presence",
         }
     }
@@ -588,6 +600,7 @@ impl NodeKind {
             NodeKind::OnEvent => &NO_PORTS,   // entry: only an exec_out; activated by the event
             NodeKind::Print => &PRINT_IN,
             NodeKind::ShowImage => &SHOW_IMAGE_IN,
+            NodeKind::DrawBbox => &DRAW_BBOX_IN,
             NodeKind::FlipFlop => &NO_PORTS, // engine-driven; no data inputs
             NodeKind::Compare
             | NodeKind::NumLt
@@ -628,6 +641,7 @@ impl NodeKind {
             NodeKind::OnEvent => &NO_PORTS,   // drives its subtree via exec_out only
             NodeKind::Print => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::ShowImage => &NO_PORTS, // a sink — exec passes through, no data out
+            NodeKind::DrawBbox => &DRAW_BBOX_OUT,
             NodeKind::FlipFlop => &FLIP_FLOP_OUT,
             NodeKind::Compare
             | NodeKind::NumLt
@@ -694,6 +708,7 @@ impl NodeKind {
             | NodeKind::NumNe => json!({ "a": "0", "b": "0" }),
             NodeKind::NumToText | NodeKind::BoolToText => json!({}),
             NodeKind::Cooldown => json!({ "window_secs": "60" }),
+            NodeKind::DrawBbox => json!({ "color": "#00FF00", "thickness": "2", "format": "xyxy" }),
         }
     }
 }

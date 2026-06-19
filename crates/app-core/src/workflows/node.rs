@@ -258,6 +258,7 @@ pub fn run_node(
         // the editor — is driven by the engine, which owns the node id the UI needs to
         // place the preview. Here it's a pure pass-through (exec flows on, no data out).
         NodeKind::ShowImage => Ok(PortValues::new()),
+        NodeKind::DrawBbox => run_draw_bbox(config, inputs),
         // FlipFlop is engine-driven (reads/writes cross-run state + routes exec).
         // Never called directly — the engine handles it before reaching run_node.
         NodeKind::FlipFlop => Ok(PortValues::new()),
@@ -324,6 +325,7 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::EmitEvent
         | NodeKind::OnEvent
         | NodeKind::ShowImage
+        | NodeKind::DrawBbox
         | NodeKind::ForEach => return None,
     };
     let secs = config_u64(config, "timeout_secs").unwrap_or(default_secs);
@@ -607,6 +609,10 @@ pub fn debug_summary(
             let ok = outputs.get("ok").and_then(PortValue::as_bool).unwrap_or(false);
             let window = config.get("window_secs").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).unwrap_or(60);
             format!("{elapsed}s elapsed / {window}s → {}", if ok { "pass" } else { "blocked" })
+        }
+        NodeKind::DrawBbox => {
+            let bytes = outputs.get("image").and_then(PortValue::as_image).map_or(0, <[u8]>::len);
+            format!("bbox drawn ({} KB)", bytes / 1024)
         }
     }
 }
@@ -1078,6 +1084,86 @@ fn run_format(config: &Value, inputs: &PortValues) -> Result<PortValues, String>
     let mut o = PortValues::new();
     o.insert("text".into(), PortValue::Text(text));
     Ok(o)
+}
+
+fn run_draw_bbox(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let raw = inputs.get("image").and_then(PortValue::as_image).ok_or("missing required input 'image'")?;
+    let bbox_vals: Vec<i64> = {
+        let list = inputs.get("bbox").ok_or("missing required input 'bbox'")?;
+        match list {
+            PortValue::List(items) => items.iter().filter_map(PortValue::as_num).collect(),
+            _ => return Err("'bbox' must be a NumArray".into()),
+        }
+    };
+    if bbox_vals.len() < 4 {
+        return Err(format!("'bbox' needs 4 numbers, got {}", bbox_vals.len()));
+    }
+
+    let fmt = config.get("format").and_then(|v| v.as_str()).unwrap_or("xyxy");
+    let (x1, y1, x2, y2) = if fmt == "xywh" {
+        (bbox_vals[0], bbox_vals[1], bbox_vals[0] + bbox_vals[2], bbox_vals[1] + bbox_vals[3])
+    } else {
+        (bbox_vals[0], bbox_vals[1], bbox_vals[2], bbox_vals[3])
+    };
+
+    let color_str = config.get("color").and_then(|v| v.as_str()).unwrap_or("#00FF00");
+    let color = parse_hex_color(color_str).unwrap_or([0, 255, 0]);
+    let thickness = config
+        .get("thickness")
+        .and_then(|v| v.as_str().and_then(|s| s.parse::<u32>().ok()).or_else(|| v.as_u64().map(|n| n as u32)))
+        .unwrap_or(2)
+        .max(1);
+
+    let img = image::load_from_memory(raw).map_err(|e| format!("could not decode image: {e}"))?;
+    let mut rgb = img.into_rgb8();
+    draw_rect(&mut rgb, x1, y1, x2, y2, color, thickness);
+
+    let mut out = Vec::new();
+    image::DynamicImage::ImageRgb8(rgb)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
+        .map_err(|e| format!("could not encode image: {e}"))?;
+
+    let w = out.len(); // used only for the log
+    log::debug!("draw_bbox: drew {thickness}px rect [{x1},{y1},{x2},{y2}] on {w}-byte JPEG");
+
+    let mut o = PortValues::new();
+    o.insert("image".into(), PortValue::Image(out));
+    o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
+}
+
+fn parse_hex_color(s: &str) -> Option<[u8; 3]> {
+    let s = s.trim_start_matches('#');
+    if s.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+    Some([r, g, b])
+}
+
+fn draw_rect(img: &mut image::RgbImage, x1: i64, y1: i64, x2: i64, y2: i64, color: [u8; 3], thickness: u32) {
+    let w = img.width() as i64;
+    let h = img.height() as i64;
+    let px = image::Rgb(color);
+    let t = thickness as i64;
+    for d in 0..t {
+        // top and bottom edges
+        for x in x1..=x2 {
+            if x >= 0 && x < w {
+                if y1 + d >= 0 && y1 + d < h { img.put_pixel(x as u32, (y1 + d) as u32, px); }
+                if y2 - d >= 0 && y2 - d < h { img.put_pixel(x as u32, (y2 - d) as u32, px); }
+            }
+        }
+        // left and right edges
+        for y in y1..=y2 {
+            if y >= 0 && y < h {
+                if x1 + d >= 0 && x1 + d < w { img.put_pixel((x1 + d) as u32, y as u32, px); }
+                if x2 - d >= 0 && x2 - d < w { img.put_pixel((x2 - d) as u32, y as u32, px); }
+            }
+        }
+    }
 }
 
 /// Re-encode snapshot bytes to JPEG for the UI event (same helper as the chat tool).

@@ -96,6 +96,7 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 | **Recognize person** | `image*` | `person`, `person_id`, `confidence` %, `ok` | `max_distance` (0.4) | Embeds the largest face (AI sidecar) + kNN over enrolled people (pgvector). `ok` = match within threshold. | `Camera snapshot → Recognize person → If(ok) → Notify recipient` |
 | **Describe image** | `image*` | `description`, `ok` | `label` | Natural-language caption of the frame via the vision model. | `Camera snapshot → Describe image → Notify(message=description)` |
 | **Motion detection** | `image_a*`, `image_b*` | `moved` (bool), `score` %, `ok` | `sensitivity`, `pixel_threshold` | Compares two frames; reports whether/how much they differ. | `snapshot A + snapshot B → Motion detection → If(moved)` |
+| **Draw BBox** | `image*` (Image), `bbox*` (Number[]) | `image` (Image), `ok` | `color` (#RRGGBB, default `#00FF00`), `thickness` (px, default `2`), `format` (`xyxy`/`xywh`, default `xyxy`) | Draws a bounding box rectangle on the image at the given coords → annotated JPEG. Wire `format=xywh` when coming from Motion detection; `format=xyxy` (default) when coming from Break person/face detection. | `Person detection → For each → Break person detection → (bbox) Draw BBox → Show image` |
 
 ### Alerts
 
