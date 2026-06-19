@@ -158,12 +158,12 @@ export type MapRoom = {
   cameras: RoomCamera[];
 };
 
-/** Wall render style — independent of thickness. `solid` = filled, raised wall that
- * casts a shadow; `wireframe` = a flat footprint outline (just the edges). */
-export type WallStyle = "solid" | "wireframe";
+/** Wall render style — independent of thickness.
+ * solid = filled raised wall; wireframe = flat box outline;
+ * dashed / dotted = centerline dash or dot; line = solid 1px flat line. */
+export type WallStyle = "solid" | "wireframe" | "dashed" | "dotted" | "line";
 
-/** A free-form wall (matches `app_core::map::MapWall`): a segment on the grid with a
- * thickness (its width) and a style (filled vs outline). Independent of rooms. */
+/** A free-form wall (matches `app_core::map::MapWall`). */
 export type MapWall = {
   id: number;
   x1: number;
@@ -172,6 +172,8 @@ export type MapWall = {
   y2: number;
   thickness: number;
   style?: WallStyle;
+  /** Hex color override (e.g. "#ff0000"). Undefined = use palette default. */
+  color?: string;
 };
 
 /** A placeable furniture / landmark marker (matches `app_core::map::MapMarker`),
@@ -186,11 +188,45 @@ export type MapMarker = {
   label?: string | null;
 };
 
+/** A text label placed on the floor plan (matches `app_core::map::MapText`). */
+export type MapText = {
+  id: number;
+  text: string;
+  x: number;
+  y: number;
+  size?: number;   // font size in world units, default 0.5
+  color?: string;  // default white
+  rot?: number;    // degrees
+};
+
+/** Stroke pattern for shape outlines. */
+export type StrokeStyle = "solid" | "dashed" | "dotted";
+
+/** Shape annotation on the floor plan (matches `app_core::map::MapShape`).
+ * kind: "rect" | "triangle" | "circle" */
+export type ShapeKind = "rect" | "triangle" | "circle";
+export type MapShape = {
+  id: number;
+  kind: ShapeKind;
+  x: number;      // center x (rect/circle); unused for triangle
+  y: number;      // center y
+  w?: number;     // rect width
+  h?: number;     // rect height
+  r?: number;     // circle radius
+  pts?: [number, number][];  // triangle: [[x0,y0],[x1,y1],[x2,y2]]
+  color?: string;            // stroke color
+  fill?: string;             // fill color (undefined = no fill)
+  strokeStyle?: StrokeStyle;
+  rot?: number;              // degrees
+};
+
 /** The whole floor-plan document exchanged with `/map` (matches `app_core::map::MapDoc`). */
 export type MapDoc = {
   rooms: MapRoom[];
   walls: MapWall[];
   markers: MapMarker[];
+  texts: MapText[];
+  shapes: MapShape[];
 };
 
 /** What a presence detection was (matches `app_core::presence::Category`). */

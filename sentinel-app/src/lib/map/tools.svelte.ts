@@ -3,7 +3,7 @@
 // into these via the Viewport, then snaps before drawing.
 import type { MapWall } from "$lib/types";
 
-export type ToolMode = "select" | "wall" | "marker";
+export type ToolMode = "select" | "wall" | "line" | "marker" | "text" | "rect" | "triangle" | "circle";
 export type Pt = { x: number; z: number };
 
 const GRID = 1; // snap step in grid units
@@ -105,13 +105,17 @@ export class ToolState {
   ortho = $state(false);
   /** Selected icon for the marker tool. */
   markerIcon = $state("sofa");
+  /** Second vertex for triangle (after first click); null when no second point yet. */
+  draftB = $state<Pt | null>(null);
 
   setMode(m: ToolMode): void {
     this.mode = m;
     this.draft = null;
+    this.draftB = null;
   }
 
   cancel(): void {
     this.draft = null;
+    this.draftB = null;
   }
 }

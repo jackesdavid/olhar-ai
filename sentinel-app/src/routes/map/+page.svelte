@@ -16,7 +16,12 @@
   import Redo2 from "@lucide/svelte/icons/redo-2";
   import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
   import Spline from "@lucide/svelte/icons/spline";
+  import Minus from "@lucide/svelte/icons/minus";
   import Armchair from "@lucide/svelte/icons/armchair";
+  import Type from "@lucide/svelte/icons/type";
+  import Square from "@lucide/svelte/icons/square";
+  import Triangle from "@lucide/svelte/icons/triangle";
+  import Circle from "@lucide/svelte/icons/circle";
   import Save from "@lucide/svelte/icons/save";
   import LoaderCircle from "@lucide/svelte/icons/loader-circle";
   import Keyboard from "@lucide/svelte/icons/keyboard";
@@ -224,8 +229,26 @@
           <Button variant={toolVariant("select")} size="icon" class="size-9" title="Select / move (V)" onclick={() => tools.setMode("select")}>
             <MousePointer2 class="size-4" />
           </Button>
+          <div class="my-0.5 h-px w-6 bg-border"></div>
           <Button variant={toolVariant("wall")} size="icon" class="size-9" title="Draw wall (W)" onclick={() => tools.setMode("wall")}>
             <Spline class="size-4" />
+          </Button>
+          <Button variant={toolVariant("line")} size="icon" class="size-9" title="Draw line (L)" onclick={() => tools.setMode("line")}>
+            <Minus class="size-4" />
+          </Button>
+          <div class="my-0.5 h-px w-6 bg-border"></div>
+          <Button variant={toolVariant("rect")} size="icon" class="size-9" title="Rectangle (R)" onclick={() => tools.setMode("rect")}>
+            <Square class="size-4" />
+          </Button>
+          <Button variant={toolVariant("triangle")} size="icon" class="size-9" title="Triangle (T)" onclick={() => tools.setMode("triangle")}>
+            <Triangle class="size-4" />
+          </Button>
+          <Button variant={toolVariant("circle")} size="icon" class="size-9" title="Circle (C)" onclick={() => tools.setMode("circle")}>
+            <Circle class="size-4" />
+          </Button>
+          <div class="my-0.5 h-px w-6 bg-border"></div>
+          <Button variant={toolVariant("text")} size="icon" class="size-9" title="Text label" onclick={() => tools.setMode("text")}>
+            <Type class="size-4" />
           </Button>
           <Button variant={toolVariant("marker")} size="icon" class="size-9" title="Place furniture (M)" onclick={() => tools.setMode("marker")}>
             <Armchair class="size-4" />

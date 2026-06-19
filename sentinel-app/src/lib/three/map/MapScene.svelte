@@ -1,9 +1,7 @@
 <script lang="ts">
   // Scene root for the Map. Top-down orthographic view with flat 2D navigation, and
-  // tool-aware pointer handling: Select (pick / drag entities, pan empty space) and
-  // Wall (click-chain segments with grid + vertex + ortho snapping). All picking and
-  // screen→world go through the shared Viewport, so everything shares one coordinate
-  // model. Soft shadows on the wall extrusions give the gentle 3D depth.
+  // tool-aware pointer handling. All picking/screen→world go through the shared
+  // Viewport, so everything shares one coordinate model.
   import { onMount } from "svelte";
   import { T, useThrelte } from "@threlte/core";
   import { interactivity } from "@threlte/extras";
@@ -19,6 +17,8 @@
   import WallLayer from "./WallLayer.svelte";
   import MarkerLayer from "./MarkerLayer.svelte";
   import CameraLayer from "./CameraLayer.svelte";
+  import MapTextLayer from "./MapTextLayer.svelte";
+  import ShapeLayer from "./ShapeLayer.svelte";
   import DrawPreview from "./DrawPreview.svelte";
   import PresencePulse from "./PresencePulse.svelte";
 
@@ -41,10 +41,6 @@
 
   let cam = $state<OrthographicCamera | undefined>(undefined);
 
-  // One effect drives the camera: reading $size directly guarantees a re-apply on every
-  // canvas resize (e.g. collapsing the side panel), and apply() reads zoom/pan so it also
-  // re-runs on manual zoom/pan. (Splitting size and apply into two effects let the resize
-  // case slip through — the view reset until the next manual zoom.)
   $effect(() => {
     viewport.width = $size.width || 1;
     viewport.height = $size.height || 1;
@@ -71,28 +67,107 @@
   type Drag =
     | { mode: "pan"; sx: number; sy: number }
     | { mode: "endpoint"; id: number; which: 1 | 2; started: boolean }
-    | { mode: "room" | "wall" | "marker"; id: number; last: Pt; started: boolean };
+    | { mode: "room" | "wall" | "marker" | "text" | "shape"; id: number; last: Pt; started: boolean };
   let drag: Drag | null = null;
 
   function onDown(e: PointerEvent) {
     renderer.domElement.setPointerCapture?.(e.pointerId);
+    const m = tools.mode;
 
-    if (tools.mode === "wall") {
+    // ---- wall / line tool (two-click chain) --------------------------------
+    if (m === "wall" || m === "line") {
       const sp = snap(worldAt(e), tools.draft, e.shiftKey);
-      if (!tools.draft) tools.draft = sp;
-      else {
-        store.addWall(tools.draft.x, tools.draft.z, sp.x, sp.z);
+      const style = m === "line" ? "line" : "solid";
+      if (!tools.draft) {
+        tools.draft = sp;
+      } else {
+        store.addWall(tools.draft.x, tools.draft.z, sp.x, sp.z, 0.12, style);
         tools.draft = sp; // chain
       }
       return;
     }
-    if (tools.mode === "marker") {
+
+    // ---- marker tool -------------------------------------------------------
+    if (m === "marker") {
       const sp = resolveMarkerPoint(worldAt(e), store.walls);
       store.addMarker(tools.markerIcon, sp.x, sp.z);
       return;
     }
 
-    // select mode
+    // ---- text tool (single click) ------------------------------------------
+    if (m === "text") {
+      const sp = snap(worldAt(e), null, false);
+      store.addText(sp.x, sp.z);
+      return;
+    }
+
+    // ---- rect tool (two clicks: corner A → corner B) -----------------------
+    if (m === "rect") {
+      const sp = snap(worldAt(e), null, false);
+      if (!tools.draft) {
+        tools.draft = sp;
+      } else {
+        const x1 = tools.draft.x, z1 = tools.draft.z;
+        const x2 = sp.x, z2 = sp.z;
+        const w = Math.abs(x2 - x1);
+        const h = Math.abs(z2 - z1);
+        if (w > 0.05 || h > 0.05) {
+          store.addShape({
+            kind: "rect",
+            x: (x1 + x2) / 2,
+            y: (z1 + z2) / 2,
+            w,
+            h,
+            color: "#ffffff",
+          });
+        }
+        tools.draft = null;
+      }
+      return;
+    }
+
+    // ---- circle tool (two clicks: center → edge) ---------------------------
+    if (m === "circle") {
+      const sp = snap(worldAt(e), null, false);
+      if (!tools.draft) {
+        tools.draft = sp;
+      } else {
+        const r = Math.hypot(sp.x - tools.draft.x, sp.z - tools.draft.z);
+        if (r > 0.1) {
+          store.addShape({
+            kind: "circle",
+            x: tools.draft.x,
+            y: tools.draft.z,
+            r,
+            color: "#ffffff",
+          });
+        }
+        tools.draft = null;
+      }
+      return;
+    }
+
+    // ---- triangle tool (three clicks) --------------------------------------
+    if (m === "triangle") {
+      const sp = snap(worldAt(e), null, false);
+      if (!tools.draft) {
+        tools.draft = sp;
+      } else if (!tools.draftB) {
+        tools.draftB = sp;
+      } else {
+        const pts: [number, number][] = [
+          [tools.draft.x, tools.draft.z],
+          [tools.draftB.x, tools.draftB.z],
+          [sp.x, sp.z],
+        ];
+        store.addShape({ kind: "triangle", x: 0, y: 0, pts, color: "#ffffff" });
+        tools.draft = null;
+        tools.draftB = null;
+      }
+      return;
+    }
+
+    // ---- select mode -------------------------------------------------------
     const raw = worldAt(e);
     const ep = nearWallEndpoint(raw, store.walls);
     if (ep) {
@@ -100,11 +175,13 @@
       drag = { mode: "endpoint", id: ep.id, which: ep.which, started: false };
       return;
     }
-    const hit = hitTest(raw, store.rooms, store.walls, store.markers);
+    const hit = hitTest(raw, store.rooms, store.walls, store.markers, store.texts, store.shapes);
     if (hit) {
       if (hit.kind === "room") store.selectRoom(hit.id);
       else if (hit.kind === "wall") store.selectWall(hit.id);
-      else store.selectMarker(hit.id);
+      else if (hit.kind === "marker") store.selectMarker(hit.id);
+      else if (hit.kind === "text") store.selectText(hit.id);
+      else if (hit.kind === "shape") store.selectShape(hit.id);
       drag = { mode: hit.kind, id: hit.id, last: snap(raw, null, false), started: false };
       return;
     }
@@ -113,10 +190,12 @@
   }
 
   function onMove(e: PointerEvent) {
-    // live snapped cursor for the draw preview
-    if (tools.mode === "wall") tools.hover = snap(worldAt(e), tools.draft, e.shiftKey);
-    else if (tools.mode === "marker") tools.hover = resolveMarkerPoint(worldAt(e), store.walls);
-    else tools.hover = null;
+    const m = tools.mode;
+    if (m === "wall" || m === "line") tools.hover = snap(worldAt(e), tools.draft, e.shiftKey);
+    else if (m === "marker") tools.hover = resolveMarkerPoint(worldAt(e), store.walls);
+    else if (m === "text" || m === "rect" || m === "circle" || m === "triangle") {
+      tools.hover = snap(worldAt(e), tools.draft, false);
+    } else tools.hover = null;
 
     if (!drag) return;
 
@@ -130,44 +209,49 @@
     const sp = snap(worldAt(e), null, e.shiftKey);
 
     if (drag.mode === "endpoint") {
-      if (!drag.started) {
-        store.checkpoint();
-        drag.started = true;
-      }
+      if (!drag.started) { store.checkpoint(); drag.started = true; }
       if (drag.which === 1) store.updateWall(drag.id, { x1: sp.x, y1: sp.z });
       else store.updateWall(drag.id, { x2: sp.x, y2: sp.z });
       return;
     }
 
-    // Markers snap absolutely (onto a wall when near one, else grid) so they stay aligned.
     if (drag.mode === "marker") {
-      const mid = drag.id;
       const mp = resolveMarkerPoint(worldAt(e), store.walls);
-      const m = store.markers.find((x) => x.id === mid);
-      if (m && (m.x !== mp.x || m.y !== mp.z)) {
-        if (!drag.started) {
-          store.checkpoint();
-          drag.started = true;
-        }
-        store.updateMarker(m.id, { x: mp.x, y: mp.z });
+      const m2 = store.markers.find((x) => x.id === drag!.id);
+      if (m2 && (m2.x !== mp.x || m2.y !== mp.z)) {
+        if (!drag.started) { store.checkpoint(); drag.started = true; }
+        store.updateMarker(m2.id, { x: mp.x, y: mp.z });
       }
       return;
     }
 
+    // Narrow: pan/endpoint/marker already returned; only room|wall|text|shape remain.
+    if (!("last" in drag)) return;
+    const id = drag.id;
     const ddx = sp.x - drag.last.x;
     const ddz = sp.z - drag.last.z;
     if (ddx === 0 && ddz === 0) return;
-    if (!drag.started) {
-      store.checkpoint();
-      drag.started = true;
-    }
-    const id = drag.id;
+    if (!drag.started) { store.checkpoint(); drag.started = true; }
     if (drag.mode === "room") {
       const r = store.rooms.find((x) => x.id === id);
       if (r) store.updateRoom({ x: r.x + ddx, y: r.y + ddz });
     } else if (drag.mode === "wall") {
       const w = store.walls.find((x) => x.id === id);
       if (w) store.updateWall(w.id, { x1: w.x1 + ddx, y1: w.y1 + ddz, x2: w.x2 + ddx, y2: w.y2 + ddz });
+    } else if (drag.mode === "text") {
+      const t = store.texts.find((x) => x.id === id);
+      if (t) store.updateText(t.id, { x: t.x + ddx, y: t.y + ddz });
+    } else if (drag.mode === "shape") {
+      const s = store.shapes.find((x) => x.id === id);
+      if (s) {
+        if (s.kind === "triangle" && s.pts) {
+          store.updateShape(s.id, {
+            pts: s.pts.map(([px, py]) => [px + ddx, py + ddz]) as [number, number][],
+          });
+        } else {
+          store.updateShape(s.id, { x: s.x + ddx, y: s.y + ddz });
+        }
+      }
     }
     drag.last = sp;
   }
@@ -216,7 +300,6 @@
   shadow.camera.near={1}
   shadow.camera.far={400}
 />
-<!-- cool neutral fill — keeps the plan reading as paper-white, not green-tinted -->
 <T.DirectionalLight position={[-30, 18, -40]} intensity={0.3} color="#aab9c7" />
 
 <GroundGrid />
@@ -227,6 +310,8 @@
 
 <WallLayer {store} />
 <MarkerLayer {store} />
+<ShapeLayer {store} />
+<MapTextLayer {store} />
 <CameraLayer {store} {onCameraClick} />
 
 {#if presence}
@@ -235,8 +320,11 @@
   {/each}
 {/if}
 
-{#if tools.mode === "wall"}
-  <DrawPreview from={tools.draft} to={tools.hover} />
-{:else if tools.mode === "marker"}
-  <DrawPreview to={tools.hover} />
+{#if tools.mode !== "select"}
+  <DrawPreview
+    mode={tools.mode}
+    from={tools.draft}
+    to={tools.hover}
+    draftB={tools.draftB}
+  />
 {/if}

@@ -1,13 +1,13 @@
 // MapStore — the editor's working copy of the floor plan: room zones, free-form
-// walls, furniture/landmark markers, plus the device list, selection, undo/redo,
-// and the dirty/saving flags. Pulled out of the page so the route shell stays thin.
+// walls, furniture/landmark markers, text labels, shape annotations, plus the
+// device list, selection, undo/redo, and the dirty/saving flags.
 //
 // Mutations re-assign the relevant array (so Svelte 5 reactivity fires) and set
 // `dirty`. Discrete actions checkpoint history first; continuous gestures (drag,
 // sliders) checkpoint once at the start via `beginGesture()`. The whole plan saves
-// as one { rooms, walls, markers } document.
+// as one { rooms, walls, markers, texts, shapes } document.
 import { data } from "$lib/data";
-import type { Device, MapDoc, MapMarker, MapRoom, MapWall } from "$lib/types";
+import type { Device, MapDoc, MapMarker, MapRoom, MapShape, MapText, MapWall } from "$lib/types";
 import { History } from "./history.svelte";
 
 const DEFAULT_ROOM_W = 6;
@@ -17,13 +17,15 @@ function clampInt(v: number, min: number): number {
   return Number.isFinite(v) ? Math.max(min, Math.round(v)) : min;
 }
 
-export type SelKind = "room" | "wall" | "marker";
+export type SelKind = "room" | "wall" | "marker" | "text" | "shape";
 export type Selection = { kind: SelKind; id: number } | null;
 
 export class MapStore {
   rooms = $state<MapRoom[]>([]);
   walls = $state<MapWall[]>([]);
   markers = $state<MapMarker[]>([]);
+  texts = $state<MapText[]>([]);
+  shapes = $state<MapShape[]>([]);
   devices = $state<Device[]>([]);
 
   sel = $state<Selection>(null);
@@ -45,9 +47,17 @@ export class MapStore {
   selectedMarker = $derived(
     this.sel?.kind === "marker" ? (this.markers.find((m) => m.id === this.sel!.id) ?? null) : null,
   );
+  selectedText = $derived(
+    this.sel?.kind === "text" ? (this.texts.find((t) => t.id === this.sel!.id) ?? null) : null,
+  );
+  selectedShape = $derived(
+    this.sel?.kind === "shape" ? (this.shapes.find((s) => s.id === this.sel!.id) ?? null) : null,
+  );
   selectedRoomId = $derived(this.sel?.kind === "room" ? this.sel.id : null);
   selectedWallId = $derived(this.sel?.kind === "wall" ? this.sel.id : null);
   selectedMarkerId = $derived(this.sel?.kind === "marker" ? this.sel.id : null);
+  selectedTextId = $derived(this.sel?.kind === "text" ? this.sel.id : null);
+  selectedShapeId = $derived(this.sel?.kind === "shape" ? this.sel.id : null);
 
   selectRoom(id: number | null): void {
     this.sel = id === null ? null : { kind: "room", id };
@@ -57,6 +67,12 @@ export class MapStore {
   }
   selectMarker(id: number): void {
     this.sel = { kind: "marker", id };
+  }
+  selectText(id: number): void {
+    this.sel = { kind: "text", id };
+  }
+  selectShape(id: number): void {
+    this.sel = { kind: "shape", id };
   }
   clearSelection(): void {
     this.sel = null;
@@ -75,12 +91,20 @@ export class MapStore {
 
   // ---- history ------------------------------------------------------------
   private doc(): MapDoc {
-    return { rooms: this.rooms, walls: this.walls, markers: this.markers };
+    return {
+      rooms: this.rooms,
+      walls: this.walls,
+      markers: this.markers,
+      texts: this.texts,
+      shapes: this.shapes,
+    };
   }
   private apply(doc: MapDoc): void {
     this.rooms = doc.rooms;
     this.walls = doc.walls;
     this.markers = doc.markers;
+    this.texts = doc.texts ?? [];
+    this.shapes = doc.shapes ?? [];
     this.dirty = true;
   }
   private syncHistory(): void {
@@ -120,6 +144,8 @@ export class MapStore {
       this.rooms = doc.rooms ?? [];
       this.walls = doc.walls ?? [];
       this.markers = doc.markers ?? [];
+      this.texts = doc.texts ?? [];
+      this.shapes = doc.shapes ?? [];
       this.devices = ds;
       this.sel = this.rooms.length > 0 ? { kind: "room", id: this.rooms[0].id } : null;
       this.dirty = false;
@@ -272,6 +298,16 @@ export class MapStore {
       const a = rot(w.x1, w.y1);
       const b = rot(w.x2, w.y2);
       this.updateWall(w.id, { x1: a.x, y1: a.z, x2: b.x, y2: b.z });
+    } else if (this.sel?.kind === "text") {
+      const t = this.selectedText;
+      if (!t) return;
+      this.checkpoint();
+      this.updateText(t.id, { rot: (((t.rot ?? 0) + deltaDeg) % 360 + 360) % 360 });
+    } else if (this.sel?.kind === "shape") {
+      const s = this.selectedShape;
+      if (!s) return;
+      this.checkpoint();
+      this.updateShape(s.id, { rot: (((s.rot ?? 0) + deltaDeg) % 360 + 360) % 360 });
     }
   }
 
@@ -283,10 +319,10 @@ export class MapStore {
   }
 
   // ---- walls --------------------------------------------------------------
-  addWall(x1: number, y1: number, x2: number, y2: number, thickness = 0.12): MapWall {
+  addWall(x1: number, y1: number, x2: number, y2: number, thickness = 0.12, style = "solid"): MapWall {
     this.checkpoint();
     const id = this.nextId(this.walls);
-    const wall: MapWall = { id, x1, y1, x2, y2, thickness, style: "solid" };
+    const wall: MapWall = { id, x1, y1, x2, y2, thickness, style: style as MapWall["style"] };
     this.walls = [...this.walls, wall];
     this.sel = { kind: "wall", id };
     return wall;
@@ -325,10 +361,54 @@ export class MapStore {
     if (this.sel?.kind === "marker" && this.sel.id === id) this.sel = null;
   }
 
+  // ---- texts --------------------------------------------------------------
+  addText(x: number, y: number, text = "Text"): MapText {
+    this.checkpoint();
+    const id = this.nextId(this.texts);
+    const t: MapText = { id, text, x, y, size: 0.5, color: "#ffffff" };
+    this.texts = [...this.texts, t];
+    this.sel = { kind: "text", id };
+    return t;
+  }
+
+  updateText(id: number, patch: Partial<MapText>): void {
+    this.texts = this.texts.map((t) => (t.id === id ? { ...t, ...patch } : t));
+    this.dirty = true;
+  }
+
+  deleteText(id: number): void {
+    this.checkpoint();
+    this.texts = this.texts.filter((t) => t.id !== id);
+    if (this.sel?.kind === "text" && this.sel.id === id) this.sel = null;
+  }
+
+  // ---- shapes -------------------------------------------------------------
+  addShape(shape: Omit<MapShape, "id">): MapShape {
+    this.checkpoint();
+    const id = this.nextId(this.shapes);
+    const s: MapShape = { id, ...shape };
+    this.shapes = [...this.shapes, s];
+    this.sel = { kind: "shape", id };
+    return s;
+  }
+
+  updateShape(id: number, patch: Partial<MapShape>): void {
+    this.shapes = this.shapes.map((s) => (s.id === id ? { ...s, ...patch } : s));
+    this.dirty = true;
+  }
+
+  deleteShape(id: number): void {
+    this.checkpoint();
+    this.shapes = this.shapes.filter((s) => s.id !== id);
+    if (this.sel?.kind === "shape" && this.sel.id === id) this.sel = null;
+  }
+
   /** Delete whatever is currently selected. */
   deleteSelected(): void {
     if (this.sel?.kind === "wall") this.deleteWall(this.sel.id);
     else if (this.sel?.kind === "marker") this.deleteMarker(this.sel.id);
+    else if (this.sel?.kind === "text") this.deleteText(this.sel.id);
+    else if (this.sel?.kind === "shape") this.deleteShape(this.sel.id);
   }
 
   /** Nudge the current selection by whole grid cells (keyboard arrows). */
@@ -345,15 +425,27 @@ export class MapStore {
       if (!m) return;
       this.checkpoint();
       this.updateMarker(m.id, { x: m.x + dx, y: m.y + dy });
+    } else if (this.sel?.kind === "text") {
+      const t = this.selectedText;
+      if (!t) return;
+      this.checkpoint();
+      this.updateText(t.id, { x: t.x + dx, y: t.y + dy });
+    } else if (this.sel?.kind === "shape") {
+      const s = this.selectedShape;
+      if (!s) return;
+      this.checkpoint();
+      this.updateShape(s.id, { x: s.x + dx, y: s.y + dy });
     }
   }
 
-  /** Cycle selection across all entities (rooms → walls → markers); dir ±1. */
+  /** Cycle selection across all entities; dir ±1. */
   cycleSelection(dir: 1 | -1): void {
     const items: Selection[] = [
       ...this.rooms.map((r) => ({ kind: "room" as const, id: r.id })),
       ...this.walls.map((w) => ({ kind: "wall" as const, id: w.id })),
       ...this.markers.map((m) => ({ kind: "marker" as const, id: m.id })),
+      ...this.texts.map((t) => ({ kind: "text" as const, id: t.id })),
+      ...this.shapes.map((s) => ({ kind: "shape" as const, id: s.id })),
     ];
     if (items.length === 0) return;
     const cur = items.findIndex((i) => i!.kind === this.sel?.kind && i!.id === this.sel?.id);

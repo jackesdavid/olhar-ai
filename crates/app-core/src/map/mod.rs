@@ -121,10 +121,12 @@ pub struct MapWall {
     pub y2: f64,
     #[serde(default = "default_thickness")]
     pub thickness: f64,
-    /// "solid" (filled, shadow-casting wall) or "wireframe" (flat footprint outline).
-    /// Defaults to solid so walls saved before this field load filled.
+    /// "solid" | "wireframe" | "dashed" | "dotted". Defaults to solid.
     #[serde(default = "default_wall_style")]
     pub style: String,
+    /// Optional hex color override (e.g. "#ff0000"). None = use the plan default.
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 fn default_thickness() -> f64 {
@@ -156,8 +158,49 @@ fn default_scale() -> f64 {
     1.0
 }
 
+/// A text label placed on the floor plan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MapText {
+    pub id: u32,
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub size: Option<f64>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub rot: Option<f64>,
+}
+
+/// A geometric shape annotation on the floor plan.
+/// `kind`: "rect" | "triangle" | "circle"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MapShape {
+    pub id: u32,
+    pub kind: String,
+    pub x: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub w: Option<f64>,
+    #[serde(default)]
+    pub h: Option<f64>,
+    #[serde(default)]
+    pub r: Option<f64>,
+    #[serde(default)]
+    pub pts: Option<Vec<[f64; 2]>>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub fill: Option<String>,
+    #[serde(default)]
+    pub stroke_style: Option<String>,
+    #[serde(default)]
+    pub rot: Option<f64>,
+}
+
 /// The whole floor-plan document the API exchanges in one round-trip: labeled
-/// room zones, free-form walls, and markers.
+/// room zones, free-form walls, markers, text labels, and shape annotations.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MapDoc {
     #[serde(default)]
@@ -166,6 +209,10 @@ pub struct MapDoc {
     pub walls: Vec<MapWall>,
     #[serde(default)]
     pub markers: Vec<MapMarker>,
+    #[serde(default)]
+    pub texts: Vec<MapText>,
+    #[serde(default)]
+    pub shapes: Vec<MapShape>,
 }
 
 /// The next free room id (max existing + 1), for the frontend's "Add room".

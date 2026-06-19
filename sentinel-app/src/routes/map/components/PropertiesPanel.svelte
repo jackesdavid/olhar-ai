@@ -1,7 +1,6 @@
 <script lang="ts">
-  // Properties tab content: follows the current selection (marker → wall → room props),
-  // plus the marker picker / drawing hints while a draw tool is active. Pure composition
-  // over the shared MapStore. The room list lives in the Explorer tab now.
+  // Properties tab content: follows the current selection (text/shape/marker/wall/room props),
+  // plus the marker picker / drawing hints while a draw tool is active.
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import Spline from "@lucide/svelte/icons/spline";
   import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
@@ -15,6 +14,8 @@
   import WallProps from "./WallProps.svelte";
   import MarkerProps from "./MarkerProps.svelte";
   import MarkerPicker from "./MarkerPicker.svelte";
+  import TextProps from "./TextProps.svelte";
+  import ShapeProps from "./ShapeProps.svelte";
 
   let {
     store,
@@ -28,14 +29,26 @@
     if (store.selectedRoom) store.deleteRoom(store.selectedRoom.id);
     deleteOpen = false;
   }
+
+  const DRAW_HINTS: Partial<Record<string, string>> = {
+    wall: "Click to drop points and chain a wall. Hold Shift to snap to 45°/90°.",
+    line: "Click two points to draw a flat line. Hold Shift for ortho.",
+    rect: "Click the first corner, then the opposite corner.",
+    triangle: "Click three points to define the triangle vertices.",
+    circle: "Click the center, then drag out to set the radius.",
+    text: "Click anywhere on the floor to place a text label.",
+  };
 </script>
 
 <div class="flex flex-col gap-4">
-  {#if tools.mode === "wall"}
-    <div class="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 p-2 text-xs text-muted-foreground">
-      <Spline class="mt-0.5 size-4 shrink-0 text-primary" />
-      <span>Click to drop points and chain a wall. Hold <kbd>Shift</kbd> to snap to 45°/90° (diagonals). Drag a thin wall thicker to make it solid.</span>
-    </div>
+  {#if tools.mode !== "select" && tools.mode !== "marker"}
+    {@const hint = DRAW_HINTS[tools.mode]}
+    {#if hint}
+      <div class="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 p-2 text-xs text-muted-foreground">
+        <Spline class="mt-0.5 size-4 shrink-0 text-primary" />
+        <span>{hint}</span>
+      </div>
+    {/if}
   {/if}
 
   {#if tools.mode === "marker"}
@@ -46,7 +59,11 @@
     <Separator />
   {/if}
 
-  {#if store.selectedMarker}
+  {#if store.selectedText}
+    <TextProps {store} />
+  {:else if store.selectedShape}
+    <ShapeProps {store} />
+  {:else if store.selectedMarker}
     <MarkerProps {store} />
   {:else if store.selectedWall}
     <WallProps {store} />
