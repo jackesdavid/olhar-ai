@@ -880,12 +880,14 @@ mod tests {
 
     #[test]
     fn memoized_node_on_a_loop_runs_once_and_does_not_error() {
-        // Same loop but memoize ON (default): the re-entered node reuses its output and
+        // Same loop but memoize ON (explicit): the re-entered node reuses its output and
         // stops — the run completes cleanly (warn only), no infinite loop.
         let ctx = test_ctx();
         let mut g = Graph::new(1, "loop");
         let a = g.add_node(NodeKind::Format, 0, 0);
         let b = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(a).unwrap().memoize = true;
+        g.node_mut(b).unwrap().memoize = true;
         g.add_edge(a, "exec_out", b, "exec_in").unwrap();
         g.add_edge(b, "exec_out", a, "exec_in").unwrap();
         let outs = run_dag(&g, &ctx).expect("memoized loop must terminate");

@@ -975,13 +975,12 @@ impl Graph {
         self.nodes.iter_mut().find(|n| n.id == id)
     }
 
-    /// Add a node at (x, y); returns its new id. Event entry/emit nodes never memoize
-    /// (they're no-op signal nodes — caching is meaningless and confusing), so default off.
+    /// Add a node at (x, y); returns its new id. All new nodes default to memoize=false
+    /// (recompute every time) — the user opts in to caching explicitly via the inspector.
     pub fn add_node(&mut self, kind: NodeKind, x: i32, y: i32) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
-        let memoize = !matches!(kind, NodeKind::EmitEvent | NodeKind::OnEvent);
-        self.nodes.push(GraphNode { id, kind, x, y, config: kind.default_config(), memoize });
+        self.nodes.push(GraphNode { id, kind, x, y, config: kind.default_config(), memoize: false });
         id
     }
 
@@ -1318,22 +1317,22 @@ mod tests {
     }
 
     #[test]
-    fn memoize_defaults_true_for_old_blobs_and_round_trips() {
-        // New nodes default to memoize=true.
+    fn memoize_defaults_false_for_new_nodes_and_round_trips() {
+        // New nodes default to memoize=false.
         let mut g = Graph::new(1, "g");
         let n = g.add_node(NodeKind::Format, 0, 0);
-        assert!(g.node(n).unwrap().memoize, "new node defaults to memoize=true");
+        assert!(!g.node(n).unwrap().memoize, "new node defaults to memoize=false");
 
-        // An old persisted node JSON without the `memoize` key deserializes to true.
+        // An old persisted node JSON without the `memoize` key deserializes to true (back-compat).
         let old = r#"{"id":7,"kind":"format","x":0,"y":0,"config":{}}"#;
         let node: GraphNode = serde_json::from_str(old).unwrap();
-        assert!(node.memoize, "missing memoize → true (back-compat)");
+        assert!(node.memoize, "missing memoize → true (back-compat for pre-memoize nodes)");
 
-        // memoize=false round-trips.
-        g.node_mut(n).unwrap().memoize = false;
+        // memoize=true round-trips.
+        g.node_mut(n).unwrap().memoize = true;
         let s = serde_json::to_string(&g).unwrap();
         let g2: Graph = serde_json::from_str(&s).unwrap();
-        assert!(!g2.node(n).unwrap().memoize);
+        assert!(g2.node(n).unwrap().memoize);
     }
 
     #[test]

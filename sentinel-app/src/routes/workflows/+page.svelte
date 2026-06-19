@@ -2463,7 +2463,7 @@
                     Memoize output
                   </Label>
                   <Switch
-                    checked={selectedNode.memoize !== false}
+                    checked={selectedNode.memoize === true}
                     disabled={editLocked}
                     onCheckedChange={(v) => saveNodeMemoize(selectedNode, v)}
                   />
