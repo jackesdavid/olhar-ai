@@ -119,9 +119,38 @@ Skip the "Memoize" toggle, port list, and "Run / Active" badge — those are mea
 
 Comments should appear in the palette under "Utility" (auto-derived from `NodeKind::ALL`). No special case needed.
 
-### 2f — "Drag to move contained nodes" (deferred)
+### 2f — Drag to move contained nodes
 
-When dragging a comment, optionally translate all nodes whose center falls within the comment's rect. This is the killer UE feature but adds complexity (need to snapshot positions on drag start). Defer to v2 — for v1 the user moves enclosed nodes manually.
+When dragging a comment, any regular node whose **center point** falls inside the comment's bounding rect moves with it. This is the core UE feature; it's in scope for v1.
+
+Implementation:
+- On comment `startDrag`, snapshot `enclosedIds`: all `graph.nodes` where `kind !== 'comment'` and center `(n.x + NODE_W/2, n.y + rowsHeight(n)/2)` is inside the comment rect.
+- While drag is in progress (`onCanvasMove`, `drag.id` matches comment), apply the same `(dx, dy)` to every enclosed node's position in addition to the comment itself.
+- On `onCanvasUp`, call `data.moveNode` for the comment **and** each enclosed node (one API call each, already async/fire-and-forget).
+
+```typescript
+// snapshot on startDrag when node is a comment
+if (n.kind === 'comment') {
+  const cw = commentW(n), ch = commentH(n);
+  drag = { id: n.id, offX, offY,
+           enclosedIds: graph.nodes
+             .filter(r => r.kind !== 'comment'
+               && r.x + NODE_W/2 >= n.x && r.x + NODE_W/2 <= n.x + cw
+               && r.y + nodeH(r)/2 >= n.y && r.y + nodeH(r)/2 <= n.y + ch)
+             .map(r => r.id) };
+}
+
+// in onCanvasMove, after updating comment node pos:
+if (drag.enclosedIds?.length) {
+  const ddx = newX - prevX, ddy = newY - prevY;  // delta this tick
+  for (const eid of drag.enclosedIds) {
+    const en = graph.nodes.find(x => x.id === eid);
+    if (en) { en.x += ddx; en.y += ddy; }
+  }
+}
+```
+
+Note: `drag` state needs `enclosedIds?: number[]` added to its type.
 
 ## Phase 3 — Docs
 
@@ -137,7 +166,6 @@ Add to `docs/workflow-nodes.md` Utility section:
 
 ## Out of scope (v1)
 
-- Drag-to-move-contained-nodes
 - Multi-line text (textarea)
 - Locking nodes inside a comment (prevent accidental moves)
 - Collapsible/minimize comment to just the header bar

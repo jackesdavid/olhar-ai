@@ -361,6 +361,8 @@ pub fn run_node(
         // arm in forward_epoch). Here we just validate the required input is present.
         NodeKind::StringSwitch => run_string_switch(inputs),
         NodeKind::AskAi => run_ask_ai(config, inputs, sys),
+        // Comment is a canvas organizer — it never executes.
+        NodeKind::Comment => Ok(PortValues::new()),
     }
 }
 
@@ -413,7 +415,8 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::ForEach
         | NodeKind::StringSwitch
         | NodeKind::GetCameraByName
-        | NodeKind::BreakCamera => return None,
+        | NodeKind::BreakCamera
+        | NodeKind::Comment => return None,
     };
     let secs = config_u64(config, "timeout_secs").unwrap_or(default_secs);
     if secs == 0 {
@@ -801,6 +804,7 @@ pub fn debug_summary(
             let name = inputs.get("camera").and_then(PortValue::as_camera).map(|c| c.name.as_str()).unwrap_or("?");
             format!("break '{name}' → id/ip/name")
         }
+        NodeKind::Comment => "comment".into(),
     }
 }
 

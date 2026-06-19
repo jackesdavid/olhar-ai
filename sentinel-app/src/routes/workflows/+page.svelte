@@ -132,6 +132,8 @@
   const EXPR_H = 30;
   // ShowImage preview: a 16:9 thumbnail tucked below the node's ports.
   const PREVIEW_W = NODE_W - 16;
+  function commentW(n: Node): number { return Math.max(120, Number(n.config.width) || 400); }
+  function commentH(n: Node): number { return Math.max(60, Number(n.config.height) || 200); }
   const PREVIEW_H = Math.round((PREVIEW_W * 9) / 16);
 
   // ---- state ---------------------------------------------------------------
@@ -542,7 +544,7 @@
     const payloadNames = new Set(payloadFields(selectedNode).map((f) => f.name));
     const inputs = (nk?.inputs ?? []).filter((p) => p.type !== "exec" && !payloadNames.has(p.name));
     const rows: { key: string; port: CatPort | null }[] = inputs.map((p) => ({ key: p.name, port: p }));
-    const MANAGED_KEYS: Record<string, string[]> = { string_switch: ["arms"] };
+    const MANAGED_KEYS: Record<string, string[]> = { string_switch: ["arms"], comment: ["width", "height"] };
     const managedForKind = new Set(MANAGED_KEYS[selectedNode.kind] ?? []);
     for (const key of Object.keys(nk?.default_config ?? {})) {
       if (!inputs.some((p) => p.name === key) && !managedForKind.has(key)) rows.push({ key, port: null });
@@ -602,6 +604,7 @@
   // (e.g. "Emit event: Foo") so it reads in the header instead of clashing with ports.
   function nodeTitle(n: Node, k: CatKind | undefined): string {
     const base = k?.label ?? n.kind;
+    if (n.kind === "comment") return String(n.config.text ?? "Comment").trim() || "Comment";
     if (n.kind === "emit_event" || n.kind === "on_event") {
       const ev = String(n.config.event ?? "").trim();
       return ev ? `${base}: ${ev}` : base;
@@ -1401,7 +1404,8 @@
 
   // ---- canvas: infinite pan / zoom + node drag -----------------------------
   let svgEl: SVGSVGElement | undefined;
-  let drag: { id: number; offX: number; offY: number } | null = null;
+  let drag: { id: number; offX: number; offY: number; enclosedIds?: number[] } | null = null;
+  let commentResize: { id: number; startX: number; startY: number; startW: number; startH: number } | null = null;
   let panning: { sx: number; sy: number; ox: number; oy: number } | null = null;
 
   // Screen → world (the <g> transform is translate(pan) scale(zoom)).
@@ -1413,7 +1417,24 @@
     selectedNodeId = n.id; // selecting to view props is fine
     if (editLocked) return; // …but no moving while the graph is active (running/armed)
     const wp = worldPoint(e);
-    drag = { id: n.id, offX: wp.x - n.x, offY: wp.y - n.y };
+    const base = { id: n.id, offX: wp.x - n.x, offY: wp.y - n.y };
+    if (n.kind === 'comment' && graph) {
+      const cw = commentW(n), ch = commentH(n);
+      const enclosedIds = graph.nodes
+        .filter(r => r.kind !== 'comment'
+          && r.x + NODE_W / 2 >= n.x && r.x + NODE_W / 2 <= n.x + cw
+          && r.y + nodeHeight(r) / 2 >= n.y && r.y + nodeHeight(r) / 2 <= n.y + ch)
+        .map(r => r.id);
+      drag = { ...base, enclosedIds };
+    } else {
+      drag = base;
+    }
+  }
+  function startCommentResize(e: PointerEvent, n: Node) {
+    e.stopPropagation();
+    if (editLocked) return;
+    commentResize = { id: n.id, startX: e.clientX, startY: e.clientY, startW: commentW(n), startH: commentH(n) };
+    svgEl?.setPointerCapture?.(e.pointerId);
   }
   function onCanvasDown(e: PointerEvent) {
     if (e.target !== e.currentTarget) return; // only grab empty canvas, not a node
@@ -1432,12 +1453,25 @@
       pan = { x: panning.ox + (e.clientX - panning.sx), y: panning.oy + (e.clientY - panning.sy) };
       return;
     }
-    if (drag && graph) {
+    if (commentResize && graph) {
+      const dx = (e.clientX - commentResize.startX) / zoom;
+      const dy = (e.clientY - commentResize.startY) / zoom;
+      const n = graph.nodes.find((x) => x.id === commentResize!.id);
+      if (n) n.config = { ...n.config, width: Math.max(120, Math.round(commentResize.startW + dx)), height: Math.max(60, Math.round(commentResize.startH + dy)) };
+    } else if (drag && graph) {
       const wp = worldPoint(e);
       const n = graph.nodes.find((x) => x.id === drag!.id);
       if (n) {
-        n.x = Math.round(wp.x - drag.offX);
-        n.y = Math.round(wp.y - drag.offY);
+        const newX = Math.round(wp.x - drag.offX);
+        const newY = Math.round(wp.y - drag.offY);
+        const dx = newX - n.x, dy = newY - n.y;
+        n.x = newX; n.y = newY;
+        if (drag.enclosedIds?.length) {
+          for (const eid of drag.enclosedIds) {
+            const en = graph.nodes.find(x => x.id === eid);
+            if (en) { en.x += dx; en.y += dy; }
+          }
+        }
       }
     }
   }
@@ -1446,11 +1480,23 @@
       panning = null;
       return;
     }
+    if (commentResize && graph) {
+      const id = commentResize.id;
+      const n = graph.nodes.find((x) => x.id === id);
+      commentResize = null;
+      if (n) await saveNodeConfig(n, n.config);
+      return;
+    }
     if (drag && graph) {
       const id = drag.id;
+      const enclosedIds = drag.enclosedIds ?? [];
       const n = graph.nodes.find((x) => x.id === id);
       drag = null;
       if (n) await data.moveNode(graph.id, id, n.x, n.y);
+      for (const eid of enclosedIds) {
+        const en = graph.nodes.find(x => x.id === eid);
+        if (en) await data.moveNode(graph.id, eid, en.x, en.y);
+      }
     }
   }
   function clampZoom(z: number) {
@@ -1483,8 +1529,8 @@
     }
     const minX = Math.min(...graph.nodes.map((n) => n.x)) - 60;
     const minY = Math.min(...graph.nodes.map((n) => n.y)) - 60;
-    const maxX = Math.max(...graph.nodes.map((n) => n.x + NODE_W)) + 60;
-    const maxY = Math.max(...graph.nodes.map((n) => n.y + nodeHeight(n))) + 60;
+    const maxX = Math.max(...graph.nodes.map((n) => n.x + (n.kind === 'comment' ? commentW(n) : NODE_W))) + 60;
+    const maxY = Math.max(...graph.nodes.map((n) => n.y + (n.kind === 'comment' ? commentH(n) : nodeHeight(n)))) + 60;
     const r = svgEl.getBoundingClientRect();
     const z = clampZoom(Math.min(r.width / (maxX - minX), r.height / (maxY - minY), 1.5));
     zoom = z;
@@ -1693,6 +1739,40 @@
               </defs>
 
               <g transform="translate({pan.x} {pan.y}) scale({zoom})">
+              <!-- comment boxes (behind edges and regular nodes) -->
+              {#each graph.nodes.filter(cn => cn.kind === 'comment') as n (n.id)}
+                {@const cw = commentW(n)}
+                {@const ch = commentH(n)}
+                {@const col = String(n.config.color ?? '#facc15')}
+                {@const sel = selectedNodeId === n.id}
+                <g transform="translate({n.x} {n.y})">
+                  <rect
+                    width={cw} height={ch} rx="10"
+                    fill={col} fill-opacity="0.1"
+                    stroke={col} stroke-opacity={sel ? 0.7 : 0.35} stroke-width={sel ? 2 : 1.5}
+                    class="cursor-move"
+                    onpointerdown={(ev) => startDrag(ev, n)}
+                    role="presentation"
+                  />
+                  <path
+                    d="M0 10 a10 10 0 0 1 10 -10 h{cw - 20} a10 10 0 0 1 10 10 v20 h-{cw} z"
+                    fill={col} fill-opacity={sel ? 0.45 : 0.3}
+                    class="pointer-events-none"
+                  />
+                  <text x="14" y="20" font-size="12" font-weight="600"
+                    class="pointer-events-none select-none fill-foreground/80">
+                    {String(n.config.text ?? 'Comment').trim() || 'Comment'}
+                  </text>
+                  <polygon
+                    points="{cw - 16},{ch} {cw},{ch - 16} {cw},{ch}"
+                    fill={col} fill-opacity="0.7"
+                    class="cursor-se-resize"
+                    onpointerdown={(ev) => { selectedNodeId = n.id; startCommentResize(ev, n); }}
+                    role="presentation"
+                  />
+                </g>
+              {/each}
+
               <!-- edges -->
               {#each graph.edges as e, idx (idx)}
                 {@const fromN = graph.nodes.find((n) => n.id === e.from)}
@@ -1719,8 +1799,8 @@
                 {/if}
               {/each}
 
-              <!-- nodes -->
-              {#each graph.nodes as n (n.id)}
+              <!-- regular nodes (comment boxes rendered in the pass above) -->
+              {#each graph.nodes.filter(rn => rn.kind !== 'comment') as n (n.id)}
                 {@const k = effectiveKind(n)}
                 {@const h = nodeHeight(n)}
                 {@const sel = selectedNodeId === n.id}
@@ -2464,6 +2544,14 @@
                         {#if evName && known}
                           <p class="mt-1 text-[10px] text-muted-foreground">Registered · “{known.category}”</p>
                         {/if}
+                      {:else if key === "color"}
+                        <input
+                          type="color"
+                          class="h-8 w-full cursor-pointer rounded-lg border border-border bg-card"
+                          disabled={editLocked}
+                          value={String(selectedNode.config[key] ?? '#facc15')}
+                          onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })}
+                        />
                       {:else}
                         <Input class="h-8" disabled={editLocked} value={String(selectedNode.config[key] ?? "")} oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)} />
                       {/if}
@@ -2571,7 +2659,7 @@
               <!-- Memoize: cache the node's output for the run (default) vs recompute each
                    time it's reached. Turn OFF for loop bodies / live sources so loops iterate.
                    Hidden for event nodes — they're no-op signals that never memoize. -->
-              {#if selectedNode.kind !== "emit_event" && selectedNode.kind !== "on_event"}
+              {#if selectedNode.kind !== "emit_event" && selectedNode.kind !== "on_event" && selectedNode.kind !== "comment"}
                 <div class="flex items-center justify-between gap-2 border-t border-border pt-2.5">
                   <Label
                     class="flex items-center gap-1.5 text-xs text-muted-foreground"

@@ -255,6 +255,10 @@ pub enum NodeKind {
     /// `question` can be wired (Text) or set as a config literal; `image` is optional
     /// (text-only questions like "Is it past 18:00?" work without an image).
     AskAi,
+    /// Canvas organizer: a resizable colored annotation box that sits behind all nodes.
+    /// Purely visual — zero exec, zero ports, never runs. Drag to reposition and pull
+    /// enclosed nodes with it; drag the bottom-right grip to resize.
+    Comment,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -484,7 +488,7 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 46] = [
+    pub const ALL: [NodeKind; 47] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -531,6 +535,7 @@ impl NodeKind {
         NodeKind::TextCompare,
         NodeKind::StringSwitch,
         NodeKind::AskAi,
+        NodeKind::Comment,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -583,6 +588,7 @@ impl NodeKind {
             NodeKind::TextCompare => "text_compare",
             NodeKind::StringSwitch => "string_switch",
             NodeKind::AskAi => "ask_ai",
+            NodeKind::Comment => "comment",
         }
     }
 
@@ -638,6 +644,7 @@ impl NodeKind {
             NodeKind::TextCompare => "Text compare",
             NodeKind::StringSwitch => "String switch",
             NodeKind::AskAi => "AI If",
+            NodeKind::Comment => "Comment",
         }
     }
 
@@ -683,6 +690,7 @@ impl NodeKind {
             | NodeKind::BreakFaceDetection
             | NodeKind::DrawBbox => "Vision",
             NodeKind::RecordPresence => "Presence",
+            NodeKind::Comment => "Utility",
         }
     }
 
@@ -723,6 +731,7 @@ impl NodeKind {
             NodeKind::FlipFlop => &EXEC_OUT_FLIP_FLOP,
             // Dynamic: arms come from config, not a static slice. See GraphNode::output_port.
             NodeKind::StringSwitch => &NO_PORTS,
+            NodeKind::Comment => &NO_PORTS,
             _ => &EXEC_OUT_DEFAULT,
         }
     }
@@ -774,6 +783,7 @@ impl NodeKind {
             NodeKind::Cooldown => &NO_PORTS, // engine-driven; window_secs is config
             NodeKind::StringSwitch => &STRING_SWITCH_IN,
             NodeKind::AskAi => &ASK_AI_IN,
+            NodeKind::Comment => &NO_PORTS,
         }
     }
 
@@ -821,6 +831,7 @@ impl NodeKind {
             NodeKind::Cooldown => &COOLDOWN_OUT,
             NodeKind::StringSwitch => &NO_PORTS, // exec outputs are dynamic arms (+ "default")
             NodeKind::AskAi => &NO_PORTS, // exec outputs are true/false branches only
+            NodeKind::Comment => &NO_PORTS,
         }
     }
 
@@ -887,6 +898,7 @@ impl NodeKind {
             NodeKind::TextCompare => json!({ "operator": "eq", "b": "" }),
             NodeKind::StringSwitch => json!({ "arms": ["arm_1", "arm_2"] }),
             NodeKind::AskAi => json!({ "question": "", "timeout_secs": "65" }),
+            NodeKind::Comment => json!({ "text": "Comment", "color": "#facc15", "width": 400, "height": 200 }),
         }
     }
 }

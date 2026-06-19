@@ -240,6 +240,10 @@ fn forward_epoch(
             continue;
         }
         let n = graph.node(nid).ok_or("node vanished mid-run")?;
+        if n.kind == NodeKind::Comment {
+            settle(&mut settled, &mut indeg);
+            continue;
+        }
 
         // Activation: a forced re-entry target is active; otherwise a node with incoming
         // ORDERING exec edges activates when fed by a live one; a node with none is an

@@ -143,6 +143,12 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 | **Print** | `message`, `on_screen` (bool) | — | `message`, `on_screen`, `level` | Prints to the editor console (+ on-screen flash unless off). Debug sink. | `Recognize person → Print("Saw {p1}", message=person)` |
 | **Show image** | `image*` | — | `label` | Renders the input frame on the canvas. Debug sink; emits no data. | `Camera snapshot → Show image` |
 
+### Utility
+
+| Node | Inputs | Outputs | Config | Behavior | Sample usage |
+|---|---|---|---|---|---|
+| **Comment** | — | — | `text`, `color` (#RRGGBB, default `#facc15`), `width` (px, default 400), `height` (px, default 200) | Visual group box for annotating the canvas. Drag to reposition; nodes whose center falls inside move with it. Drag the bottom-right grip to resize. No ports, no execution. | *(canvas organizer — never part of execution flow)* |
+
 ---
 
 ## How to use events (`Emit event` / `On event`)

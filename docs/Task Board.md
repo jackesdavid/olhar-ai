@@ -36,8 +36,6 @@ kanban-plugin: board
 	  - Plan: [[face-recognition-next-steps]]
 - [ ] Workflow list improvements: last run, search, description, duplicate
 	  - Plan: [[workflow-list-improvements]]
-- [ ] Comment node — canvas organizer
-	  - Plan: [[comment-node]]
 - [ ] AI If node — yes/no question routes exec like If
 	  - Plan: [[ai-question-node]]
 
@@ -52,6 +50,8 @@ kanban-plugin: board
 	  - Plan: [[string-switch-node]]
 - [ ] Missing comparison nodes: TextCompare + And / Or / Not
 	  - Plan: [[missing-comparison-nodes]]
+- [ ] Comment node — canvas organizer
+	  - Plan: [[comment-node]]
 
 
 ## Review
