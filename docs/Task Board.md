@@ -28,8 +28,6 @@ kanban-plugin: board
 
 - [ ] Face recognition: DetectFaces node + live-feed triggers
 	  - Plan: [[face-recognition-next-steps]]
-- [ ] Node run animation lags — light on arrival, keep min duration
-	  - Plan: [[node-animation-timing]]
 - [ ] Workflow list improvements: last run, search, description, duplicate
 	  - Plan: [[workflow-list-improvements]]
 - [ ] Comment node — canvas organizer
@@ -41,14 +39,17 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] Draw BBox node — annotate image with bounding box
-	  - Plan: [[draw-bbox-node]]
-- [ ] Map: solid walls taller, richer material, deeper shadows
-	  - Plan: [[map-walls-3d-depth]]
+- [ ] Node run animation lags — light on arrival, keep min duration
+	  - Plan: [[node-animation-timing]]
+
 
 
 ## Review
 
+- [ ] Map: solid walls taller, richer material, deeper shadows
+	  - Plan: [[map-walls-3d-depth]]
+- [ ] Draw BBox node — annotate image with bounding box
+	  - Plan: [[draw-bbox-node]]
 - [x] Map Redesign 2 — wall style + architectural-neutral pass
 	  - Plan: [[map-redesign-2]]
 - [ ] Free text ( filled and wireframe) tool map

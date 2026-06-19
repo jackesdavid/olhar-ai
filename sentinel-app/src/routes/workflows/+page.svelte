@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { fade } from "svelte/transition";
   import { data, onEvent } from "$lib/data";
   import {
     CATEGORY_ORDER as PRESENCE_CATEGORIES,
@@ -293,45 +294,40 @@
   let runsLogs = $state<Record<string, RunLog[]>>({});
   let runsExpanded = $state<string | null>(null);
 
-  // Per-node highlight controller (driven by workflow-node events): exactly ONE
-  // node is "live" at a time, shown for at least MIN_HIGHLIGHT_MS, in sequence.
-  // Fast nodes queue (so every node is still seen) and a finished node stops the
-  // moment the next one starts — no overlap. Visual only.
+  // Per-node highlight controller (driven by workflow-node events): each node
+  // lights up immediately on arrival and stays lit for at least MIN_HIGHLIGHT_MS.
+  // Multiple nodes can be live simultaneously (fast graphs / branches). The active
+  // node keeps its highlight until the next event (or run end). Visual only.
   const MIN_HIGHLIGHT_MS = 700;
-  let liveNode = $state<number | null>(null);
-  let liveQueue: number[] = [];
-  let liveTimer: ReturnType<typeof setTimeout> | null = null;
+  const liveNodes = $state(new Set<number>());
+  const liveTimers = new Map<number, ReturnType<typeof setTimeout>>();
   let runEnded = false;
 
   function markLive(nodeId: number) {
-    runEnded = false; // a node event means a run is active
-    const tail = liveQueue.length ? liveQueue[liveQueue.length - 1] : liveNode;
-    if (tail === nodeId) return; // already current / queued
-    if (liveTimer === null) showLive(nodeId);
-    else liveQueue.push(nodeId); // within the current node's minimum → queue it
-  }
-  function showLive(nodeId: number) {
-    liveNode = nodeId;
-    liveTimer = setTimeout(onMinElapsed, MIN_HIGHLIGHT_MS);
-  }
-  function onMinElapsed() {
-    liveTimer = null;
-    const next = liveQueue.shift();
-    if (next !== undefined) showLive(next);
-    else if (runEnded) liveNode = null;
-    // else: keep the current node lit (still running) until the next event
+    runEnded = false;
+    const prev = liveTimers.get(nodeId);
+    if (prev !== undefined) clearTimeout(prev); // re-trigger: restart the minimum hold
+    liveNodes.add(nodeId);
+    liveTimers.set(nodeId, setTimeout(() => {
+      liveTimers.delete(nodeId);
+      // Keep the node lit if it's still the active node and the run hasn't ended.
+      if (!runEnded && act?.current === nodeId) return;
+      liveNodes.delete(nodeId);
+    }, MIN_HIGHLIGHT_MS));
   }
   function endLive() {
-    // run finished/errored: let any queued min-holds drain, then stop.
     runEnded = true;
-    if (liveTimer === null && liveQueue.length === 0) liveNode = null;
+    // Pending timers will fire and remove themselves. Nodes that outlasted their
+    // timer (stayed lit as the active node) need to be cleared right now.
+    for (const id of liveNodes) {
+      if (!liveTimers.has(id)) liveNodes.delete(id);
+    }
   }
   function clearLive() {
-    if (liveTimer) clearTimeout(liveTimer);
-    liveTimer = null;
-    liveQueue = [];
+    for (const t of liveTimers.values()) clearTimeout(t);
+    liveTimers.clear();
+    liveNodes.clear();
     runEnded = false;
-    liveNode = null;
   }
 
   // ---- delete confirmation (window.confirm is a no-op in the Tauri WebView) --
@@ -403,9 +399,9 @@
   // is executing. Either way it's ACTIVE, so editing is locked to avoid changing a
   // graph mid-flight; stop it (disable) to edit nodes, configs, or positions.
   const editLocked = $derived(isRunning || (graph?.enabled ?? false));
-  // A node (and the edge feeding it) is "live" only while it's the current node.
+  // A node (and the edge feeding it) is "live" while it has an active highlight.
   function nodeLive(id: number): boolean {
-    return liveNode === id;
+    return liveNodes.has(id);
   }
 
   // Re-entering the editor mid-run (e.g. during a long Wait) won't get a fresh
@@ -415,7 +411,7 @@
     const cur = act?.current ?? null;
     // `!runEnded` guards against the polled `current` lagging behind the run-end
     // event: without it we'd re-light the last node after the flow already ended.
-    if (view === "editor" && cur !== null && !runEnded && liveNode === null && liveTimer === null) {
+    if (view === "editor" && cur !== null && !runEnded && liveNodes.size === 0) {
       markLive(cur);
     }
   });
@@ -1694,24 +1690,26 @@
                     class="fill-card transition-[stroke] {nodeBorderClass(n)}"
                   />
                   {#if live}
-                    <!-- the executing node: a bright marching-ants emerald border
-                         over a breathing solid ring -->
-                    <rect
-                      width={NODE_W}
-                      height={h}
-                      rx="8"
-                      fill="none"
-                      stroke-width="3"
-                      class="node-run-glow stroke-primary"
-                    />
-                    <rect
-                      width={NODE_W}
-                      height={h}
-                      rx="8"
-                      fill="none"
-                      stroke-width="3"
-                      class="node-running stroke-primary"
-                    />
+                    <g transition:fade={{ duration: 200 }}>
+                      <!-- the executing node: a bright marching-ants emerald border
+                           over a breathing solid ring -->
+                      <rect
+                        width={NODE_W}
+                        height={h}
+                        rx="8"
+                        fill="none"
+                        stroke-width="3"
+                        class="node-run-glow stroke-primary"
+                      />
+                      <rect
+                        width={NODE_W}
+                        height={h}
+                        rx="8"
+                        fill="none"
+                        stroke-width="3"
+                        class="node-running stroke-primary"
+                      />
+                    </g>
                   {/if}
                   <!-- Category-tinted header band (Unreal-Blueprint style): a top-rounded
                        band behind the label so node families read at a glance and events pop.
