@@ -88,6 +88,39 @@ pub fn detect_persons_detailed(image_bytes: &[u8]) -> Result<Vec<PersonDetection
         .collect())
 }
 
+/// All 80 COCO class names in class-index order (index 0 = "person", etc.).
+pub const COCO_CLASSES: [&str; 80] = [
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
+    "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
+    "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack",
+    "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball",
+    "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
+    "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake",
+    "chair", "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop",
+    "mouse", "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
+    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier",
+    "toothbrush",
+];
+
+/// Resolve a COCO class name (case-insensitive) to its class index, or `None` if unknown.
+pub fn class_id_for_name(name: &str) -> Option<u32> {
+    COCO_CLASSES.iter().position(|&c| c.eq_ignore_ascii_case(name)).map(|i| i as u32)
+}
+
+/// Detect objects of a specific COCO class (by class id) and return one [`PersonDetection`]
+/// per detection (box + confidence) — the generic counterpart to `detect_persons_detailed`.
+pub fn detect_objects_detailed(
+    image_bytes: &[u8],
+    class_id: u32,
+) -> Result<Vec<PersonDetection>, String> {
+    Ok(detect(image_bytes)?
+        .into_iter()
+        .filter(|d| d.class == class_id)
+        .map(|d| PersonDetection { bbox: d.xyxy, confidence: d.score })
+        .collect())
+}
+
 /// Process-lifetime YOLOX plan, built once on first use. The build result (ok or the
 /// error string) is cached, so a load failure is reported on every call without
 /// re-attempting a doomed init. The returned `&Arc` is exactly what `run` wants.

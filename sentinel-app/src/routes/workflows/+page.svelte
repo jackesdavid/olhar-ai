@@ -588,6 +588,10 @@
       const ev = String(n.config.event ?? "").trim();
       return ev ? `${base}: ${ev}` : base;
     }
+    if (n.kind === "object_detection") {
+      const cls = String(n.config.class ?? "person").trim();
+      return cls ? `${base}: ${cls}` : base;
+    }
     return base;
   }
 
@@ -651,7 +655,7 @@
   // Pure data/logic nodes: no exec pins, activated by data availability.
   // Includes comparison operators, logical operators, and type-conversion nodes.
   const PURE_KINDS = new Set([
-    "num_lt","num_lte","num_gt","num_gte","num_eq","num_ne","compare","and",
+    "num_lt","num_lte","num_gt","num_gte","num_eq","num_ne","compare","and","or","not","text_compare",
     "bool_to_text","num_to_text",
   ]);
   function isCompareOrLogic(kind: string): boolean {
@@ -672,8 +676,11 @@
       case "num_eq":  return "=";
       case "num_ne":  return "≠";
       case "compare": return String(config.operator ?? "==");
-      case "and":     return "AND";
-      default:        return "?";
+      case "and":          return "AND";
+      case "or":           return "OR";
+      case "not":          return "NOT";
+      case "text_compare": return String(config.operator ?? "eq");
+      default:             return "?";
     }
   }
   function exprOperand(nodeId: number, port: string, config: Record<string, unknown>): string {
@@ -1465,6 +1472,18 @@
   }
 
   const LEVELS = ["debug", "info", "warn", "error"];
+  const COCO_CLASSES = [
+    "person","bicycle","car","motorcycle","airplane","bus","train","truck","boat",
+    "traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat",
+    "dog","horse","sheep","cow","elephant","bear","zebra","giraffe","backpack",
+    "umbrella","handbag","tie","suitcase","frisbee","skis","snowboard","sports ball",
+    "kite","baseball bat","baseball glove","skateboard","surfboard","tennis racket",
+    "bottle","wine glass","cup","fork","knife","spoon","bowl","banana","apple",
+    "sandwich","orange","broccoli","carrot","hot dog","pizza","donut","cake",
+    "chair","couch","potted plant","bed","dining table","toilet","tv","laptop",
+    "mouse","remote","keyboard","cell phone","microwave","oven","toaster","sink",
+    "refrigerator","book","clock","vase","scissors","teddy bear","hair drier","toothbrush",
+  ];
   const TRIGGER_OPTS = [
     { value: "manual", label: "Manual (Run-now only)" },
     { value: "cron", label: "Cron (every N seconds)" },
@@ -2363,6 +2382,34 @@
                           <Select.Trigger class="h-8 w-full">{clabel2}</Select.Trigger>
                           <Select.Content>
                             {#each categoryOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                          </Select.Content>
+                        </Select.Root>
+                      {:else if key === "class" && selectedNode.kind === "object_detection"}
+                        {@const clsWired = graph.edges.some((e) => e.to === selectedNode.id && e.to_port === "class")}
+                        {@const clsv = String(selectedNode.config[key] ?? "person")}
+                        <Select.Root type="single" disabled={editLocked || clsWired} value={clsv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "person" })}>
+                          <Select.Trigger class="h-8 w-full capitalize">{clsv}</Select.Trigger>
+                          <Select.Content>
+                            {#each COCO_CLASSES as c (c)}<Select.Item value={c} label={c} class="capitalize">{c}</Select.Item>{/each}
+                          </Select.Content>
+                        </Select.Root>
+                        {#if clsWired}
+                          <p class="mt-0.5 text-[10px] text-muted-foreground">Overridden by wired input</p>
+                        {/if}
+                      {:else if key === "operator" && selectedNode.kind === "text_compare"}
+                        {@const TEXT_OPS = [
+                          { value: "eq", label: "equals" },
+                          { value: "ne", label: "not equals" },
+                          { value: "contains", label: "contains" },
+                          { value: "starts_with", label: "starts with" },
+                          { value: "ends_with", label: "ends with" },
+                        ]}
+                        {@const topv = String(selectedNode.config[key] ?? "eq")}
+                        {@const toplabel = TEXT_OPS.find((o) => o.value === topv)?.label ?? topv}
+                        <Select.Root type="single" disabled={editLocked} value={topv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "eq" })}>
+                          <Select.Trigger class="h-8 w-full">{toplabel}</Select.Trigger>
+                          <Select.Content>
+                            {#each TEXT_OPS as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
                           </Select.Content>
                         </Select.Root>
                       {:else if key === "operator"}

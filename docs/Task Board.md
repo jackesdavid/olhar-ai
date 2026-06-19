@@ -26,6 +26,8 @@ kanban-plugin: board
 
 ## ToDo
 
+- [ ] Chat agent on the web (TTS / STT / tools)
+	  - Plan: [[chat-agent-web]]
 - [ ] Face recognition: DetectFaces node + live-feed triggers
 	  - Plan: [[face-recognition-next-steps]]
 - [ ] Workflow list improvements: last run, search, description, duplicate
@@ -33,15 +35,18 @@ kanban-plugin: board
 - [ ] Comment node — canvas organizer
 	  - Plan: [[comment-node]]
 - [ ] In the (Record Presence) node is not possible to change the room in the property panel
-- [ ] Missing comparison nodes: TextCompare + And / Or / Not
-	  - Plan: [[missing-comparison-nodes]]
+- [ ] Ai Question Node
+	  - Plan: [[ai-question-node]]
 
 
 ## In Progress
 
+- [ ] Generic Object Detection node — configurable COCO class
+	  - Plan: [[generic-object-detection-node]]
+- [ ] Missing comparison nodes: TextCompare + And / Or / Not
+	  - Plan: [[missing-comparison-nodes]]
 - [ ] Node run animation lags — light on arrival, keep min duration
 	  - Plan: [[node-animation-timing]]
-
 
 
 ## Review

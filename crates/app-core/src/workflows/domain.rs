@@ -151,8 +151,17 @@ pub enum NodeKind {
     MotionWatch,
     /// Vision: detect whether a person is present in an image (via the AI sidecar).
     PersonDetection,
+    /// Vision: detect any single COCO class in an image. The class is chosen from a
+    /// dropdown in the property panel or overridden by wiring the `class` Text input.
+    /// Outputs the same shape as `PersonDetection` (`count`, `confidence`, `detections`,
+    /// `ok`) so it wires directly into `ForEach` + `BreakDetection`.
+    ObjectDetection,
     /// Destructure a `PersonDetection` element → `bbox` + `confidence` (like Unreal's Break).
     BreakPersonDetection,
+    /// Destructure a generic `Detection` element (from `ObjectDetection`) →
+    /// `bbox` + `confidence`. Equivalent to `BreakPersonDetection` but paired with
+    /// the `ObjectDetection` node for clarity.
+    BreakDetection,
     /// Destructure a `FaceDetection` element → `bbox` + `confidence` + `landmarks`.
     BreakFaceDetection,
     /// Vision: match a face in an image against the enrolled people (pgvector kNN).
@@ -207,6 +216,14 @@ pub enum NodeKind {
     DrawBbox,
     /// Logic: `a && b` — true only when both inputs are true.
     And,
+    /// Logic: `a || b` — true when at least one input is true.
+    Or,
+    /// Logic: `!a` — inverts a bool.
+    Not,
+    /// Data: compare two text values with a configurable operator → `result` bool.
+    /// `b` can be wired from upstream or typed as a literal in the inspector.
+    /// Operators: `eq`, `ne`, `contains`, `starts_with`, `ends_with`.
+    TextCompare,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -311,9 +328,22 @@ const FOR_EACH_IN: [Port; 1] = [p("items", PortType::Any, false)];
 const FOR_EACH_OUT: [Port; 2] =
     [p("item", PortType::Any, false), p("index", PortType::Num, false)];
 
+// Object detection: detect any COCO class — class chosen by config or wired `class` input.
+const OBJECT_DETECTION_IN: [Port; 2] =
+    [p("image", PortType::Image, true), p("class", PortType::Text, false)];
+const OBJECT_DETECTION_OUT: [Port; 4] = [
+    p("count", PortType::Num, false),
+    p("confidence", PortType::Num, false), // percent 0..100 (top detection)
+    p("detections", PortType::PersonArray, false), // one Detection per match — loop this
+    p("ok", PortType::Bool, false),
+];
+
 // Break (destructure) nodes — split a struct element into its fields, like Unreal's Break.
 const BREAK_PERSON_IN: [Port; 1] = [p("person", PortType::Person, true)];
 const BREAK_PERSON_OUT: [Port; 2] =
+    [p("bbox", PortType::NumArray, false), p("confidence", PortType::Num, false)];
+const BREAK_DETECTION_IN: [Port; 1] = [p("detection", PortType::Person, true)];
+const BREAK_DETECTION_OUT: [Port; 2] =
     [p("bbox", PortType::NumArray, false), p("confidence", PortType::Num, false)];
 const BREAK_FACE_IN: [Port; 1] = [p("face", PortType::Face, true)];
 const BREAK_FACE_OUT: [Port; 3] = [
@@ -385,6 +415,9 @@ const DRAW_BBOX_OUT: [Port; 2] =
 
 const BOOL_OP_IN: [Port; 2] =
     [p("a", PortType::Bool, false), p("b", PortType::Bool, false)];
+const NOT_IN: [Port; 1] = [p("a", PortType::Bool, false)];
+const TEXT_COMPARE_IN: [Port; 2] =
+    [p("a", PortType::Text, false), p("b", PortType::Text, false)];
 
 const NO_PORTS: [Port; 0] = [];
 
@@ -403,7 +436,7 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 37] = [
+    pub const ALL: [NodeKind; 42] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -430,7 +463,9 @@ impl NodeKind {
         NodeKind::MotionDetection,
         NodeKind::MotionWatch,
         NodeKind::PersonDetection,
+        NodeKind::ObjectDetection,
         NodeKind::BreakPersonDetection,
+        NodeKind::BreakDetection,
         NodeKind::BreakFaceDetection,
         NodeKind::RecognizePerson,
         NodeKind::RecordPresence,
@@ -441,6 +476,9 @@ impl NodeKind {
         NodeKind::Cooldown,
         NodeKind::DrawBbox,
         NodeKind::And,
+        NodeKind::Or,
+        NodeKind::Not,
+        NodeKind::TextCompare,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -463,7 +501,9 @@ impl NodeKind {
             NodeKind::MotionDetection => "motion_detection",
             NodeKind::MotionWatch => "motion_watch",
             NodeKind::PersonDetection => "person_detection",
+            NodeKind::ObjectDetection => "object_detection",
             NodeKind::BreakPersonDetection => "break_person_detection",
+            NodeKind::BreakDetection => "break_detection",
             NodeKind::BreakFaceDetection => "break_face_detection",
             NodeKind::RecognizePerson => "recognize_person",
             NodeKind::RecordPresence => "record_presence",
@@ -484,6 +524,9 @@ impl NodeKind {
             NodeKind::Cooldown => "cooldown",
             NodeKind::DrawBbox => "draw_bbox",
             NodeKind::And => "and",
+            NodeKind::Or => "or",
+            NodeKind::Not => "not",
+            NodeKind::TextCompare => "text_compare",
         }
     }
 
@@ -509,7 +552,9 @@ impl NodeKind {
             NodeKind::MotionDetection => "Motion detection",
             NodeKind::MotionWatch => "Motion watch",
             NodeKind::PersonDetection => "Person detection",
+            NodeKind::ObjectDetection => "Detect objects",
             NodeKind::BreakPersonDetection => "Break person detection",
+            NodeKind::BreakDetection => "Break detection",
             NodeKind::BreakFaceDetection => "Break face detection",
             NodeKind::RecognizePerson => "Recognize person",
             NodeKind::RecordPresence => "Record presence",
@@ -530,6 +575,9 @@ impl NodeKind {
             NodeKind::Cooldown => "Cooldown",
             NodeKind::DrawBbox => "Draw BBox",
             NodeKind::And => "And",
+            NodeKind::Or => "Or",
+            NodeKind::Not => "Not",
+            NodeKind::TextCompare => "Text compare",
         }
     }
 
@@ -559,13 +607,18 @@ impl NodeKind {
             | NodeKind::NumNe
             | NodeKind::NumToText
             | NodeKind::BoolToText
-            | NodeKind::And => "Logic",
+            | NodeKind::And
+            | NodeKind::Or
+            | NodeKind::Not
+            | NodeKind::TextCompare => "Logic",
             NodeKind::HttpPost => "Network",
             NodeKind::MotionDetection
             | NodeKind::MotionWatch
             | NodeKind::PersonDetection
+            | NodeKind::ObjectDetection
             | NodeKind::RecognizePerson
             | NodeKind::BreakPersonDetection
+            | NodeKind::BreakDetection
             | NodeKind::BreakFaceDetection
             | NodeKind::DrawBbox => "Vision",
             NodeKind::RecordPresence => "Presence",
@@ -588,6 +641,9 @@ impl NodeKind {
                 | NodeKind::NumToText
                 | NodeKind::BoolToText
                 | NodeKind::And
+                | NodeKind::Or
+                | NodeKind::Not
+                | NodeKind::TextCompare
         )
     }
 
@@ -623,7 +679,9 @@ impl NodeKind {
             NodeKind::MotionDetection => &MOTION_IN,
             NodeKind::MotionWatch => &MOTION_WATCH_IN,
             NodeKind::PersonDetection => &PERSON_DETECTION_IN,
+            NodeKind::ObjectDetection => &OBJECT_DETECTION_IN,
             NodeKind::BreakPersonDetection => &BREAK_PERSON_IN,
+            NodeKind::BreakDetection => &BREAK_DETECTION_IN,
             NodeKind::BreakFaceDetection => &BREAK_FACE_IN,
             NodeKind::RecognizePerson => &RECOGNIZE_PERSON_IN,
             NodeKind::RecordPresence => &RECORD_PRESENCE_IN,
@@ -632,7 +690,9 @@ impl NodeKind {
             NodeKind::Print => &PRINT_IN,
             NodeKind::ShowImage => &SHOW_IMAGE_IN,
             NodeKind::DrawBbox => &DRAW_BBOX_IN,
-            NodeKind::And => &BOOL_OP_IN,
+            NodeKind::And | NodeKind::Or => &BOOL_OP_IN,
+            NodeKind::Not => &NOT_IN,
+            NodeKind::TextCompare => &TEXT_COMPARE_IN,
             NodeKind::FlipFlop => &NO_PORTS, // engine-driven; no data inputs
             NodeKind::Compare
             | NodeKind::NumLt
@@ -665,7 +725,9 @@ impl NodeKind {
             NodeKind::MotionDetection => &MOTION_OUT,
             NodeKind::MotionWatch => &MOTION_OUT,
             NodeKind::PersonDetection => &PERSON_DETECTION_OUT,
+            NodeKind::ObjectDetection => &OBJECT_DETECTION_OUT,
             NodeKind::BreakPersonDetection => &BREAK_PERSON_OUT,
+            NodeKind::BreakDetection => &BREAK_DETECTION_OUT,
             NodeKind::BreakFaceDetection => &BREAK_FACE_OUT,
             NodeKind::RecognizePerson => &RECOGNIZE_PERSON_OUT,
             NodeKind::RecordPresence => &RECORD_PRESENCE_OUT,
@@ -674,7 +736,7 @@ impl NodeKind {
             NodeKind::Print => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::ShowImage => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::DrawBbox => &DRAW_BBOX_OUT,
-            NodeKind::And => &COMPARE_OUT,
+            NodeKind::And | NodeKind::Or | NodeKind::Not | NodeKind::TextCompare => &COMPARE_OUT,
             NodeKind::FlipFlop => &FLIP_FLOP_OUT,
             NodeKind::Compare
             | NodeKind::NumLt
@@ -723,7 +785,9 @@ impl NodeKind {
             NodeKind::MotionDetection => json!({ "sensitivity": "2", "pixel_threshold": "25", "timeout_secs": "30" }),
             NodeKind::MotionWatch => json!({ "camera": "first", "sensitivity": "2", "pixel_threshold": "25", "sample_gap_ms": "400", "timeout_secs": "15" }),
             NodeKind::PersonDetection => json!({ "timeout_secs": "30" }),
+            NodeKind::ObjectDetection => json!({ "class": "person", "timeout_secs": "30" }),
             NodeKind::BreakPersonDetection => json!({}),
+            NodeKind::BreakDetection => json!({}),
             NodeKind::BreakFaceDetection => json!({}),
             NodeKind::RecognizePerson => json!({ "max_distance": "0.4", "timeout_secs": "30" }),
             NodeKind::RecordPresence => json!({ "category": "person", "room": "", "label": "", "duration_secs": "8" }),
@@ -742,7 +806,9 @@ impl NodeKind {
             NodeKind::NumToText | NodeKind::BoolToText => json!({}),
             NodeKind::Cooldown => json!({ "window_secs": "60" }),
             NodeKind::DrawBbox => json!({ "color": "#00FF00", "thickness": "2", "format": "xyxy" }),
-            NodeKind::And => json!({ "a": false, "b": false }),
+            NodeKind::And | NodeKind::Or => json!({ "a": false, "b": false }),
+            NodeKind::Not => json!({ "a": false }),
+            NodeKind::TextCompare => json!({ "operator": "eq", "b": "" }),
         }
     }
 }

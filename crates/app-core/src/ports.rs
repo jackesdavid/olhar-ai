@@ -39,6 +39,12 @@ pub trait Vision: Send + Sync {
     fn detect_persons(&self, jpeg: &[u8]) -> Result<PersonResult, String>;
     /// Per-person detections (box + confidence) — backs the `PersonDetection[]` output.
     fn detect_persons_detailed(&self, jpeg: &[u8]) -> Result<Vec<PersonDetection>, String>;
+    /// Per-object detections filtered to a single COCO class id — backs `ObjectDetection`.
+    fn detect_objects_detailed(
+        &self,
+        jpeg: &[u8],
+        class_id: u32,
+    ) -> Result<Vec<PersonDetection>, String>;
     fn describe(&self, jpeg: &[u8], label: &str) -> Result<String, String>;
 }
 
@@ -107,6 +113,13 @@ impl Vision for LocalVision {
     }
     fn detect_persons_detailed(&self, jpeg: &[u8]) -> Result<Vec<PersonDetection>, String> {
         crate::agent::detector::detect_persons_detailed(jpeg)
+    }
+    fn detect_objects_detailed(
+        &self,
+        jpeg: &[u8],
+        class_id: u32,
+    ) -> Result<Vec<PersonDetection>, String> {
+        crate::agent::detector::detect_objects_detailed(jpeg, class_id)
     }
     fn describe(&self, jpeg: &[u8], label: &str) -> Result<String, String> {
         crate::agent::vision::describe_image(jpeg, label)

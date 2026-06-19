@@ -245,7 +245,9 @@ pub fn run_node(
         NodeKind::MotionDetection => run_motion_detection(config, inputs),
         NodeKind::MotionWatch => run_motion_watch(config, inputs, sys),
         NodeKind::PersonDetection => run_person_detection(inputs, sys),
+        NodeKind::ObjectDetection => run_object_detection(config, inputs, sys),
         NodeKind::BreakPersonDetection => run_break_person_detection(inputs),
+        NodeKind::BreakDetection => run_break_detection(inputs),
         NodeKind::BreakFaceDetection => run_break_face_detection(inputs),
         NodeKind::RecognizePerson => run_recognize_person(config, inputs, sys),
         NodeKind::RecordPresence => run_record_presence(config, inputs, sys),
@@ -270,6 +272,9 @@ pub fn run_node(
         NodeKind::NumEq => run_num_cmp(config, inputs, |a, b| a == b),
         NodeKind::NumNe => run_num_cmp(config, inputs, |a, b| a != b),
         NodeKind::And => run_and(config, inputs),
+        NodeKind::Or => run_or(config, inputs),
+        NodeKind::Not => run_not(config, inputs),
+        NodeKind::TextCompare => run_text_compare(config, inputs),
         NodeKind::NumToText => {
             let v = inputs.get("value").and_then(PortValue::as_num).unwrap_or(0);
             let mut o = PortValues::new();
@@ -296,7 +301,7 @@ pub fn run_node(
 pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duration> {
     let default_secs = match kind {
         NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame => 10,
-        NodeKind::PersonDetection | NodeKind::MotionDetection => 30,
+        NodeKind::PersonDetection | NodeKind::ObjectDetection | NodeKind::MotionDetection => 30,
         NodeKind::MotionWatch => 20, // two camera grabs + the sample gap
         NodeKind::RecognizePerson => 30,
         NodeKind::DescribeImage => 65,
@@ -322,12 +327,16 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::GetRecipient
         | NodeKind::GetLastAlert
         | NodeKind::BreakPersonDetection
+        | NodeKind::BreakDetection
         | NodeKind::BreakFaceDetection
         | NodeKind::EmitEvent
         | NodeKind::OnEvent
         | NodeKind::ShowImage
         | NodeKind::DrawBbox
         | NodeKind::And
+        | NodeKind::Or
+        | NodeKind::Not
+        | NodeKind::TextCompare
         | NodeKind::ForEach => return None,
     };
     let secs = config_u64(config, "timeout_secs").unwrap_or(default_secs);
@@ -409,6 +418,37 @@ fn run_person_detection(inputs: &PortValues, sys: &ToolContext) -> Result<PortVa
     Ok(o)
 }
 
+/// Detect any single COCO class in the image. The class is read from the wired `class` Text
+/// input first; falls back to the `class` config field (default "person"). Outputs the same
+/// shape as `PersonDetection` so it wires directly into `ForEach` + `BreakDetection`.
+fn run_object_detection(
+    config: &Value,
+    inputs: &PortValues,
+    sys: &ToolContext,
+) -> Result<PortValues, String> {
+    let bytes = inputs
+        .get("image")
+        .and_then(PortValue::as_image)
+        .ok_or("missing required input 'image'")?;
+    let class_name = inputs
+        .get("class")
+        .and_then(PortValue::as_text)
+        .or_else(|| config.get("class").and_then(|v| v.as_str()))
+        .unwrap_or("person");
+    let class_id = crate::agent::detector::class_id_for_name(class_name)
+        .ok_or_else(|| format!("unknown COCO class: '{class_name}'"))?;
+    let detections = sys.vision.detect_objects_detailed(bytes, class_id)?;
+    let count = detections.len() as i64;
+    let confidence = detections.iter().map(|d| d.confidence).fold(0.0_f32, f32::max);
+    let items: Vec<PortValue> = detections.into_iter().map(PortValue::Person).collect();
+    let mut o = PortValues::new();
+    o.insert("count".into(), PortValue::Num(count));
+    o.insert("confidence".into(), PortValue::Num((confidence * 100.0).round() as i64));
+    o.insert("detections".into(), PortValue::List(items));
+    o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
+}
+
 /// Break a `PersonDetection` element into its fields: `bbox` (a `[x1,y1,x2,y2]` NumArray)
 /// and `confidence` (percent 0..100). Like Unreal's "Break" struct node.
 fn run_break_person_detection(inputs: &PortValues) -> Result<PortValues, String> {
@@ -420,6 +460,20 @@ fn run_break_person_detection(inputs: &PortValues) -> Result<PortValues, String>
     let mut o = PortValues::new();
     o.insert("bbox".into(), PortValue::List(bbox));
     o.insert("confidence".into(), PortValue::Num((p.confidence * 100.0).round() as i64));
+    Ok(o)
+}
+
+/// Break a generic `Detection` element (from `ObjectDetection`) into `bbox` + `confidence`.
+/// Identical logic to `run_break_person_detection` but reads from the `detection` input pin.
+fn run_break_detection(inputs: &PortValues) -> Result<PortValues, String> {
+    let d = inputs
+        .get("detection")
+        .and_then(PortValue::as_person)
+        .ok_or("missing required input 'detection'")?;
+    let bbox = d.bbox.iter().map(|v| PortValue::Num(v.round() as i64)).collect();
+    let mut o = PortValues::new();
+    o.insert("bbox".into(), PortValue::List(bbox));
+    o.insert("confidence".into(), PortValue::Num((d.confidence * 100.0).round() as i64));
     Ok(o)
 }
 
@@ -548,7 +602,14 @@ pub fn debug_summary(
             0 => "no person detected".into(),
             c => format!("{c} person(s) ({}% confidence)", num("confidence").unwrap_or(0)),
         },
-        NodeKind::BreakPersonDetection | NodeKind::BreakFaceDetection => {
+        NodeKind::ObjectDetection => {
+            let class = config.get("class").and_then(|v| v.as_str()).unwrap_or("person");
+            match num("count").unwrap_or(0) {
+                0 => format!("no {class} detected"),
+                c => format!("{c} {class}(s) ({}% confidence)", num("confidence").unwrap_or(0)),
+            }
+        }
+        NodeKind::BreakPersonDetection | NodeKind::BreakDetection | NodeKind::BreakFaceDetection => {
             format!("bbox + {}% confidence", num("confidence").unwrap_or(0))
         }
         NodeKind::Print => {
@@ -622,6 +683,27 @@ pub fn debug_summary(
             let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
             format!("{a} AND {b} → {result}")
         }
+        NodeKind::Or => {
+            let a = inputs.get("a").and_then(PortValue::as_bool).unwrap_or(false);
+            let b = inputs.get("b").and_then(PortValue::as_bool).unwrap_or(false);
+            let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            format!("{a} OR {b} → {result}")
+        }
+        NodeKind::Not => {
+            let a = inputs.get("a").and_then(PortValue::as_bool).unwrap_or(false);
+            let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            format!("NOT {a} → {result}")
+        }
+        NodeKind::TextCompare => {
+            let a = inputs.get("a").and_then(PortValue::as_text).unwrap_or("");
+            let b = inputs.get("b").and_then(PortValue::as_text)
+                .or_else(|| config.get("b").and_then(|v| v.as_str()))
+                .unwrap_or("");
+            let op = config.get("operator").and_then(|v| v.as_str()).unwrap_or("eq");
+            let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            let clip = |s: &str| if s.chars().count() > 20 { format!("{}…", s.chars().take(19).collect::<String>()) } else { s.to_string() };
+            format!("\"{}\" {op} \"{}\" → {result}", clip(a), clip(b))
+        }
     }
 }
 
@@ -645,6 +727,49 @@ fn run_and(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
     };
     let mut o = PortValues::new();
     o.insert("result".into(), PortValue::Bool(bool_val("a") && bool_val("b")));
+    Ok(o)
+}
+
+fn run_or(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let bool_val = |key: &str| -> bool {
+        inputs.get(key).and_then(PortValue::as_bool)
+            .or_else(|| config.get(key).and_then(|v| v.as_bool().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))))
+            .unwrap_or(false)
+    };
+    let mut o = PortValues::new();
+    o.insert("result".into(), PortValue::Bool(bool_val("a") || bool_val("b")));
+    Ok(o)
+}
+
+fn run_not(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let a = inputs.get("a").and_then(PortValue::as_bool)
+        .or_else(|| config.get("a").and_then(|v| v.as_bool().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))))
+        .unwrap_or(false);
+    let mut o = PortValues::new();
+    o.insert("result".into(), PortValue::Bool(!a));
+    Ok(o)
+}
+
+fn run_text_compare(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let text_val = |key: &str| -> String {
+        inputs.get(key).and_then(PortValue::as_text)
+            .or_else(|| config.get(key).and_then(|v| v.as_str()))
+            .unwrap_or("")
+            .to_string()
+    };
+    let a = text_val("a");
+    let b = text_val("b");
+    let op = config.get("operator").and_then(Value::as_str).unwrap_or("eq");
+    let result = match op {
+        "eq"          => a == b,
+        "ne"          => a != b,
+        "contains"    => a.contains(b.as_str()),
+        "starts_with" => a.starts_with(b.as_str()),
+        "ends_with"   => a.ends_with(b.as_str()),
+        _             => return Err(format!("unknown text_compare operator: '{op}'")),
+    };
+    let mut o = PortValues::new();
+    o.insert("result".into(), PortValue::Bool(result));
     Ok(o)
 }
 
