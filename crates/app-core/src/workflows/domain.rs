@@ -205,6 +205,8 @@ pub enum NodeKind {
     /// Vision: draw a bounding box rectangle on an image → annotated JPEG out.
     /// Accepts `xyxy` (x1,y1,x2,y2) or `xywh` (x,y,width,height) via `format` config.
     DrawBbox,
+    /// Logic: `a && b` — true only when both inputs are true.
+    And,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -381,6 +383,9 @@ const DRAW_BBOX_IN: [Port; 2] =
 const DRAW_BBOX_OUT: [Port; 2] =
     [p("image", PortType::Image, false), p("ok", PortType::Bool, false)];
 
+const BOOL_OP_IN: [Port; 2] =
+    [p("a", PortType::Bool, false), p("b", PortType::Bool, false)];
+
 const NO_PORTS: [Port; 0] = [];
 
 // Universal control-flow ports — every node has an `exec_in` and, by default, an
@@ -398,7 +403,7 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 36] = [
+    pub const ALL: [NodeKind; 37] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -435,6 +440,7 @@ impl NodeKind {
         NodeKind::ShowImage,
         NodeKind::Cooldown,
         NodeKind::DrawBbox,
+        NodeKind::And,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -477,6 +483,7 @@ impl NodeKind {
             NodeKind::BoolToText => "bool_to_text",
             NodeKind::Cooldown => "cooldown",
             NodeKind::DrawBbox => "draw_bbox",
+            NodeKind::And => "and",
         }
     }
 
@@ -522,6 +529,7 @@ impl NodeKind {
             NodeKind::BoolToText => "Bool → Text",
             NodeKind::Cooldown => "Cooldown",
             NodeKind::DrawBbox => "Draw BBox",
+            NodeKind::And => "And",
         }
     }
 
@@ -550,7 +558,8 @@ impl NodeKind {
             | NodeKind::NumEq
             | NodeKind::NumNe
             | NodeKind::NumToText
-            | NodeKind::BoolToText => "Logic",
+            | NodeKind::BoolToText
+            | NodeKind::And => "Logic",
             NodeKind::HttpPost => "Network",
             NodeKind::MotionDetection
             | NodeKind::MotionWatch
@@ -601,6 +610,7 @@ impl NodeKind {
             NodeKind::Print => &PRINT_IN,
             NodeKind::ShowImage => &SHOW_IMAGE_IN,
             NodeKind::DrawBbox => &DRAW_BBOX_IN,
+            NodeKind::And => &BOOL_OP_IN,
             NodeKind::FlipFlop => &NO_PORTS, // engine-driven; no data inputs
             NodeKind::Compare
             | NodeKind::NumLt
@@ -642,6 +652,7 @@ impl NodeKind {
             NodeKind::Print => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::ShowImage => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::DrawBbox => &DRAW_BBOX_OUT,
+            NodeKind::And => &COMPARE_OUT,
             NodeKind::FlipFlop => &FLIP_FLOP_OUT,
             NodeKind::Compare
             | NodeKind::NumLt
@@ -709,6 +720,7 @@ impl NodeKind {
             NodeKind::NumToText | NodeKind::BoolToText => json!({}),
             NodeKind::Cooldown => json!({ "window_secs": "60" }),
             NodeKind::DrawBbox => json!({ "color": "#00FF00", "thickness": "2", "format": "xyxy" }),
+            NodeKind::And => json!({ "a": false, "b": false }),
         }
     }
 }
@@ -1029,14 +1041,12 @@ impl Graph {
         if !Self::compatible(ft, tt) {
             return Err(format!("type mismatch: {ft:?} → {tt:?}"));
         }
-        if self.edges.iter().any(|e| e.to == to && e.to_port == to_port) {
+        // exec_in accepts fan-in (multiple execution paths converging on the same node —
+        // e.g. both branches of an If merging downstream). Data ports stay single-fed.
+        let is_exec = to_port == EXEC_IN.name;
+        if !is_exec && self.edges.iter().any(|e| e.to == to && e.to_port == to_port) {
             return Err(format!("input '{to_port}' is already wired"));
         }
-        // Cycles are allowed ONLY through an **exec** back-edge (a loop): the engine runs
-        // the forward graph in order and re-enters the loop along the back-edge, bounded by
-        // a step/time budget. A **data** cycle has no defined value (the input would depend
-        // on an output not yet produced), so it's still rejected.
-        let is_exec = to_port == EXEC_IN.name;
         if self.reaches(to, from) && !is_exec {
             return Err("that link would create a data cycle".into());
         }

@@ -269,6 +269,7 @@ pub fn run_node(
         NodeKind::NumGte => run_num_cmp(config, inputs, |a, b| a >= b),
         NodeKind::NumEq => run_num_cmp(config, inputs, |a, b| a == b),
         NodeKind::NumNe => run_num_cmp(config, inputs, |a, b| a != b),
+        NodeKind::And => run_and(config, inputs),
         NodeKind::NumToText => {
             let v = inputs.get("value").and_then(PortValue::as_num).unwrap_or(0);
             let mut o = PortValues::new();
@@ -326,6 +327,7 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::OnEvent
         | NodeKind::ShowImage
         | NodeKind::DrawBbox
+        | NodeKind::And
         | NodeKind::ForEach => return None,
     };
     let secs = config_u64(config, "timeout_secs").unwrap_or(default_secs);
@@ -614,6 +616,12 @@ pub fn debug_summary(
             let bytes = outputs.get("image").and_then(PortValue::as_image).map_or(0, <[u8]>::len);
             format!("bbox drawn ({} KB)", bytes / 1024)
         }
+        NodeKind::And => {
+            let a = inputs.get("a").and_then(PortValue::as_bool).unwrap_or(false);
+            let b = inputs.get("b").and_then(PortValue::as_bool).unwrap_or(false);
+            let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            format!("{a} AND {b} → {result}")
+        }
     }
 }
 
@@ -629,6 +637,17 @@ fn run_if(inputs: &PortValues) -> Result<PortValues, String> {
 
 /// Compare two integers using a configurable operator → `result` bool.
 /// Both `a` and `b` fall back to 0 when not wired and no config literal is set.
+fn run_and(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let bool_val = |key: &str| -> bool {
+        inputs.get(key).and_then(PortValue::as_bool)
+            .or_else(|| config.get(key).and_then(|v| v.as_bool().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))))
+            .unwrap_or(false)
+    };
+    let mut o = PortValues::new();
+    o.insert("result".into(), PortValue::Bool(bool_val("a") && bool_val("b")));
+    Ok(o)
+}
+
 fn run_compare(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
     let a = inputs.get("a").and_then(PortValue::as_num).unwrap_or(0);
     let b = inputs.get("b").and_then(PortValue::as_num).unwrap_or(0);

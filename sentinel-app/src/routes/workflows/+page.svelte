@@ -124,6 +124,9 @@
   const HEAD_H = 26;
   const ROW_H = 22;
   const PAD = 8;
+  // Extra height inserted between the header divider and data ports on comparison/logic
+  // nodes, used to render the inline expression (a OP b).
+  const EXPR_H = 30;
   // ShowImage preview: a 16:9 thumbnail tucked below the node's ports.
   const PREVIEW_W = NODE_W - 16;
   const PREVIEW_H = Math.round((PREVIEW_W * 9) / 16);
@@ -613,7 +616,7 @@
     const execCount = execOutPorts(k).length;
     const outRows = dataPorts(k, "out").length + outDataOffset(k);
     const rows = Math.max(dataPorts(k, "in").length, outRows, execCount, 1);
-    return HEAD_H + rows * ROW_H;
+    return HEAD_H + nodeExprH(n) + rows * ROW_H;
   }
   // A ShowImage node grows to fit its preview thumbnail once a frame has arrived.
   function hasPreview(n: Node): boolean {
@@ -637,7 +640,7 @@
     const k = effectiveKind(node);
     const i = dataPorts(k, side).findIndex((p) => p.name === port);
     const off = side === "out" ? outDataOffset(k) : 0;
-    return dataPortY(Math.max(0, i) + off);
+    return dataPortY(Math.max(0, i) + off) + nodeExprH(node);
   }
   // Absolute port Y (for drawing edges between nodes).
   function inPortY(n: Node, port: string) {
@@ -648,6 +651,38 @@
   }
   function wiredInto(nodeId: number, port: string): Edge | undefined {
     return graph?.edges.find((e) => e.to === nodeId && e.to_port === port);
+  }
+  const COMPARE_LOGIC_KINDS = new Set([
+    "num_lt","num_lte","num_gt","num_gte","num_eq","num_ne","compare","and"
+  ]);
+  function isCompareOrLogic(kind: string): boolean {
+    return COMPARE_LOGIC_KINDS.has(kind);
+  }
+  function nodeExprH(n: Node): number {
+    return isCompareOrLogic(n.kind) ? EXPR_H : 0;
+  }
+  function opLabel(kind: string, config: Record<string, unknown>): string {
+    switch (kind) {
+      case "num_lt":  return "<";
+      case "num_lte": return "≤";
+      case "num_gt":  return ">";
+      case "num_gte": return "≥";
+      case "num_eq":  return "=";
+      case "num_ne":  return "≠";
+      case "compare": return String(config.operator ?? "==");
+      case "and":     return "AND";
+      default:        return "?";
+    }
+  }
+  function exprOperand(nodeId: number, port: string, config: Record<string, unknown>): string {
+    const edge = wiredInto(nodeId, port);
+    if (edge) {
+      const src = graph?.nodes.find((n) => n.id === edge.from);
+      const srcLabel = src ? (catalog[src.kind]?.label ?? src.kind) : "?";
+      const lbl = `${srcLabel}.${edge.from_port}`;
+      return lbl.length > 15 ? lbl.slice(0, 14) + "…" : lbl;
+    }
+    return String(config[port] ?? "");
   }
   const portColor: Record<PortType, string> = {
     text: "#60a5fa",
@@ -1715,6 +1750,33 @@
                     class="pointer-events-none stroke-border"
                     stroke-width="1"
                   />
+                  {#if isCompareOrLogic(n.kind)}
+                    {@const op = opLabel(n.kind, n.config)}
+                    {@const aVal = exprOperand(n.id, "a", n.config)}
+                    {@const bVal = exprOperand(n.id, "b", n.config)}
+                    {@const ey = HEAD_H + EXPR_H / 2}
+                    <text
+                      x={NODE_W / 2}
+                      y={ey + 7}
+                      text-anchor="middle"
+                      font-size="17"
+                      font-weight="700"
+                      class="pointer-events-none select-none fill-primary"
+                    >{op}</text>
+                    <text
+                      x="10"
+                      y={ey + 5}
+                      font-size="8"
+                      class="pointer-events-none select-none fill-muted-foreground/70"
+                    >{aVal}</text>
+                    <text
+                      x={NODE_W - 10}
+                      y={ey + 5}
+                      text-anchor="end"
+                      font-size="8"
+                      class="pointer-events-none select-none fill-muted-foreground/70"
+                    >{bVal}</text>
+                  {/if}
                   {#if invalid}
                     <!-- required input(s) not filled — a red dot, the logo's signal -->
                     <circle cx={NODE_W - 9} cy="9" r="5.5" class="pointer-events-none fill-destructive/20" />
@@ -1767,9 +1829,10 @@
                   {#each dataPorts(k, "in") as p, i}
                     {@const wired = wiredInto(n.id, p.name)}
                     {@const need = p.required && !isFilled(n, p)}
+                    {@const py = dataPortY(i) + nodeExprH(n)}
                     <circle
                       cx="0"
-                      cy={dataPortY(i)}
+                      cy={py}
                       r="5"
                       fill={wired ? portColor[p.type] : "#151c19"}
                       stroke={need ? "#ef4444" : portColor[p.type]}
@@ -1780,7 +1843,7 @@
                     />
                     <text
                       x="11"
-                      y={dataPortY(i) + 3}
+                      y={py + 3}
                       class="pointer-events-none select-none {need ? 'fill-destructive' : 'fill-muted-foreground'}"
                       font-size="10"
                     >
@@ -1791,7 +1854,7 @@
                   <!-- output data ports (stacked below the exec-out pins) -->
                   {#each dataPorts(k, "out") as p, i}
                     {@const isPending = pending && pending.node === n.id && pending.port === p.name}
-                    {@const dy = dataPortY(i + outDataOffset(k))}
+                    {@const dy = dataPortY(i + outDataOffset(k)) + nodeExprH(n)}
                     {@const pc = portColorOf(n, p.name, "out")}
                     <circle
                       cx={NODE_W}
