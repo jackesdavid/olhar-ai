@@ -4,30 +4,21 @@
     "type": "split",
     "children": [
       {
-        "id": "66096778ab0c1e83",
+        "id": "1c3de9330a44663c",
         "type": "tabs",
         "children": [
           {
-            "id": "9bef662de5d0e2dd",
+            "id": "ed375cc67003ec28",
             "type": "leaf",
             "state": {
-              "type": "kanban",
+              "type": "markdown",
               "state": {
-                "file": "Task Board.md",
-                "kanbanViewState": {
-                  "kanban-plugin": "board",
-                  "list-collapse": [
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false
-                  ]
-                }
+                "file": "plans/ai-vision-node-ideas.md",
+                "mode": "source",
+                "source": false
               },
-              "icon": "lucide-trello",
-              "title": "Task Board"
+              "icon": "lucide-file",
+              "title": "ai-vision-node-ideas"
             }
           }
         ]
@@ -194,43 +185,43 @@
       "obsidian-excalidraw-plugin:New drawing": false
     }
   },
-  "active": "9bef662de5d0e2dd",
+  "active": "ed375cc67003ec28",
   "lastOpenFiles": [
+    "Task Board.md.tmp.15799.404c01b28612",
+    "plans/telegram-bot-two-way-research.md",
+    "plans/telegram-beacons-fix-polish.md",
+    "Task Board.md.tmp.15799.2c20b1fc8591",
+    "plans/string-switch-node.md",
+    "Task Board.md",
+    "Task Board.md.tmp.48169.2399079efe74",
+    "plans/ai-vision-node-ideas.md",
+    "plans/ai-question-node.md.tmp.48169.251f809bb7d3",
+    "plans/ai-question-node.md",
+    "ai-question-node.md",
+    "plans/node-animation-timing.md",
+    "Task Board.md.tmp.29082.4cb8d7985b89",
+    "Task Board.md.tmp.29082.8394a52b8e06",
+    "Task Board.md.tmp.29082.3a46aa100871",
+    "Task Board.md.tmp.27454.161865e778e7",
+    "plans/chat-agent-web.md",
+    "plans/chat-agent-web.md.tmp.27454.bcd6197d336c",
+    "Task Board.md.tmp.8883.460ada31718d",
+    "plans/generic-object-detection-node.md",
+    "plans/face-recognition-next-steps.md",
     "plans/missing-comparison-nodes.md",
     "plans/workflow-list-improvements.md",
-    "Task Board.md",
     "plans/map-walls-3d-depth.md",
     "HANDOFF.md",
     "web-migration-plan.md",
     "plans/comment-node.md",
     "Task Board.md.tmp.7228.8354f9aee768",
     "plans/draw-bbox-node.md",
-    "plans/draw-bbox-node.md.tmp.7228.03e081ee10bd",
-    "ref/edge.md.tmp.7228.2066da191aad",
-    "plans/node-animation-timing.md",
-    "Task Board.md.tmp.5859.d8da5e1728a7",
-    "Task Board.md.tmp.5859.71abc85d7a83",
-    "Task Board.md.tmp.5859.1b88fc4dac0c",
-    "Task Board.md.tmp.5859.42251129362b",
     "plans/motion-detection-node-v2.md",
     "plans/event-payload-data.md",
     "plans/show-image-node-rendering.md",
     "plans/multi-pod-flow-event-fabric.md",
-    "Task Board.md.tmp.5859.a29c55edf154",
-    "Task Board.md.tmp.5859.c4739b7dd78a",
-    "plans/multi-pod-flow-event-fabric.md.tmp.5859.a4d8ec891382",
     "plans/box-rekey-enrollment.md",
     "plans/workflow-runs-realtime.md",
-    "plans/school-student-frequency.md",
-    "plans/multi-tenant-gateway-edge.md",
-    "plans/map-redesign-2.md",
-    "epics/map-redesign.md",
-    "use-cases/school-frequence.md",
-    "use-cases/parent-chatbot.md",
-    "workflow-nodes.md",
-    "plans/feature-slice-architecture.md",
-    "plans/foreach-and-fanout-notification.md",
-    "use-cases/Use cases.md",
-    "Use cases.md"
+    "plans/school-student-frequency.md"
   ]
 }
