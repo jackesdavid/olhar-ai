@@ -20,6 +20,8 @@ kanban-plugin: board
 
 ## ToDo
 
+- [ ] Face recognition: DetectFaces node + live-feed triggers
+	  - Plan: [[face-recognition-next-steps]]
 
 
 ## In Progress
