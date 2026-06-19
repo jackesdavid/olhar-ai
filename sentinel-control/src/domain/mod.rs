@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::auth::Claims;
 use crate::AppState;
 
+mod admin_providers;
 mod alerts;
 mod beacons;
 mod boxes;
@@ -30,6 +31,7 @@ pub fn router() -> Router<AppState> {
         .merge(map::router())
         .merge(workflows::router())
         .merge(boxes::router())
+        .merge(admin_providers::router())
 }
 
 /// The tenant this token operates in. The master's own (un-assumed) token carries no

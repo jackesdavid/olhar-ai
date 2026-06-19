@@ -18,6 +18,7 @@
   import ShieldCheck from "@lucide/svelte/icons/shield-check";
   import UsersRound from "@lucide/svelte/icons/users-round";
   import Building2 from "@lucide/svelte/icons/building-2";
+  import Bell from "@lucide/svelte/icons/bell";
   import HardDrive from "@lucide/svelte/icons/hard-drive";
   import LogOut from "@lucide/svelte/icons/log-out";
   import Undo2 from "@lucide/svelte/icons/undo-2";
@@ -76,7 +77,7 @@
     finish();
     // A master's own token has no tenant context — tenant-scoped pages would 400.
     // Send them to the console to pick a tenant to operate inside (Navigate as tenant).
-    if (auth.me?.is_master && !auth.me.tenant_id && path !== "/admin/tenants") {
+    if (auth.me?.is_master && !auth.me.tenant_id && !path.startsWith("/admin")) {
       await goto("/admin/tenants");
     }
   }
@@ -185,6 +186,7 @@
     ...(inTenant && hasPerm("roles.manage") ? [{ label: "Roles", href: "/settings/roles", icon: ShieldCheck }] : []),
     ...(inTenant && hasPerm("users.manage") ? [{ label: "Users", href: "/settings/users", icon: UsersRound }] : []),
     ...(auth.me?.is_master ? [{ label: "Tenants", href: "/admin/tenants", icon: Building2 }] : []),
+    ...(auth.me?.is_master ? [{ label: "Providers", href: "/admin/providers", icon: Bell }] : []),
   ]);
 
   async function signOut() {

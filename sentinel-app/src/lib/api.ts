@@ -102,4 +102,7 @@ export const admin = {
       admin_email: adminEmail,
       admin_password: adminPassword,
     }),
+  getTelegramProvider: () => api.get<import("./types").TelegramProviderState>("/admin/telegram-provider"),
+  setTelegramProvider: (botToken: string) =>
+    api.put<void>("/admin/telegram-provider", { bot_token: botToken }),
 };

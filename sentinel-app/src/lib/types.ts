@@ -84,11 +84,17 @@ export type NotificationTarget = {
   enabled: boolean;
 };
 
-/** Telegram config state for the Beacons screen (matches `TelegramConfigState`).
- * The bot token is never returned — only whether it's set. */
+/** Telegram config state for the Recipients screen (matches `TelegramState`).
+ * The bot token is never returned — only whether it's set via the global provider. */
 export type TelegramConfigState = {
-  configured: boolean;
+  provider_configured: boolean;
   pairing_code: string;
+  bot_username?: string;
+};
+
+/** Global Telegram provider state (master-only, matches `TelegramProviderState`). */
+export type TelegramProviderState = {
+  configured: boolean;
   bot_username?: string;
 };
 

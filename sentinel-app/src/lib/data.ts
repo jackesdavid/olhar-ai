@@ -192,9 +192,8 @@ export const data = {
   // ---- beacons / telegram -------------------------------------------------
   listBeacons: (): Promise<NotificationTarget[]> => api.get<NotificationTarget[]>("/beacons"),
   getTelegramConfig: (): Promise<TelegramConfigState> => api.get<TelegramConfigState>("/telegram"),
-  setTelegramConfig: async (botToken: string, pairingCode: string): Promise<string> => {
-    await api.put<void>("/telegram", { bot_token: botToken, pairing_code: pairingCode });
-    return "Saved.";
+  setPairingCode: async (pairingCode: string): Promise<void> => {
+    await api.put<void>("/telegram", { pairing_code: pairingCode });
   },
   toggleBeacon: async (chatId: number, enabled: boolean): Promise<void> => {
     await api.post<void>(`/beacons/${chatId}/toggle`, { enabled });
