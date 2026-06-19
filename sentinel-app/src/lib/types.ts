@@ -89,6 +89,7 @@ export type NotificationTarget = {
 export type TelegramConfigState = {
   configured: boolean;
   pairing_code: string;
+  bot_username?: string;
 };
 
 /** A managed person (matches `app_core::persons::Person`). The hierarchy is

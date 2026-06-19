@@ -17,6 +17,7 @@ mod bus;
 mod engine;
 mod events;
 mod http;
+mod pairing;
 mod state;
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -50,6 +51,8 @@ fn main() {
     // shell. `Db::block` bridges sqlx from there safely (it spawns, never block_on).
     engine::spawn_poller(state.clone());
     log::info!("Workflow engine + trigger poller started");
+    pairing::spawn(state.clone());
+    log::info!("Telegram pairing pollers started");
 
     // Now build the tokio runtime for the HTTP control plane.
     let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");

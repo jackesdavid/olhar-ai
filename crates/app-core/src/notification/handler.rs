@@ -22,7 +22,12 @@ pub fn parse_pairing_code(text: &str, code: &str) -> bool {
         return false;
     }
     let t = text.trim();
-    let candidate = t.strip_prefix("/pair").map(str::trim_start).unwrap_or(t).trim();
+    let candidate = t
+        .strip_prefix("/pair")
+        .or_else(|| t.strip_prefix("/start"))
+        .map(str::trim_start)
+        .unwrap_or(t)
+        .trim();
     candidate == code
 }
 
@@ -228,6 +233,8 @@ mod tests {
         assert!(parse_pairing_code("/pair SECRET", "SECRET"));
         assert!(parse_pairing_code("  SECRET ", "SECRET"));
         assert!(parse_pairing_code("/pair   SECRET", "SECRET"));
+        assert!(parse_pairing_code("/start SECRET", "SECRET")); // deep-link payload
+        assert!(parse_pairing_code("/start   SECRET", "SECRET"));
         assert!(!parse_pairing_code("nope", "SECRET"));
         assert!(!parse_pairing_code("SECRET", "")); // empty code never matches
     }

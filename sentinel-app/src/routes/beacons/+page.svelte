@@ -10,6 +10,8 @@
   import Radio from "@lucide/svelte/icons/radio";
   import CheckCircle2 from "@lucide/svelte/icons/circle-check-big";
   import XCircle from "@lucide/svelte/icons/circle-x";
+  import Send from "@lucide/svelte/icons/send";
+  import ExternalLink from "@lucide/svelte/icons/external-link";
 
   import * as Card from "$lib/components/ui/card";
   import * as Table from "$lib/components/ui/table";
@@ -37,6 +39,7 @@
 
   // ---- per-beacon action state ---------------------------------------------
   let togglingId = $state<number | null>(null);
+  let testingId = $state<number | null>(null);
 
   // ---- Rename dialog -------------------------------------------------------
   let renameOpen = $state(false);
@@ -91,6 +94,19 @@
       toast.error("Failed to save config", { description: String(err) });
     } finally {
       savingConfig = false;
+    }
+  }
+
+  async function testSend(b: NotificationTarget) {
+    testingId = b.chat_id;
+    try {
+      await data.testBeacon(b.chat_id);
+      toast.success(`Test sent to '${b.label}'.`);
+    } catch (err) {
+      console.error("Test send failed", err);
+      toast.error("Test failed", { description: String(err) });
+    } finally {
+      testingId = null;
     }
   }
 
@@ -204,15 +220,29 @@
       </div>
 
       {#if config?.configured && config.pairing_code.trim().length > 0}
-        <div class="rounded-md border border-border bg-muted/40 p-3 text-sm">
+        <div class="rounded-md border border-border bg-muted/40 p-3 text-sm space-y-2">
           <p class="text-muted-foreground">
             To pair a phone, DM the bot:
             <code class="rounded bg-background px-1.5 py-0.5 font-mono text-foreground">
               /pair {config.pairing_code}
             </code>
           </p>
-          <p class="mt-1 text-xs text-muted-foreground">
-            Once paired, the device appears below. Token changes take effect after an app restart.
+          {#if config.bot_username}
+            <p class="text-muted-foreground">
+              Or open Telegram directly —
+              <a
+                href="https://t.me/{config.bot_username}?start={config.pairing_code}"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="inline-flex items-center gap-1 text-emerald-400 underline-offset-2 hover:underline"
+              >
+                Pair now in Telegram
+                <ExternalLink class="size-3" />
+              </a>
+            </p>
+          {/if}
+          <p class="text-xs text-muted-foreground">
+            Once paired, the device appears below automatically.
           </p>
         </div>
       {/if}
@@ -281,6 +311,19 @@
                 </Table.Cell>
                 <Table.Cell class="text-right">
                   <div class="flex items-center justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title="Send test message"
+                      disabled={testingId === b.chat_id}
+                      onclick={() => testSend(b)}
+                    >
+                      {#if testingId === b.chat_id}
+                        <LoaderCircle class="size-4 animate-spin" />
+                      {:else}
+                        <Send class="size-4" />
+                      {/if}
+                    </Button>
                     <Button variant="ghost" size="sm" title="Rename" onclick={() => openRename(b)}>
                       <Pencil class="size-4" />
                     </Button>

@@ -9,7 +9,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use serde::{Deserialize, Serialize};
 
-use app_core::notification::{self, NotificationStore, NotificationTarget};
+use app_core::notification::{self, NotificationConfig, NotificationStore, NotificationTarget};
 
 use super::{blocking, err, tenant_of, ApiErr};
 use crate::auth::{self, UserClaims};
@@ -19,6 +19,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/beacons", get(list))
         .route("/beacons/:chat_id/toggle", post(toggle))
+        .route("/beacons/:chat_id/test", post(test_send))
         .route("/beacons/:chat_id", axum::routing::patch(rename).delete(remove))
         .route("/telegram", get(get_config).put(set_config))
 }
@@ -81,6 +82,7 @@ async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(chat
 struct TelegramState {
     configured: bool,
     pairing_code: String,
+    bot_username: Option<String>,
 }
 
 /// Telegram config WITHOUT leaking the bot token.
@@ -89,9 +91,13 @@ async fn get_config(UserClaims(c): UserClaims, State(st): State<AppState>) -> Re
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     let state = blocking(move || {
-        notification::repo::load_telegram(&db, tid)
-            .map(|(bot_token, pairing_code)| TelegramState { configured: !bot_token.trim().is_empty(), pairing_code })
-            .unwrap_or(TelegramState { configured: false, pairing_code: String::new() })
+        notification::repo::load_telegram_full(&db, tid)
+            .map(|(bot_token, pairing_code, bot_username)| TelegramState {
+                configured: !bot_token.trim().is_empty(),
+                pairing_code,
+                bot_username,
+            })
+            .unwrap_or(TelegramState { configured: false, pairing_code: String::new(), bot_username: None })
     })
     .await?;
     Ok(Json(state))
@@ -120,7 +126,40 @@ async fn set_config(UserClaims(c): UserClaims, State(st): State<AppState>, Json(
             }
         };
         notification::repo::save_telegram(&db, tid, &token, b.pairing_code.trim());
+        // Resolve bot username for the deep-link (best-effort; ignored on failure).
+        if !token.trim().is_empty() {
+            let cfg = NotificationConfig { bot_token: token, pairing_code: String::new() };
+            if let Ok(username) = notification::client::get_me(&cfg) {
+                notification::repo::save_telegram_username(&db, tid, &username);
+            }
+        }
     })
     .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn test_send(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(chat_id): Path<i64>,
+) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "beacons.write")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    blocking(move || {
+        let cfg = notification::repo::load_telegram(&db, tid)
+            .and_then(|(token, code)| {
+                if token.trim().is_empty() {
+                    None
+                } else {
+                    Some(NotificationConfig { bot_token: token, pairing_code: code })
+                }
+            })
+            .ok_or_else(|| "Telegram is not configured.".to_string())?;
+        notification::client::send_message(&cfg, chat_id, "Sentinel test \u{2713} — delivery confirmed.")
+            .map_err(|e| format!("Send failed: {e}"))
+    })
+    .await?
+    .map_err(|e| err(StatusCode::BAD_GATEWAY, e))?;
     Ok(StatusCode::NO_CONTENT)
 }

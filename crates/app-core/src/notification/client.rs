@@ -76,6 +76,27 @@ fn photo_multipart(chat_id: i64, caption: &str, jpeg: &[u8]) -> Vec<u8> {
     body
 }
 
+/// Fetch the bot's own profile and return its `username`. Used to build the
+/// `t.me/<username>?start=<code>` deep-link for one-tap pairing on mobile.
+pub fn get_me(cfg: &NotificationConfig) -> Result<String, String> {
+    let resp = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .get(&method_url(cfg, "getMe"))
+        .call()
+        .map_err(|e| format!("getMe failed: {e}"))?;
+    let body = resp.into_string().map_err(|e| format!("read failed: {e}"))?;
+    let v: Value = serde_json::from_str(&body).map_err(|e| format!("bad JSON: {e}"))?;
+    if v.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err("getMe returned ok=false".into());
+    }
+    v.get("result")
+        .and_then(|r| r.get("username"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| "bot has no username".into())
+}
+
 /// A minimal projection of a Telegram update we care about for pairing.
 pub struct Update {
     pub update_id: i64,

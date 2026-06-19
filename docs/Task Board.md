@@ -28,6 +28,8 @@ kanban-plugin: board
 
 ## ToDo
 
+- [ ] Telegram bot: two-way use cases research
+	  - Plan: [[telegram-bot-two-way-research]]
 - [ ] Chat agent on the web (TTS / STT / tools)
 	  - Plan: [[chat-agent-web]]
 - [ ] Face recognition: DetectFaces node + live-feed triggers
@@ -42,6 +44,8 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] Telegram Beacons: fix enrollment + polish + observability
+	  - Plan: [[telegram-beacons-fix-polish]]
 - [ ] Generic Object Detection node — configurable COCO class
 	  - Plan: [[generic-object-detection-node]]
 - [ ] String Switch node — multi-arm exec router on string value

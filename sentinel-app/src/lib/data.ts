@@ -205,7 +205,9 @@ export const data = {
   deleteBeacon: async (chatId: number): Promise<void> => {
     await api.del<void>(`/beacons/${chatId}`);
   },
-  testBeacon: (): Promise<never> => cloudOnly("Beacon test"),
+  testBeacon: async (chatId: number): Promise<void> => {
+    await api.post<void>(`/beacons/${chatId}/test`, {});
+  },
 
   // ---- map ----------------------------------------------------------------
   // The whole floor plan is one document (rooms + walls + markers), replace-all.
