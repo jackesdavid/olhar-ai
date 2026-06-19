@@ -5,6 +5,7 @@
   import { BoxGeometry, EdgesGeometry, BufferGeometry, Vector3 } from "three";
   import type { MapWall } from "$lib/types";
   import { INK, INK_FILL, ACCENT_BRIGHT, ACCENT_SOFT, ACCENT_LABEL } from "$lib/map/palette";
+  import LineStroke from "./LineStroke.svelte";
 
   let { wall, selected = false }: { wall: MapWall; selected?: boolean } = $props();
 
@@ -24,15 +25,10 @@
   const geo = $derived(new BoxGeometry(geoLen, height, depth));
   const edges = $derived(new EdgesGeometry(geo));
 
-  // Dashed/dotted: a single centerline with computed line distances.
-  const lineGeo = $derived((() => {
-    const g = new BufferGeometry().setFromPoints([
-      new Vector3(0, 0, 0),
-      new Vector3(len, 0, 0),
-    ]);
-    g.computeLineDistances();
-    return g;
-  })());
+  // Line/dashed/dotted: a single centerline geometry (distances computed on the mesh).
+  const lineGeo = $derived(
+    new BufferGeometry().setFromPoints([new Vector3(0, 0, 0), new Vector3(len, 0, 0)])
+  );
   const dashSize = $derived(style === "dotted" ? 0.04 : 0.25);
   const gapSize = $derived(style === "dotted" ? 0.14 : 0.14);
 
@@ -55,15 +51,14 @@
       </T.LineSegments>
 
     {:else if style === "line"}
-      <!-- flat solid 1px line (the "line" tool — no thickness) -->
-      <T.Line geometry={lineGeo} position={[0, 0.06, 0]}>
-        <T.LineBasicMaterial color={strokeColor} />
-      </T.Line>
+      <T.Group position={[0, 0.06, 0]}>
+        <LineStroke geometry={lineGeo} color={strokeColor} />
+      </T.Group>
     {:else}
       <!-- dashed or dotted centerline -->
-      <T.Line geometry={lineGeo} position={[0, 0.06, 0]}>
-        <T.LineDashedMaterial color={strokeColor} {dashSize} {gapSize} />
-      </T.Line>
+      <T.Group position={[0, 0.06, 0]}>
+        <LineStroke geometry={lineGeo} color={strokeColor} dashed dashSize={dashSize} gapSize={gapSize} />
+      </T.Group>
     {/if}
 
     {#if selected}

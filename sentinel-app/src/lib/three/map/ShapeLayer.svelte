@@ -1,21 +1,13 @@
 <script lang="ts">
   // Renders MapShape annotations (rect / triangle / circle) flat on the floor.
-  // Shapes have an optional semi-transparent fill and a stroke outline.
-  // Dashed/dotted strokes use LineDashedMaterial (computeLineDistances required).
   import { T } from "@threlte/core";
   import { BufferGeometry, BufferAttribute, Vector3 } from "three";
   import type { MapShape } from "$lib/types";
   import type { MapStore } from "$lib/map/store.svelte";
   import { ACCENT_SOFT, ACCENT_BRIGHT, INK } from "$lib/map/palette";
+  import LineStroke from "./LineStroke.svelte";
 
   let { store }: { store: MapStore } = $props();
-
-  function withLineDist(g: BufferGeometry): BufferGeometry {
-    // Three.js types don't expose computeLineDistances on BufferGeometry,
-    // but it exists at runtime and is needed by LineDashedMaterial.
-    (g as unknown as { computeLineDistances(): void }).computeLineDistances();
-    return g;
-  }
 
   function rectOutlineGeo(w: number, h: number): BufferGeometry {
     const hw = w / 2, hh = h / 2;
@@ -24,7 +16,7 @@
       new Vector3(hw, 0, hh), new Vector3(-hw, 0, hh),
       new Vector3(-hw, 0, -hh),
     ];
-    return withLineDist(new BufferGeometry().setFromPoints(pts));
+    return new BufferGeometry().setFromPoints(pts);
   }
 
   function circleOutlineGeo(r: number, segs = 64): BufferGeometry {
@@ -32,7 +24,7 @@
       const a = (i / segs) * Math.PI * 2;
       return new Vector3(Math.cos(a) * r, 0, Math.sin(a) * r);
     });
-    return withLineDist(new BufferGeometry().setFromPoints(pts));
+    return new BufferGeometry().setFromPoints(pts);
   }
 
   function triOutlineGeo(pts: [number, number][]): BufferGeometry {
@@ -41,7 +33,7 @@
       new Vector3(a[0], 0, a[1]), new Vector3(b[0], 0, b[1]),
       new Vector3(c[0], 0, c[1]), new Vector3(a[0], 0, a[1]),
     ];
-    return withLineDist(new BufferGeometry().setFromPoints(verts));
+    return new BufferGeometry().setFromPoints(verts);
   }
 
   function triFillGeo(pts: [number, number][]): BufferGeometry {
@@ -57,11 +49,10 @@
   function sc(s: MapShape, selected: boolean): string {
     return selected ? ACCENT_BRIGHT : (s.color ?? INK);
   }
-  function dashed(s: MapShape): boolean {
+  function isDashed(s: MapShape): boolean {
     return s.strokeStyle === "dashed" || s.strokeStyle === "dotted";
   }
   function ds(s: MapShape): number { return s.strokeStyle === "dotted" ? 0.04 : 0.25; }
-  function gs(_s: MapShape): number { return 0.14; }
   function rr(s: MapShape): number { return ((s.rot ?? 0) * Math.PI) / 180; }
 </script>
 
@@ -80,15 +71,7 @@
         </T.Mesh>
       {/if}
       <T.Group position.y={0.05}>
-        {#if dashed(s)}
-          <T.Line geometry={outGeo}>
-            <T.LineDashedMaterial color={stroke} dashSize={ds(s)} gapSize={gs(s)} />
-          </T.Line>
-        {:else}
-          <T.Line geometry={outGeo}>
-            <T.LineBasicMaterial color={stroke} />
-          </T.Line>
-        {/if}
+        <LineStroke geometry={outGeo} color={stroke} dashed={isDashed(s)} dashSize={ds(s)} gapSize={0.14} />
       </T.Group>
     </T.Group>
 
@@ -102,15 +85,7 @@
         </T.Mesh>
       {/if}
       <T.Group position.y={0.05}>
-        {#if dashed(s)}
-          <T.Line geometry={outGeo}>
-            <T.LineDashedMaterial color={stroke} dashSize={ds(s)} gapSize={gs(s)} />
-          </T.Line>
-        {:else}
-          <T.Line geometry={outGeo}>
-            <T.LineBasicMaterial color={stroke} />
-          </T.Line>
-        {/if}
+        <LineStroke geometry={outGeo} color={stroke} dashed={isDashed(s)} dashSize={ds(s)} gapSize={0.14} />
       </T.Group>
     </T.Group>
 
@@ -124,15 +99,7 @@
         </T.Mesh>
       {/if}
       <T.Group position.y={0.05}>
-        {#if dashed(s)}
-          <T.Line geometry={outGeo}>
-            <T.LineDashedMaterial color={stroke} dashSize={ds(s)} gapSize={gs(s)} />
-          </T.Line>
-        {:else}
-          <T.Line geometry={outGeo}>
-            <T.LineBasicMaterial color={stroke} />
-          </T.Line>
-        {/if}
+        <LineStroke geometry={outGeo} color={stroke} dashed={isDashed(s)} dashSize={ds(s)} gapSize={0.14} />
       </T.Group>
     </T.Group>
   {/if}
