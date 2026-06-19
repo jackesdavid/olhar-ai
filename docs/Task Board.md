@@ -26,6 +26,8 @@ kanban-plugin: board
 
 ## ToDo
 
+- [ ] Face recognition: DetectFaces node + live-feed triggers
+	  - Plan: [[face-recognition-next-steps]]
 - [ ] Node run animation lags — light on arrival, keep min duration
 	  - Plan: [[node-animation-timing]]
 - [ ] Workflow list improvements: last run, search, description, duplicate
@@ -34,6 +36,7 @@ kanban-plugin: board
 	  - Plan: [[draw-bbox-node]]
 - [ ] Comment node — canvas organizer
 	  - Plan: [[comment-node]]
+- [ ] In the (Record Presence) node is not possible to change the room in the property panel
 - [ ] Missing comparison nodes: TextCompare + And / Or / Not
 	  - Plan: [[missing-comparison-nodes]]
 - [ ] Free text ( filled and wireframe) tool map
