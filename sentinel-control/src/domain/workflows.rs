@@ -118,12 +118,19 @@ async fn catalog(UserClaims(c): UserClaims) -> Result<Json<Value>, ApiErr> {
     let kinds = WfNodeKind::ALL
         .iter()
         .map(|k| {
+            // Pure data/logic nodes have no exec pins — omit exec_in/exec_out entirely
+            // so the UI can hide the exec circles and the engine knows to pull them.
+            let (inputs, outputs) = if k.is_pure() {
+                (ports(k.input_ports()), ports(k.output_ports()))
+            } else {
+                (with_exec(&exec_in, k.input_ports()), with_exec(k.exec_out_ports(), k.output_ports()))
+            };
             json!({
                 "slug": k.slug(),
                 "label": k.label(),
                 "category": k.category(),
-                "inputs": with_exec(&exec_in, k.input_ports()),
-                "outputs": with_exec(k.exec_out_ports(), k.output_ports()),
+                "inputs": inputs,
+                "outputs": outputs,
                 "default_config": k.default_config(),
             })
         })

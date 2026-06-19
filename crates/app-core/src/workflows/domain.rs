@@ -572,9 +572,31 @@ impl NodeKind {
         }
     }
 
-    /// Exec OUTPUT pins for this kind. Default is a single `exec_out`; `If` splits
-    /// the run into `true`/`false` branches. (`exec_in` is universal — see EXEC_IN.)
+    /// Pure data/logic nodes have no exec pins — they activate whenever their upstream
+    /// data is ready, like pure functions in Unreal Blueprint. Comparison operators,
+    /// logical operators, and type-conversion nodes are all pure.
+    pub fn is_pure(self) -> bool {
+        matches!(
+            self,
+            NodeKind::Compare
+                | NodeKind::NumLt
+                | NodeKind::NumLte
+                | NodeKind::NumGt
+                | NodeKind::NumGte
+                | NodeKind::NumEq
+                | NodeKind::NumNe
+                | NodeKind::NumToText
+                | NodeKind::BoolToText
+                | NodeKind::And
+        )
+    }
+
+    /// Exec OUTPUT pins for this kind. Pure nodes have none; `If` splits into
+    /// `true`/`false` branches; everything else gets a single `exec_out`.
     pub fn exec_out_ports(self) -> &'static [Port] {
+        if self.is_pure() {
+            return &NO_PORTS;
+        }
         match self {
             NodeKind::If => &EXEC_OUT_IF,
             NodeKind::ForEach => &EXEC_OUT_FOR_EACH,

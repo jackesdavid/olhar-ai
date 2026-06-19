@@ -267,7 +267,23 @@ fn forward_epoch(
         } else if has_ord_exec {
             fed_live
         } else {
-            seed_entries
+            // No exec_in wired: pure data/logic nodes and true entry orphans. For nodes
+            // with upstream data edges (comparison, conversion, etc.), activate as soon as
+            // any upstream producer has run — they're pulled by the exec chain, not seeded.
+            // True orphans (no incoming ordering edges at all) fall back to seed_entries.
+            let has_upstream = graph
+                .edges
+                .iter()
+                .any(|e| e.to == nid && !back.contains(&(e.from, nid)));
+            if has_upstream {
+                graph
+                    .edges
+                    .iter()
+                    .filter(|e| e.to == nid && !back.contains(&(e.from, nid)))
+                    .any(|e| outputs.contains_key(&e.from))
+            } else {
+                seed_entries
+            }
         };
         if !active {
             settle(&mut settled, &mut indeg);

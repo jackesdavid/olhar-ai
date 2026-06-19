@@ -648,11 +648,17 @@
   function wiredInto(nodeId: number, port: string): Edge | undefined {
     return graph?.edges.find((e) => e.to === nodeId && e.to_port === port);
   }
-  const COMPARE_LOGIC_KINDS = new Set([
-    "num_lt","num_lte","num_gt","num_gte","num_eq","num_ne","compare","and"
+  // Pure data/logic nodes: no exec pins, activated by data availability.
+  // Includes comparison operators, logical operators, and type-conversion nodes.
+  const PURE_KINDS = new Set([
+    "num_lt","num_lte","num_gt","num_gte","num_eq","num_ne","compare","and",
+    "bool_to_text","num_to_text",
   ]);
   function isCompareOrLogic(kind: string): boolean {
-    return COMPARE_LOGIC_KINDS.has(kind);
+    return PURE_KINDS.has(kind);
+  }
+  function isPure(k: CatKind | undefined): boolean {
+    return !((k?.inputs ?? []).some((p) => p.type === "exec"));
   }
   function nodeExprH(n: Node): number {
     return isCompareOrLogic(n.kind) ? EXPR_H : 0;
@@ -1783,7 +1789,9 @@
                     </circle>
                   {/if}
 
-                  <!-- exec (control-flow) pins — white. exec_in on the left header. -->
+                  <!-- exec (control-flow) pins — white. exec_in on the left header.
+                       Pure data/logic nodes (comparisons, conversions) have no exec pins. -->
+                  {#if !isPure(k)}
                   <circle
                     cx="0"
                     cy={HEAD_H / 2}
@@ -1795,6 +1803,7 @@
                     onclick={() => clickInPort(n, EXEC_IN_NAME)}
                     role="presentation"
                   />
+                  {/if}
                   <!-- exec outputs stack down the right edge (exec_out, or true/false) -->
                   {#each execOutPorts(k) as p, i}
                     {@const ey = HEAD_H / 2 + i * ROW_H}
