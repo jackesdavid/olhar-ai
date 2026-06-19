@@ -12,11 +12,14 @@
   import XCircle from "@lucide/svelte/icons/circle-x";
   import Send from "@lucide/svelte/icons/send";
   import ExternalLink from "@lucide/svelte/icons/external-link";
+  import Copy from "@lucide/svelte/icons/copy";
+  import Check from "@lucide/svelte/icons/check";
+  import Link2 from "@lucide/svelte/icons/link-2";
 
   import * as Card from "$lib/components/ui/card";
   import * as Table from "$lib/components/ui/table";
   import * as Dialog from "$lib/components/ui/dialog";
-  import { Button } from "$lib/components/ui/button";
+  import { Button, buttonVariants } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import { Switch } from "$lib/components/ui/switch";
@@ -40,6 +43,20 @@
   // ---- per-beacon action state ---------------------------------------------
   let togglingId = $state<number | null>(null);
   let testingId = $state<number | null>(null);
+
+  // ---- enrollment link copy ------------------------------------------------
+  let copied = $state(false);
+
+  function enrollmentLink(username: string, code: string) {
+    return `https://t.me/${username}?start=${code}`;
+  }
+
+  async function copyEnrollmentLink() {
+    if (!config?.bot_username || !config.pairing_code) return;
+    await navigator.clipboard.writeText(enrollmentLink(config.bot_username, config.pairing_code));
+    copied = true;
+    setTimeout(() => (copied = false), 2000);
+  }
 
   // ---- Rename dialog -------------------------------------------------------
   let renameOpen = $state(false);
@@ -220,30 +237,53 @@
       </div>
 
       {#if config?.configured && config.pairing_code.trim().length > 0}
-        <div class="rounded-md border border-border bg-muted/40 p-3 text-sm space-y-2">
-          <p class="text-muted-foreground">
-            To pair a phone, DM the bot:
-            <code class="rounded bg-background px-1.5 py-0.5 font-mono text-foreground">
-              /pair {config.pairing_code}
-            </code>
-          </p>
+        <div class="rounded-md border border-border bg-muted/40 p-3 text-sm space-y-3">
           {#if config.bot_username}
-            <p class="text-muted-foreground">
-              Or open Telegram directly —
-              <a
-                href="https://t.me/{config.bot_username}?start={config.pairing_code}"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="inline-flex items-center gap-1 text-emerald-400 underline-offset-2 hover:underline"
-              >
-                Pair now in Telegram
-                <ExternalLink class="size-3" />
-              </a>
+            <!-- Enrollment link — primary action -->
+            <div class="flex items-center gap-2">
+              <Link2 class="size-4 shrink-0 text-emerald-400" />
+              <span class="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+                {enrollmentLink(config.bot_username, config.pairing_code)}
+              </span>
+              <div class="flex shrink-0 items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="h-7 gap-1 text-xs"
+                  onclick={copyEnrollmentLink}
+                >
+                  {#if copied}
+                    <Check class="size-3 text-emerald-400" />
+                    Copied
+                  {:else}
+                    <Copy class="size-3" />
+                    Copy
+                  {/if}
+                </Button>
+                <a
+                  href={enrollmentLink(config.bot_username, config.pairing_code)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class={buttonVariants({ variant: "outline", size: "sm" }) + " h-7 gap-1 text-xs"}
+                >
+                  <ExternalLink class="size-3" />
+                  Open
+                </a>
+              </div>
+            </div>
+            <p class="text-xs text-muted-foreground">
+              Share this link with anyone who should receive alerts — tapping it opens Telegram and
+              pairs their device automatically.
             </p>
+          {:else}
+            <p class="text-muted-foreground">
+              To pair a device, DM the bot:
+              <code class="rounded bg-background px-1.5 py-0.5 font-mono text-foreground">
+                /pair {config.pairing_code}
+              </code>
+            </p>
+            <p class="text-xs text-muted-foreground">Once paired, the device appears below automatically.</p>
           {/if}
-          <p class="text-xs text-muted-foreground">
-            Once paired, the device appears below automatically.
-          </p>
         </div>
       {/if}
 
@@ -271,10 +311,39 @@
       {#if loading}
         <Loader label="Loading recipients…" />
       {:else if beacons.length === 0}
-        <EmptyState
-          title="No recipients paired"
-          description="DM the bot the pairing code above — paired phones appear here automatically."
-        />
+        <div class="flex flex-col items-center gap-4 py-8 text-center">
+          <p class="text-sm font-medium">No recipients paired</p>
+          {#if config?.configured && config.bot_username && config.pairing_code}
+            <p class="max-w-sm text-xs text-muted-foreground">
+              Share the enrollment link with anyone who should receive alerts — tapping it opens
+              Telegram and pairs their device in one step.
+            </p>
+            <div class="flex items-center gap-2">
+              <Button variant="outline" size="sm" class="gap-1.5" onclick={copyEnrollmentLink}>
+                {#if copied}
+                  <Check class="size-4 text-emerald-400" />
+                  Link copied
+                {:else}
+                  <Copy class="size-4" />
+                  Copy enrollment link
+                {/if}
+              </Button>
+              <a
+                href={enrollmentLink(config.bot_username, config.pairing_code)}
+                target="_blank"
+                rel="noopener noreferrer"
+                class={buttonVariants({ variant: "outline", size: "sm" }) + " gap-1.5"}
+              >
+                <ExternalLink class="size-4" />
+                Pair this device
+              </a>
+            </div>
+          {:else}
+            <p class="text-xs text-muted-foreground">
+              Configure the bot above, then DM it the pairing code to enroll a device.
+            </p>
+          {/if}
+        </div>
       {:else}
         <Table.Root>
           <Table.Header>
