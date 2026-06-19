@@ -44,6 +44,8 @@ pub enum PortValue {
     Person(crate::agent::detector::PersonDetection),
     /// A detected face (element of a `FaceDetection[]`).
     Face(crate::agent::face::FaceDetection),
+    /// A camera device entity (id + ip + name, credential-free). Carried by `Camera` ports.
+    Camera(crate::workflows::domain::CameraEntity),
 }
 
 impl PortValue {
@@ -104,6 +106,12 @@ impl PortValue {
     pub fn as_face(&self) -> Option<&crate::agent::face::FaceDetection> {
         match self {
             PortValue::Face(f) => Some(f),
+            _ => None,
+        }
+    }
+    pub fn as_camera(&self) -> Option<&crate::workflows::domain::CameraEntity> {
+        match self {
+            PortValue::Camera(c) => Some(c),
             _ => None,
         }
     }
@@ -207,15 +215,8 @@ pub fn literal_for_named(config: &Value, name: &str, ty: PortType) -> Option<Por
         }
         // Control-flow ports never carry a value.
         PortType::Exec => None,
-        // A camera literal is the stable device id stored in config by the editor dropdown.
-        PortType::Camera => {
-            let s = v.as_str()?;
-            if s.trim().is_empty() {
-                None
-            } else {
-                Some(PortValue::Text(s.to_string()))
-            }
-        }
+        // Camera literals are resolved by the engine (needs sys.devices); not a plain config value.
+        PortType::Camera => None,
         // Arrays / detection elements / the Any wildcard are produced by upstream nodes
         // (or, for ForEach `items`, parsed from text in the engine) — never a config literal.
         PortType::TextArray
@@ -226,6 +227,62 @@ pub fn literal_for_named(config: &Value, name: &str, ty: PortType) -> Option<Por
         | PortType::Face
         | PortType::Any => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Camera entity helpers (used by the engine + nodes)
+// ---------------------------------------------------------------------------
+
+/// Resolve a query string (device id, IP, or name) to a `CameraEntity` using `sys.devices`.
+/// Returns `None` if the query is empty or no device matches.
+pub fn resolve_camera_entity(query: &str, sys: &ToolContext) -> Option<crate::workflows::domain::CameraEntity> {
+    let q = query.trim();
+    if q.is_empty() {
+        return None;
+    }
+    let devices = sys.devices.lock().unwrap();
+    let idx = dev_actions::resolve_device(&devices, q).ok()?;
+    let d = &devices[idx];
+    Some(crate::workflows::domain::CameraEntity { id: d.id.clone(), ip: d.ip.clone(), name: d.name.clone() })
+}
+
+/// Resolve a `Camera` config literal (the dropdown-stored device id) to a `PortValue::Camera`.
+/// Called by the engine when a `PortType::Camera` input port has no wired edge.
+pub fn resolve_camera_literal(config: &Value, key: &str, sys: &ToolContext) -> Option<PortValue> {
+    let id = config.get(key).and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty())?;
+    resolve_camera_entity(id, sys).map(PortValue::Camera)
+}
+
+/// Upgrade a `PortValues` map that came from an event payload: for every field whose port is
+/// `PortType::Camera`, convert a raw `PortValue::Text` (IP or id string from the wire) into
+/// a `PortValue::Camera(CameraEntity)`. Called by the engine when seeding an `OnEvent` node.
+pub fn seed_event_cameras(
+    payload: &PortValues,
+    ports: &[crate::workflows::domain::ResolvedPort],
+    sys: &ToolContext,
+) -> PortValues {
+    let mut out = payload.clone();
+    for port in ports {
+        if port.ty == crate::workflows::domain::PortType::Camera {
+            if let Some(PortValue::Text(s)) = out.get(&port.name).cloned() {
+                if let Some(cam) = resolve_camera_entity(&s, sys) {
+                    out.insert(port.name.clone(), PortValue::Camera(cam));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Get the full `Device` from `sys.devices` using a `CameraEntity`'s stable id.
+fn device_from_camera<'a>(
+    cam: &crate::workflows::domain::CameraEntity,
+    devices: &'a [crate::devices::Device],
+) -> Result<&'a crate::devices::Device, String> {
+    devices
+        .iter()
+        .find(|d| d.id == cam.id)
+        .ok_or_else(|| format!("camera '{}' not found (was it removed?)", cam.name))
 }
 
 /// Execute one node against its resolved inputs. Returns its declared outputs.
@@ -242,7 +299,8 @@ pub fn run_node(
         NodeKind::DeliverAlert => run_deliver_alert(inputs, sys),
         NodeKind::CameraSnapshot => run_camera_snapshot(inputs, sys),
         NodeKind::GetCurrentFrame => run_get_current_frame(config, inputs, sys),
-        NodeKind::GetCameraByName => run_get_camera_by_name(config),
+        NodeKind::GetCameraByName => run_get_camera_by_name(config, sys),
+        NodeKind::BreakCamera => run_break_camera(inputs),
         NodeKind::DescribeImage => run_describe_image(config, inputs, sys),
         NodeKind::NotifyRecipient => run_notify_recipient(inputs, sys),
         NodeKind::Format => run_format(config, inputs),
@@ -354,7 +412,8 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::TextCompare
         | NodeKind::ForEach
         | NodeKind::StringSwitch
-        | NodeKind::GetCameraByName => return None,
+        | NodeKind::GetCameraByName
+        | NodeKind::BreakCamera => return None,
     };
     let secs = config_u64(config, "timeout_secs").unwrap_or(default_secs);
     if secs == 0 {
@@ -735,8 +794,12 @@ pub fn debug_summary(
             format!("AI: \"{}\" → {}", clip(q), if answer { "true" } else { "false" })
         }
         NodeKind::GetCameraByName => {
-            let id = outputs.get("camera").and_then(PortValue::as_text).unwrap_or("");
-            format!("camera: {id}")
+            let name = outputs.get("camera").and_then(PortValue::as_camera).map(|c| c.name.as_str()).unwrap_or("?");
+            format!("camera: {name}")
+        }
+        NodeKind::BreakCamera => {
+            let name = inputs.get("camera").and_then(PortValue::as_camera).map(|c| c.name.as_str()).unwrap_or("?");
+            format!("break '{name}' → id/ip/name")
         }
     }
 }
@@ -916,11 +979,11 @@ fn run_motion_detection(config: &Value, inputs: &PortValues) -> Result<PortValue
 /// apart, and reports `moved`/`score`. Self-contained per run — drop it in a Cron graph to
 /// watch a feed continuously and wire `moved` → If → Emit event to act only on motion.
 fn run_motion_watch(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let camera = req_text(inputs, "camera")?;
+    let cam = inputs.get("camera").and_then(PortValue::as_camera)
+        .ok_or("missing required camera input")?;
     let device = {
         let devices = sys.devices.lock().unwrap();
-        let idx = dev_actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
-        devices[idx].clone()
+        device_from_camera(cam, &devices)?.clone()
     };
     let pixel_threshold = cfg_i64(config, "pixel_threshold", 25).clamp(0, 255) as i16;
     let sensitivity = cfg_i64(config, "sensitivity", 2).clamp(0, 100) as f64;
@@ -1124,9 +1187,8 @@ fn run_record_presence(config: &Value, inputs: &PortValues, sys: &ToolContext) -
 
     let camera = inputs
         .get("camera")
-        .and_then(PortValue::as_text)
-        .map(|s| s.to_string())
-        .filter(|s| !s.trim().is_empty());
+        .and_then(PortValue::as_camera)
+        .map(|c| c.id.clone());
 
     // How long the map keeps the pulse alive (seconds). Input overrides config; default 8.
     let duration_secs = inputs
@@ -1203,11 +1265,11 @@ fn run_deliver_alert(inputs: &PortValues, sys: &ToolContext) -> Result<PortValue
 }
 
 fn run_camera_snapshot(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let camera = req_text(inputs, "camera")?;
+    let cam = inputs.get("camera").and_then(PortValue::as_camera)
+        .ok_or("missing required camera input")?;
     let device = {
         let devices = sys.devices.lock().unwrap();
-        let idx = dev_actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
-        devices[idx].clone()
+        device_from_camera(cam, &devices)?.clone()
     };
     let bytes = sys.frames.snapshot(&device)?;
     // Mirror the chat tool: also surface the snapshot in the UI.
@@ -1225,11 +1287,11 @@ fn run_camera_snapshot(inputs: &PortValues, sys: &ToolContext) -> Result<PortVal
 /// camera round trip), starting/keeping a background grabber. For high-rate loops like a
 /// 1 Hz recognition graph. Falls back to an on-demand snapshot until the cache is warm.
 fn run_get_current_frame(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let camera = req_text(inputs, "camera")?;
+    let cam = inputs.get("camera").and_then(PortValue::as_camera)
+        .ok_or("missing required camera input")?;
     let device = {
         let devices = sys.devices.lock().unwrap();
-        let idx = dev_actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
-        devices[idx].clone()
+        device_from_camera(cam, &devices)?.clone()
     };
     let max_age_ms = config
         .get("max_age_ms")
@@ -1243,15 +1305,29 @@ fn run_get_current_frame(config: &Value, inputs: &PortValues, sys: &ToolContext)
     Ok(o)
 }
 
-fn run_get_camera_by_name(config: &Value) -> Result<PortValues, String> {
+fn run_get_camera_by_name(config: &Value, sys: &ToolContext) -> Result<PortValues, String> {
     let id = config
         .get("camera")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or("No camera selected — pick one in the node config.")?;
+    let cam = resolve_camera_entity(id, sys)
+        .ok_or_else(|| format!("camera '{id}' not found"))?;
     let mut o = PortValues::new();
-    o.insert("camera".into(), PortValue::Text(id.to_string()));
+    o.insert("camera".into(), PortValue::Camera(cam));
+    Ok(o)
+}
+
+fn run_break_camera(inputs: &PortValues) -> Result<PortValues, String> {
+    let cam = inputs
+        .get("camera")
+        .and_then(PortValue::as_camera)
+        .ok_or("missing required camera input")?;
+    let mut o = PortValues::new();
+    o.insert("id".into(), PortValue::Text(cam.id.clone()));
+    o.insert("ip".into(), PortValue::Text(cam.ip.clone()));
+    o.insert("name".into(), PortValue::Text(cam.name.clone()));
     Ok(o)
 }
 

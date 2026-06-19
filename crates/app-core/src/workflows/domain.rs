@@ -55,6 +55,16 @@ pub enum PortType {
     Any,
 }
 
+/// A camera device as it appears on the wire — the safe, credential-free subset of `Device`.
+/// Produced by `GetCameraByName` and `OnEvent("motion")`. Consumed by camera-input nodes and
+/// `BreakCamera`. The `id` is the stable ONVIF device id (same as `Device::id`).
+#[derive(Debug, Clone)]
+pub struct CameraEntity {
+    pub id: String,
+    pub ip: String,
+    pub name: String,
+}
+
 /// A static port declaration on a `NodeKind` (not persisted — derived from the kind).
 #[derive(Debug, Clone, Copy)]
 pub struct Port {
@@ -134,6 +144,10 @@ pub enum NodeKind {
     /// value. No exec pins — activates whenever its output is demanded. Use this to
     /// inject a static camera reference into any part of a graph without exec flow.
     GetCameraByName,
+    /// Pure data: destructure a `Camera` entity → `id`, `ip`, `name` Text outputs.
+    /// Like Unreal's Break node — use this when you need the raw strings from a camera
+    /// that arrived on a `Camera` typed wire (e.g. from `OnEvent("motion")`).
+    BreakCamera,
     DescribeImage,
     /// Renamed from `notify_beacon`; the alias keeps old `workflows.json` loadable.
     #[serde(alias = "notify_beacon")]
@@ -446,6 +460,13 @@ const ASK_AI_IN: [Port; 2] =
 
 const GET_CAMERA_BY_NAME_OUT: [Port; 1] = [p("camera", PortType::Camera, false)];
 
+const BREAK_CAMERA_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
+const BREAK_CAMERA_OUT: [Port; 3] = [
+    p("id", PortType::Text, false),
+    p("ip", PortType::Text, false),
+    p("name", PortType::Text, false),
+];
+
 const NO_PORTS: [Port; 0] = [];
 
 // Universal control-flow ports — every node has an `exec_in` and, by default, an
@@ -463,7 +484,7 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 45] = [
+    pub const ALL: [NodeKind; 46] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -471,6 +492,7 @@ impl NodeKind {
         NodeKind::CameraSnapshot,
         NodeKind::GetCurrentFrame,
         NodeKind::GetCameraByName,
+        NodeKind::BreakCamera,
         NodeKind::DescribeImage,
         NodeKind::NotifyRecipient,
         NodeKind::Format,
@@ -522,6 +544,7 @@ impl NodeKind {
             NodeKind::CameraSnapshot => "camera_snapshot",
             NodeKind::GetCurrentFrame => "get_current_frame",
             NodeKind::GetCameraByName => "get_camera_by_name",
+            NodeKind::BreakCamera => "break_camera",
             NodeKind::DescribeImage => "describe_image",
             NodeKind::NotifyRecipient => "notify_recipient",
             NodeKind::Format => "format",
@@ -576,6 +599,7 @@ impl NodeKind {
             NodeKind::CameraSnapshot => "Camera snapshot",
             NodeKind::GetCurrentFrame => "Get current frame",
             NodeKind::GetCameraByName => "Get camera",
+            NodeKind::BreakCamera => "Break camera",
             NodeKind::DescribeImage => "Describe image",
             NodeKind::NotifyRecipient => "Notify recipient",
             NodeKind::Format => "Format",
@@ -622,7 +646,7 @@ impl NodeKind {
         match self {
             NodeKind::GetLastAlert | NodeKind::CreateAlert | NodeKind::DeliverAlert => "Alerts",
             NodeKind::GetRecipient | NodeKind::NotifyRecipient => "Recipients",
-            NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame | NodeKind::GetCameraByName => "Cameras",
+            NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame | NodeKind::GetCameraByName | NodeKind::BreakCamera => "Cameras",
             NodeKind::DescribeImage | NodeKind::AskAi => "AI",
             NodeKind::Format => "Text",
             NodeKind::Wait
@@ -669,6 +693,7 @@ impl NodeKind {
         matches!(
             self,
             NodeKind::GetCameraByName
+                | NodeKind::BreakCamera
                 | NodeKind::Compare
                 | NodeKind::NumLt
                 | NodeKind::NumLte
@@ -711,6 +736,7 @@ impl NodeKind {
             NodeKind::CameraSnapshot => &CAMERA_SNAPSHOT_IN,
             NodeKind::GetCurrentFrame => &GET_CURRENT_FRAME_IN,
             NodeKind::GetCameraByName => &NO_PORTS,
+            NodeKind::BreakCamera => &BREAK_CAMERA_IN,
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_IN,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_IN,
             NodeKind::Format => &FORMAT_IN,
@@ -760,6 +786,7 @@ impl NodeKind {
             NodeKind::CameraSnapshot => &CAMERA_SNAPSHOT_OUT,
             NodeKind::GetCurrentFrame => &GET_CURRENT_FRAME_OUT,
             NodeKind::GetCameraByName => &GET_CAMERA_BY_NAME_OUT,
+            NodeKind::BreakCamera => &BREAK_CAMERA_OUT,
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_OUT,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_OUT,
             NodeKind::Format => &FORMAT_OUT,
@@ -823,6 +850,7 @@ impl NodeKind {
             NodeKind::CameraSnapshot => json!({ "camera": "first", "timeout_secs": "10" }),
             NodeKind::GetCurrentFrame => json!({ "camera": "first", "max_age_ms": "2000", "timeout_secs": "10" }),
             NodeKind::GetCameraByName => json!({ "camera": "" }),
+            NodeKind::BreakCamera => json!({}),
             NodeKind::DescribeImage => json!({ "timeout_secs": "65" }),
             NodeKind::NotifyRecipient => json!({ "message": "", "timeout_secs": "35" }),
             NodeKind::Format => json!({ "template": "{p1} — {p2}", "p1": "", "p2": "", "p3": "" }),

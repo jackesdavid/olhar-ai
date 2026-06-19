@@ -7,7 +7,7 @@
 //! resolving inputs from upstream outputs else config literals), stopping on the
 //! first node error. The trigger/concurrency methods are the pure decision logic
 //! the backend poller drives.
-use super::domain::{string_switch_arms, ConcurrencyPolicy, Graph, NodeKind, EXEC_IN};
+use super::domain::{string_switch_arms, ConcurrencyPolicy, Graph, NodeKind, PortType, EXEC_IN};
 use super::repo;
 use super::node::{self, PortValue, PortValues};
 use crate::agent::tools::{ToolContext, ToolUiEvent};
@@ -309,6 +309,11 @@ fn forward_epoch(
                     }
                     None => {}
                 }
+            } else if port.ty == PortType::Camera {
+                // Camera literals require device resolution — handled here where sys is available.
+                if let Some(cam) = node::resolve_camera_literal(&n.config, &port.name, sys) {
+                    inputs.insert(port.name.clone(), cam);
+                }
             } else if let Some(lit) = node::literal_for_named(&n.config, &port.name, port.ty) {
                 inputs.insert(port.name.clone(), lit);
             }
@@ -482,8 +487,9 @@ fn forward_epoch(
 
         // OnEvent entry: seed its outputs with the delivered payload so downstream nodes
         // read each field by port name (run_node returned an empty map for it).
+        // Camera-typed fields are upgraded from raw Text (IP/id from the wire) to CameraEntity.
         if n.kind == NodeKind::OnEvent {
-            o = entry_payload.clone();
+            o = node::seed_event_cameras(entry_payload, &n.output_ports(), sys);
         }
 
         if n.kind == NodeKind::If {

@@ -52,8 +52,6 @@ kanban-plugin: board
 	  - Plan: [[string-switch-node]]
 - [ ] Missing comparison nodes: TextCompare + And / Or / Not
 	  - Plan: [[missing-comparison-nodes]]
-- [ ] Camera typed port + GetCameraByName node
-	  - Plan: [[camera-typed-port]]
 
 
 ## Review
@@ -73,6 +71,8 @@ kanban-plugin: board
 ## Done
 
 **Complete**
+- [x] Camera typed port + GetCameraByName node
+	  - Plan: [[camera-typed-port]]
 - [x] Node run animation lags — light on arrival, keep min duration
 	  - Plan: [[node-animation-timing]]
 - [x] Events carry typed payload data
