@@ -4,8 +4,9 @@
   import { BufferGeometry, BufferAttribute, Vector3 } from "three";
   import type { MapShape } from "$lib/types";
   import type { MapStore } from "$lib/map/store.svelte";
-  import { ACCENT_SOFT, ACCENT_BRIGHT, INK } from "$lib/map/palette";
+  import { ACCENT_SOFT, ACCENT_BRIGHT, ACCENT_LABEL, INK } from "$lib/map/palette";
   import LineStroke from "./LineStroke.svelte";
+  import { shapeHandlePositions } from "$lib/map/pick";
 
   let { store }: { store: MapStore } = $props();
 
@@ -102,5 +103,14 @@
         <LineStroke geometry={outGeo} color={stroke} dashed={isDashed(s)} dashSize={ds(s)} gapSize={0.14} />
       </T.Group>
     </T.Group>
+  {/if}
+
+  {#if sel}
+    {#each shapeHandlePositions(s) as h (h.x + ',' + h.z)}
+      <T.Mesh position={[h.x, 0.18, h.z]}>
+        <T.SphereGeometry args={[0.13, 10, 10]} />
+        <T.MeshBasicMaterial color={ACCENT_LABEL} />
+      </T.Mesh>
+    {/each}
   {/if}
 {/each}

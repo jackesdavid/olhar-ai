@@ -28,6 +28,43 @@ function pointInTriangle(px: number, pz: number, ax: number, az: number, bx: num
   return !(hasNeg && hasPos);
 }
 
+/** World positions of resize handles for a shape (empty when no handles apply). */
+export function shapeHandlePositions(s: MapShape): Pt[] {
+  if (s.kind === "rect" && s.w != null && s.h != null) {
+    const rad = ((s.rot ?? 0) * Math.PI) / 180;
+    const cr = Math.cos(rad), sr = Math.sin(rad);
+    const hw = s.w / 2, hh = s.h / 2;
+    const corners: [number, number][] = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
+    return corners.map(([lx, lz]) => ({
+      x: s.x + lx * cr - lz * sr,
+      z: s.y + lx * sr + lz * cr,
+    }));
+  }
+  if (s.kind === "circle" && s.r != null) {
+    return [{ x: s.x + s.r, z: s.y }];
+  }
+  if (s.kind === "triangle" && s.pts) {
+    return s.pts.map(([px, pz]) => ({ x: px, z: pz }));
+  }
+  return [];
+}
+
+export type ShapeHandleHit = { id: number; idx: number } | null;
+
+/** Nearest resize handle for the currently-selected shape. */
+export function nearShapeHandle(p: Pt, shapes: MapShape[], selectedId: number | null, threshold = 0.4): ShapeHandleHit {
+  if (selectedId === null) return null;
+  const s = shapes.find((x) => x.id === selectedId);
+  if (!s) return null;
+  const handles = shapeHandlePositions(s);
+  for (let i = 0; i < handles.length; i++) {
+    if (Math.hypot(p.x - handles[i].x, p.z - handles[i].z) <= threshold) {
+      return { id: s.id, idx: i };
+    }
+  }
+  return null;
+}
+
 /** Nearest wall endpoint within grab range — for reshaping a wall by an end. */
 export function nearWallEndpoint(p: Pt, walls: MapWall[]): EndpointHit {
   for (const w of walls) {

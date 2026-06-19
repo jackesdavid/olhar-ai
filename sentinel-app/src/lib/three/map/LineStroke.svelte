@@ -1,9 +1,11 @@
 <script lang="ts">
-  // Thin wrapper around T.Line that calls computeLineDistances() on the mesh
-  // after mount — required for LineDashedMaterial to render dashes correctly.
-  // computeLineDistances() lives on Line (the mesh), NOT on BufferGeometry.
+  // Wrapper around T.Line that manages its material and dash distances imperatively.
+  // Threlte's child T.LineDashedMaterial doesn't reliably propagate color/dash changes,
+  // and computeLineDistances() lives on the Line mesh — not on BufferGeometry.
+  // This component owns both: it recreates the material and re-runs computeLineDistances
+  // whenever any prop changes.
   import { T } from "@threlte/core";
-  import type { BufferGeometry } from "three";
+  import { LineBasicMaterial, LineDashedMaterial, type BufferGeometry, type Line } from "three";
 
   let {
     geometry,
@@ -19,17 +21,19 @@
     gapSize?: number;
   } = $props();
 
-  let ref = $state<{ computeLineDistances(): void } | undefined>(undefined);
+  let ref = $state<Line | undefined>(undefined);
 
   $effect(() => {
-    if (ref) ref.computeLineDistances();
+    // Track all props so the effect re-runs whenever any one changes.
+    // Threlte sets ref.geometry = geometry before effects fire, so computeLineDistances
+    // will see the latest geometry.
+    void geometry;
+    if (!ref) return;
+    ref.material = dashed
+      ? new LineDashedMaterial({ color, dashSize, gapSize })
+      : new LineBasicMaterial({ color });
+    ref.computeLineDistances();
   });
 </script>
 
-<T.Line {geometry} bind:ref>
-  {#if dashed}
-    <T.LineDashedMaterial {color} {dashSize} {gapSize} />
-  {:else}
-    <T.LineBasicMaterial {color} />
-  {/if}
-</T.Line>
+<T.Line {geometry} bind:ref />

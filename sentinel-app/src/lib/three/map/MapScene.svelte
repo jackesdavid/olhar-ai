@@ -10,7 +10,7 @@
   import type { PresenceStore } from "$lib/map/presence.svelte";
   import type { Viewport } from "$lib/map/view3d.svelte";
   import { resolvePoint, resolveMarkerPoint, wallVertices, type Pt, type ToolState } from "$lib/map/tools.svelte";
-  import { hitTest, nearWallEndpoint } from "$lib/map/pick";
+  import { hitTest, nearWallEndpoint, nearShapeHandle } from "$lib/map/pick";
   import { categoryColor } from "$lib/map/categories";
   import GroundGrid from "./GroundGrid.svelte";
   import RoomMesh from "./RoomMesh.svelte";
@@ -67,6 +67,7 @@
   type Drag =
     | { mode: "pan"; sx: number; sy: number }
     | { mode: "endpoint"; id: number; which: 1 | 2; started: boolean }
+    | { mode: "shape-resize"; id: number; idx: number; started: boolean }
     | { mode: "room" | "wall" | "marker" | "text" | "shape"; id: number; last: Pt; started: boolean };
   let drag: Drag | null = null;
 
@@ -169,6 +170,15 @@
 
     // ---- select mode -------------------------------------------------------
     const raw = worldAt(e);
+
+    // Check shape resize handles before anything else (so a handle grab wins over
+    // a shape-body drag when the user clicks near a corner/vertex).
+    const sh = nearShapeHandle(raw, store.shapes, store.selectedShapeId);
+    if (sh) {
+      drag = { mode: "shape-resize", id: sh.id, idx: sh.idx, started: false };
+      return;
+    }
+
     const ep = nearWallEndpoint(raw, store.walls);
     if (ep) {
       store.selectWall(ep.id);
@@ -212,6 +222,38 @@
       if (!drag.started) { store.checkpoint(); drag.started = true; }
       if (drag.which === 1) store.updateWall(drag.id, { x1: sp.x, y1: sp.z });
       else store.updateWall(drag.id, { x2: sp.x, y2: sp.z });
+      return;
+    }
+
+    if (drag.mode === "shape-resize") {
+      if (!drag.started) { store.checkpoint(); drag.started = true; }
+      const s = store.shapes.find((x) => x.id === drag!.id);
+      if (!s) return;
+      const idx = (drag as { mode: "shape-resize"; id: number; idx: number; started: boolean }).idx;
+
+      if (s.kind === "circle") {
+        const r = Math.max(0.1, Math.hypot(sp.x - s.x, sp.z - s.y));
+        store.updateShape(s.id, { r });
+      } else if (s.kind === "triangle" && s.pts) {
+        const newPts = s.pts.map((pt, i) =>
+          i === idx ? [sp.x, sp.z] as [number, number] : pt
+        ) as [number, number][];
+        store.updateShape(s.id, { pts: newPts });
+      } else if (s.kind === "rect" && s.w != null && s.h != null) {
+        const rad = ((s.rot ?? 0) * Math.PI) / 180;
+        const cr = Math.cos(rad), sr = Math.sin(rad);
+        const hw = s.w / 2, hh = s.h / 2;
+        const corners: [number, number][] = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
+        const [flx, flz] = corners[(idx + 2) % 4];
+        const fixedX = s.x + flx * cr - flz * sr;
+        const fixedZ = s.y + flx * sr + flz * cr;
+        const newCx = (sp.x + fixedX) / 2;
+        const newCz = (sp.z + fixedZ) / 2;
+        const ddx = sp.x - fixedX, ddz = sp.z - fixedZ;
+        const newW = Math.max(0.1, Math.abs(ddx * cr + ddz * sr));
+        const newH = Math.max(0.1, Math.abs(-ddx * sr + ddz * cr));
+        store.updateShape(s.id, { x: newCx, y: newCz, w: newW, h: newH });
+      }
       return;
     }
 
