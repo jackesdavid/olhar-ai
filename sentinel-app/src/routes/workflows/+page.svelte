@@ -35,6 +35,7 @@
   import Printer from "@lucide/svelte/icons/printer";
   import History from "@lucide/svelte/icons/history";
   import DictionaryEditor from "$lib/components/dictionary-editor.svelte";
+  import SearchableSelect from "$lib/components/searchable-select.svelte";
 
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -2390,12 +2391,12 @@
                       {:else if key === "class" && selectedNode.kind === "object_detection"}
                         {@const clsWired = graph.edges.some((e) => e.to === selectedNode.id && e.to_port === "class")}
                         {@const clsv = String(selectedNode.config[key] ?? "person")}
-                        <Select.Root type="single" disabled={editLocked || clsWired} value={clsv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "person" })}>
-                          <Select.Trigger class="h-8 w-full capitalize">{clsv}</Select.Trigger>
-                          <Select.Content>
-                            {#each COCO_CLASSES as c (c)}<Select.Item value={c} label={c} class="capitalize">{c}</Select.Item>{/each}
-                          </Select.Content>
-                        </Select.Root>
+                        <SearchableSelect
+                          value={clsv}
+                          options={COCO_CLASSES}
+                          disabled={editLocked || clsWired}
+                          onchange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, class: v })}
+                        />
                         {#if clsWired}
                           <p class="mt-0.5 text-[10px] text-muted-foreground">Overridden by wired input</p>
                         {/if}
