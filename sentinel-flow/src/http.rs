@@ -2,10 +2,13 @@
 //! run state, asks for a manual run (`POST /runs` → 202, async-job style), and
 //! subscribes to the live event stream. The engine remains authoritative; SSE is an
 //! optimization layered over re-fetchable REST state.
+use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
 use axum::Router;
@@ -27,6 +30,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/runs/history", get(run_history))
         .route("/runs/frame", get(run_frame))
         .route("/runs/:run_id/logs", get(run_logs))
+        .route("/events", get(events_sse))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -163,4 +167,29 @@ async fn run_logs(
 ) -> impl IntoResponse {
     let logs = app_core::workflows::repo::list_run_logs(&state.db, q.tenant, run_id);
     Json(logs)
+}
+
+/// Internal SSE feed — all run-progress events from this pod's in-process bus, unfiltered.
+/// Consumed by the sentinel-control relay when Redis is not configured (single-pod mode).
+/// Not exposed externally (sentinel-flow is not public-facing).
+async fn events_sse(
+    State(state): State<Arc<AppState>>,
+) -> Sse<impl futures::Stream<Item = Result<Event, Infallible>>> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
+    let mut bus_rx = state.events.subscribe();
+    tokio::spawn(async move {
+        loop {
+            match bus_rx.recv().await {
+                Ok(line) => {
+                    if tx.send(Ok(Event::default().data(line))).await.is_err() {
+                        return;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+            }
+        }
+    });
+    Sse::new(tokio_stream::wrappers::ReceiverStream::new(rx))
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }

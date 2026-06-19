@@ -22,6 +22,8 @@ kanban-plugin: board
 	  - Plan: [[box-rekey-enrollment]]
 - [ ] Recipients management UI (add/edit/remove notification targets)
 - [ ] Define site/zones model in workflows domain
+- [ ] AI/Vision node ideas — research backlog
+	  - Plan: [[ai-vision-node-ideas]]
 
 
 ## ToDo
@@ -34,8 +36,7 @@ kanban-plugin: board
 	  - Plan: [[workflow-list-improvements]]
 - [ ] Comment node — canvas organizer
 	  - Plan: [[comment-node]]
-- [ ] In the (Record Presence) node is not possible to change the room in the property panel
-- [ ] Ai Question Node
+- [ ] AI If node — yes/no question routes exec like If
 	  - Plan: [[ai-question-node]]
 
 
@@ -45,8 +46,6 @@ kanban-plugin: board
 	  - Plan: [[generic-object-detection-node]]
 - [ ] Missing comparison nodes: TextCompare + And / Or / Not
 	  - Plan: [[missing-comparison-nodes]]
-- [ ] Node run animation lags — light on arrival, keep min duration
-	  - Plan: [[node-animation-timing]]
 
 
 ## Review
@@ -58,6 +57,7 @@ kanban-plugin: board
 - [x] Map Redesign 2 — wall style + architectural-neutral pass
 	  - Plan: [[map-redesign-2]]
 - [ ] Free text ( filled and wireframe) tool map
+- [ ] In the (Record Presence) node is not possible to change the room in the property panel
 - [ ] Map redesign — top-down 3D blueprint editor + live presence
 	  - Epic: [[map-redesign]]
 
@@ -65,6 +65,8 @@ kanban-plugin: board
 ## Done
 
 **Complete**
+- [x] Node run animation lags — light on arrival, keep min duration
+	  - Plan: [[node-animation-timing]]
 - [x] Events carry typed payload data
 	  - Plan: [[event-payload-data]]
 - [x] Motion Detection Node v2 (camera-bound; emit+throttle deferred)

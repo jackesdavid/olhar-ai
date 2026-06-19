@@ -341,11 +341,10 @@ struct EventsQuery {
     token: String,
 }
 
-/// Relay run-progress SSE to the browser, **scoped to the caller's tenant**, off the Redis
-/// event fabric. The editor opens an `EventSource` here (which can't send headers, so the JWT
-/// rides the `token` query param). We subscribe to `events:<tenant>`, which carries EVERY flow
-/// pod's events (multi-pod). The channel name isolates the tenant, so no per-message filter is
-/// needed. Lossy by design (final state is re-fetchable via REST).
+/// Relay run-progress SSE to the browser, **scoped to the caller's tenant**.
+/// With Redis: subscribes to `events:<tenant>` pubsub (multi-pod, all flow events).
+/// Without Redis: proxies sentinel-flow's internal `/events` SSE and filters by tenant
+/// (single-pod fallback — no fan-out, but works without a Redis sidecar).
 async fn events_stream(
     State(st): State<AppState>,
     Query(q): Query<EventsQuery>,
@@ -354,35 +353,79 @@ async fn events_stream(
     auth::require(&claims, "workflows.read")?;
     let tid = tenant_of(&claims)?.to_string();
 
-    let Some(url) = st.redis_url.clone() else {
-        return Err(err(StatusCode::BAD_GATEWAY, "event fabric unavailable (REDIS_URL not set)"));
-    };
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
-    let chan = format!("events:{tid}");
-    tokio::spawn(async move {
-        let client = match redis::Client::open(url) {
-            Ok(c) => c,
-            Err(e) => { log::warn!("events relay: bad redis url: {e}"); return; }
-        };
-        let mut pubsub = match client.get_async_pubsub().await {
-            Ok(p) => p,
-            Err(e) => { log::warn!("events relay: redis pubsub connect failed: {e}"); return; }
-        };
-        if let Err(e) = pubsub.subscribe(&chan).await {
-            log::warn!("events relay: subscribe {chan} failed: {e}");
-            return;
-        }
-        let mut on_msg = pubsub.on_message();
-        while let Some(msg) = on_msg.next().await {
-            let Ok(payload) = msg.get_payload::<String>() else { continue };
-            if tx.send(Ok(Event::default().data(payload))).await.is_err() {
-                return; // browser disconnected
+
+    if let Some(url) = st.redis_url.clone() {
+        let chan = format!("events:{tid}");
+        tokio::spawn(async move {
+            let client = match redis::Client::open(url) {
+                Ok(c) => c,
+                Err(e) => { log::warn!("events relay: bad redis url: {e}"); return; }
+            };
+            let mut pubsub = match client.get_async_pubsub().await {
+                Ok(p) => p,
+                Err(e) => { log::warn!("events relay: redis pubsub connect failed: {e}"); return; }
+            };
+            if let Err(e) = pubsub.subscribe(&chan).await {
+                log::warn!("events relay: subscribe {chan} failed: {e}");
+                return;
             }
-        }
-    });
+            let mut on_msg = pubsub.on_message();
+            while let Some(msg) = on_msg.next().await {
+                let Ok(payload) = msg.get_payload::<String>() else { continue };
+                if tx.send(Ok(Event::default().data(payload))).await.is_err() {
+                    return; // browser disconnected
+                }
+            }
+        });
+    } else {
+        // Single-pod fallback: proxy sentinel-flow's internal /events and filter by tenant.
+        let flow_events_url = format!("{}/events", flow_base());
+        tokio::spawn(async move {
+            relay_flow_events(flow_events_url, tid, tx).await;
+        });
+    }
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+/// HTTP-proxy sentinel-flow's internal SSE `/events` to a browser client, forwarding
+/// only events whose `tenant` field matches `tid`. Used as the single-pod fallback when
+/// `REDIS_URL` is not configured.
+async fn relay_flow_events(
+    url: String,
+    tenant: String,
+    tx: tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
+) {
+    let resp = match reqwest::Client::new().get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("events proxy: flow /events unreachable ({url}): {e}");
+            return;
+        }
+    };
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+    while let Some(item) = stream.next().await {
+        let Ok(bytes) = item else { return };
+        let Ok(text) = std::str::from_utf8(&bytes) else { continue };
+        buf.push_str(text);
+        // Drain all complete lines from the buffer, forward matching tenant's data events.
+        while let Some(nl) = buf.find('\n') {
+            let line = buf[..nl].trim_end_matches('\r').to_string();
+            buf.drain(..=nl);
+            if let Some(data) = line.strip_prefix("data: ") {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                    if v.get("tenant").and_then(|t| t.as_str()) == Some(tenant.as_str()) {
+                        if tx.send(Ok(Event::default().data(data.to_string()))).await.is_err() {
+                            return; // browser disconnected
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ---- graph lifecycle --------------------------------------------------------
