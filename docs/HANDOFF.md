@@ -6,6 +6,28 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-06-19 — GPU box setup: Tailscale + SSH + sidecar build (CUDA mismatch blocked)
+
+- **Branch:** worktree `scalable-bouncing-hamming` off `new-ui`; plan note committed to `feat/map-redesign` via cherry-pick
+- **Commits:** `d966e5f` (face-recognition-next-steps plan + board card, on `feat/map-redesign`)
+- **Done:**
+  - **Face recognition plan note:** `docs/plans/face-recognition-next-steps.md` — full state snapshot + 4-phase next-steps (DetectFaces node, live-feed triggers, GPU box upgrade, hardening). Board card added to ToDo.
+  - **GPU box access:** Tailscale on Bazzite Linux box (`100.84.250.126`). SSH alias `gpu-box` in `~/.ssh/config`, key `~/.ssh/id_rsa`. NOPASSWD sudo for `/usr/bin/podman` via `/etc/sudoers.d/sentinel-ai`.
+  - **GPU confirmed:** RTX 2060 SUPER, driver 595.71.05 (CUDA 13.2 capable), CDI config present (`/etc/cdi/nvidia.yaml`), GPU passthrough works with `sudo podman`.
+  - **Sidecar image built:** `localhost/sentinel-ai:gpu` (8.4 GB) on the box; container `sentinel-ai` running on port 8000. `Dockerfile.gpu` on box patches `FROM` with `docker.io/` prefix (Podman Fedora policy).
+- **State:** Sidecar running but on **CPUExecutionProvider** — GPU not active. `torch.cuda.is_available()` = True; problem is onnxruntime-gpu CUDA version.
+- **Blocker — CUDA version mismatch:**
+  PyPI onnxruntime-gpu skips CUDA 12: ≤1.17.x links `.so.11`, ≥1.19.x links `.so.13`. Dockerfile base (`pytorch:2.4.1-cuda12.4`) ships `.so.12`. CUDA 12.4 apt packages installed in running container. **Try `onnxruntime-gpu==1.18.1` next** — likely the CUDA 12 sweet spot. Fallback: direct wheel from ONNX Runtime GitHub releases.
+- **Pending / next:**
+  1. `ssh gpu-box "sudo podman exec sentinel-ai pip install onnxruntime-gpu==1.18.1"` → `ldd libonnxruntime_providers_cuda.so | grep "not found"` → if `.so.12`, update LD_LIBRARY_PATH to CUDA 12.4 apt paths + restart
+  2. If 1.18.1 still wrong CUDA, get wheel from https://github.com/microsoft/onnxruntime/releases
+  3. Once GPU confirmed: update `Dockerfile.gpu`, rebuild image, smoke-test with a real face image
+  4. Wire into VPS: `sentinel.env` → `AI_SERVICE_URL=http://100.84.250.126:8000/runsync` + `extra_hosts` in sentinel-control service
+- **Blockers:** onnxruntime CUDA gap — autonomous if 1.18.1 works; needs user if Dockerfile rebuild required
+- **Refs:** `docs/ref/ai-sidecar.md` (new this session), `docs/plans/face-recognition-next-steps.md`
+
+---
+
 ## 2026-06-19 — Workflow nodes: ObjectDetection + comparison nodes + SSE animation fix
 
 - **Branch:** `feat/map-redesign` (all workflow work on this branch); pushed via `task cloud-deploy`.
