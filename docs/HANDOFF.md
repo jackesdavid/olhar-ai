@@ -6,6 +6,32 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-06-19 — Workflow nodes: ObjectDetection + comparison nodes + SSE animation fix
+
+- **Branch:** `feat/map-redesign` (all workflow work on this branch); pushed via `task cloud-deploy`.
+- **Commits:** `14ef865` (new nodes), `c8c1f78` (SSE animation fix).
+- **Done:**
+  - **Generic Object Detection node** (`object_detection`): any COCO class via dropdown or wired `class` Text input; outputs `count`, `confidence`, `detections` (PersonArray), `ok`. Wired class pin grays out the dropdown.
+  - **Break Detection node** (`break_detection`): splits a single detection into `bbox` (NumArray) + `confidence`.
+  - **Missing comparison/logic nodes:** `Or`, `Not`, `TextCompare` (eq/ne/contains/starts_with/ends_with) — all pure pull-based with inline expression labels in the canvas.
+  - **Workflow node animations fixed:** `events_stream` in sentinel-control returned 502 when `REDIS_URL` was unset — the promised single-pod fallback was never built. Fixed: (1) `GET /events` SSE on sentinel-flow streams the in-process bus; (2) sentinel-control proxies it and filters by tenant when Redis is absent. Redis path (production) unchanged.
+  - **`.env.example`**: documented `REDIS_URL` as optional with fallback note.
+  - **Board:** "Node run animation lags" → Done.
+  - **Deployed:** `task cloud-deploy -- sentinel-flow sentinel-control` in flight at handoff time.
+- **State:**
+  - `cargo check` clean for both crates before commit. `svelte-check` not re-run (no frontend changes this session).
+  - Deploy was still building when handoff was saved — verify containers restarted on VPS.
+- **Pending / next:**
+  1. Verify animations work in browser after deploy settles.
+  2. Move "Generic Object Detection" + "Missing comparison nodes" board cards → Done.
+  3. RecordPresence room picker bug (Review column) still open.
+  4. Map: wall depth card still Review; remove `[presence]` debug console lines.
+  5. Release: bump web version + merge `feat/map-redesign` → `new-ui`.
+- **Blockers:** none.
+- **Refs:** `sentinel-flow/src/http.rs:171` (new `/events`), `sentinel-control/src/domain/workflows.rs:353` (`events_stream`), `docs/ref/workflows.md`, `docs/workflow-nodes.md`.
+
+---
+
 ## 2026-06-18 — Map 3D wall depth polish + no-Docker deploy path
 
 - **Branch:** `feat/map-redesign` (off `main`); pushed. Not merged to `new-ui`.
