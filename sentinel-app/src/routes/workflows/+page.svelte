@@ -299,7 +299,9 @@
   // Multiple nodes can be live simultaneously (fast graphs / branches). The active
   // node keeps its highlight until the next event (or run end). Visual only.
   const MIN_HIGHLIGHT_MS = 700;
-  const liveNodes = $state(new Set<number>());
+  // Use a plain record instead of Set — $state({}) property mutations are definitely
+  // tracked by Svelte 5's reactive proxy (Set.add/delete tracking has been unreliable).
+  const liveNodes = $state<Record<number, true>>({});
   const liveTimers = new Map<number, ReturnType<typeof setTimeout>>();
   let runEnded = false;
 
@@ -307,26 +309,27 @@
     runEnded = false;
     const prev = liveTimers.get(nodeId);
     if (prev !== undefined) clearTimeout(prev); // re-trigger: restart the minimum hold
-    liveNodes.add(nodeId);
+    liveNodes[nodeId] = true;
     liveTimers.set(nodeId, setTimeout(() => {
       liveTimers.delete(nodeId);
       // Keep the node lit if it's still the active node and the run hasn't ended.
       if (!runEnded && act?.current === nodeId) return;
-      liveNodes.delete(nodeId);
+      delete liveNodes[nodeId];
     }, MIN_HIGHLIGHT_MS));
   }
   function endLive() {
     runEnded = true;
     // Pending timers will fire and remove themselves. Nodes that outlasted their
     // timer (stayed lit as the active node) need to be cleared right now.
-    for (const id of liveNodes) {
-      if (!liveTimers.has(id)) liveNodes.delete(id);
+    for (const k of Object.keys(liveNodes)) {
+      const id = Number(k);
+      if (!liveTimers.has(id)) delete liveNodes[id];
     }
   }
   function clearLive() {
     for (const t of liveTimers.values()) clearTimeout(t);
     liveTimers.clear();
-    liveNodes.clear();
+    for (const k in liveNodes) delete liveNodes[Number(k)];
     runEnded = false;
   }
 
@@ -401,7 +404,7 @@
   const editLocked = $derived(isRunning || (graph?.enabled ?? false));
   // A node (and the edge feeding it) is "live" while it has an active highlight.
   function nodeLive(id: number): boolean {
-    return liveNodes.has(id);
+    return id in liveNodes;
   }
 
   // Re-entering the editor mid-run (e.g. during a long Wait) won't get a fresh
@@ -411,7 +414,7 @@
     const cur = act?.current ?? null;
     // `!runEnded` guards against the polled `current` lagging behind the run-end
     // event: without it we'd re-light the last node after the flow already ended.
-    if (view === "editor" && cur !== null && !runEnded && liveNodes.size === 0) {
+    if (view === "editor" && cur !== null && !runEnded && Object.keys(liveNodes).length === 0) {
       markLive(cur);
     }
   });
