@@ -274,7 +274,7 @@ pub fn system_events() -> Vec<TenantEvent> {
             field("score", PortType::Num),
             field("area", PortType::Num),
             field("blobs", PortType::Num),
-            field("bbox", PortType::Text),
+            field("bbox", PortType::NumArray),
             field("frame", PortType::Image),
         ],
     }]
