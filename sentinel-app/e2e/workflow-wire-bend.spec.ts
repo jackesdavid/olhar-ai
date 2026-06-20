@@ -95,8 +95,10 @@ test.describe("workflow wire bending", () => {
 
       // Locate the visible wire path (non-transparent stroke).
       // There is exactly one edge in our test graph.
+      // SVG paths with fill="none" are marked "hidden" by Playwright even though they render —
+      // use toBeAttached() which checks DOM presence without the visibility heuristic.
       const wirePath = canvas.locator("path[stroke]:not([stroke='transparent'])").first();
-      await expect(wirePath).toBeVisible();
+      await expect(wirePath).toBeAttached();
 
       // Capture the path shape before dragging.
       const dBefore = await wirePath.getAttribute("d");
@@ -174,7 +176,7 @@ test.describe("workflow wire bending", () => {
       await expect(canvas).toBeVisible({ timeout: 10_000 });
 
       const hitPath = canvas.locator("path[stroke='transparent'][stroke-width='20']").first();
-      await expect(hitPath).toBeVisible();
+      await expect(hitPath).toBeAttached(); // transparent path — toBeVisible() fails on fill:none
 
       const bbox = await hitPath.boundingBox();
       const midX = bbox!.x + bbox!.width / 2;
