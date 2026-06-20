@@ -495,7 +495,9 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 48] = [
+    /// All user-visible node kinds. Reroute is intentionally excluded: it is a
+    /// UI-only wire organiser that the engine collapses before execution.
+    pub const ALL: [NodeKind; 47] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -543,7 +545,6 @@ impl NodeKind {
         NodeKind::StringSwitch,
         NodeKind::AskAi,
         NodeKind::Comment,
-        NodeKind::Reroute,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the

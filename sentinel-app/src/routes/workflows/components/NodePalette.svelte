@@ -45,7 +45,7 @@
       k.category.toLowerCase().includes(q) ||
       k.slug.toLowerCase().includes(q);
 
-    const matched = kinds.filter(matchKind);
+    const matched = kinds.filter((k) => k.slug !== "comment" && k.slug !== "reroute" && matchKind(k));
     const groups = new Map<string, PaletteKind[]>();
     for (const k of matched) {
       const list = groups.get(k.category) ?? [];

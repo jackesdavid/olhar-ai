@@ -31,15 +31,22 @@
 
   let search = $state("");
 
+  // Reroute is UI-only and not in the server catalog; inject it here so it's always available.
+  const REROUTE_ENTRY: PaletteKind = {
+    slug: "reroute",
+    label: "Reroute",
+    category: "Utility",
+    inputs: [{ name: "value", type: "any", required: false }],
+    outputs: [{ name: "value", type: "any", required: false }],
+    default_config: {},
+  };
+
   const filteredKinds = $derived.by(() => {
     const q = search.trim().toLowerCase();
     const type = portType;
-    return kinds
-      .filter(
-        (k) =>
-          k.slug !== "comment" &&
-          (!q || k.label.toLowerCase().includes(q) || k.slug.includes(q)),
-      )
+    const base = [REROUTE_ENTRY, ...kinds.filter((k) => k.slug !== "comment" && k.slug !== "reroute")];
+    return base
+      .filter((k) => !q || k.label.toLowerCase().includes(q) || k.slug.includes(q))
       .map((k) => ({
         ...k,
         _score:

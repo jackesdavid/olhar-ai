@@ -362,15 +362,8 @@ pub fn run_node(
         NodeKind::StringSwitch => run_string_switch(inputs),
         NodeKind::AskAi => run_ask_ai(config, inputs, sys),
         // Comment is a canvas organizer — it never executes.
-        NodeKind::Comment => Ok(PortValues::new()),
-        // Reroute passes its input value through unchanged.
-        NodeKind::Reroute => {
-            let mut out = PortValues::new();
-            if let Some(v) = inputs.get("value") {
-                out.insert("value".into(), v.clone());
-            }
-            Ok(out)
-        }
+        // Reroute is collapsed to a direct edge before the engine runs (see engine::flatten_reroutes).
+        NodeKind::Comment | NodeKind::Reroute => Ok(PortValues::new()),
     }
 }
 

@@ -56,6 +56,49 @@ fn json_to_port_value(v: &serde_json::Value) -> PortValue {
     }
 }
 
+/// Collapse reroute chains: for every edge A→Reroute→B, emit a direct A→B edge and
+/// drop all edges involving reroute nodes. Handles chained reroutes (A→R1→R2→B → A→B).
+fn flatten_reroutes(
+    edges: &[super::domain::Edge],
+    reroute_ids: &HashSet<u32>,
+) -> Vec<super::domain::Edge> {
+    fn resolve_source(
+        id: u32,
+        edges: &[super::domain::Edge],
+        reroutes: &HashSet<u32>,
+    ) -> Option<(u32, String)> {
+        if !reroutes.contains(&id) {
+            return None; // not a reroute — caller already knows the non-reroute source
+        }
+        let src = edges.iter().find(|e| e.to == id)?;
+        if reroutes.contains(&src.from) {
+            resolve_source(src.from, edges, reroutes)
+        } else {
+            Some((src.from, src.from_port.clone()))
+        }
+    }
+
+    let mut result = Vec::with_capacity(edges.len());
+    for e in edges {
+        if !reroute_ids.contains(&e.from) && !reroute_ids.contains(&e.to) {
+            result.push(e.clone()); // normal edge, keep as-is
+        } else if reroute_ids.contains(&e.from) && !reroute_ids.contains(&e.to) {
+            // reroute → real node: resolve the non-reroute source
+            if let Some((from, from_port)) = resolve_source(e.from, edges, reroute_ids) {
+                result.push(super::domain::Edge {
+                    from,
+                    from_port,
+                    to: e.to,
+                    to_port: e.to_port.clone(),
+                });
+            }
+            // else: reroute has no input wired — drop silently
+        }
+        // real → reroute edges are absorbed (handled via output resolution above)
+    }
+    result
+}
+
 /// Run the whole graph once in topological order. Each node runs at most once; inputs
 /// resolve from upstream outputs (wired edges) else config literals; stops on first error.
 pub fn run_dag(graph: &Graph, sys: &ToolContext) -> Result<HashMap<u32, PortValues>, String> {
@@ -135,19 +178,37 @@ fn run_driver(
     on_log: &mut dyn FnMut(u32, &str, u128),
     emit: &mut dyn FnMut(&str, &PortValues),
 ) -> Result<HashMap<u32, PortValues>, String> {
-    let connected: HashSet<u32> = if graph.run_orphans {
-        graph.nodes.iter().map(|n| n.id).collect()
+    // Reroute nodes are UI-only wire organizers. Collapse them here so the engine
+    // executes the graph as if they don't exist: A→Reroute→B becomes A→B.
+    let reroute_ids: HashSet<u32> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.kind == NodeKind::Reroute)
+        .map(|n| n.id)
+        .collect();
+    let flat_edges_buf: Vec<super::domain::Edge>;
+    let edges: &[super::domain::Edge] = if reroute_ids.is_empty() {
+        &graph.edges
     } else {
-        graph.edges.iter().flat_map(|e| [e.from, e.to]).collect()
+        flat_edges_buf = flatten_reroutes(&graph.edges, &reroute_ids);
+        &flat_edges_buf
+    };
+
+    let connected: HashSet<u32> = if graph.run_orphans {
+        graph.nodes.iter().filter(|n| !reroute_ids.contains(&n.id)).map(|n| n.id).collect()
+    } else {
+        edges.iter().flat_map(|e| [e.from, e.to]).collect()
     };
     let back = graph.back_edges();
 
     // Ordering indegree + adjacency over DISTINCT non-back `(from,to)` pairs (same de-dup
     // as `topo_order`), so the forward graph is acyclic.
-    let mut indeg_tmpl: HashMap<u32, usize> = graph.nodes.iter().map(|n| (n.id, 0)).collect();
-    let mut adj: HashMap<u32, Vec<u32>> = graph.nodes.iter().map(|n| (n.id, Vec::new())).collect();
+    let mut indeg_tmpl: HashMap<u32, usize> = graph.nodes.iter()
+        .filter(|n| !reroute_ids.contains(&n.id)).map(|n| (n.id, 0)).collect();
+    let mut adj: HashMap<u32, Vec<u32>> = graph.nodes.iter()
+        .filter(|n| !reroute_ids.contains(&n.id)).map(|n| (n.id, Vec::new())).collect();
     let mut seen_pair = HashSet::new();
-    for e in &graph.edges {
+    for e in edges {
         if back.contains(&(e.from, e.to)) {
             continue;
         }
@@ -170,14 +231,14 @@ fn run_driver(
     let run_started = Instant::now();
 
     let mut reentries = forward_epoch(
-        graph, sys, &indeg_tmpl, &adj, &back, &connected, seed_entries, initial_forced, entry_payload,
+        graph, edges, sys, &indeg_tmpl, &adj, &back, &connected, seed_entries, initial_forced, entry_payload,
         &mut outputs, &mut ran, &mut loop_state, &mut steps, run_started, on_node, on_log, emit,
     )?;
     // Later epochs: re-enter loops at the back-edge / ForEach targets until none fire.
     while !reentries.is_empty() {
         let forced: HashSet<u32> = reentries.into_iter().collect();
         reentries = forward_epoch(
-            graph, sys, &indeg_tmpl, &adj, &back, &connected, false, &forced, entry_payload,
+            graph, edges, sys, &indeg_tmpl, &adj, &back, &connected, false, &forced, entry_payload,
             &mut outputs, &mut ran, &mut loop_state, &mut steps, run_started, on_node, on_log, emit,
         )?;
     }
@@ -190,6 +251,7 @@ fn run_driver(
 #[allow(clippy::too_many_arguments)]
 fn forward_epoch(
     graph: &Graph,
+    edges: &[super::domain::Edge],
     sys: &ToolContext,
     indeg_tmpl: &HashMap<u32, usize>,
     adj: &HashMap<u32, Vec<u32>>,
@@ -251,8 +313,7 @@ fn forward_epoch(
         // branch, gating the other off — unchanged.
         let mut has_ord_exec = false;
         let mut fed_live = false;
-        for e in graph
-            .edges
+        for e in edges
             .iter()
             .filter(|e| e.to == nid && e.to_port == EXEC_IN.name && !back.contains(&(e.from, nid)))
         {
@@ -275,13 +336,11 @@ fn forward_epoch(
             // with upstream data edges (comparison, conversion, etc.), activate as soon as
             // any upstream producer has run — they're pulled by the exec chain, not seeded.
             // True orphans (no incoming ordering edges at all) fall back to seed_entries.
-            let has_upstream = graph
-                .edges
+            let has_upstream = edges
                 .iter()
                 .any(|e| e.to == nid && !back.contains(&(e.from, nid)));
             if has_upstream {
-                graph
-                    .edges
+                edges
                     .iter()
                     .filter(|e| e.to == nid && !back.contains(&(e.from, nid)))
                     .any(|e| outputs.contains_key(&e.from))
@@ -302,7 +361,7 @@ fn forward_epoch(
         // Node-aware ports: most kinds are static, but EmitEvent's inputs are its
         // configured event's payload fields (one per field). Gather wired values by name.
         for port in n.input_ports() {
-            if let Some(edge) = graph.edges.iter().find(|e| e.to == nid && e.to_port == port.name) {
+            if let Some(edge) = edges.iter().find(|e| e.to == nid && e.to_port == port.name) {
                 match outputs.get(&edge.from).and_then(|m| m.get(&edge.from_port)) {
                     Some(v) => {
                         inputs.insert(port.name.clone(), v.clone());
