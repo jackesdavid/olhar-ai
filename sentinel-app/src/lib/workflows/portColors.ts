@@ -12,7 +12,7 @@ export const portColor: Record<PortType, string> = {
   file: "#fb923c",
   exec: "#f4f4f5",
   text_array: "#93c5fd",
-  num_array: "#6ee7b7",
+  num_array: "#fb923c",
   person_array: "#f0abfc",
   face_array: "#fda4af",
   person: "#e879f9",

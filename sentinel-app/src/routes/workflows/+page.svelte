@@ -76,6 +76,8 @@
     { value: "num", label: "Number" },
     { value: "bool", label: "Bool" },
     { value: "image", label: "Image" },
+    { value: "num_array", label: "Num array" },
+    { value: "text_array", label: "Text array" },
     { value: "camera", label: "Camera" },
     { value: "recipient", label: "Recipient" },
     { value: "file", label: "File" },
