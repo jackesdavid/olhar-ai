@@ -125,7 +125,6 @@
 
   // ---- layout constants ----------------------------------------------------
   const NODE_W = 176;
-  const REROUTE_R = 11; // radius of the reroute dot; total width = 2*REROUTE_R
   const HEAD_H = 26;
   const ROW_H = 22;
   const PAD = 8;
@@ -153,6 +152,15 @@
   let contextPos = $state({ x: 0, y: 0 });
   let contextPending = $state<{ node: number; port: string; portType: PortType } | null>(null);
   const contextPortType = $derived(contextPending?.portType ?? ("any" as PortType));
+  // Edge via-points: purely visual bend handles stored in memory (key = "from:port:to:port").
+  // The logical edge A→B is unchanged; the via dot just repositions the wire on screen.
+  let edgeVias = $state(new Map<string, { x: number; y: number }>());
+  let dragVia = $state<{ key: string } | null>(null);
+
+  function edgeViaKey(e: { from: number; from_port: string; to: number; to_port: string }) {
+    return `${e.from}:${e.from_port}:${e.to}:${e.to_port}`;
+  }
+
   let consoleOpen = $state(false);
   let logs = $state<LogLine[]>([]);
 
@@ -630,7 +638,6 @@
   // Local Y of a port by name — exec_in on the header; exec outputs stack from the
   // header down; data ports sit below the header divider.
   function portLocalY(node: Node, port: string, side: "in" | "out") {
-    if (node.kind === "reroute") return REROUTE_R; // single center point for both ports
     if (isExec(node, port, side)) {
       if (side === "in") return HEAD_H / 2;
       const i = execOutPorts(effectiveKind(node)).findIndex((p) => p.name === port);
@@ -655,7 +662,7 @@
   // Includes comparison operators, logical operators, and type-conversion nodes.
   const PURE_KINDS = new Set([
     "num_lt","num_lte","num_gt","num_gte","num_eq","num_ne","compare","and","or","not","text_compare",
-    "bool_to_text","num_to_text","get_camera_by_name","break_camera","reroute",
+    "bool_to_text","num_to_text","get_camera_by_name","break_camera",
   ]);
   function isCompareOrLogic(kind: string): boolean {
     return PURE_KINDS.has(kind);
@@ -1053,8 +1060,8 @@
     let x: number;
     let y: number;
     if (dropAt) {
-      x = Math.round(dropAt.x) - (slug === "reroute" ? REROUTE_R : NODE_W / 2);
-      y = Math.round(dropAt.y) - (slug === "reroute" ? REROUTE_R : HEAD_H / 2);
+      x = Math.round(dropAt.x) - NODE_W / 2;
+      y = Math.round(dropAt.y) - HEAD_H / 2;
       dropAt = null;
     } else {
       const n = graph.nodes.length;
@@ -1446,6 +1453,11 @@
   function _onCanvasMove(e: PointerEvent) {
     hoverWorld = worldPoint(e); // track the cursor for the `n`-to-add-here shortcut
     if (pending) cursor = worldPoint(e); // drag the open wire end with the cursor
+    if (dragVia) {
+      const wp = worldPoint(e);
+      edgeVias.set(dragVia.key, wp);
+      return;
+    }
     if (panning) {
       pan = { x: panning.ox + (e.clientX - panning.sx), y: panning.oy + (e.clientY - panning.sy) };
       return;
@@ -1473,6 +1485,10 @@
     }
   }
   async function onCanvasUp() {
+    if (dragVia) {
+      dragVia = null;
+      return;
+    }
     if (panning) {
       panning = null;
       return;
@@ -1775,14 +1791,19 @@
                 {@const fromN = nodeById.get(e.from)}
                 {@const toN = nodeById.get(e.to)}
                 {#if fromN && toN}
-                  {@const x1 = fromN.kind === "reroute" ? fromN.x + REROUTE_R * 2 : fromN.x + NODE_W}
+                  {@const x1 = fromN.x + NODE_W}
                   {@const y1 = outPortY(fromN, e.from_port)}
                   {@const x2 = toN.x}
                   {@const y2 = inPortY(toN, e.to_port)}
                   {@const eLive = nodeLive(e.to)}
                   {@const eColor = portColorOf(fromN, e.from_port, "out")}
+                  {@const vk = edgeViaKey(e)}
+                  {@const via = edgeVias.get(vk)}
+                  {@const pathD = via
+                    ? `M ${x1} ${y1} C ${x1 + 60} ${y1}, ${via.x - 30} ${via.y}, ${via.x} ${via.y} C ${via.x + 30} ${via.y}, ${x2 - 60} ${y2}, ${x2} ${y2}`
+                    : `M ${x1} ${y1} C ${x1 + 60} ${y1}, ${x2 - 60} ${y2}, ${x2} ${y2}`}
                   <path
-                    d={`M ${x1} ${y1} C ${x1 + 60} ${y1}, ${x2 - 60} ${y2}, ${x2} ${y2}`}
+                    d={pathD}
                     fill="none"
                     stroke={eColor}
                     stroke-width={eLive ? 3 : 2}
@@ -1791,6 +1812,21 @@
                       ? 'node-running'
                       : ''}"
                     onclick={() => removeEdge(idx)}
+                    role="presentation"
+                  />
+                  <!-- via dot: drag to bend the wire; dblclick to straighten -->
+                  {@const dotX = via ? via.x : (x1 + x2) / 2}
+                  {@const dotY = via ? via.y : (y1 + y2) / 2}
+                  <circle
+                    cx={dotX}
+                    cy={dotY}
+                    r={via ? 5 : 4}
+                    fill={via ? eColor : "transparent"}
+                    stroke={eColor}
+                    stroke-width={via ? 1.5 : 0}
+                    class="cursor-grab transition-all {via ? 'opacity-100' : 'opacity-0 hover:opacity-60'}"
+                    onpointerdown={(ev) => { ev.stopPropagation(); dragVia = { key: vk }; edgeVias.set(vk, worldPoint(ev)); }}
+                    ondblclick={(ev) => { ev.stopPropagation(); edgeVias.delete(vk); }}
                     role="presentation"
                   />
                 {/if}
@@ -1803,29 +1839,6 @@
                 {@const sel = selectedNodeId === n.id}
                 {@const live = nodeLive(n.id)}
                 {@const invalid = requiredUnfilled(n).length > 0}
-                {#if n.kind === "reroute"}
-                  {@const anyCol = portColor.any}
-                  {@const isOutP = pending && pending.node === n.id && pending.port === "value"}
-                  <g transform="translate({n.x} {n.y})" filter={sel || live ? "url(#nodeGlow)" : undefined}>
-                    <circle cx={REROUTE_R} cy={REROUTE_R} r={REROUTE_R}
-                      stroke-width={sel ? 2 : 1.5}
-                      class="fill-card transition-[stroke] {sel ? 'stroke-primary' : 'stroke-border'}"
-                    />
-                    <circle cx={REROUTE_R} cy={REROUTE_R} r={Math.round(REROUTE_R * 0.45)} fill={anyCol} class="pointer-events-none" />
-                    <circle cx={REROUTE_R} cy={REROUTE_R} r={REROUTE_R} fill="transparent"
-                      class="cursor-move" onpointerdown={(ev) => startDrag(ev, n)}
-                      onclick={() => { selectedNodeId = n.id; }} role="presentation"
-                    />
-                    <circle cx={0} cy={REROUTE_R} r={4}
-                      fill={wiredInto(n.id, "value") ? anyCol : "#151c19"} stroke={anyCol} stroke-width="1.5"
-                      class="cursor-pointer" onclick={() => clickInPort(n, "value")} role="presentation"
-                    />
-                    <circle cx={REROUTE_R * 2} cy={REROUTE_R} r={isOutP ? 5 : 4}
-                      fill={isOutP ? anyCol : "#151c19"} stroke={anyCol} stroke-width="1.5"
-                      class="cursor-pointer transition-all" onclick={() => clickOutPort(n, "value")} role="presentation"
-                    />
-                  </g>
-                {:else}
                 <!-- One transform moves the whole node; inner coords are local,
                      so dragging only updates this single attribute (no per-port
                      recompute). -->
@@ -2089,14 +2102,13 @@
                     </g>
                   {/if}
                 </g>
-                {/if}
               {/each}
 
               <!-- wire being drawn: from the chosen output port to the cursor -->
               {#if pending}
                 {@const pn = nodeById.get(pending.node)}
                 {#if pn}
-                  {@const px = pn.kind === "reroute" ? pn.x + REROUTE_R * 2 : pn.x + NODE_W}
+                  {@const px = pn.x + NODE_W}
                   {@const py = outPortY(pn, pending.port)}
                   {@const pColor = portColorOf(pn, pending.port, "out")}
                   <path
