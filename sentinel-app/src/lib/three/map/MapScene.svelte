@@ -199,7 +199,20 @@
     drag = { mode: "pan", sx: e.clientX, sy: e.clientY };
   }
 
+  let _pendingMove: PointerEvent | null = null;
+  let _moveRaf: number | null = null;
+
   function onMove(e: PointerEvent) {
+    _pendingMove = e;
+    if (_moveRaf !== null) return;
+    _moveRaf = requestAnimationFrame(() => {
+      _moveRaf = null;
+      const ev = _pendingMove;
+      if (ev) { _pendingMove = null; _onMove(ev); }
+    });
+  }
+
+  function _onMove(e: PointerEvent) {
     const m = tools.mode;
     if (m === "wall" || m === "line") tools.hover = snap(worldAt(e), tools.draft, e.shiftKey);
     else if (m === "marker") tools.hover = resolveMarkerPoint(worldAt(e), store.walls);

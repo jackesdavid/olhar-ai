@@ -31,6 +31,28 @@
 
   function setColor(v: string) { patch({ color: v }); }
   function setFill(v: string) { patch({ fill: v }); }
+
+  let _pendingStroke: string | null = null;
+  let _strokeRaf: number | null = null;
+  function onStrokeInput(v: string) {
+    _pendingStroke = v;
+    if (_strokeRaf !== null) return;
+    _strokeRaf = requestAnimationFrame(() => {
+      _strokeRaf = null;
+      if (_pendingStroke !== null) { setColor(_pendingStroke); _pendingStroke = null; }
+    });
+  }
+
+  let _pendingFill: string | null = null;
+  let _fillRaf: number | null = null;
+  function onFillInput(v: string) {
+    _pendingFill = v;
+    if (_fillRaf !== null) return;
+    _fillRaf = requestAnimationFrame(() => {
+      _fillRaf = null;
+      if (_pendingFill !== null) { setFill(_pendingFill); _pendingFill = null; }
+    });
+  }
   function clearFill() { store.checkpoint(); patch({ fill: undefined }); }
 </script>
 
@@ -49,7 +71,7 @@
           value={s.color ?? "#ffffff"}
           class="h-8 w-10 cursor-pointer rounded border border-border bg-transparent p-0.5"
           onpointerdown={() => store.checkpoint()}
-          oninput={(e) => setColor(e.currentTarget.value)}
+          oninput={(e) => onStrokeInput(e.currentTarget.value)}
         />
         {#if s.color && s.color !== "#ffffff"}
           <Button variant="ghost" size="sm" class="h-8 text-xs text-muted-foreground"
@@ -88,7 +110,7 @@
           value={s.fill ?? "#ffffff"}
           class="h-8 w-10 cursor-pointer rounded border border-border bg-transparent p-0.5"
           onpointerdown={() => store.checkpoint()}
-          oninput={(e) => setFill(e.currentTarget.value)}
+          oninput={(e) => onFillInput(e.currentTarget.value)}
         />
         {#if s.fill}
           <Button variant="ghost" size="sm" class="h-8 text-xs text-muted-foreground" onclick={clearFill}>

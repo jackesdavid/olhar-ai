@@ -343,6 +343,8 @@
 
   const graph = $derived(graphs.find((g) => g.id === selectedGraphId) ?? null);
   const selectedNode = $derived(graph?.nodes.find((n) => n.id === selectedNodeId) ?? null);
+  const nodeById = $derived(new Map(graph?.nodes.map((n) => [n.id, n]) ?? []));
+  const nonCommentNodes = $derived(graph?.nodes.filter((n) => n.kind !== "comment") ?? []);
   const kinds = $derived(Object.values(catalog));
 
   // node palette: search + group by category
@@ -1446,7 +1448,20 @@
     panning = { sx: e.clientX, sy: e.clientY, ox: pan.x, oy: pan.y };
     svgEl?.setPointerCapture?.(e.pointerId);
   }
+  let _canvasPendingMove: PointerEvent | null = null;
+  let _canvasMoveRaf: number | null = null;
+
   function onCanvasMove(e: PointerEvent) {
+    _canvasPendingMove = e;
+    if (_canvasMoveRaf !== null) return;
+    _canvasMoveRaf = requestAnimationFrame(() => {
+      _canvasMoveRaf = null;
+      const ev = _canvasPendingMove;
+      if (ev) { _canvasPendingMove = null; _onCanvasMove(ev); }
+    });
+  }
+
+  function _onCanvasMove(e: PointerEvent) {
     hoverWorld = worldPoint(e); // track the cursor for the `n`-to-add-here shortcut
     if (pending) cursor = worldPoint(e); // drag the open wire end with the cursor
     if (panning) {
@@ -1456,11 +1471,11 @@
     if (commentResize && graph) {
       const dx = (e.clientX - commentResize.startX) / zoom;
       const dy = (e.clientY - commentResize.startY) / zoom;
-      const n = graph.nodes.find((x) => x.id === commentResize!.id);
+      const n = nodeById.get(commentResize.id);
       if (n) n.config = { ...n.config, width: Math.max(120, Math.round(commentResize.startW + dx)), height: Math.max(60, Math.round(commentResize.startH + dy)) };
     } else if (drag && graph) {
       const wp = worldPoint(e);
-      const n = graph.nodes.find((x) => x.id === drag!.id);
+      const n = nodeById.get(drag.id);
       if (n) {
         const newX = Math.round(wp.x - drag.offX);
         const newY = Math.round(wp.y - drag.offY);
@@ -1468,7 +1483,7 @@
         n.x = newX; n.y = newY;
         if (drag.enclosedIds?.length) {
           for (const eid of drag.enclosedIds) {
-            const en = graph.nodes.find(x => x.id === eid);
+            const en = nodeById.get(eid);
             if (en) { en.x += dx; en.y += dy; }
           }
         }
@@ -1775,8 +1790,8 @@
 
               <!-- edges -->
               {#each graph.edges as e, idx (idx)}
-                {@const fromN = graph.nodes.find((n) => n.id === e.from)}
-                {@const toN = graph.nodes.find((n) => n.id === e.to)}
+                {@const fromN = nodeById.get(e.from)}
+                {@const toN = nodeById.get(e.to)}
                 {#if fromN && toN}
                   {@const x1 = fromN.x + NODE_W}
                   {@const y1 = outPortY(fromN, e.from_port)}
@@ -1800,7 +1815,7 @@
               {/each}
 
               <!-- regular nodes (comment boxes rendered in the pass above) -->
-              {#each graph.nodes.filter(rn => rn.kind !== 'comment') as n (n.id)}
+              {#each nonCommentNodes as n (n.id)}
                 {@const k = effectiveKind(n)}
                 {@const h = nodeHeight(n)}
                 {@const sel = selectedNodeId === n.id}
@@ -2073,7 +2088,7 @@
 
               <!-- wire being drawn: from the chosen output port to the cursor -->
               {#if pending}
-                {@const pn = graph.nodes.find((n) => n.id === pending.node)}
+                {@const pn = nodeById.get(pending.node)}
                 {#if pn}
                   {@const px = pn.x + NODE_W}
                   {@const py = outPortY(pn, pending.port)}
@@ -2550,6 +2565,7 @@
                           class="h-8 w-full cursor-pointer rounded-lg border border-border bg-card"
                           disabled={editLocked}
                           value={String(selectedNode.config[key] ?? '#facc15')}
+                          oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)}
                           onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })}
                         />
                       {:else}
