@@ -258,6 +258,10 @@ export type Presence = {
   duration_secs?: number;
   source: string;
   created_at: string;
+  /** Normalised horizontal position within camera FOV (-0.5 left, 0 centre, 0.5 right). */
+  detect_x?: number | null;
+  /** Normalised depth within camera range (0 near camera, 1 far edge). */
+  detect_depth?: number | null;
 };
 
 /** A live presence push over SSE (the `presence` event from sentinel-flow). */
@@ -270,6 +274,10 @@ export type PresenceEvent = {
   /** How long the pulse should stay on the map, in seconds (RecordPresence config). */
   duration_secs?: number;
   created_at: string;
+  /** Normalised horizontal position within camera FOV (-0.5 left, 0 centre, 0.5 right). */
+  detect_x?: number | null;
+  /** Normalised depth within camera range (0 near camera, 1 far edge). */
+  detect_depth?: number | null;
 };
 
 export const DEFAULT_SETTINGS: Settings = {

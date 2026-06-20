@@ -40,12 +40,12 @@ kanban-plugin: board
 	  - Plan: [[ai-question-node]]
 - [ ] GetCameraRoom node — look up room name from a camera entity
 	  - Plan: [[get-camera-room]]
+- [ ] Map: presence history + logs panel in SidePanel
+	  - Plan: [[map-presence-history]]
 
 
 ## In Progress
 
-- [ ] Unified Platform Logs — one table, one UI, all modules
-	  - Plan: [[platform-logs-unified]]
 - [ ] Telegram Beacons: fix enrollment + polish + observability
 	  - Plan: [[telegram-beacons-fix-polish]]
 - [ ] Generic Object Detection node — configurable COCO class
@@ -56,10 +56,14 @@ kanban-plugin: board
 	  - Plan: [[missing-comparison-nodes]]
 - [ ] Comment node — canvas organizer
 	  - Plan: [[comment-node]]
+- [ ] Presence: bbox-based detection positioning on map
+	  - Plan: [[presence-bbox-positioning]]
 
 
 ## Review
 
+- [ ] Unified Platform Logs — one table, one UI, all modules
+	  - Plan: [[platform-logs-unified]]
 - [ ] Map: solid walls taller, richer material, deeper shadows
 	  - Plan: [[map-walls-3d-depth]]
 - [ ] Draw BBox node — annotate image with bounding box

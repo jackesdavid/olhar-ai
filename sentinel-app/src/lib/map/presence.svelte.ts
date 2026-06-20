@@ -81,9 +81,16 @@ export class PresenceStore {
           const camZ = r.y + r.h / 2 - lx * swx + lz * cwx;
           // Drop the pulse ahead in the camera's field of view (facing = cam.rot + room.rot;
           // forward = (-sin, cos), matching CameraMarker), scaled to the camera's range.
-          const a = (((c.rot ?? 0) + (r.rot ?? 0)) * Math.PI) / 180;
-          const ahead = Math.max(1, (c.range ?? 4.2) * 0.55);
-          return { x: camX - Math.sin(a) * ahead, z: camZ + Math.cos(a) * ahead };
+          // When bbox-derived detect_x / detect_depth are available, use them to place the
+          // pulse more accurately within the FOV cone; else fall back to "55% ahead, centre".
+          const fovDeg = c.fov ?? 62;
+          const range = c.range ?? 4.2;
+          const dx = p.detect_x != null ? p.detect_x : 0;
+          const depth = p.detect_depth != null ? p.detect_depth : 0.55;
+          const angleOffsetRad = dx * (fovDeg * Math.PI) / 180;
+          const dist = Math.max(0.5, depth * range);
+          const a = (((c.rot ?? 0) + (r.rot ?? 0)) * Math.PI) / 180 + angleOffsetRad;
+          return { x: camX - Math.sin(a) * dist, z: camZ + Math.cos(a) * dist };
         }
       }
     }

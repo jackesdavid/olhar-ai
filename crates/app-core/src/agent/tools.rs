@@ -52,6 +52,10 @@ pub enum ToolUiEvent {
         /// How long the map should keep the pulse alive, in seconds (from node config).
         duration_secs: u32,
         created_at: String,
+        /// Normalised horizontal position within the camera FOV (-0.5 left, 0.5 right).
+        detect_x: Option<f32>,
+        /// Normalised depth within the camera range (0 near, 1 far).
+        detect_depth: Option<f32>,
     },
 }
 

@@ -285,11 +285,14 @@ const CREATE_ALERT_OUT: [Port; 3] = [
     p("ok", PortType::Bool, false),
 ];
 
-const RECORD_PRESENCE_IN: [Port; 4] = [
+const RECORD_PRESENCE_IN: [Port; 7] = [
     p("room", PortType::Text, false),
     p("category", PortType::Text, false),
     p("label", PortType::Text, false),
     p("camera", PortType::Camera, false),
+    p("bbox", PortType::NumArray, false),   // [x1,y1,x2,y2] from BreakPersonDetection
+    p("frame_w", PortType::Num, false),     // source image width in pixels
+    p("frame_h", PortType::Num, false),     // source image height in pixels
 ];
 const RECORD_PRESENCE_OUT: [Port; 2] = [
     p("id", PortType::Num, false),
@@ -303,16 +306,20 @@ const DELIVER_ALERT_OUT: [Port; 2] = [
 ];
 
 const CAMERA_SNAPSHOT_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
-const CAMERA_SNAPSHOT_OUT: [Port; 3] = [
+const CAMERA_SNAPSHOT_OUT: [Port; 5] = [
     p("image", PortType::Image, false),
     p("result", PortType::Text, false),
+    p("width", PortType::Num, false),
+    p("height", PortType::Num, false),
     p("ok", PortType::Bool, false),
 ];
 
 const GET_CURRENT_FRAME_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
-const GET_CURRENT_FRAME_OUT: [Port; 3] = [
+const GET_CURRENT_FRAME_OUT: [Port; 5] = [
     p("image", PortType::Image, false),
     p("age_ms", PortType::Num, false), // how old the returned frame is (0 = fresh capture)
+    p("width", PortType::Num, false),
+    p("height", PortType::Num, false),
     p("ok", PortType::Bool, false),
 ];
 
@@ -369,10 +376,12 @@ const FOR_EACH_OUT: [Port; 2] =
 // Object detection: detect any COCO class — class chosen by config or wired `class` input.
 const OBJECT_DETECTION_IN: [Port; 2] =
     [p("image", PortType::Image, true), p("class", PortType::Text, false)];
-const OBJECT_DETECTION_OUT: [Port; 4] = [
+const OBJECT_DETECTION_OUT: [Port; 6] = [
     p("count", PortType::Num, false),
     p("confidence", PortType::Num, false), // percent 0..100 (top detection)
     p("detections", PortType::PersonArray, false), // one Detection per match — loop this
+    p("width", PortType::Num, false),
+    p("height", PortType::Num, false),
     p("ok", PortType::Bool, false),
 ];
 
@@ -402,10 +411,12 @@ const MOTION_WATCH_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
 
 // Person detection: an image in → whether a person is present (via the AI sidecar).
 const PERSON_DETECTION_IN: [Port; 1] = [p("image", PortType::Image, true)];
-const PERSON_DETECTION_OUT: [Port; 4] = [
+const PERSON_DETECTION_OUT: [Port; 6] = [
     p("count", PortType::Num, false),
     p("confidence", PortType::Num, false), // percent 0..100 (top person)
     p("persons", PortType::PersonArray, false), // one PersonDetection per person — loop this
+    p("width", PortType::Num, false),
+    p("height", PortType::Num, false),
     p("ok", PortType::Bool, false),
 ];
 

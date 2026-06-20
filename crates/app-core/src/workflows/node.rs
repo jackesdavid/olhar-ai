@@ -491,10 +491,13 @@ fn run_person_detection(inputs: &PortValues, sys: &ToolContext) -> Result<PortVa
     let count = people.len() as i64;
     let confidence = people.iter().map(|p| p.confidence).fold(0.0_f32, f32::max);
     let persons: Vec<PortValue> = people.into_iter().map(PortValue::Person).collect();
+    let (w, h) = jpeg_dimensions(bytes);
     let mut o = PortValues::new();
     o.insert("count".into(), PortValue::Num(count));
     o.insert("confidence".into(), PortValue::Num((confidence * 100.0).round() as i64));
     o.insert("persons".into(), PortValue::List(persons));
+    o.insert("width".into(), PortValue::Num(w));
+    o.insert("height".into(), PortValue::Num(h));
     o.insert("ok".into(), PortValue::Bool(true));
     Ok(o)
 }
@@ -522,10 +525,13 @@ fn run_object_detection(
     let count = detections.len() as i64;
     let confidence = detections.iter().map(|d| d.confidence).fold(0.0_f32, f32::max);
     let items: Vec<PortValue> = detections.into_iter().map(PortValue::Person).collect();
+    let (w, h) = jpeg_dimensions(bytes);
     let mut o = PortValues::new();
     o.insert("count".into(), PortValue::Num(count));
     o.insert("confidence".into(), PortValue::Num((confidence * 100.0).round() as i64));
     o.insert("detections".into(), PortValue::List(items));
+    o.insert("width".into(), PortValue::Num(w));
+    o.insert("height".into(), PortValue::Num(h));
     o.insert("ok".into(), PortValue::Bool(true));
     Ok(o)
 }
@@ -1226,6 +1232,25 @@ fn run_record_presence(config: &Value, inputs: &PortValues, sys: &ToolContext) -
         None => (None, None),
     };
 
+    // Compute detect_x / detect_depth from bbox + frame dimensions when all three are wired.
+    let detect_pos: Option<(f32, f32)> = (|| {
+        let bbox = inputs.get("bbox").and_then(PortValue::as_list)?;
+        if bbox.len() < 4 { return None; }
+        let x1 = bbox[0].as_num()? as f32;
+        let y1 = bbox[1].as_num()? as f32;
+        let x2 = bbox[2].as_num()? as f32;
+        let y2 = bbox[3].as_num()? as f32;
+        let fw = inputs.get("frame_w").and_then(PortValue::as_num)? as f32;
+        let fh = inputs.get("frame_h").and_then(PortValue::as_num)? as f32;
+        if fw <= 0.0 || fh <= 0.0 { return None; }
+        let cx = (x1 + x2) / 2.0 / fw - 0.5; // -0.5..0.5, left-to-right
+        let cy = (y1 + y2) / 2.0 / fh;        // 0 top, 1 bottom
+        let depth = 1.0 - cy;                  // bottom of frame = near (0), top = far (1)
+        Some((cx.clamp(-0.5, 0.5), depth.clamp(0.0, 1.0)))
+    })();
+    let detect_x = detect_pos.map(|(x, _)| x);
+    let detect_depth = detect_pos.map(|(_, d)| d);
+
     let p = crate::presence::create(
         &sys.db,
         sys.tenant_id,
@@ -1236,6 +1261,8 @@ fn run_record_presence(config: &Value, inputs: &PortValues, sys: &ToolContext) -
         camera.clone(),
         duration_secs,
         "workflow".to_string(),
+        detect_x,
+        detect_depth,
     );
 
     let _ = sys.ui_tx.send(ToolUiEvent::Presence {
@@ -1246,6 +1273,8 @@ fn run_record_presence(config: &Value, inputs: &PortValues, sys: &ToolContext) -
         camera,
         duration_secs,
         created_at: p.created_at.clone(),
+        detect_x,
+        detect_depth,
     });
 
     let mut o = PortValues::new();
@@ -1283,9 +1312,12 @@ fn run_camera_snapshot(inputs: &PortValues, sys: &ToolContext) -> Result<PortVal
     if let Ok(jpeg) = to_jpeg(&bytes) {
         let _ = sys.ui_tx.send(ToolUiEvent::Snapshot { camera: device.name.clone(), jpeg });
     }
+    let (w, h) = jpeg_dimensions(&bytes);
     let mut o = PortValues::new();
     o.insert("image".into(), PortValue::Image(bytes));
     o.insert("result".into(), PortValue::Text(format!("Snapshot of '{}' captured", device.name)));
+    o.insert("width".into(), PortValue::Num(w));
+    o.insert("height".into(), PortValue::Num(h));
     o.insert("ok".into(), PortValue::Bool(true));
     Ok(o)
 }
@@ -1305,9 +1337,12 @@ fn run_get_current_frame(config: &Value, inputs: &PortValues, sys: &ToolContext)
         .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
         .unwrap_or(2000);
     let (bytes, age_ms) = sys.frames.current(&device, max_age_ms)?;
+    let (w, h) = jpeg_dimensions(&bytes);
     let mut o = PortValues::new();
     o.insert("image".into(), PortValue::Image(bytes));
     o.insert("age_ms".into(), PortValue::Num(age_ms as i64));
+    o.insert("width".into(), PortValue::Num(w));
+    o.insert("height".into(), PortValue::Num(h));
     o.insert("ok".into(), PortValue::Bool(true));
     Ok(o)
 }
@@ -1467,6 +1502,15 @@ fn draw_rect(img: &mut image::RgbImage, x1: i64, y1: i64, x2: i64, y2: i64, colo
 }
 
 /// Re-encode snapshot bytes to JPEG for the UI event (same helper as the chat tool).
+/// Decode just the JPEG/PNG header to extract image dimensions. Returns (0, 0) on error
+/// so callers can treat unknown dimensions as absent without failing.
+fn jpeg_dimensions(bytes: &[u8]) -> (i64, i64) {
+    match image::load_from_memory(bytes) {
+        Ok(img) => (img.width() as i64, img.height() as i64),
+        Err(_) => (0, 0),
+    }
+}
+
 pub(crate) fn to_jpeg(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let img = image::load_from_memory(bytes).map_err(|e| format!("decode snapshot: {e}"))?;
     let mut out = Vec::new();

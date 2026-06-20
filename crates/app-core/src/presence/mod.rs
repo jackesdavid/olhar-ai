@@ -69,6 +69,13 @@ pub struct Presence {
     pub duration_secs: u32,
     pub source: String,
     pub created_at: String, // RFC3339
+    /// Normalised horizontal position within the camera FOV (-0.5 left, 0 centre, 0.5 right).
+    /// Computed from the detection bbox when `frame_w`/`frame_h` are wired into RecordPresence.
+    #[serde(default)]
+    pub detect_x: Option<f32>,
+    /// Normalised depth within the camera range (0 = near camera, 1 = far edge of range).
+    #[serde(default)]
+    pub detect_depth: Option<f32>,
 }
 
 fn default_duration() -> u32 {
@@ -89,6 +96,8 @@ pub fn create(
     camera: Option<String>,
     duration_secs: u32,
     source: String,
+    detect_x: Option<f32>,
+    detect_depth: Option<f32>,
 ) -> Presence {
     let created_at = crate::alerts::now_rfc3339();
     let id = repo::insert(
@@ -102,7 +111,9 @@ pub fn create(
         duration_secs,
         &source,
         &created_at,
+        detect_x,
+        detect_depth,
     )
     .unwrap_or(0);
-    Presence { id, category, label, room_id, room_name, camera, duration_secs, source, created_at }
+    Presence { id, category, label, room_id, room_name, camera, duration_secs, source, created_at, detect_x, detect_depth }
 }
