@@ -157,7 +157,7 @@
   const contextPortType = $derived(contextPending?.portType ?? ("any" as PortType));
   // Edge via-points: purely visual bend handles stored in memory (key = "from:port:to:port").
   // The logical edge A→B is unchanged; the via dot just repositions the wire on screen.
-  let edgeVias = $state(new Map<string, { x: number; y: number }>());
+  let edgeVias = $state<Record<string, { x: number; y: number }>>({});
   let dragVia = $state<{ key: string } | null>(null);
   let hoveredEdgeKey = $state<string | null>(null);
 
@@ -1487,7 +1487,7 @@
     if (pending) cursor = worldPoint(e); // drag the open wire end with the cursor
     if (dragVia) {
       const wp = worldPoint(e);
-      edgeVias.set(dragVia.key, wp);
+      edgeVias[dragVia.key] = wp;
       return;
     }
     if (panning) {
@@ -1830,7 +1830,7 @@
                   {@const eLive = nodeLive(e.to)}
                   {@const eColor = portColorOf(fromN, e.from_port, "out")}
                   {@const vk = edgeViaKey(e)}
-                  {@const via = edgeVias.get(vk)}
+                  {@const via = edgeVias[vk]}
                   {@const pathD = via
                     ? `M ${x1} ${y1} C ${x1 + 60} ${y1}, ${via.x - 30} ${via.y}, ${via.x} ${via.y} C ${via.x + 30} ${via.y}, ${x2 - 60} ${y2}, ${x2} ${y2}`
                     : `M ${x1} ${y1} C ${x1 + 60} ${y1}, ${x2 - 60} ${y2}, ${x2} ${y2}`}
@@ -1880,7 +1880,7 @@
                         class="cursor-grab"
                         onpointerdown={(ev) => {
                           ev.stopPropagation();
-                          if (ev.altKey) { edgeVias.delete(vk); return; }
+                          if (ev.altKey) { delete edgeVias[vk]; return; }
                           dragVia = { key: vk };
                         }}
                         role="presentation"
