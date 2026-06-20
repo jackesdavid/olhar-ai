@@ -1770,6 +1770,7 @@
             <svg
               bind:this={svgEl}
               use:passiveWheel
+              data-canvas
               class="block size-full {panning ? 'cursor-grabbing' : 'cursor-grab'}"
               onpointerdown={onCanvasDown}
               onpointermove={onCanvasMove}
