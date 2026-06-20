@@ -159,6 +159,7 @@
   // The logical edge A→B is unchanged; the via dot just repositions the wire on screen.
   let edgeVias = $state(new Map<string, { x: number; y: number }>());
   let dragVia = $state<{ key: string } | null>(null);
+  let hoveredEdgeKey = $state<string | null>(null);
 
   function edgeViaKey(e: { from: number; from_port: string; to: number; to_port: string }) {
     return `${e.from}:${e.from_port}:${e.to}:${e.to_port}`;
@@ -1833,29 +1834,39 @@
                   {@const pathD = via
                     ? `M ${x1} ${y1} C ${x1 + 60} ${y1}, ${via.x - 30} ${via.y}, ${via.x} ${via.y} C ${via.x + 30} ${via.y}, ${x2 - 60} ${y2}, ${x2} ${y2}`
                     : `M ${x1} ${y1} C ${x1 + 60} ${y1}, ${x2 - 60} ${y2}, ${x2} ${y2}`}
+                  <!-- wide invisible hit area so hovering anywhere on the wire reveals the via dot -->
+                  <path
+                    d={pathD}
+                    fill="none"
+                    stroke="transparent"
+                    stroke-width="20"
+                    class="cursor-pointer"
+                    onpointerenter={() => { hoveredEdgeKey = vk; }}
+                    onpointerleave={() => { if (hoveredEdgeKey === vk) hoveredEdgeKey = null; }}
+                    onclick={() => removeEdge(idx)}
+                    role="presentation"
+                  />
                   <path
                     d={pathD}
                     fill="none"
                     stroke={eColor}
                     stroke-width={eLive ? 3 : 2}
                     stroke-opacity={eLive ? 1 : 0.55}
-                    class="cursor-pointer transition-colors hover:stroke-destructive {eLive
-                      ? 'node-running'
-                      : ''}"
-                    onclick={() => removeEdge(idx)}
+                    class="pointer-events-none transition-colors {hoveredEdgeKey === vk ? 'stroke-destructive' : ''} {eLive ? 'node-running' : ''}"
                     role="presentation"
                   />
                   <!-- via dot: drag to bend the wire; dblclick to straighten -->
                   {@const dotX = via ? via.x : (x1 + x2) / 2}
                   {@const dotY = via ? via.y : (y1 + y2) / 2}
+                  {@const dotVisible = via || hoveredEdgeKey === vk}
                   <circle
                     cx={dotX}
                     cy={dotY}
                     r={via ? 5 : 4}
                     fill={via ? eColor : "transparent"}
                     stroke={eColor}
-                    stroke-width={via ? 1.5 : 0}
-                    class="cursor-grab transition-all {via ? 'opacity-100' : 'opacity-0 hover:opacity-60'}"
+                    stroke-width={dotVisible ? 1.5 : 0}
+                    class="cursor-grab transition-all {dotVisible ? 'opacity-100' : 'opacity-0'}"
                     onpointerdown={(ev) => { ev.stopPropagation(); dragVia = { key: vk }; edgeVias.set(vk, worldPoint(ev)); }}
                     ondblclick={(ev) => { ev.stopPropagation(); edgeVias.delete(vk); }}
                     role="presentation"

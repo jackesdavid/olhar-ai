@@ -436,7 +436,10 @@ pub struct RunRecord {
 pub struct RunLogLine {
     pub node_id: Option<u32>,
     pub label: Option<String>,
+    /// "node" (UI animation) or "log" (execution result).
     pub kind: String,
+    /// The node's kind slug (e.g. "person_detection"), used for UI colouring.
+    pub node_kind: Option<String>,
     pub message: String,
 }
 
@@ -590,6 +593,7 @@ pub fn list_run_logs(db: &Db, tenant_id: Uuid, run_id: Uuid) -> Vec<RunLogLine> 
             node_id: node_id.map(|v| v as u32),
             label,
             kind,
+            node_kind: None, // not persisted in this table; only carried in-memory for platform_logs
             message,
         })
         .collect()

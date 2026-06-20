@@ -201,11 +201,14 @@ fn execute_run(
     let debug = graph.debug;
     let labels: std::collections::HashMap<u32, &'static str> =
         graph.nodes.iter().map(|n| (n.id, n.kind.label())).collect();
+    let slugs: std::collections::HashMap<u32, &'static str> =
+        graph.nodes.iter().map(|n| (n.id, n.kind.slug())).collect();
     let logs = std::rc::Rc::new(std::cell::RefCell::new(Vec::<RunLogLine>::new()));
 
     let prog = Arc::clone(state);
     let node_logs = logs.clone();
     let node_labels = labels.clone();
+    let node_slugs = slugs.clone();
     let mut on_node = |nid: u32| {
         let snapshot = {
             let mut a = prog.activity.lock().unwrap();
@@ -220,6 +223,7 @@ fn execute_run(
                 node_id: Some(nid),
                 label: node_labels.get(&nid).map(|s| s.to_string()),
                 kind: "node".into(),
+                node_kind: node_slugs.get(&nid).map(|s| s.to_string()),
                 message: node_labels.get(&nid).copied().unwrap_or("node").to_string(),
             });
         }
@@ -228,15 +232,17 @@ fn execute_run(
     let log_logs = logs.clone();
     let mut on_log = |nid: u32, msg: &str, ms: u128| {
         let label = labels.get(&nid).copied().unwrap_or("node");
+        let slug = slugs.get(&nid).copied().unwrap_or("");
         events::publish(
             &log_state.events,
             "workflow-log",
-            serde_json::json!({ "tenant": tenant, "graph": graph_id, "node": nid, "label": label, "message": msg, "ms": ms as u64, "run_id": run_id }),
+            serde_json::json!({ "tenant": tenant, "graph": graph_id, "node": nid, "label": label, "node_kind": slug, "message": msg, "ms": ms as u64, "run_id": run_id }),
         );
         log_logs.borrow_mut().push(RunLogLine {
             node_id: Some(nid),
             label: Some(label.to_string()),
             kind: "log".into(),
+            node_kind: Some(slug.to_string()),
             message: msg.to_string(),
         });
     };
@@ -271,6 +277,7 @@ fn execute_run(
     if !buffered.is_empty() {
         let plogs: Vec<app_core::platform_logs::PlatformLog> = buffered
             .iter()
+            .filter(|l| l.kind != "node") // "node" entries are UI-only (live node highlights); skip them
             .map(|l| app_core::platform_logs::PlatformLog {
                 tenant_id: tenant,
                 module: "workflow",
@@ -283,6 +290,7 @@ fn execute_run(
                     "kind": l.kind,
                     "node_id": l.node_id,
                     "label": l.label,
+                    "node_kind": l.node_kind,
                 })),
             })
             .collect();
@@ -349,6 +357,7 @@ pub fn fire_event(
                 node_id: None,
                 label: None,
                 kind: "dispatch".into(),
+                node_kind: None,
                 message: format!("Dispatched '{}' to {} listener(s)", event, listeners.len()),
             }],
         );
@@ -382,6 +391,7 @@ pub fn fire_event(
                             node_id: None,
                             label: None,
                             kind: "skip".into(),
+                            node_kind: None,
                             message: format!("Listener '{listener_name}' skipped '{event}' — handler still running"),
                         }],
                     );
@@ -452,6 +462,7 @@ fn spawn_event_handler(
                 node_id: None,
                 label: None,
                 kind: "trigger".into(),
+                node_kind: None,
                 message: format!("Triggered by {emitter_name} via event '{event}'"),
             }],
         );

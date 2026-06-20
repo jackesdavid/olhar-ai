@@ -20,6 +20,7 @@
   import EmptyState from "$lib/components/empty-state.svelte";
 
   import { platformLogs, type PlatformLog, type PlatformLogsFilter } from "$lib/api";
+  import { nodeKindColor } from "$lib/workflows/portColors";
 
   // ---- state ------------------------------------------------------------------
   let loading = $state(true);
@@ -184,6 +185,20 @@
       alert:    "bg-amber-500/15 text-amber-400",
     };
     return map[mod] ?? "bg-muted text-muted-foreground";
+  }
+
+  const MODULE_DOT: Record<string, string> = {
+    workflow: "#10b981",
+    edge:     "#60a5fa",
+    presence: "#34d399",
+    device:   "#a78bfa",
+    alert:    "#fbbf24",
+  };
+
+  function logDotColor(l: PlatformLog): string {
+    const nk = (l.payload as Record<string, unknown> | null)?.node_kind as string | undefined;
+    if (l.module === "workflow" && nk) return nodeKindColor(nk);
+    return MODULE_DOT[l.module] ?? "#64748b";
   }
 
   function setTraceFilter(traceId: string) {
@@ -356,6 +371,7 @@
                   {#if sortCol === "created_at"}<span class="text-primary">{sortDir === "asc" ? "↑" : "↓"}</span>{:else}<span class="text-muted-foreground/40">↕</span>{/if}
                 </button>
               </Table.Head>
+              <Table.Head class="w-5"></Table.Head>
               <Table.Head class="w-24">
                 <button class="flex items-center gap-1 hover:text-foreground" onclick={() => toggleSort("module")}>
                   Module
@@ -378,6 +394,13 @@
               <Table.Row class="align-top">
                 <Table.Cell class="whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground">
                   {fmtTs(l.created_at)}
+                </Table.Cell>
+                <Table.Cell class="pr-0">
+                  <span
+                    class="inline-block size-2 rounded-full"
+                    style:background-color={logDotColor(l)}
+                    title={((l.payload as Record<string, unknown> | null)?.node_kind as string) ?? l.module}
+                  ></span>
                 </Table.Cell>
                 <Table.Cell>
                   <span class="inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[10px] font-medium {moduleColor(l.module)}">
