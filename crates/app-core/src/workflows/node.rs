@@ -329,6 +329,7 @@ pub fn run_node(
         // place the preview. Here it's a pure pass-through (exec flows on, no data out).
         NodeKind::ShowImage => Ok(PortValues::new()),
         NodeKind::DrawBbox => run_draw_bbox(config, inputs),
+        NodeKind::GetImageSize => run_get_image_size(inputs),
         // FlipFlop is engine-driven (reads/writes cross-run state + routes exec).
         // Never called directly — the engine handles it before reaching run_node.
         NodeKind::FlipFlop => Ok(PortValues::new()),
@@ -409,6 +410,7 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::OnEvent
         | NodeKind::ShowImage
         | NodeKind::DrawBbox
+        | NodeKind::GetImageSize
         | NodeKind::And
         | NodeKind::Or
         | NodeKind::Not
@@ -763,6 +765,11 @@ pub fn debug_summary(
         NodeKind::DrawBbox => {
             let bytes = outputs.get("image").and_then(PortValue::as_image).map_or(0, <[u8]>::len);
             format!("bbox drawn ({} KB)", bytes / 1024)
+        }
+        NodeKind::GetImageSize => {
+            let w = outputs.get("width").and_then(PortValue::as_num).unwrap_or(0);
+            let h = outputs.get("height").and_then(PortValue::as_num).unwrap_or(0);
+            format!("{w}×{h}")
         }
         NodeKind::And => {
             let a = inputs.get("a").and_then(PortValue::as_bool).unwrap_or(false);
@@ -1418,6 +1425,16 @@ fn run_format(config: &Value, inputs: &PortValues) -> Result<PortValues, String>
         .replace("{p3}", &get("p3"));
     let mut o = PortValues::new();
     o.insert("text".into(), PortValue::Text(text));
+    Ok(o)
+}
+
+fn run_get_image_size(inputs: &PortValues) -> Result<PortValues, String> {
+    let bytes = inputs.get("image").and_then(PortValue::as_image).ok_or("missing required input 'image'")?;
+    let (w, h) = jpeg_dimensions(bytes);
+    let mut o = PortValues::new();
+    o.insert("width".into(), PortValue::Num(w));
+    o.insert("height".into(), PortValue::Num(h));
+    o.insert("ok".into(), PortValue::Bool(w > 0 && h > 0));
     Ok(o)
 }
 
