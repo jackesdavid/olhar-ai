@@ -34,6 +34,6 @@ sqlx = { version = "0.8", default-features = false, features = [
     "migrate",
     "uuid",
 ] }
-tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 log = "0.4"

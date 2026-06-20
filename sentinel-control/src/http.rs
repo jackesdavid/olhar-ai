@@ -310,9 +310,25 @@ async fn box_logs_push(State(st): State<AppState>, headers: HeaderMap, body: Opt
         return StatusCode::NO_CONTENT.into_response();
     }
     // Live fan-out (tagged with tenant+box so the per-box SSE relay can filter).
+    // Also push to the unified platform_logs queue (fire-and-forget; edge logs are module=edge).
     for l in &lines {
         let msg = json!({ "tenant": tenant, "box": box_id, "ts": l.ts, "level": l.level, "target": l.target, "message": l.message });
         let _ = st.log_bus.send(msg.to_string());
+        st.log_queue.push(app_core::platform_logs::PlatformLog {
+            tenant_id: tenant,
+            module: "edge",
+            trace_id: None,
+            entity_id: Some(box_id.to_string()),
+            entity_type: Some("edge_box"),
+            level: match l.level.to_lowercase().as_str() {
+                "error" => "error",
+                "warn"  => "warn",
+                "debug" => "debug",
+                _       => "info",
+            },
+            message: l.message.clone(),
+            payload: Some(json!({ "target": l.target, "ts": l.ts })),
+        });
     }
     if let Err(e) = store::insert_box_logs(&st.pool, tenant, box_id, &lines, BOX_LOG_KEEP).await {
         log::error!("insert_box_logs failed: {e}");

@@ -96,6 +96,16 @@ pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, sourc
         workflows::repo::insert_run(
             &state.db, tenant, run_id, graph_id, &graph.name, source, None, None, None, &state.pod_name,
         );
+        app_core::platform_logs::insert_log_sync(&state.db, app_core::platform_logs::PlatformLog {
+            tenant_id: tenant,
+            module: "workflow",
+            trace_id: Some(run_id),
+            entity_id: Some(graph_id.to_string()),
+            entity_type: Some("workflow_graph"),
+            level: "info",
+            message: format!("Run started: {}", graph.name),
+            payload: Some(serde_json::json!({ "trigger": source.as_str(), "graph_name": graph.name })),
+        });
         events::publish(
             &state.events,
             "workflow-run-start",
@@ -256,12 +266,44 @@ fn execute_run(
     };
     let buffered = logs.borrow().clone();
     workflows::repo::insert_run_logs(&state.db, run_id, &buffered);
+    // Mirror run log lines to the unified platform_logs table so the /logs page can
+    // show detailed execution traces, cross-linked by trace_id = run_id.
+    if !buffered.is_empty() {
+        let plogs: Vec<app_core::platform_logs::PlatformLog> = buffered
+            .iter()
+            .map(|l| app_core::platform_logs::PlatformLog {
+                tenant_id: tenant,
+                module: "workflow",
+                trace_id: Some(run_id),
+                entity_id: Some(graph.id.to_string()),
+                entity_type: Some("workflow_graph"),
+                level: if l.kind == "log" { "info" } else { "debug" },
+                message: l.message.clone(),
+                payload: Some(serde_json::json!({
+                    "kind": l.kind,
+                    "node_id": l.node_id,
+                    "label": l.label,
+                })),
+            })
+            .collect();
+        app_core::platform_logs::insert_logs_sync(&state.db, plogs);
+    }
     workflows::repo::finish_run(
         &state.db,
         run_id,
         if ok { RunStatus::Ok } else { RunStatus::Failed },
         &summary,
     );
+    app_core::platform_logs::insert_log_sync(&state.db, app_core::platform_logs::PlatformLog {
+        tenant_id: tenant,
+        module: "workflow",
+        trace_id: Some(run_id),
+        entity_id: Some(graph.id.to_string()),
+        entity_type: Some("workflow_graph"),
+        level: if ok { "info" } else { "error" },
+        message: format!("Run {}: {}", if ok { "ok" } else { "failed" }, summary),
+        payload: Some(serde_json::json!({ "status": if ok { "ok" } else { "failed" }, "summary": summary })),
+    });
     (ok, summary)
 }
 

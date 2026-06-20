@@ -9,6 +9,7 @@
 
 pub mod agent;
 pub mod alerts;
+pub mod platform_logs;
 pub mod config;
 pub mod db;
 pub mod device_actions;

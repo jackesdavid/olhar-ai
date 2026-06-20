@@ -38,10 +38,14 @@ kanban-plugin: board
 	  - Plan: [[workflow-list-improvements]]
 - [ ] AI If node — yes/no question routes exec like If
 	  - Plan: [[ai-question-node]]
+- [ ] GetCameraRoom node — look up room name from a camera entity
+	  - Plan: [[get-camera-room]]
 
 
 ## In Progress
 
+- [ ] Unified Platform Logs — one table, one UI, all modules
+	  - Plan: [[platform-logs-unified]]
 - [ ] Telegram Beacons: fix enrollment + polish + observability
 	  - Plan: [[telegram-beacons-fix-polish]]
 - [ ] Generic Object Detection node — configurable COCO class

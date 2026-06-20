@@ -16,6 +16,7 @@ mod boxes;
 mod devices;
 mod map;
 mod persons;
+mod platform_logs;
 mod workflows;
 
 /// `(status, message)` error tuple — axum turns it into the HTTP response.
@@ -32,6 +33,7 @@ pub fn router() -> Router<AppState> {
         .merge(workflows::router())
         .merge(boxes::router())
         .merge(admin_providers::router())
+        .merge(platform_logs::router())
 }
 
 /// The tenant this token operates in. The master's own (un-assumed) token carries no

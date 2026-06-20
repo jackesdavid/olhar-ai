@@ -57,6 +57,9 @@ pub struct AppState {
     /// Live edge-log fan-out: the edge pushes lines to /config/logs, control persists +
     /// re-broadcasts here; the per-box log SSE relay subscribes and filters by tenant+box.
     pub log_bus: tokio::sync::broadcast::Sender<String>,
+    /// Unified platform audit log queue (async, fire-and-forget). All modules push here;
+    /// the drain task batch-inserts into platform_logs every 500 ms.
+    pub log_queue: app_core::platform_logs::LogQueue,
     /// Shared event fabric. `redis_url` opens per-client pub/sub connections for the SSE
     /// relay (subscribe `events:<tenant>`); `redis` is a multiplexed handle for publishing
     /// injected events (edge motion). Both `None` when `REDIS_URL` is unset → the relay
@@ -145,6 +148,7 @@ fn main() {
         let pending_rescan = Arc::new(Mutex::new(std::collections::HashSet::new()));
         let pending_restart = Arc::new(Mutex::new(std::collections::HashSet::new()));
         let (log_bus, _) = tokio::sync::broadcast::channel::<String>(1024);
+        let log_queue = app_core::platform_logs::LogQueue::spawn(pool.clone());
 
         // Shared event fabric (optional). When set, the workflow SSE relay subscribes to
         // Redis (every flow pod's events) and the edge-motion endpoint publishes here.
@@ -162,7 +166,7 @@ fn main() {
 
         let state = AppState {
             db, pool, jwt_secret, google, oauth_states, tailscale, http, pending_creds, notifiers,
-            pending_rescan, pending_restart, log_bus, redis_url, redis,
+            pending_rescan, pending_restart, log_bus, log_queue, redis_url, redis,
         };
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {
