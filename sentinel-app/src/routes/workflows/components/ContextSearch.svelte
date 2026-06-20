@@ -87,11 +87,15 @@
     style:max-height="360px"
   >
     <div class="flex items-center gap-2 border-b border-border px-3 py-2">
-      <span
-        class="size-2 shrink-0 rounded-full"
-        style:background-color={portColor[portType as PortType] ?? portColor.any}
-      ></span>
-      <span class="flex-1 truncate text-xs font-medium text-muted-foreground">Connect to…</span>
+      {#if portType !== "any"}
+        <span
+          class="size-2 shrink-0 rounded-full"
+          style:background-color={portColor[portType as PortType] ?? portColor.any}
+        ></span>
+        <span class="flex-1 truncate text-xs font-medium text-muted-foreground">Connect to…</span>
+      {:else}
+        <span class="flex-1 truncate text-xs font-medium text-muted-foreground">Add node</span>
+      {/if}
       <button class="text-muted-foreground hover:text-foreground" onclick={close}>
         <X class="size-3.5" />
       </button>

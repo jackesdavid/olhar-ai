@@ -51,7 +51,7 @@
   import StatusDot from "$lib/components/status-dot.svelte";
   import { portColor, typeColor } from "$lib/workflows/portColors";
   import type { PortType } from "$lib/workflows/portColors";
-  import NodePalette from "./components/NodePalette.svelte";
+
   import ContextSearch from "./components/ContextSearch.svelte";
 
   // ---- types (the serialized core shapes) ----------------------------------
@@ -147,7 +147,7 @@
   let pending = $state<{ node: number; port: string } | null>(null);
   let loading = $state(true);
   let running = $state(false);
-  let addOpen = $state(false);
+
   // Context search: appears at wire-drop position, pre-filtered by the pending port type.
   let contextOpen = $state(false);
   let contextPos = $state({ x: 0, y: 0 });
@@ -328,6 +328,7 @@
 
   // live cursor world position (for the `n`-to-add-here shortcut) + pending drop point
   let hoverWorld = $state<{ x: number; y: number } | null>(null);
+  let hoverClient = $state<{ x: number; y: number }>({ x: 200, y: 60 }); // screen coords of cursor over canvas
   let dropAt: { x: number; y: number } | null = null;
 
   // recent-runs drawer (per graph in the list)
@@ -1113,7 +1114,6 @@
     }
     if (patched) await data.setNodeConfig(graph.id, id, cfg);
     selectedNodeId = id;
-    addOpen = false;
     await reload();
     return id;
   }
@@ -1138,17 +1138,19 @@
     }
   }
 
-  // Press `n` over the canvas → open the palette and drop the next node at the cursor.
+  // Press `n` over the canvas → open the context search at the cursor.
   // Ignored while typing in a field or while the graph is active (editLocked).
   function onWindowKey(e: KeyboardEvent) {
     if (e.key !== "n" && e.key !== "N") return;
-    if (view !== "editor" || editLocked || addOpen) return;
+    if (view !== "editor" || editLocked || contextOpen) return;
     const el = document.activeElement as HTMLElement | null;
     const tag = el?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
     e.preventDefault();
     dropAt = hoverWorld;
-    addOpen = true;
+    contextPos = hoverClient;
+    contextPending = null;
+    contextOpen = true;
   }
 
   // Unreal-Blueprint-style header tint by category, so node families read at a glance and
@@ -1478,6 +1480,7 @@
 
   function _onCanvasMove(e: PointerEvent) {
     hoverWorld = worldPoint(e); // track the cursor for the `n`-to-add-here shortcut
+    hoverClient = { x: e.clientX, y: e.clientY };
     if (pending) cursor = worldPoint(e); // drag the open wire end with the cursor
     if (dragVia) {
       const wp = worldPoint(e);
@@ -2156,7 +2159,7 @@
             <Button
               class="shadow-lg"
               disabled={editLocked}
-              onclick={() => { addOpen = true; }}
+              onclick={(e) => { contextPos = { x: (e.target as HTMLElement).getBoundingClientRect().left, y: 60 }; contextPending = null; contextOpen = true; }}
             >
               <Plus class="size-4" /> Add node
             </Button>
@@ -2852,14 +2855,6 @@
     {/if}
   </Dialog.Content>
 </Dialog.Root>
-
-<!-- Node palette and context search are extracted components for maintainability -->
-<NodePalette
-  bind:open={addOpen}
-  kinds={kinds as PaletteKind[]}
-  {eventPaletteGroups}
-  onSelect={addNodeKind}
-/>
 
 <ContextSearch
   bind:open={contextOpen}
