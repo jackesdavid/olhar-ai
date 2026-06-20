@@ -31,6 +31,19 @@ services:
       timeout: 5s
       retries: 5
 
+  sentinel-redis:
+    # Shared event fabric (pub/sub only — no persistence). Carries flow run-progress events
+    # (multi-pod SSE relay) + edge-originated motion events. Internal only; no published port.
+    image: redis:7-alpine
+    container_name: sentinel-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   sentinel-control:
     image: ghcr.io/jackesdavid/sentinel-control:latest
     container_name: sentinel-control
@@ -39,6 +52,7 @@ services:
       - sentinel.env   # JWT_SECRET, GOOGLE_*, MASTER_*
     environment:
       DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
+      REDIS_URL: redis://sentinel-redis:6379
       CONTROL_BIND: 0.0.0.0:8790
       OAUTH_REDIRECT_BASE: https://control.thesentinels.online
       OAUTH_SUCCESS_REDIRECT: https://app.thesentinels.online/login
@@ -55,6 +69,8 @@ services:
       sentinel-postgres:
         condition: service_healthy
       sentinel-ai:
+        condition: service_started
+      sentinel-redis:
         condition: service_started
     labels:
       - "traefik.enable=true"
@@ -140,6 +156,7 @@ services:
       - sentinel.env   # TELEGRAM_* fallback, etc.
     environment:
       DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
+      REDIS_URL: redis://sentinel-redis:6379
       FLOW_BIND: 0.0.0.0:8787
       AI_SERVICE_URL: http://sentinel-ai:8000/runsync
       # FALLBACK go2rtc base for a tenant with no resolved box host. Per-tenant edges are
@@ -152,6 +169,8 @@ services:
       sentinel-postgres:
         condition: service_healthy
       sentinel-ai:
+        condition: service_started
+      sentinel-redis:
         condition: service_started
 
 volumes:

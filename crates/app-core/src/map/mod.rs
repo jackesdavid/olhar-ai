@@ -28,6 +28,23 @@ pub struct RoomCamera {
     pub dx: i32,
     #[serde(default)]
     pub dy: i32,
+    /// Facing yaw in degrees (0 = +y / "down" on the plan); orients the FOV wedge.
+    #[serde(default)]
+    pub rot: f64,
+    /// Field-of-view angle in degrees.
+    #[serde(default = "default_fov")]
+    pub fov: f64,
+    /// View distance in grid units.
+    #[serde(default = "default_range")]
+    pub range: f64,
+}
+
+fn default_fov() -> f64 {
+    62.0
+}
+
+fn default_range() -> f64 {
+    4.2
 }
 
 /// One room on the floor plan: an axis-aligned rectangle (grid units, y-down,
@@ -40,6 +57,9 @@ pub struct MapRoom {
     pub y: i32,
     pub w: i32,
     pub h: i32,
+    /// Rotation of the room rectangle in degrees (about its centre).
+    #[serde(default)]
+    pub rot: f64,
     /// Accepts both the new `[{ip,dx,dy}]` form and the legacy `["ip"]` form;
     /// legacy entries get centered in the room on load.
     #[serde(default, deserialize_with = "de_cameras")]
@@ -63,7 +83,8 @@ where
     Ok(entries
         .into_iter()
         .map(|e| match e {
-            Entry::Ip(ip) => RoomCamera { ip, dx: -1, dy: -1 }, // sentinel → centered on load
+            // sentinel offset → centered on load
+            Entry::Ip(ip) => RoomCamera { ip, dx: -1, dy: -1, rot: 0.0, fov: default_fov(), range: default_range() },
             Entry::Full(c) => c,
         })
         .collect())
@@ -85,6 +106,113 @@ impl MapRoom {
     pub fn center(&self) -> (f64, f64) {
         (self.x as f64 + self.w as f64 / 2.0, self.y as f64 + self.h as f64 / 2.0)
     }
+}
+
+/// A free-form wall: a segment from `(x1,y1)` to `(x2,y2)` on the grid with a
+/// `thickness` (its width) and a `style` (filled vs outline). Thickness and style
+/// are independent: a thin solid wall and a thick wireframe are both valid. Walls
+/// are independent of rooms.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MapWall {
+    pub id: u32,
+    pub x1: f64,
+    pub y1: f64,
+    pub x2: f64,
+    pub y2: f64,
+    #[serde(default = "default_thickness")]
+    pub thickness: f64,
+    /// "solid" | "wireframe" | "dashed" | "dotted". Defaults to solid.
+    #[serde(default = "default_wall_style")]
+    pub style: String,
+    /// Optional hex color override (e.g. "#ff0000"). None = use the plan default.
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
+fn default_thickness() -> f64 {
+    0.12
+}
+
+fn default_wall_style() -> String {
+    "solid".to_string()
+}
+
+/// A placeable furniture / landmark marker, rendered as a flat SVG glyph on the
+/// floor. `icon` is a key into the frontend icon library; `rot` is degrees,
+/// `scale` a multiplier; `label` is an optional caption.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MapMarker {
+    pub id: u32,
+    pub icon: String,
+    pub x: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub rot: f64,
+    #[serde(default = "default_scale")]
+    pub scale: f64,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+fn default_scale() -> f64 {
+    1.0
+}
+
+/// A text label placed on the floor plan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MapText {
+    pub id: u32,
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub size: Option<f64>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub rot: Option<f64>,
+}
+
+/// A geometric shape annotation on the floor plan.
+/// `kind`: "rect" | "triangle" | "circle"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MapShape {
+    pub id: u32,
+    pub kind: String,
+    pub x: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub w: Option<f64>,
+    #[serde(default)]
+    pub h: Option<f64>,
+    #[serde(default)]
+    pub r: Option<f64>,
+    #[serde(default)]
+    pub pts: Option<Vec<[f64; 2]>>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub fill: Option<String>,
+    #[serde(default)]
+    pub stroke_style: Option<String>,
+    #[serde(default)]
+    pub rot: Option<f64>,
+}
+
+/// The whole floor-plan document the API exchanges in one round-trip: labeled
+/// room zones, free-form walls, markers, text labels, and shape annotations.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MapDoc {
+    #[serde(default)]
+    pub rooms: Vec<MapRoom>,
+    #[serde(default)]
+    pub walls: Vec<MapWall>,
+    #[serde(default)]
+    pub markers: Vec<MapMarker>,
+    #[serde(default)]
+    pub texts: Vec<MapText>,
+    #[serde(default)]
+    pub shapes: Vec<MapShape>,
 }
 
 /// The next free room id (max existing + 1), for the frontend's "Add room".
@@ -127,6 +255,7 @@ mod tests {
             y: 0,
             w: DEFAULT_ROOM_W,
             h: DEFAULT_ROOM_H,
+            rot: 0.0,
             cameras: vec![],
         }
     }

@@ -7,21 +7,23 @@
   import Pencil from "@lucide/svelte/icons/pencil";
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import LoaderCircle from "@lucide/svelte/icons/loader-circle";
-  import Radio from "@lucide/svelte/icons/radio";
   import CheckCircle2 from "@lucide/svelte/icons/circle-check-big";
   import XCircle from "@lucide/svelte/icons/circle-x";
+  import Send from "@lucide/svelte/icons/send";
+  import ExternalLink from "@lucide/svelte/icons/external-link";
+  import Copy from "@lucide/svelte/icons/copy";
+  import Check from "@lucide/svelte/icons/check";
+  import Link2 from "@lucide/svelte/icons/link-2";
 
   import * as Card from "$lib/components/ui/card";
   import * as Table from "$lib/components/ui/table";
   import * as Dialog from "$lib/components/ui/dialog";
-  import { Button } from "$lib/components/ui/button";
+  import { Button, buttonVariants } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import { Switch } from "$lib/components/ui/switch";
   import { Badge } from "$lib/components/ui/badge";
-  import { Separator } from "$lib/components/ui/separator";
   import Loader from "$lib/components/loader.svelte";
-  import EmptyState from "$lib/components/empty-state.svelte";
   import StatusDot from "$lib/components/status-dot.svelte";
 
   import type { NotificationTarget, TelegramConfigState } from "$lib/types";
@@ -30,13 +32,27 @@
   let config = $state<TelegramConfigState | null>(null);
   let loading = $state(true);
 
-  // ---- Telegram config form ------------------------------------------------
-  let botToken = $state("");
+  // ---- pairing code edit ---------------------------------------------------
   let pairingCode = $state("");
-  let savingConfig = $state(false);
+  let savingCode = $state(false);
 
   // ---- per-beacon action state ---------------------------------------------
   let togglingId = $state<number | null>(null);
+  let testingId = $state<number | null>(null);
+
+  // ---- enrollment link copy ------------------------------------------------
+  let copied = $state(false);
+
+  function enrollmentLink(username: string, code: string) {
+    return `https://t.me/${username}?start=${code}`;
+  }
+
+  async function copyEnrollmentLink() {
+    if (!config?.bot_username || !config.pairing_code) return;
+    await navigator.clipboard.writeText(enrollmentLink(config.bot_username, config.pairing_code));
+    copied = true;
+    setTimeout(() => (copied = false), 2000);
+  }
 
   // ---- Rename dialog -------------------------------------------------------
   let renameOpen = $state(false);
@@ -72,25 +88,36 @@
 
   onMount(() => {
     load();
-    // Live-refresh when the backend pairing poller adds a beacon.
     const unlisten = onEvent("beacons-changed", () => loadBeacons());
     return () => {
       unlisten.then((un) => un());
     };
   });
 
-  async function saveConfig() {
-    savingConfig = true;
+  async function saveCode() {
+    savingCode = true;
     try {
-      const msg = await data.setTelegramConfig(botToken, pairingCode);
-      botToken = ""; // never keep the token in the field
-      toast.success("Telegram config saved.", { description: msg });
+      await data.setPairingCode(pairingCode);
+      toast.success("Pairing code saved.");
       await loadConfig();
     } catch (err) {
-      console.error("Failed to save Telegram config", err);
-      toast.error("Failed to save config", { description: String(err) });
+      console.error("Failed to save pairing code", err);
+      toast.error("Failed to save", { description: String(err) });
     } finally {
-      savingConfig = false;
+      savingCode = false;
+    }
+  }
+
+  async function testSend(b: NotificationTarget) {
+    testingId = b.chat_id;
+    try {
+      await data.testBeacon(b.chat_id);
+      toast.success(`Test sent to '${b.label}'.`);
+    } catch (err) {
+      console.error("Test send failed", err);
+      toast.error("Test failed", { description: String(err) });
+    } finally {
+      testingId = null;
     }
   }
 
@@ -102,7 +129,7 @@
     } catch (err) {
       console.error("Failed to toggle beacon", err);
       toast.error("Failed to update beacon", { description: String(err) });
-      await loadBeacons(); // resync the switch
+      await loadBeacons();
     } finally {
       togglingId = null;
     }
@@ -156,6 +183,10 @@
       deleting = false;
     }
   }
+
+  function hasEnrollmentLink() {
+    return config?.provider_configured && config.bot_username && config.pairing_code;
+  }
 </script>
 
 <div class="space-y-6">
@@ -166,69 +197,97 @@
     </p>
   </div>
 
-  <!-- Telegram config -->
+  <!-- Telegram enrollment -->
   <Card.Root>
     <Card.Header>
       <Card.Title class="flex items-center gap-2">
         Telegram
-        {#if config?.configured}
+        {#if config?.provider_configured}
           <Badge variant="outline" class="border-emerald-500/30 bg-emerald-500/15 text-emerald-400">
-            Configured
+            Provider active
           </Badge>
         {:else}
           <Badge variant="outline" class="border-amber-500/30 bg-amber-500/15 text-amber-400">
-            Not configured
+            Provider not configured
           </Badge>
         {/if}
       </Card.Title>
       <Card.Description>
-        Create a bot with @BotFather, paste its token below, and choose a secret pairing code.
+        {#if config?.provider_configured}
+          Set a pairing code — share the enrollment link with anyone who should receive alerts.
+        {:else}
+          The Telegram bot is not configured yet. Ask your account administrator to set it up in
+          Notification Providers.
+        {/if}
       </Card.Description>
     </Card.Header>
-    <Card.Content class="space-y-4">
-      <div class="grid gap-4 sm:grid-cols-2">
-        <div class="space-y-2">
-          <Label for="bot-token">Bot token</Label>
-          <Input
-            id="bot-token"
-            type="password"
-            bind:value={botToken}
-            placeholder={config?.configured ? "•••••••• (set — leave blank to keep)" : "123456:ABC-DEF…"}
-            autocomplete="off"
-          />
-        </div>
+    {#if config?.provider_configured}
+      <Card.Content class="space-y-4">
         <div class="space-y-2">
           <Label for="pairing-code">Pairing code</Label>
-          <Input id="pairing-code" bind:value={pairingCode} placeholder="choose-a-secret" autocomplete="off" />
-        </div>
-      </div>
-
-      {#if config?.configured && config.pairing_code.trim().length > 0}
-        <div class="rounded-md border border-border bg-muted/40 p-3 text-sm">
-          <p class="text-muted-foreground">
-            To pair a phone, DM the bot:
-            <code class="rounded bg-background px-1.5 py-0.5 font-mono text-foreground">
-              /pair {config.pairing_code}
-            </code>
+          <div class="flex gap-2">
+            <Input
+              id="pairing-code"
+              bind:value={pairingCode}
+              placeholder="choose-a-secret"
+              autocomplete="off"
+              class="max-w-xs"
+            />
+            <Button onclick={saveCode} disabled={savingCode} size="sm">
+              {#if savingCode}
+                <LoaderCircle class="size-4 animate-spin" />
+                Saving…
+              {:else}
+                <Save class="size-4" />
+                Save
+              {/if}
+            </Button>
+          </div>
+          <p class="text-xs text-muted-foreground">
+            Anyone who knows this code can pair their Telegram with your site.
           </p>
-          <p class="mt-1 text-xs text-muted-foreground">
-            Once paired, the device appears below. Token changes take effect after an app restart.
-          </p>
         </div>
-      {/if}
 
-      <div class="flex justify-end">
-        <Button onclick={saveConfig} disabled={savingConfig}>
-          {#if savingConfig}
-            <LoaderCircle class="size-4 animate-spin" />
-            Saving…
-          {:else}
-            <Save class="size-4" />
-            Save config
-          {/if}
-        </Button>
-      </div>
-    </Card.Content>
+        {#if config.bot_username && config.pairing_code}
+          <div class="rounded-md border border-border bg-muted/40 p-3 text-sm space-y-3">
+            <div class="flex items-center gap-2">
+              <Link2 class="size-4 shrink-0 text-emerald-400" />
+              <span class="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+                {enrollmentLink(config.bot_username, config.pairing_code)}
+              </span>
+              <div class="flex shrink-0 items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="h-7 gap-1 text-xs"
+                  onclick={copyEnrollmentLink}
+                >
+                  {#if copied}
+                    <Check class="size-3 text-emerald-400" />
+                    Copied
+                  {:else}
+                    <Copy class="size-3" />
+                    Copy
+                  {/if}
+                </Button>
+                <a
+                  href={enrollmentLink(config.bot_username, config.pairing_code)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class={buttonVariants({ variant: "outline", size: "sm" }) + " h-7 gap-1 text-xs"}
+                >
+                  <ExternalLink class="size-3" />
+                  Open
+                </a>
+              </div>
+            </div>
+            <p class="text-xs text-muted-foreground">
+              Share this link — tapping it opens Telegram and pairs the device automatically.
+            </p>
+          </div>
+        {/if}
+      </Card.Content>
+    {/if}
   </Card.Root>
 
   <!-- Paired beacons -->
@@ -241,10 +300,42 @@
       {#if loading}
         <Loader label="Loading recipients…" />
       {:else if beacons.length === 0}
-        <EmptyState
-          title="No recipients paired"
-          description="DM the bot the pairing code above — paired phones appear here automatically."
-        />
+        <div class="flex flex-col items-center gap-4 py-8 text-center">
+          <p class="text-sm font-medium">No recipients paired</p>
+          {#if hasEnrollmentLink()}
+            <p class="max-w-sm text-xs text-muted-foreground">
+              Share the enrollment link — tapping it opens Telegram and pairs the device in one step.
+            </p>
+            <div class="flex items-center gap-2">
+              <Button variant="outline" size="sm" class="gap-1.5" onclick={copyEnrollmentLink}>
+                {#if copied}
+                  <Check class="size-4 text-emerald-400" />
+                  Link copied
+                {:else}
+                  <Copy class="size-4" />
+                  Copy enrollment link
+                {/if}
+              </Button>
+              <a
+                href={enrollmentLink(config!.bot_username!, config!.pairing_code)}
+                target="_blank"
+                rel="noopener noreferrer"
+                class={buttonVariants({ variant: "outline", size: "sm" }) + " gap-1.5"}
+              >
+                <ExternalLink class="size-4" />
+                Pair this device
+              </a>
+            </div>
+          {:else if config?.provider_configured}
+            <p class="text-xs text-muted-foreground">
+              Set a pairing code above, then share the enrollment link.
+            </p>
+          {:else}
+            <p class="text-xs text-muted-foreground">
+              The Telegram provider needs to be configured before pairing is available.
+            </p>
+          {/if}
+        </div>
       {:else}
         <Table.Root>
           <Table.Header>
@@ -281,6 +372,19 @@
                 </Table.Cell>
                 <Table.Cell class="text-right">
                   <div class="flex items-center justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title="Send test message"
+                      disabled={testingId === b.chat_id}
+                      onclick={() => testSend(b)}
+                    >
+                      {#if testingId === b.chat_id}
+                        <LoaderCircle class="size-4 animate-spin" />
+                      {:else}
+                        <Send class="size-4" />
+                      {/if}
+                    </Button>
                     <Button variant="ghost" size="sm" title="Rename" onclick={() => openRename(b)}>
                       <Pencil class="size-4" />
                     </Button>

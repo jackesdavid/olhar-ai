@@ -24,7 +24,9 @@ pub fn ensure_up() {
         return;
     }
     let hostname = std::env::var("TS_HOSTNAME").unwrap_or_else(|_| "sentinel-edge".to_string());
-    let tags = std::env::var("TS_TAGS").ok().filter(|s| !s.trim().is_empty());
+    let tags = std::env::var("TS_TAGS")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
 
     let mut up = Command::new("tailscale");
     up.arg("up")
@@ -53,7 +55,10 @@ pub fn ensure_up() {
 
     // Report this box's tailnet go2rtc URL to control (so the gateway can resolve the
     // tenant's live upstream) — unless it was supplied explicitly at install time.
-    if std::env::var("EDGE_PUBLIC_HOST").map(|v| v.trim().is_empty()).unwrap_or(true) {
+    if std::env::var("EDGE_PUBLIC_HOST")
+        .map(|v| v.trim().is_empty())
+        .unwrap_or(true)
+    {
         if let Some(dns) = detect_dns_name() {
             let url = format!("https://{}", dns.trim_end_matches('.'));
             log::info!("detected EDGE_PUBLIC_HOST={url}");
@@ -66,9 +71,15 @@ pub fn ensure_up() {
 /// Best-effort + idempotent — safe to re-run periodically; a no-op (logged at debug) when
 /// Tailscale is stopped. Output is captured so a stopped daemon doesn't spam stderr.
 pub fn serve_go2rtc() {
-    match Command::new("tailscale").args(["serve", "--bg", "1984"]).output() {
+    match Command::new("tailscale")
+        .args(["serve", "--bg", "1984"])
+        .output()
+    {
         Ok(o) if o.status.success() => log::debug!("tailscale serve --bg 1984 ok"),
-        Ok(o) => log::debug!("tailscale serve --bg 1984: {}", String::from_utf8_lossy(&o.stderr).trim()),
+        Ok(o) => log::debug!(
+            "tailscale serve --bg 1984: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
         Err(e) => log::debug!("tailscale serve unavailable: {e}"),
     }
 }
@@ -79,7 +90,10 @@ pub fn serve_go2rtc() {
 ///   `up`       — node Running but go2rtc isn't served over the tailnet yet
 ///   `serving`  — node Running AND go2rtc exposed (Live should work)
 pub fn tailscale_state() -> &'static str {
-    if std::env::var("TS_AUTHKEY").map(|v| v.trim().is_empty()).unwrap_or(true) {
+    if std::env::var("TS_AUTHKEY")
+        .map(|v| v.trim().is_empty())
+        .unwrap_or(true)
+    {
         return "disabled";
     }
     let running = Command::new("tailscale")
@@ -88,7 +102,11 @@ pub fn tailscale_state() -> &'static str {
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())
-        .and_then(|v| v.get("BackendState").and_then(|s| s.as_str()).map(|s| s == "Running"))
+        .and_then(|v| {
+            v.get("BackendState")
+                .and_then(|s| s.as_str())
+                .map(|s| s == "Running")
+        })
         .unwrap_or(false);
     if !running {
         return "offline";
@@ -109,10 +127,17 @@ pub fn tailscale_state() -> &'static str {
 
 /// This node's MagicDNS name from `tailscale status --json` (`Self.DNSName`), if up.
 fn detect_dns_name() -> Option<String> {
-    let out = Command::new("tailscale").args(["status", "--json"]).output().ok()?;
+    let out = Command::new("tailscale")
+        .args(["status", "--json"])
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    v.get("Self")?.get("DNSName")?.as_str().filter(|s| !s.is_empty()).map(str::to_string)
+    v.get("Self")?
+        .get("DNSName")?
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }

@@ -12,12 +12,9 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
 use axum::Router;
-use futures::Stream;
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::StreamExt;
 use tower_http::cors::CorsLayer;
 
 use crate::engine;
@@ -31,8 +28,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/graphs/reload", post(reload_graphs))
         .route("/runs", get(run_states).post(create_run))
         .route("/runs/history", get(run_history))
+        .route("/runs/frame", get(run_frame))
         .route("/runs/:run_id/logs", get(run_logs))
-        .route("/events", get(events))
+        .route("/events", get(events_sse))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -135,6 +133,32 @@ async fn run_history(
     Json(runs)
 }
 
+#[derive(Deserialize)]
+struct FrameQuery {
+    tenant: Uuid,
+    graph: u32,
+    node: u32,
+}
+
+/// The latest `ShowImage` debug frame for a tenant's `(graph, node)` as raw `image/jpeg`
+/// (`?tenant=<uuid>&graph=<id>&node=<id>`), or `404` if none cached. Served out of band so
+/// the bytes never head-of-line-block the SSE stream (see [`crate::events`]).
+async fn run_frame(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<FrameQuery>,
+) -> impl IntoResponse {
+    let bytes = state.node_frames.lock().unwrap().get(&(q.tenant, q.graph, q.node)).cloned();
+    match bytes {
+        Some(jpeg) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "image/jpeg")],
+            jpeg,
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 /// All persisted signal lines for one run of a tenant (`?tenant=<uuid>`).
 async fn run_logs(
     State(state): State<Arc<AppState>>,
@@ -145,16 +169,27 @@ async fn run_logs(
     Json(logs)
 }
 
-/// SSE stream of engine events (`workflow-run`/`-node`/`-log`/`-print`/`-image`,
-/// plus snapshot/alerts/devices pokes). Lossy on a slow client; final state is
-/// always re-fetchable via the REST routes above.
-async fn events(
+/// Internal SSE feed — all run-progress events from this pod's in-process bus, unfiltered.
+/// Consumed by the sentinel-control relay when Redis is not configured (single-pod mode).
+/// Not exposed externally (sentinel-flow is not public-facing).
+async fn events_sse(
     State(state): State<Arc<AppState>>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let rx = state.events.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(|msg| match msg {
-        Ok(line) => Some(Ok(Event::default().data(line))),
-        Err(_) => None, // lagged: drop, keep streaming
+) -> Sse<impl futures::Stream<Item = Result<Event, Infallible>>> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
+    let mut bus_rx = state.events.subscribe();
+    tokio::spawn(async move {
+        loop {
+            match bus_rx.recv().await {
+                Ok(line) => {
+                    if tx.send(Ok(Event::default().data(line))).await.is_err() {
+                        return;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+            }
+        }
     });
-    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+    Sse::new(tokio_stream::wrappers::ReceiverStream::new(rx))
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }

@@ -18,6 +18,7 @@
 mod go2rtc;
 mod http;
 mod logbuf;
+mod motion;
 mod state;
 mod tailscale;
 
@@ -58,6 +59,10 @@ fn main() {
     }
     // Report the initially-resolved stream set so the Devices dot is correct from boot.
     state.push_streaming();
+
+    // Continuous motion detection (one OpenCV MOG2 watcher per camera). No-op stub unless
+    // built with `--features motion`; the watchers POST normalized motion events to control.
+    motion::spawn(&state);
 
     // Discovery loop: sweep the LAN for ONVIF cameras every 5 min — reconciling any camera
     // that changed IP (matched by stable ONVIF id) and pushing the sweep to control so the
@@ -120,7 +125,10 @@ fn main() {
             }
         };
         log::info!("sentinel-edge listening on http://{bind} (GET /snapshot/<ip>)");
-        if let Err(e) = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await {
+        if let Err(e) = axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+        {
             log::error!("server error: {e}");
             std::process::exit(1);
         }
@@ -134,7 +142,8 @@ async fn shutdown_signal() {
     };
     #[cfg(unix)]
     let term = async {
-        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
             s.recv().await;
         }
     };

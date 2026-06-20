@@ -84,11 +84,18 @@ export type NotificationTarget = {
   enabled: boolean;
 };
 
-/** Telegram config state for the Beacons screen (matches `TelegramConfigState`).
- * The bot token is never returned — only whether it's set. */
+/** Telegram config state for the Recipients screen (matches `TelegramState`).
+ * The bot token is never returned — only whether it's set via the global provider. */
 export type TelegramConfigState = {
-  configured: boolean;
+  provider_configured: boolean;
   pairing_code: string;
+  bot_username?: string;
+};
+
+/** Global Telegram provider state (master-only, matches `TelegramProviderState`). */
+export type TelegramProviderState = {
+  configured: boolean;
+  bot_username?: string;
 };
 
 /** A managed person (matches `app_core::persons::Person`). The hierarchy is
@@ -130,11 +137,18 @@ export type RecognizeDetail = {
 };
 
 /** A camera assigned to a room (matches `app_core::map::RoomCamera`).
- * Positioned by an offset (`dx,dy`) in cells from the room's top-left. */
+ * Positioned by an offset (`dx,dy`) in cells from the room's top-left.
+ * `rot` is the yaw in degrees (0 = facing +y / "down" on the plan) used to
+ * orient the field-of-view wedge; optional + defaulted for back-compat. */
 export type RoomCamera = {
   ip: string;
   dx: number;
   dy: number;
+  rot?: number;
+  /** Field-of-view angle in degrees (wedge width). */
+  fov?: number;
+  /** View distance in grid units (wedge length). */
+  range?: number;
 };
 
 /** One room on the floor plan (matches `app_core::map::MapRoom`).
@@ -146,7 +160,124 @@ export type MapRoom = {
   y: number;
   w: number;
   h: number;
+  /** Rotation of the room rectangle in degrees (about its centre). */
+  rot?: number;
   cameras: RoomCamera[];
+};
+
+/** Wall render style — independent of thickness.
+ * solid = filled raised wall; wireframe = flat box outline;
+ * dashed / dotted = centerline dash or dot; line = solid 1px flat line. */
+export type WallStyle = "solid" | "wireframe" | "dashed" | "dotted" | "line";
+
+/** A free-form wall (matches `app_core::map::MapWall`). */
+export type MapWall = {
+  id: number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  thickness: number;
+  style?: WallStyle;
+  /** Hex color override (e.g. "#ff0000"). Undefined = use palette default. */
+  color?: string;
+};
+
+/** A placeable furniture / landmark marker (matches `app_core::map::MapMarker`),
+ * rendered as a flat SVG glyph on the floor. `icon` keys the icon library. */
+export type MapMarker = {
+  id: number;
+  icon: string;
+  x: number;
+  y: number;
+  rot: number;
+  scale: number;
+  label?: string | null;
+};
+
+/** A text label placed on the floor plan (matches `app_core::map::MapText`). */
+export type MapText = {
+  id: number;
+  text: string;
+  x: number;
+  y: number;
+  size?: number;   // font size in world units, default 0.5
+  color?: string;  // default white
+  rot?: number;    // degrees
+};
+
+/** Stroke pattern for shape outlines. */
+export type StrokeStyle = "solid" | "dashed" | "dotted";
+
+/** Shape annotation on the floor plan (matches `app_core::map::MapShape`).
+ * kind: "rect" | "triangle" | "circle" */
+export type ShapeKind = "rect" | "triangle" | "circle";
+export type MapShape = {
+  id: number;
+  kind: ShapeKind;
+  x: number;      // center x (rect/circle); unused for triangle
+  y: number;      // center y
+  w?: number;     // rect width
+  h?: number;     // rect height
+  r?: number;     // circle radius
+  pts?: [number, number][];  // triangle: [[x0,y0],[x1,y1],[x2,y2]]
+  color?: string;            // stroke color
+  fill?: string;             // fill color (undefined = no fill)
+  strokeStyle?: StrokeStyle;
+  rot?: number;              // degrees
+};
+
+/** The whole floor-plan document exchanged with `/map` (matches `app_core::map::MapDoc`). */
+export type MapDoc = {
+  rooms: MapRoom[];
+  walls: MapWall[];
+  markers: MapMarker[];
+  texts: MapText[];
+  shapes: MapShape[];
+};
+
+/** What a presence detection was (matches `app_core::presence::Category`). */
+export type PresenceCategory =
+  | "person"
+  | "known_person"
+  | "car"
+  | "cat"
+  | "dog"
+  | "unknown";
+
+/** A recorded presence event (matches `app_core::presence::Presence`). Written by
+ * the RecordPresence workflow node; pulsed live on the map. */
+export type Presence = {
+  id: number;
+  category: PresenceCategory;
+  label?: string | null;
+  room_id?: number | null;
+  room_name?: string | null;
+  camera?: string | null;
+  /** How long the pulse stays on the map, in seconds. */
+  duration_secs?: number;
+  source: string;
+  created_at: string;
+  /** Normalised horizontal position within camera FOV (-0.5 left, 0 centre, 0.5 right). */
+  detect_x?: number | null;
+  /** Normalised depth within camera range (0 near camera, 1 far edge). */
+  detect_depth?: number | null;
+};
+
+/** A live presence push over SSE (the `presence` event from sentinel-flow). */
+export type PresenceEvent = {
+  category: PresenceCategory;
+  room_id?: number | null;
+  room_name?: string | null;
+  label?: string | null;
+  camera?: string | null;
+  /** How long the pulse should stay on the map, in seconds (RecordPresence config). */
+  duration_secs?: number;
+  created_at: string;
+  /** Normalised horizontal position within camera FOV (-0.5 left, 0 centre, 0.5 right). */
+  detect_x?: number | null;
+  /** Normalised depth within camera range (0 near camera, 1 far edge). */
+  detect_depth?: number | null;
 };
 
 export const DEFAULT_SETTINGS: Settings = {

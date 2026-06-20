@@ -44,6 +44,8 @@ pub enum PortValue {
     Person(crate::agent::detector::PersonDetection),
     /// A detected face (element of a `FaceDetection[]`).
     Face(crate::agent::face::FaceDetection),
+    /// A camera device entity (id + ip + name, credential-free). Carried by `Camera` ports.
+    Camera(crate::workflows::domain::CameraEntity),
 }
 
 impl PortValue {
@@ -107,6 +109,12 @@ impl PortValue {
             _ => None,
         }
     }
+    pub fn as_camera(&self) -> Option<&crate::workflows::domain::CameraEntity> {
+        match self {
+            PortValue::Camera(c) => Some(c),
+            _ => None,
+        }
+    }
 }
 
 /// Read a file path into a `FileVal` (bytes + basename + guessed MIME).
@@ -146,8 +154,15 @@ pub type PortValues = HashMap<String, PortValue>;
 /// Convert a node's config literal into a typed value for an UNCONNECTED input port.
 /// Empty text / missing keys / `Image` ports yield `None` (treated as "not provided").
 pub fn literal_for(config: &Value, port: Port) -> Option<PortValue> {
-    let v = config.get(port.name)?;
-    match port.ty {
+    literal_for_named(config, port.name, port.ty)
+}
+
+/// As [`literal_for`], but by port name + type — so config-derived ports (with owned
+/// names, e.g. EmitEvent payload inputs) resolve a literal too. Payload ports carry no
+/// config literal (their value arrives by wire), so this returns `None` for them.
+pub fn literal_for_named(config: &Value, name: &str, ty: PortType) -> Option<PortValue> {
+    let v = config.get(name)?;
+    match ty {
         PortType::Text => {
             let s = v.as_str()?;
             if s.trim().is_empty() {
@@ -200,6 +215,8 @@ pub fn literal_for(config: &Value, port: Port) -> Option<PortValue> {
         }
         // Control-flow ports never carry a value.
         PortType::Exec => None,
+        // Camera literals are resolved by the engine (needs sys.devices); not a plain config value.
+        PortType::Camera => None,
         // Arrays / detection elements / the Any wildcard are produced by upstream nodes
         // (or, for ForEach `items`, parsed from text in the engine) — never a config literal.
         PortType::TextArray
@@ -210,6 +227,62 @@ pub fn literal_for(config: &Value, port: Port) -> Option<PortValue> {
         | PortType::Face
         | PortType::Any => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Camera entity helpers (used by the engine + nodes)
+// ---------------------------------------------------------------------------
+
+/// Resolve a query string (device id, IP, or name) to a `CameraEntity` using `sys.devices`.
+/// Returns `None` if the query is empty or no device matches.
+pub fn resolve_camera_entity(query: &str, sys: &ToolContext) -> Option<crate::workflows::domain::CameraEntity> {
+    let q = query.trim();
+    if q.is_empty() {
+        return None;
+    }
+    let devices = sys.devices.lock().unwrap();
+    let idx = dev_actions::resolve_device(&devices, q).ok()?;
+    let d = &devices[idx];
+    Some(crate::workflows::domain::CameraEntity { id: d.id.clone(), ip: d.ip.clone(), name: d.name.clone() })
+}
+
+/// Resolve a `Camera` config literal (the dropdown-stored device id) to a `PortValue::Camera`.
+/// Called by the engine when a `PortType::Camera` input port has no wired edge.
+pub fn resolve_camera_literal(config: &Value, key: &str, sys: &ToolContext) -> Option<PortValue> {
+    let id = config.get(key).and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty())?;
+    resolve_camera_entity(id, sys).map(PortValue::Camera)
+}
+
+/// Upgrade a `PortValues` map that came from an event payload: for every field whose port is
+/// `PortType::Camera`, convert a raw `PortValue::Text` (IP or id string from the wire) into
+/// a `PortValue::Camera(CameraEntity)`. Called by the engine when seeding an `OnEvent` node.
+pub fn seed_event_cameras(
+    payload: &PortValues,
+    ports: &[crate::workflows::domain::ResolvedPort],
+    sys: &ToolContext,
+) -> PortValues {
+    let mut out = payload.clone();
+    for port in ports {
+        if port.ty == crate::workflows::domain::PortType::Camera {
+            if let Some(PortValue::Text(s)) = out.get(&port.name).cloned() {
+                if let Some(cam) = resolve_camera_entity(&s, sys) {
+                    out.insert(port.name.clone(), PortValue::Camera(cam));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Get the full `Device` from `sys.devices` using a `CameraEntity`'s stable id.
+fn device_from_camera<'a>(
+    cam: &crate::workflows::domain::CameraEntity,
+    devices: &'a [crate::devices::Device],
+) -> Result<&'a crate::devices::Device, String> {
+    devices
+        .iter()
+        .find(|d| d.id == cam.id)
+        .ok_or_else(|| format!("camera '{}' not found (was it removed?)", cam.name))
 }
 
 /// Execute one node against its resolved inputs. Returns its declared outputs.
@@ -226,6 +299,8 @@ pub fn run_node(
         NodeKind::DeliverAlert => run_deliver_alert(inputs, sys),
         NodeKind::CameraSnapshot => run_camera_snapshot(inputs, sys),
         NodeKind::GetCurrentFrame => run_get_current_frame(config, inputs, sys),
+        NodeKind::GetCameraByName => run_get_camera_by_name(config, sys),
+        NodeKind::BreakCamera => run_break_camera(inputs),
         NodeKind::DescribeImage => run_describe_image(config, inputs, sys),
         NodeKind::NotifyRecipient => run_notify_recipient(inputs, sys),
         NodeKind::Format => run_format(config, inputs),
@@ -236,10 +311,14 @@ pub fn run_node(
         // advances the index across epochs, sets item/index, and fires loop_body/completed.
         NodeKind::ForEach => Ok(PortValues::new()),
         NodeKind::MotionDetection => run_motion_detection(config, inputs),
+        NodeKind::MotionWatch => run_motion_watch(config, inputs, sys),
         NodeKind::PersonDetection => run_person_detection(inputs, sys),
+        NodeKind::ObjectDetection => run_object_detection(config, inputs, sys),
         NodeKind::BreakPersonDetection => run_break_person_detection(inputs),
+        NodeKind::BreakDetection => run_break_detection(inputs),
         NodeKind::BreakFaceDetection => run_break_face_detection(inputs),
         NodeKind::RecognizePerson => run_recognize_person(config, inputs, sys),
+        NodeKind::RecordPresence => run_record_presence(config, inputs, sys),
         // EmitEvent/OnEvent are exec-flow markers: the engine handles the event fire
         // (spawning the guarded sub-run) and the OnEvent entry, like the If/ShowImage
         // special-cases. Here they're no-ops that just pass exec through.
@@ -249,6 +328,43 @@ pub fn run_node(
         // the editor — is driven by the engine, which owns the node id the UI needs to
         // place the preview. Here it's a pure pass-through (exec flows on, no data out).
         NodeKind::ShowImage => Ok(PortValues::new()),
+        NodeKind::DrawBbox => run_draw_bbox(config, inputs),
+        NodeKind::GetImageSize => run_get_image_size(inputs),
+        // FlipFlop is engine-driven (reads/writes cross-run state + routes exec).
+        // Never called directly — the engine handles it before reaching run_node.
+        NodeKind::FlipFlop => Ok(PortValues::new()),
+        NodeKind::Compare => run_compare(config, inputs),
+        NodeKind::NumLt => run_num_cmp(config, inputs, |a, b| a < b),
+        NodeKind::NumLte => run_num_cmp(config, inputs, |a, b| a <= b),
+        NodeKind::NumGt => run_num_cmp(config, inputs, |a, b| a > b),
+        NodeKind::NumGte => run_num_cmp(config, inputs, |a, b| a >= b),
+        NodeKind::NumEq => run_num_cmp(config, inputs, |a, b| a == b),
+        NodeKind::NumNe => run_num_cmp(config, inputs, |a, b| a != b),
+        NodeKind::And => run_and(config, inputs),
+        NodeKind::Or => run_or(config, inputs),
+        NodeKind::Not => run_not(config, inputs),
+        NodeKind::TextCompare => run_text_compare(config, inputs),
+        NodeKind::NumToText => {
+            let v = inputs.get("value").and_then(PortValue::as_num).unwrap_or(0);
+            let mut o = PortValues::new();
+            o.insert("text".into(), PortValue::Text(v.to_string()));
+            Ok(o)
+        }
+        NodeKind::BoolToText => {
+            let v = inputs.get("value").and_then(PortValue::as_bool).unwrap_or(false);
+            let mut o = PortValues::new();
+            o.insert("text".into(), PortValue::Text(if v { "true" } else { "false" }.into()));
+            Ok(o)
+        }
+        // Cooldown is engine-driven (reads/writes cross-run node state).
+        NodeKind::Cooldown => Ok(PortValues::new()),
+        // StringSwitch is engine-driven (the engine reads `value` and fires the matching
+        // arm in forward_epoch). Here we just validate the required input is present.
+        NodeKind::StringSwitch => run_string_switch(inputs),
+        NodeKind::AskAi => run_ask_ai(config, inputs, sys),
+        // Comment is a canvas organizer — it never executes.
+        // Reroute is collapsed to a direct edge before the engine runs (see engine::flatten_reroutes).
+        NodeKind::Comment | NodeKind::Reroute => Ok(PortValues::new()),
     }
 }
 
@@ -261,25 +377,50 @@ pub fn run_node(
 pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duration> {
     let default_secs = match kind {
         NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame => 10,
-        NodeKind::PersonDetection | NodeKind::MotionDetection => 30,
+        NodeKind::AskAi => 65,
+        NodeKind::PersonDetection | NodeKind::ObjectDetection | NodeKind::MotionDetection => 30,
+        NodeKind::MotionWatch => 20, // two camera grabs + the sample gap
         NodeKind::RecognizePerson => 30,
         NodeKind::DescribeImage => 65,
         NodeKind::HttpPost | NodeKind::NotifyRecipient | NodeKind::DeliverAlert => 35,
-        NodeKind::CreateAlert => 15,
+        NodeKind::CreateAlert | NodeKind::RecordPresence => 15,
         // Inline (no watchdog): instant/pure nodes + the deliberate `Wait` sleep + the
-        // engine-driven markers (ForEach/EmitEvent/OnEvent/ShowImage).
+        // engine-driven markers (ForEach/EmitEvent/OnEvent/ShowImage/FlipFlop).
         NodeKind::Wait
         | NodeKind::Format
         | NodeKind::If
+        | NodeKind::Compare
+        | NodeKind::NumLt
+        | NodeKind::NumLte
+        | NodeKind::NumGt
+        | NodeKind::NumGte
+        | NodeKind::NumEq
+        | NodeKind::NumNe
+        | NodeKind::NumToText
+        | NodeKind::BoolToText
+        | NodeKind::FlipFlop
+        | NodeKind::Cooldown
         | NodeKind::Print
         | NodeKind::GetRecipient
         | NodeKind::GetLastAlert
         | NodeKind::BreakPersonDetection
+        | NodeKind::BreakDetection
         | NodeKind::BreakFaceDetection
         | NodeKind::EmitEvent
         | NodeKind::OnEvent
         | NodeKind::ShowImage
-        | NodeKind::ForEach => return None,
+        | NodeKind::DrawBbox
+        | NodeKind::GetImageSize
+        | NodeKind::And
+        | NodeKind::Or
+        | NodeKind::Not
+        | NodeKind::TextCompare
+        | NodeKind::ForEach
+        | NodeKind::StringSwitch
+        | NodeKind::GetCameraByName
+        | NodeKind::BreakCamera
+        | NodeKind::Comment
+        | NodeKind::Reroute => return None,
     };
     let secs = config_u64(config, "timeout_secs").unwrap_or(default_secs);
     if secs == 0 {
@@ -352,10 +493,47 @@ fn run_person_detection(inputs: &PortValues, sys: &ToolContext) -> Result<PortVa
     let count = people.len() as i64;
     let confidence = people.iter().map(|p| p.confidence).fold(0.0_f32, f32::max);
     let persons: Vec<PortValue> = people.into_iter().map(PortValue::Person).collect();
+    let (w, h) = jpeg_dimensions(bytes);
     let mut o = PortValues::new();
     o.insert("count".into(), PortValue::Num(count));
     o.insert("confidence".into(), PortValue::Num((confidence * 100.0).round() as i64));
     o.insert("persons".into(), PortValue::List(persons));
+    o.insert("width".into(), PortValue::Num(w));
+    o.insert("height".into(), PortValue::Num(h));
+    o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
+}
+
+/// Detect any single COCO class in the image. The class is read from the wired `class` Text
+/// input first; falls back to the `class` config field (default "person"). Outputs the same
+/// shape as `PersonDetection` so it wires directly into `ForEach` + `BreakDetection`.
+fn run_object_detection(
+    config: &Value,
+    inputs: &PortValues,
+    sys: &ToolContext,
+) -> Result<PortValues, String> {
+    let bytes = inputs
+        .get("image")
+        .and_then(PortValue::as_image)
+        .ok_or("missing required input 'image'")?;
+    let class_name = inputs
+        .get("class")
+        .and_then(PortValue::as_text)
+        .or_else(|| config.get("class").and_then(|v| v.as_str()))
+        .unwrap_or("person");
+    let class_id = crate::agent::detector::class_id_for_name(class_name)
+        .ok_or_else(|| format!("unknown COCO class: '{class_name}'"))?;
+    let detections = sys.vision.detect_objects_detailed(bytes, class_id)?;
+    let count = detections.len() as i64;
+    let confidence = detections.iter().map(|d| d.confidence).fold(0.0_f32, f32::max);
+    let items: Vec<PortValue> = detections.into_iter().map(PortValue::Person).collect();
+    let (w, h) = jpeg_dimensions(bytes);
+    let mut o = PortValues::new();
+    o.insert("count".into(), PortValue::Num(count));
+    o.insert("confidence".into(), PortValue::Num((confidence * 100.0).round() as i64));
+    o.insert("detections".into(), PortValue::List(items));
+    o.insert("width".into(), PortValue::Num(w));
+    o.insert("height".into(), PortValue::Num(h));
     o.insert("ok".into(), PortValue::Bool(true));
     Ok(o)
 }
@@ -371,6 +549,20 @@ fn run_break_person_detection(inputs: &PortValues) -> Result<PortValues, String>
     let mut o = PortValues::new();
     o.insert("bbox".into(), PortValue::List(bbox));
     o.insert("confidence".into(), PortValue::Num((p.confidence * 100.0).round() as i64));
+    Ok(o)
+}
+
+/// Break a generic `Detection` element (from `ObjectDetection`) into `bbox` + `confidence`.
+/// Identical logic to `run_break_person_detection` but reads from the `detection` input pin.
+fn run_break_detection(inputs: &PortValues) -> Result<PortValues, String> {
+    let d = inputs
+        .get("detection")
+        .and_then(PortValue::as_person)
+        .ok_or("missing required input 'detection'")?;
+    let bbox = d.bbox.iter().map(|v| PortValue::Num(v.round() as i64)).collect();
+    let mut o = PortValues::new();
+    o.insert("bbox".into(), PortValue::List(bbox));
+    o.insert("confidence".into(), PortValue::Num((d.confidence * 100.0).round() as i64));
     Ok(o)
 }
 
@@ -489,11 +681,24 @@ pub fn debug_summary(
                 if flag("moved") { "moved" } else { "still" }
             )
         }
+        NodeKind::MotionWatch => format!(
+            "{} · score {}% → {}",
+            config.get("camera").and_then(|v| v.as_str()).unwrap_or("first"),
+            num("score").unwrap_or(0),
+            if flag("moved") { "moved" } else { "still" }
+        ),
         NodeKind::PersonDetection => match num("count").unwrap_or(0) {
             0 => "no person detected".into(),
             c => format!("{c} person(s) ({}% confidence)", num("confidence").unwrap_or(0)),
         },
-        NodeKind::BreakPersonDetection | NodeKind::BreakFaceDetection => {
+        NodeKind::ObjectDetection => {
+            let class = config.get("class").and_then(|v| v.as_str()).unwrap_or("person");
+            match num("count").unwrap_or(0) {
+                0 => format!("no {class} detected"),
+                c => format!("{c} {class}(s) ({}% confidence)", num("confidence").unwrap_or(0)),
+            }
+        }
+        NodeKind::BreakPersonDetection | NodeKind::BreakDetection | NodeKind::BreakFaceDetection => {
             format!("bbox + {}% confidence", num("confidence").unwrap_or(0))
         }
         NodeKind::Print => {
@@ -507,6 +712,7 @@ pub fn debug_summary(
                 "no match".into()
             }
         }
+        NodeKind::RecordPresence => format!("presence recorded (#{})", num("id").unwrap_or(0)),
         NodeKind::EmitEvent => {
             let ev = config.get("event").and_then(|v| v.as_str()).unwrap_or("");
             format!("emit '{ev}'")
@@ -523,6 +729,98 @@ pub fn debug_summary(
                 "no image".into()
             }
         }
+        NodeKind::FlipFlop => {
+            let branch = outputs.get("is_a").and_then(PortValue::as_bool).map(|b| if b { "a" } else { "b" }).unwrap_or("?");
+            format!("flip flop → {branch}")
+        }
+        NodeKind::Compare => {
+            let a = inputs.get("a").and_then(PortValue::as_num).unwrap_or(0);
+            let b = inputs.get("b").and_then(PortValue::as_num).unwrap_or(0);
+            let op = config.get("operator").and_then(|v| v.as_str()).unwrap_or("==");
+            let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            format!("{a} {op} {b} → {result}")
+        }
+        NodeKind::NumLt => num_cmp_summary("<", inputs, outputs),
+        NodeKind::NumLte => num_cmp_summary("<=", inputs, outputs),
+        NodeKind::NumGt => num_cmp_summary(">", inputs, outputs),
+        NodeKind::NumGte => num_cmp_summary(">=", inputs, outputs),
+        NodeKind::NumEq => num_cmp_summary("==", inputs, outputs),
+        NodeKind::NumNe => num_cmp_summary("!=", inputs, outputs),
+        NodeKind::NumToText => {
+            let v = inputs.get("value").and_then(PortValue::as_num).unwrap_or(0);
+            let text = outputs.get("text").and_then(PortValue::as_text).unwrap_or("");
+            format!("{v} → \"{text}\"")
+        }
+        NodeKind::BoolToText => {
+            let v = inputs.get("value").and_then(PortValue::as_bool).unwrap_or(false);
+            let text = outputs.get("text").and_then(PortValue::as_text).unwrap_or("");
+            format!("{v} → \"{text}\"")
+        }
+        NodeKind::Cooldown => {
+            let elapsed = outputs.get("elapsed_secs").and_then(PortValue::as_num).unwrap_or(0);
+            let ok = outputs.get("ok").and_then(PortValue::as_bool).unwrap_or(false);
+            let window = config.get("window_secs").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).unwrap_or(60);
+            format!("{elapsed}s elapsed / {window}s → {}", if ok { "pass" } else { "blocked" })
+        }
+        NodeKind::DrawBbox => {
+            let bytes = outputs.get("image").and_then(PortValue::as_image).map_or(0, <[u8]>::len);
+            format!("bbox drawn ({} KB)", bytes / 1024)
+        }
+        NodeKind::GetImageSize => {
+            let w = outputs.get("width").and_then(PortValue::as_num).unwrap_or(0);
+            let h = outputs.get("height").and_then(PortValue::as_num).unwrap_or(0);
+            format!("{w}×{h}")
+        }
+        NodeKind::And => {
+            let a = inputs.get("a").and_then(PortValue::as_bool).unwrap_or(false);
+            let b = inputs.get("b").and_then(PortValue::as_bool).unwrap_or(false);
+            let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            format!("{a} AND {b} → {result}")
+        }
+        NodeKind::Or => {
+            let a = inputs.get("a").and_then(PortValue::as_bool).unwrap_or(false);
+            let b = inputs.get("b").and_then(PortValue::as_bool).unwrap_or(false);
+            let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            format!("{a} OR {b} → {result}")
+        }
+        NodeKind::Not => {
+            let a = inputs.get("a").and_then(PortValue::as_bool).unwrap_or(false);
+            let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            format!("NOT {a} → {result}")
+        }
+        NodeKind::TextCompare => {
+            let a = inputs.get("a").and_then(PortValue::as_text).unwrap_or("");
+            let b = inputs.get("b").and_then(PortValue::as_text)
+                .or_else(|| config.get("b").and_then(|v| v.as_str()))
+                .unwrap_or("");
+            let op = config.get("operator").and_then(|v| v.as_str()).unwrap_or("eq");
+            let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            let clip = |s: &str| if s.chars().count() > 20 { format!("{}…", s.chars().take(19).collect::<String>()) } else { s.to_string() };
+            format!("\"{}\" {op} \"{}\" → {result}", clip(a), clip(b))
+        }
+        NodeKind::StringSwitch => {
+            let val = inputs.get("value").and_then(PortValue::as_text).unwrap_or("");
+            let arms = super::domain::string_switch_arms(config);
+            let fired = if arms.iter().any(|a| a == val) { val } else { "default" };
+            format!("\"{}\" → arm '{fired}'", clip(val))
+        }
+        NodeKind::AskAi => {
+            let q = inputs.get("question").and_then(PortValue::as_text)
+                .or_else(|| config.get("question").and_then(|v| v.as_str()))
+                .unwrap_or("");
+            let answer = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            format!("AI: \"{}\" → {}", clip(q), if answer { "true" } else { "false" })
+        }
+        NodeKind::GetCameraByName => {
+            let name = outputs.get("camera").and_then(PortValue::as_camera).map(|c| c.name.as_str()).unwrap_or("?");
+            format!("camera: {name}")
+        }
+        NodeKind::BreakCamera => {
+            let name = inputs.get("camera").and_then(PortValue::as_camera).map(|c| c.name.as_str()).unwrap_or("?");
+            format!("break '{name}' → id/ip/name")
+        }
+        NodeKind::Comment => "comment".into(),
+        NodeKind::Reroute => "reroute".into(),
     }
 }
 
@@ -536,17 +834,132 @@ fn run_if(inputs: &PortValues) -> Result<PortValues, String> {
     Ok(PortValues::new())
 }
 
+/// String switch: validates the required `value` Text input is present. The engine's
+/// `forward_epoch` handles the actual arm routing — exactly one arm fires.
+fn run_string_switch(inputs: &PortValues) -> Result<PortValues, String> {
+    inputs
+        .get("value")
+        .and_then(PortValue::as_text)
+        .ok_or("missing required input 'value'")?;
+    Ok(PortValues::new())
+}
+
+/// AI If: asks the vision model a yes/no question about an optional image and returns
+/// `result: Bool`. The engine routes exec to `true` or `false` based on this result,
+/// identically to how it handles the `If` node but reading from outputs instead of inputs.
+fn run_ask_ai(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+    let question = inputs
+        .get("question")
+        .and_then(PortValue::as_text)
+        .or_else(|| config.get("question").and_then(|v| v.as_str()))
+        .filter(|s| !s.trim().is_empty())
+        .ok_or("AI If: question is required (wire it or set it in config)")?;
+    let image = inputs.get("image").and_then(PortValue::as_image);
+    let answer = sys.vision.ask_yes_no(question, image)?;
+    let mut o = PortValues::new();
+    o.insert("result".into(), PortValue::Bool(answer));
+    Ok(o)
+}
+
+/// Compare two integers using a configurable operator → `result` bool.
+/// Both `a` and `b` fall back to 0 when not wired and no config literal is set.
+fn run_and(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let bool_val = |key: &str| -> bool {
+        inputs.get(key).and_then(PortValue::as_bool)
+            .or_else(|| config.get(key).and_then(|v| v.as_bool().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))))
+            .unwrap_or(false)
+    };
+    let mut o = PortValues::new();
+    o.insert("result".into(), PortValue::Bool(bool_val("a") && bool_val("b")));
+    Ok(o)
+}
+
+fn run_or(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let bool_val = |key: &str| -> bool {
+        inputs.get(key).and_then(PortValue::as_bool)
+            .or_else(|| config.get(key).and_then(|v| v.as_bool().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))))
+            .unwrap_or(false)
+    };
+    let mut o = PortValues::new();
+    o.insert("result".into(), PortValue::Bool(bool_val("a") || bool_val("b")));
+    Ok(o)
+}
+
+fn run_not(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let a = inputs.get("a").and_then(PortValue::as_bool)
+        .or_else(|| config.get("a").and_then(|v| v.as_bool().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))))
+        .unwrap_or(false);
+    let mut o = PortValues::new();
+    o.insert("result".into(), PortValue::Bool(!a));
+    Ok(o)
+}
+
+fn run_text_compare(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let text_val = |key: &str| -> String {
+        inputs.get(key).and_then(PortValue::as_text)
+            .or_else(|| config.get(key).and_then(|v| v.as_str()))
+            .unwrap_or("")
+            .to_string()
+    };
+    let a = text_val("a");
+    let b = text_val("b");
+    let op = config.get("operator").and_then(Value::as_str).unwrap_or("eq");
+    let result = match op {
+        "eq"          => a == b,
+        "ne"          => a != b,
+        "contains"    => a.contains(b.as_str()),
+        "starts_with" => a.starts_with(b.as_str()),
+        "ends_with"   => a.ends_with(b.as_str()),
+        _             => return Err(format!("unknown text_compare operator: '{op}'")),
+    };
+    let mut o = PortValues::new();
+    o.insert("result".into(), PortValue::Bool(result));
+    Ok(o)
+}
+
+fn run_compare(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let a = inputs.get("a").and_then(PortValue::as_num).unwrap_or(0);
+    let b = inputs.get("b").and_then(PortValue::as_num).unwrap_or(0);
+    let op = config.get("operator").and_then(Value::as_str).unwrap_or("==");
+    let result = match op {
+        ">"  => a > b,
+        ">=" => a >= b,
+        "<"  => a < b,
+        "<=" => a <= b,
+        "==" => a == b,
+        "!=" => a != b,
+        _ => return Err(format!("Compare: unknown operator '{op}' (use >, >=, <, <=, ==, !=)")),
+    };
+    let mut o = PortValues::new();
+    o.insert("result".into(), PortValue::Bool(result));
+    Ok(o)
+}
+
+/// Numeric comparison with a fixed operator — shared by the six Num: </<=/>/>==/!= nodes.
+fn run_num_cmp(config: &Value, inputs: &PortValues, op: impl FnOnce(i64, i64) -> bool) -> Result<PortValues, String> {
+    let a = inputs.get("a").and_then(PortValue::as_num)
+        .or_else(|| config.get("a").and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))))
+        .unwrap_or(0);
+    let b = inputs.get("b").and_then(PortValue::as_num)
+        .or_else(|| config.get("b").and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))))
+        .unwrap_or(0);
+    let mut o = PortValues::new();
+    o.insert("result".into(), PortValue::Bool(op(a, b)));
+    Ok(o)
+}
+
+fn num_cmp_summary(op: &str, inputs: &PortValues, outputs: &PortValues) -> String {
+    let a = inputs.get("a").and_then(PortValue::as_num).unwrap_or(0);
+    let b = inputs.get("b").and_then(PortValue::as_num).unwrap_or(0);
+    let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+    format!("{a} {op} {b} → {result}")
+}
+
 /// Compare two frames (resized to a common small grayscale) and report how much
 /// they differ. `moved` = changed% >= `sensitivity`; `score` = changed% (0..100).
-fn run_motion_detection(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
-    let a = inputs.get("image_a").and_then(PortValue::as_image).ok_or("missing required input 'image_a'")?;
-    let b = inputs.get("image_b").and_then(PortValue::as_image).ok_or("missing required input 'image_b'")?;
-    let cfg_num = |k: &str, d: i64| -> i64 {
-        config.get(k).and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).unwrap_or(d)
-    };
-    let pixel_threshold = cfg_num("pixel_threshold", 25).clamp(0, 255) as i16;
-    let sensitivity = cfg_num("sensitivity", 2).clamp(0, 100) as f64;
-
+/// Percent of pixels that changed between two JPEG frames: both are downscaled to a fixed
+/// 320×240 grayscale, then counted where the absolute luma difference exceeds `pixel_threshold`.
+fn motion_score(a: &[u8], b: &[u8], pixel_threshold: i16) -> Result<f64, String> {
     const W: u32 = 320;
     const H: u32 = 240;
     let gray = |raw: &[u8]| -> Result<Vec<u8>, String> {
@@ -561,7 +974,45 @@ fn run_motion_detection(config: &Value, inputs: &PortValues) -> Result<PortValue
         .zip(gb.iter())
         .filter(|(x, y)| (**x as i16 - **y as i16).abs() > pixel_threshold)
         .count();
-    let score = (changed as f64 / total as f64) * 100.0;
+    Ok((changed as f64 / total as f64) * 100.0)
+}
+
+fn cfg_i64(config: &Value, k: &str, d: i64) -> i64 {
+    config.get(k).and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).unwrap_or(d)
+}
+
+fn run_motion_detection(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let a = inputs.get("image_a").and_then(PortValue::as_image).ok_or("missing required input 'image_a'")?;
+    let b = inputs.get("image_b").and_then(PortValue::as_image).ok_or("missing required input 'image_b'")?;
+    let pixel_threshold = cfg_i64(config, "pixel_threshold", 25).clamp(0, 255) as i16;
+    let sensitivity = cfg_i64(config, "sensitivity", 2).clamp(0, 100) as f64;
+    let score = motion_score(a, b, pixel_threshold)?;
+
+    let mut o = PortValues::new();
+    o.insert("moved".into(), PortValue::Bool(score >= sensitivity));
+    o.insert("score".into(), PortValue::Num(score.round() as i64));
+    o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
+}
+
+/// Camera-bound motion detector: resolves its own camera, grabs two frames `sample_gap_ms`
+/// apart, and reports `moved`/`score`. Self-contained per run — drop it in a Cron graph to
+/// watch a feed continuously and wire `moved` → If → Emit event to act only on motion.
+fn run_motion_watch(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+    let cam = inputs.get("camera").and_then(PortValue::as_camera)
+        .ok_or("missing required camera input")?;
+    let device = {
+        let devices = sys.devices.lock().unwrap();
+        device_from_camera(cam, &devices)?.clone()
+    };
+    let pixel_threshold = cfg_i64(config, "pixel_threshold", 25).clamp(0, 255) as i16;
+    let sensitivity = cfg_i64(config, "sensitivity", 2).clamp(0, 100) as f64;
+    let gap_ms = cfg_i64(config, "sample_gap_ms", 400).clamp(0, 5000) as u64;
+
+    let a = sys.frames.snapshot(&device)?;
+    std::thread::sleep(std::time::Duration::from_millis(gap_ms));
+    let b = sys.frames.snapshot(&device)?;
+    let score = motion_score(&a, &b, pixel_threshold)?;
 
     let mut o = PortValues::new();
     o.insert("moved".into(), PortValue::Bool(score >= sensitivity));
@@ -736,6 +1187,109 @@ fn run_create_alert(
     Ok(o)
 }
 
+/// Record a categorized presence in a room: persist it and pulse it live on the map
+/// (via the `Presence` UI event → SSE relay). Inputs override config; the room name
+/// resolves to a `room_id` like `CreateAlert`.
+fn run_record_presence(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+    let cat_str = inputs
+        .get("category")
+        .and_then(PortValue::as_text)
+        .or_else(|| config.get("category").and_then(Value::as_str))
+        .unwrap_or("person");
+    let category = crate::presence::Category::parse(cat_str);
+
+    let label = inputs
+        .get("label")
+        .and_then(PortValue::as_text)
+        .or_else(|| config.get("label").and_then(Value::as_str))
+        .map(|s| s.to_string())
+        .filter(|s| !s.trim().is_empty());
+
+    let camera = inputs
+        .get("camera")
+        .and_then(PortValue::as_camera)
+        .map(|c| c.id.clone());
+
+    // How long the map keeps the pulse alive (seconds). Input overrides config; default 8.
+    let duration_secs = inputs
+        .get("duration_secs")
+        .and_then(PortValue::as_num)
+        .or_else(|| {
+            config
+                .get("duration_secs")
+                .and_then(Value::as_str)
+                .and_then(|s| s.trim().parse::<i64>().ok())
+        })
+        .filter(|n| *n > 0)
+        .unwrap_or(8) as u32;
+
+    let (room_id, room_name) = match inputs
+        .get("room")
+        .and_then(PortValue::as_text)
+        .or_else(|| config.get("room").and_then(Value::as_str))
+        .filter(|s| !s.trim().is_empty())
+    {
+        Some(name) => {
+            let rooms = crate::map::repo::load(&sys.db, sys.tenant_id);
+            match rooms.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim())) {
+                Some(r) => (Some(r.id), Some(r.name.clone())),
+                None => (None, Some(name.to_string())),
+            }
+        }
+        None => (None, None),
+    };
+
+    // Compute detect_x / detect_depth from bbox + frame dimensions when all three are wired.
+    let detect_pos: Option<(f32, f32)> = (|| {
+        let bbox = inputs.get("bbox").and_then(PortValue::as_list)?;
+        if bbox.len() < 4 { return None; }
+        let x1 = bbox[0].as_num()? as f32;
+        let y1 = bbox[1].as_num()? as f32;
+        let x2 = bbox[2].as_num()? as f32;
+        let y2 = bbox[3].as_num()? as f32;
+        let fw = inputs.get("frame_w").and_then(PortValue::as_num)? as f32;
+        let fh = inputs.get("frame_h").and_then(PortValue::as_num)? as f32;
+        if fw <= 0.0 || fh <= 0.0 { return None; }
+        let cx = (x1 + x2) / 2.0 / fw - 0.5; // -0.5..0.5, left-to-right
+        let cy = (y1 + y2) / 2.0 / fh;        // 0 top, 1 bottom
+        let depth = 1.0 - cy;                  // bottom of frame = near (0), top = far (1)
+        Some((cx.clamp(-0.5, 0.5), depth.clamp(0.0, 1.0)))
+    })();
+    let detect_x = detect_pos.map(|(x, _)| x);
+    let detect_depth = detect_pos.map(|(_, d)| d);
+
+    let p = crate::presence::create(
+        &sys.db,
+        sys.tenant_id,
+        category,
+        label.clone(),
+        room_id,
+        room_name.clone(),
+        camera.clone(),
+        duration_secs,
+        "workflow".to_string(),
+        detect_x,
+        detect_depth,
+    );
+
+    let _ = sys.ui_tx.send(ToolUiEvent::Presence {
+        category: category.slug().to_string(),
+        room_id,
+        room_name,
+        label,
+        camera,
+        duration_secs,
+        created_at: p.created_at.clone(),
+        detect_x,
+        detect_depth,
+    });
+
+    let mut o = PortValues::new();
+    o.insert("id".into(), PortValue::Num(p.id as i64));
+    o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
+}
+
 fn run_deliver_alert(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
     let id = inputs
         .get("id")
@@ -754,20 +1308,23 @@ fn run_deliver_alert(inputs: &PortValues, sys: &ToolContext) -> Result<PortValue
 }
 
 fn run_camera_snapshot(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let camera = req_text(inputs, "camera")?;
+    let cam = inputs.get("camera").and_then(PortValue::as_camera)
+        .ok_or("missing required camera input")?;
     let device = {
         let devices = sys.devices.lock().unwrap();
-        let idx = dev_actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
-        devices[idx].clone()
+        device_from_camera(cam, &devices)?.clone()
     };
     let bytes = sys.frames.snapshot(&device)?;
     // Mirror the chat tool: also surface the snapshot in the UI.
     if let Ok(jpeg) = to_jpeg(&bytes) {
         let _ = sys.ui_tx.send(ToolUiEvent::Snapshot { camera: device.name.clone(), jpeg });
     }
+    let (w, h) = jpeg_dimensions(&bytes);
     let mut o = PortValues::new();
     o.insert("image".into(), PortValue::Image(bytes));
     o.insert("result".into(), PortValue::Text(format!("Snapshot of '{}' captured", device.name)));
+    o.insert("width".into(), PortValue::Num(w));
+    o.insert("height".into(), PortValue::Num(h));
     o.insert("ok".into(), PortValue::Bool(true));
     Ok(o)
 }
@@ -776,21 +1333,50 @@ fn run_camera_snapshot(inputs: &PortValues, sys: &ToolContext) -> Result<PortVal
 /// camera round trip), starting/keeping a background grabber. For high-rate loops like a
 /// 1 Hz recognition graph. Falls back to an on-demand snapshot until the cache is warm.
 fn run_get_current_frame(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let camera = req_text(inputs, "camera")?;
+    let cam = inputs.get("camera").and_then(PortValue::as_camera)
+        .ok_or("missing required camera input")?;
     let device = {
         let devices = sys.devices.lock().unwrap();
-        let idx = dev_actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
-        devices[idx].clone()
+        device_from_camera(cam, &devices)?.clone()
     };
     let max_age_ms = config
         .get("max_age_ms")
         .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
         .unwrap_or(2000);
     let (bytes, age_ms) = sys.frames.current(&device, max_age_ms)?;
+    let (w, h) = jpeg_dimensions(&bytes);
     let mut o = PortValues::new();
     o.insert("image".into(), PortValue::Image(bytes));
     o.insert("age_ms".into(), PortValue::Num(age_ms as i64));
+    o.insert("width".into(), PortValue::Num(w));
+    o.insert("height".into(), PortValue::Num(h));
     o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
+}
+
+fn run_get_camera_by_name(config: &Value, sys: &ToolContext) -> Result<PortValues, String> {
+    let id = config
+        .get("camera")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or("No camera selected — pick one in the node config.")?;
+    let cam = resolve_camera_entity(id, sys)
+        .ok_or_else(|| format!("camera '{id}' not found"))?;
+    let mut o = PortValues::new();
+    o.insert("camera".into(), PortValue::Camera(cam));
+    Ok(o)
+}
+
+fn run_break_camera(inputs: &PortValues) -> Result<PortValues, String> {
+    let cam = inputs
+        .get("camera")
+        .and_then(PortValue::as_camera)
+        .ok_or("missing required camera input")?;
+    let mut o = PortValues::new();
+    o.insert("id".into(), PortValue::Text(cam.id.clone()));
+    o.insert("ip".into(), PortValue::Text(cam.ip.clone()));
+    o.insert("name".into(), PortValue::Text(cam.name.clone()));
     Ok(o)
 }
 
@@ -842,7 +1428,106 @@ fn run_format(config: &Value, inputs: &PortValues) -> Result<PortValues, String>
     Ok(o)
 }
 
+fn run_get_image_size(inputs: &PortValues) -> Result<PortValues, String> {
+    let bytes = inputs.get("image").and_then(PortValue::as_image).ok_or("missing required input 'image'")?;
+    let (w, h) = jpeg_dimensions(bytes);
+    let mut o = PortValues::new();
+    o.insert("width".into(), PortValue::Num(w));
+    o.insert("height".into(), PortValue::Num(h));
+    o.insert("ok".into(), PortValue::Bool(w > 0 && h > 0));
+    Ok(o)
+}
+
+fn run_draw_bbox(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let raw = inputs.get("image").and_then(PortValue::as_image).ok_or("missing required input 'image'")?;
+    let bbox_vals: Vec<i64> = {
+        let list = inputs.get("bbox").ok_or("missing required input 'bbox'")?;
+        match list {
+            PortValue::List(items) => items.iter().filter_map(PortValue::as_num).collect(),
+            _ => return Err("'bbox' must be a NumArray".into()),
+        }
+    };
+    if bbox_vals.len() < 4 {
+        return Err(format!("'bbox' needs 4 numbers, got {}", bbox_vals.len()));
+    }
+
+    let fmt = config.get("format").and_then(|v| v.as_str()).unwrap_or("xyxy");
+    let (x1, y1, x2, y2) = if fmt == "xywh" {
+        (bbox_vals[0], bbox_vals[1], bbox_vals[0] + bbox_vals[2], bbox_vals[1] + bbox_vals[3])
+    } else {
+        (bbox_vals[0], bbox_vals[1], bbox_vals[2], bbox_vals[3])
+    };
+
+    let color_str = config.get("color").and_then(|v| v.as_str()).unwrap_or("#00FF00");
+    let color = parse_hex_color(color_str).unwrap_or([0, 255, 0]);
+    let thickness = config
+        .get("thickness")
+        .and_then(|v| v.as_str().and_then(|s| s.parse::<u32>().ok()).or_else(|| v.as_u64().map(|n| n as u32)))
+        .unwrap_or(2)
+        .max(1);
+
+    let img = image::load_from_memory(raw).map_err(|e| format!("could not decode image: {e}"))?;
+    let mut rgb = img.into_rgb8();
+    draw_rect(&mut rgb, x1, y1, x2, y2, color, thickness);
+
+    let mut out = Vec::new();
+    image::DynamicImage::ImageRgb8(rgb)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
+        .map_err(|e| format!("could not encode image: {e}"))?;
+
+    let w = out.len(); // used only for the log
+    log::debug!("draw_bbox: drew {thickness}px rect [{x1},{y1},{x2},{y2}] on {w}-byte JPEG");
+
+    let mut o = PortValues::new();
+    o.insert("image".into(), PortValue::Image(out));
+    o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
+}
+
+fn parse_hex_color(s: &str) -> Option<[u8; 3]> {
+    let s = s.trim_start_matches('#');
+    if s.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+    Some([r, g, b])
+}
+
+fn draw_rect(img: &mut image::RgbImage, x1: i64, y1: i64, x2: i64, y2: i64, color: [u8; 3], thickness: u32) {
+    let w = img.width() as i64;
+    let h = img.height() as i64;
+    let px = image::Rgb(color);
+    let t = thickness as i64;
+    for d in 0..t {
+        // top and bottom edges
+        for x in x1..=x2 {
+            if x >= 0 && x < w {
+                if y1 + d >= 0 && y1 + d < h { img.put_pixel(x as u32, (y1 + d) as u32, px); }
+                if y2 - d >= 0 && y2 - d < h { img.put_pixel(x as u32, (y2 - d) as u32, px); }
+            }
+        }
+        // left and right edges
+        for y in y1..=y2 {
+            if y >= 0 && y < h {
+                if x1 + d >= 0 && x1 + d < w { img.put_pixel((x1 + d) as u32, y as u32, px); }
+                if x2 - d >= 0 && x2 - d < w { img.put_pixel((x2 - d) as u32, y as u32, px); }
+            }
+        }
+    }
+}
+
 /// Re-encode snapshot bytes to JPEG for the UI event (same helper as the chat tool).
+/// Decode just the JPEG/PNG header to extract image dimensions. Returns (0, 0) on error
+/// so callers can treat unknown dimensions as absent without failing.
+fn jpeg_dimensions(bytes: &[u8]) -> (i64, i64) {
+    match image::load_from_memory(bytes) {
+        Ok(img) => (img.width() as i64, img.height() as i64),
+        Err(_) => (0, 0),
+    }
+}
+
 pub(crate) fn to_jpeg(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let img = image::load_from_memory(bytes).map_err(|e| format!("decode snapshot: {e}"))?;
     let mut out = Vec::new();
@@ -1036,5 +1721,18 @@ mod tests {
         let err = run_node(NodeKind::CreateAlert, &cfg, &PortValues::new(), &ctx).unwrap_err();
         assert!(err.contains("missing required input 'message'"), "got: {err}");
         assert!(ctx.alerts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn ask_ai_requires_a_question() {
+        // Neither wired question nor config literal → should error without touching the API.
+        let err = run_node(NodeKind::AskAi, &json!({ "question": "" }), &PortValues::new(), &test_ctx())
+            .unwrap_err();
+        assert!(err.contains("question is required"), "got: {err}");
+    }
+
+    #[test]
+    fn ask_ai_timeout_is_65s() {
+        assert_eq!(node_timeout(NodeKind::AskAi, &json!({})), Some(std::time::Duration::from_secs(65)));
     }
 }

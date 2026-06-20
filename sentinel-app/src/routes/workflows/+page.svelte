@@ -1,6 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { fade } from "svelte/transition";
   import { data, onEvent } from "$lib/data";
+  import { platformLogs, type PlatformLog } from "$lib/api";
+  import {
+    CATEGORY_ORDER as PRESENCE_CATEGORIES,
+    CATEGORY_STYLE as PRESENCE_CATEGORY_STYLE,
+  } from "$lib/map/categories";
   import { toast } from "svelte-sonner";
 
   import Plus from "@lucide/svelte/icons/plus";
@@ -30,6 +36,7 @@
   import Printer from "@lucide/svelte/icons/printer";
   import History from "@lucide/svelte/icons/history";
   import DictionaryEditor from "$lib/components/dictionary-editor.svelte";
+  import SearchableSelect from "$lib/components/searchable-select.svelte";
 
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -42,11 +49,12 @@
   import Loader from "$lib/components/loader.svelte";
   import EmptyState from "$lib/components/empty-state.svelte";
   import StatusDot from "$lib/components/status-dot.svelte";
+  import { portColor, typeColor } from "$lib/workflows/portColors";
+  import type { PortType } from "$lib/workflows/portColors";
+
+  import ContextSearch from "./components/ContextSearch.svelte";
 
   // ---- types (the serialized core shapes) ----------------------------------
-  type PortType =
-    | "text" | "num" | "bool" | "image" | "recipient" | "dictionary" | "file" | "exec"
-    | "text_array" | "num_array" | "person_array" | "face_array" | "person" | "face" | "any";
   type CatPort = { name: string; type: PortType; required: boolean };
   type CatKind = {
     slug: string;
@@ -59,8 +67,22 @@
   type Node = { id: number; kind: string; x: number; y: number; config: Record<string, unknown>; memoize?: boolean };
   type Edge = { from: number; from_port: string; to: number; to_port: string };
   type Trigger = "Manual" | { Cron: { every_secs: number } };
-  type WorkflowEvent = { name: string; category: string; source: string };
+  type EventField = { name: string; type: PortType };
+  type WorkflowEvent = { name: string; category: string; source: string; fields?: EventField[] };
   type EventCategory = { name: string; source: string };
+  // The payload types an event field may carry (the wire-able data types; no exec/arrays in v1).
+  const PAYLOAD_TYPES: { value: PortType; label: string }[] = [
+    { value: "text", label: "Text" },
+    { value: "num", label: "Number" },
+    { value: "bool", label: "Bool" },
+    { value: "image", label: "Image" },
+    { value: "num_array", label: "Num array" },
+    { value: "text_array", label: "Text array" },
+    { value: "camera", label: "Camera" },
+    { value: "recipient", label: "Recipient" },
+    { value: "file", label: "File" },
+    { value: "dictionary", label: "Dictionary" },
+  ];
   // A palette entry: a node kind, optionally pre-bound to an event name (for the
   // synthesized "On event: Foo" / "Emit event: Foo" entries).
   type PaletteKind = CatKind & { presetEvent?: string };
@@ -109,8 +131,13 @@
   const HEAD_H = 26;
   const ROW_H = 22;
   const PAD = 8;
+  // Extra height inserted between the header divider and data ports on comparison/logic
+  // nodes, used to render the inline expression (a OP b).
+  const EXPR_H = 30;
   // ShowImage preview: a 16:9 thumbnail tucked below the node's ports.
   const PREVIEW_W = NODE_W - 16;
+  function commentW(n: Node): number { return Math.max(120, Number(n.config.width) || 400); }
+  function commentH(n: Node): number { return Math.max(60, Number(n.config.height) || 200); }
   const PREVIEW_H = Math.round((PREVIEW_W * 9) / 16);
 
   // ---- state ---------------------------------------------------------------
@@ -122,7 +149,22 @@
   let pending = $state<{ node: number; port: string } | null>(null);
   let loading = $state(true);
   let running = $state(false);
-  let addOpen = $state(false);
+
+  // Context search: appears at wire-drop position, pre-filtered by the pending port type.
+  let contextOpen = $state(false);
+  let contextPos = $state({ x: 0, y: 0 });
+  let contextPending = $state<{ node: number; port: string; portType: PortType } | null>(null);
+  const contextPortType = $derived(contextPending?.portType ?? ("any" as PortType));
+  // Edge via-points: purely visual bend handles stored in memory (key = "from:port:to:port").
+  // The logical edge A→B is unchanged; the via dot just repositions the wire on screen.
+  let edgeVias = $state(new Map<string, { x: number; y: number }>());
+  let dragVia = $state<{ key: string } | null>(null);
+  let hoveredEdgeKey = $state<string | null>(null);
+
+  function edgeViaKey(e: { from: number; from_port: string; to: number; to_port: string }) {
+    return `${e.from}:${e.from_port}:${e.to}:${e.to_port}`;
+  }
+
   let consoleOpen = $state(false);
   let logs = $state<LogLine[]>([]);
 
@@ -152,6 +194,29 @@
     if (log.level) return levelText(log.level);
     if (log.debug) return "text-muted-foreground";
     return log.ok ? "text-primary" : "text-destructive";
+  }
+
+  function platformLogToLine(l: PlatformLog): LogLine {
+    const label = (l.payload?.label as string | undefined) ?? (l.payload?.graph_name as string | undefined);
+    return {
+      time: l.created_at.slice(11, 19),
+      name: label ?? "workflow",
+      ok: l.level !== "error",
+      summary: l.message,
+      debug: l.level === "debug",
+    };
+  }
+
+  async function loadConsoleLogs(graphId: number) {
+    try {
+      const r = await platformLogs.list({
+        module: "workflow",
+        entity_type: "workflow_graph",
+        entity_id: String(graphId),
+        limit: 50,
+      });
+      logs = r.items.map(platformLogToLine);
+    } catch { /* best-effort — console works without history */ }
   }
   function screenMsgClass(level: string): string {
     if (level === "error") return "border-destructive/40 text-destructive";
@@ -246,6 +311,7 @@
   // live references for node dropdowns + per-graph run activity (polled)
   let devices = $state<{ id?: string; ip?: string; name: string; rtsp_url?: string | null }[]>([]);
   let recipients = $state<{ label: string; enabled: boolean }[]>([]);
+  let rooms = $state<{ id: number; name: string }[]>([]);
   type Activity = {
     running: number;
     current: number | null;
@@ -260,57 +326,58 @@
   let eventCategories = $state<EventCategory[]>([]);
   // category typed when registering a brand-new event from the property field
   let newEventCategory = $state("");
+  // Draft payload fields while registering a new event (name + wire type each).
+  let newEventFields = $state<EventField[]>([]);
 
   // live cursor world position (for the `n`-to-add-here shortcut) + pending drop point
   let hoverWorld = $state<{ x: number; y: number } | null>(null);
+  let hoverClient = $state<{ x: number; y: number }>({ x: 200, y: 60 }); // screen coords of cursor over canvas
   let dropAt: { x: number; y: number } | null = null;
 
   // recent-runs drawer (per graph in the list)
   let runsOpen = $state(false);
   let runsGraph = $state<Graph | null>(null);
   let runsList = $state<RunRecord[]>([]);
-  let runsLogs = $state<Record<string, RunLog[]>>({});
+  let runsLogs = $state<Record<string, PlatformLog[]>>({});
   let runsExpanded = $state<string | null>(null);
 
-  // Per-node highlight controller (driven by workflow-node events): exactly ONE
-  // node is "live" at a time, shown for at least MIN_HIGHLIGHT_MS, in sequence.
-  // Fast nodes queue (so every node is still seen) and a finished node stops the
-  // moment the next one starts — no overlap. Visual only.
+  // Per-node highlight controller (driven by workflow-node events): each node
+  // lights up immediately on arrival and stays lit for at least MIN_HIGHLIGHT_MS.
+  // Multiple nodes can be live simultaneously (fast graphs / branches). The active
+  // node keeps its highlight until the next event (or run end). Visual only.
   const MIN_HIGHLIGHT_MS = 700;
-  let liveNode = $state<number | null>(null);
-  let liveQueue: number[] = [];
-  let liveTimer: ReturnType<typeof setTimeout> | null = null;
+  // Use a plain record instead of Set — $state({}) property mutations are definitely
+  // tracked by Svelte 5's reactive proxy (Set.add/delete tracking has been unreliable).
+  const liveNodes = $state<Record<number, true>>({});
+  const liveTimers = new Map<number, ReturnType<typeof setTimeout>>();
   let runEnded = false;
 
   function markLive(nodeId: number) {
-    runEnded = false; // a node event means a run is active
-    const tail = liveQueue.length ? liveQueue[liveQueue.length - 1] : liveNode;
-    if (tail === nodeId) return; // already current / queued
-    if (liveTimer === null) showLive(nodeId);
-    else liveQueue.push(nodeId); // within the current node's minimum → queue it
-  }
-  function showLive(nodeId: number) {
-    liveNode = nodeId;
-    liveTimer = setTimeout(onMinElapsed, MIN_HIGHLIGHT_MS);
-  }
-  function onMinElapsed() {
-    liveTimer = null;
-    const next = liveQueue.shift();
-    if (next !== undefined) showLive(next);
-    else if (runEnded) liveNode = null;
-    // else: keep the current node lit (still running) until the next event
+    runEnded = false;
+    const prev = liveTimers.get(nodeId);
+    if (prev !== undefined) clearTimeout(prev); // re-trigger: restart the minimum hold
+    liveNodes[nodeId] = true;
+    liveTimers.set(nodeId, setTimeout(() => {
+      liveTimers.delete(nodeId);
+      // Keep the node lit if it's still the active node and the run hasn't ended.
+      if (!runEnded && act?.current === nodeId) return;
+      delete liveNodes[nodeId];
+    }, MIN_HIGHLIGHT_MS));
   }
   function endLive() {
-    // run finished/errored: let any queued min-holds drain, then stop.
     runEnded = true;
-    if (liveTimer === null && liveQueue.length === 0) liveNode = null;
+    // Pending timers will fire and remove themselves. Nodes that outlasted their
+    // timer (stayed lit as the active node) need to be cleared right now.
+    for (const k of Object.keys(liveNodes)) {
+      const id = Number(k);
+      if (!liveTimers.has(id)) delete liveNodes[id];
+    }
   }
   function clearLive() {
-    if (liveTimer) clearTimeout(liveTimer);
-    liveTimer = null;
-    liveQueue = [];
+    for (const t of liveTimers.values()) clearTimeout(t);
+    liveTimers.clear();
+    for (const k in liveNodes) delete liveNodes[Number(k)];
     runEnded = false;
-    liveNode = null;
   }
 
   // ---- delete confirmation (window.confirm is a no-op in the Tauri WebView) --
@@ -319,15 +386,11 @@
 
   const graph = $derived(graphs.find((g) => g.id === selectedGraphId) ?? null);
   const selectedNode = $derived(graph?.nodes.find((n) => n.id === selectedNodeId) ?? null);
+  const nodeById = $derived(new Map(graph?.nodes.map((n) => [n.id, n]) ?? []));
+  const nonCommentNodes = $derived(graph?.nodes.filter((n) => n.kind !== "comment") ?? []);
   const kinds = $derived(Object.values(catalog));
 
-  // node palette: search + group by category
-  let nodeSearch = $state("");
-  const CATEGORY_ORDER = ["Cameras", "Vision", "AI", "Alerts", "Recipients", "Text", "Network", "Flow"];
-  // Synthesize per-event palette entries from the tenant registry: each registered event
-  // becomes a droppable "On event: <name>" + "Emit event: <name>", grouped under its
-  // category (prefixed so the groups sort together). The generic On/Emit event entries
-  // stay in "Flow" for authoring a brand-new name.
+  // Synthesize per-event palette entries (On/Emit event: <name>) from the tenant registry.
   const EVENT_GROUP_PREFIX = "Events · ";
   const eventPaletteGroups = $derived.by(() => {
     const onBase = catalog["on_event"];
@@ -344,36 +407,6 @@
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([cat, kinds]) => ({ name: `${EVENT_GROUP_PREFIX}${cat}`, kinds }));
   });
-  const nodeCategories = $derived.by(() => {
-    const q = nodeSearch.trim().toLowerCase();
-    const matchKind = (k: PaletteKind) =>
-      !q ||
-      k.label.toLowerCase().includes(q) ||
-      k.category.toLowerCase().includes(q) ||
-      k.slug.toLowerCase().includes(q);
-    const matched = (kinds as PaletteKind[]).filter(matchKind);
-    const groups = new Map<string, PaletteKind[]>();
-    for (const k of matched) {
-      const list = groups.get(k.category) ?? [];
-      list.push(k);
-      groups.set(k.category, list);
-    }
-    const ordered: { name: string; kinds: PaletteKind[] }[] = [];
-    for (const name of CATEGORY_ORDER) {
-      const list = groups.get(name);
-      if (list) {
-        ordered.push({ name, kinds: list });
-        groups.delete(name);
-      }
-    }
-    for (const [name, list] of groups) ordered.push({ name, kinds: list });
-    // Event groups last, filtered by the same search query.
-    for (const g of eventPaletteGroups) {
-      const ks = g.kinds.filter(matchKind);
-      if (ks.length) ordered.push({ name: g.name, kinds: ks });
-    }
-    return ordered;
-  });
 
   // run state for the open graph
   const act = $derived(selectedGraphId != null ? activity[selectedGraphId] : undefined);
@@ -382,9 +415,9 @@
   // is executing. Either way it's ACTIVE, so editing is locked to avoid changing a
   // graph mid-flight; stop it (disable) to edit nodes, configs, or positions.
   const editLocked = $derived(isRunning || (graph?.enabled ?? false));
-  // A node (and the edge feeding it) is "live" only while it's the current node.
+  // A node (and the edge feeding it) is "live" while it has an active highlight.
   function nodeLive(id: number): boolean {
-    return liveNode === id;
+    return id in liveNodes;
   }
 
   // Re-entering the editor mid-run (e.g. during a long Wait) won't get a fresh
@@ -394,7 +427,7 @@
     const cur = act?.current ?? null;
     // `!runEnded` guards against the polled `current` lagging behind the run-end
     // event: without it we'd re-light the last node after the flow already ended.
-    if (view === "editor" && cur !== null && !runEnded && liveNode === null && liveTimer === null) {
+    if (view === "editor" && cur !== null && !runEnded && Object.keys(liveNodes).length === 0) {
       markLive(cur);
     }
   });
@@ -406,6 +439,16 @@
   const cameraKey = (d: { id?: string; ip?: string }) => d.id || d.ip || "";
   const cameraOptions = $derived(devices.map((d) => ({ value: cameraKey(d), label: d.name })));
   const recipientOptions = $derived(recipients.map((r) => ({ value: r.label, label: r.label })));
+  // Rooms for the `room` node dropdown (CreateAlert / RecordPresence). Stored BY NAME —
+  // the flow node resolves the name to a room_id, and the map pulse locates by it. A
+  // blank "(no room)" option keeps room optional (e.g. CreateAlert without a room).
+  const NO_ROOM = "__none__"; // sentinel — bits-ui Select doesn't take an empty-string value
+  const roomOptions = $derived([
+    { value: NO_ROOM, label: "(no room)" },
+    ...rooms.map((r) => ({ value: r.name, label: r.name })),
+  ]);
+  // Presence categories for the `category` dropdown (slug → friendly label).
+  const categoryOptions = PRESENCE_CATEGORIES.map((c) => ({ value: c, label: PRESENCE_CATEGORY_STYLE[c].label }));
   function cameraValue(stored: string): string {
     const s = String(stored ?? "");
     const d = devices.find((x) => (x.id && x.id === s) || x.ip === s || x.name === s);
@@ -503,12 +546,17 @@
   // are never rendered.
   const configRows = $derived.by(() => {
     if (!selectedNode) return [] as { key: string; port: CatPort | null }[];
-    const nk = catalog[selectedNode.kind];
-    // Exec pins are pure wiring — never editable settings, so exclude them.
-    const inputs = (nk?.inputs ?? []).filter((p) => p.type !== "exec");
+    const nk = effectiveKind(selectedNode);
+    // Exec pins are pure wiring — never editable settings, so exclude them. Event payload
+    // ports are managed by the Payload editor (and wired on the canvas), not as value rows.
+    // StringSwitch arms are managed by the Arms editor below, not as a generic text row.
+    const payloadNames = new Set(payloadFields(selectedNode).map((f) => f.name));
+    const inputs = (nk?.inputs ?? []).filter((p) => p.type !== "exec" && !payloadNames.has(p.name));
     const rows: { key: string; port: CatPort | null }[] = inputs.map((p) => ({ key: p.name, port: p }));
+    const MANAGED_KEYS: Record<string, string[]> = { string_switch: ["arms"], comment: ["width", "height"] };
+    const managedForKind = new Set(MANAGED_KEYS[selectedNode.kind] ?? []);
     for (const key of Object.keys(nk?.default_config ?? {})) {
-      if (!inputs.some((p) => p.name === key)) rows.push({ key, port: null });
+      if (!inputs.some((p) => p.name === key) && !managedForKind.has(key)) rows.push({ key, port: null });
     }
     return rows;
   });
@@ -523,12 +571,64 @@
   // down the right edge from the header.
   const EXEC_IN_NAME = "exec_in";
   function portOf(node: Node, port: string, side: "in" | "out"): CatPort | undefined {
-    const list = side === "out" ? catalog[node.kind]?.outputs : catalog[node.kind]?.inputs;
+    const k = effectiveKind(node);
+    const list = side === "out" ? k?.outputs : k?.inputs;
     return list?.find((p) => p.name === port);
   }
   function isExec(node: Node, port: string, side: "in" | "out"): boolean {
     return portOf(node, port, side)?.type === "exec";
   }
+  // Event payload ports: EmitEvent/OnEvent carry one port per field of their configured
+  // event's schema, baked onto `config.payload` when the event is chosen. EmitEvent takes
+  // them as inputs, OnEvent exposes them as outputs.
+  function payloadFields(node: Node): EventField[] {
+    if (node.kind !== "emit_event" && node.kind !== "on_event") return [];
+    const p = node.config?.payload;
+    return Array.isArray(p) ? (p as EventField[]).filter((f) => f && f.name) : [];
+  }
+  // The catalog kind for a node, augmented with its dynamic ports (if any), so the
+  // existing render/wire/validate helpers see EmitEvent inputs / OnEvent outputs /
+  // StringSwitch per-arm exec outputs.
+  function effectiveKind(node: Node): CatKind | undefined {
+    const k = catalog[node.kind];
+    if (!k) return k;
+    // StringSwitch: exec outputs are the user-defined arm labels + built-in "default".
+    if (node.kind === "string_switch") {
+      const arms: string[] = Array.isArray(node.config?.arms) ? (node.config.arms as string[]) : [];
+      const armPorts: CatPort[] = [
+        ...arms.map((a) => ({ name: String(a), type: "exec" as CatPort["type"], required: false })),
+        { name: "default", type: "exec" as CatPort["type"], required: false },
+      ];
+      return { ...k, outputs: armPorts };
+    }
+    const fields = payloadFields(node);
+    if (fields.length === 0) return k;
+    const ports: CatPort[] = fields.map((f) => ({ name: f.name, type: f.type, required: false }));
+    if (node.kind === "emit_event") return { ...k, inputs: [...k.inputs, ...ports] };
+    if (node.kind === "on_event") return { ...k, outputs: [...k.outputs, ...ports] };
+    return k;
+  }
+
+  // Node header title: the kind label, plus the bound event name for event nodes
+  // (e.g. "Emit event: Foo") so it reads in the header instead of clashing with ports.
+  function nodeTitle(n: Node, k: CatKind | undefined): string {
+    const base = k?.label ?? n.kind;
+    if (n.kind === "comment") return String(n.config.text ?? "Comment").trim() || "Comment";
+    if (n.kind === "emit_event" || n.kind === "on_event") {
+      const ev = String(n.config.event ?? "").trim();
+      return ev ? `${base}: ${ev}` : base;
+    }
+    if (n.kind === "object_detection") {
+      const cls = String(n.config.class ?? "person").trim();
+      return cls ? `${base}: ${cls}` : base;
+    }
+    if (n.kind === "string_switch") {
+      const arms: string[] = Array.isArray(n.config?.arms) ? (n.config.arms as string[]) : [];
+      return arms.length > 0 ? `${base} (${arms.length})` : base;
+    }
+    return base;
+  }
+
   // Data ports = everything except the white exec pins.
   function dataPorts(k: CatKind | undefined, side: "in" | "out"): CatPort[] {
     const list = side === "in" ? k?.inputs : k?.outputs;
@@ -546,11 +646,11 @@
   }
   // Y where a node's body ends and the optional ShowImage preview begins.
   function portsBottom(n: Node): number {
-    const k = catalog[n.kind];
+    const k = effectiveKind(n);
     const execCount = execOutPorts(k).length;
     const outRows = dataPorts(k, "out").length + outDataOffset(k);
     const rows = Math.max(dataPorts(k, "in").length, outRows, execCount, 1);
-    return HEAD_H + rows * ROW_H;
+    return HEAD_H + nodeExprH(n) + rows * ROW_H;
   }
   // A ShowImage node grows to fit its preview thumbnail once a frame has arrived.
   function hasPreview(n: Node): boolean {
@@ -568,12 +668,13 @@
   function portLocalY(node: Node, port: string, side: "in" | "out") {
     if (isExec(node, port, side)) {
       if (side === "in") return HEAD_H / 2;
-      const i = execOutPorts(catalog[node.kind]).findIndex((p) => p.name === port);
+      const i = execOutPorts(effectiveKind(node)).findIndex((p) => p.name === port);
       return HEAD_H / 2 + Math.max(0, i) * ROW_H;
     }
-    const i = dataPorts(catalog[node.kind], side).findIndex((p) => p.name === port);
-    const off = side === "out" ? outDataOffset(catalog[node.kind]) : 0;
-    return dataPortY(Math.max(0, i) + off);
+    const k = effectiveKind(node);
+    const i = dataPorts(k, side).findIndex((p) => p.name === port);
+    const off = side === "out" ? outDataOffset(k) : 0;
+    return dataPortY(Math.max(0, i) + off) + nodeExprH(node);
   }
   // Absolute port Y (for drawing edges between nodes).
   function inPortY(n: Node, port: string) {
@@ -585,24 +686,47 @@
   function wiredInto(nodeId: number, port: string): Edge | undefined {
     return graph?.edges.find((e) => e.to === nodeId && e.to_port === port);
   }
-  const portColor: Record<PortType, string> = {
-    text: "#60a5fa",
-    num: "#34d399",
-    bool: "#fbbf24",
-    image: "#f472b6",
-    recipient: "#a78bfa",
-    dictionary: "#2dd4bf",
-    file: "#fb923c",
-    exec: "#f4f4f5",
-    // Typed arrays (brighter shades of their element color) + detection elements + wildcard.
-    text_array: "#93c5fd",
-    num_array: "#6ee7b7",
-    person_array: "#f0abfc",
-    face_array: "#fda4af",
-    person: "#e879f9",
-    face: "#fb7185",
-    any: "#94a3b8",
-  };
+  // Pure data/logic nodes: no exec pins, activated by data availability.
+  // Includes comparison operators, logical operators, and type-conversion nodes.
+  const PURE_KINDS = new Set([
+    "num_lt","num_lte","num_gt","num_gte","num_eq","num_ne","compare","and","or","not","text_compare",
+    "bool_to_text","num_to_text","get_camera_by_name","break_camera",
+  ]);
+  function isCompareOrLogic(kind: string): boolean {
+    return PURE_KINDS.has(kind);
+  }
+  function isPure(k: CatKind | undefined): boolean {
+    return !((k?.inputs ?? []).some((p) => p.type === "exec"));
+  }
+  function nodeExprH(n: Node): number {
+    return isCompareOrLogic(n.kind) ? EXPR_H : 0;
+  }
+  function opLabel(kind: string, config: Record<string, unknown>): string {
+    switch (kind) {
+      case "num_lt":  return "<";
+      case "num_lte": return "≤";
+      case "num_gt":  return ">";
+      case "num_gte": return "≥";
+      case "num_eq":  return "=";
+      case "num_ne":  return "≠";
+      case "compare": return String(config.operator ?? "==");
+      case "and":          return "AND";
+      case "or":           return "OR";
+      case "not":          return "NOT";
+      case "text_compare": return String(config.operator ?? "eq");
+      default:             return "?";
+    }
+  }
+  function exprOperand(nodeId: number, port: string, config: Record<string, unknown>): string {
+    const edge = wiredInto(nodeId, port);
+    if (edge) {
+      const src = graph?.nodes.find((n) => n.id === edge.from);
+      const srcLabel = src ? (catalog[src.kind]?.label ?? src.kind) : "?";
+      const lbl = `${srcLabel}.${edge.from_port}`;
+      return lbl.length > 15 ? lbl.slice(0, 14) + "…" : lbl;
+    }
+    return String(config[port] ?? "");
+  }
   // The element colour for an array type (so a ForEach `item` mirrors the wired array).
   function arrayElementColor(t: PortType): string {
     switch (t) {
@@ -644,11 +768,14 @@
     selectedNodeId = null;
     pending = null;
     nodeImages = {}; // node ids restart per graph — drop the previous graph's previews
+    logs = [];
+    void loadConsoleLogs(id);
     const v = graphs.find((x) => x.id === id)?.viewport;
     pan = v ? { x: v.x, y: v.y } : { x: 40, y: 40 };
     zoom = v?.zoom ?? 1;
     clearLive();
     view = "editor";
+    void reconcileEventNodes(id); // self-heal event nodes against the current registry
   }
   function backToList() {
     saveViewport();
@@ -668,11 +795,12 @@
 
   async function loadRefs() {
     try {
-      const [d, r] = await Promise.all([data.listDevices(), data.listBeacons()]);
+      const [d, r, m] = await Promise.all([data.listDevices(), data.listBeacons(), data.loadMap()]);
       devices = d;
       recipients = r;
+      rooms = (m.rooms ?? []).map((rm) => ({ id: rm.id, name: rm.name }));
     } catch (err) {
-      console.error("Failed to load devices/recipients", err);
+      console.error("Failed to load devices/recipients/rooms", err);
     }
   }
   async function loadEvents() {
@@ -685,6 +813,16 @@
       eventCategories = cats ?? [];
     } catch (err) {
       console.error("Failed to load events", err);
+    }
+  }
+
+  // Seed the live activity map from REST. Called once on mount and again on every SSE
+  // (re)connect — between connects we'd miss `workflow-activity` deltas, so re-fetch.
+  async function refreshActivity() {
+    try {
+      activity = await data.runStates<Record<number, Activity>>();
+    } catch {
+      /* ignore transient errors */
     }
   }
 
@@ -702,6 +840,7 @@
         await reload();
         await loadRefs();
         await loadEvents();
+        await refreshActivity();
       } catch (err) {
         toast.error("Failed to load workflows", { description: String(err) });
       } finally {
@@ -716,9 +855,12 @@
         ok: boolean;
         summary: string;
       };
-      // Run finished (ok or error) → drain remaining highlights, then stop.
-      if (gid === selectedGraphId) endLive();
-      logs = [{ time: new Date().toLocaleTimeString(), name, ok, summary }, ...logs].slice(0, 200);
+      // Run finished (ok or error) → drain remaining highlights, then stop. The console
+      // shows only the open graph; other graphs' completions still surface as toasts.
+      if (gid === selectedGraphId) {
+        endLive();
+        logs = [{ time: new Date().toLocaleTimeString(), name, ok, summary }, ...logs].slice(0, 200);
+      }
       if (ok) toast.success(`Workflow "${name}"`, { description: summary });
       else toast.error(`Workflow "${name}" failed`, { description: summary });
     });
@@ -737,27 +879,27 @@
         ...logs,
       ].slice(0, 200);
     });
-    // Print node: always echo to the Console (independent of the debug flag) and,
-    // when on_screen, flash it over the canvas. Not graph-filtered — the payload
-    // carries no graph id (see plan); the editor shows one graph at a time.
+    // Print node: echo to the Console (independent of the debug flag) for the OPEN graph
+    // only, and when on_screen flash it over the canvas.
     const unPrint = onEvent("workflow-print", (payload) => {
-      const { message, level, on_screen } = payload as { message: string; level: string; on_screen: boolean };
+      const p = payload as { graph?: number; message: string; level: string; on_screen: boolean };
+      if (p.graph !== selectedGraphId) return; // only the open graph
       logs = [
-        { time: new Date().toLocaleTimeString(), name: "Print", ok: true, summary: message, level },
+        { time: new Date().toLocaleTimeString(), name: "Print", ok: true, summary: p.message, level: p.level },
         ...logs,
       ].slice(0, 200);
-      if (on_screen) flashOnScreen(message, level);
+      if (p.on_screen) flashOnScreen(p.message, p.level);
     });
-    // Show image node: stash the frame inside that node (debug-only, by node id).
+    // Show image node: the event is a reference (bytes never ride SSE) — fetch the frame
+    // out of band from the control relay, cache-busting so each new frame reloads.
     const unImage = onEvent("workflow-image", (payload) => {
-      const { graph: gid, node, label, data: frame } = payload as {
+      const { graph: gid, node, label } = payload as {
         graph: number;
         node: number;
         label: string;
-        data: string;
       };
       if (gid !== selectedGraphId) return; // node ids are per-graph — only the open one
-      nodeImages = { ...nodeImages, [node]: { src: `data:image/jpeg;base64,${frame}`, label } };
+      nodeImages = { ...nodeImages, [node]: { src: data.runFrameUrl(gid, node, Date.now()), label } };
     });
     // Cross-graph events: dispatched on the emitter, triggered/skipped on each listener.
     // Show the line in whichever graph's run view is open (matched by `graph`).
@@ -778,14 +920,33 @@
         ...logs,
       ].slice(0, 200);
     });
-    // Poll run activity (running graphs + status) for the lock + list badges.
-    const poll = setInterval(async () => {
-      try {
-        activity = await data.runStates<Record<number, Activity>>();
-      } catch {
-        /* ignore transient errors */
-      }
-    }, 700);
+    // Live run activity (running graphs + current node) for the lock + list badges —
+    // pushed from the engine over SSE (replaces the old 700 ms poll). Each delta is one
+    // graph's snapshot; merge it into the map.
+    const unActivity = onEvent("workflow-activity", (payload) => {
+      const p = payload as {
+        graph: number;
+        running: number;
+        current: number | null;
+        run_id?: string | null;
+        trigger?: string | null;
+        pod_name?: string | null;
+      };
+      activity = {
+        ...activity,
+        [p.graph]: {
+          running: p.running,
+          current: p.current,
+          run_id: p.run_id,
+          trigger: p.trigger,
+          pod_name: p.pod_name,
+        },
+      };
+    });
+    // Re-seed from REST on every (re)connect — deltas emitted while disconnected are missed.
+    const unOpen = onEvent("stream-open", () => {
+      void refreshActivity();
+    });
     return () => {
       saveViewport(); // persist the viewport when leaving the page too
       un.then((u) => u());
@@ -794,9 +955,10 @@
       unPrint.then((u) => u());
       unImage.then((u) => u());
       unEvent.then((u) => u());
+      unActivity.then((u) => u());
+      unOpen.then((u) => u());
       screenTimers.forEach((t) => clearTimeout(t));
       screenTimers.clear();
-      clearInterval(poll);
     };
   });
 
@@ -921,14 +1083,14 @@
   }
 
   // ---- node + edge ops -----------------------------------------------------
-  async function addNodeKind(slug: string, presetEvent?: string) {
-    if (!graph || editLocked) return;
+  async function addNodeKind(slug: string, presetEvent?: string): Promise<number | null> {
+    if (!graph || editLocked) return null;
     // Place at the cursor (when opened via the `n` shortcut), else cascade.
     let x: number;
     let y: number;
     if (dropAt) {
-      x = Math.round(dropAt.x);
-      y = Math.round(dropAt.y);
+      x = Math.round(dropAt.x) - NODE_W / 2;
+      y = Math.round(dropAt.y) - HEAD_H / 2;
       dropAt = null;
     } else {
       const n = graph.nodes.length;
@@ -950,26 +1112,48 @@
     }
     if (presetEvent) {
       cfg.event = presetEvent;
+      cfg.payload = eventFields(presetEvent); // bake payload ports onto the new event node
       patched = true;
     }
     if (patched) await data.setNodeConfig(graph.id, id, cfg);
     selectedNodeId = id;
-    addOpen = false;
     await reload();
+    return id;
   }
 
-  // Press `n` over the canvas → open the palette and drop the next node at the cursor.
+  // Add a node from context search and auto-wire it to the pending output port.
+  async function addFromContext(slug: string, presetEvent?: string) {
+    const cp = contextPending;
+    contextOpen = false;
+    contextPending = null;
+    const id = await addNodeKind(slug, presetEvent);
+    if (cp && id !== null && graph) {
+      const cat = catalog[slug];
+      const matchPort =
+        cat?.inputs.find((p) => p.type === cp.portType) ??
+        cat?.inputs.find((p) => p.type === "any");
+      if (matchPort) {
+        try {
+          await data.addEdge(graph.id, cp.node, cp.port, id, matchPort.name);
+          await reload();
+        } catch {}
+      }
+    }
+  }
+
+  // Press `n` over the canvas → open the context search at the cursor.
   // Ignored while typing in a field or while the graph is active (editLocked).
   function onWindowKey(e: KeyboardEvent) {
     if (e.key !== "n" && e.key !== "N") return;
-    if (view !== "editor" || editLocked || addOpen) return;
+    if (view !== "editor" || editLocked || contextOpen) return;
     const el = document.activeElement as HTMLElement | null;
     const tag = el?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
     e.preventDefault();
     dropAt = hoverWorld;
-    nodeSearch = "";
-    addOpen = true;
+    contextPos = hoverClient;
+    contextPending = null;
+    contextOpen = true;
   }
 
   // Unreal-Blueprint-style header tint by category, so node families read at a glance and
@@ -981,7 +1165,7 @@
       case "Vision": return portColor.person; // violet/magenta
       case "AI": return portColor.dictionary; // teal
       case "Alerts": return portColor.bool; // amber
-      case "Cameras": return portColor.text; // blue
+      case "Cameras": return portColor.camera; // sky
       case "Recipients": return portColor.recipient; // purple
       case "Text": return portColor.num; // green
       case "Network": return "#22d3ee"; // cyan
@@ -989,21 +1173,109 @@
     }
   }
 
-  // Register the (already-saved) event name into the tenant registry under the typed
-  // category (default "General") — so other graphs can listen for it and it appears in the
-  // palette grouped by category. Explicit (a button), not coupled to typing the name.
+  // Old field names whose (name, type) isn't preserved in the other schema — their wires
+  // are invalid and get pruned so the ports can be re-wired.
+  function staleFields(oldFields: EventField[], newFields: EventField[]): string[] {
+    return oldFields.filter((o) => !newFields.some((n) => n.name === o.name && n.type === o.type)).map((f) => f.name);
+  }
+  const draftFields = (): EventField[] =>
+    newEventFields.map((f) => ({ name: f.name.trim(), type: f.type })).filter((f) => f.name);
+
+  // Save the event's schema to the registry + bake it onto the open node. Other graphs that
+  // use this event self-heal when next opened (see `reconcileEventNodes`) — no manual step.
   async function registerEvent(name: string) {
     const ev = name.trim();
     if (!ev) return;
+    const fields = draftFields();
     try {
-      await data.createEvent(ev, newEventCategory.trim() || "General");
+      await data.createEvent(ev, newEventCategory.trim() || "General", undefined, fields);
       await loadEvents();
-      newEventCategory = "";
-      toast.success(`Event “${ev}” registered`);
+      if (selectedNode && String(selectedNode.config.event ?? "").trim() === ev) {
+        await saveNodeConfig(selectedNode, { ...selectedNode.config, event: ev, payload: fields });
+      }
+      payloadEditorFor = null; // let the effect re-seed the editor from the saved schema
+      toast.success(`Event “${ev}” saved`);
     } catch (err) {
-      toast.error("Couldn't register event", { description: String(err) });
+      toast.error("Couldn't save event", { description: String(err) });
     }
   }
+
+  // On opening a graph, bring its Emit/On nodes in line with the current event registry:
+  // re-bake each node's payload schema and drop wires on any port that was removed/retyped.
+  // Silent when nothing changed; otherwise alerts how many nodes were updated.
+  async function reconcileEventNodes(graphId: number) {
+    const g = graphs.find((x) => x.id === graphId);
+    if (!g) return;
+    const removeIdx: number[] = [];
+    const updates: { id: number; config: Record<string, unknown> }[] = [];
+    for (const n of g.nodes) {
+      if (n.kind !== "emit_event" && n.kind !== "on_event") continue;
+      const ev = String(n.config.event ?? "").trim();
+      const known = events.find((e) => e.name === ev);
+      if (!ev || !known) continue;
+      const want = known.fields ?? [];
+      const have = (Array.isArray(n.config.payload) ? n.config.payload : []) as EventField[];
+      if (staleFields(have, want).length === 0 && staleFields(want, have).length === 0) continue; // in sync
+      const stale = new Set(staleFields(have, want));
+      g.edges.forEach((e, idx) => {
+        const emitHit = n.kind === "emit_event" && e.to === n.id && stale.has(e.to_port);
+        const onHit = n.kind === "on_event" && e.from === n.id && stale.has(e.from_port);
+        if (emitHit || onHit) removeIdx.push(idx);
+      });
+      updates.push({ id: n.id, config: { ...n.config, payload: want } });
+    }
+    if (updates.length === 0) return;
+    try {
+      for (const idx of removeIdx.sort((a, b) => b - a)) await data.removeEdge(graphId, idx);
+      for (const u of updates) await data.setNodeConfig(graphId, u.id, u.config);
+      await reload();
+      toast.info(`Updated ${updates.length} event node(s) to the latest payload`);
+    } catch (err) {
+      console.error("reconcile event nodes failed", err);
+    }
+  }
+
+  // Payload schema of a registered event (empty if unknown / payload-less).
+  function eventFields(name: string): EventField[] {
+    return events.find((e) => e.name === name)?.fields ?? [];
+  }
+  // Choose an event for an EmitEvent/OnEvent node: persist the name AND bake the event's
+  // payload schema onto the node so its dynamic ports (one per field) render + wire.
+  function chooseEvent(node: Node, raw: string) {
+    const ev = raw.trim();
+    saveNodeConfig(node, { ...node.config, event: ev, payload: eventFields(ev) });
+  }
+  function addEventField() {
+    newEventFields = [...newEventFields, { name: "", type: "text" }];
+  }
+  function removeEventField(i: number) {
+    newEventFields = newEventFields.filter((_, idx) => idx !== i);
+  }
+  function setEventFieldName(i: number, name: string) {
+    newEventFields = newEventFields.map((f, idx) => (idx === i ? { ...f, name } : f));
+  }
+  function setEventFieldType(i: number, type: PortType) {
+    newEventFields = newEventFields.map((f, idx) => (idx === i ? { ...f, type } : f));
+  }
+  function payloadTypeLabel(t: PortType): string {
+    return PAYLOAD_TYPES.find((x) => x.value === t)?.label ?? t;
+  }
+  // Seed the payload-fields editor whenever the selected event node points at a different
+  // event: load that event's saved fields (empty for a brand-new name) so the editor always
+  // reflects the current schema and can edit it — not just define a new one.
+  let payloadEditorFor = $state<string | null>(null);
+  $effect(() => {
+    const ev =
+      selectedNode && (selectedNode.kind === "emit_event" || selectedNode.kind === "on_event")
+        ? String(selectedNode.config.event ?? "").trim()
+        : "";
+    if (ev !== payloadEditorFor) {
+      payloadEditorFor = ev;
+      const known = events.find((e) => e.name === ev);
+      newEventFields = known?.fields?.map((f) => ({ ...f })) ?? [];
+      newEventCategory = known?.category ?? "";
+    }
+  });
 
   // ---- recent-runs drawer (list view) --------------------------------------
   async function openRuns(g: Graph) {
@@ -1026,7 +1298,8 @@
     runsExpanded = runId;
     if (!runsLogs[runId]) {
       try {
-        runsLogs = { ...runsLogs, [runId]: await data.runLogs<RunLog[]>(runId) };
+        const r = await platformLogs.list({ trace_id: runId, module: "workflow", limit: 100 });
+        runsLogs = { ...runsLogs, [runId]: r.items };
       } catch (err) {
         toast.error("Couldn't load run logs", { description: String(err) });
       }
@@ -1098,6 +1371,21 @@
     await data.setNodeConfig(graph.id, n.id, config);
     await reload();
   }
+
+  // Live-save a single config field as the user types: update locally at once (so the
+  // value sticks + downstream reads it without pressing Enter) and debounce the backend
+  // write (config-only, no reload — that would fight the input mid-type).
+  let cfgSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  function liveSaveConfig(n: Node, key: string, value: unknown) {
+    if (!graph) return;
+    const gid = graph.id;
+    n.config = { ...n.config, [key]: value };
+    const cfg = n.config;
+    clearTimeout(cfgSaveTimer);
+    cfgSaveTimer = setTimeout(() => {
+      data.setNodeConfig(gid, n.id, cfg).catch((err) => console.error("Failed to save node config", err));
+    }, 400);
+  }
   async function saveNodeMemoize(n: Node, memoize: boolean) {
     if (!graph) return;
     await data.setNodeMemoize(graph.id, n.id, memoize);
@@ -1129,7 +1417,8 @@
 
   // ---- canvas: infinite pan / zoom + node drag -----------------------------
   let svgEl: SVGSVGElement | undefined;
-  let drag: { id: number; offX: number; offY: number } | null = null;
+  let drag: { id: number; offX: number; offY: number; enclosedIds?: number[] } | null = null;
+  let commentResize: { id: number; startX: number; startY: number; startW: number; startH: number } | null = null;
   let panning: { sx: number; sy: number; ox: number; oy: number } | null = null;
 
   // Screen → world (the <g> transform is translate(pan) scale(zoom)).
@@ -1141,44 +1430,118 @@
     selectedNodeId = n.id; // selecting to view props is fine
     if (editLocked) return; // …but no moving while the graph is active (running/armed)
     const wp = worldPoint(e);
-    drag = { id: n.id, offX: wp.x - n.x, offY: wp.y - n.y };
+    const base = { id: n.id, offX: wp.x - n.x, offY: wp.y - n.y };
+    if (n.kind === 'comment' && graph) {
+      const cw = commentW(n), ch = commentH(n);
+      const enclosedIds = graph.nodes
+        .filter(r => r.kind !== 'comment'
+          && r.x + NODE_W / 2 >= n.x && r.x + NODE_W / 2 <= n.x + cw
+          && r.y + nodeHeight(r) / 2 >= n.y && r.y + nodeHeight(r) / 2 <= n.y + ch)
+        .map(r => r.id);
+      drag = { ...base, enclosedIds };
+    } else {
+      drag = base;
+    }
+  }
+  function startCommentResize(e: PointerEvent, n: Node) {
+    e.stopPropagation();
+    if (editLocked) return;
+    commentResize = { id: n.id, startX: e.clientX, startY: e.clientY, startW: commentW(n), startH: commentH(n) };
+    svgEl?.setPointerCapture?.(e.pointerId);
   }
   function onCanvasDown(e: PointerEvent) {
     if (e.target !== e.currentTarget) return; // only grab empty canvas, not a node
     if (pending) {
-      pending = null; // clicking empty space cancels the wire being drawn
+      // Dropping a wire onto empty canvas → open context-aware node search at the cursor.
+      if (svgEl) {
+        const pn = nodeById.get(pending.node);
+        const portType = (pn ? effectiveKind(pn)?.outputs.find((p) => p.name === pending.port)?.type : null) ?? "any";
+        dropAt = hoverWorld;
+        contextPending = { node: pending.node, port: pending.port, portType: portType as PortType };
+        contextPos = { x: e.clientX, y: e.clientY };
+        contextOpen = true;
+      }
+      pending = null;
       return;
     }
     selectedNodeId = null; // clicking the empty canvas deselects the node
     panning = { sx: e.clientX, sy: e.clientY, ox: pan.x, oy: pan.y };
     svgEl?.setPointerCapture?.(e.pointerId);
   }
+  let _canvasPendingMove: PointerEvent | null = null;
+  let _canvasMoveRaf: number | null = null;
+
   function onCanvasMove(e: PointerEvent) {
+    _canvasPendingMove = e;
+    if (_canvasMoveRaf !== null) return;
+    _canvasMoveRaf = requestAnimationFrame(() => {
+      _canvasMoveRaf = null;
+      const ev = _canvasPendingMove;
+      if (ev) { _canvasPendingMove = null; _onCanvasMove(ev); }
+    });
+  }
+
+  function _onCanvasMove(e: PointerEvent) {
     hoverWorld = worldPoint(e); // track the cursor for the `n`-to-add-here shortcut
+    hoverClient = { x: e.clientX, y: e.clientY };
     if (pending) cursor = worldPoint(e); // drag the open wire end with the cursor
+    if (dragVia) {
+      const wp = worldPoint(e);
+      edgeVias.set(dragVia.key, wp);
+      return;
+    }
     if (panning) {
       pan = { x: panning.ox + (e.clientX - panning.sx), y: panning.oy + (e.clientY - panning.sy) };
       return;
     }
-    if (drag && graph) {
+    if (commentResize && graph) {
+      const dx = (e.clientX - commentResize.startX) / zoom;
+      const dy = (e.clientY - commentResize.startY) / zoom;
+      const n = nodeById.get(commentResize.id);
+      if (n) n.config = { ...n.config, width: Math.max(120, Math.round(commentResize.startW + dx)), height: Math.max(60, Math.round(commentResize.startH + dy)) };
+    } else if (drag && graph) {
       const wp = worldPoint(e);
-      const n = graph.nodes.find((x) => x.id === drag!.id);
+      const n = nodeById.get(drag.id);
       if (n) {
-        n.x = Math.round(wp.x - drag.offX);
-        n.y = Math.round(wp.y - drag.offY);
+        const newX = Math.round(wp.x - drag.offX);
+        const newY = Math.round(wp.y - drag.offY);
+        const dx = newX - n.x, dy = newY - n.y;
+        n.x = newX; n.y = newY;
+        if (drag.enclosedIds?.length) {
+          for (const eid of drag.enclosedIds) {
+            const en = nodeById.get(eid);
+            if (en) { en.x += dx; en.y += dy; }
+          }
+        }
       }
     }
   }
   async function onCanvasUp() {
+    if (dragVia) {
+      dragVia = null;
+      return;
+    }
     if (panning) {
       panning = null;
       return;
     }
+    if (commentResize && graph) {
+      const id = commentResize.id;
+      const n = graph.nodes.find((x) => x.id === id);
+      commentResize = null;
+      if (n) await saveNodeConfig(n, n.config);
+      return;
+    }
     if (drag && graph) {
       const id = drag.id;
+      const enclosedIds = drag.enclosedIds ?? [];
       const n = graph.nodes.find((x) => x.id === id);
       drag = null;
       if (n) await data.moveNode(graph.id, id, n.x, n.y);
+      for (const eid of enclosedIds) {
+        const en = graph.nodes.find(x => x.id === eid);
+        if (en) await data.moveNode(graph.id, eid, en.x, en.y);
+      }
     }
   }
   function clampZoom(z: number) {
@@ -1211,8 +1574,8 @@
     }
     const minX = Math.min(...graph.nodes.map((n) => n.x)) - 60;
     const minY = Math.min(...graph.nodes.map((n) => n.y)) - 60;
-    const maxX = Math.max(...graph.nodes.map((n) => n.x + NODE_W)) + 60;
-    const maxY = Math.max(...graph.nodes.map((n) => n.y + nodeHeight(n))) + 60;
+    const maxX = Math.max(...graph.nodes.map((n) => n.x + (n.kind === 'comment' ? commentW(n) : NODE_W))) + 60;
+    const maxY = Math.max(...graph.nodes.map((n) => n.y + (n.kind === 'comment' ? commentH(n) : nodeHeight(n)))) + 60;
     const r = svgEl.getBoundingClientRect();
     const z = clampZoom(Math.min(r.width / (maxX - minX), r.height / (maxY - minY), 1.5));
     zoom = z;
@@ -1223,6 +1586,18 @@
   }
 
   const LEVELS = ["debug", "info", "warn", "error"];
+  const COCO_CLASSES = [
+    "person","bicycle","car","motorcycle","airplane","bus","train","truck","boat",
+    "traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat",
+    "dog","horse","sheep","cow","elephant","bear","zebra","giraffe","backpack",
+    "umbrella","handbag","tie","suitcase","frisbee","skis","snowboard","sports ball",
+    "kite","baseball bat","baseball glove","skateboard","surfboard","tennis racket",
+    "bottle","wine glass","cup","fork","knife","spoon","bowl","banana","apple",
+    "sandwich","orange","broccoli","carrot","hot dog","pizza","donut","cake",
+    "chair","couch","potted plant","bed","dining table","toilet","tv","laptop",
+    "mouse","remote","keyboard","cell phone","microwave","oven","toaster","sink",
+    "refrigerator","book","clock","vase","scissors","teddy bear","hair drier","toothbrush",
+  ];
   const TRIGGER_OPTS = [
     { value: "manual", label: "Manual (Run-now only)" },
     { value: "cron", label: "Cron (every N seconds)" },
@@ -1409,10 +1784,44 @@
               </defs>
 
               <g transform="translate({pan.x} {pan.y}) scale({zoom})">
+              <!-- comment boxes (behind edges and regular nodes) -->
+              {#each graph.nodes.filter(cn => cn.kind === 'comment') as n (n.id)}
+                {@const cw = commentW(n)}
+                {@const ch = commentH(n)}
+                {@const col = String(n.config.color ?? '#facc15')}
+                {@const sel = selectedNodeId === n.id}
+                <g transform="translate({n.x} {n.y})">
+                  <rect
+                    width={cw} height={ch} rx="10"
+                    fill={col} fill-opacity="0.1"
+                    stroke={col} stroke-opacity={sel ? 0.7 : 0.35} stroke-width={sel ? 2 : 1.5}
+                    class="cursor-move"
+                    onpointerdown={(ev) => startDrag(ev, n)}
+                    role="presentation"
+                  />
+                  <path
+                    d="M0 10 a10 10 0 0 1 10 -10 h{cw - 20} a10 10 0 0 1 10 10 v20 h-{cw} z"
+                    fill={col} fill-opacity={sel ? 0.45 : 0.3}
+                    class="pointer-events-none"
+                  />
+                  <text x="14" y="20" font-size="12" font-weight="600"
+                    class="pointer-events-none select-none fill-foreground/80">
+                    {String(n.config.text ?? 'Comment').trim() || 'Comment'}
+                  </text>
+                  <polygon
+                    points="{cw - 16},{ch} {cw},{ch - 16} {cw},{ch}"
+                    fill={col} fill-opacity="0.7"
+                    class="cursor-se-resize"
+                    onpointerdown={(ev) => { selectedNodeId = n.id; startCommentResize(ev, n); }}
+                    role="presentation"
+                  />
+                </g>
+              {/each}
+
               <!-- edges -->
               {#each graph.edges as e, idx (idx)}
-                {@const fromN = graph.nodes.find((n) => n.id === e.from)}
-                {@const toN = graph.nodes.find((n) => n.id === e.to)}
+                {@const fromN = nodeById.get(e.from)}
+                {@const toN = nodeById.get(e.to)}
                 {#if fromN && toN}
                   {@const x1 = fromN.x + NODE_W}
                   {@const y1 = outPortY(fromN, e.from_port)}
@@ -1420,24 +1829,54 @@
                   {@const y2 = inPortY(toN, e.to_port)}
                   {@const eLive = nodeLive(e.to)}
                   {@const eColor = portColorOf(fromN, e.from_port, "out")}
+                  {@const vk = edgeViaKey(e)}
+                  {@const via = edgeVias.get(vk)}
+                  {@const pathD = via
+                    ? `M ${x1} ${y1} C ${x1 + 60} ${y1}, ${via.x - 30} ${via.y}, ${via.x} ${via.y} C ${via.x + 30} ${via.y}, ${x2 - 60} ${y2}, ${x2} ${y2}`
+                    : `M ${x1} ${y1} C ${x1 + 60} ${y1}, ${x2 - 60} ${y2}, ${x2} ${y2}`}
+                  <!-- wide invisible hit area so hovering anywhere on the wire reveals the via dot -->
                   <path
-                    d={`M ${x1} ${y1} C ${x1 + 60} ${y1}, ${x2 - 60} ${y2}, ${x2} ${y2}`}
+                    d={pathD}
+                    fill="none"
+                    stroke="transparent"
+                    stroke-width="20"
+                    class="cursor-pointer"
+                    onpointerenter={() => { hoveredEdgeKey = vk; }}
+                    onpointerleave={() => { if (hoveredEdgeKey === vk) hoveredEdgeKey = null; }}
+                    onclick={() => removeEdge(idx)}
+                    role="presentation"
+                  />
+                  <path
+                    d={pathD}
                     fill="none"
                     stroke={eColor}
                     stroke-width={eLive ? 3 : 2}
                     stroke-opacity={eLive ? 1 : 0.55}
-                    class="cursor-pointer transition-colors hover:stroke-destructive {eLive
-                      ? 'node-running'
-                      : ''}"
-                    onclick={() => removeEdge(idx)}
+                    class="pointer-events-none transition-colors {hoveredEdgeKey === vk ? 'stroke-destructive' : ''} {eLive ? 'node-running' : ''}"
+                    role="presentation"
+                  />
+                  <!-- via dot: drag to bend the wire; dblclick to straighten -->
+                  {@const dotX = via ? via.x : (x1 + x2) / 2}
+                  {@const dotY = via ? via.y : (y1 + y2) / 2}
+                  {@const dotVisible = via || hoveredEdgeKey === vk}
+                  <circle
+                    cx={dotX}
+                    cy={dotY}
+                    r={via ? 5 : 4}
+                    fill={via ? eColor : "transparent"}
+                    stroke={eColor}
+                    stroke-width={dotVisible ? 1.5 : 0}
+                    class="cursor-grab transition-all {dotVisible ? 'opacity-100' : 'opacity-0'}"
+                    onpointerdown={(ev) => { ev.stopPropagation(); dragVia = { key: vk }; edgeVias.set(vk, worldPoint(ev)); }}
+                    ondblclick={(ev) => { ev.stopPropagation(); edgeVias.delete(vk); }}
                     role="presentation"
                   />
                 {/if}
               {/each}
 
-              <!-- nodes -->
-              {#each graph.nodes as n (n.id)}
-                {@const k = catalog[n.kind]}
+              <!-- regular nodes (comment boxes rendered in the pass above) -->
+              {#each nonCommentNodes as n (n.id)}
+                {@const k = effectiveKind(n)}
                 {@const h = nodeHeight(n)}
                 {@const sel = selectedNodeId === n.id}
                 {@const live = nodeLive(n.id)}
@@ -1454,24 +1893,26 @@
                     class="fill-card transition-[stroke] {nodeBorderClass(n)}"
                   />
                   {#if live}
-                    <!-- the executing node: a bright marching-ants emerald border
-                         over a breathing solid ring -->
-                    <rect
-                      width={NODE_W}
-                      height={h}
-                      rx="8"
-                      fill="none"
-                      stroke-width="3"
-                      class="node-run-glow stroke-primary"
-                    />
-                    <rect
-                      width={NODE_W}
-                      height={h}
-                      rx="8"
-                      fill="none"
-                      stroke-width="3"
-                      class="node-running stroke-primary"
-                    />
+                    <g transition:fade={{ duration: 200 }}>
+                      <!-- the executing node: a bright marching-ants emerald border
+                           over a breathing solid ring -->
+                      <rect
+                        width={NODE_W}
+                        height={h}
+                        rx="8"
+                        fill="none"
+                        stroke-width="3"
+                        class="node-run-glow stroke-primary"
+                      />
+                      <rect
+                        width={NODE_W}
+                        height={h}
+                        rx="8"
+                        fill="none"
+                        stroke-width="3"
+                        class="node-running stroke-primary"
+                      />
+                    </g>
                   {/if}
                   <!-- Category-tinted header band (Unreal-Blueprint style): a top-rounded
                        band behind the label so node families read at a glance and events pop.
@@ -1500,7 +1941,7 @@
                     font-size="11"
                     font-weight="600"
                   >
-                    {k?.label ?? n.kind}
+                    {nodeTitle(n, k)}
                   </text>
                   <line
                     x1="0"
@@ -1510,22 +1951,33 @@
                     class="pointer-events-none stroke-border"
                     stroke-width="1"
                   />
-                  <!-- Event nodes show their bound event name in the body (Unreal-style), so
-                       you can read which event a node fires/listens for at a glance. -->
-                  {#if n.kind === "emit_event" || n.kind === "on_event"}
-                    {@const ev = String(n.config.event ?? "").trim()}
+                  {#if isCompareOrLogic(n.kind)}
+                    {@const op = opLabel(n.kind, n.config)}
+                    {@const aVal = exprOperand(n.id, "a", n.config)}
+                    {@const bVal = exprOperand(n.id, "b", n.config)}
+                    {@const ey = HEAD_H + EXPR_H / 2}
                     <text
                       x={NODE_W / 2}
-                      y={HEAD_H + 20}
+                      y={ey + 7}
                       text-anchor="middle"
-                      class="pointer-events-none select-none {ev ? 'fill-foreground' : 'fill-muted-foreground'}"
-                      font-size="12"
-                      font-weight="600"
-                    >
-                      {ev || "(no event)"}
-                    </text>
+                      font-size="17"
+                      font-weight="700"
+                      class="pointer-events-none select-none fill-primary"
+                    >{op}</text>
+                    <text
+                      x="10"
+                      y={ey + 5}
+                      font-size="8"
+                      class="pointer-events-none select-none fill-muted-foreground/70"
+                    >{aVal}</text>
+                    <text
+                      x={NODE_W - 10}
+                      y={ey + 5}
+                      text-anchor="end"
+                      font-size="8"
+                      class="pointer-events-none select-none fill-muted-foreground/70"
+                    >{bVal}</text>
                   {/if}
-
                   {#if invalid}
                     <!-- required input(s) not filled — a red dot, the logo's signal -->
                     <circle cx={NODE_W - 9} cy="9" r="5.5" class="pointer-events-none fill-destructive/20" />
@@ -1534,7 +1986,9 @@
                     </circle>
                   {/if}
 
-                  <!-- exec (control-flow) pins — white. exec_in on the left header. -->
+                  <!-- exec (control-flow) pins — white. exec_in on the left header.
+                       Pure data/logic nodes (comparisons, conversions) have no exec pins. -->
+                  {#if !isPure(k)}
                   <circle
                     cx="0"
                     cy={HEAD_H / 2}
@@ -1546,6 +2000,7 @@
                     onclick={() => clickInPort(n, EXEC_IN_NAME)}
                     role="presentation"
                   />
+                  {/if}
                   <!-- exec outputs stack down the right edge (exec_out, or true/false) -->
                   {#each execOutPorts(k) as p, i}
                     {@const ey = HEAD_H / 2 + i * ROW_H}
@@ -1578,9 +2033,10 @@
                   {#each dataPorts(k, "in") as p, i}
                     {@const wired = wiredInto(n.id, p.name)}
                     {@const need = p.required && !isFilled(n, p)}
+                    {@const py = dataPortY(i) + nodeExprH(n)}
                     <circle
                       cx="0"
-                      cy={dataPortY(i)}
+                      cy={py}
                       r="5"
                       fill={wired ? portColor[p.type] : "#151c19"}
                       stroke={need ? "#ef4444" : portColor[p.type]}
@@ -1591,7 +2047,7 @@
                     />
                     <text
                       x="11"
-                      y={dataPortY(i) + 3}
+                      y={py + 3}
                       class="pointer-events-none select-none {need ? 'fill-destructive' : 'fill-muted-foreground'}"
                       font-size="10"
                     >
@@ -1602,7 +2058,7 @@
                   <!-- output data ports (stacked below the exec-out pins) -->
                   {#each dataPorts(k, "out") as p, i}
                     {@const isPending = pending && pending.node === n.id && pending.port === p.name}
-                    {@const dy = dataPortY(i + outDataOffset(k))}
+                    {@const dy = dataPortY(i + outDataOffset(k)) + nodeExprH(n)}
                     {@const pc = portColorOf(n, p.name, "out")}
                     <circle
                       cx={NODE_W}
@@ -1692,7 +2148,7 @@
 
               <!-- wire being drawn: from the chosen output port to the cursor -->
               {#if pending}
-                {@const pn = graph.nodes.find((n) => n.id === pending.node)}
+                {@const pn = nodeById.get(pending.node)}
                 {#if pn}
                   {@const px = pn.x + NODE_W}
                   {@const py = outPortY(pn, pending.port)}
@@ -1716,10 +2172,7 @@
             <Button
               class="shadow-lg"
               disabled={editLocked}
-              onclick={() => {
-                nodeSearch = "";
-                addOpen = true;
-              }}
+              onclick={(e) => { contextPos = { x: (e.target as HTMLElement).getBoundingClientRect().left, y: 60 }; contextPending = null; contextOpen = true; }}
             >
               <Plus class="size-4" /> Add node
             </Button>
@@ -2081,6 +2534,68 @@
                             {#each LEVELS as l (l)}<Select.Item value={l} label={l} class="capitalize">{l}</Select.Item>{/each}
                           </Select.Content>
                         </Select.Root>
+                      {:else if key === "room"}
+                        {#if rooms.length === 0}
+                          <p class="rounded border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">
+                            No rooms — add zones on the Map.
+                          </p>
+                        {:else}
+                          {@const rmStored = String(selectedNode.config[key] ?? "")}
+                          {@const rmv = rmStored === "" ? NO_ROOM : rmStored}
+                          {@const rmlabel = roomOptions.find((o) => o.value === rmv)?.label ?? rmStored}
+                          <Select.Root type="single" disabled={editLocked} value={rmv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v === NO_ROOM ? "" : (v ?? "") })}>
+                            <Select.Trigger class="h-8 w-full">{rmlabel}</Select.Trigger>
+                            <Select.Content>
+                              {#each roomOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                            </Select.Content>
+                          </Select.Root>
+                        {/if}
+                      {:else if key === "category"}
+                        {@const cv2 = String(selectedNode.config[key] ?? "person")}
+                        {@const clabel2 = categoryOptions.find((o) => o.value === cv2)?.label ?? cv2}
+                        <Select.Root type="single" disabled={editLocked} value={cv2} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "person" })}>
+                          <Select.Trigger class="h-8 w-full">{clabel2}</Select.Trigger>
+                          <Select.Content>
+                            {#each categoryOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                          </Select.Content>
+                        </Select.Root>
+                      {:else if key === "class" && selectedNode.kind === "object_detection"}
+                        {@const clsWired = graph.edges.some((e) => e.to === selectedNode.id && e.to_port === "class")}
+                        {@const clsv = String(selectedNode.config[key] ?? "person")}
+                        <SearchableSelect
+                          value={clsv}
+                          options={COCO_CLASSES}
+                          disabled={editLocked || clsWired}
+                          onchange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, class: v })}
+                        />
+                        {#if clsWired}
+                          <p class="mt-0.5 text-[10px] text-muted-foreground">Overridden by wired input</p>
+                        {/if}
+                      {:else if key === "operator" && selectedNode.kind === "text_compare"}
+                        {@const TEXT_OPS = [
+                          { value: "eq", label: "equals" },
+                          { value: "ne", label: "not equals" },
+                          { value: "contains", label: "contains" },
+                          { value: "starts_with", label: "starts with" },
+                          { value: "ends_with", label: "ends with" },
+                        ]}
+                        {@const topv = String(selectedNode.config[key] ?? "eq")}
+                        {@const toplabel = TEXT_OPS.find((o) => o.value === topv)?.label ?? topv}
+                        <Select.Root type="single" disabled={editLocked} value={topv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "eq" })}>
+                          <Select.Trigger class="h-8 w-full">{toplabel}</Select.Trigger>
+                          <Select.Content>
+                            {#each TEXT_OPS as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                          </Select.Content>
+                        </Select.Root>
+                      {:else if key === "operator"}
+                        {@const ops = [">", ">=", "<", "<=", "==", "!="]}
+                        {@const opv = String(selectedNode.config[key] ?? "==")}
+                        <Select.Root type="single" disabled={editLocked} value={opv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "==" })}>
+                          <Select.Trigger class="h-8 w-full font-mono">{opv}</Select.Trigger>
+                          <Select.Content>
+                            {#each ops as op (op)}<Select.Item value={op} label={op} class="font-mono">{op}</Select.Item>{/each}
+                          </Select.Content>
+                        </Select.Root>
                       {:else if key === "event"}
                         <!-- Event name persists like any other field (onchange → saveNodeConfig).
                              Registration into the tenant registry (so other graphs can listen +
@@ -2093,45 +2608,131 @@
                           disabled={editLocked}
                           placeholder="EventName (e.g. Foo)"
                           value={String(selectedNode.config[key] ?? "")}
-                          onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value.trim() })}
+                          onchange={(e) => chooseEvent(selectedNode, e.currentTarget.value)}
                         />
                         <datalist id="wf-events">
                           {#each events as e (e.name)}<option value={e.name}>{e.category}</option>{/each}
                         </datalist>
                         {#if evName && known}
-                          <p class="mt-1 text-[10px] text-muted-foreground">Registered · category “{known.category}”</p>
-                        {:else if evName}
-                          <div class="mt-1.5 flex items-center gap-1.5">
-                            <Input
-                              class="h-8"
-                              list="wf-event-cats"
-                              disabled={editLocked}
-                              placeholder="Category (default General)"
-                              bind:value={newEventCategory}
-                            />
-                            <Button size="sm" class="h-8 shrink-0" disabled={editLocked} onclick={() => registerEvent(evName)}>
-                              Register
-                            </Button>
-                          </div>
-                          <datalist id="wf-event-cats">
-                            {#each eventCategories as c (c.name)}<option value={c.name}></option>{/each}
-                          </datalist>
-                          <p class="mt-1 text-[10px] text-muted-foreground">
-                            New event — Register it so other graphs can listen and it shows in the palette.
-                          </p>
+                          <p class="mt-1 text-[10px] text-muted-foreground">Registered · “{known.category}”</p>
                         {/if}
+                      {:else if key === "color"}
+                        <input
+                          type="color"
+                          class="h-8 w-full cursor-pointer rounded-lg border border-border bg-card"
+                          disabled={editLocked}
+                          value={String(selectedNode.config[key] ?? '#facc15')}
+                          oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)}
+                          onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })}
+                        />
                       {:else}
-                        <Input class="h-8" disabled={editLocked} value={String(selectedNode.config[key] ?? "")} onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })} />
+                        <Input class="h-8" disabled={editLocked} value={String(selectedNode.config[key] ?? "")} oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)} />
                       {/if}
                       </div>
                     </div>
                   {/each}
                 </div>
               {/if}
+              <!-- Event payload form: category, the typed fields (label on the left like every
+                   other row), and a Save at the bottom. Saving updates the registry; graphs
+                   using this event self-heal when next opened. -->
+              {#if selectedNode.kind === "emit_event" || selectedNode.kind === "on_event"}
+                {@const evName = String(selectedNode.config.event ?? "").trim()}
+                {@const knownEv = events.find((e) => e.name === evName)}
+                {#if evName && knownEv && knownEv.source === "system"}
+                  <!-- Platform-defined event: read-only (its payload schema ships with the
+                       app, available to every tenant — no registration needed). -->
+                  <div class="space-y-1 border-t border-border pt-2.5">
+                    <p class="text-[10px] font-medium text-muted-foreground">System event · “{knownEv.category}” (read-only)</p>
+                    {#if (knownEv.fields ?? []).length > 0}
+                      <p class="text-[10px] text-muted-foreground">Payload: {(knownEv.fields ?? []).map((f) => `${f.name} (${f.type})`).join(", ")}</p>
+                    {/if}
+                  </div>
+                {:else if evName}
+                  <div class="space-y-2.5 border-t border-border pt-2.5">
+                    <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">
+                      <Label class="pt-2 text-xs text-muted-foreground">Category</Label>
+                      <div>
+                        <Input class="h-8" list="wf-event-cats" disabled={editLocked} placeholder="General" bind:value={newEventCategory} />
+                        <datalist id="wf-event-cats">{#each eventCategories as c (c.name)}<option value={c.name}></option>{/each}</datalist>
+                      </div>
+                    </div>
+                    <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">
+                      <Label class="pt-2 text-xs text-muted-foreground">Payload</Label>
+                      <div class="space-y-1.5">
+                        {#each newEventFields as f, i (i)}
+                          <div class="flex items-center gap-1.5">
+                            <Input class="h-8 min-w-0" disabled={editLocked} placeholder="field (e.g. Message)" value={f.name} oninput={(e) => setEventFieldName(i, e.currentTarget.value)} />
+                            <Select.Root type="single" disabled={editLocked} value={f.type} onValueChange={(v) => setEventFieldType(i, (v ?? "text") as PortType)}>
+                              <Select.Trigger class="h-8 w-24 shrink-0">{payloadTypeLabel(f.type)}</Select.Trigger>
+                              <Select.Content>
+                                {#each PAYLOAD_TYPES as t (t.value)}<Select.Item value={t.value} label={t.label}>{t.label}</Select.Item>{/each}
+                              </Select.Content>
+                            </Select.Root>
+                            <Button size="icon" variant="ghost" class="h-8 w-8 shrink-0" disabled={editLocked} onclick={() => removeEventField(i)} title="Remove field">×</Button>
+                          </div>
+                        {/each}
+                        <Button size="sm" variant="outline" class="h-8 w-full" disabled={editLocked} onclick={addEventField}>+ Payload field</Button>
+                      </div>
+                    </div>
+                    <Button size="sm" class="h-8 w-full" disabled={editLocked} onclick={() => registerEvent(evName)}>Save</Button>
+                    <p class="text-[10px] text-muted-foreground">
+                      {#if knownEv}Saved · “{knownEv.category}”. Saving updates graphs using this event when they next open.{:else}New event — Save so other graphs can listen.{/if}
+                    </p>
+                  </div>
+                {/if}
+              {/if}
+              <!-- String switch: user-defined match arms. Each arm becomes an exec output
+                   port. A built-in "default" arm always fires when no arm matches. -->
+              {#if selectedNode.kind === "string_switch"}
+                {@const swArms = Array.isArray(selectedNode.config?.arms) ? (selectedNode.config.arms as string[]) : []}
+                <div class="space-y-2.5 border-t border-border pt-2.5">
+                  <p class="text-xs font-medium text-muted-foreground">Match arms</p>
+                  <div class="space-y-1.5">
+                    {#each swArms as arm, i (i)}
+                      <div class="flex items-center gap-1.5">
+                        <Input
+                          class="h-8 min-w-0 flex-1"
+                          disabled={editLocked}
+                          placeholder="arm label (e.g. red)"
+                          value={arm}
+                          oninput={(e) => {
+                            const updated = [...swArms];
+                            updated[i] = e.currentTarget.value;
+                            saveNodeConfig(selectedNode, { ...selectedNode.config, arms: updated });
+                          }}
+                        />
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          class="h-8 w-8 shrink-0"
+                          disabled={editLocked || swArms.length <= 1}
+                          onclick={() => {
+                            const updated = swArms.filter((_, j) => j !== i);
+                            saveNodeConfig(selectedNode, { ...selectedNode.config, arms: updated });
+                          }}
+                          title="Remove arm"
+                        >×</Button>
+                      </div>
+                    {/each}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      class="h-8 w-full"
+                      disabled={editLocked}
+                      onclick={() => {
+                        const updated = [...swArms, `arm_${swArms.length + 1}`];
+                        saveNodeConfig(selectedNode, { ...selectedNode.config, arms: updated });
+                      }}
+                    >+ Add arm</Button>
+                  </div>
+                  <p class="text-[10px] text-muted-foreground">A built-in <strong>default</strong> arm always fires when no label matches.</p>
+                </div>
+              {/if}
               <!-- Memoize: cache the node's output for the run (default) vs recompute each
                    time it's reached. Turn OFF for loop bodies / live sources so loops iterate.
                    Hidden for event nodes — they're no-op signals that never memoize. -->
-              {#if selectedNode.kind !== "emit_event" && selectedNode.kind !== "on_event"}
+              {#if selectedNode.kind !== "emit_event" && selectedNode.kind !== "on_event" && selectedNode.kind !== "comment"}
                 <div class="flex items-center justify-between gap-2 border-t border-border pt-2.5">
                   <Label
                     class="flex items-center gap-1.5 text-xs text-muted-foreground"
@@ -2140,7 +2741,7 @@
                     Memoize output
                   </Label>
                   <Switch
-                    checked={selectedNode.memoize !== false}
+                    checked={selectedNode.memoize === true}
                     disabled={editLocked}
                     onCheckedChange={(v) => saveNodeMemoize(selectedNode, v)}
                   />
@@ -2268,68 +2869,13 @@
   </Dialog.Content>
 </Dialog.Root>
 
-<!-- Add-node modal — centered over the editor with a subtle backdrop blur -->
-{#if addOpen}
-  <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-    <button
-      class="absolute inset-0 bg-background/40 backdrop-blur-sm duration-200 animate-in fade-in"
-      aria-label="Close"
-      onclick={() => (addOpen = false)}
-    ></button>
-    <div
-      class="relative z-10 flex max-h-[78vh] w-full max-w-md flex-col rounded-2xl border border-border bg-popover/95 p-4 shadow-2xl duration-200 animate-in fade-in zoom-in-95"
-    >
-      <div class="mb-3 flex items-center justify-between">
-        <h3 class="flex items-center gap-2 text-sm font-semibold">
-          <span class="size-1.5 rounded-full bg-primary"></span> Add a node
-        </h3>
-        <Button variant="ghost" size="icon" class="size-7" onclick={() => (addOpen = false)}>
-          <X class="size-4" />
-        </Button>
-      </div>
-      <div class="relative mb-3">
-        <Search class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <!-- svelte-ignore a11y_autofocus -->
-        <Input
-          autofocus
-          bind:value={nodeSearch}
-          placeholder="Search nodes…"
-          class="h-9 pl-8"
-        />
-      </div>
-      <div class="-mr-2 flex-1 space-y-4 overflow-y-auto pr-2">
-        {#each nodeCategories as cat (cat.name)}
-          <div>
-            <div class="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              {cat.name}
-            </div>
-            <div class="space-y-1">
-              {#each cat.kinds as k (k.label)}
-                <button
-                  class="interactive group flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2 text-left"
-                  onclick={() => addNodeKind(k.slug, k.presetEvent)}
-                >
-                  <span class="flex items-center gap-2 text-sm font-medium">
-                    <span class="size-1.5 rounded-full bg-primary transition-transform group-hover:scale-125"></span>
-                    {k.label}
-                  </span>
-                  <span class="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-                    {k.inputs.length} in · {k.outputs.length} out
-                  </span>
-                </button>
-              {/each}
-            </div>
-          </div>
-        {:else}
-          <div class="flex flex-col items-center gap-2 py-10 text-center">
-            <Search class="size-6 text-muted-foreground/50" />
-            <p class="text-sm text-muted-foreground">No nodes match “{nodeSearch}”</p>
-          </div>
-        {/each}
-      </div>
-    </div>
-  </div>
-{/if}
+<ContextSearch
+  bind:open={contextOpen}
+  pos={contextPos}
+  portType={contextPortType}
+  kinds={kinds as PaletteKind[]}
+  onSelect={addFromContext}
+/>
 
 <!-- Recent runs drawer — persisted run history for one graph (trigger, pod, status). -->
 <Dialog.Root bind:open={runsOpen}>
@@ -2337,6 +2883,13 @@
     <Dialog.Header>
       <Dialog.Title class="flex items-center gap-2">
         <History class="size-4" /> Recent runs — {runsGraph?.name ?? ""}
+        {#if runsGraph}
+          <a
+            href="/logs?module=workflow&entity_type=workflow_graph&entity_id={runsGraph.id}"
+            class="ml-auto text-[11px] text-primary hover:underline"
+            onclick={() => (runsOpen = false)}
+          >View all in Logs →</a>
+        {/if}
       </Dialog.Title>
       <Dialog.Description>Manual, scheduled, and event-triggered runs, newest first.</Dialog.Description>
     </Dialog.Header>
@@ -2370,10 +2923,12 @@
                   <p class="text-[11px] text-muted-foreground/60">No detailed signals recorded.</p>
                 {:else}
                   <div class="space-y-0.5 font-mono text-[10px] leading-relaxed">
-                    {#each runsLogs[r.id] as line (line)}
+                    {#each runsLogs[r.id] as line (line.id)}
                       <div class="flex gap-2">
-                        <span class="shrink-0 uppercase text-muted-foreground/60">{line.kind}</span>
-                        <span class="text-muted-foreground">{line.label ? `${line.label}: ` : ""}{line.message}</span>
+                        <span class="w-10 shrink-0 uppercase {line.level === 'error' ? 'text-destructive' : line.level === 'warn' ? 'text-amber-400' : 'text-muted-foreground/60'}">{line.level}</span>
+                        <span class="{line.level === 'error' ? 'text-destructive' : 'text-muted-foreground'}">
+                          {(line.payload?.label as string | undefined) ? `${line.payload?.label}: ` : ""}{line.message}
+                        </span>
                       </div>
                     {/each}
                   </div>

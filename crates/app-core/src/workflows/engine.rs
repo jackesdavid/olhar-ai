@@ -7,7 +7,8 @@
 //! resolving inputs from upstream outputs else config literals), stopping on the
 //! first node error. The trigger/concurrency methods are the pure decision logic
 //! the backend poller drives.
-use super::domain::{ConcurrencyPolicy, Graph, NodeKind, EXEC_IN};
+use super::domain::{string_switch_arms, ConcurrencyPolicy, Graph, NodeKind, PortType, EXEC_IN};
+use super::repo;
 use super::node::{self, PortValue, PortValues};
 use crate::agent::tools::{ToolContext, ToolUiEvent};
 use crate::alerts::{Alert, AlertLevel};
@@ -71,7 +72,7 @@ pub fn run_dag_with(
     on_node: &mut dyn FnMut(u32),
     on_log: &mut dyn FnMut(u32, &str, u128),
 ) -> Result<HashMap<u32, PortValues>, String> {
-    run_driver(graph, sys, true, &HashSet::new(), on_node, on_log, &mut |_| {})
+    run_driver(graph, sys, true, &HashSet::new(), &PortValues::new(), on_node, on_log, &mut |_, _| {})
 }
 
 /// Like [`run_dag_with`], but `emit(event)` is called whenever an `EmitEvent` node fires,
@@ -82,24 +83,27 @@ pub fn run_dag_eventful(
     sys: &ToolContext,
     on_node: &mut dyn FnMut(u32),
     on_log: &mut dyn FnMut(u32, &str, u128),
-    emit: &mut dyn FnMut(&str),
+    emit: &mut dyn FnMut(&str, &PortValues),
 ) -> Result<HashMap<u32, PortValues>, String> {
-    run_driver(graph, sys, true, &HashSet::new(), on_node, on_log, emit)
+    run_driver(graph, sys, true, &HashSet::new(), &PortValues::new(), on_node, on_log, emit)
 }
 
 /// Run ONLY the subtree rooted at `entry` (an `OnEvent` node) — the body of a fired event,
-/// as its own decoupled run. Loops + nested `EmitEvent`s inside the handler work the same.
+/// as its own decoupled run. `entry_payload` seeds the `OnEvent`'s outputs (the event's
+/// typed payload), so downstream nodes read each field by port name. Loops + nested
+/// `EmitEvent`s inside the handler work the same.
 pub fn run_subpath_eventful(
     graph: &Graph,
     sys: &ToolContext,
     entry: u32,
+    entry_payload: PortValues,
     on_node: &mut dyn FnMut(u32),
     on_log: &mut dyn FnMut(u32, &str, u128),
-    emit: &mut dyn FnMut(&str),
+    emit: &mut dyn FnMut(&str, &PortValues),
 ) -> Result<HashMap<u32, PortValues>, String> {
     let mut forced = HashSet::new();
     forced.insert(entry);
-    run_driver(graph, sys, false, &forced, on_node, on_log, emit)
+    run_driver(graph, sys, false, &forced, &entry_payload, on_node, on_log, emit)
 }
 
 /// Find the `OnEvent` node subscribing to `event`, if any (first match in node order).
@@ -126,9 +130,10 @@ fn run_driver(
     sys: &ToolContext,
     seed_entries: bool,
     initial_forced: &HashSet<u32>,
+    entry_payload: &PortValues,
     on_node: &mut dyn FnMut(u32),
     on_log: &mut dyn FnMut(u32, &str, u128),
-    emit: &mut dyn FnMut(&str),
+    emit: &mut dyn FnMut(&str, &PortValues),
 ) -> Result<HashMap<u32, PortValues>, String> {
     let connected: HashSet<u32> = if graph.run_orphans {
         graph.nodes.iter().map(|n| n.id).collect()
@@ -165,14 +170,14 @@ fn run_driver(
     let run_started = Instant::now();
 
     let mut reentries = forward_epoch(
-        graph, sys, &indeg_tmpl, &adj, &back, &connected, seed_entries, initial_forced,
+        graph, sys, &indeg_tmpl, &adj, &back, &connected, seed_entries, initial_forced, entry_payload,
         &mut outputs, &mut ran, &mut loop_state, &mut steps, run_started, on_node, on_log, emit,
     )?;
     // Later epochs: re-enter loops at the back-edge / ForEach targets until none fire.
     while !reentries.is_empty() {
         let forced: HashSet<u32> = reentries.into_iter().collect();
         reentries = forward_epoch(
-            graph, sys, &indeg_tmpl, &adj, &back, &connected, false, &forced,
+            graph, sys, &indeg_tmpl, &adj, &back, &connected, false, &forced, entry_payload,
             &mut outputs, &mut ran, &mut loop_state, &mut steps, run_started, on_node, on_log, emit,
         )?;
     }
@@ -192,6 +197,7 @@ fn forward_epoch(
     connected: &HashSet<u32>,
     seed_entries: bool,
     forced: &HashSet<u32>,
+    entry_payload: &PortValues,
     outputs: &mut HashMap<u32, PortValues>,
     ran: &mut HashSet<u32>,
     loop_state: &mut HashMap<u32, usize>,
@@ -199,7 +205,7 @@ fn forward_epoch(
     run_started: Instant,
     on_node: &mut dyn FnMut(u32),
     on_log: &mut dyn FnMut(u32, &str, u128),
-    emit: &mut dyn FnMut(&str),
+    emit: &mut dyn FnMut(&str, &PortValues),
 ) -> Result<Vec<u32>, String> {
     let mut indeg = indeg_tmpl.clone();
     let mut settled: HashSet<u32> = HashSet::new();
@@ -234,6 +240,10 @@ fn forward_epoch(
             continue;
         }
         let n = graph.node(nid).ok_or("node vanished mid-run")?;
+        if n.kind == NodeKind::Comment {
+            settle(&mut settled, &mut indeg);
+            continue;
+        }
 
         // Activation: a forced re-entry target is active; otherwise a node with incoming
         // ORDERING exec edges activates when fed by a live one; a node with none is an
@@ -241,8 +251,7 @@ fn forward_epoch(
         // branch, gating the other off — unchanged.
         let mut has_ord_exec = false;
         let mut fed_live = false;
-        for e in graph
-            .edges
+        for e in graph.edges
             .iter()
             .filter(|e| e.to == nid && e.to_port == EXEC_IN.name && !back.contains(&(e.from, nid)))
         {
@@ -261,7 +270,21 @@ fn forward_epoch(
         } else if has_ord_exec {
             fed_live
         } else {
-            seed_entries
+            // No exec_in wired: pure data/logic nodes and true entry orphans. For nodes
+            // with upstream data edges (comparison, conversion, etc.), activate as soon as
+            // any upstream producer has run — they're pulled by the exec chain, not seeded.
+            // True orphans (no incoming ordering edges at all) fall back to seed_entries.
+            let has_upstream = graph.edges
+                .iter()
+                .any(|e| e.to == nid && !back.contains(&(e.from, nid)));
+            if has_upstream {
+                graph.edges
+                    .iter()
+                    .filter(|e| e.to == nid && !back.contains(&(e.from, nid)))
+                    .any(|e| outputs.contains_key(&e.from))
+            } else {
+                seed_entries
+            }
         };
         if !active {
             settle(&mut settled, &mut indeg);
@@ -273,11 +296,13 @@ fn forward_epoch(
         // ordering predecessor has settled by now, so `outputs` reflects which ran.)
         let mut inputs = PortValues::new();
         let mut dead = false;
-        for port in n.kind.input_ports() {
+        // Node-aware ports: most kinds are static, but EmitEvent's inputs are its
+        // configured event's payload fields (one per field). Gather wired values by name.
+        for port in n.input_ports() {
             if let Some(edge) = graph.edges.iter().find(|e| e.to == nid && e.to_port == port.name) {
                 match outputs.get(&edge.from).and_then(|m| m.get(&edge.from_port)) {
                     Some(v) => {
-                        inputs.insert(port.name.to_string(), v.clone());
+                        inputs.insert(port.name.clone(), v.clone());
                     }
                     None if port.required && !outputs.contains_key(&edge.from) => {
                         dead = true;
@@ -285,8 +310,13 @@ fn forward_epoch(
                     }
                     None => {}
                 }
-            } else if let Some(lit) = node::literal_for(&n.config, *port) {
-                inputs.insert(port.name.to_string(), lit);
+            } else if port.ty == PortType::Camera {
+                // Camera literals require device resolution — handled here where sys is available.
+                if let Some(cam) = node::resolve_camera_literal(&n.config, &port.name, sys) {
+                    inputs.insert(port.name.clone(), cam);
+                }
+            } else if let Some(lit) = node::literal_for_named(&n.config, &port.name, port.ty) {
+                inputs.insert(port.name.clone(), lit);
             }
         }
         if dead {
@@ -350,10 +380,84 @@ fn forward_epoch(
             continue;
         }
 
+        // FlipFlop: read cross-run state, fire `a` or `b`, write toggled state back.
+        // Engine-driven (like ForEach) — no run_node call.
+        if n.kind == NodeKind::FlipFlop {
+            let state = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid);
+            // State stores the branch to fire next. Missing = first run → fire A (is_a=true).
+            let is_a = state
+                .as_ref()
+                .and_then(|v| v.get("is_a"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            repo::set_node_state(
+                &sys.db,
+                sys.tenant_id,
+                graph.id,
+                nid,
+                &serde_json::json!({ "is_a": !is_a }),
+            );
+            live_out.insert((nid, if is_a { "a" } else { "b" }.to_string()));
+            let mut o = PortValues::new();
+            o.insert("is_a".into(), PortValue::Bool(is_a));
+            *steps += 1;
+            if graph.debug {
+                on_log(nid, &format!("Flip Flop → {}", if is_a { "a" } else { "b" }), 0);
+            }
+            outputs.insert(nid, o);
+            ran.insert(nid);
+            settle(&mut settled, &mut indeg);
+            continue;
+        }
+
+        // Cooldown: pass exec through only when `window_secs` have elapsed since last fire.
+        // Stores last-fired Unix-ms in node state; first run always passes.
+        if n.kind == NodeKind::Cooldown {
+            let window_secs = n.config
+                .get("window_secs")
+                .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+                .unwrap_or(60);
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let state = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid);
+            let last_ms = state
+                .as_ref()
+                .and_then(|v| v.get("last_ms"))
+                .and_then(|v| v.as_u64());
+            let elapsed_secs = match last_ms {
+                None => window_secs + 1, // never fired → always open
+                Some(t) => now_ms.saturating_sub(t) / 1000,
+            };
+            let ok = elapsed_secs >= window_secs;
+            if ok {
+                repo::set_node_state(
+                    &sys.db,
+                    sys.tenant_id,
+                    graph.id,
+                    nid,
+                    &serde_json::json!({ "last_ms": now_ms }),
+                );
+                live_out.insert((nid, "exec_out".to_string()));
+            }
+            let mut o = PortValues::new();
+            o.insert("elapsed_secs".into(), PortValue::Num(elapsed_secs as i64));
+            o.insert("ok".into(), PortValue::Bool(ok));
+            *steps += 1;
+            if graph.debug {
+                on_log(nid, &format!("Cooldown: {elapsed_secs}s elapsed / {window_secs}s window → {}", if ok { "pass" } else { "blocked" }), 0);
+            }
+            outputs.insert(nid, o);
+            ran.insert(nid);
+            settle(&mut settled, &mut indeg);
+            continue;
+        }
+
         let started = Instant::now();
         // IO-bound kinds run under a per-node deadline (watchdog thread) so a stuck call
         // aborts the run instead of hanging forever; pure/instant kinds run inline.
-        let o = match node::node_timeout(n.kind, &n.config) {
+        let mut o = match node::node_timeout(n.kind, &n.config) {
             Some(deadline) => node::run_node_timed(n.kind, &n.config, &inputs, sys, deadline),
             None => node::run_node(n.kind, &n.config, &inputs, sys),
         }
@@ -375,15 +479,35 @@ fn forward_epoch(
         }
 
         // EmitEvent: fire the event so the host spawns the (guarded) handler sub-run.
+        // The node's gathered inputs ARE the event's typed payload (one per field).
         if n.kind == NodeKind::EmitEvent {
             if let Some(ev) = n.config.get("event").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
-                emit(ev);
+                emit(ev, &inputs);
             }
+        }
+
+        // OnEvent entry: seed its outputs with the delivered payload so downstream nodes
+        // read each field by port name (run_node returned an empty map for it).
+        // Camera-typed fields are upgraded from raw Text (IP/id from the wire) to CameraEntity.
+        if n.kind == NodeKind::OnEvent {
+            o = node::seed_event_cameras(entry_payload, &n.output_ports(), sys);
         }
 
         if n.kind == NodeKind::If {
             let cond = inputs.get("condition").and_then(PortValue::as_bool).unwrap_or(false);
             live_out.insert((nid, if cond { "true" } else { "false" }.to_string()));
+        } else if n.kind == NodeKind::AskAi {
+            // AskAi: run_node computed the answer and stored it in `o["result"]`.
+            let answer = o.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            live_out.insert((nid, if answer { "true" } else { "false" }.to_string()));
+        } else if n.kind == NodeKind::StringSwitch {
+            let val = inputs.get("value").and_then(PortValue::as_text).unwrap_or_default();
+            let arms = string_switch_arms(&n.config);
+            if arms.iter().any(|a| a == val) {
+                live_out.insert((nid, val.to_string()));
+            } else {
+                live_out.insert((nid, "default".to_string()));
+            }
         } else {
             for p in n.kind.exec_out_ports() {
                 live_out.insert((nid, p.name.to_string()));
@@ -565,9 +689,11 @@ fn level_rank(l: AlertLevel) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::super::domain::{Graph, NodeKind};
+    use super::super::domain::{Graph, NodeKind, PortType};
     use super::*;
     use crate::alerts::{Alert, AlertLevel};
+    use crate::ports::Vision;
+    use crate::agent::detector::{PersonDetection, PersonResult};
     use serde_json::json;
 
     fn test_ctx() -> ToolContext {
@@ -581,6 +707,25 @@ mod tests {
             None,
             tx,
         )
+    }
+
+    /// A Vision stub whose `ask_yes_no` returns a fixed answer. Used to test `AskAi`
+    /// routing without hitting the Anthropic API.
+    struct StubVision(bool);
+    impl Vision for StubVision {
+        fn detect_persons(&self, _: &[u8]) -> Result<PersonResult, String> { Ok(PersonResult { person: false, count: 0, confidence: 0.0 }) }
+        fn detect_persons_detailed(&self, _: &[u8]) -> Result<Vec<PersonDetection>, String> { Ok(vec![]) }
+        fn detect_objects_detailed(&self, _: &[u8], _: u32) -> Result<Vec<PersonDetection>, String> { Ok(vec![]) }
+        fn describe(&self, _: &[u8], _: &str) -> Result<String, String> { Ok("stub".into()) }
+        fn ask_yes_no(&self, _: &str, _: Option<&[u8]>) -> Result<bool, String> { Ok(self.0) }
+    }
+
+    fn ctx_with_vision(answer: bool) -> ToolContext {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut ctx = test_ctx();
+        ctx.ui_tx = tx;
+        ctx.vision = std::sync::Arc::new(StubVision(answer));
+        ctx
     }
 
     fn alert(id: u64, level: AlertLevel, source: &str, msg: &str) -> Alert {
@@ -775,12 +920,14 @@ mod tests {
 
     #[test]
     fn memoized_node_on_a_loop_runs_once_and_does_not_error() {
-        // Same loop but memoize ON (default): the re-entered node reuses its output and
+        // Same loop but memoize ON (explicit): the re-entered node reuses its output and
         // stops — the run completes cleanly (warn only), no infinite loop.
         let ctx = test_ctx();
         let mut g = Graph::new(1, "loop");
         let a = g.add_node(NodeKind::Format, 0, 0);
         let b = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(a).unwrap().memoize = true;
+        g.node_mut(b).unwrap().memoize = true;
         g.add_edge(a, "exec_out", b, "exec_in").unwrap();
         g.add_edge(b, "exec_out", a, "exec_in").unwrap();
         let outs = run_dag(&g, &ctx).expect("memoized loop must terminate");
@@ -902,7 +1049,7 @@ mod tests {
         g.add_edge(on, "exec_out", fmt, "exec_in").unwrap();
 
         let mut fired: Vec<String> = Vec::new();
-        let outs = run_dag_eventful(&g, &ctx, &mut |_| {}, &mut |_, _, _| {}, &mut |ev| fired.push(ev.to_string())).unwrap();
+        let outs = run_dag_eventful(&g, &ctx, &mut |_| {}, &mut |_, _, _| {}, &mut |ev, _| fired.push(ev.to_string())).unwrap();
         assert_eq!(fired, vec!["seen"], "EmitEvent calls the emit sink");
         assert!(outs.contains_key(&em), "EmitEvent ran");
         assert!(!outs.contains_key(&on), "OnEvent must NOT run on a normal trigger");
@@ -911,9 +1058,43 @@ mod tests {
         // The handler runs only when its event fires (a sub-run seeded at the OnEvent node).
         let entry = on_event_node(&g, "seen").expect("OnEvent found by name");
         assert_eq!(entry, on);
-        let outs2 = run_subpath_eventful(&g, &ctx, entry, &mut |_| {}, &mut |_, _, _| {}, &mut |_| {}).unwrap();
+        let outs2 = run_subpath_eventful(&g, &ctx, entry, PortValues::new(), &mut |_| {}, &mut |_, _, _| {}, &mut |_, _| {}).unwrap();
         assert!(outs2.contains_key(&on) && outs2.contains_key(&fmt), "handler subtree runs on its event");
         assert!(!outs2.contains_key(&em), "the sub-run runs ONLY the handler subtree");
+    }
+
+    #[test]
+    fn event_payload_makes_dynamic_ports_and_seeds_the_on_event_output() {
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "g");
+        // An event "seen" carrying a Text field "msg" — baked onto both nodes' config.
+        let schema = json!({ "event": "seen", "payload": [{ "name": "msg", "type": "text" }] });
+        let em = g.add_node(NodeKind::EmitEvent, 0, 0);
+        g.node_mut(em).unwrap().config = schema.clone();
+        let on = g.add_node(NodeKind::OnEvent, 0, 0);
+        g.node_mut(on).unwrap().config = schema;
+
+        // EmitEvent gains a Text INPUT port "msg"; OnEvent a Text OUTPUT port "msg".
+        assert_eq!(g.node(em).unwrap().input_port("msg").unwrap().ty, PortType::Text);
+        assert_eq!(g.node(on).unwrap().output_port("msg").unwrap().ty, PortType::Text);
+
+        // The dynamic ports wire by type: Format.text → EmitEvent.msg, OnEvent.msg → Format.p1.
+        let src = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(src, "text", em, "msg").expect("payload INPUT port wires by type");
+        let sink = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(on, "exec_out", sink, "exec_in").unwrap();
+        g.add_edge(on, "msg", sink, "p1").expect("payload OUTPUT port wires by type");
+
+        // Firing the handler with a payload seeds the OnEvent's "msg" output for downstream.
+        let entry = on_event_node(&g, "seen").unwrap();
+        let mut payload = PortValues::new();
+        payload.insert("msg".into(), PortValue::Text("hello".into()));
+        let outs = run_subpath_eventful(&g, &ctx, entry, payload, &mut |_| {}, &mut |_, _, _| {}, &mut |_, _| {}).unwrap();
+        assert_eq!(
+            outs.get(&on).and_then(|m| m.get("msg")).and_then(PortValue::as_text),
+            Some("hello"),
+            "OnEvent exposes the delivered payload on its named output"
+        );
     }
 
     #[test]
@@ -991,6 +1172,131 @@ mod tests {
         assert_eq!(e.alert_seen_max(t), 5, "seeded watermark");
         let _ = e.drain_new_alert_levels(t, &alerts);
         assert_eq!(e.alert_seen_max(t), 9, "watermark advanced to the max id seen");
+    }
+
+    #[test]
+    fn ask_ai_routes_true_branch_on_yes_answer() {
+        let ctx = ctx_with_vision(true);
+        let mut g = Graph::new(1, "g");
+        let ai = g.add_node(NodeKind::AskAi, 0, 0);
+        g.node_mut(ai).unwrap().config = json!({ "question": "Is someone there?", "timeout_secs": "65" });
+        let yes = g.add_node(NodeKind::Format, 0, 0);
+        let no = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(ai, "true", yes, "exec_in").unwrap();
+        g.add_edge(ai, "false", no, "exec_in").unwrap();
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(outs.contains_key(&ai), "AI If ran");
+        assert!(outs.contains_key(&yes), "'true' branch ran (answer = YES)");
+        assert!(!outs.contains_key(&no), "'false' branch skipped");
+    }
+
+    #[test]
+    fn ask_ai_routes_false_branch_on_no_answer() {
+        let ctx = ctx_with_vision(false);
+        let mut g = Graph::new(1, "g");
+        let ai = g.add_node(NodeKind::AskAi, 0, 0);
+        g.node_mut(ai).unwrap().config = json!({ "question": "Is someone there?", "timeout_secs": "65" });
+        let yes = g.add_node(NodeKind::Format, 0, 0);
+        let no = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(ai, "true", yes, "exec_in").unwrap();
+        g.add_edge(ai, "false", no, "exec_in").unwrap();
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(!outs.contains_key(&yes), "'true' branch skipped");
+        assert!(outs.contains_key(&no), "'false' branch ran (answer = NO)");
+    }
+
+    #[test]
+    fn ask_ai_errors_without_question() {
+        let ctx = ctx_with_vision(false);
+        let mut g = Graph::new(1, "g");
+        let ai = g.add_node(NodeKind::AskAi, 0, 0);
+        // No question in config or wired
+        g.node_mut(ai).unwrap().config = json!({ "question": "" });
+        g.run_orphans = true;
+        let err = run_dag(&g, &ctx).unwrap_err();
+        assert!(err.contains("question is required"), "got: {err}");
+    }
+
+    #[test]
+    fn ask_ai_wires_true_false_exec_ports() {
+        let mut g = Graph::new(1, "g");
+        let ai = g.add_node(NodeKind::AskAi, 0, 0);
+        let t = g.add_node(NodeKind::Format, 0, 0);
+        let f = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(ai, "true", t, "exec_in").expect("true port wires");
+        g.add_edge(ai, "false", f, "exec_in").expect("false port wires");
+        // image and question wire correctly
+        let snap = g.add_node(NodeKind::CameraSnapshot, 0, 0);
+        g.add_edge(snap, "image", ai, "image").expect("image wires");
+    }
+
+    #[test]
+    fn string_switch_routes_to_matching_arm() {
+        // StringSwitch("red") → fires the "red" arm; "blue" and "default" are skipped.
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "g");
+        let sw = g.add_node(NodeKind::StringSwitch, 0, 0);
+        g.node_mut(sw).unwrap().config = json!({ "arms": ["red", "blue", "green"], "value": "red" });
+        let red = g.add_node(NodeKind::Format, 0, 0);
+        let blue = g.add_node(NodeKind::Format, 0, 0);
+        let def = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(sw, "red", red, "exec_in").unwrap();
+        g.add_edge(sw, "blue", blue, "exec_in").unwrap();
+        g.add_edge(sw, "default", def, "exec_in").unwrap();
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(outs.contains_key(&sw), "switch ran");
+        assert!(outs.contains_key(&red), "matching arm 'red' ran");
+        assert!(!outs.contains_key(&blue), "'blue' skipped");
+        assert!(!outs.contains_key(&def), "'default' skipped when a match fires");
+    }
+
+    #[test]
+    fn string_switch_fires_default_when_no_arm_matches() {
+        // StringSwitch("purple") → no arm matches → "default" fires, named arms skip.
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "g");
+        let sw = g.add_node(NodeKind::StringSwitch, 0, 0);
+        g.node_mut(sw).unwrap().config = json!({ "arms": ["red", "blue"], "value": "purple" });
+        let red = g.add_node(NodeKind::Format, 0, 0);
+        let def = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(sw, "red", red, "exec_in").unwrap();
+        g.add_edge(sw, "default", def, "exec_in").unwrap();
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(!outs.contains_key(&red), "'red' skipped");
+        assert!(outs.contains_key(&def), "'default' fires on no match");
+    }
+
+    #[test]
+    fn string_switch_value_from_upstream_node() {
+        // Wired value: Format → "blue" → StringSwitch routes to blue arm.
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "g");
+        let fmt = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(fmt).unwrap().config = json!({ "template": "blue", "p1": "", "p2": "", "p3": "" });
+        let sw = g.add_node(NodeKind::StringSwitch, 0, 0);
+        g.node_mut(sw).unwrap().config = json!({ "arms": ["red", "blue", "green"] });
+        g.add_edge(fmt, "exec_out", sw, "exec_in").unwrap();
+        g.add_edge(fmt, "text", sw, "value").unwrap();
+        let blue = g.add_node(NodeKind::Format, 0, 0);
+        let def = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(sw, "blue", blue, "exec_in").unwrap();
+        g.add_edge(sw, "default", def, "exec_in").unwrap();
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(outs.contains_key(&blue), "'blue' arm fires (wired value = \"blue\")");
+        assert!(!outs.contains_key(&def), "'default' skipped");
+    }
+
+    #[test]
+    fn string_switch_missing_value_errors() {
+        // No wired value and no config literal → run errors on missing required input.
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "g");
+        let sw = g.add_node(NodeKind::StringSwitch, 0, 0);
+        // arms set but no value literal or wire
+        g.node_mut(sw).unwrap().config = json!({ "arms": ["red"] });
+        g.run_orphans = true;
+        let err = run_dag(&g, &ctx).unwrap_err();
+        assert!(err.contains("missing required input 'value'"), "got: {err}");
     }
 
     #[test]

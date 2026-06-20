@@ -1,7 +1,14 @@
 //! Transparent edge enrollment: the operator holds a Tailscale OAuth client; control
-//! mints a fresh **pre-authorized, ephemeral, tagged** auth key per box via the
-//! Tailscale API and bakes it into the install command. The tenant never logs into
-//! Tailscale — they run one line and the edge joins the private tailnet automatically.
+//! mints a fresh **pre-authorized, reusable, non-ephemeral, tagged** auth key per box
+//! via the Tailscale API and bakes it into the install command. The tenant never logs
+//! into Tailscale — they run one line and the edge joins the private tailnet automatically.
+//!
+//! The key is **reusable + non-ephemeral** on purpose: an appliance reboots, and on
+//! every boot the edge re-runs `tailscale up --authkey=<the key in edge.env>`. A
+//! single-use or ephemeral key would work exactly once and then leave the box off the
+//! tailnet (node wiped on disconnect, key already consumed) — the reboot-drops-offline
+//! bug. Non-ephemeral also keeps the node's MagicDNS name stable, which the gateway
+//! relies on to resolve the box's live upstream.
 //!
 //! One-time operator setup (Tailscale admin console):
 //!   1. Create an OAuth client with the `auth_keys` write scope, tagged `tag:sentinel-edge`.
@@ -40,9 +47,10 @@ impl TailscaleConfig {
         Some(Self { client_id, client_secret, tailnet, tag })
     }
 
-    /// Mint a single-use, ephemeral, pre-authorized auth key tagged for the edge.
-    /// `description` shows in the Tailscale admin (e.g. the box name). Short-lived: the
-    /// key only needs to live long enough for the box to come up once.
+    /// Mint a reusable, non-ephemeral, pre-authorized auth key tagged for the edge.
+    /// `description` shows in the Tailscale admin (e.g. the box name). The key persists
+    /// (default 90 days, the Tailscale max; override with `TS_KEY_EXPIRY_SECS`) so the
+    /// appliance can re-authenticate on every reboot without operator intervention.
     pub async fn mint_auth_key(&self, http: &reqwest::Client, description: &str) -> Result<String, String> {
         // Tailscale rejects non-ASCII / odd chars in key descriptions — sanitize.
         let description: String = description
@@ -66,15 +74,22 @@ impl TailscaleConfig {
             .await
             .map_err(|e| format!("ts token parse: {e}"))?;
 
-        // 2. Create a pre-authorized ephemeral tagged auth key.
+        // 2. Create a pre-authorized, reusable, non-ephemeral tagged auth key so the box
+        //    re-auths cleanly on every reboot (see module docs). 90 days is the Tailscale
+        //    default max; ops can shorten/lengthen (within tailnet policy) via env.
+        let expiry_secs: u64 = std::env::var("TS_KEY_EXPIRY_SECS")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .filter(|&s| s > 0)
+            .unwrap_or(7_776_000); // 90 days
         let body = serde_json::json!({
             "capabilities": { "devices": { "create": {
-                "reusable": false,
-                "ephemeral": true,
+                "reusable": true,
+                "ephemeral": false,
                 "preauthorized": true,
                 "tags": [self.tag],
             }}},
-            "expirySeconds": 1800,
+            "expirySeconds": expiry_secs,
             "description": description,
         });
         let key: KeyResp = http

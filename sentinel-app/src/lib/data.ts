@@ -11,7 +11,8 @@ import {
   type Alert,
   type AlertStats,
   type Device,
-  type MapRoom,
+  type MapDoc,
+  type Presence,
   type NotificationTarget,
   type Person,
   type PersonEmbedding,
@@ -51,6 +52,12 @@ function ensureCloudStream(): void {
   if (cloudStream || typeof EventSource === "undefined" || !auth.token) return;
   const url = `${API_BASE}/workflows/events?token=${encodeURIComponent(auth.token)}`;
   const es = new EventSource(url);
+  // Fired on first connect AND on every auto-reconnect. Subscribers to the synthetic
+  // "stream-open" event use it to re-seed state that arrives only as deltas (e.g. run
+  // activity), since deltas emitted while disconnected are missed.
+  es.onopen = () => {
+    cloudSubs.get("stream-open")?.forEach((cb) => cb());
+  };
   es.onmessage = (e) => {
     let msg: { event?: string };
     try {
@@ -185,9 +192,8 @@ export const data = {
   // ---- beacons / telegram -------------------------------------------------
   listBeacons: (): Promise<NotificationTarget[]> => api.get<NotificationTarget[]>("/beacons"),
   getTelegramConfig: (): Promise<TelegramConfigState> => api.get<TelegramConfigState>("/telegram"),
-  setTelegramConfig: async (botToken: string, pairingCode: string): Promise<string> => {
-    await api.put<void>("/telegram", { bot_token: botToken, pairing_code: pairingCode });
-    return "Saved.";
+  setPairingCode: async (pairingCode: string): Promise<void> => {
+    await api.put<void>("/telegram", { pairing_code: pairingCode });
   },
   toggleBeacon: async (chatId: number, enabled: boolean): Promise<void> => {
     await api.post<void>(`/beacons/${chatId}/toggle`, { enabled });
@@ -198,13 +204,19 @@ export const data = {
   deleteBeacon: async (chatId: number): Promise<void> => {
     await api.del<void>(`/beacons/${chatId}`);
   },
-  testBeacon: (): Promise<never> => cloudOnly("Beacon test"),
+  testBeacon: async (chatId: number): Promise<void> => {
+    await api.post<void>(`/beacons/${chatId}/test`, {});
+  },
 
   // ---- map ----------------------------------------------------------------
-  loadMap: (): Promise<MapRoom[]> => api.get<MapRoom[]>("/map"),
-  saveMap: async (rooms: MapRoom[]): Promise<void> => {
-    await api.put<void>("/map", rooms);
+  // The whole floor plan is one document (rooms + walls + markers), replace-all.
+  loadMap: (): Promise<MapDoc> => api.get<MapDoc>("/map"),
+  saveMap: async (doc: MapDoc): Promise<void> => {
+    await api.put<void>("/map", doc);
   },
+  /** Recent presence events (baseline for the map's live pulse). */
+  loadPresence: (limit = 100): Promise<Presence[]> =>
+    api.get<Presence[]>(`/map/presence?limit=${limit}`),
 
   // ---- workflows ----------------------------------------------------------
   loadGraphs: <T = unknown>(): Promise<T[]> => api.get<T[]>("/workflows"),
@@ -259,8 +271,13 @@ export const data = {
 
   // ---- workflow events + run history --------------------------------------
   listEvents: <T = unknown>(): Promise<T> => api.get<T>("/workflows/event-registry"),
-  createEvent: async (name: string, category?: string, description?: string): Promise<void> => {
-    await api.post<void>("/workflows/event-registry", { name, category, description });
+  createEvent: async (
+    name: string,
+    category?: string,
+    description?: string,
+    fields?: { name: string; type: string }[],
+  ): Promise<void> => {
+    await api.post<void>("/workflows/event-registry", { name, category, description, fields });
   },
   deleteEvent: async (name: string): Promise<void> => {
     await api.del<void>(`/workflows/event-registry/${encodeURIComponent(name)}`);
@@ -278,4 +295,13 @@ export const data = {
   },
   runLogs: <T = unknown>(runId: string): Promise<T> =>
     api.get<T>(`/workflows/runs/${encodeURIComponent(runId)}/logs`),
+  /** Out-of-band URL for a ShowImage node's latest debug frame (image/jpeg). The token
+   * rides the query so it works as an `<img src>`; pass `bust` (e.g. Date.now()) to force
+   * a reload when a new frame arrives. */
+  runFrameUrl: (graph: number, node: number, bust?: number): string => {
+    const qs = new URLSearchParams({ graph: String(graph), node: String(node) });
+    if (auth.token) qs.set("token", auth.token);
+    if (bust != null) qs.set("t", String(bust));
+    return `${API_BASE}/workflows/runs/frame?${qs.toString()}`;
+  },
 };

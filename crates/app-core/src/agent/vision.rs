@@ -14,6 +14,7 @@ use super::domain::{text_of, AgentConfig};
 const ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const MAX_TOKENS: u32 = 320; // a few sentences of description
+const YES_NO_MAX_TOKENS: u32 = 8; // "YES" or "NO" only
 /// Cameras can be 1080p+; Claude downsizes anything past ~1568px anyway, so cap
 /// the long edge here to keep the base64 payload small without losing detail.
 const MAX_EDGE: u32 = 1024;
@@ -78,4 +79,57 @@ pub fn describe_image(raw: &[u8], camera_name: &str) -> Result<String, String> {
     } else {
         Ok(text)
     }
+}
+
+/// Ask a yes/no question about an optional image frame. Returns `true` for YES, `false`
+/// for NO. The model is forced to one-word answers via the system prompt and `max_tokens: 8`.
+/// When `image` is `None` the question is asked as plain text (useful for time/logic checks).
+pub fn ask_yes_no(question: &str, image: Option<&[u8]>) -> Result<bool, String> {
+    let cfg = AgentConfig::from_env()
+        .ok_or("AI If needs an ANTHROPIC_API_KEY — none configured.")?;
+
+    let mut content: Vec<Value> = Vec::new();
+    if let Some(raw) = image {
+        let img = image::load_from_memory(raw)
+            .map_err(|e| format!("AI If: could not decode image: {e}"))?;
+        let img = if img.width().max(img.height()) > MAX_EDGE {
+            img.resize(MAX_EDGE, MAX_EDGE, image::imageops::FilterType::Triangle)
+        } else {
+            img
+        };
+        let mut jpeg = Vec::new();
+        img.write_to(&mut Cursor::new(&mut jpeg), ImageFormat::Jpeg)
+            .map_err(|e| format!("AI If: could not encode image: {e}"))?;
+        let data = B64.encode(&jpeg);
+        content.push(json!({
+            "type": "image",
+            "source": { "type": "base64", "media_type": "image/jpeg", "data": data }
+        }));
+    }
+    content.push(json!({ "type": "text", "text": question }));
+
+    let body = json!({
+        "model": cfg.model,
+        "max_tokens": YES_NO_MAX_TOKENS,
+        "system": "You are a camera monitor. Answer ONLY with YES or NO, nothing else.",
+        "messages": [{ "role": "user", "content": content }]
+    });
+
+    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(60)).build();
+    let resp = agent
+        .post(ENDPOINT)
+        .set("x-api-key", &cfg.api_key)
+        .set("anthropic-version", ANTHROPIC_VERSION)
+        .set("content-type", "application/json")
+        .send_string(&body.to_string())
+        .map_err(|e| format!("AI If request failed: {e}"))?;
+    let parsed: Value = resp
+        .into_string()
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .ok_or("AI If response was not valid JSON.")?;
+    let text = text_of(parsed.get("content").ok_or("AI If response had no content.")?)
+        .trim()
+        .to_uppercase();
+    Ok(text.starts_with('Y'))
 }

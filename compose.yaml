@@ -21,5 +21,15 @@ services:
       timeout: 3s
       retries: 20
 
+  # Shared event fabric (pub/sub) — local dev mirror of the VPS sentinel-redis.
+  # REDIS_URL=redis://127.0.0.1:6379 for flow + control.
+  redis:
+    image: redis:7-alpine
+    container_name: sentinel-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+
 volumes:
   sentinel-pgdata:

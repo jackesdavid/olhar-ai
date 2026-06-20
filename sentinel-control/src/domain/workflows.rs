@@ -9,7 +9,7 @@ use std::time::Duration;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::Json;
+use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post, put};
 use axum::Router;
 use futures::StreamExt;
@@ -31,6 +31,7 @@ pub fn router() -> Router<AppState> {
         .route("/workflows/catalog", get(catalog))
         .route("/workflows/runs", get(run_states))
         .route("/workflows/runs/history", get(run_history))
+        .route("/workflows/runs/frame", get(run_frame))
         .route("/workflows/runs/:run_id/logs", get(run_logs))
         .route("/workflows/events", get(events_stream))
         .route("/workflows/event-registry", get(list_events).post(create_event))
@@ -117,12 +118,19 @@ async fn catalog(UserClaims(c): UserClaims) -> Result<Json<Value>, ApiErr> {
     let kinds = WfNodeKind::ALL
         .iter()
         .map(|k| {
+            // Pure data/logic nodes have no exec pins — omit exec_in/exec_out entirely
+            // so the UI can hide the exec circles and the engine knows to pull them.
+            let (inputs, outputs) = if k.is_pure() {
+                (ports(k.input_ports()), ports(k.output_ports()))
+            } else {
+                (with_exec(&exec_in, k.input_ports()), with_exec(k.exec_out_ports(), k.output_ports()))
+            };
             json!({
                 "slug": k.slug(),
                 "label": k.label(),
                 "category": k.category(),
-                "inputs": with_exec(&exec_in, k.input_ports()),
-                "outputs": with_exec(k.exec_out_ports(), k.output_ports()),
+                "inputs": inputs,
+                "outputs": outputs,
                 "default_config": k.default_config(),
             })
         })
@@ -170,6 +178,38 @@ async fn run_history(
     Ok(Json(flow_get_json(&url).await))
 }
 
+#[derive(Deserialize)]
+struct FrameQuery {
+    token: String,
+    graph: u32,
+    node: u32,
+}
+
+/// The latest `ShowImage` debug frame for one of this tenant's `(graph, node)` as
+/// `image/jpeg`. The token rides the query param (not a header) so an `<img src>` can
+/// authenticate, mirroring [`events_stream`]. Proxies sentinel-flow's out-of-band
+/// `/runs/frame`; `404` when no frame is cached for that node.
+async fn run_frame(
+    State(st): State<AppState>,
+    Query(q): Query<FrameQuery>,
+) -> Result<axum::response::Response, ApiErr> {
+    let claims = auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    auth::require(&claims, "workflows.read")?;
+    let tid = tenant_of(&claims)?;
+    let url = format!("{}/runs/frame?tenant={}&graph={}&node={}", flow_base(), tid, q.graph, q.node);
+    let resp = st
+        .http
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, format!("sentinel-flow unreachable: {e}")))?;
+    if !resp.status().is_success() {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+    let bytes = resp.bytes().await.map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
+    Ok(([(axum::http::header::CONTENT_TYPE, "image/jpeg")], bytes).into_response())
+}
+
 /// All persisted signal lines for one of this tenant's runs. Proxies sentinel-flow.
 async fn run_logs(UserClaims(c): UserClaims, Path(run_id): Path<Uuid>) -> Result<Json<Value>, ApiErr> {
     auth::require(&c, "workflows.read")?;
@@ -189,12 +229,20 @@ async fn flow_get_json(url: &str) -> Value {
 
 // ---- event registry + categories (per tenant) ------------------------------
 
-/// The tenant's registered events (name + category + source), for the editor palette.
+/// The events the editor palette offers: the platform's system events (always available, with
+/// payload schema) merged with this tenant's own registered events. System events win on a
+/// name clash (they're platform-defined).
 async fn list_events(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Value>, ApiErr> {
     auth::require(&c, "workflows.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    let events = blocking(move || workflows::repo::list_events(&db, tid)).await?;
+    let events = blocking(move || {
+        let mut out = workflows::repo::system_events();
+        let sys: std::collections::HashSet<String> = out.iter().map(|e| e.name.clone()).collect();
+        out.extend(workflows::repo::list_events(&db, tid).into_iter().filter(|e| !sys.contains(&e.name)));
+        out
+    })
+    .await?;
     Ok(Json(serde_json::to_value(events).unwrap_or_else(|_| json!([]))))
 }
 
@@ -203,6 +251,9 @@ struct CreateEventReq {
     name: String,
     category: Option<String>,
     description: Option<String>,
+    /// Typed payload schema: `[{ name, type }]`. Optional (empty = payload-less).
+    #[serde(default)]
+    fields: Vec<workflows::repo::EventField>,
 }
 
 /// Register a new tenant event (idempotent), creating its category if needed.
@@ -219,9 +270,33 @@ async fn create_event(
     }
     let category = b.category.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("General").to_string();
     let description = b.description.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let fields = sanitize_event_fields(b.fields)?;
     let db = st.db.clone();
-    blocking(move || workflows::repo::create_event(&db, tid, &name, &category, description.as_deref(), None)).await?;
+    blocking(move || workflows::repo::create_event(&db, tid, &name, &category, description.as_deref(), None, &fields)).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Validate a payload schema: trim names, drop empties, reject the reserved `exec` name,
+/// and reject duplicates (each field becomes a port — names must be unique + non-reserved).
+fn sanitize_event_fields(
+    fields: Vec<workflows::repo::EventField>,
+) -> Result<Vec<workflows::repo::EventField>, ApiErr> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(fields.len());
+    for mut f in fields {
+        f.name = f.name.trim().to_string();
+        if f.name.is_empty() {
+            continue;
+        }
+        if f.name.eq_ignore_ascii_case("exec") {
+            return Err(err(StatusCode::BAD_REQUEST, "'exec' is a reserved field name"));
+        }
+        if !seen.insert(f.name.to_lowercase()) {
+            return Err(err(StatusCode::BAD_REQUEST, format!("duplicate payload field '{}'", f.name)));
+        }
+        out.push(f);
+    }
+    Ok(out)
 }
 
 /// Remove a registered tenant event.
@@ -266,11 +341,10 @@ struct EventsQuery {
     token: String,
 }
 
-/// Relay sentinel-flow's run-progress SSE to the browser, **scoped to the caller's
-/// tenant**. The editor opens an `EventSource` here (which can't send headers, so the JWT
-/// rides the `token` query param). We subscribe to flow's pod-wide `/events` stream, parse
-/// each `data:<json>` line, and forward only those whose `tenant` matches — so one tenant
-/// never sees another's run progress. Lossy by design (final state is re-fetchable via REST).
+/// Relay run-progress SSE to the browser, **scoped to the caller's tenant**.
+/// With Redis: subscribes to `events:<tenant>` pubsub (multi-pod, all flow events).
+/// Without Redis: proxies sentinel-flow's internal `/events` SSE and filters by tenant
+/// (single-pod fallback — no fan-out, but works without a Redis sidecar).
 async fn events_stream(
     State(st): State<AppState>,
     Query(q): Query<EventsQuery>,
@@ -279,46 +353,79 @@ async fn events_stream(
     auth::require(&claims, "workflows.read")?;
     let tid = tenant_of(&claims)?.to_string();
 
-    let resp = st
-        .http
-        .get(format!("{}/events", flow_base()))
-        .send()
-        .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, format!("sentinel-flow unreachable: {e}")))?;
-    let mut upstream = resp.bytes_stream();
-
-    // Pump the filtered events through a channel the SSE response drains. The task ends
-    // when flow's stream closes or the browser disconnects (the send fails).
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
-    tokio::spawn(async move {
-        let mut buf: Vec<u8> = Vec::new();
-        while let Some(chunk) = upstream.next().await {
-            let Ok(bytes) = chunk else { break };
-            buf.extend_from_slice(&bytes);
-            // Flow frames events as `data:<json>\n\n`; split on the (ASCII) newline so a
-            // line is always a whole UTF-8 string before we parse it.
-            while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-                let line: Vec<u8> = buf.drain(..=pos).collect();
-                let line = String::from_utf8_lossy(&line);
-                let Some(payload) = line.trim().strip_prefix("data:") else { continue };
-                let payload = payload.trim();
-                if payload.is_empty() {
-                    continue;
-                }
-                // Tenant isolation: forward only this tenant's events.
-                let same_tenant = serde_json::from_str::<Value>(payload)
-                    .ok()
-                    .and_then(|v| v.get("tenant").and_then(|t| t.as_str()).map(|t| t == tid))
-                    .unwrap_or(false);
-                if same_tenant && tx.send(Ok(Event::default().data(payload.to_string()))).await.is_err() {
+
+    if let Some(url) = st.redis_url.clone() {
+        let chan = format!("events:{tid}");
+        tokio::spawn(async move {
+            let client = match redis::Client::open(url) {
+                Ok(c) => c,
+                Err(e) => { log::warn!("events relay: bad redis url: {e}"); return; }
+            };
+            let mut pubsub = match client.get_async_pubsub().await {
+                Ok(p) => p,
+                Err(e) => { log::warn!("events relay: redis pubsub connect failed: {e}"); return; }
+            };
+            if let Err(e) = pubsub.subscribe(&chan).await {
+                log::warn!("events relay: subscribe {chan} failed: {e}");
+                return;
+            }
+            let mut on_msg = pubsub.on_message();
+            while let Some(msg) = on_msg.next().await {
+                let Ok(payload) = msg.get_payload::<String>() else { continue };
+                if tx.send(Ok(Event::default().data(payload))).await.is_err() {
                     return; // browser disconnected
                 }
             }
-        }
-    });
+        });
+    } else {
+        // Single-pod fallback: proxy sentinel-flow's internal /events and filter by tenant.
+        let flow_events_url = format!("{}/events", flow_base());
+        tokio::spawn(async move {
+            relay_flow_events(flow_events_url, tid, tx).await;
+        });
+    }
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+/// HTTP-proxy sentinel-flow's internal SSE `/events` to a browser client, forwarding
+/// only events whose `tenant` field matches `tid`. Used as the single-pod fallback when
+/// `REDIS_URL` is not configured.
+async fn relay_flow_events(
+    url: String,
+    tenant: String,
+    tx: tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
+) {
+    let resp = match reqwest::Client::new().get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("events proxy: flow /events unreachable ({url}): {e}");
+            return;
+        }
+    };
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+    while let Some(item) = stream.next().await {
+        let Ok(bytes) = item else { return };
+        let Ok(text) = std::str::from_utf8(&bytes) else { continue };
+        buf.push_str(text);
+        // Drain all complete lines from the buffer, forward matching tenant's data events.
+        while let Some(nl) = buf.find('\n') {
+            let line = buf[..nl].trim_end_matches('\r').to_string();
+            buf.drain(..=nl);
+            if let Some(data) = line.strip_prefix("data: ") {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                    if v.get("tenant").and_then(|t| t.as_str()) == Some(tenant.as_str()) {
+                        if tx.send(Ok(Event::default().data(data.to_string()))).await.is_err() {
+                            return; // browser disconnected
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ---- graph lifecycle --------------------------------------------------------

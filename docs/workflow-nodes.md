@@ -91,11 +91,15 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 | Node | Inputs | Outputs | Config | Behavior | Sample usage |
 |---|---|---|---|---|---|
 | **Person detection** | `image*` | `count`, `confidence` %, `persons` (**PersonDetection[]**), `ok` | — | Detects people locally (on-device, no sidecar). `persons` is one detection (box + confidence) per person — iterate it (a single person = a loop of 1). | `Get current frame → Person detection → (persons) → For each` |
+| **Detect objects** | `image*`, `class` (Text) | `count`, `confidence` %, `detections` (**PersonDetection[]**), `ok` | `class` (any COCO class name, default `person`) | Detects any of the 80 COCO classes locally. Choose the class in the property panel dropdown or wire `class` to override at runtime. Outputs the same shape as Person detection — plug into `For each` + `Break detection`. | `Get current frame → Detect objects(class=car) → For each → Break detection → bbox` |
 | **Break person detection** | `person` (Person) | `bbox` (Number[]), `confidence` % | — | Destructures a `PersonDetection` element into its fields (Unreal-style "Break"). | `For each(persons) → item → Break person detection → bbox / confidence` |
+| **Break detection** | `detection` (Person) | `bbox` (Number[]), `confidence` % | — | Destructures a generic `Detection` element (from Detect objects) into its fields. Same as Break person detection but paired with the Detect objects node. | `For each(detections) → item → Break detection → bbox / confidence` |
 | **Break face detection** | `face` (Face) | `bbox` (Number[]), `confidence` %, `landmarks` (count) | — | Destructures a `FaceDetection` element into its fields. | `For each(faces) → item → Break face detection` |
 | **Recognize person** | `image*` | `person`, `person_id`, `confidence` %, `ok` | `max_distance` (0.4) | Embeds the largest face (AI sidecar) + kNN over enrolled people (pgvector). `ok` = match within threshold. | `Camera snapshot → Recognize person → If(ok) → Notify recipient` |
 | **Describe image** | `image*` | `description`, `ok` | `label` | Natural-language caption of the frame via the vision model. | `Camera snapshot → Describe image → Notify(message=description)` |
 | **Motion detection** | `image_a*`, `image_b*` | `moved` (bool), `score` %, `ok` | `sensitivity`, `pixel_threshold` | Compares two frames; reports whether/how much they differ. | `snapshot A + snapshot B → Motion detection → If(moved)` |
+| **Draw BBox** | `image*` (Image), `bbox*` (Number[]) | `image` (Image), `ok` | `color` (#RRGGBB, default `#00FF00`), `thickness` (px, default `2`), `format` (`xyxy`/`xywh`, default `xyxy`) | Draws a bounding box rectangle on the image at the given coords → annotated JPEG. Wire `format=xywh` when coming from Motion detection; `format=xyxy` (default) when coming from Break person/face detection. | `Person detection → For each → Break person detection → (bbox) Draw BBox → Show image` |
+| **AI If** | `image` (Image, optional), `question` (Text, optional) | exec: `true`, `false` | `question` (string), `timeout_secs` (default `65`) | Asks the vision model a yes/no question about an optional image. Routes exec to `true` or `false` exactly like `If` but powered by Claude. `question` can be wired (Text) or set as a config literal; no image wired = text-only question (e.g. "Is it after 18:00?"). Fails the run if no question is provided. | `Camera snapshot → AI If(question="Is there smoke?") →true Create alert` |
 
 ### Alerts
 
@@ -124,12 +128,26 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 | Node | Inputs | Outputs | Config | Behavior | Sample usage |
 |---|---|---|---|---|---|
 | **If** | `condition*` (bool) | exec: `true` / `false` | — | Routes the run down the true/false exec branch; the other branch is gated off. | `Recognize person → If(ok) →true Notify recipient` |
+| **String switch** | `value*` (Text) | exec: `<arm_1>`, `<arm_2>`, … , `default` | `arms` (list of labels, default `["arm_1","arm_2"]`) | Routes exec to the arm whose label exactly equals the incoming string (case-sensitive). If no arm matches, the built-in `default` arm fires. Arms are added/removed in the inspector — each becomes a named exec output port. | `Describe image → (description) → String switch (arms: red, blue) →red Notify recipient` |
 | **For each** | `items` (**any array** — `String[]`/`Number[]`/`PersonDetection[]`/…, or a text list) | `item` (the element, any type), `index`; exec: `loop_body` / `completed` | `items` (CSV `a,b` or JSON `["a",1]` when not wired) | Iterates the array **synchronously**: `loop_body` once per element (with `item`+`index`), then `completed` once. Empty → just `completed`. | `Person detection → (persons) → For each →loop_body Break person detection; →completed Print("done")` |
+| **Flip flop** | — | exec: `a` / `b`; `is_a` (bool) | — | Alternates exec between `a` and `b` on each graph run (cross-run persistent). `is_a = true` when `a` just fired. Like Unreal's Flip Flop. | `Motion Watch → If(moved) → Flip flop →a Create alert("started") →b Create alert("still active")` |
+| **Compare** | `a` (num), `b` (num) | `result` (bool) | `operator` (`>` `>=` `<` `<=` `==` `!=`, default `==`), `a` (default 0), `b` (default 0) | Compares two integers; `result` feeds `If`. Either operand can be wired from upstream **or** typed as a literal in the inspector. | `Person detection → (count) a → Compare(operator=">", b=0) → (result) → If →true Notify` |
+| **Text compare** | `a` (Text), `b` (Text) | `result` (bool) | `operator` (`eq` / `ne` / `contains` / `starts_with` / `ends_with`, default `eq`), `b` (literal fallback) | Compares two text values. `b` can be wired or typed as a literal in the inspector. | `Describe image → (description) a → Text compare(operator=contains, b=person) → If(result)` |
+| **And** | `a` (bool), `b` (bool) | `result` (bool) | `a`, `b` (literal fallbacks) | `a && b` — pure logic, no exec pins. | `Compare → And → If(result)` |
+| **Or** | `a` (bool), `b` (bool) | `result` (bool) | `a`, `b` | `a \|\| b` — pure logic. | `PersonDetection(ok) → Or → If(result)` |
+| **Not** | `a` (bool) | `result` (bool) | `a` | `!a` — inverts a bool. | `Compare → Not → If(result)` |
+| **Cooldown** | — | `elapsed_secs` (num), `ok` (bool) | `window_secs` (default 60) | Rate-limit gate: lets exec through only when at least `window_secs` have elapsed since it last fired. Persists state across runs. `ok = true` means the gate opened. | `OnEvent(motion) → Cooldown(window_secs=300) → Notify recipient` |
 | **Wait** | — (exec only) | — | `seconds` | Delays the run by N seconds, staying active until it elapses. | `Create alert → Wait(5s) → Deliver alert` |
 | **Emit event** | — (exec only) | — | `event` | Fires a named in-graph event → concurrent guarded `On event` handler; **dropped if that handler is still running**. Exec passes through. | `If(ok) → Emit event("seen")` |
 | **On event** | — | exec: `exec_out` (entry) | `event` | Entry for a named event. **Never runs on the normal trigger** — only when a matching `Emit event` fires. | `On event("seen") → Get current frame → Recognize person` |
 | **Print** | `message`, `on_screen` (bool) | — | `message`, `on_screen`, `level` | Prints to the editor console (+ on-screen flash unless off). Debug sink. | `Recognize person → Print("Saw {p1}", message=person)` |
 | **Show image** | `image*` | — | `label` | Renders the input frame on the canvas. Debug sink; emits no data. | `Camera snapshot → Show image` |
+
+### Utility
+
+| Node | Inputs | Outputs | Config | Behavior | Sample usage |
+|---|---|---|---|---|---|
+| **Comment** | — | — | `text`, `color` (#RRGGBB, default `#facc15`), `width` (px, default 400), `height` (px, default 200) | Visual group box for annotating the canvas. Drag to reposition; nodes whose center falls inside move with it. Drag the bottom-right grip to resize. No ports, no execution. | *(canvas organizer — never part of execution flow)* |
 
 ---
 

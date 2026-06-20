@@ -40,7 +40,10 @@ impl AppState {
         let mut devices = load_cameras(&control_url, &cache_path, 0);
         resolve_rtsp(&mut devices);
         write_cache(&cache_path, &devices);
-        log::info!("Edge has {} camera(s) (control={control_url})", devices.len());
+        log::info!(
+            "Edge has {} camera(s) (control={control_url})",
+            devices.len()
+        );
 
         let own_go2rtc = std::env::var("EDGE_OWN_GO2RTC")
             .map(|v| !matches!(v.trim(), "0" | "false" | "no"))
@@ -65,7 +68,12 @@ impl AppState {
 
     /// Resolve a saved camera by exact IP.
     pub fn device_by_ip(&self, ip: &str) -> Option<Device> {
-        self.devices.lock().unwrap().iter().find(|d| d.ip == ip).cloned()
+        self.devices
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|d| d.ip == ip)
+            .cloned()
     }
 
     /// Re-pull the camera list (and restart go2rtc if owned). `wait` long-polls control:
@@ -109,7 +117,10 @@ impl AppState {
                         let old_ip = dev.ip.clone();
                         log::info!(
                             "camera '{}' moved {} -> {} (onvif id {})",
-                            dev.name, old_ip, new_ip, dev.id
+                            dev.name,
+                            old_ip,
+                            new_ip,
+                            dev.id
                         );
                         moves.push(serde_json::json!({
                             "onvif_id": dev.id,
@@ -167,12 +178,28 @@ impl AppState {
             .lock()
             .unwrap()
             .iter()
-            .filter(|d| d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false))
+            .filter(|d| {
+                d.rtsp_url
+                    .as_deref()
+                    .map(|u| !u.trim().is_empty())
+                    .unwrap_or(false)
+            })
             .map(|d| d.ip.clone())
             .collect();
         let url = format!("{}/config/streaming", self.control_url);
         if let Err(e) = self.box_agent().post(&url).send_json(&ips) {
             log::debug!("streaming push failed: {e}");
+        }
+    }
+
+    /// Report one normalized motion event to control (box-authed → tenant). The edge is a
+    /// pure sensor: it sends the raw signal (foreground %, largest-blob area, bbox) for a
+    /// camera; per-graph sensitivity is applied in the cloud (control → Redis → OnEvent).
+    /// Best-effort.
+    pub fn push_motion(&self, ev: &MotionEvent) {
+        let url = format!("{}/config/motion", self.control_url);
+        if let Err(e) = self.box_agent().post(&url).send_json(ev) {
+            log::debug!("motion push failed: {e}");
         }
     }
 
@@ -201,7 +228,11 @@ impl AppState {
     /// A short-timeout ureq agent + request stamped with this box's token + tailnet host +
     /// edge version — the standard headers control uses to resolve the box's tenant.
     fn box_agent(&self) -> BoxReq {
-        BoxReq { agent: ureq::AgentBuilder::new().timeout(Duration::from_secs(15)).build() }
+        BoxReq {
+            agent: ureq::AgentBuilder::new()
+                .timeout(Duration::from_secs(15))
+                .build(),
+        }
     }
 }
 
@@ -210,6 +241,28 @@ impl AppState {
 pub struct EdgeCommands {
     pub rescan: bool,
     pub restart: bool,
+}
+
+/// One motion observation the edge reports to control. Normalized signal only — the cloud
+/// applies per-graph sensitivity. Coordinates/areas are in the watcher's processing
+/// resolution (downscaled), so the cloud treats them as relative.
+#[derive(serde::Serialize)]
+pub struct MotionEvent {
+    pub camera_ip: String,
+    /// Foreground share of the frame, 0–100.
+    pub score: f64,
+    /// Largest motion blob area in pixels (processing resolution).
+    pub area: i64,
+    /// Number of qualifying motion blobs.
+    pub blobs: i64,
+    /// Largest blob bounding box [x, y, w, h] (processing resolution).
+    pub bbox: [i32; 4],
+    /// RFC3339 observation time.
+    pub at: String,
+    /// The JPEG frame that triggered this event (base64), so the cloud can deliver it
+    /// as an `Image` port on `OnEvent("motion")` without a second round-trip to the edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_b64: Option<String>,
 }
 
 /// Whether `ffmpeg` is on PATH (go2rtc needs it for JPEG frames). Computed once + cached —
@@ -279,13 +332,24 @@ fn load_cameras(control_url: &str, cache_path: &PathBuf, wait: u64) -> Vec<Devic
             // arrive without them (control hands creds over once; RTSP stays edge-only).
             for d in devices.iter_mut() {
                 if let Some(prev) = cached.iter().find(|p| p.ip == d.ip) {
-                    if d.username.as_deref().map(|u| u.trim().is_empty()).unwrap_or(true)
-                        && prev.username.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false)
+                    if d.username
+                        .as_deref()
+                        .map(|u| u.trim().is_empty())
+                        .unwrap_or(true)
+                        && prev
+                            .username
+                            .as_deref()
+                            .map(|u| !u.trim().is_empty())
+                            .unwrap_or(false)
                     {
                         d.username = prev.username.clone();
                         d.password = prev.password.clone();
                     }
-                    if d.rtsp_url.as_deref().map(|u| u.trim().is_empty()).unwrap_or(true) {
+                    if d.rtsp_url
+                        .as_deref()
+                        .map(|u| u.trim().is_empty())
+                        .unwrap_or(true)
+                    {
                         d.rtsp_url = prev.rtsp_url.clone();
                         d.rtsp_sub_url = prev.rtsp_sub_url.clone();
                     }
@@ -316,13 +380,28 @@ fn write_cache(cache_path: &PathBuf, devices: &[Device]) {
 /// never reported to the cloud. Best-effort.
 fn resolve_rtsp(devices: &mut [Device]) {
     for d in devices.iter_mut() {
-        let needs = d.rtsp_url.as_deref().map(|u| u.trim().is_empty()).unwrap_or(true);
-        let has_creds = d.username.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false)
-            && d.password.as_deref().map(|p| !p.is_empty()).unwrap_or(false);
+        let needs = d
+            .rtsp_url
+            .as_deref()
+            .map(|u| u.trim().is_empty())
+            .unwrap_or(true);
+        let has_creds = d
+            .username
+            .as_deref()
+            .map(|u| !u.trim().is_empty())
+            .unwrap_or(false)
+            && d.password
+                .as_deref()
+                .map(|p| !p.is_empty())
+                .unwrap_or(false);
         if !(needs && has_creds) {
             continue;
         }
-        let target = if d.xaddr.trim().is_empty() { d.ip.clone() } else { d.xaddr.clone() };
+        let target = if d.xaddr.trim().is_empty() {
+            d.ip.clone()
+        } else {
+            d.xaddr.clone()
+        };
         let user = d.username.clone().unwrap_or_default();
         let pass = d.password.clone().unwrap_or_default();
         match app_core::onvif::client::resolve_stream_uris(&target, &user, &pass) {

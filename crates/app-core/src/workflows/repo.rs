@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::db::Db;
 
-use super::domain::{Graph, RunStatus, TriggerSource};
+use super::domain::{Graph, PortType, RunStatus, TriggerSource};
 
 /// On-disk shape of the legacy `workflows.json` — one object holding the graph array.
 #[derive(serde::Deserialize)]
@@ -188,6 +188,45 @@ pub fn save_cron_fired(db: &Db, tenant_id: Uuid, graph_id: u32, fired_ms: u64) {
     }
 }
 
+/// Returns the persisted JSON state for a node, or `None` if never set.
+pub fn get_node_state(db: &Db, tenant_id: Uuid, graph_id: u32, node_id: u32) -> Option<serde_json::Value> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_as::<_, (String,)>(
+            "SELECT state_json FROM workflow_node_state WHERE tenant_id = $1 AND graph_id = $2 AND node_id = $3",
+        )
+        .bind(tenant_id)
+        .bind(graph_id as i64)
+        .bind(node_id as i64)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|(s,)| serde_json::from_str(&s).ok())
+    })
+}
+
+/// Upserts the JSON state for a node. Best-effort (errors are logged, not propagated).
+pub fn set_node_state(db: &Db, tenant_id: Uuid, graph_id: u32, node_id: u32, state: &serde_json::Value) {
+    let pool = db.pool();
+    let json_str = state.to_string();
+    let res: Result<_, sqlx::Error> = db.block(async move {
+        sqlx::query(
+            "INSERT INTO workflow_node_state (tenant_id, graph_id, node_id, state_json) VALUES ($1, $2, $3, $4)
+             ON CONFLICT (tenant_id, graph_id, node_id) DO UPDATE SET state_json = EXCLUDED.state_json",
+        )
+        .bind(tenant_id)
+        .bind(graph_id as i64)
+        .bind(node_id as i64)
+        .bind(json_str)
+        .execute(&pool)
+        .await
+    });
+    if let Err(e) = res {
+        log::error!("workflows::repo::set_node_state failed: {e}");
+    }
+}
+
 // ---- event registry + categories (per tenant) ------------------------------
 
 /// A tenant-scoped event category. `source` is `user` or `system`.
@@ -195,6 +234,15 @@ pub fn save_cron_fired(db: &Db, tenant_id: Uuid, graph_id: u32, fired_ms: u64) {
 pub struct EventCategory {
     pub name: String,
     pub source: String,
+}
+
+/// One typed field an event carries. `EmitEvent` gets an input port per field; the
+/// matching `OnEvent` an output port per field. Serializes as `{ "name", "type" }`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EventField {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub ty: PortType,
 }
 
 /// A registered event other graphs can emit/listen for, grouped by `category`.
@@ -205,6 +253,31 @@ pub struct TenantEvent {
     pub source: String,
     pub description: Option<String>,
     pub created_by_graph: Option<u32>,
+    /// The typed payload schema (possibly empty).
+    pub fields: Vec<EventField>,
+}
+
+/// Platform-defined events available to EVERY tenant, with their payload schema. Merged into
+/// the event list the editor fetches, so `OnEvent` nodes expose typed outputs immediately —
+/// no per-tenant registration and no first-event chicken-and-egg. System events are emitted
+/// by the platform (e.g. `motion` by the edge), not user `EmitEvent` nodes. Add new ones here.
+pub fn system_events() -> Vec<TenantEvent> {
+    let field = |name: &str, ty: PortType| EventField { name: name.to_string(), ty };
+    vec![TenantEvent {
+        name: "motion".to_string(),
+        category: "System".to_string(),
+        source: "system".to_string(),
+        description: Some("Edge motion detection".to_string()),
+        created_by_graph: None,
+        fields: vec![
+            field("camera", PortType::Camera),
+            field("score", PortType::Num),
+            field("area", PortType::Num),
+            field("blobs", PortType::Num),
+            field("bbox", PortType::NumArray),
+            field("frame", PortType::Image),
+        ],
+    }]
 }
 
 /// The tenant's event categories, ordered by name. Empty on error.
@@ -252,8 +325,8 @@ pub fn create_category(db: &Db, tenant_id: Uuid, name: &str, source: &str) {
 pub fn list_events(db: &Db, tenant_id: Uuid) -> Vec<TenantEvent> {
     let pool = db.pool();
     db.block(async move {
-        sqlx::query_as::<_, (String, String, String, Option<String>, Option<i64>)>(
-            "SELECT name, category, source, description, created_by_graph
+        sqlx::query_as::<_, (String, String, String, Option<String>, Option<i64>, serde_json::Value)>(
+            "SELECT name, category, source, description, created_by_graph, payload
              FROM tenant_events WHERE tenant_id = $1 ORDER BY category, name",
         )
         .bind(tenant_id)
@@ -264,12 +337,13 @@ pub fn list_events(db: &Db, tenant_id: Uuid) -> Vec<TenantEvent> {
             Vec::new()
         })
         .into_iter()
-        .map(|(name, category, source, description, gid)| TenantEvent {
+        .map(|(name, category, source, description, gid, payload)| TenantEvent {
             name,
             category,
             source,
             description,
             created_by_graph: gid.map(|v| v as u32),
+            fields: serde_json::from_value(payload).unwrap_or_default(),
         })
         .collect()
     })
@@ -284,11 +358,13 @@ pub fn create_event(
     category: &str,
     description: Option<&str>,
     created_by_graph: Option<u32>,
+    fields: &[EventField],
 ) {
     let pool = db.pool();
     let name = name.to_string();
     let category = category.to_string();
     let description = description.map(|s| s.to_string());
+    let payload = serde_json::to_value(fields).unwrap_or_else(|_| serde_json::json!([]));
     let res: Result<(), sqlx::Error> = db.block(async move {
         let mut tx = pool.begin().await?;
         sqlx::query(
@@ -300,15 +376,16 @@ pub fn create_event(
         .execute(&mut *tx)
         .await?;
         sqlx::query(
-            "INSERT INTO tenant_events (tenant_id, name, category, source, description, created_by_graph)
-             VALUES ($1, $2, $3, 'user', $4, $5)
-             ON CONFLICT (tenant_id, name) DO UPDATE SET category = EXCLUDED.category, description = EXCLUDED.description",
+            "INSERT INTO tenant_events (tenant_id, name, category, source, description, created_by_graph, payload)
+             VALUES ($1, $2, $3, 'user', $4, $5, $6)
+             ON CONFLICT (tenant_id, name) DO UPDATE SET category = EXCLUDED.category, description = EXCLUDED.description, payload = EXCLUDED.payload",
         )
         .bind(tenant_id)
         .bind(&name)
         .bind(&category)
         .bind(&description)
         .bind(created_by_graph.map(|v| v as i64))
+        .bind(payload)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -359,7 +436,10 @@ pub struct RunRecord {
 pub struct RunLogLine {
     pub node_id: Option<u32>,
     pub label: Option<String>,
+    /// "node" (UI animation) or "log" (execution result).
     pub kind: String,
+    /// The node's kind slug (e.g. "person_detection"), used for UI colouring.
+    pub node_kind: Option<String>,
     pub message: String,
 }
 
@@ -513,6 +593,7 @@ pub fn list_run_logs(db: &Db, tenant_id: Uuid, run_id: Uuid) -> Vec<RunLogLine> 
             node_id: node_id.map(|v| v as u32),
             label,
             kind,
+            node_kind: None, // not persisted in this table; only carried in-memory for platform_logs
             message,
         })
         .collect()

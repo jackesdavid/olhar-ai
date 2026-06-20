@@ -4,30 +4,21 @@
     "type": "split",
     "children": [
       {
-        "id": "a85ae6b616a0e118",
+        "id": "1c3de9330a44663c",
         "type": "tabs",
         "children": [
           {
-            "id": "5b0327e1d4fd2370",
+            "id": "ed375cc67003ec28",
             "type": "leaf",
             "state": {
-              "type": "kanban",
+              "type": "markdown",
               "state": {
-                "file": "Task Board.md",
-                "kanbanViewState": {
-                  "kanban-plugin": "board",
-                  "list-collapse": [
-                    true,
-                    true,
-                    false,
-                    false,
-                    false,
-                    false
-                  ]
-                }
+                "file": "plans/ai-vision-node-ideas.md",
+                "mode": "source",
+                "source": false
               },
-              "icon": "lucide-trello",
-              "title": "Task Board"
+              "icon": "lucide-file",
+              "title": "ai-vision-node-ideas"
             }
           }
         ]
@@ -194,21 +185,43 @@
       "obsidian-excalidraw-plugin:New drawing": false
     }
   },
-  "active": "5b0327e1d4fd2370",
+  "active": "ed375cc67003ec28",
   "lastOpenFiles": [
     "workflow-nodes.md",
+    "ref/workflows.md",
+    "ref/map.md",
+    "ref/edge.md",
+    "ref/deploy.md",
+    "ref/architecture.md",
+    "ref/ai-sidecar.md",
+    "ref",
+    "plans/workflow-runs-realtime.md",
+    "plans/workflow-list-improvements.md",
+    "plans/telegram-bot-two-way-research.md",
+    "plans/telegram-beacons-fix-polish.md",
+    "plans/string-switch-node.md",
+    "plans/show-image-node-rendering.md",
+    "plans/node-animation-timing.md",
     "plans/multi-tenant-gateway-edge.md",
-    "plans/feature-slice-architecture.md",
+    "plans/multi-pod-flow-event-fabric.md",
+    "plans/motion-detection-node-v2.md",
+    "plans/missing-comparison-nodes.md",
+    "plans/map-walls-3d-depth.md",
+    "plans/map-redesign-2.md",
+    "plans/generic-object-detection-node.md",
     "plans/foreach-and-fanout-notification.md",
-    "plans/school-student-frequency.md.tmp.52330.52b8dd281b83",
-    "plans/school-student-frequency.md",
-    "Task Board.md",
-    "use-cases/parent-chatbot.md",
-    "plans",
-    "use-cases/school-frequence.md",
-    "use-cases/Use cases.md",
-    "Use cases.md",
-    "use-cases",
-    "Task Board.md.tmp.52330.0453e522a21c"
+    "plans/feature-slice-architecture.md",
+    "plans/face-recognition-next-steps.md",
+    "plans/event-payload-data.md",
+    "plans/draw-bbox-node.md",
+    "epics",
+    "Task Board.md.tmp.15799.404c01b28612",
+    "Task Board.md.tmp.15799.2c20b1fc8591",
+    "Task Board.md.tmp.48169.2399079efe74",
+    "plans/ai-question-node.md.tmp.48169.251f809bb7d3",
+    "Task Board.md.tmp.29082.4cb8d7985b89",
+    "Task Board.md.tmp.29082.8394a52b8e06",
+    "Task Board.md.tmp.29082.3a46aa100871",
+    "Task Board.md.tmp.27454.161865e778e7"
   ]
 }

@@ -18,12 +18,12 @@ use uuid::Uuid;
 use app_core::agent::{ToolContext, ToolUiEvent};
 use app_core::notification::{NotificationConfig, NotificationStore};
 use app_core::workflows::{
-    self, ConcurrencyPolicy, EventSource, Fire, Graph as WfGraph, RunLogLine, RunStatus, Trigger,
-    TriggerSource,
+    self, ConcurrencyPolicy, EventSource, Fire, Graph as WfGraph, PortValues, RunLogLine, RunStatus,
+    Trigger, TriggerSource,
 };
 
 use crate::events;
-use crate::state::{self, AppState, WF_GLOBAL_CAP};
+use crate::state::{self, AppState, GraphActivity, WF_GLOBAL_CAP};
 
 /// Spawn the 1 s trigger poller on a background thread. Across ALL tenants: fires due
 /// Cron graphs under each graph's concurrency policy, persisting the cron timing state
@@ -96,13 +96,23 @@ pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, sourc
         workflows::repo::insert_run(
             &state.db, tenant, run_id, graph_id, &graph.name, source, None, None, None, &state.pod_name,
         );
+        app_core::platform_logs::insert_log_sync(&state.db, app_core::platform_logs::PlatformLog {
+            tenant_id: tenant,
+            module: "workflow",
+            trace_id: Some(run_id),
+            entity_id: Some(graph_id.to_string()),
+            entity_type: Some("workflow_graph"),
+            level: "info",
+            message: format!("Run started: {}", graph.name),
+            payload: Some(serde_json::json!({ "trigger": source.as_str(), "graph_name": graph.name })),
+        });
         events::publish(
             &state.events,
             "workflow-run-start",
             serde_json::json!({ "tenant": tenant, "graph": graph_id, "name": graph.name, "run_id": run_id, "trigger": source.as_str() }),
         );
 
-        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, None);
+        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, None, PortValues::new());
 
         mark_run_finished(&state, tenant, graph_id);
         if ok {
@@ -126,30 +136,52 @@ pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, sourc
 }
 
 /// Mark a run started in the live activity map: bump the in-flight count and record the
-/// current run id + trigger source (shown in the graph list).
+/// current run id + trigger source (shown in the graph list). Pushes the new snapshot to
+/// the UI over SSE (`workflow-activity`) so the list badges update without polling.
 fn mark_run_started(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, run_id: Uuid, trigger: &str) {
-    let mut a = state.activity.lock().unwrap();
-    let e = a.entry((tenant, graph_id)).or_default();
-    e.running += 1;
-    e.run_id = Some(run_id);
-    e.trigger = Some(trigger.to_string());
-    e.pod_name = Some(state.pod_name.clone());
+    let snapshot = {
+        let mut a = state.activity.lock().unwrap();
+        let e = a.entry((tenant, graph_id)).or_default();
+        e.running += 1;
+        e.run_id = Some(run_id);
+        e.trigger = Some(trigger.to_string());
+        e.pod_name = Some(state.pod_name.clone());
+        e.clone()
+    };
+    publish_activity(state, tenant, graph_id, &snapshot);
 }
 
 /// Mark a run finished in the live activity map: drop the in-flight count, clearing the
-/// current node / run id / trigger once the last run of this graph completes.
+/// current node / run id / trigger once the last run of this graph completes. Pushes the
+/// new snapshot to the UI over SSE (`workflow-activity`).
 fn mark_run_finished(state: &Arc<AppState>, tenant: Uuid, graph_id: u32) {
-    let mut a = state.activity.lock().unwrap();
-    let e = a.entry((tenant, graph_id)).or_default();
-    if e.running > 0 {
-        e.running -= 1;
+    let snapshot = {
+        let mut a = state.activity.lock().unwrap();
+        let e = a.entry((tenant, graph_id)).or_default();
+        if e.running > 0 {
+            e.running -= 1;
+        }
+        if e.running == 0 {
+            e.current = None;
+            e.run_id = None;
+            e.trigger = None;
+            e.pod_name = None;
+        }
+        e.clone()
+    };
+    publish_activity(state, tenant, graph_id, &snapshot);
+}
+
+/// Push one graph's live activity snapshot to the UI over the SSE bus as `workflow-activity`
+/// (`{ tenant, graph, running, current, run_id, trigger, pod_name }`). This replaces the old
+/// 700 ms `GET /runs` poll: the UI seeds once on connect (REST) then updates from these deltas.
+fn publish_activity(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, snapshot: &GraphActivity) {
+    let mut payload = serde_json::to_value(snapshot).unwrap_or_else(|_| serde_json::json!({}));
+    if let serde_json::Value::Object(ref mut map) = payload {
+        map.insert("tenant".into(), serde_json::json!(tenant));
+        map.insert("graph".into(), serde_json::json!(graph_id));
     }
-    if e.running == 0 {
-        e.current = None;
-        e.run_id = None;
-        e.trigger = None;
-        e.pod_name = None;
-    }
+    events::publish(&state.events, "workflow-activity", payload);
 }
 
 /// The shared run body: builds the tenant run context, wires SSE progress + run-log
@@ -162,25 +194,36 @@ fn execute_run(
     graph: &WfGraph,
     run_id: Uuid,
     entry: Option<u32>,
+    entry_payload: PortValues,
 ) -> (bool, String) {
-    let (ctx, drain) = build_run_context(state, tenant);
+    let (ctx, drain) = build_run_context(state, tenant, graph.id);
     let graph_id = graph.id;
     let debug = graph.debug;
     let labels: std::collections::HashMap<u32, &'static str> =
         graph.nodes.iter().map(|n| (n.id, n.kind.label())).collect();
+    let slugs: std::collections::HashMap<u32, &'static str> =
+        graph.nodes.iter().map(|n| (n.id, n.kind.slug())).collect();
     let logs = std::rc::Rc::new(std::cell::RefCell::new(Vec::<RunLogLine>::new()));
 
     let prog = Arc::clone(state);
     let node_logs = logs.clone();
     let node_labels = labels.clone();
+    let node_slugs = slugs.clone();
     let mut on_node = |nid: u32| {
-        prog.activity.lock().unwrap().entry((tenant, graph_id)).or_default().current = Some(nid);
+        let snapshot = {
+            let mut a = prog.activity.lock().unwrap();
+            let e = a.entry((tenant, graph_id)).or_default();
+            e.current = Some(nid);
+            e.clone()
+        };
+        publish_activity(&prog, tenant, graph_id, &snapshot);
         events::publish(&prog.events, "workflow-node", serde_json::json!({ "tenant": tenant, "graph": graph_id, "node": nid, "run_id": run_id }));
         if debug {
             node_logs.borrow_mut().push(RunLogLine {
                 node_id: Some(nid),
                 label: node_labels.get(&nid).map(|s| s.to_string()),
                 kind: "node".into(),
+                node_kind: node_slugs.get(&nid).map(|s| s.to_string()),
                 message: node_labels.get(&nid).copied().unwrap_or("node").to_string(),
             });
         }
@@ -189,32 +232,35 @@ fn execute_run(
     let log_logs = logs.clone();
     let mut on_log = |nid: u32, msg: &str, ms: u128| {
         let label = labels.get(&nid).copied().unwrap_or("node");
+        let slug = slugs.get(&nid).copied().unwrap_or("");
         events::publish(
             &log_state.events,
             "workflow-log",
-            serde_json::json!({ "tenant": tenant, "graph": graph_id, "node": nid, "label": label, "message": msg, "ms": ms as u64, "run_id": run_id }),
+            serde_json::json!({ "tenant": tenant, "graph": graph_id, "node": nid, "label": label, "node_kind": slug, "message": msg, "ms": ms as u64, "run_id": run_id }),
         );
         log_logs.borrow_mut().push(RunLogLine {
             node_id: Some(nid),
             label: Some(label.to_string()),
             kind: "log".into(),
+            node_kind: Some(slug.to_string()),
             message: msg.to_string(),
         });
     };
     let emit_state = Arc::clone(state);
     let emit_name = graph.name.clone();
-    let mut emit = |ev: &str| {
+    let mut emit = |ev: &str, payload: &PortValues| {
         fire_event(
             &emit_state,
             tenant,
             EventSource::Graph { id: graph_id, name: emit_name.clone() },
             ev.to_string(),
             Some(run_id),
+            payload.clone(),
         )
     };
 
     let result = match entry {
-        Some(e) => workflows::run_subpath_eventful(graph, &ctx, e, &mut on_node, &mut on_log, &mut emit),
+        Some(e) => workflows::run_subpath_eventful(graph, &ctx, e, entry_payload, &mut on_node, &mut on_log, &mut emit),
         None => workflows::run_dag_eventful(graph, &ctx, &mut on_node, &mut on_log, &mut emit),
     };
     drop(ctx); // closes the UI channel → its drain thread ends
@@ -226,12 +272,46 @@ fn execute_run(
     };
     let buffered = logs.borrow().clone();
     workflows::repo::insert_run_logs(&state.db, run_id, &buffered);
+    // Mirror run log lines to the unified platform_logs table so the /logs page can
+    // show detailed execution traces, cross-linked by trace_id = run_id.
+    if !buffered.is_empty() {
+        let plogs: Vec<app_core::platform_logs::PlatformLog> = buffered
+            .iter()
+            .filter(|l| l.kind != "node") // "node" entries are UI-only (live node highlights); skip them
+            .map(|l| app_core::platform_logs::PlatformLog {
+                tenant_id: tenant,
+                module: "workflow",
+                trace_id: Some(run_id),
+                entity_id: Some(graph.id.to_string()),
+                entity_type: Some("workflow_graph"),
+                level: if l.kind == "log" { "info" } else { "debug" },
+                message: l.message.clone(),
+                payload: Some(serde_json::json!({
+                    "kind": l.kind,
+                    "node_id": l.node_id,
+                    "label": l.label,
+                    "node_kind": l.node_kind,
+                })),
+            })
+            .collect();
+        app_core::platform_logs::insert_logs_sync(&state.db, plogs);
+    }
     workflows::repo::finish_run(
         &state.db,
         run_id,
         if ok { RunStatus::Ok } else { RunStatus::Failed },
         &summary,
     );
+    app_core::platform_logs::insert_log_sync(&state.db, app_core::platform_logs::PlatformLog {
+        tenant_id: tenant,
+        module: "workflow",
+        trace_id: Some(run_id),
+        entity_id: Some(graph.id.to_string()),
+        entity_type: Some("workflow_graph"),
+        level: if ok { "info" } else { "error" },
+        message: format!("Run {}: {}", if ok { "ok" } else { "failed" }, summary),
+        payload: Some(serde_json::json!({ "status": if ok { "ok" } else { "failed" }, "summary": summary })),
+    });
     (ok, summary)
 }
 
@@ -247,6 +327,7 @@ pub fn fire_event(
     source: EventSource,
     event: String,
     emitting_run_id: Option<Uuid>,
+    payload: PortValues,
 ) {
     // Snapshot listeners (don't hold the store lock while spawning).
     let listeners: Vec<(u32, String, u32)> = {
@@ -276,6 +357,7 @@ pub fn fire_event(
                 node_id: None,
                 label: None,
                 kind: "dispatch".into(),
+                node_kind: None,
                 message: format!("Dispatched '{}' to {} listener(s)", event, listeners.len()),
             }],
         );
@@ -309,6 +391,7 @@ pub fn fire_event(
                             node_id: None,
                             label: None,
                             kind: "skip".into(),
+                            node_kind: None,
                             message: format!("Listener '{listener_name}' skipped '{event}' — handler still running"),
                         }],
                     );
@@ -319,6 +402,7 @@ pub fn fire_event(
         let _ = listener_name; // listener's display name comes from its graph in the handler
         spawn_event_handler(
             state, tenant, listener_id, entry, event.clone(), emitter_id, emitter_name.clone(), key,
+            payload.clone(),
         );
     }
 }
@@ -328,7 +412,7 @@ pub fn fire_event(
 /// Unused today; wired up when system emitters land.
 #[allow(dead_code)]
 pub fn fire_system_event(state: &Arc<AppState>, tenant: Uuid, label: &str, event: String) {
-    fire_event(state, tenant, EventSource::System { label: label.to_string() }, event, None);
+    fire_event(state, tenant, EventSource::System { label: label.to_string() }, event, None, PortValues::new());
 }
 
 /// Spawn one `OnEvent` handler sub-run for a listening graph (the coalesce key is already
@@ -344,6 +428,7 @@ fn spawn_event_handler(
     emitter_id: Option<u32>,
     emitter_name: String,
     key: (Uuid, u32, String),
+    payload: PortValues,
 ) {
     let graph: WfGraph = match state::find_graph(&state.store, tenant, listener_id) {
         Some(g) => g,
@@ -377,11 +462,12 @@ fn spawn_event_handler(
                 node_id: None,
                 label: None,
                 kind: "trigger".into(),
+                node_kind: None,
                 message: format!("Triggered by {emitter_name} via event '{event}'"),
             }],
         );
 
-        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, Some(entry));
+        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, Some(entry), payload);
 
         mark_run_finished(&state, tenant, listener_id);
         if !ok {
@@ -402,7 +488,7 @@ fn spawn_event_handler(
 /// keep-alive agent), so concurrent runs of different tenants never collide. The returned
 /// `JoinHandle` is the thread draining UI side-effects to the SSE bus; it ends when the
 /// context (and its `Sender`) is dropped.
-fn build_run_context(state: &Arc<AppState>, tenant: Uuid) -> (ToolContext, std::thread::JoinHandle<()>) {
+fn build_run_context(state: &Arc<AppState>, tenant: Uuid, graph_id: u32) -> (ToolContext, std::thread::JoinHandle<()>) {
     let devices = Arc::new(std::sync::Mutex::new(app_core::devices::repo::load(&state.db, tenant)));
     let alerts = Arc::new(std::sync::Mutex::new(app_core::alerts::repo::load(&state.db, tenant)));
     let notif: NotificationStore =
@@ -411,9 +497,15 @@ fn build_run_context(state: &Arc<AppState>, tenant: Uuid) -> (ToolContext, std::
 
     let (tx, rx) = std::sync::mpsc::channel::<ToolUiEvent>();
     let bus = state.events.clone();
+    let node_frames = state.node_frames.clone();
     let drain = std::thread::spawn(move || {
         while let Ok(ev) = rx.recv() {
-            events::publish_tool_event(&bus, tenant, ev);
+            // ShowImage carries raw jpeg bytes — stash them for out-of-band fetch
+            // (`GET /runs/frame`); the SSE event itself only carries a reference.
+            if let ToolUiEvent::ShowImage { graph, node, jpeg, .. } = &ev {
+                node_frames.lock().unwrap().insert((tenant, *graph, *node), jpeg.clone());
+            }
+            events::publish_tool_event(&bus, tenant, graph_id, ev);
         }
     });
 

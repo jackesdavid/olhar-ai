@@ -32,6 +32,7 @@ pub fn router(state: AppState) -> Router {
         .route("/config/device-moved", post(device_moved))
         .route("/config/streaming", post(streaming_push))
         .route("/config/logs", post(box_logs_push))
+        .route("/config/motion", post(motion_push))
         .merge(handlers::router())
         .merge(crate::domain::router())
         .nest_service("/edge", ServeDir::new(edge_dist))
@@ -230,6 +231,69 @@ async fn streaming_push(State(st): State<AppState>, headers: HeaderMap, body: Op
     StatusCode::NO_CONTENT.into_response()
 }
 
+/// One motion observation reported by the edge.
+#[derive(serde::Deserialize)]
+struct MotionIn {
+    camera_ip: String,
+    #[serde(default)]
+    score: f64,
+    #[serde(default)]
+    area: i64,
+    #[serde(default)]
+    blobs: i64,
+    #[serde(default)]
+    bbox: [i32; 4],
+    #[allow(dead_code)]
+    #[serde(default)]
+    at: String,
+    /// The JPEG frame that triggered detection (base64). Relayed to flow so `OnEvent("motion")`
+    /// can expose it as an Image output without a second round-trip to the edge.
+    #[serde(default)]
+    frame_b64: Option<String>,
+}
+
+/// The edge reports a motion observation (box token → tenant). We publish it onto the Redis
+/// fabric (`flow:inject`) so flow fires a `motion` System event to that tenant's `OnEvent`
+/// handler graphs, and (once per tenant per process) ensure the `motion` event is registered
+/// with its typed payload so OnEvent nodes expose camera/score/area/blobs/bbox outputs.
+async fn motion_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<MotionIn>>) -> Response {
+    let tenant = match box_tenant(&st, &headers).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
+        Err(resp) => return resp,
+    };
+    let Some(Json(ev)) = body else {
+        return (StatusCode::BAD_REQUEST, "motion body required").into_response();
+    };
+
+    if let Some(mut conn) = st.redis.clone() {
+        let bbox = format!("{},{},{},{}", ev.bbox[0], ev.bbox[1], ev.bbox[2], ev.bbox[3]);
+        let mut payload = serde_json::json!({
+            "camera": ev.camera_ip,
+            "score": ev.score.round() as i64,
+            "area": ev.area,
+            "blobs": ev.blobs,
+            "bbox": bbox,
+        });
+        if let (Some(obj), Some(f)) = (payload.as_object_mut(), ev.frame_b64) {
+            obj.insert("frame".to_string(), serde_json::Value::String(f));
+        }
+        let msg = json!({
+            "tenant": tenant.to_string(),
+            "event": "motion",
+            "payload": payload,
+        });
+        let _: Result<i64, _> = redis::cmd("PUBLISH")
+            .arg("flow:inject")
+            .arg(msg.to_string())
+            .query_async(&mut conn)
+            .await;
+    } else {
+        log::warn!("motion event dropped: REDIS_URL not configured");
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
 /// Newest box-log rows kept per box (bounded retention; the edge keeps its own ring + stdout).
 const BOX_LOG_KEEP: i64 = 5000;
 
@@ -246,9 +310,25 @@ async fn box_logs_push(State(st): State<AppState>, headers: HeaderMap, body: Opt
         return StatusCode::NO_CONTENT.into_response();
     }
     // Live fan-out (tagged with tenant+box so the per-box SSE relay can filter).
+    // Also push to the unified platform_logs queue (fire-and-forget; edge logs are module=edge).
     for l in &lines {
         let msg = json!({ "tenant": tenant, "box": box_id, "ts": l.ts, "level": l.level, "target": l.target, "message": l.message });
         let _ = st.log_bus.send(msg.to_string());
+        st.log_queue.push(app_core::platform_logs::PlatformLog {
+            tenant_id: tenant,
+            module: "edge",
+            trace_id: None,
+            entity_id: Some(box_id.to_string()),
+            entity_type: Some("edge_box"),
+            level: match l.level.to_lowercase().as_str() {
+                "error" => "error",
+                "warn"  => "warn",
+                "debug" => "debug",
+                _       => "info",
+            },
+            message: l.message.clone(),
+            payload: Some(json!({ "target": l.target, "ts": l.ts })),
+        });
     }
     if let Err(e) = store::insert_box_logs(&st.pool, tenant, box_id, &lines, BOX_LOG_KEEP).await {
         log::error!("insert_box_logs failed: {e}");

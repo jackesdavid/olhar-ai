@@ -47,9 +47,22 @@ pub enum PortType {
     Person,
     /// A single `FaceDetection`.
     Face,
+    /// A camera device reference (stable device id, carried as a string on the wire).
+    /// Distinct from `Text` so the editor enforces camera-to-camera wiring.
+    Camera,
     /// Wildcard — compatible with ANY type at wire time. Used by `ForEach` (`items`/`item`)
     /// so one loop node handles every array/element type. See [`Graph::compatible`].
     Any,
+}
+
+/// A camera device as it appears on the wire — the safe, credential-free subset of `Device`.
+/// Produced by `GetCameraByName` and `OnEvent("motion")`. Consumed by camera-input nodes and
+/// `BreakCamera`. The `id` is the stable ONVIF device id (same as `Device::id`).
+#[derive(Debug, Clone)]
+pub struct CameraEntity {
+    pub id: String,
+    pub ip: String,
+    pub name: String,
 }
 
 /// A static port declaration on a `NodeKind` (not persisted — derived from the kind).
@@ -63,6 +76,48 @@ pub struct Port {
 
 const fn p(name: &'static str, ty: PortType, required: bool) -> Port {
     Port { name, ty, required }
+}
+
+/// An owned port declaration — like [`Port`] but with an owned name, for ports that are
+/// **derived from a node's config** rather than static on the kind (today: the payload
+/// ports of `EmitEvent`/`OnEvent`, one per field of the configured event). See
+/// [`GraphNode::input_ports`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedPort {
+    pub name: String,
+    pub ty: PortType,
+    pub required: bool,
+}
+
+impl From<&Port> for ResolvedPort {
+    fn from(p: &Port) -> Self {
+        ResolvedPort { name: p.name.to_string(), ty: p.ty, required: p.required }
+    }
+}
+
+/// The payload ports baked into an `EmitEvent`/`OnEvent` node's config (`config.payload`
+/// is `[{ name, type }]`, copied from the event's registry schema at config time). Empty
+/// when the event is payload-less or unset. Used as inputs on `EmitEvent`, outputs on
+/// `OnEvent`.
+fn payload_ports(config: &Value) -> Vec<ResolvedPort> {
+    config
+        .get("payload")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|f| {
+                    let name = f.get("name").and_then(|v| v.as_str())?.trim().to_string();
+                    if name.is_empty() {
+                        return None;
+                    }
+                    let ty = f
+                        .get("type")
+                        .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())?;
+                    Some(ResolvedPort { name, ty, required: false })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +140,14 @@ pub enum NodeKind {
     /// latency, no per-call round trip) — for high-rate loops (e.g. recognise every
     /// second). `CameraSnapshot` is the on-demand/quality path.
     GetCurrentFrame,
+    /// Pure data: pick a camera by name from a dropdown and output it as a `Camera`
+    /// value. No exec pins — activates whenever its output is demanded. Use this to
+    /// inject a static camera reference into any part of a graph without exec flow.
+    GetCameraByName,
+    /// Pure data: destructure a `Camera` entity → `id`, `ip`, `name` Text outputs.
+    /// Like Unreal's Break node — use this when you need the raw strings from a camera
+    /// that arrived on a `Camera` typed wire (e.g. from `OnEvent("motion")`).
+    BreakCamera,
     DescribeImage,
     /// Renamed from `notify_beacon`; the alias keeps old `workflows.json` loadable.
     #[serde(alias = "notify_beacon")]
@@ -103,14 +166,30 @@ pub enum NodeKind {
     ForEach,
     /// Vision: compare two frames and report whether/how much they differ.
     MotionDetection,
+    /// Vision: a camera-bound motion detector — picks its own camera, grabs two frames a
+    /// short gap apart, and reports `moved`/`score`. Put it in a Cron graph to watch a feed
+    /// continuously; wire `moved` → If → Emit event to act only on motion.
+    MotionWatch,
     /// Vision: detect whether a person is present in an image (via the AI sidecar).
     PersonDetection,
+    /// Vision: detect any single COCO class in an image. The class is chosen from a
+    /// dropdown in the property panel or overridden by wiring the `class` Text input.
+    /// Outputs the same shape as `PersonDetection` (`count`, `confidence`, `detections`,
+    /// `ok`) so it wires directly into `ForEach` + `BreakDetection`.
+    ObjectDetection,
     /// Destructure a `PersonDetection` element → `bbox` + `confidence` (like Unreal's Break).
     BreakPersonDetection,
+    /// Destructure a generic `Detection` element (from `ObjectDetection`) →
+    /// `bbox` + `confidence`. Equivalent to `BreakPersonDetection` but paired with
+    /// the `ObjectDetection` node for clarity.
+    BreakDetection,
     /// Destructure a `FaceDetection` element → `bbox` + `confidence` + `landmarks`.
     BreakFaceDetection,
     /// Vision: match a face in an image against the enrolled people (pgvector kNN).
     RecognizePerson,
+    /// Presence: record a categorized detection (person/known person/car/cat/dog/
+    /// unknown) in a room — persisted and pulsed live on the map. Exec passes through.
+    RecordPresence,
     /// Events: fire the named event → (re)runs the matching `OnEvent` subtree as a
     /// decoupled, concurrent sub-run. Dropped while that subtree is already running
     /// (coalesce). Exec passes through so the main flow continues. Carries no data (v1).
@@ -124,6 +203,68 @@ pub enum NodeKind {
     /// Debug: show an `image` on the editor canvas — a sink for eyeballing a frame as
     /// it flows through the graph. Like `Print`, but for pixels; emits no data.
     ShowImage,
+    /// Flow control: alternates exec between `a` and `b` on each graph run, with
+    /// cross-run persistent state. `is_a` (bool data output) tells which branch just
+    /// fired — true = A. Like Unreal's Flip Flop node. Engine-driven (not `run_node`).
+    FlipFlop,
+    /// Data: compare two integers with a configurable operator → `result` bool.
+    /// Both operands (`a`, `b`) can be wired from upstream or typed as literals in the
+    /// inspector. Feeds directly into `If` for conditional routing.
+    Compare,
+    /// Data: `a < b` (Num × Num → Bool). Operator baked in — no config needed.
+    NumLt,
+    /// Data: `a <= b` (Num × Num → Bool).
+    NumLte,
+    /// Data: `a > b` (Num × Num → Bool).
+    NumGt,
+    /// Data: `a >= b` (Num × Num → Bool).
+    NumGte,
+    /// Data: `a == b` (Num × Num → Bool).
+    NumEq,
+    /// Data: `a != b` (Num × Num → Bool).
+    NumNe,
+    /// Data: cast a Num to its decimal Text representation.
+    NumToText,
+    /// Data: cast a Bool to "true" or "false" Text.
+    BoolToText,
+    /// Flow control: rate-limit gate — lets exec through only when at least `window_secs`
+    /// have elapsed since the node last fired. Persists `last_fired_at` across runs via
+    /// node state. Outputs `elapsed_secs` (how long since last fire, or window+1 on first
+    /// run) and `ok` (true = gate opened). Engine-driven (not `run_node`).
+    Cooldown,
+    /// Vision: draw a bounding box rectangle on an image → annotated JPEG out.
+    /// Accepts `xyxy` (x1,y1,x2,y2) or `xywh` (x,y,width,height) via `format` config.
+    DrawBbox,
+    /// Vision: return the pixel dimensions of an image — useful when the frame
+    /// arrives via a custom event and width/height aren't already on the wire.
+    GetImageSize,
+    /// Logic: `a && b` — true only when both inputs are true.
+    And,
+    /// Logic: `a || b` — true when at least one input is true.
+    Or,
+    /// Logic: `!a` — inverts a bool.
+    Not,
+    /// Data: compare two text values with a configurable operator → `result` bool.
+    /// `b` can be wired from upstream or typed as a literal in the inspector.
+    /// Operators: `eq`, `ne`, `contains`, `starts_with`, `ends_with`.
+    TextCompare,
+    /// Flow control: routes exec to the arm whose label exactly matches the incoming
+    /// `value` string. Arms are user-defined in the inspector (one or more labels).
+    /// A built-in `default` arm fires whenever no arm label matches. Engine-driven (like
+    /// `If`) — the exec routing happens in `forward_epoch`, not in `run_node`.
+    StringSwitch,
+    /// AI flow control: asks the vision model a yes/no question about an optional image
+    /// and routes exec down `true` or `false` — exactly like `If` but powered by Claude.
+    /// `question` can be wired (Text) or set as a config literal; `image` is optional
+    /// (text-only questions like "Is it past 18:00?" work without an image).
+    AskAi,
+    /// Canvas organizer: a resizable colored annotation box that sits behind all nodes.
+    /// Purely visual — zero exec, zero ports, never runs. Drag to reposition and pull
+    /// enclosed nodes with it; drag the bottom-right grip to resize.
+    Comment,
+    /// Wire organizer: a tiny pure passthrough node (any → any) used to bend and route
+    /// wires cleanly across the canvas, like Unreal's reroute node. Zero config.
+    Reroute,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -147,23 +288,41 @@ const CREATE_ALERT_OUT: [Port; 3] = [
     p("ok", PortType::Bool, false),
 ];
 
+const RECORD_PRESENCE_IN: [Port; 7] = [
+    p("room", PortType::Text, false),
+    p("category", PortType::Text, false),
+    p("label", PortType::Text, false),
+    p("camera", PortType::Camera, false),
+    p("bbox", PortType::NumArray, false),   // [x1,y1,x2,y2] from BreakPersonDetection
+    p("frame_w", PortType::Num, false),     // source image width in pixels
+    p("frame_h", PortType::Num, false),     // source image height in pixels
+];
+const RECORD_PRESENCE_OUT: [Port; 2] = [
+    p("id", PortType::Num, false),
+    p("ok", PortType::Bool, false),
+];
+
 const DELIVER_ALERT_IN: [Port; 1] = [p("id", PortType::Num, true)];
 const DELIVER_ALERT_OUT: [Port; 2] = [
     p("result", PortType::Text, false),
     p("ok", PortType::Bool, false),
 ];
 
-const CAMERA_SNAPSHOT_IN: [Port; 1] = [p("camera", PortType::Text, true)];
-const CAMERA_SNAPSHOT_OUT: [Port; 3] = [
+const CAMERA_SNAPSHOT_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
+const CAMERA_SNAPSHOT_OUT: [Port; 5] = [
     p("image", PortType::Image, false),
     p("result", PortType::Text, false),
+    p("width", PortType::Num, false),
+    p("height", PortType::Num, false),
     p("ok", PortType::Bool, false),
 ];
 
-const GET_CURRENT_FRAME_IN: [Port; 1] = [p("camera", PortType::Text, true)];
-const GET_CURRENT_FRAME_OUT: [Port; 3] = [
+const GET_CURRENT_FRAME_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
+const GET_CURRENT_FRAME_OUT: [Port; 5] = [
     p("image", PortType::Image, false),
     p("age_ms", PortType::Num, false), // how old the returned frame is (0 = fresh capture)
+    p("width", PortType::Num, false),
+    p("height", PortType::Num, false),
     p("ok", PortType::Bool, false),
 ];
 
@@ -217,9 +376,24 @@ const FOR_EACH_IN: [Port; 1] = [p("items", PortType::Any, false)];
 const FOR_EACH_OUT: [Port; 2] =
     [p("item", PortType::Any, false), p("index", PortType::Num, false)];
 
+// Object detection: detect any COCO class — class chosen by config or wired `class` input.
+const OBJECT_DETECTION_IN: [Port; 2] =
+    [p("image", PortType::Image, true), p("class", PortType::Text, false)];
+const OBJECT_DETECTION_OUT: [Port; 6] = [
+    p("count", PortType::Num, false),
+    p("confidence", PortType::Num, false), // percent 0..100 (top detection)
+    p("detections", PortType::PersonArray, false), // one Detection per match — loop this
+    p("width", PortType::Num, false),
+    p("height", PortType::Num, false),
+    p("ok", PortType::Bool, false),
+];
+
 // Break (destructure) nodes — split a struct element into its fields, like Unreal's Break.
 const BREAK_PERSON_IN: [Port; 1] = [p("person", PortType::Person, true)];
 const BREAK_PERSON_OUT: [Port; 2] =
+    [p("bbox", PortType::NumArray, false), p("confidence", PortType::Num, false)];
+const BREAK_DETECTION_IN: [Port; 1] = [p("detection", PortType::Person, true)];
+const BREAK_DETECTION_OUT: [Port; 2] =
     [p("bbox", PortType::NumArray, false), p("confidence", PortType::Num, false)];
 const BREAK_FACE_IN: [Port; 1] = [p("face", PortType::Face, true)];
 const BREAK_FACE_OUT: [Port; 3] = [
@@ -236,13 +410,16 @@ const MOTION_OUT: [Port; 3] = [
     p("score", PortType::Num, false),
     p("ok", PortType::Bool, false),
 ];
+const MOTION_WATCH_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
 
 // Person detection: an image in → whether a person is present (via the AI sidecar).
 const PERSON_DETECTION_IN: [Port; 1] = [p("image", PortType::Image, true)];
-const PERSON_DETECTION_OUT: [Port; 4] = [
+const PERSON_DETECTION_OUT: [Port; 6] = [
     p("count", PortType::Num, false),
     p("confidence", PortType::Num, false), // percent 0..100 (top person)
     p("persons", PortType::PersonArray, false), // one PersonDetection per person — loop this
+    p("width", PortType::Num, false),
+    p("height", PortType::Num, false),
     p("ok", PortType::Bool, false),
 ];
 
@@ -262,6 +439,66 @@ const PRINT_IN: [Port; 2] =
 // Show image: a debug sink — an image in, flashed on the canvas. No data out.
 const SHOW_IMAGE_IN: [Port; 1] = [p("image", PortType::Image, true)];
 
+// Flip Flop: exec a/b outputs (alternating), plus is_a bool data output.
+const EXEC_OUT_FLIP_FLOP: [Port; 2] = [
+    p("a", PortType::Exec, false),
+    p("b", PortType::Exec, false),
+];
+const FLIP_FLOP_OUT: [Port; 1] = [p("is_a", PortType::Bool, false)];
+
+// Compare: two numeric inputs (wired or literal) → a bool result.
+const COMPARE_IN: [Port; 2] = [p("a", PortType::Num, false), p("b", PortType::Num, false)];
+const COMPARE_OUT: [Port; 1] = [p("result", PortType::Bool, false)];
+
+// Type cast nodes.
+const NUM_TO_TEXT_IN: [Port; 1] = [p("value", PortType::Num, true)];
+const BOOL_TO_TEXT_IN: [Port; 1] = [p("value", PortType::Bool, true)];
+const CAST_TEXT_OUT: [Port; 1] = [p("text", PortType::Text, false)];
+
+const COOLDOWN_OUT: [Port; 2] = [
+    p("elapsed_secs", PortType::Num, false),
+    p("ok", PortType::Bool, false),
+];
+
+const DRAW_BBOX_IN: [Port; 2] =
+    [p("image", PortType::Image, true), p("bbox", PortType::NumArray, true)];
+const DRAW_BBOX_OUT: [Port; 2] =
+    [p("image", PortType::Image, false), p("ok", PortType::Bool, false)];
+
+const GET_IMAGE_SIZE_IN: [Port; 1] = [p("image", PortType::Image, true)];
+const GET_IMAGE_SIZE_OUT: [Port; 3] = [
+    p("width", PortType::Num, false),
+    p("height", PortType::Num, false),
+    p("ok", PortType::Bool, false),
+];
+
+const BOOL_OP_IN: [Port; 2] =
+    [p("a", PortType::Bool, false), p("b", PortType::Bool, false)];
+const NOT_IN: [Port; 1] = [p("a", PortType::Bool, false)];
+const TEXT_COMPARE_IN: [Port; 2] =
+    [p("a", PortType::Text, false), p("b", PortType::Text, false)];
+
+// String switch: one required text input (the value to match against the arms).
+const STRING_SWITCH_IN: [Port; 1] = [p("value", PortType::Text, true)];
+
+// AI If: optional image + question text. Both are optional at the port level so a
+// text-only question (no image wired) works. The node errors at runtime if no question.
+const ASK_AI_IN: [Port; 2] =
+    [p("image", PortType::Image, false), p("question", PortType::Text, false)];
+
+// Reroute: wildcard passthrough — one Any input, one Any output.
+const REROUTE_IN: [Port; 1] = [p("value", PortType::Any, false)];
+const REROUTE_OUT: [Port; 1] = [p("value", PortType::Any, false)];
+
+const GET_CAMERA_BY_NAME_OUT: [Port; 1] = [p("camera", PortType::Camera, false)];
+
+const BREAK_CAMERA_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
+const BREAK_CAMERA_OUT: [Port; 3] = [
+    p("id", PortType::Text, false),
+    p("ip", PortType::Text, false),
+    p("name", PortType::Text, false),
+];
+
 const NO_PORTS: [Port; 0] = [];
 
 // Universal control-flow ports — every node has an `exec_in` and, by default, an
@@ -279,13 +516,17 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 22] = [
+    /// All user-visible node kinds. Reroute is intentionally excluded: it is a
+    /// UI-only wire organiser that the engine collapses before execution.
+    pub const ALL: [NodeKind; 48] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
         NodeKind::DeliverAlert,
         NodeKind::CameraSnapshot,
         NodeKind::GetCurrentFrame,
+        NodeKind::GetCameraByName,
+        NodeKind::BreakCamera,
         NodeKind::DescribeImage,
         NodeKind::NotifyRecipient,
         NodeKind::Format,
@@ -293,15 +534,39 @@ impl NodeKind {
         NodeKind::HttpPost,
         NodeKind::If,
         NodeKind::ForEach,
+        NodeKind::FlipFlop,
+        NodeKind::Compare,
+        NodeKind::NumLt,
+        NodeKind::NumLte,
+        NodeKind::NumGt,
+        NodeKind::NumGte,
+        NodeKind::NumEq,
+        NodeKind::NumNe,
+        NodeKind::NumToText,
+        NodeKind::BoolToText,
         NodeKind::MotionDetection,
+        NodeKind::MotionWatch,
         NodeKind::PersonDetection,
+        NodeKind::ObjectDetection,
         NodeKind::BreakPersonDetection,
+        NodeKind::BreakDetection,
         NodeKind::BreakFaceDetection,
         NodeKind::RecognizePerson,
+        NodeKind::RecordPresence,
         NodeKind::EmitEvent,
         NodeKind::OnEvent,
         NodeKind::Print,
         NodeKind::ShowImage,
+        NodeKind::Cooldown,
+        NodeKind::DrawBbox,
+        NodeKind::GetImageSize,
+        NodeKind::And,
+        NodeKind::Or,
+        NodeKind::Not,
+        NodeKind::TextCompare,
+        NodeKind::StringSwitch,
+        NodeKind::AskAi,
+        NodeKind::Comment,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -314,6 +579,8 @@ impl NodeKind {
             NodeKind::DeliverAlert => "deliver_alert",
             NodeKind::CameraSnapshot => "camera_snapshot",
             NodeKind::GetCurrentFrame => "get_current_frame",
+            NodeKind::GetCameraByName => "get_camera_by_name",
+            NodeKind::BreakCamera => "break_camera",
             NodeKind::DescribeImage => "describe_image",
             NodeKind::NotifyRecipient => "notify_recipient",
             NodeKind::Format => "format",
@@ -322,14 +589,39 @@ impl NodeKind {
             NodeKind::If => "if",
             NodeKind::ForEach => "for_each",
             NodeKind::MotionDetection => "motion_detection",
+            NodeKind::MotionWatch => "motion_watch",
             NodeKind::PersonDetection => "person_detection",
+            NodeKind::ObjectDetection => "object_detection",
             NodeKind::BreakPersonDetection => "break_person_detection",
+            NodeKind::BreakDetection => "break_detection",
             NodeKind::BreakFaceDetection => "break_face_detection",
             NodeKind::RecognizePerson => "recognize_person",
+            NodeKind::RecordPresence => "record_presence",
             NodeKind::EmitEvent => "emit_event",
             NodeKind::OnEvent => "on_event",
             NodeKind::Print => "print",
             NodeKind::ShowImage => "show_image",
+            NodeKind::FlipFlop => "flip_flop",
+            NodeKind::Compare => "compare",
+            NodeKind::NumLt => "num_lt",
+            NodeKind::NumLte => "num_lte",
+            NodeKind::NumGt => "num_gt",
+            NodeKind::NumGte => "num_gte",
+            NodeKind::NumEq => "num_eq",
+            NodeKind::NumNe => "num_ne",
+            NodeKind::NumToText => "num_to_text",
+            NodeKind::BoolToText => "bool_to_text",
+            NodeKind::Cooldown => "cooldown",
+            NodeKind::DrawBbox => "draw_bbox",
+            NodeKind::GetImageSize => "get_image_size",
+            NodeKind::And => "and",
+            NodeKind::Or => "or",
+            NodeKind::Not => "not",
+            NodeKind::TextCompare => "text_compare",
+            NodeKind::StringSwitch => "string_switch",
+            NodeKind::AskAi => "ask_ai",
+            NodeKind::Comment => "comment",
+            NodeKind::Reroute => "reroute",
         }
     }
 
@@ -345,6 +637,8 @@ impl NodeKind {
             NodeKind::DeliverAlert => "Deliver alert",
             NodeKind::CameraSnapshot => "Camera snapshot",
             NodeKind::GetCurrentFrame => "Get current frame",
+            NodeKind::GetCameraByName => "Get camera",
+            NodeKind::BreakCamera => "Break camera",
             NodeKind::DescribeImage => "Describe image",
             NodeKind::NotifyRecipient => "Notify recipient",
             NodeKind::Format => "Format",
@@ -353,14 +647,39 @@ impl NodeKind {
             NodeKind::If => "If",
             NodeKind::ForEach => "For each",
             NodeKind::MotionDetection => "Motion detection",
+            NodeKind::MotionWatch => "Motion watch",
             NodeKind::PersonDetection => "Person detection",
+            NodeKind::ObjectDetection => "Detect objects",
             NodeKind::BreakPersonDetection => "Break person detection",
+            NodeKind::BreakDetection => "Break detection",
             NodeKind::BreakFaceDetection => "Break face detection",
             NodeKind::RecognizePerson => "Recognize person",
+            NodeKind::RecordPresence => "Record presence",
             NodeKind::EmitEvent => "Emit event",
             NodeKind::OnEvent => "On event",
             NodeKind::Print => "Print",
             NodeKind::ShowImage => "Show image",
+            NodeKind::FlipFlop => "Flip flop",
+            NodeKind::Compare => "Compare",
+            NodeKind::NumLt => "Num: <",
+            NodeKind::NumLte => "Num: <=",
+            NodeKind::NumGt => "Num: >",
+            NodeKind::NumGte => "Num: >=",
+            NodeKind::NumEq => "Num: ==",
+            NodeKind::NumNe => "Num: !=",
+            NodeKind::NumToText => "Num → Text",
+            NodeKind::BoolToText => "Bool → Text",
+            NodeKind::Cooldown => "Cooldown",
+            NodeKind::DrawBbox => "Draw BBox",
+            NodeKind::GetImageSize => "Get image size",
+            NodeKind::And => "And",
+            NodeKind::Or => "Or",
+            NodeKind::Not => "Not",
+            NodeKind::TextCompare => "Text compare",
+            NodeKind::StringSwitch => "String switch",
+            NodeKind::AskAi => "AI If",
+            NodeKind::Comment => "Comment",
+            NodeKind::Reroute => "Reroute",
         }
     }
 
@@ -369,31 +688,89 @@ impl NodeKind {
         match self {
             NodeKind::GetLastAlert | NodeKind::CreateAlert | NodeKind::DeliverAlert => "Alerts",
             NodeKind::GetRecipient | NodeKind::NotifyRecipient => "Recipients",
-            NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame => "Cameras",
-            NodeKind::DescribeImage => "AI",
+            NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame | NodeKind::GetCameraByName | NodeKind::BreakCamera => "Cameras",
+            NodeKind::DescribeImage | NodeKind::AskAi => "AI",
             NodeKind::Format => "Text",
             NodeKind::Wait
             | NodeKind::If
             | NodeKind::ForEach
+            | NodeKind::FlipFlop
+            | NodeKind::Compare
+            | NodeKind::Cooldown
             | NodeKind::Print
             | NodeKind::ShowImage
             | NodeKind::EmitEvent
-            | NodeKind::OnEvent => "Flow",
+            | NodeKind::OnEvent
+            | NodeKind::StringSwitch => "Flow",
+            NodeKind::NumLt
+            | NodeKind::NumLte
+            | NodeKind::NumGt
+            | NodeKind::NumGte
+            | NodeKind::NumEq
+            | NodeKind::NumNe
+            | NodeKind::NumToText
+            | NodeKind::BoolToText
+            | NodeKind::And
+            | NodeKind::Or
+            | NodeKind::Not
+            | NodeKind::TextCompare => "Logic",
             NodeKind::HttpPost => "Network",
             NodeKind::MotionDetection
+            | NodeKind::MotionWatch
             | NodeKind::PersonDetection
+            | NodeKind::ObjectDetection
             | NodeKind::RecognizePerson
             | NodeKind::BreakPersonDetection
-            | NodeKind::BreakFaceDetection => "Vision",
+            | NodeKind::BreakDetection
+            | NodeKind::BreakFaceDetection
+            | NodeKind::DrawBbox
+            | NodeKind::GetImageSize => "Vision",
+            NodeKind::RecordPresence => "Presence",
+            NodeKind::Comment => "Utility",
+            NodeKind::Reroute => "Utility",
         }
     }
 
-    /// Exec OUTPUT pins for this kind. Default is a single `exec_out`; `If` splits
-    /// the run into `true`/`false` branches. (`exec_in` is universal — see EXEC_IN.)
+    /// Pure data/logic nodes have no exec pins — they activate whenever their upstream
+    /// data is ready, like pure functions in Unreal Blueprint. Comparison operators,
+    /// logical operators, and type-conversion nodes are all pure.
+    pub fn is_pure(self) -> bool {
+        matches!(
+            self,
+            NodeKind::GetCameraByName
+                | NodeKind::BreakCamera
+                | NodeKind::Compare
+                | NodeKind::NumLt
+                | NodeKind::NumLte
+                | NodeKind::NumGt
+                | NodeKind::NumGte
+                | NodeKind::NumEq
+                | NodeKind::NumNe
+                | NodeKind::NumToText
+                | NodeKind::BoolToText
+                | NodeKind::And
+                | NodeKind::Or
+                | NodeKind::Not
+                | NodeKind::TextCompare
+                | NodeKind::Reroute
+        )
+    }
+
+    /// Exec OUTPUT pins for this kind. Pure nodes have none; `If` splits into
+    /// `true`/`false` branches; `StringSwitch` has user-defined arms (dynamic, see
+    /// [`GraphNode::output_port`]); everything else gets a single `exec_out`.
     pub fn exec_out_ports(self) -> &'static [Port] {
+        if self.is_pure() {
+            return &NO_PORTS;
+        }
         match self {
-            NodeKind::If => &EXEC_OUT_IF,
+            NodeKind::If | NodeKind::AskAi => &EXEC_OUT_IF,
             NodeKind::ForEach => &EXEC_OUT_FOR_EACH,
+            NodeKind::FlipFlop => &EXEC_OUT_FLIP_FLOP,
+            // Dynamic: arms come from config, not a static slice. See GraphNode::output_port.
+            NodeKind::StringSwitch => &NO_PORTS,
+            NodeKind::Comment => &NO_PORTS,
+            NodeKind::Reroute => &NO_PORTS, // pure passthrough, no exec pins
             _ => &EXEC_OUT_DEFAULT,
         }
     }
@@ -406,6 +783,8 @@ impl NodeKind {
             NodeKind::DeliverAlert => &DELIVER_ALERT_IN,
             NodeKind::CameraSnapshot => &CAMERA_SNAPSHOT_IN,
             NodeKind::GetCurrentFrame => &GET_CURRENT_FRAME_IN,
+            NodeKind::GetCameraByName => &NO_PORTS,
+            NodeKind::BreakCamera => &BREAK_CAMERA_IN,
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_IN,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_IN,
             NodeKind::Format => &FORMAT_IN,
@@ -414,14 +793,38 @@ impl NodeKind {
             NodeKind::If => &IF_IN,
             NodeKind::ForEach => &FOR_EACH_IN,
             NodeKind::MotionDetection => &MOTION_IN,
+            NodeKind::MotionWatch => &MOTION_WATCH_IN,
             NodeKind::PersonDetection => &PERSON_DETECTION_IN,
+            NodeKind::ObjectDetection => &OBJECT_DETECTION_IN,
             NodeKind::BreakPersonDetection => &BREAK_PERSON_IN,
+            NodeKind::BreakDetection => &BREAK_DETECTION_IN,
             NodeKind::BreakFaceDetection => &BREAK_FACE_IN,
             NodeKind::RecognizePerson => &RECOGNIZE_PERSON_IN,
+            NodeKind::RecordPresence => &RECORD_PRESENCE_IN,
             NodeKind::EmitEvent => &NO_PORTS, // exec-only (universal exec_in/out); event name in config
             NodeKind::OnEvent => &NO_PORTS,   // entry: only an exec_out; activated by the event
             NodeKind::Print => &PRINT_IN,
             NodeKind::ShowImage => &SHOW_IMAGE_IN,
+            NodeKind::DrawBbox => &DRAW_BBOX_IN,
+            NodeKind::GetImageSize => &GET_IMAGE_SIZE_IN,
+            NodeKind::And | NodeKind::Or => &BOOL_OP_IN,
+            NodeKind::Not => &NOT_IN,
+            NodeKind::TextCompare => &TEXT_COMPARE_IN,
+            NodeKind::FlipFlop => &NO_PORTS, // engine-driven; no data inputs
+            NodeKind::Compare
+            | NodeKind::NumLt
+            | NodeKind::NumLte
+            | NodeKind::NumGt
+            | NodeKind::NumGte
+            | NodeKind::NumEq
+            | NodeKind::NumNe => &COMPARE_IN,
+            NodeKind::NumToText => &NUM_TO_TEXT_IN,
+            NodeKind::BoolToText => &BOOL_TO_TEXT_IN,
+            NodeKind::Cooldown => &NO_PORTS, // engine-driven; window_secs is config
+            NodeKind::StringSwitch => &STRING_SWITCH_IN,
+            NodeKind::AskAi => &ASK_AI_IN,
+            NodeKind::Comment => &NO_PORTS,
+            NodeKind::Reroute => &REROUTE_IN,
         }
     }
 
@@ -433,6 +836,8 @@ impl NodeKind {
             NodeKind::DeliverAlert => &DELIVER_ALERT_OUT,
             NodeKind::CameraSnapshot => &CAMERA_SNAPSHOT_OUT,
             NodeKind::GetCurrentFrame => &GET_CURRENT_FRAME_OUT,
+            NodeKind::GetCameraByName => &GET_CAMERA_BY_NAME_OUT,
+            NodeKind::BreakCamera => &BREAK_CAMERA_OUT,
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_OUT,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_OUT,
             NodeKind::Format => &FORMAT_OUT,
@@ -441,14 +846,35 @@ impl NodeKind {
             NodeKind::If => &NO_PORTS, // outputs are exec branches (true/false)
             NodeKind::ForEach => &FOR_EACH_OUT, // item + index (exec outs are loop_body/completed)
             NodeKind::MotionDetection => &MOTION_OUT,
+            NodeKind::MotionWatch => &MOTION_OUT,
             NodeKind::PersonDetection => &PERSON_DETECTION_OUT,
+            NodeKind::ObjectDetection => &OBJECT_DETECTION_OUT,
             NodeKind::BreakPersonDetection => &BREAK_PERSON_OUT,
+            NodeKind::BreakDetection => &BREAK_DETECTION_OUT,
             NodeKind::BreakFaceDetection => &BREAK_FACE_OUT,
             NodeKind::RecognizePerson => &RECOGNIZE_PERSON_OUT,
+            NodeKind::RecordPresence => &RECORD_PRESENCE_OUT,
             NodeKind::EmitEvent => &NO_PORTS, // exec passes through, no data out
             NodeKind::OnEvent => &NO_PORTS,   // drives its subtree via exec_out only
             NodeKind::Print => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::ShowImage => &NO_PORTS, // a sink — exec passes through, no data out
+            NodeKind::DrawBbox => &DRAW_BBOX_OUT,
+            NodeKind::GetImageSize => &GET_IMAGE_SIZE_OUT,
+            NodeKind::And | NodeKind::Or | NodeKind::Not | NodeKind::TextCompare => &COMPARE_OUT,
+            NodeKind::FlipFlop => &FLIP_FLOP_OUT,
+            NodeKind::Compare
+            | NodeKind::NumLt
+            | NodeKind::NumLte
+            | NodeKind::NumGt
+            | NodeKind::NumGte
+            | NodeKind::NumEq
+            | NodeKind::NumNe => &COMPARE_OUT,
+            NodeKind::NumToText | NodeKind::BoolToText => &CAST_TEXT_OUT,
+            NodeKind::Cooldown => &COOLDOWN_OUT,
+            NodeKind::StringSwitch => &NO_PORTS, // exec outputs are dynamic arms (+ "default")
+            NodeKind::AskAi => &NO_PORTS, // exec outputs are true/false branches only
+            NodeKind::Comment => &NO_PORTS,
+            NodeKind::Reroute => &REROUTE_OUT,
         }
     }
 
@@ -477,6 +903,8 @@ impl NodeKind {
             NodeKind::DeliverAlert => json!({ "id": "", "timeout_secs": "35" }),
             NodeKind::CameraSnapshot => json!({ "camera": "first", "timeout_secs": "10" }),
             NodeKind::GetCurrentFrame => json!({ "camera": "first", "max_age_ms": "2000", "timeout_secs": "10" }),
+            NodeKind::GetCameraByName => json!({ "camera": "" }),
+            NodeKind::BreakCamera => json!({}),
             NodeKind::DescribeImage => json!({ "timeout_secs": "65" }),
             NodeKind::NotifyRecipient => json!({ "message": "", "timeout_secs": "35" }),
             NodeKind::Format => json!({ "template": "{p1} — {p2}", "p1": "", "p2": "", "p3": "" }),
@@ -485,14 +913,37 @@ impl NodeKind {
             NodeKind::If => json!({}),
             NodeKind::ForEach => json!({ "items": "" }),
             NodeKind::MotionDetection => json!({ "sensitivity": "2", "pixel_threshold": "25", "timeout_secs": "30" }),
+            NodeKind::MotionWatch => json!({ "camera": "first", "sensitivity": "2", "pixel_threshold": "25", "sample_gap_ms": "400", "timeout_secs": "15" }),
             NodeKind::PersonDetection => json!({ "timeout_secs": "30" }),
+            NodeKind::ObjectDetection => json!({ "class": "person", "timeout_secs": "30" }),
             NodeKind::BreakPersonDetection => json!({}),
+            NodeKind::BreakDetection => json!({}),
             NodeKind::BreakFaceDetection => json!({}),
             NodeKind::RecognizePerson => json!({ "max_distance": "0.4", "timeout_secs": "30" }),
+            NodeKind::RecordPresence => json!({ "category": "person", "room": "", "label": "", "duration_secs": "8" }),
             NodeKind::EmitEvent => json!({ "event": "" }),
             NodeKind::OnEvent => json!({ "event": "" }),
             NodeKind::Print => json!({ "message": "", "on_screen": true, "level": "info" }),
             NodeKind::ShowImage => json!({ "label": "" }),
+            NodeKind::FlipFlop => json!({}),
+            NodeKind::Compare => json!({ "operator": "==", "a": "0", "b": "0" }),
+            NodeKind::NumLt
+            | NodeKind::NumLte
+            | NodeKind::NumGt
+            | NodeKind::NumGte
+            | NodeKind::NumEq
+            | NodeKind::NumNe => json!({ "a": "0", "b": "0" }),
+            NodeKind::NumToText | NodeKind::BoolToText => json!({}),
+            NodeKind::Cooldown => json!({ "window_secs": "60" }),
+            NodeKind::DrawBbox => json!({ "color": "#00FF00", "thickness": "2", "format": "xyxy" }),
+            NodeKind::GetImageSize => json!({}),
+            NodeKind::And | NodeKind::Or => json!({ "a": false, "b": false }),
+            NodeKind::Not => json!({ "a": false }),
+            NodeKind::TextCompare => json!({ "operator": "eq", "b": "" }),
+            NodeKind::StringSwitch => json!({ "arms": ["arm_1", "arm_2"] }),
+            NodeKind::AskAi => json!({ "question": "", "timeout_secs": "65" }),
+            NodeKind::Comment => json!({ "text": "Comment", "color": "#facc15", "width": 400, "height": 200 }),
+            NodeKind::Reroute => json!({}),
         }
     }
 }
@@ -522,6 +973,63 @@ pub struct GraphNode {
 
 fn default_true() -> bool {
     true
+}
+
+impl GraphNode {
+    /// This node's **effective** input ports. Static for every kind except `EmitEvent`,
+    /// whose inputs are one-per-payload-field derived from its config (see [`payload_ports`]).
+    pub fn input_ports(&self) -> Vec<ResolvedPort> {
+        match self.kind {
+            NodeKind::EmitEvent => payload_ports(&self.config),
+            k => k.input_ports().iter().map(ResolvedPort::from).collect(),
+        }
+    }
+
+    /// This node's **effective** output ports. Static for every kind except `OnEvent`,
+    /// whose outputs are one-per-payload-field derived from its config.
+    pub fn output_ports(&self) -> Vec<ResolvedPort> {
+        match self.kind {
+            NodeKind::OnEvent => payload_ports(&self.config),
+            k => k.output_ports().iter().map(ResolvedPort::from).collect(),
+        }
+    }
+
+    /// Look up one input port by name (config-aware), incl. the universal `exec_in`.
+    pub fn input_port(&self, name: &str) -> Option<ResolvedPort> {
+        if name == EXEC_IN.name {
+            return Some(ResolvedPort::from(&EXEC_IN));
+        }
+        self.input_ports().into_iter().find(|p| p.name == name)
+    }
+
+    /// Look up one output port by name (config-aware), incl. the kind's exec_out pins.
+    pub fn output_port(&self, name: &str) -> Option<ResolvedPort> {
+        // StringSwitch: exec outputs are user-defined arm labels + the fixed "default" arm.
+        // These are instance-level (stored in config), not on the static kind.
+        if self.kind == NodeKind::StringSwitch {
+            let arms = string_switch_arms(&self.config);
+            if arms.iter().any(|a| a == name) || name == "default" {
+                return Some(ResolvedPort { name: name.to_string(), ty: PortType::Exec, required: false });
+            }
+            return None;
+        }
+        if let Some(e) = self.kind.exec_out_ports().iter().find(|p| p.name == name) {
+            return Some(ResolvedPort::from(e));
+        }
+        self.output_ports().into_iter().find(|p| p.name == name)
+    }
+}
+
+/// Extract the arm labels from a `StringSwitch` node's config. The "default" arm is
+/// implicit — it fires when no arm label matches — and is NOT included in this list.
+pub fn string_switch_arms(config: &Value) -> Vec<String> {
+    config
+        .get("arms")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A typed, directed wire: source node's `from_port` → target node's `to_port`.
@@ -689,13 +1197,12 @@ impl Graph {
         self.nodes.iter_mut().find(|n| n.id == id)
     }
 
-    /// Add a node at (x, y); returns its new id. Event entry/emit nodes never memoize
-    /// (they're no-op signal nodes — caching is meaningless and confusing), so default off.
+    /// Add a node at (x, y); returns its new id. All new nodes default to memoize=false
+    /// (recompute every time) — the user opts in to caching explicitly via the inspector.
     pub fn add_node(&mut self, kind: NodeKind, x: i32, y: i32) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
-        let memoize = !matches!(kind, NodeKind::EmitEvent | NodeKind::OnEvent);
-        self.nodes.push(GraphNode { id, kind, x, y, config: kind.default_config(), memoize });
+        self.nodes.push(GraphNode { id, kind, x, y, config: kind.default_config(), memoize: false });
         id
     }
 
@@ -762,27 +1269,27 @@ impl Graph {
         if from == to {
             return Err("a node cannot link to itself".into());
         }
-        let fk = self.node(from).ok_or("source node not found")?.kind;
-        let tk = self.node(to).ok_or("target node not found")?.kind;
-        let ft = fk
+        // Resolve port types from the NODES (config-aware), so payload ports on
+        // EmitEvent/OnEvent — derived from the configured event's schema — validate too.
+        let fnode = self.node(from).ok_or("source node not found")?;
+        let tnode = self.node(to).ok_or("target node not found")?;
+        let ft = fnode
             .output_port(from_port)
-            .ok_or_else(|| format!("{} has no output port '{from_port}'", fk.label()))?
+            .ok_or_else(|| format!("{} has no output port '{from_port}'", fnode.kind.label()))?
             .ty;
-        let tt = tk
+        let tt = tnode
             .input_port(to_port)
-            .ok_or_else(|| format!("{} has no input port '{to_port}'", tk.label()))?
+            .ok_or_else(|| format!("{} has no input port '{to_port}'", tnode.kind.label()))?
             .ty;
         if !Self::compatible(ft, tt) {
             return Err(format!("type mismatch: {ft:?} → {tt:?}"));
         }
-        if self.edges.iter().any(|e| e.to == to && e.to_port == to_port) {
+        // exec_in accepts fan-in (multiple execution paths converging on the same node —
+        // e.g. both branches of an If merging downstream). Data ports stay single-fed.
+        let is_exec = to_port == EXEC_IN.name;
+        if !is_exec && self.edges.iter().any(|e| e.to == to && e.to_port == to_port) {
             return Err(format!("input '{to_port}' is already wired"));
         }
-        // Cycles are allowed ONLY through an **exec** back-edge (a loop): the engine runs
-        // the forward graph in order and re-enters the loop along the back-edge, bounded by
-        // a step/time budget. A **data** cycle has no defined value (the input would depend
-        // on an output not yet produced), so it's still rejected.
-        let is_exec = to_port == EXEC_IN.name;
         if self.reaches(to, from) && !is_exec {
             return Err("that link would create a data cycle".into());
         }
@@ -1032,22 +1539,22 @@ mod tests {
     }
 
     #[test]
-    fn memoize_defaults_true_for_old_blobs_and_round_trips() {
-        // New nodes default to memoize=true.
+    fn memoize_defaults_false_for_new_nodes_and_round_trips() {
+        // New nodes default to memoize=false.
         let mut g = Graph::new(1, "g");
         let n = g.add_node(NodeKind::Format, 0, 0);
-        assert!(g.node(n).unwrap().memoize, "new node defaults to memoize=true");
+        assert!(!g.node(n).unwrap().memoize, "new node defaults to memoize=false");
 
-        // An old persisted node JSON without the `memoize` key deserializes to true.
+        // An old persisted node JSON without the `memoize` key deserializes to true (back-compat).
         let old = r#"{"id":7,"kind":"format","x":0,"y":0,"config":{}}"#;
         let node: GraphNode = serde_json::from_str(old).unwrap();
-        assert!(node.memoize, "missing memoize → true (back-compat)");
+        assert!(node.memoize, "missing memoize → true (back-compat for pre-memoize nodes)");
 
-        // memoize=false round-trips.
-        g.node_mut(n).unwrap().memoize = false;
+        // memoize=true round-trips.
+        g.node_mut(n).unwrap().memoize = true;
         let s = serde_json::to_string(&g).unwrap();
         let g2: Graph = serde_json::from_str(&s).unwrap();
-        assert!(!g2.node(n).unwrap().memoize);
+        assert!(g2.node(n).unwrap().memoize);
     }
 
     #[test]
@@ -1068,5 +1575,44 @@ mod tests {
         for k in NodeKind::ALL {
             assert_eq!(NodeKind::from_slug(k.slug()), Some(k));
         }
+    }
+
+    #[test]
+    fn string_switch_wires_arm_and_default_exec_ports() {
+        let mut g = Graph::new(1, "g");
+        let sw = g.add_node(NodeKind::StringSwitch, 0, 0);
+        g.node_mut(sw).unwrap().config = json!({ "arms": ["red", "blue"] });
+        let a = g.add_node(NodeKind::Format, 0, 0);
+        let b = g.add_node(NodeKind::Format, 0, 0);
+        let d = g.add_node(NodeKind::Format, 0, 0);
+        // Named arm ports resolve and wire correctly.
+        g.add_edge(sw, "red", a, "exec_in").expect("'red' arm wires");
+        g.add_edge(sw, "blue", b, "exec_in").expect("'blue' arm wires");
+        // The built-in default arm also wires.
+        g.add_edge(sw, "default", d, "exec_in").expect("'default' arm wires");
+        // An arm not in config is rejected.
+        let c = g.add_node(NodeKind::Format, 0, 0);
+        let err = g.add_edge(sw, "green", c, "exec_in").unwrap_err();
+        assert!(err.contains("no output port"), "unknown arm rejected: {err}");
+    }
+
+    #[test]
+    fn string_switch_value_port_is_required_text() {
+        let k = NodeKind::StringSwitch;
+        let p = k.input_port("value").expect("value port exists");
+        assert_eq!(p.ty, PortType::Text);
+        assert!(p.required);
+        // exec_out_ports is empty (dynamic); output_ports is empty.
+        assert!(k.exec_out_ports().is_empty());
+        assert!(k.output_ports().is_empty());
+    }
+
+    #[test]
+    fn string_switch_default_config_has_two_arms() {
+        let cfg = NodeKind::StringSwitch.default_config();
+        let arms = cfg["arms"].as_array().expect("arms is an array");
+        assert_eq!(arms.len(), 2);
+        assert_eq!(arms[0].as_str(), Some("arm_1"));
+        assert_eq!(arms[1].as_str(), Some("arm_2"));
     }
 }

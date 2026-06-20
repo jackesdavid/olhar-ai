@@ -30,7 +30,9 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let n = state.devices.lock().unwrap().len();
-    Json(json!({ "status": "ok", "service": "sentinel-edge", "devices": n, "owns_go2rtc": state.own_go2rtc }))
+    Json(
+        json!({ "status": "ok", "service": "sentinel-edge", "devices": n, "owns_go2rtc": state.own_go2rtc }),
+    )
 }
 
 /// The cameras the edge knows about (ip + name + whether a stream is configured).
@@ -41,7 +43,11 @@ async fn devices(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .unwrap()
         .iter()
         .map(|d| {
-            let has_stream = d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false);
+            let has_stream = d
+                .rtsp_url
+                .as_deref()
+                .map(|u| !u.trim().is_empty())
+                .unwrap_or(false);
             json!({ "ip": d.ip, "name": d.name, "has_stream": has_stream })
         })
         .collect();
@@ -55,7 +61,12 @@ async fn streams(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .lock()
         .unwrap()
         .iter()
-        .filter(|d| d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false))
+        .filter(|d| {
+            d.rtsp_url
+                .as_deref()
+                .map(|u| !u.trim().is_empty())
+                .unwrap_or(false)
+        })
         .map(|d| {
             let name = go2rtc::stream_name(&d.ip);
             json!({
@@ -78,7 +89,10 @@ async fn snapshot(State(state): State<Arc<AppState>>, Path(ip): Path<String>) ->
     match tokio::task::spawn_blocking(move || capture_snapshot_bytes(&device)).await {
         Ok(Ok(bytes)) => (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-store")],
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
             Body::from(bytes),
         )
             .into_response(),
@@ -86,7 +100,11 @@ async fn snapshot(State(state): State<Arc<AppState>>, Path(ip): Path<String>) ->
             log::warn!("snapshot {ip} failed: {e}");
             (StatusCode::BAD_GATEWAY, e).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("capture task failed: {e}")).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("capture task failed: {e}"),
+        )
+            .into_response(),
     }
 }
 
