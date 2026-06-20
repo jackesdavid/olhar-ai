@@ -8,10 +8,6 @@ import type { MapStore } from "./store.svelte";
 
 // Fallback lifetime only if an event somehow carries no duration (matches the node default).
 const FALLBACK_TTL_MS = 8000;
-// On open, replay presence recorded in the last window as a fresh pulse — so a detection
-// fired moments before you opened the map still shows (the live SSE only covers events
-// that arrive while the page is mounted).
-const REPLAY_WINDOW_MS = 30000;
 
 export type Pulse = {
   id: number;
@@ -48,7 +44,10 @@ export class PresenceStore {
       const now = Date.now();
       for (const r of recent) {
         const age = now - Date.parse(r.created_at);
-        if (Number.isFinite(age) && age >= 0 && age <= REPLAY_WINDOW_MS) this.add(r);
+        if (!Number.isFinite(age) || age < 0) continue;
+        const ttl = r.duration_secs && r.duration_secs > 0 ? r.duration_secs * 1000 : FALLBACK_TTL_MS;
+        if (age >= ttl) continue; // already expired
+        this.add(r, age);
       }
     } catch (err) {
       console.warn("[presence] baseline load failed", err);
@@ -100,7 +99,7 @@ export class PresenceStore {
     return null;
   }
 
-  private add(p: PresenceEvent): void {
+  private add(p: PresenceEvent, ageMs = 0): void {
     const at = this.locate(p);
     if (!at) {
       // Most common cause: the room/camera on the event doesn't match any on the map.
@@ -108,10 +107,10 @@ export class PresenceStore {
       return;
     }
     const ttl = p.duration_secs && p.duration_secs > 0 ? p.duration_secs * 1000 : FALLBACK_TTL_MS;
-    console.debug("[presence] pulse", p.category, "at", at, "for", ttl / 1000, "s");
+    console.debug("[presence] pulse", p.category, "at", at, "ttl", ttl / 1000, "s remaining", (ttl - ageMs) / 1000, "s");
     this.pulses = [
       ...this.pulses,
-      { id: this.seq++, category: p.category, x: at.x, z: at.z, born: Date.now(), ttl },
+      { id: this.seq++, category: p.category, x: at.x, z: at.z, born: Date.now() - ageMs, ttl },
     ];
   }
 
