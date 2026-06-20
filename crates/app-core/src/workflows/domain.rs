@@ -259,6 +259,9 @@ pub enum NodeKind {
     /// Purely visual — zero exec, zero ports, never runs. Drag to reposition and pull
     /// enclosed nodes with it; drag the bottom-right grip to resize.
     Comment,
+    /// Wire organizer: a tiny pure passthrough node (any → any) used to bend and route
+    /// wires cleanly across the canvas, like Unreal's reroute node. Zero config.
+    Reroute,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -462,6 +465,10 @@ const STRING_SWITCH_IN: [Port; 1] = [p("value", PortType::Text, true)];
 const ASK_AI_IN: [Port; 2] =
     [p("image", PortType::Image, false), p("question", PortType::Text, false)];
 
+// Reroute: wildcard passthrough — one Any input, one Any output.
+const REROUTE_IN: [Port; 1] = [p("value", PortType::Any, false)];
+const REROUTE_OUT: [Port; 1] = [p("value", PortType::Any, false)];
+
 const GET_CAMERA_BY_NAME_OUT: [Port; 1] = [p("camera", PortType::Camera, false)];
 
 const BREAK_CAMERA_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
@@ -488,7 +495,7 @@ const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 47] = [
+    pub const ALL: [NodeKind; 48] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -536,6 +543,7 @@ impl NodeKind {
         NodeKind::StringSwitch,
         NodeKind::AskAi,
         NodeKind::Comment,
+        NodeKind::Reroute,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -589,6 +597,7 @@ impl NodeKind {
             NodeKind::StringSwitch => "string_switch",
             NodeKind::AskAi => "ask_ai",
             NodeKind::Comment => "comment",
+            NodeKind::Reroute => "reroute",
         }
     }
 
@@ -645,6 +654,7 @@ impl NodeKind {
             NodeKind::StringSwitch => "String switch",
             NodeKind::AskAi => "AI If",
             NodeKind::Comment => "Comment",
+            NodeKind::Reroute => "Reroute",
         }
     }
 
@@ -691,6 +701,7 @@ impl NodeKind {
             | NodeKind::DrawBbox => "Vision",
             NodeKind::RecordPresence => "Presence",
             NodeKind::Comment => "Utility",
+            NodeKind::Reroute => "Utility",
         }
     }
 
@@ -715,6 +726,7 @@ impl NodeKind {
                 | NodeKind::Or
                 | NodeKind::Not
                 | NodeKind::TextCompare
+                | NodeKind::Reroute
         )
     }
 
@@ -732,6 +744,7 @@ impl NodeKind {
             // Dynamic: arms come from config, not a static slice. See GraphNode::output_port.
             NodeKind::StringSwitch => &NO_PORTS,
             NodeKind::Comment => &NO_PORTS,
+            NodeKind::Reroute => &NO_PORTS, // pure passthrough, no exec pins
             _ => &EXEC_OUT_DEFAULT,
         }
     }
@@ -784,6 +797,7 @@ impl NodeKind {
             NodeKind::StringSwitch => &STRING_SWITCH_IN,
             NodeKind::AskAi => &ASK_AI_IN,
             NodeKind::Comment => &NO_PORTS,
+            NodeKind::Reroute => &REROUTE_IN,
         }
     }
 
@@ -832,6 +846,7 @@ impl NodeKind {
             NodeKind::StringSwitch => &NO_PORTS, // exec outputs are dynamic arms (+ "default")
             NodeKind::AskAi => &NO_PORTS, // exec outputs are true/false branches only
             NodeKind::Comment => &NO_PORTS,
+            NodeKind::Reroute => &REROUTE_OUT,
         }
     }
 
@@ -899,6 +914,7 @@ impl NodeKind {
             NodeKind::StringSwitch => json!({ "arms": ["arm_1", "arm_2"] }),
             NodeKind::AskAi => json!({ "question": "", "timeout_secs": "65" }),
             NodeKind::Comment => json!({ "text": "Comment", "color": "#facc15", "width": 400, "height": 200 }),
+            NodeKind::Reroute => json!({}),
         }
     }
 }

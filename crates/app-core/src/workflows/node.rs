@@ -363,6 +363,14 @@ pub fn run_node(
         NodeKind::AskAi => run_ask_ai(config, inputs, sys),
         // Comment is a canvas organizer — it never executes.
         NodeKind::Comment => Ok(PortValues::new()),
+        // Reroute passes its input value through unchanged.
+        NodeKind::Reroute => {
+            let mut out = PortValues::new();
+            if let Some(v) = inputs.get("value") {
+                out.insert("value".into(), v.clone());
+            }
+            Ok(out)
+        }
     }
 }
 
@@ -416,7 +424,8 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::StringSwitch
         | NodeKind::GetCameraByName
         | NodeKind::BreakCamera
-        | NodeKind::Comment => return None,
+        | NodeKind::Comment
+        | NodeKind::Reroute => return None,
     };
     let secs = config_u64(config, "timeout_secs").unwrap_or(default_secs);
     if secs == 0 {
@@ -805,6 +814,7 @@ pub fn debug_summary(
             format!("break '{name}' → id/ip/name")
         }
         NodeKind::Comment => "comment".into(),
+        NodeKind::Reroute => "reroute".into(),
     }
 }
 

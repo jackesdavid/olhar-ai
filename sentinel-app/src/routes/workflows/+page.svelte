@@ -48,11 +48,12 @@
   import Loader from "$lib/components/loader.svelte";
   import EmptyState from "$lib/components/empty-state.svelte";
   import StatusDot from "$lib/components/status-dot.svelte";
+  import { portColor, typeColor } from "$lib/workflows/portColors";
+  import type { PortType } from "$lib/workflows/portColors";
+  import NodePalette from "./components/NodePalette.svelte";
+  import ContextSearch from "./components/ContextSearch.svelte";
 
   // ---- types (the serialized core shapes) ----------------------------------
-  type PortType =
-    | "text" | "num" | "bool" | "image" | "recipient" | "dictionary" | "file" | "exec"
-    | "text_array" | "num_array" | "person_array" | "face_array" | "person" | "face" | "camera" | "any";
   type CatPort = { name: string; type: PortType; required: boolean };
   type CatKind = {
     slug: string;
@@ -124,6 +125,7 @@
 
   // ---- layout constants ----------------------------------------------------
   const NODE_W = 176;
+  const REROUTE_R = 11; // radius of the reroute dot; total width = 2*REROUTE_R
   const HEAD_H = 26;
   const ROW_H = 22;
   const PAD = 8;
@@ -146,6 +148,11 @@
   let loading = $state(true);
   let running = $state(false);
   let addOpen = $state(false);
+  // Context search: appears at wire-drop position, pre-filtered by the pending port type.
+  let contextOpen = $state(false);
+  let contextPos = $state({ x: 0, y: 0 });
+  let contextPending = $state<{ node: number; port: string; portType: PortType } | null>(null);
+  const contextPortType = $derived(contextPending?.portType ?? ("any" as PortType));
   let consoleOpen = $state(false);
   let logs = $state<LogLine[]>([]);
 
@@ -347,13 +354,7 @@
   const nonCommentNodes = $derived(graph?.nodes.filter((n) => n.kind !== "comment") ?? []);
   const kinds = $derived(Object.values(catalog));
 
-  // node palette: search + group by category
-  let nodeSearch = $state("");
-  const CATEGORY_ORDER = ["Cameras", "Vision", "AI", "Alerts", "Recipients", "Text", "Network", "Flow"];
-  // Synthesize per-event palette entries from the tenant registry: each registered event
-  // becomes a droppable "On event: <name>" + "Emit event: <name>", grouped under its
-  // category (prefixed so the groups sort together). The generic On/Emit event entries
-  // stay in "Flow" for authoring a brand-new name.
+  // Synthesize per-event palette entries (On/Emit event: <name>) from the tenant registry.
   const EVENT_GROUP_PREFIX = "Events · ";
   const eventPaletteGroups = $derived.by(() => {
     const onBase = catalog["on_event"];
@@ -369,36 +370,6 @@
     return [...byCat.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([cat, kinds]) => ({ name: `${EVENT_GROUP_PREFIX}${cat}`, kinds }));
-  });
-  const nodeCategories = $derived.by(() => {
-    const q = nodeSearch.trim().toLowerCase();
-    const matchKind = (k: PaletteKind) =>
-      !q ||
-      k.label.toLowerCase().includes(q) ||
-      k.category.toLowerCase().includes(q) ||
-      k.slug.toLowerCase().includes(q);
-    const matched = (kinds as PaletteKind[]).filter(matchKind);
-    const groups = new Map<string, PaletteKind[]>();
-    for (const k of matched) {
-      const list = groups.get(k.category) ?? [];
-      list.push(k);
-      groups.set(k.category, list);
-    }
-    const ordered: { name: string; kinds: PaletteKind[] }[] = [];
-    for (const name of CATEGORY_ORDER) {
-      const list = groups.get(name);
-      if (list) {
-        ordered.push({ name, kinds: list });
-        groups.delete(name);
-      }
-    }
-    for (const [name, list] of groups) ordered.push({ name, kinds: list });
-    // Event groups last, filtered by the same search query.
-    for (const g of eventPaletteGroups) {
-      const ks = g.kinds.filter(matchKind);
-      if (ks.length) ordered.push({ name: g.name, kinds: ks });
-    }
-    return ordered;
   });
 
   // run state for the open graph
@@ -659,6 +630,7 @@
   // Local Y of a port by name — exec_in on the header; exec outputs stack from the
   // header down; data ports sit below the header divider.
   function portLocalY(node: Node, port: string, side: "in" | "out") {
+    if (node.kind === "reroute") return REROUTE_R; // single center point for both ports
     if (isExec(node, port, side)) {
       if (side === "in") return HEAD_H / 2;
       const i = execOutPorts(effectiveKind(node)).findIndex((p) => p.name === port);
@@ -683,7 +655,7 @@
   // Includes comparison operators, logical operators, and type-conversion nodes.
   const PURE_KINDS = new Set([
     "num_lt","num_lte","num_gt","num_gte","num_eq","num_ne","compare","and","or","not","text_compare",
-    "bool_to_text","num_to_text",
+    "bool_to_text","num_to_text","get_camera_by_name","break_camera","reroute",
   ]);
   function isCompareOrLogic(kind: string): boolean {
     return PURE_KINDS.has(kind);
@@ -720,25 +692,6 @@
     }
     return String(config[port] ?? "");
   }
-  const portColor: Record<PortType, string> = {
-    text: "#60a5fa",
-    num: "#34d399",
-    bool: "#fbbf24",
-    image: "#f472b6",
-    recipient: "#a78bfa",
-    dictionary: "#2dd4bf",
-    file: "#fb923c",
-    exec: "#f4f4f5",
-    // Typed arrays (brighter shades of their element color) + detection elements + wildcard.
-    text_array: "#93c5fd",
-    num_array: "#6ee7b7",
-    person_array: "#f0abfc",
-    face_array: "#fda4af",
-    person: "#e879f9",
-    face: "#fb7185",
-    camera: "#38bdf8",
-    any: "#94a3b8",
-  };
   // The element colour for an array type (so a ForEach `item` mirrors the wired array).
   function arrayElementColor(t: PortType): string {
     switch (t) {
@@ -1094,14 +1047,14 @@
   }
 
   // ---- node + edge ops -----------------------------------------------------
-  async function addNodeKind(slug: string, presetEvent?: string) {
-    if (!graph || editLocked) return;
+  async function addNodeKind(slug: string, presetEvent?: string): Promise<number | null> {
+    if (!graph || editLocked) return null;
     // Place at the cursor (when opened via the `n` shortcut), else cascade.
     let x: number;
     let y: number;
     if (dropAt) {
-      x = Math.round(dropAt.x);
-      y = Math.round(dropAt.y);
+      x = Math.round(dropAt.x) - (slug === "reroute" ? REROUTE_R : NODE_W / 2);
+      y = Math.round(dropAt.y) - (slug === "reroute" ? REROUTE_R : HEAD_H / 2);
       dropAt = null;
     } else {
       const n = graph.nodes.length;
@@ -1130,6 +1083,27 @@
     selectedNodeId = id;
     addOpen = false;
     await reload();
+    return id;
+  }
+
+  // Add a node from context search and auto-wire it to the pending output port.
+  async function addFromContext(slug: string, presetEvent?: string) {
+    const cp = contextPending;
+    contextOpen = false;
+    contextPending = null;
+    const id = await addNodeKind(slug, presetEvent);
+    if (cp && id !== null && graph) {
+      const cat = catalog[slug];
+      const matchPort =
+        cat?.inputs.find((p) => p.type === cp.portType) ??
+        cat?.inputs.find((p) => p.type === "any");
+      if (matchPort) {
+        try {
+          await data.addEdge(graph.id, cp.node, cp.port, id, matchPort.name);
+          await reload();
+        } catch {}
+      }
+    }
   }
 
   // Press `n` over the canvas → open the palette and drop the next node at the cursor.
@@ -1142,7 +1116,6 @@
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
     e.preventDefault();
     dropAt = hoverWorld;
-    nodeSearch = "";
     addOpen = true;
   }
 
@@ -1441,7 +1414,16 @@
   function onCanvasDown(e: PointerEvent) {
     if (e.target !== e.currentTarget) return; // only grab empty canvas, not a node
     if (pending) {
-      pending = null; // clicking empty space cancels the wire being drawn
+      // Dropping a wire onto empty canvas → open context-aware node search at the cursor.
+      if (svgEl) {
+        const pn = nodeById.get(pending.node);
+        const portType = (pn ? effectiveKind(pn)?.outputs.find((p) => p.name === pending.port)?.type : null) ?? "any";
+        dropAt = hoverWorld;
+        contextPending = { node: pending.node, port: pending.port, portType: portType as PortType };
+        contextPos = { x: e.clientX, y: e.clientY };
+        contextOpen = true;
+      }
+      pending = null;
       return;
     }
     selectedNodeId = null; // clicking the empty canvas deselects the node
@@ -1793,7 +1775,7 @@
                 {@const fromN = nodeById.get(e.from)}
                 {@const toN = nodeById.get(e.to)}
                 {#if fromN && toN}
-                  {@const x1 = fromN.x + NODE_W}
+                  {@const x1 = fromN.kind === "reroute" ? fromN.x + REROUTE_R * 2 : fromN.x + NODE_W}
                   {@const y1 = outPortY(fromN, e.from_port)}
                   {@const x2 = toN.x}
                   {@const y2 = inPortY(toN, e.to_port)}
@@ -1821,6 +1803,29 @@
                 {@const sel = selectedNodeId === n.id}
                 {@const live = nodeLive(n.id)}
                 {@const invalid = requiredUnfilled(n).length > 0}
+                {#if n.kind === "reroute"}
+                  {@const anyCol = portColor.any}
+                  {@const isOutP = pending && pending.node === n.id && pending.port === "value"}
+                  <g transform="translate({n.x} {n.y})" filter={sel || live ? "url(#nodeGlow)" : undefined}>
+                    <circle cx={REROUTE_R} cy={REROUTE_R} r={REROUTE_R}
+                      stroke-width={sel ? 2 : 1.5}
+                      class="fill-card transition-[stroke] {sel ? 'stroke-primary' : 'stroke-border'}"
+                    />
+                    <circle cx={REROUTE_R} cy={REROUTE_R} r={Math.round(REROUTE_R * 0.45)} fill={anyCol} class="pointer-events-none" />
+                    <circle cx={REROUTE_R} cy={REROUTE_R} r={REROUTE_R} fill="transparent"
+                      class="cursor-move" onpointerdown={(ev) => startDrag(ev, n)}
+                      onclick={() => { selectedNodeId = n.id; }} role="presentation"
+                    />
+                    <circle cx={0} cy={REROUTE_R} r={4}
+                      fill={wiredInto(n.id, "value") ? anyCol : "#151c19"} stroke={anyCol} stroke-width="1.5"
+                      class="cursor-pointer" onclick={() => clickInPort(n, "value")} role="presentation"
+                    />
+                    <circle cx={REROUTE_R * 2} cy={REROUTE_R} r={isOutP ? 5 : 4}
+                      fill={isOutP ? anyCol : "#151c19"} stroke={anyCol} stroke-width="1.5"
+                      class="cursor-pointer transition-all" onclick={() => clickOutPort(n, "value")} role="presentation"
+                    />
+                  </g>
+                {:else}
                 <!-- One transform moves the whole node; inner coords are local,
                      so dragging only updates this single attribute (no per-port
                      recompute). -->
@@ -2084,13 +2089,14 @@
                     </g>
                   {/if}
                 </g>
+                {/if}
               {/each}
 
               <!-- wire being drawn: from the chosen output port to the cursor -->
               {#if pending}
                 {@const pn = nodeById.get(pending.node)}
                 {#if pn}
-                  {@const px = pn.x + NODE_W}
+                  {@const px = pn.kind === "reroute" ? pn.x + REROUTE_R * 2 : pn.x + NODE_W}
                   {@const py = outPortY(pn, pending.port)}
                   {@const pColor = portColorOf(pn, pending.port, "out")}
                   <path
@@ -2112,10 +2118,7 @@
             <Button
               class="shadow-lg"
               disabled={editLocked}
-              onclick={() => {
-                nodeSearch = "";
-                addOpen = true;
-              }}
+              onclick={() => { addOpen = true; }}
             >
               <Plus class="size-4" /> Add node
             </Button>
@@ -2812,68 +2815,21 @@
   </Dialog.Content>
 </Dialog.Root>
 
-<!-- Add-node modal — centered over the editor with a subtle backdrop blur -->
-{#if addOpen}
-  <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-    <button
-      class="absolute inset-0 bg-background/40 backdrop-blur-sm duration-200 animate-in fade-in"
-      aria-label="Close"
-      onclick={() => (addOpen = false)}
-    ></button>
-    <div
-      class="relative z-10 flex max-h-[78vh] w-full max-w-md flex-col rounded-2xl border border-border bg-popover/95 p-4 shadow-2xl duration-200 animate-in fade-in zoom-in-95"
-    >
-      <div class="mb-3 flex items-center justify-between">
-        <h3 class="flex items-center gap-2 text-sm font-semibold">
-          <span class="size-1.5 rounded-full bg-primary"></span> Add a node
-        </h3>
-        <Button variant="ghost" size="icon" class="size-7" onclick={() => (addOpen = false)}>
-          <X class="size-4" />
-        </Button>
-      </div>
-      <div class="relative mb-3">
-        <Search class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <!-- svelte-ignore a11y_autofocus -->
-        <Input
-          autofocus
-          bind:value={nodeSearch}
-          placeholder="Search nodes…"
-          class="h-9 pl-8"
-        />
-      </div>
-      <div class="-mr-2 flex-1 space-y-4 overflow-y-auto pr-2">
-        {#each nodeCategories as cat (cat.name)}
-          <div>
-            <div class="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              {cat.name}
-            </div>
-            <div class="space-y-1">
-              {#each cat.kinds as k (k.label)}
-                <button
-                  class="interactive group flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2 text-left"
-                  onclick={() => addNodeKind(k.slug, k.presetEvent)}
-                >
-                  <span class="flex items-center gap-2 text-sm font-medium">
-                    <span class="size-1.5 rounded-full bg-primary transition-transform group-hover:scale-125"></span>
-                    {k.label}
-                  </span>
-                  <span class="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-                    {k.inputs.length} in · {k.outputs.length} out
-                  </span>
-                </button>
-              {/each}
-            </div>
-          </div>
-        {:else}
-          <div class="flex flex-col items-center gap-2 py-10 text-center">
-            <Search class="size-6 text-muted-foreground/50" />
-            <p class="text-sm text-muted-foreground">No nodes match “{nodeSearch}”</p>
-          </div>
-        {/each}
-      </div>
-    </div>
-  </div>
-{/if}
+<!-- Node palette and context search are extracted components for maintainability -->
+<NodePalette
+  bind:open={addOpen}
+  kinds={kinds as PaletteKind[]}
+  {eventPaletteGroups}
+  onSelect={addNodeKind}
+/>
+
+<ContextSearch
+  bind:open={contextOpen}
+  pos={contextPos}
+  portType={contextPortType}
+  kinds={kinds as PaletteKind[]}
+  onSelect={addFromContext}
+/>
 
 <!-- Recent runs drawer — persisted run history for one graph (trigger, pod, status). -->
 <Dialog.Root bind:open={runsOpen}>
