@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { fade } from "svelte/transition";
   import { data, onEvent } from "$lib/data";
+  import { platformLogs, type PlatformLog } from "$lib/api";
   import {
     CATEGORY_ORDER as PRESENCE_CATEGORIES,
     CATEGORY_STYLE as PRESENCE_CATEGORY_STYLE,
@@ -191,6 +192,29 @@
     if (log.debug) return "text-muted-foreground";
     return log.ok ? "text-primary" : "text-destructive";
   }
+
+  function platformLogToLine(l: PlatformLog): LogLine {
+    const label = (l.payload?.label as string | undefined) ?? (l.payload?.graph_name as string | undefined);
+    return {
+      time: l.created_at.slice(11, 19),
+      name: label ?? "workflow",
+      ok: l.level !== "error",
+      summary: l.message,
+      debug: l.level === "debug",
+    };
+  }
+
+  async function loadConsoleLogs(graphId: number) {
+    try {
+      const r = await platformLogs.list({
+        module: "workflow",
+        entity_type: "workflow_graph",
+        entity_id: String(graphId),
+        limit: 50,
+      });
+      logs = r.items.map(platformLogToLine);
+    } catch { /* best-effort — console works without history */ }
+  }
   function screenMsgClass(level: string): string {
     if (level === "error") return "border-destructive/40 text-destructive";
     if (level === "warn") return "border-amber-500/40 text-amber-500";
@@ -310,7 +334,7 @@
   let runsOpen = $state(false);
   let runsGraph = $state<Graph | null>(null);
   let runsList = $state<RunRecord[]>([]);
-  let runsLogs = $state<Record<string, RunLog[]>>({});
+  let runsLogs = $state<Record<string, PlatformLog[]>>({});
   let runsExpanded = $state<string | null>(null);
 
   // Per-node highlight controller (driven by workflow-node events): each node
@@ -740,7 +764,8 @@
     selectedNodeId = null;
     pending = null;
     nodeImages = {}; // node ids restart per graph — drop the previous graph's previews
-    logs = []; // the console is per-graph — clear the previous graph's lines
+    logs = [];
+    void loadConsoleLogs(id);
     const v = graphs.find((x) => x.id === id)?.viewport;
     pan = v ? { x: v.x, y: v.y } : { x: 40, y: 40 };
     zoom = v?.zoom ?? 1;
@@ -1268,7 +1293,8 @@
     runsExpanded = runId;
     if (!runsLogs[runId]) {
       try {
-        runsLogs = { ...runsLogs, [runId]: await data.runLogs<RunLog[]>(runId) };
+        const r = await platformLogs.list({ trace_id: runId, module: "workflow", limit: 100 });
+        runsLogs = { ...runsLogs, [runId]: r.items };
       } catch (err) {
         toast.error("Couldn't load run logs", { description: String(err) });
       }
@@ -2849,6 +2875,13 @@
     <Dialog.Header>
       <Dialog.Title class="flex items-center gap-2">
         <History class="size-4" /> Recent runs — {runsGraph?.name ?? ""}
+        {#if runsGraph}
+          <a
+            href="/logs?module=workflow&entity_type=workflow_graph&entity_id={runsGraph.id}"
+            class="ml-auto text-[11px] text-primary hover:underline"
+            onclick={() => (runsOpen = false)}
+          >View all in Logs →</a>
+        {/if}
       </Dialog.Title>
       <Dialog.Description>Manual, scheduled, and event-triggered runs, newest first.</Dialog.Description>
     </Dialog.Header>
@@ -2882,10 +2915,12 @@
                   <p class="text-[11px] text-muted-foreground/60">No detailed signals recorded.</p>
                 {:else}
                   <div class="space-y-0.5 font-mono text-[10px] leading-relaxed">
-                    {#each runsLogs[r.id] as line (line)}
+                    {#each runsLogs[r.id] as line (line.id)}
                       <div class="flex gap-2">
-                        <span class="shrink-0 uppercase text-muted-foreground/60">{line.kind}</span>
-                        <span class="text-muted-foreground">{line.label ? `${line.label}: ` : ""}{line.message}</span>
+                        <span class="w-10 shrink-0 uppercase {line.level === 'error' ? 'text-destructive' : line.level === 'warn' ? 'text-amber-400' : 'text-muted-foreground/60'}">{line.level}</span>
+                        <span class="{line.level === 'error' ? 'text-destructive' : 'text-muted-foreground'}">
+                          {(line.payload?.label as string | undefined) ? `${line.payload?.label}: ` : ""}{line.message}
+                        </span>
                       </div>
                     {/each}
                   </div>

@@ -47,11 +47,34 @@
     { label: "30 days",    hours: 24 * 30 },
   ];
 
+  // ---- sort -------------------------------------------------------------------
+  type SortCol = "created_at" | "module" | "level";
+  let sortCol = $state<SortCol>("created_at");
+  let sortDir = $state<"asc" | "desc">("desc");
+
+  function toggleSort(col: SortCol) {
+    if (sortCol === col) {
+      sortDir = sortDir === "asc" ? "desc" : "asc";
+    } else {
+      sortCol = col;
+      sortDir = col === "created_at" ? "desc" : "asc";
+    }
+  }
+
   // ---- derived ----------------------------------------------------------------
-  const shown = $derived(
+  const filtered = $derived(
     filterSearch.trim()
       ? items.filter(l => l.message.toLowerCase().includes(filterSearch.trim().toLowerCase()))
       : items,
+  );
+
+  const shown = $derived(
+    [...filtered].sort((a, b) => {
+      const av = a[sortCol] as string;
+      const bv = b[sortCol] as string;
+      const cmp = av.localeCompare(bv);
+      return sortDir === "asc" ? cmp : -cmp;
+    }),
   );
 
   // ---- URL sync ---------------------------------------------------------------
@@ -327,9 +350,24 @@
         <Table.Root class="w-full">
           <Table.Header class="sticky top-0 z-10 bg-card">
             <Table.Row>
-              <Table.Head class="w-40">Time</Table.Head>
-              <Table.Head class="w-24">Module</Table.Head>
-              <Table.Head class="w-14">Level</Table.Head>
+              <Table.Head class="w-40">
+                <button class="flex items-center gap-1 hover:text-foreground" onclick={() => toggleSort("created_at")}>
+                  Time
+                  {#if sortCol === "created_at"}<span class="text-primary">{sortDir === "asc" ? "↑" : "↓"}</span>{:else}<span class="text-muted-foreground/40">↕</span>{/if}
+                </button>
+              </Table.Head>
+              <Table.Head class="w-24">
+                <button class="flex items-center gap-1 hover:text-foreground" onclick={() => toggleSort("module")}>
+                  Module
+                  {#if sortCol === "module"}<span class="text-primary">{sortDir === "asc" ? "↑" : "↓"}</span>{:else}<span class="text-muted-foreground/40">↕</span>{/if}
+                </button>
+              </Table.Head>
+              <Table.Head class="w-14">
+                <button class="flex items-center gap-1 hover:text-foreground" onclick={() => toggleSort("level")}>
+                  Level
+                  {#if sortCol === "level"}<span class="text-primary">{sortDir === "asc" ? "↑" : "↓"}</span>{:else}<span class="text-muted-foreground/40">↕</span>{/if}
+                </button>
+              </Table.Head>
               <Table.Head class="w-28">Entity</Table.Head>
               <Table.Head>Message</Table.Head>
               <Table.Head class="w-32">Trace ID</Table.Head>
