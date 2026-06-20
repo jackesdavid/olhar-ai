@@ -6,6 +6,32 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-06-20 — Wire-bend UX + E2E test suite + prod seed
+
+- **Branch:** `main` (all work merged via PRs #2–#6; pushed)
+- **Commits:** `529ac87` → `ec958e5` (PRs #2–#6 merged + final test fix)
+- **Done:**
+  - **Wire reroute UX (PR #2):** Fixed hover/drag — moved `onpointerenter/leave` from inner `<path>` to `<g>` wrapper so the bend dot doesn't vanish when the cursor slides from the hit-path to the dot.
+  - **Direct wire bending (PR #3):** Removed the "reroute pin" intermediary. Click+drag anywhere on a wire to bend it at that point. Alt+click wire to delete the edge. Alt+click the bend dot to straighten back to a single bezier.
+  - **Svelte reactivity fix (PR #4):** `edgeVias` was a `Map` — `Map.set()` mutations don't trigger Svelte 5 re-renders. Changed to a plain `$state<Record<string, {x,y}>>({})` object; assignments (`obj[k] = v`) are always reactive.
+  - **E2E suite (PR #5):** `sentinel-app/e2e/workflow-wire-bend.spec.ts` — 3 Playwright tests: real-time drag reactivity (guards the Map bug), bend handle persist + alt+click straighten, alt+click wire delete. `playwright.config.ts`, `global.setup.ts`, `.env.test.example` added.
+  - **Prod seed + fixture fixes (PR #6):** `e2e/seed.ts` — one command (`npm run test:e2e:seed`) creates `e2e-sentinel@thesentinels.online` on prod control (signup or login fallback) and writes `.env.test` with credentials + `E2E_TOKEN`. Fixed: `apiToken` sync (no localStorage read), empty-body API responses, unique timestamped workflow names per run, `<tr>` XPath ancestor click.
+  - **SVG visibility fix (direct commit `ec958e5`):** Playwright marks SVG `<path>` elements with `fill:none` as "hidden". Changed assertions to `toBeAttached()`.
+  - **Deployed:** `task cloud-deploy -- sentinel-app` — prod running commit `c0b81c3` with `data-canvas` attribute on the SVG canvas.
+- **State:**
+  - All 4 E2E tests pass locally (localhost:5173 → prod control) and against prod: `4 passed (37.4s)`.
+  - `npm run test:e2e:seed` creates the test account idempotently.
+  - No Rust changes this session; `cargo check` not re-run (not needed).
+  - `svelte-check` not re-run (no type-unsafe changes).
+- **Pending / next:**
+  1. **Wire bend persistence** — bends (`edgeVias`) are in-memory only; lost on page refresh. Fix: add `via: Option<{x,y}>` to `Edge` struct in `crates/app-core/src/workflows/domain.rs` (graph is stored as a JSON blob so no migration needed), add `PATCH /workflows/:id/edges/:idx/via` endpoint in `sentinel-control/src/domain/workflows.rs`, frontend saves on `pointerup` in `_onCanvasUp` and populates `edgeVias` on graph load.
+  2. Stale test workflows on prod e2e account (IDs 1–12, all named `__e2e_wire_bend__` from prior debug runs). Safe to delete manually via the Sentinel UI or a one-off curl — they belong to `e2e-sentinel@thesentinels.online`.
+  3. GPU sidecar CUDA mismatch (ongoing from previous session — see 2026-06-19 entry).
+- **Blockers:** none.
+- **Refs:** `sentinel-app/src/routes/workflows/+page.svelte` (edgeVias, onCanvasMove/Up), `crates/app-core/src/workflows/domain.rs:1037` (Edge struct), `sentinel-control/src/domain/workflows.rs:53` (edge routes), `sentinel-app/e2e/`
+
+---
+
 ## 2026-06-19 — GPU box setup: Tailscale + SSH + sidecar build (CUDA mismatch blocked)
 
 - **Branch:** worktree `scalable-bouncing-hamming` off `new-ui`; plan note committed to `feat/map-redesign` via cherry-pick
