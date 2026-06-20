@@ -11,31 +11,31 @@
 import { test, expect, type Page } from "@playwright/test";
 
 const CONTROL_URL = process.env.E2E_CONTROL_URL ?? "https://control.thesentinels.online";
+// Token written to .env.test by e2e/seed.ts — avoids reading localStorage before page.goto.
 const E2E_TOKEN   = process.env.E2E_TOKEN ?? "";
 
 // ---------------------------------------------------------------------------
 // Helpers — call the control API directly to seed / clean up test data.
 // ---------------------------------------------------------------------------
 
-async function apiToken(page: Page): Promise<string> {
-  // Prefer an explicit token from env (fast); fall back to reading it from
-  // the app's localStorage (set during the auth setup step).
-  if (E2E_TOKEN) return E2E_TOKEN;
-  return page.evaluate(() => localStorage.getItem("sentinel_token") ?? "");
+function apiToken(_page: Page): string {
+  if (!E2E_TOKEN) throw new Error("E2E_TOKEN not set — run `npm run test:e2e:seed` first");
+  return E2E_TOKEN;
 }
 
 async function apiPost<T>(page: Page, path: string, body: unknown): Promise<T> {
-  const token = await apiToken(page);
+  const token = apiToken(page);
   const res = await page.request.post(`${CONTROL_URL}${path}`, {
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     data: body,
   });
   if (!res.ok()) throw new Error(`POST ${path} → ${res.status()}: ${await res.text()}`);
-  return res.json() as Promise<T>;
+  const text = await res.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }
 
 async function apiDelete(page: Page, path: string): Promise<void> {
-  const token = await apiToken(page);
+  const token = apiToken(page);
   await page.request.delete(`${CONTROL_URL}${path}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -47,9 +47,12 @@ async function apiDelete(page: Page, path: string): Promise<void> {
 
 async function withTestWorkflow(
   page: Page,
-  fn: (graphId: number) => Promise<void>,
+  fn: () => Promise<void>,
 ): Promise<void> {
-  const graphId = await apiPost<number>(page, "/workflows", { name: "__e2e_wire_bend__" });
+  // Unique name per test run to avoid collisions if previous runs left stale workflows.
+  const wfName = `__e2e_bend_${Date.now()}__`;
+
+  const graphId = await apiPost<number>(page, "/workflows", { name: wfName });
 
   // Two nodes with a wire between them so the editor has an edge to interact with.
   // Print → Print is the simplest node kind that needs no config.
@@ -65,7 +68,15 @@ async function withTestWorkflow(
   });
 
   try {
-    await fn(graphId);
+    // Navigate to the list. Find the row and click it to open the graph editor.
+    await page.goto("/workflows");
+    const nameCell = page.locator("td").filter({ hasText: wfName }).first();
+    await expect(nameCell).toBeVisible({ timeout: 15_000 });
+    // Click the row (tr) rather than the cell to ensure the onclick fires.
+    const row = nameCell.locator("xpath=ancestor::tr");
+    await row.click();
+
+    await fn();
   } finally {
     await apiDelete(page, `/workflows/${graphId}`).catch(() => {});
   }
@@ -77,10 +88,8 @@ async function withTestWorkflow(
 
 test.describe("workflow wire bending", () => {
   test("dragging a wire creates a visible bend in real-time", async ({ page }) => {
-    await withTestWorkflow(page, async (graphId) => {
-      await page.goto(`/workflows?graph=${graphId}`);
-
-      // Wait for the SVG canvas to be present.
+    await withTestWorkflow(page, async () => {
+      // Wait for the SVG canvas to be present (the editor mounts after the row click).
       const canvas = page.locator("svg[data-canvas]");
       await expect(canvas).toBeVisible({ timeout: 10_000 });
 
@@ -127,9 +136,7 @@ test.describe("workflow wire bending", () => {
   });
 
   test("bend handle appears after drag and stays draggable", async ({ page }) => {
-    await withTestWorkflow(page, async (graphId) => {
-      await page.goto(`/workflows?graph=${graphId}`);
-
+    await withTestWorkflow(page, async () => {
       const canvas = page.locator("svg[data-canvas]");
       await expect(canvas).toBeVisible({ timeout: 10_000 });
 
@@ -162,9 +169,7 @@ test.describe("workflow wire bending", () => {
   });
 
   test("alt+click on wire deletes it", async ({ page }) => {
-    await withTestWorkflow(page, async (graphId) => {
-      await page.goto(`/workflows?graph=${graphId}`);
-
+    await withTestWorkflow(page, async () => {
       const canvas = page.locator("svg[data-canvas]");
       await expect(canvas).toBeVisible({ timeout: 10_000 });
 
