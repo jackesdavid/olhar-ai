@@ -288,7 +288,7 @@ const CREATE_ALERT_OUT: [Port; 3] = [
     p("ok", PortType::Bool, false),
 ];
 
-const RECORD_PRESENCE_IN: [Port; 7] = [
+const RECORD_PRESENCE_IN: [Port; 8] = [
     p("room", PortType::Text, false),
     p("category", PortType::Text, false),
     p("label", PortType::Text, false),
@@ -296,6 +296,7 @@ const RECORD_PRESENCE_IN: [Port; 7] = [
     p("bbox", PortType::NumArray, false),   // [x1,y1,x2,y2] from BreakPersonDetection
     p("frame_w", PortType::Num, false),     // source image width in pixels
     p("frame_h", PortType::Num, false),     // source image height in pixels
+    p("duration_secs", PortType::Num, false),
 ];
 const RECORD_PRESENCE_OUT: [Port; 2] = [
     p("id", PortType::Num, false),

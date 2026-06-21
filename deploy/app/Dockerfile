@@ -17,4 +17,6 @@ RUN npm run build
 FROM nginx:alpine
 COPY deploy/app/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/build /usr/share/nginx/html
+ARG VITE_COMMIT=dev
+RUN echo "{\"commit\":\"${VITE_COMMIT}\"}" > /usr/share/nginx/html/version.json
 EXPOSE 80

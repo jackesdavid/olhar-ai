@@ -119,10 +119,11 @@
 
   onMount(() => {
     load();
-    // Live-refresh when the chat agent raises/delivers/deletes an alert.
     const unlisten = onEvent("alerts-changed", () => load());
+    const unlistenOpen = onEvent("stream-open", () => load());
     return () => {
       unlisten.then((un) => un());
+      unlistenOpen.then((un) => un());
     };
   });
 

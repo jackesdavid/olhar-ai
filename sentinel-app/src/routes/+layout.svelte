@@ -111,6 +111,27 @@
     if (localStorage.getItem("sentinel.navCollapsed") === "true")
       navCollapsed = true;
     cloudBoot();
+
+    if (COMMIT === "dev") return;
+    let updateToasted = false;
+    const checkVersion = async () => {
+      if (updateToasted) return;
+      try {
+        const res = await fetch("/version.json", { cache: "no-store" });
+        if (!res.ok) return;
+        const { commit } = (await res.json()) as { commit?: string };
+        if (commit && commit !== "dev" && commit !== COMMIT) {
+          updateToasted = true;
+          toast.info("Update available — reload to get the latest version.", {
+            duration: Infinity,
+            action: { label: "Reload", onClick: () => location.reload() },
+          });
+        }
+      } catch { /* silent */ }
+    };
+    const iv = setInterval(checkVersion, 5 * 60 * 1000);
+    void checkVersion();
+    return () => clearInterval(iv);
   });
 
   // App-wide alert toasts — only once authenticated. Subscribing earlier would fire
@@ -147,6 +168,25 @@
       unsub = u;
     });
     return () => unsub?.();
+  });
+
+  // Stream reconnect: show a persistent toast while the SSE connection is down.
+  $effect(() => {
+    if (!auth.me) return;
+    let disconnectToastId: string | number | undefined;
+    let unOpen: (() => void) | null = null;
+    let unClosed: (() => void) | null = null;
+    onEvent("stream-open", () => {
+      if (disconnectToastId != null) {
+        toast.dismiss(disconnectToastId);
+        disconnectToastId = undefined;
+      }
+    }).then((u) => { unOpen = u; });
+    onEvent("stream-closed", () => {
+      if (disconnectToastId == null)
+        disconnectToastId = toast.warning("Connection lost — reconnecting…", { duration: Infinity });
+    }).then((u) => { unClosed = u; });
+    return () => { unOpen?.(); unClosed?.(); };
   });
 
   function isActive(href: string): boolean {

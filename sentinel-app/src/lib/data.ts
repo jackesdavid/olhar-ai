@@ -68,7 +68,16 @@ function ensureCloudStream(): void {
     if (!msg.event) return;
     cloudSubs.get(msg.event)?.forEach((cb) => cb(msg));
   };
-  // EventSource auto-reconnects on error; keep it open.
+  es.onerror = (e) => {
+    const src = e.target as EventSource;
+    // CONNECTING (0) = browser is retrying on its own — leave it alone.
+    // CLOSED (2) = browser gave up (e.g. 502 during pod restart) — clear and retry manually.
+    if (src.readyState === EventSource.CLOSED) {
+      cloudSubs.get("stream-closed")?.forEach((cb) => cb());
+      if (cloudStream === src) cloudStream = null;
+      setTimeout(ensureCloudStream, 3000);
+    }
+  };
   cloudStream = es;
 }
 
