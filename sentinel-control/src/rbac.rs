@@ -21,6 +21,8 @@ pub const PERMISSIONS: &[(&str, &str)] = &[
     ("settings.write", "Change settings"),
     ("users.manage", "Invite and manage users"),
     ("roles.manage", "Manage roles and permissions"),
+    ("recordings.read", "View recorded clips"),
+    ("recordings.write", "Create or delete recordings"),
 ];
 
 /// All action keys (the Admin role gets these — including `live.view`).

@@ -24,6 +24,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/streams", get(streams))
         .route("/snapshot/:ip", get(snapshot))
         .route("/reload", post(reload))
+        .route("/recording/start", post(recording_start))
+        .route("/recording/stop", post(recording_stop))
+        .route("/recording/:clip_id", get(recording_get))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -113,4 +116,109 @@ async fn reload(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let n = state.reload(0);
     log::info!("devices reloaded on request — {n} device(s)");
     Json(json!({ "reloaded": n }))
+}
+
+// ---- Recording routes (called by sentinel-flow workflow nodes) --------------
+
+#[derive(serde::Deserialize)]
+struct StartRecordingReq {
+    camera_ip: String,
+    #[serde(default)]
+    pre_roll_secs: Option<u32>,
+}
+
+async fn recording_start(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<StartRecordingReq>,
+) -> impl IntoResponse {
+    let mgr = state.recording.clone();
+    match tokio::task::spawn_blocking(move || mgr.start(&body.camera_ip)).await {
+        Ok(Ok(clip_id)) => Json(json!({ "clip_id": clip_id })).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct StopRecordingReq {
+    camera_ip:  String,
+    #[serde(default)]
+    clip_id:    Option<String>,
+}
+
+async fn recording_stop(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<StopRecordingReq>,
+) -> impl IntoResponse {
+    let mgr = state.recording.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        if let Some(id) = body.clip_id.filter(|s| !s.is_empty()) {
+            mgr.stop(&id)
+        } else {
+            mgr.stop_by_ip(&body.camera_ip)
+                .unwrap_or_else(|| Err(format!("no active session for {}", body.camera_ip)))
+        }
+    })
+    .await;
+
+    match result {
+        Ok(Ok(meta)) => {
+            // Push the clip manifest to control so the DB + browsers know about it.
+            let control_url = state.control_url.clone();
+            let payload = serde_json::json!({
+                "camera_ip": meta.camera_ip,
+                "clip_id": meta.clip_id,
+                "duration_secs": meta.duration_secs,
+                "size_bytes": meta.size_bytes,
+                "started_at": meta.started_at,
+            });
+            tokio::task::spawn_blocking(move || {
+                let url = format!("{control_url}/config/recordings/clip");
+                let mut req = ureq::AgentBuilder::new()
+                    .timeout(std::time::Duration::from_secs(10))
+                    .build()
+                    .post(&url);
+                if let Ok(t) = std::env::var("BOX_TOKEN") {
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        req = req.set("Authorization", &format!("Bearer {t}"));
+                    }
+                }
+                if let Err(e) = req.send_string(&payload.to_string()) {
+                    log::warn!("clip push failed: {e}");
+                }
+            });
+            Json(json!({
+                "clip_id": meta.clip_id,
+                "duration_secs": meta.duration_secs,
+                "size_bytes": meta.size_bytes,
+            }))
+            .into_response()
+        }
+        Ok(Err(e)) => (StatusCode::NOT_FOUND, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
+    }
+}
+
+/// Serve the raw clip file (used by control's download proxy).
+async fn recording_get(
+    State(state): State<Arc<AppState>>,
+    Path(clip_id): Path<String>,
+) -> impl IntoResponse {
+    let mgr = state.recording.clone();
+    match tokio::task::spawn_blocking(move || mgr.clip_path(&clip_id)).await {
+        Ok(Some(path)) => {
+            match tokio::fs::read(&path).await {
+                Ok(bytes) => (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "video/mp4")],
+                    Body::from(bytes),
+                )
+                    .into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("read: {e}")).into_response(),
+            }
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "clip not found").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
+    }
 }

@@ -28,6 +28,7 @@ pub fn router() -> Router<AppState> {
         .route("/boxes/:id/logs", get(box_logs))
         .route("/boxes/:id/logs/stream", get(box_logs_stream))
         .route("/internal/box-upstream", get(box_upstream))
+        .route("/boxes/:id/recording-config", axum::routing::patch(patch_recording_config))
 }
 
 fn db_err(e: sqlx::Error) -> ApiErr {
@@ -202,4 +203,25 @@ async fn box_logs_stream(
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(out);
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+/// Update the ring-buffer + recording config for a box (tenant admin only).
+async fn patch_recording_config(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<Uuid>,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> Result<axum::response::Json<serde_json::Value>, ApiErr> {
+    auth::require(&c, "settings.write")?;
+    let tid = tenant_of(&c)?;
+    let updated = store::set_recording_config(&st.pool, tid, id, body.clone())
+        .await
+        .map_err(|e| {
+            log::error!("set_recording_config: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+        })?;
+    if !updated {
+        return Err(err(StatusCode::NOT_FOUND, "box not found"));
+    }
+    Ok(axum::response::Json(body))
 }

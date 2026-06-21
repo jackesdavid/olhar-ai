@@ -22,6 +22,8 @@ pub struct AppState {
     pub own_go2rtc: bool,
     pub go2rtc_config: PathBuf,
     pub go2rtc_bin: PathBuf,
+    /// Ring-buffer + clip recording manager.
+    pub recording: Arc<crate::recording::RecordingManager>,
 }
 
 impl AppState {
@@ -55,6 +57,8 @@ impl AppState {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("go2rtc"));
 
+        let recording = crate::recording::RecordingManager::boot(&control_url);
+
         Arc::new(AppState {
             control_url,
             devices: Mutex::new(devices),
@@ -63,6 +67,7 @@ impl AppState {
             own_go2rtc,
             go2rtc_config,
             go2rtc_bin,
+            recording,
         })
     }
 

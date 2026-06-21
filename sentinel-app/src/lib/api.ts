@@ -92,6 +92,14 @@ export const boxes = {
   /** EventSource URL for a box's live log tail (token in query — EventSource can't set headers). */
   logsStreamUrl: (id: string) =>
     `${API_BASE}/boxes/${encodeURIComponent(id)}/logs/stream?token=${encodeURIComponent(auth.token ?? "")}`,
+  patchRecordingConfig: (id: string, config: RecordingConfig) =>
+    api.patch<RecordingConfig>(`/boxes/${id}/recording-config`, config),
+};
+
+export type RecordingConfig = {
+  pre_roll_secs: number;
+  max_storage_mb: number;
+  codec: string;
 };
 
 export type PlatformLog = {
@@ -139,6 +147,30 @@ export const platformLogs = {
     const qs = p.toString();
     return api.get<PlatformLogsPage>(`/platform-logs${qs ? `?${qs}` : ""}`);
   },
+};
+
+// ---- Recordings -------------------------------------------------------------
+
+export type Recording = {
+  id: number;
+  camera_ip: string;
+  clip_id: string;
+  duration_secs: number;
+  size_bytes: number;
+  started_at: string;  // RFC3339
+  created_at: string;  // RFC3339
+};
+
+export const recordings = {
+  list: (opts?: { camera_ip?: string; limit?: number }) => {
+    const p = new URLSearchParams();
+    if (opts?.camera_ip) p.set("camera_ip", opts.camera_ip);
+    if (opts?.limit != null) p.set("limit", String(opts.limit));
+    const qs = p.toString();
+    return api.get<Recording[]>(`/recordings${qs ? `?${qs}` : ""}`);
+  },
+  del: (id: number) => api.del<void>(`/recordings/${id}`),
+  downloadUrl: (id: number) => `${API_BASE}/recordings/${id}/download`,
 };
 
 export const admin = {

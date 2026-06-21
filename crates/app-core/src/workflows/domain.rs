@@ -265,6 +265,13 @@ pub enum NodeKind {
     /// Wire organizer: a tiny pure passthrough node (any → any) used to bend and route
     /// wires cleanly across the canvas, like Unreal's reroute node. Zero config.
     Reroute,
+    /// Recording: tell the edge to start recording on the given `camera_ip`. Idempotent —
+    /// if already recording, the request is a no-op. Outputs `clip_id` (Text) that can
+    /// be passed to `StopRecording` to stop a specific clip.
+    StartRecording,
+    /// Recording: tell the edge to stop a recording started by `StartRecording`. Pass
+    /// the `clip_id` from `StartRecording` to stop the correct clip. Exec passes through.
+    StopRecording,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -491,6 +498,19 @@ const ASK_AI_IN: [Port; 2] =
 const REROUTE_IN: [Port; 1] = [p("value", PortType::Any, false)];
 const REROUTE_OUT: [Port; 1] = [p("value", PortType::Any, false)];
 
+// StartRecording: camera ip + optional duration hint.
+const START_RECORDING_IN: [Port; 2] = [
+    p("camera_ip", PortType::Text, true),
+    p("pre_roll_secs", PortType::Num, false),
+];
+const START_RECORDING_OUT: [Port; 1] = [p("clip_id", PortType::Text, false)];
+
+// StopRecording: clip_id from StartRecording.
+const STOP_RECORDING_IN: [Port; 2] = [
+    p("camera_ip", PortType::Text, true),
+    p("clip_id", PortType::Text, false),
+];
+
 const GET_CAMERA_BY_NAME_OUT: [Port; 1] = [p("camera", PortType::Camera, false)];
 
 const BREAK_CAMERA_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
@@ -519,7 +539,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 48] = [
+    pub const ALL: [NodeKind; 50] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -568,6 +588,8 @@ impl NodeKind {
         NodeKind::StringSwitch,
         NodeKind::AskAi,
         NodeKind::Comment,
+        NodeKind::StartRecording,
+        NodeKind::StopRecording,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -623,6 +645,8 @@ impl NodeKind {
             NodeKind::AskAi => "ask_ai",
             NodeKind::Comment => "comment",
             NodeKind::Reroute => "reroute",
+            NodeKind::StartRecording => "start_recording",
+            NodeKind::StopRecording => "stop_recording",
         }
     }
 
@@ -681,6 +705,8 @@ impl NodeKind {
             NodeKind::AskAi => "AI If",
             NodeKind::Comment => "Comment",
             NodeKind::Reroute => "Reroute",
+            NodeKind::StartRecording => "Start recording",
+            NodeKind::StopRecording => "Stop recording",
         }
     }
 
@@ -729,6 +755,7 @@ impl NodeKind {
             NodeKind::RecordPresence => "Presence",
             NodeKind::Comment => "Utility",
             NodeKind::Reroute => "Utility",
+            NodeKind::StartRecording | NodeKind::StopRecording => "Recording",
         }
     }
 
@@ -826,6 +853,8 @@ impl NodeKind {
             NodeKind::AskAi => &ASK_AI_IN,
             NodeKind::Comment => &NO_PORTS,
             NodeKind::Reroute => &REROUTE_IN,
+            NodeKind::StartRecording => &START_RECORDING_IN,
+            NodeKind::StopRecording => &STOP_RECORDING_IN,
         }
     }
 
@@ -876,6 +905,8 @@ impl NodeKind {
             NodeKind::AskAi => &NO_PORTS, // exec outputs are true/false branches only
             NodeKind::Comment => &NO_PORTS,
             NodeKind::Reroute => &REROUTE_OUT,
+            NodeKind::StartRecording => &START_RECORDING_OUT,
+            NodeKind::StopRecording => &NO_PORTS,
         }
     }
 
@@ -945,6 +976,8 @@ impl NodeKind {
             NodeKind::AskAi => json!({ "question": "", "timeout_secs": "65" }),
             NodeKind::Comment => json!({ "text": "Comment", "color": "#facc15", "width": 400, "height": 200 }),
             NodeKind::Reroute => json!({}),
+            NodeKind::StartRecording => json!({ "timeout_secs": "30" }),
+            NodeKind::StopRecording => json!({ "timeout_secs": "15" }),
         }
     }
 }

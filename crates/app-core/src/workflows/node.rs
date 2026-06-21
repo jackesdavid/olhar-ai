@@ -365,6 +365,8 @@ pub fn run_node(
         // Comment is a canvas organizer — it never executes.
         // Reroute is collapsed to a direct edge before the engine runs (see engine::flatten_reroutes).
         NodeKind::Comment | NodeKind::Reroute => Ok(PortValues::new()),
+        NodeKind::StartRecording => run_start_recording(config, inputs, sys),
+        NodeKind::StopRecording => run_stop_recording(inputs, sys),
     }
 }
 
@@ -384,6 +386,7 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         NodeKind::DescribeImage => 65,
         NodeKind::HttpPost | NodeKind::NotifyRecipient | NodeKind::DeliverAlert => 35,
         NodeKind::CreateAlert | NodeKind::RecordPresence => 15,
+        NodeKind::StartRecording | NodeKind::StopRecording => 30,
         // Inline (no watchdog): instant/pure nodes + the deliberate `Wait` sleep + the
         // engine-driven markers (ForEach/EmitEvent/OnEvent/ShowImage/FlipFlop).
         NodeKind::Wait
@@ -821,6 +824,8 @@ pub fn debug_summary(
         }
         NodeKind::Comment => "comment".into(),
         NodeKind::Reroute => "reroute".into(),
+        NodeKind::StartRecording => txt("clip_id").map(|id| format!("recording started: {id}")).unwrap_or_else(|| "recording started".into()),
+        NodeKind::StopRecording => "recording stopped".into(),
     }
 }
 
@@ -1534,6 +1539,86 @@ pub(crate) fn to_jpeg(bytes: &[u8]) -> Result<Vec<u8>, String> {
     img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
         .map_err(|e| format!("encode snapshot: {e}"))?;
     Ok(out)
+}
+
+// ---- Recording nodes -------------------------------------------------------
+// These call the edge's HTTP API (ureq, blocking). The edge host is resolved
+// from `tenant_boxes` via the shared Postgres pool in `sys.db`.
+
+fn resolve_edge_base(sys: &ToolContext) -> Result<String, String> {
+    let pool = sys.db.pool();
+    let tid = sys.tenant_id;
+    let host: Option<String> = sys.db.block(async move {
+        let row: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT magicdns_host FROM tenant_boxes
+              WHERE tenant_id = $1 AND magicdns_host IS NOT NULL
+           ORDER BY last_seen DESC NULLS LAST LIMIT 1",
+        )
+        .bind(tid)
+        .fetch_optional(&pool)
+        .await
+        .unwrap_or(None);
+        row.and_then(|(h,)| h)
+    });
+    let h = host.ok_or("no edge box connected for this tenant")?;
+    let trimmed = h.trim().trim_end_matches('/');
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        Ok(trimmed.to_string())
+    } else {
+        Ok(format!("https://{trimmed}"))
+    }
+}
+
+fn run_start_recording(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+    let camera_ip = inputs
+        .get("camera_ip")
+        .and_then(PortValue::as_text)
+        .or_else(|| config.get("camera_ip").and_then(|v| v.as_str()))
+        .ok_or("missing required input 'camera_ip'")?
+        .to_string();
+    let pre_roll = inputs
+        .get("pre_roll_secs")
+        .and_then(PortValue::as_num)
+        .map(|n| n as u64);
+    let base = resolve_edge_base(sys)?;
+    let mut body = serde_json::json!({ "camera_ip": camera_ip });
+    if let Some(pr) = pre_roll {
+        body["pre_roll_secs"] = serde_json::Value::Number(pr.into());
+    }
+    let resp = ureq::post(&format!("{base}/recording/start"))
+        .set("Content-Type", "application/json")
+        .send_string(&body.to_string())
+        .map_err(|e| format!("edge start_recording: {e}"))?;
+    let clip_id: String = resp
+        .into_json::<serde_json::Value>()
+        .ok()
+        .and_then(|v: serde_json::Value| {
+            v.get("clip_id").and_then(|s| s.as_str()).map(str::to_string)
+        })
+        .unwrap_or_else(|| format!("{camera_ip}-{}", chrono::Utc::now().timestamp()));
+    let mut o = PortValues::new();
+    o.insert("clip_id".into(), PortValue::Text(clip_id));
+    Ok(o)
+}
+
+fn run_stop_recording(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+    let camera_ip = inputs
+        .get("camera_ip")
+        .and_then(PortValue::as_text)
+        .ok_or("missing required input 'camera_ip'")?
+        .to_string();
+    let clip_id = inputs
+        .get("clip_id")
+        .and_then(PortValue::as_text)
+        .unwrap_or("")
+        .to_string();
+    let base = resolve_edge_base(sys)?;
+    let body = serde_json::json!({ "camera_ip": camera_ip, "clip_id": clip_id });
+    ureq::post(&format!("{base}/recording/stop"))
+        .set("Content-Type", "application/json")
+        .send_string(&body.to_string())
+        .map_err(|e| format!("edge stop_recording: {e}"))?;
+    Ok(PortValues::new())
 }
 
 #[cfg(test)]

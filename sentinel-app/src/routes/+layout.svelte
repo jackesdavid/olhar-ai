@@ -219,6 +219,7 @@
     "/map": "map.read",
     "/chat": null,
     "/workflows": "workflows.read",
+    "/recordings": "recordings.read",
     "/logs": "devices.read",
     "/settings": "settings.read",
   };

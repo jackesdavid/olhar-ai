@@ -33,6 +33,8 @@ pub fn router(state: AppState) -> Router {
         .route("/config/streaming", post(streaming_push))
         .route("/config/logs", post(box_logs_push))
         .route("/config/motion", post(motion_push))
+        .route("/config/recording", get(recording_config))
+        .route("/config/recordings/clip", post(clip_push))
         .merge(handlers::router())
         .merge(crate::domain::router())
         .nest_service("/edge", ServeDir::new(edge_dist))
@@ -350,6 +352,48 @@ async fn discovered_push(State(st): State<AppState>, headers: HeaderMap, body: O
         Err(e) => {
             log::error!("upsert_discovered failed: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, "store failed").into_response()
+        }
+    }
+}
+
+/// Return the recording config for the authenticated edge box.
+async fn recording_config(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let Some(tok) = token else {
+        return (StatusCode::UNAUTHORIZED, "box token required").into_response();
+    };
+    let hash = hex::encode(Sha256::digest(tok.as_bytes()));
+    match store::recording_config_by_token(&st.pool, &hash).await {
+        Ok(Some(cfg)) => Json(cfg).into_response(),
+        Ok(None) => (StatusCode::UNAUTHORIZED, "unknown box token").into_response(),
+        Err(e) => {
+            log::error!("recording_config_by_token: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response()
+        }
+    }
+}
+
+/// The edge pushes a finalised clip manifest (box token). Persists metadata
+/// and fans out a `recording-ready` SSE event to the tenant's browsers.
+async fn clip_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<crate::domain::recordings::ClipPush>>) -> Response {
+    let tenant = match box_tenant(&st, &headers).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
+        Err(resp) => return resp,
+    };
+    let Some(Json(clip)) = body else {
+        return (StatusCode::BAD_REQUEST, "clip body required").into_response();
+    };
+    match crate::domain::recordings::push_clip(&st.pool, tenant, clip).await {
+        Ok(id) => Json(serde_json::json!({ "id": id })).into_response(),
+        Err(e) => {
+            log::error!("clip push failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
         }
     }
 }

@@ -433,6 +433,111 @@ pub async fn box_host_for_tenant(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result
     Ok(row.and_then(|(h,)| h))
 }
 
+// ---- recording config (per box) --------------------------------------------
+
+/// The recording_config jsonb for a specific box, resolved by its token hash.
+pub async fn recording_config_by_token(pool: &PgPool, token_hash: &str) -> sqlx::Result<Option<serde_json::Value>> {
+    let row: Option<(serde_json::Value,)> = sqlx::query_as(
+        "SELECT recording_config FROM tenant_boxes WHERE token_hash = $1",
+    )
+    .bind(token_hash)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(v,)| v))
+}
+
+pub async fn set_recording_config(pool: &PgPool, tenant_id: Uuid, box_id: Uuid, config: serde_json::Value) -> sqlx::Result<bool> {
+    let r = sqlx::query(
+        "UPDATE tenant_boxes SET recording_config = $1 WHERE tenant_id = $2 AND id = $3",
+    )
+    .bind(config)
+    .bind(tenant_id)
+    .bind(box_id)
+    .execute(pool)
+    .await?;
+    Ok(r.rows_affected() > 0)
+}
+
+// ---- recordings (clip metadata pushed by edge) -----------------------------
+
+#[derive(sqlx::FromRow, serde::Serialize)]
+pub struct RecordingRow {
+    pub id:            i64,
+    pub camera_ip:     String,
+    pub clip_id:       String,
+    pub duration_secs: i32,
+    pub size_bytes:    i64,
+    pub started_at:    String,
+    pub created_at:    String,
+}
+
+pub async fn insert_recording(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    camera_ip: &str,
+    clip_id: &str,
+    duration_secs: i32,
+    size_bytes: i64,
+    started_at: &str,
+) -> sqlx::Result<i64> {
+    let now = app_core::alerts::now_rfc3339();
+    let (id,): (i64,) = sqlx::query_as(
+        "INSERT INTO recordings (tenant_id, camera_ip, clip_id, duration_secs, size_bytes, started_at, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
+    )
+    .bind(tenant_id)
+    .bind(camera_ip)
+    .bind(clip_id)
+    .bind(duration_secs)
+    .bind(size_bytes)
+    .bind(started_at)
+    .bind(now)
+    .fetch_one(pool)
+    .await?;
+    Ok(id)
+}
+
+pub async fn list_recordings(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    camera_ip: Option<&str>,
+    limit: i64,
+) -> sqlx::Result<Vec<RecordingRow>> {
+    if let Some(ip) = camera_ip {
+        sqlx::query_as::<_, RecordingRow>(
+            "SELECT id, camera_ip, clip_id, duration_secs, size_bytes, started_at, created_at
+               FROM recordings WHERE tenant_id = $1 AND camera_ip = $2
+              ORDER BY started_at DESC LIMIT $3",
+        )
+        .bind(tenant_id).bind(ip).bind(limit)
+        .fetch_all(pool).await
+    } else {
+        sqlx::query_as::<_, RecordingRow>(
+            "SELECT id, camera_ip, clip_id, duration_secs, size_bytes, started_at, created_at
+               FROM recordings WHERE tenant_id = $1
+              ORDER BY started_at DESC LIMIT $2",
+        )
+        .bind(tenant_id).bind(limit)
+        .fetch_all(pool).await
+    }
+}
+
+pub async fn get_recording(pool: &PgPool, tenant_id: Uuid, id: i64) -> sqlx::Result<Option<RecordingRow>> {
+    sqlx::query_as::<_, RecordingRow>(
+        "SELECT id, camera_ip, clip_id, duration_secs, size_bytes, started_at, created_at
+           FROM recordings WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant_id).bind(id)
+    .fetch_optional(pool).await
+}
+
+pub async fn delete_recording(pool: &PgPool, tenant_id: Uuid, id: i64) -> sqlx::Result<bool> {
+    let r = sqlx::query("DELETE FROM recordings WHERE tenant_id = $1 AND id = $2")
+        .bind(tenant_id).bind(id)
+        .execute(pool).await?;
+    Ok(r.rows_affected() > 0)
+}
+
 // ---- tenants ----------------------------------------------------------------
 
 pub async fn list_tenants(pool: &PgPool) -> sqlx::Result<Vec<TenantRow>> {

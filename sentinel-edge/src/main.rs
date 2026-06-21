@@ -19,6 +19,7 @@ mod go2rtc;
 mod http;
 mod logbuf;
 mod motion;
+mod recording;
 mod state;
 mod tailscale;
 
