@@ -768,6 +768,17 @@
     selectedNodeId = null;
     pending = null;
     nodeImages = {}; // node ids restart per graph — drop the previous graph's previews
+    // Pre-fetch persisted ShowImage frames (DB-backed, survives flow restarts).
+    const showNodes = graphs.find((x) => x.id === id)?.nodes.filter((n: Node) => n.kind === "show_image") ?? [];
+    for (const n of showNodes) {
+      const url = data.runFrameUrl(id, n.id);
+      fetch(url).then((r) => {
+        if (r.ok) {
+          const label = typeof n.config?.label === "string" ? n.config.label : "";
+          nodeImages = { ...nodeImages, [n.id]: { src: `${url}&t=${Date.now()}`, label } };
+        }
+      }).catch(() => {});
+    }
     logs = [];
     void loadConsoleLogs(id);
     const v = graphs.find((x) => x.id === id)?.viewport;

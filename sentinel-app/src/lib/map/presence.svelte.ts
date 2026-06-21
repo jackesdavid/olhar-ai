@@ -25,13 +25,22 @@ export class PresenceStore {
   private seq = 0;
   private unsub: (() => void) | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
+  // Buffer live events that arrive before the map rooms finish loading.
+  private pendingLive: PresenceEvent[] = [];
 
   constructor(map: MapStore) {
     this.map = map;
   }
 
   async start(): Promise<void> {
-    this.unsub = await onEvent("presence", (p) => this.add(p as PresenceEvent));
+    // Subscribe to live events immediately, but buffer them while the map is loading.
+    this.unsub = await onEvent("presence", (p) => {
+      if (this.map.loading) {
+        this.pendingLive.push(p as PresenceEvent);
+      } else {
+        this.add(p as PresenceEvent);
+      }
+    });
     this.timer = setInterval(() => this.prune(), 500);
     // Seed from recent history so presence fired just before the map opened still shows.
     // Wait for the map's rooms to load first — otherwise locate() can't resolve a
@@ -40,6 +49,10 @@ export class PresenceStore {
       for (let i = 0; i < 100 && this.map.loading; i++) {
         await new Promise((r) => setTimeout(r, 50));
       }
+      // Flush any live events that arrived during loading.
+      for (const p of this.pendingLive) this.add(p);
+      this.pendingLive = [];
+
       const recent = await data.loadPresence(50);
       const now = Date.now();
       for (const r of recent) {
@@ -59,6 +72,7 @@ export class PresenceStore {
     this.unsub = null;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.pendingLive = [];
   }
 
   /** Where to draw the pulse: the detecting camera, else the room centre. */
@@ -99,20 +113,35 @@ export class PresenceStore {
       if (r) return { x: r.x + r.w / 2, z: r.y + r.h / 2 };
     }
     if (p.room_name) {
-      const name = p.room_name.toLowerCase();
-      const r = this.map.rooms.find((x) => x.name.toLowerCase() === name);
-      if (r) return { x: r.x + r.w / 2, z: r.y + r.h / 2 };
+      const name = p.room_name.toLowerCase().trim();
+      // Exact match first.
+      const exact = this.map.rooms.find((x) => x.name.toLowerCase().trim() === name);
+      if (exact) return { x: exact.x + exact.w / 2, z: exact.y + exact.h / 2 };
+      // Partial-contains fallback (handles "Living Room" vs "Living").
+      const partial = this.map.rooms.find(
+        (x) => x.name.toLowerCase().includes(name) || name.includes(x.name.toLowerCase().trim()),
+      );
+      if (partial) return { x: partial.x + partial.w / 2, z: partial.y + partial.h / 2 };
     }
+    // Last resort: if the map has any rooms at all, place at the centre of the first one
+    // so the pulse still shows. Better than a silent drop when room names don't align.
+    if (this.map.rooms.length > 0) {
+      const r = this.map.rooms[0];
+      console.warn(
+        "[presence] room/camera not matched — showing at first room centre. " +
+        `Event room_name="${p.room_name}" room_id=${p.room_id} camera=${p.camera}. ` +
+        "Fix: make sure the RecordPresence 'room' config matches a room name on the map.",
+      );
+      return { x: r.x + r.w / 2, z: r.y + r.h / 2 };
+    }
+    // No rooms on the map at all — nothing to show.
+    console.warn("[presence] dropped — map has no rooms. Add rooms in the Map editor first.", p);
     return null;
   }
 
   private add(p: PresenceEvent, ageMs = 0): void {
     const at = this.locate(p);
-    if (!at) {
-      // Most common cause: the room/camera on the event doesn't match any on the map.
-      console.warn("[presence] dropped — no map location for", p);
-      return;
-    }
+    if (!at) return;
     const ttl = p.duration_secs && p.duration_secs > 0 ? p.duration_secs * 1000 : FALLBACK_TTL_MS;
     console.debug("[presence] pulse", p.category, "at", at, "ttl", ttl / 1000, "s remaining", (ttl - ageMs) / 1000, "s");
     this.pulses = [

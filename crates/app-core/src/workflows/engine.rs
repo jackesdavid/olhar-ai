@@ -7,6 +7,7 @@
 //! resolving inputs from upstream outputs else config literals), stopping on the
 //! first node error. The trigger/concurrency methods are the pure decision logic
 //! the backend poller drives.
+use base64::Engine as _;
 use super::domain::{string_switch_arms, ConcurrencyPolicy, Graph, NodeKind, PortType, EXEC_IN};
 use super::repo;
 use super::node::{self, PortValue, PortValues};
@@ -474,6 +475,17 @@ fn forward_epoch(
                 inputs.get("image").and_then(PortValue::as_image).and_then(|b| node::to_jpeg(b).ok())
             {
                 let label = n.config.get("label").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                // Persist the frame so it survives browser refresh and flow restarts.
+                repo::set_node_state(
+                    &sys.db,
+                    sys.tenant_id,
+                    graph.id,
+                    nid,
+                    &serde_json::json!({
+                        "jpeg_b64": base64::engine::general_purpose::STANDARD.encode(&jpeg),
+                        "label": &label,
+                    }),
+                );
                 let _ = sys.ui_tx.send(ToolUiEvent::ShowImage { graph: graph.id, node: nid, label, jpeg });
             }
         }

@@ -2,6 +2,7 @@
 //! run state, asks for a manual run (`POST /runs` → 202, async-job style), and
 //! subscribes to the live event stream. The engine remains authoritative; SSE is an
 //! optimization layered over re-fetchable REST state.
+use base64::Engine as _;
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
@@ -147,14 +148,24 @@ async fn run_frame(
     State(state): State<Arc<AppState>>,
     Query(q): Query<FrameQuery>,
 ) -> impl IntoResponse {
+    // Fast path: in-memory cache (current or very recent run).
     let bytes = state.node_frames.lock().unwrap().get(&(q.tenant, q.graph, q.node)).cloned();
-    match bytes {
-        Some(jpeg) => (
-            StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "image/jpeg")],
-            jpeg,
-        )
-            .into_response(),
+    if let Some(jpeg) = bytes {
+        return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "image/jpeg")], jpeg).into_response();
+    }
+    // Fallback: persisted frame from workflow_node_state (survives flow restarts and browser refreshes).
+    let db = state.db.clone();
+    let saved = tokio::task::spawn_blocking(move || {
+        app_core::workflows::repo::get_node_state(&db, q.tenant, q.graph, q.node)
+    })
+    .await
+    .ok()
+    .flatten();
+    match saved
+        .and_then(|v| v.get("jpeg_b64").and_then(|b| b.as_str()).map(str::to_string))
+        .and_then(|b64| base64::engine::general_purpose::STANDARD.decode(b64).ok())
+    {
+        Some(jpeg) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "image/jpeg")], jpeg).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
