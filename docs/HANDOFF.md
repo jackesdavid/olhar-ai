@@ -6,6 +6,28 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-06-21 — Motion-triggered stream recorder (full implementation)
+
+- **Branch:** main (commit 5d32d0b, deployed)
+- **Commits:** 5d32d0b
+- **Done:**
+  - DB migration 0030: `tenant_boxes.recording_config` JSONB + `recordings` table (RFC3339 TEXT timestamps)
+  - sentinel-control: `recordings.read/write` permissions; `GET /recordings`, `POST /recordings`, `DELETE /recordings/:id`, `GET /recordings/:id/download` (proxies bytes from edge over tailnet); `PATCH /boxes/:id/recording-config`; edge-authenticated `GET /config/recording` + `POST /config/recordings/clip`
+  - app-core: `StartRecording` + `StopRecording` NodeKind (ALL 48→50); edge host resolved from `tenant_boxes` via `sys.db`; ureq json feature enabled for `into_json`
+  - sentinel-edge: `recording.rs` (RecordingManager — per-camera ffmpeg clip sessions, boot from /config/recording); `/recording/start|stop|:clip_id` routes; `AppState.recording` field; chrono added to Cargo.toml
+  - sentinel-app: `Recording` type + `recordings` API (list/del/downloadUrl); `RecordingConfig` type + `boxes.patchRecordingConfig`; Recordings nav item (Clapperboard); `/recordings` page (table, empty state, download link, delete button); `recordings.read` NAV_PERM gate
+  - E2E: `e2e/recordings.spec.ts` — empty-state check, seeded rows appear, delete removes row; seeds via `POST /recordings` (JWT with recordings.write)
+- **State:** `task cargo` clean, `task check` no new errors (9 pre-existing), `task build` clean; deployed sentinel-app + sentinel-control (commit 5d32d0b)
+- **Pending / next:**
+  - `/recordings` page settings section in boxes (recording config UI — `pre_roll_secs`, `max_storage_mb`, `codec`)
+  - sentinel-flow: `StartRecording` + `StopRecording` are wired in domain.rs/node.rs but the edge binary hasn't been rebuilt/deployed — edge recording routes exist but require a local binary push (see deploy ref)
+  - E2E: tests skip gracefully if seeds fail (403 — recordings.write not in test tenant role). May need to grant recordings.write to the test tenant's viewer role, or the seed user needs Admin role
+  - Run `npm run test:e2e -- recordings` against prod to verify
+- **Blockers:** None — edge binary deploy requires local build (GH Actions billing-blocked)
+- **Refs:** `docs/plans/motion-triggered-recorder.md`, `crates/app-core/migrations/0030_recordings.sql`, `sentinel-control/src/domain/recordings.rs`, `sentinel-edge/src/recording.rs`, `sentinel-app/src/routes/recordings/+page.svelte`
+
+---
+
 ## 2026-06-20 — Wire-bend UX + E2E test suite + prod seed
 
 - **Branch:** `main` (all work merged via PRs #2–#6; pushed)

@@ -4,18 +4,12 @@ kanban-plugin: board
 
 ---
 
-## Bugs
-
-- [ ] Splash should retry on transient `boot_status` DB errors instead of hanging
-- [ ] We should encrypt the passwords in the db column level too
-- [ ] Pricing simulator: surface managed vs self-hosted AI in Settings UI
-
-
 ## Backlog
 
 - [ ] School Student Frequency Case
 	  - Plan: [[school-student-frequency]]
 	  - Use case: [[school-frequence]]
+- [ ] Pricing simulator: surface managed vs self-hosted AI in Settings UI
 - [ ] Multi-pod sentinel-flow: shared event fabric
 	  - Plan: [[multi-pod-flow-event-fabric]]
 - [ ] Box re-key / rotate enrollment action
@@ -24,6 +18,16 @@ kanban-plugin: board
 - [ ] Define site/zones model in workflows domain
 - [ ] AI/Vision node ideas — research backlog
 	  - Plan: [[ai-vision-node-ideas]]
+
+
+## Bugs
+
+- [ ] Splash should retry on transient `boot_status` DB errors instead of hanging
+- [ ] We should encrypt the passwords in the db column level too
+- [ ] Update available — reload to get the latest version.
+- [ ] Should be possible to see the last images in the Show Image graphs even if the graph is not live opened. WE should be able to see the last image saved on this node
+- [ ] The data time on the logs should locally time and we should see the date too
+	for the current day show only the time
 
 
 ## ToDo
@@ -47,8 +51,11 @@ kanban-plugin: board
 ## In Progress
 
 
+
 ## Review
 
+- [ ] Motion-triggered stream recorder
+	  - Plan: [[motion-triggered-recorder]]
 - [ ] Unified Platform Logs — one table, one UI, all modules
 	  - Plan: [[platform-logs-unified]]
 - [ ] Map: solid walls taller, richer material, deeper shadows
