@@ -46,19 +46,6 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] Telegram Beacons: fix enrollment + polish + observability
-	  - Plan: [[telegram-beacons-fix-polish]]
-- [ ] Generic Object Detection node — configurable COCO class
-	  - Plan: [[generic-object-detection-node]]
-- [ ] String Switch node — multi-arm exec router on string value
-	  - Plan: [[string-switch-node]]
-- [ ] Missing comparison nodes: TextCompare + And / Or / Not
-	  - Plan: [[missing-comparison-nodes]]
-- [ ] Comment node — canvas organizer
-	  - Plan: [[comment-node]]
-- [ ] Presence: bbox-based detection positioning on map
-	  - Plan: [[presence-bbox-positioning]]
-
 
 ## Review
 
@@ -79,6 +66,18 @@ kanban-plugin: board
 ## Done
 
 **Complete**
+- [x] Telegram Beacons: fix enrollment + polish + observability
+	  - Plan: [[telegram-beacons-fix-polish]]
+- [x] Generic Object Detection node — configurable COCO class
+	  - Plan: [[generic-object-detection-node]]
+- [x] String Switch node — multi-arm exec router on string value
+	  - Plan: [[string-switch-node]]
+- [x] Missing comparison nodes: TextCompare + And / Or / Not
+	  - Plan: [[missing-comparison-nodes]]
+- [x] Comment node — canvas organizer
+	  - Plan: [[comment-node]]
+- [x] Presence: bbox-based detection positioning on map
+	  - Plan: [[presence-bbox-positioning]]
 - [x] Camera typed port + GetCameraByName node
 	  - Plan: [[camera-typed-port]]
 - [x] Node run animation lags — light on arrival, keep min duration
