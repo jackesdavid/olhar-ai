@@ -120,7 +120,7 @@
         const res = await fetch("/version.json", { cache: "no-store" });
         if (!res.ok) return;
         const { commit } = (await res.json()) as { commit?: string };
-        if (commit && commit !== "dev" && commit !== COMMIT) {
+        if (commit && commit !== "dev" && commit.slice(0, 7) !== COMMIT) {
           updateToasted = true;
           toast.info("Update available — reload to get the latest version.", {
             duration: Infinity,
