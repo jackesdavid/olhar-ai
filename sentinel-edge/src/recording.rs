@@ -266,9 +266,10 @@ impl RecordingManager {
             log::warn!("recording[{clip_id}]: requested {requested_pre_roll_secs}s pre-roll but ring has no segments");
         }
 
-        // Note which ring segment index marks the start of the "live" portion.
-        // The cleanup thread will not delete segments at or above this index.
-        let start_seg_idx = max_ring_seg_idx(&ring_cam_dir).map(|n| n + 1).unwrap_or(0);
+        // Include the segment currently being written (N) as the first live segment.
+        // collect_preroll() already excluded N (incomplete at copy time); by stop()
+        // it is complete, giving a seamless [N-1 → N] join with zero missing frames.
+        let start_seg_idx = max_ring_seg_idx(&ring_cam_dir).unwrap_or(0);
         self.recording_locks.lock().unwrap().insert(camera_ip.to_string(), start_seg_idx);
 
         log::info!("recording started: {clip_id} (ring-only, start_seg={start_seg_idx})");
