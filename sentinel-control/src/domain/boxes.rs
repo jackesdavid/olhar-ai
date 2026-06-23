@@ -25,6 +25,7 @@ pub fn router() -> Router<AppState> {
         .route("/boxes", get(list).post(create))
         .route("/boxes/:id", axum::routing::delete(remove))
         .route("/boxes/:id/restart", axum::routing::post(restart))
+        .route("/boxes/:id/update", axum::routing::post(update))
         .route("/boxes/:id/logs", get(box_logs))
         .route("/boxes/:id/logs/stream", get(box_logs_stream))
         .route("/internal/box-upstream", get(box_upstream))
@@ -116,7 +117,19 @@ async fn restart(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id)
     if !store::box_belongs_to(&st.pool, tid, id).await.map_err(db_err)? {
         return Err(err(StatusCode::NOT_FOUND, "box not found"));
     }
-    st.request_restart(id);
+    st.request_restart(id).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Queue an update for a box: the edge exits on its next poll, the service manager
+/// relaunches it, and `maybe_self_update()` at startup downloads + installs the new binary.
+async fn update(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<Uuid>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "devices.write")?;
+    let tid = tenant_of(&c)?;
+    if !store::box_belongs_to(&st.pool, tid, id).await.map_err(db_err)? {
+        return Err(err(StatusCode::NOT_FOUND, "box not found"));
+    }
+    st.request_update(id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

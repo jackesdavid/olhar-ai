@@ -34,7 +34,7 @@ pub fn router(state: AppState) -> Router {
         .route("/config/logs", post(box_logs_push))
         .route("/config/motion", post(motion_push))
         .route("/config/recording", get(recording_config))
-        .route("/config/recordings/clip", post(clip_push))
+        .route("/config/recordings/clip-metadata", post(clip_push))
         .merge(handlers::router())
         .merge(crate::domain::router())
         .nest_service("/edge", ServeDir::new(edge_dist))
@@ -177,8 +177,13 @@ async fn commands(State(st): State<AppState>, headers: HeaderMap) -> Response {
         Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
         Err(resp) => return resp,
     };
-    // rescan is tenant-wide (Devices "Rescan"); restart targets this specific box.
-    Json(json!({ "rescan": st.take_rescan(tenant), "restart": st.take_restart(box_id) })).into_response()
+    // rescan is tenant-wide (Devices "Rescan"); restart/update are per-box and DB-backed.
+    let (restart, update) = st.take_box_commands(box_id).await;
+    Json(json!({
+        "rescan":  st.take_rescan(tenant),
+        "restart": restart,
+        "update":  update,
+    })).into_response()
 }
 
 /// A camera that changed IP, reported by the edge (matched on its stable ONVIF id).

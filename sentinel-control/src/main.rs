@@ -51,9 +51,8 @@ pub struct AppState {
     /// Tenants with a pending "rescan cameras" command — set by the UI, consumed by the
     /// edge on its next poll (see /config/commands). Rescan is idempotent + cheap.
     pub pending_rescan: Arc<Mutex<std::collections::HashSet<uuid::Uuid>>>,
-    /// Box ids with a pending "restart" command — consumed by that box on its next poll
-    /// (it exits → the service manager relaunches it, re-running tailscale up + serve).
-    pub pending_restart: Arc<Mutex<std::collections::HashSet<uuid::Uuid>>>,
+    // pending_restart / pending_update are now persisted in tenant_boxes (migration 0031)
+    // so they survive control restarts. See store::set_box_command / take_box_commands.
     /// Live edge-log fan-out: the edge pushes lines to /config/logs, control persists +
     /// re-broadcasts here; the per-box log SSE relay subscribes and filters by tenant+box.
     pub log_bus: tokio::sync::broadcast::Sender<String>,
@@ -86,13 +85,22 @@ impl AppState {
     pub fn take_rescan(&self, tid: uuid::Uuid) -> bool {
         self.pending_rescan.lock().unwrap().remove(&tid)
     }
-    /// Queue a restart for a specific box.
-    pub fn request_restart(&self, box_id: uuid::Uuid) {
-        self.pending_restart.lock().unwrap().insert(box_id);
+    /// Queue a restart for a specific box (persisted to DB — survives control restarts).
+    pub async fn request_restart(&self, box_id: uuid::Uuid) {
+        if let Err(e) = crate::store::set_box_command(&self.pool, box_id, "pending_restart", true).await {
+            log::warn!("set pending_restart: {e}");
+        }
     }
-    /// Consume a box's pending restart flag (true if one was queued).
-    pub fn take_restart(&self, box_id: uuid::Uuid) -> bool {
-        self.pending_restart.lock().unwrap().remove(&box_id)
+    /// Queue an update for a specific box (persisted to DB — survives control restarts).
+    pub async fn request_update(&self, box_id: uuid::Uuid) {
+        if let Err(e) = crate::store::set_box_command(&self.pool, box_id, "pending_update", true).await {
+            log::warn!("set pending_update: {e}");
+        }
+    }
+    /// Atomically read and clear both command flags for a box (called on the edge's poll).
+    /// Returns (restart, update).
+    pub async fn take_box_commands(&self, box_id: uuid::Uuid) -> (bool, bool) {
+        crate::store::take_box_commands(&self.pool, box_id).await.unwrap_or((false, false))
     }
 }
 
@@ -146,7 +154,6 @@ fn main() {
         let pending_creds = Arc::new(Mutex::new(HashMap::new()));
         let notifiers = Arc::new(Mutex::new(HashMap::new()));
         let pending_rescan = Arc::new(Mutex::new(std::collections::HashSet::new()));
-        let pending_restart = Arc::new(Mutex::new(std::collections::HashSet::new()));
         let (log_bus, _) = tokio::sync::broadcast::channel::<String>(1024);
         let log_queue = app_core::platform_logs::LogQueue::spawn(pool.clone());
 
@@ -166,7 +173,7 @@ fn main() {
 
         let state = AppState {
             db, pool, jwt_secret, google, oauth_states, tailscale, http, pending_creds, notifiers,
-            pending_rescan, pending_restart, log_bus, log_queue, redis_url, redis,
+            pending_rescan, log_bus, log_queue, redis_url, redis,
         };
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {

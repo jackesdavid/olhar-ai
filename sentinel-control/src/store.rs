@@ -131,6 +131,7 @@ pub struct BoxRow {
     pub tailscale_state: Option<String>,
     pub ffmpeg_ok: Option<bool>,
     pub health_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub recording_config: Option<serde_json::Value>,
 }
 
 /// A camera the edge found via ONVIF WS-Discovery (surfaced in the cloud UI).
@@ -159,7 +160,7 @@ pub async fn create_box(pool: &PgPool, tenant_id: Uuid, name: &str, token_hash: 
 
 pub async fn list_boxes(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<BoxRow>> {
     sqlx::query_as::<_, BoxRow>(
-        "SELECT id, name, magicdns_host, version, last_seen, created_at, tailscale_state, ffmpeg_ok, health_at \
+        "SELECT id, name, magicdns_host, version, last_seen, created_at, tailscale_state, ffmpeg_ok, health_at, recording_config \
          FROM tenant_boxes WHERE tenant_id = $1 ORDER BY name",
     )
     .bind(tenant_id)
@@ -458,6 +459,34 @@ pub async fn set_recording_config(pool: &PgPool, tenant_id: Uuid, box_id: Uuid, 
     Ok(r.rows_affected() > 0)
 }
 
+// ---- persistent edge commands (survive control restarts) -------------------
+
+/// Set a pending command flag for a box. Idempotent.
+pub async fn set_box_command(pool: &PgPool, box_id: Uuid, field: &str, value: bool) -> sqlx::Result<()> {
+    // field is a trusted internal string (never user input), so we construct the query
+    // with the column name inline. The caller is responsible for passing a valid column.
+    let sql = format!(
+        "UPDATE tenant_boxes SET {field} = $1 WHERE id = $2"
+    );
+    sqlx::query(&sql).bind(value).bind(box_id).execute(pool).await?;
+    Ok(())
+}
+
+/// Read and atomically clear both command flags for a box (called by the edge on each poll).
+/// Returns (restart, update).
+pub async fn take_box_commands(pool: &PgPool, box_id: Uuid) -> sqlx::Result<(bool, bool)> {
+    let row: Option<(bool, bool)> = sqlx::query_as(
+        "UPDATE tenant_boxes
+            SET pending_restart = FALSE, pending_update = FALSE
+          WHERE id = $1
+        RETURNING pending_restart, pending_update",
+    )
+    .bind(box_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.unwrap_or((false, false)))
+}
+
 // ---- recordings (clip metadata pushed by edge) -----------------------------
 
 #[derive(sqlx::FromRow, serde::Serialize)]
@@ -471,6 +500,7 @@ pub struct RecordingRow {
     pub created_at:    String,
 }
 
+/// Persist clip metadata only — the video file stays on the edge and is proxied on download.
 pub async fn insert_recording(
     pool: &PgPool,
     tenant_id: Uuid,

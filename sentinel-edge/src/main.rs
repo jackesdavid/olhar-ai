@@ -138,13 +138,11 @@ fn main() {
                 std::process::exit(0);
             }
             if cmd.update {
-                log::warn!("update requested from the cloud — running install.sh --update");
-                let control = sync.control_url.clone();
-                let script = format!(
-                    "curl -fsSL {control}/install.sh | sh -s -- --update --control {control}"
-                );
-                let _ = std::process::Command::new("sh").arg("-c").arg(script).spawn();
-                // The install script stops + replaces the binary + restarts the service — no exit needed.
+                // Exit so the service manager relaunches us. `maybe_self_update()` runs at
+                // startup and handles the actual binary swap — no need to spawn install.sh
+                // from inside the running process (launchd's SIGKILL would kill it anyway).
+                log::warn!("update requested from the cloud — exiting for service manager to relaunch + auto-update");
+                std::process::exit(0);
             }
         });
     }
