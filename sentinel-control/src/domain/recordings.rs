@@ -1,7 +1,14 @@
-//! Recordings: clip metadata pushed by the edge + tenant-scoped list/download.
-//! The edge pushes finalized clip metadata via `POST /config/recordings/clip`;
-//! browsers fetch the clip list via `GET /recordings` and stream bytes via
-//! `GET /recordings/:id/download` (control proxies from the edge over the tailnet).
+//! Recordings — metadata index only. Video files never leave the edge.
+//!
+//! Flow:
+//!   1. Edge finishes a clip → pushes metadata (camera_ip, clip_id, duration, size,
+//!      started_at) to `POST /config/recordings/clip`. Control persists only those fields.
+//!   2. Browser lists clips via `GET /recordings` — gets metadata rows, no video bytes.
+//!   3. Browser downloads a clip via `GET /recordings/:id/download` — control resolves the
+//!      tenant's edge MagicDNS host and proxies the file bytes from the edge on-demand.
+//!      Nothing is buffered or stored cloud-side; the proxy is a pass-through stream.
+//!
+//! The edge is the sole source of truth for the actual .mp4 files.
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
@@ -82,6 +89,8 @@ async fn remove(
 
 /// Stream a clip from the edge over the tailnet, proxying through control so
 /// the browser doesn't need to be on the Tailscale network.
+/// Stream a clip from the edge to the browser. Control resolves the tenant's edge
+/// MagicDNS host and proxies bytes on-demand — no video is stored cloud-side.
 async fn download(
     UserClaims(c): UserClaims,
     State(st): State<AppState>,
@@ -115,7 +124,14 @@ async fn download(
     })?;
 
     if !resp.status().is_success() {
-        return Err(err(StatusCode::BAD_GATEWAY, format!("edge returned {}", resp.status())));
+        let edge_status = resp.status();
+        // Pass 404 through so the browser shows "not found" rather than a confusing gateway error.
+        let our_status = if edge_status == reqwest::StatusCode::NOT_FOUND {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::BAD_GATEWAY
+        };
+        return Err(err(our_status, format!("edge returned {edge_status}")));
     }
 
     let filename = format!("{}.mp4", rec.clip_id);
