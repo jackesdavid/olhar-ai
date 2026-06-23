@@ -473,18 +473,29 @@ pub async fn set_box_command(pool: &PgPool, box_id: Uuid, field: &str, value: bo
 }
 
 /// Read and atomically clear both command flags for a box (called by the edge on each poll).
-/// Returns (restart, update).
+/// Returns (restart, update) reflecting what was set BEFORE clearing.
+///
+/// Postgres RETURNING gives post-update values (always false after we clear),
+/// so we use SELECT FOR UPDATE + UPDATE inside a transaction to capture the old state.
 pub async fn take_box_commands(pool: &PgPool, box_id: Uuid) -> sqlx::Result<(bool, bool)> {
+    let mut tx = pool.begin().await?;
     let row: Option<(bool, bool)> = sqlx::query_as(
-        "UPDATE tenant_boxes
-            SET pending_restart = FALSE, pending_update = FALSE
-          WHERE id = $1
-        RETURNING pending_restart, pending_update",
+        "SELECT pending_restart, pending_update FROM tenant_boxes WHERE id = $1 FOR UPDATE",
     )
     .bind(box_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
-    Ok(row.unwrap_or((false, false)))
+    let (restart, update) = row.unwrap_or((false, false));
+    if restart || update {
+        sqlx::query(
+            "UPDATE tenant_boxes SET pending_restart = FALSE, pending_update = FALSE WHERE id = $1",
+        )
+        .bind(box_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok((restart, update))
 }
 
 // ---- recordings (clip metadata pushed by edge) -----------------------------
