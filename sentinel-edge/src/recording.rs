@@ -222,9 +222,19 @@ impl RecordingManager {
         let output  = self.dir.join(format!("{clip_id}.mp4"));
         let live_ts = self.live_dir.join(format!("{clip_id}.ts"));
 
-        // Collect available pre-roll segments.
+        // Collect available pre-roll segments, then copy them into live_dir so
+        // the ring cleanup loop can't delete them before stop() concatenates them.
         let max_pre_roll = requested_pre_roll_secs.min(self.config.pre_roll_secs);
-        let preroll = collect_preroll(&self.ring_dir.join(&ip_key), max_pre_roll);
+        let ring_segs = collect_preroll(&self.ring_dir.join(&ip_key), max_pre_roll);
+        let preroll: Vec<PathBuf> = ring_segs.iter().enumerate().filter_map(|(i, src)| {
+            let dst = self.live_dir.join(format!("{clip_id}_pre_{i:03}.ts"));
+            if let Err(e) = fs::copy(src, &dst) {
+                log::warn!("recording[{clip_id}]: copy preroll seg {i}: {e}");
+                None
+            } else {
+                Some(dst)
+            }
+        }).collect();
         if !preroll.is_empty() {
             log::info!("recording[{clip_id}]: pre-roll {}s ({} segments)", preroll.len(), preroll.len());
         } else if requested_pre_roll_secs > 0 {
@@ -295,8 +305,11 @@ impl RecordingManager {
             fs::metadata(&sess.output).map(|m| m.len()).unwrap_or(0) as i64
         };
 
-        // Clean up live temp file.
+        // Clean up live temp file and copied pre-roll stash.
         let _ = fs::remove_file(&sess.live_ts);
+        for p in &sess.preroll {
+            let _ = fs::remove_file(p);
+        }
 
         let started = chrono::DateTime::parse_from_rfc3339(&sess.started_at)
             .map(|t| t.with_timezone(&chrono::Utc))

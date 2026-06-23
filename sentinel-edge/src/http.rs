@@ -197,8 +197,19 @@ async fn recording_stop(
             }))
             .into_response()
         }
-        Ok(Err(e)) => (StatusCode::NOT_FOUND, e).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
+        Ok(Err(e)) => {
+            let (status, kind) = if e.contains("no active session") {
+                (StatusCode::NOT_FOUND, "not_found")
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, "error")
+            };
+            log::warn!("recording stop [{kind}]: {e}");
+            (status, e).into_response()
+        }
+        Err(e) => {
+            log::warn!("recording stop [task panic]: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response()
+        }
     }
 }
 
