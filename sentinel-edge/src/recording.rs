@@ -111,9 +111,10 @@ pub struct RecordingManager {
 impl RecordingManager {
     pub fn boot(control_url: &str) -> Arc<RecordingManager> {
         let config = fetch_config(control_url).unwrap_or_default();
+        // Default to a persistent path that survives edge restarts and OS reboots.
         let dir = std::env::var("EDGE_RECORDING_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/tmp/sentinel-recordings"));
+            .unwrap_or_else(|_| PathBuf::from("/opt/sentinel-edge/recordings"));
         let ring_dir = PathBuf::from("/tmp/sentinel-ring");
         let live_dir = PathBuf::from("/tmp/sentinel-live");
 

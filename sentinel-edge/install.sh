@@ -118,7 +118,7 @@ if [ "$UPDATE" = "1" ]; then
 fi
 
 echo "▸ Installing sentinel-edge ($os-$arch) → $PREFIX"
-mkdir -p "$PREFIX" "$ENV_DIR"
+mkdir -p "$PREFIX" "$PREFIX/recordings" "$ENV_DIR"
 
 # ---- 1. Tailscale -----------------------------------------------------------
 # A working `tailscale version` is the real test (a leftover GUI-app shim resolves on PATH
