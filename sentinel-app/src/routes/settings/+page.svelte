@@ -12,10 +12,12 @@
   import { Separator } from "$lib/components/ui/separator";
 
   import { DEFAULT_SETTINGS, type Settings, type Transport } from "$lib/types";
+  import { boxes } from "$lib/api";
 
   let settings = $state<Settings>({ ...DEFAULT_SETTINGS });
   let loading = $state(true);
   let saving = $state(false);
+  let boxIds = $state<string[]>([]);
 
   const transportOptions: { value: Transport; label: string }[] = [
     { value: "tcp", label: "TCP" },
@@ -37,13 +39,21 @@
 
   onMount(async () => {
     try {
-      const loaded = await data.getSettings();
+      const [loaded, allBoxes] = await Promise.all([
+        data.getSettings(),
+        boxes.list(),
+      ]);
       settings = { ...DEFAULT_SETTINGS, ...loaded };
+      boxIds = allBoxes.map((b) => b.id);
+      // cameras_always_warm + pre_roll_secs live in each box's recording_config.
+      const firstBox = allBoxes[0];
+      if (firstBox?.recording_config != null) {
+        settings.cameras_always_warm = firstBox.recording_config.cameras_always_warm ?? false;
+        settings.pre_roll_secs = firstBox.recording_config.pre_roll_secs ?? 10;
+      }
     } catch (err) {
       console.error("Failed to load settings", err);
-      toast.error("Failed to load settings", {
-        description: String(err),
-      });
+      toast.error("Failed to load settings", { description: String(err) });
     } finally {
       loading = false;
     }
@@ -52,13 +62,23 @@
   async function save() {
     saving = true;
     try {
-      await data.setSettings($state.snapshot(settings));
+      const snap = $state.snapshot(settings);
+      await data.setSettings(snap);
+      // cameras_always_warm + pre_roll_secs are edge behaviors — persist to every box's recording_config.
+      await Promise.all(
+        boxIds.map((id) =>
+          boxes.patchRecordingConfig(id, {
+            pre_roll_secs: snap.pre_roll_secs,
+            max_storage_mb: 1000,
+            codec: "copy",
+            cameras_always_warm: snap.cameras_always_warm,
+          })
+        )
+      );
       toast.success("Settings saved");
     } catch (err) {
       console.error("Failed to save settings", err);
-      toast.error("Failed to save settings", {
-        description: String(err),
-      });
+      toast.error("Failed to save settings", { description: String(err) });
     } finally {
       saving = false;
     }
@@ -196,16 +216,15 @@
   <Card.Root>
     <Card.Header>
       <Card.Title>Cameras</Card.Title>
-      <Card.Description>How the shared live feed serves snapshots.</Card.Description>
+      <Card.Description>Live feed and recording behaviour.</Card.Description>
     </Card.Header>
-    <Card.Content>
+    <Card.Content class="space-y-6">
       <div class="flex items-center justify-between">
         <div class="space-y-0.5">
           <Label for="cameras-always-warm">Keep camera feeds always on</Label>
           <p class="text-xs text-muted-foreground">
-            Snapshots are instant at any time. Otherwise feeds warm up on demand (the
-            first snapshot after an idle period takes about a second). Uses more
-            bandwidth when nothing is watching.
+            Maintains a rolling pre-roll buffer per camera so recordings start with
+            footage from before the trigger. Uses more bandwidth when nothing is watching.
           </p>
         </div>
         <Switch
@@ -213,6 +232,29 @@
           bind:checked={settings.cameras_always_warm}
           disabled={loading}
         />
+      </div>
+
+      <Separator />
+
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <Label>Max pre-roll</Label>
+          <span class="text-sm tabular-nums text-muted-foreground">
+            {settings.pre_roll_secs}s
+          </span>
+        </div>
+        <Slider
+          type="single"
+          min={0}
+          max={60}
+          step={5}
+          bind:value={settings.pre_roll_secs}
+          disabled={loading || !settings.cameras_always_warm}
+        />
+        <p class="text-xs text-muted-foreground">
+          How many seconds of footage the ring buffer keeps before a recording trigger
+          (0–60 s). The recording node can request up to this amount.
+        </p>
       </div>
     </Card.Content>
   </Card.Root>

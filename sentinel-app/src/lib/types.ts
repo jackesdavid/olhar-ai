@@ -10,6 +10,8 @@ export type Settings = {
   stt_autosend: boolean;
   transport: Transport;
   cameras_always_warm: boolean;
+  /** Max ring buffer size in seconds; also the upper bound for per-recording pre-roll. */
+  pre_roll_secs: number;
 };
 
 /** A saved camera (matches `app_core::devices::Device`). */
@@ -290,4 +292,5 @@ export const DEFAULT_SETTINGS: Settings = {
   stt_autosend: false,
   transport: "auto",
   cameras_always_warm: false,
+  pre_roll_secs: 10,
 };

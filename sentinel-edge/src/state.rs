@@ -27,6 +27,15 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Returns the configured control-plane URL (same logic as `boot`).
+    pub fn control_url() -> String {
+        std::env::var("CONTROL_URL")
+            .ok()
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "http://127.0.0.1:8790".to_string())
+    }
+
     /// Build the edge: pull the camera list from the control plane (falling back to
     /// the local cache when it's unreachable). No database connection.
     pub fn boot() -> Arc<AppState> {
@@ -174,6 +183,28 @@ impl AppState {
         }
     }
 
+    /// Start the ring buffer for every camera with a resolved stream. Called on boot and
+    /// after each rediscover so newly added cameras get a ring without a manual restart.
+    /// Only runs when `cameras_always_warm = true` in the box recording config.
+    pub fn warm_cameras(&self) {
+        if !self.recording.config.cameras_always_warm {
+            return;
+        }
+        let ips: Vec<String> = self
+            .devices.lock().unwrap()
+            .iter()
+            .filter(|d| d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false))
+            .map(|d| d.ip.clone())
+            .collect();
+        if ips.is_empty() {
+            log::debug!("warm_cameras: no cameras with resolved streams");
+            return;
+        }
+        for ip in &ips {
+            self.recording.start_ring(ip);
+        }
+    }
+
     /// Report which cameras the edge currently has a resolved stream for (rtsp_url set →
     /// creds valid + camera reachable). Drives the cloud's "online & correct" status dot.
     /// Best-effort.
@@ -216,8 +247,9 @@ impl AppState {
                 .into_json::<serde_json::Value>()
                 .ok()
                 .map(|v| EdgeCommands {
-                    rescan: v.get("rescan").and_then(|r| r.as_bool()).unwrap_or(false),
+                    rescan:  v.get("rescan").and_then(|r| r.as_bool()).unwrap_or(false),
                     restart: v.get("restart").and_then(|r| r.as_bool()).unwrap_or(false),
+                    update:  v.get("update").and_then(|r| r.as_bool()).unwrap_or(false),
                 })
                 .unwrap_or_default(),
             Err(_) => EdgeCommands::default(), // network hiccup — try again next cycle
@@ -246,6 +278,7 @@ impl AppState {
 pub struct EdgeCommands {
     pub rescan: bool,
     pub restart: bool,
+    pub update: bool,
 }
 
 /// One motion observation the edge reports to control. Normalized signal only — the cloud

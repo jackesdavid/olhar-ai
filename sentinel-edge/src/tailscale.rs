@@ -52,6 +52,9 @@ pub fn ensure_up() {
 
     // Expose the localhost-only go2rtc API over the tailnet (TLS via MagicDNS).
     serve_go2rtc();
+    // Also expose the edge API itself on port 8080 so workflow nodes (recording etc.)
+    // can reach it at https://<magicdns>:8080/ without colliding with go2rtc at port 443.
+    serve_edge_api();
 
     // Report this box's tailnet go2rtc URL to control (so the gateway can resolve the
     // tenant's live upstream) — unless it was supplied explicitly at install time.
@@ -81,6 +84,23 @@ pub fn serve_go2rtc() {
             String::from_utf8_lossy(&o.stderr).trim()
         ),
         Err(e) => log::debug!("tailscale serve unavailable: {e}"),
+    }
+}
+
+/// Expose the edge's own HTTP API (`:8788`) over the tailnet on port 8080.
+/// Workflow nodes (recording, snapshots) call https://<magicdns>:8080/ to reach the API.
+/// Port 443 is reserved for go2rtc so the gateway is unaffected.
+pub fn serve_edge_api() {
+    match Command::new("tailscale")
+        .args(["serve", "--bg", "--https=8080", "8788"])
+        .output()
+    {
+        Ok(o) if o.status.success() => log::info!("tailscale serve --https=8080 8788 ok (edge API on tailnet)"),
+        Ok(o) => log::warn!(
+            "tailscale serve --https=8080 8788: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
+        Err(e) => log::warn!("tailscale serve (edge API) unavailable: {e}"),
     }
 }
 

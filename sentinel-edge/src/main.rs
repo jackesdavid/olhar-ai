@@ -25,12 +25,49 @@ mod tailscale;
 
 use state::AppState;
 
+/// Check control for the latest published edge version. If it differs from our own,
+/// spawn install.sh --update in the background — the script stops the service, swaps
+/// the binary, and restarts it, so the service manager relaunches us on the new build.
+/// This means the UI Restart button doubles as an update trigger: restart → startup →
+/// version check → auto-update. No more bootstrapping problem between releases.
+fn maybe_self_update(control_url: &str) {
+    let current = env!("CARGO_PKG_VERSION");
+    let url = format!("{control_url}/edge-latest");
+    let resp = match ureq::get(&url)
+        .timeout(std::time::Duration::from_secs(8))
+        .call()
+    {
+        Ok(r) => r,
+        Err(e) => { log::debug!("version check skipped: {e}"); return; }
+    };
+    let latest = resp
+        .into_json::<serde_json::Value>()
+        .ok()
+        .and_then(|v| v.get("version").and_then(|s| s.as_str()).map(str::to_string))
+        .unwrap_or_default();
+    if latest.is_empty() || latest == current {
+        log::debug!("edge {current} is up to date (latest={latest})");
+        return;
+    }
+    log::warn!("auto-update: {current} → {latest} — spawning install.sh --update");
+    let script = format!(
+        "curl -fsSL {control_url}/install.sh | sh -s -- --update --control {control_url}"
+    );
+    let _ = std::process::Command::new("sh").arg("-c").arg(script).spawn();
+    // install.sh stops + replaces the binary + restarts the service on its own.
+}
+
 fn main() {
     // Capture logs into a shared ring (also teed to stderr) so the box can push them up
     // for the in-UI log viewer — the edge is no longer a black box.
     let logs = logbuf::init();
 
     let bind = std::env::var("EDGE_BIND").unwrap_or_else(|_| "0.0.0.0:8788".to_string());
+
+    // Auto-update: if control reports a newer version, run install.sh --update and let
+    // the service manager relaunch us with the new binary. This means any restart
+    // (UI button, crash, deploy) automatically picks up the latest edge release.
+    maybe_self_update(&AppState::control_url());
 
     // Join the tailnet + expose go2rtc over it (opt-in via TS_AUTHKEY) FIRST, so the
     // detected EDGE_PUBLIC_HOST is reported to control on the very first camera pull.
@@ -60,6 +97,9 @@ fn main() {
     }
     // Report the initially-resolved stream set so the Devices dot is correct from boot.
     state.push_streaming();
+    // If cameras_always_warm is enabled, pre-open each camera's go2rtc RTSP session so
+    // recordings start instantly without a cold-start delay.
+    state.warm_cameras();
 
     // Continuous motion detection (one OpenCV MOG2 watcher per camera). No-op stub unless
     // built with `--features motion`; the watchers POST normalized motion events to control.
@@ -72,9 +112,10 @@ fn main() {
         let disco = std::sync::Arc::clone(&state);
         std::thread::spawn(move || loop {
             disco.rediscover();
-            // Re-assert the tailnet serve so go2rtc stays reachable if the daemon blipped
-            // (idempotent; a no-op when Tailscale is down). Keeps Live healthy unattended.
+            // Re-assert the tailnet serve so go2rtc stays reachable if the daemon blipped.
             tailscale::serve_go2rtc();
+            // Start ring buffers for any newly discovered cameras (idempotent per IP).
+            disco.warm_cameras();
             std::thread::sleep(std::time::Duration::from_secs(300));
         });
     }
@@ -95,6 +136,15 @@ fn main() {
             if cmd.restart {
                 log::warn!("restart requested from the cloud — exiting for the service manager to relaunch");
                 std::process::exit(0);
+            }
+            if cmd.update {
+                log::warn!("update requested from the cloud — running install.sh --update");
+                let control = sync.control_url.clone();
+                let script = format!(
+                    "curl -fsSL {control}/install.sh | sh -s -- --update --control {control}"
+                );
+                let _ = std::process::Command::new("sh").arg("-c").arg(script).spawn();
+                // The install script stops + replaces the binary + restarts the service — no exit needed.
             }
         });
     }

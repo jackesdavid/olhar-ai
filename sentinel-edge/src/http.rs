@@ -132,7 +132,8 @@ async fn recording_start(
     Json(body): Json<StartRecordingReq>,
 ) -> impl IntoResponse {
     let mgr = state.recording.clone();
-    match tokio::task::spawn_blocking(move || mgr.start(&body.camera_ip)).await {
+    let pre_roll = body.pre_roll_secs.unwrap_or(0);
+    match tokio::task::spawn_blocking(move || mgr.start(&body.camera_ip, pre_roll)).await {
         Ok(Ok(clip_id)) => Json(json!({ "clip_id": clip_id })).into_response(),
         Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
@@ -173,11 +174,12 @@ async fn recording_stop(
                 "started_at": meta.started_at,
             });
             tokio::task::spawn_blocking(move || {
-                let url = format!("{control_url}/config/recordings/clip");
+                let url = format!("{control_url}/config/recordings/clip-metadata");
                 let mut req = ureq::AgentBuilder::new()
                     .timeout(std::time::Duration::from_secs(10))
                     .build()
-                    .post(&url);
+                    .post(&url)
+                    .set("Content-Type", "application/json");
                 if let Ok(t) = std::env::var("BOX_TOKEN") {
                     let t = t.trim();
                     if !t.is_empty() {
