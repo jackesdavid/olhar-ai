@@ -154,6 +154,18 @@ impl RecordingManager {
             return;
         }
 
+        // Remove stale segments from any previous ring run. ffmpeg always starts
+        // its segment counter from 000000, so old high-numbered segments would
+        // confuse index-based ordering (cleanup would keep stale old ones and
+        // delete the fresh new ones).
+        if let Ok(rd) = fs::read_dir(&seg_dir) {
+            for entry in rd.filter_map(|e| e.ok()) {
+                if entry.path().extension().map(|x| x == "ts").unwrap_or(false) {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
+
         let rtsp_url = format!("rtsp://localhost:8554/cam_{ip_key}");
         let seg_pattern = seg_dir.join("seg_%06d.ts");
 
