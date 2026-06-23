@@ -115,7 +115,9 @@ async fn download(
         })?
         .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "no edge box connected for this tenant"))?;
 
+    // magicdns_host is the go2rtc URL (port 443). The edge API runs on :8080.
     let base = normalize_host(&edge_host);
+    let base = edge_api_base(&base);
     let url = format!("{base}/recording/{}", urlencoding::encode(&rec.clip_id));
 
     let resp = reqwest::get(&url).await.map_err(|e| {
@@ -156,6 +158,17 @@ fn normalize_host(host: &str) -> String {
     } else {
         format!("https://{h}")
     }
+}
+
+/// The edge API (recording, snapshot) runs on :8080 via `tailscale serve --https=8080`.
+/// magicdns_host is the base URL (port 443, go2rtc). Rewrite to :8080 for API calls.
+fn edge_api_base(base: &str) -> String {
+    // If it already has a port, use as-is.
+    let after_scheme = base.trim_start_matches("https://").trim_start_matches("http://");
+    if after_scheme.contains(':') {
+        return base.to_string();
+    }
+    format!("{base}:8080")
 }
 
 // ---- edge push (called by the edge with BOX_TOKEN) --------------------------
