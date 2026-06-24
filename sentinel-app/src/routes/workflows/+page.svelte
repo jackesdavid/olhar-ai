@@ -2797,6 +2797,20 @@
                         {#if evName && known}
                           <p class="mt-1 text-[10px] text-muted-foreground">Registered · “{known.category}”</p>
                         {/if}
+                      {:else if key === "style" && selectedNode.kind === "draw_bbox"}
+                        {@const STYLES = [
+                          { value: "box", label: "Box (rectangle)" },
+                          { value: "corners", label: "Corner brackets" },
+                          { value: "reticle", label: "Targeting reticle" },
+                        ]}
+                        {@const stv = String(selectedNode.config[key] ?? "box")}
+                        {@const stlabel = STYLES.find((o) => o.value === stv)?.label ?? stv}
+                        <Select.Root type="single" disabled={editLocked} value={stv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "box" })}>
+                          <Select.Trigger class="h-8 w-full">{stlabel}</Select.Trigger>
+                          <Select.Content>
+                            {#each STYLES as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                          </Select.Content>
+                        </Select.Root>
                       {:else if key === "color"}
                         <input
                           type="color"

@@ -195,15 +195,20 @@ pub(super) fn run_draw_bbox(config: &Value, inputs: &PortValues) -> Result<PortV
         .and_then(|v| v.as_str().and_then(|s| s.parse::<u32>().ok()).or_else(|| v.as_u64().map(|n| n as u32)))
         .unwrap_or(2)
         .max(1);
+    let style = config.get("style").and_then(|v| v.as_str()).unwrap_or("box");
     let img = image::load_from_memory(raw).map_err(|e| format!("could not decode image: {e}"))?;
     let mut rgb = img.into_rgb8();
-    draw_rect(&mut rgb, x1, y1, x2, y2, color, thickness);
+    match style {
+        "corners" => draw_corners(&mut rgb, x1, y1, x2, y2, color, thickness),
+        "reticle" => draw_reticle(&mut rgb, x1, y1, x2, y2, color, thickness),
+        _ => draw_rect(&mut rgb, x1, y1, x2, y2, color, thickness),
+    }
     let mut out = Vec::new();
     image::DynamicImage::ImageRgb8(rgb)
         .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
         .map_err(|e| format!("could not encode image: {e}"))?;
     let w = out.len();
-    log::debug!("draw_bbox: drew {thickness}px rect [{x1},{y1},{x2},{y2}] on {w}-byte JPEG");
+    log::debug!("draw_bbox: drew {thickness}px {style} [{x1},{y1},{x2},{y2}] on {w}-byte JPEG");
     let mut o = PortValues::new();
     o.insert("image".into(), PortValue::Image(out));
     o.insert("ok".into(), PortValue::Bool(true));
@@ -323,4 +328,59 @@ fn draw_rect(img: &mut image::RgbImage, x1: i64, y1: i64, x2: i64, y2: i64, colo
             }
         }
     }
+}
+
+/// Fill an inclusive pixel block [ax..=bx, ay..=by], clamped to the frame.
+/// No-op when the block is empty or entirely off-frame.
+fn fill_block(img: &mut image::RgbImage, ax: i64, ay: i64, bx: i64, by: i64, color: [u8; 3]) {
+    let w = img.width() as i64;
+    let h = img.height() as i64;
+    let px = image::Rgb(color);
+    let lo_x = ax.min(bx).max(0);
+    let hi_x = ax.max(bx).min(w - 1);
+    let lo_y = ay.min(by).max(0);
+    let hi_y = ay.max(by).min(h - 1);
+    for y in lo_y..=hi_y {
+        for x in lo_x..=hi_x {
+            img.put_pixel(x as u32, y as u32, px);
+        }
+    }
+}
+
+/// HUD style: L-shaped brackets at each corner instead of a full rectangle.
+fn draw_corners(img: &mut image::RgbImage, x1: i64, y1: i64, x2: i64, y2: i64, color: [u8; 3], thickness: u32) {
+    let t = thickness.max(1) as i64;
+    // Arm length: a fraction of the shorter side, clamped to a sane range.
+    let arm = ((x2 - x1).min(y2 - y1) / 4).clamp(6, 48);
+    // Top-left
+    fill_block(img, x1, y1, x1 + arm, y1 + t - 1, color);
+    fill_block(img, x1, y1, x1 + t - 1, y1 + arm, color);
+    // Top-right
+    fill_block(img, x2 - arm, y1, x2, y1 + t - 1, color);
+    fill_block(img, x2 - t + 1, y1, x2, y1 + arm, color);
+    // Bottom-left
+    fill_block(img, x1, y2 - t + 1, x1 + arm, y2, color);
+    fill_block(img, x1, y2 - arm, x1 + t - 1, y2, color);
+    // Bottom-right
+    fill_block(img, x2 - arm, y2 - t + 1, x2, y2, color);
+    fill_block(img, x2 - t + 1, y2 - arm, x2, y2, color);
+}
+
+/// HUD style: corner brackets + a centre crosshair with a small square (the
+/// targeting-reticle look). Crosshair arms leave a gap around the centre square.
+fn draw_reticle(img: &mut image::RgbImage, x1: i64, y1: i64, x2: i64, y2: i64, color: [u8; 3], thickness: u32) {
+    draw_corners(img, x1, y1, x2, y2, color, thickness);
+    let t = thickness.max(1) as i64;
+    let cx = (x1 + x2) / 2;
+    let cy = (y1 + y2) / 2;
+    let half = ((x2 - x1).min(y2 - y1) / 12).clamp(4, 16); // centre square half-size
+    // Small centre square outline.
+    draw_rect(img, cx - half, cy - half, cx + half, cy + half, color, thickness);
+    // Crosshair arms (gap around the square so they don't touch it).
+    let gap = half + 4;
+    let len = (half * 2).max(8);
+    fill_block(img, cx - gap - len, cy, cx - gap, cy + t - 1, color); // left
+    fill_block(img, cx + gap, cy, cx + gap + len, cy + t - 1, color); // right
+    fill_block(img, cx, cy - gap - len, cx + t - 1, cy - gap, color); // up
+    fill_block(img, cx, cy + gap, cx + t - 1, cy + gap + len, color); // down
 }
