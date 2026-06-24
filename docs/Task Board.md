@@ -54,8 +54,6 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #55 Workflow nodes — rename, categorize & split into files
-	  - Plan: [[workflow-node-ux-refactor]]
 - [ ] #22 Recordings: storage, names, filters, delete, sort, paginate
 	  - Plan: [[recordings-improvements]]
 
@@ -119,6 +117,8 @@ kanban-plugin: board
 - [x] #52 Snapshots grabbed from shared go2rtc feed (fast path)
 - [x] #53 RunPod `/status` polling on cold-start (IN_QUEUE/IN_PROGRESS)
 - [x] #54 CPU-only torch in the AI Docker image
+- [x] #55 Workflow nodes — rename, categorize & split into files
+	  - Plan: [[workflow-node-ux-refactor]]
 
 
 
