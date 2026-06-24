@@ -125,8 +125,6 @@
 
   async function load() {
     loading = true;
-    items = [];
-    nextCursor = null;
     try {
       const r = await platformLogs.list(buildFilter());
       items = r.items;
@@ -342,14 +340,15 @@
           applyFilters();
         }}
       >Clear all</Button>
-      {#if !loading}
-        <span class="text-xs tabular-nums text-muted-foreground">{shown.length} shown</span>
-      {/if}
+      <span
+        class="text-xs tabular-nums text-muted-foreground"
+        class:invisible={loading && items.length === 0}
+      >{shown.length} shown</span>
     </div>
   </div>
 
   <!-- log table -->
-  {#if loading}
+  {#if loading && items.length === 0}
     <Loader label="Loading logs…" />
   {:else if shown.length === 0}
     <EmptyState
@@ -383,6 +382,7 @@
               </Table.Head>
               <Table.Head class="w-28">Entity</Table.Head>
               <Table.Head>Message</Table.Head>
+              <Table.Head class="w-16">Payload</Table.Head>
               <Table.Head class="w-32">Trace ID</Table.Head>
             </Table.Row>
           </Table.Header>
@@ -417,11 +417,13 @@
                   {/if}
                 </Table.Cell>
                 <Table.Cell class="font-mono text-[11px] {levelColor(l.level)}">
-                  <span class="whitespace-pre-wrap break-words">{l.message}</span>
+                  <span class="line-clamp-2 break-words" title={l.message}>{l.message}</span>
+                </Table.Cell>
+                <Table.Cell class="align-top">
                   {#if l.payload}
-                    <details class="mt-0.5">
-                      <summary class="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground">payload</summary>
-                      <pre class="mt-1 overflow-x-auto rounded bg-well p-1 text-[10px] text-muted-foreground">{JSON.stringify(l.payload, null, 2)}</pre>
+                    <details>
+                      <summary class="cursor-pointer font-mono text-[10px] text-muted-foreground hover:text-foreground">{"{…}"}</summary>
+                      <pre class="mt-1 max-w-[28rem] overflow-x-auto rounded bg-well p-1 text-[10px] text-muted-foreground">{JSON.stringify(l.payload, null, 2)}</pre>
                     </details>
                   {/if}
                 </Table.Cell>
