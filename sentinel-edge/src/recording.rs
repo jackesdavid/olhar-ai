@@ -303,7 +303,6 @@ impl RecordingManager {
         cmd.args([
                 "-loglevel", "warning",
                 "-rtsp_transport", "tcp",
-                "-fflags", "+genpts+discardcorrupt",
                 "-i", &rtsp_url,
                 "-c:v", "copy",
                 "-an",
