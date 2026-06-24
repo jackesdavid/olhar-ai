@@ -21,6 +21,7 @@
 
   import { platformLogs, type PlatformLog, type PlatformLogsFilter } from "$lib/api";
   import { nodeKindColor } from "$lib/workflows/portColors";
+  import { fmtTs } from "$lib/utils";
 
   // ---- state ------------------------------------------------------------------
   let loading = $state(true);
@@ -165,10 +166,6 @@
   }
 
   // ---- helpers ----------------------------------------------------------------
-  function fmtTs(ts: string): string {
-    return ts.slice(0, 19).replace("T", " ");
-  }
-
   function levelColor(lvl: string): string {
     if (lvl === "error") return "text-destructive";
     if (lvl === "warn")  return "text-amber-500";

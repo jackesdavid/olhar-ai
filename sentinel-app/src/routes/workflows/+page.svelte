@@ -3,6 +3,7 @@
   import { fade } from "svelte/transition";
   import { data, onEvent } from "$lib/data";
   import { platformLogs, type PlatformLog } from "$lib/api";
+  import { fmtTs } from "$lib/utils";
   import {
     CATEGORY_ORDER as PRESENCE_CATEGORIES,
     CATEGORY_STYLE as PRESENCE_CATEGORY_STYLE,
@@ -200,7 +201,7 @@
   function platformLogToLine(l: PlatformLog): LogLine {
     const label = (l.payload?.label as string | undefined) ?? (l.payload?.graph_name as string | undefined);
     return {
-      time: l.created_at.slice(11, 19),
+      time: fmtTs(l.created_at),
       name: label ?? "workflow",
       ok: l.level !== "error",
       summary: l.message,
@@ -949,7 +950,7 @@
       // shows only the open graph; other graphs' completions still surface as toasts.
       if (gid === selectedGraphId) {
         endLive();
-        logs = [{ time: new Date().toLocaleTimeString(), name, ok, summary }, ...logs].slice(0, 200);
+        logs = [{ time: fmtTs(new Date().toISOString()), name, ok, summary }, ...logs].slice(0, 200);
       }
       if (ok) toast.success(`Workflow "${name}"`, { description: summary });
       else toast.error(`Workflow "${name}" failed`, { description: summary });
@@ -965,7 +966,7 @@
       if (p.graph !== selectedGraphId) return; // only the open graph
       const { label, message, ms } = p;
       logs = [
-        { time: new Date().toLocaleTimeString(), name: label, ok: true, summary: message, debug: true, ms },
+        { time: fmtTs(new Date().toISOString()), name: label, ok: true, summary: message, debug: true, ms },
         ...logs,
       ].slice(0, 200);
     });
@@ -975,7 +976,7 @@
       const p = payload as { graph?: number; message: string; level: string; on_screen: boolean };
       if (p.graph !== selectedGraphId) return; // only the open graph
       logs = [
-        { time: new Date().toLocaleTimeString(), name: "Print", ok: true, summary: p.message, level: p.level },
+        { time: fmtTs(new Date().toISOString()), name: "Print", ok: true, summary: p.message, level: p.level },
         ...logs,
       ].slice(0, 200);
       if (p.on_screen) flashOnScreen(p.message, p.level);
@@ -1006,7 +1007,7 @@
       const summary = eventLogSummary(p);
       if (!summary) return;
       logs = [
-        { time: new Date().toLocaleTimeString(), name: "Event", ok: p.kind !== "skip", summary, level: p.kind === "skip" ? "warn" : "info" },
+        { time: fmtTs(new Date().toISOString()), name: "Event", ok: p.kind !== "skip", summary, level: p.kind === "skip" ? "warn" : "info" },
         ...logs,
       ].slice(0, 200);
     });
@@ -3151,7 +3152,7 @@
                   '{r.event_name}'{#if r.source_graph_name} ← {r.source_graph_name}{/if}
                 </span>
               {/if}
-              <span class="ml-auto shrink-0 text-[10px] text-muted-foreground">{r.started_at}</span>
+              <span class="ml-auto shrink-0 text-[10px] text-muted-foreground">{fmtTs(r.started_at)}</span>
               <span class="shrink-0 text-[10px] text-muted-foreground/70">· {r.pod_name}</span>
             </button>
             {#if runsExpanded === r.id}

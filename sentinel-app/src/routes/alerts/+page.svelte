@@ -21,6 +21,7 @@
   import EmptyState from "$lib/components/empty-state.svelte";
 
   import type { Alert, AlertLevel, AlertStats } from "$lib/types";
+  import { fmtTs } from "$lib/utils";
 
   let alerts = $state<Alert[]>([]);
   let stats = $state<AlertStats | null>(null);
@@ -83,17 +84,6 @@
   /** Count for a level label out of `stats.by_level` (labels are upper-case). */
   function levelCount(label: string): number {
     return stats?.by_level.find(([l]) => l === label)?.[1] ?? 0;
-  }
-
-  function formatTime(iso: string): string {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleString(undefined, {
-      month: "short",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
   }
 
   function dash(s: string | null | undefined): string {
@@ -299,7 +289,7 @@
                 <Table.Cell class="text-muted-foreground">{dash(a.room_name)}</Table.Cell>
                 <Table.Cell class="text-muted-foreground">{a.source}</Table.Cell>
                 <Table.Cell class="tabular-nums text-muted-foreground">
-                  {formatTime(a.created_at)}
+                  {fmtTs(a.created_at)}
                 </Table.Cell>
                 <Table.Cell>
                   {#if isDelivered(a)}

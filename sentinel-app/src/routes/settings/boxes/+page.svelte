@@ -23,6 +23,7 @@
   import { API_BASE } from "$lib/config";
   import { hasPerm } from "$lib/auth.svelte";
   import { pendingInstall } from "$lib/box-install.svelte";
+  import { fmtTs } from "$lib/utils";
 
   const allowed = hasPerm("devices.write");
 
@@ -127,8 +128,7 @@
 
   function seen(b: Box): string {
     if (!b.last_seen) return "never";
-    const d = new Date(b.last_seen);
-    return Number.isNaN(d.getTime()) ? b.last_seen : d.toLocaleString();
+    return fmtTs(b.last_seen);
   }
 
   // ---- health (Tailscale + ffmpeg, reported on the heartbeat) --------------
