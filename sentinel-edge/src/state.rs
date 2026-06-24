@@ -103,6 +103,7 @@ impl AppState {
             crate::go2rtc::respawn(self);
         }
         self.push_streaming();
+        self.warm_cameras(); // restart any ring that crashed since last poll
         n
     }
 
