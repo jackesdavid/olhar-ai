@@ -1,6 +1,6 @@
 [package]
 name = "sentinel-edge"
-version = "0.5.25"
+version = "0.5.26"
 edition = "2021"
 description = "The edge gateway — the ONLY thing that touches cameras. Wraps go2rtc (sentinel-rtc) + ONVIF and serves on-demand JPEG snapshots over REST so out-of-process services (sentinel-flow, the UI) reach the LAN-bound cameras without speaking RTSP/ONVIF themselves. Cameras are LAN-bound, so this tier is mandatory however cloud the rest becomes."
 
@@ -27,8 +27,10 @@ env_logger = "0.11"
 # macOS `brew install opencv`). The cloud crates build per-package (`-p sentinel-flow` …) so
 # they never pull OpenCV; only this edge crate does.
 opencv = "0.93"
-# RTSP ring buffer: connects to go2rtc's re-server (rtsp://127.0.0.1:8554/) to keep
-# an in-memory pre-roll ring of H264 frames without a separate ffmpeg process.
+# RTSP ring buffer: connects to go2rtc's re-server (rtsp://127.0.0.1:8554/) for an
+# in-memory pre-roll ring. We use retina only for RTSP transport + RTP ordering and
+# do our OWN lenient H264 depacketization (retina's codec layer rejects go2rtc's
+# repackaged NALs with "forbidden sequence 00 00 00").
 retina = "0.4"
 futures = "0.3"
 url = "2"

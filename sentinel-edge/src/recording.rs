@@ -2,22 +2,25 @@
 //!
 //! **Ring buffer** (`start_ring`)
 //!   A background thread per camera opens an RTSP connection to go2rtc's local
-//!   re-server (`rtsp://127.0.0.1:8554/cam_{ip_key}`) via the `retina` crate.
-//!   Received H264 Annex-B frames are kept in a `VecDeque<H264Frame>` in memory
-//!   (the *mem-ring*). No segments are written to disk between recordings.
-//!   go2rtc owns the camera RTSP connection; retina is just another consumer.
+//!   re-server (`rtsp://127.0.0.1:8554/cam_{ip_key}`). We use the `retina` crate
+//!   ONLY for RTSP transport + RTP ordering (`PacketItem::Rtp`) and do our own
+//!   lenient H264 depacketization (`H264Reassembler`) — retina's built-in codec
+//!   layer rejects go2rtc's repackaged NALs with "forbidden sequence 00 00 00".
+//!   Reassembled Annex-B access units are kept in a `VecDeque<H264Frame>` in
+//!   memory (the *mem-ring*). No segments are written to disk between recordings.
 //!
 //! **Recording** (`start` / `stop`)
 //!   `start()` snapshots the mem-ring from the last IDR frame (guarantees a clean
-//!   keyframe — no black frames), spawns `ffmpeg -f h264 -i pipe:0 … output.mp4`,
-//!   writes the pre-roll bytes to ffmpeg stdin, then wires the live_sink channel so
-//!   the collector thread keeps feeding new frames to ffmpeg for the live portion.
+//!   keyframe — no black frames) and installs the live sink under the SAME ring
+//!   lock, so no frame is dropped or duplicated at the boundary. It spawns
+//!   `ffmpeg -f h264 -i pipe:0 … output.mp4`, writes the pre-roll bytes, then a
+//!   relay thread feeds subsequent live frames to ffmpeg stdin.
 //!
-//!   `stop()` drops the live_sink → channel closes → relay thread exits → ffmpeg
+//!   `stop()` clears the live sink → channel closes → relay thread drains → ffmpeg
 //!   stdin gets EOF → ffmpeg finalises the MP4. No concat step needed.
 
 use futures::StreamExt as _;
-use retina::codec::CodecItem;
+use retina::client::PacketItem;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::Write as _;
@@ -174,19 +177,21 @@ struct H264Frame {
 
 struct MemRing {
     frames: VecDeque<H264Frame>,
+    /// When a recording is active, the collector forwards each new access unit
+    /// here. Installed by `start()` and cleared by `stop()` under this same lock,
+    /// so the pre-roll/live boundary has no gap or overlap.
+    live_sink: Option<std::sync::mpsc::SyncSender<Vec<u8>>>,
 }
 
 // ---- ring session -----------------------------------------------------------
 
-/// Per-camera ring state. The collector thread owns the retina RTSP connection
-/// and writes frames into `mem_ring`. During a recording, it also sends frames
-/// to `live_sink` so they reach the active ffmpeg process.
+/// Per-camera ring state. The collector thread owns the RTSP connection and
+/// writes reassembled access units into `mem_ring`. During a recording it also
+/// forwards frames via `mem_ring.live_sink` so they reach the active ffmpeg.
 struct RingSession {
     #[allow(dead_code)]
-    stop_tx:   std::sync::mpsc::SyncSender<()>,
-    mem_ring:  Arc<Mutex<MemRing>>,
-    /// Set to Some(tx) by start(), cleared to None by stop().
-    live_sink: Arc<Mutex<Option<std::sync::mpsc::SyncSender<Vec<u8>>>>>,
+    stop_tx:  std::sync::mpsc::SyncSender<()>,
+    mem_ring: Arc<Mutex<MemRing>>,
 }
 
 // ---- active recording -------------------------------------------------------
@@ -240,30 +245,26 @@ impl RecordingManager {
         }
 
         let (stop_tx, stop_rx) = std::sync::mpsc::sync_channel(1);
-        let mem_ring  = Arc::new(Mutex::new(MemRing { frames: VecDeque::new() }));
-        let live_sink = Arc::new(Mutex::new(None::<std::sync::mpsc::SyncSender<Vec<u8>>>));
+        let mem_ring = Arc::new(Mutex::new(MemRing { frames: VecDeque::new(), live_sink: None }));
 
         let ip_t          = camera_ip.to_string();
         let pre_roll_secs = self.config.pre_roll_secs;
         let mem_ring_t    = Arc::clone(&mem_ring);
-        let live_sink_t   = Arc::clone(&live_sink);
 
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .expect("tokio rt for RTSP ring");
-            rt.block_on(run_rtsp_collector(
-                ip_t, pre_roll_secs, mem_ring_t, live_sink_t, stop_rx,
-            ));
+            rt.block_on(run_rtsp_collector(ip_t, pre_roll_secs, mem_ring_t, stop_rx));
         });
 
         self.ring_sessions.lock().unwrap().insert(
             camera_ip.to_string(),
-            RingSession { stop_tx, mem_ring, live_sink },
+            RingSession { stop_tx, mem_ring },
         );
 
-        log::info!("ring[{camera_ip}]: started (retina RTSP, {}s in-memory pre-roll)", pre_roll_secs);
+        log::info!("ring[{camera_ip}]: started (RTSP raw-RTP, {}s in-memory pre-roll)", pre_roll_secs);
     }
 
     #[allow(dead_code)]
@@ -296,44 +297,7 @@ impl RecordingManager {
         let output     = self.dir.join(format!("{clip_id}.mp4"));
         let max_pre    = requested_pre_roll_secs.min(self.config.pre_roll_secs);
 
-        // --- Step 1: snapshot pre-roll from in-memory ring -------------------
-        // Estimate max frames to look back: assume sub-stream ≤ 30 fps.
-        let max_frames   = (max_pre as usize) * 30;
-        let pre_roll_bytes: Vec<u8> = {
-            let rings = self.ring_sessions.lock().unwrap();
-            match rings.get(camera_ip) {
-                None => vec![],
-                Some(rs) => {
-                    let ring = rs.mem_ring.lock().unwrap();
-                    let window_start = ring.frames.len().saturating_sub(max_frames);
-                    // Find the LAST keyframe in the window so we always start cleanly.
-                    let last_idr = ring.frames.range(window_start..)
-                        .rposition(|f| f.is_keyframe)
-                        .map(|rel| window_start + rel);
-                    match last_idr {
-                        None => {
-                            log::warn!("recording[{clip_id}]: no keyframe in ring yet, no pre-roll");
-                            vec![]
-                        }
-                        Some(from) => {
-                            // Drop the most-recent frame — may still be arriving.
-                            let to = ring.frames.len().saturating_sub(1);
-                            let mut bytes = Vec::new();
-                            for f in ring.frames.range(from..to) {
-                                bytes.extend_from_slice(&f.data);
-                            }
-                            log::info!(
-                                "recording[{clip_id}]: pre-roll {} frames from memory ring",
-                                to.saturating_sub(from)
-                            );
-                            bytes
-                        }
-                    }
-                }
-            }
-        };
-
-        // --- Step 2: spawn ffmpeg, write pre-roll, wire live_sink ------------
+        // --- Step 1: spawn ffmpeg -------------------------------------------
         let mut ffmpeg = Command::new("ffmpeg")
             .args([
                 "-loglevel", "warning",
@@ -350,27 +314,66 @@ impl RecordingManager {
 
         let mut ffmpeg_stdin = ffmpeg.stdin.take().expect("piped");
 
+        // --- Step 2: snapshot pre-roll + install live sink ATOMICALLY -------
+        // Both happen under the one mem_ring lock so the next access unit the
+        // collector completes goes to the live channel (not the snapshot) with
+        // no gap or overlap at the boundary.
+        // Assume sub-stream ≤ 30 fps for the look-back window.
+        let max_frames = (max_pre as usize) * 30;
+        let (pre_roll_bytes, live_rx): (Vec<u8>, std::sync::mpsc::Receiver<Vec<u8>>) = {
+            let rings = self.ring_sessions.lock().unwrap();
+            let (live_tx, live_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(256);
+            let bytes = match rings.get(camera_ip) {
+                None => vec![],
+                Some(rs) => {
+                    let mut ring = rs.mem_ring.lock().unwrap();
+                    let win_start = ring.frames.len().saturating_sub(max_frames);
+                    // Earliest keyframe within the window → most pre-roll up to the
+                    // cap. If the GOP is longer than the window, fall back to the
+                    // last keyframe overall so the clip still starts decodable.
+                    let start_idx = ring.frames.iter().enumerate()
+                        .skip(win_start)
+                        .find(|(_, f)| f.is_keyframe)
+                        .map(|(i, _)| i)
+                        .or_else(|| ring.frames.iter().rposition(|f| f.is_keyframe));
+                    let bytes = match start_idx {
+                        None => {
+                            log::warn!("recording[{clip_id}]: no keyframe in ring yet, no pre-roll");
+                            vec![]
+                        }
+                        Some(from) => {
+                            let mut b = Vec::new();
+                            for f in ring.frames.range(from..) {
+                                b.extend_from_slice(&f.data);
+                            }
+                            log::info!(
+                                "recording[{clip_id}]: pre-roll {} frames from memory ring",
+                                ring.frames.len() - from
+                            );
+                            b
+                        }
+                    };
+                    ring.live_sink = Some(live_tx);
+                    bytes
+                }
+            };
+            (bytes, live_rx)
+        };
+
+        // --- Step 3: write pre-roll, then hand stdin to the relay thread -----
         if !pre_roll_bytes.is_empty() {
             ffmpeg_stdin.write_all(&pre_roll_bytes)
                 .map_err(|e| format!("ffmpeg pre-roll write: {e}"))?;
         }
 
-        // Live frames: collector → channel → relay thread → ffmpeg stdin
-        let (live_tx, live_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(128);
-        {
-            let rings = self.ring_sessions.lock().unwrap();
-            if let Some(rs) = rings.get(camera_ip) {
-                *rs.live_sink.lock().unwrap() = Some(live_tx);
-            }
-        }
-
-        // Relay: buffer until first IDR in live portion so there are no glitches
-        // at the pre-roll/live boundary.
+        // With pre-roll present, live frames are contiguous with it (same GOP),
+        // so write them immediately. Without pre-roll, wait for the first live
+        // IDR so the file starts on a keyframe.
+        let wait_for_idr = pre_roll_bytes.is_empty();
         let relay = std::thread::spawn(move || {
-            let mut idr_seen = pre_roll_bytes.is_empty(); // if no pre-roll, don't wait for IDR
+            let mut idr_seen = !wait_for_idr;
             for frame_data in live_rx {
                 if !idr_seen {
-                    // Check for H264 Annex-B IDR NAL (type 5 = 0x65 after start code)
                     let is_idr = frame_data.windows(5).any(|w| {
                         (w[0..4] == [0, 0, 0, 1] && (w[4] & 0x1F) == 5)
                         || (w[0..3] == [0, 0, 1] && (w[3] & 0x1F) == 5)
@@ -403,11 +406,11 @@ impl RecordingManager {
                 .ok_or_else(|| format!("no active session for {clip_id}"))?
         };
 
-        // Dropping live_sink → channel closes → relay thread drains → stdin drops → ffmpeg EOF
+        // Clearing live_sink → channel closes → relay thread drains → stdin drops → ffmpeg EOF
         {
             let rings = self.ring_sessions.lock().unwrap();
             if let Some(rs) = rings.get(&sess.camera_ip) {
-                *rs.live_sink.lock().unwrap() = None;
+                rs.mem_ring.lock().unwrap().live_sink = None;
             }
         }
 
@@ -550,16 +553,15 @@ impl RecordingManager {
     }
 }
 
-// ---- retina RTSP ring collector ---------------------------------------------
+// ---- RTSP ring collector (raw RTP) ------------------------------------------
 
 /// Async task: opens an RTSP connection to go2rtc's local re-server for `camera_ip`,
-/// receives H264 Annex-B frames, and maintains the in-memory ring.
-/// Reconnects automatically on error. Exits when the stop signal fires.
+/// reassembles raw RTP into H264 Annex-B access units, and maintains the in-memory
+/// ring. Reconnects automatically on error. Exits when the stop signal fires.
 async fn run_rtsp_collector(
-    camera_ip:    String,
+    camera_ip:     String,
     pre_roll_secs: u32,
     mem_ring:      Arc<Mutex<MemRing>>,
-    live_sink:     Arc<Mutex<Option<std::sync::mpsc::SyncSender<Vec<u8>>>>>,
     stop_rx:       std::sync::mpsc::Receiver<()>,
 ) {
     let ip_key      = camera_ip.replace('.', "_");
@@ -576,14 +578,7 @@ async fn run_rtsp_collector(
             break;
         }
 
-        let result = rtsp_stream_once(
-            &rtsp_url,
-            &camera_ip,
-            max_frames,
-            &mem_ring,
-            &live_sink,
-            &stop_rx,
-        ).await;
+        let result = rtsp_stream_once(&rtsp_url, &camera_ip, max_frames, &mem_ring, &stop_rx).await;
 
         match result {
             Ok(()) => break, // stop signal received inside
@@ -596,12 +591,11 @@ async fn run_rtsp_collector(
 }
 
 async fn rtsp_stream_once(
-    rtsp_url:  &str,
-    camera_ip: &str,
+    rtsp_url:   &str,
+    camera_ip:  &str,
     max_frames: usize,
-    mem_ring:  &Arc<Mutex<MemRing>>,
-    live_sink: &Arc<Mutex<Option<std::sync::mpsc::SyncSender<Vec<u8>>>>>,
-    stop_rx:   &std::sync::mpsc::Receiver<()>,
+    mem_ring:   &Arc<Mutex<MemRing>>,
+    stop_rx:    &std::sync::mpsc::Receiver<()>,
 ) -> Result<(), String> {
     let url = rtsp_url.parse::<url::Url>().map_err(|e| format!("bad URL: {e}"))?;
 
@@ -618,57 +612,173 @@ async fn rtsp_stream_once(
     session.setup(video_idx, retina::client::SetupOptions::default()).await
         .map_err(|e| format!("setup: {e}"))?;
 
+    // Raw RTP stream — NO .demuxed(): retina's codec layer rejects go2rtc's
+    // repackaged NALs. We depacketize ourselves below.
     let mut playing = session.play(retina::client::PlayOptions::default()).await
-        .map_err(|e| format!("play: {e}"))?
-        .demuxed()
-        .map_err(|e| format!("demux: {e}"))?;
+        .map_err(|e| format!("play: {e}"))?;
 
-    log::debug!("ring-rtsp[{camera_ip}]: RTSP playing");
+    log::debug!("ring-rtsp[{camera_ip}]: RTSP playing (raw RTP)");
+
+    let mut reasm = H264Reassembler::default();
 
     loop {
         if stop_rx.try_recv().is_ok() {
             return Ok(()); // clean stop
         }
 
-        // Poll next frame with a timeout so we can check the stop signal.
+        // Poll next packet with a timeout so we can check the stop signal.
         let item = tokio::time::timeout(Duration::from_secs(5), playing.next()).await;
 
-        let codec_item = match item {
+        let pkt = match item {
             Err(_) => return Err("RTSP read timeout".to_string()),
             Ok(None) => return Err("RTSP stream ended".to_string()),
-            Ok(Some(Err(e))) => return Err(format!("frame error: {e}")),
-            Ok(Some(Ok(ci))) => ci,
+            Ok(Some(Err(e))) => return Err(format!("packet error: {e}")),
+            Ok(Some(Ok(PacketItem::Rtp(p)))) => p,
+            Ok(Some(Ok(_))) => continue, // RTCP etc.
         };
 
-        let (frame_data, is_keyframe) = match codec_item {
-            CodecItem::VideoFrame(f) => {
-                let key = f.is_random_access_point();
-                let data = f.data().to_vec();
-                (data, key)
-            }
-            _ => continue,
-        };
-
-        if frame_data.is_empty() {
-            continue;
-        }
-
-        // Push to in-memory ring.
-        {
+        let ts     = pkt.timestamp().timestamp();
+        let marker = pkt.mark();
+        for frame in reasm.push(pkt.payload(), ts, marker) {
+            if frame.data.is_empty() { continue; }
             let mut ring = mem_ring.lock().unwrap();
-            ring.frames.push_back(H264Frame { data: frame_data.clone(), is_keyframe });
+            // Forward to an active recording first (clone), then store in ring.
+            if let Some(tx) = ring.live_sink.as_ref() {
+                let _ = tx.try_send(frame.data.clone()); // non-blocking; drop on full
+            }
+            ring.frames.push_back(frame);
             while ring.frames.len() > max_frames {
                 ring.frames.pop_front();
             }
         }
+    }
+}
 
-        // Forward to live recording if active.
-        {
-            let sink = live_sink.lock().unwrap();
-            if let Some(ref tx) = *sink {
-                let _ = tx.try_send(frame_data); // non-blocking; drop on full
+// ---- H264 RTP depacketizer (RFC 6184, lenient) ------------------------------
+
+/// Reassembles RTP payloads into H264 Annex-B *access units* (one per frame).
+/// Handles single-NAL, STAP-A aggregation, and FU-A fragmentation. Caches the
+/// most recent SPS/PPS and prepends them to keyframe access units that lack
+/// inline parameter sets, so every keyframe in the ring is independently
+/// decodable. Deliberately lenient — unlike retina's codec layer, it does not
+/// reject NALs for spec-purity reasons; ffmpeg copes fine.
+#[derive(Default)]
+struct H264Reassembler {
+    fu_buf:     Vec<u8>,      // in-progress FU-A NAL (incl. reconstructed header)
+    fu_active:  bool,
+    au:         Vec<u8>,      // accumulating access unit (Annex-B)
+    au_ts:      Option<i64>,
+    au_has_idr: bool,
+    au_has_sps: bool,
+    sps:        Option<Vec<u8>>, // raw NAL (no start code)
+    pps:        Option<Vec<u8>>,
+}
+
+const START_CODE: [u8; 4] = [0, 0, 0, 1];
+
+impl H264Reassembler {
+    /// Feed one RTP payload. Returns any completed access units.
+    fn push(&mut self, payload: &[u8], ts: i64, marker: bool) -> Vec<H264Frame> {
+        let mut out = Vec::new();
+        if payload.is_empty() {
+            return out;
+        }
+
+        // Timestamp change ⇒ previous access unit is complete.
+        if let Some(cur) = self.au_ts {
+            if cur != ts {
+                if let Some(f) = self.flush_au() {
+                    out.push(f);
+                }
             }
         }
+        self.au_ts = Some(ts);
+
+        let nal_type = payload[0] & 0x1F;
+        match nal_type {
+            1..=23 => self.add_nal(payload), // single NAL unit packet
+            24 => {
+                // STAP-A: [hdr][size:u16][nal]...[size:u16][nal]
+                let mut i = 1;
+                while i + 2 <= payload.len() {
+                    let size = u16::from_be_bytes([payload[i], payload[i + 1]]) as usize;
+                    i += 2;
+                    if i + size > payload.len() { break; }
+                    self.add_nal(&payload[i..i + size]);
+                    i += size;
+                }
+            }
+            28 => {
+                // FU-A: [FU indicator][FU header][fragment]
+                if payload.len() < 3 { return out; }
+                let fu_ind = payload[0];
+                let fu_hdr = payload[1];
+                let start  = fu_hdr & 0x80 != 0;
+                let end    = fu_hdr & 0x40 != 0;
+                let orig   = fu_hdr & 0x1F;
+                if start {
+                    self.fu_buf.clear();
+                    self.fu_buf.push((fu_ind & 0xE0) | orig); // reconstructed NAL header
+                    self.fu_active = true;
+                }
+                if self.fu_active {
+                    self.fu_buf.extend_from_slice(&payload[2..]);
+                    if end {
+                        let nal = std::mem::take(&mut self.fu_buf);
+                        self.fu_active = false;
+                        self.add_nal(&nal);
+                    }
+                }
+            }
+            _ => { /* STAP-B / MTAP / FU-B / reserved — skip */ }
+        }
+
+        if marker {
+            if let Some(f) = self.flush_au() {
+                out.push(f);
+            }
+        }
+        out
+    }
+
+    fn add_nal(&mut self, nal: &[u8]) {
+        if nal.is_empty() { return; }
+        match nal[0] & 0x1F {
+            7 => { self.sps = Some(nal.to_vec()); self.au_has_sps = true; }
+            8 => { self.pps = Some(nal.to_vec()); }
+            5 => { self.au_has_idr = true; }
+            _ => {}
+        }
+        self.au.extend_from_slice(&START_CODE);
+        self.au.extend_from_slice(nal);
+    }
+
+    fn flush_au(&mut self) -> Option<H264Frame> {
+        if self.au.is_empty() {
+            self.reset_au();
+            return None;
+        }
+        let is_keyframe = self.au_has_idr;
+        let mut data = Vec::with_capacity(self.au.len() + 64);
+        // Prepend cached SPS/PPS to keyframes that lack inline parameter sets.
+        if self.au_has_idr && !self.au_has_sps {
+            if let (Some(sps), Some(pps)) = (&self.sps, &self.pps) {
+                data.extend_from_slice(&START_CODE);
+                data.extend_from_slice(sps);
+                data.extend_from_slice(&START_CODE);
+                data.extend_from_slice(pps);
+            }
+        }
+        data.append(&mut self.au);
+        self.reset_au();
+        Some(H264Frame { data, is_keyframe })
+    }
+
+    fn reset_au(&mut self) {
+        self.au.clear();
+        self.au_ts = None;
+        self.au_has_idr = false;
+        self.au_has_sps = false;
     }
 }
 
