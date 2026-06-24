@@ -421,6 +421,9 @@
   const selectedNode = $derived(graph?.nodes.find((n) => n.id === selectedNodeId) ?? null);
   const nodeById = $derived(new Map(graph?.nodes.map((n) => [n.id, n]) ?? []));
   const nonCommentNodes = $derived(graph?.nodes.filter((n) => n.kind !== "comment") ?? []);
+  // Set of "<toNodeId>:<toPort>" for every wired input — lets isFilled()/requiredUnfilled()
+  // be O(1) instead of scanning graph.edges per port per node on every edge change.
+  const filledPorts = $derived(new Set((graph?.edges ?? []).map((e) => `${e.to}:${e.to_port}`)));
   const kinds = $derived(Object.values(catalog));
 
   // Synthesize per-event palette entries (On/Emit event: <name>) from the tenant registry.
@@ -516,7 +519,7 @@
   // ---- required-input validation -------------------------------------------
   // A required input is "filled" when it's wired or has a usable config literal.
   function isFilled(node: Node, port: CatPort): boolean {
-    if (graph?.edges.some((e) => e.to === node.id && e.to_port === port.name)) return true;
+    if (filledPorts.has(`${node.id}:${port.name}`)) return true;
     const v = node.config[port.name];
     switch (port.type) {
       case "bool":
@@ -1442,8 +1445,20 @@
   }
   async function removeEdge(idx: number) {
     if (!graph || editLocked) return;
-    await data.removeEdge(graph.id, idx);
-    await reload();
+    const removed = graph.edges[idx];
+    if (!removed) return;
+    const gid = graph.id;
+    // Optimistic: drop the wire locally now, persist in the background. No full
+    // reload — the canvas updates instantly and we revert only if the server says no.
+    graph.edges.splice(idx, 1);
+    const vk = edgeViaKey(removed);
+    if (edgeVias[vk]) delete edgeVias[vk];
+    try {
+      await data.removeEdge(gid, idx);
+    } catch (err) {
+      graph.edges.splice(idx, 0, removed);
+      toast.error("Couldn't remove wire", { description: String(err) });
+    }
   }
   // Drop the wire feeding a node's input port so the user can fill it manually.
   async function unlinkPort(nodeId: number, port: string) {
@@ -1468,11 +1483,17 @@
       toast.info("Pick an output port first, then this input.");
       return;
     }
+    const gid = graph.id;
+    const newEdge: Edge = { from: pending.node, from_port: pending.port, to: node.id, to_port: port };
+    pending = null;
+    // Optimistic: show the wire immediately, persist in the background. Revert if
+    // the server rejects it (e.g. type mismatch / cycle).
+    graph.edges.push(newEdge);
     try {
-      await data.addEdge(graph.id, pending.node, pending.port, node.id, port);
-      pending = null;
-      await reload();
+      await data.addEdge(gid, newEdge.from, newEdge.from_port, newEdge.to, newEdge.to_port);
     } catch (err) {
+      const i = graph.edges.indexOf(newEdge);
+      if (i >= 0) graph.edges.splice(i, 1);
       toast.error("Can't wire that", { description: String(err) });
     }
   }
@@ -1932,7 +1953,7 @@
               {/each}
 
               <!-- edges -->
-              {#each graph.edges as e, idx (idx)}
+              {#each graph.edges as e, idx (edgeViaKey(e))}
                 {@const fromN = nodeById.get(e.from)}
                 {@const toN = nodeById.get(e.to)}
                 {#if fromN && toN}
