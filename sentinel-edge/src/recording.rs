@@ -284,20 +284,32 @@ impl RecordingManager {
             return;
         }
 
-        // Remove stale segments from any previous ring run. ffmpeg always starts
-        // its segment counter from 000000, so old high-numbered segments would
-        // confuse index-based ordering (cleanup would keep stale old ones and
-        // delete the fresh new ones).
-        if let Ok(rd) = fs::read_dir(&seg_dir) {
-            for entry in rd.filter_map(|e| e.ok()) {
-                if entry.path().extension().map(|x| x == "ts").unwrap_or(false) {
-                    let _ = fs::remove_file(entry.path());
+        // If a recording is active for this camera, preserve existing ring segments
+        // so collect_live_segs() can still find them at stop() time. Continue ffmpeg
+        // numbering from the highest existing index + 1 so collect_live_segs (which
+        // filters idx >= start_seg_idx) picks up both pre-crash and post-crash segs.
+        //
+        // If no recording is active, clear stale segments so the fresh ffmpeg starts
+        // at 000000 and index ordering stays unambiguous.
+        let has_active_recording = self.recording_locks.lock().unwrap().contains_key(camera_ip);
+        let next_seg_idx = if has_active_recording {
+            let next = max_ring_seg_idx(&seg_dir).map(|m| m + 1).unwrap_or(0);
+            log::warn!("ring[{camera_ip}]: restarting during active recording — continuing from seg_{next:06}");
+            next
+        } else {
+            if let Ok(rd) = fs::read_dir(&seg_dir) {
+                for entry in rd.filter_map(|e| e.ok()) {
+                    if entry.path().extension().map(|x| x == "ts").unwrap_or(false) {
+                        let _ = fs::remove_file(entry.path());
+                    }
                 }
             }
-        }
+            0
+        };
 
         let rtsp_url = format!("rtsp://localhost:8554/cam_{ip_key}");
         let seg_pattern = seg_dir.join("seg_%06d.ts");
+        let next_seg_str = next_seg_idx.to_string();
 
         let mut cmd = Command::new("ffmpeg");
         cmd.args([
@@ -310,8 +322,11 @@ impl RecordingManager {
                 "-segment_time", "1",
                 "-segment_format", "mpegts",
                 "-reset_timestamps", "1",
-                seg_pattern.to_str().unwrap_or_default(),
-            ])
+            ]);
+        if next_seg_idx > 0 {
+            cmd.args(["-segment_start_number", &next_seg_str]);
+        }
+        cmd.arg(seg_pattern.to_str().unwrap_or_default())
             .stdin(Stdio::piped())
             .stderr(Stdio::piped());
 
