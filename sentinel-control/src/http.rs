@@ -275,13 +275,15 @@ async fn motion_push(State(st): State<AppState>, headers: HeaderMap, body: Optio
     };
 
     if let Some(mut conn) = st.redis.clone() {
-        let bbox = format!("{},{},{},{}", ev.bbox[0], ev.bbox[1], ev.bbox[2], ev.bbox[3]);
+        // bbox is a NumArray port — send a JSON array [x,y,w,h] so it decodes as a
+        // PortValue::List, not a comma-joined string (which Draw BBox / Blur Outside
+        // Box reject with "'bbox' must be a NumArray").
         let mut payload = serde_json::json!({
             "camera": ev.camera_ip,
             "score": ev.score.round() as i64,
             "area": ev.area,
             "blobs": ev.blobs,
-            "bbox": bbox,
+            "bbox": ev.bbox,
         });
         if let (Some(obj), Some(f)) = (payload.as_object_mut(), ev.frame_b64) {
             obj.insert("frame".to_string(), serde_json::Value::String(f));

@@ -113,16 +113,19 @@ fn payload_to_portvalues(payload: Option<&serde_json::Value>) -> app_core::workf
     let mut pv = app_core::workflows::PortValues::new();
     if let Some(obj) = payload.and_then(|p| p.as_object()) {
         for (k, v) in obj {
-            let val = if let Some(s) = v.as_str() {
+            let val = if let Some(arr) = v.as_array() {
+                // NumArray ports (e.g. motion `bbox` = [x,y,w,h]) → PortValue::List.
+                PortValue::List(arr.iter().map(json_num_to_pv).collect())
+            } else if let Some(s) = v.as_str() {
                 // Attempt base64 decode; if the result starts with JPEG magic it's an image.
                 if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(s.as_bytes()) {
                     if bytes.len() > 3 && bytes[0] == 0xFF_u8 && bytes[1] == 0xD8 && bytes[2] == 0xFF {
                         PortValue::Image(bytes)
                     } else {
-                        PortValue::Text(s.to_string())
+                        str_to_pv(s)
                     }
                 } else {
-                    PortValue::Text(s.to_string())
+                    str_to_pv(s)
                 }
             } else if let Some(n) = v.as_i64() {
                 PortValue::Num(n)
@@ -137,4 +140,36 @@ fn payload_to_portvalues(payload: Option<&serde_json::Value>) -> app_core::workf
         }
     }
     pv
+}
+
+/// A single JSON number → PortValue::Num (floats rounded). Non-numbers → Text.
+fn json_num_to_pv(v: &serde_json::Value) -> app_core::workflows::PortValue {
+    use app_core::workflows::PortValue;
+    if let Some(n) = v.as_i64() {
+        PortValue::Num(n)
+    } else if let Some(f) = v.as_f64() {
+        PortValue::Num(f.round() as i64)
+    } else if let Some(s) = v.as_str() {
+        PortValue::Text(s.to_string())
+    } else {
+        PortValue::Text(v.to_string())
+    }
+}
+
+/// A scalar string payload value. Defensively decodes a JSON-array or comma-joined
+/// number string (e.g. a legacy `bbox` "x,y,w,h") into a NumArray List; otherwise Text.
+fn str_to_pv(s: &str) -> app_core::workflows::PortValue {
+    use app_core::workflows::PortValue;
+    let t = s.trim();
+    if t.starts_with('[') {
+        if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str::<serde_json::Value>(t) {
+            return PortValue::List(arr.iter().map(json_num_to_pv).collect());
+        }
+    }
+    // Comma-joined integers like "12,34,56,78" → List; anything else stays Text.
+    let parts: Vec<&str> = t.split(',').map(str::trim).collect();
+    if parts.len() >= 2 && parts.iter().all(|p| p.parse::<i64>().is_ok()) {
+        return PortValue::List(parts.iter().map(|p| PortValue::Num(p.parse().unwrap())).collect());
+    }
+    PortValue::Text(s.to_string())
 }
