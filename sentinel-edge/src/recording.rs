@@ -24,7 +24,7 @@ use std::io::Read as _;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 // ---- friendly name word list ------------------------------------------------
 
@@ -182,15 +182,15 @@ struct RingSession {
 // ---- live recording session -------------------------------------------------
 
 struct Session {
-    clip_id:         String,
-    camera_ip:       String,
-    output:          PathBuf,
+    clip_id:       String,
+    camera_ip:     String,
+    output:        PathBuf,
     /// Pre-roll segments copied into live_dir at start() time.
-    preroll:         Vec<PathBuf>,
-    /// Wall-clock time when recording started. Ring segments with mtime ≥ this
-    /// value are the live portion of the clip; cleanup never touches them.
-    ring_started_at: SystemTime,
-    started_at:      String,
+    preroll:       Vec<PathBuf>,
+    /// The highest ring segment index that existed when recording started.
+    /// Ring segments with index > this value are the live portion of the clip.
+    start_seg_idx: u64,
+    started_at:    String,
 }
 
 // ---- manager ----------------------------------------------------------------
@@ -203,8 +203,8 @@ pub struct RecordingManager {
     sessions:        Mutex<HashMap<String, Session>>,
     /// Arc so the per-camera collector thread can hold a weak reference without Self.
     ring_sessions:   Arc<Mutex<HashMap<String, RingSession>>>,
-    /// Per-camera recording start time. Cleanup skips segments newer than this.
-    recording_locks: Arc<Mutex<HashMap<String, SystemTime>>>,
+    /// Per-camera start_seg_idx. Cleanup never deletes segments with index > this value.
+    recording_locks: Arc<Mutex<HashMap<String, u64>>>,
 }
 
 impl RecordingManager {
@@ -325,6 +325,11 @@ impl RecordingManager {
         let max_pre_roll = requested_pre_roll_secs.min(self.config.pre_roll_secs);
         let ring_cam_dir = self.ring_dir.join(&ip_key);
         let ring_segs = collect_preroll(&ring_cam_dir, max_pre_roll);
+
+        // Snapshot the highest segment index currently on disk BEFORE we copy pre-roll.
+        // Ring segments with index > this value are the live portion of the clip.
+        let start_seg_idx = max_ring_seg_idx(&ring_cam_dir);
+
         let preroll: Vec<PathBuf> = ring_segs.iter().enumerate().filter_map(|(i, src)| {
             let dst = self.live_dir.join(format!("{clip_id}_pre_{i:03}.ts"));
             if let Err(e) = fs::copy(src, &dst) {
@@ -336,14 +341,12 @@ impl RecordingManager {
         }).collect();
 
         if !preroll.is_empty() {
-            log::info!("recording[{clip_id}]: pre-roll {}s ({} segments)", preroll.len(), preroll.len());
+            log::info!("recording[{clip_id}]: pre-roll {} segments (start_seg_idx={start_seg_idx})", preroll.len());
         } else if requested_pre_roll_secs > 0 {
-            log::warn!("recording[{clip_id}]: requested {requested_pre_roll_secs}s pre-roll but ring has no segments yet");
+            log::warn!("recording[{clip_id}]: requested {requested_pre_roll_secs}s pre-roll but ring has no segments yet (start_seg_idx={start_seg_idx})");
         }
 
-        // All ring segments with mtime >= this moment are the live portion.
-        let ring_started_at = SystemTime::now();
-        self.recording_locks.lock().unwrap().insert(camera_ip.to_string(), ring_started_at);
+        self.recording_locks.lock().unwrap().insert(camera_ip.to_string(), start_seg_idx);
 
         log::info!("recording started: {clip_id}");
         sessions.insert(clip_id.clone(), Session {
@@ -351,7 +354,7 @@ impl RecordingManager {
             camera_ip: camera_ip.to_string(),
             output,
             preroll,
-            ring_started_at,
+            start_seg_idx,
             started_at,
         });
         Ok((clip_id, true))
@@ -363,7 +366,7 @@ impl RecordingManager {
             .ok_or_else(|| format!("no active session for clip_id {clip_id}"))?;
 
         let ring_cam_dir = self.ring_dir.join(sess.camera_ip.replace('.', "_"));
-        let live_segs = collect_live_segs(&ring_cam_dir, sess.ring_started_at);
+        let live_segs = collect_live_segs(&ring_cam_dir, sess.start_seg_idx);
 
         if live_segs.is_empty() && sess.preroll.is_empty() {
             self.recording_locks.lock().unwrap().remove(&sess.camera_ip);
@@ -543,7 +546,7 @@ fn run_hls_collector(
     camera_ip:       &str,
     seg_dir:         &PathBuf,
     pre_roll_secs:   u32,
-    recording_locks: &Arc<Mutex<HashMap<String, SystemTime>>>,
+    recording_locks: &Arc<Mutex<HashMap<String, u64>>>,
     ring_sessions:   &Arc<Mutex<HashMap<String, RingSession>>>,
     stop_rx:         std::sync::mpsc::Receiver<()>,
 ) {
@@ -645,8 +648,8 @@ fn run_hls_collector(
         }
 
         // --- Evict old segments beyond the rolling window ---
-        let min_time = recording_locks.lock().unwrap().get(camera_ip).copied();
-        cleanup_ring_dir(seg_dir, keep, camera_ip, min_time);
+        let min_idx = recording_locks.lock().unwrap().get(camera_ip).copied();
+        cleanup_ring_dir(seg_dir, keep, camera_ip, min_idx);
     }
 }
 
@@ -684,58 +687,66 @@ fn collect_preroll(ring_dir: &PathBuf, max_secs: u32) -> Vec<PathBuf> {
     entries[start..].iter().map(|(_, p)| p.clone()).collect()
 }
 
-/// Collect ring segments with mtime >= `started_at`. These are the live portion
-/// of the clip. Drops the most-recently-modified segment (may still be writing).
-fn collect_live_segs(ring_dir: &PathBuf, started_at: SystemTime) -> Vec<PathBuf> {
+/// The highest segment index currently in the ring dir, or 0 if empty.
+fn max_ring_seg_idx(ring_dir: &PathBuf) -> u64 {
+    fs::read_dir(ring_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map(|x| x == "ts").unwrap_or(false))
+        .filter_map(|e| seg_idx(&e.path()))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Collect ring segments with index > `start_idx` (the live portion of the clip),
+/// sorted oldest-first. Drops the highest-indexed segment (may still be downloading).
+fn collect_live_segs(ring_dir: &PathBuf, start_idx: u64) -> Vec<PathBuf> {
     if !ring_dir.exists() {
         return vec![];
     }
-
-    let mut entries: Vec<(SystemTime, PathBuf)> = fs::read_dir(ring_dir)
+    let mut entries: Vec<(u64, PathBuf)> = fs::read_dir(ring_dir)
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().map(|x| x == "ts").unwrap_or(false))
         .filter_map(|e| {
-            let mtime = e.metadata().ok()?.modified().ok()?;
-            if mtime >= started_at { Some((mtime, e.path())) } else { None }
+            let idx = seg_idx(&e.path())?;
+            if idx > start_idx { Some((idx, e.path())) } else { None }
         })
         .collect();
 
-    entries.sort_by_key(|(mtime, _)| *mtime);
+    entries.sort_by_key(|(idx, _)| *idx);
 
     if entries.len() > 1 {
-        entries.pop(); // drop most-recent (may still be downloading)
+        entries.pop(); // drop highest-indexed (may still be downloading)
     }
 
-    log::debug!("collect_live_segs: {} segments since {:?}", entries.len(), started_at);
+    log::debug!("collect_live_segs: {} segments after idx {start_idx}", entries.len());
     entries.into_iter().map(|(_, p)| p).collect()
 }
 
-/// Evict old ring segments, keeping the `keep` most recent by mtime.
-/// Never deletes segments with mtime >= `min_keep_time` (active recording window).
-fn cleanup_ring_dir(dir: &PathBuf, keep: usize, ip: &str, min_keep_time: Option<SystemTime>) {
-    let mut entries: Vec<(SystemTime, PathBuf)> = match fs::read_dir(dir) {
+/// Evict old ring segments, keeping the `keep` most recent by index.
+/// Never deletes segments with index > `min_seg_idx` (active recording window).
+fn cleanup_ring_dir(dir: &PathBuf, keep: usize, ip: &str, min_seg_idx: Option<u64>) {
+    let mut entries: Vec<(u64, PathBuf)> = match fs::read_dir(dir) {
         Ok(rd) => rd.filter_map(|e| e.ok())
             .filter(|e| e.path().extension().map(|x| x == "ts").unwrap_or(false))
-            .filter_map(|e| {
-                let mtime = e.metadata().ok()?.modified().ok()?;
-                Some((mtime, e.path()))
-            })
+            .filter_map(|e| seg_idx(&e.path()).map(|idx| (idx, e.path())))
             .collect(),
         Err(_) => return,
     };
 
-    // Protect segments written during an active recording.
-    if let Some(min_time) = min_keep_time {
-        entries.retain(|(mtime, _)| *mtime < min_time);
+    // Protect segments that are part of an active recording (live portion).
+    if let Some(min_idx) = min_seg_idx {
+        entries.retain(|(idx, _)| *idx <= min_idx);
     }
 
     if entries.len() <= keep {
         return;
     }
 
-    entries.sort_by_key(|(mtime, _)| *mtime);
+    entries.sort_by_key(|(idx, _)| *idx);
     let to_delete = entries.len() - keep;
     for (_, path) in entries.iter().take(to_delete) {
         if let Err(e) = fs::remove_file(path) {
