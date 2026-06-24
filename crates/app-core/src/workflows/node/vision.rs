@@ -210,6 +210,48 @@ pub(super) fn run_draw_bbox(config: &Value, inputs: &PortValues) -> Result<PortV
     Ok(o)
 }
 
+pub(super) fn run_blur_outside_bbox(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let raw = inputs.get("image").and_then(PortValue::as_image).ok_or("missing required input 'image'")?;
+    let bbox_vals: Vec<i64> = {
+        let list = inputs.get("bbox").ok_or("missing required input 'bbox'")?;
+        match list {
+            PortValue::List(items) => items.iter().filter_map(PortValue::as_num).collect(),
+            _ => return Err("'bbox' must be a NumArray".into()),
+        }
+    };
+    if bbox_vals.len() < 4 {
+        return Err(format!("'bbox' needs 4 numbers, got {}", bbox_vals.len()));
+    }
+    let fmt = config.get("format").and_then(|v| v.as_str()).unwrap_or("xyxy");
+    let (x1, y1, x2, y2) = if fmt == "xywh" {
+        (bbox_vals[0], bbox_vals[1], bbox_vals[0] + bbox_vals[2], bbox_vals[1] + bbox_vals[3])
+    } else {
+        (bbox_vals[0], bbox_vals[1], bbox_vals[2], bbox_vals[3])
+    };
+    let sigma = config
+        .get("blur")
+        .and_then(|v| v.as_str().and_then(|s| s.trim().parse::<f32>().ok()).or_else(|| v.as_f64().map(|n| n as f32)))
+        .unwrap_or(12.0)
+        .max(0.1);
+
+    // Blur the whole frame, then paste the sharp region of interest back inside
+    // the box — everything outside the box ends up blurred.
+    let img = image::load_from_memory(raw).map_err(|e| format!("could not decode image: {e}"))?;
+    let sharp = img.into_rgb8();
+    let mut out_img = image::imageops::blur(&sharp, sigma);
+    copy_rect(&sharp, &mut out_img, x1, y1, x2, y2);
+
+    let mut out = Vec::new();
+    image::DynamicImage::ImageRgb8(out_img)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
+        .map_err(|e| format!("could not encode image: {e}"))?;
+    log::debug!("blur_outside_bbox: kept [{x1},{y1},{x2},{y2}] sharp, σ={sigma} → {}-byte JPEG", out.len());
+    let mut o = PortValues::new();
+    o.insert("image".into(), PortValue::Image(out));
+    o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -243,6 +285,23 @@ fn parse_hex_color(s: &str) -> Option<[u8; 3]> {
     let g = u8::from_str_radix(&s[2..4], 16).ok()?;
     let b = u8::from_str_radix(&s[4..6], 16).ok()?;
     Some([r, g, b])
+}
+
+/// Copy the pixels inside the rect from `src` over `dst` (clamped to bounds).
+/// Empty when the rect lies fully outside the frame.
+fn copy_rect(src: &image::RgbImage, dst: &mut image::RgbImage, x1: i64, y1: i64, x2: i64, y2: i64) {
+    let w = src.width() as i64;
+    let h = src.height() as i64;
+    let lo_x = x1.min(x2).max(0);
+    let hi_x = x1.max(x2).min(w - 1);
+    let lo_y = y1.min(y2).max(0);
+    let hi_y = y1.max(y2).min(h - 1);
+    for y in lo_y..=hi_y {
+        for x in lo_x..=hi_x {
+            let px = *src.get_pixel(x as u32, y as u32);
+            dst.put_pixel(x as u32, y as u32, px);
+        }
+    }
 }
 
 fn draw_rect(img: &mut image::RgbImage, x1: i64, y1: i64, x2: i64, y2: i64, color: [u8; 3], thickness: u32) {

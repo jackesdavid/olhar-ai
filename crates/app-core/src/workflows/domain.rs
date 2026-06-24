@@ -235,6 +235,10 @@ pub enum NodeKind {
     /// Vision: draw a bounding box rectangle on an image → annotated JPEG out.
     /// Accepts `xyxy` (x1,y1,x2,y2) or `xywh` (x,y,width,height) via `format` config.
     DrawBbox,
+    /// Vision: blur everything OUTSIDE a bounding box → redacted JPEG out (the
+    /// region inside the box stays sharp). Accepts `xyxy`/`xywh` via `format`;
+    /// `blur` config sets the Gaussian strength.
+    BlurOutsideBbox,
     /// Vision: return the pixel dimensions of an image — useful when the frame
     /// arrives via a custom event and width/height aren't already on the wire.
     GetImageSize,
@@ -485,6 +489,11 @@ const DRAW_BBOX_IN: [Port; 2] =
 const DRAW_BBOX_OUT: [Port; 2] =
     [p("image", PortType::Image, false), p("ok", PortType::Bool, false)];
 
+const BLUR_OUTSIDE_BBOX_IN: [Port; 2] =
+    [p("image", PortType::Image, true), p("bbox", PortType::NumArray, true)];
+const BLUR_OUTSIDE_BBOX_OUT: [Port; 2] =
+    [p("image", PortType::Image, false), p("ok", PortType::Bool, false)];
+
 const GET_IMAGE_SIZE_IN: [Port; 1] = [p("image", PortType::Image, true)];
 const GET_IMAGE_SIZE_OUT: [Port; 3] = [
     p("width", PortType::Num, false),
@@ -557,7 +566,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 52] = [
+    pub const ALL: [NodeKind; 53] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -598,6 +607,7 @@ impl NodeKind {
         NodeKind::ShowImage,
         NodeKind::Cooldown,
         NodeKind::DrawBbox,
+        NodeKind::BlurOutsideBbox,
         NodeKind::GetImageSize,
         NodeKind::And,
         NodeKind::Or,
@@ -656,6 +666,7 @@ impl NodeKind {
             NodeKind::BoolToText => "bool_to_text",
             NodeKind::Cooldown => "cooldown",
             NodeKind::DrawBbox => "draw_bbox",
+            NodeKind::BlurOutsideBbox => "blur_outside_bbox",
             NodeKind::GetImageSize => "get_image_size",
             NodeKind::And => "and",
             NodeKind::Or => "or",
@@ -718,6 +729,7 @@ impl NodeKind {
             NodeKind::BoolToText => "Yes/No to Text",
             NodeKind::Cooldown => "Cooldown",
             NodeKind::DrawBbox => "Draw Detection Box",
+            NodeKind::BlurOutsideBbox => "Blur Outside Box",
             NodeKind::GetImageSize => "Image Size",
             NodeKind::And => "And",
             NodeKind::Or => "Or",
@@ -775,6 +787,7 @@ impl NodeKind {
             | NodeKind::BreakDetection
             | NodeKind::BreakFaceDetection
             | NodeKind::DrawBbox
+            | NodeKind::BlurOutsideBbox
             | NodeKind::GetImageSize => "Vision",
             NodeKind::RecordPresence => "Presence",
             NodeKind::Print | NodeKind::ShowImage | NodeKind::Comment => "Debug",
@@ -859,6 +872,7 @@ impl NodeKind {
             NodeKind::Print => &PRINT_IN,
             NodeKind::ShowImage => &SHOW_IMAGE_IN,
             NodeKind::DrawBbox => &DRAW_BBOX_IN,
+            NodeKind::BlurOutsideBbox => &BLUR_OUTSIDE_BBOX_IN,
             NodeKind::GetImageSize => &GET_IMAGE_SIZE_IN,
             NodeKind::And | NodeKind::Or => &BOOL_OP_IN,
             NodeKind::Not => &NOT_IN,
@@ -916,6 +930,7 @@ impl NodeKind {
             NodeKind::Print => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::ShowImage => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::DrawBbox => &DRAW_BBOX_OUT,
+            NodeKind::BlurOutsideBbox => &BLUR_OUTSIDE_BBOX_OUT,
             NodeKind::GetImageSize => &GET_IMAGE_SIZE_OUT,
             NodeKind::And | NodeKind::Or | NodeKind::Not | NodeKind::TextCompare => &COMPARE_OUT,
             NodeKind::FlipFlop => &FLIP_FLOP_OUT,
@@ -996,6 +1011,7 @@ impl NodeKind {
             NodeKind::NumToText | NodeKind::BoolToText => json!({}),
             NodeKind::Cooldown => json!({ "window_secs": "60" }),
             NodeKind::DrawBbox => json!({ "color": "#00FF00", "thickness": "2", "format": "xyxy" }),
+            NodeKind::BlurOutsideBbox => json!({ "blur": "12", "format": "xyxy" }),
             NodeKind::GetImageSize => json!({}),
             NodeKind::And | NodeKind::Or => json!({ "a": false, "b": false }),
             NodeKind::Not => json!({ "a": false }),

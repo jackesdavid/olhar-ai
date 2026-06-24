@@ -37,7 +37,7 @@ const NODE_KIND_COLOR: Record<string, string> = {
   person_detection: portColor.person, object_detection: portColor.person,
   break_person_detection: portColor.person, break_detection: portColor.person,
   break_face_detection: portColor.person, recognize_person: portColor.person,
-  draw_bbox: portColor.person,
+  draw_bbox: portColor.person, blur_outside_bbox: portColor.person,
   // AI
   describe_image: portColor.dictionary, ask_ai: portColor.dictionary,
   // Alerts

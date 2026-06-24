@@ -61,7 +61,7 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
   on `Db::connect` (control + flow boot). Additive; next number is **0033** (recent: 0029 = presence_detect_position,
   0030 = recordings, 0031 = box_pending_commands, 0032 = recordings_friendly_name). System events
   (e.g. `motion`) are a code catalog (`repo::system_events()`), not a migration.
-- **Workflow nodes**: 52 user-visible nodes in `NodeKind::ALL` (`crates/app-core/src/workflows/domain.rs`);
+- **Workflow nodes**: 53 user-visible nodes in `NodeKind::ALL` (`crates/app-core/src/workflows/domain.rs`);
   execution in `node.rs` (same folder). Node catalog + port reference: [docs/workflow-nodes.md](docs/workflow-nodes.md).
 - **Versioning**: web app = `sentinel-app/package.json` + the footer in `routes/+layout.svelte`;
   edge = `sentinel-edge/Cargo.toml` (drives `LATEST_EDGE_VERSION` + the `v*` release tag). Bump
