@@ -58,13 +58,14 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
 - **Timestamps are RFC3339 `text`**, not `timestamptz` — sqlx is built without the chrono/time
   feature, so it can't decode `timestamptz`. Generate with `app_core::alerts::now_rfc3339()`.
 - **Migrations**: `crates/app-core/migrations/NNNN_*.sql`, embedded via `sqlx::migrate!`, applied
-  on `Db::connect` (control + flow boot). Additive; next number is 0029 (0023 = workflow_node_state,
-  0024 = map_texts, 0025 = map_shapes, 0026 = telegram_bot_username, 0027 = telegram_global_config,
-  0028 = platform_logs). System events (e.g. `motion`) are a code
-  catalog (`repo::system_events()`), not a migration.
+  on `Db::connect` (control + flow boot). Additive; next number is **0033** (recent: 0029 = presence_detect_position,
+  0030 = recordings, 0031 = box_pending_commands, 0032 = recordings_friendly_name). System events
+  (e.g. `motion`) are a code catalog (`repo::system_events()`), not a migration.
+- **Workflow nodes**: 52 user-visible nodes in `NodeKind::ALL` (`crates/app-core/src/workflows/domain.rs`);
+  execution in `node.rs` (same folder). Node catalog + port reference: [docs/workflow-nodes.md](docs/workflow-nodes.md).
 - **Versioning**: web app = `sentinel-app/package.json` + the footer in `routes/+layout.svelte`;
   edge = `sentinel-edge/Cargo.toml` (drives `LATEST_EDGE_VERSION` + the `v*` release tag). Bump
-  together for a release. Current: web **0.4.1**, edge **0.5.0**. The edge is **out of the
+  together for a release. Current: web **0.4.1**, edge **0.5.19**. The edge is **out of the
   cargo workspace** (links native OpenCV for motion) — build it from `sentinel-edge/`.
 - **GitHub Actions is billing-blocked** — deploy locally with `task cloud-deploy`; release the
   edge binary by building locally + scp (see [deploy ref](docs/ref/deploy.md)).

@@ -284,7 +284,7 @@
         >
           <SentinelMark
             size={32}
-            class="shrink-0 text-primary drop-shadow-[0_0_10px_oklch(0.7_0.16_162/0.45)]"
+            class="shrink-0 text-primary drop-shadow-[0_0_10px_oklch(1_0_0/0.3)]"
           />
           {#if !navCollapsed}
             <div class="flex flex-col leading-tight">

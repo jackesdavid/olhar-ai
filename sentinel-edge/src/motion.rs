@@ -98,12 +98,18 @@ fn has_stream(d: &app_core::devices::Device) -> bool {
 
 /// One camera's supervised loop: run the capture until stopped, retrying on error.
 fn watch(state: Arc<AppState>, ip: String, stop: Arc<AtomicBool>) {
-    let p = Params::from_env();
+    let mut p = Params::from_env();
+    // Allow the box recording_config to override the MOG2 sensitivity.
+    let cfg_var = state.recording.config.motion_var_threshold;
+    if cfg_var > 0.0 {
+        p.var_threshold = cfg_var;
+    }
     log::info!(
-        "motion watcher[{ip}]: starting (fps={}, floor={}%, min_interval={}s)",
+        "motion watcher[{ip}]: starting (fps={}, floor={}%, min_interval={}s, mog2_var={})",
         p.fps,
         p.floor_pct,
-        p.min_interval.as_secs()
+        p.min_interval.as_secs(),
+        p.var_threshold
     );
     while !stop.load(Ordering::Relaxed) {
         if let Err(e) = run_capture(&state, &ip, &p, &stop) {

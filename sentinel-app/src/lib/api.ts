@@ -73,6 +73,7 @@ export type Box = {
   tailscale_state: string | null;
   ffmpeg_ok: boolean | null;
   health_at: string | null;
+  recording_config: RecordingConfig | null;
 };
 
 export type NewBox = { id: string; token: string; hostname: string; tailscale_key: string | null };
@@ -85,6 +86,8 @@ export const boxes = {
   del: (id: string) => api.del<void>(`/boxes/${id}`),
   /** Queue a restart for a box (it relaunches → reconnects tailnet + re-serves go2rtc). */
   restart: (id: string) => api.post<void>(`/boxes/${id}/restart`),
+  /** Queue an update for a box (it runs install.sh --update → service manager restarts with new binary). */
+  update: (id: string) => api.post<void>(`/boxes/${id}/update`),
   /** The latest edge build the operator has published (for "update available"). */
   latestVersion: () => api.get<{ version: string }>("/edge-latest"),
   /** Recent persisted log tail for a box (oldest-first). */
@@ -100,6 +103,8 @@ export type RecordingConfig = {
   pre_roll_secs: number;
   max_storage_mb: number;
   codec: string;
+  cameras_always_warm: boolean;
+  motion_var_threshold?: number;
 };
 
 export type PlatformLog = {
@@ -154,23 +159,57 @@ export const platformLogs = {
 export type Recording = {
   id: number;
   camera_ip: string;
+  camera_name?: string | null;
   clip_id: string;
+  friendly_name: string;
   duration_secs: number;
   size_bytes: number;
   started_at: string;  // RFC3339
   created_at: string;  // RFC3339
 };
 
+export type RecordingPage = {
+  total: number;
+  items: Recording[];
+};
+
+export type RecordingListOpts = {
+  camera_ip?: string;
+  from?: string;
+  to?: string;
+  sort?: string;
+  dir?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+};
+
+export type RecordingCamera = { ip: string; name: string };
+
 export const recordings = {
-  list: (opts?: { camera_ip?: string; limit?: number }) => {
+  list: (opts?: RecordingListOpts) => {
     const p = new URLSearchParams();
     if (opts?.camera_ip) p.set("camera_ip", opts.camera_ip);
-    if (opts?.limit != null) p.set("limit", String(opts.limit));
+    if (opts?.from)      p.set("from", opts.from);
+    if (opts?.to)        p.set("to", opts.to);
+    if (opts?.sort)      p.set("sort", opts.sort);
+    if (opts?.dir)       p.set("dir", opts.dir);
+    if (opts?.limit != null)  p.set("limit",  String(opts.limit));
+    if (opts?.offset != null) p.set("offset", String(opts.offset));
     const qs = p.toString();
-    return api.get<Recording[]>(`/recordings${qs ? `?${qs}` : ""}`);
+    return api.get<RecordingPage>(`/recordings${qs ? `?${qs}` : ""}`);
   },
+  cameras: () => api.get<RecordingCamera[]>("/recordings/cameras"),
   del: (id: number) => api.del<void>(`/recordings/${id}`),
-  downloadUrl: (id: number) => `${API_BASE}/recordings/${id}/download`,
+  bulkDel: (ids: number[]) =>
+    api.post<{ deleted: number }>("/recordings/bulk-delete", { ids }),
+  /** Fetch the clip with the JWT bearer and return a Blob for client-side save. */
+  download: async (id: number): Promise<Blob> => {
+    const headers: Record<string, string> = {};
+    if (auth.token) headers.Authorization = `Bearer ${auth.token}`;
+    const r = await fetch(`${API_BASE}/recordings/${id}/download`, { headers });
+    if (!r.ok) throw new Error(`Download failed (${r.status})`);
+    return r.blob();
+  },
 };
 
 export const admin = {

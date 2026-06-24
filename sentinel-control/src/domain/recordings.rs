@@ -24,6 +24,8 @@ use crate::{store, AppState};
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/recordings", get(list).post(create))
+        .route("/recordings/cameras", get(list_cameras))
+        .route("/recordings/bulk-delete", axum::routing::post(bulk_delete))
         .route("/recordings/:id/download", get(download))
         .route("/recordings/:id", axum::routing::delete(remove))
 }
@@ -31,8 +33,14 @@ pub fn router() -> Router<AppState> {
 #[derive(Deserialize)]
 struct ListQuery {
     camera_ip: Option<String>,
+    from:      Option<String>,
+    to:        Option<String>,
+    sort:      Option<String>,
+    dir:       Option<String>,
     #[serde(default)]
     limit:     Option<i64>,
+    #[serde(default)]
+    offset:    Option<i64>,
 }
 
 async fn list(
@@ -42,14 +50,25 @@ async fn list(
 ) -> Result<impl IntoResponse, ApiErr> {
     auth::require(&c, "recordings.read")?;
     let tid = tenant_of(&c)?;
-    let limit = q.limit.unwrap_or(100).clamp(1, 500);
-    let rows = store::list_recordings(&st.pool, tid, q.camera_ip.as_deref(), limit)
-        .await
-        .map_err(|e| {
-            log::error!("list recordings: {e}");
-            err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
-        })?;
-    Ok(Json(rows))
+    let limit  = q.limit.unwrap_or(50).clamp(1, 500);
+    let offset = q.offset.unwrap_or(0).max(0);
+    let sort   = q.sort.as_deref().unwrap_or("started_at");
+    let dir    = q.dir.as_deref().unwrap_or("desc");
+
+    let page = store::list_recordings_filtered(
+        &st.pool, tid,
+        q.camera_ip.as_deref(),
+        q.from.as_deref(),
+        q.to.as_deref(),
+        sort, dir, limit, offset,
+    )
+    .await
+    .map_err(|e| {
+        log::error!("list recordings: {e}");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+    })?;
+
+    Ok(Json(serde_json::json!({ "total": page.total, "items": page.items })))
 }
 
 /// Create a recording row directly (JWT auth, recordings.write). Used for manual imports
@@ -62,7 +81,7 @@ async fn create(
     auth::require(&c, "recordings.write")?;
     let tid = tenant_of(&c)?;
     let id = store::insert_recording(
-        &st.pool, tid, &body.camera_ip, &body.clip_id,
+        &st.pool, tid, &body.camera_ip, &body.clip_id, &body.friendly_name,
         body.duration_secs, body.size_bytes, &body.started_at,
     )
     .await
@@ -80,6 +99,33 @@ async fn remove(
 ) -> Result<impl IntoResponse, ApiErr> {
     auth::require(&c, "recordings.write")?;
     let tid = tenant_of(&c)?;
+
+    // Look up the clip_id so we can delete it from the edge disk.
+    let rec = store::get_recording(&st.pool, tid, id).await.map_err(|e| {
+        log::error!("get recording {id}: {e}");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+    })?;
+
+    if let Some(rec) = rec {
+        // Best-effort: proxy DELETE to edge. If edge returns 404 the file is already gone — still
+        // clean up the DB row. Only hard-fail on a network/5xx error.
+        if let Ok(Some(edge_host)) = store::box_host_for_tenant(&st.pool, tid).await {
+            let base = edge_api_base(&normalize_host(&edge_host));
+            let url = format!("{base}/recording/{}", urlencoding::encode(&rec.clip_id));
+            match reqwest::Client::new().delete(&url).send().await {
+                Ok(r) if r.status().is_server_error() => {
+                    log::warn!("edge delete {url}: edge returned {}", r.status());
+                    return Err(err(StatusCode::BAD_GATEWAY, "edge delete failed"));
+                }
+                Err(e) => {
+                    log::warn!("edge delete {url}: {e}");
+                    return Err(err(StatusCode::BAD_GATEWAY, format!("edge unreachable: {e}")));
+                }
+                _ => {} // 200 or 404 — both are fine, proceed to DB delete
+            }
+        }
+    }
+
     store::delete_recording(&st.pool, tid, id).await.map_err(|e| {
         log::error!("delete recording {id}: {e}");
         err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
@@ -171,6 +217,61 @@ fn edge_api_base(base: &str) -> String {
     format!("{base}:8080")
 }
 
+/// Discovered cameras for this tenant — used to populate the camera filter dropdown.
+async fn list_cameras(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<impl IntoResponse, ApiErr> {
+    auth::require(&c, "recordings.read")?;
+    let tid = tenant_of(&c)?;
+    let cameras = store::list_discovered(&st.pool, tid).await.map_err(|e| {
+        log::error!("list cameras for recordings: {e}");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+    })?;
+    let result: Vec<_> = cameras
+        .into_iter()
+        .map(|cam| serde_json::json!({ "ip": cam.ip, "name": cam.name }))
+        .collect();
+    Ok(Json(result))
+}
+
+/// Bulk delete recordings by id — proxies each delete to the edge, then removes DB rows.
+#[derive(Deserialize)]
+struct BulkDeleteBody {
+    ids: Vec<i64>,
+}
+
+async fn bulk_delete(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    axum::Json(body): axum::Json<BulkDeleteBody>,
+) -> Result<impl IntoResponse, ApiErr> {
+    auth::require(&c, "recordings.write")?;
+    let tid = tenant_of(&c)?;
+
+    let edge_base: Option<String> = store::box_host_for_tenant(&st.pool, tid)
+        .await
+        .ok()
+        .flatten()
+        .map(|h| edge_api_base(&normalize_host(&h)));
+
+    let mut deleted = 0u32;
+    for id in &body.ids {
+        let rec = match store::get_recording(&st.pool, tid, *id).await {
+            Ok(Some(r)) => r,
+            _ => continue,
+        };
+        if let Some(ref base) = edge_base {
+            let url = format!("{base}/recording/{}", urlencoding::encode(&rec.clip_id));
+            let _ = reqwest::Client::new().delete(&url).send().await;
+        }
+        if store::delete_recording(&st.pool, tid, *id).await.is_ok() {
+            deleted += 1;
+        }
+    }
+    Ok(Json(serde_json::json!({ "deleted": deleted })))
+}
+
 // ---- edge push (called by the edge with BOX_TOKEN) --------------------------
 
 /// The edge calls this when a recording is finalised.
@@ -178,6 +279,8 @@ fn edge_api_base(base: &str) -> String {
 pub struct ClipPush {
     pub camera_ip:     String,
     pub clip_id:       String,
+    #[serde(default)]
+    pub friendly_name: String,
     pub duration_secs: i32,
     pub size_bytes:    i64,
     pub started_at:    String,
@@ -195,6 +298,7 @@ pub async fn push_clip(
         tenant_id,
         &clip.camera_ip,
         &clip.clip_id,
+        &clip.friendly_name,
         clip.duration_secs,
         clip.size_bytes,
         &clip.started_at,

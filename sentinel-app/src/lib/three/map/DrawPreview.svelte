@@ -82,21 +82,21 @@
 {#if seg}
   <T.Mesh position={[seg.midX, 0.2, seg.midZ]} rotation.y={-seg.angle}>
     <T.BoxGeometry args={[seg.len, 0.06, 0.14]} />
-    <T.MeshBasicMaterial color="#34d399" transparent opacity={0.55} depthWrite={false} />
+    <T.MeshBasicMaterial color="#e5e5e5" transparent opacity={0.55} depthWrite={false} />
   </T.Mesh>
 {/if}
 
 {#if (mode === "wall" || mode === "line") && from}
   <T.Mesh position={[from.x, 0.22, from.z]}>
     <T.SphereGeometry args={[0.16, 12, 12]} />
-    <T.MeshBasicMaterial color="#34d399" />
+    <T.MeshBasicMaterial color="#e5e5e5" />
   </T.Mesh>
 {/if}
 
 {#if (mode === "wall" || mode === "line") && to}
   <T.Mesh position={[to.x, 0.22, to.z]}>
     <T.SphereGeometry args={[0.13, 12, 12]} />
-    <T.MeshBasicMaterial color="#a7f3d0" transparent opacity={0.9} depthWrite={false} />
+    <T.MeshBasicMaterial color="#d4d4d4" transparent opacity={0.9} depthWrite={false} />
   </T.Mesh>
 {/if}
 
@@ -104,12 +104,12 @@
 {#if rectPreview && rectGeo}
   <T.Group position={[rectPreview.cx, 0.1, rectPreview.cz]}>
     <T.Line geometry={rectGeo}>
-      <T.LineBasicMaterial color="#34d399" transparent opacity={0.7} />
+      <T.LineBasicMaterial color="#e5e5e5" transparent opacity={0.7} />
     </T.Line>
   </T.Group>
   <T.Mesh position={[from!.x, 0.22, from!.z]}>
     <T.SphereGeometry args={[0.14, 12, 12]} />
-    <T.MeshBasicMaterial color="#34d399" />
+    <T.MeshBasicMaterial color="#e5e5e5" />
   </T.Mesh>
 {/if}
 
@@ -117,12 +117,12 @@
 {#if circlePreview && circleGeo}
   <T.Group position={[circlePreview.cx, 0.1, circlePreview.cz]}>
     <T.Line geometry={circleGeo}>
-      <T.LineBasicMaterial color="#34d399" transparent opacity={0.7} />
+      <T.LineBasicMaterial color="#e5e5e5" transparent opacity={0.7} />
     </T.Line>
   </T.Group>
   <T.Mesh position={[circlePreview.cx, 0.22, circlePreview.cz]}>
     <T.SphereGeometry args={[0.14, 12, 12]} />
-    <T.MeshBasicMaterial color="#34d399" />
+    <T.MeshBasicMaterial color="#e5e5e5" />
   </T.Mesh>
 {/if}
 
@@ -130,19 +130,19 @@
 {#if triGeo}
   <T.Group position.y={0.1}>
     <T.Line geometry={triGeo}>
-      <T.LineBasicMaterial color="#34d399" transparent opacity={0.7} />
+      <T.LineBasicMaterial color="#e5e5e5" transparent opacity={0.7} />
     </T.Line>
   </T.Group>
   {#if from}
     <T.Mesh position={[from.x, 0.22, from.z]}>
       <T.SphereGeometry args={[0.14, 12, 12]} />
-      <T.MeshBasicMaterial color="#34d399" />
+      <T.MeshBasicMaterial color="#e5e5e5" />
     </T.Mesh>
   {/if}
   {#if draftB}
     <T.Mesh position={[draftB.x, 0.22, draftB.z]}>
       <T.SphereGeometry args={[0.13, 12, 12]} />
-      <T.MeshBasicMaterial color="#6ee7b7" />
+      <T.MeshBasicMaterial color="#b0b0b0" />
     </T.Mesh>
   {/if}
 {/if}
@@ -151,6 +151,6 @@
 {#if (mode === "marker" || mode === "text") && to}
   <T.Mesh position={[to.x, 0.22, to.z]}>
     <T.SphereGeometry args={[0.13, 12, 12]} />
-    <T.MeshBasicMaterial color="#a7f3d0" transparent opacity={0.9} depthWrite={false} />
+    <T.MeshBasicMaterial color="#d4d4d4" transparent opacity={0.9} depthWrite={false} />
   </T.Mesh>
 {/if}

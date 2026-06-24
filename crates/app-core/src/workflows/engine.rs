@@ -8,7 +8,7 @@
 //! first node error. The trigger/concurrency methods are the pure decision logic
 //! the backend poller drives.
 use base64::Engine as _;
-use super::domain::{string_switch_arms, ConcurrencyPolicy, Graph, NodeKind, PortType, EXEC_IN};
+use super::domain::{camera_switch_arms, string_switch_arms, ConcurrencyPolicy, Graph, NodeKind, PortType, EXEC_IN};
 use super::repo;
 use super::node::{self, PortValue, PortValues};
 use crate::agent::tools::{ToolContext, ToolUiEvent};
@@ -20,8 +20,6 @@ use std::time::{Duration, Instant};
 /// loop (a `memoize=false` cycle / event storm). Far above any real acyclic graph, so it
 /// never trips on a normal DAG. Exceeding it fails the run with a clear error.
 pub const WF_MAX_STEPS: u32 = 10_000;
-/// Wall-clock ceiling per run — covers `Wait`-heavy loops that stay under the step cap.
-pub const WF_MAX_RUNTIME: Duration = Duration::from_secs(60);
 
 /// Parse a `For each` **text** items value (config field or a wired text) into element
 /// values. A JSON array (`["a","b"]` / `[1,2,3]`) maps each element to a typed `PortValue`
@@ -168,18 +166,16 @@ fn run_driver(
     // Per-run iteration state for `ForEach` nodes (node id → next index), persisted across
     // epochs so each epoch advances the loop one element.
     let mut loop_state: HashMap<u32, usize> = HashMap::new();
-    let run_started = Instant::now();
-
     let mut reentries = forward_epoch(
         graph, sys, &indeg_tmpl, &adj, &back, &connected, seed_entries, initial_forced, entry_payload,
-        &mut outputs, &mut ran, &mut loop_state, &mut steps, run_started, on_node, on_log, emit,
+        &mut outputs, &mut ran, &mut loop_state, &mut steps, on_node, on_log, emit,
     )?;
     // Later epochs: re-enter loops at the back-edge / ForEach targets until none fire.
     while !reentries.is_empty() {
         let forced: HashSet<u32> = reentries.into_iter().collect();
         reentries = forward_epoch(
             graph, sys, &indeg_tmpl, &adj, &back, &connected, false, &forced, entry_payload,
-            &mut outputs, &mut ran, &mut loop_state, &mut steps, run_started, on_node, on_log, emit,
+            &mut outputs, &mut ran, &mut loop_state, &mut steps, on_node, on_log, emit,
         )?;
     }
     Ok(outputs)
@@ -203,7 +199,6 @@ fn forward_epoch(
     ran: &mut HashSet<u32>,
     loop_state: &mut HashMap<u32, usize>,
     steps: &mut u32,
-    run_started: Instant,
     on_node: &mut dyn FnMut(u32),
     on_log: &mut dyn FnMut(u32, &str, u128),
     emit: &mut dyn FnMut(&str, &PortValues),
@@ -339,9 +334,6 @@ fn forward_epoch(
 
         if *steps >= WF_MAX_STEPS {
             return Err(format!("workflow exceeded step budget ({WF_MAX_STEPS} steps) — possible infinite loop"));
-        }
-        if run_started.elapsed() > WF_MAX_RUNTIME {
-            return Err(format!("workflow exceeded time budget ({}s)", WF_MAX_RUNTIME.as_secs()));
         }
 
         on_node(nid);
@@ -625,6 +617,16 @@ fn forward_epoch(
             } else {
                 live_out.insert((nid, "default".to_string()));
             }
+        } else if n.kind == NodeKind::CameraSwitch {
+            let cam = inputs.get("camera").and_then(PortValue::as_camera);
+            let port = if let Some(cam) = cam {
+                let arms = camera_switch_arms(&n.config);
+                let idx = arms.iter().position(|a| !a.is_empty() && (a == &cam.ip || a == &cam.id));
+                idx.map(|i| format!("arm_{}", i + 1)).unwrap_or_else(|| "default".to_string())
+            } else {
+                "default".to_string()
+            };
+            live_out.insert((nid, port));
         } else {
             for p in n.kind.exec_out_ports() {
                 live_out.insert((nid, p.name.to_string()));
@@ -1414,6 +1416,99 @@ mod tests {
         g.run_orphans = true;
         let err = run_dag(&g, &ctx).unwrap_err();
         assert!(err.contains("missing required input 'value'"), "got: {err}");
+    }
+
+    // ---- CameraSwitch routing -----------------------------------------------
+    // Helper: build a ToolContext pre-populated with two test cameras.
+    // cam_a: ONVIF id "urn:uuid:aaa", ip "10.0.0.1", name "hall"
+    // cam_b: no ONVIF id (legacy), ip "10.0.0.2", name "lobby"
+    fn test_ctx_with_cameras() -> ToolContext {
+        use crate::devices::Device;
+        let cam_a = Device { id: "urn:uuid:aaa".into(), ip: "10.0.0.1".into(), xaddr: "".into(), name: "hall".into(), manufacturer: None, model: None, username: None, password: None, rtsp_url: None, rtsp_sub_url: None };
+        let cam_b = Device { id: "".into(), ip: "10.0.0.2".into(), xaddr: "".into(), name: "lobby".into(), manufacturer: None, model: None, username: None, password: None, rtsp_url: None, rtsp_sub_url: None };
+        let (tx, _rx) = std::sync::mpsc::channel();
+        ToolContext::new_local(
+            std::sync::Arc::new(std::sync::Mutex::new(vec![cam_a, cam_b])),
+            crate::db::Db::lazy("postgres://x@localhost/x"),
+            crate::tenancy::DEFAULT_TENANT_ID,
+            std::sync::Arc::new(std::sync::Mutex::new(vec![])),
+            std::sync::Arc::new(std::sync::Mutex::new(vec![])),
+            None,
+            tx,
+        )
+    }
+
+    // Build a graph with a CameraSwitch node that gets the camera from a literal in config.
+    // The engine resolves `config["camera"]` as a camera entity (via resolve_camera_literal).
+    fn make_camera_switch_graph(camera_name: &str, arms: serde_json::Value) -> (Graph, u32, u32, u32, u32) {
+        let mut g = Graph::new(1, "g");
+        g.run_orphans = true; // run the switch even without an upstream exec trigger
+        let sw = g.add_node(NodeKind::CameraSwitch, 0, 0);
+        g.node_mut(sw).unwrap().config = serde_json::json!({ "arms": arms, "camera": camera_name });
+        let arm1 = g.add_node(NodeKind::Format, 0, 0);
+        let arm2 = g.add_node(NodeKind::Format, 0, 0);
+        let def = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(sw, "arm_1", arm1, "exec_in").unwrap();
+        g.add_edge(sw, "arm_2", arm2, "exec_in").unwrap();
+        g.add_edge(sw, "default", def, "exec_in").unwrap();
+        (g, sw, arm1, arm2, def)
+    }
+
+    #[test]
+    fn camera_switch_routes_by_camera_id() {
+        // Camera "hall" (ONVIF id "urn:uuid:aaa"): arm_1 stores that id → arm_1 fires.
+        let ctx = test_ctx_with_cameras();
+        let (g, sw, arm1, arm2, def) = make_camera_switch_graph(
+            "hall", json!(["urn:uuid:aaa", "10.0.0.2"]),
+        );
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(outs.contains_key(&sw), "switch ran");
+        assert!(outs.contains_key(&arm1), "arm_1 (hall by id) fires");
+        assert!(!outs.contains_key(&arm2), "arm_2 skipped");
+        assert!(!outs.contains_key(&def), "default skipped when match found");
+    }
+
+    #[test]
+    fn camera_switch_routes_by_camera_ip_legacy() {
+        // Legacy camera "lobby" (no ONVIF id, ip "10.0.0.2"): arm_2 stores the IP → fires.
+        let ctx = test_ctx_with_cameras();
+        let (g, _sw, arm1, arm2, def) = make_camera_switch_graph(
+            "lobby", json!(["urn:uuid:aaa", "10.0.0.2"]),
+        );
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(!outs.contains_key(&arm1), "arm_1 skipped");
+        assert!(outs.contains_key(&arm2), "arm_2 (lobby by ip) fires");
+        assert!(!outs.contains_key(&def), "default skipped");
+    }
+
+    #[test]
+    fn camera_switch_fires_default_when_no_arm_matches() {
+        // Camera ip/id not in any arm → default fires; named arm skips.
+        let ctx = test_ctx_with_cameras();
+        let mut g = Graph::new(1, "g");
+        g.run_orphans = true;
+        let sw = g.add_node(NodeKind::CameraSwitch, 0, 0);
+        g.node_mut(sw).unwrap().config = json!({ "arms": ["10.0.0.99"], "camera": "hall" });
+        let arm1 = g.add_node(NodeKind::Format, 0, 0);
+        let def = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(sw, "arm_1", arm1, "exec_in").unwrap();
+        g.add_edge(sw, "default", def, "exec_in").unwrap();
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(!outs.contains_key(&arm1), "arm_1 skipped (no match)");
+        assert!(outs.contains_key(&def), "default fires when nothing matches");
+    }
+
+    #[test]
+    fn camera_switch_empty_arm_string_never_matches() {
+        // Empty string arms (old default config ["", ""]) must never match any camera —
+        // the bug: `"" == cam.id` was true for legacy cameras with no ONVIF id.
+        let ctx = test_ctx_with_cameras();
+        let (g, _sw, arm1, _arm2, def) = make_camera_switch_graph(
+            "lobby", json!(["", ""]), // lobby has id="" — must NOT false-match
+        );
+        let outs = run_dag(&g, &ctx).unwrap();
+        assert!(!outs.contains_key(&arm1), "empty arm must not false-match a legacy camera (id=\"\")");
+        assert!(outs.contains_key(&def), "default fires for unset arms");
     }
 
     #[test]

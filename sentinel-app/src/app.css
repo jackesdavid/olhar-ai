@@ -1,86 +1,11 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "../../styles/sentinel-tokens.css";
 
 @custom-variant dark (&:is(.dark *));
 
-/* ─────────────────────────────────────────────────────────────────────────
-   Sentinel — "Emerald Guardian" theme.
-   Emerald primary (active / armed / online), near-black green-neutral surfaces,
-   emerald focus glow. Light theme kept as a sane fallback; the app runs dark.
-   ───────────────────────────────────────────────────────────────────────── */
-
-:root {
-  --background: oklch(0.99 0.004 160);
-  --foreground: oklch(0.17 0.01 160);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.17 0.01 160);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.17 0.01 160);
-  --primary: oklch(0.62 0.15 162);
-  --primary-foreground: oklch(0.99 0.01 160);
-  --secondary: oklch(0.96 0.01 160);
-  --secondary-foreground: oklch(0.24 0.02 160);
-  --muted: oklch(0.96 0.008 160);
-  --muted-foreground: oklch(0.52 0.02 158);
-  --accent: oklch(0.94 0.03 162);
-  --accent-foreground: oklch(0.24 0.04 162);
-  --destructive: oklch(0.58 0.22 25);
-  --destructive-foreground: oklch(0.99 0 0);
-  --border: oklch(0.9 0.01 160);
-  --input: oklch(0.9 0.01 160);
-  --ring: oklch(0.62 0.15 162);
-  --chart-1: oklch(0.62 0.15 162);
-  --chart-2: oklch(0.62 0.12 200);
-  --chart-3: oklch(0.7 0.16 80);
-  --chart-4: oklch(0.55 0.2 290);
-  --chart-5: oklch(0.62 0.2 15);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.98 0.005 160);
-  --sidebar-foreground: oklch(0.24 0.01 160);
-  --sidebar-primary: oklch(0.62 0.15 162);
-  --sidebar-primary-foreground: oklch(0.99 0.01 160);
-  --sidebar-accent: oklch(0.94 0.03 162);
-  --sidebar-accent-foreground: oklch(0.24 0.04 162);
-  --sidebar-border: oklch(0.9 0.01 160);
-  --sidebar-ring: oklch(0.62 0.15 162);
-}
-
-.dark {
-  --background: oklch(0.165 0.006 160);
-  --foreground: oklch(0.97 0.006 150);
-  --card: oklch(0.205 0.008 162);
-  --card-foreground: oklch(0.97 0.006 150);
-  --popover: oklch(0.215 0.009 162);
-  --popover-foreground: oklch(0.97 0.006 150);
-  --primary: oklch(0.7 0.16 162);
-  --primary-foreground: oklch(0.16 0.03 165);
-  --secondary: oklch(0.255 0.009 162);
-  --secondary-foreground: oklch(0.97 0.006 150);
-  --muted: oklch(0.255 0.009 162);
-  --muted-foreground: oklch(0.71 0.018 158);
-  --accent: oklch(0.3 0.03 162);
-  --accent-foreground: oklch(0.98 0.01 160);
-  --destructive: oklch(0.7 0.19 22);
-  --destructive-foreground: oklch(0.99 0 0);
-  --border: oklch(0.95 0.02 162 / 9%);
-  --input: oklch(0.95 0.02 162 / 13%);
-  --ring: oklch(0.7 0.16 162);
-  --chart-1: oklch(0.7 0.16 162);
-  --chart-2: oklch(0.68 0.12 200);
-  --chart-3: oklch(0.78 0.16 80);
-  --chart-4: oklch(0.65 0.2 292);
-  --chart-5: oklch(0.68 0.2 15);
-  --sidebar: oklch(0.185 0.007 162);
-  --sidebar-foreground: oklch(0.92 0.008 152);
-  --sidebar-primary: oklch(0.7 0.16 162);
-  --sidebar-primary-foreground: oklch(0.16 0.03 165);
-  --sidebar-accent: oklch(0.27 0.02 162);
-  --sidebar-accent-foreground: oklch(0.98 0.01 160);
-  --sidebar-border: oklch(0.95 0.02 162 / 8%);
-  --sidebar-ring: oklch(0.7 0.16 162);
-}
-
 @theme inline {
+  --color-well: var(--well);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -125,58 +50,78 @@
   }
   body {
     @apply bg-background text-foreground;
-    /* Emerald top-glow (the focal point). The animated dot-field itself is the
-       SensorField canvas layered above this. Fixed so it doesn't scroll. */
+    /* Subtle achromatic top shimmer. */
     background-image: radial-gradient(
-      55% 45% at 50% -5%,
-      oklch(0.7 0.16 162 / 0.07),
+      55% 40% at 50% -5%,
+      oklch(1 0 0 / 0.04),
       transparent 70%
     );
     background-attachment: fixed;
   }
 
-  /* Emerald text selection. */
   ::selection {
-    background: oklch(0.7 0.16 162 / 0.28);
+    background: oklch(1 0 0 / 0.2);
   }
 
-  /* Thin, dark, unobtrusive scrollbars. */
+  /* Code and preformatted text sink into the well — deepest surface. */
+  pre, code {
+    background-color: var(--well);
+    border-radius: var(--radius);
+  }
+  pre {
+    padding: 0.75rem 1rem;
+    overflow-x: auto;
+    border: 1px solid oklch(1 0 0 / 0.08);
+  }
+  code {
+    padding: 0.1em 0.35em;
+    font-size: 0.875em;
+  }
+  pre code {
+    padding: 0;
+    background: none;
+    font-size: inherit;
+  }
+
   * {
     scrollbar-width: thin;
-    scrollbar-color: oklch(1 0 0 / 0.14) transparent;
+    scrollbar-color: oklch(1 0 0 / 0.14) var(--well);
   }
   ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
   }
+  ::-webkit-scrollbar-track {
+    background: var(--well);
+  }
   ::-webkit-scrollbar-thumb {
-    background: oklch(1 0 0 / 0.12);
+    background: oklch(1 0 0 / 0.14);
     border-radius: 9999px;
-    border: 2px solid transparent;
+    border: 2px solid var(--well);
     background-clip: content-box;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: oklch(1 0 0 / 0.22);
+    background: oklch(1 0 0 / 0.26);
     background-clip: content-box;
   }
 }
 
 @layer utilities {
-  /* Card/row that lifts and warms its border on hover. */
+  /* Card/row that lifts on hover with a white edge. */
   .interactive {
     @apply transition-all duration-200 ease-out;
   }
   .interactive:hover {
     transform: translateY(-2px);
-    border-color: oklch(0.7 0.16 162 / 0.45);
-    box-shadow: 0 10px 30px -12px oklch(0 0 0 / 0.6);
+    border-color: oklch(1 0 0 / 0.2);
+    box-shadow: 0 10px 30px -14px oklch(0 0 0 / 0.8);
   }
 
-  /* Emerald focus/active glow. */
+  /* Soft white glow — restrained, not harsh. */
   .glow {
     box-shadow:
-      0 0 0 1px oklch(0.7 0.16 162 / 0.35),
-      0 0 26px -6px oklch(0.7 0.16 162 / 0.45);
+      0 0 0 1px oklch(1 0 0 / 0.14),
+      0 0 28px -8px oklch(1 0 0 / 0.2);
   }
 
   /* Tactile press feedback. */
@@ -187,24 +132,23 @@
     transform: scale(0.97);
   }
 
-  /* Soft "breathing" pulse for live/online indicators. */
+  /* Soft white "breathing" pulse for live/online indicators. */
   @keyframes status-pulse {
     0%,
     100% {
       opacity: 1;
-      box-shadow: 0 0 0 0 oklch(0.7 0.16 162 / 0.5);
+      box-shadow: 0 0 0 0 oklch(1 0 0 / 0.5);
     }
     50% {
       opacity: 0.85;
-      box-shadow: 0 0 0 4px oklch(0.7 0.16 162 / 0);
+      box-shadow: 0 0 0 4px oklch(1 0 0 / 0);
     }
   }
   .status-live {
     animation: status-pulse 2s ease-in-out infinite;
   }
 
-  /* Executing-node border (workflow editor): a bright marching-ants emerald
-     stroke over a solid ring that breathes — clearly shows the running node. */
+  /* Executing-node border: white marching-ants stroke. */
   @keyframes node-march {
     to {
       stroke-dashoffset: -28;
@@ -227,8 +171,7 @@
     animation: node-glow 1s ease-in-out infinite;
   }
 
-  /* The same marching-ants feedback as a running node, for a running list row.
-     Four emerald gradient strips around the row perimeter, scrolling clockwise. */
+  /* Marching-ants for running / idle list rows. */
   @keyframes list-march {
     to {
       background-position:
@@ -250,12 +193,20 @@
     background-position: 0 0, 0 100%, 0 0, 100% 0;
     animation: list-march 0.6s linear infinite;
   }
-  /* Running = emerald (executing now); idle = amber (armed, waiting to fire). */
+  /* Running = white (executing now); idle = amber (armed — semantic, not brand). */
   .list-running {
     --march: var(--primary);
   }
   .list-idle {
-    --march: oklch(0.77 0.16 78); /* amber */
-    animation-duration: 1.4s; /* a calmer march for "armed, not running" */
+    --march: oklch(0.77 0.16 78);
+    animation-duration: 1.4s;
+  }
+
+  /* White gradient text for hero headings. */
+  .text-grad {
+    background: linear-gradient(110deg, oklch(0.97 0 0), oklch(0.72 0 0) 60%, oklch(0.55 0 0));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
   }
 }

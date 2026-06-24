@@ -25,34 +25,49 @@ checkbox list items under them. The lifecycle columns this skill touches, in ord
 ## ToDo          →  ## In Progress  →  ## Review  →  ## Done
 ```
 
-A **card** is one list item line — `- [ ] <title>` — plus its 2-space-indented link line(s)
+A **card** is one list item line — `- [ ] #N <title>` — plus its 2-space-indented link line(s)
 beneath it. Moving a card means moving the whole block (title **and** its links).
 
 Other columns (`## Bugs`, `## Backlog`) and the `**Complete**` marker under `## Done` exist too;
 leave them alone unless a card you're moving lives there.
 
+## Card numbers — always, forever
+
+**Every card must have a `#N` number prefix — always.** This is a stable, monotone integer ID
+assigned at creation and never changed, even when the card moves columns or gets renamed.
+
+- **Format**: `- [ ] #N Card title here` (the `#N` is the first thing after `- [ ] `).
+- **Assigning a number**: before creating a new card, scan all cards on the entire board (all
+  columns, including Done) for the highest existing `#N`. The new card gets `#(highest + 1)`.
+- **Matching by number**: if the user references `#5` or `"card 5"`, find the card with `#5`
+  directly — no fuzzy match needed.
+- **Never reuse or renumber**: if a card is deleted, its number is retired. Don't renumber.
+- **Missing numbers on old cards**: if you encounter a card without a `#N`, assign the next
+  available number to it before doing anything else with that card.
+
 ## What a card holds — title + links only
 
-**This is the cardinal rule.** A card is a **short, significant title** plus, indented beneath
-it, **only wikilinks** — never prose, context, rationale, or steps. All of that knowledge lives
-in the card's **plan note** under `docs/plans/`.
+**This is the cardinal rule.** A card is a **`#N` number + short, significant title** plus,
+indented beneath it, **only wikilinks** — never prose, context, rationale, or steps. All of
+that knowledge lives in the card's **plan note** under `docs/plans/`.
 
 A well-formed card:
 
 ```
-- [ ] Workflow runs: real-time over SSE
+- [ ] #12 Workflow runs: real-time over SSE
 	  - Plan: [[workflow-runs-realtime]]
 ```
 
 …optionally with a `- Use case: [[<slug>]]` line when one exists. That's the whole card.
 
-- **Title**: one line, the significant essence — what it *is*, not how/why. Skimmable.
+- **Number**: `#N` prefix, stable across the card's entire life. Never omit it.
+- **Title**: one line after the number, the significant essence — what it *is*, not how/why. Skimmable.
 - **No inline knowledge**: root cause, phases, refs, "why", branch notes, file paths — none of
   it goes on the card. It goes in the plan note.
 - **Whenever you create or touch a card** and find detail that belongs to it, write that detail
   into its `docs/plans/<slug>.md` note and leave only the `[[…]]` link on the card. If the card
   has no note yet, create one (see "The plan note").
-- The only per-card text besides the title is the wikilink line(s). Keep `Ref:`/`Branch:`/`Why:`
+- The only per-card text besides the number+title is the wikilink line(s). Keep `Ref:`/`Branch:`/`Why:`
   lines **inside the plan note**, never on the card.
 
 ## Stages (the argument)
@@ -87,10 +102,11 @@ happened / what the user said).
 4. **Write the plan to the vault** (not inline in the card). Create `docs/plans/<slug>.md` — a
    proper Obsidian note (see "The plan note" for its shape). `<slug>` is a kebab-case name derived
    from the use case (e.g. `school-student-frequency`).
-5. **Create the card in ToDo** that *links* to the plan. Title it from the use case (concise), and
-   give it just two note lines — a wikilink to the plan and a wikilink to the use case:
+5. **Create the card in ToDo** that *links* to the plan. Assign the next available number,
+   title it from the use case (concise), and give it just two note lines — a wikilink to the
+   plan and a wikilink to the use case:
    ```
-   - [ ] School Student Frequency Case
+   - [ ] #23 School Student Frequency Case
      - Plan: [[school-student-frequency]]
      - Use case: [[school-frequence]]
    ```
@@ -157,7 +173,7 @@ The note is a normal markdown document. Recommended shape:
   of the target column's card list. Carry its link line(s) with it.
 - **Never leave inline knowledge on a card.** If you encounter a card carrying prose/notes,
   migrate that text into its `docs/plans/<slug>.md` note and reduce the card to title + `[[…]]`.
-- Keep the card title text byte-for-byte across a move (only `[ ]`→`[x]` may change, for `done`).
+- Keep the card title text (including its `#N` prefix) byte-for-byte across a move (only `[ ]`→`[x]` may change, for `done`).
 - Use `Edit` against `docs/Task Board.md`. After editing, confirm to the user in one line which
   card moved and to where (e.g. "Moved 'Image node' → Review").
 

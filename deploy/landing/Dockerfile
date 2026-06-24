@@ -6,6 +6,7 @@ WORKDIR /app
 COPY landing/package.json landing/package-lock.json ./
 RUN npm ci
 COPY landing/ ./
+COPY styles/ /styles/
 RUN npm run build
 
 FROM nginx:alpine

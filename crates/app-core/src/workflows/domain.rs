@@ -253,6 +253,11 @@ pub enum NodeKind {
     /// A built-in `default` arm fires whenever no arm label matches. Engine-driven (like
     /// `If`) — the exec routing happens in `forward_epoch`, not in `run_node`.
     StringSwitch,
+    /// Flow control: routes exec to the arm whose camera config matches the incoming
+    /// `camera` entity. Arms are user-defined in the inspector — each arm is a camera
+    /// selected from a dropdown. A built-in `default` arm fires when no arm matches.
+    /// Engine-driven (routing happens in `forward_epoch`).
+    CameraSwitch,
     /// AI flow control: asks the vision model a yes/no question about an optional image
     /// and routes exec down `true` or `false` — exactly like `If` but powered by Claude.
     /// `question` can be wired (Text) or set as a config literal; `image` is optional
@@ -496,6 +501,9 @@ const TEXT_COMPARE_IN: [Port; 2] =
 // String switch: one required text input (the value to match against the arms).
 const STRING_SWITCH_IN: [Port; 1] = [p("value", PortType::Text, true)];
 
+// Camera switch: one required camera input (the entity to match against the arms).
+const CAMERA_SWITCH_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
+
 // AI If: optional image + question text. Both are optional at the port level so a
 // text-only question (no image wired) works. The node errors at runtime if no question.
 const ASK_AI_IN: [Port; 2] =
@@ -549,7 +557,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 51] = [
+    pub const ALL: [NodeKind; 52] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -596,6 +604,7 @@ impl NodeKind {
         NodeKind::Not,
         NodeKind::TextCompare,
         NodeKind::StringSwitch,
+        NodeKind::CameraSwitch,
         NodeKind::AskAi,
         NodeKind::Comment,
         NodeKind::StartRecording,
@@ -653,6 +662,7 @@ impl NodeKind {
             NodeKind::Not => "not",
             NodeKind::TextCompare => "text_compare",
             NodeKind::StringSwitch => "string_switch",
+            NodeKind::CameraSwitch => "camera_switch",
             NodeKind::AskAi => "ask_ai",
             NodeKind::Comment => "comment",
             NodeKind::Reroute => "reroute",
@@ -668,57 +678,58 @@ impl NodeKind {
 
     pub fn label(self) -> &'static str {
         match self {
-            NodeKind::GetLastAlert => "Get last alert",
-            NodeKind::GetRecipient => "Get recipient",
-            NodeKind::CreateAlert => "Create alert",
-            NodeKind::DeliverAlert => "Deliver alert",
-            NodeKind::CameraSnapshot => "Camera snapshot",
-            NodeKind::GetCurrentFrame => "Get current frame",
-            NodeKind::GetCameraByName => "Get camera",
-            NodeKind::BreakCamera => "Break camera",
-            NodeKind::DescribeImage => "Describe image",
-            NodeKind::NotifyRecipient => "Notify recipient",
+            NodeKind::GetLastAlert => "Last Alert",
+            NodeKind::GetRecipient => "Find Recipient",
+            NodeKind::CreateAlert => "Create Alert",
+            NodeKind::DeliverAlert => "Send Alert",
+            NodeKind::CameraSnapshot => "Snapshot",
+            NodeKind::GetCurrentFrame => "Current Frame",
+            NodeKind::GetCameraByName => "Find Camera",
+            NodeKind::BreakCamera => "Camera Details",
+            NodeKind::DescribeImage => "Describe Image",
+            NodeKind::NotifyRecipient => "Notify",
             NodeKind::Format => "Format",
             NodeKind::Wait => "Wait",
-            NodeKind::HttpPost => "HTTP post",
+            NodeKind::HttpPost => "HTTP Post",
             NodeKind::If => "If",
-            NodeKind::ForEach => "For each",
-            NodeKind::MotionDetection => "Motion detection",
-            NodeKind::MotionWatch => "Motion watch",
-            NodeKind::PersonDetection => "Person detection",
-            NodeKind::ObjectDetection => "Detect objects",
-            NodeKind::BreakPersonDetection => "Break person detection",
-            NodeKind::BreakDetection => "Break detection",
-            NodeKind::BreakFaceDetection => "Break face detection",
-            NodeKind::RecognizePerson => "Recognize person",
-            NodeKind::RecordPresence => "Record presence",
-            NodeKind::EmitEvent => "Emit event",
-            NodeKind::OnEvent => "On event",
+            NodeKind::ForEach => "For Each",
+            NodeKind::MotionDetection => "Detect Motion",
+            NodeKind::MotionWatch => "Watch for Motion",
+            NodeKind::PersonDetection => "Detect People",
+            NodeKind::ObjectDetection => "Detect Objects",
+            NodeKind::BreakPersonDetection => "Unpack Person",
+            NodeKind::BreakDetection => "Unpack Detection",
+            NodeKind::BreakFaceDetection => "Unpack Face",
+            NodeKind::RecognizePerson => "Recognize Person",
+            NodeKind::RecordPresence => "Record Presence",
+            NodeKind::EmitEvent => "Send Event",
+            NodeKind::OnEvent => "When Event",
             NodeKind::Print => "Print",
-            NodeKind::ShowImage => "Show image",
-            NodeKind::FlipFlop => "Flip flop",
+            NodeKind::ShowImage => "Show Image",
+            NodeKind::FlipFlop => "Toggle",
             NodeKind::Compare => "Compare",
-            NodeKind::NumLt => "Num: <",
-            NodeKind::NumLte => "Num: <=",
-            NodeKind::NumGt => "Num: >",
-            NodeKind::NumGte => "Num: >=",
-            NodeKind::NumEq => "Num: ==",
-            NodeKind::NumNe => "Num: !=",
-            NodeKind::NumToText => "Num → Text",
-            NodeKind::BoolToText => "Bool → Text",
+            NodeKind::NumLt => "Less Than",
+            NodeKind::NumLte => "Less Than or Equal",
+            NodeKind::NumGt => "Greater Than",
+            NodeKind::NumGte => "Greater Than or Equal",
+            NodeKind::NumEq => "Number Equal",
+            NodeKind::NumNe => "Number Not Equal",
+            NodeKind::NumToText => "Number to Text",
+            NodeKind::BoolToText => "Yes/No to Text",
             NodeKind::Cooldown => "Cooldown",
-            NodeKind::DrawBbox => "Draw BBox",
-            NodeKind::GetImageSize => "Get image size",
+            NodeKind::DrawBbox => "Draw Detection Box",
+            NodeKind::GetImageSize => "Image Size",
             NodeKind::And => "And",
             NodeKind::Or => "Or",
             NodeKind::Not => "Not",
-            NodeKind::TextCompare => "Text compare",
-            NodeKind::StringSwitch => "String switch",
-            NodeKind::AskAi => "AI If",
+            NodeKind::TextCompare => "Text Compare",
+            NodeKind::StringSwitch => "Text Switch",
+            NodeKind::CameraSwitch => "Camera Switch",
+            NodeKind::AskAi => "AI Branch",
             NodeKind::Comment => "Comment",
             NodeKind::Reroute => "Reroute",
-            NodeKind::StartRecording => "Start recording",
-            NodeKind::StopRecording => "Stop recording",
+            NodeKind::StartRecording => "Start Recording",
+            NodeKind::StopRecording => "Stop Recording",
             NodeKind::TimeGate => "Time Gate",
         }
     }
@@ -735,13 +746,12 @@ impl NodeKind {
             | NodeKind::If
             | NodeKind::ForEach
             | NodeKind::FlipFlop
-            | NodeKind::Compare
             | NodeKind::Cooldown
-            | NodeKind::Print
-            | NodeKind::ShowImage
             | NodeKind::EmitEvent
             | NodeKind::OnEvent
-            | NodeKind::StringSwitch => "Flow",
+            | NodeKind::StringSwitch
+            | NodeKind::CameraSwitch
+            | NodeKind::TimeGate => "Control",
             NodeKind::NumLt
             | NodeKind::NumLte
             | NodeKind::NumGt
@@ -750,6 +760,7 @@ impl NodeKind {
             | NodeKind::NumNe
             | NodeKind::NumToText
             | NodeKind::BoolToText
+            | NodeKind::Compare
             | NodeKind::And
             | NodeKind::Or
             | NodeKind::Not
@@ -766,10 +777,9 @@ impl NodeKind {
             | NodeKind::DrawBbox
             | NodeKind::GetImageSize => "Vision",
             NodeKind::RecordPresence => "Presence",
-            NodeKind::Comment => "Utility",
+            NodeKind::Print | NodeKind::ShowImage | NodeKind::Comment => "Debug",
             NodeKind::Reroute => "Utility",
             NodeKind::StartRecording | NodeKind::StopRecording => "Recording",
-            NodeKind::TimeGate => "Flow",
         }
     }
 
@@ -810,7 +820,7 @@ impl NodeKind {
             NodeKind::ForEach => &EXEC_OUT_FOR_EACH,
             NodeKind::FlipFlop => &EXEC_OUT_FLIP_FLOP,
             // Dynamic: arms come from config, not a static slice. See GraphNode::output_port.
-            NodeKind::StringSwitch => &NO_PORTS,
+            NodeKind::StringSwitch | NodeKind::CameraSwitch => &NO_PORTS,
             NodeKind::Comment => &NO_PORTS,
             NodeKind::Reroute => &NO_PORTS, // pure passthrough, no exec pins
             NodeKind::TimeGate => &EXEC_OUT_TIME_GATE, // "out" fires when countdown expires
@@ -865,6 +875,7 @@ impl NodeKind {
             NodeKind::BoolToText => &BOOL_TO_TEXT_IN,
             NodeKind::Cooldown => &NO_PORTS, // engine-driven; window_secs is config
             NodeKind::StringSwitch => &STRING_SWITCH_IN,
+            NodeKind::CameraSwitch => &CAMERA_SWITCH_IN,
             NodeKind::AskAi => &ASK_AI_IN,
             NodeKind::Comment => &NO_PORTS,
             NodeKind::Reroute => &REROUTE_IN,
@@ -917,7 +928,7 @@ impl NodeKind {
             | NodeKind::NumNe => &COMPARE_OUT,
             NodeKind::NumToText | NodeKind::BoolToText => &CAST_TEXT_OUT,
             NodeKind::Cooldown => &COOLDOWN_OUT,
-            NodeKind::StringSwitch => &NO_PORTS, // exec outputs are dynamic arms (+ "default")
+            NodeKind::StringSwitch | NodeKind::CameraSwitch => &NO_PORTS, // exec outputs are dynamic arms (+ "default")
             NodeKind::AskAi => &NO_PORTS, // exec outputs are true/false branches only
             NodeKind::Comment => &NO_PORTS,
             NodeKind::Reroute => &REROUTE_OUT,
@@ -990,6 +1001,7 @@ impl NodeKind {
             NodeKind::Not => json!({ "a": false }),
             NodeKind::TextCompare => json!({ "operator": "eq", "b": "" }),
             NodeKind::StringSwitch => json!({ "arms": ["arm_1", "arm_2"] }),
+            NodeKind::CameraSwitch => json!({ "arms": [] }),
             NodeKind::AskAi => json!({ "question": "", "timeout_secs": "65" }),
             NodeKind::Comment => json!({ "text": "Comment", "color": "#facc15", "width": 400, "height": 200 }),
             NodeKind::Reroute => json!({}),
@@ -1065,6 +1077,15 @@ impl GraphNode {
             }
             return None;
         }
+        // CameraSwitch: exec outputs are numbered "arm_1", "arm_2", ... + "default".
+        if self.kind == NodeKind::CameraSwitch {
+            let arms = camera_switch_arms(&self.config);
+            let valid = (1..=arms.len()).any(|i| name == format!("arm_{i}").as_str()) || name == "default";
+            if valid {
+                return Some(ResolvedPort { name: name.to_string(), ty: PortType::Exec, required: false });
+            }
+            return None;
+        }
         if let Some(e) = self.kind.exec_out_ports().iter().find(|p| p.name == name) {
             return Some(ResolvedPort::from(e));
         }
@@ -1081,6 +1102,17 @@ pub fn string_switch_arms(config: &Value) -> Vec<String> {
         .map(|arr| {
             arr.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect()
         })
+        .unwrap_or_default()
+}
+
+/// Extract the camera keys from a `CameraSwitch` node's config (one per arm; may be empty
+/// strings for unconfigured arms). Arm port names are "arm_1", "arm_2", etc. (NOT the key).
+/// The "default" arm is implicit — fires when no arm matches — and is NOT included here.
+pub fn camera_switch_arms(config: &Value) -> Vec<String> {
+    config
+        .get("arms")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
         .unwrap_or_default()
 }
 

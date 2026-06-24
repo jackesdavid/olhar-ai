@@ -36,6 +36,75 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+// ---- friendly name word list ------------------------------------------------
+
+const ADJECTIVES: &[&str] = &[
+    "amber","azure","bold","bright","calm","cedar","clear","cloud","coral","crisp",
+    "dark","dawn","deep","deft","dense","drift","dusk","early","faint","fast",
+    "fern","firm","flash","fleet","frost","gentle","ghost","glad","glide","gold",
+    "grand","grey","gust","hardy","haze","high","hollow","iron","jade","keen",
+    "kind","lake","lean","light","lofty","lone","loud","mist","misty","moss",
+    "muted","night","noble","north","oak","pale","peak","pine","plain","prime",
+    "pure","quick","quiet","rapid","raw","reef","rich","ridge","ripple","rise",
+    "roam","rocky","rough","sage","sharp","silver","sleek","slim","slow","smooth",
+    "soft","solid","stark","steady","steel","still","stone","storm","strong","swift",
+    "tall","thin","tidal","trim","true","vast","veil","warm","wide","wild",
+];
+
+const NOUNS: &[&str] = &[
+    "arc","ash","bay","beam","birch","blade","blaze","bloom","boulder","branch",
+    "bridge","brook","canyon","cedar","cliff","cloud","comet","cove","creek","crest",
+    "dawn","delta","drift","dune","dusk","echo","ember","falcon","fern","field",
+    "fjord","flame","flare","flash","flint","fog","forest","gale","gate","glacier",
+    "glen","grove","gust","harbor","hawk","haze","hill","hollow","horizon","isle",
+    "jade","lake","ledge","light","loch","mesa","meteor","mist","moon","moss",
+    "mount","nebula","night","north","oak","orbit","pass","peak","pine","plain",
+    "pond","pulse","quarry","rain","range","rapid","reef","ridge","rift","river",
+    "rock","root","run","sage","salt","sand","shore","sierra","sky","slate",
+    "snow","sol","spark","spire","spring","star","stone","storm","stream","summit",
+    "sun","surge","tide","timber","torch","trail","vale","vault","wave","wind",
+];
+
+/// Generate a memorable 3-word slug from a Unix epoch timestamp.
+pub fn generate_friendly_name(epoch: i64) -> String {
+    let e = epoch.unsigned_abs() as usize;
+    let na = ADJECTIVES.len();
+    let nn = NOUNS.len();
+    let w1 = ADJECTIVES[e % na];
+    let w2 = ADJECTIVES[(e.wrapping_mul(31)) % na];
+    let w3 = NOUNS[(e.wrapping_mul(97)) % nn];
+    format!("{w1}-{w2}-{w3}")
+}
+
+// ---- paginated list ---------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ClipListItem {
+    pub clip_id:       String,
+    pub friendly_name: String,
+    pub camera_ip:     String,
+    pub duration_secs: i32,
+    pub size_bytes:    i64,
+    pub started_at:    String,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ClipPage {
+    pub total: usize,
+    pub items: Vec<ClipListItem>,
+}
+
+#[derive(Debug)]
+pub struct ListParams {
+    pub camera_ip: Option<String>,
+    pub sort:      String,   // "started_at" | "duration_secs" | "size_bytes" | "friendly_name"
+    pub dir:       String,   // "asc" | "desc"
+    pub limit:     usize,
+    pub offset:    usize,
+    pub from:      Option<String>, // RFC3339
+    pub to:        Option<String>, // RFC3339
+}
+
 // ---- config -----------------------------------------------------------------
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -52,6 +121,10 @@ pub struct RecordingConfig {
     /// recordings start with pre-roll footage instead of from the trigger moment.
     #[serde(default)]
     pub cameras_always_warm: bool,
+    /// MOG2 `varThreshold` for motion detection (default 16). Lower = more sensitive
+    /// (triggers on small pixel changes); higher = less sensitive. Range: 4–256.
+    #[serde(default = "default_motion_var")]
+    pub motion_var_threshold: f64,
 }
 
 impl Default for RecordingConfig {
@@ -61,9 +134,12 @@ impl Default for RecordingConfig {
             max_storage_mb: 1000,
             codec: "copy".to_string(),
             cameras_always_warm: false,
+            motion_var_threshold: 16.0,
         }
     }
 }
+
+fn default_motion_var() -> f64 { 16.0 }
 
 fn default_pre_roll() -> u32 { 10 }
 fn default_storage() -> u64 { 1000 }
@@ -141,10 +217,20 @@ impl RecordingManager {
     // ---- ring ---------------------------------------------------------------
 
     /// Start the ring buffer for `camera_ip`. Idempotent — no-op if already running.
+    /// If ffmpeg has crashed (process exited), the stale entry is removed first so it
+    /// restarts cleanly; this prevents stale old segments from masquerading as live footage.
     pub fn start_ring(&self, camera_ip: &str) {
         let mut rings = self.ring_sessions.lock().unwrap();
-        if rings.contains_key(camera_ip) {
-            return;
+        if let Some(rs) = rings.get_mut(camera_ip) {
+            let dead = rs.child.as_mut()
+                .and_then(|c| c.try_wait().ok())
+                .is_some(); // Some(status) = exited; None = still running
+            if dead {
+                log::warn!("ring[{camera_ip}]: ffmpeg exited unexpectedly — restarting");
+                rings.remove(camera_ip);
+            } else {
+                return; // healthy
+            }
         }
 
         let ip_key = camera_ip.replace('.', "_");
@@ -232,10 +318,11 @@ impl RecordingManager {
     /// Start recording `camera_ip`. Collects up to `requested_pre_roll_secs` of
     /// ring footage to prepend; the live portion is captured from the ring buffer
     /// directly (no second ffmpeg process), ensuring seamless keyframe-aligned join.
-    pub fn start(&self, camera_ip: &str, requested_pre_roll_secs: u32) -> Result<String, String> {
+    /// Returns `(clip_id, new)` where `new = false` means a recording was already in progress.
+    pub fn start(&self, camera_ip: &str, requested_pre_roll_secs: u32) -> Result<(String, bool), String> {
         let mut sessions = self.sessions.lock().unwrap();
         if let Some((id, _)) = sessions.iter().find(|(_, s)| s.camera_ip == camera_ip) {
-            return Ok(id.clone());
+            return Ok((id.clone(), false));
         }
 
         let ts = chrono::Utc::now();
@@ -244,6 +331,16 @@ impl RecordingManager {
         let clip_id = format!("{ip_key}-{epoch}");
         let started_at = ts.to_rfc3339();
         let output = self.dir.join(format!("{clip_id}.mp4"));
+
+        // Ensure the ring buffer is alive before we start. If ffmpeg crashed, this
+        // restarts it so we capture live footage during the recording window.
+        drop(sessions); // release lock before start_ring (which takes ring_sessions lock)
+        self.start_ring(camera_ip);
+        let mut sessions = self.sessions.lock().unwrap();
+        // Re-check after ring restart: another caller may have started the same camera.
+        if let Some((id, _)) = sessions.iter().find(|(_, s)| s.camera_ip == camera_ip) {
+            return Ok((id.clone(), false));
+        }
 
         // Collect available pre-roll segments and copy them into live_dir so the
         // ring cleanup loop can't delete them before stop() concatenates them.
@@ -281,7 +378,7 @@ impl RecordingManager {
             start_seg_idx,
             started_at,
         });
-        Ok(clip_id)
+        Ok((clip_id, true))
     }
 
     pub fn stop(&self, clip_id: &str) -> Result<ClipMeta, String> {
@@ -321,15 +418,35 @@ impl RecordingManager {
         let started = chrono::DateTime::parse_from_rfc3339(&sess.started_at)
             .map(|t| t.with_timezone(&chrono::Utc))
             .unwrap_or_else(|_| chrono::Utc::now());
-        let duration_secs = (chrono::Utc::now() - started).num_seconds().max(0) as i32;
+        // Probe the actual output file for exact duration (covers pre-roll + live footage and
+        // handles GoP-aligned segments that may be longer than the 1s nominal segment_time).
+        let duration_secs = probe_duration(&sess.output)
+            .unwrap_or_else(|| (chrono::Utc::now() - started).num_seconds().max(0) as i32);
 
         log::info!("recording stopped: {clip_id} ({duration_secs}s, {size_bytes}B)");
         if size_bytes < 1000 {
             log::warn!("recording[{clip_id}]: clip is only {size_bytes}B — stream may not have been warm");
         }
 
+        let friendly_name = generate_friendly_name(started.timestamp());
+
+        // Write a sidecar .json so list_clips() can reconstruct metadata without a DB.
+        let sidecar = serde_json::json!({
+            "clip_id":       &sess.clip_id,
+            "friendly_name": &friendly_name,
+            "camera_ip":     &sess.camera_ip,
+            "duration_secs": duration_secs,
+            "size_bytes":    size_bytes,
+            "started_at":    &sess.started_at,
+        });
+        let sidecar_path = self.dir.join(format!("{clip_id}.json"));
+        if let Err(e) = fs::write(&sidecar_path, sidecar.to_string()) {
+            log::warn!("recording[{clip_id}]: sidecar write failed: {e}");
+        }
+
         Ok(ClipMeta {
             clip_id: sess.clip_id,
+            friendly_name,
             camera_ip: sess.camera_ip,
             duration_secs,
             size_bytes,
@@ -348,6 +465,57 @@ impl RecordingManager {
     pub fn clip_path(&self, clip_id: &str) -> Option<PathBuf> {
         let candidate = self.dir.join(format!("{clip_id}.mp4"));
         if candidate.exists() { Some(candidate) } else { None }
+    }
+
+    /// List clips from the recordings directory, applying filter/sort/paginate.
+    pub fn list_clips(&self, p: &ListParams) -> ClipPage {
+        let mut items: Vec<ClipListItem> = fs::read_dir(&self.dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))
+            .filter_map(|e| {
+                let raw = fs::read_to_string(e.path()).ok()?;
+                serde_json::from_str::<ClipListItem>(&raw).ok()
+            })
+            .filter(|c| {
+                if let Some(ref ip) = p.camera_ip {
+                    if &c.camera_ip != ip { return false; }
+                }
+                if let Some(ref from) = p.from {
+                    if c.started_at.as_str() < from.as_str() { return false; }
+                }
+                if let Some(ref to) = p.to {
+                    if c.started_at.as_str() > to.as_str() { return false; }
+                }
+                true
+            })
+            .collect();
+
+        let desc = p.dir == "desc";
+        match p.sort.as_str() {
+            "duration_secs" => items.sort_by(|a, b| a.duration_secs.cmp(&b.duration_secs)),
+            "size_bytes"    => items.sort_by(|a, b| a.size_bytes.cmp(&b.size_bytes)),
+            "friendly_name" => items.sort_by(|a, b| a.friendly_name.cmp(&b.friendly_name)),
+            _               => items.sort_by(|a, b| a.started_at.cmp(&b.started_at)),
+        }
+        if desc { items.reverse(); }
+
+        let total = items.len();
+        let items = items.into_iter().skip(p.offset).take(p.limit).collect();
+        ClipPage { total, items }
+    }
+
+    /// Delete a clip by id (removes both the .mp4 and sidecar .json).
+    pub fn delete_clip(&self, clip_id: &str) -> Result<(), String> {
+        let mp4  = self.dir.join(format!("{clip_id}.mp4"));
+        let json = self.dir.join(format!("{clip_id}.json"));
+        if !mp4.exists() {
+            return Err(format!("clip not found: {clip_id}"));
+        }
+        fs::remove_file(&mp4).map_err(|e| format!("remove mp4: {e}"))?;
+        let _ = fs::remove_file(&json); // best-effort sidecar removal
+        Ok(())
     }
 }
 
@@ -497,6 +665,26 @@ fn remux_ts_to_mp4(src: &PathBuf, dst: &PathBuf) -> Result<(), String> {
     if status.success() { Ok(()) } else { Err("remux failed".to_string()) }
 }
 
+/// Run ffprobe to get the exact duration of the output mp4 in seconds. Returns None if
+/// ffprobe is not available or the file can't be probed (wall-clock fallback is used instead).
+fn probe_duration(path: &PathBuf) -> Option<i32> {
+    let out = Command::new("ffprobe")
+        .args([
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            path.to_str().unwrap_or_default(),
+        ])
+        .output()
+        .ok()?;
+    std::str::from_utf8(&out.stdout)
+        .ok()?
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .map(|d| d.round() as i32)
+}
+
 /// Concatenate multiple .ts files → .mp4 using ffmpeg concat demuxer.
 fn concat_to_mp4(sources: &[&PathBuf], dst: &PathBuf) -> Result<(), String> {
     let list_path = dst.with_extension("concat.txt");
@@ -528,6 +716,7 @@ fn concat_to_mp4(sources: &[&PathBuf], dst: &PathBuf) -> Result<(), String> {
 
 pub struct ClipMeta {
     pub clip_id:       String,
+    pub friendly_name: String,
     pub camera_ip:     String,
     pub duration_secs: i32,
     pub size_bytes:    i64,

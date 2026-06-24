@@ -1,19 +1,32 @@
 // Curated furniture / landmark icon library for map markers. Each icon is a small
-// SVG (filled silhouettes, 24×24) parsed by three's SVGLoader into flat geometry
-// and rendered as an emerald glyph on the floor — vector-crisp at any zoom and
-// trivially extensible: add an entry here and it shows up in the picker.
-
-// `anchor` is the icon's logical origin in viewBox (0–24) coords — the point that lands
-// on the placement target and that the marker rotates around. Defaults to the center
-// [12, 12]; override it for icons whose meaningful pivot is off-center (e.g. a door's
-// hinge), so they align onto walls correctly. Future swapped-in assets just declare it.
-export type IconDef = { key: string; label: string; svg: string; anchor?: [number, number] };
+// SVG parsed by three's SVGLoader into flat geometry and rendered as an emerald glyph
+// on the floor — vector-crisp at any zoom and trivially extensible: add an entry here
+// and it shows up in the picker.
+//
+// Two icon modes:
+//   svg  — inline SVG string, 24×24 viewBox. Fast, no network.
+//   src  — URL to a static SVG asset (e.g. "/markers/car.svg"). Fetched once, cached.
+//           Set `vb` to the SVG's largest viewBox dimension so MarkerGlyph scales it to
+//           the same world footprint as the inline icons. anchor coordinates are in the
+//           external file's viewBox space.
+//
+// `anchor` is the icon's logical origin — the point that lands on the placement target
+// and that the marker rotates around. Defaults to center of the viewBox.
+export type IconDef = {
+  key: string;
+  label: string;
+  svg?: string;
+  src?: string;
+  vb?: number;
+  anchor?: [number, number];
+};
 
 // The fill value is irrelevant (MarkerGlyph overrides it with the emerald material) — use
 // a concrete colour, not `currentColor`, which SVGLoader can't parse (warns on every load).
 const VB = (body: string) => `<svg viewBox="0 0 24 24" fill="#9ca3af">${body}</svg>`;
 
 const CENTER: [number, number] = [12, 12];
+const CENTER_EXT = (vb: [number, number]): [number, number] => [vb[0] / 2, vb[1] / 2];
 
 // All icons are authored as TOP-DOWN architectural plan symbols, composed of closed
 // shapes (rects / circles / paths). The renderer draws each shape as a thin emerald
@@ -58,10 +71,12 @@ export const MARKER_ICONS: IconDef[] = [
   {
     key: "car",
     label: "Car",
-    // body + cabin + four wheels (top-down)
-    svg: VB(
-      '<rect x="4.5" y="2.5" width="15" height="19" rx="4"/><rect x="6.5" y="7.5" width="11" height="8" rx="2"/><rect x="3" y="5.5" width="2" height="3.5" rx="0.6"/><rect x="3" y="15" width="2" height="3.5" rx="0.6"/><rect x="19" y="5.5" width="2" height="3.5" rx="0.6"/><rect x="19" y="15" width="2" height="3.5" rx="0.6"/>',
-    ),
+    // External SVG from static/markers/car.svg.
+    // vb = height of the 1932×976 viewBox — normalises the car to the same world height
+    // as inline icons while keeping its natural wide-body aspect ratio.
+    src: "/markers/car.svg",
+    vb: 976,
+    anchor: CENTER_EXT([1932, 976]),
   },
   {
     key: "sink",
@@ -105,15 +120,28 @@ export const MARKER_ICONS: IconDef[] = [
 
 const BY_KEY = new Map(MARKER_ICONS.map((i) => [i.key, i]));
 
+function def(key: string): IconDef {
+  return BY_KEY.get(key) ?? MARKER_ICONS[0];
+}
+
 export function iconSvg(key: string): string {
-  return (BY_KEY.get(key) ?? MARKER_ICONS[0]).svg;
+  return def(key).svg ?? '<svg viewBox="0 0 24 24"></svg>';
+}
+
+export function iconSrc(key: string): string | null {
+  return def(key).src ?? null;
 }
 
 export function iconLabel(key: string): string {
-  return (BY_KEY.get(key) ?? MARKER_ICONS[0]).label;
+  return def(key).label;
 }
 
-/** The icon's logical origin in viewBox coords (defaults to the center). */
+/** Largest viewBox dimension — used by MarkerGlyph to normalise world scale. */
+export function iconVb(key: string): number {
+  return def(key).vb ?? 24;
+}
+
+/** The icon's logical origin in viewBox coords (defaults to the centre). */
 export function iconAnchor(key: string): [number, number] {
-  return (BY_KEY.get(key) ?? MARKER_ICONS[0]).anchor ?? CENTER;
+  return def(key).anchor ?? CENTER;
 }

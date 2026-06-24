@@ -32,8 +32,12 @@
           title={icon.label}
           onclick={() => store.updateMarker(marker.id, { icon: icon.key })}
         >
-          <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-          {@html icon.svg}
+            {#if icon.svg}
+            <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+            {@html icon.svg}
+          {:else if icon.src}
+            <img src={icon.src} class="size-full object-contain opacity-70" alt={icon.label} />
+          {/if}
         </button>
       {/each}
     </div>

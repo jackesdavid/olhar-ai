@@ -9,9 +9,22 @@
 //! `PortValue` is a typed enum (not `serde_json::Value`) so an `Image` port can
 //! carry raw JPEG bytes — JSON can't hold image bytes cleanly. Action nodes adapt
 //! the core domain functions directly (typed in/out, no string-result parsing).
+
+mod alerts;
+mod ai;
+mod camera;
+mod control;
+mod debug_node;
+mod logic;
+mod network;
+mod presence;
+mod recipients;
+mod recording;
+mod text;
+mod vision;
+
 use super::domain::{NodeKind, Port, PortType};
-use crate::agent::tools::{ToolContext, ToolUiEvent};
-use crate::alerts::{self, AlertLevel};
+use crate::agent::tools::ToolContext;
 use crate::device_actions as dev_actions;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -293,80 +306,71 @@ pub fn run_node(
     sys: &ToolContext,
 ) -> Result<PortValues, String> {
     match kind {
-        NodeKind::GetLastAlert => run_get_last_alert(sys),
-        NodeKind::GetRecipient => run_get_recipient(config),
-        NodeKind::CreateAlert => run_create_alert(config, inputs, sys),
-        NodeKind::DeliverAlert => run_deliver_alert(inputs, sys),
-        NodeKind::CameraSnapshot => run_camera_snapshot(inputs, sys),
-        NodeKind::GetCurrentFrame => run_get_current_frame(config, inputs, sys),
-        NodeKind::GetCameraByName => run_get_camera_by_name(config, sys),
-        NodeKind::BreakCamera => run_break_camera(inputs),
-        NodeKind::DescribeImage => run_describe_image(config, inputs, sys),
-        NodeKind::NotifyRecipient => run_notify_recipient(inputs, sys),
-        NodeKind::Format => run_format(config, inputs),
-        NodeKind::Wait => run_wait(config),
-        NodeKind::HttpPost => run_http_post(config, inputs),
-        NodeKind::If => run_if(inputs),
+        NodeKind::GetLastAlert => alerts::run_get_last_alert(sys),
+        NodeKind::GetRecipient => recipients::run_get_recipient(config),
+        NodeKind::CreateAlert => alerts::run_create_alert(config, inputs, sys),
+        NodeKind::DeliverAlert => alerts::run_deliver_alert(inputs, sys),
+        NodeKind::CameraSnapshot => camera::run_camera_snapshot(inputs, sys),
+        NodeKind::GetCurrentFrame => camera::run_get_current_frame(config, inputs, sys),
+        NodeKind::GetCameraByName => camera::run_get_camera_by_name(config, sys),
+        NodeKind::BreakCamera => camera::run_break_camera(inputs),
+        NodeKind::DescribeImage => ai::run_describe_image(config, inputs, sys),
+        NodeKind::NotifyRecipient => recipients::run_notify_recipient(inputs, sys),
+        NodeKind::Format => text::run_format(config, inputs),
+        NodeKind::Wait => control::run_wait(config),
+        NodeKind::HttpPost => network::run_http_post(config, inputs),
+        NodeKind::If => control::run_if(inputs),
         // ForEach is engine-driven (like If/EmitEvent): the scheduler parses `items`,
         // advances the index across epochs, sets item/index, and fires loop_body/completed.
         NodeKind::ForEach => Ok(PortValues::new()),
-        NodeKind::MotionDetection => run_motion_detection(config, inputs),
-        NodeKind::MotionWatch => run_motion_watch(config, inputs, sys),
-        NodeKind::PersonDetection => run_person_detection(inputs, sys),
-        NodeKind::ObjectDetection => run_object_detection(config, inputs, sys),
-        NodeKind::BreakPersonDetection => run_break_person_detection(inputs),
-        NodeKind::BreakDetection => run_break_detection(inputs),
-        NodeKind::BreakFaceDetection => run_break_face_detection(inputs),
-        NodeKind::RecognizePerson => run_recognize_person(config, inputs, sys),
-        NodeKind::RecordPresence => run_record_presence(config, inputs, sys),
+        NodeKind::MotionDetection => vision::run_motion_detection(config, inputs),
+        NodeKind::MotionWatch => vision::run_motion_watch(config, inputs, sys),
+        NodeKind::PersonDetection => vision::run_person_detection(inputs, sys),
+        NodeKind::ObjectDetection => vision::run_object_detection(config, inputs, sys),
+        NodeKind::BreakPersonDetection => vision::run_break_person_detection(inputs),
+        NodeKind::BreakDetection => vision::run_break_detection(inputs),
+        NodeKind::BreakFaceDetection => vision::run_break_face_detection(inputs),
+        NodeKind::RecognizePerson => vision::run_recognize_person(config, inputs, sys),
+        NodeKind::RecordPresence => presence::run_record_presence(config, inputs, sys),
         // EmitEvent/OnEvent are exec-flow markers: the engine handles the event fire
         // (spawning the guarded sub-run) and the OnEvent entry, like the If/ShowImage
         // special-cases. Here they're no-ops that just pass exec through.
         NodeKind::EmitEvent | NodeKind::OnEvent => Ok(PortValues::new()),
-        NodeKind::Print => run_print(config, inputs, sys),
+        NodeKind::Print => debug_node::run_print(config, inputs, sys),
         // ShowImage is a debug sink whose only effect — mirroring its input frame to
         // the editor — is driven by the engine, which owns the node id the UI needs to
         // place the preview. Here it's a pure pass-through (exec flows on, no data out).
         NodeKind::ShowImage => Ok(PortValues::new()),
-        NodeKind::DrawBbox => run_draw_bbox(config, inputs),
-        NodeKind::GetImageSize => run_get_image_size(inputs),
+        NodeKind::DrawBbox => vision::run_draw_bbox(config, inputs),
+        NodeKind::GetImageSize => vision::run_get_image_size(inputs),
         // FlipFlop is engine-driven (reads/writes cross-run state + routes exec).
         // Never called directly — the engine handles it before reaching run_node.
         NodeKind::FlipFlop => Ok(PortValues::new()),
-        NodeKind::Compare => run_compare(config, inputs),
-        NodeKind::NumLt => run_num_cmp(config, inputs, |a, b| a < b),
-        NodeKind::NumLte => run_num_cmp(config, inputs, |a, b| a <= b),
-        NodeKind::NumGt => run_num_cmp(config, inputs, |a, b| a > b),
-        NodeKind::NumGte => run_num_cmp(config, inputs, |a, b| a >= b),
-        NodeKind::NumEq => run_num_cmp(config, inputs, |a, b| a == b),
-        NodeKind::NumNe => run_num_cmp(config, inputs, |a, b| a != b),
-        NodeKind::And => run_and(config, inputs),
-        NodeKind::Or => run_or(config, inputs),
-        NodeKind::Not => run_not(config, inputs),
-        NodeKind::TextCompare => run_text_compare(config, inputs),
-        NodeKind::NumToText => {
-            let v = inputs.get("value").and_then(PortValue::as_num).unwrap_or(0);
-            let mut o = PortValues::new();
-            o.insert("text".into(), PortValue::Text(v.to_string()));
-            Ok(o)
-        }
-        NodeKind::BoolToText => {
-            let v = inputs.get("value").and_then(PortValue::as_bool).unwrap_or(false);
-            let mut o = PortValues::new();
-            o.insert("text".into(), PortValue::Text(if v { "true" } else { "false" }.into()));
-            Ok(o)
-        }
+        NodeKind::Compare => logic::run_compare(config, inputs),
+        NodeKind::NumLt => logic::run_num_cmp(config, inputs, |a, b| a < b),
+        NodeKind::NumLte => logic::run_num_cmp(config, inputs, |a, b| a <= b),
+        NodeKind::NumGt => logic::run_num_cmp(config, inputs, |a, b| a > b),
+        NodeKind::NumGte => logic::run_num_cmp(config, inputs, |a, b| a >= b),
+        NodeKind::NumEq => logic::run_num_cmp(config, inputs, |a, b| a == b),
+        NodeKind::NumNe => logic::run_num_cmp(config, inputs, |a, b| a != b),
+        NodeKind::And => logic::run_and(config, inputs),
+        NodeKind::Or => logic::run_or(config, inputs),
+        NodeKind::Not => logic::run_not(config, inputs),
+        NodeKind::TextCompare => logic::run_text_compare(config, inputs),
+        NodeKind::NumToText => logic::run_num_to_text(inputs),
+        NodeKind::BoolToText => logic::run_bool_to_text(inputs),
         // Cooldown is engine-driven (reads/writes cross-run node state).
         NodeKind::Cooldown => Ok(PortValues::new()),
-        // StringSwitch is engine-driven (the engine reads `value` and fires the matching
-        // arm in forward_epoch). Here we just validate the required input is present.
-        NodeKind::StringSwitch => run_string_switch(inputs),
-        NodeKind::AskAi => run_ask_ai(config, inputs, sys),
+        // StringSwitch / CameraSwitch are engine-driven (the engine reads the value and
+        // fires the matching arm in forward_epoch). Here we just validate the required input.
+        NodeKind::StringSwitch => control::run_string_switch(inputs),
+        NodeKind::CameraSwitch => control::run_camera_switch(inputs),
+        NodeKind::AskAi => ai::run_ask_ai(config, inputs, sys),
         // Comment is a canvas organizer — it never executes.
         // Reroute is collapsed to a direct edge before the engine runs (see engine::flatten_reroutes).
         NodeKind::Comment | NodeKind::Reroute => Ok(PortValues::new()),
-        NodeKind::StartRecording => run_start_recording(config, inputs, sys),
-        NodeKind::StopRecording => run_stop_recording(inputs, sys),
+        NodeKind::StartRecording => recording::run_start_recording(config, inputs, sys),
+        NodeKind::StopRecording => recording::run_stop_recording(inputs, sys),
         // TimeGate is engine-driven (reads/writes cross-run state, polls until expiry).
         // Never called through run_node — the engine handles it in forward_epoch.
         NodeKind::TimeGate => Ok(PortValues::new()),
@@ -423,6 +427,7 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::TextCompare
         | NodeKind::ForEach
         | NodeKind::StringSwitch
+        | NodeKind::CameraSwitch
         | NodeKind::GetCameraByName
         | NodeKind::BreakCamera
         | NodeKind::Comment
@@ -476,152 +481,6 @@ pub fn run_node_timed(
     }
 }
 
-/// Debug sink: echo `message` to the editor Console (always, regardless of the graph's
-/// debug flag) and — unless `on_screen` is off — flash it over the canvas. Carries the
-/// `level` so the UI can tint both. Returns no data; exec passes through.
-fn run_print(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let message = inputs.get("message").and_then(PortValue::as_text).unwrap_or("").to_string();
-    let on_screen = inputs.get("on_screen").and_then(PortValue::as_bool).unwrap_or(true);
-    let level = config.get("level").and_then(Value::as_str).unwrap_or("info").to_string();
-    let _ = sys.ui_tx.send(ToolUiEvent::Print { message, level, on_screen });
-    Ok(PortValues::new())
-}
-
-/// Detect whether a person is present in the image with the local YOLOX-Nano model.
-/// Outputs `person` (Bool), `count` (Num), `confidence` (Num %, 0..100), `ok`.
-fn run_person_detection(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let bytes = inputs
-        .get("image")
-        .and_then(PortValue::as_image)
-        .ok_or("missing required input 'image'")?;
-    // Per-person boxes → a `PersonDetection[]` (the `persons` output), with the scalar
-    // summary derived from it (count, top confidence) for convenience / back-compat.
-    let people = sys.vision.detect_persons_detailed(bytes)?;
-    let count = people.len() as i64;
-    let confidence = people.iter().map(|p| p.confidence).fold(0.0_f32, f32::max);
-    let persons: Vec<PortValue> = people.into_iter().map(PortValue::Person).collect();
-    let (w, h) = jpeg_dimensions(bytes);
-    let mut o = PortValues::new();
-    o.insert("count".into(), PortValue::Num(count));
-    o.insert("confidence".into(), PortValue::Num((confidence * 100.0).round() as i64));
-    o.insert("persons".into(), PortValue::List(persons));
-    o.insert("width".into(), PortValue::Num(w));
-    o.insert("height".into(), PortValue::Num(h));
-    o.insert("ok".into(), PortValue::Bool(true));
-    Ok(o)
-}
-
-/// Detect any single COCO class in the image. The class is read from the wired `class` Text
-/// input first; falls back to the `class` config field (default "person"). Outputs the same
-/// shape as `PersonDetection` so it wires directly into `ForEach` + `BreakDetection`.
-fn run_object_detection(
-    config: &Value,
-    inputs: &PortValues,
-    sys: &ToolContext,
-) -> Result<PortValues, String> {
-    let bytes = inputs
-        .get("image")
-        .and_then(PortValue::as_image)
-        .ok_or("missing required input 'image'")?;
-    let class_name = inputs
-        .get("class")
-        .and_then(PortValue::as_text)
-        .or_else(|| config.get("class").and_then(|v| v.as_str()))
-        .unwrap_or("person");
-    let class_id = crate::agent::detector::class_id_for_name(class_name)
-        .ok_or_else(|| format!("unknown COCO class: '{class_name}'"))?;
-    let detections = sys.vision.detect_objects_detailed(bytes, class_id)?;
-    let count = detections.len() as i64;
-    let confidence = detections.iter().map(|d| d.confidence).fold(0.0_f32, f32::max);
-    let items: Vec<PortValue> = detections.into_iter().map(PortValue::Person).collect();
-    let (w, h) = jpeg_dimensions(bytes);
-    let mut o = PortValues::new();
-    o.insert("count".into(), PortValue::Num(count));
-    o.insert("confidence".into(), PortValue::Num((confidence * 100.0).round() as i64));
-    o.insert("detections".into(), PortValue::List(items));
-    o.insert("width".into(), PortValue::Num(w));
-    o.insert("height".into(), PortValue::Num(h));
-    o.insert("ok".into(), PortValue::Bool(true));
-    Ok(o)
-}
-
-/// Break a `PersonDetection` element into its fields: `bbox` (a `[x1,y1,x2,y2]` NumArray)
-/// and `confidence` (percent 0..100). Like Unreal's "Break" struct node.
-fn run_break_person_detection(inputs: &PortValues) -> Result<PortValues, String> {
-    let p = inputs
-        .get("person")
-        .and_then(PortValue::as_person)
-        .ok_or("missing required input 'person'")?;
-    let bbox = p.bbox.iter().map(|v| PortValue::Num(v.round() as i64)).collect();
-    let mut o = PortValues::new();
-    o.insert("bbox".into(), PortValue::List(bbox));
-    o.insert("confidence".into(), PortValue::Num((p.confidence * 100.0).round() as i64));
-    Ok(o)
-}
-
-/// Break a generic `Detection` element (from `ObjectDetection`) into `bbox` + `confidence`.
-/// Identical logic to `run_break_person_detection` but reads from the `detection` input pin.
-fn run_break_detection(inputs: &PortValues) -> Result<PortValues, String> {
-    let d = inputs
-        .get("detection")
-        .and_then(PortValue::as_person)
-        .ok_or("missing required input 'detection'")?;
-    let bbox = d.bbox.iter().map(|v| PortValue::Num(v.round() as i64)).collect();
-    let mut o = PortValues::new();
-    o.insert("bbox".into(), PortValue::List(bbox));
-    o.insert("confidence".into(), PortValue::Num((d.confidence * 100.0).round() as i64));
-    Ok(o)
-}
-
-/// Break a `FaceDetection` element into `bbox` (NumArray), `confidence` (percent), and
-/// `landmarks` (count of the 5-point landmark set).
-fn run_break_face_detection(inputs: &PortValues) -> Result<PortValues, String> {
-    let f = inputs
-        .get("face")
-        .and_then(PortValue::as_face)
-        .ok_or("missing required input 'face'")?;
-    let bbox = f.bbox.iter().map(|v| PortValue::Num(v.round() as i64)).collect();
-    let mut o = PortValues::new();
-    o.insert("bbox".into(), PortValue::List(bbox));
-    o.insert("confidence".into(), PortValue::Num((f.confidence * 100.0).round() as i64));
-    o.insert("landmarks".into(), PortValue::Num(f.landmarks.len() as i64));
-    Ok(o)
-}
-
-/// Recognise a face against the enrolled people: embed the frame, run a cosine kNN
-/// over approved embeddings, and pick the best person within `max_distance`. Outputs
-/// `person` (name), `person_id`, `confidence` (%), and `ok` (whether a match was found).
-fn run_recognize_person(
-    config: &Value,
-    inputs: &PortValues,
-    sys: &ToolContext,
-) -> Result<PortValues, String> {
-    let bytes = inputs
-        .get("image")
-        .and_then(PortValue::as_image)
-        .ok_or("missing required input 'image'")?;
-    let max_distance = config
-        .get("max_distance")
-        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
-        .unwrap_or(0.4) as f32;
-    let embedding = crate::agent::face::embed(bytes)?;
-    let matches = sys.recognizer.recognize(&embedding, 5);
-    let mut o = PortValues::new();
-    match crate::persons::best_match(&matches, max_distance) {
-        Some(m) => {
-            o.insert("person".into(), PortValue::Text(m.name));
-            o.insert("person_id".into(), PortValue::Text(m.person_id));
-            o.insert("confidence".into(), PortValue::Num(m.confidence));
-            o.insert("ok".into(), PortValue::Bool(true));
-        }
-        None => {
-            o.insert("confidence".into(), PortValue::Num(0));
-            o.insert("ok".into(), PortValue::Bool(false));
-        }
-    }
-    Ok(o)
-}
-
 /// A short, human-readable line describing what a node did this run — shown in the
 /// editor console when the graph's `debug` flag is on. Reads the node's own outputs
 /// (and a couple of inputs/config) so each kind reports something useful.
@@ -672,7 +531,7 @@ pub fn debug_summary(
         NodeKind::ForEach => match num("index") {
             Some(i) => match txt("item") {
                 Some(it) => format!("item[{i}] = {}", clip(it)),
-                None => format!("item[{i}]"), // non-text element (num / detection)
+                None => format!("item[{i}]"),
             },
             None => "loop complete".into(),
         },
@@ -811,6 +670,17 @@ pub fn debug_summary(
             let fired = if arms.iter().any(|a| a == val) { val } else { "default" };
             format!("\"{}\" → arm '{fired}'", clip(val))
         }
+        NodeKind::CameraSwitch => {
+            let cam = inputs.get("camera").and_then(PortValue::as_camera);
+            if let Some(cam) = cam {
+                let arms = super::domain::camera_switch_arms(config);
+                let idx = arms.iter().position(|a| !a.is_empty() && (a == &cam.ip || a == &cam.id));
+                let fired = idx.map(|i| format!("arm_{}", i + 1)).unwrap_or_else(|| "default".to_string());
+                format!("{} → {fired}", cam.name)
+            } else {
+                "no camera → default".to_string()
+            }
+        }
         NodeKind::AskAi => {
             let q = inputs.get("question").and_then(PortValue::as_text)
                 .or_else(|| config.get("question").and_then(|v| v.as_str()))
@@ -828,134 +698,13 @@ pub fn debug_summary(
         }
         NodeKind::Comment => "comment".into(),
         NodeKind::Reroute => "reroute".into(),
-        NodeKind::StartRecording => txt("clip_id").map(|id| format!("recording started: {id}")).unwrap_or_else(|| "recording started".into()),
+        NodeKind::StartRecording => {
+            let new = outputs.get("recording_new").and_then(|v| if let PortValue::Bool(b) = v { Some(*b) } else { None }).unwrap_or(true);
+            txt("clip_id").map(|id| if new { format!("recording started: {id}") } else { format!("recording resumed: {id}") }).unwrap_or_else(|| "recording started".into())
+        }
         NodeKind::StopRecording => "recording stopped".into(),
         NodeKind::TimeGate => "time gate".into(),
     }
-}
-
-/// Control-flow branch: just validates the `condition` Bool is present. The engine
-/// reads the resolved condition to choose the live `true`/`false` exec branch.
-fn run_if(inputs: &PortValues) -> Result<PortValues, String> {
-    inputs
-        .get("condition")
-        .and_then(PortValue::as_bool)
-        .ok_or("missing required input 'condition'")?;
-    Ok(PortValues::new())
-}
-
-/// String switch: validates the required `value` Text input is present. The engine's
-/// `forward_epoch` handles the actual arm routing — exactly one arm fires.
-fn run_string_switch(inputs: &PortValues) -> Result<PortValues, String> {
-    inputs
-        .get("value")
-        .and_then(PortValue::as_text)
-        .ok_or("missing required input 'value'")?;
-    Ok(PortValues::new())
-}
-
-/// AI If: asks the vision model a yes/no question about an optional image and returns
-/// `result: Bool`. The engine routes exec to `true` or `false` based on this result,
-/// identically to how it handles the `If` node but reading from outputs instead of inputs.
-fn run_ask_ai(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let question = inputs
-        .get("question")
-        .and_then(PortValue::as_text)
-        .or_else(|| config.get("question").and_then(|v| v.as_str()))
-        .filter(|s| !s.trim().is_empty())
-        .ok_or("AI If: question is required (wire it or set it in config)")?;
-    let image = inputs.get("image").and_then(PortValue::as_image);
-    let answer = sys.vision.ask_yes_no(question, image)?;
-    let mut o = PortValues::new();
-    o.insert("result".into(), PortValue::Bool(answer));
-    Ok(o)
-}
-
-/// Compare two integers using a configurable operator → `result` bool.
-/// Both `a` and `b` fall back to 0 when not wired and no config literal is set.
-fn run_and(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
-    let bool_val = |key: &str| -> bool {
-        inputs.get(key).and_then(PortValue::as_bool)
-            .or_else(|| config.get(key).and_then(|v| v.as_bool().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))))
-            .unwrap_or(false)
-    };
-    let mut o = PortValues::new();
-    o.insert("result".into(), PortValue::Bool(bool_val("a") && bool_val("b")));
-    Ok(o)
-}
-
-fn run_or(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
-    let bool_val = |key: &str| -> bool {
-        inputs.get(key).and_then(PortValue::as_bool)
-            .or_else(|| config.get(key).and_then(|v| v.as_bool().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))))
-            .unwrap_or(false)
-    };
-    let mut o = PortValues::new();
-    o.insert("result".into(), PortValue::Bool(bool_val("a") || bool_val("b")));
-    Ok(o)
-}
-
-fn run_not(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
-    let a = inputs.get("a").and_then(PortValue::as_bool)
-        .or_else(|| config.get("a").and_then(|v| v.as_bool().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))))
-        .unwrap_or(false);
-    let mut o = PortValues::new();
-    o.insert("result".into(), PortValue::Bool(!a));
-    Ok(o)
-}
-
-fn run_text_compare(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
-    let text_val = |key: &str| -> String {
-        inputs.get(key).and_then(PortValue::as_text)
-            .or_else(|| config.get(key).and_then(|v| v.as_str()))
-            .unwrap_or("")
-            .to_string()
-    };
-    let a = text_val("a");
-    let b = text_val("b");
-    let op = config.get("operator").and_then(Value::as_str).unwrap_or("eq");
-    let result = match op {
-        "eq"          => a == b,
-        "ne"          => a != b,
-        "contains"    => a.contains(b.as_str()),
-        "starts_with" => a.starts_with(b.as_str()),
-        "ends_with"   => a.ends_with(b.as_str()),
-        _             => return Err(format!("unknown text_compare operator: '{op}'")),
-    };
-    let mut o = PortValues::new();
-    o.insert("result".into(), PortValue::Bool(result));
-    Ok(o)
-}
-
-fn run_compare(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
-    let a = inputs.get("a").and_then(PortValue::as_num).unwrap_or(0);
-    let b = inputs.get("b").and_then(PortValue::as_num).unwrap_or(0);
-    let op = config.get("operator").and_then(Value::as_str).unwrap_or("==");
-    let result = match op {
-        ">"  => a > b,
-        ">=" => a >= b,
-        "<"  => a < b,
-        "<=" => a <= b,
-        "==" => a == b,
-        "!=" => a != b,
-        _ => return Err(format!("Compare: unknown operator '{op}' (use >, >=, <, <=, ==, !=)")),
-    };
-    let mut o = PortValues::new();
-    o.insert("result".into(), PortValue::Bool(result));
-    Ok(o)
-}
-
-/// Numeric comparison with a fixed operator — shared by the six Num: </<=/>/>==/!= nodes.
-fn run_num_cmp(config: &Value, inputs: &PortValues, op: impl FnOnce(i64, i64) -> bool) -> Result<PortValues, String> {
-    let a = inputs.get("a").and_then(PortValue::as_num)
-        .or_else(|| config.get("a").and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))))
-        .unwrap_or(0);
-    let b = inputs.get("b").and_then(PortValue::as_num)
-        .or_else(|| config.get("b").and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))))
-        .unwrap_or(0);
-    let mut o = PortValues::new();
-    o.insert("result".into(), PortValue::Bool(op(a, b)));
-    Ok(o)
 }
 
 fn num_cmp_summary(op: &str, inputs: &PortValues, outputs: &PortValues) -> String {
@@ -965,168 +714,6 @@ fn num_cmp_summary(op: &str, inputs: &PortValues, outputs: &PortValues) -> Strin
     format!("{a} {op} {b} → {result}")
 }
 
-/// Compare two frames (resized to a common small grayscale) and report how much
-/// they differ. `moved` = changed% >= `sensitivity`; `score` = changed% (0..100).
-/// Percent of pixels that changed between two JPEG frames: both are downscaled to a fixed
-/// 320×240 grayscale, then counted where the absolute luma difference exceeds `pixel_threshold`.
-fn motion_score(a: &[u8], b: &[u8], pixel_threshold: i16) -> Result<f64, String> {
-    const W: u32 = 320;
-    const H: u32 = 240;
-    let gray = |raw: &[u8]| -> Result<Vec<u8>, String> {
-        let img = image::load_from_memory(raw).map_err(|e| format!("Could not decode frame: {e}"))?;
-        Ok(img.resize_exact(W, H, image::imageops::FilterType::Triangle).to_luma8().into_raw())
-    };
-    let ga = gray(a)?;
-    let gb = gray(b)?;
-    let total = ga.len().max(1);
-    let changed = ga
-        .iter()
-        .zip(gb.iter())
-        .filter(|(x, y)| (**x as i16 - **y as i16).abs() > pixel_threshold)
-        .count();
-    Ok((changed as f64 / total as f64) * 100.0)
-}
-
-fn cfg_i64(config: &Value, k: &str, d: i64) -> i64 {
-    config.get(k).and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).unwrap_or(d)
-}
-
-fn run_motion_detection(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
-    let a = inputs.get("image_a").and_then(PortValue::as_image).ok_or("missing required input 'image_a'")?;
-    let b = inputs.get("image_b").and_then(PortValue::as_image).ok_or("missing required input 'image_b'")?;
-    let pixel_threshold = cfg_i64(config, "pixel_threshold", 25).clamp(0, 255) as i16;
-    let sensitivity = cfg_i64(config, "sensitivity", 2).clamp(0, 100) as f64;
-    let score = motion_score(a, b, pixel_threshold)?;
-
-    let mut o = PortValues::new();
-    o.insert("moved".into(), PortValue::Bool(score >= sensitivity));
-    o.insert("score".into(), PortValue::Num(score.round() as i64));
-    o.insert("ok".into(), PortValue::Bool(true));
-    Ok(o)
-}
-
-/// Camera-bound motion detector: resolves its own camera, grabs two frames `sample_gap_ms`
-/// apart, and reports `moved`/`score`. Self-contained per run — drop it in a Cron graph to
-/// watch a feed continuously and wire `moved` → If → Emit event to act only on motion.
-fn run_motion_watch(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let cam = inputs.get("camera").and_then(PortValue::as_camera)
-        .ok_or("missing required camera input")?;
-    let device = {
-        let devices = sys.devices.lock().unwrap();
-        device_from_camera(cam, &devices)?.clone()
-    };
-    let pixel_threshold = cfg_i64(config, "pixel_threshold", 25).clamp(0, 255) as i16;
-    let sensitivity = cfg_i64(config, "sensitivity", 2).clamp(0, 100) as f64;
-    let gap_ms = cfg_i64(config, "sample_gap_ms", 400).clamp(0, 5000) as u64;
-
-    let a = sys.frames.snapshot(&device)?;
-    std::thread::sleep(std::time::Duration::from_millis(gap_ms));
-    let b = sys.frames.snapshot(&device)?;
-    let score = motion_score(&a, &b, pixel_threshold)?;
-
-    let mut o = PortValues::new();
-    o.insert("moved".into(), PortValue::Bool(score >= sensitivity));
-    o.insert("score".into(), PortValue::Num(score.round() as i64));
-    o.insert("ok".into(), PortValue::Bool(true));
-    Ok(o)
-}
-
-/// POST form data to `url`. `fields` (a string map) are the form fields and
-/// `headers` (a string map) are extra request headers. If a `file` is provided
-/// the request is sent as `multipart/form-data` (fields as text parts + the file);
-/// otherwise as `application/x-www-form-urlencoded`. Outputs status, body, ok.
-fn run_http_post(_config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
-    let url = req_text(inputs, "url")?.to_string();
-    let headers = inputs.get("headers").and_then(PortValue::as_dict).unwrap_or(&[]);
-    let fields = inputs.get("fields").and_then(PortValue::as_dict).unwrap_or(&[]);
-    let file = inputs.get("file").and_then(PortValue::as_file);
-
-    let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(30))
-        .build();
-    let mut req = agent.post(&url);
-    for (k, v) in headers {
-        req = req.set(k, v);
-    }
-
-    let result = if let Some(f) = file {
-        let boundary = "----sentinelFormBoundary7MA4YWxkTrZu0gW";
-        let body = multipart_body(fields, f, boundary);
-        req.set("Content-Type", &format!("multipart/form-data; boundary={boundary}"))
-            .send_bytes(&body)
-    } else {
-        let form: Vec<(&str, &str)> = fields.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        req.send_form(&form)
-    };
-
-    let (status, body, ok) = match result {
-        Ok(resp) => {
-            let s = resp.status();
-            (s as i64, resp.into_string().unwrap_or_default(), (200..300).contains(&s))
-        }
-        // ureq treats 4xx/5xx as an error but still carries the response.
-        Err(ureq::Error::Status(code, resp)) => {
-            (code as i64, resp.into_string().unwrap_or_default(), false)
-        }
-        Err(e) => return Err(format!("HTTP POST to {url} failed: {e}")),
-    };
-
-    let mut o = PortValues::new();
-    o.insert("status".into(), PortValue::Num(status));
-    o.insert("response".into(), PortValue::Text(body));
-    o.insert("ok".into(), PortValue::Bool(ok));
-    Ok(o)
-}
-
-/// Build a `multipart/form-data` body: each field as a text part, then the file.
-fn multipart_body(fields: &[(String, String)], file: &FileVal, boundary: &str) -> Vec<u8> {
-    let mut body = Vec::with_capacity(file.bytes.len() + 1024);
-    for (k, v) in fields {
-        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        body.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"{k}\"\r\n\r\n").as_bytes(),
-        );
-        body.extend_from_slice(v.as_bytes());
-        body.extend_from_slice(b"\r\n");
-    }
-    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-    body.extend_from_slice(
-        format!(
-            "Content-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\n",
-            file.name
-        )
-        .as_bytes(),
-    );
-    body.extend_from_slice(format!("Content-Type: {}\r\n\r\n", file.mime).as_bytes());
-    body.extend_from_slice(&file.bytes);
-    body.extend_from_slice(b"\r\n");
-    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
-    body
-}
-
-/// Delay the run by `seconds` (clamped 0..=3600). A pure control-flow node: it
-/// has no data ports — its exec_out simply fires the next node after the delay.
-/// The node stays active for the whole delay since the engine runs it synchronously.
-fn run_wait(config: &Value) -> Result<PortValues, String> {
-    let secs = config
-        .get("seconds")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
-        .unwrap_or(1)
-        .clamp(0, 3600);
-    std::thread::sleep(std::time::Duration::from_secs(secs as u64));
-    Ok(PortValues::new())
-}
-
-/// Output the recipient chosen in this node's config as a typed `Recipient`.
-fn run_get_recipient(config: &Value) -> Result<PortValues, String> {
-    let label = config.get("recipient").and_then(Value::as_str).unwrap_or("").trim().to_string();
-    let ok = !label.is_empty();
-    let mut o = PortValues::new();
-    o.insert("recipient".into(), PortValue::Recipient(label));
-    o.insert("ok".into(), PortValue::Bool(ok));
-    Ok(o)
-}
-
 fn req_text<'a>(inputs: &'a PortValues, name: &str) -> Result<&'a str, String> {
     inputs
         .get(name)
@@ -1134,401 +721,6 @@ fn req_text<'a>(inputs: &'a PortValues, name: &str) -> Result<&'a str, String> {
         .ok_or_else(|| format!("missing required input '{name}'"))
 }
 
-fn run_get_last_alert(sys: &ToolContext) -> Result<PortValues, String> {
-    let mut o = PortValues::new();
-    let alerts = sys.alerts.lock().unwrap();
-    match alerts.last() {
-        Some(a) => {
-            o.insert("id".into(), PortValue::Num(a.id as i64));
-            o.insert("level".into(), PortValue::Text(a.level.label().to_string()));
-            o.insert("message".into(), PortValue::Text(a.message.clone()));
-            o.insert("room".into(), PortValue::Text(a.room_name.clone().unwrap_or_default()));
-            o.insert("source".into(), PortValue::Text(a.source.clone()));
-            o.insert("created_at".into(), PortValue::Text(a.created_at.clone()));
-            o.insert("ok".into(), PortValue::Bool(true));
-        }
-        None => {
-            o.insert("ok".into(), PortValue::Bool(false));
-        }
-    }
-    Ok(o)
-}
-
-fn run_create_alert(
-    config: &Value,
-    inputs: &PortValues,
-    sys: &ToolContext,
-) -> Result<PortValues, String> {
-    let message = req_text(inputs, "message")?.to_string();
-    let level = config
-        .get("level")
-        .and_then(Value::as_str)
-        .and_then(AlertLevel::parse)
-        .unwrap_or_default();
-    let source = config
-        .get("source")
-        .and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or("workflow")
-        .to_string();
-    let (room_id, room_name) = match inputs
-        .get("room")
-        .and_then(PortValue::as_text)
-        .filter(|s| !s.trim().is_empty())
-    {
-        Some(name) => {
-            let rooms = crate::map::repo::load(&sys.db, sys.tenant_id);
-            match rooms.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim())) {
-                Some(r) => (Some(r.id), Some(r.name.clone())),
-                None => (None, Some(name.to_string())),
-            }
-        }
-        None => (None, None),
-    };
-    let a = alerts::create(&sys.alerts, Some(&sys.db), sys.tenant_id, level, message, room_id, room_name, source);
-    let _ = sys.ui_tx.send(ToolUiEvent::AlertsChanged);
-    let mut o = PortValues::new();
-    o.insert("id".into(), PortValue::Num(a.id as i64));
-    o.insert(
-        "result".into(),
-        PortValue::Text(format!("Raised alert {} [{}]", a.id, a.level.label())),
-    );
-    o.insert("ok".into(), PortValue::Bool(true));
-    Ok(o)
-}
-
-/// Record a categorized presence in a room: persist it and pulse it live on the map
-/// (via the `Presence` UI event → SSE relay). Inputs override config; the room name
-/// resolves to a `room_id` like `CreateAlert`.
-fn run_record_presence(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let cat_str = inputs
-        .get("category")
-        .and_then(PortValue::as_text)
-        .or_else(|| config.get("category").and_then(Value::as_str))
-        .unwrap_or("person");
-    let category = crate::presence::Category::parse(cat_str);
-
-    let label = inputs
-        .get("label")
-        .and_then(PortValue::as_text)
-        .or_else(|| config.get("label").and_then(Value::as_str))
-        .map(|s| s.to_string())
-        .filter(|s| !s.trim().is_empty());
-
-    let camera = inputs
-        .get("camera")
-        .and_then(PortValue::as_camera)
-        .map(|c| c.id.clone());
-
-    // How long the map keeps the pulse alive (seconds). Input overrides config; default 8.
-    let duration_secs = inputs
-        .get("duration_secs")
-        .and_then(PortValue::as_num)
-        .or_else(|| {
-            config
-                .get("duration_secs")
-                .and_then(Value::as_str)
-                .and_then(|s| s.trim().parse::<i64>().ok())
-        })
-        .filter(|n| *n > 0)
-        .unwrap_or(8) as u32;
-
-    let (room_id, room_name) = match inputs
-        .get("room")
-        .and_then(PortValue::as_text)
-        .or_else(|| config.get("room").and_then(Value::as_str))
-        .filter(|s| !s.trim().is_empty())
-    {
-        Some(name) => {
-            let rooms = crate::map::repo::load(&sys.db, sys.tenant_id);
-            match rooms.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim())) {
-                Some(r) => (Some(r.id), Some(r.name.clone())),
-                None => (None, Some(name.to_string())),
-            }
-        }
-        None => (None, None),
-    };
-
-    // Compute detect_x / detect_depth from bbox + frame dimensions when all three are wired.
-    let detect_pos: Option<(f32, f32)> = (|| {
-        let bbox = inputs.get("bbox").and_then(PortValue::as_list)?;
-        if bbox.len() < 4 { return None; }
-        let x1 = bbox[0].as_num()? as f32;
-        let y1 = bbox[1].as_num()? as f32;
-        let x2 = bbox[2].as_num()? as f32;
-        let y2 = bbox[3].as_num()? as f32;
-        let fw = inputs.get("frame_w").and_then(PortValue::as_num)? as f32;
-        let fh = inputs.get("frame_h").and_then(PortValue::as_num)? as f32;
-        if fw <= 0.0 || fh <= 0.0 { return None; }
-        let cx = (x1 + x2) / 2.0 / fw - 0.5; // -0.5..0.5, left-to-right
-        let cy = (y1 + y2) / 2.0 / fh;        // 0 top, 1 bottom
-        let depth = 1.0 - cy;                  // bottom of frame = near (0), top = far (1)
-        Some((cx.clamp(-0.5, 0.5), depth.clamp(0.0, 1.0)))
-    })();
-    let detect_x = detect_pos.map(|(x, _)| x);
-    let detect_depth = detect_pos.map(|(_, d)| d);
-
-    let p = crate::presence::create(
-        &sys.db,
-        sys.tenant_id,
-        category,
-        label.clone(),
-        room_id,
-        room_name.clone(),
-        camera.clone(),
-        duration_secs,
-        "workflow".to_string(),
-        detect_x,
-        detect_depth,
-    );
-
-    let _ = sys.ui_tx.send(ToolUiEvent::Presence {
-        category: category.slug().to_string(),
-        room_id,
-        room_name,
-        label,
-        camera,
-        duration_secs,
-        created_at: p.created_at.clone(),
-        detect_x,
-        detect_depth,
-    });
-
-    let mut o = PortValues::new();
-    o.insert("id".into(), PortValue::Num(p.id as i64));
-    o.insert("ok".into(), PortValue::Bool(true));
-    Ok(o)
-}
-
-fn run_deliver_alert(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let id = inputs
-        .get("id")
-        .and_then(PortValue::as_num)
-        .ok_or("missing required input 'id'")? as u64;
-    let cfg = sys
-        .notif_cfg
-        .as_ref()
-        .ok_or("Notifications are not configured (set the Telegram bot token in Beacons).")?;
-    let result = alerts::deliver(&sys.alerts, Some(&sys.db), sys.tenant_id, &sys.notif, cfg, id)?;
-    let _ = sys.ui_tx.send(ToolUiEvent::AlertsChanged);
-    let mut o = PortValues::new();
-    o.insert("result".into(), PortValue::Text(result));
-    o.insert("ok".into(), PortValue::Bool(true));
-    Ok(o)
-}
-
-fn run_camera_snapshot(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let cam = inputs.get("camera").and_then(PortValue::as_camera)
-        .ok_or("missing required camera input")?;
-    let device = {
-        let devices = sys.devices.lock().unwrap();
-        device_from_camera(cam, &devices)?.clone()
-    };
-    let bytes = sys.frames.snapshot(&device)?;
-    // Mirror the chat tool: also surface the snapshot in the UI.
-    if let Ok(jpeg) = to_jpeg(&bytes) {
-        let _ = sys.ui_tx.send(ToolUiEvent::Snapshot { camera: device.name.clone(), jpeg });
-    }
-    let (w, h) = jpeg_dimensions(&bytes);
-    let mut o = PortValues::new();
-    o.insert("image".into(), PortValue::Image(bytes));
-    o.insert("result".into(), PortValue::Text(format!("Snapshot of '{}' captured", device.name)));
-    o.insert("width".into(), PortValue::Num(w));
-    o.insert("height".into(), PortValue::Num(h));
-    o.insert("ok".into(), PortValue::Bool(true));
-    Ok(o)
-}
-
-/// Fast frame source: return the camera's most-recent warm in-memory frame (no per-call
-/// camera round trip), starting/keeping a background grabber. For high-rate loops like a
-/// 1 Hz recognition graph. Falls back to an on-demand snapshot until the cache is warm.
-fn run_get_current_frame(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let cam = inputs.get("camera").and_then(PortValue::as_camera)
-        .ok_or("missing required camera input")?;
-    let device = {
-        let devices = sys.devices.lock().unwrap();
-        device_from_camera(cam, &devices)?.clone()
-    };
-    let max_age_ms = config
-        .get("max_age_ms")
-        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
-        .unwrap_or(2000);
-    let (bytes, age_ms) = sys.frames.current(&device, max_age_ms)?;
-    let (w, h) = jpeg_dimensions(&bytes);
-    let mut o = PortValues::new();
-    o.insert("image".into(), PortValue::Image(bytes));
-    o.insert("age_ms".into(), PortValue::Num(age_ms as i64));
-    o.insert("width".into(), PortValue::Num(w));
-    o.insert("height".into(), PortValue::Num(h));
-    o.insert("ok".into(), PortValue::Bool(true));
-    Ok(o)
-}
-
-fn run_get_camera_by_name(config: &Value, sys: &ToolContext) -> Result<PortValues, String> {
-    let id = config
-        .get("camera")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or("No camera selected — pick one in the node config.")?;
-    let cam = resolve_camera_entity(id, sys)
-        .ok_or_else(|| format!("camera '{id}' not found"))?;
-    let mut o = PortValues::new();
-    o.insert("camera".into(), PortValue::Camera(cam));
-    Ok(o)
-}
-
-fn run_break_camera(inputs: &PortValues) -> Result<PortValues, String> {
-    let cam = inputs
-        .get("camera")
-        .and_then(PortValue::as_camera)
-        .ok_or("missing required camera input")?;
-    let mut o = PortValues::new();
-    o.insert("id".into(), PortValue::Text(cam.id.clone()));
-    o.insert("ip".into(), PortValue::Text(cam.ip.clone()));
-    o.insert("name".into(), PortValue::Text(cam.name.clone()));
-    Ok(o)
-}
-
-fn run_describe_image(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let bytes = inputs
-        .get("image")
-        .and_then(PortValue::as_image)
-        .ok_or("missing required input 'image'")?;
-    let label = config
-        .get("label")
-        .and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or("camera");
-    let description = sys.vision.describe(bytes, label)?;
-    let mut o = PortValues::new();
-    o.insert("description".into(), PortValue::Text(description));
-    o.insert("ok".into(), PortValue::Bool(true));
-    Ok(o)
-}
-
-fn run_notify_recipient(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let message = req_text(inputs, "message")?;
-    // A wired Recipient picks the target; unwired → auto (the sole enabled one).
-    let target = inputs
-        .get("recipient")
-        .and_then(PortValue::as_recipient)
-        .filter(|s| !s.trim().is_empty());
-    let image = inputs.get("image").and_then(PortValue::as_image).map(|b| b.to_vec());
-    let cfg = sys
-        .notif_cfg
-        .as_ref()
-        .ok_or("Notifications are not configured (set the Telegram bot token in Beacons).")?;
-    let result = sys.notifier.dispatch(&sys.notif, cfg, target, message, image)?;
-    let mut o = PortValues::new();
-    o.insert("result".into(), PortValue::Text(result));
-    o.insert("ok".into(), PortValue::Bool(true));
-    Ok(o)
-}
-
-fn run_format(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
-    let template = config.get("template").and_then(Value::as_str).unwrap_or("");
-    let get = |k: &str| inputs.get(k).and_then(PortValue::as_text).unwrap_or("").to_string();
-    let text = template
-        .replace("{p1}", &get("p1"))
-        .replace("{p2}", &get("p2"))
-        .replace("{p3}", &get("p3"));
-    let mut o = PortValues::new();
-    o.insert("text".into(), PortValue::Text(text));
-    Ok(o)
-}
-
-fn run_get_image_size(inputs: &PortValues) -> Result<PortValues, String> {
-    let bytes = inputs.get("image").and_then(PortValue::as_image).ok_or("missing required input 'image'")?;
-    let (w, h) = jpeg_dimensions(bytes);
-    let mut o = PortValues::new();
-    o.insert("width".into(), PortValue::Num(w));
-    o.insert("height".into(), PortValue::Num(h));
-    o.insert("ok".into(), PortValue::Bool(w > 0 && h > 0));
-    Ok(o)
-}
-
-fn run_draw_bbox(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
-    let raw = inputs.get("image").and_then(PortValue::as_image).ok_or("missing required input 'image'")?;
-    let bbox_vals: Vec<i64> = {
-        let list = inputs.get("bbox").ok_or("missing required input 'bbox'")?;
-        match list {
-            PortValue::List(items) => items.iter().filter_map(PortValue::as_num).collect(),
-            _ => return Err("'bbox' must be a NumArray".into()),
-        }
-    };
-    if bbox_vals.len() < 4 {
-        return Err(format!("'bbox' needs 4 numbers, got {}", bbox_vals.len()));
-    }
-
-    let fmt = config.get("format").and_then(|v| v.as_str()).unwrap_or("xyxy");
-    let (x1, y1, x2, y2) = if fmt == "xywh" {
-        (bbox_vals[0], bbox_vals[1], bbox_vals[0] + bbox_vals[2], bbox_vals[1] + bbox_vals[3])
-    } else {
-        (bbox_vals[0], bbox_vals[1], bbox_vals[2], bbox_vals[3])
-    };
-
-    let color_str = config.get("color").and_then(|v| v.as_str()).unwrap_or("#00FF00");
-    let color = parse_hex_color(color_str).unwrap_or([0, 255, 0]);
-    let thickness = config
-        .get("thickness")
-        .and_then(|v| v.as_str().and_then(|s| s.parse::<u32>().ok()).or_else(|| v.as_u64().map(|n| n as u32)))
-        .unwrap_or(2)
-        .max(1);
-
-    let img = image::load_from_memory(raw).map_err(|e| format!("could not decode image: {e}"))?;
-    let mut rgb = img.into_rgb8();
-    draw_rect(&mut rgb, x1, y1, x2, y2, color, thickness);
-
-    let mut out = Vec::new();
-    image::DynamicImage::ImageRgb8(rgb)
-        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
-        .map_err(|e| format!("could not encode image: {e}"))?;
-
-    let w = out.len(); // used only for the log
-    log::debug!("draw_bbox: drew {thickness}px rect [{x1},{y1},{x2},{y2}] on {w}-byte JPEG");
-
-    let mut o = PortValues::new();
-    o.insert("image".into(), PortValue::Image(out));
-    o.insert("ok".into(), PortValue::Bool(true));
-    Ok(o)
-}
-
-fn parse_hex_color(s: &str) -> Option<[u8; 3]> {
-    let s = s.trim_start_matches('#');
-    if s.len() != 6 {
-        return None;
-    }
-    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-    Some([r, g, b])
-}
-
-fn draw_rect(img: &mut image::RgbImage, x1: i64, y1: i64, x2: i64, y2: i64, color: [u8; 3], thickness: u32) {
-    let w = img.width() as i64;
-    let h = img.height() as i64;
-    let px = image::Rgb(color);
-    let t = thickness as i64;
-    for d in 0..t {
-        // top and bottom edges
-        for x in x1..=x2 {
-            if x >= 0 && x < w {
-                if y1 + d >= 0 && y1 + d < h { img.put_pixel(x as u32, (y1 + d) as u32, px); }
-                if y2 - d >= 0 && y2 - d < h { img.put_pixel(x as u32, (y2 - d) as u32, px); }
-            }
-        }
-        // left and right edges
-        for y in y1..=y2 {
-            if y >= 0 && y < h {
-                if x1 + d >= 0 && x1 + d < w { img.put_pixel((x1 + d) as u32, y as u32, px); }
-                if x2 - d >= 0 && x2 - d < w { img.put_pixel((x2 - d) as u32, y as u32, px); }
-            }
-        }
-    }
-}
-
-/// Re-encode snapshot bytes to JPEG for the UI event (same helper as the chat tool).
 /// Decode just the JPEG/PNG header to extract image dimensions. Returns (0, 0) on error
 /// so callers can treat unknown dimensions as absent without failing.
 fn jpeg_dimensions(bytes: &[u8]) -> (i64, i64) {
@@ -1544,97 +736,6 @@ pub(crate) fn to_jpeg(bytes: &[u8]) -> Result<Vec<u8>, String> {
     img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
         .map_err(|e| format!("encode snapshot: {e}"))?;
     Ok(out)
-}
-
-// ---- Recording nodes -------------------------------------------------------
-// These call the edge's HTTP API (ureq, blocking). The edge host is resolved
-// from `tenant_boxes` via the shared Postgres pool in `sys.db`.
-
-/// Returns the go2rtc base URL for the tenant's edge (port 443 via tailscale serve).
-fn resolve_edge_base(sys: &ToolContext) -> Result<String, String> {
-    let pool = sys.db.pool();
-    let tid = sys.tenant_id;
-    let host: Option<String> = sys.db.block(async move {
-        let row: Option<(Option<String>,)> = sqlx::query_as(
-            "SELECT magicdns_host FROM tenant_boxes
-              WHERE tenant_id = $1 AND magicdns_host IS NOT NULL
-           ORDER BY last_seen DESC NULLS LAST LIMIT 1",
-        )
-        .bind(tid)
-        .fetch_optional(&pool)
-        .await
-        .unwrap_or(None);
-        row.and_then(|(h,)| h)
-    });
-    let h = host.ok_or("no edge box connected for this tenant")?;
-    let trimmed = h.trim().trim_end_matches('/');
-    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        Ok(trimmed.to_string())
-    } else {
-        Ok(format!("https://{trimmed}"))
-    }
-}
-
-/// Returns the edge API base URL (port 8080 via tailscale serve).
-/// go2rtc occupies port 443; the edge API is served separately on 8080.
-fn resolve_edge_api_base(sys: &ToolContext) -> Result<String, String> {
-    let base = resolve_edge_base(sys)?;
-    let bare = base
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .trim_end_matches('/');
-    Ok(format!("https://{bare}:8080"))
-}
-
-fn run_start_recording(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let camera_ip = inputs
-        .get("camera")
-        .and_then(PortValue::as_camera)
-        .map(|c| c.ip.clone())
-        .ok_or("missing required input 'camera'")?;
-    let pre_roll = inputs
-        .get("pre_roll_secs")
-        .and_then(PortValue::as_num)
-        .map(|n| n as u64);
-    let base = resolve_edge_api_base(sys)?;
-    let mut body = serde_json::json!({ "camera_ip": camera_ip });
-    if let Some(pr) = pre_roll {
-        body["pre_roll_secs"] = serde_json::Value::Number(pr.into());
-    }
-    let resp = ureq::post(&format!("{base}/recording/start"))
-        .set("Content-Type", "application/json")
-        .send_string(&body.to_string())
-        .map_err(|e| format!("edge start_recording: {e}"))?;
-    let clip_id: String = resp
-        .into_json::<serde_json::Value>()
-        .ok()
-        .and_then(|v: serde_json::Value| {
-            v.get("clip_id").and_then(|s| s.as_str()).map(str::to_string)
-        })
-        .unwrap_or_else(|| format!("{camera_ip}-{}", chrono::Utc::now().timestamp()));
-    let mut o = PortValues::new();
-    o.insert("clip_id".into(), PortValue::Text(clip_id));
-    Ok(o)
-}
-
-fn run_stop_recording(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let camera_ip = inputs
-        .get("camera")
-        .and_then(PortValue::as_camera)
-        .map(|c| c.ip.clone())
-        .ok_or("missing required input 'camera'")?;
-    let clip_id = inputs
-        .get("clip_id")
-        .and_then(PortValue::as_text)
-        .unwrap_or("")
-        .to_string();
-    let base = resolve_edge_api_base(sys)?;
-    let body = serde_json::json!({ "camera_ip": camera_ip, "clip_id": clip_id });
-    ureq::post(&format!("{base}/recording/stop"))
-        .set("Content-Type", "application/json")
-        .send_string(&body.to_string())
-        .map_err(|e| format!("edge stop_recording: {e}"))?;
-    Ok(PortValues::new())
 }
 
 #[cfg(test)]
@@ -1659,11 +760,9 @@ mod tests {
     #[test]
     fn node_timeout_maps_io_vs_pure_kinds() {
         use std::time::Duration;
-        // Pure/instant kinds + the deliberate `Wait` sleep + engine-driven markers ⇒ inline.
         for k in [NodeKind::Wait, NodeKind::Format, NodeKind::If, NodeKind::Print, NodeKind::ForEach, NodeKind::ShowImage] {
             assert_eq!(node_timeout(k, &json!({})), None, "{k:?} should run inline");
         }
-        // IO-bound kinds ⇒ a positive per-kind deadline.
         assert_eq!(node_timeout(NodeKind::CameraSnapshot, &json!({})), Some(Duration::from_secs(10)));
         assert_eq!(node_timeout(NodeKind::DescribeImage, &json!({})), Some(Duration::from_secs(65)));
         assert_eq!(node_timeout(NodeKind::RecognizePerson, &json!({})), Some(Duration::from_secs(30)));
@@ -1672,17 +771,14 @@ mod tests {
     #[test]
     fn node_timeout_config_override_wins_and_zero_disables() {
         use std::time::Duration;
-        // A per-node override (string or number) beats the default…
         assert_eq!(node_timeout(NodeKind::CameraSnapshot, &json!({ "timeout_secs": "3" })), Some(Duration::from_secs(3)));
         assert_eq!(node_timeout(NodeKind::CameraSnapshot, &json!({ "timeout_secs": 3 })), Some(Duration::from_secs(3)));
-        // …and 0 disables the watchdog for that node.
         assert_eq!(node_timeout(NodeKind::CameraSnapshot, &json!({ "timeout_secs": "0" })), None);
     }
 
     #[test]
     fn run_node_timed_aborts_a_slow_node_promptly() {
         use std::time::{Duration, Instant};
-        // `Wait` sleeps for its configured 5s, but a 200ms deadline must cut it short.
         let cfg = json!({ "seconds": "5" });
         let start = Instant::now();
         let err = run_node_timed(NodeKind::Wait, &cfg, &PortValues::new(), &test_ctx(), Duration::from_millis(200))
@@ -1695,7 +791,6 @@ mod tests {
     #[test]
     fn run_node_timed_returns_a_fast_nodes_output() {
         use std::time::Duration;
-        // A fast node finishes well within its deadline and returns its real output.
         let cfg = json!({ "template": "hello" });
         let out = run_node_timed(NodeKind::Format, &cfg, &PortValues::new(), &test_ctx(), Duration::from_secs(5)).unwrap();
         assert_eq!(out.get("text").and_then(PortValue::as_text), Some("hello"));
@@ -1721,7 +816,7 @@ mod tests {
         let pairs = got.as_dict().unwrap();
         assert_eq!(pairs.len(), 2);
         assert!(pairs.contains(&("Authorization".into(), "Bearer x".into())));
-        assert!(literal_for(&cfg, empty).is_none()); // empty dictionary → not provided
+        assert!(literal_for(&cfg, empty).is_none());
     }
 
     #[test]
@@ -1774,8 +869,6 @@ mod tests {
 
     #[test]
     fn show_image_is_a_sink_with_no_data_outputs() {
-        // The debug preview is emitted by the engine (it owns the node id); the node
-        // itself is a pure exec pass-through that yields no data ports.
         let mut inputs = PortValues::new();
         inputs.insert("image".into(), PortValue::Image(solid_jpeg(32, 24, 128)));
         let out =
@@ -1800,7 +893,6 @@ mod tests {
 
     #[test]
     fn wait_is_pure_control_flow_no_data_outputs() {
-        // seconds=0 → no real delay; a control-flow node emits no data ports.
         let out = run_node(NodeKind::Wait, &json!({ "seconds": "0" }), &PortValues::new(), &test_ctx())
             .unwrap();
         assert!(out.is_empty());
@@ -1826,7 +918,6 @@ mod tests {
 
     #[test]
     fn ask_ai_requires_a_question() {
-        // Neither wired question nor config literal → should error without touching the API.
         let err = run_node(NodeKind::AskAi, &json!({ "question": "" }), &PortValues::new(), &test_ctx())
             .unwrap_err();
         assert!(err.contains("question is required"), "got: {err}");

@@ -17,7 +17,7 @@
   };
 
   const EVENT_GROUP_PREFIX = "Events · ";
-  const CATEGORY_ORDER = ["Cameras", "Vision", "AI", "Alerts", "Recipients", "Text", "Network", "Flow"];
+  const CATEGORY_ORDER = ["Cameras", "Vision", "AI", "Alerts", "Recipients", "Text", "Network", "Control", "Logic", "Recording", "Presence", "Debug"];
 
   let {
     open = $bindable(false),

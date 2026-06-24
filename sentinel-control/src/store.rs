@@ -500,15 +500,83 @@ pub async fn take_box_commands(pool: &PgPool, box_id: Uuid) -> sqlx::Result<(boo
 
 // ---- recordings (clip metadata pushed by edge) -----------------------------
 
+const FNAME_ADJ: &[&str] = &[
+    "amber","azure","bold","bright","calm","cedar","clear","cloud","coral","crisp",
+    "dark","dawn","deep","deft","dense","drift","dusk","early","faint","fast",
+    "fern","firm","flash","fleet","frost","gentle","ghost","glad","glide","gold",
+    "grand","grey","gust","hardy","haze","high","hollow","iron","jade","keen",
+    "kind","lake","lean","light","lofty","lone","loud","mist","misty","moss",
+    "muted","night","noble","north","oak","pale","peak","pine","plain","prime",
+    "pure","quick","quiet","rapid","raw","reef","rich","ridge","ripple","rise",
+    "roam","rocky","rough","sage","sharp","silver","sleek","slim","slow","smooth",
+    "soft","solid","stark","steady","steel","still","stone","storm","strong","swift",
+    "tall","thin","tidal","trim","true","vast","veil","warm","wide","wild",
+];
+
+const FNAME_NOUN: &[&str] = &[
+    "arc","ash","bay","beam","birch","blade","blaze","bloom","boulder","branch",
+    "bridge","brook","canyon","cedar","cliff","cloud","comet","cove","creek","crest",
+    "dawn","delta","drift","dune","dusk","echo","ember","falcon","fern","field",
+    "fjord","flame","flare","flash","flint","fog","forest","gale","gate","glacier",
+    "glen","grove","gust","harbor","hawk","haze","hill","hollow","horizon","isle",
+    "jade","lake","ledge","light","loch","mesa","meteor","mist","moon","moss",
+    "mount","nebula","night","north","oak","orbit","pass","peak","pine","plain",
+    "pond","pulse","quarry","rain","range","rapid","reef","ridge","rift","river",
+    "rock","root","run","sage","salt","sand","shore","sierra","sky","slate",
+    "snow","sol","spark","spire","spring","star","stone","storm","stream","summit",
+    "sun","surge","tide","timber","torch","trail","vale","vault","wave","wind",
+];
+
+pub fn generate_friendly_name(epoch: i64) -> String {
+    let e = epoch.unsigned_abs() as usize;
+    let na = FNAME_ADJ.len();
+    let nn = FNAME_NOUN.len();
+    format!(
+        "{}-{}-{}",
+        FNAME_ADJ[e % na],
+        FNAME_ADJ[e.wrapping_mul(31) % na],
+        FNAME_NOUN[e.wrapping_mul(97) % nn],
+    )
+}
+
+/// Backfill friendly names for recordings that were created before the name generator
+/// was deployed. Runs at control startup — cheap (one SELECT + N UPDATEs, once).
+pub async fn backfill_friendly_names(pool: &PgPool) -> sqlx::Result<u64> {
+    let rows: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, started_at FROM recordings WHERE friendly_name = ''")
+            .fetch_all(pool)
+            .await?;
+    let count = rows.len() as u64;
+    for (id, started_at) in rows {
+        let epoch = chrono::DateTime::parse_from_rfc3339(&started_at)
+            .map(|t| t.timestamp())
+            .unwrap_or(0);
+        let name = generate_friendly_name(epoch);
+        sqlx::query("UPDATE recordings SET friendly_name = $1 WHERE id = $2")
+            .bind(&name)
+            .bind(id)
+            .execute(pool)
+            .await?;
+    }
+    if count > 0 {
+        log::info!("backfill_friendly_names: updated {count} recording(s)");
+    }
+    Ok(count)
+}
+
 #[derive(sqlx::FromRow, serde::Serialize)]
 pub struct RecordingRow {
     pub id:            i64,
     pub camera_ip:     String,
     pub clip_id:       String,
+    pub friendly_name: String,
     pub duration_secs: i32,
     pub size_bytes:    i64,
     pub started_at:    String,
     pub created_at:    String,
+    // Enriched at query time — not a DB column.
+    #[sqlx(default)]
+    pub camera_name:   Option<String>,
 }
 
 /// Persist clip metadata only — the video file stays on the edge and is proxied on download.
@@ -517,18 +585,28 @@ pub async fn insert_recording(
     tenant_id: Uuid,
     camera_ip: &str,
     clip_id: &str,
+    friendly_name: &str,
     duration_secs: i32,
     size_bytes: i64,
     started_at: &str,
 ) -> sqlx::Result<i64> {
+    let effective_name = if friendly_name.is_empty() {
+        let epoch = chrono::DateTime::parse_from_rfc3339(started_at)
+            .map(|t| t.timestamp())
+            .unwrap_or_else(|_| chrono::Utc::now().timestamp());
+        generate_friendly_name(epoch)
+    } else {
+        friendly_name.to_string()
+    };
     let now = app_core::alerts::now_rfc3339();
     let (id,): (i64,) = sqlx::query_as(
-        "INSERT INTO recordings (tenant_id, camera_ip, clip_id, duration_secs, size_bytes, started_at, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
+        "INSERT INTO recordings (tenant_id, camera_ip, clip_id, friendly_name, duration_secs, size_bytes, started_at, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
     )
     .bind(tenant_id)
     .bind(camera_ip)
     .bind(clip_id)
+    .bind(&effective_name)
     .bind(duration_secs)
     .bind(size_bytes)
     .bind(started_at)
@@ -538,34 +616,71 @@ pub async fn insert_recording(
     Ok(id)
 }
 
-pub async fn list_recordings(
+pub struct RecordingPage {
+    pub total: i64,
+    pub items: Vec<RecordingRow>,
+}
+
+/// List recordings with optional filter, sort, and pagination.
+/// All sort column names are validated against an allowlist before interpolation.
+pub async fn list_recordings_filtered(
     pool: &PgPool,
     tenant_id: Uuid,
     camera_ip: Option<&str>,
+    from: Option<&str>,
+    to: Option<&str>,
+    sort: &str,
+    dir: &str,
     limit: i64,
-) -> sqlx::Result<Vec<RecordingRow>> {
-    if let Some(ip) = camera_ip {
-        sqlx::query_as::<_, RecordingRow>(
-            "SELECT id, camera_ip, clip_id, duration_secs, size_bytes, started_at, created_at
-               FROM recordings WHERE tenant_id = $1 AND camera_ip = $2
-              ORDER BY started_at DESC LIMIT $3",
-        )
-        .bind(tenant_id).bind(ip).bind(limit)
-        .fetch_all(pool).await
-    } else {
-        sqlx::query_as::<_, RecordingRow>(
-            "SELECT id, camera_ip, clip_id, duration_secs, size_bytes, started_at, created_at
-               FROM recordings WHERE tenant_id = $1
-              ORDER BY started_at DESC LIMIT $2",
-        )
-        .bind(tenant_id).bind(limit)
-        .fetch_all(pool).await
-    }
+    offset: i64,
+) -> sqlx::Result<RecordingPage> {
+    let col = match sort {
+        "duration_secs" => "r.duration_secs",
+        "size_bytes"    => "r.size_bytes",
+        "friendly_name" => "r.friendly_name",
+        "camera_ip"     => "r.camera_ip",
+        _               => "r.started_at",
+    };
+    let ord = if dir == "asc" { "ASC" } else { "DESC" };
+
+    // Use a fixed-width filter that sets every optional to a sentinel when unused.
+    // $2/$3/$4 are optional filters: NULL means "skip this filter".
+    let sql = format!(
+        "SELECT r.id, r.camera_ip, r.clip_id, r.friendly_name, r.duration_secs, r.size_bytes,
+                r.started_at, r.created_at,
+                dc.name AS camera_name
+           FROM recordings r
+           LEFT JOIN discovered_cameras dc
+                  ON dc.tenant_id = r.tenant_id AND dc.ip = r.camera_ip
+          WHERE r.tenant_id = $1
+            AND ($2::text IS NULL OR r.camera_ip = $2)
+            AND ($3::text IS NULL OR r.started_at >= $3)
+            AND ($4::text IS NULL OR r.started_at <= $4)
+          ORDER BY {col} {ord}
+          LIMIT $5 OFFSET $6"
+    );
+    let count_sql =
+        "SELECT COUNT(*) FROM recordings r
+          WHERE r.tenant_id = $1
+            AND ($2::text IS NULL OR r.camera_ip = $2)
+            AND ($3::text IS NULL OR r.started_at >= $3)
+            AND ($4::text IS NULL OR r.started_at <= $4)";
+
+    let (total,): (i64,) = sqlx::query_as(count_sql)
+        .bind(tenant_id).bind(camera_ip).bind(from).bind(to)
+        .fetch_one(pool).await?;
+
+    let items = sqlx::query_as::<_, RecordingRow>(&sql)
+        .bind(tenant_id).bind(camera_ip).bind(from).bind(to)
+        .bind(limit).bind(offset)
+        .fetch_all(pool).await?;
+
+    Ok(RecordingPage { total, items })
 }
 
 pub async fn get_recording(pool: &PgPool, tenant_id: Uuid, id: i64) -> sqlx::Result<Option<RecordingRow>> {
     sqlx::query_as::<_, RecordingRow>(
-        "SELECT id, camera_ip, clip_id, duration_secs, size_bytes, started_at, created_at
+        "SELECT id, camera_ip, clip_id, friendly_name, duration_secs, size_bytes, started_at, created_at, NULL::text AS camera_name
            FROM recordings WHERE tenant_id = $1 AND id = $2",
     )
     .bind(tenant_id).bind(id)

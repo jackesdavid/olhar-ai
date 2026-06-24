@@ -12,6 +12,7 @@ ENV VITE_COMMIT=$VITE_COMMIT
 COPY sentinel-app/package.json sentinel-app/package-lock.json ./
 RUN npm ci
 COPY sentinel-app/ ./
+COPY styles/ /styles/
 RUN npm run build
 
 FROM nginx:alpine

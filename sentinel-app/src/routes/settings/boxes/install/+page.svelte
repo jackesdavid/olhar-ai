@@ -66,7 +66,7 @@
       </Card.Header>
       <Card.Content class="space-y-4">
         <div class="relative">
-          <pre class="overflow-x-auto rounded-md border border-border bg-muted/40 p-4 pr-12 font-mono text-xs leading-relaxed">{install.command}</pre>
+          <pre class="overflow-x-auto rounded-md border border-border bg-well p-4 pr-12 font-mono text-xs leading-relaxed">{install.command}</pre>
           <Button variant="ghost" size="icon" class="absolute right-2 top-2" title="Copy command" onclick={() => copy(install.command)}>
             <Copy class="size-4" />
           </Button>
@@ -75,7 +75,7 @@
         <div class="space-y-1.5">
           <Label>Box token</Label>
           <div class="flex items-center gap-2">
-            <code class="flex-1 truncate rounded-md border border-border bg-muted/40 px-2.5 py-1.5 font-mono text-xs">{install.token}</code>
+            <code class="flex-1 truncate rounded-md border border-border bg-well px-2.5 py-1.5 font-mono text-xs">{install.token}</code>
             <Button variant="outline" size="sm" onclick={() => copy(install.token)}><Copy class="size-3.5" /> Copy</Button>
           </div>
         </div>

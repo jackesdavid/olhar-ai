@@ -50,6 +50,7 @@
       if (firstBox?.recording_config != null) {
         settings.cameras_always_warm = firstBox.recording_config.cameras_always_warm ?? false;
         settings.pre_roll_secs = firstBox.recording_config.pre_roll_secs ?? 10;
+        settings.motion_var_threshold = firstBox.recording_config.motion_var_threshold ?? 16;
       }
     } catch (err) {
       console.error("Failed to load settings", err);
@@ -72,6 +73,7 @@
             max_storage_mb: 1000,
             codec: "copy",
             cameras_always_warm: snap.cameras_always_warm,
+            motion_var_threshold: snap.motion_var_threshold,
           })
         )
       );
@@ -86,6 +88,14 @@
 
   function pct(v: number): string {
     return `${Math.round(v * 100)}%`;
+  }
+
+  function sensitivityLabel(varThreshold: number): string {
+    if (varThreshold <= 8) return "very high";
+    if (varThreshold <= 16) return "high";
+    if (varThreshold <= 32) return "medium";
+    if (varThreshold <= 64) return "low";
+    return "very low";
   }
 </script>
 
@@ -254,6 +264,30 @@
         <p class="text-xs text-muted-foreground">
           How many seconds of footage the ring buffer keeps before a recording trigger
           (0–60 s). The recording node can request up to this amount.
+        </p>
+      </div>
+
+      <Separator />
+
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <Label>Motion sensitivity</Label>
+          <span class="text-sm tabular-nums text-muted-foreground">
+            {sensitivityLabel(settings.motion_var_threshold)}
+          </span>
+        </div>
+        <Slider
+          type="single"
+          min={4}
+          max={128}
+          step={4}
+          bind:value={settings.motion_var_threshold}
+          disabled={loading}
+        />
+        <p class="text-xs text-muted-foreground">
+          Controls how much pixel change triggers a motion event. Lower = more sensitive
+          (reacts to subtle movement); higher = less sensitive (ignores small changes).
+          Takes effect after the edge restarts.
         </p>
       </div>
     </Card.Content>

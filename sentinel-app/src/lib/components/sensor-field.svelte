@@ -16,7 +16,7 @@
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     const S = 44; // lattice spacing (px)
-    const RGB = "52,211,153"; // emerald-400
+    const RGB = "140,140,140"; // neutral mid-grey dot lattice
     const REST = 0.05; // resting alpha — dots are always visible (dim)
     const PEAK = 0.3; // extra alpha at full activation
     const SPEED = 90; // px/s the wavefront spreads

@@ -32,6 +32,7 @@ pub fn router() -> Router<AppState> {
         .route("/workflows/runs", get(run_states))
         .route("/workflows/runs/history", get(run_history))
         .route("/workflows/runs/frame", get(run_frame))
+        .route("/workflows/runs/node-state", get(node_state))
         .route("/workflows/runs/:run_id/logs", get(run_logs))
         .route("/workflows/events", get(events_stream))
         .route("/workflows/event-registry", get(list_events).post(create_event))
@@ -208,6 +209,19 @@ async fn run_frame(
     }
     let bytes = resp.bytes().await.map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
     Ok(([(axum::http::header::CONTENT_TYPE, "image/jpeg")], bytes).into_response())
+}
+
+/// Raw node state JSON for one of this tenant's `(graph, node)` — proxies sentinel-flow.
+/// Returns `null` when no state has been written; used by the UI for live TimeGate countdown.
+async fn node_state(
+    State(st): State<AppState>,
+    Query(q): Query<FrameQuery>,
+) -> Result<Json<Value>, ApiErr> {
+    let claims = auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    auth::require(&claims, "workflows.read")?;
+    let tid = tenant_of(&claims)?;
+    let url = format!("{}/runs/node-state?tenant={}&graph={}&node={}", flow_base(), tid, q.graph, q.node);
+    Ok(Json(flow_get_json(&url).await))
 }
 
 /// All persisted signal lines for one of this tenant's runs. Proxies sentinel-flow.

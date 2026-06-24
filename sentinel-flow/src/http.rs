@@ -30,6 +30,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/runs", get(run_states).post(create_run))
         .route("/runs/history", get(run_history))
         .route("/runs/frame", get(run_frame))
+        .route("/runs/node-state", get(node_state))
         .route("/runs/:run_id/logs", get(run_logs))
         .route("/events", get(events_sse))
         .layer(CorsLayer::permissive())
@@ -168,6 +169,23 @@ async fn run_frame(
         Some(jpeg) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "image/jpeg")], jpeg).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// Raw `workflow_node_state` JSON for one `(tenant, graph, node)` — used by the UI to
+/// display live engine-driven node state (TimeGate countdown, Cooldown last-fired, etc.).
+/// Returns `null` when no state has been written yet.
+async fn node_state(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<FrameQuery>,
+) -> impl IntoResponse {
+    let db = state.db.clone();
+    let st = tokio::task::spawn_blocking(move || {
+        app_core::workflows::repo::get_node_state(&db, q.tenant, q.graph, q.node)
+    })
+    .await
+    .ok()
+    .flatten();
+    Json(st.unwrap_or(serde_json::Value::Null))
 }
 
 /// All persisted signal lines for one run of a tenant (`?tenant=<uuid>`).

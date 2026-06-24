@@ -10,7 +10,7 @@
 //! Runs on dedicated std threads (blocking), exactly like the Tauri version; the
 //! axum server runs on the tokio runtime alongside. `Db::block` bridges sqlx safely
 //! from either.
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use uuid::Uuid;
@@ -373,11 +373,24 @@ pub fn fire_event(
             );
             continue;
         }
-        // Coalesce-drop per listening graph: skip if its handler is already running.
+        // Coalesce-drop per listening graph: respect the graph's concurrency limit.
+        // Concurrent graphs allow up to max_concurrent simultaneous event handlers;
+        // all others allow at most 1 (classic coalesce-drop behaviour).
         let key = (tenant, listener_id, event.clone());
         {
+            let max_allowed: usize = {
+                let s = state.store.lock().unwrap();
+                s.iter()
+                    .find(|(t, g)| *t == tenant && g.id == listener_id)
+                    .map(|(_, g)| match &g.concurrency {
+                        app_core::workflows::domain::ConcurrencyPolicy::Concurrent { max_concurrent } => *max_concurrent as usize,
+                        _ => 1,
+                    })
+                    .unwrap_or(1)
+            };
             let mut guard = state.event_runs.lock().unwrap();
-            if !guard.insert(key.clone()) {
+            let count = guard.entry(key.clone()).or_insert(0);
+            if *count >= max_allowed {
                 events::publish(
                     &state.events,
                     "workflow-event",
@@ -392,12 +405,13 @@ pub fn fire_event(
                             label: None,
                             kind: "skip".into(),
                             node_kind: None,
-                            message: format!("Listener '{listener_name}' skipped '{event}' — handler still running"),
+                            message: format!("Listener '{listener_name}' skipped '{event}' — {count}/{max_allowed} handlers running"),
                         }],
                     );
                 }
                 continue;
             }
+            *count += 1;
         }
         let _ = listener_name; // listener's display name comes from its graph in the handler
         spawn_event_handler(
@@ -433,7 +447,7 @@ fn spawn_event_handler(
     let graph: WfGraph = match state::find_graph(&state.store, tenant, listener_id) {
         Some(g) => g,
         None => {
-            state.event_runs.lock().unwrap().remove(&key);
+            decrement_event_run(&state.event_runs, &key);
             return;
         }
     };
@@ -478,8 +492,22 @@ fn spawn_event_handler(
             "workflow-run",
             serde_json::json!({ "tenant": tenant, "graph": listener_id, "name": graph.name, "ok": ok, "summary": summary, "run_id": run_id }),
         );
-        state.event_runs.lock().unwrap().remove(&key);
+        decrement_event_run(&state.event_runs, &key);
     });
+}
+
+fn decrement_event_run(
+    event_runs: &Arc<Mutex<std::collections::HashMap<(Uuid, u32, String), usize>>>,
+    key: &(Uuid, u32, String),
+) {
+    let mut guard = event_runs.lock().unwrap();
+    if let Some(count) = guard.get_mut(key) {
+        if *count <= 1 {
+            guard.remove(key);
+        } else {
+            *count -= 1;
+        }
+    }
 }
 
 /// Build a [`ToolContext`] for one run of `tenant`, wired to the in-process ports, with

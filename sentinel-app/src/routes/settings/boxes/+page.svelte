@@ -40,7 +40,6 @@
 
   // Edge versioning
   let latest = $state<string>("");
-  const updateCmd = `curl -fsSL ${API_BASE}/edge/install.sh | sudo sh -s -- --update --control ${API_BASE}`;
   function outdated(b: Box): boolean {
     return !!b.version && !!latest && b.version !== latest;
   }
@@ -67,7 +66,7 @@
     // Prefer the auto-minted key (transparent enrollment); else a manual override; else a placeholder.
     const key = tsKey || authkey.trim() || "<YOUR_TAILSCALE_AUTHKEY>";
     return [
-      `curl -fsSL ${API_BASE}/edge/install.sh | sudo sh -s -- \\`,
+      `curl -fsSL ${API_BASE}/install.sh | sudo sh -s -- \\`,
       `  --control ${API_BASE} \\`,
       `  --box-token ${token} \\`,
       `  --authkey ${key} \\`,
@@ -153,7 +152,7 @@
     return "";
   }
 
-  // ---- restart -------------------------------------------------------------
+  // ---- restart / update ----------------------------------------------------
   let restartingId = $state<string | null>(null);
   async function restartBox(b: Box) {
     restartingId = b.id;
@@ -164,6 +163,19 @@
       toast.error(e instanceof Error ? e.message : "Failed to request restart");
     } finally {
       restartingId = null;
+    }
+  }
+
+  let updatingId = $state<string | null>(null);
+  async function updateBox(b: Box) {
+    updatingId = b.id;
+    try {
+      await boxApi.update(b.id);
+      toast.success(`Update requested for "${b.name}"`, { description: `Updating to v${latest} — ready in ~60s.` });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to request update");
+    } finally {
+      updatingId = null;
     }
   }
 </script>
@@ -217,11 +229,16 @@
                     <span class="font-mono text-xs tabular-nums text-muted-foreground">v{b.version}</span>
                     {#if outdated(b)}
                       <button
-                        class="interactive ml-2 inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400"
-                        title="Copy the update command"
-                        onclick={() => copy(updateCmd)}
+                        class="interactive ml-2 inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400 disabled:opacity-50"
+                        title="Update to v{latest}"
+                        disabled={updatingId === b.id}
+                        onclick={() => updateBox(b)}
                       >
-                        <ArrowUpCircle class="size-3" /> Update → v{latest}
+                        {#if updatingId === b.id}
+                          <LoaderCircle class="size-3 animate-spin" /> Updating…
+                        {:else}
+                          <ArrowUpCircle class="size-3" /> Update → v{latest}
+                        {/if}
                       </button>
                     {/if}
                   {:else}

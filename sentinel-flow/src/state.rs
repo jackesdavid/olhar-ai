@@ -74,10 +74,11 @@ pub struct AppState {
     /// Resolved tenant → edge go2rtc base (`https://<host>`) with a short TTL, so each
     /// run's `EdgeFrameSource` targets that tenant's own edge without a DB hit per frame.
     pub edge_cache: Arc<Mutex<HashMap<Uuid, (String, Instant)>>>,
-    /// In-flight event handlers, keyed `(tenant, graph_id, event_name)`. An `EmitEvent`
-    /// fire whose `OnEvent` handler is already running here is DROPPED (coalesced) — "skip
-    /// if the path is still running". Cleared when the handler sub-run finishes.
-    pub event_runs: Arc<Mutex<std::collections::HashSet<(Uuid, u32, String)>>>,
+    /// In-flight event handler counts, keyed `(tenant, graph_id, event_name)`. Tracks how
+    /// many concurrent handler runs are active for each `(graph, event)` pair. A new event
+    /// is dropped only when the count is at or above the graph's `max_concurrent` limit
+    /// (or ≥1 for non-Concurrent graphs). Decremented when each handler sub-run finishes.
+    pub event_runs: Arc<Mutex<std::collections::HashMap<(Uuid, u32, String), usize>>>,
     /// This flow instance's name, shown in the UI as the "pod" executing a run. Resolved
     /// once at boot from `FLOW_INSTANCE_NAME`, else `HOSTNAME`, else `"flow"`.
     pub pod_name: String,
@@ -122,7 +123,7 @@ impl AppState {
             events: events::channel(),
             node_frames: Arc::new(Mutex::new(HashMap::new())),
             edge_cache: Arc::new(Mutex::new(HashMap::new())),
-            event_runs: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            event_runs: Arc::new(Mutex::new(std::collections::HashMap::new())),
             pod_name,
             pairing_stops: Arc::new(Mutex::new(HashMap::new())),
         }))

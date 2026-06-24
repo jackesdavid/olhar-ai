@@ -251,6 +251,69 @@ tasks:
     cmds:
       - ./deploy/push-local.sh {{.CLI_ARGS}}
 
+  edge-build:
+    desc: Build the edge binary for the current platform (release, with OpenCV + libclang on macOS)
+    dir: sentinel-edge
+    env:
+      LIBCLANG_PATH: '{{.LIBCLANG_PATH | default "/Library/Developer/CommandLineTools/usr/lib"}}'
+      DYLD_FALLBACK_LIBRARY_PATH: '{{.DYLD_FALLBACK_LIBRARY_PATH | default "/Library/Developer/CommandLineTools/usr/lib"}}'
+    cmds:
+      - cargo build --release
+
+  edge-publish:
+    desc: "Build the edge binary + scp to the VPS dist server + redeploy control (so LATEST_EDGE_VERSION matches) + verify. Full release in one shot."
+    cmds:
+      - task: edge-build
+      - |
+        set -e
+        os=$(uname -s); arch=$(uname -m)
+        case "$os-$arch" in
+          Darwin-x86_64)             asset=sentinel-edge-macos-x86_64 ;;
+          Darwin-arm64)              asset=sentinel-edge-macos-arm64 ;;
+          Linux-x86_64)              asset=sentinel-edge-linux-x86_64 ;;
+          Linux-aarch64|Linux-arm64) asset=sentinel-edge-linux-arm64 ;;
+          *) echo "Unsupported $os-$arch"; exit 1 ;;
+        esac
+        echo "Uploading sentinel-edge → /ibbf/edge-dist/$asset …"
+        scp -i ~/.ssh/id_contab_ed25519 -o IdentitiesOnly=yes \
+          sentinel-edge/target/release/sentinel-edge \
+          root@85.239.248.86:/ibbf/edge-dist/$asset
+        echo "✓ Binary uploaded — redeploying control to bump LATEST_EDGE_VERSION …"
+      - task: cloud-deploy
+        vars: { CLI_ARGS: sentinel-control }
+      - |
+        # Verify LATEST_EDGE_VERSION in the running container matches Cargo.toml.
+        # If they diverge the UI update badge will be wrong (shows stale or missing).
+        set -e
+        CARGO_VER="$(grep -m1 '^version' sentinel-edge/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+        LIVE_VER="$(ssh -i ~/.ssh/id_contab_ed25519 -o IdentitiesOnly=yes root@85.239.248.86 \
+          'docker exec sentinel-control env' | grep LATEST_EDGE_VERSION | cut -d= -f2)"
+        if [ "$CARGO_VER" = "$LIVE_VER" ]; then
+          echo "✓ LATEST_EDGE_VERSION=${LIVE_VER} matches Cargo.toml — UI badge is correct"
+        else
+          echo "✗ MISMATCH: Cargo.toml=${CARGO_VER} but container has LATEST_EDGE_VERSION=${LIVE_VER}"
+          echo "  Run: task cloud-deploy -- sentinel-control"
+          exit 1
+        fi
+
+  flow-scale:
+    desc: "Scale sentinel-flow to N replicas on the VPS (task flow-scale -- 2). Docker DNS round-robins across them automatically — no redeploy needed."
+    cmds:
+      - |
+        set -e
+        N="{{.CLI_ARGS}}"
+        if [ -z "$N" ] || ! echo "$N" | grep -qE '^[0-9]+$'; then
+          echo "Usage: task flow-scale -- <count>  (e.g. task flow-scale -- 2)"
+          exit 1
+        fi
+        echo ">> Scaling sentinel-flow → ${N} replica(s) …"
+        ssh -i ~/.ssh/id_contab_ed25519 -o IdentitiesOnly=yes root@85.239.248.86 \
+          "cd /ibbf && docker compose -f docker-compose.yml -f docker-compose.sentinel.yml up -d --scale sentinel-flow=${N} --no-recreate"
+        echo ">> Verifying …"
+        RUNNING=$(ssh -i ~/.ssh/id_contab_ed25519 -o IdentitiesOnly=yes root@85.239.248.86 \
+          "docker ps --filter name=ibbf-sentinel-flow --format '{{.Names}}' | wc -l | tr -d ' '")
+        echo "✓ sentinel-flow: ${RUNNING} replica(s) running"
+
   services-check:
     desc: Type-check all detachable services (shared workspace)
     env:

@@ -313,4 +313,9 @@ export const data = {
     if (bust != null) qs.set("t", String(bust));
     return `${API_BASE}/workflows/runs/frame?${qs.toString()}`;
   },
+  nodeStateUrl: (graph: number, node: number): string => {
+    const qs = new URLSearchParams({ graph: String(graph), node: String(node) });
+    if (auth.token) qs.set("token", auth.token);
+    return `${API_BASE}/workflows/runs/node-state?${qs.toString()}`;
+  },
 };

@@ -49,7 +49,7 @@
 
 <!-- field-of-view: a flat polygon clipped by walls (line of sight) -->
 <T.Mesh geometry={fovGeo}>
-  <T.MeshBasicMaterial color="#34d399" transparent opacity={0.14} depthWrite={false} side={DoubleSide} />
+  <T.MeshBasicMaterial color="#e5e5e5" transparent opacity={0.1} depthWrite={false} side={DoubleSide} />
 </T.Mesh>
 
 <!-- camera body glyph -->
@@ -64,5 +64,5 @@
   onpointerleave={() => pointer(false)}
 >
   <T.CylinderGeometry args={[0.32, 0.32, 0.36, 18]} />
-  <T.MeshStandardMaterial color="#34d399" emissive="#10b981" emissiveIntensity={0.55} roughness={0.4} />
+  <T.MeshStandardMaterial color="#e5e5e5" emissive="#ffffff" emissiveIntensity={0.35} roughness={0.5} />
 </T.Mesh>

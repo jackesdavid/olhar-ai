@@ -36,7 +36,7 @@ kanban-plugin: board
 - [ ] #13 Cooldown node: `reset` exec port
 	  - Plan: [[cooldown-reset-port]]
 - [ ] #14 The data time on the logs should locally time and we should see the date too — for the current day show only the time
-- [ ] #15 Telegram bot: two-way use cases research
+- [ ] #15 Telegram bot: workflow-graph brain + inbound commands
 	  - Plan: [[telegram-bot-two-way-research]]
 - [ ] #16 Chat agent on the web (TTS / STT / tools)
 	  - Plan: [[chat-agent-web]]
@@ -54,14 +54,16 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #55 Workflow nodes — rename, categorize & split into files
+	  - Plan: [[workflow-node-ux-refactor]]
 - [ ] #22 Recordings: storage, names, filters, delete, sort, paginate
 	  - Plan: [[recordings-improvements]]
-- [ ] #23 TimeGate node — debounced motion wait
-	  - Plan: [[time-gate-node]]
 
 
 ## Review
 
+- [ ] #23 TimeGate node — debounced motion wait
+	  - Plan: [[time-gate-node]]
 - [ ] #24 Black & White Rebrand — Sentinel Noir
 	  - Plan: [[monochrome-rebrand]]
 - [ ] #25 Motion-triggered stream recorder

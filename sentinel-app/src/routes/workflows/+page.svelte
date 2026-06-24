@@ -156,9 +156,10 @@
   let contextPending = $state<{ node: number; port: string; portType: PortType } | null>(null);
   const contextPortType = $derived(contextPending?.portType ?? ("any" as PortType));
   // Edge via-points: purely visual bend handles stored in memory (key = "from:port:to:port").
-  // The logical edge A→B is unchanged; the via dot just repositions the wire on screen.
-  let edgeVias = $state<Record<string, { x: number; y: number }>>({});
-  let dragVia = $state<{ key: string } | null>(null);
+  // The logical edge A→B is unchanged; the via dots just reposition the wire on screen.
+  // Up to 2 via-points per edge; ordered by insertion (not by x).
+  let edgeVias = $state<Record<string, { x: number; y: number }[]>>({});
+  let dragVia = $state<{ key: string; idx: number } | null>(null);
   let hoveredEdgeKey = $state<string | null>(null);
 
   function edgeViaKey(e: { from: number; from_port: string; to: number; to_port: string }) {
@@ -235,6 +236,37 @@
   function openImageModal(img: NodeImage) {
     imageModal = img;
     imageModalOpen = true;
+  }
+
+  // TimeGate live countdown — keyed by node id, value is remaining seconds (null = idle).
+  let timeGateCountdowns = $state<Record<number, number | null>>({});
+  let timeGateTimer: ReturnType<typeof setInterval> | null = null;
+
+  function startTimeGatePolling() {
+    stopTimeGatePolling();
+    timeGateTimer = setInterval(() => pollTimeGates(), 1000);
+  }
+  function stopTimeGatePolling() {
+    if (timeGateTimer != null) { clearInterval(timeGateTimer); timeGateTimer = null; }
+  }
+  async function pollTimeGates() {
+    const g = graph;
+    if (!g) return;
+    const nodes = g.nodes.filter((n) => n.kind === "time_gate");
+    for (const n of nodes) {
+      try {
+        const url = data.nodeStateUrl(g.id, n.id);
+        const r = await fetch(url);
+        if (!r.ok) { timeGateCountdowns = { ...timeGateCountdowns, [n.id]: null }; continue; }
+        const st = await r.json();
+        if (!st || st.state !== "armed" || !st.expires_at) {
+          timeGateCountdowns = { ...timeGateCountdowns, [n.id]: null };
+        } else {
+          const remaining = Math.ceil((new Date(st.expires_at).getTime() - Date.now()) / 1000);
+          timeGateCountdowns = { ...timeGateCountdowns, [n.id]: Math.max(0, remaining) };
+        }
+      } catch { timeGateCountdowns = { ...timeGateCountdowns, [n.id]: null }; }
+    }
   }
 
   // resizable right column (config/property panel)
@@ -460,6 +492,19 @@
     return opts.some((o) => o.value === stored) ? stored : (opts[0]?.value ?? "");
   }
 
+  // When a CameraSwitch node is selected and has empty-string arms (the old default config
+  // ["", ""] or un-configured arms), auto-save the normalized values so the engine can match.
+  // cameraValue("") resolves to the first camera's ID — this fires once per selection and
+  // doesn't re-run because saveNodeConfig updates the stored arms to non-empty strings.
+  $effect(() => {
+    const node = selectedNode;
+    if (!node || node.kind !== "camera_switch" || editLocked || cameraOptions.length === 0) return;
+    const arms = Array.isArray(node.config?.arms) ? (node.config.arms as string[]) : [];
+    if (!arms.some((a) => !a)) return; // no empty arms — nothing to do
+    const normalized = arms.map((a) => a || cameraValue(a));
+    saveNodeConfig(node, { ...node.config, arms: normalized });
+  });
+
   // A graph can only do something when it has at least one wired node — unless it
   // opts into running orphans. With no edges and orphans off, every node is
   // skipped, so a run is a no-op and Run is disabled.
@@ -553,7 +598,7 @@
     const payloadNames = new Set(payloadFields(selectedNode).map((f) => f.name));
     const inputs = (nk?.inputs ?? []).filter((p) => p.type !== "exec" && !payloadNames.has(p.name));
     const rows: { key: string; port: CatPort | null }[] = inputs.map((p) => ({ key: p.name, port: p }));
-    const MANAGED_KEYS: Record<string, string[]> = { string_switch: ["arms"], comment: ["width", "height"] };
+    const MANAGED_KEYS: Record<string, string[]> = { string_switch: ["arms"], camera_switch: ["arms"], comment: ["width", "height"] };
     const managedForKind = new Set(MANAGED_KEYS[selectedNode.kind] ?? []);
     for (const key of Object.keys(nk?.default_config ?? {})) {
       if (!inputs.some((p) => p.name === key) && !managedForKind.has(key)) rows.push({ key, port: null });
@@ -601,6 +646,15 @@
       ];
       return { ...k, outputs: armPorts };
     }
+    // CameraSwitch: exec outputs are numbered "arm_1", "arm_2", ... + built-in "default".
+    if (node.kind === "camera_switch") {
+      const arms: unknown[] = Array.isArray(node.config?.arms) ? (node.config.arms as unknown[]) : [];
+      const armPorts: CatPort[] = [
+        ...arms.map((_, i) => ({ name: `arm_${i + 1}`, type: "exec" as CatPort["type"], required: false })),
+        { name: "default", type: "exec" as CatPort["type"], required: false },
+      ];
+      return { ...k, outputs: armPorts };
+    }
     const fields = payloadFields(node);
     if (fields.length === 0) return k;
     const ports: CatPort[] = fields.map((f) => ({ name: f.name, type: f.type, required: false }));
@@ -622,8 +676,8 @@
       const cls = String(n.config.class ?? "person").trim();
       return cls ? `${base}: ${cls}` : base;
     }
-    if (n.kind === "string_switch") {
-      const arms: string[] = Array.isArray(n.config?.arms) ? (n.config.arms as string[]) : [];
+    if (n.kind === "string_switch" || n.kind === "camera_switch") {
+      const arms: unknown[] = Array.isArray(n.config?.arms) ? (n.config.arms as unknown[]) : [];
       return arms.length > 0 ? `${base} (${arms.length})` : base;
     }
     return base;
@@ -637,12 +691,31 @@
   function execOutPorts(k: CatKind | undefined): CatPort[] {
     return (k?.outputs ?? []).filter((p) => p.type === "exec");
   }
+  // True when a node has multiple exec outputs (arms/branches). These nodes place all exec
+  // pins in the body instead of the header, and skip the standard single exec_out header pin.
+  function hasMultipleExecOuts(k: CatKind | undefined): boolean {
+    return execOutPorts(k).length > 1;
+  }
 
-  // Output data ports stack BELOW the exec-out pins (which occupy the first rows from the
-  // header). Without this a node with >1 exec out (For each: loop_body/completed) overlaps
-  // its data outputs (item/index). Single-exec nodes get offset 0 (unchanged).
+  // Friendly label for an exec output port — for camera_switch arms shows the camera name
+  // instead of the internal "arm_1" key.
+  function execPortLabel(node: Node, portName: string): string {
+    if (portName === "default") return "default";
+    if (node.kind === "camera_switch" && portName.startsWith("arm_")) {
+      const idx = parseInt(portName.slice(4)) - 1;
+      const arms = Array.isArray(node.config?.arms) ? (node.config.arms as string[]) : [];
+      const stored = String(arms[idx] ?? "");
+      return cameraOptions.find((o) => o.value === cameraValue(stored))?.label ?? portName;
+    }
+    return portName;
+  }
+
+  // Output data ports stack BELOW exec-out pins that live in the body.
+  // Multi-exec nodes: ALL exec rows are in the body → offset = execCount.
+  // Single-exec node: exec pin is in the header → no body rows consumed → offset = 0.
   function outDataOffset(k: CatKind | undefined): number {
-    return Math.max(0, execOutPorts(k).length - 1);
+    const count = execOutPorts(k).length;
+    return count > 1 ? count : 0;
   }
   // Y where a node's body ends and the optional ShowImage preview begins.
   function portsBottom(n: Node): number {
@@ -657,7 +730,8 @@
     return n.kind === "show_image" && !!nodeImages[n.id];
   }
   function nodeHeight(n: Node): number {
-    return portsBottom(n) + PAD + (hasPreview(n) ? PREVIEW_H + PAD : 0);
+    const extra = hasPreview(n) ? PREVIEW_H + PAD : n.kind === "time_gate" ? 26 : 0;
+    return portsBottom(n) + PAD + extra;
   }
   // Local Y of the i-th data port within a node (the <g> is translated to n.x/n.y).
   function dataPortY(i: number) {
@@ -668,8 +742,11 @@
   function portLocalY(node: Node, port: string, side: "in" | "out") {
     if (isExec(node, port, side)) {
       if (side === "in") return HEAD_H / 2;
-      const i = execOutPorts(effectiveKind(node)).findIndex((p) => p.name === port);
-      return HEAD_H / 2 + Math.max(0, i) * ROW_H;
+      const k = effectiveKind(node);
+      const i = execOutPorts(k).findIndex((p) => p.name === port);
+      // Multi-exec: all exec pins live in the body; single-exec: header position.
+      if (hasMultipleExecOuts(k)) return HEAD_H + Math.max(0, i) * ROW_H + ROW_H / 2;
+      return HEAD_H / 2;
     }
     const k = effectiveKind(node);
     const i = dataPorts(k, side).findIndex((p) => p.name === port);
@@ -787,8 +864,10 @@
     clearLive();
     view = "editor";
     void reconcileEventNodes(id); // self-heal event nodes against the current registry
+    startTimeGatePolling();
   }
   function backToList() {
+    stopTimeGatePolling();
     saveViewport();
     view = "list";
     selectedNodeId = null;
@@ -1152,19 +1231,38 @@
     }
   }
 
-  // Press `n` over the canvas → open the context search at the cursor.
-  // Ignored while typing in a field or while the graph is active (editLocked).
+  // Keyboard shortcuts over the canvas (ignored while typing in a field or graph is active).
   function onWindowKey(e: KeyboardEvent) {
-    if (e.key !== "n" && e.key !== "N") return;
-    if (view !== "editor" || editLocked || contextOpen) return;
+    if (view !== "editor") return;
     const el = document.activeElement as HTMLElement | null;
     const tag = el?.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
-    e.preventDefault();
-    dropAt = hoverWorld;
-    contextPos = hoverClient;
-    contextPending = null;
-    contextOpen = true;
+    const inField = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable;
+
+    // Escape: cancel pending wire OR deselect node (priority order).
+    if (e.key === "Escape") {
+      if (pending) { pending = null; e.preventDefault(); return; }
+      if (selectedNodeId !== null) { selectedNodeId = null; e.preventDefault(); return; }
+      return;
+    }
+
+    if (inField) return;  // remaining shortcuts require no active text input
+
+    // n / N: open node search palette at cursor position.
+    if ((e.key === "n" || e.key === "N") && !editLocked && !contextOpen) {
+      e.preventDefault();
+      dropAt = hoverWorld;
+      contextPos = hoverClient;
+      contextPending = null;
+      contextOpen = true;
+      return;
+    }
+
+    // Delete / Backspace: delete the selected node.
+    if ((e.key === "Delete" || e.key === "Backspace") && !editLocked) {
+      const sel = graph?.nodes.find((n) => n.id === selectedNodeId);
+      if (sel) { e.preventDefault(); removeNode(sel); }
+      return;
+    }
   }
 
   // Unreal-Blueprint-style header tint by category, so node families read at a glance and
@@ -1498,7 +1596,9 @@
     if (pending) cursor = worldPoint(e); // drag the open wire end with the cursor
     if (dragVia) {
       const wp = worldPoint(e);
-      edgeVias[dragVia.key] = wp;
+      const cur = edgeVias[dragVia.key] ? [...edgeVias[dragVia.key]] : [];
+      cur[dragVia.idx] = wp;
+      edgeVias[dragVia.key] = cur;
       return;
     }
     if (panning) {
@@ -1775,8 +1875,8 @@
         <!-- col 1: the node editor -->
         <div class="relative min-w-0 flex-1">
           <div
-            class="absolute inset-0 overflow-hidden rounded-xl border border-border bg-card/20 bg-[radial-gradient(circle,_rgba(52,211,153,0.12)_1px,_transparent_1px)]"
-            style="background-size: {18 * zoom}px {18 * zoom}px; background-position: {pan.x}px {pan.y}px;"
+            class="absolute inset-0 overflow-hidden rounded-xl border border-border bg-well"
+            style="background-image: linear-gradient(oklch(1 0 0 / 9%) 1px, transparent 1px), linear-gradient(90deg, oklch(1 0 0 / 9%) 1px, transparent 1px), linear-gradient(oklch(1 0 0 / 4%) 1px, transparent 1px), linear-gradient(90deg, oklch(1 0 0 / 4%) 1px, transparent 1px); background-size: {90 * zoom}px {90 * zoom}px, {90 * zoom}px {90 * zoom}px, {18 * zoom}px {18 * zoom}px, {18 * zoom}px {18 * zoom}px; background-position: {pan.x}px {pan.y}px, {pan.x}px {pan.y}px, {pan.x}px {pan.y}px, {pan.x}px {pan.y}px;"
           >
             <svg
               bind:this={svgEl}
@@ -1791,7 +1891,7 @@
             >
               <defs>
                 <filter id="nodeGlow" x="-40%" y="-40%" width="180%" height="180%">
-                  <feDropShadow dx="0" dy="0" stdDeviation="5" flood-color="#10b981" flood-opacity="0.5" />
+                  <feDropShadow dx="0" dy="0" stdDeviation="5" flood-color="#e5e5e5" flood-opacity="0.5" />
                 </filter>
               </defs>
 
@@ -1842,19 +1942,29 @@
                   {@const eLive = nodeLive(e.to)}
                   {@const eColor = portColorOf(fromN, e.from_port, "out")}
                   {@const vk = edgeViaKey(e)}
-                  {@const via = edgeVias[vk]}
-                  {@const pathD = via
-                    ? `M ${x1} ${y1} C ${x1 + 60} ${y1}, ${via.x - 30} ${via.y}, ${via.x} ${via.y} C ${via.x + 30} ${via.y}, ${x2 - 60} ${y2}, ${x2} ${y2}`
-                    : `M ${x1} ${y1} C ${x1 + 60} ${y1}, ${x2 - 60} ${y2}, ${x2} ${y2}`}
-                  <!-- click+drag anywhere on the wire to bend it at that point;
-                       double-click to delete; bend dot drag to reposition; dot dblclick to straighten -->
+                  {@const vias = edgeVias[vk] ?? []}
+                  {@const pathD = (() => {
+                    if (vias.length === 0) return `M ${x1} ${y1} C ${x1+60} ${y1}, ${x2-60} ${y2}, ${x2} ${y2}`;
+                    const pts = [{x:x1,y:y1}, ...vias, {x:x2,y:y2}];
+                    let d = `M ${pts[0].x} ${pts[0].y}`;
+                    for (let pi = 0; pi < pts.length - 1; pi++) {
+                      const a = pts[pi], b = pts[pi+1];
+                      const c1x = pi === 0 ? a.x+60 : a.x+(b.x-a.x)*0.35;
+                      const c1y = pi === 0 ? a.y : a.y+(b.y-a.y)*0.1;
+                      const c2x = pi === pts.length-2 ? b.x-60 : b.x-(b.x-a.x)*0.35;
+                      const c2y = pi === pts.length-2 ? b.y : b.y-(b.y-a.y)*0.1;
+                      d += ` C ${c1x} ${c1y}, ${c2x} ${c2y}, ${b.x} ${b.y}`;
+                    }
+                    return d;
+                  })()}
+                  <!-- click+drag anywhere on the wire to add/move a bend (up to 2);
+                       alt+click on wire deletes it; alt+click on a dot straightens that segment -->
                   <g
                     role="presentation"
                     onpointerenter={() => { hoveredEdgeKey = vk; }}
                     onpointerleave={() => { if (hoveredEdgeKey === vk) hoveredEdgeKey = null; }}
                   >
-                    <!-- wide transparent hit area — crosshair hints "bend here"
-                         alt+click deletes the wire; drag creates/moves the bend -->
+                    <!-- wide transparent hit area; alt+click deletes wire; drag adds/moves bend -->
                     <path
                       d={pathD}
                       fill="none"
@@ -1864,11 +1974,24 @@
                       onpointerdown={(ev) => {
                         ev.stopPropagation();
                         if (ev.altKey) { removeEdge(idx); return; }
-                        dragVia = { key: vk };
+                        if (vias.length < 2) {
+                          // Add a new via at the click point, sorted by x so segments stay ordered.
+                          const svgPt = worldPoint(ev);
+                          const newVia = { x: svgPt.x, y: svgPt.y };
+                          const cur = [...vias, newVia].sort((a, b) => a.x - b.x);
+                          edgeVias[vk] = cur;
+                          dragVia = { key: vk, idx: cur.indexOf(newVia) };
+                        } else {
+                          // Already 2 vias — drag the nearest one instead of adding.
+                          const svgPt = worldPoint(ev);
+                          const nearIdx = vias.reduce((bi, v, vi) =>
+                            Math.hypot(v.x-svgPt.x, v.y-svgPt.y) < Math.hypot(vias[bi].x-svgPt.x, vias[bi].y-svgPt.y) ? vi : bi, 0);
+                          dragVia = { key: vk, idx: nearIdx };
+                        }
                       }}
                       role="presentation"
                     />
-                    <!-- visible wire; turns red on hover to confirm it's interactive -->
+                    <!-- visible wire; turns red on hover -->
                     <path
                       d={pathD}
                       fill="none"
@@ -1878,9 +2001,8 @@
                       class="pointer-events-none transition-colors {hoveredEdgeKey === vk ? 'stroke-destructive/70' : ''} {eLive ? 'node-running' : ''}"
                       role="presentation"
                     />
-                    <!-- bend handle: only shown when a bend is placed
-                         drag to reposition; alt+click to straighten back to normal -->
-                    {#if via}
+                    <!-- bend handles; alt+click removes that via-point -->
+                    {#each vias as via, vi}
                       <circle
                         cx={via.x}
                         cy={via.y}
@@ -1892,12 +2014,16 @@
                         class="cursor-grab"
                         onpointerdown={(ev) => {
                           ev.stopPropagation();
-                          if (ev.altKey) { delete edgeVias[vk]; return; }
-                          dragVia = { key: vk };
+                          if (ev.altKey) {
+                            edgeVias[vk] = vias.filter((_, j) => j !== vi);
+                            if (edgeVias[vk].length === 0) delete edgeVias[vk];
+                            return;
+                          }
+                          dragVia = { key: vk, idx: vi };
                         }}
                         role="presentation"
                       />
-                    {/if}
+                    {/each}
                   </g>
                 {/if}
               {/each}
@@ -1918,7 +2044,7 @@
                     height={h}
                     rx="8"
                     stroke-width={sel || live || invalid ? 2 : 1}
-                    class="fill-card transition-[stroke] {nodeBorderClass(n)}"
+                    class="node-body transition-[stroke] {nodeBorderClass(n)}"
                   />
                   {#if live}
                     <g transition:fade={{ duration: 200 }}>
@@ -2029,30 +2155,33 @@
                     role="presentation"
                   />
                   {/if}
-                  <!-- exec outputs stack down the right edge (exec_out, or true/false) -->
+                  <!-- exec outputs: single exec_out stays at the header right edge;
+                       multi-exec (arms/branches) all live in the node body so the header
+                       area stays clean and the arms read left-to-right with their labels. -->
                   {#each execOutPorts(k) as p, i}
-                    {@const ey = HEAD_H / 2 + i * ROW_H}
+                    {@const multi = hasMultipleExecOuts(k)}
+                    {@const ey = multi ? HEAD_H + i * ROW_H + ROW_H / 2 : HEAD_H / 2}
                     {@const isP = pending && pending.node === n.id && pending.port === p.name}
                     <circle
                       cx={NODE_W}
                       cy={ey}
                       r={isP ? 6 : 5}
-                      fill={isP ? portColor.exec : "#151c19"}
+                      fill={isP ? portColor.exec : "#1a2420"}
                       stroke={portColor.exec}
                       stroke-width="2"
                       class="cursor-pointer transition-all"
                       onclick={() => clickOutPort(n, p.name)}
                       role="presentation"
                     />
-                    {#if execOutPorts(k).length > 1}
+                    {#if multi}
                       <text
                         x={NODE_W - 9}
-                        y={ey + 3}
+                        y={ey + 4}
                         text-anchor="end"
                         class="pointer-events-none select-none fill-muted-foreground"
                         font-size="9"
                       >
-                        {p.name}
+                        {execPortLabel(n, p.name)}
                       </text>
                     {/if}
                   {/each}
@@ -2109,6 +2238,29 @@
                       {p.name}
                     </text>
                   {/each}
+
+                  <!-- TimeGate live countdown — shown when the node is armed -->
+                  {#if n.kind === "time_gate"}
+                    {@const secs = timeGateCountdowns[n.id]}
+                    {@const armed = secs != null}
+                    {@const label = armed ? `${secs}s remaining` : "idle"}
+                    <rect
+                      x={8}
+                      y={portsBottom(n) + 4}
+                      width={NODE_W - 16}
+                      height={18}
+                      rx="4"
+                      class={armed ? "fill-primary/15" : "fill-muted/20"}
+                    />
+                    <text
+                      x={NODE_W / 2}
+                      y={portsBottom(n) + 16}
+                      text-anchor="middle"
+                      class={armed ? "fill-primary" : "fill-muted-foreground"}
+                      font-size="10"
+                      font-weight={armed ? "600" : "400"}
+                    >{label}</text>
+                  {/if}
 
                   <!-- ShowImage preview: the frame that passed through, drawn as a
                        native SVG <image> so it honours this node's transform (a
@@ -2757,6 +2909,64 @@
                   <p class="text-[10px] text-muted-foreground">A built-in <strong>default</strong> arm always fires when no label matches.</p>
                 </div>
               {/if}
+              <!-- Camera switch: user-defined camera arms. Each arm maps a camera (via dropdown)
+                   to a numbered exec output port. A built-in "default" arm fires when no camera
+                   matches. -->
+              {#if selectedNode.kind === "camera_switch"}
+                {@const cwArms = Array.isArray(selectedNode.config?.arms) ? (selectedNode.config.arms as string[]) : []}
+                <div class="space-y-2.5 border-t border-border pt-2.5">
+                  <p class="text-xs font-medium text-muted-foreground">Camera arms</p>
+                  <div class="space-y-1.5">
+                    {#each cwArms as arm, i (i)}
+                      <div class="flex items-center gap-1.5">
+                        {#if cameraOptions.length === 0}
+                          <p class="flex-1 rounded border border-dashed border-border px-2 py-1 text-xs text-muted-foreground">No cameras</p>
+                        {:else}
+                          {@const cv = cameraValue(arm)}
+                          {@const clabel = cameraOptions.find((o) => o.value === cv)?.label ?? cv}
+                          <Select.Root
+                            type="single"
+                            disabled={editLocked}
+                            value={cv}
+                            onValueChange={(v) => {
+                              const updated = [...cwArms];
+                              updated[i] = v ?? cv;
+                              saveNodeConfig(selectedNode, { ...selectedNode.config, arms: updated });
+                            }}
+                          >
+                            <Select.Trigger class="h-8 flex-1">{clabel}</Select.Trigger>
+                            <Select.Content>
+                              {#each cameraOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                            </Select.Content>
+                          </Select.Root>
+                        {/if}
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          class="h-8 w-8 shrink-0"
+                          disabled={editLocked || cwArms.length <= 1}
+                          onclick={() => {
+                            const updated = cwArms.filter((_, j) => j !== i);
+                            saveNodeConfig(selectedNode, { ...selectedNode.config, arms: updated });
+                          }}
+                          title="Remove arm"
+                        >×</Button>
+                      </div>
+                    {/each}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      class="h-8 w-full"
+                      disabled={editLocked}
+                      onclick={() => {
+                        const updated = [...cwArms, cameraOptions[0]?.value ?? ""];
+                        saveNodeConfig(selectedNode, { ...selectedNode.config, arms: updated });
+                      }}
+                    >+ Add arm</Button>
+                  </div>
+                  <p class="text-[10px] text-muted-foreground">A built-in <strong>default</strong> arm fires when no camera matches.</p>
+                </div>
+              {/if}
               <!-- Memoize: cache the node's output for the run (default) vs recompute each
                    time it's reached. Turn OFF for loop bodies / live sources so loops iterate.
                    Hidden for event nodes — they're no-op signals that never memoize. -->
@@ -2820,7 +3030,7 @@
           <ChevronDown class="size-4 text-muted-foreground transition-transform {consoleOpen ? '' : '-rotate-90'}" />
         </button>
         {#if consoleOpen}
-          <div class="overflow-y-auto border-t border-border p-4 font-mono text-sm" style="height: {consoleH}px">
+          <div class="overflow-y-auto border-t border-border bg-well p-4 font-mono text-sm" style="height: {consoleH}px">
             {#if logs.length === 0}
               <p class="text-muted-foreground">No runs yet — run the workflow to see node output here.</p>
             {:else}
@@ -2969,3 +3179,11 @@
     </div>
   </Dialog.Content>
 </Dialog.Root>
+
+<style>
+  /* Node body fill — slightly elevated above the canvas so nodes read as distinct surfaces.
+     --card alone is too dark; mixing with --popover lifts it ~2 tonal steps. */
+  :global(.node-body) {
+    fill: color-mix(in srgb, var(--card) 55%, var(--popover) 45%);
+  }
+</style>

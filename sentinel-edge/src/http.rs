@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
@@ -24,9 +24,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/streams", get(streams))
         .route("/snapshot/:ip", get(snapshot))
         .route("/reload", post(reload))
+        .route("/recordings", get(recordings_list))
         .route("/recording/start", post(recording_start))
         .route("/recording/stop", post(recording_stop))
-        .route("/recording/:clip_id", get(recording_get))
+        .route("/recording/:clip_id", get(recording_get).delete(recording_delete))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -134,7 +135,7 @@ async fn recording_start(
     let mgr = state.recording.clone();
     let pre_roll = body.pre_roll_secs.unwrap_or(0);
     match tokio::task::spawn_blocking(move || mgr.start(&body.camera_ip, pre_roll)).await {
-        Ok(Ok(clip_id)) => Json(json!({ "clip_id": clip_id })).into_response(),
+        Ok(Ok((clip_id, new))) => Json(json!({ "clip_id": clip_id, "new": new })).into_response(),
         Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
     }
@@ -167,11 +168,12 @@ async fn recording_stop(
             // Push the clip manifest to control so the DB + browsers know about it.
             let control_url = state.control_url.clone();
             let payload = serde_json::json!({
-                "camera_ip": meta.camera_ip,
-                "clip_id": meta.clip_id,
+                "camera_ip":     meta.camera_ip,
+                "clip_id":       meta.clip_id,
+                "friendly_name": meta.friendly_name,
                 "duration_secs": meta.duration_secs,
-                "size_bytes": meta.size_bytes,
-                "started_at": meta.started_at,
+                "size_bytes":    meta.size_bytes,
+                "started_at":    meta.started_at,
             });
             tokio::task::spawn_blocking(move || {
                 let url = format!("{control_url}/config/recordings/clip-metadata");
@@ -232,6 +234,54 @@ async fn recording_get(
             }
         }
         Ok(None) => (StatusCode::NOT_FOUND, "clip not found").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
+    }
+}
+
+/// Delete a clip by id — removes the .mp4 and sidecar .json from disk.
+async fn recording_delete(
+    State(state): State<Arc<AppState>>,
+    Path(clip_id): Path<String>,
+) -> impl IntoResponse {
+    let mgr = state.recording.clone();
+    match tokio::task::spawn_blocking(move || mgr.delete_clip(&clip_id)).await {
+        Ok(Ok(())) => Json(json!({ "ok": true })).into_response(),
+        Ok(Err(e)) if e.contains("not found") => (StatusCode::NOT_FOUND, e).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
+    }
+}
+
+// ---- recordings list (server-side filter/sort/paginate) --------------------
+
+#[derive(serde::Deserialize)]
+struct RecordingsListQuery {
+    camera_ip: Option<String>,
+    sort:      Option<String>,
+    dir:       Option<String>,
+    limit:     Option<usize>,
+    offset:    Option<usize>,
+    from:      Option<String>,
+    to:        Option<String>,
+}
+
+async fn recordings_list(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<RecordingsListQuery>,
+) -> impl IntoResponse {
+    use crate::recording::ListParams;
+    let params = ListParams {
+        camera_ip: q.camera_ip,
+        sort:   q.sort.unwrap_or_else(|| "started_at".into()),
+        dir:    q.dir.unwrap_or_else(|| "desc".into()),
+        limit:  q.limit.unwrap_or(50).min(200),
+        offset: q.offset.unwrap_or(0),
+        from:   q.from,
+        to:     q.to,
+    };
+    let mgr = state.recording.clone();
+    match tokio::task::spawn_blocking(move || mgr.list_clips(&params)).await {
+        Ok(page) => Json(json!({ "total": page.total, "items": page.items })).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
     }
 }

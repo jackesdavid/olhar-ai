@@ -3,24 +3,38 @@
 import { CanvasTexture, RepeatWrapping, type Texture } from "three";
 import { GRID_INK, GLOW_INK } from "$lib/map/palette";
 
-/** Box-grid tile — a single square cell with faint white border lines, repeated
- * across the floor. One tile = one world unit. Matches the drafting-paper grid
- * look of the architectural floor-plan reference. */
+/** Two-level grid tile — minor lines every cell, major lines every 5 cells.
+ * One major tile = 5 world units. Grid lines are darker than the workflow
+ * editor to stay understated behind 3D geometry. */
 export function boxGridTexture(): Texture {
-  const S = 64; // px per grid cell in the tile
+  const MINOR = 64;   // px per minor cell (one world unit)
+  const MAJOR_N = 5;  // minor cells per major division
+  const S = MINOR * MAJOR_N; // 320px tile
+
   const c = document.createElement("canvas");
   c.width = c.height = S;
   const ctx = c.getContext("2d")!;
   ctx.clearRect(0, 0, S, S);
-  ctx.strokeStyle = GRID_INK;
+
+  // Minor grid lines — 4 internal lines per axis at very low opacity
+  ctx.strokeStyle = "rgba(255,255,255,0.04)";
   ctx.lineWidth = 1;
-  // Draw the right and bottom edges only — tiling fills the rest.
   ctx.beginPath();
-  ctx.moveTo(S - 0.5, 0);
-  ctx.lineTo(S - 0.5, S);
-  ctx.moveTo(0, S - 0.5);
-  ctx.lineTo(S, S - 0.5);
+  for (let i = 1; i < MAJOR_N; i++) {
+    const v = i * MINOR - 0.5;
+    ctx.moveTo(v, 0); ctx.lineTo(v, S); // vertical
+    ctx.moveTo(0, v); ctx.lineTo(S, v); // horizontal
+  }
   ctx.stroke();
+
+  // Major grid lines — right + bottom edge of the tile, slightly brighter
+  ctx.strokeStyle = "rgba(255,255,255,0.09)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(S - 0.5, 0); ctx.lineTo(S - 0.5, S);
+  ctx.moveTo(0, S - 0.5); ctx.lineTo(S, S - 0.5);
+  ctx.stroke();
+
   const tex = new CanvasTexture(c);
   tex.wrapS = tex.wrapT = RepeatWrapping;
   return tex;

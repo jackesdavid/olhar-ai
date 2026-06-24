@@ -131,6 +131,9 @@ fn main() {
         if let Err(e) = seed::run(&pool).await {
             log::error!("seed failed: {e}");
         }
+        if let Err(e) = store::backfill_friendly_names(&pool).await {
+            log::warn!("backfill_friendly_names: {e}");
+        }
 
         let google = oauth::GoogleOauth::from_env();
         log::info!("Google login: {}", if google.is_some() { "enabled" } else { "disabled (set GOOGLE_CLIENT_ID/SECRET)" });

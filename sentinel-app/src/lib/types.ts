@@ -12,6 +12,8 @@ export type Settings = {
   cameras_always_warm: boolean;
   /** Max ring buffer size in seconds; also the upper bound for per-recording pre-roll. */
   pre_roll_secs: number;
+  /** MOG2 varThreshold for motion detection. Lower = more sensitive (default 16). */
+  motion_var_threshold: number;
 };
 
 /** A saved camera (matches `app_core::devices::Device`). */
@@ -293,4 +295,5 @@ export const DEFAULT_SETTINGS: Settings = {
   transport: "auto",
   cameras_always_warm: false,
   pre_roll_secs: 10,
+  motion_var_threshold: 16,
 };

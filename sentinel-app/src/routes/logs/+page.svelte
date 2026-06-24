@@ -180,7 +180,7 @@
     const map: Record<string, string> = {
       workflow: "bg-primary/15 text-primary",
       edge:     "bg-blue-500/15 text-blue-400",
-      presence: "bg-emerald-500/15 text-emerald-400",
+      presence: "bg-muted text-foreground",
       device:   "bg-purple-500/15 text-purple-400",
       alert:    "bg-amber-500/15 text-amber-400",
     };
@@ -188,7 +188,7 @@
   }
 
   const MODULE_DOT: Record<string, string> = {
-    workflow: "#10b981",
+    workflow: "#e5e5e5",
     edge:     "#60a5fa",
     presence: "#34d399",
     device:   "#a78bfa",
@@ -424,7 +424,7 @@
                   {#if l.payload}
                     <details class="mt-0.5">
                       <summary class="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground">payload</summary>
-                      <pre class="mt-1 overflow-x-auto rounded bg-muted/50 p-1 text-[10px] text-muted-foreground">{JSON.stringify(l.payload, null, 2)}</pre>
+                      <pre class="mt-1 overflow-x-auto rounded bg-well p-1 text-[10px] text-muted-foreground">{JSON.stringify(l.payload, null, 2)}</pre>
                     </details>
                   {/if}
                 </Table.Cell>

@@ -68,7 +68,7 @@
         {#if loading}
           <LoaderCircle class="size-4 animate-spin text-muted-foreground" />
         {:else if provider?.configured}
-          <Badge variant="outline" class="border-emerald-500/30 bg-emerald-500/15 text-emerald-400">
+          <Badge variant="outline" class="border-border bg-muted text-foreground">
             Configured
             {#if provider.bot_username}
               · @{provider.bot_username}

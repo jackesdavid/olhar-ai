@@ -149,8 +149,13 @@ services:
     # workflows for every tenant on its own). Each run resolves its tenant's edge go2rtc
     # from the box registry (tenant_boxes.magicdns_host) and grabs frames bound to that
     # edge; face recognition uses the in-cluster CPU sidecar.
+    #
+    # Scaling: `docker compose ... up -d --scale sentinel-flow=N` (or `task flow-scale N`).
+    # No container_name — required so multiple replicas can coexist. Each replica gets a
+    # unique HOSTNAME (Docker-assigned container ID) which the engine uses as pod_name.
+    # Docker's internal DNS round-robins across all replicas; control's FLOW_URL resolves
+    # to whichever pod is next in the rotation — no extra proxy needed.
     image: ghcr.io/jackesdavid/sentinel-flow:latest
-    container_name: sentinel-flow
     restart: always
     env_file:
       - sentinel.env   # TELEGRAM_* fallback, etc.
@@ -172,6 +177,8 @@ services:
         condition: service_started
       sentinel-redis:
         condition: service_started
+    deploy:
+      replicas: 1   # increase with `task flow-scale N` — no redeploy needed
 
 volumes:
   sentinel_pgdata:

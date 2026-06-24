@@ -17,7 +17,7 @@
 
   onMount(() => {
     const d = boxGridTexture();
-    d.repeat.set(SIZE, SIZE); // one cell per world (grid) unit
+    d.repeat.set(SIZE / 5, SIZE / 5); // tile covers 5 world units (major division)
     dots = d;
     glow = radialGlowTexture();
     return () => {
