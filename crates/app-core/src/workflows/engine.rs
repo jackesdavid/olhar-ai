@@ -455,6 +455,111 @@ fn forward_epoch(
             continue;
         }
 
+        // TimeGate: debounced countdown with extension on re-trigger.
+        //
+        // First arm: write state=armed + expires_at, then poll every 250 ms until expiry
+        // (holding this thread, just like Wait). When the countdown expires, write
+        // state=idle and fire exec "out".
+        //
+        // Re-trigger while armed: extend expires_at if remaining < extend_secs, then
+        // return immediately with no exec output — the keeper run is still polling.
+        if n.kind == NodeKind::TimeGate {
+            use chrono::Utc;
+            let wait_secs = n.config.get("wait_secs")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+                .unwrap_or(10);
+            let extend_secs = n.config.get("extend_secs")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+                .unwrap_or(wait_secs);
+            let now_ts = Utc::now().timestamp();
+            let state = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid);
+            let is_armed = state.as_ref()
+                .and_then(|v| v.get("state"))
+                .and_then(|v| v.as_str())
+                .map(|s| s == "armed")
+                .unwrap_or(false);
+
+            if is_armed {
+                // Re-trigger: extend if needed, then return with no exec output.
+                let expires_ts = state.as_ref()
+                    .and_then(|v| v.get("expires_at"))
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .map(|t| t.timestamp())
+                    .unwrap_or(now_ts + wait_secs);
+                let remaining = expires_ts - now_ts;
+                if remaining < extend_secs {
+                    let new_expires_ts = now_ts + extend_secs;
+                    repo::set_node_state(&sys.db, sys.tenant_id, graph.id, nid, &serde_json::json!({
+                        "state": "armed",
+                        "expires_at": chrono::DateTime::from_timestamp(new_expires_ts, 0)
+                            .unwrap_or_else(Utc::now)
+                            .to_rfc3339(),
+                    }));
+                    if graph.debug {
+                        on_log(nid, &format!("Time Gate: extended +{}s", extend_secs - remaining), 0);
+                    }
+                } else if graph.debug {
+                    on_log(nid, &format!("Time Gate: re-trigger, {remaining}s remaining (no extend)"), 0);
+                }
+                *steps += 1;
+                outputs.insert(nid, PortValues::new());
+                ran.insert(nid);
+                settle(&mut settled, &mut indeg);
+                continue;
+            }
+
+            // Idle — this run becomes the keeper. Arm and poll.
+            let expires_ts = now_ts + wait_secs;
+            repo::set_node_state(&sys.db, sys.tenant_id, graph.id, nid, &serde_json::json!({
+                "state": "armed",
+                "expires_at": chrono::DateTime::from_timestamp(expires_ts, 0)
+                    .unwrap_or_else(Utc::now)
+                    .to_rfc3339(),
+            }));
+            if graph.debug {
+                on_log(nid, &format!("Time Gate: armed for {wait_secs}s"), 0);
+            }
+
+            let fired = loop {
+                std::thread::sleep(Duration::from_millis(250));
+                let st = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid);
+                let armed = st.as_ref()
+                    .and_then(|v| v.get("state"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s == "armed")
+                    .unwrap_or(false);
+                if !armed {
+                    break false; // reset by an external write
+                }
+                let exp = st.as_ref()
+                    .and_then(|v| v.get("expires_at"))
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .map(|t| t.timestamp())
+                    .unwrap_or(0);
+                if Utc::now().timestamp() >= exp {
+                    break true;
+                }
+            };
+
+            repo::set_node_state(&sys.db, sys.tenant_id, graph.id, nid,
+                &serde_json::json!({ "state": "idle" }));
+            if fired {
+                live_out.insert((nid, "out".to_string()));
+                if graph.debug {
+                    on_log(nid, "Time Gate: countdown expired → out", 0);
+                }
+            } else if graph.debug {
+                on_log(nid, "Time Gate: reset → no output", 0);
+            }
+            *steps += 1;
+            outputs.insert(nid, PortValues::new());
+            ran.insert(nid);
+            settle(&mut settled, &mut indeg);
+            continue;
+        }
+
         let started = Instant::now();
         // IO-bound kinds run under a per-node deadline (watchdog thread) so a stuck call
         // aborts the run instead of hanging forever; pure/instant kinds run inline.

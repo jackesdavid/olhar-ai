@@ -272,6 +272,13 @@ pub enum NodeKind {
     /// Recording: tell the edge to stop a recording started by `StartRecording`. Pass
     /// the `clip_id` from `StartRecording` to stop the correct clip. Exec passes through.
     StopRecording,
+    /// Flow control: debounced countdown gate. First `arm` starts a `wait_secs` countdown;
+    /// re-triggers only extend the wait when less than `extend_secs` remain
+    /// (`new_remaining = max(remaining, extend_secs)`). Fires `out` once when the countdown
+    /// expires with no pending extensions. Cross-run: the first run polls and blocks; later
+    /// runs extend and return immediately. Use to hold open a recording window past the last
+    /// motion event.
+    TimeGate,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -498,16 +505,16 @@ const ASK_AI_IN: [Port; 2] =
 const REROUTE_IN: [Port; 1] = [p("value", PortType::Any, false)];
 const REROUTE_OUT: [Port; 1] = [p("value", PortType::Any, false)];
 
-// StartRecording: camera ip + optional duration hint.
+// StartRecording: camera entity + optional pre-roll hint.
 const START_RECORDING_IN: [Port; 2] = [
-    p("camera_ip", PortType::Text, true),
+    p("camera", PortType::Camera, true),
     p("pre_roll_secs", PortType::Num, false),
 ];
 const START_RECORDING_OUT: [Port; 1] = [p("clip_id", PortType::Text, false)];
 
-// StopRecording: clip_id from StartRecording.
+// StopRecording: camera entity + optional clip_id from StartRecording.
 const STOP_RECORDING_IN: [Port; 2] = [
-    p("camera_ip", PortType::Text, true),
+    p("camera", PortType::Camera, true),
     p("clip_id", PortType::Text, false),
 ];
 
@@ -521,6 +528,9 @@ const BREAK_CAMERA_OUT: [Port; 3] = [
 ];
 
 const NO_PORTS: [Port; 0] = [];
+
+// TimeGate exec outputs: a single `out` port (fires when the countdown expires).
+const EXEC_OUT_TIME_GATE: [Port; 1] = [p("out", PortType::Exec, false)];
 
 // Universal control-flow ports — every node has an `exec_in` and, by default, an
 // `exec_out`. They carry no value; they sequence/gate execution. A node kind may
@@ -539,7 +549,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 50] = [
+    pub const ALL: [NodeKind; 51] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -590,6 +600,7 @@ impl NodeKind {
         NodeKind::Comment,
         NodeKind::StartRecording,
         NodeKind::StopRecording,
+        NodeKind::TimeGate,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -647,6 +658,7 @@ impl NodeKind {
             NodeKind::Reroute => "reroute",
             NodeKind::StartRecording => "start_recording",
             NodeKind::StopRecording => "stop_recording",
+            NodeKind::TimeGate => "time_gate",
         }
     }
 
@@ -707,6 +719,7 @@ impl NodeKind {
             NodeKind::Reroute => "Reroute",
             NodeKind::StartRecording => "Start recording",
             NodeKind::StopRecording => "Stop recording",
+            NodeKind::TimeGate => "Time Gate",
         }
     }
 
@@ -756,6 +769,7 @@ impl NodeKind {
             NodeKind::Comment => "Utility",
             NodeKind::Reroute => "Utility",
             NodeKind::StartRecording | NodeKind::StopRecording => "Recording",
+            NodeKind::TimeGate => "Flow",
         }
     }
 
@@ -799,6 +813,7 @@ impl NodeKind {
             NodeKind::StringSwitch => &NO_PORTS,
             NodeKind::Comment => &NO_PORTS,
             NodeKind::Reroute => &NO_PORTS, // pure passthrough, no exec pins
+            NodeKind::TimeGate => &EXEC_OUT_TIME_GATE, // "out" fires when countdown expires
             _ => &EXEC_OUT_DEFAULT,
         }
     }
@@ -855,6 +870,7 @@ impl NodeKind {
             NodeKind::Reroute => &REROUTE_IN,
             NodeKind::StartRecording => &START_RECORDING_IN,
             NodeKind::StopRecording => &STOP_RECORDING_IN,
+            NodeKind::TimeGate => &NO_PORTS, // exec-only; wait_secs/extend_secs are config
         }
     }
 
@@ -907,6 +923,7 @@ impl NodeKind {
             NodeKind::Reroute => &REROUTE_OUT,
             NodeKind::StartRecording => &START_RECORDING_OUT,
             NodeKind::StopRecording => &NO_PORTS,
+            NodeKind::TimeGate => &NO_PORTS, // exec-only; fires via exec "out" port
         }
     }
 
@@ -978,6 +995,7 @@ impl NodeKind {
             NodeKind::Reroute => json!({}),
             NodeKind::StartRecording => json!({ "timeout_secs": "30" }),
             NodeKind::StopRecording => json!({ "timeout_secs": "15" }),
+            NodeKind::TimeGate => json!({ "wait_secs": 10, "extend_secs": 10 }),
         }
     }
 }

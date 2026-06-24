@@ -367,6 +367,9 @@ pub fn run_node(
         NodeKind::Comment | NodeKind::Reroute => Ok(PortValues::new()),
         NodeKind::StartRecording => run_start_recording(config, inputs, sys),
         NodeKind::StopRecording => run_stop_recording(inputs, sys),
+        // TimeGate is engine-driven (reads/writes cross-run state, polls until expiry).
+        // Never called through run_node — the engine handles it in forward_epoch.
+        NodeKind::TimeGate => Ok(PortValues::new()),
     }
 }
 
@@ -423,7 +426,8 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::GetCameraByName
         | NodeKind::BreakCamera
         | NodeKind::Comment
-        | NodeKind::Reroute => return None,
+        | NodeKind::Reroute
+        | NodeKind::TimeGate => return None,
     };
     let secs = config_u64(config, "timeout_secs").unwrap_or(default_secs);
     if secs == 0 {
@@ -826,6 +830,7 @@ pub fn debug_summary(
         NodeKind::Reroute => "reroute".into(),
         NodeKind::StartRecording => txt("clip_id").map(|id| format!("recording started: {id}")).unwrap_or_else(|| "recording started".into()),
         NodeKind::StopRecording => "recording stopped".into(),
+        NodeKind::TimeGate => "time gate".into(),
     }
 }
 
@@ -1545,6 +1550,7 @@ pub(crate) fn to_jpeg(bytes: &[u8]) -> Result<Vec<u8>, String> {
 // These call the edge's HTTP API (ureq, blocking). The edge host is resolved
 // from `tenant_boxes` via the shared Postgres pool in `sys.db`.
 
+/// Returns the go2rtc base URL for the tenant's edge (port 443 via tailscale serve).
 fn resolve_edge_base(sys: &ToolContext) -> Result<String, String> {
     let pool = sys.db.pool();
     let tid = sys.tenant_id;
@@ -1569,18 +1575,28 @@ fn resolve_edge_base(sys: &ToolContext) -> Result<String, String> {
     }
 }
 
+/// Returns the edge API base URL (port 8080 via tailscale serve).
+/// go2rtc occupies port 443; the edge API is served separately on 8080.
+fn resolve_edge_api_base(sys: &ToolContext) -> Result<String, String> {
+    let base = resolve_edge_base(sys)?;
+    let bare = base
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/');
+    Ok(format!("https://{bare}:8080"))
+}
+
 fn run_start_recording(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
     let camera_ip = inputs
-        .get("camera_ip")
-        .and_then(PortValue::as_text)
-        .or_else(|| config.get("camera_ip").and_then(|v| v.as_str()))
-        .ok_or("missing required input 'camera_ip'")?
-        .to_string();
+        .get("camera")
+        .and_then(PortValue::as_camera)
+        .map(|c| c.ip.clone())
+        .ok_or("missing required input 'camera'")?;
     let pre_roll = inputs
         .get("pre_roll_secs")
         .and_then(PortValue::as_num)
         .map(|n| n as u64);
-    let base = resolve_edge_base(sys)?;
+    let base = resolve_edge_api_base(sys)?;
     let mut body = serde_json::json!({ "camera_ip": camera_ip });
     if let Some(pr) = pre_roll {
         body["pre_roll_secs"] = serde_json::Value::Number(pr.into());
@@ -1603,16 +1619,16 @@ fn run_start_recording(config: &Value, inputs: &PortValues, sys: &ToolContext) -
 
 fn run_stop_recording(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
     let camera_ip = inputs
-        .get("camera_ip")
-        .and_then(PortValue::as_text)
-        .ok_or("missing required input 'camera_ip'")?
-        .to_string();
+        .get("camera")
+        .and_then(PortValue::as_camera)
+        .map(|c| c.ip.clone())
+        .ok_or("missing required input 'camera'")?;
     let clip_id = inputs
         .get("clip_id")
         .and_then(PortValue::as_text)
         .unwrap_or("")
         .to_string();
-    let base = resolve_edge_base(sys)?;
+    let base = resolve_edge_api_base(sys)?;
     let body = serde_json::json!({ "camera_ip": camera_ip, "clip_id": clip_id });
     ureq::post(&format!("{base}/recording/stop"))
         .set("Content-Type", "application/json")
