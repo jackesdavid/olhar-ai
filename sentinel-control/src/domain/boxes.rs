@@ -30,6 +30,7 @@ pub fn router() -> Router<AppState> {
         .route("/boxes/:id/logs/stream", get(box_logs_stream))
         .route("/internal/box-upstream", get(box_upstream))
         .route("/boxes/:id/recording-config", axum::routing::patch(patch_recording_config))
+        .route("/boxes/:id/storage-stats", get(storage_stats))
 }
 
 fn db_err(e: sqlx::Error) -> ApiErr {
@@ -237,4 +238,42 @@ async fn patch_recording_config(
         return Err(err(StatusCode::NOT_FOUND, "box not found"));
     }
     Ok(axum::response::Json(body))
+}
+
+/// Proxy GET /storage/stats from the box's edge appliance (JWT auth, recordings.read).
+/// Returns { used_bytes, max_bytes, clip_count, path, pct } directly from the edge.
+async fn storage_stats(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<impl axum::response::IntoResponse, ApiErr> {
+    use crate::domain::recordings::{normalize_host, edge_api_base};
+    auth::require(&c, "recordings.read")?;
+    let tid = tenant_of(&c)?;
+
+    let edge_host = store::box_host_for_tenant(&st.pool, tid)
+        .await
+        .map_err(|e| {
+            log::error!("box host lookup: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+        })?
+        .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "no edge box connected"))?;
+
+    let base = edge_api_base(&normalize_host(&edge_host));
+    let url  = format!("{base}/storage/stats");
+
+    let resp = reqwest::get(&url).await.map_err(|e| {
+        log::error!("storage stats fetch {url}: {e}");
+        err(StatusCode::BAD_GATEWAY, format!("edge unreachable: {e}"))
+    })?;
+
+    if !resp.status().is_success() {
+        return Err(err(StatusCode::BAD_GATEWAY, format!("edge returned {}", resp.status())));
+    }
+
+    let json = resp.json::<serde_json::Value>().await.map_err(|e| {
+        err(StatusCode::BAD_GATEWAY, format!("edge response parse error: {e}"))
+    })?;
+
+    Ok(axum::response::Json(json))
 }

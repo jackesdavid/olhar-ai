@@ -12,12 +12,14 @@
   import { Separator } from "$lib/components/ui/separator";
 
   import { DEFAULT_SETTINGS, type Settings, type Transport } from "$lib/types";
-  import { boxes } from "$lib/api";
+  import { boxes, type StorageStats } from "$lib/api";
+  import { Input } from "$lib/components/ui/input";
 
   let settings = $state<Settings>({ ...DEFAULT_SETTINGS });
   let loading = $state(true);
   let saving = $state(false);
   let boxIds = $state<string[]>([]);
+  let storageStats = $state<(StorageStats & { boxId: string })[]>([]);
 
   const transportOptions: { value: Transport; label: string }[] = [
     { value: "tcp", label: "TCP" },
@@ -51,6 +53,14 @@
         settings.cameras_always_warm = firstBox.recording_config.cameras_always_warm ?? false;
         settings.pre_roll_secs = firstBox.recording_config.pre_roll_secs ?? 10;
         settings.motion_var_threshold = firstBox.recording_config.motion_var_threshold ?? 16;
+        settings.max_storage_mb = firstBox.recording_config.max_storage_mb ?? 10000;
+        settings.recordings_path = firstBox.recording_config.recordings_path ?? "/opt/sentinel-edge/recordings";
+      }
+      // Load storage stats for each box in the background (best-effort).
+      for (const b of allBoxes) {
+        boxes.storageStats(b.id).then((s) => {
+          storageStats = [...storageStats.filter((x) => x.boxId !== b.id), { ...s, boxId: b.id }];
+        }).catch(() => {});
       }
     } catch (err) {
       console.error("Failed to load settings", err);
@@ -70,7 +80,8 @@
         boxIds.map((id) =>
           boxes.patchRecordingConfig(id, {
             pre_roll_secs: snap.pre_roll_secs,
-            max_storage_mb: 1000,
+            max_storage_mb: snap.max_storage_mb,
+            recordings_path: snap.recordings_path,
             codec: "copy",
             cameras_always_warm: snap.cameras_always_warm,
             motion_var_threshold: snap.motion_var_threshold,
@@ -89,6 +100,22 @@
   function pct(v: number): string {
     return `${Math.round(v * 100)}%`;
   }
+
+  function formatBytes(bytes: number): string {
+    if (bytes >= 1e12) return `${(bytes / 1e12).toFixed(1)} TB`;
+    if (bytes >= 1e9)  return `${(bytes / 1e9).toFixed(1)} GB`;
+    if (bytes >= 1e6)  return `${(bytes / 1e6).toFixed(1)} MB`;
+    if (bytes >= 1e3)  return `${(bytes / 1e3).toFixed(0)} KB`;
+    return `${bytes} B`;
+  }
+
+  function formatMb(mb: number): string {
+    if (mb >= 1024 * 1024) return `${(mb / (1024 * 1024)).toFixed(0)} TB`;
+    if (mb >= 1024) return `${(mb / 1024).toFixed(0)} GB`;
+    return `${mb} MB`;
+  }
+
+  const STORAGE_STEPS = [500, 1000, 2000, 5000, 10000, 20000, 50000, 100000];
 
   function sensitivityLabel(varThreshold: number): string {
     if (varThreshold <= 8) return "very high";
@@ -290,6 +317,69 @@
           Takes effect after the edge restarts.
         </p>
       </div>
+
+      <Separator />
+
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <Label>Max recording storage</Label>
+          <span class="text-sm tabular-nums text-muted-foreground">
+            {formatMb(settings.max_storage_mb)}
+          </span>
+        </div>
+        <Slider
+          type="single"
+          min={0}
+          max={STORAGE_STEPS.length - 1}
+          step={1}
+          value={STORAGE_STEPS.indexOf(settings.max_storage_mb) >= 0
+            ? STORAGE_STEPS.indexOf(settings.max_storage_mb)
+            : STORAGE_STEPS.findIndex((s) => s >= settings.max_storage_mb)}
+          onValueChange={(v) => { settings.max_storage_mb = STORAGE_STEPS[v] ?? STORAGE_STEPS[STORAGE_STEPS.length - 1]; }}
+          disabled={loading}
+        />
+        <p class="text-xs text-muted-foreground">
+          Old clips are auto-deleted (oldest first) when total recording size exceeds this limit.
+          A workflow event <strong>edge:full-disk</strong> fires when usage reaches 90%.
+        </p>
+      </div>
+
+      <Separator />
+
+      <div class="space-y-2">
+        <Label>Recordings folder</Label>
+        <Input
+          class="font-mono text-sm"
+          placeholder="/opt/sentinel-edge/recordings"
+          bind:value={settings.recordings_path}
+          disabled={loading}
+        />
+        <p class="text-xs text-muted-foreground">
+          Directory on the edge appliance where .mp4 clips are stored. Takes effect after the edge restarts.
+        </p>
+      </div>
+
+      {#if storageStats.length > 0}
+        <Separator />
+        <div class="space-y-3">
+          <Label class="text-xs text-muted-foreground">Current storage usage</Label>
+          {#each storageStats as s (s.boxId)}
+            {@const color = s.pct >= 90 ? "bg-destructive" : s.pct >= 75 ? "bg-yellow-500" : "bg-emerald-500"}
+            <div class="space-y-1.5">
+              <div class="flex items-center justify-between text-xs">
+                <span class="text-muted-foreground truncate font-mono">{s.path}</span>
+                <span class="{s.pct >= 90 ? 'text-destructive font-semibold' : 'text-muted-foreground'} shrink-0 pl-2 tabular-nums">
+                  {formatBytes(s.used_bytes)} / {formatBytes(s.max_bytes)}
+                </span>
+              </div>
+              <div class="h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div class="h-full rounded-full transition-all {color}" style="width: {s.pct}%"></div>
+              </div>
+              <p class="text-xs text-muted-foreground">{s.clip_count} clip{s.clip_count !== 1 ? "s" : ""} · {s.pct}% used</p>
+            </div>
+          {/each}
+        </div>
+      {/if}
     </Card.Content>
   </Card.Root>
 </div>

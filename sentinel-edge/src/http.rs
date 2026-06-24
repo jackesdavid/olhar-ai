@@ -25,6 +25,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/snapshot/:ip", get(snapshot))
         .route("/reload", post(reload))
         .route("/recordings", get(recordings_list))
+        .route("/storage/stats", get(storage_stats))
         .route("/recording/start", post(recording_start))
         .route("/recording/stop", post(recording_stop))
         .route("/recording/:clip_id", get(recording_get).delete(recording_delete))
@@ -282,6 +283,20 @@ async fn recordings_list(
     let mgr = state.recording.clone();
     match tokio::task::spawn_blocking(move || mgr.list_clips(&params)).await {
         Ok(page) => Json(json!({ "total": page.total, "items": page.items })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
+    }
+}
+
+async fn storage_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mgr = state.recording.clone();
+    match tokio::task::spawn_blocking(move || mgr.storage_stats()).await {
+        Ok(s) => Json(json!({
+            "used_bytes":  s.used_bytes,
+            "max_bytes":   s.max_bytes,
+            "clip_count":  s.clip_count,
+            "path":        s.path,
+            "pct":         s.pct,
+        })).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
     }
 }

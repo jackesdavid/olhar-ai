@@ -163,6 +163,38 @@ fn main() {
         });
     }
 
+    // Storage eviction + disk-alert loop: every 60 s, evict old clips when over the configured
+    // limit, and push an `edge:full-disk` event to control when usage exceeds 90%.
+    {
+        let evict_state = std::sync::Arc::clone(&state);
+        std::thread::spawn(move || {
+            // Minimum interval between disk-full alerts (avoid spamming control).
+            let alert_interval = std::time::Duration::from_secs(10 * 60);
+            let mut last_alert: Option<std::time::Instant> = None;
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                let mgr = evict_state.recording.clone();
+                let evicted = mgr.evict_if_over_limit();
+                if evicted > 0 {
+                    log::info!("storage: evicted {evicted} clip(s) to stay under limit");
+                }
+                let stats = mgr.storage_stats();
+                // Fire alert when >90% full — rate-limited to once per alert_interval.
+                if stats.pct >= 90 {
+                    let should_alert = last_alert
+                        .map(|t| t.elapsed() >= alert_interval)
+                        .unwrap_or(true);
+                    if should_alert {
+                        log::warn!("storage: {}% full ({}/{} bytes) — pushing edge:full-disk alert",
+                            stats.pct, stats.used_bytes, stats.max_bytes);
+                        evict_state.push_disk_alert(stats.used_bytes, stats.max_bytes, stats.pct, &stats.path);
+                        last_alert = Some(std::time::Instant::now());
+                    }
+                }
+            }
+        });
+    }
+
     let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");
     rt.block_on(async move {
         let app = http::router(state);

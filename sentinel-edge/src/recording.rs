@@ -125,6 +125,10 @@ pub struct RecordingConfig {
     /// (triggers on small pixel changes); higher = less sensitive. Range: 4–256.
     #[serde(default = "default_motion_var")]
     pub motion_var_threshold: f64,
+    /// Directory on the edge where .mp4 clips are saved. Defaults to
+    /// `/opt/sentinel-edge/recordings`. EDGE_RECORDING_DIR env overrides this.
+    #[serde(default = "default_recordings_path")]
+    pub recordings_path: String,
 }
 
 impl Default for RecordingConfig {
@@ -135,15 +139,55 @@ impl Default for RecordingConfig {
             codec: "copy".to_string(),
             cameras_always_warm: false,
             motion_var_threshold: 16.0,
+            recordings_path: default_recordings_path(),
         }
     }
 }
 
 fn default_motion_var() -> f64 { 16.0 }
-
 fn default_pre_roll() -> u32 { 10 }
 fn default_storage() -> u64 { 1000 }
 fn default_codec() -> String { "copy".to_string() }
+fn default_recordings_path() -> String { "/opt/sentinel-edge/recordings".to_string() }
+
+// ---- storage stats ----------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StorageStats {
+    pub used_bytes:  u64,
+    pub max_bytes:   u64,
+    pub clip_count:  usize,
+    pub path:        String,
+    /// 0–100 percentage of max_bytes used (capped at 100).
+    pub pct:         u8,
+}
+
+impl StorageStats {
+    /// Derive storage stats by summing `size_bytes` from all clip sidecar JSONs.
+    pub fn compute(dir: &std::path::Path, max_mb: u64) -> Self {
+        let mut used_bytes: u64 = 0;
+        let mut clip_count: usize = 0;
+        if let Ok(rd) = fs::read_dir(dir) {
+            for entry in rd.filter_map(|e| e.ok()) {
+                let p = entry.path();
+                if p.extension().map(|x| x == "json").unwrap_or(false) {
+                    if let Ok(raw) = fs::read_to_string(&p) {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                            let sz = v.get("size_bytes").and_then(|b| b.as_u64()).unwrap_or(0);
+                            used_bytes += sz;
+                            clip_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+        let max_bytes = max_mb.saturating_mul(1024 * 1024);
+        let pct = if max_bytes == 0 { 100 } else {
+            ((used_bytes * 100) / max_bytes).min(100) as u8
+        };
+        StorageStats { used_bytes, max_bytes, clip_count, path: dir.to_string_lossy().into_owned(), pct }
+    }
+}
 
 // ---- ring buffer ------------------------------------------------------------
 
@@ -187,10 +231,10 @@ pub struct RecordingManager {
 impl RecordingManager {
     pub fn boot(control_url: &str) -> Arc<RecordingManager> {
         let config = fetch_config(control_url).unwrap_or_default();
-        // Default to a persistent path that survives edge restarts and OS reboots.
+        // EDGE_RECORDING_DIR env overrides the cloud config (useful for dev/testing).
         let dir = std::env::var("EDGE_RECORDING_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/opt/sentinel-edge/recordings"));
+            .unwrap_or_else(|_| PathBuf::from(&config.recordings_path));
         let ring_dir = PathBuf::from("/tmp/sentinel-ring");
         let live_dir = PathBuf::from("/tmp/sentinel-live");
 
@@ -504,6 +548,57 @@ impl RecordingManager {
         let total = items.len();
         let items = items.into_iter().skip(p.offset).take(p.limit).collect();
         ClipPage { total, items }
+    }
+
+    /// Current storage stats (sum of sidecar size_bytes fields).
+    pub fn storage_stats(&self) -> StorageStats {
+        StorageStats::compute(&self.dir, self.config.max_storage_mb)
+    }
+
+    /// Evict oldest clips until total usage is ≤ 80% of max. Returns number deleted.
+    /// Clips with an active recording session are skipped.
+    pub fn evict_if_over_limit(&self) -> usize {
+        let max_bytes = self.config.max_storage_mb.saturating_mul(1024 * 1024);
+        if max_bytes == 0 { return 0; }
+        let target = (max_bytes as f64 * 0.80) as u64;
+
+        // Collect all sidecar metadata sorted oldest-first.
+        let mut clips: Vec<(String, u64, String)> = fs::read_dir(&self.dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))
+            .filter_map(|e| {
+                let raw = fs::read_to_string(e.path()).ok()?;
+                let v = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+                let clip_id    = v.get("clip_id")?.as_str()?.to_string();
+                let size_bytes = v.get("size_bytes").and_then(|b| b.as_u64()).unwrap_or(0);
+                let started_at = v.get("started_at").and_then(|s| s.as_str()).unwrap_or("").to_string();
+                Some((clip_id, size_bytes, started_at))
+            })
+            .collect();
+        clips.sort_by(|a, b| a.2.cmp(&b.2)); // oldest started_at first
+
+        let total: u64 = clips.iter().map(|(_, sz, _)| sz).sum();
+        if total <= max_bytes { return 0; } // under limit — nothing to evict
+
+        let active = self.sessions.lock().unwrap()
+            .values()
+            .map(|s| s.clip_id.clone())
+            .collect::<std::collections::HashSet<_>>();
+
+        let mut remaining = total;
+        let mut deleted = 0;
+        for (clip_id, size_bytes, _) in &clips {
+            if remaining <= target { break; }
+            if active.contains(clip_id) { continue; } // skip in-progress recording
+            if self.delete_clip(clip_id).is_ok() {
+                remaining = remaining.saturating_sub(*size_bytes);
+                deleted += 1;
+                log::info!("storage evict: deleted {clip_id} ({size_bytes}B) — {remaining}/{max_bytes}B");
+            }
+        }
+        deleted
     }
 
     /// Delete a clip by id (removes both the .mp4 and sidecar .json).

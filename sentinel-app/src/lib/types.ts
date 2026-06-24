@@ -14,6 +14,10 @@ export type Settings = {
   pre_roll_secs: number;
   /** MOG2 varThreshold for motion detection. Lower = more sensitive (default 16). */
   motion_var_threshold: number;
+  /** Maximum recording storage in MB before old clips are auto-evicted (default 10000 = ~10 GB). */
+  max_storage_mb: number;
+  /** Directory on the edge where .mp4 clips are saved (default /opt/sentinel-edge/recordings). */
+  recordings_path: string;
 };
 
 /** A saved camera (matches `app_core::devices::Device`). */
@@ -296,4 +300,6 @@ export const DEFAULT_SETTINGS: Settings = {
   cameras_always_warm: false,
   pre_roll_secs: 10,
   motion_var_threshold: 16,
+  max_storage_mb: 10000,
+  recordings_path: "/opt/sentinel-edge/recordings",
 };

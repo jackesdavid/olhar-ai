@@ -262,6 +262,21 @@ impl AppState {
         self.box_agent().post(&url).send_json(lines).is_ok()
     }
 
+    /// Notify control that disk usage has crossed the warning threshold.
+    /// Control publishes this as an `edge:full-disk` system event so tenant workflows can react.
+    pub fn push_disk_alert(&self, used_bytes: u64, max_bytes: u64, pct: u8, path: &str) {
+        let url = format!("{}/config/disk-alert", self.control_url);
+        let body = serde_json::json!({
+            "used_bytes": used_bytes,
+            "max_bytes":  max_bytes,
+            "pct":        pct,
+            "path":       path,
+        });
+        if let Err(e) = self.box_agent().post(&url).send_json(&body) {
+            log::debug!("disk alert push failed: {e}");
+        }
+    }
+
     /// A short-timeout ureq agent + request stamped with this box's token + tailnet host +
     /// edge version — the standard headers control uses to resolve the box's tenant.
     fn box_agent(&self) -> BoxReq {

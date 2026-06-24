@@ -263,21 +263,36 @@ pub struct TenantEvent {
 /// by the platform (e.g. `motion` by the edge), not user `EmitEvent` nodes. Add new ones here.
 pub fn system_events() -> Vec<TenantEvent> {
     let field = |name: &str, ty: PortType| EventField { name: name.to_string(), ty };
-    vec![TenantEvent {
-        name: "motion".to_string(),
-        category: "System".to_string(),
-        source: "system".to_string(),
-        description: Some("Edge motion detection".to_string()),
-        created_by_graph: None,
-        fields: vec![
-            field("camera", PortType::Camera),
-            field("score", PortType::Num),
-            field("area", PortType::Num),
-            field("blobs", PortType::Num),
-            field("bbox", PortType::NumArray),
-            field("frame", PortType::Image),
-        ],
-    }]
+    vec![
+        TenantEvent {
+            name: "motion".to_string(),
+            category: "System".to_string(),
+            source: "system".to_string(),
+            description: Some("Edge motion detection".to_string()),
+            created_by_graph: None,
+            fields: vec![
+                field("camera", PortType::Camera),
+                field("score", PortType::Num),
+                field("area", PortType::Num),
+                field("blobs", PortType::Num),
+                field("bbox", PortType::NumArray),
+                field("frame", PortType::Image),
+            ],
+        },
+        TenantEvent {
+            name: "edge:full-disk".to_string(),
+            category: "System".to_string(),
+            source: "system".to_string(),
+            description: Some("Edge recording storage is near or over the configured limit".to_string()),
+            created_by_graph: None,
+            fields: vec![
+                field("used_bytes", PortType::Num),
+                field("max_bytes", PortType::Num),
+                field("pct", PortType::Num),
+                field("path", PortType::Text),
+            ],
+        },
+    ]
 }
 
 /// The tenant's event categories, ordered by name. Empty on error.

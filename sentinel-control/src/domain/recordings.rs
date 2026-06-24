@@ -197,7 +197,7 @@ async fn download(
         .into_response())
 }
 
-fn normalize_host(host: &str) -> String {
+pub fn normalize_host(host: &str) -> String {
     let h = host.trim().trim_end_matches('/');
     if h.starts_with("http://") || h.starts_with("https://") {
         h.to_string()
@@ -208,7 +208,7 @@ fn normalize_host(host: &str) -> String {
 
 /// The edge API (recording, snapshot) runs on :8080 via `tailscale serve --https=8080`.
 /// magicdns_host is the base URL (port 443, go2rtc). Rewrite to :8080 for API calls.
-fn edge_api_base(base: &str) -> String {
+pub fn edge_api_base(base: &str) -> String {
     // If it already has a port, use as-is.
     let after_scheme = base.trim_start_matches("https://").trim_start_matches("http://");
     if after_scheme.contains(':') {

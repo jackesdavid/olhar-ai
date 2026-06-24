@@ -33,6 +33,7 @@ pub fn router(state: AppState) -> Router {
         .route("/config/streaming", post(streaming_push))
         .route("/config/logs", post(box_logs_push))
         .route("/config/motion", post(motion_push))
+        .route("/config/disk-alert", post(disk_alert_push))
         .route("/config/recording", get(recording_config))
         .route("/config/recordings/clip-metadata", post(clip_push))
         .merge(handlers::router())
@@ -297,6 +298,33 @@ async fn motion_push(State(st): State<AppState>, headers: HeaderMap, body: Optio
             .await;
     } else {
         log::warn!("motion event dropped: REDIS_URL not configured");
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// The edge reports disk usage is near/over the configured limit (box token → tenant).
+/// Publishes an `edge:full-disk` system event to the Redis flow:inject fabric so tenant
+/// `OnEvent("edge:full-disk")` workflow graphs can react (send alert, stop recordings, etc.).
+async fn disk_alert_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<serde_json::Value>>) -> Response {
+    let tenant = match box_tenant(&st, &headers).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
+        Err(resp) => return resp,
+    };
+    let payload = body.map(|Json(v)| v).unwrap_or_default();
+    if let Some(mut conn) = st.redis.clone() {
+        let msg = json!({
+            "tenant": tenant.to_string(),
+            "event":  "edge:full-disk",
+            "payload": payload,
+        });
+        let _: Result<i64, _> = redis::cmd("PUBLISH")
+            .arg("flow:inject")
+            .arg(msg.to_string())
+            .query_async(&mut conn)
+            .await;
+    } else {
+        log::warn!("edge:full-disk event dropped: REDIS_URL not configured");
     }
     StatusCode::NO_CONTENT.into_response()
 }

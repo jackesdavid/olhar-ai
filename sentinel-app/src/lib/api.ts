@@ -97,14 +97,24 @@ export const boxes = {
     `${API_BASE}/boxes/${encodeURIComponent(id)}/logs/stream?token=${encodeURIComponent(auth.token ?? "")}`,
   patchRecordingConfig: (id: string, config: RecordingConfig) =>
     api.patch<RecordingConfig>(`/boxes/${id}/recording-config`, config),
+  storageStats: (id: string) => api.get<StorageStats>(`/boxes/${id}/storage-stats`),
 };
 
 export type RecordingConfig = {
   pre_roll_secs: number;
   max_storage_mb: number;
+  recordings_path: string;
   codec: string;
   cameras_always_warm: boolean;
   motion_var_threshold?: number;
+};
+
+export type StorageStats = {
+  used_bytes: number;
+  max_bytes: number;
+  clip_count: number;
+  path: string;
+  pct: number;
 };
 
 export type PlatformLog = {
