@@ -86,6 +86,11 @@ pub struct ToolContext {
     pub vision: Arc<dyn Vision>,
     pub recognizer: Arc<dyn Recognizer>,
     pub notifier: Arc<dyn Notifier>,
+    /// In-flight TimeGate keeper threads: `(tenant_id, graph_id, node_id)`.
+    /// Shared across all runs in the same process (sentinel-flow overwrites the default
+    /// with the AppState copy). Used by the TimeGate node to detect and recover from
+    /// keeper threads that died (e.g. after a flow restart).
+    pub active_gates: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<(uuid::Uuid, u32, u32)>>>,
 }
 
 impl ToolContext {
@@ -115,6 +120,7 @@ impl ToolContext {
             vision: Arc::new(crate::ports::LocalVision),
             recognizer,
             notifier: Arc::new(crate::ports::LocalNotifier),
+            active_gates: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }
     }
 }

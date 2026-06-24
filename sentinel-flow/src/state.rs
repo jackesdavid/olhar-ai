@@ -85,6 +85,10 @@ pub struct AppState {
     /// Running pairing pollers per tenant. Each entry holds the bot token that started
     /// the poller (for change detection) and the stop flag used to retire it.
     pub pairing_stops: PairingStops,
+    /// In-flight TimeGate keeper threads: `(tenant_id, graph_id, node_id)`. The TimeGate
+    /// node registers here when it starts a keeper and removes itself when it fires or resets.
+    /// On re-trigger, if the entry is absent the node knows the keeper died and restarts one.
+    pub active_gates: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<(uuid::Uuid, u32, u32)>>>,
 }
 
 impl AppState {
@@ -126,6 +130,7 @@ impl AppState {
             event_runs: Arc::new(Mutex::new(std::collections::HashMap::new())),
             pod_name,
             pairing_stops: Arc::new(Mutex::new(HashMap::new())),
+            active_gates: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }))
     }
 

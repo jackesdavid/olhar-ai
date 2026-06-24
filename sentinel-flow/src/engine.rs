@@ -550,6 +550,7 @@ fn build_run_context(state: &Arc<AppState>, tenant: Uuid, graph_id: u32) -> (Too
     // keeps the connection warm across every `GetFrame`/`Snapshot` in the run, so a
     // `memoize=false` node in a loop re-grabs a fresh frame without re-handshaking.
     ctx.frames = Arc::new(app_core::ports::EdgeFrameSource::new(state.edge_base(tenant)));
+    ctx.active_gates = std::sync::Arc::clone(&state.active_gates);
     (ctx, drain)
 }
 

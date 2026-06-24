@@ -471,8 +471,11 @@ fn forward_epoch(
                 .map(|s| s == "armed")
                 .unwrap_or(false);
 
-            if is_armed {
-                // Re-trigger: extend if needed, then return with no exec output.
+            let gate_key = (sys.tenant_id, graph.id, nid);
+            let keeper_alive = sys.active_gates.lock().unwrap().contains(&gate_key);
+
+            if is_armed && keeper_alive {
+                // Re-trigger: a keeper is running. Extend expires_at if needed, then return.
                 let expires_ts = state.as_ref()
                     .and_then(|v| v.get("expires_at"))
                     .and_then(|v| v.as_str())
@@ -501,7 +504,8 @@ fn forward_epoch(
                 continue;
             }
 
-            // Idle — this run becomes the keeper. Arm and poll.
+            // Idle, OR armed with a dead keeper (e.g. flow restarted) — this run becomes the keeper.
+            // Arm fresh: if already armed just update the expiry so the keeper starts from now.
             let expires_ts = now_ts + wait_secs;
             repo::set_node_state(&sys.db, sys.tenant_id, graph.id, nid, &serde_json::json!({
                 "state": "armed",
@@ -509,8 +513,13 @@ fn forward_epoch(
                     .unwrap_or_else(Utc::now)
                     .to_rfc3339(),
             }));
+            sys.active_gates.lock().unwrap().insert(gate_key);
             if graph.debug {
-                on_log(nid, &format!("Time Gate: armed for {wait_secs}s"), 0);
+                if is_armed {
+                    on_log(nid, &format!("Time Gate: keeper recovered, re-armed for {wait_secs}s"), 0);
+                } else {
+                    on_log(nid, &format!("Time Gate: armed for {wait_secs}s"), 0);
+                }
             }
 
             let fired = loop {
@@ -535,6 +544,7 @@ fn forward_epoch(
                 }
             };
 
+            sys.active_gates.lock().unwrap().remove(&gate_key);
             repo::set_node_state(&sys.db, sys.tenant_id, graph.id, nid,
                 &serde_json::json!({ "state": "idle" }));
             if fired {
