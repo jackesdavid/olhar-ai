@@ -58,6 +58,26 @@ repoints ip/xaddr, re-resolves RTSP, regenerates the `cam_<ip>` go2rtc streams, 
 go2rtc streams are named `cam_<ip-with-underscores>` (preview/substream) + `cam_<ip>_hd`
 (main). `crates/app-core/src/go2rtc.rs` is the single source of truth for naming + config.
 
+## Recording + pre-roll ring (`src/recording.rs`)
+
+On-demand clip recording with an **in-memory H264 pre-roll ring** — no per-camera
+ffmpeg ring process, no segment files on disk between recordings.
+
+- **Ring** (`start_ring`): a background thread per camera opens an RTSP connection to
+  go2rtc's local re-server (`rtsp://127.0.0.1:8554/cam_<ip>`). We use the `retina` crate
+  **only for RTSP transport + RTP ordering** (raw `PacketItem::Rtp`, *not* `.demuxed()`)
+  and do our own lenient H264 depacketization (`H264Reassembler`: single-NAL / STAP-A /
+  FU-A → Annex-B access units, caches SPS/PPS and prepends them to keyframes). retina's
+  built-in codec layer rejects go2rtc's repackaged NALs with `forbidden sequence 00 00 00`,
+  which is why we bypass it. Access units live in a `VecDeque<H264Frame>` capped at
+  ~`pre_roll_secs` of frames.
+- **Record** (`start`/`stop`): `start()` snapshots the ring from the last IDR (clean
+  keyframe → no black frames) **and** installs the live sink under the same `MemRing` lock,
+  so the boundary has no gap/overlap. One `ffmpeg -f h264 -i pipe:0 -c:v copy out.mp4`:
+  pre-roll bytes are written first, then a relay thread feeds live frames to its stdin.
+  `stop()` clears the live sink → channel closes → relay drains → ffmpeg gets EOF and
+  finalises the MP4. No concat step. Sidecar `<clip>.json` holds friendly name + metadata.
+
 ## Motion detection (OpenCV MOG2) — `src/motion.rs`
 
 The edge owns **continuous** motion detection (it's the only thing near the cameras). A
