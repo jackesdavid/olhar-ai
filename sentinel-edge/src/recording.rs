@@ -1,40 +1,30 @@
 //! On-demand clip recording with pre-roll ring buffer.
 //!
-//! Architecture:
-//!
 //! **Ring buffer** (`start_ring` / `stop_ring`)
-//!   A background ffmpeg per camera writes 1-second MPEG-TS segments to
-//!   `/tmp/sentinel-ring/{ip}/seg_%06d.ts`. A cleanup thread keeps only the
-//!   last `pre_roll_secs + 2` segments (the +2 guards against the segment
-//!   currently being written). Started by `warm_cameras()` on edge boot.
+//!   A per-camera background thread polls go2rtc's HLS endpoint
+//!   (`/api/hls/playlist.m3u8?id=…`) every 500 ms, downloads each new MPEG-TS
+//!   segment, and saves it to `/tmp/sentinel-ring/{ip}/seg_%06d.ts`. go2rtc
+//!   owns the RTSP connection and normalises timestamps — no raw camera RTSP
+//!   or ffmpeg process is needed for the ring. A cleanup pass keeps only the
+//!   last `pre_roll_secs + 2` segments.
 //!
 //! **Recording** (`start` / `stop`)
-//!   `start(ip, requested_secs)` copies the last N complete ring segments as
-//!   the pre-roll, notes the current ring segment index, and sets a "recording
-//!   lock" so the cleanup thread won't delete new segments while recording.
-//!   `stop(clip_id)` collects ring segments written since start(), then runs
-//!   ffmpeg to concat [preroll copies + live ring segments] into the final .mp4.
+//!   `start(ip, requested_pre_roll_secs)` copies the last N complete ring segments as
+//!   the pre-roll, records the wall-clock start time, and sets a "recording lock"
+//!   so cleanup never deletes segments with mtime ≥ that time.
+//!   `stop(clip_id)` collects ring segments with mtime ≥ start time (live portion),
+//!   then runs ffmpeg to concat [preroll copies + live segments] into the final .mp4.
 //!
-//!   This design avoids spawning a second ffmpeg for the live portion: the ring
-//!   buffer is ALREADY writing the camera stream continuously, so its segments
-//!   are used directly. This eliminates the "gap" between pre-roll and live that
-//!   occurs when a second ffmpeg process takes time to connect to the RTSP stream.
-//!   Every ring segment starts at a keyframe (guaranteed by the segment muxer),
-//!   so the join between pre-roll and live is seamless.
-//!
-//! **Graceful shutdown**
-//!   The ring ffmpeg receives 'q\n' on stdin to flush and write the final segment.
-//!   A 5-second deadline + SIGKILL fallback ensures stop() never hangs.
-//!
-//! All ffmpeg stderr is forwarded to the edge log buffer (→ cloud log viewer).
+//! **No per-camera ffmpeg processes.** ffmpeg is only invoked once per clip at
+//!   stop() time to mux the already-downloaded MPEG-TS segments into MP4.
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write as _;
+use std::io::Read as _;
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 // ---- friendly name word list ------------------------------------------------
 
@@ -97,36 +87,28 @@ pub struct ClipPage {
 #[derive(Debug)]
 pub struct ListParams {
     pub camera_ip: Option<String>,
-    pub sort:      String,   // "started_at" | "duration_secs" | "size_bytes" | "friendly_name"
-    pub dir:       String,   // "asc" | "desc"
+    pub sort:      String,
+    pub dir:       String,
     pub limit:     usize,
     pub offset:    usize,
-    pub from:      Option<String>, // RFC3339
-    pub to:        Option<String>, // RFC3339
+    pub from:      Option<String>,
+    pub to:        Option<String>,
 }
 
 // ---- config -----------------------------------------------------------------
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct RecordingConfig {
-    /// Maximum ring buffer size in seconds — also the upper bound for pre_roll_secs
-    /// in the StartRecording node. Drives how many segments warm_cameras() keeps.
     #[serde(default = "default_pre_roll")]
     pub pre_roll_secs: u32,
     #[serde(default = "default_storage")]
     pub max_storage_mb: u64,
     #[serde(default = "default_codec")]
     pub codec: String,
-    /// Keep every camera's RTSP stream open permanently via a ring buffer so
-    /// recordings start with pre-roll footage instead of from the trigger moment.
     #[serde(default)]
     pub cameras_always_warm: bool,
-    /// MOG2 `varThreshold` for motion detection (default 16). Lower = more sensitive
-    /// (triggers on small pixel changes); higher = less sensitive. Range: 4–256.
     #[serde(default = "default_motion_var")]
     pub motion_var_threshold: f64,
-    /// Directory on the edge where .mp4 clips are saved. Defaults to
-    /// `/opt/sentinel-edge/recordings`. EDGE_RECORDING_DIR env overrides this.
     #[serde(default = "default_recordings_path")]
     pub recordings_path: String,
 }
@@ -158,12 +140,10 @@ pub struct StorageStats {
     pub max_bytes:   u64,
     pub clip_count:  usize,
     pub path:        String,
-    /// 0–100 percentage of max_bytes used (capped at 100).
     pub pct:         u8,
 }
 
 impl StorageStats {
-    /// Derive storage stats by summing `size_bytes` from all clip sidecar JSONs.
     pub fn compute(dir: &std::path::Path, max_mb: u64) -> Self {
         let mut used_bytes: u64 = 0;
         let mut clip_count: usize = 0;
@@ -189,49 +169,47 @@ impl StorageStats {
     }
 }
 
-// ---- ring buffer ------------------------------------------------------------
+// ---- ring session -----------------------------------------------------------
 
-#[allow(dead_code)]
+/// A live ring-buffer collector for one camera. Sending on `stop_tx` causes the
+/// background thread to drain its current segment download and exit within one poll
+/// interval (≤ 500 ms).
 struct RingSession {
-    child: Option<Child>,
-    stdin: Option<ChildStdin>,
+    #[allow(dead_code)] // used via try_send() after consuming from HashMap in stop_ring()
+    stop_tx: std::sync::mpsc::SyncSender<()>,
 }
 
-// ---- live session -----------------------------------------------------------
+// ---- live recording session -------------------------------------------------
 
 struct Session {
-    clip_id:       String,
-    camera_ip:     String,
-    /// Final .mp4 output path.
-    output:        PathBuf,
-    /// Pre-roll segment copies (in live_dir, safe from ring cleanup).
-    preroll:       Vec<PathBuf>,
-    /// First ring segment index that belongs to the "live" portion.
-    start_seg_idx: u64,
-    started_at:    String,
+    clip_id:         String,
+    camera_ip:       String,
+    output:          PathBuf,
+    /// Pre-roll segments copied into live_dir at start() time.
+    preroll:         Vec<PathBuf>,
+    /// Wall-clock time when recording started. Ring segments with mtime ≥ this
+    /// value are the live portion of the clip; cleanup never touches them.
+    ring_started_at: SystemTime,
+    started_at:      String,
 }
 
 // ---- manager ----------------------------------------------------------------
 
 pub struct RecordingManager {
     pub config: RecordingConfig,
-    /// Final clip directory.
     dir:          PathBuf,
-    /// Ring segment root: {ring_dir}/{ip}/seg_%06d.ts
     ring_dir:     PathBuf,
-    /// Pre-roll copies while recording (intermediate stash before concat).
     live_dir:     PathBuf,
-    sessions:     Mutex<HashMap<String, Session>>,
-    ring_sessions: Mutex<HashMap<String, RingSession>>,
-    /// Per-camera minimum ring segment index to preserve during active recording.
-    /// Cleanup thread checks this before deleting segments.
-    recording_locks: Arc<Mutex<HashMap<String, u64>>>,
+    sessions:        Mutex<HashMap<String, Session>>,
+    /// Arc so the per-camera collector thread can hold a weak reference without Self.
+    ring_sessions:   Arc<Mutex<HashMap<String, RingSession>>>,
+    /// Per-camera recording start time. Cleanup skips segments newer than this.
+    recording_locks: Arc<Mutex<HashMap<String, SystemTime>>>,
 }
 
 impl RecordingManager {
     pub fn boot(control_url: &str) -> Arc<RecordingManager> {
         let config = fetch_config(control_url).unwrap_or_default();
-        // EDGE_RECORDING_DIR env overrides the cloud config (useful for dev/testing).
         let dir = std::env::var("EDGE_RECORDING_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(&config.recordings_path));
@@ -252,28 +230,22 @@ impl RecordingManager {
             dir,
             ring_dir,
             live_dir,
-            sessions: Mutex::new(HashMap::new()),
-            ring_sessions: Mutex::new(HashMap::new()),
+            sessions:        Mutex::new(HashMap::new()),
+            ring_sessions:   Arc::new(Mutex::new(HashMap::new())),
             recording_locks: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
     // ---- ring ---------------------------------------------------------------
 
-    /// Start the ring buffer for `camera_ip`. Idempotent — no-op if already running.
-    /// If ffmpeg has crashed (process exited), the stale entry is removed first so it
-    /// restarts cleanly; this prevents stale old segments from masquerading as live footage.
+    /// Start the go2rtc HLS ring collector for `camera_ip`. Idempotent — no-op
+    /// if already running. The collector polls go2rtc every 500 ms, downloading
+    /// new MPEG-TS segments. If go2rtc is unavailable it retries automatically.
     pub fn start_ring(&self, camera_ip: &str) {
-        let mut rings = self.ring_sessions.lock().unwrap();
-        if let Some(rs) = rings.get_mut(camera_ip) {
-            let dead = rs.child.as_mut()
-                .and_then(|c| c.try_wait().ok())
-                .is_some(); // Some(status) = exited; None = still running
-            if dead {
-                log::warn!("ring[{camera_ip}]: ffmpeg exited unexpectedly — restarting");
-                rings.remove(camera_ip);
-            } else {
-                return; // healthy
+        {
+            let rings = self.ring_sessions.lock().unwrap();
+            if rings.contains_key(camera_ip) {
+                return; // already collecting
             }
         }
 
@@ -284,19 +256,11 @@ impl RecordingManager {
             return;
         }
 
-        // If a recording is active for this camera, preserve existing ring segments
-        // so collect_live_segs() can still find them at stop() time. Continue ffmpeg
-        // numbering from the highest existing index + 1 so collect_live_segs (which
-        // filters idx >= start_seg_idx) picks up both pre-crash and post-crash segs.
-        //
-        // If no recording is active, clear stale segments so the fresh ffmpeg starts
-        // at 000000 and index ordering stays unambiguous.
+        // Clear stale segments when no recording is active. With mtime-based
+        // live-segment collection a fresh start is always safe and avoids
+        // stale-segment confusion from the previous run.
         let has_active_recording = self.recording_locks.lock().unwrap().contains_key(camera_ip);
-        let next_seg_idx = if has_active_recording {
-            let next = max_ring_seg_idx(&seg_dir).map(|m| m + 1).unwrap_or(0);
-            log::warn!("ring[{camera_ip}]: restarting during active recording — continuing from seg_{next:06}");
-            next
-        } else {
+        if !has_active_recording {
             if let Ok(rd) = fs::read_dir(&seg_dir) {
                 for entry in rd.filter_map(|e| e.ok()) {
                     if entry.path().extension().map(|x| x == "ts").unwrap_or(false) {
@@ -304,84 +268,42 @@ impl RecordingManager {
                     }
                 }
             }
-            0
-        };
-
-        let rtsp_url = format!("rtsp://localhost:8554/cam_{ip_key}");
-        let seg_pattern = seg_dir.join("seg_%06d.ts");
-        let next_seg_str = next_seg_idx.to_string();
-
-        let mut cmd = Command::new("ffmpeg");
-        cmd.args([
-                "-loglevel", "warning",
-                "-rtsp_transport", "tcp",
-                "-i", &rtsp_url,
-                "-c:v", "copy",
-                "-an",
-                "-f", "segment",
-                "-segment_time", "1",
-                "-segment_format", "mpegts",
-                "-reset_timestamps", "1",
-            ]);
-        if next_seg_idx > 0 {
-            cmd.args(["-segment_start_number", &next_seg_str]);
-        }
-        cmd.arg(seg_pattern.to_str().unwrap_or_default())
-            .stdin(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => { log::warn!("ring[{camera_ip}]: spawn failed: {e}"); return; }
-        };
-        let stdin = child.stdin.take();
-
-        if let Some(stderr) = child.stderr.take() {
-            let ip = camera_ip.to_string();
-            std::thread::spawn(move || {
-                use std::io::BufRead as _;
-                for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
-                    log::warn!("ring-ffmpeg[{ip}]: {line}");
-                }
-            });
         }
 
-        log::info!("ring[{camera_ip}]: started (max {}s buffer)", self.config.pre_roll_secs);
-        rings.insert(camera_ip.to_string(), RingSession { child: Some(child), stdin });
+        let (stop_tx, stop_rx) = std::sync::mpsc::sync_channel(1);
 
-        // Cleanup thread: keep only the last (pre_roll_secs + 2) segments,
-        // but never delete segments at or above an active recording's start index.
-        let keep = self.config.pre_roll_secs as usize + 2;
-        let dir_clone = seg_dir.clone();
-        let ip_clone = camera_ip.to_string();
-        let locks = Arc::clone(&self.recording_locks);
+        let ip_t          = camera_ip.to_string();
+        let seg_dir_t     = seg_dir.clone();
+        let pre_roll_secs = self.config.pre_roll_secs;
+        let locks         = Arc::clone(&self.recording_locks);
+        let ring_sessions = Arc::clone(&self.ring_sessions);
+
         std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_secs(2));
-                let min_idx = locks.lock().unwrap().get(&ip_clone).copied();
-                cleanup_ring_dir(&dir_clone, keep, &ip_clone, min_idx);
-            }
+            run_hls_collector(&ip_t, &seg_dir_t, pre_roll_secs, &locks, &ring_sessions, stop_rx);
         });
+
+        self.ring_sessions.lock().unwrap()
+            .insert(camera_ip.to_string(), RingSession { stop_tx });
+
+        log::info!("ring[{camera_ip}]: started (max {pre_roll_secs}s buffer, go2rtc HLS)");
     }
 
-    /// Stop the ring buffer for `camera_ip`.
+    /// Stop the ring collector for `camera_ip`.
     pub fn stop_ring(&self, camera_ip: &str) {
-        let mut sess = self.ring_sessions.lock().unwrap().remove(camera_ip);
-        if let Some(mut rs) = sess.take() {
-            kill_ffmpeg(&mut rs.child, &mut rs.stdin, &format!("ring[{camera_ip}]"));
+        if let Some(rs) = self.ring_sessions.lock().unwrap().remove(camera_ip) {
+            let _ = rs.stop_tx.try_send(());
         }
     }
 
     // ---- recording ----------------------------------------------------------
 
-    /// Start recording `camera_ip`. Collects up to `requested_pre_roll_secs` of
-    /// ring footage to prepend; the live portion is captured from the ring buffer
-    /// directly (no second ffmpeg process), ensuring seamless keyframe-aligned join.
-    /// Returns `(clip_id, new)` where `new = false` means a recording was already in progress.
     pub fn start(&self, camera_ip: &str, requested_pre_roll_secs: u32) -> Result<(String, bool), String> {
-        let mut sessions = self.sessions.lock().unwrap();
-        if let Some((id, _)) = sessions.iter().find(|(_, s)| s.camera_ip == camera_ip) {
-            return Ok((id.clone(), false));
+        // Quick duplicate check (lock released before start_ring).
+        {
+            let sessions = self.sessions.lock().unwrap();
+            if let Some((id, _)) = sessions.iter().find(|(_, s)| s.camera_ip == camera_ip) {
+                return Ok((id.clone(), false));
+            }
         }
 
         let ts = chrono::Utc::now();
@@ -391,18 +313,15 @@ impl RecordingManager {
         let started_at = ts.to_rfc3339();
         let output = self.dir.join(format!("{clip_id}.mp4"));
 
-        // Ensure the ring buffer is alive before we start. If ffmpeg crashed, this
-        // restarts it so we capture live footage during the recording window.
-        drop(sessions); // release lock before start_ring (which takes ring_sessions lock)
+        // Ensure ring is running before we snapshot pre-roll.
         self.start_ring(camera_ip);
+
+        // Second check after ring start (another thread could have won the race).
         let mut sessions = self.sessions.lock().unwrap();
-        // Re-check after ring restart: another caller may have started the same camera.
         if let Some((id, _)) = sessions.iter().find(|(_, s)| s.camera_ip == camera_ip) {
             return Ok((id.clone(), false));
         }
 
-        // Collect available pre-roll segments and copy them into live_dir so the
-        // ring cleanup loop can't delete them before stop() concatenates them.
         let max_pre_roll = requested_pre_roll_secs.min(self.config.pre_roll_secs);
         let ring_cam_dir = self.ring_dir.join(&ip_key);
         let ring_segs = collect_preroll(&ring_cam_dir, max_pre_roll);
@@ -419,22 +338,20 @@ impl RecordingManager {
         if !preroll.is_empty() {
             log::info!("recording[{clip_id}]: pre-roll {}s ({} segments)", preroll.len(), preroll.len());
         } else if requested_pre_roll_secs > 0 {
-            log::warn!("recording[{clip_id}]: requested {requested_pre_roll_secs}s pre-roll but ring has no segments");
+            log::warn!("recording[{clip_id}]: requested {requested_pre_roll_secs}s pre-roll but ring has no segments yet");
         }
 
-        // Include the segment currently being written (N) as the first live segment.
-        // collect_preroll() already excluded N (incomplete at copy time); by stop()
-        // it is complete, giving a seamless [N-1 → N] join with zero missing frames.
-        let start_seg_idx = max_ring_seg_idx(&ring_cam_dir).unwrap_or(0);
-        self.recording_locks.lock().unwrap().insert(camera_ip.to_string(), start_seg_idx);
+        // All ring segments with mtime >= this moment are the live portion.
+        let ring_started_at = SystemTime::now();
+        self.recording_locks.lock().unwrap().insert(camera_ip.to_string(), ring_started_at);
 
-        log::info!("recording started: {clip_id} (ring-only, start_seg={start_seg_idx})");
+        log::info!("recording started: {clip_id}");
         sessions.insert(clip_id.clone(), Session {
             clip_id: clip_id.clone(),
             camera_ip: camera_ip.to_string(),
             output,
             preroll,
-            start_seg_idx,
+            ring_started_at,
             started_at,
         });
         Ok((clip_id, true))
@@ -445,13 +362,12 @@ impl RecordingManager {
         let sess = sessions.remove(clip_id)
             .ok_or_else(|| format!("no active session for clip_id {clip_id}"))?;
 
-        // Collect ring segments written since start() — these form the live portion.
         let ring_cam_dir = self.ring_dir.join(sess.camera_ip.replace('.', "_"));
-        let live_segs = collect_live_segs(&ring_cam_dir, sess.start_seg_idx);
+        let live_segs = collect_live_segs(&ring_cam_dir, sess.ring_started_at);
 
         if live_segs.is_empty() && sess.preroll.is_empty() {
             self.recording_locks.lock().unwrap().remove(&sess.camera_ip);
-            return Err(format!("no footage captured for {clip_id} — ring may not have been running"));
+            return Err(format!("no footage captured for {clip_id} — ring may not have had segments yet"));
         }
 
         let mut sources: Vec<PathBuf> = sess.preroll.iter().cloned().collect();
@@ -466,10 +382,8 @@ impl RecordingManager {
             fs::metadata(&sess.output).map(|m| m.len()).unwrap_or(0) as i64
         };
 
-        // Release the recording lock — cleanup can now delete those live ring segments.
         self.recording_locks.lock().unwrap().remove(&sess.camera_ip);
 
-        // Clean up copied pre-roll stash.
         for p in &sess.preroll {
             let _ = fs::remove_file(p);
         }
@@ -477,8 +391,6 @@ impl RecordingManager {
         let started = chrono::DateTime::parse_from_rfc3339(&sess.started_at)
             .map(|t| t.with_timezone(&chrono::Utc))
             .unwrap_or_else(|_| chrono::Utc::now());
-        // Probe the actual output file for exact duration (covers pre-roll + live footage and
-        // handles GoP-aligned segments that may be longer than the 1s nominal segment_time).
         let duration_secs = probe_duration(&sess.output)
             .unwrap_or_else(|| (chrono::Utc::now() - started).num_seconds().max(0) as i32);
 
@@ -489,7 +401,6 @@ impl RecordingManager {
 
         let friendly_name = generate_friendly_name(started.timestamp());
 
-        // Write a sidecar .json so list_clips() can reconstruct metadata without a DB.
         let sidecar = serde_json::json!({
             "clip_id":       &sess.clip_id,
             "friendly_name": &friendly_name,
@@ -526,7 +437,6 @@ impl RecordingManager {
         if candidate.exists() { Some(candidate) } else { None }
     }
 
-    /// List clips from the recordings directory, applying filter/sort/paginate.
     pub fn list_clips(&self, p: &ListParams) -> ClipPage {
         let mut items: Vec<ClipListItem> = fs::read_dir(&self.dir)
             .into_iter()
@@ -565,19 +475,15 @@ impl RecordingManager {
         ClipPage { total, items }
     }
 
-    /// Current storage stats (sum of sidecar size_bytes fields).
     pub fn storage_stats(&self) -> StorageStats {
         StorageStats::compute(&self.dir, self.config.max_storage_mb)
     }
 
-    /// Evict oldest clips until total usage is ≤ 80% of max. Returns number deleted.
-    /// Clips with an active recording session are skipped.
     pub fn evict_if_over_limit(&self) -> usize {
         let max_bytes = self.config.max_storage_mb.saturating_mul(1024 * 1024);
         if max_bytes == 0 { return 0; }
         let target = (max_bytes as f64 * 0.80) as u64;
 
-        // Collect all sidecar metadata sorted oldest-first.
         let mut clips: Vec<(String, u64, String)> = fs::read_dir(&self.dir)
             .into_iter()
             .flatten()
@@ -592,10 +498,10 @@ impl RecordingManager {
                 Some((clip_id, size_bytes, started_at))
             })
             .collect();
-        clips.sort_by(|a, b| a.2.cmp(&b.2)); // oldest started_at first
+        clips.sort_by(|a, b| a.2.cmp(&b.2));
 
         let total: u64 = clips.iter().map(|(_, sz, _)| sz).sum();
-        if total <= max_bytes { return 0; } // under limit — nothing to evict
+        if total <= max_bytes { return 0; }
 
         let active = self.sessions.lock().unwrap()
             .values()
@@ -606,7 +512,7 @@ impl RecordingManager {
         let mut deleted = 0;
         for (clip_id, size_bytes, _) in &clips {
             if remaining <= target { break; }
-            if active.contains(clip_id) { continue; } // skip in-progress recording
+            if active.contains(clip_id) { continue; }
             if self.delete_clip(clip_id).is_ok() {
                 remaining = remaining.saturating_sub(*size_bytes);
                 deleted += 1;
@@ -616,7 +522,6 @@ impl RecordingManager {
         deleted
     }
 
-    /// Delete a clip by id (removes both the .mp4 and sidecar .json).
     pub fn delete_clip(&self, clip_id: &str) -> Result<(), String> {
         let mp4  = self.dir.join(format!("{clip_id}.mp4"));
         let json = self.dir.join(format!("{clip_id}.json"));
@@ -624,8 +529,124 @@ impl RecordingManager {
             return Err(format!("clip not found: {clip_id}"));
         }
         fs::remove_file(&mp4).map_err(|e| format!("remove mp4: {e}"))?;
-        let _ = fs::remove_file(&json); // best-effort sidecar removal
+        let _ = fs::remove_file(&json);
         Ok(())
+    }
+}
+
+// ---- go2rtc HLS ring collector ----------------------------------------------
+
+/// Background thread: polls go2rtc's HLS API for `camera_ip`, downloads new
+/// MPEG-TS segments to `seg_dir`, and evicts old ones. Exits when the stop
+/// signal fires or the camera's entry is removed from `ring_sessions`.
+fn run_hls_collector(
+    camera_ip:       &str,
+    seg_dir:         &PathBuf,
+    pre_roll_secs:   u32,
+    recording_locks: &Arc<Mutex<HashMap<String, SystemTime>>>,
+    ring_sessions:   &Arc<Mutex<HashMap<String, RingSession>>>,
+    stop_rx:         std::sync::mpsc::Receiver<()>,
+) {
+    let ip_key      = camera_ip.replace('.', "_");
+    let stream_name = format!("cam_{ip_key}");
+    let go2rtc_base = app_core::go2rtc::BASE;
+    let master_url  = format!("{go2rtc_base}/api/stream.m3u8?src={stream_name}");
+    let keep        = pre_roll_secs as usize + 2;
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(5))
+        .build();
+
+    let mut session_id: Option<String> = None;
+    // Last go2rtc segment index we downloaded in the current session.
+    let mut last_n: i64 = -1;
+    // Our own monotonically-increasing disk segment counter (never resets).
+    let mut disk_n: u64 = 0;
+
+    log::debug!("ring-hls[{camera_ip}]: collector running");
+
+    loop {
+        std::thread::sleep(Duration::from_millis(500));
+
+        // Stop if signalled or entry removed from ring_sessions.
+        if stop_rx.try_recv().is_ok() || !ring_sessions.lock().unwrap().contains_key(camera_ip) {
+            log::debug!("ring-hls[{camera_ip}]: collector exiting");
+            break;
+        }
+
+        // --- Ensure we have a live HLS session ---
+        let sid = match &session_id {
+            Some(s) => s.clone(),
+            None => {
+                let body = match agent.get(&master_url).call().and_then(|r| r.into_string().map_err(Into::into)) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        log::warn!("ring-hls[{camera_ip}]: go2rtc unavailable: {e}");
+                        continue;
+                    }
+                };
+                // Master playlist: "hls/playlist.m3u8?id=ABC123"
+                let maybe_id = body.lines()
+                    .find(|l| l.contains("id="))
+                    .and_then(|l| l.split("id=").nth(1))
+                    .map(|s| s.trim().to_string());
+                match maybe_id {
+                    Some(id) => {
+                        last_n = -1; // new session → restart segment sequence
+                        session_id = Some(id.clone());
+                        id
+                    }
+                    None => {
+                        log::warn!("ring-hls[{camera_ip}]: could not parse session from master playlist");
+                        continue;
+                    }
+                }
+            }
+        };
+
+        // --- Fetch segment playlist ---
+        let playlist_url = format!("{go2rtc_base}/api/hls/playlist.m3u8?id={sid}");
+        let playlist = match agent.get(&playlist_url).call().and_then(|r| r.into_string().map_err(Into::into)) {
+            Ok(b) => b,
+            Err(_) => {
+                // Session expired or go2rtc restarted — create a new one next iteration.
+                session_id = None;
+                continue;
+            }
+        };
+
+        // --- Download any new segments ---
+        // Segment lines look like: "segment.ts?id=ABC123&n=5"
+        let new_ns: Vec<u64> = playlist.lines()
+            .filter(|l| l.contains("segment.ts") && l.contains("&n="))
+            .filter_map(|l| {
+                l.split("&n=").nth(1)
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+            })
+            .filter(|&n| n as i64 > last_n)
+            .collect();
+
+        for n in new_ns {
+            let seg_url = format!("{go2rtc_base}/api/hls/segment.ts?id={sid}&n={n}");
+            match agent.get(&seg_url).call() {
+                Ok(resp) => {
+                    let mut data = Vec::new();
+                    if resp.into_reader().read_to_end(&mut data).is_ok() && data.len() > 500 {
+                        let dst = seg_dir.join(format!("seg_{disk_n:06}.ts"));
+                        if fs::write(&dst, &data).is_ok() {
+                            disk_n += 1;
+                        }
+                    }
+                    // Always advance last_n so we don't retry the same index.
+                    last_n = n as i64;
+                }
+                Err(_) => break, // segment not ready yet — try again next poll
+            }
+        }
+
+        // --- Evict old segments beyond the rolling window ---
+        let min_time = recording_locks.lock().unwrap().get(camera_ip).copied();
+        cleanup_ring_dir(seg_dir, keep, camera_ip, min_time);
     }
 }
 
@@ -639,17 +660,8 @@ fn seg_idx(path: &PathBuf) -> Option<u64> {
         .and_then(|s| s.parse().ok())
 }
 
-/// Highest segment index currently in `ring_dir`, or None if no segments exist.
-fn max_ring_seg_idx(ring_dir: &PathBuf) -> Option<u64> {
-    fs::read_dir(ring_dir).ok()?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map(|x| x == "ts").unwrap_or(false))
-        .filter_map(|e| seg_idx(&e.path()))
-        .max()
-}
-
-/// Collect the last `max_secs` complete segment files from the ring dir.
-/// "Complete" means not the highest-indexed (still being written by ffmpeg).
+/// Collect the last `max_secs` complete segments from the ring dir, sorted oldest-first.
+/// Drops the highest-indexed segment (may still be writing).
 fn collect_preroll(ring_dir: &PathBuf, max_secs: u32) -> Vec<PathBuf> {
     if max_secs == 0 || !ring_dir.exists() {
         return vec![];
@@ -664,68 +676,66 @@ fn collect_preroll(ring_dir: &PathBuf, max_secs: u32) -> Vec<PathBuf> {
 
     entries.sort_by_key(|(idx, _)| *idx);
 
-    // Drop the last entry — it's the segment currently being written by ffmpeg.
     if entries.len() > 1 {
-        entries.pop();
+        entries.pop(); // drop highest-indexed (may still be downloading)
     }
 
-    // Take the last max_secs entries.
     let start = entries.len().saturating_sub(max_secs as usize);
     entries[start..].iter().map(|(_, p)| p.clone()).collect()
 }
 
-/// Collect ring segments at or above `start_idx`, excluding the one currently
-/// being written (highest index in the dir at call time).
-fn collect_live_segs(ring_dir: &PathBuf, start_idx: u64) -> Vec<PathBuf> {
+/// Collect ring segments with mtime >= `started_at`. These are the live portion
+/// of the clip. Drops the most-recently-modified segment (may still be writing).
+fn collect_live_segs(ring_dir: &PathBuf, started_at: SystemTime) -> Vec<PathBuf> {
     if !ring_dir.exists() {
         return vec![];
     }
-    let mut entries: Vec<(u64, PathBuf)> = fs::read_dir(ring_dir)
+
+    let mut entries: Vec<(SystemTime, PathBuf)> = fs::read_dir(ring_dir)
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().map(|x| x == "ts").unwrap_or(false))
-        .filter_map(|e| seg_idx(&e.path()).map(|idx| (idx, e.path())))
-        .filter(|(idx, _)| *idx >= start_idx)
+        .filter_map(|e| {
+            let mtime = e.metadata().ok()?.modified().ok()?;
+            if mtime >= started_at { Some((mtime, e.path())) } else { None }
+        })
         .collect();
 
-    entries.sort_by_key(|(idx, _)| *idx);
+    entries.sort_by_key(|(mtime, _)| *mtime);
 
-    // Drop the highest-indexed segment — it may still be open for writing.
     if entries.len() > 1 {
-        entries.pop();
+        entries.pop(); // drop most-recent (may still be downloading)
     }
 
-    log::debug!(
-        "collect_live_segs(start={start_idx}): {} segments [{:?}..{:?}]",
-        entries.len(),
-        entries.first().map(|(i, _)| i),
-        entries.last().map(|(i, _)| i),
-    );
-
+    log::debug!("collect_live_segs: {} segments since {:?}", entries.len(), started_at);
     entries.into_iter().map(|(_, p)| p).collect()
 }
 
-/// Delete old ring segments, keeping the `keep` most recent.
-/// Never deletes segments with index >= `min_keep_idx` (active recording window).
-fn cleanup_ring_dir(dir: &PathBuf, keep: usize, ip: &str, min_keep_idx: Option<u64>) {
-    let mut entries: Vec<(u64, PathBuf)> = match fs::read_dir(dir) {
+/// Evict old ring segments, keeping the `keep` most recent by mtime.
+/// Never deletes segments with mtime >= `min_keep_time` (active recording window).
+fn cleanup_ring_dir(dir: &PathBuf, keep: usize, ip: &str, min_keep_time: Option<SystemTime>) {
+    let mut entries: Vec<(SystemTime, PathBuf)> = match fs::read_dir(dir) {
         Ok(rd) => rd.filter_map(|e| e.ok())
             .filter(|e| e.path().extension().map(|x| x == "ts").unwrap_or(false))
-            .filter_map(|e| seg_idx(&e.path()).map(|idx| (idx, e.path())))
+            .filter_map(|e| {
+                let mtime = e.metadata().ok()?.modified().ok()?;
+                Some((mtime, e.path()))
+            })
             .collect(),
         Err(_) => return,
     };
 
-    // If recording is active, protect segments at or above its start index.
-    if let Some(min_idx) = min_keep_idx {
-        entries.retain(|(idx, _)| *idx < min_idx);
+    // Protect segments written during an active recording.
+    if let Some(min_time) = min_keep_time {
+        entries.retain(|(mtime, _)| *mtime < min_time);
     }
 
     if entries.len() <= keep {
         return;
     }
-    entries.sort_by_key(|(idx, _)| *idx);
+
+    entries.sort_by_key(|(mtime, _)| *mtime);
     let to_delete = entries.len() - keep;
     for (_, path) in entries.iter().take(to_delete) {
         if let Err(e) = fs::remove_file(path) {
@@ -735,31 +745,7 @@ fn cleanup_ring_dir(dir: &PathBuf, keep: usize, ip: &str, min_keep_idx: Option<u
     log::debug!("ring cleanup[{ip}]: removed {to_delete} old segment(s)");
 }
 
-/// Gracefully stop an ffmpeg child: send 'q\n' on stdin, wait up to 5s, then SIGKILL.
-fn kill_ffmpeg(child: &mut Option<Child>, stdin: &mut Option<ChildStdin>, label: &str) {
-    if let Some(mut s) = stdin.take() {
-        let _ = s.write_all(b"q\n");
-    }
-    if let Some(mut c) = child.take() {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            match c.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                _ => {
-                    log::warn!("{label}: did not exit in 5s — SIGKILL");
-                    let _ = c.kill();
-                    let _ = c.wait();
-                    break;
-                }
-            }
-        }
-    }
-}
-
-/// Remux a single .ts → .mp4 (no pre-roll, avoids a concat file).
+/// Remux a single .ts → .mp4.
 fn remux_ts_to_mp4(src: &PathBuf, dst: &PathBuf) -> Result<(), String> {
     let status = Command::new("ffmpeg")
         .args([
@@ -775,8 +761,7 @@ fn remux_ts_to_mp4(src: &PathBuf, dst: &PathBuf) -> Result<(), String> {
     if status.success() { Ok(()) } else { Err("remux failed".to_string()) }
 }
 
-/// Run ffprobe to get the exact duration of the output mp4 in seconds. Returns None if
-/// ffprobe is not available or the file can't be probed (wall-clock fallback is used instead).
+/// Run ffprobe to get the exact clip duration.
 fn probe_duration(path: &PathBuf) -> Option<i32> {
     let out = Command::new("ffprobe")
         .args([
