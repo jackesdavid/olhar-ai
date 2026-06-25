@@ -79,6 +79,7 @@
     { value: "image", label: "Image" },
     { value: "num_array", label: "Num array" },
     { value: "text_array", label: "Text array" },
+    { value: "bbox", label: "Bounding box" },
     { value: "camera", label: "Camera" },
     { value: "recipient", label: "Recipient" },
     { value: "file", label: "File" },

@@ -53,12 +53,11 @@ pub(super) fn run_record_presence(config: &Value, inputs: &PortValues, sys: &Too
     };
 
     let detect_pos: Option<(f32, f32)> = (|| {
-        let bbox = inputs.get("bbox").and_then(PortValue::as_list)?;
-        if bbox.len() < 4 { return None; }
-        let x1 = bbox[0].as_num()? as f32;
-        let y1 = bbox[1].as_num()? as f32;
-        let x2 = bbox[2].as_num()? as f32;
-        let y2 = bbox[3].as_num()? as f32;
+        let bbox = inputs.get("bbox").and_then(PortValue::as_bbox)?;
+        let x1 = bbox.x1 as f32;
+        let y1 = bbox.y1 as f32;
+        let x2 = bbox.x2 as f32;
+        let y2 = bbox.y2 as f32;
         let fw = inputs.get("frame_w").and_then(PortValue::as_num)? as f32;
         let fh = inputs.get("frame_h").and_then(PortValue::as_num)? as f32;
         if fw <= 0.0 || fh <= 0.0 { return None; }

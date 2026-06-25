@@ -609,7 +609,7 @@ fn forward_epoch(
         // read each field by port name (run_node returned an empty map for it).
         // Camera-typed fields are upgraded from raw Text (IP/id from the wire) to CameraEntity.
         if n.kind == NodeKind::OnEvent {
-            o = node::seed_event_cameras(entry_payload, &n.output_ports(), sys);
+            o = node::seed_event_payload(entry_payload, &n.output_ports(), sys);
         }
 
         if n.kind == NodeKind::If {

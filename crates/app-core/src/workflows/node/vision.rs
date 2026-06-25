@@ -59,9 +59,8 @@ pub(super) fn run_break_person_detection(inputs: &PortValues) -> Result<PortValu
         .get("person")
         .and_then(PortValue::as_person)
         .ok_or("missing required input 'person'")?;
-    let bbox = p.bbox.iter().map(|v| PortValue::Num(v.round() as i64)).collect();
     let mut o = PortValues::new();
-    o.insert("bbox".into(), PortValue::List(bbox));
+    o.insert("bbox".into(), PortValue::Bbox(bbox_from_xyxy(&p.bbox)));
     o.insert("confidence".into(), PortValue::Num((p.confidence * 100.0).round() as i64));
     Ok(o)
 }
@@ -72,9 +71,8 @@ pub(super) fn run_break_detection(inputs: &PortValues) -> Result<PortValues, Str
         .get("detection")
         .and_then(PortValue::as_person)
         .ok_or("missing required input 'detection'")?;
-    let bbox = d.bbox.iter().map(|v| PortValue::Num(v.round() as i64)).collect();
     let mut o = PortValues::new();
-    o.insert("bbox".into(), PortValue::List(bbox));
+    o.insert("bbox".into(), PortValue::Bbox(bbox_from_xyxy(&d.bbox)));
     o.insert("confidence".into(), PortValue::Num((d.confidence * 100.0).round() as i64));
     Ok(o)
 }
@@ -85,9 +83,8 @@ pub(super) fn run_break_face_detection(inputs: &PortValues) -> Result<PortValues
         .get("face")
         .and_then(PortValue::as_face)
         .ok_or("missing required input 'face'")?;
-    let bbox = f.bbox.iter().map(|v| PortValue::Num(v.round() as i64)).collect();
     let mut o = PortValues::new();
-    o.insert("bbox".into(), PortValue::List(bbox));
+    o.insert("bbox".into(), PortValue::Bbox(bbox_from_xyxy(&f.bbox)));
     o.insert("confidence".into(), PortValue::Num((f.confidence * 100.0).round() as i64));
     o.insert("landmarks".into(), PortValue::Num(f.landmarks.len() as i64));
     Ok(o)
@@ -172,22 +169,8 @@ pub(super) fn run_get_image_size(inputs: &PortValues) -> Result<PortValues, Stri
 
 pub(super) fn run_draw_bbox(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
     let raw = inputs.get("image").and_then(PortValue::as_image).ok_or("missing required input 'image'")?;
-    let bbox_vals: Vec<i64> = {
-        let list = inputs.get("bbox").ok_or("missing required input 'bbox'")?;
-        match list {
-            PortValue::List(items) => items.iter().filter_map(PortValue::as_num).collect(),
-            _ => return Err("'bbox' must be a NumArray".into()),
-        }
-    };
-    if bbox_vals.len() < 4 {
-        return Err(format!("'bbox' needs 4 numbers, got {}", bbox_vals.len()));
-    }
-    let fmt = config.get("format").and_then(|v| v.as_str()).unwrap_or("xyxy");
-    let (x1, y1, x2, y2) = if fmt == "xywh" {
-        (bbox_vals[0], bbox_vals[1], bbox_vals[0] + bbox_vals[2], bbox_vals[1] + bbox_vals[3])
-    } else {
-        (bbox_vals[0], bbox_vals[1], bbox_vals[2], bbox_vals[3])
-    };
+    let b = inputs.get("bbox").and_then(PortValue::as_bbox).ok_or("missing required input 'bbox'")?;
+    let (x1, y1, x2, y2) = (b.x1, b.y1, b.x2, b.y2);
     let color_str = config.get("color").and_then(|v| v.as_str()).unwrap_or("#00FF00");
     let color = parse_hex_color(color_str).unwrap_or([0, 255, 0]);
     let thickness = config
@@ -217,22 +200,8 @@ pub(super) fn run_draw_bbox(config: &Value, inputs: &PortValues) -> Result<PortV
 
 pub(super) fn run_blur_outside_bbox(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
     let raw = inputs.get("image").and_then(PortValue::as_image).ok_or("missing required input 'image'")?;
-    let bbox_vals: Vec<i64> = {
-        let list = inputs.get("bbox").ok_or("missing required input 'bbox'")?;
-        match list {
-            PortValue::List(items) => items.iter().filter_map(PortValue::as_num).collect(),
-            _ => return Err("'bbox' must be a NumArray".into()),
-        }
-    };
-    if bbox_vals.len() < 4 {
-        return Err(format!("'bbox' needs 4 numbers, got {}", bbox_vals.len()));
-    }
-    let fmt = config.get("format").and_then(|v| v.as_str()).unwrap_or("xyxy");
-    let (x1, y1, x2, y2) = if fmt == "xywh" {
-        (bbox_vals[0], bbox_vals[1], bbox_vals[0] + bbox_vals[2], bbox_vals[1] + bbox_vals[3])
-    } else {
-        (bbox_vals[0], bbox_vals[1], bbox_vals[2], bbox_vals[3])
-    };
+    let b = inputs.get("bbox").and_then(PortValue::as_bbox).ok_or("missing required input 'bbox'")?;
+    let (x1, y1, x2, y2) = (b.x1, b.y1, b.x2, b.y2);
     let sigma = config
         .get("blur")
         .and_then(|v| v.as_str().and_then(|s| s.trim().parse::<f32>().ok()).or_else(|| v.as_f64().map(|n| n as f32)))
@@ -260,6 +229,16 @@ pub(super) fn run_blur_outside_bbox(config: &Value, inputs: &PortValues) -> Resu
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// A detector's `[f32; 4]` xyxy box → the canonical integer `BBox`.
+fn bbox_from_xyxy(v: &[f32; 4]) -> crate::workflows::domain::BBox {
+    crate::workflows::domain::BBox::from_xyxy(
+        v[0].round() as i64,
+        v[1].round() as i64,
+        v[2].round() as i64,
+        v[3].round() as i64,
+    )
+}
 
 fn motion_score(a: &[u8], b: &[u8], pixel_threshold: i16) -> Result<f64, String> {
     const W: u32 = 320;

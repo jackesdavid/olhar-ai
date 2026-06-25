@@ -47,6 +47,11 @@ pub enum PortType {
     Person,
     /// A single `FaceDetection`.
     Face,
+    /// A bounding box — top-left/bottom-right pixel rectangle (canonical xyxy). A real type
+    /// (not a bare `NumArray`) so producers normalise at the source and consumers never guess
+    /// the coordinate convention. Produced by `Break*` nodes + `OnEvent("motion")`; consumed
+    /// by `DrawBbox`, `BlurOutsideBbox`, `RecordPresence`.
+    Bbox,
     /// A camera device reference (stable device id, carried as a string on the wire).
     /// Distinct from `Text` so the editor enforces camera-to-camera wiring.
     Camera,
@@ -63,6 +68,34 @@ pub struct CameraEntity {
     pub id: String,
     pub ip: String,
     pub name: String,
+}
+
+/// A bounding box in **canonical xyxy pixel coordinates**: top-left `(x1,y1)` → bottom-right
+/// `(x2,y2)`. One convention everywhere — producers convert at the source (`from_xywh` for the
+/// edge's motion blobs, identity for detector xyxy) so consumers (`DrawBbox`, `BlurOutsideBbox`,
+/// `RecordPresence`) never need a `format` toggle. Serialised as a 4-element array `[x1,y1,x2,y2]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BBox {
+    pub x1: i64,
+    pub y1: i64,
+    pub x2: i64,
+    pub y2: i64,
+}
+
+impl BBox {
+    pub fn from_xyxy(x1: i64, y1: i64, x2: i64, y2: i64) -> Self {
+        Self { x1, y1, x2, y2 }
+    }
+    pub fn from_xywh(x: i64, y: i64, w: i64, h: i64) -> Self {
+        Self { x1: x, y1: y, x2: x + w, y2: y + h }
+    }
+    /// Parse 4 numbers (xyxy) — returns `None` if fewer than 4 are present.
+    pub fn from_xyxy_slice(v: &[i64]) -> Option<Self> {
+        if v.len() >= 4 { Some(Self { x1: v[0], y1: v[1], x2: v[2], y2: v[3] }) } else { None }
+    }
+    pub fn to_array(self) -> [i64; 4] {
+        [self.x1, self.y1, self.x2, self.y2]
+    }
 }
 
 /// A static port declaration on a `NodeKind` (not persisted — derived from the kind).
@@ -316,7 +349,7 @@ const RECORD_PRESENCE_IN: [Port; 8] = [
     p("category", PortType::Text, false),
     p("label", PortType::Text, false),
     p("camera", PortType::Camera, false),
-    p("bbox", PortType::NumArray, false),   // [x1,y1,x2,y2] from BreakPersonDetection
+    p("bbox", PortType::Bbox, false),       // [x1,y1,x2,y2] from BreakPersonDetection
     p("frame_w", PortType::Num, false),     // source image width in pixels
     p("frame_h", PortType::Num, false),     // source image height in pixels
     p("duration_secs", PortType::Num, false),
@@ -415,13 +448,13 @@ const OBJECT_DETECTION_OUT: [Port; 6] = [
 // Break (destructure) nodes — split a struct element into its fields, like Unreal's Break.
 const BREAK_PERSON_IN: [Port; 1] = [p("person", PortType::Person, true)];
 const BREAK_PERSON_OUT: [Port; 2] =
-    [p("bbox", PortType::NumArray, false), p("confidence", PortType::Num, false)];
+    [p("bbox", PortType::Bbox, false), p("confidence", PortType::Num, false)];
 const BREAK_DETECTION_IN: [Port; 1] = [p("detection", PortType::Person, true)];
 const BREAK_DETECTION_OUT: [Port; 2] =
-    [p("bbox", PortType::NumArray, false), p("confidence", PortType::Num, false)];
+    [p("bbox", PortType::Bbox, false), p("confidence", PortType::Num, false)];
 const BREAK_FACE_IN: [Port; 1] = [p("face", PortType::Face, true)];
 const BREAK_FACE_OUT: [Port; 3] = [
-    p("bbox", PortType::NumArray, false),
+    p("bbox", PortType::Bbox, false),
     p("confidence", PortType::Num, false),
     p("landmarks", PortType::Num, false), // count of the 5-point landmark set
 ];
@@ -485,12 +518,12 @@ const COOLDOWN_OUT: [Port; 2] = [
 ];
 
 const DRAW_BBOX_IN: [Port; 2] =
-    [p("image", PortType::Image, true), p("bbox", PortType::NumArray, true)];
+    [p("image", PortType::Image, true), p("bbox", PortType::Bbox, true)];
 const DRAW_BBOX_OUT: [Port; 2] =
     [p("image", PortType::Image, false), p("ok", PortType::Bool, false)];
 
 const BLUR_OUTSIDE_BBOX_IN: [Port; 2] =
-    [p("image", PortType::Image, true), p("bbox", PortType::NumArray, true)];
+    [p("image", PortType::Image, true), p("bbox", PortType::Bbox, true)];
 const BLUR_OUTSIDE_BBOX_OUT: [Port; 2] =
     [p("image", PortType::Image, false), p("ok", PortType::Bool, false)];
 
@@ -1010,8 +1043,8 @@ impl NodeKind {
             | NodeKind::NumNe => json!({ "a": "0", "b": "0" }),
             NodeKind::NumToText | NodeKind::BoolToText => json!({}),
             NodeKind::Cooldown => json!({ "window_secs": "60" }),
-            NodeKind::DrawBbox => json!({ "color": "#00FF00", "thickness": "2", "format": "xyxy", "style": "box" }),
-            NodeKind::BlurOutsideBbox => json!({ "blur": "12", "format": "xyxy" }),
+            NodeKind::DrawBbox => json!({ "color": "#00FF00", "thickness": "2", "style": "box" }),
+            NodeKind::BlurOutsideBbox => json!({ "blur": "12" }),
             NodeKind::GetImageSize => json!({}),
             NodeKind::And | NodeKind::Or => json!({ "a": false, "b": false }),
             NodeKind::Not => json!({ "a": false }),

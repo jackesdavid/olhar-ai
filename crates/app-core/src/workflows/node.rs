@@ -59,6 +59,8 @@ pub enum PortValue {
     Face(crate::agent::face::FaceDetection),
     /// A camera device entity (id + ip + name, credential-free). Carried by `Camera` ports.
     Camera(crate::workflows::domain::CameraEntity),
+    /// A bounding box (canonical xyxy pixels). Carried by `Bbox` ports.
+    Bbox(crate::workflows::domain::BBox),
 }
 
 impl PortValue {
@@ -125,6 +127,12 @@ impl PortValue {
     pub fn as_camera(&self) -> Option<&crate::workflows::domain::CameraEntity> {
         match self {
             PortValue::Camera(c) => Some(c),
+            _ => None,
+        }
+    }
+    pub fn as_bbox(&self) -> Option<crate::workflows::domain::BBox> {
+        match self {
+            PortValue::Bbox(b) => Some(*b),
             _ => None,
         }
     }
@@ -238,6 +246,7 @@ pub fn literal_for_named(config: &Value, name: &str, ty: PortType) -> Option<Por
         | PortType::FaceArray
         | PortType::Person
         | PortType::Face
+        | PortType::Bbox
         | PortType::Any => None,
     }
 }
@@ -266,22 +275,37 @@ pub fn resolve_camera_literal(config: &Value, key: &str, sys: &ToolContext) -> O
     resolve_camera_entity(id, sys).map(PortValue::Camera)
 }
 
-/// Upgrade a `PortValues` map that came from an event payload: for every field whose port is
-/// `PortType::Camera`, convert a raw `PortValue::Text` (IP or id string from the wire) into
-/// a `PortValue::Camera(CameraEntity)`. Called by the engine when seeding an `OnEvent` node.
-pub fn seed_event_cameras(
+/// Upgrade a `PortValues` map that came from an event payload to its declared port types.
+/// Event payloads arrive as generic scalars/lists (no type info); here we coerce them using
+/// the `OnEvent` node's port schema:
+///   - `Camera` ports: a `Text` (IP or id) → `PortValue::Camera(CameraEntity)`.
+///   - `Bbox` ports: a 4-element `List` of nums → `PortValue::Bbox` (canonical xyxy).
+/// Called by the engine when seeding an `OnEvent` node.
+pub fn seed_event_payload(
     payload: &PortValues,
     ports: &[crate::workflows::domain::ResolvedPort],
     sys: &ToolContext,
 ) -> PortValues {
+    use crate::workflows::domain::{BBox, PortType};
     let mut out = payload.clone();
     for port in ports {
-        if port.ty == crate::workflows::domain::PortType::Camera {
-            if let Some(PortValue::Text(s)) = out.get(&port.name).cloned() {
-                if let Some(cam) = resolve_camera_entity(&s, sys) {
-                    out.insert(port.name.clone(), PortValue::Camera(cam));
+        match port.ty {
+            PortType::Camera => {
+                if let Some(PortValue::Text(s)) = out.get(&port.name).cloned() {
+                    if let Some(cam) = resolve_camera_entity(&s, sys) {
+                        out.insert(port.name.clone(), PortValue::Camera(cam));
+                    }
                 }
             }
+            PortType::Bbox => {
+                if let Some(PortValue::List(items)) = out.get(&port.name).cloned() {
+                    let nums: Vec<i64> = items.iter().filter_map(PortValue::as_num).collect();
+                    if let Some(b) = BBox::from_xyxy_slice(&nums) {
+                        out.insert(port.name.clone(), PortValue::Bbox(b));
+                    }
+                }
+            }
+            _ => {}
         }
     }
     out
