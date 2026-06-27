@@ -34,8 +34,10 @@ pub fn summaries_text(summaries: &[DeviceSummary]) -> String {
     }
     let mut out = String::new();
     for (i, d) in summaries.iter().enumerate() {
-        let creds = if d.has_credentials { "credentials saved" } else { "no credentials" };
-        out.push_str(&format!("{}. {} ({}) — {}\n", i + 1, d.name, d.ip, creds));
+        // Credentials live on the edge (never in the cloud record), so don't report a
+        // credential status here — it would always read "no credentials" cloud-side and
+        // mislead the assistant into refusing camera actions.
+        out.push_str(&format!("{}. {} ({})\n", i + 1, d.name, d.ip));
     }
     out.trim_end().to_string()
 }
@@ -162,10 +164,13 @@ mod tests {
     }
 
     #[test]
-    fn summaries_text_lists_creds_status() {
+    fn summaries_text_lists_devices_without_creds_status() {
         let s = list_summaries(&[mk("Front", "10.0.0.1", true), mk("Back", "10.0.0.2", false)]);
         let t = summaries_text(&s);
-        assert!(t.contains("Front (10.0.0.1) — credentials saved"));
-        assert!(t.contains("Back (10.0.0.2) — no credentials"));
+        // Credentials live on the edge, never in the cloud record — the summary must not
+        // report a credential status (it would always be "no credentials" cloud-side).
+        assert!(t.contains("Front (10.0.0.1)"));
+        assert!(t.contains("Back (10.0.0.2)"));
+        assert!(!t.contains("credentials"));
     }
 }

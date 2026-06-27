@@ -189,9 +189,8 @@ impl Default for ToolRegistry {
 fn list_devices() -> ToolSpec {
     ToolSpec {
         name: "list_devices",
-        description: "List the operator's saved/scanned cameras (name, IP, and whether \
-            credentials are saved). Use this to show the operator their devices, or to find a \
-            device by name before acting on it.",
+        description: "List the operator's saved/scanned cameras (name and IP). Use this to show \
+            the operator their devices, or to find a device by name before acting on it.",
         input_schema: json!({ "type": "object", "properties": {}, "required": [] }),
         run: |_input, ctx| {
             let devices = ctx.devices.lock().unwrap();
@@ -205,8 +204,7 @@ fn get_camera_snapshot() -> ToolSpec {
     ToolSpec {
         name: "get_camera_snapshot",
         description: "Capture a still image from a camera and display it to the operator. Give \
-            the camera's name, or \"first\" for the first saved camera. The camera must have \
-            saved credentials.",
+            the camera's name, or \"first\" for the first camera.",
         input_schema: json!({
             "type": "object",
             "properties": { "camera": { "type": "string", "description": "camera name, or \"first\"" } },
@@ -233,8 +231,8 @@ fn describe_camera() -> ToolSpec {
         description: "Capture a still from a camera and describe what is currently visible in it \
             — people, vehicles, objects, activity, the setting and lighting. Use this whenever the \
             operator asks what is on a camera, what can be seen, or to check on a location. Give \
-            the camera's name, or \"first\" for the first saved camera. The camera must have saved \
-            credentials. The snapshot is also shown to the operator.",
+            the camera's name, or \"first\" for the first camera. The snapshot is also shown to \
+            the operator.",
         input_schema: json!({
             "type": "object",
             "properties": { "camera": { "type": "string", "description": "camera name, or \"first\"" } },
@@ -264,8 +262,7 @@ fn count_people() -> ToolSpec {
         description: "Capture a still from a camera and detect whether any people are present, \
             and how many, using the on-device YOLOX vision model. Use this when the operator asks \
             if someone/anyone is on a camera, or to count people at a location. Give the camera's \
-            name, or \"first\". The camera must have saved credentials. The snapshot is also shown \
-            to the operator.",
+            name, or \"first\". The snapshot is also shown to the operator.",
         input_schema: json!({
             "type": "object",
             "properties": { "camera": { "type": "string", "description": "camera name, or \"first\"" } },
@@ -296,7 +293,7 @@ fn show_live_feed() -> ToolSpec {
     ToolSpec {
         name: "show_live_feed",
         description: "Open a live video feed from a camera for the operator. Give the camera's \
-            name, or \"first\" for the first saved camera. The camera must have saved credentials.",
+            name, or \"first\" for the first camera.",
         input_schema: json!({
             "type": "object",
             "properties": { "camera": { "type": "string", "description": "camera name, or \"first\"" } },
@@ -309,9 +306,6 @@ fn show_live_feed() -> ToolSpec {
                 let idx = actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
                 devices[idx].clone()
             };
-            if !device.has_credentials() {
-                return Err(format!("Camera '{}' has no saved credentials.", device.name));
-            }
             let _ = ctx.ui_tx.send(ToolUiEvent::OpenLive { ip: device.ip.clone() });
             Ok(format!("Opening the live feed for '{}'.", device.name))
         },
