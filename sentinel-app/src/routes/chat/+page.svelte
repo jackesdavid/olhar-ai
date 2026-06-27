@@ -2,7 +2,7 @@
   // Voice-first assistant. The Sentinel dot-field orb sits center stage and reacts to
   // live audio — emerald while Sentinel speaks, sky-blue while the operator speaks.
   // Spoken replies reveal their text in time with the audio; dictation is sent straight
-  // to the chat; hold F9 (or the mic button) to push-to-talk.
+  // to the chat; hold Space or the mic button (or F9 where the OS allows) to push-to-talk.
   import { onDestroy, tick } from "svelte";
   import { toast } from "svelte-sonner";
 
@@ -39,7 +39,6 @@
   let recorder: MediaRecorder | null = null;
   let chunks: Blob[] = [];
   let micStream: MediaStream | null = null;
-  let f9held = false;
 
   // ---- amplitude meter (drives the orb) -------------------------------------
   function meterLoop() {
@@ -69,7 +68,7 @@
     if (recording) return "Listening…";
     if (voiceState === "speaking") return "Speaking…";
     if (busy) return "Thinking…";
-    return "Hold F9 (or the mic) to talk";
+    return "Hold Space or the mic to talk";
   }
 
   function bubbleClass(role: Msg["role"]): string {
@@ -222,10 +221,25 @@
     if (recording) recorder?.stop();
   }
 
+  // Push-to-talk intent, shared by the key + button. Tracks "held" so a release that
+  // lands during the async getUserMedia gap still stops the recording once it starts.
+  let pttHeld = false;
+  async function pttStart() {
+    if (pttHeld || busy) return; // dedupe key-repeat / ignore mid-turn
+    pttHeld = true;
+    await startRec();
+    if (!pttHeld) stopRec(); // released before the mic finished opening
+  }
+  function pttStop() {
+    pttHeld = false;
+    stopRec();
+  }
+
   // Transcribe the clip and send it straight to the chat (no manual edit step).
   async function transcribeAndSend() {
     if (chunks.length === 0) return;
     const blob = new Blob(chunks, { type: recorder?.mimeType || "audio/webm" });
+    if (blob.size < 1200) return; // ignore an accidental tap — too short to transcribe
     busy = true;
     let text = "";
     try {
@@ -240,21 +254,25 @@
   }
 
   // ---- key handling ---------------------------------------------------------
+  // Push-to-talk: hold Space (when not typing) — works everywhere — or F9, which macOS
+  // reserves for Mission Control so it only fires where the OS lets it through.
+  function isTyping(e: KeyboardEvent): boolean {
+    const t = e.target as HTMLElement | null;
+    return !!t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable);
+  }
+  function isPttKey(e: KeyboardEvent): boolean {
+    if (e.code === "F9") return true;
+    return e.code === "Space" && !isTyping(e);
+  }
   function onWindowKeydown(e: KeyboardEvent) {
-    if (e.code === "F9") {
-      e.preventDefault();
-      if (!f9held) {
-        f9held = true;
-        void startRec();
-      }
-    }
+    if (e.repeat || !isPttKey(e)) return;
+    e.preventDefault();
+    void pttStart();
   }
   function onWindowKeyup(e: KeyboardEvent) {
-    if (e.code === "F9") {
-      e.preventDefault();
-      f9held = false;
-      stopRec();
-    }
+    if (!isPttKey(e)) return;
+    e.preventDefault();
+    pttStop();
   }
   function onInputKeydown(e: KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -348,13 +366,13 @@
       variant={recording ? "destructive" : "outline"}
       size="icon"
       class="shrink-0"
-      title="Hold to talk (or press F9)"
+      title="Hold to talk (or hold Space)"
       onpointerdown={(e) => {
         e.preventDefault();
-        void startRec();
+        void pttStart();
       }}
-      onpointerup={stopRec}
-      onpointerleave={stopRec}
+      onpointerup={pttStop}
+      onpointerleave={pttStop}
     >
       <Mic class="size-4" />
     </Button>
