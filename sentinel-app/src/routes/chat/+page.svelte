@@ -2,7 +2,7 @@
   // Voice-first assistant. The Sentinel dot-field orb sits center stage and reacts to
   // live audio — emerald while Sentinel speaks, sky-blue while the operator speaks.
   // Spoken replies reveal their text in time with the audio; dictation is sent straight
-  // to the chat; hold Space or the mic button (or F9 where the OS allows) to push-to-talk.
+  // to the chat; hold Ctrl or the orb to push-to-talk.
   import { onDestroy, tick } from "svelte";
   import { toast } from "svelte-sonner";
 
@@ -68,7 +68,7 @@
     if (recording) return "Listening…";
     if (voiceState === "speaking") return "Speaking…";
     if (busy) return "Thinking…";
-    return "Hold the orb to talk";
+    return "Hold Ctrl or the orb to talk";
   }
 
   function bubbleClass(role: Msg["role"]): string {
@@ -207,7 +207,9 @@
         analyser = null;
         level = 0;
         voiceState = "idle";
-        void transcribeAndSend();
+        const discard = pttDiscard;
+        pttDiscard = false;
+        if (!discard) void transcribeAndSend();
       };
       recorder.start();
       recording = true;
@@ -217,8 +219,13 @@
     }
   }
 
-  function stopRec() {
-    if (recording) recorder?.stop();
+  // `discard` drops the clip without transcribing (used when Ctrl turns out to be a shortcut).
+  let pttDiscard = false;
+  function stopRec(discard = false) {
+    if (recording) {
+      pttDiscard = discard;
+      recorder?.stop();
+    }
   }
 
   // Push-to-talk intent, shared by the key + button. Tracks "held" so a release that
@@ -232,7 +239,11 @@
   }
   function pttStop() {
     pttHeld = false;
-    stopRec();
+    stopRec(false);
+  }
+  function pttCancel() {
+    pttHeld = false;
+    stopRec(true);
   }
 
   // Transcribe the clip and send it straight to the chat (no manual edit step).
@@ -254,25 +265,27 @@
   }
 
   // ---- key handling ---------------------------------------------------------
-  // Push-to-talk: hold Space (when not typing) — works everywhere — or F9, which macOS
-  // reserves for Mission Control so it only fires where the OS lets it through.
-  function isTyping(e: KeyboardEvent): boolean {
-    const t = e.target as HTMLElement | null;
-    return !!t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable);
-  }
-  function isPttKey(e: KeyboardEvent): boolean {
-    if (e.code === "F9") return true;
-    return e.code === "Space" && !isTyping(e);
-  }
+  // Push-to-talk: hold Ctrl. A modifier never inserts text, so it works even while the
+  // message box is focused. If another key is pressed while Ctrl is down, it's a shortcut
+  // (Ctrl+C, …) — abort the recording without sending.
+  let ctrlPtt = false;
   function onWindowKeydown(e: KeyboardEvent) {
-    if (e.repeat || !isPttKey(e)) return;
-    e.preventDefault();
-    void pttStart();
+    if (e.key === "Control") {
+      if (e.repeat || ctrlPtt) return;
+      ctrlPtt = true;
+      void pttStart();
+      return;
+    }
+    if (ctrlPtt) {
+      ctrlPtt = false;
+      pttCancel(); // Ctrl + something = a shortcut, not speech
+    }
   }
   function onWindowKeyup(e: KeyboardEvent) {
-    if (!isPttKey(e)) return;
-    e.preventDefault();
-    pttStop();
+    if (e.key === "Control" && ctrlPtt) {
+      ctrlPtt = false;
+      pttStop();
+    }
   }
   function onInputKeydown(e: KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -313,7 +326,7 @@
       type="button"
       class="interactive rounded-full transition-transform focus-visible:outline-none active:scale-95 disabled:opacity-50"
       style="touch-action:none"
-      title="Hold to talk"
+      title="Hold to talk (or hold Ctrl)"
       aria-label="Hold to talk"
       disabled={busy}
       onpointerdown={(e) => {
