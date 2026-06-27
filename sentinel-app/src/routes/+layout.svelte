@@ -223,8 +223,8 @@
     "/logs": "devices.read",
     "/settings": "settings.read",
   };
-  // Features without a cloud backend yet (the AI agent) — kept as routes but hidden from nav.
-  const CLOUD_HIDE = new Set(["/chat"]);
+  // Features without a cloud backend yet — kept as routes but hidden from nav.
+  const CLOUD_HIDE = new Set<string>([]);
   // A tenant context exists for normal users always, and for the master only while
   // "acting as" a tenant (assume sets tenant_id). Tenant-scoped pages require it.
   const inTenant = $derived(auth.me?.tenant_id != null);

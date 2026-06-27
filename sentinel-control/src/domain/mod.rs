@@ -10,6 +10,7 @@ use crate::auth::Claims;
 use crate::AppState;
 
 mod admin_providers;
+mod agent;
 mod alerts;
 mod beacons;
 mod boxes;
@@ -27,6 +28,7 @@ pub type ApiErr = (StatusCode, String);
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(devices::router())
+        .merge(agent::router())
         .merge(alerts::router())
         .merge(persons::router())
         .merge(beacons::router())

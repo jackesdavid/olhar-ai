@@ -222,6 +222,43 @@ export const recordings = {
   },
 };
 
+// ---- Assistant (chat + voice) -----------------------------------------------
+
+export type ChatTurn = { role: "user" | "assistant"; content: string };
+
+/** A tool side-effect rendered inline in the assistant's reply. `type` discriminates. */
+export type ChatToolEvent =
+  | { type: "snapshot"; camera: string; image: string }
+  | { type: "image"; label: string; image: string }
+  | { type: "open_live"; ip: string }
+  | { type: "devices_changed" }
+  | { type: "alerts_changed" }
+  | { type: "print"; message: string; level: string };
+
+export type ChatReply = { text: string; tool_events: ChatToolEvent[] };
+
+export const agent = {
+  /** Run one conversation turn; send the full transcript (stateless server). */
+  chat: (history: ChatTurn[]) => api.post<ChatReply>("/agent/chat", { history }),
+  /** Synthesize a reply to speech; returns an MP3 blob (503 if voice isn't configured). */
+  tts: async (text: string): Promise<Blob | null> => {
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (auth.token) headers.Authorization = `Bearer ${auth.token}`;
+    const r = await fetch(`${API_BASE}/agent/tts`, { method: "POST", headers, body: JSON.stringify({ text }) });
+    if (r.status === 503) return null; // voice disabled — degrade to silence
+    if (!r.ok) throw new Error(`TTS failed (${r.status})`);
+    return r.blob();
+  },
+  /** Transcribe a recorded clip; posts the raw MediaRecorder blob with its mime type. */
+  stt: async (blob: Blob): Promise<string> => {
+    const headers: Record<string, string> = { "content-type": blob.type || "audio/webm" };
+    if (auth.token) headers.Authorization = `Bearer ${auth.token}`;
+    const r = await fetch(`${API_BASE}/agent/stt`, { method: "POST", headers, body: blob });
+    if (!r.ok) throw new Error(`Transcription failed (${r.status})`);
+    return ((await r.json()) as { text: string }).text;
+  },
+};
+
 export const admin = {
   tenants: () => api.get<Tenant[]>("/admin/tenants"),
   createTenant: (tenantName: string, adminEmail: string, adminPassword: string) =>

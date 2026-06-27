@@ -154,6 +154,12 @@ fn main() {
             None => log::warn!("AI recognition: disabled — set AI_SERVICE_URL (+ AI_SERVICE_KEY) to enable enroll/recognize"),
         }
 
+        // Conversational assistant (/agent/chat, /tts, /stt). The chat tool loop needs the
+        // Anthropic key; TTS/STT need ElevenLabs. Log each leg so a missing key is obvious.
+        log::info!("Assistant chat: {}", if app_core::agent::domain::AgentConfig::from_env().is_some() { "enabled" } else { "disabled (set ANTHROPIC_API_KEY)" });
+        log::info!("Assistant voice (TTS): {}", if app_core::voice::VoiceConfig::from_env().is_some() { "enabled" } else { "disabled (set ELEVENLABS_API_KEY)" });
+        log::info!("Assistant transcription (STT): {}", if app_core::listen::SttConfig::from_env().is_some() { "enabled" } else { "disabled (set ELEVENLABS_API_KEY)" });
+
         let pending_creds = Arc::new(Mutex::new(HashMap::new()));
         let notifiers = Arc::new(Mutex::new(HashMap::new()));
         let pending_rescan = Arc::new(Mutex::new(std::collections::HashSet::new()));

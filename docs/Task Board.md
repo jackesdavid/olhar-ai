@@ -38,14 +38,10 @@ kanban-plugin: board
 - [ ] #14 The data time on the logs should locally time and we should see the date too — for the current day show only the time
 - [ ] #15 Telegram bot: workflow-graph brain + inbound commands
 	  - Plan: [[telegram-bot-two-way-research]]
-- [ ] #16 Chat agent on the web (TTS / STT / tools)
-	  - Plan: [[chat-agent-web]]
 - [ ] #17 Face recognition: DetectFaces node + live-feed triggers
 	  - Plan: [[face-recognition-next-steps]]
 - [ ] #18 Workflow list improvements: last run, search, description, duplicate
 	  - Plan: [[workflow-list-improvements]]
-- [ ] #19 AI If node — yes/no question routes exec like If
-	  - Plan: [[ai-question-node]]
 - [ ] #20 GetCameraRoom node — look up room name from a camera entity
 	  - Plan: [[get-camera-room]]
 - [ ] #21 Map: presence history + logs panel in SidePanel
@@ -54,12 +50,16 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #22 Recordings: storage, names, filters, delete, sort, paginate
-	  - Plan: [[recordings-improvements]]
+- [ ] #19 AI If node — yes/no question routes exec like If
+	  - Plan: [[ai-question-node]]
+- [ ] #16 Chat agent on the web (TTS / STT / tools)
+	  - Plan: [[chat-agent-web]]
 
 
 ## Review
 
+- [ ] #22 Recordings: storage, names, filters, delete, sort, paginate
+	  - Plan: [[recordings-improvements]]
 - [ ] #23 TimeGate node — debounced motion wait
 	  - Plan: [[time-gate-node]]
 - [ ] #24 Black & White Rebrand — Sentinel Noir

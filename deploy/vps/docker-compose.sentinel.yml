@@ -49,7 +49,9 @@ services:
     container_name: sentinel-control
     restart: always
     env_file:
-      - sentinel.env   # JWT_SECRET, GOOGLE_*, MASTER_*
+      # JWT_SECRET, GOOGLE_*, MASTER_*; ANTHROPIC_API_KEY (assistant chat — shared with flow);
+      # ELEVENLABS_API_KEY (+ optional ELEVENLABS_VOICE_ID/MODEL_ID) for assistant TTS/STT.
+      - sentinel.env
     environment:
       DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
       REDIS_URL: redis://sentinel-redis:6379
