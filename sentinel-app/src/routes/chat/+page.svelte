@@ -68,7 +68,7 @@
     if (recording) return "Listening…";
     if (voiceState === "speaking") return "Speaking…";
     if (busy) return "Thinking…";
-    return "Hold Space or the mic to talk";
+    return "Hold the orb to talk";
   }
 
   function bubbleClass(role: Msg["role"]): string {
@@ -307,9 +307,25 @@
     </Button>
   </div>
 
-  <!-- center stage: the audio-reactive orb -->
+  <!-- center stage: the audio-reactive orb doubles as the push-to-talk control -->
   <div class="flex flex-col items-center justify-center gap-3 py-4">
-    <VoiceOrb {level} state={voiceState} size={220} />
+    <button
+      type="button"
+      class="interactive rounded-full transition-transform focus-visible:outline-none active:scale-95 disabled:opacity-50"
+      style="touch-action:none"
+      title="Hold to talk"
+      aria-label="Hold to talk"
+      disabled={busy}
+      onpointerdown={(e) => {
+        e.preventDefault();
+        void pttStart();
+      }}
+      onpointerup={pttStop}
+      onpointerleave={pttStop}
+      onpointercancel={pttStop}
+    >
+      <VoiceOrb {level} state={voiceState} size={220} />
+    </button>
     <p class="text-sm font-medium text-muted-foreground">{statusLine()}</p>
   </div>
 
