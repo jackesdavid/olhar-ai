@@ -1,38 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "../../styles/sentinel-tokens.css";
 
 @custom-variant dark (&:is(.dark *));
-
-/* ─────────────────────────────────────────────────────────────────────────
-   Sentinel — "Emerald Guardian" theme (shared with the app).
-   ───────────────────────────────────────────────────────────────────────── */
-
-:root {
-  --background: oklch(0.99 0.004 160);
-  --foreground: oklch(0.17 0.01 160);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.17 0.01 160);
-  --primary: oklch(0.62 0.15 162);
-  --primary-foreground: oklch(0.99 0.01 160);
-  --muted: oklch(0.96 0.008 160);
-  --muted-foreground: oklch(0.52 0.02 158);
-  --border: oklch(0.9 0.01 160);
-  --ring: oklch(0.62 0.15 162);
-  --radius: 0.625rem;
-}
-
-.dark {
-  --background: oklch(0.165 0.006 160);
-  --foreground: oklch(0.97 0.006 150);
-  --card: oklch(0.205 0.008 162);
-  --card-foreground: oklch(0.97 0.006 150);
-  --primary: oklch(0.7 0.16 162);
-  --primary-foreground: oklch(0.16 0.03 165);
-  --muted: oklch(0.255 0.009 162);
-  --muted-foreground: oklch(0.71 0.018 158);
-  --border: oklch(0.95 0.02 162 / 9%);
-  --ring: oklch(0.7 0.16 162);
-}
 
 @theme inline {
   --color-background: var(--background);
@@ -62,34 +32,34 @@
     @apply bg-background text-foreground;
     font-family:
       ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    /* Emerald top-glow focal point (the SensorField canvas layers above this). */
+    /* Subtle achromatic top shimmer. */
     background-image: radial-gradient(
-      60% 50% at 50% -8%,
-      oklch(0.7 0.16 162 / 0.1),
+      60% 45% at 50% -8%,
+      oklch(1 0 0 / 0.05),
       transparent 70%
     );
     background-attachment: fixed;
     -webkit-font-smoothing: antialiased;
   }
   ::selection {
-    background: oklch(0.7 0.16 162 / 0.28);
+    background: oklch(1 0 0 / 0.2);
   }
 }
 
 @layer utilities {
-  /* Card/row that lifts and warms its border on hover (shared idiom). */
+  /* Card/row that lifts on hover. */
   .interactive {
     @apply transition-all duration-200 ease-out;
   }
   .interactive:hover {
     transform: translateY(-3px);
-    border-color: oklch(0.7 0.16 162 / 0.45);
-    box-shadow: 0 16px 40px -18px oklch(0 0 0 / 0.7);
+    border-color: oklch(1 0 0 / 0.2);
+    box-shadow: 0 16px 40px -18px oklch(0 0 0 / 0.8);
   }
   .glow {
     box-shadow:
-      0 0 0 1px oklch(0.7 0.16 162 / 0.35),
-      0 0 26px -6px oklch(0.7 0.16 162 / 0.45);
+      0 0 0 1px oklch(1 0 0 / 0.14),
+      0 0 28px -8px oklch(1 0 0 / 0.2);
   }
   .press {
     @apply transition-transform duration-100;
@@ -98,23 +68,23 @@
     transform: scale(0.97);
   }
 
-  /* Soft "breathing" pulse for live/online dots. */
+  /* White breathing pulse for live/online dots. */
   @keyframes status-pulse {
     0%,
     100% {
       opacity: 1;
-      box-shadow: 0 0 0 0 oklch(0.7 0.16 162 / 0.5);
+      box-shadow: 0 0 0 0 oklch(1 0 0 / 0.5);
     }
     50% {
       opacity: 0.85;
-      box-shadow: 0 0 0 5px oklch(0.7 0.16 162 / 0);
+      box-shadow: 0 0 0 5px oklch(1 0 0 / 0);
     }
   }
   .status-live {
     animation: status-pulse 2s ease-in-out infinite;
   }
 
-  /* The signature "ping" — concentric rings radiating from a point (sensor detect). */
+  /* Concentric ring ping (sensor detect). */
   @keyframes ping-ring {
     0% {
       transform: scale(0.55);
@@ -130,9 +100,9 @@
     animation: ping-ring 3.2s cubic-bezier(0.22, 1, 0.36, 1) infinite;
   }
 
-  /* Emerald gradient text. */
+  /* White gradient text for hero headings. */
   .text-grad {
-    background: linear-gradient(110deg, oklch(0.86 0.14 165), oklch(0.7 0.16 162) 60%, oklch(0.72 0.12 195));
+    background: linear-gradient(110deg, oklch(0.97 0 0), oklch(0.72 0 0) 60%, oklch(0.55 0 0));
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;

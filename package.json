@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@genwave/svgmaker-mcp": "^2.0.0"
+  }
+}

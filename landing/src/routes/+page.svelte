@@ -72,7 +72,7 @@
   bind:this={hdr}>
   <div class="mx-auto flex h-16 w-full max-w-6xl items-center gap-7 px-6">
     <a href="/" class="flex items-center gap-2.5 font-semibold tracking-tight">
-      <SentinelMark size={26} class="text-primary drop-shadow-[0_0_10px_oklch(0.7_0.16_162/0.5)]" />
+      <SentinelMark size={26} class="text-primary drop-shadow-[0_0_10px_oklch(1_0_0/0.35)]" />
       <span>Sentinel</span>
     </a>
     <nav class="ml-3 hidden gap-7 text-sm font-medium text-muted-foreground md:flex">
@@ -82,7 +82,7 @@
     </nav>
     <div class="ml-auto flex items-center gap-3">
       <a class="hidden text-sm font-medium text-muted-foreground transition-colors hover:text-foreground sm:block" href={APP}>Sign in</a>
-      <a class="press inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-[0_8px_30px_-8px_oklch(0.7_0.16_162/0.5)] transition-transform hover:-translate-y-0.5" href={APP}>Get started</a>
+      <a class="press inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-[0_8px_30px_-8px_oklch(1_0_0/0.35)] transition-transform hover:-translate-y-0.5" href={APP}>Get started</a>
     </div>
   </div>
 </header>
@@ -94,7 +94,7 @@
     <div class="relative mb-8 grid place-items-center">
       <span class="ping-ring absolute size-28 rounded-full border border-primary/30" style="animation-delay:0s"></span>
       <span class="ping-ring absolute size-28 rounded-full border border-primary/20" style="animation-delay:1.6s"></span>
-      <SentinelMark size={78} class="relative text-primary drop-shadow-[0_0_24px_oklch(0.7_0.16_162/0.45)]" />
+      <SentinelMark size={78} class="relative text-primary drop-shadow-[0_0_24px_oklch(1_0_0/0.3)]" />
     </div>
 
     <span use:reveal class="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3.5 py-1.5 text-xs font-semibold text-primary">
@@ -113,7 +113,7 @@
     </p>
 
     <div use:reveal={180} class="mt-9 flex flex-wrap items-center justify-center gap-3.5">
-      <a class="press inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3.5 text-[15px] font-semibold text-primary-foreground shadow-[0_10px_36px_-10px_oklch(0.7_0.16_162/0.55)] transition-transform hover:-translate-y-0.5" href={APP}>
+      <a class="press inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3.5 text-[15px] font-semibold text-primary-foreground shadow-[0_10px_36px_-10px_oklch(1_0_0/0.25)] transition-transform hover:-translate-y-0.5" href={APP}>
         Start free <ArrowRight class="size-4" />
       </a>
       <a class="press inline-flex items-center gap-2 rounded-xl border border-border bg-card/40 px-6 py-3.5 text-[15px] font-semibold backdrop-blur transition-colors hover:border-primary/40" href="#how">
@@ -145,7 +145,7 @@
           <span class="absolute bottom-3 left-3 size-4 border-b-2 border-l-2 border-primary/50"></span>
           <span class="absolute bottom-3 right-3 size-4 border-b-2 border-r-2 border-primary/50"></span>
           <!-- detection -->
-          <div class="absolute left-[26%] top-[22%] h-[58%] w-[30%] rounded-lg border-[1.5px] border-primary shadow-[0_0_28px_-4px_oklch(0.7_0.16_162/0.6)]">
+          <div class="absolute left-[26%] top-[22%] h-[58%] w-[30%] rounded-lg border-[1.5px] border-primary shadow-[0_0_28px_-4px_oklch(1_0_0/0.35)]">
             <span class="absolute -top-3 left-0 -translate-y-full rounded-md bg-primary px-2 py-1 text-[11px] font-bold text-primary-foreground whitespace-nowrap">Recognised · Maya</span>
             <span class="absolute -bottom-3 right-0 translate-y-full font-mono text-[10.5px] text-primary tabular-nums">99.2%</span>
             <span class="ping-ring absolute left-1/2 top-1/2 size-10 -translate-x-1/2 -translate-y-1/2 rounded-full border border-primary/50"></span>
@@ -207,9 +207,9 @@
   <!-- ===== privacy ===== -->
   <section id="privacy" class="py-24">
     <div use:reveal class="relative overflow-hidden rounded-3xl border border-primary/20 p-10 text-center md:p-14"
-      style="background:radial-gradient(600px 320px at 50% 0%, oklch(0.7 0.16 162 / 0.12), transparent 70%), oklch(0.205 0.008 162 / 0.5);">
+      style="background:radial-gradient(600px 320px at 50% 0%, oklch(1 0 0 / 0.04), transparent 70%), oklch(0.11 0 0);">
       <div class="mb-5 grid place-items-center">
-        <SentinelMark size={48} class="text-primary drop-shadow-[0_0_18px_oklch(0.7_0.16_162/0.5)]" />
+        <SentinelMark size={48} class="text-primary drop-shadow-[0_0_18px_oklch(1_0_0/0.35)]" />
       </div>
       <span class="text-sm font-bold tracking-wide text-primary">Private by design</span>
       <h2 class="mx-auto mt-3 max-w-xl text-3xl font-extrabold tracking-tight md:text-[2.4rem]">Your footage is yours. Full stop.</h2>
@@ -238,7 +238,7 @@
       <h2 class="mx-auto max-w-xl text-4xl font-extrabold tracking-tight md:text-5xl">Bring calm to your cameras today</h2>
       <p class="mx-auto mt-4 max-w-md text-lg text-muted-foreground">Create your workspace in a minute. Add a camera, meet your new assistant.</p>
       <div class="mt-8 flex flex-wrap items-center justify-center gap-3.5">
-        <a class="press inline-flex items-center gap-2 rounded-xl bg-primary px-7 py-4 text-base font-semibold text-primary-foreground shadow-[0_10px_36px_-10px_oklch(0.7_0.16_162/0.55)] transition-transform hover:-translate-y-0.5" href={APP}>
+        <a class="press inline-flex items-center gap-2 rounded-xl bg-primary px-7 py-4 text-base font-semibold text-primary-foreground shadow-[0_10px_36px_-10px_oklch(1_0_0/0.25)] transition-transform hover:-translate-y-0.5" href={APP}>
           Get started free <ArrowRight class="size-4" />
         </a>
         <a class="press inline-flex items-center rounded-xl border border-border bg-card/40 px-7 py-4 text-base font-semibold backdrop-blur transition-colors hover:border-primary/40" href={APP}>Sign in</a>
@@ -285,11 +285,11 @@
   /* live-feed mock: dot-grid (the halftone) + a soft scanning sweep */
   .feed {
     background:
-      radial-gradient(oklch(0.7 0.16 162 / 0.1) 1px, transparent 1.4px) 0 0 / 22px 22px,
-      radial-gradient(120% 80% at 50% 0%, oklch(0.25 0.02 162), oklch(0.16 0.006 160));
+      radial-gradient(oklch(1 0 0 / 0.04) 1px, transparent 1.4px) 0 0 / 22px 22px,
+      radial-gradient(120% 80% at 50% 0%, oklch(0.16 0 0), oklch(0.08 0 0));
   }
   .sweep {
-    background: linear-gradient(90deg, transparent, oklch(0.7 0.16 162 / 0.14), transparent);
+    background: linear-gradient(90deg, transparent, oklch(1 0 0 / 0.06), transparent);
     animation: feed-sweep 4.5s cubic-bezier(0.45, 0, 0.55, 1) infinite;
   }
   @keyframes feed-sweep {

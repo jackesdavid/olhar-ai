@@ -11,14 +11,23 @@
             "id": "ed375cc67003ec28",
             "type": "leaf",
             "state": {
-              "type": "markdown",
+              "type": "kanban",
               "state": {
-                "file": "plans/ai-vision-node-ideas.md",
-                "mode": "source",
-                "source": false
+                "file": "Task Board.md",
+                "kanbanViewState": {
+                  "kanban-plugin": "board",
+                  "list-collapse": [
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false
+                  ]
+                }
               },
-              "icon": "lucide-file",
-              "title": "ai-vision-node-ideas"
+              "icon": "lucide-trello",
+              "title": "Task Board"
             }
           }
         ]
@@ -187,41 +196,41 @@
   },
   "active": "ed375cc67003ec28",
   "lastOpenFiles": [
-    "workflow-nodes.md",
-    "ref/workflows.md",
+    "plans/workflow-variables.md",
+    "workflow-nodes.md.tmp.3523.314baa0a528f",
+    "Task Board.md.tmp.82943.d3faa5a5137c",
+    "Task Board.md.tmp.82943.8b47896febaf",
+    "plans/telegram-bot-two-way-research.md",
+    "Task Board.md",
+    "Task Board.md.tmp.82943.9396fcf6f2f0",
+    "plans/workflow-node-ux-refactor.md",
+    "Task Board.md.tmp.82967.d65c4d17767a",
+    "Task Board.md.tmp.82967.6e16ee0d1ede",
+    "plans/map-presence-history.md",
+    "Task Board.md.tmp.98630.0897d5b93bea",
+    "plans/time-gate-node.md",
+    "plans/recordings-improvements.md",
+    "plans/update-button-loading.md",
+    "plans/monochrome-rebrand.md",
+    "Task Board.md.tmp.8274.e0e49c706a5a",
+    "plans/motion-triggered-recorder.md",
     "ref/map.md",
-    "ref/edge.md",
-    "ref/deploy.md",
-    "ref/architecture.md",
     "ref/ai-sidecar.md",
-    "ref",
     "plans/workflow-runs-realtime.md",
     "plans/workflow-list-improvements.md",
-    "plans/telegram-bot-two-way-research.md",
     "plans/telegram-beacons-fix-polish.md",
     "plans/string-switch-node.md",
     "plans/show-image-node-rendering.md",
+    "plans/presence-bbox-positioning.md",
+    "plans/platform-logs-unified.md",
     "plans/node-animation-timing.md",
-    "plans/multi-tenant-gateway-edge.md",
     "plans/multi-pod-flow-event-fabric.md",
     "plans/motion-detection-node-v2.md",
     "plans/missing-comparison-nodes.md",
     "plans/map-walls-3d-depth.md",
     "plans/map-redesign-2.md",
     "plans/generic-object-detection-node.md",
-    "plans/foreach-and-fanout-notification.md",
-    "plans/feature-slice-architecture.md",
-    "plans/face-recognition-next-steps.md",
-    "plans/event-payload-data.md",
-    "plans/draw-bbox-node.md",
     "epics",
-    "Task Board.md.tmp.15799.404c01b28612",
-    "Task Board.md.tmp.15799.2c20b1fc8591",
-    "Task Board.md.tmp.48169.2399079efe74",
-    "plans/ai-question-node.md.tmp.48169.251f809bb7d3",
-    "Task Board.md.tmp.29082.4cb8d7985b89",
-    "Task Board.md.tmp.29082.8394a52b8e06",
-    "Task Board.md.tmp.29082.3a46aa100871",
-    "Task Board.md.tmp.27454.161865e778e7"
+    "Task Board.md.tmp.40582.c3436902c07d"
   ]
 }
