@@ -735,7 +735,7 @@ impl NodeKind {
             NodeKind::Format => "Format",
             NodeKind::Wait => "Wait",
             NodeKind::HttpPost => "HTTP Post",
-            NodeKind::If => "If",
+            NodeKind::If => "Branch",
             NodeKind::ForEach => "For Each",
             NodeKind::MotionDetection => "Detect Motion",
             NodeKind::MotionWatch => "Watch for Motion",
