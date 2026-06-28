@@ -170,7 +170,6 @@ pub(super) fn run_get_image_size(inputs: &PortValues) -> Result<PortValues, Stri
 pub(super) fn run_draw_bbox(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
     let raw = inputs.get("image").and_then(PortValue::as_image).ok_or("missing required input 'image'")?;
     let b = inputs.get("bbox").and_then(PortValue::as_bbox).ok_or("missing required input 'bbox'")?;
-    let (x1, y1, x2, y2) = (b.x1, b.y1, b.x2, b.y2);
     let color_str = config.get("color").and_then(|v| v.as_str()).unwrap_or("#00FF00");
     let color = parse_hex_color(color_str).unwrap_or([0, 255, 0]);
     let thickness = config
@@ -179,6 +178,21 @@ pub(super) fn run_draw_bbox(config: &Value, inputs: &PortValues) -> Result<PortV
         .unwrap_or(2)
         .max(1);
     let style = config.get("style").and_then(|v| v.as_str()).unwrap_or("box");
+    // Optional: grow the box outward by `expand`% of its size on each side (draw fns clamp to image).
+    let expand = config
+        .get("expand")
+        .and_then(|v| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()).or_else(|| v.as_i64()))
+        .unwrap_or(0)
+        .max(0);
+    let (mut x1, mut y1, mut x2, mut y2) = (b.x1, b.y1, b.x2, b.y2);
+    if expand > 0 {
+        let dx = (x2 - x1).max(0) * expand / 100;
+        let dy = (y2 - y1).max(0) * expand / 100;
+        x1 -= dx;
+        y1 -= dy;
+        x2 += dx;
+        y2 += dy;
+    }
     let img = image::load_from_memory(raw).map_err(|e| format!("could not decode image: {e}"))?;
     let mut rgb = img.into_rgb8();
     match style {

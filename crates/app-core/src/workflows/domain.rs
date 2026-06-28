@@ -1075,7 +1075,7 @@ impl NodeKind {
             | NodeKind::NumNe => json!({ "a": "0", "b": "0" }),
             NodeKind::NumToText | NodeKind::BoolToText => json!({}),
             NodeKind::Cooldown => json!({ "window_secs": "60" }),
-            NodeKind::DrawBbox => json!({ "color": "#00FF00", "thickness": "2", "style": "box" }),
+            NodeKind::DrawBbox => json!({ "color": "#00FF00", "thickness": "2", "style": "box", "expand": "0" }),
             NodeKind::BlurOutsideBbox => json!({ "blur": "12" }),
             NodeKind::GetImageSize => json!({}),
             NodeKind::And | NodeKind::Or => json!({ "a": false, "b": false }),
