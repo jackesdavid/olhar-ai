@@ -44,6 +44,7 @@
 
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
+  import { Slider } from "$lib/components/ui/slider";
   import { Label } from "$lib/components/ui/label";
   import { Switch } from "$lib/components/ui/switch";
   import * as Card from "$lib/components/ui/card";
@@ -3105,6 +3106,21 @@
                             {#each STYLES as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
                           </Select.Content>
                         </Select.Root>
+                      {:else if key === "expand"}
+                        {@const ev = Number(selectedNode.config[key] ?? 0)}
+                        <div class="flex items-center gap-2">
+                          <Slider
+                            type="single"
+                            min={0}
+                            max={100}
+                            step={1}
+                            value={ev}
+                            disabled={editLocked}
+                            class="flex-1"
+                            onValueChange={(v) => liveSaveConfig(selectedNode, key, String(v))}
+                          />
+                          <span class="w-9 text-right text-xs tabular-nums text-muted-foreground">{ev}%</span>
+                        </div>
                       {:else if key === "color"}
                         <input
                           type="color"
