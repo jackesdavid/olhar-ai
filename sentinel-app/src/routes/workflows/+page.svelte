@@ -822,8 +822,12 @@
   // Includes comparison operators, logical operators, and type-conversion nodes.
   const PURE_KINDS = new Set([
     "num_lt","num_lte","num_gt","num_gte","num_eq","num_ne","compare","and","or","not","text_compare",
-    "bool_to_text","num_to_text","get_camera_by_name","break_camera","get_variable",
+    "bool_to_text","num_to_text","get_camera_by_name","break_camera",
   ]);
+  // Get/Set Variable are simple one-port nodes → render them narrower than the default.
+  function nodeW(n: Node): number {
+    return n.kind === "get_variable" || n.kind === "set_variable" ? 120 : NODE_W;
+  }
   function isCompareOrLogic(kind: string): boolean {
     return PURE_KINDS.has(kind);
   }
@@ -1624,7 +1628,7 @@
     if (editLocked) return;
     pending = { node: node.id, port };
     // seed the wire's free end at the port so it starts with zero length
-    cursor = { x: node.x + NODE_W, y: outPortY(node, port) };
+    cursor = { x: node.x + nodeW(node), y: outPortY(node, port) };
   }
   async function clickInPort(node: Node, port: string) {
     if (!graph || editLocked) return;
@@ -1930,7 +1934,7 @@
     }
     const minX = Math.min(...graph.nodes.map((n) => n.x)) - 60;
     const minY = Math.min(...graph.nodes.map((n) => n.y)) - 60;
-    const maxX = Math.max(...graph.nodes.map((n) => n.x + (n.kind === 'comment' ? commentW(n) : NODE_W))) + 60;
+    const maxX = Math.max(...graph.nodes.map((n) => n.x + (n.kind === 'comment' ? commentW(n) : nodeW(n)))) + 60;
     const maxY = Math.max(...graph.nodes.map((n) => n.y + (n.kind === 'comment' ? commentH(n) : nodeHeight(n)))) + 60;
     const r = svgEl.getBoundingClientRect();
     const z = clampZoom(Math.min(r.width / (maxX - minX), r.height / (maxY - minY), 1.5));
@@ -2194,7 +2198,7 @@
                 {@const fromN = nodeById.get(e.from)}
                 {@const toN = nodeById.get(e.to)}
                 {#if fromN && toN}
-                  {@const x1 = fromN.x + NODE_W}
+                  {@const x1 = fromN.x + nodeW(fromN)}
                   {@const y1 = outPortY(fromN, e.from_port)}
                   {@const x2 = toN.x}
                   {@const y2 = inPortY(toN, e.to_port)}
@@ -2293,6 +2297,7 @@
               {#each nonCommentNodes as n (n.id)}
                 {@const k = effectiveKind(n)}
                 {@const h = nodeHeight(n)}
+                {@const nw = nodeW(n)}
                 {@const sel = selectedNodeId === n.id}
                 {@const live = nodeLive(n.id)}
                 {@const invalid = requiredUnfilled(n).length > 0}
@@ -2301,7 +2306,7 @@
                      recompute). -->
                 <g transform="translate({n.x} {n.y})" filter={sel || live ? "url(#nodeGlow)" : undefined}>
                   <rect
-                    width={NODE_W}
+                    width={nw}
                     height={h}
                     rx="8"
                     stroke-width={sel || live || invalid ? 2 : 1}
@@ -2312,7 +2317,7 @@
                       <!-- the executing node: a bright marching-ants emerald border
                            over a breathing solid ring -->
                       <rect
-                        width={NODE_W}
+                        width={nw}
                         height={h}
                         rx="8"
                         fill="none"
@@ -2320,7 +2325,7 @@
                         class="node-run-glow stroke-primary"
                       />
                       <rect
-                        width={NODE_W}
+                        width={nw}
                         height={h}
                         rx="8"
                         fill="none"
@@ -2333,7 +2338,7 @@
                        band behind the label so node families read at a glance and events pop.
                        Drawn before the drag handle so the handle stays on top for clicks. -->
                   <path
-                    d="M0 8 a8 8 0 0 1 8 -8 h{NODE_W - 16} a8 8 0 0 1 8 8 v{HEAD_H - 8} h-{NODE_W} z"
+                    d="M0 8 a8 8 0 0 1 8 -8 h{nw - 16} a8 8 0 0 1 8 8 v{HEAD_H - 8} h-{nw} z"
                     fill={headerColorFor(n)}
                     fill-opacity={n.kind === "emit_event" || n.kind === "on_event" ? 0.32 : 0.18}
                     class="pointer-events-none"
@@ -2341,7 +2346,7 @@
                   <!-- Drag handle covers the whole node body; ports render after
                        this rect, so they stay clickable on top of it. -->
                   <rect
-                    width={NODE_W}
+                    width={nw}
                     height={h}
                     rx="8"
                     fill="transparent"
@@ -2366,14 +2371,14 @@
                       onpointerdown={(ev) => ev.stopPropagation()}
                       onclick={() => removeNode(n)}
                     >
-                      <circle cx={NODE_W} cy="0" r={isTouch ? 11 : 9} class="fill-destructive" />
-                      <path d="M{NODE_W - 3.5} -3.5 l7 7 M{NODE_W + 3.5} -3.5 l-7 7" stroke="white" stroke-width="1.6" stroke-linecap="round" />
+                      <circle cx={nw} cy="0" r={isTouch ? 11 : 9} class="fill-destructive" />
+                      <path d="M{nw - 3.5} -3.5 l7 7 M{nw + 3.5} -3.5 l-7 7" stroke="white" stroke-width="1.6" stroke-linecap="round" />
                     </g>
                   {/if}
                   <line
                     x1="0"
                     y1={HEAD_H}
-                    x2={NODE_W}
+                    x2={nw}
                     y2={HEAD_H}
                     class="pointer-events-none stroke-border"
                     stroke-width="1"
@@ -2384,7 +2389,7 @@
                     {@const bVal = exprOperand(n.id, "b", n.config)}
                     {@const ey = HEAD_H + EXPR_H / 2}
                     <text
-                      x={NODE_W / 2}
+                      x={nw / 2}
                       y={ey + 7}
                       text-anchor="middle"
                       font-size="17"
@@ -2398,7 +2403,7 @@
                       class="pointer-events-none select-none fill-muted-foreground/70"
                     >{aVal}</text>
                     <text
-                      x={NODE_W - 10}
+                      x={nw - 10}
                       y={ey + 5}
                       text-anchor="end"
                       font-size="8"
@@ -2407,8 +2412,8 @@
                   {/if}
                   {#if invalid}
                     <!-- required input(s) not filled — a red dot, the logo's signal -->
-                    <circle cx={NODE_W - 9} cy="9" r="5.5" class="pointer-events-none fill-destructive/20" />
-                    <circle cx={NODE_W - 9} cy="9" r="3" class="fill-destructive">
+                    <circle cx={nw - 9} cy="9" r="5.5" class="pointer-events-none fill-destructive/20" />
+                    <circle cx={nw - 9} cy="9" r="3" class="fill-destructive">
                       <title>Required input not filled: {requiredUnfilled(n).map((p) => p.name).join(", ")}</title>
                     </circle>
                   {/if}
@@ -2436,7 +2441,7 @@
                     {@const ey = multi ? HEAD_H + i * ROW_H + ROW_H / 2 : HEAD_H / 2}
                     {@const isP = pending && pending.node === n.id && pending.port === p.name}
                     <circle
-                      cx={NODE_W}
+                      cx={nw}
                       cy={ey}
                       r={isP ? portR + 1 : portR}
                       fill={isP ? portColor.exec : "#1a2420"}
@@ -2448,7 +2453,7 @@
                     />
                     {#if multi}
                       <text
-                        x={NODE_W - 9}
+                        x={nw - 9}
                         y={ey + 4}
                         text-anchor="end"
                         class="pointer-events-none select-none fill-muted-foreground"
@@ -2491,7 +2496,7 @@
                     {@const dy = dataPortY(i + outDataOffset(k)) + nodeExprH(n)}
                     {@const pc = portColorOf(n, p.name, "out")}
                     <circle
-                      cx={NODE_W}
+                      cx={nw}
                       cy={dy}
                       r={isPending ? portR + 1 : portR}
                       fill={isPending ? pc : "#151c19"}
@@ -2502,7 +2507,7 @@
                       role="presentation"
                     />
                     <text
-                      x={NODE_W - 11}
+                      x={nw - 11}
                       y={dy + 3}
                       text-anchor="end"
                       class="pointer-events-none select-none fill-muted-foreground"
@@ -2520,13 +2525,13 @@
                     <rect
                       x={8}
                       y={portsBottom(n) + 4}
-                      width={NODE_W - 16}
+                      width={nw - 16}
                       height={18}
                       rx="4"
                       class={armed ? "fill-primary/15" : "fill-muted/20"}
                     />
                     <text
-                      x={NODE_W / 2}
+                      x={nw / 2}
                       y={portsBottom(n) + 16}
                       text-anchor="middle"
                       class={armed ? "fill-primary" : "fill-muted-foreground"}
@@ -2603,7 +2608,7 @@
               {#if pending}
                 {@const pn = nodeById.get(pending.node)}
                 {#if pn}
-                  {@const px = pn.x + NODE_W}
+                  {@const px = pn.x + nodeW(pn)}
                   {@const py = outPortY(pn, pending.port)}
                   {@const pColor = portColorOf(pn, pending.port, "out")}
                   <path
