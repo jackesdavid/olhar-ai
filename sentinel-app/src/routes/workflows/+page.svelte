@@ -3121,7 +3121,7 @@
                           />
                           <span class="w-9 text-right text-xs tabular-nums text-muted-foreground">{ev}%</span>
                         </div>
-                      {:else if key === "color"}
+                      {:else if key === "color" || key === "text_color" || key === "bg_color"}
                         <input
                           type="color"
                           class="h-8 w-full cursor-pointer rounded-lg border border-border bg-card"
@@ -3130,6 +3130,30 @@
                           oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)}
                           onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })}
                         />
+                      {:else if key === "position" && selectedNode.kind === "draw_text"}
+                        {@const POSITIONS = [
+                          { value: "top-left", label: "Top-left" },
+                          { value: "top-right", label: "Top-right" },
+                          { value: "bottom-left", label: "Bottom-left" },
+                          { value: "bottom-right", label: "Bottom-right" },
+                        ]}
+                        {@const pv = String(selectedNode.config[key] ?? "top-left")}
+                        {@const plabel = POSITIONS.find((o) => o.value === pv)?.label ?? pv}
+                        <Select.Root type="single" disabled={editLocked} value={pv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "top-left" })}>
+                          <Select.Trigger class="h-8 w-full">{plabel}</Select.Trigger>
+                          <Select.Content>
+                            {#each POSITIONS as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                          </Select.Content>
+                        </Select.Root>
+                      {:else if key === "background"}
+                        <div class="flex h-8 items-center gap-2">
+                          <Switch
+                            checked={selectedNode.config[key] === true || selectedNode.config[key] === "true"}
+                            disabled={editLocked}
+                            onCheckedChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v })}
+                          />
+                          <span class="text-xs text-muted-foreground">{selectedNode.config[key] === true || selectedNode.config[key] === "true" ? "On" : "Off"}</span>
+                        </div>
                       {:else}
                         <Input class="h-8" disabled={editLocked} value={String(selectedNode.config[key] ?? "")} oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)} />
                       {/if}

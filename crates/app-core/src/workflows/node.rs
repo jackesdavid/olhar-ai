@@ -367,6 +367,7 @@ pub fn run_node(
         // place the preview. Here it's a pure pass-through (exec flows on, no data out).
         NodeKind::ShowImage => Ok(PortValues::new()),
         NodeKind::DrawBbox => vision::run_draw_bbox(config, inputs),
+        NodeKind::DrawText => vision::run_draw_text(config, inputs),
         NodeKind::BlurOutsideBbox => vision::run_blur_outside_bbox(config, inputs),
         NodeKind::GetImageSize => vision::run_get_image_size(inputs),
         // FlipFlop is engine-driven (reads/writes cross-run state + routes exec).
@@ -448,6 +449,7 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::OnEvent
         | NodeKind::ShowImage
         | NodeKind::DrawBbox
+        | NodeKind::DrawText
         | NodeKind::BlurOutsideBbox
         | NodeKind::GetImageSize
         | NodeKind::And
@@ -662,6 +664,12 @@ pub fn debug_summary(
         NodeKind::DrawBbox => {
             let bytes = outputs.get("image").and_then(PortValue::as_image).map_or(0, <[u8]>::len);
             format!("bbox drawn ({} KB)", bytes / 1024)
+        }
+        NodeKind::DrawText => {
+            let t = inputs.get("text").and_then(PortValue::as_text)
+                .or_else(|| config.get("text").and_then(|v| v.as_str()))
+                .unwrap_or("");
+            format!("text drawn: {}", clip(t))
         }
         NodeKind::BlurOutsideBbox => {
             let bytes = outputs.get("image").and_then(PortValue::as_image).map_or(0, <[u8]>::len);

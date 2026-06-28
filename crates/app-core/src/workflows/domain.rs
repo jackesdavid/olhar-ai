@@ -280,6 +280,10 @@ pub enum NodeKind {
     /// Vision: draw a bounding box rectangle on an image → annotated JPEG out.
     /// Accepts `xyxy` (x1,y1,x2,y2) or `xywh` (x,y,width,height) via `format` config.
     DrawBbox,
+    /// Vision: draw a text label anchored to a corner of a bbox (top-left/top-right/
+    /// bottom-left/bottom-right), optionally on a filled background rectangle in a contrasting
+    /// colour. `text` is wired (Text) or a config literal. → annotated JPEG out.
+    DrawText,
     /// Vision: blur everything OUTSIDE a bounding box → redacted JPEG out (the
     /// region inside the box stays sharp). Accepts `xyxy`/`xywh` via `format`;
     /// `blur` config sets the Gaussian strength.
@@ -547,6 +551,15 @@ const DRAW_BBOX_OUT: [Port; 3] = [
     p("ok", PortType::Bool, false),
 ];
 
+// DrawText: an image + a bbox to anchor against + the text (wired or config literal).
+const DRAW_TEXT_IN: [Port; 3] = [
+    p("image", PortType::Image, true),
+    p("bbox", PortType::Bbox, true),
+    p("text", PortType::Text, false),
+];
+const DRAW_TEXT_OUT: [Port; 2] =
+    [p("image", PortType::Image, false), p("ok", PortType::Bool, false)];
+
 const BLUR_OUTSIDE_BBOX_IN: [Port; 2] =
     [p("image", PortType::Image, true), p("bbox", PortType::Bbox, true)];
 const BLUR_OUTSIDE_BBOX_OUT: [Port; 2] =
@@ -624,7 +637,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 55] = [
+    pub const ALL: [NodeKind; 56] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -665,6 +678,7 @@ impl NodeKind {
         NodeKind::ShowImage,
         NodeKind::Cooldown,
         NodeKind::DrawBbox,
+        NodeKind::DrawText,
         NodeKind::BlurOutsideBbox,
         NodeKind::GetImageSize,
         NodeKind::And,
@@ -726,6 +740,7 @@ impl NodeKind {
             NodeKind::BoolToText => "bool_to_text",
             NodeKind::Cooldown => "cooldown",
             NodeKind::DrawBbox => "draw_bbox",
+            NodeKind::DrawText => "draw_text",
             NodeKind::BlurOutsideBbox => "blur_outside_bbox",
             NodeKind::GetImageSize => "get_image_size",
             NodeKind::And => "and",
@@ -791,6 +806,7 @@ impl NodeKind {
             NodeKind::BoolToText => "Yes/No to Text",
             NodeKind::Cooldown => "Cooldown",
             NodeKind::DrawBbox => "Draw Detection Box",
+            NodeKind::DrawText => "Draw Text",
             NodeKind::BlurOutsideBbox => "Blur Outside Box",
             NodeKind::GetImageSize => "Image Size",
             NodeKind::And => "And",
@@ -851,6 +867,7 @@ impl NodeKind {
             | NodeKind::BreakDetection
             | NodeKind::BreakFaceDetection
             | NodeKind::DrawBbox
+            | NodeKind::DrawText
             | NodeKind::BlurOutsideBbox
             | NodeKind::GetImageSize => "Vision",
             NodeKind::RecordPresence => "Presence",
@@ -938,6 +955,7 @@ impl NodeKind {
             NodeKind::Print => &PRINT_IN,
             NodeKind::ShowImage => &SHOW_IMAGE_IN,
             NodeKind::DrawBbox => &DRAW_BBOX_IN,
+            NodeKind::DrawText => &DRAW_TEXT_IN,
             NodeKind::BlurOutsideBbox => &BLUR_OUTSIDE_BBOX_IN,
             NodeKind::GetImageSize => &GET_IMAGE_SIZE_IN,
             NodeKind::And | NodeKind::Or => &BOOL_OP_IN,
@@ -998,6 +1016,7 @@ impl NodeKind {
             NodeKind::Print => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::ShowImage => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::DrawBbox => &DRAW_BBOX_OUT,
+            NodeKind::DrawText => &DRAW_TEXT_OUT,
             NodeKind::BlurOutsideBbox => &BLUR_OUTSIDE_BBOX_OUT,
             NodeKind::GetImageSize => &GET_IMAGE_SIZE_OUT,
             NodeKind::And | NodeKind::Or | NodeKind::Not | NodeKind::TextCompare => &COMPARE_OUT,
@@ -1081,6 +1100,7 @@ impl NodeKind {
             NodeKind::NumToText | NodeKind::BoolToText => json!({}),
             NodeKind::Cooldown => json!({ "window_secs": "60" }),
             NodeKind::DrawBbox => json!({ "color": "#00FF00", "thickness": "2", "style": "box", "expand": "0" }),
+            NodeKind::DrawText => json!({ "text": "", "position": "top-left", "size": "18", "text_color": "#FFFFFF", "background": true, "bg_color": "#000000" }),
             NodeKind::BlurOutsideBbox => json!({ "blur": "12" }),
             NodeKind::GetImageSize => json!({}),
             NodeKind::And | NodeKind::Or => json!({ "a": false, "b": false }),

@@ -2,6 +2,18 @@ use super::{PortValue, PortValues, device_from_camera, jpeg_dimensions};
 use crate::agent::tools::ToolContext;
 use serde_json::Value;
 
+/// Embedded monospace font for the Draw Text node (CascadiaMono).
+const FONT_BYTES: &[u8] = include_bytes!("../../../assets/fonts/CascadiaMono-Regular.ttf");
+
+/// Encode an RGB image to JPEG bytes.
+fn encode_jpeg(rgb: image::RgbImage) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    image::DynamicImage::ImageRgb8(rgb)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
+        .map_err(|e| format!("could not encode image: {e}"))?;
+    Ok(out)
+}
+
 pub(super) fn run_person_detection(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
     let bytes = inputs
         .get("image")
@@ -220,6 +232,77 @@ pub(super) fn run_draw_bbox(config: &Value, inputs: &PortValues) -> Result<PortV
             y2.clamp(0, ih),
         )),
     );
+    o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
+}
+
+/// Draw a text label anchored to a corner of `bbox`, optionally on a filled background rect.
+pub(super) fn run_draw_text(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    use ab_glyph::{FontRef, PxScale};
+    use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut, text_size};
+    use imageproc::rect::Rect;
+
+    let raw = inputs.get("image").and_then(PortValue::as_image).ok_or("missing required input 'image'")?;
+    let b = inputs.get("bbox").and_then(PortValue::as_bbox).ok_or("missing required input 'bbox'")?;
+    // Text: wired input wins, else the config literal.
+    let text = inputs
+        .get("text")
+        .and_then(PortValue::as_text)
+        .map(str::to_string)
+        .or_else(|| config.get("text").and_then(|v| v.as_str()).map(str::to_string))
+        .unwrap_or_default();
+
+    let img = image::load_from_memory(raw).map_err(|e| format!("could not decode image: {e}"))?;
+    let mut rgb = img.into_rgb8();
+    if text.trim().is_empty() {
+        // Nothing to draw — pass the image through unchanged.
+        let out = encode_jpeg(rgb)?;
+        let mut o = PortValues::new();
+        o.insert("image".into(), PortValue::Image(out));
+        o.insert("ok".into(), PortValue::Bool(false));
+        return Ok(o);
+    }
+    let (iw, ih) = (rgb.width() as i64, rgb.height() as i64);
+
+    let position = config.get("position").and_then(|v| v.as_str()).unwrap_or("top-left");
+    let size = config
+        .get("size")
+        .and_then(|v| v.as_str().and_then(|s| s.trim().parse::<f32>().ok()).or_else(|| v.as_f64().map(|n| n as f32)))
+        .unwrap_or(18.0)
+        .clamp(6.0, 200.0);
+    let text_color = parse_hex_color(config.get("text_color").and_then(|v| v.as_str()).unwrap_or("#FFFFFF")).unwrap_or([255, 255, 255]);
+    let bg_on = config.get("background").and_then(|v| v.as_bool()).unwrap_or(true);
+    let bg_color = parse_hex_color(config.get("bg_color").and_then(|v| v.as_str()).unwrap_or("#000000")).unwrap_or([0, 0, 0]);
+
+    let font = FontRef::try_from_slice(FONT_BYTES).map_err(|e| format!("font load: {e}"))?;
+    let scale = PxScale::from(size);
+    let (tw, th) = text_size(scale, &font, &text);
+    let (tw, th) = (tw as i64, th as i64);
+    let pad: i64 = 4;
+
+    // Anchor the text box to the chosen bbox corner (inside the box, with padding).
+    let (tx, ty) = match position {
+        "top-right" => (b.x2 - tw - pad, b.y1 + pad),
+        "bottom-left" => (b.x1 + pad, b.y2 - th - pad),
+        "bottom-right" => (b.x2 - tw - pad, b.y2 - th - pad),
+        _ => (b.x1 + pad, b.y1 + pad), // top-left
+    };
+    // Keep the label on-screen.
+    let tx = tx.clamp(pad, (iw - tw - pad).max(pad));
+    let ty = ty.clamp(pad, (ih - th - pad).max(pad));
+
+    if bg_on {
+        let rx = (tx - pad).max(0) as i32;
+        let ry = (ty - pad).max(0) as i32;
+        let rw = (tw + pad * 2).max(1) as u32;
+        let rh = (th + pad * 2).max(1) as u32;
+        draw_filled_rect_mut(&mut rgb, Rect::at(rx, ry).of_size(rw, rh), image::Rgb(bg_color));
+    }
+    draw_text_mut(&mut rgb, image::Rgb(text_color), tx as i32, ty as i32, scale, &font, &text);
+
+    let out = encode_jpeg(rgb)?;
+    let mut o = PortValues::new();
+    o.insert("image".into(), PortValue::Image(out));
     o.insert("ok".into(), PortValue::Bool(true));
     Ok(o)
 }
