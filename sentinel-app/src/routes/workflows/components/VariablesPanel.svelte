@@ -5,6 +5,7 @@
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import PanelLeftClose from "@lucide/svelte/icons/panel-left-close";
   import PanelLeftOpen from "@lucide/svelte/icons/panel-left-open";
+  import GripVertical from "@lucide/svelte/icons/grip-vertical";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { typeColor } from "$lib/workflows/portColors";
@@ -55,7 +56,7 @@
 
     {#if variables.length === 0}
       <p class="rounded-lg border border-dashed border-border px-2 py-3 text-center text-[11px] leading-snug text-muted-foreground">
-        No variables yet. Add one, then drop its Get/Set nodes from the add-node menu (press N).
+        No variables yet. Add one, then drag it onto the canvas (or use the add-node menu) to drop Get/Set.
       </p>
     {/if}
 
@@ -63,7 +64,17 @@
       {#each variables as v, i (i)}
         <div class="space-y-1.5 rounded-lg border border-border bg-background/60 p-2">
           <div class="flex items-center gap-1.5">
-            <span class="size-2 shrink-0 rounded-full" style:background-color={typeColor(v.type)}></span>
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <span
+              class="shrink-0 cursor-grab"
+              class:cursor-not-allowed={disabled}
+              draggable={!disabled}
+              title="Drag onto the canvas → Get / Set"
+              style:color={typeColor(v.type)}
+              ondragstart={(e) => e.dataTransfer?.setData("application/x-sentinel-variable", JSON.stringify({ name: v.name, type: v.type }))}
+            >
+              <GripVertical class="size-3.5" />
+            </span>
             <Input
               class="h-7 flex-1 text-xs"
               value={v.name}

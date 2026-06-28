@@ -1300,6 +1300,39 @@
     if (editLocked) return;
     await saveVariables(variables.filter((_, j) => j !== i));
   }
+  // ---- drag a variable from the panel onto the canvas (Unreal-style) -------
+  const VAR_DRAG_MIME = "application/x-sentinel-variable";
+  // After a drop, a small chooser asks Get vs Set at the drop point.
+  let varDrop = $state<{ world: { x: number; y: number }; screen: { x: number; y: number }; v: { name: string; type: string } } | null>(null);
+
+  function onCanvasDragOver(e: DragEvent) {
+    if (!editLocked && e.dataTransfer?.types.includes(VAR_DRAG_MIME)) {
+      e.preventDefault(); // allow the drop
+      e.dataTransfer.dropEffect = "copy";
+    }
+  }
+  function onCanvasDrop(e: DragEvent) {
+    const raw = e.dataTransfer?.getData(VAR_DRAG_MIME);
+    if (!raw || editLocked || !svgEl) return;
+    e.preventDefault();
+    let v: { name: string; type: string };
+    try {
+      v = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    const r = svgEl.getBoundingClientRect();
+    const world = { x: (e.clientX - r.left - pan.x) / zoom, y: (e.clientY - r.top - pan.y) / zoom };
+    varDrop = { world, screen: { x: e.clientX, y: e.clientY }, v };
+  }
+  async function chooseVarNode(kind: "get_variable" | "set_variable") {
+    const d = varDrop;
+    varDrop = null;
+    if (!d) return;
+    dropAt = d.world; // addNodeKind places at this world point
+    await addNodeKind(kind, undefined, d.v);
+  }
+
   // Add a node from context search and auto-wire it to the pending output port.
   async function addFromContext(slug: string, presetEvent?: string, presetVariable?: { name: string; type: string }) {
     const cp = contextPending;
@@ -1998,6 +2031,9 @@
           <div
             class="absolute inset-0 overflow-hidden rounded-xl border border-border bg-well"
             style="background-image: linear-gradient(oklch(1 0 0 / 9%) 1px, transparent 1px), linear-gradient(90deg, oklch(1 0 0 / 9%) 1px, transparent 1px), linear-gradient(oklch(1 0 0 / 4%) 1px, transparent 1px), linear-gradient(90deg, oklch(1 0 0 / 4%) 1px, transparent 1px); background-size: {90 * zoom}px {90 * zoom}px, {90 * zoom}px {90 * zoom}px, {18 * zoom}px {18 * zoom}px, {18 * zoom}px {18 * zoom}px; background-position: {pan.x}px {pan.y}px, {pan.x}px {pan.y}px, {pan.x}px {pan.y}px, {pan.x}px {pan.y}px;"
+            role="application"
+            ondragover={onCanvasDragOver}
+            ondrop={onCanvasDrop}
           >
             <svg
               bind:this={svgEl}
@@ -3249,6 +3285,25 @@
   kinds={menuKinds}
   onSelect={addFromContext}
 />
+
+<!-- Drop chooser: after dragging a variable onto the canvas, pick Get or Set at the drop point. -->
+{#if varDrop}
+  <button class="fixed inset-0 z-[59]" aria-label="Cancel" onclick={() => (varDrop = null)}></button>
+  <div
+    class="fixed z-[60] flex flex-col overflow-hidden rounded-xl border border-border bg-popover/95 shadow-xl backdrop-blur-sm duration-150 animate-in fade-in zoom-in-95"
+    style:left="{Math.min(varDrop.screen.x, (typeof window !== 'undefined' ? window.innerWidth : 9999) - 180)}px"
+    style:top="{Math.min(varDrop.screen.y, (typeof window !== 'undefined' ? window.innerHeight : 9999) - 110)}px"
+    style:width="170px"
+  >
+    <div class="truncate border-b border-border px-3 py-1.5 text-[11px] font-medium text-muted-foreground">{varDrop.v.name}</div>
+    <button class="interactive flex items-center gap-2 px-3 py-2 text-left text-xs hover:bg-accent" onclick={() => chooseVarNode("get_variable")}>
+      <span class="size-1.5 rounded-full bg-primary"></span> Get {varDrop.v.name}
+    </button>
+    <button class="interactive flex items-center gap-2 px-3 py-2 text-left text-xs hover:bg-accent" onclick={() => chooseVarNode("set_variable")}>
+      <span class="size-1.5 rounded-full bg-sky-400"></span> Set {varDrop.v.name}
+    </button>
+  </div>
+{/if}
 
 <!-- Recent runs drawer — persisted run history for one graph (trigger, pod, status). -->
 <Dialog.Root bind:open={runsOpen}>
