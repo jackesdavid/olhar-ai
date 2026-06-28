@@ -91,6 +91,10 @@ pub struct ToolContext {
     /// with the AppState copy). Used by the TimeGate node to detect and recover from
     /// keeper threads that died (e.g. after a flow restart).
     pub active_gates: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<(uuid::Uuid, u32, u32)>>>,
+    /// Per-run workflow variables (Unreal-style Get/Set Variable nodes). Fresh empty map per
+    /// run — a `Set` writes here, a `Get` reads — so values flow across the graph without wires.
+    /// Scope is one run (local-variable semantics).
+    pub variables: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, crate::workflows::node::PortValue>>>,
 }
 
 impl ToolContext {
@@ -121,6 +125,7 @@ impl ToolContext {
             recognizer,
             notifier: Arc::new(crate::ports::LocalNotifier),
             active_gates: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            variables: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 }

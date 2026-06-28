@@ -45,7 +45,10 @@
       k.category.toLowerCase().includes(q) ||
       k.slug.toLowerCase().includes(q);
 
-    const matched = kinds.filter((k) => k.slug !== "comment" && k.slug !== "reroute" && matchKind(k));
+    // get_variable / set_variable are spawned from the Variables panel (per declared variable),
+    // not the generic palette — like the synthesized per-event entries.
+    const HIDDEN = new Set(["comment", "reroute", "get_variable", "set_variable"]);
+    const matched = kinds.filter((k) => !HIDDEN.has(k.slug) && matchKind(k));
     const groups = new Map<string, PaletteKind[]>();
     for (const k of matched) {
       const list = groups.get(k.category) ?? [];

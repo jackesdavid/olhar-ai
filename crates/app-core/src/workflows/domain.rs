@@ -153,6 +153,18 @@ fn payload_ports(config: &Value) -> Vec<ResolvedPort> {
         .unwrap_or_default()
 }
 
+/// The single typed port of a Get/Set Variable node — derived from `config.type` (the
+/// variable's declared wire type, baked into the node at create time, same as `payload_ports`
+/// bakes event fields). `required` is set true for the Set value input, false for the Get
+/// output. Defaults to `Text` when the type is unset/unknown.
+fn variable_port(config: &Value, required: bool) -> Vec<ResolvedPort> {
+    let ty = config
+        .get("type")
+        .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())
+        .unwrap_or(PortType::Text);
+    vec![ResolvedPort { name: "value".to_string(), ty, required }]
+}
+
 // ---------------------------------------------------------------------------
 // Node kinds + their port declarations
 // ---------------------------------------------------------------------------
@@ -321,6 +333,14 @@ pub enum NodeKind {
     /// runs extend and return immediately. Use to hold open a recording window past the last
     /// motion event.
     TimeGate,
+    /// Variables: read a workflow variable's current value → one typed data output (`value`).
+    /// Pure (no exec pins) — drop it anywhere and wire its output, no flow wires needed. The
+    /// variable name + type are in config; the output port type follows the variable's type.
+    GetVariable,
+    /// Variables: write a value into a workflow variable. One typed data input (`value`) + an
+    /// exec passthrough so it writes at an exact point in the flow. The variable name + type
+    /// are in config; the input port type follows the variable's type.
+    SetVariable,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -599,7 +619,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 53] = [
+    pub const ALL: [NodeKind; 55] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -653,6 +673,8 @@ impl NodeKind {
         NodeKind::StartRecording,
         NodeKind::StopRecording,
         NodeKind::TimeGate,
+        NodeKind::GetVariable,
+        NodeKind::SetVariable,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -713,6 +735,8 @@ impl NodeKind {
             NodeKind::StartRecording => "start_recording",
             NodeKind::StopRecording => "stop_recording",
             NodeKind::TimeGate => "time_gate",
+            NodeKind::GetVariable => "get_variable",
+            NodeKind::SetVariable => "set_variable",
         }
     }
 
@@ -776,6 +800,8 @@ impl NodeKind {
             NodeKind::StartRecording => "Start Recording",
             NodeKind::StopRecording => "Stop Recording",
             NodeKind::TimeGate => "Time Gate",
+            NodeKind::GetVariable => "Get Variable",
+            NodeKind::SetVariable => "Set Variable",
         }
     }
 
@@ -826,6 +852,7 @@ impl NodeKind {
             NodeKind::Print | NodeKind::ShowImage | NodeKind::Comment => "Debug",
             NodeKind::Reroute => "Utility",
             NodeKind::StartRecording | NodeKind::StopRecording => "Recording",
+            NodeKind::GetVariable | NodeKind::SetVariable => "Variables",
         }
     }
 
@@ -851,6 +878,7 @@ impl NodeKind {
                 | NodeKind::Not
                 | NodeKind::TextCompare
                 | NodeKind::Reroute
+                | NodeKind::GetVariable
         )
     }
 
@@ -929,6 +957,8 @@ impl NodeKind {
             NodeKind::StartRecording => &START_RECORDING_IN,
             NodeKind::StopRecording => &STOP_RECORDING_IN,
             NodeKind::TimeGate => &NO_PORTS, // exec-only; wait_secs/extend_secs are config
+            // Get has no inputs; Set's typed `value` input is dynamic (GraphNode::input_ports).
+            NodeKind::GetVariable | NodeKind::SetVariable => &NO_PORTS,
         }
     }
 
@@ -983,6 +1013,8 @@ impl NodeKind {
             NodeKind::StartRecording => &START_RECORDING_OUT,
             NodeKind::StopRecording => &NO_PORTS,
             NodeKind::TimeGate => &NO_PORTS, // exec-only; fires via exec "out" port
+            // Get's typed `value` output is dynamic (GraphNode::output_ports); Set has none.
+            NodeKind::GetVariable | NodeKind::SetVariable => &NO_PORTS,
         }
     }
 
@@ -1057,6 +1089,9 @@ impl NodeKind {
             NodeKind::StartRecording => json!({ "timeout_secs": "30" }),
             NodeKind::StopRecording => json!({ "timeout_secs": "15" }),
             NodeKind::TimeGate => json!({ "wait_secs": 10, "extend_secs": 10 }),
+            // `variable` = the declared variable's name; `type` = its wire type (baked in so the
+            // dynamic port resolves without a graph lookup). Set by the Variables panel on create.
+            NodeKind::GetVariable | NodeKind::SetVariable => json!({ "variable": "", "type": "text" }),
         }
     }
 }
@@ -1094,6 +1129,8 @@ impl GraphNode {
     pub fn input_ports(&self) -> Vec<ResolvedPort> {
         match self.kind {
             NodeKind::EmitEvent => payload_ports(&self.config),
+            // Set Variable: one `value` input typed by the variable (required).
+            NodeKind::SetVariable => variable_port(&self.config, true),
             k => k.input_ports().iter().map(ResolvedPort::from).collect(),
         }
     }
@@ -1103,6 +1140,8 @@ impl GraphNode {
     pub fn output_ports(&self) -> Vec<ResolvedPort> {
         match self.kind {
             NodeKind::OnEvent => payload_ports(&self.config),
+            // Get Variable: one `value` output typed by the variable.
+            NodeKind::GetVariable => variable_port(&self.config, false),
             k => k.output_ports().iter().map(ResolvedPort::from).collect(),
         }
     }
@@ -1299,6 +1338,19 @@ pub struct Graph {
     pub edges: Vec<Edge>,
     #[serde(default)]
     pub viewport: Viewport,
+    /// Typed, per-graph variables (Unreal-style). Each spawns Get/Set Variable nodes whose
+    /// port type follows its declared type. Additive — old graphs deserialize with `[]`.
+    #[serde(default)]
+    pub variables: Vec<VariableDecl>,
+}
+
+/// A workflow variable declaration: a name + its wire type. Declared in the editor's Variables
+/// panel; referenced by `GetVariable`/`SetVariable` nodes (which bake the name+type into config).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VariableDecl {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub ty: PortType,
 }
 
 fn one() -> u32 {
@@ -1319,6 +1371,7 @@ impl Graph {
             nodes: Vec::new(),
             edges: Vec::new(),
             viewport: Viewport::default(),
+            variables: Vec::new(),
         }
     }
 

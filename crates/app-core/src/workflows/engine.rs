@@ -263,6 +263,11 @@ fn forward_epoch(
             forced.contains(&nid)
         } else if forced.contains(&nid) {
             true
+        } else if n.kind == NodeKind::GetVariable {
+            // A variable read re-evaluates every epoch (pure, no exec propagation) so a
+            // consumer sees the value as of when it runs — after any upstream `Set` — rather
+            // than a stale epoch-0 read. Cheap; never extends the run.
+            true
         } else if has_ord_exec {
             fed_live
         } else {
@@ -1115,6 +1120,33 @@ mod tests {
         let body_logs: Vec<String> =
             logs.iter().filter(|(id, _)| *id == body).map(|(_, m)| m.clone()).collect();
         assert_eq!(body_logs, vec!["→ a", "→ b", "→ c"], "item flows in order");
+    }
+
+    #[test]
+    fn set_variable_then_get_variable_reads_the_value() {
+        // Format("hello") --exec--> SetVariable(greeting)   [value <- Format.text]
+        //                            SetVariable --exec--> Format("{p1}")  [p1 <- GetVariable.value]
+        // The Get must read "hello" (the value Set wrote), not its epoch-0 zero default.
+        let ctx = test_ctx();
+        let mut g = Graph::new(1, "vars");
+        let src = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(src).unwrap().config["template"] = json!("hello");
+        let set = g.add_node(NodeKind::SetVariable, 0, 0);
+        g.node_mut(set).unwrap().config["variable"] = json!("greeting");
+        g.node_mut(set).unwrap().config["type"] = json!("text");
+        let get = g.add_node(NodeKind::GetVariable, 0, 0);
+        g.node_mut(get).unwrap().config["variable"] = json!("greeting");
+        g.node_mut(get).unwrap().config["type"] = json!("text");
+        let sink = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(sink).unwrap().config["template"] = json!("{p1}");
+        g.add_edge(src, "exec_out", set, "exec_in").unwrap();
+        g.add_edge(src, "text", set, "value").unwrap();
+        g.add_edge(set, "exec_out", sink, "exec_in").unwrap();
+        g.add_edge(get, "value", sink, "p1").unwrap();
+
+        let outs = run_dag(&g, &ctx).expect("run");
+        let got = outs.get(&sink).and_then(|m| m.get("text")).and_then(PortValue::as_text);
+        assert_eq!(got, Some("hello"), "Get reads the value Set wrote");
     }
 
     #[test]

@@ -18,7 +18,8 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use app_core::workflows::{
-    self, ConcurrencyPolicy, Graph as WfGraph, NodeKind as WfNodeKind, Trigger, Viewport, Workflows,
+    self, ConcurrencyPolicy, Graph as WfGraph, NodeKind as WfNodeKind, Trigger, VariableDecl, Viewport,
+    Workflows,
 };
 
 use super::{blocking, err, tenant_of, ApiErr};
@@ -42,6 +43,7 @@ pub fn router() -> Router<AppState> {
         .route("/workflows/:id/trigger", put(set_trigger))
         .route("/workflows/:id/concurrency", put(set_concurrency))
         .route("/workflows/:id/viewport", put(set_viewport))
+        .route("/workflows/:id/variables", put(set_variables))
         .route("/workflows/:id/enabled", put(set_enabled))
         .route("/workflows/:id/run-orphans", put(set_run_orphans))
         .route("/workflows/:id/debug", put(set_debug))
@@ -532,6 +534,19 @@ struct ViewportReq {
     x: f64,
     y: f64,
     zoom: f64,
+}
+
+/// Replace a graph's variable declarations (the Variables panel). Get/Set Variable nodes that
+/// reference a removed/renamed variable are left as-is — the editor re-syncs/warns separately.
+async fn set_variables(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<Vec<VariableDecl>>) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        wf.graph_mut(id).ok_or("graph not found")?.variables = b;
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn set_viewport(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<ViewportReq>) -> Result<StatusCode, ApiErr> {

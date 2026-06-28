@@ -21,6 +21,7 @@ mod presence;
 mod recipients;
 mod recording;
 mod text;
+mod variable;
 mod vision;
 
 use super::domain::{NodeKind, Port, PortType};
@@ -399,6 +400,8 @@ pub fn run_node(
         // TimeGate is engine-driven (reads/writes cross-run state, polls until expiry).
         // Never called through run_node — the engine handles it in forward_epoch.
         NodeKind::TimeGate => Ok(PortValues::new()),
+        NodeKind::GetVariable => variable::run_get_variable(config, sys),
+        NodeKind::SetVariable => variable::run_set_variable(config, inputs, sys),
     }
 }
 
@@ -458,7 +461,9 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::BreakCamera
         | NodeKind::Comment
         | NodeKind::Reroute
-        | NodeKind::TimeGate => return None,
+        | NodeKind::TimeGate
+        | NodeKind::GetVariable
+        | NodeKind::SetVariable => return None,
     };
     let secs = config_u64(config, "timeout_secs").unwrap_or(default_secs);
     if secs == 0 {
@@ -734,6 +739,14 @@ pub fn debug_summary(
         }
         NodeKind::StopRecording => "recording stopped".into(),
         NodeKind::TimeGate => "time gate".into(),
+        NodeKind::GetVariable => {
+            let name = config.get("variable").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("get ${name}")
+        }
+        NodeKind::SetVariable => {
+            let name = config.get("variable").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("set ${name}")
+        }
     }
 }
 

@@ -256,6 +256,9 @@ export const data = {
   setGraphViewport: async (id: number, x: number, y: number, zoom: number): Promise<void> => {
     await api.put<void>(`/workflows/${id}/viewport`, { x, y, zoom });
   },
+  setGraphVariables: async (id: number, variables: { name: string; type: string }[]): Promise<void> => {
+    await api.put<void>(`/workflows/${id}/variables`, variables);
+  },
   addNode: (graphId: number, kind: string, x: number, y: number): Promise<number> =>
     api.post<number>(`/workflows/${graphId}/nodes`, { kind, x, y }),
   removeNode: async (graphId: number, nodeId: number): Promise<void> => {

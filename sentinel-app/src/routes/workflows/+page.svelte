@@ -54,6 +54,7 @@
   import type { PortType } from "$lib/workflows/portColors";
 
   import ContextSearch from "./components/ContextSearch.svelte";
+  import VariablesPanel from "./components/VariablesPanel.svelte";
 
   // ---- types (the serialized core shapes) ----------------------------------
   type CatPort = { name: string; type: PortType; required: boolean };
@@ -106,6 +107,7 @@
     | "SkipIfRunning"
     | { QueueSingle: { max_queued: number } }
     | { Concurrent: { max_concurrent: number } };
+  type Variable = { name: string; type: PortType };
   type Graph = {
     id: number;
     name: string;
@@ -117,6 +119,7 @@
     nodes: Node[];
     edges: Edge[];
     viewport?: { x: number; y: number; zoom: number };
+    variables?: Variable[];
   };
   type LogLine = {
     time: string;
@@ -660,6 +663,12 @@
       ];
       return { ...k, outputs: armPorts };
     }
+    // Get/Set Variable: one `value` port typed by the variable (baked into config.type).
+    if (node.kind === "get_variable" || node.kind === "set_variable") {
+      const ty = (typeof node.config?.type === "string" ? node.config.type : "text") as CatPort["type"];
+      const port: CatPort = { name: "value", type: ty, required: node.kind === "set_variable" };
+      return node.kind === "get_variable" ? { ...k, outputs: [port] } : { ...k, inputs: [port] };
+    }
     const fields = payloadFields(node);
     if (fields.length === 0) return k;
     const ports: CatPort[] = fields.map((f) => ({ name: f.name, type: f.type, required: false }));
@@ -684,6 +693,10 @@
     if (n.kind === "string_switch" || n.kind === "camera_switch") {
       const arms: unknown[] = Array.isArray(n.config?.arms) ? (n.config.arms as unknown[]) : [];
       return arms.length > 0 ? `${base} (${arms.length})` : base;
+    }
+    if (n.kind === "get_variable" || n.kind === "set_variable") {
+      const v = String(n.config.variable ?? "").trim();
+      return v ? `${base}: ${v}` : base;
     }
     return base;
   }
@@ -772,7 +785,7 @@
   // Includes comparison operators, logical operators, and type-conversion nodes.
   const PURE_KINDS = new Set([
     "num_lt","num_lte","num_gt","num_gte","num_eq","num_ne","compare","and","or","not","text_compare",
-    "bool_to_text","num_to_text","get_camera_by_name","break_camera",
+    "bool_to_text","num_to_text","get_camera_by_name","break_camera","get_variable",
   ]);
   function isCompareOrLogic(kind: string): boolean {
     return PURE_KINDS.has(kind);
@@ -1218,6 +1231,53 @@
     selectedNodeId = id;
     await reload();
     return id;
+  }
+
+  // ---- workflow variables (left panel) -------------------------------------
+  let varsOpen = $state(true);
+  const variables = $derived<Variable[]>(graph?.variables ?? []);
+
+  async function saveVariables(next: Variable[]) {
+    if (!graph) return;
+    await data.setGraphVariables(graph.id, next.map((v) => ({ name: v.name, type: v.type })));
+    await reload();
+  }
+  function uniqueVarName(existing: Variable[]): string {
+    const taken = new Set(existing.map((v) => v.name));
+    let i = existing.length + 1;
+    while (taken.has(`var${i}`)) i++;
+    return `var${i}`;
+  }
+  async function addVariable() {
+    if (editLocked) return;
+    await saveVariables([...variables, { name: uniqueVarName(variables), type: "text" as PortType }]);
+  }
+  // Edit a variable + re-sync the baked name/type on any Get/Set nodes that reference it,
+  // so existing nodes keep a valid port type after a rename/retype.
+  async function editVariable(i: number, patch: { name?: string; type?: string }) {
+    if (editLocked || !graph) return;
+    const old = variables[i];
+    if (!old) return;
+    const updated = { ...old, ...patch } as Variable;
+    if (patch.name === "" || (patch.name && variables.some((v, j) => j !== i && v.name === patch.name))) return; // keep names non-empty + unique
+    for (const n of graph.nodes) {
+      if ((n.kind === "get_variable" || n.kind === "set_variable") && n.config?.variable === old.name) {
+        await data.setNodeConfig(graph.id, n.id, { variable: updated.name, type: updated.type });
+      }
+    }
+    await saveVariables(variables.map((v, j) => (j === i ? updated : v)));
+  }
+  async function removeVariable(i: number) {
+    if (editLocked) return;
+    await saveVariables(variables.filter((_, j) => j !== i));
+  }
+  // Drop a Get/Set node for a variable onto the canvas, with its name + type baked into config.
+  async function addVariableNode(kind: "get_variable" | "set_variable", v: { name: string; type: string }) {
+    if (!graph || editLocked) return;
+    const id = await addNodeKind(kind);
+    if (id === null) return;
+    await data.setNodeConfig(graph.id, id, { variable: v.name, type: v.type });
+    await reload();
   }
 
   // Add a node from context search and auto-wire it to the pending output port.
@@ -1897,8 +1957,19 @@
         {/if}
       </div>
 
-      <!-- row 1: editor + resizable side panel -->
+      <!-- row 1: variables panel + editor + resizable side panel -->
       <div class="flex min-h-0 flex-1 gap-1">
+        <!-- col 0: variables (Unreal-style) -->
+        <VariablesPanel
+          bind:open={varsOpen}
+          {variables}
+          types={PAYLOAD_TYPES}
+          disabled={editLocked}
+          onAdd={addVariable}
+          onEdit={editVariable}
+          onRemove={removeVariable}
+          onAddNode={addVariableNode}
+        />
         <!-- col 1: the node editor -->
         <div class="relative min-w-0 flex-1">
           <div

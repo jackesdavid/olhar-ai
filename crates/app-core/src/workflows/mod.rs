@@ -11,7 +11,7 @@ pub mod repo;
 
 pub use domain::{
     ConcurrencyPolicy, Edge, EventSource, Graph, GraphNode, NodeKind, Port, PortType, RunStatus,
-    Trigger, TriggerSource, Viewport, Workflows, EXEC_IN, EXEC_OUT,
+    Trigger, TriggerSource, VariableDecl, Viewport, Workflows, EXEC_IN, EXEC_OUT,
 };
 pub use repo::{EventCategory, RunLogLine, RunRecord, TenantEvent};
 pub use engine::{

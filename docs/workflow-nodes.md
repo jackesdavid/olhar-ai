@@ -150,6 +150,18 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 |---|---|---|---|---|---|
 | **Comment** | — | — | `text`, `color` (#RRGGBB, default `#facc15`), `width` (px, default 400), `height` (px, default 200) | Visual group box for annotating the canvas. Drag to reposition; nodes whose center falls inside move with it. Drag the bottom-right grip to resize. No ports, no execution. | *(canvas organizer — never part of execution flow)* |
 
+### Variables
+
+Declare typed, per-graph variables in the editor's left **Variables** panel (name + type, reusing
+the event-field type dropdown). Each variable spawns two nodes (added from the panel's Get/Set
+buttons, not the generic palette). Scope is **one run** — a variable read before any Set yields its
+type's zero value. The node's port type follows the variable's declared type.
+
+| Node | Inputs | Outputs | Config | Behavior | Sample usage |
+|---|---|---|---|---|---|
+| **Get Variable** | — | `value` (the variable's type) | `variable`, `type` (baked from the declaration) | **Pure** (no exec pins) — drop anywhere, wire its `value` out, no flow wires needed. Reads the variable's current value. | `Get Variable(count) → (value) → Compare(b=0)` |
+| **Set Variable** | `value`* (the variable's type) | — | `variable`, `type` | Writes `value` into the variable; **exec passes through** so it writes at an exact point in the flow. | `Person detection → (count) → Set Variable(count) →exec next` |
+
 ---
 
 ## How to use events (`Emit event` / `On event`)

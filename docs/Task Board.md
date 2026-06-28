@@ -52,8 +52,8 @@ kanban-plugin: board
 
 - [ ] #19 AI If node — yes/no question routes exec like If
 	  - Plan: [[ai-question-node]]
-- [ ] #16 Chat agent on the web (TTS / STT / tools)
-	  - Plan: [[chat-agent-web]]
+- [ ] #56 Workflow Variables — typed vars + Get/Set nodes
+	  - Plan: [[workflow-variables]]
 
 
 ## Review
@@ -83,6 +83,8 @@ kanban-plugin: board
 ## Done
 
 **Complete**
+- [x] #16 Chat agent on the web (TTS / STT / tools)
+	  - Plan: [[chat-agent-web]]
 - [x] #33 Telegram Beacons: fix enrollment + polish + observability
 	  - Plan: [[telegram-beacons-fix-polish]]
 - [x] #34 Generic Object Detection node — configurable COCO class
