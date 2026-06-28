@@ -30,6 +30,9 @@
   import Search from "@lucide/svelte/icons/search";
   import Link2 from "@lucide/svelte/icons/link-2";
   import Unplug from "@lucide/svelte/icons/unplug";
+  import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
+  import Hand from "@lucide/svelte/icons/hand";
+  import Scissors from "@lucide/svelte/icons/scissors";
   import Upload from "@lucide/svelte/icons/upload";
   import ImageIcon from "@lucide/svelte/icons/image";
   import FileIcon from "@lucide/svelte/icons/file";
@@ -152,6 +155,12 @@
   let selectedGraphId = $state<number | null>(null);
   let selectedNodeId = $state<number | null>(null);
   let pending = $state<{ node: number; port: string } | null>(null);
+  // Editor tool/mode (touch-first): move = drag nodes, pan = drag canvas, link = tap ports to
+  // wire (node body inert), break = tap a wire to delete it. Default preserves mouse behavior.
+  let editorMode = $state<"move" | "pan" | "link" | "break">("move");
+  // Coarse pointer (tablet/touch) → bigger hit targets. Set on mount (browser-only).
+  let isTouch = $state(false);
+  const portR = $derived(isTouch ? 8 : 5); // port circle radius — fatter for touch
   let loading = $state(true);
   let running = $state(false);
 
@@ -963,6 +972,7 @@
   }
 
   onMount(() => {
+    isTouch = window.matchMedia?.("(pointer: coarse)").matches ?? false;
     const savedW = Number(localStorage.getItem("wf.panelW"));
     if (savedW >= PANEL_MIN && savedW <= PANEL_MAX) panelW = savedW;
     const savedOpen = localStorage.getItem("wf.panelOpen");
@@ -1377,6 +1387,15 @@
 
     if (inField) return;  // remaining shortcuts require no active text input
 
+    // Tool shortcuts (mouse parity for the touch tool palette): v move, h pan, l link, b break.
+    const toolKey: Record<string, typeof editorMode> = { v: "move", h: "pan", l: "link", b: "break" };
+    if (toolKey[e.key] && !contextOpen) {
+      e.preventDefault();
+      editorMode = toolKey[e.key];
+      pending = null; // switching tools cancels an in-progress wire
+      return;
+    }
+
     // n / N: open node search palette at cursor position.
     if ((e.key === "n" || e.key === "N") && !editLocked && !contextOpen) {
       e.preventDefault();
@@ -1686,6 +1705,11 @@
   let drag: { id: number; offX: number; offY: number; enclosedIds?: number[] } | null = null;
   let commentResize: { id: number; startX: number; startY: number; startW: number; startH: number } | null = null;
   let panning: { sx: number; sy: number; ox: number; oy: number } | null = null;
+  // Multi-touch: track every active pointer so we can detect a 2-finger pinch/pan. `pinching`
+  // latches until the last finger lifts so a trailing finger doesn't jerk into a pan/drag.
+  let pointers = new Map<number, { x: number; y: number }>();
+  let gesture: { d: number; cx: number; cy: number; panX: number; panY: number; zoom: number } | null = null;
+  let pinching = false;
 
   // Screen → world (the <g> transform is translate(pan) scale(zoom)).
   function worldPoint(e: PointerEvent | WheelEvent) {
@@ -1695,6 +1719,20 @@
   function startDrag(e: PointerEvent, n: Node) {
     selectedNodeId = n.id; // selecting to view props is fine
     if (editLocked) return; // …but no moving while the graph is active (running/armed)
+    // Pan tool: a drag starting on a node pans the canvas instead of moving the node.
+    if (editorMode === "pan") {
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      panning = { sx: e.clientX, sy: e.clientY, ox: pan.x, oy: pan.y };
+      svgEl?.setPointerCapture?.(e.pointerId);
+      e.preventDefault();
+      return;
+    }
+    // Link / Break tools: node body is inert (ports still tap to wire) so taps are precise.
+    if (editorMode === "link" || editorMode === "break") return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size >= 2) return; // a 2nd finger → let the move handler pinch, don't drag
+    e.preventDefault();
+    svgEl?.setPointerCapture?.(e.pointerId);
     const wp = worldPoint(e);
     const base = { id: n.id, offX: wp.x - n.x, offY: wp.y - n.y };
     if (n.kind === 'comment' && graph) {
@@ -1730,14 +1768,20 @@
       pending = null;
       return;
     }
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size >= 2) { panning = null; return; } // 2nd finger → pinch, not pan
     selectedNodeId = null; // clicking the empty canvas deselects the node
     panning = { sx: e.clientX, sy: e.clientY, ox: pan.x, oy: pan.y };
     svgEl?.setPointerCapture?.(e.pointerId);
+    e.preventDefault();
   }
   let _canvasPendingMove: PointerEvent | null = null;
   let _canvasMoveRaf: number | null = null;
 
   function onCanvasMove(e: PointerEvent) {
+    // Update the live pointer position synchronously (the rAF batch below only keeps the
+    // latest event, but a pinch needs BOTH fingers' current positions).
+    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     _canvasPendingMove = e;
     if (_canvasMoveRaf !== null) return;
     _canvasMoveRaf = requestAnimationFrame(() => {
@@ -1748,6 +1792,28 @@
   }
 
   function _onCanvasMove(e: PointerEvent) {
+    // Two fingers down → pinch-zoom + pan about the centroid; abort any single-finger op.
+    if (pointers.size >= 2) {
+      drag = null; panning = null; dragVia = null; commentResize = null;
+      const [a, b] = [...pointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      const r = svgEl!.getBoundingClientRect();
+      const cx = (a.x + b.x) / 2 - r.left;
+      const cy = (a.y + b.y) / 2 - r.top;
+      if (!gesture) {
+        gesture = { d, cx, cy, panX: pan.x, panY: pan.y, zoom };
+      } else {
+        const nz = clampZoom(gesture.zoom * (d / gesture.d));
+        // keep the world point that was under the initial centroid pinned to the current one
+        const wx = (gesture.cx - gesture.panX) / gesture.zoom;
+        const wy = (gesture.cy - gesture.panY) / gesture.zoom;
+        pan = { x: cx - wx * nz, y: cy - wy * nz };
+        zoom = nz;
+      }
+      pinching = true;
+      return;
+    }
+    if (pinching) return; // a lone trailing finger after a pinch — ignore until all lift
     hoverWorld = worldPoint(e); // track the cursor for the `n`-to-add-here shortcut
     hoverClient = { x: e.clientX, y: e.clientY };
     if (pending) cursor = worldPoint(e); // drag the open wire end with the cursor
@@ -1784,7 +1850,13 @@
       }
     }
   }
-  async function onCanvasUp() {
+  async function onCanvasUp(e?: PointerEvent) {
+    if (e) {
+      pointers.delete(e.pointerId);
+      svgEl?.releasePointerCapture?.(e.pointerId);
+    }
+    if (pointers.size < 2) gesture = null; // pinch ended (or a finger lifted)
+    if (pointers.size === 0) pinching = false; // all fingers up → re-enable single-finger ops
     if (dragVia) {
       dragVia = null;
       return;
@@ -1811,6 +1883,22 @@
         if (en) await data.moveNode(graph.id, eid, en.x, en.y);
       }
     }
+  }
+  // Open the add-node menu, dropping the new node at the canvas center (touch has no cursor).
+  function openAddNodeMenu(e: MouseEvent) {
+    if (svgEl) {
+      const r = svgEl.getBoundingClientRect();
+      dropAt = { x: (r.width / 2 - pan.x) / zoom, y: (r.height / 2 - pan.y) / zoom };
+    }
+    contextPos = { x: (e.currentTarget as HTMLElement).getBoundingClientRect().left, y: 60 };
+    contextPending = null;
+    contextOpen = true;
+  }
+  // Canvas cursor reflects the active tool so the mode is legible on desktop.
+  function canvasCursorClass(): string {
+    if (panning) return "cursor-grabbing";
+    if (editorMode === "link" || editorMode === "break") return "cursor-crosshair";
+    return "cursor-grab"; // move + pan both grab the canvas
   }
   function clampZoom(z: number) {
     return Math.min(2.5, Math.max(0.35, z));
@@ -2042,7 +2130,7 @@
         <!-- col 1: the node editor -->
         <div class="relative min-w-0 flex-1">
           <div
-            class="absolute inset-0 overflow-hidden rounded-xl border border-border bg-well"
+            class="absolute inset-0 touch-none overflow-hidden rounded-xl border border-border bg-well"
             style="background-image: linear-gradient(oklch(1 0 0 / 9%) 1px, transparent 1px), linear-gradient(90deg, oklch(1 0 0 / 9%) 1px, transparent 1px), linear-gradient(oklch(1 0 0 / 4%) 1px, transparent 1px), linear-gradient(90deg, oklch(1 0 0 / 4%) 1px, transparent 1px); background-size: {90 * zoom}px {90 * zoom}px, {90 * zoom}px {90 * zoom}px, {18 * zoom}px {18 * zoom}px, {18 * zoom}px {18 * zoom}px; background-position: {pan.x}px {pan.y}px, {pan.x}px {pan.y}px, {pan.x}px {pan.y}px, {pan.x}px {pan.y}px;"
             role="application"
             ondragover={onCanvasDragOver}
@@ -2052,11 +2140,12 @@
               bind:this={svgEl}
               use:passiveWheel
               data-canvas
-              class="block size-full {panning ? 'cursor-grabbing' : 'cursor-grab'}"
+              class="block size-full touch-none {canvasCursorClass()}"
               onpointerdown={onCanvasDown}
               onpointermove={onCanvasMove}
               onpointerup={onCanvasUp}
               onpointerleave={onCanvasUp}
+              onpointercancel={onCanvasUp}
               role="presentation"
             >
               <defs>
@@ -2134,16 +2223,17 @@
                     onpointerenter={() => { hoveredEdgeKey = vk; }}
                     onpointerleave={() => { if (hoveredEdgeKey === vk) hoveredEdgeKey = null; }}
                   >
-                    <!-- wide transparent hit area; alt+click deletes wire; drag adds/moves bend -->
+                    <!-- wide transparent hit area; break tool / alt+click deletes wire; drag adds/moves bend -->
                     <path
                       d={pathD}
                       fill="none"
                       stroke="transparent"
-                      stroke-width="20"
+                      stroke-width={isTouch || editorMode === "break" ? 28 : 20}
                       class="cursor-crosshair"
                       onpointerdown={(ev) => {
                         ev.stopPropagation();
-                        if (ev.altKey) { removeEdge(idx); return; }
+                        if (editorMode === "break" || ev.altKey) { removeEdge(idx); return; }
+                        if (editorMode !== "move") return; // bends are a move-tool gesture
                         if (vias.length < 2) {
                           // Add a new via at the click point, sorted by x so segments stay ordered.
                           const svgPt = worldPoint(ev);
@@ -2168,7 +2258,8 @@
                       stroke={eColor}
                       stroke-width={eLive ? 3 : 2}
                       stroke-opacity={eLive ? 1 : 0.55}
-                      class="pointer-events-none transition-colors {hoveredEdgeKey === vk ? 'stroke-destructive/70' : ''} {eLive ? 'node-running' : ''}"
+                      class="pointer-events-none transition-colors {editorMode === 'break' || hoveredEdgeKey === vk ? 'stroke-destructive/70' : ''} {eLive ? 'node-running' : ''}"
+                      stroke-dasharray={editorMode === "break" ? "6 4" : undefined}
                       role="presentation"
                     />
                     <!-- bend handles; alt+click removes that via-point -->
@@ -2267,6 +2358,18 @@
                   >
                     {nodeTitle(n, k)}
                   </text>
+                  <!-- delete badge on the selected node — the touch path for removing a node -->
+                  {#if sel && !editLocked}
+                    <g
+                      class="cursor-pointer"
+                      role="presentation"
+                      onpointerdown={(ev) => ev.stopPropagation()}
+                      onclick={() => removeNode(n)}
+                    >
+                      <circle cx={NODE_W} cy="0" r={isTouch ? 11 : 9} class="fill-destructive" />
+                      <path d="M{NODE_W - 3.5} -3.5 l7 7 M{NODE_W + 3.5} -3.5 l-7 7" stroke="white" stroke-width="1.6" stroke-linecap="round" />
+                    </g>
+                  {/if}
                   <line
                     x1="0"
                     y1={HEAD_H}
@@ -2316,7 +2419,7 @@
                   <circle
                     cx="0"
                     cy={HEAD_H / 2}
-                    r="5"
+                    r={portR}
                     fill={wiredInto(n.id, EXEC_IN_NAME) ? portColor.exec : "#151c19"}
                     stroke={portColor.exec}
                     stroke-width="2"
@@ -2335,7 +2438,7 @@
                     <circle
                       cx={NODE_W}
                       cy={ey}
-                      r={isP ? 6 : 5}
+                      r={isP ? portR + 1 : portR}
                       fill={isP ? portColor.exec : "#1a2420"}
                       stroke={portColor.exec}
                       stroke-width="2"
@@ -2364,7 +2467,7 @@
                     <circle
                       cx="0"
                       cy={py}
-                      r="5"
+                      r={portR}
                       fill={wired ? portColor[p.type] : "#151c19"}
                       stroke={need ? "#ef4444" : portColor[p.type]}
                       stroke-width="2"
@@ -2390,7 +2493,7 @@
                     <circle
                       cx={NODE_W}
                       cy={dy}
-                      r={isPending ? 6 : 5}
+                      r={isPending ? portR + 1 : portR}
                       fill={isPending ? pc : "#151c19"}
                       stroke={pc}
                       stroke-width="2"
@@ -2519,13 +2622,30 @@
           <!-- floating controls (over the canvas only) -->
           <!-- top-left: add node -->
           <div class="absolute left-3 top-3">
-            <Button
-              class="shadow-lg"
-              disabled={editLocked}
-              onclick={(e) => { contextPos = { x: (e.target as HTMLElement).getBoundingClientRect().left, y: 60 }; contextPending = null; contextOpen = true; }}
-            >
+            <Button class="shadow-lg" disabled={editLocked} onclick={openAddNodeMenu}>
               <Plus class="size-4" /> Add node
             </Button>
+          </div>
+
+          <!-- left edge: touch tool palette (Move / Pan / Link / Break) -->
+          <div class="absolute left-3 top-1/2 flex -translate-y-1/2 flex-col gap-1 rounded-lg border border-border bg-background/75 p-1 shadow-lg backdrop-blur">
+            {#each [
+              { mode: "move", Icon: MousePointer2, label: "Move / select (V)", lock: true },
+              { mode: "pan", Icon: Hand, label: "Pan (H)", lock: false },
+              { mode: "link", Icon: Link2, label: "Link ports (L)", lock: true },
+              { mode: "break", Icon: Scissors, label: "Break link (B)", lock: true },
+            ] as t (t.mode)}
+              <Button
+                variant="ghost"
+                size="icon"
+                class="size-8 {editorMode === t.mode ? 'bg-primary/15 text-primary' : ''}"
+                title={t.label}
+                disabled={t.lock && editLocked}
+                onclick={() => { editorMode = t.mode as typeof editorMode; pending = null; }}
+              >
+                <t.Icon class="size-4" />
+              </Button>
+            {/each}
           </div>
 
           <!-- on-screen Print messages (Unreal-style debug text, newest on top) -->
