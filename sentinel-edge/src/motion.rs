@@ -239,16 +239,23 @@ fn run_capture(state: &Arc<AppState>, ip: &str, p: &Params, stop: &AtomicBool) -
         if qualifies && throttle_ok {
             last_emit = Some(Instant::now());
             let frame_b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg);
+            // `largest_rect` is in the downscaled processing space (proc_w×proc_h), but the
+            // frame we send (frame_b64) is the full-resolution original. Scale the box back to
+            // the frame's pixels so consumers (Draw Detection Box, presence positioning) land it
+            // on the right place — otherwise it's shifted top-left and too small.
+            let (fw, fh) = (frame.cols().max(1), frame.rows().max(1));
+            let sx = fw as f32 / p.proc_w as f32;
+            let sy = fh as f32 / p.proc_h as f32;
             let ev = MotionEvent {
                 camera_ip: ip.to_string(),
                 score: (pct * 100.0).round() / 100.0,
                 area: largest_area as i64,
                 blobs,
                 bbox: [
-                    largest_rect.x,
-                    largest_rect.y,
-                    largest_rect.width,
-                    largest_rect.height,
+                    (largest_rect.x as f32 * sx).round() as i32,
+                    (largest_rect.y as f32 * sy).round() as i32,
+                    (largest_rect.width as f32 * sx).round() as i32,
+                    (largest_rect.height as f32 * sy).round() as i32,
                 ],
                 at: app_core::alerts::now_rfc3339(),
                 frame_b64: Some(frame_b64),
