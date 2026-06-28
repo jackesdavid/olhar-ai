@@ -19,7 +19,6 @@
     onAdd,
     onEdit,
     onRemove,
-    onAddNode,
   }: {
     variables: Variable[];
     types: { value: string; label: string }[];
@@ -28,7 +27,6 @@
     onAdd: () => void;
     onEdit: (i: number, patch: Partial<Variable>) => void;
     onRemove: (i: number) => void;
-    onAddNode: (kind: "get_variable" | "set_variable", v: Variable) => void;
   } = $props();
 </script>
 
@@ -57,7 +55,7 @@
 
     {#if variables.length === 0}
       <p class="rounded-lg border border-dashed border-border px-2 py-3 text-center text-[11px] leading-snug text-muted-foreground">
-        No variables yet. Add one to set a value once and get it anywhere — no wires.
+        No variables yet. Add one, then drop its Get/Set nodes from the add-node menu (press N).
       </p>
     {/if}
 
@@ -84,10 +82,6 @@
           >
             {#each types as t (t.value)}<option value={t.value}>{t.label}</option>{/each}
           </select>
-          <div class="flex gap-1">
-            <Button variant="outline" size="sm" class="h-6 flex-1 text-[11px]" disabled={disabled} onclick={() => onAddNode("get_variable", v)}>Get</Button>
-            <Button variant="outline" size="sm" class="h-6 flex-1 text-[11px]" disabled={disabled} onclick={() => onAddNode("set_variable", v)}>Set</Button>
-          </div>
         </div>
       {/each}
     </div>

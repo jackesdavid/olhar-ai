@@ -13,6 +13,7 @@
     outputs: CatPort[];
     default_config: Record<string, unknown>;
     presetEvent?: string;
+    presetVariable?: { name: string; type: string };
   };
 
   let {
@@ -26,7 +27,7 @@
     pos: { x: number; y: number };
     portType: PortType | "any";
     kinds: PaletteKind[];
-    onSelect: (slug: string, presetEvent?: string) => void;
+    onSelect: (slug: string, presetEvent?: string, presetVariable?: { name: string; type: string }) => void;
   } = $props();
 
   let search = $state("");
@@ -52,9 +53,9 @@
     search = "";
   }
 
-  function select(slug: string, presetEvent?: string) {
+  function select(slug: string, presetEvent?: string, presetVariable?: { name: string; type: string }) {
     close();
-    onSelect(slug, presetEvent);
+    onSelect(slug, presetEvent, presetVariable);
   }
 
   function dotColor(k: PaletteKind & { _score: number }): string | null {
@@ -107,11 +108,11 @@
     </div>
 
     <div class="flex-1 overflow-y-auto px-2 pb-2">
-      {#each filteredKinds as k (k.slug + (k.presetEvent ?? ""))}
+      {#each filteredKinds as k (k.slug + (k.presetEvent ?? "") + (k.presetVariable?.name ?? ""))}
         {@const dot = dotColor(k)}
         <button
           class="interactive group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-accent"
-          onclick={() => select(k.slug, k.presetEvent)}
+          onclick={() => select(k.slug, k.presetEvent, k.presetVariable)}
         >
           {#if dot}
             <span class="size-2 shrink-0 rounded-full" style:background-color={dot}></span>

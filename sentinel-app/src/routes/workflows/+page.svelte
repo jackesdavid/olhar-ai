@@ -88,7 +88,7 @@
   ];
   // A palette entry: a node kind, optionally pre-bound to an event name (for the
   // synthesized "On event: Foo" / "Emit event: Foo" entries).
-  type PaletteKind = CatKind & { presetEvent?: string };
+  type PaletteKind = CatKind & { presetEvent?: string; presetVariable?: { name: string; type: string } };
   type RunRecord = {
     id: string;
     graph_id: number;
@@ -429,6 +429,30 @@
   // be O(1) instead of scanning graph.edges per port per node on every edge change.
   const filledPorts = $derived(new Set((graph?.edges ?? []).map((e) => `${e.to}:${e.to_port}`)));
   const kinds = $derived(Object.values(catalog));
+
+  // The bare get/set kinds are meaningless without a variable, so they never show in the
+  // add-node menu directly — instead synthesize one "Get: <name>" / "Set: <name>" entry per
+  // declared variable (typed `value` port + the variable baked in), mirroring per-event entries.
+  function variableNodeEntries(): PaletteKind[] {
+    const getBase = catalog["get_variable"];
+    const setBase = catalog["set_variable"];
+    if (!getBase || !setBase) return [];
+    const out: PaletteKind[] = [];
+    for (const v of variables) {
+      const port: CatPort = { name: "value", type: v.type, required: false };
+      const pv = { name: v.name, type: v.type };
+      out.push({ ...getBase, label: `Get: ${v.name}`, presetVariable: pv, inputs: [], outputs: [port] });
+      out.push({ ...setBase, label: `Set: ${v.name}`, presetVariable: pv, inputs: [{ ...port, required: true }], outputs: [] });
+    }
+    return out;
+  }
+  // What the add-node menu (ContextSearch) lists: all real kinds except the bare variable
+  // placeholders + canvas-only helpers, plus the per-variable Get/Set entries.
+  const HIDE_FROM_MENU = new Set(["get_variable", "set_variable", "comment", "reroute"]);
+  const menuKinds = $derived<PaletteKind[]>([
+    ...(kinds as PaletteKind[]).filter((k) => !HIDE_FROM_MENU.has(k.slug)),
+    ...variableNodeEntries(),
+  ]);
 
   // Synthesize per-event palette entries (On/Emit event: <name>) from the tenant registry.
   const EVENT_GROUP_PREFIX = "Events · ";
@@ -1195,7 +1219,7 @@
   }
 
   // ---- node + edge ops -----------------------------------------------------
-  async function addNodeKind(slug: string, presetEvent?: string): Promise<number | null> {
+  async function addNodeKind(slug: string, presetEvent?: string, presetVariable?: { name: string; type: string }): Promise<number | null> {
     if (!graph || editLocked) return null;
     // Place at the cursor (when opened via the `n` shortcut), else cascade.
     let x: number;
@@ -1225,6 +1249,11 @@
     if (presetEvent) {
       cfg.event = presetEvent;
       cfg.payload = eventFields(presetEvent); // bake payload ports onto the new event node
+      patched = true;
+    }
+    if (presetVariable) {
+      cfg.variable = presetVariable.name;
+      cfg.type = presetVariable.type; // bake the variable's name + type → its dynamic port
       patched = true;
     }
     if (patched) await data.setNodeConfig(graph.id, id, cfg);
@@ -1271,26 +1300,21 @@
     if (editLocked) return;
     await saveVariables(variables.filter((_, j) => j !== i));
   }
-  // Drop a Get/Set node for a variable onto the canvas, with its name + type baked into config.
-  async function addVariableNode(kind: "get_variable" | "set_variable", v: { name: string; type: string }) {
-    if (!graph || editLocked) return;
-    const id = await addNodeKind(kind);
-    if (id === null) return;
-    await data.setNodeConfig(graph.id, id, { variable: v.name, type: v.type });
-    await reload();
-  }
-
   // Add a node from context search and auto-wire it to the pending output port.
-  async function addFromContext(slug: string, presetEvent?: string) {
+  async function addFromContext(slug: string, presetEvent?: string, presetVariable?: { name: string; type: string }) {
     const cp = contextPending;
     contextOpen = false;
     contextPending = null;
-    const id = await addNodeKind(slug, presetEvent);
+    const id = await addNodeKind(slug, presetEvent, presetVariable);
     if (cp && id !== null && graph) {
-      const cat = catalog[slug];
+      // A Set Variable node's input is its dynamic typed `value` port, not a static catalog port.
+      const candidateInputs: CatPort[] =
+        presetVariable && slug === "set_variable"
+          ? [{ name: "value", type: presetVariable.type as PortType, required: true }]
+          : (catalog[slug]?.inputs ?? []);
       const matchPort =
-        cat?.inputs.find((p) => p.type === cp.portType) ??
-        cat?.inputs.find((p) => p.type === "any");
+        candidateInputs.find((p) => p.type === cp.portType) ??
+        candidateInputs.find((p) => p.type === "any");
       if (matchPort) {
         try {
           await data.addEdge(graph.id, cp.node, cp.port, id, matchPort.name);
@@ -1968,7 +1992,6 @@
           onAdd={addVariable}
           onEdit={editVariable}
           onRemove={removeVariable}
-          onAddNode={addVariableNode}
         />
         <!-- col 1: the node editor -->
         <div class="relative min-w-0 flex-1">
@@ -3223,7 +3246,7 @@
   bind:open={contextOpen}
   pos={contextPos}
   portType={contextPortType}
-  kinds={kinds as PaletteKind[]}
+  kinds={menuKinds}
   onSelect={addFromContext}
 />
 
