@@ -2,6 +2,15 @@ use super::{PortValue, PortValues};
 use crate::agent::tools::ToolContext;
 use serde_json::Value;
 
+/// Edge recording calls go over the tailnet and must not hang the node (a bare `ureq::post`
+/// has no timeout). Cap below the node watchdog (15s) so a stalled edge fails fast with a
+/// clean error instead of leaking the watchdog's detached worker thread.
+fn edge_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(12))
+        .build()
+}
+
 pub(super) fn run_start_recording(_config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
     let camera_ip = inputs
         .get("camera")
@@ -17,7 +26,8 @@ pub(super) fn run_start_recording(_config: &Value, inputs: &PortValues, sys: &To
     if let Some(pr) = pre_roll {
         body["pre_roll_secs"] = serde_json::Value::Number(pr.into());
     }
-    let resp = ureq::post(&format!("{base}/recording/start"))
+    let resp = edge_agent()
+        .post(&format!("{base}/recording/start"))
         .set("Content-Type", "application/json")
         .send_string(&body.to_string())
         .map_err(|e| format!("edge start_recording: {e}"))?;
@@ -45,7 +55,8 @@ pub(super) fn run_stop_recording(inputs: &PortValues, sys: &ToolContext) -> Resu
         .to_string();
     let base = resolve_edge_api_base(sys)?;
     let body = serde_json::json!({ "camera_ip": camera_ip, "clip_id": clip_id });
-    ureq::post(&format!("{base}/recording/stop"))
+    edge_agent()
+        .post(&format!("{base}/recording/stop"))
         .set("Content-Type", "application/json")
         .send_string(&body.to_string())
         .map_err(|e| format!("edge stop_recording: {e}"))?;

@@ -1037,6 +1037,10 @@
           pod_name: p.pod_name,
         },
       };
+      // Self-heal the run animation from authoritative state: when the engine reports the
+      // open graph is no longer running, drain any highlights even if the separate
+      // `workflow-run` event was missed — otherwise a node can stay lit indefinitely.
+      if (p.graph === selectedGraphId && p.running === 0) endLive();
     });
     // Re-seed from REST on every (re)connect — deltas emitted while disconnected are missed.
     const unOpen = onEvent("stream-open", () => {
