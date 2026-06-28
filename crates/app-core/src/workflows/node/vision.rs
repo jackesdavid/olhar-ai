@@ -195,6 +195,7 @@ pub(super) fn run_draw_bbox(config: &Value, inputs: &PortValues) -> Result<PortV
     }
     let img = image::load_from_memory(raw).map_err(|e| format!("could not decode image: {e}"))?;
     let mut rgb = img.into_rgb8();
+    let (iw, ih) = (rgb.width() as i64, rgb.height() as i64);
     match style {
         "corners" => draw_corners(&mut rgb, x1, y1, x2, y2, color, thickness),
         "reticle" => draw_reticle(&mut rgb, x1, y1, x2, y2, color, thickness),
@@ -208,6 +209,17 @@ pub(super) fn run_draw_bbox(config: &Value, inputs: &PortValues) -> Result<PortV
     log::debug!("draw_bbox: drew {thickness}px {style} [{x1},{y1},{x2},{y2}] on {w}-byte JPEG");
     let mut o = PortValues::new();
     o.insert("image".into(), PortValue::Image(out));
+    // The (possibly expanded) box we drew, clamped to the frame, so downstream nodes can reuse
+    // the expanded region without off-frame coordinates.
+    o.insert(
+        "bbox".into(),
+        PortValue::Bbox(crate::workflows::domain::BBox::from_xyxy(
+            x1.clamp(0, iw),
+            y1.clamp(0, ih),
+            x2.clamp(0, iw),
+            y2.clamp(0, ih),
+        )),
+    );
     o.insert("ok".into(), PortValue::Bool(true));
     Ok(o)
 }

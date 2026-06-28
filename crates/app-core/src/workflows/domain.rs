@@ -539,8 +539,13 @@ const COOLDOWN_OUT: [Port; 2] = [
 
 const DRAW_BBOX_IN: [Port; 2] =
     [p("image", PortType::Image, true), p("bbox", PortType::Bbox, true)];
-const DRAW_BBOX_OUT: [Port; 2] =
-    [p("image", PortType::Image, false), p("ok", PortType::Bool, false)];
+// `bbox` is the box actually drawn — i.e. the input box after the `expand` config is applied,
+// so downstream nodes (blur, crop, presence) can reuse the expanded region.
+const DRAW_BBOX_OUT: [Port; 3] = [
+    p("image", PortType::Image, false),
+    p("bbox", PortType::Bbox, false),
+    p("ok", PortType::Bool, false),
+];
 
 const BLUR_OUTSIDE_BBOX_IN: [Port; 2] =
     [p("image", PortType::Image, true), p("bbox", PortType::Bbox, true)];
