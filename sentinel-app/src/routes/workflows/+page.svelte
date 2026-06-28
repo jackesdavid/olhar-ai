@@ -688,10 +688,13 @@
       return { ...k, outputs: armPorts };
     }
     // Get/Set Variable: one `value` port typed by the variable (baked into config.type).
+    // Set keeps its exec pins (it's not pure) — append the value input to the existing ports.
     if (node.kind === "get_variable" || node.kind === "set_variable") {
       const ty = (typeof node.config?.type === "string" ? node.config.type : "text") as CatPort["type"];
       const port: CatPort = { name: "value", type: ty, required: node.kind === "set_variable" };
-      return node.kind === "get_variable" ? { ...k, outputs: [port] } : { ...k, inputs: [port] };
+      return node.kind === "get_variable"
+        ? { ...k, outputs: [port] }
+        : { ...k, inputs: [...k.inputs, port] };
     }
     const fields = payloadFields(node);
     if (fields.length === 0) return k;
@@ -720,7 +723,8 @@
     }
     if (n.kind === "get_variable" || n.kind === "set_variable") {
       const v = String(n.config.variable ?? "").trim();
-      return v ? `${base}: ${v}` : base;
+      const verb = n.kind === "get_variable" ? "Get" : "Set";
+      return v ? `${verb} ${v}` : base;
     }
     return base;
   }
@@ -1406,6 +1410,15 @@
       case "Network": return "#22d3ee"; // cyan
       default: return "#64748b";
     }
+  }
+  // Node-aware header colour: Get/Set Variable nodes take their variable's TYPE colour, so a
+  // variable's get + set read as one family on the canvas. Everything else is by category.
+  function headerColorFor(n: Node): string {
+    if (n.kind === "get_variable" || n.kind === "set_variable") {
+      const t = typeof n.config?.type === "string" ? n.config.type : "text";
+      return portColor[t as PortType] ?? headerColor(n.kind);
+    }
+    return headerColor(n.kind);
   }
 
   // Old field names whose (name, type) isn't preserved in the other schema — their wires
@@ -2230,7 +2243,7 @@
                        Drawn before the drag handle so the handle stays on top for clicks. -->
                   <path
                     d="M0 8 a8 8 0 0 1 8 -8 h{NODE_W - 16} a8 8 0 0 1 8 8 v{HEAD_H - 8} h-{NODE_W} z"
-                    fill={headerColor(n.kind)}
+                    fill={headerColorFor(n)}
                     fill-opacity={n.kind === "emit_event" || n.kind === "on_event" ? 0.32 : 0.18}
                     class="pointer-events-none"
                   />
