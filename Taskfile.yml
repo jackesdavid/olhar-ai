@@ -201,6 +201,15 @@ tasks:
     cmds:
       - cargo run
 
+  notification:
+    desc: Run sentinel-notification — consumes the notification queue + sends (on :8791)
+    dir: sentinel-notification
+    deps: [db-up]
+    env:
+      NOTIFY_BIND: '{{.NOTIFY_BIND | default "127.0.0.1:8791"}}'
+    cmds:
+      - cargo run
+
   flow-build:
     desc: Build sentinel-flow (release)
     dir: sentinel-flow

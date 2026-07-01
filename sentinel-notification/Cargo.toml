@@ -1,0 +1,16 @@
+[package]
+name = "sentinel-notification"
+version = "0.1.0"
+edition = "2021"
+description = "Notification service. Owns recipient config + the actual sending. Consumes a durable Postgres notification queue (flow only enqueues), sends to recipients (Telegram), and serves read-only observability. Pure-Rust so the shared cloud image build cooks it."
+
+[dependencies]
+app-core = { path = "../crates/app-core" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+axum = "0.7"
+uuid = { version = "1", features = ["v4", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+env_logger = "0.11"

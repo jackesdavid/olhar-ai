@@ -14,6 +14,7 @@
 pub mod client;
 pub mod domain;
 pub mod handler;
+pub mod queue;
 pub mod repo;
 
 pub use domain::{load_targets, NotificationConfig, NotificationStore, NotificationTarget};

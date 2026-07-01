@@ -15,7 +15,7 @@ REPO="ghcr.io/jackesdavid"
 GH_USER="jackesdavid"
 VPS_SSH="${VPS_SSH:-root@85.239.248.86}"
 VPS_KEY="${VPS_KEY:-$HOME/.ssh/id_contab_ed25519}"
-ALL="sentinel-control sentinel-gateway sentinel-flow sentinel-app sentinel-landing"
+ALL="sentinel-control sentinel-gateway sentinel-flow sentinel-notification sentinel-app sentinel-landing"
 SERVICES="${*:-$ALL}"
 SHA="$(git rev-parse HEAD)"
 

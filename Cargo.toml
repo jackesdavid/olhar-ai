@@ -8,6 +8,7 @@ members = [
     "sentinel-flow",
     "sentinel-gateway",
     "sentinel-control",
+    "sentinel-notification",
 ]
 # sentinel-edge is built + shipped independently and links a NATIVE dep (OpenCV, for the
 # motion watcher). Keeping it OUT of the workspace stops its native deps from entering the

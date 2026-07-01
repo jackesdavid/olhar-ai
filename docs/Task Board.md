@@ -36,12 +36,8 @@ kanban-plugin: board
 - [ ] #13 Cooldown node: `reset` exec port
 	  - Plan: [[cooldown-reset-port]]
 - [ ] #14 The data time on the logs should locally time and we should see the date too — for the current day show only the time
-- [ ] #15 Telegram bot: workflow-graph brain + inbound commands
-	  - Plan: [[telegram-bot-two-way-research]]
 - [ ] #17 Face recognition: DetectFaces node + live-feed triggers
 	  - Plan: [[face-recognition-next-steps]]
-- [ ] #18 Workflow list improvements: last run, search, description, duplicate
-	  - Plan: [[workflow-list-improvements]]
 - [ ] #20 GetCameraRoom node — look up room name from a camera entity
 	  - Plan: [[get-camera-room]]
 - [ ] #21 Map: presence history + logs panel in SidePanel
@@ -50,14 +46,18 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #19 AI If node — yes/no question routes exec like If
-	  - Plan: [[ai-question-node]]
 - [ ] #56 Workflow Variables — typed vars + Get/Set nodes
 	  - Plan: [[workflow-variables]]
+- [ ] #15 Telegram bot: workflow-graph brain + inbound commands
+	  - Plan: [[telegram-bot-two-way-research]]
+- [ ] #57 Notification queue + sentinel-notification service
+	  - Plan: [[notification-queue-service]]
 
 
 ## Review
 
+- [ ] #19 AI If node — yes/no question routes exec like If
+	  - Plan: [[ai-question-node]]
 - [ ] #22 Recordings: storage, names, filters, delete, sort, paginate
 	  - Plan: [[recordings-improvements]]
 - [ ] #23 TimeGate node — debounced motion wait
@@ -121,6 +121,8 @@ kanban-plugin: board
 - [x] #54 CPU-only torch in the AI Docker image
 - [x] #55 Workflow nodes — rename, categorize & split into files
 	  - Plan: [[workflow-node-ux-refactor]]
+- [x] #18 Workflow list improvements: last run, search, description, duplicate
+	  - Plan: [[workflow-list-improvements]]
 
 
 
