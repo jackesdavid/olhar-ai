@@ -42,6 +42,8 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }
 
 @layer base {
@@ -50,17 +52,19 @@
   }
   body {
     @apply bg-background text-foreground;
-    /* Subtle achromatic top shimmer. */
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    /* Subtle achromatic top shimmer (dot-field ambient). */
     background-image: radial-gradient(
       55% 40% at 50% -5%,
-      oklch(1 0 0 / 0.04),
+      var(--shimmer),
       transparent 70%
     );
     background-attachment: fixed;
   }
 
   ::selection {
-    background: oklch(1 0 0 / 0.2);
+    background: var(--selection);
   }
 
   /* Code and preformatted text sink into the well — deepest surface. */
@@ -71,7 +75,7 @@
   pre {
     padding: 0.75rem 1rem;
     overflow-x: auto;
-    border: 1px solid oklch(1 0 0 / 0.08);
+    border: 1px solid var(--code-border);
   }
   code {
     padding: 0.1em 0.35em;
@@ -85,7 +89,7 @@
 
   * {
     scrollbar-width: thin;
-    scrollbar-color: oklch(1 0 0 / 0.14) var(--well);
+    scrollbar-color: var(--scroll-thumb) var(--well);
   }
   ::-webkit-scrollbar {
     width: 10px;
@@ -95,33 +99,31 @@
     background: var(--well);
   }
   ::-webkit-scrollbar-thumb {
-    background: oklch(1 0 0 / 0.14);
+    background: var(--scroll-thumb);
     border-radius: 9999px;
     border: 2px solid var(--well);
     background-clip: content-box;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: oklch(1 0 0 / 0.26);
+    background: var(--scroll-thumb-hover);
     background-clip: content-box;
   }
 }
 
 @layer utilities {
-  /* Card/row that lifts on hover with a white edge. */
+  /* Card/row that lifts on hover with an inked edge (mode-aware). */
   .interactive {
     @apply transition-all duration-200 ease-out;
   }
   .interactive:hover {
     transform: translateY(-2px);
-    border-color: oklch(1 0 0 / 0.2);
-    box-shadow: 0 10px 30px -14px oklch(0 0 0 / 0.8);
+    border-color: var(--lift-border);
+    box-shadow: var(--lift-shadow);
   }
 
-  /* Soft white glow — restrained, not harsh. */
+  /* Soft brand glow — restrained, not harsh (mode-aware). */
   .glow {
-    box-shadow:
-      0 0 0 1px oklch(1 0 0 / 0.14),
-      0 0 28px -8px oklch(1 0 0 / 0.2);
+    box-shadow: var(--glow-shadow);
   }
 
   /* Tactile press feedback. */
@@ -132,16 +134,16 @@
     transform: scale(0.97);
   }
 
-  /* Soft white "breathing" pulse for live/online indicators. */
+  /* Soft "breathing" pulse for live/online indicators (mode-aware ring). */
   @keyframes status-pulse {
     0%,
     100% {
       opacity: 1;
-      box-shadow: 0 0 0 0 oklch(1 0 0 / 0.5);
+      box-shadow: 0 0 0 0 var(--pulse-color);
     }
     50% {
       opacity: 0.85;
-      box-shadow: 0 0 0 4px oklch(1 0 0 / 0);
+      box-shadow: 0 0 0 4px transparent;
     }
   }
   .status-live {
@@ -202,9 +204,9 @@
     animation-duration: 1.4s;
   }
 
-  /* White gradient text for hero headings. */
+  /* Inked gradient text for hero headings (mode-aware). */
   .text-grad {
-    background: linear-gradient(110deg, oklch(0.97 0 0), oklch(0.72 0 0) 60%, oklch(0.55 0 0));
+    background: linear-gradient(110deg, var(--grad-from), var(--grad-mid) 60%, var(--grad-to));
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;

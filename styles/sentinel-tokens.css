@@ -1,24 +1,33 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   Sentinel Noir — design tokens.  Single source of truth for the full suite.
+   Sentinel — design tokens.  Single source of truth for the full suite.
    Both sentinel-app and landing import this file; never duplicate values here.
 
-   Brand identity: monochrome — no hue on surfaces or primary action.
-   Semantic colours (destructive red, amber "armed") survive unchanged.
+   Brand identity: monochrome — no hue on surfaces or primary action. Branding is
+   carried by form, not colour: the dot-field mark, radial falloff, generous space,
+   and one near-black↔white ink. Semantic colours (destructive red, amber "armed",
+   online green) survive because they communicate STATE, not brand.
+
+   Two operative themes, toggled by the `.dark` class on <html> (default: light):
+     • Light "Clean White" — white canvas, near-black ink. The default.
+     • Dark  "Sentinel Noir" — near-black canvas, white ink.
+
+   Light surface stack (bottom → top):
+     0.93  --well       deepest inset: code, log output, scrollbar track
+     0.965 --background page base (soft gray, lets white cards lift)
+     0.99  --sidebar    nav rail (near-white, advances subtly)
+     1.00  --card       cards, sheets, panels (pure white)
+     0.95  --secondary  row hover, secondary bg
+     0.93  --accent     selected / active item bg
+     1.00  --popover    floating: dropdowns, tooltips, command palette
 
    Dark surface stack (bottom → top):
-     0.04  --well       deepest inset: code blocks, log output, scrollbar track
-     0.07  --background page base
-     0.10  --sidebar    nav rail (recedes behind cards)
-     0.13  --card       cards, sheets, panels
-     0.17  --secondary  row hover, secondary bg
-     0.22  --accent     selected / active item bg
-     0.28  --popover    floating: dropdowns, tooltips, command palette
+     0.04  --well · 0.07 --background · 0.10 --sidebar · 0.13 --card
+     0.17  --secondary · 0.22 --accent · 0.28 --popover
 
-   Text stack (light on dark):
-     1.00  --primary          white CTA / headings
-     0.93  --foreground       body text (slightly off-white, easier on eye)
-     0.76  --secondary-fg     supporting / secondary text
-     0.52  --muted-foreground captions, timestamps, labels
+   Beyond the shadcn colour tokens, both themes also define a set of
+   *effect* variables (--lift-*, --glow-*, --selection, --pulse-color, --shimmer,
+   --brand-glow, --grad-*) so the utilities in app.css read correctly on either
+   canvas instead of baking in white-on-dark.  Add effects here, never per-file.
 
    Usage (in each app's app.css):
      @import "../../styles/sentinel-tokens.css";
@@ -29,44 +38,90 @@
   --radius: 0.375rem; /* tight/sharp — serious product feel */
 }
 
-/* ── Light mode (fallback only — the app always runs dark) ───────────────── */
+/* ── Type — one source of truth for the whole suite ───────────────────────────
+   Default: SF Pro via the Apple system stack. Renders real SF Pro on macOS/iOS/
+   iPadOS at zero network cost; falls back to a clean grotesque elsewhere. Note
+   non-Apple platforms therefore see Segoe/Roboto, not SF Pro.
+
+   ONE-LINE SWITCH → self-hosted Inter (identical metrics, pixel-consistent on
+   every OS — better for landing screenshots): replace the --font-sans value with
+     "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+   and add the @font-face / <link> for Inter in the consuming app. */
 :root {
-  --well:                   oklch(0.91 0 0);   /* inset surfaces in light mode */
-  --background:             oklch(0.98 0 0);
-  --foreground:             oklch(0.09 0 0);
-  --card:                   oklch(1 0 0);
-  --card-foreground:        oklch(0.09 0 0);
-  --popover:                oklch(1 0 0);
-  --popover-foreground:     oklch(0.09 0 0);
-  --primary:                oklch(0.09 0 0);
-  --primary-foreground:     oklch(0.98 0 0);
-  --secondary:              oklch(0.93 0 0);
-  --secondary-foreground:   oklch(0.22 0 0);
-  --muted:                  oklch(0.93 0 0);
-  --muted-foreground:       oklch(0.48 0 0);
-  --accent:                 oklch(0.89 0 0);
-  --accent-foreground:      oklch(0.18 0 0);
-  --destructive:            oklch(0.58 0.22 25);
-  --destructive-foreground: oklch(0.99 0 0);
-  --border:                 oklch(0.84 0 0);
-  --input:                  oklch(0.84 0 0);
-  --ring:                   oklch(0.09 0 0);
-  --chart-1:                oklch(0.18 0 0);
-  --chart-2:                oklch(0.38 0 0);
-  --chart-3:                oklch(0.55 0 0);
-  --chart-4:                oklch(0.70 0 0);
-  --chart-5:                oklch(0.58 0.22 25);
-  --sidebar:                oklch(0.95 0 0);
-  --sidebar-foreground:     oklch(0.18 0 0);
-  --sidebar-primary:        oklch(0.09 0 0);
-  --sidebar-primary-foreground: oklch(0.98 0 0);
-  --sidebar-accent:         oklch(0.89 0 0);
-  --sidebar-accent-foreground:  oklch(0.18 0 0);
-  --sidebar-border:         oklch(0.84 0 0);
-  --sidebar-ring:           oklch(0.09 0 0);
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    "SF Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Code",
+    "Roboto Mono", monospace;
 }
 
-/* ── Dark mode (operative) ────────────────────────────────────────────────── */
+/* ── Light "Clean White" (default operative theme) ────────────────────────── */
+:root {
+  /* surfaces */
+  --well:                   oklch(0.93 0 0);   /* deepest inset: code, log, scrollbar track */
+  --background:             oklch(0.965 0 0);  /* page base — soft gray so white cards lift */
+  --card:                   oklch(1 0 0);      /* cards, panels — pure white */
+  --card-foreground:        oklch(0.20 0 0);
+  --popover:                oklch(1 0 0);      /* floating surfaces */
+  --popover-foreground:     oklch(0.20 0 0);
+  --secondary:              oklch(0.95 0 0);   /* row hover / secondary bg */
+  --secondary-foreground:   oklch(0.32 0 0);   /* supporting / secondary text */
+  --muted:                  oklch(0.95 0 0);
+  --muted-foreground:       oklch(0.52 0 0);   /* captions, timestamps, inactive */
+  --accent:                 oklch(0.93 0 0);   /* selected / active bg */
+  --accent-foreground:      oklch(0.18 0 0);
+
+  /* text — near-black ink */
+  --foreground:             oklch(0.20 0 0);   /* body text */
+
+  /* primary action — near-black */
+  --primary:                oklch(0.15 0 0);
+  --primary-foreground:     oklch(0.99 0 0);
+
+  /* semantic (state, not brand) */
+  --destructive:            oklch(0.58 0.22 25);
+  --destructive-foreground: oklch(0.99 0 0);
+
+  /* edges — whisper borders (alpha ink, not solid gray) */
+  --border:                 oklch(0.15 0 0 / 10%);
+  --input:                  oklch(0.15 0 0 / 14%);
+  --ring:                   oklch(0.15 0 0);
+
+  /* charts — graduated ink scale */
+  --chart-1:                oklch(0.20 0 0);
+  --chart-2:                oklch(0.40 0 0);
+  --chart-3:                oklch(0.58 0 0);
+  --chart-4:                oklch(0.72 0 0);
+  --chart-5:                oklch(0.58 0.22 25);
+
+  /* sidebar — near-white rail, one stop above the page */
+  --sidebar:                oklch(0.99 0 0);
+  --sidebar-foreground:     oklch(0.30 0 0);
+  --sidebar-primary:        oklch(0.15 0 0);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent:         oklch(0.95 0 0);
+  --sidebar-accent-foreground:  oklch(0.15 0 0);
+  --sidebar-border:         oklch(0.15 0 0 / 8%);
+  --sidebar-ring:           oklch(0.15 0 0);
+
+  /* effects — dark ink on a light canvas */
+  --lift-border:            oklch(0.15 0 0 / 18%);
+  --lift-shadow:            0 10px 30px -14px oklch(0 0 0 / 20%);
+  --glow-shadow:            0 0 0 1px oklch(0.15 0 0 / 10%), 0 10px 26px -12px oklch(0 0 0 / 16%);
+  --selection:              oklch(0.15 0 0 / 12%);
+  --scroll-thumb:           oklch(0 0 0 / 18%);
+  --scroll-thumb-hover:     oklch(0 0 0 / 32%);
+  --pulse-color:            oklch(0.15 0 0 / 40%);   /* status-live ring */
+  --shimmer:                oklch(0 0 0 / 3%);       /* ambient top shimmer */
+  --brand-glow:             0 0 12px oklch(0.15 0 0 / 12%);
+  --code-border:            oklch(0.15 0 0 / 8%);
+  --grad-from:              oklch(0.20 0 0);         /* hero gradient text */
+  --grad-mid:              oklch(0.40 0 0);
+  --grad-to:               oklch(0.58 0 0);
+}
+
+/* ── Dark "Sentinel Noir" (toggled via .dark) ─────────────────────────────── */
 .dark {
   /* surfaces — 9 distinct stops */
   --well:                   oklch(0.04 0 0);   /* deepest inset: code, log, scrollbar track */
@@ -114,4 +169,19 @@
   --sidebar-accent-foreground:  oklch(0.85 0 0);
   --sidebar-border:         oklch(1 0 0 / 9%);
   --sidebar-ring:           oklch(1 0 0);
+
+  /* effects — white ink on a dark canvas */
+  --lift-border:            oklch(1 0 0 / 20%);
+  --lift-shadow:            0 10px 30px -14px oklch(0 0 0 / 80%);
+  --glow-shadow:            0 0 0 1px oklch(1 0 0 / 14%), 0 0 28px -8px oklch(1 0 0 / 20%);
+  --selection:              oklch(1 0 0 / 20%);
+  --scroll-thumb:           oklch(1 0 0 / 14%);
+  --scroll-thumb-hover:     oklch(1 0 0 / 26%);
+  --pulse-color:            oklch(1 0 0 / 50%);
+  --shimmer:                oklch(1 0 0 / 4%);
+  --brand-glow:             0 0 10px oklch(1 0 0 / 30%);
+  --code-border:            oklch(1 0 0 / 8%);
+  --grad-from:              oklch(0.97 0 0);
+  --grad-mid:              oklch(0.72 0 0);
+  --grad-to:               oklch(0.55 0 0);
 }

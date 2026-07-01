@@ -66,7 +66,8 @@
     <Card.Header class="items-center text-center">
       <SentinelMark
         size={40}
-        class="text-primary drop-shadow-[0_0_12px_oklch(0.7_0.16_162/0.45)]"
+        class="text-primary"
+        style="filter: drop-shadow(var(--brand-glow))"
       />
       <Card.Title class="mt-2 text-xl">Sentinel</Card.Title>
       <Card.Description>

@@ -10,6 +10,9 @@
   import { navItems } from "$lib/nav";
   import { Toaster } from "$lib/components/ui/sonner";
   import SentinelMark from "$lib/components/sentinel-mark.svelte";
+  import { theme, loadTheme, toggleTheme } from "$lib/theme.svelte";
+  import Sun from "@lucide/svelte/icons/sun";
+  import Moon from "@lucide/svelte/icons/moon";
   // Animated dot-field backdrop — disabled for now; kept for a future feature.
   // import SensorField from "$lib/components/sensor-field.svelte";
   import Splash from "$lib/components/splash.svelte";
@@ -87,6 +90,9 @@
   }
 
   let navCollapsed = $state(false);
+  const themeLabel = $derived(
+    theme.current === "dark" ? "Switch to light" : "Switch to dark",
+  );
   function toggleNav() {
     navCollapsed = !navCollapsed;
     try {
@@ -108,6 +114,7 @@
   }
 
   onMount(() => {
+    loadTheme();
     if (localStorage.getItem("sentinel.navCollapsed") === "true")
       navCollapsed = true;
     cloudBoot();
@@ -284,7 +291,8 @@
         >
           <SentinelMark
             size={32}
-            class="shrink-0 text-primary drop-shadow-[0_0_10px_oklch(1_0_0/0.3)]"
+            class="shrink-0 text-primary"
+            style="filter: drop-shadow(var(--brand-glow))"
           />
           {#if !navCollapsed}
             <div class="flex flex-col leading-tight">
@@ -376,23 +384,49 @@
         {/if}
 
         <div
-          class="flex items-center border-t border-sidebar-border p-3 text-[11px] text-muted-foreground {navCollapsed
-            ? 'justify-center'
-            : 'gap-1.5'}"
+          class="border-t border-sidebar-border p-3 text-[11px] text-muted-foreground {navCollapsed
+            ? 'flex flex-col items-center gap-1'
+            : 'flex items-center gap-1.5'}"
         >
           {#if !navCollapsed}
             <span class="size-1.5 rounded-full bg-primary status-live"></span>
             <span class="font-mono">v0.4.1</span>
             <span class="font-mono" title="Deployed commit">· {COMMIT}</span>
-            <button
-              class="interactive ml-auto rounded-md p-1 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
-              title="Collapse sidebar"
-              aria-label="Collapse sidebar"
-              onclick={toggleNav}
-            >
-              <PanelLeftClose class="size-4" />
-            </button>
+            <div class="ml-auto flex items-center gap-0.5">
+              <button
+                class="interactive rounded-md p-1 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+                title={themeLabel}
+                aria-label={themeLabel}
+                onclick={toggleTheme}
+              >
+                {#if theme.current === "dark"}
+                  <Sun class="size-4" />
+                {:else}
+                  <Moon class="size-4" />
+                {/if}
+              </button>
+              <button
+                class="interactive rounded-md p-1 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+                title="Collapse sidebar"
+                aria-label="Collapse sidebar"
+                onclick={toggleNav}
+              >
+                <PanelLeftClose class="size-4" />
+              </button>
+            </div>
           {:else}
+            <button
+              class="interactive rounded-md p-1 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+              title={themeLabel}
+              aria-label={themeLabel}
+              onclick={toggleTheme}
+            >
+              {#if theme.current === "dark"}
+                <Sun class="size-4" />
+              {:else}
+                <Moon class="size-4" />
+              {/if}
+            </button>
             <button
               class="interactive rounded-md p-1 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
               title="Expand sidebar"

@@ -8,7 +8,14 @@
     animated = true,
     rings = 5,
     class: klass = "",
-  }: { size?: number; animated?: boolean; rings?: number; class?: string } = $props();
+    style = "",
+  }: {
+    size?: number;
+    animated?: boolean;
+    rings?: number;
+    class?: string;
+    style?: string;
+  } = $props();
 
   type Dot = { cx: number; cy: number; r: number; o: number; delay: number };
 
@@ -45,6 +52,7 @@
   width={size}
   height={size}
   class="sentinel-mark {animated ? 'is-animated' : ''} {klass}"
+  {style}
   fill="currentColor"
   role="img"
   aria-label="Sentinel"
