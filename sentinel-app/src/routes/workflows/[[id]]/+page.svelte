@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { fade } from "svelte/transition";
+  import { page } from "$app/stores";
+  import { goto } from "$app/navigation";
   import { data, onEvent } from "$lib/data";
   import { platformLogs, type PlatformLog } from "$lib/api";
   import { fmtTs } from "$lib/utils";
@@ -80,8 +82,8 @@
   } from "$lib/workflows/portColors";
   import type { PortType } from "$lib/workflows/portColors";
 
-  import ContextSearch from "./components/ContextSearch.svelte";
-  import VariablesPanel from "./components/VariablesPanel.svelte";
+  import ContextSearch from "../components/ContextSearch.svelte";
+  import VariablesPanel from "../components/VariablesPanel.svelte";
 
   // ---- types (the serialized core shapes) ----------------------------------
   type CatPort = { name: string; type: PortType; required: boolean };
@@ -924,7 +926,17 @@
     if (g) g.viewport = v;
     data.setGraphViewport(id, v.x, v.y, v.zoom).catch(() => {});
   }
+  // The URL is the source of truth for which graph is open (/workflows/<id>).
+  // openGraph / backToList only navigate; the $effect below applies the route to state,
+  // so a refresh or a shared link lands straight in the right editor.
   function openGraph(id: number) {
+    void goto(`/workflows/${id}`, { keepFocus: true, noScroll: true });
+  }
+  function backToList() {
+    void goto("/workflows", { keepFocus: true, noScroll: true });
+  }
+  // Apply an open-graph route to editor state (was the body of openGraph).
+  function applyGraph(id: number) {
     saveViewport();
     selectedGraphId = id;
     selectedNodeId = null;
@@ -951,14 +963,31 @@
     void reconcileEventNodes(id); // self-heal event nodes against the current registry
     startTimeGatePolling();
   }
-  function backToList() {
+  // Apply the bare /workflows route to state (was the body of backToList).
+  function showListView() {
     stopTimeGatePolling();
     saveViewport();
-    view = "list";
+    selectedGraphId = null;
     selectedNodeId = null;
     pending = null;
     clearLive();
+    view = "list";
   }
+  // Route → state. Waits for graphs to load; an unknown id falls back to the list.
+  $effect(() => {
+    const raw = $page.params.id;
+    const id = raw != null && raw !== "" ? Number(raw) : null;
+    if (id != null && Number.isFinite(id)) {
+      if (graphs.length === 0) return; // graphs not loaded yet — re-runs when they are
+      if (!graphs.some((g) => g.id === id)) {
+        void goto("/workflows", { replaceState: true, keepFocus: true, noScroll: true });
+        return;
+      }
+      if (selectedGraphId !== id || view !== "editor") applyGraph(id);
+    } else if (view !== "list") {
+      showListView();
+    }
+  });
 
   // ---- load ----------------------------------------------------------------
   async function reload() {

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
   import { data } from "$lib/data";
@@ -99,7 +98,15 @@
     }
   }
 
-  onMount(load);
+  // Reload whenever the route id changes. Under route-id keying the page no longer
+  // remounts on a param-only change, so an effect (not just onMount) keeps data fresh.
+  let loadedId = "";
+  $effect(() => {
+    if (id !== loadedId) {
+      loadedId = id;
+      void load();
+    }
+  });
 
   async function save() {
     if (form.name.trim().length === 0) {

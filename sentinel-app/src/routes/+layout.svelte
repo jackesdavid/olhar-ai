@@ -457,7 +457,9 @@
           </div>
         {/if}
         <main class="flex-1 overflow-y-auto">
-          {#key $page.url.pathname}
+          <!-- Key on the route id, not the full path, so param-only changes
+               (e.g. /workflows ↔ /workflows/123) don't remount the page. -->
+          {#key $page.route?.id}
             {#if fullBleed}
               <div
                 class="h-full overflow-hidden duration-200 animate-in fade-in"
