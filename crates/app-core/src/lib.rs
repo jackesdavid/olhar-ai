@@ -17,6 +17,7 @@ pub mod devices;
 pub mod go2rtc;
 pub mod listen;
 pub mod map;
+pub mod media;
 pub mod notification;
 pub mod onvif;
 pub mod persons;

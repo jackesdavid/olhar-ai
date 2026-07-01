@@ -37,14 +37,21 @@ fn process(state: &AppState, job: queue::QueuedNotification) {
         return;
     };
 
-    // Media (image_key / video_key) rides the object store — plumbing lands in a later phase.
-    // Until then, send the text so nothing is silently dropped.
-    if job.image_key.is_some() || job.video_key.is_some() {
-        log::warn!("notification {}: media attachment present but object-store plumbing not wired yet — sending text only", job.id);
+    // Download the image from the object store (if one rode this notification).
+    let image = job.image_key.as_deref().and_then(|k| match app_core::media::get(k) {
+        Ok(bytes) => Some(bytes),
+        Err(e) => {
+            log::error!("notification {}: media get {k} failed: {e}", job.id);
+            None
+        }
+    });
+    // Video attachments (recordings) arrive with #15's Reply-to-sender; text/image go out now.
+    if job.video_key.is_some() {
+        log::warn!("notification {}: video attachment present — video send lands with #15", job.id);
     }
 
     let store: NotificationStore = Arc::new(Mutex::new(repo::load_beacons(&state.db, job.tenant_id)));
-    match notification::dispatch(&store, &cfg, job.target.as_deref(), &job.message, None) {
+    match notification::dispatch(&store, &cfg, job.target.as_deref(), &job.message, image) {
         Ok(result) => queue::mark_sent(&state.db, job.id, &result),
         Err(e) => queue::mark_retry_or_fail(&state.db, job.id, job.attempts, MAX_ATTEMPTS, backoff, &e),
     }

@@ -159,10 +159,9 @@ impl Notifier for LocalNotifier {
 
 /// Notifications via the durable queue — flow only ENQUEUEs; `sentinel-notification` consumes
 /// and sends (card #57). Baked with the run's `db` + `tenant_id` because the `Notifier` trait
-/// doesn't carry them.
-///
-/// INTERIM: image-bearing sends still go out in-process here, so attachments aren't lost until
-/// the object-store media handoff is wired; text goes through the queue.
+/// doesn't carry them. An `image` is uploaded to the object store and its key rides the queue
+/// row; the consumer downloads + sends. If the object store isn't configured (or upload fails),
+/// the image is delivered in-process so it's never lost.
 pub struct RemoteNotifier {
     pub db: crate::db::Db,
     pub tenant_id: uuid::Uuid,
@@ -176,10 +175,25 @@ impl Notifier for RemoteNotifier {
         message: &str,
         image: Option<Vec<u8>>,
     ) -> Result<String, String> {
-        if image.is_some() {
-            return crate::notification::dispatch(store, cfg, target, message, image);
-        }
-        crate::notification::queue::enqueue(&self.db, self.tenant_id, target, message, None, None);
+        let image_key = match image {
+            Some(bytes) if crate::media::enabled() => match crate::media::put(&bytes, "image/jpeg", "jpg") {
+                Ok(key) => Some(key),
+                Err(e) => {
+                    log::warn!("media upload failed ({e}); delivering image in-process");
+                    return crate::notification::dispatch(store, cfg, target, message, Some(bytes));
+                }
+            },
+            Some(bytes) => return crate::notification::dispatch(store, cfg, target, message, Some(bytes)),
+            None => None,
+        };
+        crate::notification::queue::enqueue(
+            &self.db,
+            self.tenant_id,
+            target,
+            message,
+            image_key.as_deref(),
+            None,
+        );
         Ok("queued".to_string())
     }
 }
