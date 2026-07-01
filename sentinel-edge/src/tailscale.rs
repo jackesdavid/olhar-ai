@@ -29,7 +29,12 @@ pub fn ensure_up() {
         .filter(|s| !s.trim().is_empty());
 
     let mut up = Command::new("tailscale");
+    // `--reset`: the appliance OWNS its tailscale identity (authkey-driven). Without it, a box
+    // that already had tailscale configured (e.g. Bazzite's `ujust` sets `--operator=<user>`)
+    // makes `tailscale up` refuse with "changing settings requires mentioning all non-default
+    // flags". Resetting unmentioned prefs to defaults each boot keeps the join deterministic.
     up.arg("up")
+        .arg("--reset")
         .arg(format!("--authkey={authkey}"))
         .arg(format!("--hostname={hostname}"));
     if let Some(tags) = &tags {

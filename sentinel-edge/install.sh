@@ -178,8 +178,11 @@ ensure_tailscaled_macos
 # the edge service also re-asserts this on boot. Needs a key (auto-minted or --authkey).
 if [ -n "$AUTHKEY" ]; then
   echo "▸ Joining the tailnet (hostname=$HOSTNAME_)…"
+  # --reset: the appliance owns its tailscale identity. Without it, a box that already had
+  # tailscale set up (e.g. Bazzite's `ujust` sets --operator=<user>) makes `up` refuse with
+  # "changing settings requires mentioning all non-default flags". --reset overrides that.
   # shellcheck disable=SC2086
-  tailscale up --authkey="$AUTHKEY" --hostname="$HOSTNAME_" ${TAGS:+--advertise-tags="$TAGS"} \
+  tailscale up --reset --authkey="$AUTHKEY" --hostname="$HOSTNAME_" ${TAGS:+--advertise-tags="$TAGS"} \
     || echo "  'tailscale up' failed — check the auth key; the edge service will retry on boot." >&2
 fi
 
