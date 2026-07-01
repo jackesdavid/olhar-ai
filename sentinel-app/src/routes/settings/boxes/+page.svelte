@@ -250,6 +250,11 @@
                 </td>
                 <td class="px-3 py-2">
                   <span class="flex flex-wrap items-center gap-1">
+                    {#if b.platform}
+                      <span class="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground" title="Reported platform (OS · arch)">
+                        {b.platform}
+                      </span>
+                    {/if}
                     <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium {tsClass(b.tailscale_state)}" title="Tailscale state — go2rtc must be 'serving' over the tailnet for Live to work">
                       {tsLabel(b.tailscale_state)}
                     </span>

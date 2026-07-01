@@ -58,11 +58,26 @@ fn maybe_self_update(control_url: &str) {
 }
 
 fn main() {
+    // `sentinel-edge --version` — print the build version and exit (install.sh runs this to
+    // echo what it just installed; also handy for `systemctl`-managed boxes).
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("sentinel-edge {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     // Capture logs into a shared ring (also teed to stderr) so the box can push them up
     // for the in-UI log viewer — the edge is no longer a black box.
     let logs = logbuf::init();
 
     let bind = std::env::var("EDGE_BIND").unwrap_or_else(|_| "0.0.0.0:8788".to_string());
+
+    // Stamp the build version + platform in the very first log line — it rides the cloud log
+    // viewer, so an operator sees exactly which build a box is running (matches the Boxes badge).
+    log::info!(
+        "sentinel-edge v{} starting on {}",
+        env!("CARGO_PKG_VERSION"),
+        state::platform()
+    );
 
     // Auto-update: if control reports a newer version, run install.sh --update and let
     // the service manager relaunch us with the new binary. This means any restart

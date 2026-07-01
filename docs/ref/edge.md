@@ -114,9 +114,16 @@ server. Because the binary is OpenCV-soname-coupled and the target appliance is 
 
 ## Health reporting + Restart
 
-On the heartbeat the edge sends `X-Edge-Tailscale` (`serving|up|offline|disabled`, from
-`tailscale_state()`) and `X-Edge-Ffmpeg` → stamped on `tenant_boxes` → the **Boxes page**
-shows per-box badges + a warning banner when offline / not-serving / ffmpeg-missing.
+On the heartbeat (the ~25s config poll) the edge sends `X-Edge-Tailscale`
+(`serving|up|offline|disabled`, from `tailscale_state()`), `X-Edge-Ffmpeg`, and
+`X-Edge-Platform` (`OS (arch)`, ASCII-only, e.g. `macOS (aarch64)` / `Bazzite (x86_64)`, from
+`state::platform()` — distro name via `/etc/os-release`) → stamped on `tenant_boxes`
+(`platform` col added in migration 0034) → the **Boxes page** shows per-box badges (platform,
+tailnet state, ffmpeg) + a warning banner when offline / not-serving / ffmpeg-missing.
+
+The edge also prints its version + platform in the first boot log line, and supports
+`sentinel-edge --version`. `install.sh` echoes the version it's installing (from control's
+`/edge-latest`) and, on an immutable host, runs `--version` once deps are active.
 
 **Restart command**: Boxes page button → `POST /boxes/:id/restart` → control queues it
 (`pending_restart`, per box) → the edge consumes it via `/config/commands` and `exit(0)`s, so

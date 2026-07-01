@@ -1,6 +1,6 @@
 [package]
 name = "sentinel-edge"
-version = "0.5.27"
+version = "0.5.28"
 edition = "2021"
 description = "The edge gateway — the ONLY thing that touches cameras. Wraps go2rtc (sentinel-rtc) + ONVIF and serves on-demand JPEG snapshots over REST so out-of-process services (sentinel-flow, the UI) reach the LAN-bound cameras without speaking RTSP/ONVIF themselves. Cameras are LAN-bound, so this tier is mandatory however cloud the rest becomes."
 

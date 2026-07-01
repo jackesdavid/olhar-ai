@@ -132,6 +132,8 @@ pub struct BoxRow {
     pub ffmpeg_ok: Option<bool>,
     pub health_at: Option<chrono::DateTime<chrono::Utc>>,
     pub recording_config: Option<serde_json::Value>,
+    /// Reported platform, e.g. "macOS (aarch64)" / "Bazzite (x86_64)" (heartbeat).
+    pub platform: Option<String>,
 }
 
 /// A camera the edge found via ONVIF WS-Discovery (surfaced in the cloud UI).
@@ -160,7 +162,7 @@ pub async fn create_box(pool: &PgPool, tenant_id: Uuid, name: &str, token_hash: 
 
 pub async fn list_boxes(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<BoxRow>> {
     sqlx::query_as::<_, BoxRow>(
-        "SELECT id, name, magicdns_host, version, last_seen, created_at, tailscale_state, ffmpeg_ok, health_at, recording_config \
+        "SELECT id, name, magicdns_host, version, last_seen, created_at, tailscale_state, ffmpeg_ok, health_at, recording_config, platform \
          FROM tenant_boxes WHERE tenant_id = $1 ORDER BY name",
     )
     .bind(tenant_id)
@@ -186,6 +188,7 @@ pub async fn touch_box_by_token(
     version: Option<&str>,
     tailscale: Option<&str>,
     ffmpeg: Option<bool>,
+    platform: Option<&str>,
 ) -> sqlx::Result<Option<Uuid>> {
     let row: Option<(Uuid,)> = sqlx::query_as(
         "UPDATE tenant_boxes
@@ -194,6 +197,7 @@ pub async fn touch_box_by_token(
                 version = COALESCE($3, version),
                 tailscale_state = COALESCE($4, tailscale_state),
                 ffmpeg_ok = COALESCE($5, ffmpeg_ok),
+                platform = COALESCE($6, platform),
                 health_at = CASE WHEN $4 IS NOT NULL THEN now() ELSE health_at END
           WHERE token_hash = $1
         RETURNING tenant_id",
@@ -203,6 +207,7 @@ pub async fn touch_box_by_token(
     .bind(version)
     .bind(tailscale)
     .bind(ffmpeg)
+    .bind(platform)
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|(t,)| t))
@@ -217,6 +222,7 @@ pub async fn touch_box_identity(
     version: Option<&str>,
     tailscale: Option<&str>,
     ffmpeg: Option<bool>,
+    platform: Option<&str>,
 ) -> sqlx::Result<Option<(Uuid, Uuid)>> {
     let row: Option<(Uuid, Uuid)> = sqlx::query_as(
         "UPDATE tenant_boxes
@@ -225,6 +231,7 @@ pub async fn touch_box_identity(
                 version = COALESCE($3, version),
                 tailscale_state = COALESCE($4, tailscale_state),
                 ffmpeg_ok = COALESCE($5, ffmpeg_ok),
+                platform = COALESCE($6, platform),
                 health_at = CASE WHEN $4 IS NOT NULL THEN now() ELSE health_at END
           WHERE token_hash = $1
         RETURNING tenant_id, id",
@@ -234,6 +241,7 @@ pub async fn touch_box_identity(
     .bind(version)
     .bind(tailscale)
     .bind(ffmpeg)
+    .bind(platform)
     .fetch_optional(pool)
     .await?;
     Ok(row)

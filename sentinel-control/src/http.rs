@@ -76,9 +76,9 @@ async fn box_tenant(st: &AppState, headers: &HeaderMap) -> Result<Option<uuid::U
 
     let host = headers.get("x-box-host").and_then(|v| v.to_str().ok());
     let version = headers.get("x-edge-version").and_then(|v| v.to_str().ok());
-    let (ts, ff) = box_health_headers(headers);
+    let (ts, ff, plat) = box_health_headers(headers);
     let hash = hex::encode(Sha256::digest(tok.as_bytes()));
-    match store::touch_box_by_token(&st.pool, &hash, host, version, ts, ff).await {
+    match store::touch_box_by_token(&st.pool, &hash, host, version, ts, ff, plat).await {
         Ok(Some(tid)) => Ok(Some(tid)),
         Ok(None) => Err((StatusCode::UNAUTHORIZED, "unknown box token").into_response()),
         Err(e) => {
@@ -88,12 +88,14 @@ async fn box_tenant(st: &AppState, headers: &HeaderMap) -> Result<Option<uuid::U
     }
 }
 
-/// Extract the edge health headers (`X-Edge-Tailscale`, `X-Edge-Ffmpeg`) — present only on
-/// the box's regular config poll, absent on the high-rate pushes (then `None` keeps prior).
-fn box_health_headers(headers: &HeaderMap) -> (Option<&str>, Option<bool>) {
+/// Extract the edge health headers (`X-Edge-Tailscale`, `X-Edge-Ffmpeg`, `X-Edge-Platform`) —
+/// present only on the box's regular config poll, absent on the high-rate pushes (then `None`
+/// keeps the prior value via COALESCE).
+fn box_health_headers(headers: &HeaderMap) -> (Option<&str>, Option<bool>, Option<&str>) {
     let ts = headers.get("x-edge-tailscale").and_then(|v| v.to_str().ok());
     let ff = headers.get("x-edge-ffmpeg").and_then(|v| v.to_str().ok()).map(|v| v.trim() == "1");
-    (ts, ff)
+    let plat = headers.get("x-edge-platform").and_then(|v| v.to_str().ok());
+    (ts, ff, plat)
 }
 
 /// The camera list an edge box pulls, scoped to the box's tenant (box token required —
@@ -158,9 +160,9 @@ async fn box_identity(st: &AppState, headers: &HeaderMap) -> Result<Option<(uuid
     let Some(tok) = token else { return Ok(None) };
     let host = headers.get("x-box-host").and_then(|v| v.to_str().ok());
     let version = headers.get("x-edge-version").and_then(|v| v.to_str().ok());
-    let (ts, ff) = box_health_headers(headers);
+    let (ts, ff, plat) = box_health_headers(headers);
     let hash = hex::encode(Sha256::digest(tok.as_bytes()));
-    match store::touch_box_identity(&st.pool, &hash, host, version, ts, ff).await {
+    match store::touch_box_identity(&st.pool, &hash, host, version, ts, ff, plat).await {
         Ok(Some(pair)) => Ok(Some(pair)),
         Ok(None) => Err((StatusCode::UNAUTHORIZED, "unknown box token").into_response()),
         Err(e) => {

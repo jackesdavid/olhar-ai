@@ -333,11 +333,42 @@ pub fn ffmpeg_ok() -> bool {
     })
 }
 
-/// Stamp the box's health (Tailscale state + ffmpeg presence) onto a request so control can
-/// surface it on the Boxes page. Used on the ~25s config poll (not the high-rate pushes).
+/// A friendly platform string (`OS (arch)`, e.g. `macOS (aarch64)` / `Bazzite (x86_64)`)
+/// reported to control for the Boxes list. Computed once; the distro name comes from
+/// `/etc/os-release` on Linux (so a Bazzite box reads as "Bazzite", not just "Linux").
+///
+/// MUST be ASCII — it rides an HTTP header (`X-Edge-Platform`); a non-ASCII separator (e.g.
+/// `·`) makes ureq reject the whole request, silently breaking every heartbeat.
+pub fn platform() -> &'static str {
+    static P: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    P.get_or_init(|| {
+        let arch = std::env::consts::ARCH;
+        if cfg!(target_os = "macos") {
+            format!("macOS ({arch})")
+        } else if cfg!(target_os = "linux") {
+            let distro = linux_distro().unwrap_or_else(|| "Linux".to_string());
+            format!("{distro} ({arch})")
+        } else {
+            format!("{} ({arch})", std::env::consts::OS)
+        }
+    })
+}
+
+/// Best-effort friendly distro name from `/etc/os-release` (`NAME=…`), e.g. "Bazzite".
+fn linux_distro() -> Option<String> {
+    let text = std::fs::read_to_string("/etc/os-release").ok()?;
+    text.lines()
+        .find_map(|l| l.strip_prefix("NAME="))
+        .map(|v| v.trim().trim_matches('"').to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Stamp the box's health (Tailscale state + ffmpeg presence + platform) onto a request so
+/// control can surface it on the Boxes page. Used on the ~25s config poll (not the pushes).
 fn with_health(req: ureq::Request) -> ureq::Request {
     req.set("X-Edge-Tailscale", crate::tailscale::tailscale_state())
         .set("X-Edge-Ffmpeg", if ffmpeg_ok() { "1" } else { "0" })
+        .set("X-Edge-Platform", platform())
 }
 
 /// Tiny builder that stamps the box auth headers onto each edge→control request.

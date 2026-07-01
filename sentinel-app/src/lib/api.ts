@@ -74,6 +74,8 @@ export type Box = {
   ffmpeg_ok: boolean | null;
   health_at: string | null;
   recording_config: RecordingConfig | null;
+  /** Reported platform, e.g. "macOS (aarch64)" / "Bazzite (x86_64)" (heartbeat). */
+  platform: string | null;
 };
 
 export type NewBox = { id: string; token: string; hostname: string; tailscale_key: string | null };
