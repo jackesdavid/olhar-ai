@@ -4,7 +4,8 @@
   import { BufferGeometry, BufferAttribute, Vector3 } from "three";
   import type { MapShape } from "$lib/types";
   import type { MapStore } from "$lib/map/store.svelte";
-  import { ACCENT_SOFT, ACCENT_BRIGHT, ACCENT_LABEL, INK } from "$lib/map/palette";
+  import { ACCENT_SOFT, ACCENT_BRIGHT, ACCENT_LABEL } from "$lib/map/palette";
+  import { mapInk } from "$lib/map/palette.svelte";
   import LineStroke from "./LineStroke.svelte";
   import { shapeHandlePositions } from "$lib/map/pick";
 
@@ -48,7 +49,7 @@
   }
 
   function sc(s: MapShape, selected: boolean): string {
-    return selected ? ACCENT_BRIGHT : (s.color ?? INK);
+    return selected ? ACCENT_BRIGHT : (s.color ?? mapInk.wallEdge);
   }
   function isDashed(s: MapShape): boolean {
     return s.strokeStyle === "dashed" || s.strokeStyle === "dotted";

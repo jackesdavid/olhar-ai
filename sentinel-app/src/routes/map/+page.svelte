@@ -188,8 +188,8 @@
   {:else}
     <div class="flex min-h-0 flex-1 gap-3">
       <!-- 3D canvas (top-down) -->
-      <div class="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-border">
-        <div class="h-full w-full bg-[#222b31]">
+      <div class="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-well">
+        <div class="h-full w-full bg-well">
           <Canvas>
             <MapScene {store} {viewport} {tools} {presence} onCameraClick={goLive} />
           </Canvas>

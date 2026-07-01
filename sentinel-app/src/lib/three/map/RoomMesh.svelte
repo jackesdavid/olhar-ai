@@ -7,7 +7,8 @@
   import { Text } from "@threlte/extras";
   import { DoubleSide } from "three";
   import type { MapRoom } from "$lib/types";
-  import { SLATE_LINE, SLATE_FILL, LABEL, ACCENT, ACCENT_SOFT, ACCENT_LABEL } from "$lib/map/palette";
+  import { ACCENT, ACCENT_SOFT, ACCENT_LABEL } from "$lib/map/palette";
+  import { mapInk } from "$lib/map/palette.svelte";
 
   let {
     room,
@@ -29,10 +30,10 @@
   // Uppercase room labels read like a printed plan ("COCINA", "DORMITORIO").
   const labelText = $derived(room.name.toUpperCase());
 
-  const fillColor = $derived(selected ? ACCENT_SOFT : SLATE_FILL);
-  const strokeColor = $derived(selected ? ACCENT : SLATE_LINE);
+  const fillColor = $derived(selected ? ACCENT_SOFT : mapInk.slateFill);
+  const strokeColor = $derived(selected ? ACCENT : mapInk.slateLine);
   const strokeOpacity = $derived(selected ? 0.6 : 0.35);
-  const labelColor = $derived(selected ? ACCENT_LABEL : LABEL);
+  const labelColor = $derived(selected ? ACCENT_LABEL : mapInk.label);
 </script>
 
 <!-- everything sits in a group centred on the room, rotated by room.rot -->

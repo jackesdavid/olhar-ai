@@ -13,7 +13,8 @@
   import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
   import type { MapMarker } from "$lib/types";
   import { iconSvg, iconSrc, iconAnchor, iconVb } from "$lib/map/icons";
-  import { INK, LABEL, ACCENT_BRIGHT, ACCENT_LABEL } from "$lib/map/palette";
+  import { ACCENT_BRIGHT, ACCENT_LABEL } from "$lib/map/palette";
+  import { mapInk } from "$lib/map/palette.svelte";
 
   let { marker, selected = false }: { marker: MapMarker; selected?: boolean } = $props();
 
@@ -98,10 +99,10 @@
   // vb: normalise any viewBox to BASE world units (inline icons default to 24).
   const vb = $derived(iconVb(marker.icon));
   const yaw = $derived((-marker.rot * Math.PI) / 180);
-  const lineColor = $derived(selected ? ACCENT_BRIGHT : INK);
+  const lineColor = $derived(selected ? ACCENT_BRIGHT : mapInk.wallEdge);
   const lineOpacity = $derived(selected ? 1 : 0.85);
   const fillOpacity = $derived(selected ? 0.18 : 0.1);
-  const labelColor = $derived(selected ? ACCENT_LABEL : LABEL);
+  const labelColor = $derived(selected ? ACCENT_LABEL : mapInk.label);
 </script>
 
 <T.Group position={[marker.x, 0.08, marker.y]} rotation.y={yaw} scale={marker.scale}>

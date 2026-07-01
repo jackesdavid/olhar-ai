@@ -1,24 +1,8 @@
-// Map palette — architectural monochrome: near-black ground, pure-white walls.
-// Matches the "plano de planta" reference: dark drafting ground + white walls.
-// Emerald is reserved exclusively for LIVE / interactive accents — selection,
-// camera FOV, presence pulses — so the live state pops against the neutral plan.
-
-/** Near-black ground — the dark drafting paper the plan sits on. */
-export const FLOOR_BASE = "#13171b";
-/** Subtle white box-grid lines over the ground (graph-paper feel). */
-export const GRID_INK = "rgba(255, 255, 255, 0.07)";
-/** Soft focal glow layered over the grid. */
-export const GLOW_INK = "160, 185, 200"; // rgb triplet for radial gradient stops
-
-/** Pure white — wall body fill. */
-export const INK_FILL = "#ffffff";
-/** Pure white — wall edges and furniture outlines. */
-export const INK = "#ffffff";
-
-/** Muted dark slate for room zones + labels — barely above the ground. */
-export const SLATE_LINE = "#3a4752";
-export const SLATE_FILL = "#1d252d";
-export const LABEL = "#7a8c96";
+// Map palette — architectural monochrome. The theme-reactive ink (floor, walls,
+// grid, zones, labels) now lives in ./palette.svelte.ts (`mapInk`), so the map
+// tracks the app's light/dark theme like the workflow editor. This file keeps only
+// the FIXED emerald accents — reserved exclusively for LIVE / interactive state
+// (selection, camera FOV, presence pulses) so live pops against the neutral plan.
 
 /** Emerald — LIVE / interactive accents only (selection, FOV, pulses). */
 export const ACCENT = "#34d399";

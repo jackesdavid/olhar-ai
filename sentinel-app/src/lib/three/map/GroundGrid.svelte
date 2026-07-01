@@ -2,11 +2,10 @@
   // The dot-field floor: a cool blue-slate plane (the "paper" the plan is drawn on;
   // catches shadows from the wall extrusions), a tiled cool dot texture, and a soft
   // radial glow that makes the dots read brighter toward the focal centre.
-  import { onMount } from "svelte";
   import { T } from "@threlte/core";
   import { DoubleSide, type Texture } from "three";
-  import { boxGridTexture, radialGlowTexture } from "./textures";
-  import { FLOOR_BASE } from "$lib/map/palette";
+  import { dotGridTexture, radialGlowTexture } from "./textures";
+  import { mapInk } from "$lib/map/palette.svelte";
 
   // World extent of the floor. Big enough to feel infinite at normal zoom; the
   // dot tile repeats once per grid unit so it always lines up with the grid.
@@ -15,14 +14,17 @@
   let dots = $state<Texture | null>(null);
   let glow = $state<Texture | null>(null);
 
-  onMount(() => {
-    const d = boxGridTexture();
+  // Rebuild the floor textures whenever the theme (ink) changes, so the dot-field
+  // and glow flip with light/dark. Threlte updates the floor colour reactively.
+  $effect(() => {
+    const d = dotGridTexture(mapInk.gridMinor, mapInk.gridMajor);
     d.repeat.set(SIZE / 5, SIZE / 5); // tile covers 5 world units (major division)
+    const g = radialGlowTexture(mapInk.glow);
     dots = d;
-    glow = radialGlowTexture();
+    glow = g;
     return () => {
       d.dispose();
-      glow?.dispose();
+      g.dispose();
     };
   });
 </script>
@@ -30,7 +32,7 @@
 <!-- base floor: cool blue-slate — the paper the plan sits on -->
 <T.Mesh rotation.x={-Math.PI / 2} position.y={0} receiveShadow>
   <T.PlaneGeometry args={[SIZE, SIZE]} />
-  <T.MeshStandardMaterial color={FLOOR_BASE} roughness={0.95} metalness={0} />
+  <T.MeshStandardMaterial color={mapInk.floor} roughness={0.95} metalness={0} />
 </T.Mesh>
 
 <!-- box grid -->

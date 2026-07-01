@@ -4,7 +4,8 @@
   import { T } from "@threlte/core";
   import { BoxGeometry, EdgesGeometry, BufferGeometry, Vector3 } from "three";
   import type { MapWall } from "$lib/types";
-  import { INK, INK_FILL, ACCENT_BRIGHT, ACCENT_SOFT, ACCENT_LABEL } from "$lib/map/palette";
+  import { ACCENT_BRIGHT, ACCENT_SOFT, ACCENT_LABEL } from "$lib/map/palette";
+  import { mapInk } from "$lib/map/palette.svelte";
   import LineStroke from "./LineStroke.svelte";
 
   let { wall, selected = false }: { wall: MapWall; selected?: boolean } = $props();
@@ -33,9 +34,9 @@
   const gapSize = $derived(style === "dotted" ? 0.14 : 0.14);
 
   // Color: wall.color override → selection emerald → palette default.
-  const baseColor = $derived(wall.color ?? INK_FILL);
+  const baseColor = $derived(wall.color ?? mapInk.wallFill);
   const fillColor = $derived(selected ? ACCENT_SOFT : baseColor);
-  const strokeColor = $derived(selected ? ACCENT_BRIGHT : (wall.color ?? INK));
+  const strokeColor = $derived(selected ? ACCENT_BRIGHT : (wall.color ?? mapInk.wallEdge));
 </script>
 
 {#if len > 0.001}
