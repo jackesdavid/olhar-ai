@@ -260,6 +260,47 @@ tasks:
     cmds:
       - cargo build --release
 
+  edge-linux-build:
+    desc: "Cross-build the edge binary for Linux (amd64) in a Fedora container → sentinel-edge/dist/sentinel-edge-linux-x86_64. Needs OrbStack/Docker. Set FEDORA=NN to match the appliance's Fedora major (Bazzite)."
+    vars:
+      FEDORA: '{{.FEDORA | default "42"}}'
+    cmds:
+      - mkdir -p sentinel-edge/dist
+      # Build on Fedora (the appliance is Bazzite = immutable Fedora); the edge links
+      # OpenCV dynamically so the run host must have the same Fedora-major OpenCV — the
+      # edge runs in a matching Fedora distrobox/podman on Bazzite, so it lines up.
+      - docker build --platform linux/amd64 -f deploy/edge-linux/Dockerfile
+          --build-arg FEDORA={{.FEDORA}} --target artifact
+          -o type=local,dest=sentinel-edge/dist/tmp .
+      - mv sentinel-edge/dist/tmp/out/sentinel-edge sentinel-edge/dist/sentinel-edge-linux-x86_64
+      - rm -rf sentinel-edge/dist/tmp
+      - 'echo "✓ sentinel-edge/dist/sentinel-edge-linux-x86_64 ($(file sentinel-edge/dist/sentinel-edge-linux-x86_64 | cut -d: -f2-))"'
+
+  edge-linux-publish:
+    desc: "Cross-build the Linux edge binary + scp to the VPS dist server as sentinel-edge-linux-x86_64 + redeploy control (bumps LATEST_EDGE_VERSION) + verify."
+    cmds:
+      - task: edge-linux-build
+      - |
+        set -e
+        echo "Uploading sentinel-edge-linux-x86_64 → /ibbf/edge-dist/ …"
+        scp -i ~/.ssh/id_contab_ed25519 -o IdentitiesOnly=yes \
+          sentinel-edge/dist/sentinel-edge-linux-x86_64 \
+          root@85.239.248.86:/ibbf/edge-dist/sentinel-edge-linux-x86_64
+        echo "✓ Binary uploaded — redeploying control to bump LATEST_EDGE_VERSION …"
+      - task: cloud-deploy
+        vars: { CLI_ARGS: sentinel-control }
+      - |
+        set -e
+        CARGO_VER="$(grep -m1 '^version' sentinel-edge/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+        LIVE_VER="$(ssh -i ~/.ssh/id_contab_ed25519 -o IdentitiesOnly=yes root@85.239.248.86 \
+          'docker exec sentinel-control env' | grep LATEST_EDGE_VERSION | cut -d= -f2)"
+        if [ "$CARGO_VER" = "$LIVE_VER" ]; then
+          echo "✓ LATEST_EDGE_VERSION=${LIVE_VER} matches Cargo.toml — UI badge is correct"
+        else
+          echo "✗ MISMATCH: Cargo.toml=${CARGO_VER} but container has LATEST_EDGE_VERSION=${LIVE_VER}"
+          exit 1
+        fi
+
   edge-publish:
     desc: "Build the edge binary + scp to the VPS dist server + redeploy control (so LATEST_EDGE_VERSION matches) + verify. Full release in one shot."
     cmds:

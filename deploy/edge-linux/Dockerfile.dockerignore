@@ -1,0 +1,7 @@
+# Keep the build context small + cache-stable: edits to these must NOT bust the cargo layer.
+**/target
+sentinel-edge/dist
+sentinel-edge/install.sh
+sentinel-edge/README.md
+**/.git
+**/*.md

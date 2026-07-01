@@ -60,13 +60,22 @@ cargo build --release          # (or just `task edge`, which sets these)
 scp -i ~/.ssh/id_contab_ed25519 -o IdentitiesOnly=yes \
   target/release/sentinel-edge root@85.239.248.86:/ibbf/edge-dist/sentinel-edge-macos-x86_64
 ```
-**Linux appliance binaries:** the old static-musl `cross` path no longer works — OpenCV is a
-native C++ lib that needs glibc + dynamic linking. Build on the **same Debian release** the
-appliance runs (native box, container, or `cross` with a custom image) with `apt install
-libopencv-dev libclang-dev clang pkg-config`, then `cargo build --release` and scp the binary
-as `sentinel-edge-linux-<arch>`. The binary links OpenCV dynamically, so the run host's OpenCV
-major must match the build host's (`install.sh` apt-installs the matching `libopencv-dev`).
-`release.yml` needs updating from `-musl` → `-gnu` + OpenCV before CI can build Linux edges.
+**Linux appliance binaries (cross-build from macOS):** the old static-musl `cross` path no
+longer works — OpenCV is a native C++ lib that needs glibc + dynamic linking. Instead we build
+in a Fedora container (`deploy/edge-linux/Dockerfile`) and ship the binary. **Real appliances
+are Bazzite** (immutable Fedora), so we build on Fedora to match the OpenCV soname:
+```sh
+task edge-linux-build      # → sentinel-edge/dist/sentinel-edge-linux-x86_64 (Fedora 42, OpenCV 4.11)
+task edge-linux-publish     # build + scp to /ibbf/edge-dist + redeploy control (bumps LATEST_EDGE_VERSION)
+# Bump FEDORA to match the appliance: task edge-linux-build FEDORA=41
+```
+The binary links OpenCV **dynamically**, so the run host's OpenCV major must match the build's
+Fedora major. On a **mutable** Linux box `install.sh` handles this (`dnf`/`apt` installs the
+matching OpenCV + writes a systemd unit). On an **immutable** host (Bazzite / Silverblue) you
+can't `dnf install` on the host — run the edge as a **self-contained container** instead
+(`--target runtime` bakes OpenCV + ffmpeg + go2rtc + tailscale; run recipe in
+`deploy/edge-linux/entrypoint.sh`). `release.yml` still assumes `-musl` + `cross`; it needs a
+Fedora-container job before CI can build Linux edges (CI is billing-blocked anyway).
 
 **Shipping a new install.sh without a control rebuild**:
 ```sh

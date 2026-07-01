@@ -101,9 +101,16 @@ many graphs at different sensitivities share the same single MOG2 pass. Tunables
 cloud image build pure-Rust). Build it from its own dir: `cd sentinel-edge && cargo build
 --release`, needing libopencv + libclang. macOS: `brew install opencv` and pass
 `LIBCLANG_PATH`/`DYLD_FALLBACK_LIBRARY_PATH=/Library/Developer/CommandLineTools/usr/lib` (also
-baked into `task edge`). Linux: `apt install libopencv-dev libclang-dev`. The binary links
-OpenCV **dynamically**, so the run host's OpenCV major must match the build host's — build on
-the distro you run (see [deploy ref](deploy.md) for the Linux build/publish path).
+baked into `task edge`). The binary links OpenCV **dynamically**, so the run host's OpenCV
+major must match the build host's — build on the distro you run.
+
+**Linux (Fedora/Bazzite):** cross-build from macOS in a Fedora container —
+`task edge-linux-build` (uses `deploy/edge-linux/Dockerfile`, Fedora 42 = OpenCV 4.11;
+`opencv 0.93` builds against it fine). `task edge-linux-publish` ships it to the VPS dist
+server. Because the binary is OpenCV-soname-coupled and the target appliance is **Bazzite**
+(immutable Fedora, no host `dnf install`), the edge there runs as a **self-contained container**
+(`--target runtime` bakes matching OpenCV + ffmpeg + go2rtc + tailscale; run recipe in
+`deploy/edge-linux/entrypoint.sh`). See [deploy ref](deploy.md) for the full build/publish path.
 
 ## Health reporting + Restart
 

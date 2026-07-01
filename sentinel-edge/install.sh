@@ -203,7 +203,9 @@ if [ "$os" = "Linux" ]; then
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update -qq && apt-get install -y libopencv-dev
   elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y opencv opencv-devel
+    # Fedora splits OpenCV per-module; the `opencv` metapackage omits `opencv-video` (MOG2
+    # lives there), so the edge would die with `libopencv_video.so.NNN: cannot open`.
+    dnf install -y opencv opencv-video
   elif command -v apk >/dev/null 2>&1; then
     apk add --no-cache opencv
   else
