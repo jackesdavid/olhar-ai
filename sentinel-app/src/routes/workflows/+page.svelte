@@ -39,6 +39,19 @@
   import Bug from "@lucide/svelte/icons/bug";
   import Printer from "@lucide/svelte/icons/printer";
   import History from "@lucide/svelte/icons/history";
+  // Node-category glyphs — give each node family a face on the canvas.
+  import Camera from "@lucide/svelte/icons/camera";
+  import Eye from "@lucide/svelte/icons/eye";
+  import Sparkles from "@lucide/svelte/icons/sparkles";
+  import Bell from "@lucide/svelte/icons/bell";
+  import Send from "@lucide/svelte/icons/send";
+  import Type from "@lucide/svelte/icons/type";
+  import Globe from "@lucide/svelte/icons/globe";
+  import Waypoints from "@lucide/svelte/icons/waypoints";
+  import Zap from "@lucide/svelte/icons/zap";
+  import Radar from "@lucide/svelte/icons/radar";
+  import Variable from "@lucide/svelte/icons/variable";
+  import Box from "@lucide/svelte/icons/box";
   import DictionaryEditor from "$lib/components/dictionary-editor.svelte";
   import SearchableSelect from "$lib/components/searchable-select.svelte";
 
@@ -1432,6 +1445,23 @@
     if (kind === "emit_event" || kind === "on_event") return EVENT_HEADER_COLOR;
     return CATEGORY_COLOR[catalog[kind]?.category ?? ""] ?? DEFAULT_CATEGORY_COLOR;
   }
+  // Category → glyph. Mirrors the header tint so a node's colour and icon agree.
+  const CATEGORY_ICON: Record<string, typeof Box> = {
+    Cameras: Camera,
+    Vision: Eye,
+    AI: Sparkles,
+    Alerts: Bell,
+    Recipients: Send,
+    Text: Type,
+    Network: Globe,
+    Flow: Waypoints,
+    Presence: Radar,
+  };
+  function categoryIcon(n: Node): typeof Box {
+    if (n.kind === "emit_event" || n.kind === "on_event") return Zap;
+    if (n.kind === "get_variable" || n.kind === "set_variable") return Variable;
+    return CATEGORY_ICON[catalog[n.kind]?.category ?? ""] ?? Box;
+  }
   // Node-aware header colour: Get/Set Variable nodes take their variable's TYPE colour, so a
   // variable's get + set read as one family on the canvas. Everything else is by category.
   function headerColorFor(n: Node): string {
@@ -2318,6 +2348,7 @@
                 {@const sel = selectedNodeId === n.id}
                 {@const live = nodeLive(n.id)}
                 {@const invalid = requiredUnfilled(n).length > 0}
+                {@const CatIcon = categoryIcon(n)}
                 <!-- One transform moves the whole node; inner coords are local,
                      so dragging only updates this single attribute (no per-port
                      recompute). -->
@@ -2371,8 +2402,16 @@
                     onpointerdown={(ev) => startDrag(ev, n)}
                     role="presentation"
                   />
+                  <!-- Category glyph — a face for each node family, tinted to match the header. -->
+                  <g
+                    transform="translate(10 {HEAD_H / 2 - 7.5})"
+                    style="color: {headerColorFor(n)}"
+                    class="pointer-events-none"
+                  >
+                    <CatIcon size={15} strokeWidth={2.25} />
+                  </g>
                   <text
-                    x="14"
+                    x="32"
                     y="17"
                     class="pointer-events-none select-none fill-foreground"
                     font-size="11"
