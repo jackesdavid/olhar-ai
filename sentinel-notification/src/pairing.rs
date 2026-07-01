@@ -1,21 +1,22 @@
-//! Telegram pairing-poller lifecycle. Spawns one long-poll poller per tenant
-//! that has a bot token set, and reconciles running pollers every 60 seconds
-//! so config changes made via sentinel-control take effect without a restart.
-
+//! Telegram pairing-poller lifecycle — moved here from sentinel-flow (card #57): the
+//! notification service now owns pairing (inbound) alongside sending (outbound). One long-poll
+//! poller per tenant with a bot token; reconciled every 60s so config changes take effect
+//! without a restart.
+//!
+//! Note: `on_change` is a no-op here (the paired beacon still persists to Postgres and shows on
+//! the Recipients page on next load). Live SSE refresh-on-pair would need a Redis publish; a
+//! follow-up if we want it back.
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use app_core::notification;
 use uuid::Uuid;
 
-use app_core::notification;
-
-use crate::events;
 use crate::state::AppState;
 
-/// Spawn all pollers from current DB state, then launch a background sync
-/// thread that reconciles running pollers every 60 seconds.
+/// Spawn all pollers from current DB state, then reconcile every 60s.
 pub fn spawn(state: Arc<AppState>) {
     sync(&state);
     let s = state.clone();
@@ -23,19 +24,18 @@ pub fn spawn(state: Arc<AppState>) {
         std::thread::sleep(Duration::from_secs(60));
         sync(&s);
     });
+    log::info!("Telegram pairing pollers started");
 }
 
-/// Reconcile running pollers against the DB. For each tenant with a non-empty
-/// token, start a fresh poller if none is running or the token has changed.
-/// Pollers for tenants whose token was cleared are stopped via their stop flag.
-pub fn sync(state: &Arc<AppState>) {
+/// Reconcile running pollers against the DB: start/restart on a new-or-changed token, stop
+/// pollers whose token was cleared.
+fn sync(state: &Arc<AppState>) {
     let configs = notification::repo::load_all_telegram(&state.db);
-    let active_tenants: HashSet<Uuid> = configs.iter().map(|(t, _)| *t).collect();
+    let active: HashSet<Uuid> = configs.iter().map(|(t, _)| *t).collect();
 
-    // Stop pollers for tenants whose config was removed or token cleared.
     {
         let mut stops = state.pairing_stops.lock().unwrap();
-        let removed: Vec<Uuid> = stops.keys().filter(|t| !active_tenants.contains(*t)).copied().collect();
+        let removed: Vec<Uuid> = stops.keys().filter(|t| !active.contains(*t)).copied().collect();
         for t in removed {
             let (_, flag) = stops.remove(&t).unwrap();
             flag.store(true, Ordering::Relaxed);
@@ -43,7 +43,6 @@ pub fn sync(state: &Arc<AppState>) {
         }
     }
 
-    // Start or restart pollers as needed.
     for (tenant, cfg) in configs {
         let needs_start = {
             let stops = state.pairing_stops.lock().unwrap();
@@ -53,7 +52,6 @@ pub fn sync(state: &Arc<AppState>) {
             }
         };
         if needs_start {
-            // Retire the old poller if there is one (token changed).
             if let Some((_, flag)) = state.pairing_stops.lock().unwrap().remove(&tenant) {
                 flag.store(true, Ordering::Relaxed);
             }
@@ -70,14 +68,8 @@ fn start_tenant_poller(state: &Arc<AppState>, tenant: Uuid, cfg: notification::N
         .unwrap()
         .insert(tenant, (cfg.bot_token.clone(), Arc::clone(&stop)));
 
-    let store = Arc::new(std::sync::Mutex::new(
-        notification::repo::load_beacons(&state.db, tenant),
-    ));
+    let store = Arc::new(std::sync::Mutex::new(notification::repo::load_beacons(&state.db, tenant)));
     let db = state.db.clone();
-    let bus = state.events.clone();
-
-    notification::spawn_pairing(store, cfg, Some(db), tenant, stop, move || {
-        events::publish(&bus, "beacons-changed", serde_json::json!({ "tenant": tenant }));
-    });
+    notification::spawn_pairing(store, cfg, Some(db), tenant, stop, || {});
     log::info!("pairing poller started for tenant {tenant}");
 }

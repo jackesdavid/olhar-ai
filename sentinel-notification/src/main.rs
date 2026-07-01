@@ -12,6 +12,7 @@
 //! Optional env: `TELEGRAM_BOT_TOKEN` (global send-token fallback when not set in Postgres).
 mod consumer;
 mod http;
+mod pairing;
 mod state;
 
 use std::sync::Arc;
@@ -31,6 +32,8 @@ fn main() {
 
     // The queue consumer runs on its own std thread (blocking); `Db::block` bridges sqlx.
     consumer::spawn(state.clone());
+    // This service now owns Telegram pairing (moved from sentinel-flow).
+    pairing::spawn(state.clone());
 
     let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");
     rt.block_on(async move {

@@ -8,7 +8,6 @@
 //! via the box registry + a short-lived cache), so concurrent runs of different tenants
 //! never collide on a pod-global cache.
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -50,11 +49,6 @@ pub type NodeFrames = Arc<Mutex<HashMap<(Uuid, Uuid, u32), Vec<u8>>>>;
 /// across all tenants/graphs at once.
 pub const WF_GLOBAL_CAP: u32 = 8;
 
-/// Active pairing-poller stop flags, keyed by `tenant_id`.
-/// Each entry carries the bot token that was active when the poller started —
-/// a token change triggers a restart: the old flag is set, a fresh poller begins.
-pub type PairingStops = Arc<Mutex<HashMap<Uuid, (String, Arc<AtomicBool>)>>>;
-
 /// How long a resolved tenant→edge-base mapping is cached before re-resolving from the
 /// box registry (mirrors the gateway's upstream cache TTL).
 const EDGE_TTL: Duration = Duration::from_secs(30);
@@ -82,9 +76,6 @@ pub struct AppState {
     /// This flow instance's name, shown in the UI as the "pod" executing a run. Resolved
     /// once at boot from `FLOW_INSTANCE_NAME`, else `HOSTNAME`, else `"flow"`.
     pub pod_name: String,
-    /// Running pairing pollers per tenant. Each entry holds the bot token that started
-    /// the poller (for change detection) and the stop flag used to retire it.
-    pub pairing_stops: PairingStops,
     /// In-flight TimeGate keeper threads: `(tenant_id, graph_id, node_id)`. The TimeGate
     /// node registers here when it starts a keeper and removes itself when it fires or resets.
     /// On re-trigger, if the entry is absent the node knows the keeper died and restarts one.
@@ -134,7 +125,6 @@ impl AppState {
             edge_cache: Arc::new(Mutex::new(HashMap::new())),
             event_runs: Arc::new(Mutex::new(std::collections::HashMap::new())),
             pod_name,
-            pairing_stops: Arc::new(Mutex::new(HashMap::new())),
             active_gates: std::sync::Arc::new(std::sync::Mutex::new(
                 std::collections::HashSet::new(),
             )),
