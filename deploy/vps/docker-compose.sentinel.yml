@@ -165,6 +165,14 @@ services:
       DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
       REDIS_URL: redis://sentinel-redis:6379
       FLOW_BIND: 0.0.0.0:8787
+      # Notify nodes enqueue into the durable notification_queue instead of sending in-process.
+      NOTIFY_QUEUE: "1"
+      # Object store (minio) for notification media. S3_KEY/S3_SECRET come from the deploy
+      # environment (never committed) — see the sentinel-minio service below.
+      S3_ENDPOINT: http://sentinel-minio:9000
+      S3_BUCKET: sentinel-media
+      S3_KEY: ${S3_KEY:-sentinel}
+      S3_SECRET: ${S3_SECRET}
       AI_SERVICE_URL: http://sentinel-ai:8000/runsync
       # FALLBACK go2rtc base for a tenant with no resolved box host. Per-tenant edges are
       # resolved from the registry at run time; reaching ARBITRARY tenant edges needs the
@@ -193,9 +201,37 @@ services:
     environment:
       DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
       NOTIFY_BIND: 0.0.0.0:8791
+      S3_ENDPOINT: http://sentinel-minio:9000
+      S3_BUCKET: sentinel-media
+      S3_KEY: ${S3_KEY:-sentinel}
+      S3_SECRET: ${S3_SECRET}
     depends_on:
       sentinel-postgres:
         condition: service_healthy
 
+  sentinel-minio:
+    # S3-compatible object store for notification media (snapshot JPEGs, recording mp4s).
+    # Internal only — no published ports. Credentials from the deploy env (S3_KEY/S3_SECRET),
+    # never committed. A web console can be enabled on demand (fixed --console-address + tunnel).
+    image: minio/minio:latest
+    command: server /data
+    restart: always
+    environment:
+      MINIO_ROOT_USER: ${S3_KEY:-sentinel}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET}
+    volumes:
+      - sentinel_minio:/data
+
+  sentinel-minio-init:
+    # One-shot: create the media bucket on the object store (idempotent).
+    image: minio/mc:latest
+    depends_on:
+      sentinel-minio:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "until mc alias set m http://sentinel-minio:9000 ${S3_KEY:-sentinel} ${S3_SECRET}; do sleep 1; done; mc mb --ignore-existing m/sentinel-media; echo bucket-ready"
+    restart: "no"
+
 volumes:
   sentinel_pgdata:
+  sentinel_minio:
