@@ -26,7 +26,9 @@ env_logger = "0.11"
 # NATIVE: needs libopencv on the build + run host (Debian/Ubuntu `apt install libopencv-dev`,
 # macOS `brew install opencv`). The cloud crates build per-package (`-p sentinel-flow` …) so
 # they never pull OpenCV; only this edge crate does.
-opencv = "0.93"
+# 0.98+ supports OpenCV 4.13 (Fedora 44 / latest Bazzite); 0.93 crashed its binding
+# generator on 4.13 ("unreachable code: Any other kind of class shouldn't be generated").
+opencv = "0.98"
 # RTSP ring buffer: connects to go2rtc's re-server (rtsp://127.0.0.1:8554/) for an
 # in-memory pre-roll ring. We use retina only for RTSP transport + RTP ordering and
 # do our OWN lenient H264 depacketization (retina's codec layer rejects go2rtc's
