@@ -218,18 +218,20 @@
    editor CHROME (grid lines, socket holes, node glow, handle rings) flips with
    the theme so the canvas reads correctly on white and on Noir. */
 :root {
-  --wf-grid-strong: oklch(0.15 0 0 / 13%);  /* major dot-field lattice */
-  --wf-grid-weak:   oklch(0.15 0 0 / 6%);   /* minor dot-field lattice */
+  --wf-grid-strong: oklch(0.15 0 0 / 24%);  /* major dot-field lattice */
+  --wf-grid-weak:   oklch(0.15 0 0 / 11%);  /* minor dot-field lattice */
   --wf-node-glow:   oklch(0.35 0 0);        /* selected/live node halo */
   --wf-node-shadow: oklch(0 0 0 / 12%);     /* resting node elevation */
   --wf-port-empty:  oklch(0.92 0 0);        /* unfilled port-socket hole */
   --wf-dot-ring:    oklch(0.20 0 0);        /* ring around wire bend handles */
+  --wf-exec:        oklch(0.42 0 0);        /* control-flow (exec) pins + wires */
 }
 .dark {
-  --wf-grid-strong: oklch(1 0 0 / 13%);
-  --wf-grid-weak:   oklch(1 0 0 / 6%);
+  --wf-grid-strong: oklch(1 0 0 / 16%);
+  --wf-grid-weak:   oklch(1 0 0 / 7%);
   --wf-node-glow:   oklch(0.90 0 0);
   --wf-node-shadow: oklch(0 0 0 / 45%);
   --wf-port-empty:  oklch(0.14 0 0);
   --wf-dot-ring:    oklch(1 0 0);
+  --wf-exec:        oklch(0.96 0 0);
 }

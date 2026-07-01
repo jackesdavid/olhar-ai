@@ -2240,8 +2240,8 @@
                       x2={x2}
                       y2={y2}
                     >
-                      <stop offset="0" stop-color={eColor} />
-                      <stop offset="1" stop-color={eColorTo} />
+                      <stop offset="0" style="stop-color: {eColor === portColor.exec ? 'var(--wf-exec)' : eColor}" />
+                      <stop offset="1" style="stop-color: {eColorTo === portColor.exec ? 'var(--wf-exec)' : eColorTo}" />
                     </linearGradient>
                     <!-- wide transparent hit area; break tool / alt+click deletes wire; drag adds/moves bend -->
                     <path
@@ -2446,8 +2446,7 @@
                     cx="0"
                     cy={HEAD_H / 2}
                     r={portR}
-                    style="fill: {wiredInto(n.id, EXEC_IN_NAME) ? portColor.exec : 'var(--wf-port-empty)'}"
-                    stroke={portColor.exec}
+                    style="fill: {wiredInto(n.id, EXEC_IN_NAME) ? 'var(--wf-exec)' : 'var(--wf-port-empty)'}; stroke: var(--wf-exec)"
                     stroke-width="2"
                     class="cursor-pointer wf-port"
                     onclick={() => clickInPort(n, EXEC_IN_NAME)}
@@ -2465,8 +2464,7 @@
                       cx={nw}
                       cy={ey}
                       r={isP ? portR + 1 : portR}
-                      style="fill: {isP ? portColor.exec : 'var(--wf-port-empty)'}"
-                      stroke={portColor.exec}
+                      style="fill: {isP ? 'var(--wf-exec)' : 'var(--wf-port-empty)'}; stroke: var(--wf-exec)"
                       stroke-width="2"
                       class="cursor-pointer transition-all wf-port"
                       onclick={() => clickOutPort(n, p.name)}
@@ -2634,7 +2632,7 @@
                   <path
                     d={`M ${px} ${py} C ${px + 60} ${py}, ${cursor.x - 60} ${cursor.y}, ${cursor.x} ${cursor.y}`}
                     fill="none"
-                    stroke={pColor}
+                    style="stroke: {pColor === portColor.exec ? 'var(--wf-exec)' : pColor}"
                     stroke-width="2.5"
                     class="node-running pointer-events-none"
                   />
