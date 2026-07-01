@@ -649,6 +649,18 @@ fn build_run_context(
     ctx.frames = Arc::new(app_core::ports::EdgeFrameSource::new(
         state.edge_base(tenant),
     ));
+    // Notifications go through the durable queue — this run only ENQUEUEs; the
+    // sentinel-notification service consumes + sends (card #57). Image-bearing sends are
+    // still delivered in-process for now (until the object-store media handoff).
+    // Feature-flagged (NOTIFY_QUEUE) so flow is safe to deploy before the consumer is up:
+    // with the flag unset it keeps sending in-process (LocalNotifier); flip it on once the
+    // sentinel-notification service is confirmed running, or queued sends pile up unconsumed.
+    if std::env::var("NOTIFY_QUEUE").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
+        ctx.notifier = Arc::new(app_core::ports::RemoteNotifier {
+            db: state.db.clone(),
+            tenant_id: tenant,
+        });
+    }
     ctx.active_gates = std::sync::Arc::clone(&state.active_gates);
     (ctx, drain)
 }

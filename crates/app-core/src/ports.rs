@@ -156,3 +156,30 @@ impl Notifier for LocalNotifier {
         crate::notification::dispatch(store, cfg, target, message, image)
     }
 }
+
+/// Notifications via the durable queue — flow only ENQUEUEs; `sentinel-notification` consumes
+/// and sends (card #57). Baked with the run's `db` + `tenant_id` because the `Notifier` trait
+/// doesn't carry them.
+///
+/// INTERIM: image-bearing sends still go out in-process here, so attachments aren't lost until
+/// the object-store media handoff is wired; text goes through the queue.
+pub struct RemoteNotifier {
+    pub db: crate::db::Db,
+    pub tenant_id: uuid::Uuid,
+}
+impl Notifier for RemoteNotifier {
+    fn dispatch(
+        &self,
+        store: &NotificationStore,
+        cfg: &NotificationConfig,
+        target: Option<&str>,
+        message: &str,
+        image: Option<Vec<u8>>,
+    ) -> Result<String, String> {
+        if image.is_some() {
+            return crate::notification::dispatch(store, cfg, target, message, image);
+        }
+        crate::notification::queue::enqueue(&self.db, self.tenant_id, target, message, None, None);
+        Ok("queued".to_string())
+    }
+}

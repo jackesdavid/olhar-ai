@@ -182,5 +182,20 @@ services:
     deploy:
       replicas: 1   # increase with `task flow-scale N` — no redeploy needed
 
+  sentinel-notification:
+    # Consumes the durable notification_queue and sends to recipients (Telegram). Internal
+    # only (no Traefik). Reads recipient config from the shared Postgres; TELEGRAM_* fallback
+    # (global send token) comes from sentinel.env. Flow only ENQUEUEs; this service sends.
+    image: ghcr.io/jackesdavid/sentinel-notification:latest
+    restart: always
+    env_file:
+      - sentinel.env
+    environment:
+      DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
+      NOTIFY_BIND: 0.0.0.0:8791
+    depends_on:
+      sentinel-postgres:
+        condition: service_healthy
+
 volumes:
   sentinel_pgdata:
