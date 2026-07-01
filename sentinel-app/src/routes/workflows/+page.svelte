@@ -54,7 +54,14 @@
   import Loader from "$lib/components/loader.svelte";
   import EmptyState from "$lib/components/empty-state.svelte";
   import StatusDot from "$lib/components/status-dot.svelte";
-  import { portColor, typeColor } from "$lib/workflows/portColors";
+  import {
+    portColor,
+    CATEGORY_COLOR,
+    EVENT_HEADER_COLOR,
+    DEFAULT_CATEGORY_COLOR,
+    FALLBACK_PORT_COLOR,
+    COMMENT_DEFAULT_COLOR,
+  } from "$lib/workflows/portColors";
   import type { PortType } from "$lib/workflows/portColors";
 
   import ContextSearch from "./components/ContextSearch.svelte";
@@ -885,7 +892,7 @@
       return srcType ? arrayElementColor(srcType) : portColor.any;
     }
     const p = portOf(node, port, side);
-    return p ? portColor[p.type] : "#52796f";
+    return p ? portColor[p.type] : FALLBACK_PORT_COLOR;
   }
 
   // ---- navigation ----------------------------------------------------------
@@ -1422,18 +1429,8 @@
   // Unreal-Blueprint-style header tint by category, so node families read at a glance and
   // events POP. Returns a hex colour; the header band is drawn at low alpha behind the label.
   function headerColor(kind: string): string {
-    if (kind === "emit_event" || kind === "on_event") return "#f43f5e"; // event red — stands out
-    switch (catalog[kind]?.category) {
-      case "Flow": return "#94a3b8"; // slate
-      case "Vision": return portColor.person; // violet/magenta
-      case "AI": return portColor.dictionary; // teal
-      case "Alerts": return portColor.bool; // amber
-      case "Cameras": return portColor.camera; // sky
-      case "Recipients": return portColor.recipient; // purple
-      case "Text": return portColor.num; // green
-      case "Network": return "#22d3ee"; // cyan
-      default: return "#64748b";
-    }
+    if (kind === "emit_event" || kind === "on_event") return EVENT_HEADER_COLOR;
+    return CATEGORY_COLOR[catalog[kind]?.category ?? ""] ?? DEFAULT_CATEGORY_COLOR;
   }
   // Node-aware header colour: Get/Set Variable nodes take their variable's TYPE colour, so a
   // variable's get + set read as one family on the canvas. Everything else is by category.
@@ -2136,7 +2133,7 @@
         <div class="relative min-w-0 flex-1">
           <div
             class="absolute inset-0 touch-none overflow-hidden rounded-xl border border-border bg-well"
-            style="background-image: linear-gradient(oklch(1 0 0 / 9%) 1px, transparent 1px), linear-gradient(90deg, oklch(1 0 0 / 9%) 1px, transparent 1px), linear-gradient(oklch(1 0 0 / 4%) 1px, transparent 1px), linear-gradient(90deg, oklch(1 0 0 / 4%) 1px, transparent 1px); background-size: {90 * zoom}px {90 * zoom}px, {90 * zoom}px {90 * zoom}px, {18 * zoom}px {18 * zoom}px, {18 * zoom}px {18 * zoom}px; background-position: {pan.x}px {pan.y}px, {pan.x}px {pan.y}px, {pan.x}px {pan.y}px, {pan.x}px {pan.y}px;"
+            style="background-image: radial-gradient(circle at center, var(--wf-grid-strong) {Math.max(1, 1.6 * zoom)}px, transparent 0), radial-gradient(circle at center, var(--wf-grid-weak) {Math.max(0.5, 1 * zoom)}px, transparent 0); background-size: {90 * zoom}px {90 * zoom}px, {18 * zoom}px {18 * zoom}px; background-position: {pan.x}px {pan.y}px, {pan.x}px {pan.y}px;"
             role="application"
             ondragover={onCanvasDragOver}
             ondrop={onCanvasDrop}
@@ -2155,7 +2152,11 @@
             >
               <defs>
                 <filter id="nodeGlow" x="-40%" y="-40%" width="180%" height="180%">
-                  <feDropShadow dx="0" dy="0" stdDeviation="5" flood-color="#e5e5e5" flood-opacity="0.5" />
+                  <feDropShadow dx="0" dy="0" stdDeviation="5" style="flood-color: var(--wf-node-glow)" flood-opacity="0.5" />
+                </filter>
+                <!-- Resting elevation: a soft grounded shadow so cards float above the canvas. -->
+                <filter id="nodeShadow" x="-30%" y="-30%" width="160%" height="160%">
+                  <feDropShadow dx="0" dy="2" stdDeviation="4" style="flood-color: var(--wf-node-shadow)" flood-opacity="1" />
                 </filter>
               </defs>
 
@@ -2164,7 +2165,7 @@
               {#each graph.nodes.filter(cn => cn.kind === 'comment') as n (n.id)}
                 {@const cw = commentW(n)}
                 {@const ch = commentH(n)}
-                {@const col = String(n.config.color ?? '#facc15')}
+                {@const col = String(n.config.color ?? COMMENT_DEFAULT_COLOR)}
                 {@const sel = selectedNodeId === n.id}
                 <g transform="translate({n.x} {n.y})">
                   <rect
@@ -2205,6 +2206,7 @@
                   {@const y2 = inPortY(toN, e.to_port)}
                   {@const eLive = nodeLive(e.to)}
                   {@const eColor = portColorOf(fromN, e.from_port, "out")}
+                  {@const eColorTo = portColorOf(toN, e.to_port, "in")}
                   {@const vk = edgeViaKey(e)}
                   {@const vias = edgeVias[vk] ?? []}
                   {@const pathD = (() => {
@@ -2228,6 +2230,19 @@
                     onpointerenter={() => { hoveredEdgeKey = vk; }}
                     onpointerleave={() => { if (hoveredEdgeKey === vk) hoveredEdgeKey = null; }}
                   >
+                    <!-- Wire gradient: flows from the source port's type colour to the
+                         target's, so a wire reads as a bridge between two typed pins. -->
+                    <linearGradient
+                      id="wire-{idx}"
+                      gradientUnits="userSpaceOnUse"
+                      x1={x1}
+                      y1={y1}
+                      x2={x2}
+                      y2={y2}
+                    >
+                      <stop offset="0" stop-color={eColor} />
+                      <stop offset="1" stop-color={eColorTo} />
+                    </linearGradient>
                     <!-- wide transparent hit area; break tool / alt+click deletes wire; drag adds/moves bend -->
                     <path
                       d={pathD}
@@ -2260,9 +2275,10 @@
                     <path
                       d={pathD}
                       fill="none"
-                      stroke={eColor}
+                      stroke="url(#wire-{idx})"
                       stroke-width={eLive ? 3 : 2}
-                      stroke-opacity={eLive ? 1 : 0.55}
+                      stroke-linecap="round"
+                      stroke-opacity={eLive ? 1 : 0.7}
                       class="pointer-events-none transition-colors {editorMode === 'break' || hoveredEdgeKey === vk ? 'stroke-destructive/70' : ''} {eLive ? 'node-running' : ''}"
                       stroke-dasharray={editorMode === "break" ? "6 4" : undefined}
                       role="presentation"
@@ -2274,7 +2290,7 @@
                         cy={via.y}
                         r="5"
                         fill={eColor}
-                        stroke="white"
+                        style="stroke: var(--wf-dot-ring)"
                         stroke-width="1.5"
                         stroke-opacity="0.4"
                         class="cursor-grab"
@@ -2305,7 +2321,7 @@
                 <!-- One transform moves the whole node; inner coords are local,
                      so dragging only updates this single attribute (no per-port
                      recompute). -->
-                <g transform="translate({n.x} {n.y})" filter={sel || live ? "url(#nodeGlow)" : undefined}>
+                <g transform="translate({n.x} {n.y})" filter={sel || live ? "url(#nodeGlow)" : "url(#nodeShadow)"}>
                   <rect
                     width={nw}
                     height={h}
@@ -2373,16 +2389,20 @@
                       onclick={() => removeNode(n)}
                     >
                       <circle cx={nw} cy="0" r={isTouch ? 11 : 9} class="fill-destructive" />
-                      <path d="M{nw - 3.5} -3.5 l7 7 M{nw + 3.5} -3.5 l-7 7" stroke="white" stroke-width="1.6" stroke-linecap="round" />
+                      <path d="M{nw - 3.5} -3.5 l7 7 M{nw + 3.5} -3.5 l-7 7" style="stroke: var(--destructive-foreground)" stroke-width="1.6" stroke-linecap="round" />
                     </g>
                   {/if}
+                  <!-- Category-tinted header underline — each node family gets a
+                       coloured seam under its title (the strongest at-a-glance cue). -->
                   <line
                     x1="0"
                     y1={HEAD_H}
                     x2={nw}
                     y2={HEAD_H}
-                    class="pointer-events-none stroke-border"
-                    stroke-width="1"
+                    class="pointer-events-none"
+                    style="stroke: {headerColorFor(n)}"
+                    stroke-opacity="0.55"
+                    stroke-width="1.5"
                   />
                   {#if isCompareOrLogic(n.kind)}
                     {@const op = opLabel(n.kind, n.config)}
@@ -2426,10 +2446,10 @@
                     cx="0"
                     cy={HEAD_H / 2}
                     r={portR}
-                    fill={wiredInto(n.id, EXEC_IN_NAME) ? portColor.exec : "#151c19"}
+                    style="fill: {wiredInto(n.id, EXEC_IN_NAME) ? portColor.exec : 'var(--wf-port-empty)'}"
                     stroke={portColor.exec}
                     stroke-width="2"
-                    class="cursor-pointer"
+                    class="cursor-pointer wf-port"
                     onclick={() => clickInPort(n, EXEC_IN_NAME)}
                     role="presentation"
                   />
@@ -2445,10 +2465,10 @@
                       cx={nw}
                       cy={ey}
                       r={isP ? portR + 1 : portR}
-                      fill={isP ? portColor.exec : "#1a2420"}
+                      style="fill: {isP ? portColor.exec : 'var(--wf-port-empty)'}"
                       stroke={portColor.exec}
                       stroke-width="2"
-                      class="cursor-pointer transition-all"
+                      class="cursor-pointer transition-all wf-port"
                       onclick={() => clickOutPort(n, p.name)}
                       role="presentation"
                     />
@@ -2474,10 +2494,9 @@
                       cx="0"
                       cy={py}
                       r={portR}
-                      fill={wired ? portColor[p.type] : "#151c19"}
-                      stroke={need ? "#ef4444" : portColor[p.type]}
+                      style="fill: {wired ? portColor[p.type] : 'var(--wf-port-empty)'}; stroke: {need ? 'var(--destructive)' : portColor[p.type]}"
                       stroke-width="2"
-                      class="cursor-pointer"
+                      class="cursor-pointer wf-port"
                       onclick={() => clickInPort(n, p.name)}
                       role="presentation"
                     />
@@ -2500,10 +2519,10 @@
                       cx={nw}
                       cy={dy}
                       r={isPending ? portR + 1 : portR}
-                      fill={isPending ? pc : "#151c19"}
+                      style="fill: {isPending ? pc : 'var(--wf-port-empty)'}"
                       stroke={pc}
                       stroke-width="2"
-                      class="cursor-pointer transition-all"
+                      class="cursor-pointer transition-all wf-port"
                       onclick={() => clickOutPort(n, p.name)}
                       role="presentation"
                     />
@@ -3126,7 +3145,7 @@
                           type="color"
                           class="h-8 w-full cursor-pointer rounded-lg border border-border bg-card"
                           disabled={editLocked}
-                          value={String(selectedNode.config[key] ?? '#facc15')}
+                          value={String(selectedNode.config[key] ?? COMMENT_DEFAULT_COLOR)}
                           oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)}
                           onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })}
                         />
@@ -3553,5 +3572,20 @@
      --card alone is too dark; mixing with --popover lifts it ~2 tonal steps. */
   :global(.node-body) {
     fill: color-mix(in srgb, var(--card) 55%, var(--popover) 45%);
+  }
+
+  /* Tactile ports: a subtle grow + halo on hover so pins feel clickable. */
+  :global(.wf-port) {
+    transform-box: fill-box;
+    transform-origin: center;
+    transition:
+      transform 0.12s ease-out,
+      filter 0.12s ease-out;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    :global(.wf-port:hover) {
+      transform: scale(1.28);
+      filter: drop-shadow(0 0 3px currentColor);
+    }
   }
 </style>

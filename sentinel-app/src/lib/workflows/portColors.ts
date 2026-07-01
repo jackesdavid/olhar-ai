@@ -26,6 +26,28 @@ export function typeColor(t: string): string {
   return (portColor as Record<string, string>)[t] ?? portColor.any;
 }
 
+// Fixed, theme-independent hues that live alongside the port palette so the editor
+// carries NO inline colour literals. These are categorical identity (like the port
+// types) — they do not flip with light/dark.
+export const FALLBACK_PORT_COLOR = "#52796f"; // port with no resolvable type
+export const COMMENT_DEFAULT_COLOR = "#facc15"; // sticky-note default fill
+export const EVENT_HEADER_COLOR = "#f43f5e"; // emit/on-event nodes POP in red
+export const DEFAULT_CATEGORY_COLOR = "#64748b"; // Flow / utility fallback (slate)
+
+// Node-category → header tint. Mirrors headerColor()'s intent but centralised so the
+// hues are defined once. Values reuse the fixed port palette where a category maps
+// cleanly onto a type family.
+export const CATEGORY_COLOR: Record<string, string> = {
+  Flow: "#94a3b8", // slate
+  Vision: portColor.person, // violet/magenta
+  AI: portColor.dictionary, // teal
+  Alerts: portColor.bool, // amber
+  Cameras: portColor.camera, // sky
+  Recipients: portColor.recipient, // purple
+  Text: portColor.num, // green
+  Network: "#22d3ee", // cyan
+};
+
 // Maps a workflow node kind slug to its category colour — same logic as the
 // editor's headerColor() but statically derived so it works outside the editor.
 const NODE_KIND_COLOR: Record<string, string> = {
