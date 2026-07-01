@@ -228,13 +228,26 @@ export const data = {
     api.get<Presence[]>(`/map/presence?limit=${limit}`),
 
   // ---- workflows ----------------------------------------------------------
-  loadGraphs: <T = unknown>(): Promise<T[]> => api.get<T[]>("/workflows"),
+  loadGraphs: <T = unknown>(opts?: { q?: string; group?: string }): Promise<T[]> => {
+    const qs = new URLSearchParams();
+    if (opts?.q) qs.set("q", opts.q);
+    if (opts?.group) qs.set("group", opts.group);
+    const tail = qs.toString();
+    return api.get<T[]>(`/workflows${tail ? `?${tail}` : ""}`);
+  },
   runStates: <T = unknown>(): Promise<T> => api.get<T>("/workflows/runs"),
   nodeCatalog: <T = unknown>(): Promise<T> => api.get<T>("/workflows/catalog"),
   createGraph: (name: string): Promise<string> => api.post<string>("/workflows", { name }),
   renameGraph: async (id: string, name: string): Promise<void> => {
     await api.patch<void>(`/workflows/${id}`, { name });
   },
+  setGraphDescription: async (id: string, value: string): Promise<void> => {
+    await api.put<void>(`/workflows/${id}/description`, { value });
+  },
+  setGraphGroup: async (id: string, value: string): Promise<void> => {
+    await api.put<void>(`/workflows/${id}/group`, { value });
+  },
+  duplicateGraph: (id: string): Promise<string> => api.post<string>(`/workflows/${id}/duplicate`),
   deleteGraph: async (id: string): Promise<void> => {
     await api.del<void>(`/workflows/${id}`);
   },

@@ -52,6 +52,9 @@ pub fn router() -> Router<AppState> {
             "/workflows/:id",
             axum::routing::patch(rename).delete(remove),
         )
+        .route("/workflows/:id/description", put(set_description))
+        .route("/workflows/:id/group", put(set_group))
+        .route("/workflows/:id/duplicate", post(duplicate))
         .route("/workflows/:id/trigger", put(set_trigger))
         .route("/workflows/:id/concurrency", put(set_concurrency))
         .route("/workflows/:id/viewport", put(set_viewport))
@@ -118,16 +121,59 @@ where
 
 // ---- read -------------------------------------------------------------------
 
+#[derive(Deserialize)]
+struct ListQuery {
+    /// Free-text search over name + description + group (case-insensitive).
+    q: Option<String>,
+    /// Restrict to one group (label).
+    group: Option<String>,
+}
+
+/// A graph plus its most-recent run summary, for the list. `last_run` is derived (not
+/// persisted on the graph) so it never pollutes the saved JSON blob.
+#[derive(serde::Serialize)]
+struct WfListItem {
+    #[serde(flatten)]
+    graph: WfGraph,
+    last_run: Option<workflows::repo::LastRun>,
+}
+
 async fn list(
     UserClaims(c): UserClaims,
     State(st): State<AppState>,
-) -> Result<Json<Vec<WfGraph>>, ApiErr> {
+    Query(query): Query<ListQuery>,
+) -> Result<Json<Vec<WfListItem>>, ApiErr> {
     auth::require(&c, "workflows.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    Ok(Json(
-        blocking(move || workflows::repo::load(&db, tid)).await?,
-    ))
+    let items = blocking(move || {
+        let graphs = workflows::repo::load(&db, tid);
+        let last = workflows::repo::last_run_by_graph(&db, tid);
+        let q = query
+            .q
+            .as_deref()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty());
+        let group = query.group.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        graphs
+            .into_iter()
+            .filter(|g| {
+                let hit = q.as_ref().map_or(true, |q| {
+                    g.name.to_lowercase().contains(q)
+                        || g.description.to_lowercase().contains(q)
+                        || g.group.to_lowercase().contains(q)
+                });
+                let in_group = group.map_or(true, |grp| g.group == grp);
+                hit && in_group
+            })
+            .map(|g| {
+                let last_run = last.get(&g.id).cloned();
+                WfListItem { graph: g, last_run }
+            })
+            .collect::<Vec<_>>()
+    })
+    .await?;
+    Ok(Json(items))
 }
 
 /// Static node metadata (kinds + typed ports + default config) for the palette.
@@ -595,6 +641,65 @@ async fn rename(
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct TextReq {
+    value: String,
+}
+
+async fn set_description(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<TextReq>,
+) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        wf.graph_mut(id).ok_or("graph not found")?.description = b.value.trim().to_string();
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_group(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<TextReq>,
+) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        wf.graph_mut(id).ok_or("graph not found")?.group = b.value.trim().to_string();
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Deep-copy a graph (nodes/edges/trigger/config), name it "<name> (copy)", disabled.
+/// Returns the new uuid.
+async fn duplicate(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<uuid::Uuid>, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    let new_id = mutate(&st, tid, move |wf| {
+        let mut copy = wf.graph(id).ok_or("graph not found")?.clone();
+        copy.id = uuid::Uuid::new_v4();
+        copy.name = format!("{} (copy)", copy.name);
+        copy.enabled = false;
+        let new_id = copy.id;
+        wf.graphs.push(copy);
+        Ok(new_id)
+    })
+    .await?;
+    Ok(Json(new_id))
 }
 
 async fn remove(

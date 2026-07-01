@@ -1433,6 +1433,14 @@ impl Default for Viewport {
 pub struct Graph {
     pub id: Uuid,
     pub name: String,
+    /// One-line summary shown as a caption under the name in the list. Additive —
+    /// old graphs deserialize with "".
+    #[serde(default)]
+    pub description: String,
+    /// Organisational label (a "group"). Workflows sharing a group cluster together in
+    /// the list, like log modules. Empty = ungrouped. Additive.
+    #[serde(default)]
+    pub group: String,
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
@@ -1478,6 +1486,8 @@ impl Graph {
         Graph {
             id: Uuid::new_v4(),
             name: name.to_string(),
+            description: String::new(),
+            group: String::new(),
             enabled: false,
             trigger: Trigger::Manual,
             concurrency: ConcurrencyPolicy::SkipIfRunning,

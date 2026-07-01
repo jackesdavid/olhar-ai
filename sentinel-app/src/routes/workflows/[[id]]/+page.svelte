@@ -30,6 +30,7 @@
   import Terminal from "@lucide/svelte/icons/terminal";
   import X from "@lucide/svelte/icons/x";
   import Search from "@lucide/svelte/icons/search";
+  import Copy from "@lucide/svelte/icons/copy";
   import Link2 from "@lucide/svelte/icons/link-2";
   import Unplug from "@lucide/svelte/icons/unplug";
   import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
@@ -141,6 +142,8 @@
   type Graph = {
     id: string;
     name: string;
+    description?: string;
+    group?: string;
     enabled: boolean;
     trigger: Trigger;
     concurrency: Concurrency;
@@ -150,6 +153,7 @@
     edges: Edge[];
     viewport?: { x: number; y: number; zoom: number };
     variables?: Variable[];
+    last_run?: { at: string; status: string; trigger: string } | null;
   };
   type LogLine = {
     time: string;
@@ -973,6 +977,9 @@
     pending = null;
     clearLive();
     view = "list";
+    // Reconcile the list with any active filters (graphs may have been reloaded
+    // unfiltered while editing).
+    if (wfSearch.trim() || wfGroupFilter) void loadList();
   }
   // Route → state. Waits for graphs to load; an unknown id falls back to the list.
   $effect(() => {
@@ -991,10 +998,88 @@
   });
 
   // ---- load ----------------------------------------------------------------
+  // ---- list: search + group filter + last-run --------------------------------
+  let wfSearch = $state("");
+  let wfGroupFilter = $state(""); // "" = all groups
+  let allGroups = $state<string[]>([]);
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
   async function reload() {
+    // The editor needs the full set (find the open graph); load unfiltered here and
+    // refresh the group options. The list view filters via loadList().
     graphs = await data.loadGraphs<Graph>();
+    allGroups = [...new Set(graphs.map((g) => (g.group ?? "").trim()).filter(Boolean))].sort();
     if (selectedGraphId !== null && !graphs.some((g) => g.id === selectedGraphId)) {
       selectedGraphId = null;
+    }
+  }
+
+  /** Backend-searched list (name + description + group), optionally scoped to one group. */
+  async function loadList() {
+    graphs = await data.loadGraphs<Graph>({ q: wfSearch.trim(), group: wfGroupFilter });
+  }
+  function onSearchInput(v: string) {
+    wfSearch = v;
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => void loadList(), 250);
+  }
+  function setGroupFilter(v: string) {
+    wfGroupFilter = v;
+    void loadList();
+  }
+  function clearListFilters() {
+    wfSearch = "";
+    wfGroupFilter = "";
+    void reload();
+  }
+
+  // Workflows clustered by group (named groups first, "Ungrouped" last), like the logs grouping.
+  const groupedGraphs = $derived.by(() => {
+    const map = new Map<string, Graph[]>();
+    for (const g of graphs) {
+      const key = (g.group ?? "").trim();
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(g);
+    }
+    const keys = [...map.keys()].sort((a, b) => {
+      if (a === "") return 1;
+      if (b === "") return -1;
+      return a.localeCompare(b);
+    });
+    return keys.map((k) => ({ key: k, label: k || "Ungrouped", rows: map.get(k)! }));
+  });
+  const showGroupHeaders = $derived(
+    groupedGraphs.length > 1 || (groupedGraphs.length === 1 && groupedGraphs[0].key !== ""),
+  );
+
+  function timeAgo(iso: string): string {
+    const then = new Date(iso).getTime();
+    if (!Number.isFinite(then)) return "";
+    const s = Math.max(0, (Date.now() - then) / 1000);
+    if (s < 60) return "just now";
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
+  }
+
+  function lastRunGlyph(status: string): string {
+    return status === "ok" ? "✓" : status === "failed" ? "✗" : "•";
+  }
+  function lastRunClass(status: string): string {
+    if (status === "failed") return "text-destructive";
+    if (status === "running") return "text-primary";
+    return "text-muted-foreground";
+  }
+
+  async function duplicateWorkflow(g: Graph) {
+    try {
+      const id = await data.duplicateGraph(g.id);
+      await reload();
+      openGraph(id);
+    } catch (err) {
+      toast.error("Couldn't duplicate workflow", { description: String(err) });
     }
   }
 
@@ -1203,6 +1288,26 @@
       await reload();
     } catch (err) {
       toast.error("Rename failed", { description: String(err) });
+    }
+  }
+  async function saveDescription(v: string) {
+    if (!graph || (graph.description ?? "") === v) return;
+    try {
+      await data.setGraphDescription(graph.id, v);
+      await reload();
+    } catch (err) {
+      toast.error("Couldn't save description", { description: String(err) });
+    }
+  }
+  async function saveGroup(v: string) {
+    if (!graph) return;
+    const val = v.trim();
+    if ((graph.group ?? "") === val) return;
+    try {
+      await data.setGraphGroup(graph.id, val);
+      await reload();
+    } catch (err) {
+      toast.error("Couldn't save group", { description: String(err) });
     }
   }
   function openDelete(g: Graph) {
@@ -2054,109 +2159,165 @@
 
     <!-- ════════════════════ LIST ════════════════════ -->
   {:else if view === "list"}
-    <div class="h-full overflow-y-auto">
-      <div class="mx-auto max-w-6xl space-y-6 p-6">
-      <div class="flex items-center justify-between">
+    {#snippet wfRow(g: Graph)}
+      {@const st = runStatus(g)}
+      <Table.Row
+        class="cursor-pointer transition-colors hover:bg-primary/5 {listRowAnim(g)}"
+        onclick={() => openGraph(g.id)}
+      >
+        <Table.Cell>
+          <span class="flex items-center gap-2 font-medium">
+            <StatusDot state={g.enabled ? "online" : "offline"} />
+            {g.name}
+          </span>
+          {#if g.description}
+            <span class="mt-0.5 block truncate pl-4 text-xs text-muted-foreground">{g.description}</span>
+          {/if}
+        </Table.Cell>
+        <Table.Cell class="text-muted-foreground">{triggerSummary(g.trigger)}</Table.Cell>
+        <Table.Cell class="text-center tabular-nums text-muted-foreground">{g.nodes.length}</Table.Cell>
+        <Table.Cell>
+          <div class="flex flex-col gap-0.5">
+            {#if st === "running"}
+              <span
+                class="inline-flex w-fit items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
+              >
+                <LoaderCircle class="size-3 animate-spin" />
+                {#if activity[g.id]?.trigger}{triggerSourceLabel(activity[g.id]?.trigger)}{:else}Running{/if}
+              </span>
+            {:else if st === "idle"}
+              <span class="text-xs text-muted-foreground">Idle</span>
+            {:else}
+              <span class="text-xs text-muted-foreground/60">Disabled</span>
+            {/if}
+            {#if g.last_run}
+              <span class="flex items-center gap-1 text-[10px] {lastRunClass(g.last_run.status)}">
+                {lastRunGlyph(g.last_run.status)} {timeAgo(g.last_run.at)}
+              </span>
+            {/if}
+          </div>
+        </Table.Cell>
+        <Table.Cell onclick={(e) => e.stopPropagation()}>
+          <Switch checked={g.enabled} onCheckedChange={(v) => toggleEnabled(g, v)} />
+        </Table.Cell>
+        <Table.Cell class="text-right" onclick={(e) => e.stopPropagation()}>
+          <div class="flex items-center justify-end gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              class="size-8 text-primary"
+              title={listRunTitle(g)}
+              disabled={listRunDisabled(g)}
+              onclick={() => runNow(g)}
+            >
+              {#if st === "running"}
+                <LoaderCircle class="size-4 animate-spin" />
+              {:else}
+                <Play class="size-4" />
+              {/if}
+            </Button>
+            <Button variant="ghost" size="icon" class="size-8" title="Duplicate" onclick={() => duplicateWorkflow(g)}>
+              <Copy class="size-4" />
+            </Button>
+            <Button variant="ghost" size="icon" class="size-8" title="Recent runs" onclick={() => openRuns(g)}>
+              <History class="size-4" />
+            </Button>
+            <Button variant="ghost" size="icon" class="size-8" title="Delete" onclick={() => openDelete(g)}>
+              <Trash2 class="size-4" />
+            </Button>
+          </div>
+        </Table.Cell>
+      </Table.Row>
+    {/snippet}
+
+    <div class="flex h-full flex-col gap-4 overflow-hidden p-6">
+      <!-- header -->
+      <div class="flex shrink-0 items-center justify-between gap-3">
         <div>
           <h1 class="text-2xl font-semibold tracking-tight">Workflows</h1>
-          <p class="text-sm text-muted-foreground">
-            Graph automations that run on a trigger or on demand.
-          </p>
+          <p class="text-sm text-muted-foreground">Graph automations that run on a trigger or on demand.</p>
         </div>
         <Button onclick={createWorkflow}><Plus class="size-4" /> New workflow</Button>
       </div>
 
-      <Card.Root>
-        <Card.Content class="pt-6">
-          {#if graphs.length === 0}
-            <EmptyState
-              title="No workflows yet"
-              description="Create one to chain cameras, alerts, vision, and recipients into an automation."
-            >
-              <Button onclick={createWorkflow}><Plus class="size-4" /> New workflow</Button>
-            </EmptyState>
+      <!-- filter bar -->
+      <div class="flex shrink-0 flex-wrap items-center gap-2">
+        <div class="relative">
+          <Search
+            class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input
+            value={wfSearch}
+            oninput={(e) => onSearchInput(e.currentTarget.value)}
+            placeholder="Search workflows…"
+            class="h-9 w-64 pl-8"
+          />
+        </div>
+        <select
+          value={wfGroupFilter}
+          onchange={(e) => setGroupFilter(e.currentTarget.value)}
+          class="h-9 rounded-lg border border-border bg-card px-2.5 text-sm text-foreground outline-none"
+        >
+          <option value="">All groups</option>
+          {#each allGroups as grp (grp)}<option value={grp}>{grp}</option>{/each}
+        </select>
+        {#if wfSearch.trim() || wfGroupFilter}
+          <Button variant="ghost" size="sm" class="h-9" onclick={clearListFilters}>
+            <X class="size-4" /> Clear
+          </Button>
+        {/if}
+      </div>
+
+      <!-- table -->
+      <div class="min-h-0 flex-1 overflow-y-auto rounded-xl border border-border">
+        {#if graphs.length === 0}
+          {#if wfSearch.trim() || wfGroupFilter}
+            <div class="flex flex-col items-center gap-3 p-12 text-center text-sm text-muted-foreground">
+              No workflows match your filters.
+              <Button variant="outline" size="sm" onclick={clearListFilters}>Clear filters</Button>
+            </div>
           {:else}
-            <Table.Root>
-              <Table.Header>
-                <Table.Row>
-                  <Table.Head>Name</Table.Head>
-                  <Table.Head>Trigger</Table.Head>
-                  <Table.Head class="w-20 text-center">Nodes</Table.Head>
-                  <Table.Head class="w-28">Status</Table.Head>
-                  <Table.Head class="w-24">Enabled</Table.Head>
-                  <Table.Head class="w-28 text-right">Actions</Table.Head>
-                </Table.Row>
-              </Table.Header>
-              <Table.Body>
-                {#each graphs as g (g.id)}
-                  <Table.Row
-                    class="cursor-pointer transition-colors hover:bg-primary/5 {listRowAnim(g)}"
-                    onclick={() => openGraph(g.id)}
-                  >
-                    {@const st = runStatus(g)}
-                    <Table.Cell class="font-medium">
-                      <span class="flex items-center gap-2">
-                        <StatusDot state={g.enabled ? "online" : "offline"} />
-                        {g.name}
-                      </span>
-                    </Table.Cell>
-                    <Table.Cell class="text-muted-foreground">{triggerSummary(g.trigger)}</Table.Cell>
-                    <Table.Cell class="text-center tabular-nums text-muted-foreground">
-                      {g.nodes.length}
-                    </Table.Cell>
-                    <Table.Cell>
-                      {#if st === "running"}
-                        <div class="flex flex-col gap-0.5">
-                          <span
-                            class="inline-flex w-fit items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
-                          >
-                            <LoaderCircle class="size-3 animate-spin" />
-                            {#if activity[g.id]?.trigger}{triggerSourceLabel(activity[g.id]?.trigger)}{:else}Running{/if}
-                          </span>
-                          {#if activity[g.id]?.pod_name}
-                            <span class="text-[10px] text-muted-foreground">on {activity[g.id]?.pod_name}</span>
-                          {/if}
-                        </div>
-                      {:else if st === "idle"}
-                        <span class="text-xs text-muted-foreground">Idle</span>
-                      {:else}
-                        <span class="text-xs text-muted-foreground/60">Disabled</span>
-                      {/if}
-                    </Table.Cell>
-                    <Table.Cell onclick={(e) => e.stopPropagation()}>
-                      <Switch checked={g.enabled} onCheckedChange={(v) => toggleEnabled(g, v)} />
-                    </Table.Cell>
-                    <Table.Cell class="text-right" onclick={(e) => e.stopPropagation()}>
-                      <div class="flex items-center justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          class="size-8 text-primary"
-                          title={listRunTitle(g)}
-                          disabled={listRunDisabled(g)}
-                          onclick={() => runNow(g)}
-                        >
-                          {#if st === "running"}
-                            <LoaderCircle class="size-4 animate-spin" />
-                          {:else}
-                            <Play class="size-4" />
-                          {/if}
-                        </Button>
-                        <Button variant="ghost" size="icon" class="size-8" title="Recent runs" onclick={() => openRuns(g)}>
-                          <History class="size-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" class="size-8" title="Delete" onclick={() => openDelete(g)}>
-                          <Trash2 class="size-4" />
-                        </Button>
-                      </div>
+            <div class="p-6">
+              <EmptyState
+                title="No workflows yet"
+                description="Create one to chain cameras, alerts, vision, and recipients into an automation."
+              >
+                <Button onclick={createWorkflow}><Plus class="size-4" /> New workflow</Button>
+              </EmptyState>
+            </div>
+          {/if}
+        {:else}
+          <Table.Root>
+            <Table.Header class="sticky top-0 z-10 bg-card">
+              <Table.Row>
+                <Table.Head>Workflow</Table.Head>
+                <Table.Head class="w-40">Trigger</Table.Head>
+                <Table.Head class="w-16 text-center">Nodes</Table.Head>
+                <Table.Head class="w-40">Status · Last run</Table.Head>
+                <Table.Head class="w-20">Enabled</Table.Head>
+                <Table.Head class="w-36 text-right">Actions</Table.Head>
+              </Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {#each groupedGraphs as grp (grp.key)}
+                {#if showGroupHeaders}
+                  <Table.Row class="bg-muted/20 hover:bg-muted/20">
+                    <Table.Cell
+                      colspan={6}
+                      class="py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                    >
+                      {grp.label}
+                      <span class="ml-1 text-muted-foreground/60">({grp.rows.length})</span>
                     </Table.Cell>
                   </Table.Row>
+                {/if}
+                {#each grp.rows as g (g.id)}
+                  {@render wfRow(g)}
                 {/each}
-              </Table.Body>
-            </Table.Root>
-          {/if}
-        </Card.Content>
-      </Card.Root>
+              {/each}
+            </Table.Body>
+          </Table.Root>
+        {/if}
       </div>
     </div>
 
@@ -2867,6 +3028,35 @@
             <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-x-3">
               <Label class="text-xs text-muted-foreground">Name</Label>
               <Input class="h-8" disabled={editLocked} value={graph.name} onchange={(e) => renameInline(e.currentTarget.value)} />
+            </div>
+
+            <!-- Description -->
+            <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">
+              <Label class="pt-2 text-xs text-muted-foreground">Description</Label>
+              <Textarea
+                rows={2}
+                class="min-h-14 resize-y text-sm"
+                disabled={editLocked}
+                placeholder="What does this workflow do?"
+                value={graph.description ?? ""}
+                onchange={(e) => saveDescription(e.currentTarget.value)}
+              />
+            </div>
+
+            <!-- Group -->
+            <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-x-3">
+              <Label class="text-xs text-muted-foreground">Group</Label>
+              <div>
+                <Input
+                  class="h-8"
+                  list="wf-groups"
+                  disabled={editLocked}
+                  placeholder="Ungrouped"
+                  value={graph.group ?? ""}
+                  onchange={(e) => saveGroup(e.currentTarget.value)}
+                />
+                <datalist id="wf-groups">{#each allGroups as grp (grp)}<option value={grp}></option>{/each}</datalist>
+              </div>
             </div>
 
             <!-- Enabled -->

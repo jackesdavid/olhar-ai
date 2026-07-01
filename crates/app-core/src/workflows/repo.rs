@@ -621,6 +621,37 @@ pub fn list_runs(db: &Db, tenant_id: Uuid, graph_id: Option<Uuid>, limit: i64) -
     })
 }
 
+/// The most recent run summary for a graph — for the list's "last run" column.
+#[derive(Clone, serde::Serialize)]
+pub struct LastRun {
+    pub at: String,      // RFC3339 started_at
+    pub status: String,  // "running" | "ok" | "failed"
+    pub trigger: String, // "manual" | "cron" | "event"
+}
+
+/// The latest run per graph for the tenant, keyed by graph id. One batch query
+/// (DISTINCT ON) so the list doesn't fan out a query per row. Empty on error.
+pub fn last_run_by_graph(db: &Db, tenant_id: Uuid) -> std::collections::HashMap<Uuid, LastRun> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_as::<_, (Uuid, String, String, String)>(
+            "SELECT DISTINCT ON (graph_id) graph_id, started_at, status, trigger_source
+             FROM workflow_runs WHERE tenant_id = $1
+             ORDER BY graph_id, started_at DESC",
+        )
+        .bind(tenant_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            log::error!("workflows::repo::last_run_by_graph query failed: {e}");
+            Vec::new()
+        })
+        .into_iter()
+        .map(|(gid, at, status, trigger)| (gid, LastRun { at, status, trigger }))
+        .collect()
+    })
+}
+
 /// All signal lines for one run, oldest first. Empty on error or if the run isn't this tenant's.
 pub fn list_run_logs(db: &Db, tenant_id: Uuid, run_id: Uuid) -> Vec<RunLogLine> {
     let pool = db.pool();
