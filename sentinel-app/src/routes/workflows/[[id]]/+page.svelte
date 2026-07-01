@@ -62,6 +62,7 @@
 
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
+  import { Textarea } from "$lib/components/ui/textarea";
   import { Slider } from "$lib/components/ui/slider";
   import { Label } from "$lib/components/ui/label";
   import { Switch } from "$lib/components/ui/switch";
@@ -3253,6 +3254,15 @@
                           />
                           <span class="text-xs text-muted-foreground">{selectedNode.config[key] === true || selectedNode.config[key] === "true" ? "On" : "Off"}</span>
                         </div>
+                      {:else if key === "question"}
+                        <Textarea
+                          rows={4}
+                          class="min-h-20 resize-y"
+                          disabled={editLocked}
+                          placeholder="Ask a yes/no question about the inputs…"
+                          value={String(selectedNode.config[key] ?? "")}
+                          oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)}
+                        />
                       {:else}
                         <Input class="h-8" disabled={editLocked} value={String(selectedNode.config[key] ?? "")} oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)} />
                       {/if}
