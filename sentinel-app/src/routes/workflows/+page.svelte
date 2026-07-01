@@ -52,6 +52,9 @@
   import Radar from "@lucide/svelte/icons/radar";
   import Variable from "@lucide/svelte/icons/variable";
   import Box from "@lucide/svelte/icons/box";
+  import Binary from "@lucide/svelte/icons/binary";
+  import Disc from "@lucide/svelte/icons/disc";
+  import CircleStop from "@lucide/svelte/icons/circle-stop";
   import DictionaryEditor from "$lib/components/dictionary-editor.svelte";
   import SearchableSelect from "$lib/components/searchable-select.svelte";
 
@@ -841,9 +844,11 @@
   }
   // Pure data/logic nodes: no exec pins, activated by data availability.
   // Includes comparison operators, logical operators, and type-conversion nodes.
+  // Only comparison/logic operators use the compact "a OP b" middle layout. Conversion
+  // and unpack nodes (num_to_text, break_camera, …) are plain data nodes — including them
+  // here rendered a meaningless "?" operator in their middle.
   const PURE_KINDS = new Set([
     "num_lt","num_lte","num_gt","num_gte","num_eq","num_ne","compare","and","or","not","text_compare",
-    "bool_to_text","num_to_text","get_camera_by_name","break_camera",
   ]);
   // Get/Set Variable are simple one-port nodes → render them narrower than the default.
   function nodeW(n: Node): number {
@@ -1445,7 +1450,8 @@
     if (kind === "emit_event" || kind === "on_event") return EVENT_HEADER_COLOR;
     return CATEGORY_COLOR[catalog[kind]?.category ?? ""] ?? DEFAULT_CATEGORY_COLOR;
   }
-  // Category → glyph. Mirrors the header tint so a node's colour and icon agree.
+  // Category → glyph. Keys match the Rust catalog's category() strings; mirrors the
+  // header tint so a node's colour and icon agree.
   const CATEGORY_ICON: Record<string, typeof Box> = {
     Cameras: Camera,
     Vision: Eye,
@@ -1454,10 +1460,18 @@
     Recipients: Send,
     Text: Type,
     Network: Globe,
-    Flow: Waypoints,
+    Control: Waypoints,
+    Logic: Binary,
     Presence: Radar,
+    Recording: Disc,
+    Debug: Bug,
+    Utility: Waypoints,
+    Variables: Variable,
   };
   function categoryIcon(n: Node): typeof Box {
+    // Recording gets its own record/stop identity, distinct from the camera family.
+    if (n.kind === "start_recording") return Disc;
+    if (n.kind === "stop_recording") return CircleStop;
     if (n.kind === "emit_event" || n.kind === "on_event") return Zap;
     if (n.kind === "get_variable" || n.kind === "set_variable") return Variable;
     return CATEGORY_ICON[catalog[n.kind]?.category ?? ""] ?? Box;

@@ -34,18 +34,24 @@ export const COMMENT_DEFAULT_COLOR = "#facc15"; // sticky-note default fill
 export const EVENT_HEADER_COLOR = "#f43f5e"; // emit/on-event nodes POP in red
 export const DEFAULT_CATEGORY_COLOR = "#64748b"; // Flow / utility fallback (slate)
 
-// Node-category → header tint. Mirrors headerColor()'s intent but centralised so the
-// hues are defined once. Values reuse the fixed port palette where a category maps
-// cleanly onto a type family.
+// Node-category → header tint. Keys are the exact `category()` strings from the Rust
+// catalog (crates/app-core/src/workflows/domain.rs). Values reuse the fixed port palette
+// where a category maps cleanly onto a type family.
 export const CATEGORY_COLOR: Record<string, string> = {
-  Flow: "#94a3b8", // slate
+  Cameras: portColor.camera, // sky
   Vision: portColor.person, // violet/magenta
   AI: portColor.dictionary, // teal
   Alerts: portColor.bool, // amber
-  Cameras: portColor.camera, // sky
   Recipients: portColor.recipient, // purple
   Text: portColor.num, // green
   Network: "#22d3ee", // cyan
+  Control: "#94a3b8", // slate
+  Logic: "#94a3b8", // slate
+  Presence: "#4ade80", // green (matches record_presence)
+  Recording: "#ef4444", // red — a hot "REC" identity, distinct from every other family
+  Debug: "#a1a1aa", // zinc
+  Utility: "#94a3b8", // slate
+  Variables: "#94a3b8", // slate (get/set actually take their variable's type colour)
 };
 
 // Maps a workflow node kind slug to its category colour — same logic as the

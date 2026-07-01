@@ -773,7 +773,7 @@ impl NodeKind {
             NodeKind::CameraSnapshot => "Snapshot",
             NodeKind::GetCurrentFrame => "Current Frame",
             NodeKind::GetCameraByName => "Find Camera",
-            NodeKind::BreakCamera => "Camera Details",
+            NodeKind::BreakCamera => "Unpack Camera",
             NodeKind::DescribeImage => "Describe Image",
             NodeKind::NotifyRecipient => "Notify",
             NodeKind::Format => "Format",
