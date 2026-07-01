@@ -276,6 +276,19 @@ tasks:
       - rm -rf sentinel-edge/dist/tmp
       - 'echo "✓ sentinel-edge/dist/sentinel-edge-linux-x86_64 ($(file sentinel-edge/dist/sentinel-edge-linux-x86_64 | cut -d: -f2-))"'
 
+  edge-linux-build-ubuntu:
+    desc: "Cross-build the edge binary for Debian/Ubuntu (amd64, glibc/apt, OpenCV 4.6) → sentinel-edge/dist/sentinel-edge-linux-x86_64-gnu. Set UBUNTU=22.04 for OpenCV 4.5."
+    vars:
+      UBUNTU: '{{.UBUNTU | default "24.04"}}'
+    cmds:
+      - mkdir -p sentinel-edge/dist
+      - docker build --platform linux/amd64 -f deploy/edge-linux/Dockerfile.ubuntu
+          --build-arg UBUNTU={{.UBUNTU}} --target artifact
+          -o type=local,dest=sentinel-edge/dist/ubuntu .
+      - mv sentinel-edge/dist/ubuntu/out/sentinel-edge sentinel-edge/dist/sentinel-edge-linux-x86_64-gnu
+      - rm -rf sentinel-edge/dist/ubuntu
+      - 'echo "✓ sentinel-edge/dist/sentinel-edge-linux-x86_64-gnu ($(file sentinel-edge/dist/sentinel-edge-linux-x86_64-gnu | cut -d: -f2-))"'
+
   edge-linux-publish:
     desc: "Cross-build the Linux edge binary + scp to the VPS dist server as sentinel-edge-linux-x86_64 + redeploy control (bumps LATEST_EDGE_VERSION) + verify."
     cmds:

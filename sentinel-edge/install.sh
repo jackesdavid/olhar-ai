@@ -63,7 +63,15 @@ fi
 # ---- detect platform --------------------------------------------------------
 os="$(uname -s)"; arch="$(uname -m)"
 case "$os" in
-  Linux)  EDGE_ASSET="sentinel-edge-linux-$arch" ;;
+  Linux)
+    # OpenCV is linked dynamically → soname-coupled, so we ship a binary per glibc/OpenCV
+    # family and fetch the matching one: apt (Debian/Ubuntu, OpenCV 4.6) → the `-gnu` asset;
+    # dnf/rpm-ostree (Fedora/Bazzite, OpenCV 4.11) → the default asset.
+    if command -v apt-get >/dev/null 2>&1; then
+      EDGE_ASSET="sentinel-edge-linux-$arch-gnu"
+    else
+      EDGE_ASSET="sentinel-edge-linux-$arch"
+    fi ;;
   Darwin) EDGE_ASSET="sentinel-edge-macos-$arch" ;;
   *) echo "Unsupported OS: $os" >&2; exit 1 ;;
 esac

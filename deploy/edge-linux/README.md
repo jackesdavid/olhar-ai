@@ -7,12 +7,24 @@ immutable host, run the edge as a **self-contained container** (matching OpenCV 
 
 ## Build
 
-```sh
-# Cross-build the binary from macOS in a Fedora container → sentinel-edge/dist/…
-task edge-linux-build              # Fedora 42 / OpenCV 4.11 (set FEDORA=41 to match an older Bazzite)
-task edge-linux-publish            # + scp to the VPS dist server + redeploy control
+The edge links OpenCV **dynamically**, so we ship **one binary per OpenCV/glibc family** and
+`install.sh` fetches the matching one by package manager:
 
-# Or build the self-contained runtime image (OpenCV + ffmpeg + go2rtc + tailscale baked in):
+| Asset | Built on | OpenCV soname | Host distros |
+|---|---|---|---|
+| `sentinel-edge-linux-x86_64`     | Fedora 42 (`Dockerfile`)           | `.so.411` (4.11) | Fedora 42 / Bazzite (dnf, rpm-ostree) |
+| `sentinel-edge-linux-x86_64-gnu` | Ubuntu 24.04 (`Dockerfile.ubuntu`) | `.so.406` (4.6)  | Debian 12 / Ubuntu 24.04 (apt) |
+
+> The soname must match the run host **exactly**. Bazzite on a different Fedora major
+> (41 → `.so.410`, 43 → `.so.412`) needs a matching build: `task edge-linux-build FEDORA=NN`.
+> Ubuntu 22.04 ships OpenCV 4.5 (`.so.405`): `task edge-linux-build-ubuntu UBUNTU=22.04`.
+
+```sh
+task edge-linux-build              # Fedora 42 / OpenCV 4.11 → sentinel-edge-linux-x86_64
+task edge-linux-build-ubuntu       # Ubuntu 24.04 / OpenCV 4.6 → sentinel-edge-linux-x86_64-gnu
+task edge-linux-publish            # build (Fedora) + scp to the VPS dist server + redeploy control
+
+# Or the self-contained runtime image (OpenCV + ffmpeg + go2rtc + tailscale baked in):
 docker build --platform linux/amd64 -f deploy/edge-linux/Dockerfile --target runtime \
   -t ghcr.io/jackesdavid/sentinel-edge:latest .
 ```
@@ -20,6 +32,7 @@ docker build --platform linux/amd64 -f deploy/edge-linux/Dockerfile --target run
 Fedora splits OpenCV per-module: the `opencv` metapackage ships core/imgproc/imgcodecs/videoio
 but **not** `opencv-video` (MOG2 lives there) — the Dockerfile + `install.sh` install it
 explicitly, else the edge dies with `libopencv_video.so.NNN: cannot open shared object file`.
+(Debian/Ubuntu's `libopencv-dev` is one package — no such split.)
 
 ## Run on a MUTABLE Linux box (Debian/Ubuntu/regular Fedora)
 
