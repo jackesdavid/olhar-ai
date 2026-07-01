@@ -12,7 +12,9 @@
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto; -- gen_random_uuid()
 
-TRUNCATE TABLE workflow_runs, workflow_node_state, workflow_cron_state, workflows;
+-- CASCADE: workflow_run_logs has an FK to workflow_runs(id), so a bare TRUNCATE of
+-- workflow_runs is rejected. CASCADE also empties the referencing run-logs (fine on reset).
+TRUNCATE TABLE workflow_runs, workflow_node_state, workflow_cron_state, workflows CASCADE;
 
 ALTER TABLE workflows
     ALTER COLUMN id TYPE uuid USING gen_random_uuid();
