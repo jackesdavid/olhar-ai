@@ -84,12 +84,14 @@ One mechanism, two queues (outbound `notification_queue` consumed by notificatio
 win (Redis `events:<tenant>` stays pub/sub — that's ephemeral run-progress UI fan-out). Migrating
 the motion path is a slightly larger blast radius, so it can be staged.
 
-## Phase 5 — Config REST + control proxy
-- Service exposes recipient/provider REST (logic from `sentinel-control/src/domain/beacons.rs` +
-  `admin_providers.rs`).
-- Control **proxies** under its existing auth/RBAC (`beacons.read/write`, `rbac.rs:18`) to
-  `NOTIFY_URL`, mirroring the `FLOW_URL`/`flow_base()` proxy (`domain/workflows.rs:83`). Frontend
-  keeps calling control only.
+## Phase 5 — Config ownership — DECIDED: keep control direct-DB (no proxy) ✅
+**Decision (2026-07-01):** do NOT build the config REST proxy. Control keeps reading/writing
+notification config straight from the shared Postgres — the config UI stays resilient (works even
+if the notification service is down), no proxy hop, no new failure mode. The notification service
+owns **sending + pairing only**; it already reads the same config tables directly (consumer
+`resolve_config` + pairing `load_all_telegram`), so no config REST is needed. Original proxy plan
+(service exposes recipient/provider REST, control proxies to `NOTIFY_URL` mirroring `flow_base()`)
+is intentionally descoped.
 
 ## Phase 6 — Deploy wiring
 - `deploy/push-local.sh` `ALL` += `sentinel-notification` (default `dockerfile_for`/`buildarg_for`
