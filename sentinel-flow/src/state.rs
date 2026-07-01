@@ -41,10 +41,10 @@ pub struct GraphActivity {
     /// The flow instance (pod) executing the current run.
     pub pod_name: Option<String>,
 }
-pub type Activity = Arc<Mutex<HashMap<(Uuid, u32), GraphActivity>>>;
+pub type Activity = Arc<Mutex<HashMap<(Uuid, Uuid), GraphActivity>>>;
 
 /// Latest `ShowImage` frame bytes per `(tenant, graph_id, node_id)`, fetched out of band.
-pub type NodeFrames = Arc<Mutex<HashMap<(Uuid, u32, u32), Vec<u8>>>>;
+pub type NodeFrames = Arc<Mutex<HashMap<(Uuid, Uuid, u32), Vec<u8>>>>;
 
 /// A safety backstop: never let more than this many workflow runs be in flight
 /// across all tenants/graphs at once.
@@ -78,7 +78,7 @@ pub struct AppState {
     /// many concurrent handler runs are active for each `(graph, event)` pair. A new event
     /// is dropped only when the count is at or above the graph's `max_concurrent` limit
     /// (or ≥1 for non-Concurrent graphs). Decremented when each handler sub-run finishes.
-    pub event_runs: Arc<Mutex<std::collections::HashMap<(Uuid, u32, String), usize>>>,
+    pub event_runs: Arc<Mutex<std::collections::HashMap<(Uuid, Uuid, String), usize>>>,
     /// This flow instance's name, shown in the UI as the "pod" executing a run. Resolved
     /// once at boot from `FLOW_INSTANCE_NAME`, else `HOSTNAME`, else `"flow"`.
     pub pod_name: String,
@@ -88,7 +88,8 @@ pub struct AppState {
     /// In-flight TimeGate keeper threads: `(tenant_id, graph_id, node_id)`. The TimeGate
     /// node registers here when it starts a keeper and removes itself when it fires or resets.
     /// On re-trigger, if the entry is absent the node knows the keeper died and restarts one.
-    pub active_gates: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<(uuid::Uuid, u32, u32)>>>,
+    pub active_gates:
+        std::sync::Arc<std::sync::Mutex<std::collections::HashSet<(uuid::Uuid, uuid::Uuid, u32)>>>,
 }
 
 impl AppState {
@@ -102,7 +103,11 @@ impl AppState {
         let pod_name = std::env::var("FLOW_INSTANCE_NAME")
             .ok()
             .filter(|s| !s.trim().is_empty())
-            .or_else(|| std::env::var("HOSTNAME").ok().filter(|s| !s.trim().is_empty()))
+            .or_else(|| {
+                std::env::var("HOSTNAME")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+            })
             .unwrap_or_else(|| "flow".to_string());
         log::info!("flow instance (pod) name: {pod_name}");
         // Runs die with the process; reconcile this pod's rows left 'running' by a crash.
@@ -130,7 +135,9 @@ impl AppState {
             event_runs: Arc::new(Mutex::new(std::collections::HashMap::new())),
             pod_name,
             pairing_stops: Arc::new(Mutex::new(HashMap::new())),
-            active_gates: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            active_gates: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
         }))
     }
 
@@ -154,7 +161,10 @@ impl AppState {
             Some(host) => https_base(&host),
             None => app_core::go2rtc::base(),
         };
-        self.edge_cache.lock().unwrap().insert(tenant, (base.clone(), Instant::now()));
+        self.edge_cache
+            .lock()
+            .unwrap()
+            .insert(tenant, (base.clone(), Instant::now()));
         base
     }
 }
@@ -172,7 +182,7 @@ fn https_base(host: &str) -> String {
 }
 
 /// Find a tenant's graph by id in the multi-tenant store (cloned for use outside the lock).
-pub fn find_graph(store: &WfStore, tenant: Uuid, graph_id: u32) -> Option<Graph> {
+pub fn find_graph(store: &WfStore, tenant: Uuid, graph_id: Uuid) -> Option<Graph> {
     store
         .lock()
         .unwrap()
@@ -184,7 +194,11 @@ pub fn find_graph(store: &WfStore, tenant: Uuid, graph_id: u32) -> Option<Graph>
 /// The distinct tenants present in a `(tenant, graph)` list, order-stable.
 pub fn distinct_tenants(graphs: &[(Uuid, Graph)]) -> Vec<Uuid> {
     let mut seen = std::collections::HashSet::new();
-    graphs.iter().map(|(t, _)| *t).filter(|t| seen.insert(*t)).collect()
+    graphs
+        .iter()
+        .map(|(t, _)| *t)
+        .filter(|t| seen.insert(*t))
+        .collect()
 }
 
 /// Build the engine with each tenant's cron timing restored from Postgres (Phase 0.5):

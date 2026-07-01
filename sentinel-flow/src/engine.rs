@@ -18,8 +18,8 @@ use uuid::Uuid;
 use app_core::agent::{ToolContext, ToolUiEvent};
 use app_core::notification::{NotificationConfig, NotificationStore};
 use app_core::workflows::{
-    self, ConcurrencyPolicy, EventSource, Fire, Graph as WfGraph, PortValues, RunLogLine, RunStatus,
-    Trigger, TriggerSource,
+    self, ConcurrencyPolicy, EventSource, Fire, Graph as WfGraph, PortValues, RunLogLine,
+    RunStatus, Trigger, TriggerSource,
 };
 
 use crate::events;
@@ -34,7 +34,7 @@ pub fn spawn_poller(state: Arc<AppState>) {
         let now = Instant::now();
 
         // Snapshot enabled graphs' firing properties (don't hold the lock during runs).
-        let graphs: Vec<(Uuid, u32, Trigger, ConcurrencyPolicy)> = {
+        let graphs: Vec<(Uuid, Uuid, Trigger, ConcurrencyPolicy)> = {
             let s = state.store.lock().unwrap();
             s.iter()
                 .filter(|(_, g)| g.enabled)
@@ -49,7 +49,11 @@ pub fn spawn_poller(state: Arc<AppState>) {
             let due = match &trigger {
                 Trigger::Manual => false,
                 Trigger::Cron { every_secs } => {
-                    state.engine.lock().unwrap().cron_due(tenant, id, *every_secs, now)
+                    state
+                        .engine
+                        .lock()
+                        .unwrap()
+                        .cron_due(tenant, id, *every_secs, now)
                 }
             };
             if due {
@@ -65,11 +69,15 @@ pub fn spawn_poller(state: Arc<AppState>) {
 pub fn fire_graph(
     state: &Arc<AppState>,
     tenant: Uuid,
-    graph_id: u32,
+    graph_id: Uuid,
     policy: &ConcurrencyPolicy,
     source: TriggerSource,
 ) {
-    let decision = state.engine.lock().unwrap().decide(tenant, graph_id, policy);
+    let decision = state
+        .engine
+        .lock()
+        .unwrap()
+        .decide(tenant, graph_id, policy);
     match decision {
         Fire::Spawn => {
             state.engine.lock().unwrap().on_spawn(tenant, graph_id);
@@ -84,7 +92,7 @@ pub fn fire_graph(
 /// a slot (`engine.on_spawn`). On finish it releases the slot and, if a queued fire
 /// is waiting (`QueueSingle`), reserves + spawns the next one. `source` (manual/cron) is
 /// recorded on the run.
-pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, source: TriggerSource) {
+pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid, source: TriggerSource) {
     let graph: WfGraph = match state::find_graph(&state.store, tenant, graph_id) {
         Some(g) => g,
         None => return,
@@ -94,18 +102,32 @@ pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, sourc
         let run_id = Uuid::new_v4();
         mark_run_started(&state, tenant, graph_id, run_id, source.as_str());
         workflows::repo::insert_run(
-            &state.db, tenant, run_id, graph_id, &graph.name, source, None, None, None, &state.pod_name,
+            &state.db,
+            tenant,
+            run_id,
+            graph_id,
+            &graph.name,
+            source,
+            None,
+            None,
+            None,
+            &state.pod_name,
         );
-        app_core::platform_logs::insert_log_sync(&state.db, app_core::platform_logs::PlatformLog {
-            tenant_id: tenant,
-            module: "workflow",
-            trace_id: Some(run_id),
-            entity_id: Some(graph_id.to_string()),
-            entity_type: Some("workflow_graph"),
-            level: "info",
-            message: format!("Run started: {}", graph.name),
-            payload: Some(serde_json::json!({ "trigger": source.as_str(), "graph_name": graph.name })),
-        });
+        app_core::platform_logs::insert_log_sync(
+            &state.db,
+            app_core::platform_logs::PlatformLog {
+                tenant_id: tenant,
+                module: "workflow",
+                trace_id: Some(run_id),
+                entity_id: Some(graph_id.to_string()),
+                entity_type: Some("workflow_graph"),
+                level: "info",
+                message: format!("Run started: {}", graph.name),
+                payload: Some(
+                    serde_json::json!({ "trigger": source.as_str(), "graph_name": graph.name }),
+                ),
+            },
+        );
         events::publish(
             &state.events,
             "workflow-run-start",
@@ -116,9 +138,15 @@ pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, sourc
 
         mark_run_finished(&state, tenant, graph_id);
         if ok {
-            log::info!("workflow '{}' ({tenant}/{graph_id}) ok: {summary}", graph.name);
+            log::info!(
+                "workflow '{}' ({tenant}/{graph_id}) ok: {summary}",
+                graph.name
+            );
         } else {
-            log::warn!("workflow '{}' ({tenant}/{graph_id}) failed: {summary}", graph.name);
+            log::warn!(
+                "workflow '{}' ({tenant}/{graph_id}) failed: {summary}",
+                graph.name
+            );
         }
         events::publish(
             &state.events,
@@ -138,7 +166,13 @@ pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, sourc
 /// Mark a run started in the live activity map: bump the in-flight count and record the
 /// current run id + trigger source (shown in the graph list). Pushes the new snapshot to
 /// the UI over SSE (`workflow-activity`) so the list badges update without polling.
-fn mark_run_started(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, run_id: Uuid, trigger: &str) {
+fn mark_run_started(
+    state: &Arc<AppState>,
+    tenant: Uuid,
+    graph_id: Uuid,
+    run_id: Uuid,
+    trigger: &str,
+) {
     let snapshot = {
         let mut a = state.activity.lock().unwrap();
         let e = a.entry((tenant, graph_id)).or_default();
@@ -154,7 +188,7 @@ fn mark_run_started(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, run_id: 
 /// Mark a run finished in the live activity map: drop the in-flight count, clearing the
 /// current node / run id / trigger once the last run of this graph completes. Pushes the
 /// new snapshot to the UI over SSE (`workflow-activity`).
-fn mark_run_finished(state: &Arc<AppState>, tenant: Uuid, graph_id: u32) {
+fn mark_run_finished(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid) {
     let snapshot = {
         let mut a = state.activity.lock().unwrap();
         let e = a.entry((tenant, graph_id)).or_default();
@@ -175,7 +209,7 @@ fn mark_run_finished(state: &Arc<AppState>, tenant: Uuid, graph_id: u32) {
 /// Push one graph's live activity snapshot to the UI over the SSE bus as `workflow-activity`
 /// (`{ tenant, graph, running, current, run_id, trigger, pod_name }`). This replaces the old
 /// 700 ms `GET /runs` poll: the UI seeds once on connect (REST) then updates from these deltas.
-fn publish_activity(state: &Arc<AppState>, tenant: Uuid, graph_id: u32, snapshot: &GraphActivity) {
+fn publish_activity(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid, snapshot: &GraphActivity) {
     let mut payload = serde_json::to_value(snapshot).unwrap_or_else(|_| serde_json::json!({}));
     if let serde_json::Value::Object(ref mut map) = payload {
         map.insert("tenant".into(), serde_json::json!(tenant));
@@ -217,7 +251,11 @@ fn execute_run(
             e.clone()
         };
         publish_activity(&prog, tenant, graph_id, &snapshot);
-        events::publish(&prog.events, "workflow-node", serde_json::json!({ "tenant": tenant, "graph": graph_id, "node": nid, "run_id": run_id }));
+        events::publish(
+            &prog.events,
+            "workflow-node",
+            serde_json::json!({ "tenant": tenant, "graph": graph_id, "node": nid, "run_id": run_id }),
+        );
         if debug {
             node_logs.borrow_mut().push(RunLogLine {
                 node_id: Some(nid),
@@ -252,7 +290,10 @@ fn execute_run(
         fire_event(
             &emit_state,
             tenant,
-            EventSource::Graph { id: graph_id, name: emit_name.clone() },
+            EventSource::Graph {
+                id: graph_id,
+                name: emit_name.clone(),
+            },
             ev.to_string(),
             Some(run_id),
             payload.clone(),
@@ -260,7 +301,15 @@ fn execute_run(
     };
 
     let result = match entry {
-        Some(e) => workflows::run_subpath_eventful(graph, &ctx, e, entry_payload, &mut on_node, &mut on_log, &mut emit),
+        Some(e) => workflows::run_subpath_eventful(
+            graph,
+            &ctx,
+            e,
+            entry_payload,
+            &mut on_node,
+            &mut on_log,
+            &mut emit,
+        ),
         None => workflows::run_dag_eventful(graph, &ctx, &mut on_node, &mut on_log, &mut emit),
     };
     drop(ctx); // closes the UI channel → its drain thread ends
@@ -302,16 +351,21 @@ fn execute_run(
         if ok { RunStatus::Ok } else { RunStatus::Failed },
         &summary,
     );
-    app_core::platform_logs::insert_log_sync(&state.db, app_core::platform_logs::PlatformLog {
-        tenant_id: tenant,
-        module: "workflow",
-        trace_id: Some(run_id),
-        entity_id: Some(graph.id.to_string()),
-        entity_type: Some("workflow_graph"),
-        level: if ok { "info" } else { "error" },
-        message: format!("Run {}: {}", if ok { "ok" } else { "failed" }, summary),
-        payload: Some(serde_json::json!({ "status": if ok { "ok" } else { "failed" }, "summary": summary })),
-    });
+    app_core::platform_logs::insert_log_sync(
+        &state.db,
+        app_core::platform_logs::PlatformLog {
+            tenant_id: tenant,
+            module: "workflow",
+            trace_id: Some(run_id),
+            entity_id: Some(graph.id.to_string()),
+            entity_type: Some("workflow_graph"),
+            level: if ok { "info" } else { "error" },
+            message: format!("Run {}: {}", if ok { "ok" } else { "failed" }, summary),
+            payload: Some(
+                serde_json::json!({ "status": if ok { "ok" } else { "failed" }, "summary": summary }),
+            ),
+        },
+    );
     (ok, summary)
 }
 
@@ -330,11 +384,13 @@ pub fn fire_event(
     payload: PortValues,
 ) {
     // Snapshot listeners (don't hold the store lock while spawning).
-    let listeners: Vec<(u32, String, u32)> = {
+    let listeners: Vec<(Uuid, String, u32)> = {
         let s = state.store.lock().unwrap();
         s.iter()
             .filter(|(t, g)| *t == tenant && g.enabled)
-            .filter_map(|(_, g)| workflows::on_event_node(g, &event).map(|e| (g.id, g.name.clone(), e)))
+            .filter_map(|(_, g)| {
+                workflows::on_event_node(g, &event).map(|e| (g.id, g.name.clone(), e))
+            })
             .collect()
     };
     let (emitter_id, emitter_name) = match &source {
@@ -383,7 +439,9 @@ pub fn fire_event(
                 s.iter()
                     .find(|(t, g)| *t == tenant && g.id == listener_id)
                     .map(|(_, g)| match &g.concurrency {
-                        app_core::workflows::domain::ConcurrencyPolicy::Concurrent { max_concurrent } => *max_concurrent as usize,
+                        app_core::workflows::domain::ConcurrencyPolicy::Concurrent {
+                            max_concurrent,
+                        } => *max_concurrent as usize,
                         _ => 1,
                     })
                     .unwrap_or(1)
@@ -415,7 +473,14 @@ pub fn fire_event(
         }
         let _ = listener_name; // listener's display name comes from its graph in the handler
         spawn_event_handler(
-            state, tenant, listener_id, entry, event.clone(), emitter_id, emitter_name.clone(), key,
+            state,
+            tenant,
+            listener_id,
+            entry,
+            event.clone(),
+            emitter_id,
+            emitter_name.clone(),
+            key,
             payload.clone(),
         );
     }
@@ -426,7 +491,16 @@ pub fn fire_event(
 /// Unused today; wired up when system emitters land.
 #[allow(dead_code)]
 pub fn fire_system_event(state: &Arc<AppState>, tenant: Uuid, label: &str, event: String) {
-    fire_event(state, tenant, EventSource::System { label: label.to_string() }, event, None, PortValues::new());
+    fire_event(
+        state,
+        tenant,
+        EventSource::System {
+            label: label.to_string(),
+        },
+        event,
+        None,
+        PortValues::new(),
+    );
 }
 
 /// Spawn one `OnEvent` handler sub-run for a listening graph (the coalesce key is already
@@ -436,12 +510,12 @@ pub fn fire_system_event(state: &Arc<AppState>, tenant: Uuid, label: &str, event
 fn spawn_event_handler(
     state: &Arc<AppState>,
     tenant: Uuid,
-    listener_id: u32,
+    listener_id: Uuid,
     entry: u32,
     event: String,
-    emitter_id: Option<u32>,
+    emitter_id: Option<Uuid>,
     emitter_name: String,
-    key: (Uuid, u32, String),
+    key: (Uuid, Uuid, String),
     payload: PortValues,
 ) {
     let graph: WfGraph = match state::find_graph(&state.store, tenant, listener_id) {
@@ -456,8 +530,16 @@ fn spawn_event_handler(
         let run_id = Uuid::new_v4();
         mark_run_started(&state, tenant, listener_id, run_id, "event");
         workflows::repo::insert_run(
-            &state.db, tenant, run_id, listener_id, &graph.name, TriggerSource::Event, emitter_id,
-            Some(&emitter_name), Some(&event), &state.pod_name,
+            &state.db,
+            tenant,
+            run_id,
+            listener_id,
+            &graph.name,
+            TriggerSource::Event,
+            emitter_id,
+            Some(&emitter_name),
+            Some(&event),
+            &state.pod_name,
         );
         events::publish(
             &state.events,
@@ -497,8 +579,8 @@ fn spawn_event_handler(
 }
 
 fn decrement_event_run(
-    event_runs: &Arc<Mutex<std::collections::HashMap<(Uuid, u32, String), usize>>>,
-    key: &(Uuid, u32, String),
+    event_runs: &Arc<Mutex<std::collections::HashMap<(Uuid, Uuid, String), usize>>>,
+    key: &(Uuid, Uuid, String),
 ) {
     let mut guard = event_runs.lock().unwrap();
     if let Some(count) = guard.get_mut(key) {
@@ -516,11 +598,20 @@ fn decrement_event_run(
 /// keep-alive agent), so concurrent runs of different tenants never collide. The returned
 /// `JoinHandle` is the thread draining UI side-effects to the SSE bus; it ends when the
 /// context (and its `Sender`) is dropped.
-fn build_run_context(state: &Arc<AppState>, tenant: Uuid, graph_id: u32) -> (ToolContext, std::thread::JoinHandle<()>) {
-    let devices = Arc::new(std::sync::Mutex::new(app_core::devices::repo::load(&state.db, tenant)));
-    let alerts = Arc::new(std::sync::Mutex::new(app_core::alerts::repo::load(&state.db, tenant)));
-    let notif: NotificationStore =
-        Arc::new(std::sync::Mutex::new(app_core::notification::repo::load_beacons(&state.db, tenant)));
+fn build_run_context(
+    state: &Arc<AppState>,
+    tenant: Uuid,
+    graph_id: Uuid,
+) -> (ToolContext, std::thread::JoinHandle<()>) {
+    let devices = Arc::new(std::sync::Mutex::new(app_core::devices::repo::load(
+        &state.db, tenant,
+    )));
+    let alerts = Arc::new(std::sync::Mutex::new(app_core::alerts::repo::load(
+        &state.db, tenant,
+    )));
+    let notif: NotificationStore = Arc::new(std::sync::Mutex::new(
+        app_core::notification::repo::load_beacons(&state.db, tenant),
+    ));
     let notif_cfg = resolve_telegram_config(state, tenant);
 
     let (tx, rx) = std::sync::mpsc::channel::<ToolUiEvent>();
@@ -530,8 +621,14 @@ fn build_run_context(state: &Arc<AppState>, tenant: Uuid, graph_id: u32) -> (Too
         while let Ok(ev) = rx.recv() {
             // ShowImage carries raw jpeg bytes — stash them for out-of-band fetch
             // (`GET /runs/frame`); the SSE event itself only carries a reference.
-            if let ToolUiEvent::ShowImage { graph, node, jpeg, .. } = &ev {
-                node_frames.lock().unwrap().insert((tenant, *graph, *node), jpeg.clone());
+            if let ToolUiEvent::ShowImage {
+                graph, node, jpeg, ..
+            } = &ev
+            {
+                node_frames
+                    .lock()
+                    .unwrap()
+                    .insert((tenant, *graph, *node), jpeg.clone());
             }
             events::publish_tool_event(&bus, tenant, graph_id, ev);
         }
@@ -549,7 +646,9 @@ fn build_run_context(state: &Arc<AppState>, tenant: Uuid, graph_id: u32) -> (Too
     // Bind the frame source to THIS tenant's edge go2rtc. The per-run keep-alive agent
     // keeps the connection warm across every `GetFrame`/`Snapshot` in the run, so a
     // `memoize=false` node in a loop re-grabs a fresh frame without re-handshaking.
-    ctx.frames = Arc::new(app_core::ports::EdgeFrameSource::new(state.edge_base(tenant)));
+    ctx.frames = Arc::new(app_core::ports::EdgeFrameSource::new(
+        state.edge_base(tenant),
+    ));
     ctx.active_gates = std::sync::Arc::clone(&state.active_gates);
     (ctx, drain)
 }
@@ -557,9 +656,14 @@ fn build_run_context(state: &Arc<AppState>, tenant: Uuid, graph_id: u32) -> (Too
 /// Resolve the active Telegram config for `tenant`: the saved config (Postgres) if it has
 /// a non-empty token, else the environment.
 fn resolve_telegram_config(state: &Arc<AppState>, tenant: Uuid) -> Option<NotificationConfig> {
-    if let Some((bot_token, pairing_code)) = app_core::notification::repo::load_telegram(&state.db, tenant) {
+    if let Some((bot_token, pairing_code)) =
+        app_core::notification::repo::load_telegram(&state.db, tenant)
+    {
         if !bot_token.trim().is_empty() {
-            return Some(NotificationConfig { bot_token, pairing_code });
+            return Some(NotificationConfig {
+                bot_token,
+                pairing_code,
+            });
         }
     }
     NotificationConfig::from_env()

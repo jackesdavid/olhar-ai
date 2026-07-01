@@ -36,11 +36,20 @@ pub enum ToolUiEvent {
     OpenLive { ip: String },
     /// A workflow `Print` node fired: show `message` in the editor Console (always) and,
     /// when `on_screen`, flash it over the canvas. `level` tints both (info/warn/error/debug).
-    Print { message: String, level: String, on_screen: bool },
+    Print {
+        message: String,
+        level: String,
+        on_screen: bool,
+    },
     /// A workflow `ShowImage` (debug) node received a frame: render `jpeg` inside that
     /// node (identified by `graph` + `node` id) on the editor canvas, captioned with
     /// `label`. JPEG bytes → base64 data URL on the UI side.
-    ShowImage { graph: u32, node: u32, label: String, jpeg: Vec<u8> },
+    ShowImage {
+        graph: uuid::Uuid,
+        node: u32,
+        label: String,
+        jpeg: Vec<u8>,
+    },
     /// A workflow `RecordPresence` node fired: the map pulses a categorized dot in the
     /// room. Carries no image — just where/what/when, relayed to the browser over SSE.
     Presence {
@@ -90,11 +99,14 @@ pub struct ToolContext {
     /// Shared across all runs in the same process (sentinel-flow overwrites the default
     /// with the AppState copy). Used by the TimeGate node to detect and recover from
     /// keeper threads that died (e.g. after a flow restart).
-    pub active_gates: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<(uuid::Uuid, u32, u32)>>>,
+    pub active_gates:
+        std::sync::Arc<std::sync::Mutex<std::collections::HashSet<(uuid::Uuid, uuid::Uuid, u32)>>>,
     /// Per-run workflow variables (Unreal-style Get/Set Variable nodes). Fresh empty map per
     /// run — a `Set` writes here, a `Get` reads — so values flow across the graph without wires.
     /// Scope is one run (local-variable semantics).
-    pub variables: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, crate::workflows::node::PortValue>>>,
+    pub variables: std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<String, crate::workflows::node::PortValue>>,
+    >,
 }
 
 impl ToolContext {
@@ -111,7 +123,10 @@ impl ToolContext {
         notif_cfg: Option<NotificationConfig>,
         ui_tx: Sender<ToolUiEvent>,
     ) -> Self {
-        let recognizer = Arc::new(crate::ports::LocalRecognizer { db: db.clone(), tenant_id });
+        let recognizer = Arc::new(crate::ports::LocalRecognizer {
+            db: db.clone(),
+            tenant_id,
+        });
         ToolContext {
             devices,
             db,
@@ -124,7 +139,9 @@ impl ToolContext {
             vision: Arc::new(crate::ports::LocalVision),
             recognizer,
             notifier: Arc::new(crate::ports::LocalNotifier),
-            active_gates: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            active_gates: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
             variables: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
@@ -216,7 +233,10 @@ fn get_camera_snapshot() -> ToolSpec {
             "required": ["camera"]
         }),
         run: |input, ctx| {
-            let camera = input.get("camera").and_then(Value::as_str).unwrap_or("first");
+            let camera = input
+                .get("camera")
+                .and_then(Value::as_str)
+                .unwrap_or("first");
             let device = {
                 let devices = ctx.devices.lock().unwrap();
                 let idx = actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
@@ -224,8 +244,14 @@ fn get_camera_snapshot() -> ToolSpec {
             };
             let bytes = ctx.frames.snapshot(&device)?;
             let jpeg = to_jpeg(&bytes)?;
-            let _ = ctx.ui_tx.send(ToolUiEvent::Snapshot { camera: device.name.clone(), jpeg });
-            Ok(format!("Snapshot of '{}' captured and displayed.", device.name))
+            let _ = ctx.ui_tx.send(ToolUiEvent::Snapshot {
+                camera: device.name.clone(),
+                jpeg,
+            });
+            Ok(format!(
+                "Snapshot of '{}' captured and displayed.",
+                device.name
+            ))
         },
     }
 }
@@ -244,7 +270,10 @@ fn describe_camera() -> ToolSpec {
             "required": ["camera"]
         }),
         run: |input, ctx| {
-            let camera = input.get("camera").and_then(Value::as_str).unwrap_or("first");
+            let camera = input
+                .get("camera")
+                .and_then(Value::as_str)
+                .unwrap_or("first");
             let device = {
                 let devices = ctx.devices.lock().unwrap();
                 let idx = actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
@@ -253,7 +282,10 @@ fn describe_camera() -> ToolSpec {
             // Hit the camera once; show the still and feed the same bytes to vision.
             let bytes = ctx.frames.snapshot(&device)?;
             if let Ok(jpeg) = to_jpeg(&bytes) {
-                let _ = ctx.ui_tx.send(ToolUiEvent::Snapshot { camera: device.name.clone(), jpeg });
+                let _ = ctx.ui_tx.send(ToolUiEvent::Snapshot {
+                    camera: device.name.clone(),
+                    jpeg,
+                });
             }
             let description = ctx.vision.describe(&bytes, &device.name)?;
             Ok(format!("Camera '{}' shows: {description}", device.name))
@@ -274,7 +306,10 @@ fn count_people() -> ToolSpec {
             "required": ["camera"]
         }),
         run: |input, ctx| {
-            let camera = input.get("camera").and_then(Value::as_str).unwrap_or("first");
+            let camera = input
+                .get("camera")
+                .and_then(Value::as_str)
+                .unwrap_or("first");
             let device = {
                 let devices = ctx.devices.lock().unwrap();
                 let idx = actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
@@ -282,11 +317,17 @@ fn count_people() -> ToolSpec {
             };
             let bytes = ctx.frames.snapshot(&device)?;
             if let Ok(jpeg) = to_jpeg(&bytes) {
-                let _ = ctx.ui_tx.send(ToolUiEvent::Snapshot { camera: device.name.clone(), jpeg });
+                let _ = ctx.ui_tx.send(ToolUiEvent::Snapshot {
+                    camera: device.name.clone(),
+                    jpeg,
+                });
             }
             let count = ctx.vision.detect_persons(&bytes)?.count;
             if count > 0 {
-                Ok(format!("Camera '{}': {count} person(s) detected.", device.name))
+                Ok(format!(
+                    "Camera '{}': {count} person(s) detected.",
+                    device.name
+                ))
             } else {
                 Ok(format!("Camera '{}': no people detected.", device.name))
             }
@@ -305,13 +346,18 @@ fn show_live_feed() -> ToolSpec {
             "required": ["camera"]
         }),
         run: |input, ctx| {
-            let camera = input.get("camera").and_then(Value::as_str).unwrap_or("first");
+            let camera = input
+                .get("camera")
+                .and_then(Value::as_str)
+                .unwrap_or("first");
             let device = {
                 let devices = ctx.devices.lock().unwrap();
                 let idx = actions::resolve_device(&devices, camera).map_err(|e| e.to_string())?;
                 devices[idx].clone()
             };
-            let _ = ctx.ui_tx.send(ToolUiEvent::OpenLive { ip: device.ip.clone() });
+            let _ = ctx.ui_tx.send(ToolUiEvent::OpenLive {
+                ip: device.ip.clone(),
+            });
             Ok(format!("Opening the live feed for '{}'.", device.name))
         },
     }
@@ -329,7 +375,10 @@ fn delete_device() -> ToolSpec {
             "required": ["name"]
         }),
         run: |input, ctx| {
-            let name = input.get("name").and_then(Value::as_str).ok_or("Missing 'name'.")?;
+            let name = input
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or("Missing 'name'.")?;
             let removed = {
                 let mut devices = ctx.devices.lock().unwrap();
                 let removed = actions::delete_by_name(&mut devices, name)?;
@@ -354,7 +403,10 @@ fn delete_device_by_index() -> ToolSpec {
             "required": ["index"]
         }),
         run: |input, ctx| {
-            let index = input.get("index").and_then(Value::as_u64).ok_or("Missing 'index'.")? as usize;
+            let index = input
+                .get("index")
+                .and_then(Value::as_u64)
+                .ok_or("Missing 'index'.")? as usize;
             let removed = {
                 let mut devices = ctx.devices.lock().unwrap();
                 let removed = actions::delete_by_index(&mut devices, index)?;
@@ -381,8 +433,14 @@ fn rename_device() -> ToolSpec {
             "required": ["camera", "new_name"]
         }),
         run: |input, ctx| {
-            let camera = input.get("camera").and_then(Value::as_str).unwrap_or("first");
-            let new_name = input.get("new_name").and_then(Value::as_str).ok_or("Missing 'new_name'.")?;
+            let camera = input
+                .get("camera")
+                .and_then(Value::as_str)
+                .unwrap_or("first");
+            let new_name = input
+                .get("new_name")
+                .and_then(Value::as_str)
+                .ok_or("Missing 'new_name'.")?;
             let trimmed = new_name.trim();
             if trimmed.is_empty() {
                 return Err("The new name can't be empty.".into());
@@ -403,22 +461,30 @@ fn rename_device() -> ToolSpec {
 fn list_recipients() -> ToolSpec {
     ToolSpec {
         name: "list_recipients",
-        description: "List the paired notification recipients (the phones/people who receive alerts \
+        description:
+            "List the paired notification recipients (the phones/people who receive alerts \
             via Telegram) and whether each is enabled. Use this to show the operator who can be \
             notified, or to find a recipient's name before sending to them.",
         input_schema: json!({ "type": "object", "properties": {}, "required": [] }),
         run: |_input, ctx| {
             let targets = ctx.notif.lock().unwrap();
             if targets.is_empty() {
-                return Ok("No recipients are paired yet. The operator pairs one by DMing the \
+                return Ok(
+                    "No recipients are paired yet. The operator pairs one by DMing the \
                     pairing code to the Telegram bot (Recipients screen)."
-                    .into());
+                        .into(),
+                );
             }
             let lines: Vec<String> = targets
                 .iter()
                 .enumerate()
                 .map(|(i, t)| {
-                    format!("{}. {} ({})", i + 1, t.label, if t.enabled { "enabled" } else { "disabled" })
+                    format!(
+                        "{}. {} ({})",
+                        i + 1,
+                        t.label,
+                        if t.enabled { "enabled" } else { "disabled" }
+                    )
                 })
                 .collect();
             Ok(lines.join("\n"))
@@ -609,8 +675,10 @@ fn alert_stats() -> ToolSpec {
         input_schema: json!({ "type": "object", "properties": {}, "required": [] }),
         run: |_input, ctx| {
             let alerts = ctx.alerts.lock().unwrap();
-            let today: Vec<&alerts::Alert> =
-                alerts.iter().filter(|a| alerts::is_today(&a.created_at)).collect();
+            let today: Vec<&alerts::Alert> = alerts
+                .iter()
+                .filter(|a| alerts::is_today(&a.created_at))
+                .collect();
             let total = today.len();
             let pending = today.iter().filter(|a| !a.delivered()).count();
 
@@ -637,7 +705,12 @@ fn alert_stats() -> ToolSpec {
             let rooms = if by_room.is_empty() {
                 "none".to_string()
             } else {
-                by_room.iter().take(5).map(|(n, c)| format!("{n} {c}")).collect::<Vec<_>>().join(", ")
+                by_room
+                    .iter()
+                    .take(5)
+                    .map(|(n, c)| format!("{n} {c}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             };
             Ok(format!(
                 "Today: {total} alerts, {pending} undelivered. By level: {levels}. Top locations: {rooms}."
@@ -657,12 +730,21 @@ fn deliver_alert() -> ToolSpec {
             "required": ["id"]
         }),
         run: |input, ctx| {
-            let id = input.get("id").and_then(Value::as_u64).ok_or("Missing 'id'.")?;
-            let cfg = ctx
-                .notif_cfg
-                .as_ref()
-                .ok_or("Notifications are not configured (set the Telegram bot token in Recipients).")?;
-            let result = alerts::deliver(&ctx.alerts, Some(&ctx.db), ctx.tenant_id, &ctx.notif, cfg, id)?;
+            let id = input
+                .get("id")
+                .and_then(Value::as_u64)
+                .ok_or("Missing 'id'.")?;
+            let cfg = ctx.notif_cfg.as_ref().ok_or(
+                "Notifications are not configured (set the Telegram bot token in Recipients).",
+            )?;
+            let result = alerts::deliver(
+                &ctx.alerts,
+                Some(&ctx.db),
+                ctx.tenant_id,
+                &ctx.notif,
+                cfg,
+                id,
+            )?;
             let _ = ctx.ui_tx.send(ToolUiEvent::AlertsChanged);
             Ok(result)
         },
@@ -680,7 +762,10 @@ fn delete_alert() -> ToolSpec {
             "required": ["id"]
         }),
         run: |input, ctx| {
-            let id = input.get("id").and_then(Value::as_u64).ok_or("Missing 'id'.")?;
+            let id = input
+                .get("id")
+                .and_then(Value::as_u64)
+                .ok_or("Missing 'id'.")?;
             if alerts::delete(&ctx.alerts, Some(&ctx.db), ctx.tenant_id, id) {
                 let _ = ctx.ui_tx.send(ToolUiEvent::AlertsChanged);
                 Ok(format!("Deleted alert {id}."))
@@ -697,8 +782,11 @@ fn delete_alert() -> ToolSpec {
 fn to_jpeg(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let img = image::load_from_memory(bytes).map_err(|e| format!("decode snapshot: {e}"))?;
     let mut out = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
-        .map_err(|e| format!("encode snapshot: {e}"))?;
+    img.write_to(
+        &mut std::io::Cursor::new(&mut out),
+        image::ImageFormat::Jpeg,
+    )
+    .map_err(|e| format!("encode snapshot: {e}"))?;
     Ok(out)
 }
 
@@ -734,6 +822,8 @@ mod tests {
         let (tx, _rx) = std::sync::mpsc::channel();
         let ctx = ctx(tx);
         // No telegram config → notify_beacon path errors cleanly (not a panic).
-        assert!(reg.run("send_notification", &json!({ "message": "hi" }), &ctx).is_err());
+        assert!(reg
+            .run("send_notification", &json!({ "message": "hi" }), &ctx)
+            .is_err());
     }
 }

@@ -121,7 +121,7 @@
   type PaletteKind = CatKind & { presetEvent?: string; presetVariable?: { name: string; type: string } };
   type RunRecord = {
     id: string;
-    graph_id: number;
+    graph_id: string;
     graph_name: string;
     trigger_source: string;
     source_graph_name?: string | null;
@@ -139,7 +139,7 @@
     | { Concurrent: { max_concurrent: number } };
   type Variable = { name: string; type: PortType };
   type Graph = {
-    id: number;
+    id: string;
     name: string;
     enabled: boolean;
     trigger: Trigger;
@@ -179,7 +179,7 @@
   let graphs = $state<Graph[]>([]);
   let catalog = $state<Record<string, CatKind>>({});
   let view = $state<"list" | "editor">("list");
-  let selectedGraphId = $state<number | null>(null);
+  let selectedGraphId = $state<string | null>(null);
   let selectedNodeId = $state<number | null>(null);
   let pending = $state<{ node: number; port: string } | null>(null);
   // Editor tool/mode (touch-first): move = drag nodes, pan = drag canvas, link = tap ports to
@@ -249,7 +249,7 @@
     };
   }
 
-  async function loadConsoleLogs(graphId: number) {
+  async function loadConsoleLogs(graphId: string) {
     try {
       const r = await platformLogs.list({
         module: "workflow",
@@ -392,7 +392,7 @@
     trigger?: string | null;
     pod_name?: string | null;
   };
-  let activity = $state<Record<number, Activity>>({});
+  let activity = $state<Record<string, Activity>>({});
 
   // tenant event registry + categories (for the palette + the property combobox)
   let events = $state<WorkflowEvent[]>([]);
@@ -930,14 +930,14 @@
   // The URL is the source of truth for which graph is open (/workflows/<id>).
   // openGraph / backToList only navigate; the $effect below applies the route to state,
   // so a refresh or a shared link lands straight in the right editor.
-  function openGraph(id: number) {
+  function openGraph(id: string) {
     void goto(`/workflows/${id}`, { keepFocus: true, noScroll: true });
   }
   function backToList() {
     void goto("/workflows", { keepFocus: true, noScroll: true });
   }
   // Apply an open-graph route to editor state (was the body of openGraph).
-  function applyGraph(id: number) {
+  function applyGraph(id: string) {
     saveViewport();
     selectedGraphId = id;
     selectedNodeId = null;
@@ -977,8 +977,8 @@
   // Route → state. Waits for graphs to load; an unknown id falls back to the list.
   $effect(() => {
     const raw = $page.params.id;
-    const id = raw != null && raw !== "" ? Number(raw) : null;
-    if (id != null && Number.isFinite(id)) {
+    const id = raw != null && raw !== "" ? raw : null;
+    if (id != null) {
       if (graphs.length === 0) return; // graphs not loaded yet — re-runs when they are
       if (!graphs.some((g) => g.id === id)) {
         void goto("/workflows", { replaceState: true, keepFocus: true, noScroll: true });
@@ -1025,7 +1025,7 @@
   // (re)connect — between connects we'd miss `workflow-activity` deltas, so re-fetch.
   async function refreshActivity() {
     try {
-      activity = await data.runStates<Record<number, Activity>>();
+      activity = await data.runStates<Record<string, Activity>>();
     } catch {
       /* ignore transient errors */
     }
@@ -1056,7 +1056,7 @@
     const un = onEvent("workflow-run", (payload) => {
       running = false;
       const { graph: gid, name, ok, summary } = payload as {
-        graph: number;
+        graph: string;
         name: string;
         ok: boolean;
         summary: string;
@@ -1072,12 +1072,12 @@
     });
     // Per-node execution events (real-time, catch every node).
     const unNode = onEvent("workflow-node", (payload) => {
-      const p = payload as { graph: number; node: number };
+      const p = payload as { graph: string; node: number };
       if (p.graph === selectedGraphId) markLive(p.node);
     });
     // Per-node debug logs (only emitted when the graph's debug flag is on).
     const unLog = onEvent("workflow-log", (payload) => {
-      const p = payload as { graph: number; node: number; label: string; message: string; ms: number };
+      const p = payload as { graph: string; node: number; label: string; message: string; ms: number };
       if (p.graph !== selectedGraphId) return; // only the open graph
       const { label, message, ms } = p;
       logs = [
@@ -1088,7 +1088,7 @@
     // Print node: echo to the Console (independent of the debug flag) for the OPEN graph
     // only, and when on_screen flash it over the canvas.
     const unPrint = onEvent("workflow-print", (payload) => {
-      const p = payload as { graph?: number; message: string; level: string; on_screen: boolean };
+      const p = payload as { graph?: string; message: string; level: string; on_screen: boolean };
       if (p.graph !== selectedGraphId) return; // only the open graph
       logs = [
         { time: fmtTs(new Date().toISOString()), name: "Print", ok: true, summary: p.message, level: p.level },
@@ -1100,7 +1100,7 @@
     // out of band from the control relay, cache-busting so each new frame reloads.
     const unImage = onEvent("workflow-image", (payload) => {
       const { graph: gid, node, label } = payload as {
-        graph: number;
+        graph: string;
         node: number;
         label: string;
       };
@@ -1111,7 +1111,7 @@
     // Show the line in whichever graph's run view is open (matched by `graph`).
     const unEvent = onEvent("workflow-event", (payload) => {
       const p = payload as {
-        graph: number | null;
+        graph: string | null;
         event: string;
         kind?: string;
         by_graph?: string;
@@ -1131,7 +1131,7 @@
     // graph's snapshot; merge it into the map.
     const unActivity = onEvent("workflow-activity", (payload) => {
       const p = payload as {
-        graph: number;
+        graph: string;
         running: number;
         current: number | null;
         run_id?: string | null;
@@ -1546,7 +1546,7 @@
   // On opening a graph, bring its Emit/On nodes in line with the current event registry:
   // re-bake each node's payload schema and drop wires on any port that was removed/retyped.
   // Silent when nothing changed; otherwise alerts how many nodes were updated.
-  async function reconcileEventNodes(graphId: number) {
+  async function reconcileEventNodes(graphId: string) {
     const g = graphs.find((x) => x.id === graphId);
     if (!g) return;
     const removeIdx: number[] = [];

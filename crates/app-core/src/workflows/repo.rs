@@ -73,7 +73,9 @@ pub fn load_all(db: &Db) -> Vec<(Uuid, Graph)> {
                 .filter_map(|(tid, v)| match serde_json::from_value::<Graph>(v) {
                     Ok(g) => Some((tid, g)),
                     Err(e) => {
-                        log::error!("workflows::repo::load_all: skipping a malformed graph row: {e}");
+                        log::error!(
+                            "workflows::repo::load_all: skipping a malformed graph row: {e}"
+                        );
                         None
                     }
                 })
@@ -93,12 +95,15 @@ pub fn save(db: &Db, tenant_id: Uuid, graphs: &[Graph]) {
     let graphs = graphs.to_vec();
     let res: Result<(), sqlx::Error> = db.block(async move {
         let mut tx = pool.begin().await?;
-        sqlx::query("DELETE FROM workflows WHERE tenant_id = $1").bind(tenant_id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM workflows WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await?;
         for g in &graphs {
             let data = serde_json::to_value(g).unwrap_or_else(|_| serde_json::json!({}));
             sqlx::query("INSERT INTO workflows (tenant_id, id, data) VALUES ($1, $2, $3)")
                 .bind(tenant_id)
-                .bind(g.id as i64)
+                .bind(g.id)
                 .bind(&data)
                 .execute(&mut *tx)
                 .await?;
@@ -119,15 +124,17 @@ pub fn save(db: &Db, tenant_id: Uuid, graphs: &[Graph]) {
 pub fn load_alert_seen_max(db: &Db, tenant_id: Uuid) -> Option<u64> {
     let pool = db.pool();
     db.block(async move {
-        sqlx::query_as::<_, (i64,)>("SELECT alert_seen_max FROM workflow_engine_state WHERE tenant_id = $1")
-            .bind(tenant_id)
-            .fetch_optional(&pool)
-            .await
-            .unwrap_or_else(|e| {
-                log::error!("workflows::repo::load_alert_seen_max query failed: {e}");
-                None
-            })
-            .map(|(v,)| v as u64)
+        sqlx::query_as::<_, (i64,)>(
+            "SELECT alert_seen_max FROM workflow_engine_state WHERE tenant_id = $1",
+        )
+        .bind(tenant_id)
+        .fetch_optional(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            log::error!("workflows::repo::load_alert_seen_max query failed: {e}");
+            None
+        })
+        .map(|(v,)| v as u64)
     })
 }
 
@@ -150,10 +157,10 @@ pub fn save_alert_seen_max(db: &Db, tenant_id: Uuid, max: u64) {
 }
 
 /// The tenant's per-graph cron timers as `(graph_id, last_fired_ms)`. Empty on error.
-pub fn load_cron_state(db: &Db, tenant_id: Uuid) -> Vec<(u32, u64)> {
+pub fn load_cron_state(db: &Db, tenant_id: Uuid) -> Vec<(Uuid, u64)> {
     let pool = db.pool();
     db.block(async move {
-        sqlx::query_as::<_, (i64, i64)>(
+        sqlx::query_as::<_, (Uuid, i64)>(
             "SELECT graph_id, last_fired_ms FROM workflow_cron_state WHERE tenant_id = $1",
         )
         .bind(tenant_id)
@@ -164,13 +171,13 @@ pub fn load_cron_state(db: &Db, tenant_id: Uuid) -> Vec<(u32, u64)> {
             Vec::new()
         })
         .into_iter()
-        .map(|(id, ms)| (id as u32, ms as u64))
+        .map(|(id, ms)| (id, ms as u64))
         .collect()
     })
 }
 
 /// Record that the tenant's cron graph `graph_id` fired at `fired_ms`. Best-effort.
-pub fn save_cron_fired(db: &Db, tenant_id: Uuid, graph_id: u32, fired_ms: u64) {
+pub fn save_cron_fired(db: &Db, tenant_id: Uuid, graph_id: Uuid, fired_ms: u64) {
     let pool = db.pool();
     let res: Result<_, sqlx::Error> = db.block(async move {
         sqlx::query(
@@ -178,7 +185,7 @@ pub fn save_cron_fired(db: &Db, tenant_id: Uuid, graph_id: u32, fired_ms: u64) {
              ON CONFLICT (tenant_id, graph_id) DO UPDATE SET last_fired_ms = EXCLUDED.last_fired_ms",
         )
         .bind(tenant_id)
-        .bind(graph_id as i64)
+        .bind(graph_id)
         .bind(fired_ms as i64)
         .execute(&pool)
         .await
@@ -189,14 +196,19 @@ pub fn save_cron_fired(db: &Db, tenant_id: Uuid, graph_id: u32, fired_ms: u64) {
 }
 
 /// Returns the persisted JSON state for a node, or `None` if never set.
-pub fn get_node_state(db: &Db, tenant_id: Uuid, graph_id: u32, node_id: u32) -> Option<serde_json::Value> {
+pub fn get_node_state(
+    db: &Db,
+    tenant_id: Uuid,
+    graph_id: Uuid,
+    node_id: u32,
+) -> Option<serde_json::Value> {
     let pool = db.pool();
     db.block(async move {
         sqlx::query_as::<_, (String,)>(
             "SELECT state_json FROM workflow_node_state WHERE tenant_id = $1 AND graph_id = $2 AND node_id = $3",
         )
         .bind(tenant_id)
-        .bind(graph_id as i64)
+        .bind(graph_id)
         .bind(node_id as i64)
         .fetch_optional(&pool)
         .await
@@ -207,7 +219,13 @@ pub fn get_node_state(db: &Db, tenant_id: Uuid, graph_id: u32, node_id: u32) -> 
 }
 
 /// Upserts the JSON state for a node. Best-effort (errors are logged, not propagated).
-pub fn set_node_state(db: &Db, tenant_id: Uuid, graph_id: u32, node_id: u32, state: &serde_json::Value) {
+pub fn set_node_state(
+    db: &Db,
+    tenant_id: Uuid,
+    graph_id: Uuid,
+    node_id: u32,
+    state: &serde_json::Value,
+) {
     let pool = db.pool();
     let json_str = state.to_string();
     let res: Result<_, sqlx::Error> = db.block(async move {
@@ -216,7 +234,7 @@ pub fn set_node_state(db: &Db, tenant_id: Uuid, graph_id: u32, node_id: u32, sta
              ON CONFLICT (tenant_id, graph_id, node_id) DO UPDATE SET state_json = EXCLUDED.state_json",
         )
         .bind(tenant_id)
-        .bind(graph_id as i64)
+        .bind(graph_id)
         .bind(node_id as i64)
         .bind(json_str)
         .execute(&pool)
@@ -252,7 +270,7 @@ pub struct TenantEvent {
     pub category: String,
     pub source: String,
     pub description: Option<String>,
-    pub created_by_graph: Option<u32>,
+    pub created_by_graph: Option<Uuid>,
     /// The typed payload schema (possibly empty).
     pub fields: Vec<EventField>,
 }
@@ -262,7 +280,10 @@ pub struct TenantEvent {
 /// no per-tenant registration and no first-event chicken-and-egg. System events are emitted
 /// by the platform (e.g. `motion` by the edge), not user `EmitEvent` nodes. Add new ones here.
 pub fn system_events() -> Vec<TenantEvent> {
-    let field = |name: &str, ty: PortType| EventField { name: name.to_string(), ty };
+    let field = |name: &str, ty: PortType| EventField {
+        name: name.to_string(),
+        ty,
+    };
     vec![
         TenantEvent {
             name: "motion".to_string(),
@@ -283,7 +304,9 @@ pub fn system_events() -> Vec<TenantEvent> {
             name: "edge:full-disk".to_string(),
             category: "System".to_string(),
             source: "system".to_string(),
-            description: Some("Edge recording storage is near or over the configured limit".to_string()),
+            description: Some(
+                "Edge recording storage is near or over the configured limit".to_string(),
+            ),
             created_by_graph: None,
             fields: vec![
                 field("used_bytes", PortType::Num),
@@ -340,7 +363,17 @@ pub fn create_category(db: &Db, tenant_id: Uuid, name: &str, source: &str) {
 pub fn list_events(db: &Db, tenant_id: Uuid) -> Vec<TenantEvent> {
     let pool = db.pool();
     db.block(async move {
-        sqlx::query_as::<_, (String, String, String, Option<String>, Option<i64>, serde_json::Value)>(
+        sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<Uuid>,
+                serde_json::Value,
+            ),
+        >(
             "SELECT name, category, source, description, created_by_graph, payload
              FROM tenant_events WHERE tenant_id = $1 ORDER BY category, name",
         )
@@ -352,14 +385,16 @@ pub fn list_events(db: &Db, tenant_id: Uuid) -> Vec<TenantEvent> {
             Vec::new()
         })
         .into_iter()
-        .map(|(name, category, source, description, gid, payload)| TenantEvent {
-            name,
-            category,
-            source,
-            description,
-            created_by_graph: gid.map(|v| v as u32),
-            fields: serde_json::from_value(payload).unwrap_or_default(),
-        })
+        .map(
+            |(name, category, source, description, gid, payload)| TenantEvent {
+                name,
+                category,
+                source,
+                description,
+                created_by_graph: gid,
+                fields: serde_json::from_value(payload).unwrap_or_default(),
+            },
+        )
         .collect()
     })
 }
@@ -372,7 +407,7 @@ pub fn create_event(
     name: &str,
     category: &str,
     description: Option<&str>,
-    created_by_graph: Option<u32>,
+    created_by_graph: Option<Uuid>,
     fields: &[EventField],
 ) {
     let pool = db.pool();
@@ -399,7 +434,7 @@ pub fn create_event(
         .bind(&name)
         .bind(&category)
         .bind(&description)
-        .bind(created_by_graph.map(|v| v as i64))
+        .bind(created_by_graph)
         .bind(payload)
         .execute(&mut *tx)
         .await?;
@@ -433,10 +468,10 @@ pub fn delete_event(db: &Db, tenant_id: Uuid, name: &str) {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RunRecord {
     pub id: Uuid,
-    pub graph_id: u32,
+    pub graph_id: Uuid,
     pub graph_name: String,
     pub trigger_source: String,
-    pub source_graph_id: Option<u32>,
+    pub source_graph_id: Option<Uuid>,
     pub source_graph_name: Option<String>,
     pub event_name: Option<String>,
     pub pod_name: String,
@@ -464,10 +499,10 @@ pub fn insert_run(
     db: &Db,
     tenant_id: Uuid,
     id: Uuid,
-    graph_id: u32,
+    graph_id: Uuid,
     graph_name: &str,
     trigger: TriggerSource,
-    source_graph_id: Option<u32>,
+    source_graph_id: Option<Uuid>,
     source_graph_name: Option<&str>,
     event_name: Option<&str>,
     pod_name: &str,
@@ -486,10 +521,10 @@ pub fn insert_run(
         )
         .bind(id)
         .bind(tenant_id)
-        .bind(graph_id as i64)
+        .bind(graph_id)
         .bind(graph_name)
         .bind(trigger.as_str())
-        .bind(source_graph_id.map(|v| v as i64))
+        .bind(source_graph_id)
         .bind(source_graph_name)
         .bind(event_name)
         .bind(pod_name)
@@ -549,7 +584,7 @@ pub fn insert_run_logs(db: &Db, run_id: Uuid, batch: &[RunLogLine]) {
 }
 
 /// Recent runs for a tenant, newest first; optionally filtered to one graph. Empty on error.
-pub fn list_runs(db: &Db, tenant_id: Uuid, graph_id: Option<u32>, limit: i64) -> Vec<RunRecord> {
+pub fn list_runs(db: &Db, tenant_id: Uuid, graph_id: Option<Uuid>, limit: i64) -> Vec<RunRecord> {
     let pool = db.pool();
     db.block(async move {
         let rows = if let Some(gid) = graph_id {
@@ -560,7 +595,7 @@ pub fn list_runs(db: &Db, tenant_id: Uuid, graph_id: Option<u32>, limit: i64) ->
                  ORDER BY started_at DESC LIMIT $3",
             )
             .bind(tenant_id)
-            .bind(gid as i64)
+            .bind(gid)
             .bind(limit)
             .fetch_all(&pool)
             .await
@@ -639,10 +674,10 @@ pub fn mark_orphaned_runs(db: &Db, pod_name: &str) {
 #[derive(sqlx::FromRow)]
 struct RunRow {
     id: Uuid,
-    graph_id: i64,
+    graph_id: Uuid,
     graph_name: String,
     trigger_source: String,
-    source_graph_id: Option<i64>,
+    source_graph_id: Option<Uuid>,
     source_graph_name: Option<String>,
     event_name: Option<String>,
     pod_name: String,
@@ -656,10 +691,10 @@ impl RunRow {
     fn into_record(self) -> RunRecord {
         RunRecord {
             id: self.id,
-            graph_id: self.graph_id as u32,
+            graph_id: self.graph_id,
             graph_name: self.graph_name,
             trigger_source: self.trigger_source,
-            source_graph_id: self.source_graph_id.map(|v| v as u32),
+            source_graph_id: self.source_graph_id,
             source_graph_name: self.source_graph_name,
             event_name: self.event_name,
             pod_name: self.pod_name,

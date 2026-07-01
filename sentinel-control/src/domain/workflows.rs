@@ -18,8 +18,8 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use app_core::workflows::{
-    self, ConcurrencyPolicy, Graph as WfGraph, NodeKind as WfNodeKind, Trigger, VariableDecl, Viewport,
-    Workflows,
+    self, ConcurrencyPolicy, Graph as WfGraph, NodeKind as WfNodeKind, Trigger, VariableDecl,
+    Viewport, Workflows,
 };
 
 use super::{blocking, err, tenant_of, ApiErr};
@@ -36,10 +36,22 @@ pub fn router() -> Router<AppState> {
         .route("/workflows/runs/node-state", get(node_state))
         .route("/workflows/runs/:run_id/logs", get(run_logs))
         .route("/workflows/events", get(events_stream))
-        .route("/workflows/event-registry", get(list_events).post(create_event))
-        .route("/workflows/event-registry/:name", axum::routing::delete(delete_event))
-        .route("/workflows/event-categories", get(list_categories).post(create_category))
-        .route("/workflows/:id", axum::routing::patch(rename).delete(remove))
+        .route(
+            "/workflows/event-registry",
+            get(list_events).post(create_event),
+        )
+        .route(
+            "/workflows/event-registry/:name",
+            axum::routing::delete(delete_event),
+        )
+        .route(
+            "/workflows/event-categories",
+            get(list_categories).post(create_category),
+        )
+        .route(
+            "/workflows/:id",
+            axum::routing::patch(rename).delete(remove),
+        )
         .route("/workflows/:id/trigger", put(set_trigger))
         .route("/workflows/:id/concurrency", put(set_concurrency))
         .route("/workflows/:id/viewport", put(set_viewport))
@@ -49,12 +61,18 @@ pub fn router() -> Router<AppState> {
         .route("/workflows/:id/debug", put(set_debug))
         .route("/workflows/:id/run", post(run))
         .route("/workflows/:id/nodes", post(add_node))
-        .route("/workflows/:id/nodes/:nid", axum::routing::delete(remove_node))
+        .route(
+            "/workflows/:id/nodes/:nid",
+            axum::routing::delete(remove_node),
+        )
         .route("/workflows/:id/nodes/:nid/move", put(move_node))
         .route("/workflows/:id/nodes/:nid/config", put(set_node_config))
         .route("/workflows/:id/nodes/:nid/memoize", put(set_node_memoize))
         .route("/workflows/:id/edges", post(add_edge))
-        .route("/workflows/:id/edges/:idx", axum::routing::delete(remove_edge))
+        .route(
+            "/workflows/:id/edges/:idx",
+            axum::routing::delete(remove_edge),
+        )
 }
 
 // ---- sentinel-flow proxy ----------------------------------------------------
@@ -70,7 +88,10 @@ fn flow_base() -> String {
 
 /// Poke the engine to re-read graphs after an edit (best-effort, fire-and-forget).
 async fn poke_reload() {
-    let _ = reqwest::Client::new().post(format!("{}/graphs/reload", flow_base())).send().await;
+    let _ = reqwest::Client::new()
+        .post(format!("{}/graphs/reload", flow_base()))
+        .send()
+        .await;
 }
 
 // ---- mutation helper --------------------------------------------------------
@@ -97,11 +118,16 @@ where
 
 // ---- read -------------------------------------------------------------------
 
-async fn list(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<WfGraph>>, ApiErr> {
+async fn list(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<WfGraph>>, ApiErr> {
     auth::require(&c, "workflows.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    Ok(Json(blocking(move || workflows::repo::load(&db, tid)).await?))
+    Ok(Json(
+        blocking(move || workflows::repo::load(&db, tid)).await?,
+    ))
 }
 
 /// Static node metadata (kinds + typed ports + default config) for the palette.
@@ -126,7 +152,10 @@ async fn catalog(UserClaims(c): UserClaims) -> Result<Json<Value>, ApiErr> {
             let (inputs, outputs) = if k.is_pure() {
                 (ports(k.input_ports()), ports(k.output_ports()))
             } else {
-                (with_exec(&exec_in, k.input_ports()), with_exec(k.exec_out_ports(), k.output_ports()))
+                (
+                    with_exec(&exec_in, k.input_ports()),
+                    with_exec(k.exec_out_ports(), k.output_ports()),
+                )
             };
             json!({
                 "slug": k.slug(),
@@ -150,7 +179,13 @@ async fn run_states(UserClaims(c): UserClaims) -> Result<Json<Value>, ApiErr> {
         .send()
         .await
         .ok()
-        .and_then(|r| if r.status().is_success() { Some(r) } else { None });
+        .and_then(|r| {
+            if r.status().is_success() {
+                Some(r)
+            } else {
+                None
+            }
+        });
     match v {
         Some(r) => Ok(Json(r.json::<Value>().await.unwrap_or_else(|_| json!({})))),
         None => Ok(Json(json!({}))),
@@ -159,7 +194,7 @@ async fn run_states(UserClaims(c): UserClaims) -> Result<Json<Value>, ApiErr> {
 
 #[derive(Deserialize)]
 struct HistoryQuery {
-    graph: Option<u32>,
+    graph: Option<uuid::Uuid>,
     limit: Option<i64>,
 }
 
@@ -184,7 +219,7 @@ async fn run_history(
 #[derive(Deserialize)]
 struct FrameQuery {
     token: String,
-    graph: u32,
+    graph: uuid::Uuid,
     node: u32,
 }
 
@@ -196,20 +231,30 @@ async fn run_frame(
     State(st): State<AppState>,
     Query(q): Query<FrameQuery>,
 ) -> Result<axum::response::Response, ApiErr> {
-    let claims = auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    let claims =
+        auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
     auth::require(&claims, "workflows.read")?;
     let tid = tenant_of(&claims)?;
-    let url = format!("{}/runs/frame?tenant={}&graph={}&node={}", flow_base(), tid, q.graph, q.node);
-    let resp = st
-        .http
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, format!("sentinel-flow unreachable: {e}")))?;
+    let url = format!(
+        "{}/runs/frame?tenant={}&graph={}&node={}",
+        flow_base(),
+        tid,
+        q.graph,
+        q.node
+    );
+    let resp = st.http.get(url).send().await.map_err(|e| {
+        err(
+            StatusCode::BAD_GATEWAY,
+            format!("sentinel-flow unreachable: {e}"),
+        )
+    })?;
     if !resp.status().is_success() {
         return Ok(StatusCode::NOT_FOUND.into_response());
     }
-    let bytes = resp.bytes().await.map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
     Ok(([(axum::http::header::CONTENT_TYPE, "image/jpeg")], bytes).into_response())
 }
 
@@ -219,15 +264,25 @@ async fn node_state(
     State(st): State<AppState>,
     Query(q): Query<FrameQuery>,
 ) -> Result<Json<Value>, ApiErr> {
-    let claims = auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    let claims =
+        auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
     auth::require(&claims, "workflows.read")?;
     let tid = tenant_of(&claims)?;
-    let url = format!("{}/runs/node-state?tenant={}&graph={}&node={}", flow_base(), tid, q.graph, q.node);
+    let url = format!(
+        "{}/runs/node-state?tenant={}&graph={}&node={}",
+        flow_base(),
+        tid,
+        q.graph,
+        q.node
+    );
     Ok(Json(flow_get_json(&url).await))
 }
 
 /// All persisted signal lines for one of this tenant's runs. Proxies sentinel-flow.
-async fn run_logs(UserClaims(c): UserClaims, Path(run_id): Path<Uuid>) -> Result<Json<Value>, ApiErr> {
+async fn run_logs(
+    UserClaims(c): UserClaims,
+    Path(run_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiErr> {
     auth::require(&c, "workflows.read")?;
     let tid = tenant_of(&c)?;
     let url = format!("{}/runs/{}/logs?tenant={}", flow_base(), run_id, tid);
@@ -248,18 +303,27 @@ async fn flow_get_json(url: &str) -> Value {
 /// The events the editor palette offers: the platform's system events (always available, with
 /// payload schema) merged with this tenant's own registered events. System events win on a
 /// name clash (they're platform-defined).
-async fn list_events(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Value>, ApiErr> {
+async fn list_events(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Value>, ApiErr> {
     auth::require(&c, "workflows.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     let events = blocking(move || {
         let mut out = workflows::repo::system_events();
         let sys: std::collections::HashSet<String> = out.iter().map(|e| e.name.clone()).collect();
-        out.extend(workflows::repo::list_events(&db, tid).into_iter().filter(|e| !sys.contains(&e.name)));
+        out.extend(
+            workflows::repo::list_events(&db, tid)
+                .into_iter()
+                .filter(|e| !sys.contains(&e.name)),
+        );
         out
     })
     .await?;
-    Ok(Json(serde_json::to_value(events).unwrap_or_else(|_| json!([]))))
+    Ok(Json(
+        serde_json::to_value(events).unwrap_or_else(|_| json!([])),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -284,11 +348,31 @@ async fn create_event(
     if name.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "event name is required"));
     }
-    let category = b.category.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("General").to_string();
-    let description = b.description.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let category = b
+        .category
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("General")
+        .to_string();
+    let description = b
+        .description
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let fields = sanitize_event_fields(b.fields)?;
     let db = st.db.clone();
-    blocking(move || workflows::repo::create_event(&db, tid, &name, &category, description.as_deref(), None, &fields)).await?;
+    blocking(move || {
+        workflows::repo::create_event(
+            &db,
+            tid,
+            &name,
+            &category,
+            description.as_deref(),
+            None,
+            &fields,
+        )
+    })
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -305,10 +389,16 @@ fn sanitize_event_fields(
             continue;
         }
         if f.name.eq_ignore_ascii_case("exec") {
-            return Err(err(StatusCode::BAD_REQUEST, "'exec' is a reserved field name"));
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "'exec' is a reserved field name",
+            ));
         }
         if !seen.insert(f.name.to_lowercase()) {
-            return Err(err(StatusCode::BAD_REQUEST, format!("duplicate payload field '{}'", f.name)));
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                format!("duplicate payload field '{}'", f.name),
+            ));
         }
         out.push(f);
     }
@@ -316,7 +406,11 @@ fn sanitize_event_fields(
 }
 
 /// Remove a registered tenant event.
-async fn delete_event(UserClaims(c): UserClaims, State(st): State<AppState>, Path(name): Path<String>) -> Result<StatusCode, ApiErr> {
+async fn delete_event(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
@@ -325,12 +419,17 @@ async fn delete_event(UserClaims(c): UserClaims, State(st): State<AppState>, Pat
 }
 
 /// The tenant's event categories (name + source).
-async fn list_categories(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Value>, ApiErr> {
+async fn list_categories(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Value>, ApiErr> {
     auth::require(&c, "workflows.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     let cats = blocking(move || workflows::repo::list_categories(&db, tid)).await?;
-    Ok(Json(serde_json::to_value(cats).unwrap_or_else(|_| json!([]))))
+    Ok(Json(
+        serde_json::to_value(cats).unwrap_or_else(|_| json!([])),
+    ))
 }
 
 /// Create a (user) event category, idempotently.
@@ -365,7 +464,8 @@ async fn events_stream(
     State(st): State<AppState>,
     Query(q): Query<EventsQuery>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, ApiErr> {
-    let claims = auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    let claims =
+        auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
     auth::require(&claims, "workflows.read")?;
     let tid = tenant_of(&claims)?.to_string();
 
@@ -376,11 +476,17 @@ async fn events_stream(
         tokio::spawn(async move {
             let client = match redis::Client::open(url) {
                 Ok(c) => c,
-                Err(e) => { log::warn!("events relay: bad redis url: {e}"); return; }
+                Err(e) => {
+                    log::warn!("events relay: bad redis url: {e}");
+                    return;
+                }
             };
             let mut pubsub = match client.get_async_pubsub().await {
                 Ok(p) => p,
-                Err(e) => { log::warn!("events relay: redis pubsub connect failed: {e}"); return; }
+                Err(e) => {
+                    log::warn!("events relay: redis pubsub connect failed: {e}");
+                    return;
+                }
             };
             if let Err(e) = pubsub.subscribe(&chan).await {
                 log::warn!("events relay: subscribe {chan} failed: {e}");
@@ -388,7 +494,9 @@ async fn events_stream(
             }
             let mut on_msg = pubsub.on_message();
             while let Some(msg) = on_msg.next().await {
-                let Ok(payload) = msg.get_payload::<String>() else { continue };
+                let Ok(payload) = msg.get_payload::<String>() else {
+                    continue;
+                };
                 if tx.send(Ok(Event::default().data(payload))).await.is_err() {
                     return; // browser disconnected
                 }
@@ -425,7 +533,9 @@ async fn relay_flow_events(
     let mut buf = String::new();
     while let Some(item) = stream.next().await {
         let Ok(bytes) = item else { return };
-        let Ok(text) = std::str::from_utf8(&bytes) else { continue };
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            continue;
+        };
         buf.push_str(text);
         // Drain all complete lines from the buffer, forward matching tenant's data events.
         while let Some(nl) = buf.find('\n') {
@@ -434,7 +544,11 @@ async fn relay_flow_events(
             if let Some(data) = line.strip_prefix("data: ") {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
                     if v.get("tenant").and_then(|t| t.as_str()) == Some(tenant.as_str()) {
-                        if tx.send(Ok(Event::default().data(data.to_string()))).await.is_err() {
+                        if tx
+                            .send(Ok(Event::default().data(data.to_string())))
+                            .await
+                            .is_err()
+                        {
                             return; // browser disconnected
                         }
                     }
@@ -451,15 +565,28 @@ struct NameReq {
     name: String,
 }
 
-async fn create(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): Json<NameReq>) -> Result<Json<u32>, ApiErr> {
+async fn create(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(b): Json<NameReq>,
+) -> Result<Json<uuid::Uuid>, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
-    let name = if b.name.trim().is_empty() { "Untitled".to_string() } else { b.name.trim().to_string() };
+    let name = if b.name.trim().is_empty() {
+        "Untitled".to_string()
+    } else {
+        b.name.trim().to_string()
+    };
     let id = mutate(&st, tid, move |wf| Ok(wf.create_graph(&name))).await?;
     Ok(Json(id))
 }
 
-async fn rename(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<NameReq>) -> Result<StatusCode, ApiErr> {
+async fn rename(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<NameReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
@@ -470,7 +597,11 @@ async fn rename(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id):
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>) -> Result<StatusCode, ApiErr> {
+async fn remove(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
@@ -487,13 +618,20 @@ struct TriggerReq {
     every_secs: Option<u64>,
 }
 
-async fn set_trigger(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<TriggerReq>) -> Result<StatusCode, ApiErr> {
+async fn set_trigger(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<TriggerReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
         let trigger = match b.kind.as_str() {
             "manual" => Trigger::Manual,
-            "cron" => Trigger::Cron { every_secs: b.every_secs.unwrap_or(60).max(1) },
+            "cron" => Trigger::Cron {
+                every_secs: b.every_secs.unwrap_or(60).max(1),
+            },
             other => return Err(format!("unknown trigger kind '{other}'")),
         };
         let g = wf.graph_mut(id).ok_or("graph not found")?;
@@ -512,14 +650,23 @@ struct ConcurrencyReq {
     max: Option<u32>,
 }
 
-async fn set_concurrency(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<ConcurrencyReq>) -> Result<StatusCode, ApiErr> {
+async fn set_concurrency(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<ConcurrencyReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
         let policy = match b.kind.as_str() {
             "skip" => ConcurrencyPolicy::SkipIfRunning,
-            "queue" => ConcurrencyPolicy::QueueSingle { max_queued: b.max.unwrap_or(1).max(1) },
-            "concurrent" => ConcurrencyPolicy::Concurrent { max_concurrent: b.max.unwrap_or(2).max(1) },
+            "queue" => ConcurrencyPolicy::QueueSingle {
+                max_queued: b.max.unwrap_or(1).max(1),
+            },
+            "concurrent" => ConcurrencyPolicy::Concurrent {
+                max_concurrent: b.max.unwrap_or(2).max(1),
+            },
             other => return Err(format!("unknown concurrency kind '{other}'")),
         };
         wf.graph_mut(id).ok_or("graph not found")?.concurrency = policy;
@@ -538,7 +685,12 @@ struct ViewportReq {
 
 /// Replace a graph's variable declarations (the Variables panel). Get/Set Variable nodes that
 /// reference a removed/renamed variable are left as-is — the editor re-syncs/warns separately.
-async fn set_variables(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<Vec<VariableDecl>>) -> Result<StatusCode, ApiErr> {
+async fn set_variables(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<Vec<VariableDecl>>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
@@ -549,11 +701,20 @@ async fn set_variables(UserClaims(c): UserClaims, State(st): State<AppState>, Pa
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn set_viewport(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<ViewportReq>) -> Result<StatusCode, ApiErr> {
+async fn set_viewport(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<ViewportReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
-        wf.graph_mut(id).ok_or("graph not found")?.viewport = Viewport { x: b.x, y: b.y, zoom: b.zoom };
+        wf.graph_mut(id).ok_or("graph not found")?.viewport = Viewport {
+            x: b.x,
+            y: b.y,
+            zoom: b.zoom,
+        };
         Ok(())
     })
     .await?;
@@ -565,7 +726,12 @@ struct BoolReq {
     value: bool,
 }
 
-async fn set_enabled(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<BoolReq>) -> Result<StatusCode, ApiErr> {
+async fn set_enabled(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<BoolReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
@@ -576,7 +742,12 @@ async fn set_enabled(UserClaims(c): UserClaims, State(st): State<AppState>, Path
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn set_run_orphans(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<BoolReq>) -> Result<StatusCode, ApiErr> {
+async fn set_run_orphans(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<BoolReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
@@ -587,7 +758,12 @@ async fn set_run_orphans(UserClaims(c): UserClaims, State(st): State<AppState>, 
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn set_debug(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<BoolReq>) -> Result<StatusCode, ApiErr> {
+async fn set_debug(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<BoolReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
@@ -607,18 +783,31 @@ struct AddNodeReq {
     y: i32,
 }
 
-async fn add_node(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<AddNodeReq>) -> Result<Json<u32>, ApiErr> {
+async fn add_node(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<AddNodeReq>,
+) -> Result<Json<u32>, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     let nid = mutate(&st, tid, move |wf| {
-        let kind = WfNodeKind::from_slug(&b.kind).ok_or_else(|| format!("unknown node kind '{}'", b.kind))?;
-        Ok(wf.graph_mut(id).ok_or("graph not found")?.add_node(kind, b.x, b.y))
+        let kind = WfNodeKind::from_slug(&b.kind)
+            .ok_or_else(|| format!("unknown node kind '{}'", b.kind))?;
+        Ok(wf
+            .graph_mut(id)
+            .ok_or("graph not found")?
+            .add_node(kind, b.x, b.y))
     })
     .await?;
     Ok(Json(nid))
 }
 
-async fn remove_node(UserClaims(c): UserClaims, State(st): State<AppState>, Path((id, nid)): Path<(u32, u32)>) -> Result<StatusCode, ApiErr> {
+async fn remove_node(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path((id, nid)): Path<(uuid::Uuid, u32)>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
@@ -635,7 +824,12 @@ struct MoveReq {
     y: i32,
 }
 
-async fn move_node(UserClaims(c): UserClaims, State(st): State<AppState>, Path((id, nid)): Path<(u32, u32)>, Json(b): Json<MoveReq>) -> Result<StatusCode, ApiErr> {
+async fn move_node(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path((id, nid)): Path<(uuid::Uuid, u32)>,
+    Json(b): Json<MoveReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
@@ -649,7 +843,12 @@ async fn move_node(UserClaims(c): UserClaims, State(st): State<AppState>, Path((
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn set_node_config(UserClaims(c): UserClaims, State(st): State<AppState>, Path((id, nid)): Path<(u32, u32)>, Json(config): Json<Value>) -> Result<StatusCode, ApiErr> {
+async fn set_node_config(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path((id, nid)): Path<(uuid::Uuid, u32)>,
+    Json(config): Json<Value>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
@@ -666,11 +865,20 @@ struct MemoizeReq {
     memoize: bool,
 }
 
-async fn set_node_memoize(UserClaims(c): UserClaims, State(st): State<AppState>, Path((id, nid)): Path<(u32, u32)>, Json(b): Json<MemoizeReq>) -> Result<StatusCode, ApiErr> {
+async fn set_node_memoize(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path((id, nid)): Path<(uuid::Uuid, u32)>,
+    Json(b): Json<MemoizeReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
-        wf.graph_mut(id).ok_or("graph not found")?.node_mut(nid).ok_or("node not found")?.memoize = b.memoize;
+        wf.graph_mut(id)
+            .ok_or("graph not found")?
+            .node_mut(nid)
+            .ok_or("node not found")?
+            .memoize = b.memoize;
         Ok(())
     })
     .await?;
@@ -685,17 +893,28 @@ struct AddEdgeReq {
     to_port: String,
 }
 
-async fn add_edge(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<u32>, Json(b): Json<AddEdgeReq>) -> Result<StatusCode, ApiErr> {
+async fn add_edge(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<AddEdgeReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
-        wf.graph_mut(id).ok_or("graph not found")?.add_edge(b.from, &b.from_port, b.to, &b.to_port)
+        wf.graph_mut(id)
+            .ok_or("graph not found")?
+            .add_edge(b.from, &b.from_port, b.to, &b.to_port)
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn remove_edge(UserClaims(c): UserClaims, State(st): State<AppState>, Path((id, idx)): Path<(u32, usize)>) -> Result<StatusCode, ApiErr> {
+async fn remove_edge(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path((id, idx)): Path<(uuid::Uuid, usize)>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
@@ -711,7 +930,10 @@ async fn remove_edge(UserClaims(c): UserClaims, State(st): State<AppState>, Path
 /// Run-now: ask sentinel-flow to fire this tenant's graph immediately. The flow pod is
 /// multi-tenant, so the caller's tenant id is passed through and the run is bound to that
 /// tenant's edge.
-async fn run(UserClaims(c): UserClaims, Path(id): Path<u32>) -> Result<Json<String>, ApiErr> {
+async fn run(
+    UserClaims(c): UserClaims,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<String>, ApiErr> {
     auth::require(&c, "workflows.run")?;
     let tid = tenant_of(&c)?;
     let resp = reqwest::Client::new()
@@ -721,8 +943,16 @@ async fn run(UserClaims(c): UserClaims, Path(id): Path<u32>) -> Result<Json<Stri
         .await;
     match resp {
         Ok(r) if r.status().is_success() => Ok(Json("Run accepted.".into())),
-        Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => Err(err(StatusCode::NOT_FOUND, "graph not found")),
-        Ok(r) => Err(err(StatusCode::BAD_GATEWAY, format!("sentinel-flow error: {}", r.status()))),
-        Err(e) => Err(err(StatusCode::BAD_GATEWAY, format!("sentinel-flow unreachable: {e}"))),
+        Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => {
+            Err(err(StatusCode::NOT_FOUND, "graph not found"))
+        }
+        Ok(r) => Err(err(
+            StatusCode::BAD_GATEWAY,
+            format!("sentinel-flow error: {}", r.status()),
+        )),
+        Err(e) => Err(err(
+            StatusCode::BAD_GATEWAY,
+            format!("sentinel-flow unreachable: {e}"),
+        )),
     }
 }

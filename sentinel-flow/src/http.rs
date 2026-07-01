@@ -15,8 +15,8 @@ use axum::routing::{get, post};
 use axum::Router;
 use serde::Deserialize;
 use serde_json::json;
-use uuid::Uuid;
 use tower_http::cors::CorsLayer;
+use uuid::Uuid;
 
 use crate::engine;
 use crate::state::AppState;
@@ -72,7 +72,7 @@ struct TenantQuery {
 struct HistoryQuery {
     tenant: Uuid,
     #[serde(default)]
-    graph: Option<u32>,
+    graph: Option<uuid::Uuid>,
     #[serde(default)]
     limit: Option<i64>,
 }
@@ -84,7 +84,7 @@ async fn run_states(
     State(state): State<Arc<AppState>>,
     Query(q): Query<TenantQuery>,
 ) -> impl IntoResponse {
-    let map: std::collections::HashMap<u32, crate::state::GraphActivity> = state
+    let map: std::collections::HashMap<uuid::Uuid, crate::state::GraphActivity> = state
         .activity
         .lock()
         .unwrap()
@@ -98,7 +98,7 @@ async fn run_states(
 #[derive(Deserialize)]
 struct CreateRun {
     tenant_id: Uuid,
-    graph_id: u32,
+    graph_id: uuid::Uuid,
 }
 
 /// Request a manual run of a tenant's graph. Async-job style: the engine applies the
@@ -112,7 +112,10 @@ async fn create_run(
     let policy = crate::state::find_graph(&state.store, body.tenant_id, body.graph_id)
         .map(|g| g.concurrency.clone());
     let Some(policy) = policy else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": "no such graph" })));
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no such graph" })),
+        );
     };
     engine::fire_graph(
         &state,
@@ -121,7 +124,10 @@ async fn create_run(
         &policy,
         app_core::workflows::TriggerSource::Manual,
     );
-    (StatusCode::ACCEPTED, Json(json!({ "graph_id": body.graph_id, "accepted": true })))
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({ "graph_id": body.graph_id, "accepted": true })),
+    )
 }
 
 /// Recent run history for a tenant (newest first), optionally filtered to one graph
@@ -138,7 +144,7 @@ async fn run_history(
 #[derive(Deserialize)]
 struct FrameQuery {
     tenant: Uuid,
-    graph: u32,
+    graph: uuid::Uuid,
     node: u32,
 }
 
@@ -150,9 +156,19 @@ async fn run_frame(
     Query(q): Query<FrameQuery>,
 ) -> impl IntoResponse {
     // Fast path: in-memory cache (current or very recent run).
-    let bytes = state.node_frames.lock().unwrap().get(&(q.tenant, q.graph, q.node)).cloned();
+    let bytes = state
+        .node_frames
+        .lock()
+        .unwrap()
+        .get(&(q.tenant, q.graph, q.node))
+        .cloned();
     if let Some(jpeg) = bytes {
-        return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "image/jpeg")], jpeg).into_response();
+        return (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "image/jpeg")],
+            jpeg,
+        )
+            .into_response();
     }
     // Fallback: persisted frame from workflow_node_state (survives flow restarts and browser refreshes).
     let db = state.db.clone();
@@ -163,10 +179,19 @@ async fn run_frame(
     .ok()
     .flatten();
     match saved
-        .and_then(|v| v.get("jpeg_b64").and_then(|b| b.as_str()).map(str::to_string))
+        .and_then(|v| {
+            v.get("jpeg_b64")
+                .and_then(|b| b.as_str())
+                .map(str::to_string)
+        })
         .and_then(|b64| base64::engine::general_purpose::STANDARD.decode(b64).ok())
     {
-        Some(jpeg) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "image/jpeg")], jpeg).into_response(),
+        Some(jpeg) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "image/jpeg")],
+            jpeg,
+        )
+            .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }

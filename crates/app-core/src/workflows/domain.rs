@@ -12,6 +12,7 @@ pub use crate::alerts::AlertLevel;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Ports
@@ -87,11 +88,25 @@ impl BBox {
         Self { x1, y1, x2, y2 }
     }
     pub fn from_xywh(x: i64, y: i64, w: i64, h: i64) -> Self {
-        Self { x1: x, y1: y, x2: x + w, y2: y + h }
+        Self {
+            x1: x,
+            y1: y,
+            x2: x + w,
+            y2: y + h,
+        }
     }
     /// Parse 4 numbers (xyxy) — returns `None` if fewer than 4 are present.
     pub fn from_xyxy_slice(v: &[i64]) -> Option<Self> {
-        if v.len() >= 4 { Some(Self { x1: v[0], y1: v[1], x2: v[2], y2: v[3] }) } else { None }
+        if v.len() >= 4 {
+            Some(Self {
+                x1: v[0],
+                y1: v[1],
+                x2: v[2],
+                y2: v[3],
+            })
+        } else {
+            None
+        }
     }
     pub fn to_array(self) -> [i64; 4] {
         [self.x1, self.y1, self.x2, self.y2]
@@ -124,7 +139,11 @@ pub struct ResolvedPort {
 
 impl From<&Port> for ResolvedPort {
     fn from(p: &Port) -> Self {
-        ResolvedPort { name: p.name.to_string(), ty: p.ty, required: p.required }
+        ResolvedPort {
+            name: p.name.to_string(),
+            ty: p.ty,
+            required: p.required,
+        }
     }
 }
 
@@ -146,7 +165,11 @@ fn payload_ports(config: &Value) -> Vec<ResolvedPort> {
                     let ty = f
                         .get("type")
                         .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())?;
-                    Some(ResolvedPort { name, ty, required: false })
+                    Some(ResolvedPort {
+                        name,
+                        ty,
+                        required: false,
+                    })
                 })
                 .collect()
         })
@@ -162,7 +185,11 @@ fn variable_port(config: &Value, required: bool) -> Vec<ResolvedPort> {
         .get("type")
         .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())
         .unwrap_or(PortType::Text);
-    vec![ResolvedPort { name: "value".to_string(), ty, required }]
+    vec![ResolvedPort {
+        name: "value".to_string(),
+        ty,
+        required,
+    }]
 }
 
 // ---------------------------------------------------------------------------
@@ -373,9 +400,9 @@ const RECORD_PRESENCE_IN: [Port; 8] = [
     p("category", PortType::Text, false),
     p("label", PortType::Text, false),
     p("camera", PortType::Camera, false),
-    p("bbox", PortType::Bbox, false),       // [x1,y1,x2,y2] from BreakPersonDetection
-    p("frame_w", PortType::Num, false),     // source image width in pixels
-    p("frame_h", PortType::Num, false),     // source image height in pixels
+    p("bbox", PortType::Bbox, false), // [x1,y1,x2,y2] from BreakPersonDetection
+    p("frame_w", PortType::Num, false), // source image width in pixels
+    p("frame_h", PortType::Num, false), // source image height in pixels
     p("duration_secs", PortType::Num, false),
 ];
 const RECORD_PRESENCE_OUT: [Port; 2] = [
@@ -454,12 +481,16 @@ const IF_IN: [Port; 1] = [p("condition", PortType::Bool, true)];
 // For each: iterate ANY array (a wired `*Array`, or a text list authored in config).
 // `items`/`item` are `Any` so one loop node handles every element type.
 const FOR_EACH_IN: [Port; 1] = [p("items", PortType::Any, false)];
-const FOR_EACH_OUT: [Port; 2] =
-    [p("item", PortType::Any, false), p("index", PortType::Num, false)];
+const FOR_EACH_OUT: [Port; 2] = [
+    p("item", PortType::Any, false),
+    p("index", PortType::Num, false),
+];
 
 // Object detection: detect any COCO class — class chosen by config or wired `class` input.
-const OBJECT_DETECTION_IN: [Port; 2] =
-    [p("image", PortType::Image, true), p("class", PortType::Text, false)];
+const OBJECT_DETECTION_IN: [Port; 2] = [
+    p("image", PortType::Image, true),
+    p("class", PortType::Text, false),
+];
 const OBJECT_DETECTION_OUT: [Port; 6] = [
     p("count", PortType::Num, false),
     p("confidence", PortType::Num, false), // percent 0..100 (top detection)
@@ -471,11 +502,15 @@ const OBJECT_DETECTION_OUT: [Port; 6] = [
 
 // Break (destructure) nodes — split a struct element into its fields, like Unreal's Break.
 const BREAK_PERSON_IN: [Port; 1] = [p("person", PortType::Person, true)];
-const BREAK_PERSON_OUT: [Port; 2] =
-    [p("bbox", PortType::Bbox, false), p("confidence", PortType::Num, false)];
+const BREAK_PERSON_OUT: [Port; 2] = [
+    p("bbox", PortType::Bbox, false),
+    p("confidence", PortType::Num, false),
+];
 const BREAK_DETECTION_IN: [Port; 1] = [p("detection", PortType::Person, true)];
-const BREAK_DETECTION_OUT: [Port; 2] =
-    [p("bbox", PortType::Bbox, false), p("confidence", PortType::Num, false)];
+const BREAK_DETECTION_OUT: [Port; 2] = [
+    p("bbox", PortType::Bbox, false),
+    p("confidence", PortType::Num, false),
+];
 const BREAK_FACE_IN: [Port; 1] = [p("face", PortType::Face, true)];
 const BREAK_FACE_OUT: [Port; 3] = [
     p("bbox", PortType::Bbox, false),
@@ -484,8 +519,10 @@ const BREAK_FACE_OUT: [Port; 3] = [
 ];
 
 // Motion detection: compare two frames; report whether/how much they differ.
-const MOTION_IN: [Port; 2] =
-    [p("image_a", PortType::Image, true), p("image_b", PortType::Image, true)];
+const MOTION_IN: [Port; 2] = [
+    p("image_a", PortType::Image, true),
+    p("image_b", PortType::Image, true),
+];
 const MOTION_OUT: [Port; 3] = [
     p("moved", PortType::Bool, false),
     p("score", PortType::Num, false),
@@ -514,17 +551,17 @@ const RECOGNIZE_PERSON_OUT: [Port; 4] = [
 ];
 
 // Print: a message to echo to the Console (+ optional on-screen flash).
-const PRINT_IN: [Port; 2] =
-    [p("message", PortType::Text, false), p("on_screen", PortType::Bool, false)];
+const PRINT_IN: [Port; 2] = [
+    p("message", PortType::Text, false),
+    p("on_screen", PortType::Bool, false),
+];
 
 // Show image: a debug sink — an image in, flashed on the canvas. No data out.
 const SHOW_IMAGE_IN: [Port; 1] = [p("image", PortType::Image, true)];
 
 // Flip Flop: exec a/b outputs (alternating), plus is_a bool data output.
-const EXEC_OUT_FLIP_FLOP: [Port; 2] = [
-    p("a", PortType::Exec, false),
-    p("b", PortType::Exec, false),
-];
+const EXEC_OUT_FLIP_FLOP: [Port; 2] =
+    [p("a", PortType::Exec, false), p("b", PortType::Exec, false)];
 const FLIP_FLOP_OUT: [Port; 1] = [p("is_a", PortType::Bool, false)];
 
 // Compare: two numeric inputs (wired or literal) → a bool result.
@@ -541,8 +578,10 @@ const COOLDOWN_OUT: [Port; 2] = [
     p("ok", PortType::Bool, false),
 ];
 
-const DRAW_BBOX_IN: [Port; 2] =
-    [p("image", PortType::Image, true), p("bbox", PortType::Bbox, true)];
+const DRAW_BBOX_IN: [Port; 2] = [
+    p("image", PortType::Image, true),
+    p("bbox", PortType::Bbox, true),
+];
 // `bbox` is the box actually drawn — i.e. the input box after the `expand` config is applied,
 // so downstream nodes (blur, crop, presence) can reuse the expanded region.
 const DRAW_BBOX_OUT: [Port; 3] = [
@@ -557,13 +596,19 @@ const DRAW_TEXT_IN: [Port; 3] = [
     p("bbox", PortType::Bbox, true),
     p("text", PortType::Text, false),
 ];
-const DRAW_TEXT_OUT: [Port; 2] =
-    [p("image", PortType::Image, false), p("ok", PortType::Bool, false)];
+const DRAW_TEXT_OUT: [Port; 2] = [
+    p("image", PortType::Image, false),
+    p("ok", PortType::Bool, false),
+];
 
-const BLUR_OUTSIDE_BBOX_IN: [Port; 2] =
-    [p("image", PortType::Image, true), p("bbox", PortType::Bbox, true)];
-const BLUR_OUTSIDE_BBOX_OUT: [Port; 2] =
-    [p("image", PortType::Image, false), p("ok", PortType::Bool, false)];
+const BLUR_OUTSIDE_BBOX_IN: [Port; 2] = [
+    p("image", PortType::Image, true),
+    p("bbox", PortType::Bbox, true),
+];
+const BLUR_OUTSIDE_BBOX_OUT: [Port; 2] = [
+    p("image", PortType::Image, false),
+    p("ok", PortType::Bool, false),
+];
 
 const GET_IMAGE_SIZE_IN: [Port; 1] = [p("image", PortType::Image, true)];
 const GET_IMAGE_SIZE_OUT: [Port; 3] = [
@@ -572,11 +617,9 @@ const GET_IMAGE_SIZE_OUT: [Port; 3] = [
     p("ok", PortType::Bool, false),
 ];
 
-const BOOL_OP_IN: [Port; 2] =
-    [p("a", PortType::Bool, false), p("b", PortType::Bool, false)];
+const BOOL_OP_IN: [Port; 2] = [p("a", PortType::Bool, false), p("b", PortType::Bool, false)];
 const NOT_IN: [Port; 1] = [p("a", PortType::Bool, false)];
-const TEXT_COMPARE_IN: [Port; 2] =
-    [p("a", PortType::Text, false), p("b", PortType::Text, false)];
+const TEXT_COMPARE_IN: [Port; 2] = [p("a", PortType::Text, false), p("b", PortType::Text, false)];
 
 // String switch: one required text input (the value to match against the arms).
 const STRING_SWITCH_IN: [Port; 1] = [p("value", PortType::Text, true)];
@@ -586,8 +629,10 @@ const CAMERA_SWITCH_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
 
 // AI If: optional image + question text. Both are optional at the port level so a
 // text-only question (no image wired) works. The node errors at runtime if no question.
-const ASK_AI_IN: [Port; 2] =
-    [p("image", PortType::Image, false), p("question", PortType::Text, false)];
+const ASK_AI_IN: [Port; 2] = [
+    p("image", PortType::Image, false),
+    p("question", PortType::Text, false),
+];
 
 // Reroute: wildcard passthrough — one Any input, one Any output.
 const REROUTE_IN: [Port; 1] = [p("value", PortType::Any, false)];
@@ -831,7 +876,10 @@ impl NodeKind {
         match self {
             NodeKind::GetLastAlert | NodeKind::CreateAlert | NodeKind::DeliverAlert => "Alerts",
             NodeKind::GetRecipient | NodeKind::NotifyRecipient => "Recipients",
-            NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame | NodeKind::GetCameraByName | NodeKind::BreakCamera => "Cameras",
+            NodeKind::CameraSnapshot
+            | NodeKind::GetCurrentFrame
+            | NodeKind::GetCameraByName
+            | NodeKind::BreakCamera => "Cameras",
             NodeKind::DescribeImage | NodeKind::AskAi => "AI",
             NodeKind::Format => "Text",
             NodeKind::Wait
@@ -1013,7 +1061,7 @@ impl NodeKind {
             NodeKind::RecordPresence => &RECORD_PRESENCE_OUT,
             NodeKind::EmitEvent => &NO_PORTS, // exec passes through, no data out
             NodeKind::OnEvent => &NO_PORTS,   // drives its subtree via exec_out only
-            NodeKind::Print => &NO_PORTS, // a sink — exec passes through, no data out
+            NodeKind::Print => &NO_PORTS,     // a sink — exec passes through, no data out
             NodeKind::ShowImage => &NO_PORTS, // a sink — exec passes through, no data out
             NodeKind::DrawBbox => &DRAW_BBOX_OUT,
             NodeKind::DrawText => &DRAW_TEXT_OUT,
@@ -1050,7 +1098,12 @@ impl NodeKind {
     }
 
     pub fn output_port(self, name: &str) -> Option<Port> {
-        if let Some(e) = self.exec_out_ports().iter().copied().find(|p| p.name == name) {
+        if let Some(e) = self
+            .exec_out_ports()
+            .iter()
+            .copied()
+            .find(|p| p.name == name)
+        {
             return Some(e);
         }
         self.output_ports().iter().copied().find(|p| p.name == name)
@@ -1066,25 +1119,35 @@ impl NodeKind {
             }
             NodeKind::DeliverAlert => json!({ "id": "", "timeout_secs": "35" }),
             NodeKind::CameraSnapshot => json!({ "camera": "first", "timeout_secs": "10" }),
-            NodeKind::GetCurrentFrame => json!({ "camera": "first", "max_age_ms": "2000", "timeout_secs": "10" }),
+            NodeKind::GetCurrentFrame => {
+                json!({ "camera": "first", "max_age_ms": "2000", "timeout_secs": "10" })
+            }
             NodeKind::GetCameraByName => json!({ "camera": "" }),
             NodeKind::BreakCamera => json!({}),
             NodeKind::DescribeImage => json!({ "timeout_secs": "65" }),
             NodeKind::NotifyRecipient => json!({ "message": "", "timeout_secs": "35" }),
             NodeKind::Format => json!({ "template": "{p1} — {p2}", "p1": "", "p2": "", "p3": "" }),
             NodeKind::Wait => json!({ "seconds": "1" }),
-            NodeKind::HttpPost => json!({ "url": "", "headers": {}, "fields": {}, "file": "", "timeout_secs": "35" }),
+            NodeKind::HttpPost => {
+                json!({ "url": "", "headers": {}, "fields": {}, "file": "", "timeout_secs": "35" })
+            }
             NodeKind::If => json!({}),
             NodeKind::ForEach => json!({ "items": "" }),
-            NodeKind::MotionDetection => json!({ "sensitivity": "2", "pixel_threshold": "25", "timeout_secs": "30" }),
-            NodeKind::MotionWatch => json!({ "camera": "first", "sensitivity": "2", "pixel_threshold": "25", "sample_gap_ms": "400", "timeout_secs": "15" }),
+            NodeKind::MotionDetection => {
+                json!({ "sensitivity": "2", "pixel_threshold": "25", "timeout_secs": "30" })
+            }
+            NodeKind::MotionWatch => {
+                json!({ "camera": "first", "sensitivity": "2", "pixel_threshold": "25", "sample_gap_ms": "400", "timeout_secs": "15" })
+            }
             NodeKind::PersonDetection => json!({ "timeout_secs": "30" }),
             NodeKind::ObjectDetection => json!({ "class": "person", "timeout_secs": "30" }),
             NodeKind::BreakPersonDetection => json!({}),
             NodeKind::BreakDetection => json!({}),
             NodeKind::BreakFaceDetection => json!({}),
             NodeKind::RecognizePerson => json!({ "max_distance": "0.4", "timeout_secs": "30" }),
-            NodeKind::RecordPresence => json!({ "category": "person", "room": "", "label": "", "duration_secs": "8" }),
+            NodeKind::RecordPresence => {
+                json!({ "category": "person", "room": "", "label": "", "duration_secs": "8" })
+            }
             NodeKind::EmitEvent => json!({ "event": "" }),
             NodeKind::OnEvent => json!({ "event": "" }),
             NodeKind::Print => json!({ "message": "", "on_screen": true, "level": "info" }),
@@ -1099,8 +1162,12 @@ impl NodeKind {
             | NodeKind::NumNe => json!({ "a": "0", "b": "0" }),
             NodeKind::NumToText | NodeKind::BoolToText => json!({}),
             NodeKind::Cooldown => json!({ "window_secs": "60" }),
-            NodeKind::DrawBbox => json!({ "color": "#00FF00", "thickness": "2", "style": "box", "expand": "0" }),
-            NodeKind::DrawText => json!({ "text": "", "position": "top-left", "size": "18", "text_color": "#FFFFFF", "background": true, "bg_color": "#000000" }),
+            NodeKind::DrawBbox => {
+                json!({ "color": "#00FF00", "thickness": "2", "style": "box", "expand": "0" })
+            }
+            NodeKind::DrawText => {
+                json!({ "text": "", "position": "top-left", "size": "18", "text_color": "#FFFFFF", "background": true, "bg_color": "#000000" })
+            }
             NodeKind::BlurOutsideBbox => json!({ "blur": "12" }),
             NodeKind::GetImageSize => json!({}),
             NodeKind::And | NodeKind::Or => json!({ "a": false, "b": false }),
@@ -1109,14 +1176,18 @@ impl NodeKind {
             NodeKind::StringSwitch => json!({ "arms": ["arm_1", "arm_2"] }),
             NodeKind::CameraSwitch => json!({ "arms": [] }),
             NodeKind::AskAi => json!({ "question": "", "timeout_secs": "65" }),
-            NodeKind::Comment => json!({ "text": "Comment", "color": "#facc15", "width": 400, "height": 200 }),
+            NodeKind::Comment => {
+                json!({ "text": "Comment", "color": "#facc15", "width": 400, "height": 200 })
+            }
             NodeKind::Reroute => json!({}),
             NodeKind::StartRecording => json!({ "timeout_secs": "30" }),
             NodeKind::StopRecording => json!({ "timeout_secs": "15" }),
             NodeKind::TimeGate => json!({ "wait_secs": 10, "extend_secs": 10 }),
             // `variable` = the declared variable's name; `type` = its wire type (baked in so the
             // dynamic port resolves without a graph lookup). Set by the Variables panel on create.
-            NodeKind::GetVariable | NodeKind::SetVariable => json!({ "variable": "", "type": "text" }),
+            NodeKind::GetVariable | NodeKind::SetVariable => {
+                json!({ "variable": "", "type": "text" })
+            }
         }
     }
 }
@@ -1186,16 +1257,25 @@ impl GraphNode {
         if self.kind == NodeKind::StringSwitch {
             let arms = string_switch_arms(&self.config);
             if arms.iter().any(|a| a == name) || name == "default" {
-                return Some(ResolvedPort { name: name.to_string(), ty: PortType::Exec, required: false });
+                return Some(ResolvedPort {
+                    name: name.to_string(),
+                    ty: PortType::Exec,
+                    required: false,
+                });
             }
             return None;
         }
         // CameraSwitch: exec outputs are numbered "arm_1", "arm_2", ... + "default".
         if self.kind == NodeKind::CameraSwitch {
             let arms = camera_switch_arms(&self.config);
-            let valid = (1..=arms.len()).any(|i| name == format!("arm_{i}").as_str()) || name == "default";
+            let valid =
+                (1..=arms.len()).any(|i| name == format!("arm_{i}").as_str()) || name == "default";
             if valid {
-                return Some(ResolvedPort { name: name.to_string(), ty: PortType::Exec, required: false });
+                return Some(ResolvedPort {
+                    name: name.to_string(),
+                    ty: PortType::Exec,
+                    required: false,
+                });
             }
             return None;
         }
@@ -1213,7 +1293,10 @@ pub fn string_switch_arms(config: &Value) -> Vec<String> {
         .get("arms")
         .and_then(|v| v.as_array())
         .map(|arr| {
-            arr.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect()
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+                .collect()
         })
         .unwrap_or_default()
 }
@@ -1225,7 +1308,11 @@ pub fn camera_switch_arms(config: &Value) -> Vec<String> {
     config
         .get("arms")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -1297,7 +1384,7 @@ impl RunStatus {
 /// user-create, chat, alerts…) in the future via the same fan-out.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EventSource {
-    Graph { id: u32, name: String },
+    Graph { id: Uuid, name: String },
     System { label: String },
 }
 
@@ -1333,14 +1420,18 @@ pub struct Viewport {
 
 impl Default for Viewport {
     fn default() -> Self {
-        Viewport { x: 40.0, y: 40.0, zoom: 1.0 }
+        Viewport {
+            x: 40.0,
+            y: 40.0,
+            zoom: 1.0,
+        }
     }
 }
 
 /// One named automation: a trigger + a DAG of typed nodes/edges.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Graph {
-    pub id: u32,
+    pub id: Uuid,
     pub name: String,
     #[serde(default)]
     pub enabled: bool,
@@ -1383,9 +1474,9 @@ fn one() -> u32 {
 }
 
 impl Graph {
-    pub fn new(id: u32, name: &str) -> Self {
+    pub fn new(name: &str) -> Self {
         Graph {
-            id,
+            id: Uuid::new_v4(),
             name: name.to_string(),
             enabled: false,
             trigger: Trigger::Manual,
@@ -1413,7 +1504,14 @@ impl Graph {
     pub fn add_node(&mut self, kind: NodeKind, x: i32, y: i32) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
-        self.nodes.push(GraphNode { id, kind, x, y, config: kind.default_config(), memoize: false });
+        self.nodes.push(GraphNode {
+            id,
+            kind,
+            x,
+            y,
+            config: kind.default_config(),
+            memoize: false,
+        });
         id
     }
 
@@ -1498,7 +1596,12 @@ impl Graph {
         // exec_in accepts fan-in (multiple execution paths converging on the same node —
         // e.g. both branches of an If merging downstream). Data ports stay single-fed.
         let is_exec = to_port == EXEC_IN.name;
-        if !is_exec && self.edges.iter().any(|e| e.to == to && e.to_port == to_port) {
+        if !is_exec
+            && self
+                .edges
+                .iter()
+                .any(|e| e.to == to && e.to_port == to_port)
+        {
             return Err(format!("input '{to_port}' is already wired"));
         }
         if self.reaches(to, from) && !is_exec {
@@ -1523,7 +1626,8 @@ impl Graph {
     /// `Err` if the graph contains a cycle.
     pub fn topo_order(&self) -> Result<Vec<u32>, String> {
         let mut indeg: HashMap<u32, usize> = self.nodes.iter().map(|n| (n.id, 0)).collect();
-        let mut adj: HashMap<u32, Vec<u32>> = self.nodes.iter().map(|n| (n.id, Vec::new())).collect();
+        let mut adj: HashMap<u32, Vec<u32>> =
+            self.nodes.iter().map(|n| (n.id, Vec::new())).collect();
         let mut seen = HashSet::new();
         for e in &self.edges {
             if seen.insert((e.from, e.to)) {
@@ -1615,31 +1719,29 @@ impl Graph {
 #[derive(Default)]
 pub struct Workflows {
     pub graphs: Vec<Graph>,
-    pub next_graph_id: u32,
 }
 
 impl Workflows {
     pub fn from_graphs(graphs: Vec<Graph>) -> Self {
-        let next_graph_id = graphs.iter().map(|g| g.id).max().map_or(1, |m| m + 1);
-        Workflows { graphs, next_graph_id }
+        Workflows { graphs }
     }
 
-    pub fn create_graph(&mut self, name: &str) -> u32 {
-        let id = self.next_graph_id;
-        self.next_graph_id += 1;
-        self.graphs.push(Graph::new(id, name));
+    pub fn create_graph(&mut self, name: &str) -> Uuid {
+        let g = Graph::new(name);
+        let id = g.id;
+        self.graphs.push(g);
         id
     }
 
-    pub fn remove_graph(&mut self, id: u32) {
+    pub fn remove_graph(&mut self, id: Uuid) {
         self.graphs.retain(|g| g.id != id);
     }
 
-    pub fn graph(&self, id: u32) -> Option<&Graph> {
+    pub fn graph(&self, id: Uuid) -> Option<&Graph> {
         self.graphs.iter().find(|g| g.id == id)
     }
 
-    pub fn graph_mut(&mut self, id: u32) -> Option<&mut Graph> {
+    pub fn graph_mut(&mut self, id: Uuid) -> Option<&mut Graph> {
         self.graphs.iter_mut().find(|g| g.id == id)
     }
 }
@@ -1650,7 +1752,7 @@ mod tests {
 
     fn chain() -> (Graph, u32, u32) {
         // get_last_alert.message -> create_alert.message
-        let mut g = Graph::new(1, "test");
+        let mut g = Graph::new("test");
         let a = g.add_node(NodeKind::GetLastAlert, 0, 0);
         let b = g.add_node(NodeKind::CreateAlert, 30, 0);
         g.add_edge(a, "message", b, "message").unwrap();
@@ -1659,7 +1761,7 @@ mod tests {
 
     #[test]
     fn add_node_assigns_incrementing_ids_and_default_config() {
-        let mut g = Graph::new(1, "g");
+        let mut g = Graph::new("g");
         let a = g.add_node(NodeKind::CreateAlert, 1, 2);
         let b = g.add_node(NodeKind::Format, 3, 4);
         assert_eq!((a, b), (1, 2));
@@ -1687,27 +1789,36 @@ mod tests {
 
     #[test]
     fn add_edge_rejects_type_mismatch_double_fed_cycle_and_unknown() {
-        let mut g = Graph::new(1, "g");
+        let mut g = Graph::new("g");
         let snap = g.add_node(NodeKind::CameraSnapshot, 0, 0);
         let fmt = g.add_node(NodeKind::Format, 0, 0);
-        assert!(g.add_edge(snap, "image", fmt, "p1").unwrap_err().contains("type mismatch"));
+        assert!(g
+            .add_edge(snap, "image", fmt, "p1")
+            .unwrap_err()
+            .contains("type mismatch"));
         assert!(g.add_edge(fmt, "text", fmt, "p1").is_err()); // self-loop
         assert!(g.add_edge(snap, "nope", fmt, "p1").is_err()); // unknown port
 
         let gla = g.add_node(NodeKind::GetLastAlert, 0, 0);
         let ca = g.add_node(NodeKind::CreateAlert, 0, 0);
         g.add_edge(gla, "message", ca, "message").unwrap();
-        assert!(g.add_edge(fmt, "text", ca, "message").unwrap_err().contains("already wired"));
+        assert!(g
+            .add_edge(fmt, "text", ca, "message")
+            .unwrap_err()
+            .contains("already wired"));
 
         let a = g.add_node(NodeKind::Format, 0, 0);
         let b = g.add_node(NodeKind::Format, 0, 0);
         g.add_edge(a, "text", b, "p1").unwrap();
-        assert!(g.add_edge(b, "text", a, "p1").unwrap_err().contains("cycle"));
+        assert!(g
+            .add_edge(b, "text", a, "p1")
+            .unwrap_err()
+            .contains("cycle"));
     }
 
     #[test]
     fn exec_ports_wire_between_any_nodes_but_not_to_data() {
-        let mut g = Graph::new(1, "g");
+        let mut g = Graph::new("g");
         let a = g.add_node(NodeKind::GetLastAlert, 0, 0);
         let w = g.add_node(NodeKind::Wait, 0, 0);
         let b = g.add_node(NodeKind::CreateAlert, 0, 0);
@@ -1715,8 +1826,14 @@ mod tests {
         g.add_edge(a, "exec_out", w, "exec_in").unwrap();
         g.add_edge(w, "exec_out", b, "exec_in").unwrap();
         // exec can't connect to a data port.
-        assert!(g.add_edge(a, "exec_out", b, "message").unwrap_err().contains("type mismatch"));
-        assert!(g.add_edge(a, "message", b, "exec_in").unwrap_err().contains("type mismatch"));
+        assert!(g
+            .add_edge(a, "exec_out", b, "message")
+            .unwrap_err()
+            .contains("type mismatch"));
+        assert!(g
+            .add_edge(a, "message", b, "exec_in")
+            .unwrap_err()
+            .contains("type mismatch"));
         // Wait is control-flow only — it has no data ports.
         assert!(NodeKind::Wait.input_ports().is_empty());
         assert!(NodeKind::Wait.output_ports().is_empty());
@@ -1724,14 +1841,18 @@ mod tests {
 
     #[test]
     fn if_node_has_true_false_exec_outputs() {
-        let mut g = Graph::new(1, "g");
+        let mut g = Graph::new("g");
         let gate = g.add_node(NodeKind::If, 0, 0);
         let a = g.add_node(NodeKind::Format, 0, 0);
         // Both branch pins are wireable, typed Exec.
         g.add_edge(gate, "true", a, "exec_in").unwrap();
         let b = g.add_node(NodeKind::Format, 0, 0);
         g.add_edge(gate, "false", b, "exec_in").unwrap();
-        let names: Vec<_> = NodeKind::If.exec_out_ports().iter().map(|p| p.name).collect();
+        let names: Vec<_> = NodeKind::If
+            .exec_out_ports()
+            .iter()
+            .map(|p| p.name)
+            .collect();
         assert_eq!(names, vec!["true", "false"]);
         assert_eq!(NodeKind::If.output_port("true").unwrap().ty, PortType::Exec);
         // `condition` is a required Bool data input.
@@ -1752,14 +1873,20 @@ mod tests {
     #[test]
     fn memoize_defaults_false_for_new_nodes_and_round_trips() {
         // New nodes default to memoize=false.
-        let mut g = Graph::new(1, "g");
+        let mut g = Graph::new("g");
         let n = g.add_node(NodeKind::Format, 0, 0);
-        assert!(!g.node(n).unwrap().memoize, "new node defaults to memoize=false");
+        assert!(
+            !g.node(n).unwrap().memoize,
+            "new node defaults to memoize=false"
+        );
 
         // An old persisted node JSON without the `memoize` key deserializes to true (back-compat).
         let old = r#"{"id":7,"kind":"format","x":0,"y":0,"config":{}}"#;
         let node: GraphNode = serde_json::from_str(old).unwrap();
-        assert!(node.memoize, "missing memoize → true (back-compat for pre-memoize nodes)");
+        assert!(
+            node.memoize,
+            "missing memoize → true (back-compat for pre-memoize nodes)"
+        );
 
         // memoize=true round-trips.
         g.node_mut(n).unwrap().memoize = true;
@@ -1790,21 +1917,27 @@ mod tests {
 
     #[test]
     fn string_switch_wires_arm_and_default_exec_ports() {
-        let mut g = Graph::new(1, "g");
+        let mut g = Graph::new("g");
         let sw = g.add_node(NodeKind::StringSwitch, 0, 0);
         g.node_mut(sw).unwrap().config = json!({ "arms": ["red", "blue"] });
         let a = g.add_node(NodeKind::Format, 0, 0);
         let b = g.add_node(NodeKind::Format, 0, 0);
         let d = g.add_node(NodeKind::Format, 0, 0);
         // Named arm ports resolve and wire correctly.
-        g.add_edge(sw, "red", a, "exec_in").expect("'red' arm wires");
-        g.add_edge(sw, "blue", b, "exec_in").expect("'blue' arm wires");
+        g.add_edge(sw, "red", a, "exec_in")
+            .expect("'red' arm wires");
+        g.add_edge(sw, "blue", b, "exec_in")
+            .expect("'blue' arm wires");
         // The built-in default arm also wires.
-        g.add_edge(sw, "default", d, "exec_in").expect("'default' arm wires");
+        g.add_edge(sw, "default", d, "exec_in")
+            .expect("'default' arm wires");
         // An arm not in config is rejected.
         let c = g.add_node(NodeKind::Format, 0, 0);
         let err = g.add_edge(sw, "green", c, "exec_in").unwrap_err();
-        assert!(err.contains("no output port"), "unknown arm rejected: {err}");
+        assert!(
+            err.contains("no output port"),
+            "unknown arm rejected: {err}"
+        );
     }
 
     #[test]

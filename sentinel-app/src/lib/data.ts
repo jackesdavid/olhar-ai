@@ -231,55 +231,55 @@ export const data = {
   loadGraphs: <T = unknown>(): Promise<T[]> => api.get<T[]>("/workflows"),
   runStates: <T = unknown>(): Promise<T> => api.get<T>("/workflows/runs"),
   nodeCatalog: <T = unknown>(): Promise<T> => api.get<T>("/workflows/catalog"),
-  createGraph: (name: string): Promise<number> => api.post<number>("/workflows", { name }),
-  renameGraph: async (id: number, name: string): Promise<void> => {
+  createGraph: (name: string): Promise<string> => api.post<string>("/workflows", { name }),
+  renameGraph: async (id: string, name: string): Promise<void> => {
     await api.patch<void>(`/workflows/${id}`, { name });
   },
-  deleteGraph: async (id: number): Promise<void> => {
+  deleteGraph: async (id: string): Promise<void> => {
     await api.del<void>(`/workflows/${id}`);
   },
-  setGraphTrigger: async (id: number, kind: string, everySecs?: number): Promise<void> => {
+  setGraphTrigger: async (id: string, kind: string, everySecs?: number): Promise<void> => {
     await api.put<void>(`/workflows/${id}/trigger`, { kind, every_secs: everySecs });
   },
-  setGraphConcurrency: async (id: number, kind: string, max?: number): Promise<void> => {
+  setGraphConcurrency: async (id: string, kind: string, max?: number): Promise<void> => {
     await api.put<void>(`/workflows/${id}/concurrency`, { kind, max });
   },
-  setGraphEnabled: async (id: number, enabled: boolean): Promise<void> => {
+  setGraphEnabled: async (id: string, enabled: boolean): Promise<void> => {
     await api.put<void>(`/workflows/${id}/enabled`, { value: enabled });
   },
-  setGraphRunOrphans: async (id: number, runOrphans: boolean): Promise<void> => {
+  setGraphRunOrphans: async (id: string, runOrphans: boolean): Promise<void> => {
     await api.put<void>(`/workflows/${id}/run-orphans`, { value: runOrphans });
   },
-  setGraphDebug: async (id: number, debug: boolean): Promise<void> => {
+  setGraphDebug: async (id: string, debug: boolean): Promise<void> => {
     await api.put<void>(`/workflows/${id}/debug`, { value: debug });
   },
-  setGraphViewport: async (id: number, x: number, y: number, zoom: number): Promise<void> => {
+  setGraphViewport: async (id: string, x: number, y: number, zoom: number): Promise<void> => {
     await api.put<void>(`/workflows/${id}/viewport`, { x, y, zoom });
   },
-  setGraphVariables: async (id: number, variables: { name: string; type: string }[]): Promise<void> => {
+  setGraphVariables: async (id: string, variables: { name: string; type: string }[]): Promise<void> => {
     await api.put<void>(`/workflows/${id}/variables`, variables);
   },
-  addNode: (graphId: number, kind: string, x: number, y: number): Promise<number> =>
+  addNode: (graphId: string, kind: string, x: number, y: number): Promise<number> =>
     api.post<number>(`/workflows/${graphId}/nodes`, { kind, x, y }),
-  removeNode: async (graphId: number, nodeId: number): Promise<void> => {
+  removeNode: async (graphId: string, nodeId: number): Promise<void> => {
     await api.del<void>(`/workflows/${graphId}/nodes/${nodeId}`);
   },
-  moveNode: async (graphId: number, nodeId: number, x: number, y: number): Promise<void> => {
+  moveNode: async (graphId: string, nodeId: number, x: number, y: number): Promise<void> => {
     await api.put<void>(`/workflows/${graphId}/nodes/${nodeId}/move`, { x, y });
   },
-  setNodeConfig: async (graphId: number, nodeId: number, config: unknown): Promise<void> => {
+  setNodeConfig: async (graphId: string, nodeId: number, config: unknown): Promise<void> => {
     await api.put<void>(`/workflows/${graphId}/nodes/${nodeId}/config`, config);
   },
-  setNodeMemoize: async (graphId: number, nodeId: number, memoize: boolean): Promise<void> => {
+  setNodeMemoize: async (graphId: string, nodeId: number, memoize: boolean): Promise<void> => {
     await api.put<void>(`/workflows/${graphId}/nodes/${nodeId}/memoize`, { memoize });
   },
-  addEdge: async (graphId: number, from: number, fromPort: string, to: number, toPort: string): Promise<void> => {
+  addEdge: async (graphId: string, from: number, fromPort: string, to: number, toPort: string): Promise<void> => {
     await api.post<void>(`/workflows/${graphId}/edges`, { from, from_port: fromPort, to, to_port: toPort });
   },
-  removeEdge: async (graphId: number, idx: number): Promise<void> => {
+  removeEdge: async (graphId: string, idx: number): Promise<void> => {
     await api.del<void>(`/workflows/${graphId}/edges/${idx}`);
   },
-  runGraph: (id: number): Promise<string> => api.post<string>(`/workflows/${id}/run`),
+  runGraph: (id: string): Promise<string> => api.post<string>(`/workflows/${id}/run`),
 
   // ---- workflow events + run history --------------------------------------
   listEvents: <T = unknown>(): Promise<T> => api.get<T>("/workflows/event-registry"),
@@ -298,7 +298,7 @@ export const data = {
   createEventCategory: async (name: string): Promise<void> => {
     await api.post<void>("/workflows/event-categories", { name });
   },
-  runHistory: <T = unknown>(graphId?: number, limit?: number): Promise<T> => {
+  runHistory: <T = unknown>(graphId?: string, limit?: number): Promise<T> => {
     const qs = new URLSearchParams();
     if (graphId != null) qs.set("graph", String(graphId));
     if (limit != null) qs.set("limit", String(limit));
@@ -310,13 +310,13 @@ export const data = {
   /** Out-of-band URL for a ShowImage node's latest debug frame (image/jpeg). The token
    * rides the query so it works as an `<img src>`; pass `bust` (e.g. Date.now()) to force
    * a reload when a new frame arrives. */
-  runFrameUrl: (graph: number, node: number, bust?: number): string => {
+  runFrameUrl: (graph: string, node: number, bust?: number): string => {
     const qs = new URLSearchParams({ graph: String(graph), node: String(node) });
     if (auth.token) qs.set("token", auth.token);
     if (bust != null) qs.set("t", String(bust));
     return `${API_BASE}/workflows/runs/frame?${qs.toString()}`;
   },
-  nodeStateUrl: (graph: number, node: number): string => {
+  nodeStateUrl: (graph: string, node: number): string => {
     const qs = new URLSearchParams({ graph: String(graph), node: String(node) });
     if (auth.token) qs.set("token", auth.token);
     return `${API_BASE}/workflows/runs/node-state?${qs.toString()}`;
