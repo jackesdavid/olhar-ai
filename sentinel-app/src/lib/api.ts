@@ -224,6 +224,43 @@ export const recordings = {
   },
 };
 
+// ---- Notification observability (read-only, tenant-scoped) -------------------
+
+export type QueueStats = {
+  pending: number;
+  sent_today: number;
+  failed_today: number;
+  queued_today: number;
+  hourly: { hour: string; count: number }[];
+};
+export type QueueItem = {
+  id: string;
+  status: string;
+  target: string | null;
+  message: string;
+  attempts: number;
+  image_key: string | null;
+  video_key: string | null;
+  result: string | null;
+  created_at: string;
+  sent_at: string | null;
+};
+export type QueuePage = { total: number; items: QueueItem[] };
+export type QueueListOpts = { status?: string; q?: string; limit?: number; offset?: number };
+
+export const notifications = {
+  stats: () => api.get<QueueStats>("/notifications/stats"),
+  queue: (opts?: QueueListOpts) => {
+    const p = new URLSearchParams();
+    if (opts?.status) p.set("status", opts.status);
+    if (opts?.q) p.set("q", opts.q);
+    if (opts?.limit != null) p.set("limit", String(opts.limit));
+    if (opts?.offset != null) p.set("offset", String(opts.offset));
+    const qs = p.toString();
+    return api.get<QueuePage>(`/notifications/queue${qs ? `?${qs}` : ""}`);
+  },
+};
+
 // ---- Assistant (chat + voice) -----------------------------------------------
 
 export type ChatTurn = { role: "user" | "assistant"; content: string };

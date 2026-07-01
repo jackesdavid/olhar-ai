@@ -3,14 +3,14 @@
 //! Tenants configure only their pairing code; the shared bot is used for delivery.
 use std::sync::{Arc, Mutex};
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use axum::routing::{get, post};
 use axum::Router;
 use serde::{Deserialize, Serialize};
 
-use app_core::notification::{self, NotificationConfig, NotificationStore, NotificationTarget};
+use app_core::notification::{self, queue, NotificationConfig, NotificationStore, NotificationTarget};
 
 use super::{blocking, err, tenant_of, ApiErr};
 use crate::auth::{self, UserClaims};
@@ -23,6 +23,42 @@ pub fn router() -> Router<AppState> {
         .route("/beacons/:chat_id/test", post(test_send))
         .route("/beacons/:chat_id", axum::routing::patch(rename).delete(remove))
         .route("/telegram", get(get_config).put(set_config))
+        // Read-only notification observability (tenant-scoped; plain SELECTs, never touches
+        // the send/claim path).
+        .route("/notifications/stats", get(queue_stats))
+        .route("/notifications/queue", get(queue_list))
+}
+
+async fn queue_stats(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<queue::QueueStats>, ApiErr> {
+    auth::require(&c, "beacons.read")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    Ok(Json(blocking(move || queue::stats(&db, tid)).await?))
+}
+
+#[derive(Deserialize)]
+struct QueueQuery {
+    status: Option<String>,
+    q: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+async fn queue_list(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Query(qq): Query<QueueQuery>,
+) -> Result<Json<queue::QueuePage>, ApiErr> {
+    auth::require(&c, "beacons.read")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let limit = qq.limit.unwrap_or(50).clamp(1, 200);
+    let offset = qq.offset.unwrap_or(0).max(0);
+    let status = qq.status;
+    let q = qq.q;
+    Ok(Json(
+        blocking(move || queue::list(&db, tid, status.as_deref(), q.as_deref(), limit, offset)).await?,
+    ))
 }
 
 async fn list(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<NotificationTarget>>, ApiErr> {
