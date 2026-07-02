@@ -1,11 +1,13 @@
 <script lang="ts">
+  import PageHeader from "$lib/components/page-header.svelte";
   import { goto } from "$app/navigation";
   import { toast } from "svelte-sonner";
 
-  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import Busy from "$lib/components/busy.svelte";
   import Building2 from "@lucide/svelte/icons/building-2";
   import Plus from "@lucide/svelte/icons/plus";
   import LogIn from "@lucide/svelte/icons/log-in";
+  import EmptyState from "$lib/components/empty-state.svelte";
 
   import * as Card from "$lib/components/ui/card";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -81,16 +83,17 @@
 </script>
 
 <div class="space-y-6">
-  <div class="flex items-center gap-3">
-    <Building2 class="size-6 text-primary" />
-    <div class="flex-1">
-      <h1 class="text-xl font-semibold tracking-tight">Tenants</h1>
-      <p class="text-sm text-muted-foreground">Every workspace on this Sentinel instance.</p>
-    </div>
-    {#if isMaster}
-      <Button onclick={() => (createOpen = true)}><Plus class="size-4" /> New tenant</Button>
-    {/if}
-  </div>
+  <PageHeader
+    title="Tenants"
+    description="Every workspace on this Sentinel instance."
+    icon={Building2}
+  >
+    {#snippet actions()}
+      {#if isMaster}
+        <Button onclick={() => (createOpen = true)}><Plus class="size-4" /> New tenant</Button>
+      {/if}
+    {/snippet}
+  </PageHeader>
 
   {#if !isMaster}
     <Card.Root><Card.Content class="py-10 text-center text-sm text-muted-foreground">
@@ -118,14 +121,19 @@
                 <td class="px-3 py-2"><Badge variant="secondary" class="text-[10px]">{t.status}</Badge></td>
                 <td class="px-3 py-2 text-right">
                   <Button variant="outline" size="sm" disabled={assuming === t.id} onclick={() => navigateAs(t)}>
-                    {#if assuming === t.id}<LoaderCircle class="size-3.5 animate-spin" />{:else}<LogIn class="size-3.5" />{/if}
+                    {#if assuming === t.id}<Busy size={14} />{:else}<LogIn class="size-3.5" />{/if}
                     Navigate as tenant
                   </Button>
                 </td>
               </tr>
             {/each}
             {#if tenants.length === 0}
-              <tr><td colspan={4} class="py-8 text-center text-muted-foreground">No tenants yet.</td></tr>
+              <tr><td colspan={4}>
+                <EmptyState
+                  title="No tenants yet"
+                  description="Create the first tenant to onboard a customer workspace."
+                />
+              </td></tr>
             {/if}
           </tbody>
         </table>
@@ -159,7 +167,7 @@
       </div>
       <Dialog.Footer>
         <Button type="submit" disabled={!canCreate || creating}>
-          {#if creating}<LoaderCircle class="size-4 animate-spin" />{/if}
+          {#if creating}<Busy />{/if}
           Create tenant
         </Button>
       </Dialog.Footer>

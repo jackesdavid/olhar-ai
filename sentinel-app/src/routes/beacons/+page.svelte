@@ -1,4 +1,6 @@
 <script lang="ts">
+  import PageHeader from "$lib/components/page-header.svelte";
+  import Radio from "@lucide/svelte/icons/radio";
   import { onMount } from "svelte";
   import { data, onEvent } from "$lib/data";
   import { toast } from "svelte-sonner";
@@ -6,7 +8,7 @@
   import Save from "@lucide/svelte/icons/save";
   import Pencil from "@lucide/svelte/icons/pencil";
   import Trash2 from "@lucide/svelte/icons/trash-2";
-  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import Busy from "$lib/components/busy.svelte";
   import CheckCircle2 from "@lucide/svelte/icons/circle-check-big";
   import XCircle from "@lucide/svelte/icons/circle-x";
   import Send from "@lucide/svelte/icons/send";
@@ -14,6 +16,7 @@
   import Copy from "@lucide/svelte/icons/copy";
   import Check from "@lucide/svelte/icons/check";
   import Link2 from "@lucide/svelte/icons/link-2";
+  import EmptyState from "$lib/components/empty-state.svelte";
 
   import * as Card from "$lib/components/ui/card";
   import * as Table from "$lib/components/ui/table";
@@ -190,12 +193,11 @@
 </script>
 
 <div class="space-y-6">
-  <div>
-    <h1 class="text-2xl font-semibold tracking-tight">Recipients</h1>
-    <p class="text-sm text-muted-foreground">
-      Trusted Telegram contacts that receive Sentinel's alerts.
-    </p>
-  </div>
+  <PageHeader
+    title="Recipients"
+    description="Trusted Telegram contacts that receive Sentinel's alerts."
+    icon={Radio}
+  />
 
   <!-- Telegram enrollment -->
   <Card.Root>
@@ -203,7 +205,7 @@
       <Card.Title class="flex items-center gap-2">
         Telegram
         {#if config?.provider_configured}
-          <Badge variant="outline" class="border-emerald-500/30 bg-emerald-500/15 text-emerald-400">
+          <Badge variant="outline" class="border-primary/30 bg-primary/10 text-primary">
             Provider active
           </Badge>
         {:else}
@@ -235,7 +237,7 @@
             />
             <Button onclick={saveCode} disabled={savingCode} size="sm">
               {#if savingCode}
-                <LoaderCircle class="size-4 animate-spin" />
+                <Busy />
                 Saving…
               {:else}
                 <Save class="size-4" />
@@ -251,7 +253,7 @@
         {#if config.bot_username && config.pairing_code}
           <div class="rounded-md border border-border bg-muted/40 p-3 text-sm space-y-3">
             <div class="flex items-center gap-2">
-              <Link2 class="size-4 shrink-0 text-emerald-400" />
+              <Link2 class="size-4 shrink-0 text-primary" />
               <span class="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
                 {enrollmentLink(config.bot_username, config.pairing_code)}
               </span>
@@ -263,7 +265,7 @@
                   onclick={copyEnrollmentLink}
                 >
                   {#if copied}
-                    <Check class="size-3 text-emerald-400" />
+                    <Check class="size-3 text-primary" />
                     Copied
                   {:else}
                     <Copy class="size-3" />
@@ -300,42 +302,43 @@
       {#if loading}
         <Loader label="Loading recipients…" />
       {:else if beacons.length === 0}
-        <div class="flex flex-col items-center gap-4 py-8 text-center">
-          <p class="text-sm font-medium">No recipients paired</p>
+        <EmptyState title="No recipients paired">
           {#if hasEnrollmentLink()}
-            <p class="max-w-sm text-xs text-muted-foreground">
-              Share the enrollment link — tapping it opens Telegram and pairs the device in one step.
-            </p>
-            <div class="flex items-center gap-2">
-              <Button variant="outline" size="sm" class="gap-1.5" onclick={copyEnrollmentLink}>
-                {#if copied}
-                  <Check class="size-4 text-emerald-400" />
-                  Link copied
-                {:else}
-                  <Copy class="size-4" />
-                  Copy enrollment link
-                {/if}
-              </Button>
-              <a
-                href={enrollmentLink(config!.bot_username!, config!.pairing_code)}
-                target="_blank"
-                rel="noopener noreferrer"
-                class={buttonVariants({ variant: "outline", size: "sm" }) + " gap-1.5"}
-              >
-                <ExternalLink class="size-4" />
-                Pair this device
-              </a>
+            <div class="flex flex-col items-center gap-3">
+              <p class="max-w-sm text-xs text-muted-foreground">
+                Share the enrollment link — tapping it opens Telegram and pairs the device in one step.
+              </p>
+              <div class="flex items-center gap-2">
+                <Button variant="outline" size="sm" class="gap-1.5" onclick={copyEnrollmentLink}>
+                  {#if copied}
+                    <Check class="size-4 text-primary" />
+                    Link copied
+                  {:else}
+                    <Copy class="size-4" />
+                    Copy enrollment link
+                  {/if}
+                </Button>
+                <a
+                  href={enrollmentLink(config!.bot_username!, config!.pairing_code)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class={buttonVariants({ variant: "outline", size: "sm" }) + " gap-1.5"}
+                >
+                  <ExternalLink class="size-4" />
+                  Pair this device
+                </a>
+              </div>
             </div>
           {:else if config?.provider_configured}
-            <p class="text-xs text-muted-foreground">
+            <p class="max-w-sm text-xs text-muted-foreground">
               Set a pairing code above, then share the enrollment link.
             </p>
           {:else}
-            <p class="text-xs text-muted-foreground">
+            <p class="max-w-sm text-xs text-muted-foreground">
               The Telegram provider needs to be configured before pairing is available.
             </p>
           {/if}
-        </div>
+        </EmptyState>
       {:else}
         <Table.Root>
           <Table.Header>
@@ -364,7 +367,7 @@
                       onCheckedChange={(v) => toggle(b, v)}
                     />
                     {#if b.enabled}
-                      <CheckCircle2 class="size-4 text-emerald-400" />
+                      <CheckCircle2 class="size-4 text-primary" />
                     {:else}
                       <XCircle class="size-4 text-muted-foreground" />
                     {/if}
@@ -380,7 +383,7 @@
                       onclick={() => testSend(b)}
                     >
                       {#if testingId === b.chat_id}
-                        <LoaderCircle class="size-4 animate-spin" />
+                        <Busy />
                       {:else}
                         <Send class="size-4" />
                       {/if}

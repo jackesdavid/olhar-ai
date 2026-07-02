@@ -43,7 +43,7 @@
 {:else}
   <div class="flex w-56 shrink-0 flex-col gap-2 overflow-y-auto rounded-xl border border-border bg-card/40 p-3">
     <div class="flex items-center justify-between gap-2">
-      <span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Variables</span>
+      <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Variables</span>
       <div class="flex items-center gap-1">
         <Button variant="ghost" size="icon" class="size-7" title="Add variable" disabled={disabled} onclick={onAdd}>
           <Plus class="size-3.5" />

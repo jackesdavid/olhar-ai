@@ -1,4 +1,6 @@
 <script lang="ts">
+  import PageHeader from "$lib/components/page-header.svelte";
+  import SettingsIcon from "@lucide/svelte/icons/settings";
   import { onMount } from "svelte";
   import { data } from "$lib/data";
   import { toast } from "svelte-sonner";
@@ -127,17 +129,17 @@
 </script>
 
 <div class="space-y-6">
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Settings</h1>
-      <p class="text-sm text-muted-foreground">
-        Audio, voice, and connection preferences.
-      </p>
-    </div>
-    <Button onclick={save} disabled={loading || saving}>
-      {saving ? "Saving…" : "Save"}
-    </Button>
-  </div>
+  <PageHeader
+    title="Settings"
+    description="Audio, voice, and connection preferences."
+    icon={SettingsIcon}
+  >
+    {#snippet actions()}
+      <Button onclick={save} disabled={loading || saving}>
+        {saving ? "Saving…" : "Save"}
+      </Button>
+    {/snippet}
+  </PageHeader>
 
   <Card.Root>
     <Card.Header>
@@ -364,7 +366,7 @@
         <div class="space-y-3">
           <Label class="text-xs text-muted-foreground">Current storage usage</Label>
           {#each storageStats as s (s.boxId)}
-            {@const color = s.pct >= 90 ? "bg-destructive" : s.pct >= 75 ? "bg-yellow-500" : "bg-emerald-500"}
+            {@const color = s.pct >= 90 ? "bg-destructive" : s.pct >= 75 ? "bg-amber-500" : "bg-primary"}
             <div class="space-y-1.5">
               <div class="flex items-center justify-between text-xs">
                 <span class="text-muted-foreground truncate font-mono">{s.path}</span>

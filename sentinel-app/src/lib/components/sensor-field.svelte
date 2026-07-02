@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The living background. A permanent, dim emerald dot-lattice (the logo's
+  // The living background. A permanent, dim neutral-grey dot-lattice (the logo's
   // halftone) — the dots are always *there*, just not activated. Every few
   // seconds a pulse emanates from the focal centre and a WIDE, soft wavefront
   // spreads outward: each dot swells up and gently back down as the light passes,

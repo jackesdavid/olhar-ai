@@ -8,7 +8,7 @@
 
   import SendIcon from "@lucide/svelte/icons/send";
   import Mic from "@lucide/svelte/icons/mic";
-  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import Busy from "$lib/components/busy.svelte";
   import Volume2 from "@lucide/svelte/icons/volume-2";
   import VolumeX from "@lucide/svelte/icons/volume-x";
   import ExternalLink from "@lucide/svelte/icons/external-link";
@@ -384,7 +384,7 @@
 
     {#if busy}
       <div class="mr-auto flex items-center gap-2 text-xs text-muted-foreground">
-        <LoaderCircle class="size-3.5 animate-spin" /> Thinking…
+        <Busy size={14} /> Thinking…
       </div>
     {/if}
   </div>

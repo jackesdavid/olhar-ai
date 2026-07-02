@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageHeader from "$lib/components/page-header.svelte";
   import { onMount } from "svelte";
   import { toast } from "svelte-sonner";
 
@@ -6,6 +7,7 @@
   import Download from "@lucide/svelte/icons/download";
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+  import Busy from "$lib/components/busy.svelte";
   import ChevronUp from "@lucide/svelte/icons/chevron-up";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import ChevronsUpDown from "@lucide/svelte/icons/chevrons-up-down";
@@ -316,15 +318,14 @@
 
 <div class="flex flex-col gap-6 p-6">
   <!-- header -->
-  <div class="flex items-center justify-between">
-    <div class="flex items-center gap-3">
-      <Clapperboard class="h-6 w-6 text-primary" />
-      <h1 class="text-xl font-semibold">Recordings</h1>
-      {#if total > 0}
-        <span class="text-sm text-muted-foreground">{total} total</span>
-      {/if}
-    </div>
-    <div class="flex items-center gap-2">
+  <PageHeader
+    title="Recordings"
+    description={total > 0
+      ? `${total} recording${total === 1 ? "" : "s"} saved from your cameras.`
+      : "Clips saved from your cameras."}
+    icon={Clapperboard}
+  >
+    {#snippet actions()}
       {#if someSelected}
         <Button
           variant="destructive"
@@ -333,7 +334,7 @@
           onclick={() => (bulkDeleteOpen = true)}
         >
           {#if bulkDeleting}
-            <RefreshCw class="mr-2 h-4 w-4 animate-spin" />
+            <Busy class="mr-2" />
           {:else}
             <Trash2 class="mr-2 h-4 w-4" />
           {/if}
@@ -341,11 +342,11 @@
         </Button>
       {/if}
       <Button variant="outline" size="sm" onclick={load} disabled={loading}>
-        <RefreshCw class="mr-2 h-4 w-4 {loading ? 'animate-spin' : ''}" />
+        {#if loading}<Busy class="mr-2" />{:else}<RefreshCw class="mr-2 h-4 w-4" />{/if}
         Refresh
       </Button>
-    </div>
-  </div>
+    {/snippet}
+  </PageHeader>
 
   <!-- filters + group-by bar -->
   <div class="flex flex-wrap items-end gap-3">
@@ -521,7 +522,7 @@
                       onclick={() => download(rec)}
                     >
                       {#if downloading === rec.id}
-                        <RefreshCw class="h-4 w-4 animate-spin" />
+                        <Busy />
                       {:else}
                         <Download class="h-4 w-4" />
                       {/if}
@@ -534,7 +535,7 @@
                       onclick={() => (deleteTarget = rec)}
                     >
                       {#if deleting === rec.id}
-                        <RefreshCw class="h-4 w-4 animate-spin" />
+                        <Busy />
                       {:else}
                         <Trash2 class="h-4 w-4 text-destructive" />
                       {/if}

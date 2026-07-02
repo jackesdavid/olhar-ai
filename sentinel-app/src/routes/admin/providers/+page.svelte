@@ -1,9 +1,11 @@
 <script lang="ts">
+  import PageHeader from "$lib/components/page-header.svelte";
+  import Bell from "@lucide/svelte/icons/bell";
   import { onMount } from "svelte";
   import { toast } from "svelte-sonner";
 
   import Save from "@lucide/svelte/icons/save";
-  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import Busy from "$lib/components/busy.svelte";
   import Bot from "@lucide/svelte/icons/bot";
 
   import * as Card from "$lib/components/ui/card";
@@ -53,12 +55,11 @@
 </script>
 
 <div class="space-y-6">
-  <div>
-    <h1 class="text-2xl font-semibold tracking-tight">Notification Providers</h1>
-    <p class="text-sm text-muted-foreground">
-      Global notification integrations shared across all tenants.
-    </p>
-  </div>
+  <PageHeader
+    title="Notification Providers"
+    description="Global notification integrations shared across all tenants."
+    icon={Bell}
+  />
 
   <Card.Root>
     <Card.Header>
@@ -66,7 +67,7 @@
         <Bot class="size-5" />
         Telegram Bot
         {#if loading}
-          <LoaderCircle class="size-4 animate-spin text-muted-foreground" />
+          <Busy class="text-muted-foreground" />
         {:else if provider?.configured}
           <Badge variant="outline" class="border-border bg-muted text-foreground">
             Configured
@@ -109,7 +110,7 @@
           <div class="flex justify-end">
             <Button onclick={save} disabled={saving}>
               {#if saving}
-                <LoaderCircle class="size-4 animate-spin" />
+                <Busy />
                 Saving…
               {:else}
                 <Save class="size-4" />

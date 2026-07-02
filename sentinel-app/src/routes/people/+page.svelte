@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageHeader from "$lib/components/page-header.svelte";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { data } from "$lib/data";
@@ -47,12 +48,11 @@
 </script>
 
 <div class="space-y-6">
-  <div>
-    <h1 class="text-2xl font-semibold tracking-tight">People</h1>
-    <p class="text-sm text-muted-foreground">
-      Manage the people Sentinel knows, or test who it recognises.
-    </p>
-  </div>
+  <PageHeader
+    title="People"
+    description="Manage the people Sentinel knows, or test who it recognises."
+    icon={Users}
+  />
 
   <div class="grid gap-4 sm:grid-cols-2">
     {#each tiles as t (t.href)}

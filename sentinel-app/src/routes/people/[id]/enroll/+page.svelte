@@ -10,7 +10,7 @@
   import Upload from "@lucide/svelte/icons/upload";
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import Check from "@lucide/svelte/icons/check";
-  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import Busy from "$lib/components/busy.svelte";
   import ShieldCheck from "@lucide/svelte/icons/shield-check";
 
   import * as Card from "$lib/components/ui/card";
@@ -173,7 +173,7 @@
             </div>
             <Button onclick={captureFromCamera} disabled={busy}>
               {#if busy}
-                <LoaderCircle class="size-4 animate-spin" /> Working…
+                <Busy /> Working…
               {:else}
                 <Camera class="size-4" /> Capture from camera
               {/if}

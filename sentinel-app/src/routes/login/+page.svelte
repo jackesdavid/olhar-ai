@@ -3,7 +3,7 @@
   import { goto } from "$app/navigation";
   import { toast } from "svelte-sonner";
 
-  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import Busy from "$lib/components/busy.svelte";
 
   import * as Card from "$lib/components/ui/card";
   import { Button } from "$lib/components/ui/button";
@@ -98,7 +98,7 @@
           />
         </div>
         <Button type="submit" class="w-full" disabled={!canSubmit || busy}>
-          {#if busy}<LoaderCircle class="size-4 animate-spin" />{/if}
+          {#if busy}<Busy />{/if}
           {mode === "signin" ? "Sign in" : "Create workspace"}
         </Button>
       </form>

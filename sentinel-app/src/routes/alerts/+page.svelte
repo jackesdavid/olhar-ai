@@ -1,11 +1,13 @@
 <script lang="ts">
+  import PageHeader from "$lib/components/page-header.svelte";
+  import Bell from "@lucide/svelte/icons/bell";
   import { onMount } from "svelte";
   import { data, onEvent } from "$lib/data";
   import { toast } from "svelte-sonner";
 
   import Plus from "@lucide/svelte/icons/plus";
   import Trash2 from "@lucide/svelte/icons/trash-2";
-  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import Busy from "$lib/components/busy.svelte";
   import BellRing from "@lucide/svelte/icons/bell-ring";
   import Send from "@lucide/svelte/icons/send";
 
@@ -192,16 +194,18 @@
 </script>
 
 <div class="space-y-6">
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Alerts</h1>
-      <p class="text-sm text-muted-foreground">Events and notifications from your fleet.</p>
-    </div>
-    <Button onclick={openCreate}>
-      <Plus class="size-4" />
-      New alert
-    </Button>
-  </div>
+  <PageHeader
+    title="Alerts"
+    description="Events and notifications from your fleet."
+    icon={Bell}
+  >
+    {#snippet actions()}
+      <Button onclick={openCreate}>
+        <Plus class="size-4" />
+        New alert
+      </Button>
+    {/snippet}
+  </PageHeader>
 
   <!-- Stat cards -->
   <div class="grid gap-4 sm:grid-cols-3">
@@ -295,7 +299,7 @@
                   {#if isDelivered(a)}
                     <Badge
                       variant="outline"
-                      class="border-emerald-500/30 bg-emerald-500/15 text-emerald-400"
+                      class="border-primary/30 bg-primary/10 text-primary"
                     >
                       Sent
                     </Badge>
@@ -313,7 +317,7 @@
                       onclick={() => doDeliver(a)}
                     >
                       {#if deliveringId === a.id}
-                        <LoaderCircle class="size-4 animate-spin" />
+                        <Busy />
                       {:else}
                         <Send class="size-4" />
                       {/if}
@@ -374,7 +378,7 @@
       </Button>
       <Button onclick={doCreate} disabled={creating}>
         {#if creating}
-          <LoaderCircle class="size-4 animate-spin" />
+          <Busy />
           Creating…
         {:else}
           Create

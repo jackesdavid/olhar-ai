@@ -1,11 +1,13 @@
 <script lang="ts">
+  import PageHeader from "$lib/components/page-header.svelte";
   import { goto } from "$app/navigation";
   import { toast } from "svelte-sonner";
 
-  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import Busy from "$lib/components/busy.svelte";
   import Plus from "@lucide/svelte/icons/plus";
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import HardDrive from "@lucide/svelte/icons/hard-drive";
+  import EmptyState from "$lib/components/empty-state.svelte";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
   import ArrowUpCircle from "@lucide/svelte/icons/arrow-up-circle";
   import ScrollText from "@lucide/svelte/icons/scroll-text";
@@ -181,15 +183,11 @@
 </script>
 
 <div class="space-y-6">
-  <div class="flex items-center gap-3">
-    <HardDrive class="size-6 text-primary" />
-    <div>
-      <h1 class="text-xl font-semibold tracking-tight">Edge boxes</h1>
-      <p class="text-sm text-muted-foreground">
-        Install a Sentinel edge appliance on-site. It pulls only this workspace's cameras and streams them privately.
-      </p>
-    </div>
-  </div>
+  <PageHeader
+    title="Edge boxes"
+    description="Install a Sentinel edge appliance on-site. It pulls only this workspace's cameras and streams them privately."
+    icon={HardDrive}
+  />
 
   {#if !allowed}
     <Card.Root><Card.Content class="py-10 text-center text-sm text-muted-foreground">
@@ -235,7 +233,7 @@
                         onclick={() => updateBox(b)}
                       >
                         {#if updatingId === b.id}
-                          <LoaderCircle class="size-3 animate-spin" /> Updating…
+                          <Busy size={12} /> Updating…
                         {:else}
                           <ArrowUpCircle class="size-3" /> Update → v{latest}
                         {/if}
@@ -277,7 +275,7 @@
                     <ScrollText class="size-4" />
                   </Button>
                   <Button variant="ghost" size="icon" title="Restart (reconnect tailnet + re-serve)" disabled={restartingId === b.id} onclick={() => restartBox(b)}>
-                    {#if restartingId === b.id}<LoaderCircle class="size-4 animate-spin" />{:else}<RotateCcw class="size-4" />{/if}
+                    {#if restartingId === b.id}<Busy />{:else}<RotateCcw class="size-4" />{/if}
                   </Button>
                   <Button variant="ghost" size="icon" title="Remove" onclick={() => (deleteTarget = b)}>
                     <Trash2 class="size-4" />
@@ -286,7 +284,12 @@
               </tr>
             {/each}
             {#if list.length === 0}
-              <tr><td colspan={6} class="py-8 text-center text-muted-foreground">No edge boxes yet.</td></tr>
+              <tr><td colspan={6}>
+                <EmptyState
+                  title="No edge boxes yet"
+                  description="Create a box below, then run its installer on the on-prem machine to connect it."
+                />
+              </td></tr>
             {/if}
           </tbody>
         </table>
@@ -313,7 +316,7 @@
             </div>
           </div>
           <Button type="submit" disabled={!name.trim() || creating}>
-            {#if creating}<LoaderCircle class="size-4 animate-spin" />{:else}<Plus class="size-4" />{/if}
+            {#if creating}<Busy />{:else}<Plus class="size-4" />{/if}
             Create box
           </Button>
         </form>
@@ -334,7 +337,7 @@
     <Dialog.Footer>
       <Button variant="outline" onclick={() => (deleteTarget = null)}>Cancel</Button>
       <Button variant="destructive" disabled={deleting} onclick={confirmDelete}>
-        {#if deleting}<LoaderCircle class="size-4 animate-spin" />{/if}
+        {#if deleting}<Busy />{/if}
         Remove
       </Button>
     </Dialog.Footer>

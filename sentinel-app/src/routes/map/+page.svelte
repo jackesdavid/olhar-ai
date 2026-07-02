@@ -23,7 +23,7 @@
   import Triangle from "@lucide/svelte/icons/triangle";
   import Circle from "@lucide/svelte/icons/circle";
   import Save from "@lucide/svelte/icons/save";
-  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import Busy from "$lib/components/busy.svelte";
   import Keyboard from "@lucide/svelte/icons/keyboard";
 
   import { Button } from "$lib/components/ui/button";
@@ -174,7 +174,7 @@
     </div>
     <Button onclick={save} disabled={store.saving || !store.dirty}>
       {#if store.saving}
-        <LoaderCircle class="size-4 animate-spin" />
+        <Busy />
         Saving…
       {:else}
         <Save class="size-4" />

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import PageHeader from "$lib/components/page-header.svelte";
+  import Cpu from "@lucide/svelte/icons/cpu";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { data, onEvent, type EdgeDiscovered } from "$lib/data";
@@ -213,17 +215,17 @@
 </script>
 
 <div class="space-y-6">
-  <div class="flex items-center justify-between gap-3">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Devices</h1>
-      <p class="text-sm text-muted-foreground">
-        Save and manage the cameras your edge appliance finds on its local network.
-      </p>
-    </div>
-    <Button variant="outline" onclick={rescan} disabled={rescanning} title="Re-run ONVIF discovery on your edge box now (fixes cameras that changed IP)">
-      <Radar class="size-4" /> {rescanning ? "Rescanning…" : "Rescan"}
-    </Button>
-  </div>
+  <PageHeader
+    title="Devices"
+    description="Save and manage the cameras your edge appliance finds on its local network."
+    icon={Cpu}
+  >
+    {#snippet actions()}
+      <Button variant="outline" onclick={rescan} disabled={rescanning} title="Re-run ONVIF discovery on your edge box now (fixes cameras that changed IP)">
+        <Radar class="size-4" /> {rescanning ? "Rescanning…" : "Rescan"}
+      </Button>
+    {/snippet}
+  </PageHeader>
 
   <!-- Saved devices -->
   <Card.Root>

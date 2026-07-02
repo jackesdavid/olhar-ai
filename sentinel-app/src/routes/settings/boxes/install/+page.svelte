@@ -46,7 +46,7 @@
       <div class="flex items-center gap-3">
         <HardDrive class="size-6 text-primary" />
         <div>
-          <h1 class="text-xl font-semibold tracking-tight">Install "{install.name}"</h1>
+          <h1 class="text-2xl font-semibold tracking-tight">Install "{install.name}"</h1>
           <p class="text-sm text-muted-foreground">
             Run this on the on-site machine. The token is shown only once.
           </p>

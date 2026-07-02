@@ -8,7 +8,7 @@
   import Camera from "@lucide/svelte/icons/camera";
   import Upload from "@lucide/svelte/icons/upload";
   import ScanSearch from "@lucide/svelte/icons/scan-search";
-  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import Busy from "$lib/components/busy.svelte";
   import ArrowRight from "@lucide/svelte/icons/arrow-right";
 
   import * as Card from "$lib/components/ui/card";
@@ -133,7 +133,7 @@
             </Select.Root>
           </div>
           <Button onclick={runFromCamera} disabled={running}>
-            {#if running}<LoaderCircle class="size-4 animate-spin" /> Working…{:else}<Camera class="size-4" /> Recognise from camera{/if}
+            {#if running}<Busy /> Working…{:else}<Camera class="size-4" /> Recognise from camera{/if}
           </Button>
         {/if}
         <Button variant="outline" onclick={() => fileEl?.click()} disabled={running}>

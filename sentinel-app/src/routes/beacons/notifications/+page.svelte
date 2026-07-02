@@ -1,4 +1,6 @@
 <script lang="ts">
+  import PageHeader from "$lib/components/page-header.svelte";
+  import Gauge from "@lucide/svelte/icons/gauge";
   import { onMount } from "svelte";
   import { notifications, type QueueStats, type QueueItem } from "$lib/api";
   import { fmtTs } from "$lib/utils";
@@ -89,9 +91,9 @@
   }
 
   function statusClass(s: string): string {
-    if (s === "sent") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-500";
+    if (s === "sent") return "border-primary/30 bg-primary/10 text-primary";
     if (s === "failed") return "border-destructive/30 bg-destructive/10 text-destructive";
-    if (s === "sending") return "border-primary/30 bg-primary/10 text-primary";
+    if (s === "sending") return "border-primary/20 bg-primary/5 text-primary/80";
     return "border-border bg-muted/40 text-muted-foreground"; // queued
   }
   function hourLabel(h: string): string {
@@ -102,17 +104,17 @@
 </script>
 
 <div class="flex flex-col gap-6 p-6">
-  <div class="flex items-start justify-between gap-3">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Notifications</h1>
-      <p class="text-sm text-muted-foreground">
-        Live view of the notification queue — no black box.
-      </p>
-    </div>
-    <Button variant="outline" size="sm" onclick={refresh}>
-      <RefreshCw class="size-4" /> Refresh
-    </Button>
-  </div>
+  <PageHeader
+    title="Notifications"
+    description="Live view of the notification queue — no black box."
+    icon={Gauge}
+  >
+    {#snippet actions()}
+      <Button variant="outline" size="sm" onclick={refresh}>
+        <RefreshCw class="size-4" /> Refresh
+      </Button>
+    {/snippet}
+  </PageHeader>
 
   <!-- KPI tiles -->
   <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

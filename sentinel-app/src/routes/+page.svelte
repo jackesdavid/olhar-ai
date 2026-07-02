@@ -1,4 +1,6 @@
 <script lang="ts">
+  import PageHeader from "$lib/components/page-header.svelte";
+  import LayoutDashboard from "@lucide/svelte/icons/layout-dashboard";
   import { onMount } from "svelte";
   import { data } from "$lib/data";
 
@@ -55,18 +57,20 @@
 </script>
 
 <div class="space-y-8">
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Dashboard</h1>
-      <p class="text-sm text-muted-foreground">Overview of your devices, alerts, and automations.</p>
-    </div>
-    <div
-      class="flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
-    >
-      <span class="size-1.5 rounded-full bg-primary status-live"></span>
-      System ready
-    </div>
-  </div>
+  <PageHeader
+    title="Dashboard"
+    description="Overview of your devices, alerts, and automations."
+    icon={LayoutDashboard}
+  >
+    {#snippet actions()}
+      <div
+        class="flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
+      >
+        <span class="size-1.5 rounded-full bg-primary status-live"></span>
+        System ready
+      </div>
+    {/snippet}
+  </PageHeader>
 
   <!-- Stat cards -->
   <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

@@ -1,8 +1,9 @@
 <script lang="ts">
+  import PageHeader from "$lib/components/page-header.svelte";
   import { onMount } from "svelte";
   import { toast } from "svelte-sonner";
 
-  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import Busy from "$lib/components/busy.svelte";
   import Plus from "@lucide/svelte/icons/plus";
   import ShieldCheck from "@lucide/svelte/icons/shield-check";
 
@@ -81,15 +82,11 @@
 </script>
 
 <div class="space-y-6">
-  <div class="flex items-center gap-3">
-    <ShieldCheck class="size-6 text-primary" />
-    <div>
-      <h1 class="text-xl font-semibold tracking-tight">Roles &amp; permissions</h1>
-      <p class="text-sm text-muted-foreground">
-        Toggle which actions each role can perform. Access is granted by action, never by role name.
-      </p>
-    </div>
-  </div>
+  <PageHeader
+    title={"Roles & permissions"}
+    description="Toggle which actions each role can perform. Access is granted by action, never by role name."
+    icon={ShieldCheck}
+  />
 
   {#if !allowed}
     <Card.Root><Card.Content class="py-10 text-center text-sm text-muted-foreground">
@@ -113,7 +110,7 @@
                   <div class="inline-flex items-center gap-1.5">
                     {role.name}
                     {#if role.is_system}<Badge variant="secondary" class="text-[10px]">system</Badge>{/if}
-                    {#if saving === role.id}<LoaderCircle class="size-3 animate-spin text-muted-foreground" />{/if}
+                    {#if saving === role.id}<Busy size={12} class="text-muted-foreground" />{/if}
                   </div>
                 </th>
               {/each}
@@ -153,7 +150,7 @@
         <form class="flex gap-2" onsubmit={createRole}>
           <Input bind:value={newRole} placeholder="e.g. Operator" class="max-w-xs" />
           <Button type="submit" disabled={!newRole.trim() || creating}>
-            {#if creating}<LoaderCircle class="size-4 animate-spin" />{:else}<Plus class="size-4" />{/if}
+            {#if creating}<Busy />{:else}<Plus class="size-4" />{/if}
             Create
           </Button>
         </form>

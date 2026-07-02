@@ -4,7 +4,7 @@
   import { toast } from "svelte-sonner";
 
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
-  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import Busy from "$lib/components/busy.svelte";
 
   import * as Card from "$lib/components/ui/card";
   import * as Select from "$lib/components/ui/select";
@@ -214,7 +214,7 @@
       </p>
     </div>
     <Button variant="outline" onclick={rescan} disabled={rescanning}>
-      {#if rescanning}<LoaderCircle class="size-4 animate-spin" /> Refreshing…{:else}<RefreshCw class="size-4" /> Refresh{/if}
+      {#if rescanning}<Busy /> Refreshing…{:else}<RefreshCw class="size-4" /> Refresh{/if}
     </Button>
   </div>
 

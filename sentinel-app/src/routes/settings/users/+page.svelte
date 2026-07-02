@@ -1,9 +1,11 @@
 <script lang="ts">
+  import PageHeader from "$lib/components/page-header.svelte";
   import { toast } from "svelte-sonner";
 
-  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import Busy from "$lib/components/busy.svelte";
   import UserPlus from "@lucide/svelte/icons/user-plus";
   import UsersRound from "@lucide/svelte/icons/users-round";
+  import EmptyState from "$lib/components/empty-state.svelte";
 
   import * as Card from "$lib/components/ui/card";
   import { Button } from "$lib/components/ui/button";
@@ -94,13 +96,11 @@
 </script>
 
 <div class="space-y-6">
-  <div class="flex items-center gap-3">
-    <UsersRound class="size-6 text-primary" />
-    <div>
-      <h1 class="text-xl font-semibold tracking-tight">Users</h1>
-      <p class="text-sm text-muted-foreground">Invite people into this workspace and assign their roles.</p>
-    </div>
-  </div>
+  <PageHeader
+    title="Users"
+    description="Invite people into this workspace and assign their roles."
+    icon={UsersRound}
+  />
 
   {#if !allowed}
     <Card.Root><Card.Content class="py-10 text-center text-sm text-muted-foreground">
@@ -128,7 +128,7 @@
                   <div class="flex items-center gap-2">
                     <span>{user.email}</span>
                     {#if user.is_master}<Badge variant="secondary" class="text-[10px]">master</Badge>{/if}
-                    {#if savingUser === user.id}<LoaderCircle class="size-3 animate-spin text-muted-foreground" />{/if}
+                    {#if savingUser === user.id}<Busy size={12} class="text-muted-foreground" />{/if}
                   </div>
                 </td>
                 {#each roles as role (role.id)}
@@ -145,7 +145,12 @@
               </tr>
             {/each}
             {#if users.length === 0}
-              <tr><td colspan={roles.length + 1} class="py-8 text-center text-muted-foreground">No users yet.</td></tr>
+              <tr><td colspan={roles.length + 1}>
+                <EmptyState
+                  title="No users yet"
+                  description="Invite teammates below — they sign in with their email and the roles you assign."
+                />
+              </td></tr>
             {/if}
           </tbody>
         </table>
@@ -181,7 +186,7 @@
             </div>
           </div>
           <Button type="submit" disabled={!canInvite || inviting}>
-            {#if inviting}<LoaderCircle class="size-4 animate-spin" />{:else}<UserPlus class="size-4" />{/if}
+            {#if inviting}<Busy />{:else}<UserPlus class="size-4" />{/if}
             Invite
           </Button>
         </form>

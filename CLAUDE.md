@@ -71,7 +71,8 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
   edge binary by building locally + scp (see [deploy ref](docs/ref/deploy.md)).
 - **No Claude attribution** in commits/PRs (no `Co-Authored-By: Claude`, no "Generated with").
 - UI house style: keep markup logic out of templates (named helpers returning bool/string), no
-  nested ternaries; emerald "Emerald Guardian" theme; web-only (no Tauri `prompt`/`confirm`).
+  nested ternaries; monochrome ink theme (Clean White / Sentinel Noir — no brand hue,
+  branding carried by the dot-field form); web-only (no Tauri `prompt`/`confirm`).
 - When workflow node kinds/capabilities change, the catalog auto-derives from
   `NodeKind::ALL` — `crates/app-core/src/agent/tools.rs` does NOT list workflow nodes (it's the
   chat agent's `ToolUiEvent`), so no change needed there.

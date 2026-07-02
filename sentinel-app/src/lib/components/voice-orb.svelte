@@ -1,7 +1,7 @@
 <script lang="ts">
   // The voice-first centerpiece: the Sentinel hex dot-field mark, audio-reactive.
   // It swells with live audio amplitude (`level` 0..1) and tints by who's talking —
-  // emerald when Sentinel speaks, sky-blue when the operator speaks, dim when idle.
+  // primary ink when Sentinel speaks, sky-blue when the operator speaks, dim when idle.
   import SentinelMark from "$lib/components/sentinel-mark.svelte";
 
   let {
@@ -10,7 +10,7 @@
     size = 240,
   }: { level?: number; state?: "idle" | "listening" | "speaking"; size?: number } = $props();
 
-  // Sentinel = emerald (the brand --primary); operator = sky; idle = dim grey.
+  // Sentinel = primary ink; operator = sky (a distinct speaker signal); idle = dim grey.
   function toneClass(s: string): string {
     if (s === "speaking") return "text-primary";
     if (s === "listening") return "text-sky-400";

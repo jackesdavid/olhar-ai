@@ -18,7 +18,7 @@
   import Square from "@lucide/svelte/icons/square";
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import Power from "@lucide/svelte/icons/power";
-  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import Busy from "$lib/components/busy.svelte";
   import ZoomIn from "@lucide/svelte/icons/zoom-in";
   import ZoomOut from "@lucide/svelte/icons/zoom-out";
   import Maximize from "@lucide/svelte/icons/maximize";
@@ -2182,7 +2182,7 @@
               <span
                 class="inline-flex w-fit items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
               >
-                <LoaderCircle class="size-3 animate-spin" />
+                <Busy size={12} />
                 {#if activity[g.id]?.trigger}{triggerSourceLabel(activity[g.id]?.trigger)}{:else}Running{/if}
               </span>
             {:else if st === "idle"}
@@ -2211,7 +2211,7 @@
               onclick={() => runNow(g)}
             >
               {#if st === "running"}
-                <LoaderCircle class="size-4 animate-spin" />
+                <Busy />
               {:else}
                 <Play class="size-4" />
               {/if}
@@ -2941,7 +2941,7 @@
               disabled={editorRunDisabled()}
               onclick={() => runNow(graph)}
             >
-              {#if running}<LoaderCircle class="size-4 animate-spin" />{:else}<Play class="size-4" />{/if}
+              {#if running}<Busy />{:else}<Play class="size-4" />{/if}
             </Button>
             <Button variant="ghost" size="icon" class="size-8" title="Pause (coming soon)" disabled={!isRunning} onclick={() => comingSoon("Pause")}>
               <Pause class="size-4" />
@@ -3013,7 +3013,7 @@
           <!-- configuration -->
           <div class="space-y-3 rounded-xl border border-border bg-card/40 p-3">
             <div class="flex items-center justify-between gap-2">
-              <span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Configuration</span>
+              <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Configuration</span>
               <div class="flex items-center gap-1">
                 <Button variant="ghost" size="icon" class="size-7" title="Delete workflow" onclick={() => openDelete(graph)}>
                   <Trash2 class="size-3.5" />

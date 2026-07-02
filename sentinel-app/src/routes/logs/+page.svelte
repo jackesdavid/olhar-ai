@@ -224,7 +224,7 @@
   <div class="flex flex-wrap items-center gap-3">
     <div class="flex items-center gap-2">
       <ScrollText class="size-5 text-primary" />
-      <h1 class="text-xl font-semibold tracking-tight">Platform Logs</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">Platform Logs</h1>
     </div>
     <p class="text-sm text-muted-foreground">
       Unified audit log for all modules — workflows, edge boxes, presence, devices.

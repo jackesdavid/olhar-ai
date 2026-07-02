@@ -7,12 +7,15 @@
     size = 28,
     animated = true,
     rings = 5,
+    speed = 3.4,
     class: klass = "",
     style = "",
   }: {
     size?: number;
     animated?: boolean;
     rings?: number;
+    /** Ping cycle in seconds. Lower = livelier (inline busy); default = calm ambient. */
+    speed?: number;
     class?: string;
     style?: string;
   } = $props();
@@ -58,7 +61,13 @@
   aria-label="Sentinel"
 >
   {#each dots as d, i (i)}
-    <circle class="dot" cx={d.cx} cy={d.cy} r={d.r} style="--o:{d.o}; animation-delay:{d.delay}s" />
+    <circle
+      class="dot"
+      cx={d.cx}
+      cy={d.cy}
+      r={d.r}
+      style="--o:{d.o}; animation-delay:{(d.delay * speed) / 3.4}s; animation-duration:{speed}s"
+    />
   {/each}
 </svg>
 
