@@ -102,6 +102,7 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 | **Draw Text** | `image*` (Image), `bbox*` (Bbox), `text` (Text) | `image` (Image), `ok` | `text` (literal fallback), `position` (`top-left`/`top-right`/`bottom-left`/`bottom-right`), `size` (px, default `18`), `text_color` (#RRGGBB, default `#FFFFFF`), `background` (bool, default on), `bg_color` (#RRGGBB, default `#000000`) | Draws a text label anchored to a corner of the bbox, optionally on a filled background rectangle in a contrasting colour. `text` is wired or a config literal. | `Detect People → For each → Break person → (bbox) Draw Text(text="Person", position=top-left) → Show image` |
 | **Blur Outside Box** | `image*` (Image), `bbox*` (Bbox) | `image` (Image), `ok` | `blur` (Gaussian σ, default `12`) | Blurs everything *outside* the bounding box — the region inside stays sharp → redacted JPEG. Privacy-preserving framing (e.g. blur the scene, keep only the person). Takes a typed `Bbox` from any Break* node or `OnEvent("motion")`. | `Person detection → For each → Break person detection → (bbox) Blur Outside Box → Show image` |
 | **AI If** | `image` (Image, optional), `question` (Text, optional) | exec: `true`, `false` | `question` (string), `timeout_secs` (default `65`) | Asks the vision model a yes/no question about an optional image. Routes exec to `true` or `false` exactly like `If` but powered by Claude. `question` can be wired (Text) or set as a config literal; no image wired = text-only question (e.g. "Is it after 18:00?"). Fails the run if no question is provided. | `Camera snapshot → AI If(question="Is there smoke?") →true Create alert` |
+| **AI Answer** | `prompt*` (Text), `image` (Image, optional) | `response` (Text), `ok` | `prompt` (literal fallback), `timeout_secs` (default `30`) | Single-turn Claude — a free-text prompt (+ optional image for vision) → a plain-text answer. No tool-use loop, so it's fast enough for a chat reply. Complements **AI If** (yes/no routing) and **Describe image** (fixed caption). Needs `ANTHROPIC_API_KEY`. | `On event("telegram_message") → (args) → AI Answer(prompt=args) → (response) → Reply to sender` |
 
 ### Alerts
 
@@ -117,6 +118,19 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 |---|---|---|---|---|---|
 | **Get recipient** | — | `recipient`, `ok` | `recipient` | Source node: picks a notification recipient as a typed value. | `Get recipient → Notify recipient(recipient)` |
 | **Notify recipient** | `message*`, `recipient`, `image` | `result`, `ok` | `message` | Sends a Telegram notification. Unwired `recipient` = the sole enabled one; optional `image` attaches a frame. | `Recognize person → Notify recipient(message="Seen {person}", image)` |
+
+### Telegram (bot brain)
+
+The bot's reply side. A paired user's message fires **`On event("telegram_message")`** (a system
+event, outputs `text`, `chat_id`, `from_name`, `command`, `args`); these nodes reply to *that*
+chat — the counterpart to **Notify recipient**, which addresses configured recipients. Everything is
+queued through the durable notification queue (card #57), so a reply survives a restart; the node
+reports `queued`, not delivered. Only paired chats (per tenant) ever fire the event.
+
+| Node | Inputs | Outputs | Config | Behavior | Sample usage |
+|---|---|---|---|---|---|
+| **Reply to sender** | `message*`, `chat_id*` (Num), `image` (Image, optional) | `queued` (bool), `result` | `message` | Replies to the chat that triggered the run. Wire `chat_id` from `On event("telegram_message")`. Optional `image` sends a photo with the text as caption. | `On event("telegram_message") → (command) String switch → /snap → Camera snapshot → (image) Reply to sender(chat_id)` |
+| **Reply with recording** | `clip_id*` (Text), `chat_id*` (Num), `caption` (Text, optional) | `queued` (bool), `result` | `caption` | Fetches a recording clip from the tenant's edge and relays it to the sender as a video (≤50 MB). Wire `clip_id` from **Start recording**. | `Start recording … Stop recording → (clip_id) Reply with recording(chat_id, caption="Here's the clip")` |
 
 ### Text / network
 
@@ -233,6 +247,25 @@ never more than one at a time (repeat fires coalesce).
 `loop_body` fires 3× (item = lobby, garage, roof; index = 0,1,2), each running the
 Format→Notify branch to completion; then `completed` fires once. The Format/Notify nodes
 must be **memoize = off** to re-run per item.
+
+## Worked example: a Telegram command bot
+
+The bot brain is just a graph. A paired user's message fires `On event("telegram_message")`;
+route on `command`, reply to `chat_id`.
+
+```
+[On event("telegram_message")]   (Concurrency: Concurrent)
+  ├─ command ─▶ [String switch: /snap, /ask, /status]
+  │      ├─ /snap   ─▶ [Camera snapshot(camera=args)] ─▶ (image) [Reply to sender]
+  │      ├─ /ask    ─▶ [AI Answer(prompt=args)] ─▶ (response) [Reply to sender]
+  │      ├─ /status ─▶ [Format "Online ✓"] ─▶ [Reply to sender]
+  │      └─ default ─▶ [Reply to sender "Try /snap <cam>, /ask <q>, /status"]
+  └─ chat_id ────────────────────────────────────────────▶ (wired into every Reply to sender)
+```
+
+Only chats this tenant has paired (via `/pair`) ever fire the event, and the reply always goes
+back to the sender's `chat_id` — never another tenant's. Set the reply nodes **memoize = off** if
+the same graph handles many messages in a run.
 
 ---
 

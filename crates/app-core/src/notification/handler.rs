@@ -114,19 +114,27 @@ pub fn spawn_pairing<F>(
                 Ok(updates) => {
                     for u in &updates {
                         offset = offset.max(u.update_id + 1); // ack
-                        if !parse_pairing_code(&u.text, &cfg.pairing_code) {
+                        if parse_pairing_code(&u.text, &cfg.pairing_code) {
+                            if register_target(&store, db.as_ref(), tenant_id, u) {
+                                on_change(); // notify the UI layer to refresh the beacon list
+                                let _ = client::send_message(
+                                    &cfg,
+                                    u.chat_id,
+                                    &format!(
+                                        "\u{2705} Paired as {}. You'll receive alerts here.",
+                                        u.sender_label
+                                    ),
+                                );
+                            }
                             continue;
                         }
-                        if register_target(&store, db.as_ref(), tenant_id, u) {
-                            on_change(); // notify the UI layer to refresh the beacon list
-                            let _ = client::send_message(
-                                &cfg,
-                                u.chat_id,
-                                &format!(
-                                    "\u{2705} Paired as {}. You'll receive alerts here.",
-                                    u.sender_label
-                                ),
-                            );
+                        // Not a pairing code → a regular message. If it's from a chat this tenant
+                        // has already paired, fire it onto the durable event_queue as a
+                        // `telegram_message` trigger (card #15). Flow's event_consumer claims it and
+                        // runs the tenant's `On event("telegram_message")` bot-brain graphs. Messages
+                        // from unpaired chats are ignored (tenant-scoped: one poller per tenant).
+                        if let Some(db) = db.as_ref() {
+                            enqueue_telegram_message(&store, db, tenant_id, u);
                         }
                     }
                 }
@@ -139,6 +147,44 @@ pub fn spawn_pairing<F>(
             }
         }
     });
+}
+
+/// Split a message into `(command, args)`. The command is a leading slash-word (`/snap`) —
+/// lower-cased — else empty; `args` is everything after it (or the whole trimmed text when
+/// there's no command). Pure + testable.
+pub fn split_command(text: &str) -> (String, String) {
+    let t = text.trim();
+    match t.strip_prefix('/') {
+        Some(rest) => {
+            let mut it = rest.splitn(2, char::is_whitespace);
+            let cmd = it.next().unwrap_or("");
+            let args = it.next().unwrap_or("").trim();
+            (format!("/{}", cmd.to_lowercase()), args.to_string())
+        }
+        None => (String::new(), t.to_string()),
+    }
+}
+
+/// Enqueue a paired chat's message as a `telegram_message` event. No-op for chats this tenant
+/// hasn't paired (an enabled target must match `chat_id`) — the security boundary that keeps a
+/// message from ever reaching another tenant's graphs.
+fn enqueue_telegram_message(store: &NotificationStore, db: &Db, tenant_id: uuid::Uuid, u: &Update) {
+    let paired = {
+        let targets = store.lock().unwrap();
+        targets.iter().any(|t| t.enabled && t.chat_id == u.chat_id)
+    };
+    if !paired {
+        return;
+    }
+    let (command, args) = split_command(&u.text);
+    let payload = serde_json::json!({
+        "text": u.text,
+        "chat_id": u.chat_id,
+        "from_name": u.sender_label,
+        "command": command,
+        "args": args,
+    });
+    crate::event_queue::enqueue(db, tenant_id, "telegram_message", "telegram", &payload);
 }
 
 /// Register a paired chat if not already present. Returns true if newly added.
@@ -251,6 +297,15 @@ mod tests {
         // disabled targets are excluded
         let off = vec![target("Dave", 1, false)];
         assert!(resolve_target(&off, None).is_err());
+    }
+
+    #[test]
+    fn split_command_parses_slash_and_plain() {
+        assert_eq!(split_command("/snap cam1"), ("/snap".into(), "cam1".into()));
+        assert_eq!(split_command("  /Snap  cam1 cam2 "), ("/snap".into(), "cam1 cam2".into()));
+        assert_eq!(split_command("/status"), ("/status".into(), "".into()));
+        assert_eq!(split_command("hello there"), ("".into(), "hello there".into()));
+        assert_eq!(split_command("  "), ("".into(), "".into()));
     }
 
     #[test]

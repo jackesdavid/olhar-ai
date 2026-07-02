@@ -20,6 +20,7 @@ mod network;
 mod presence;
 mod recipients;
 mod recording;
+mod telegram;
 mod text;
 mod variable;
 mod vision;
@@ -403,6 +404,9 @@ pub fn run_node(
         NodeKind::TimeGate => Ok(PortValues::new()),
         NodeKind::GetVariable => variable::run_get_variable(config, sys),
         NodeKind::SetVariable => variable::run_set_variable(config, inputs, sys),
+        NodeKind::ReplyToSender => telegram::run_reply_to_sender(config, inputs, sys),
+        NodeKind::AiAnswer => ai::run_ai_answer(config, inputs, sys),
+        NodeKind::ReplyWithRecording => telegram::run_reply_with_recording(config, inputs, sys),
     }
 }
 
@@ -423,6 +427,9 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         NodeKind::HttpPost | NodeKind::NotifyRecipient | NodeKind::DeliverAlert => 35,
         NodeKind::CreateAlert | NodeKind::RecordPresence => 15,
         NodeKind::StartRecording | NodeKind::StopRecording => 30,
+        NodeKind::ReplyToSender => 35,
+        NodeKind::AiAnswer => 30,
+        NodeKind::ReplyWithRecording => 120, // fetch clip from edge + upload
         // Inline (no watchdog): instant/pure nodes + the deliberate `Wait` sleep + the
         // engine-driven markers (ForEach/EmitEvent/OnEvent/ShowImage/FlipFlop).
         NodeKind::Wait
@@ -754,6 +761,15 @@ pub fn debug_summary(
         NodeKind::SetVariable => {
             let name = config.get("variable").and_then(|v| v.as_str()).unwrap_or("?");
             format!("set ${name}")
+        }
+        NodeKind::ReplyToSender => {
+            let chat = num("chat_id").or_else(|| inputs.get("chat_id").and_then(PortValue::as_num)).unwrap_or(0);
+            txt("result").map(clip).unwrap_or_else(|| format!("reply → chat {chat}"))
+        }
+        NodeKind::AiAnswer => txt("response").map(clip).unwrap_or_else(|| "AI answered".into()),
+        NodeKind::ReplyWithRecording => {
+            let chat = inputs.get("chat_id").and_then(PortValue::as_num).unwrap_or(0);
+            txt("result").map(clip).unwrap_or_else(|| format!("clip → chat {chat}"))
         }
     }
 }

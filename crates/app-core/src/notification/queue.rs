@@ -15,20 +15,26 @@ pub struct QueuedNotification {
     pub id: Uuid,
     pub tenant_id: Uuid,
     pub attempts: i32,
-    /// Beacon label to address, or `None` for all enabled recipients.
+    /// Beacon label to address, or `None` for all enabled recipients (ignored when `chat_id` is set).
     pub target: Option<String>,
+    /// A raw Telegram chat to reply to directly (card #15). `Some` = send straight to this chat,
+    /// bypassing beacon resolution; `None` = use `target`/all-recipients.
+    pub chat_id: Option<i64>,
     pub message: String,
     pub image_key: Option<String>,
     pub video_key: Option<String>,
 }
 
-/// Enqueue a notification for `tenant_id`. `target` = a beacon label, or `None` for every
-/// enabled recipient. `image_key`/`video_key` are object-store keys (media plumbing added later).
-/// Best-effort; returns the new row id.
+/// Enqueue a notification for `tenant_id`. `target` = a beacon label, or `None` for every enabled
+/// recipient. `chat_id` = `Some` to reply direct to a specific Telegram chat (bot reply, card #15),
+/// bypassing beacon resolution. `image_key`/`video_key` are object-store keys. Best-effort; returns
+/// the new row id.
+#[allow(clippy::too_many_arguments)]
 pub fn enqueue(
     db: &Db,
     tenant_id: Uuid,
     target: Option<&str>,
+    chat_id: Option<i64>,
     message: &str,
     image_key: Option<&str>,
     video_key: Option<&str>,
@@ -43,12 +49,13 @@ pub fn enqueue(
     let res: Result<_, sqlx::Error> = db.block(async move {
         sqlx::query(
             "INSERT INTO notification_queue
-                (id, tenant_id, status, attempts, target, message, image_key, video_key, created_at, next_attempt_at)
-             VALUES ($1, $2, 'queued', 0, $3, $4, $5, $6, $7, $7)",
+                (id, tenant_id, status, attempts, target, chat_id, message, image_key, video_key, created_at, next_attempt_at)
+             VALUES ($1, $2, 'queued', 0, $3, $4, $5, $6, $7, $8, $8)",
         )
         .bind(id)
         .bind(tenant_id)
         .bind(target)
+        .bind(chat_id)
         .bind(message)
         .bind(image_key)
         .bind(video_key)
@@ -69,9 +76,9 @@ pub fn claim_next(db: &Db) -> Option<QueuedNotification> {
     let pool = db.pool();
     db.block(async move {
         let mut tx = pool.begin().await.ok()?;
-        let row: (Uuid, Uuid, i32, Option<String>, String, Option<String>, Option<String>) =
+        let row: (Uuid, Uuid, i32, Option<String>, Option<i64>, String, Option<String>, Option<String>) =
             sqlx::query_as(
-                "SELECT id, tenant_id, attempts, target, message, image_key, video_key
+                "SELECT id, tenant_id, attempts, target, chat_id, message, image_key, video_key
                  FROM notification_queue
                  WHERE status = 'queued' AND next_attempt_at <= $1
                  ORDER BY next_attempt_at
@@ -95,9 +102,10 @@ pub fn claim_next(db: &Db) -> Option<QueuedNotification> {
             tenant_id: row.1,
             attempts: row.2 + 1,
             target: row.3,
-            message: row.4,
-            image_key: row.5,
-            video_key: row.6,
+            chat_id: row.4,
+            message: row.5,
+            image_key: row.6,
+            video_key: row.7,
         })
     })
 }

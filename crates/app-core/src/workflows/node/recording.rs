@@ -63,6 +63,34 @@ pub(super) fn run_stop_recording(inputs: &PortValues, sys: &ToolContext) -> Resu
     Ok(PortValues::new())
 }
 
+/// Cap on a fetched clip — Telegram rejects >50 MB for bot uploads anyway, and it bounds memory.
+const MAX_CLIP_BYTES: u64 = 50 * 1024 * 1024;
+
+/// Download a finished recording clip's mp4 bytes from this tenant's edge (card #15, used by
+/// `Reply with recording`). `GET {edge_api}/recording/{clip_id}`. The read is size-bounded so a
+/// runaway response can't exhaust memory.
+pub(super) fn fetch_clip(sys: &ToolContext, clip_id: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let base = resolve_edge_api_base(sys)?;
+    let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(90)).build();
+    let resp = agent
+        .get(&format!("{base}/recording/{clip_id}"))
+        .call()
+        .map_err(|e| format!("edge fetch clip {clip_id}: {e}"))?;
+    let mut buf = Vec::new();
+    resp.into_reader()
+        .take(MAX_CLIP_BYTES + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("read clip {clip_id}: {e}"))?;
+    if buf.is_empty() {
+        return Err(format!("clip {clip_id} was empty (not found or still recording?)"));
+    }
+    if buf.len() as u64 > MAX_CLIP_BYTES {
+        return Err(format!("clip {clip_id} exceeds {MAX_CLIP_BYTES} bytes — too large to relay"));
+    }
+    Ok(buf)
+}
+
 fn resolve_edge_base(sys: &ToolContext) -> Result<String, String> {
     let pool = sys.db.pool();
     let tid = sys.tenant_id;

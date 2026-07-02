@@ -52,6 +52,7 @@ export const CATEGORY_COLOR: Record<string, string> = {
   Debug: "#a1a1aa", // zinc
   Utility: "#94a3b8", // slate
   Variables: "#94a3b8", // slate (get/set actually take their variable's type colour)
+  Telegram: "#229ed9", // Telegram brand blue — the bot-reply family
 };
 
 // Maps a workflow node kind slug to its category colour — same logic as the
@@ -69,6 +70,9 @@ const NODE_KIND_COLOR: Record<string, string> = {
   draw_bbox: portColor.person, blur_outside_bbox: portColor.person,
   // AI
   describe_image: portColor.dictionary, ask_ai: portColor.dictionary,
+  ai_answer: portColor.dictionary,
+  // Telegram (bot reply)
+  reply_to_sender: "#229ed9", reply_with_recording: "#229ed9",
   // Alerts
   get_last_alert: portColor.bool, create_alert: portColor.bool, deliver_alert: portColor.bool,
   // Recipients

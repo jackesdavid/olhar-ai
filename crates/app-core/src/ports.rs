@@ -48,6 +48,8 @@ pub trait Vision: Send + Sync {
     fn describe(&self, jpeg: &[u8], label: &str) -> Result<String, String>;
     /// Ask a yes/no question about an optional image. Returns `true` for YES, `false` for NO.
     fn ask_yes_no(&self, question: &str, image: Option<&[u8]>) -> Result<bool, String>;
+    /// Single-turn free-text answer to a prompt (+ optional image). Backs the `AI Answer` node.
+    fn ask_text(&self, prompt: &str, image: Option<&[u8]>) -> Result<String, String>;
 }
 
 /// Face recognition: a cosine kNN over the approved enrolled embeddings.
@@ -65,6 +67,27 @@ pub trait Notifier: Send + Sync {
         target: Option<&str>,
         message: &str,
         image: Option<Vec<u8>>,
+    ) -> Result<String, String>;
+
+    /// Reply DIRECTLY to a specific Telegram chat — a bot reply to the message sender (card #15),
+    /// bypassing beacon resolution. The remote impl enqueues (durable); the local impl sends
+    /// in-process. `image` optional (text-only reply when `None`).
+    fn reply(
+        &self,
+        cfg: &NotificationConfig,
+        chat_id: i64,
+        message: &str,
+        image: Option<Vec<u8>>,
+    ) -> Result<String, String>;
+
+    /// Reply to a chat with a video (mp4 bytes) — `Reply with recording`. Same routing as
+    /// [`Self::reply`]; video always rides the object store on the remote path (it's heavy).
+    fn reply_video(
+        &self,
+        cfg: &NotificationConfig,
+        chat_id: i64,
+        caption: &str,
+        video: Vec<u8>,
     ) -> Result<String, String>;
 }
 
@@ -129,6 +152,9 @@ impl Vision for LocalVision {
     fn ask_yes_no(&self, question: &str, image: Option<&[u8]>) -> Result<bool, String> {
         crate::agent::vision::ask_yes_no(question, image)
     }
+    fn ask_text(&self, prompt: &str, image: Option<&[u8]>) -> Result<String, String> {
+        crate::agent::vision::ask_text(prompt, image)
+    }
 }
 
 /// Recognition via the shared Postgres + pgvector handle, scoped to a tenant.
@@ -154,6 +180,31 @@ impl Notifier for LocalNotifier {
         image: Option<Vec<u8>>,
     ) -> Result<String, String> {
         crate::notification::dispatch(store, cfg, target, message, image)
+    }
+
+    fn reply(
+        &self,
+        cfg: &NotificationConfig,
+        chat_id: i64,
+        message: &str,
+        image: Option<Vec<u8>>,
+    ) -> Result<String, String> {
+        match image {
+            Some(jpeg) => crate::notification::client::send_photo(cfg, chat_id, message, &jpeg)?,
+            None => crate::notification::client::send_message(cfg, chat_id, message)?,
+        }
+        Ok("sent".to_string())
+    }
+
+    fn reply_video(
+        &self,
+        cfg: &NotificationConfig,
+        chat_id: i64,
+        caption: &str,
+        video: Vec<u8>,
+    ) -> Result<String, String> {
+        crate::notification::client::send_video(cfg, chat_id, caption, &video)?;
+        Ok("sent".to_string())
     }
 }
 
@@ -190,9 +241,71 @@ impl Notifier for RemoteNotifier {
             &self.db,
             self.tenant_id,
             target,
+            None, // beacon-targeted send (not a direct chat reply — see reply())
             message,
             image_key.as_deref(),
             None,
+        );
+        Ok("queued".to_string())
+    }
+
+    fn reply(
+        &self,
+        cfg: &NotificationConfig,
+        chat_id: i64,
+        message: &str,
+        image: Option<Vec<u8>>,
+    ) -> Result<String, String> {
+        // Upload the image to the object store; the consumer downloads + sends. If the store is
+        // off or the upload fails, send the reply in-process so it's never lost.
+        let image_key = match image {
+            Some(bytes) if crate::media::enabled() => match crate::media::put(&bytes, "image/jpeg", "jpg") {
+                Ok(key) => Some(key),
+                Err(e) => {
+                    log::warn!("media upload failed ({e}); replying with image in-process");
+                    crate::notification::client::send_photo(cfg, chat_id, message, &bytes)?;
+                    return Ok("sent".to_string());
+                }
+            },
+            Some(bytes) => {
+                crate::notification::client::send_photo(cfg, chat_id, message, &bytes)?;
+                return Ok("sent".to_string());
+            }
+            None => None,
+        };
+        crate::notification::queue::enqueue(
+            &self.db,
+            self.tenant_id,
+            None,
+            Some(chat_id),
+            message,
+            image_key.as_deref(),
+            None,
+        );
+        Ok("queued".to_string())
+    }
+
+    fn reply_video(
+        &self,
+        cfg: &NotificationConfig,
+        chat_id: i64,
+        caption: &str,
+        video: Vec<u8>,
+    ) -> Result<String, String> {
+        // Video is heavy → always through the object store + queue. In-process only if media is off.
+        if !crate::media::enabled() {
+            crate::notification::client::send_video(cfg, chat_id, caption, &video)?;
+            return Ok("sent".to_string());
+        }
+        let key = crate::media::put(&video, "video/mp4", "mp4")?;
+        crate::notification::queue::enqueue(
+            &self.db,
+            self.tenant_id,
+            None,
+            Some(chat_id),
+            caption,
+            None,
+            Some(&key),
         );
         Ok("queued".to_string())
     }

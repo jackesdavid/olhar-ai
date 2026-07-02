@@ -52,8 +52,32 @@ pub fn send_photo(
     check_ok(resp)
 }
 
+/// Send a video (raw mp4 bytes) with a caption to a chat. Used for `Reply with recording`
+/// (card #15) — a recording clip fetched from the edge, relayed to the sender.
+pub fn send_video(cfg: &NotificationConfig, chat_id: i64, caption: &str, mp4: &[u8]) -> Result<(), String> {
+    if mp4.is_empty() {
+        return Err("no video bytes to send".into());
+    }
+    let body = media_multipart(chat_id, caption, "video", "clip.mp4", "video/mp4", mp4);
+    let content_type = format!("multipart/form-data; boundary={BOUNDARY}");
+    let resp = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(120)) // video upload to Telegram can be slow
+        .build()
+        .post(&method_url(cfg, "sendVideo"))
+        .set("Content-Type", &content_type)
+        .send_bytes(&body)
+        .map_err(|e| format!("sendVideo failed: {e}"))?;
+    check_ok(resp)
+}
+
 fn photo_multipart(chat_id: i64, caption: &str, jpeg: &[u8]) -> Vec<u8> {
-    let mut body = Vec::with_capacity(jpeg.len() + 512);
+    media_multipart(chat_id, caption, "photo", "snapshot.jpg", "image/jpeg", jpeg)
+}
+
+/// Build a Telegram multipart body with `chat_id` + `caption` text parts and one binary media
+/// part (`field` = "photo"/"video", with its filename + MIME). Shared by send_photo/send_video.
+fn media_multipart(chat_id: i64, caption: &str, field: &str, filename: &str, mime: &str, bytes: &[u8]) -> Vec<u8> {
+    let mut body = Vec::with_capacity(bytes.len() + 512);
     let mut push = |s: &str| body.extend_from_slice(s.as_bytes());
 
     push(&format!("--{BOUNDARY}\r\n"));
@@ -67,9 +91,9 @@ fn photo_multipart(chat_id: i64, caption: &str, jpeg: &[u8]) -> Vec<u8> {
     push("\r\n");
 
     push(&format!("--{BOUNDARY}\r\n"));
-    push("Content-Disposition: form-data; name=\"photo\"; filename=\"snapshot.jpg\"\r\n");
-    push("Content-Type: image/jpeg\r\n\r\n");
-    body.extend_from_slice(jpeg);
+    push(&format!("Content-Disposition: form-data; name=\"{field}\"; filename=\"{filename}\"\r\n"));
+    push(&format!("Content-Type: {mime}\r\n\r\n"));
+    body.extend_from_slice(bytes);
     body.extend_from_slice(b"\r\n");
 
     body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());

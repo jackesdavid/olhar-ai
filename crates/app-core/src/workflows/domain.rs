@@ -372,6 +372,16 @@ pub enum NodeKind {
     /// exec passthrough so it writes at an exact point in the flow. The variable name + type
     /// are in config; the input port type follows the variable's type.
     SetVariable,
+    /// Telegram: reply directly to the chat that triggered the run (the `chat_id` from
+    /// `On event("telegram_message")`), not a configured recipient. Sends `message` + optional
+    /// `image`. Everything is queued (durable) — outputs `queued` + the `result` confirmation.
+    ReplyToSender,
+    /// AI: single-turn Claude — a free-text `prompt` (+ optional `image`) → a `response` string.
+    /// Complements `AskAi` (yes/no routing) and `DescribeImage` (image caption). No tool-use loop.
+    AiAnswer,
+    /// Telegram: reply to the triggering chat with a recording clip. Fetches the `clip_id` from the
+    /// edge, relays it as a video with an optional `caption`. Queued (video is heavy).
+    ReplyWithRecording,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -651,6 +661,38 @@ const STOP_RECORDING_IN: [Port; 2] = [
     p("clip_id", PortType::Text, false),
 ];
 
+// Reply to sender (Telegram): text reply to the triggering chat + optional image.
+const REPLY_TO_SENDER_IN: [Port; 3] = [
+    p("message", PortType::Text, true),
+    p("chat_id", PortType::Num, true),
+    p("image", PortType::Image, false),
+];
+const REPLY_TO_SENDER_OUT: [Port; 2] = [
+    p("queued", PortType::Bool, false),
+    p("result", PortType::Text, false),
+];
+
+// AI Answer: free-text prompt (required) + optional image → a text response.
+const AI_ANSWER_IN: [Port; 2] = [
+    p("prompt", PortType::Text, true),
+    p("image", PortType::Image, false),
+];
+const AI_ANSWER_OUT: [Port; 2] = [
+    p("response", PortType::Text, false),
+    p("ok", PortType::Bool, false),
+];
+
+// Reply with recording (Telegram): a clip_id from StartRecording + chat_id + optional caption.
+const REPLY_RECORDING_IN: [Port; 3] = [
+    p("clip_id", PortType::Text, true),
+    p("chat_id", PortType::Num, true),
+    p("caption", PortType::Text, false),
+];
+const REPLY_RECORDING_OUT: [Port; 2] = [
+    p("queued", PortType::Bool, false),
+    p("result", PortType::Text, false),
+];
+
 const GET_CAMERA_BY_NAME_OUT: [Port; 1] = [p("camera", PortType::Camera, false)];
 
 const BREAK_CAMERA_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
@@ -682,7 +724,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 56] = [
+    pub const ALL: [NodeKind; 59] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -739,6 +781,9 @@ impl NodeKind {
         NodeKind::TimeGate,
         NodeKind::GetVariable,
         NodeKind::SetVariable,
+        NodeKind::ReplyToSender,
+        NodeKind::AiAnswer,
+        NodeKind::ReplyWithRecording,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -802,6 +847,9 @@ impl NodeKind {
             NodeKind::TimeGate => "time_gate",
             NodeKind::GetVariable => "get_variable",
             NodeKind::SetVariable => "set_variable",
+            NodeKind::ReplyToSender => "reply_to_sender",
+            NodeKind::AiAnswer => "ai_answer",
+            NodeKind::ReplyWithRecording => "reply_with_recording",
         }
     }
 
@@ -868,6 +916,9 @@ impl NodeKind {
             NodeKind::TimeGate => "Time Gate",
             NodeKind::GetVariable => "Get Variable",
             NodeKind::SetVariable => "Set Variable",
+            NodeKind::ReplyToSender => "Reply to Sender",
+            NodeKind::AiAnswer => "AI Answer",
+            NodeKind::ReplyWithRecording => "Reply with Recording",
         }
     }
 
@@ -880,7 +931,8 @@ impl NodeKind {
             | NodeKind::GetCurrentFrame
             | NodeKind::GetCameraByName
             | NodeKind::BreakCamera => "Cameras",
-            NodeKind::DescribeImage | NodeKind::AskAi => "AI",
+            NodeKind::DescribeImage | NodeKind::AskAi | NodeKind::AiAnswer => "AI",
+            NodeKind::ReplyToSender | NodeKind::ReplyWithRecording => "Telegram",
             NodeKind::Format => "Text",
             NodeKind::Wait
             | NodeKind::If
@@ -1030,6 +1082,9 @@ impl NodeKind {
             NodeKind::TimeGate => &NO_PORTS, // exec-only; wait_secs/extend_secs are config
             // Get has no inputs; Set's typed `value` input is dynamic (GraphNode::input_ports).
             NodeKind::GetVariable | NodeKind::SetVariable => &NO_PORTS,
+            NodeKind::ReplyToSender => &REPLY_TO_SENDER_IN,
+            NodeKind::AiAnswer => &AI_ANSWER_IN,
+            NodeKind::ReplyWithRecording => &REPLY_RECORDING_IN,
         }
     }
 
@@ -1087,6 +1142,9 @@ impl NodeKind {
             NodeKind::TimeGate => &NO_PORTS, // exec-only; fires via exec "out" port
             // Get's typed `value` output is dynamic (GraphNode::output_ports); Set has none.
             NodeKind::GetVariable | NodeKind::SetVariable => &NO_PORTS,
+            NodeKind::ReplyToSender => &REPLY_TO_SENDER_OUT,
+            NodeKind::AiAnswer => &AI_ANSWER_OUT,
+            NodeKind::ReplyWithRecording => &REPLY_RECORDING_OUT,
         }
     }
 
@@ -1188,6 +1246,9 @@ impl NodeKind {
             NodeKind::GetVariable | NodeKind::SetVariable => {
                 json!({ "variable": "", "type": "text" })
             }
+            NodeKind::ReplyToSender => json!({ "message": "", "timeout_secs": "35" }),
+            NodeKind::AiAnswer => json!({ "prompt": "", "timeout_secs": "30" }),
+            NodeKind::ReplyWithRecording => json!({ "caption": "", "timeout_secs": "120" }),
         }
     }
 }

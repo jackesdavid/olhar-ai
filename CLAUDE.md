@@ -58,10 +58,10 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
 - **Timestamps are RFC3339 `text`**, not `timestamptz` — sqlx is built without the chrono/time
   feature, so it can't decode `timestamptz`. Generate with `app_core::alerts::now_rfc3339()`.
 - **Migrations**: `crates/app-core/migrations/NNNN_*.sql`, embedded via `sqlx::migrate!`, applied
-  on `Db::connect` (control + flow boot). Additive; next number is **0035** (recent: 0031 = box_pending_commands,
-  0032 = recordings_friendly_name, 0033 = workflows_uuid, 0034 = box_platform). System events
-  (e.g. `motion`) are a code catalog (`repo::system_events()`), not a migration.
-- **Workflow nodes**: 56 user-visible nodes in `NodeKind::ALL` (`crates/app-core/src/workflows/domain.rs`);
+  on `Db::connect` (control + flow boot). Additive; next number is **0037** (recent: 0033 = workflows_uuid,
+  0034 = box_platform, 0035 = notification_queue + event_queue, 0036 = notification_queue.chat_id). System
+  events (e.g. `motion`, `telegram_message`) are a code catalog (`repo::system_events()`), not a migration.
+- **Workflow nodes**: 59 user-visible nodes in `NodeKind::ALL` (`crates/app-core/src/workflows/domain.rs`);
   execution in `node.rs` (same folder). Node catalog + port reference: [docs/workflow-nodes.md](docs/workflow-nodes.md).
 - **Versioning**: web app = `sentinel-app/package.json` + the footer in `routes/+layout.svelte`;
   edge = `sentinel-edge/Cargo.toml` (drives `LATEST_EDGE_VERSION` + the `v*` release tag). Bump

@@ -37,23 +37,56 @@ fn process(state: &AppState, job: queue::QueuedNotification) {
         return;
     };
 
-    // Download the image from the object store (if one rode this notification).
-    let image = job.image_key.as_deref().and_then(|k| match app_core::media::get(k) {
-        Ok(bytes) => Some(bytes),
-        Err(e) => {
-            log::error!("notification {}: media get {k} failed: {e}", job.id);
-            None
-        }
-    });
-    // Video attachments (recordings) arrive with #15's Reply-to-sender; text/image go out now.
-    if job.video_key.is_some() {
-        log::warn!("notification {}: video attachment present — video send lands with #15", job.id);
-    }
+    // Download any media the object store holds for this row.
+    let image = job.image_key.as_deref().and_then(|k| fetch_media(&job.id, k));
+    let video = job.video_key.as_deref().and_then(|k| fetch_media(&job.id, k));
 
-    let store: NotificationStore = Arc::new(Mutex::new(repo::load_beacons(&state.db, job.tenant_id)));
-    match notification::dispatch(&store, &cfg, job.target.as_deref(), &job.message, image) {
+    // A direct bot reply (card #15) carries a raw chat_id → send straight to that chat, bypassing
+    // beacon resolution. Otherwise resolve the tenant's beacon target(s) as before.
+    let result = match job.chat_id {
+        Some(chat_id) => send_to_chat(&cfg, chat_id, &job.message, image, video),
+        None => {
+            let store: NotificationStore =
+                Arc::new(Mutex::new(repo::load_beacons(&state.db, job.tenant_id)));
+            notification::dispatch(&store, &cfg, job.target.as_deref(), &job.message, image)
+        }
+    };
+    match result {
         Ok(result) => queue::mark_sent(&state.db, job.id, &result),
         Err(e) => queue::mark_retry_or_fail(&state.db, job.id, job.attempts, MAX_ATTEMPTS, backoff, &e),
+    }
+}
+
+/// Fetch an object-store blob, logging (and swallowing) a miss so a bad key doesn't wedge the row.
+fn fetch_media(job_id: &uuid::Uuid, key: &str) -> Option<Vec<u8>> {
+    match app_core::media::get(key) {
+        Ok(bytes) => Some(bytes),
+        Err(e) => {
+            log::error!("notification {job_id}: media get {key} failed: {e}");
+            None
+        }
+    }
+}
+
+/// Send directly to a specific Telegram chat (a bot reply). Prefers video, then photo, then text —
+/// a message may carry a caption alongside its media.
+fn send_to_chat(
+    cfg: &notification::NotificationConfig,
+    chat_id: i64,
+    message: &str,
+    image: Option<Vec<u8>>,
+    video: Option<Vec<u8>>,
+) -> Result<String, String> {
+    use app_core::notification::client;
+    if let Some(mp4) = video {
+        client::send_video(cfg, chat_id, message, &mp4)?;
+        Ok(format!("Sent video to chat {chat_id}."))
+    } else if let Some(jpeg) = image {
+        client::send_photo(cfg, chat_id, message, &jpeg)?;
+        Ok(format!("Sent photo to chat {chat_id}."))
+    } else {
+        client::send_message(cfg, chat_id, message)?;
+        Ok(format!("Sent message to chat {chat_id}."))
     }
 }
 

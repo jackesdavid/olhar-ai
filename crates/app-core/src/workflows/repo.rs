@@ -315,6 +315,24 @@ pub fn system_events() -> Vec<TenantEvent> {
                 field("path", PortType::Text),
             ],
         },
+        // A paired Telegram user sent a message. The notification service enqueues this from its
+        // long-poll loop (only for chat_ids paired in THIS tenant — see notification::handler),
+        // so a graph's `On event("telegram_message")` becomes the bot brain. `command`/`args` are
+        // pre-split at the source (`command` = a leading "/word", else empty; `args` = the rest).
+        TenantEvent {
+            name: "telegram_message".to_string(),
+            category: "System".to_string(),
+            source: "system".to_string(),
+            description: Some("A paired Telegram user sent a message".to_string()),
+            created_by_graph: None,
+            fields: vec![
+                field("text", PortType::Text),
+                field("chat_id", PortType::Num),
+                field("from_name", PortType::Text),
+                field("command", PortType::Text),
+                field("args", PortType::Text),
+            ],
+        },
     ]
 }
 

@@ -15,6 +15,7 @@ const ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const MAX_TOKENS: u32 = 320; // a few sentences of description
 const YES_NO_MAX_TOKENS: u32 = 8; // "YES" or "NO" only
+const ANSWER_MAX_TOKENS: u32 = 640; // a short free-text answer (Telegram reply length)
 /// Cameras can be 1080p+; Claude downsizes anything past ~1568px anyway, so cap
 /// the long edge here to keep the base64 payload small without losing detail.
 const MAX_EDGE: u32 = 1024;
@@ -76,6 +77,63 @@ pub fn describe_image(raw: &[u8], camera_name: &str) -> Result<String, String> {
     let text = text_of(content).trim().to_string();
     if text.is_empty() {
         Err("The model returned no description.".into())
+    } else {
+        Ok(text)
+    }
+}
+
+/// Single-turn free-text answer to `prompt`, with an optional image for vision. One round-trip
+/// (no tool-use loop) so it's fast enough for a Telegram reply. Backs the `AI Answer` node.
+pub fn ask_text(prompt: &str, image: Option<&[u8]>) -> Result<String, String> {
+    let cfg = AgentConfig::from_env()
+        .ok_or("AI Answer needs an ANTHROPIC_API_KEY — none configured.")?;
+
+    let mut content: Vec<Value> = Vec::new();
+    if let Some(raw) = image {
+        let img = image::load_from_memory(raw)
+            .map_err(|e| format!("AI Answer: could not decode image: {e}"))?;
+        let img = if img.width().max(img.height()) > MAX_EDGE {
+            img.resize(MAX_EDGE, MAX_EDGE, image::imageops::FilterType::Triangle)
+        } else {
+            img
+        };
+        let mut jpeg = Vec::new();
+        img.write_to(&mut Cursor::new(&mut jpeg), ImageFormat::Jpeg)
+            .map_err(|e| format!("AI Answer: could not encode image: {e}"))?;
+        let data = B64.encode(&jpeg);
+        content.push(json!({
+            "type": "image",
+            "source": { "type": "base64", "media_type": "image/jpeg", "data": data }
+        }));
+    }
+    content.push(json!({ "type": "text", "text": prompt }));
+
+    let body = json!({
+        "model": cfg.model,
+        "max_tokens": ANSWER_MAX_TOKENS,
+        "system": "You are Sentinel, a calm home + business monitoring assistant. Answer concisely \
+                   and plainly — no preamble. When shown an image, ground your answer in what's visible.",
+        "messages": [{ "role": "user", "content": content }]
+    });
+
+    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(60)).build();
+    let resp = agent
+        .post(ENDPOINT)
+        .set("x-api-key", &cfg.api_key)
+        .set("anthropic-version", ANTHROPIC_VERSION)
+        .set("content-type", "application/json")
+        .send_string(&body.to_string())
+        .map_err(|e| format!("AI Answer request failed: {e}"))?;
+    let parsed: Value = resp
+        .into_string()
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .ok_or("AI Answer response was not valid JSON.")?;
+    let text = text_of(parsed.get("content").ok_or("AI Answer response had no content.")?)
+        .trim()
+        .to_string();
+    if text.is_empty() {
+        Err("The model returned an empty answer.".into())
     } else {
         Ok(text)
     }
