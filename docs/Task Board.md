@@ -50,8 +50,6 @@ kanban-plugin: board
 	  - Plan: [[workflow-variables]]
 - [ ] #15 Telegram bot: workflow-graph brain + inbound commands
 	  - Plan: [[telegram-bot-two-way-research]]
-- [ ] #57 Notification queue + sentinel-notification service
-	  - Plan: [[notification-queue-service]]
 
 
 ## Review
@@ -123,6 +121,8 @@ kanban-plugin: board
 	  - Plan: [[workflow-node-ux-refactor]]
 - [x] #18 Workflow list improvements: last run, search, description, duplicate
 	  - Plan: [[workflow-list-improvements]]
+- [x] #57 Notification queue + sentinel-notification service
+	  - Plan: [[notification-queue-service]]
 
 
 
