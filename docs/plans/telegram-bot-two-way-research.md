@@ -26,9 +26,10 @@ INBOUND  (new work = the enqueue call + a system event)
   Postgres event_queue ─▶ flow event_consumer (DEPLOYED) ─▶ fire_event
         └─▶ OnEvent("telegram_message") graphs run with payload as typed outputs
 
-OUTBOUND (new work = 2 nodes + a send_video path)
-  graph … ─▶ [Reply to sender]  (text/photo: synchronous send to the sender's chat_id)
-  graph … ─▶ [Reply with recording] (video: fetch clip from edge → object store → queue → send_video)
+OUTBOUND (everything queued — new work = chat_id in the queue + 3 nodes + send_video)
+  graph … ─▶ [Reply to sender]      ─▶ notification_queue{chat_id, message, image_key?}
+  graph … ─▶ [Reply with recording] ─▶ notification_queue{chat_id, video_key}
+  notification consumer ─▶ send_message / send_photo / send_video  (direct to chat_id)
 ```
 
 **Current gap being closed:** `handler.rs:115-131` advances the update offset then, for any
@@ -72,28 +73,48 @@ can never fan out to another tenant. Matches the hard rule.
 
 ---
 
-## Phase 2 — `Reply to sender` node (text + photo, synchronous)
+## Phase 2 — Outbound plumbing: `chat_id` in the queue + a unified consumer send
 
-Sends back to the **specific chat that triggered the run** (not a configured beacon). Synchronous
-in-process send — a bot reply is interactive, so immediate delivery + real `ok`/`result` beats queue
-latency. (Heavy/lossy-sensitive alert sends still go through the #57 queue; short replies don't.)
+**Decision (locked): everything queued.** All replies route through the #57 `notification_queue` —
+no synchronous sends. This unifies text / photo / video behind one durable, retryable path and needs
+`chat_id` targeting in the queue **now** (not just for video).
+
+**2a. Migration `0036_notification_queue_chat_id.sql`** — `ALTER TABLE notification_queue ADD COLUMN
+chat_id bigint NULL`. `NULL` = the existing beacon-label path; set = send direct to that raw chat.
+
+**2b. `queue::enqueue` gains `chat_id: Option<i64>`** (`queue.rs:28`) + `QueuedNotification.chat_id`
+(`queue.rs:14`, read in `claim_next`). Timestamps/columns otherwise unchanged.
+
+**2c. Consumer send selection** (`sentinel-notification/src/consumer.rs::process`, `consumer.rs:26-58`):
+- Resolve config/token as today (`resolve_config`, `consumer.rs:61`).
+- Download `image_key` / `video_key` from the object store (`media::get`) as today.
+- **Target + method:**
+  - `job.chat_id` set → send **direct** to that chat via `notification::client`: `send_video` if
+    `video_key`, else `send_photo` if image, else `send_message`.
+  - `job.chat_id` NULL → existing beacon path (`notification::dispatch(store, cfg, target, msg, image)`).
+- `send_video` is new (Phase 4); until then a `video_key` with no `send_video` keeps the current
+  "lands with #15" log. Backoff/retry via `mark_retry_or_fail` unchanged.
+
+## Phase 3 — `Reply to sender` node (text + photo → queue)
+
+Enqueues a reply to the **specific chat that triggered the run** (not a configured beacon). Async by
+design (decision above): the node reports *queued*, not *delivered*.
 
 | | |
 |---|---|
 | **Kind** | `NodeKind::ReplyToSender` — category **"Telegram"** (new category) |
 | **Inputs** | `message*` (Text), `chat_id*` (Num), `image` (Image, optional) |
-| **Outputs** | `ok` (Bool), `result` (Text) |
-| **Behavior** | Resolve tenant bot token from `sys.notif_cfg` (same handle `NotifyRecipient` uses, `recipients.rs:23`). If `image` wired → `notification::client::send_photo(cfg, chat_id, message, &jpeg)`; else `send_message(cfg, chat_id, message)`. Return `ok`+`result`. |
-| **Timeout** | 35 s (notify class). |
+| **Outputs** | `queued` (Bool), `id` (Text — queue row id) |
+| **Behavior** | If `image` wired → `media::put(&jpeg,"image/jpeg","jpg")` → `image_key` (mirrors `RemoteNotifier`, `ports.rs:178`). Then `queue::enqueue(db, tenant, target=None, message, image_key, video_key=None, chat_id=Some(chat_id))`. Requires the object store (present under the #57 `NOTIFY_QUEUE` deploy). |
+| **Timeout** | 10 s (just an upload + insert). |
 
 - `domain.rs`: variant + ports + category arm + slug/label + add to `ALL` (bump size).
-- `node.rs`: dispatch arm → `node/telegram.rs::run_reply_to_sender` (new submodule); calls
-  `crate::notification::client` directly (same crate) with `sys.notif_cfg`.
-- No new client code, no schema change.
+- `node.rs`: dispatch arm → `node/telegram.rs::run_reply_to_sender` (new submodule); uses `sys.db`
+  (the run's tenant `Db`) + `app_core::event_queue`/`notification::queue` + `media`.
 
 ---
 
-## Phase 3 — `AI Answer` node (text-in → text-out)
+## Phase 4 — `AI Answer` node (text-in → text-out)
 
 Single-turn Claude: prompt in, plain text out. **Note the collision:** `NodeKind::AskAi` already
 exists — it's the yes/no "AI Branch" node (`ai.rs:25`, outputs `Bool`). So this is a **new** kind.
@@ -112,32 +133,28 @@ exists — it's the yes/no "AI Branch" node (`ai.rs:25`, outputs `Bool`). So thi
 
 ---
 
-## Phase 4 — Video reply (finish the #57 half-built path)
+## Phase 5 — Video reply (`Reply with recording`)
 
-Reply to the sender with a **recording clip**. #57 already built the media rails (`media::put/get`,
-`notification_queue.video_key`, and a consumer stub that logs *"video send lands with #15"*
-`consumer.rs:49-51`). Remaining work, all small:
+Reply to the sender with a **recording clip**, reusing the Phase 2 queue+chat_id path. The `chat_id`
+column and consumer targeting already land in Phase 2, so this phase is just the video-specific bits:
 
-1. **Edge clip fetch** — new GET on the edge + a `recording.rs` helper: `GET {edge_api}/recording/{clip_id}`
+1. **`send_video`** — add to `notification/client.rs` (multipart `sendVideo`, mirror `send_photo`
+   `client.rs:34`); wire the video arm into the consumer's chat_id send-selection (Phase 2c).
+2. **Edge clip fetch** — new GET on the edge + a `recording.rs` helper: `GET {edge_api}/recording/{clip_id}`
    → mp4 bytes (`resolve_edge_api_base`, `recording.rs:92`; only start/stop exist today).
-2. **`send_video`** — add to `notification/client.rs` (multipart `sendVideo`, mirror `send_photo`
-   `client.rs:34`); add a video arm to `dispatch` (`handler.rs:64`).
-3. **Raw chat_id in the outbound queue** — the queue targets only beacon labels today. Migration
-   **0036**: `ALTER TABLE notification_queue ADD COLUMN chat_id bigint NULL`; consumer sends direct to
-   `chat_id` when set (else beacon path). Thread `chat_id` through `queue::enqueue`.
-4. **`Reply with recording` node** (`NodeKind::ReplyWithRecording`, "Telegram"): inputs
+3. **`Reply with recording` node** (`NodeKind::ReplyWithRecording`, "Telegram"): inputs
    `clip_id*` (Text, from `Start recording`'s `clip_id` output `domain.rs:646`), `chat_id*` (Num),
-   `caption` (Text). Fetches clip → `media::put(bytes,"video/mp4","mp4")` → `queue::enqueue(chat_id,
-   video_key)`. Async by design (video is heavy) — outputs `queued:Bool`.
+   `caption` (Text). Fetches clip → `media::put(bytes,"video/mp4","mp4")` →
+   `queue::enqueue(chat_id=Some, video_key=Some)`. Outputs `queued:Bool`, `id:Text`.
 
-*Phase 4 is the one slice that touches the edge + a migration; Phases 1-3 ship the interactive
-text/photo bot on their own. Ship 1-3 first, then 4.*
+*Phase 5 is the one slice that touches the edge. Phases 1-4 ship the interactive text/photo bot on
+their own (the `chat_id` migration in Phase 2 is additive and harmless without video). Ship 1-4, then 5.*
 
 ---
 
-## Phase 5 — Palette, invariants, docs
+## Phase 6 — Palette, invariants, docs
 
-- **Node count**: `NodeKind::ALL: [NodeKind; 56]` (`domain.rs:685`) → bump to `59` (Phases 2-4 add
+- **Node count**: `NodeKind::ALL: [NodeKind; 56]` (`domain.rs:685`) → bump to `59` (adds
   ReplyToSender, AiAnswer, ReplyWithRecording). Update the `56` in `CLAUDE.md:64`.
 - **Category**: add `"Telegram"` arm in `NodeKind::category` (`domain.rs:874-927`).
 - `slug()`/`label()`/`from_slug` round-trip covered by `slug_round_trips_all_kinds` (`domain.rs:1921`).
@@ -163,19 +180,19 @@ On event("telegram_message")
 
 ---
 
-## Open decisions (resolve before/while building)
+## Decisions
 
-1. **Reply transport** — *recommend* synchronous send for text/photo (interactive UX, real `ok`),
-   queued for video (heavy). Alternative: everything through the queue (uniform, but replies get poll
-   latency + no real `ok`). **Leaning: sync text/photo, queued video.**
-2. **Enqueue scope** — enqueue *every* message from a paired chat (simple; `fire_event` no-ops with no
-   handler) vs. only when a `telegram_message` handler graph exists (needs a listener-count check).
-   **Leaning: enqueue all paired-chat messages; revisit if event_queue gets noisy.** (GC already
-   retires processed rows.)
-3. **Ship boundary** — Phases 1-3 (text/photo bot) as the first shippable slice, Phase 4 (video) as a
-   second commit on the same card. **Leaning: yes, split.**
-4. **AI backend** — Anthropic direct (`ANTHROPIC_API_KEY`) for `AI Answer`, not the RunPod vision
-   sidecar (`AI_SERVICE_URL`, which is image-only). Confirm the key is set in the flow pod's env.
+1. **Reply transport — DECIDED: everything queued.** All replies (text / photo / video) go through the
+   #57 `notification_queue`; no synchronous sends. Nodes report *queued*, not *delivered*. Drives the
+   Phase 2 `chat_id` column + unified consumer send-selection.
+2. **Enqueue scope — DECIDED: enqueue everything.** Every message from a paired chat is enqueued as a
+   `telegram_message` event (still tenant-scoped to the poller's tenant + paired chat_ids). `fire_event`
+   no-ops when a tenant has no handler graph; the event_queue GC retires processed rows.
+3. **Ship boundary — DECIDED (default): split.** Phases 1-4 (text/photo bot) first; Phase 5 (video) as a
+   second commit on the same card.
+4. **AI backend — DECIDED (default): Anthropic direct.** `AI Answer` uses `ANTHROPIC_API_KEY` +
+   `ANTHROPIC_MODEL` (default `claude-opus-4-8`), not the image-only RunPod sidecar. Confirm the key is
+   set in the flow pod's env before Phase 4.
 
 ---
 
