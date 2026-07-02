@@ -11,6 +11,16 @@ for `chat_id`s already paired in *that* tenant's beacon store).
 
 ---
 
+## Status — BUILT (commit 844fd32, 2026-07-02)
+
+Phases 1–6 implemented (56→59 nodes), full workspace compiles, migration 0036 + the queue
+`chat_id` claim path verified against a live DB. **Two things remain before the video path works
+end-to-end** (text/photo bot is complete):
+1. **Edge endpoint** `GET /recording/{clip_id}` → mp4 (in `sentinel-edge`, a separate crate/build).
+   `recording::fetch_clip` calls it; until the edge serves it, `Reply with recording` errors cleanly.
+2. **`ANTHROPIC_API_KEY`** must be set in the flow pod for `AI Answer`.
+Not yet deployed.
+
 ## What #57 changed (why this plan is much smaller now)
 
 The old plan's hardest piece — getting an engine handle into the Telegram long-poll thread — **no
