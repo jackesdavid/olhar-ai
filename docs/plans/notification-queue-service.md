@@ -65,7 +65,17 @@ leaves every call-site unchanged (`workflows/node/recipients.rs:25`, `alerts/mod
 - Move the per-tenant **pairing long-poll loop** here (from `sentinel-flow/src/pairing.rs` +
   `crates/app-core/src/notification/handler.rs`), reusing `load_all_telegram`; flow no longer polls.
 
-### Inbound events → workflows (the #15 seam) — same durable-queue mechanism, flow as consumer
+### Inbound events → workflows (the #15 seam) — same durable-queue mechanism, flow as consumer — DONE ✅
+**Shipped (commit 34d21d9, deployed + prod-verified 2026-07-02):** `app_core::event_queue`
+(enqueue / claim_next `FOR UPDATE SKIP LOCKED` / mark_done / mark_failed; jsonb bound+read as text
+so no sqlx `json` feature). `sentinel-flow::event_consumer` = std-thread claim loop → `engine::fire_event`
+→ mark_done (payload→PortValues moved out of the retired bus injector). Control's `motion_push` /
+`disk_alert_push` now `event_queue::enqueue` into Postgres instead of `PUBLISH flow:inject` — the
+motion path is migrated, and events no longer silently drop when `REDIS_URL` is unset. `bus.rs`
+keeps only the outbound republisher (ephemeral SSE telemetry). Consumer uses a 500ms idle poll (the
+durable claim mechanism); a `LISTEN/NOTIFY` wakeup is a later latency win, not required. The
+`telegram_message` inbound event (below) lands with #15.
+
 The long-poll loop no longer lives in flow, so it has no engine handle. Rather than the lossy Redis
 `flow:inject` pub/sub, **reuse the exact durable-queue pattern in the opposite direction**: a
 Postgres **`event_queue`** (`id uuid, tenant_id, event text, payload jsonb, status
