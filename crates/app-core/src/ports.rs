@@ -50,6 +50,8 @@ pub trait Vision: Send + Sync {
     fn ask_yes_no(&self, question: &str, image: Option<&[u8]>) -> Result<bool, String>;
     /// Single-turn free-text answer to a prompt (+ optional image). Backs the `AI Answer` node.
     fn ask_text(&self, prompt: &str, image: Option<&[u8]>) -> Result<String, String>;
+    /// Route a message to one of `arms` (or `None` = no match). Backs the `AI Switch` node.
+    fn classify(&self, text: &str, arms: &[String]) -> Result<Option<String>, String>;
 }
 
 /// Face recognition: a cosine kNN over the approved enrolled embeddings.
@@ -154,6 +156,9 @@ impl Vision for LocalVision {
     }
     fn ask_text(&self, prompt: &str, image: Option<&[u8]>) -> Result<String, String> {
         crate::agent::vision::ask_text(prompt, image)
+    }
+    fn classify(&self, text: &str, arms: &[String]) -> Result<Option<String>, String> {
+        crate::agent::vision::classify_intent(text, arms)
     }
 }
 

@@ -670,7 +670,7 @@
     const payloadNames = new Set(payloadFields(selectedNode).map((f) => f.name));
     const inputs = (nk?.inputs ?? []).filter((p) => p.type !== "exec" && !payloadNames.has(p.name));
     const rows: { key: string; port: CatPort | null }[] = inputs.map((p) => ({ key: p.name, port: p }));
-    const MANAGED_KEYS: Record<string, string[]> = { string_switch: ["arms"], camera_switch: ["arms"], comment: ["width", "height"] };
+    const MANAGED_KEYS: Record<string, string[]> = { string_switch: ["arms"], ai_switch: ["arms"], camera_switch: ["arms"], comment: ["width", "height"] };
     const managedForKind = new Set(MANAGED_KEYS[selectedNode.kind] ?? []);
     for (const key of Object.keys(nk?.default_config ?? {})) {
       if (!inputs.some((p) => p.name === key) && !managedForKind.has(key)) rows.push({ key, port: null });
@@ -709,8 +709,8 @@
   function effectiveKind(node: Node): CatKind | undefined {
     const k = catalog[node.kind];
     if (!k) return k;
-    // StringSwitch: exec outputs are the user-defined arm labels + built-in "default".
-    if (node.kind === "string_switch") {
+    // StringSwitch / AiSwitch: exec outputs are the user-defined arm labels + built-in "default".
+    if (node.kind === "string_switch" || node.kind === "ai_switch") {
       const arms: string[] = Array.isArray(node.config?.arms) ? (node.config.arms as string[]) : [];
       const armPorts: CatPort[] = [
         ...arms.map((a) => ({ name: String(a), type: "exec" as CatPort["type"], required: false })),
@@ -757,7 +757,7 @@
       const cls = String(n.config.class ?? "person").trim();
       return cls ? `${base}: ${cls}` : base;
     }
-    if (n.kind === "string_switch" || n.kind === "camera_switch") {
+    if (n.kind === "string_switch" || n.kind === "camera_switch" || n.kind === "ai_switch") {
       const arms: unknown[] = Array.isArray(n.config?.arms) ? (n.config.arms as unknown[]) : [];
       return arms.length > 0 ? `${base} (${arms.length})` : base;
     }
@@ -3510,19 +3510,21 @@
                   </div>
                 {/if}
               {/if}
-              <!-- String switch: user-defined match arms. Each arm becomes an exec output
-                   port. A built-in "default" arm always fires when no arm matches. -->
-              {#if selectedNode.kind === "string_switch"}
+              <!-- String / AI switch: user-defined arms. Each arm becomes an exec output port. A
+                   built-in "default" arm fires when no arm matches (String) / no confident semantic
+                   match (AI). Same arm-editing UX; AI Switch picks the arm by meaning. -->
+              {#if selectedNode.kind === "string_switch" || selectedNode.kind === "ai_switch"}
                 {@const swArms = Array.isArray(selectedNode.config?.arms) ? (selectedNode.config.arms as string[]) : []}
+                {@const isAiSwitch = selectedNode.kind === "ai_switch"}
                 <div class="space-y-2.5 border-t border-border pt-2.5">
-                  <p class="text-xs font-medium text-muted-foreground">Match arms</p>
+                  <p class="text-xs font-medium text-muted-foreground">{isAiSwitch ? "Intent arms" : "Match arms"}</p>
                   <div class="space-y-1.5">
                     {#each swArms as arm, i (i)}
                       <div class="flex items-center gap-1.5">
                         <Input
                           class="h-8 min-w-0 flex-1"
                           disabled={editLocked}
-                          placeholder="arm label (e.g. red)"
+                          placeholder={isAiSwitch ? "intent label (e.g. take a photo)" : "arm label (e.g. red)"}
                           value={arm}
                           oninput={(e) => {
                             const updated = [...swArms];
@@ -3554,7 +3556,10 @@
                       }}
                     >+ Add arm</Button>
                   </div>
-                  <p class="text-[10px] text-muted-foreground">A built-in <strong>default</strong> arm always fires when no label matches.</p>
+                  <p class="text-[10px] text-muted-foreground">
+                    {#if isAiSwitch}A model routes the message to the closest arm by meaning; a built-in <strong>default</strong> fires when none is a confident match.
+                    {:else}A built-in <strong>default</strong> arm always fires when no label matches.{/if}
+                  </p>
                 </div>
               {/if}
               <!-- Camera switch: user-defined camera arms. Each arm maps a camera (via dropdown)

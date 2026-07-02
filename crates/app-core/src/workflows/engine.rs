@@ -798,6 +798,16 @@ fn forward_epoch(
             } else {
                 live_out.insert((nid, "default".to_string()));
             }
+        } else if n.kind == NodeKind::AiSwitch {
+            // run_node classified the message and stored the chosen arm in o["arm"]. Validate it
+            // against the configured arms (defence) and fire it, else the "default" branch.
+            let arm = o.get("arm").and_then(PortValue::as_text).unwrap_or("default");
+            let arms = string_switch_arms(&n.config);
+            if arm != "default" && arms.iter().any(|a| a == arm) {
+                live_out.insert((nid, arm.to_string()));
+            } else {
+                live_out.insert((nid, "default".to_string()));
+            }
         } else if n.kind == NodeKind::CameraSwitch {
             let cam = inputs.get("camera").and_then(PortValue::as_camera);
             let port = if let Some(cam) = cam {

@@ -139,6 +139,64 @@ pub fn ask_text(prompt: &str, image: Option<&[u8]>) -> Result<String, String> {
     }
 }
 
+/// Route `text` to one of `arms` (intent labels) for the AI Switch node. Returns the matched arm
+/// (verbatim from `arms`), or `None` for no confident match → the caller fires the `default`/unknown
+/// branch. The model replies with only the option NUMBER (validated back to an index), so a
+/// hallucinated label can never mis-route. One constrained round-trip (`max_tokens: 8`).
+pub fn classify_intent(text: &str, arms: &[String]) -> Result<Option<String>, String> {
+    if arms.is_empty() {
+        return Ok(None);
+    }
+    let cfg = AgentConfig::from_env()
+        .ok_or("AI Switch needs an ANTHROPIC_API_KEY — none configured.")?;
+    let list = arms
+        .iter()
+        .enumerate()
+        .map(|(i, a)| format!("{}. {a}", i + 1))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let system = format!(
+        "You are an intent router. Read the user's message and pick the single option that best \
+         matches their intent. Reply with ONLY the option's number (1-{}), or 0 if none is a good \
+         match. No words — just the number.",
+        arms.len()
+    );
+    let body = json!({
+        "model": cfg.model,
+        "max_tokens": 8,
+        "system": system,
+        "messages": [{ "role": "user", "content": format!("Options:\n{list}\n\nMessage: {text}") }]
+    });
+
+    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(30)).build();
+    let resp = agent
+        .post(ENDPOINT)
+        .set("x-api-key", &cfg.api_key)
+        .set("anthropic-version", ANTHROPIC_VERSION)
+        .set("content-type", "application/json")
+        .send_string(&body.to_string())
+        .map_err(|e| format!("AI Switch request failed: {e}"))?;
+    let parsed: Value = resp
+        .into_string()
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .ok_or("AI Switch response was not valid JSON.")?;
+    let reply = text_of(parsed.get("content").ok_or("AI Switch response had no content.")?);
+    // Parse the leading integer the model returned; map 1-based index → arm, else None.
+    let n: usize = reply
+        .trim()
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0);
+    if (1..=arms.len()).contains(&n) {
+        Ok(Some(arms[n - 1].clone()))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Ask a yes/no question about an optional image frame. Returns `true` for YES, `false`
 /// for NO. The model is forced to one-word answers via the system prompt and `max_tokens: 8`.
 /// When `image` is `None` the question is asked as plain text (useful for time/logic checks).

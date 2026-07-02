@@ -37,6 +37,37 @@ pub(super) fn run_ai_answer(config: &Value, inputs: &PortValues, sys: &ToolConte
     Ok(o)
 }
 
+/// AI Switch: semantic router. Classifies the `text` input into one of the node's user-defined
+/// `arms` (or none) via one LLM call, and stores the chosen arm label in `o["arm"]`. The engine
+/// reads that in `forward_epoch` and fires the matching exec arm — the `String switch` machinery,
+/// but the arm is picked by meaning instead of exact match. On no match / any error → `"default"`
+/// (the unknown branch), so the graph never dead-ends.
+pub(super) fn run_ai_switch(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+    let text = inputs
+        .get("text")
+        .and_then(PortValue::as_text)
+        .or_else(|| config.get("text").and_then(Value::as_str))
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let arms = crate::workflows::domain::string_switch_arms(config);
+    let arm = if text.is_empty() || arms.is_empty() {
+        "default".to_string()
+    } else {
+        match sys.vision.classify(&text, &arms) {
+            Ok(Some(label)) => label,
+            Ok(None) => "default".to_string(),
+            Err(e) => {
+                log::warn!("AI Switch classify failed ({e}); routing to default");
+                "default".to_string()
+            }
+        }
+    };
+    let mut o = PortValues::new();
+    o.insert("arm".into(), PortValue::Text(arm));
+    Ok(o)
+}
+
 /// AI Branch: asks the vision model a yes/no question about an optional image and returns
 /// `result: Bool`. The engine routes exec to `true` or `false` based on this result,
 /// identically to how it handles the `If` node but reading from outputs instead of inputs.

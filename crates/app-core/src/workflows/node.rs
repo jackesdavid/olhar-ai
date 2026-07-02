@@ -407,6 +407,8 @@ pub fn run_node(
         NodeKind::ReplyToSender => telegram::run_reply_to_sender(config, inputs, sys),
         NodeKind::AiAnswer => ai::run_ai_answer(config, inputs, sys),
         NodeKind::ReplyWithRecording => telegram::run_reply_with_recording(config, inputs, sys),
+        // AiSwitch computes the chosen arm here; the engine reads o["arm"] to fire it (like AskAi).
+        NodeKind::AiSwitch => ai::run_ai_switch(config, inputs, sys),
     }
 }
 
@@ -429,6 +431,7 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         NodeKind::StartRecording | NodeKind::StopRecording => 30,
         NodeKind::ReplyToSender => 35,
         NodeKind::AiAnswer => 30,
+        NodeKind::AiSwitch => 30,
         NodeKind::ReplyWithRecording => 120, // fetch clip from edge + upload
         // Inline (no watchdog): instant/pure nodes + the deliberate `Wait` sleep + the
         // engine-driven markers (ForEach/EmitEvent/OnEvent/ShowImage/FlipFlop).
@@ -771,6 +774,7 @@ pub fn debug_summary(
             let chat = inputs.get("chat_id").and_then(PortValue::as_num).unwrap_or(0);
             txt("result").map(clip).unwrap_or_else(|| format!("clip → chat {chat}"))
         }
+        NodeKind::AiSwitch => format!("→ {}", txt("arm").unwrap_or("default")),
     }
 }
 

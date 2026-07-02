@@ -382,6 +382,10 @@ pub enum NodeKind {
     /// Telegram: reply to the triggering chat with a recording clip. Fetches the `clip_id` from the
     /// edge, relays it as a video with an optional `caption`. Queued (video is heavy).
     ReplyWithRecording,
+    /// AI flow control: a semantic router. Like `StringSwitch`, but the arm is chosen by a model
+    /// from the `text` input's *meaning* — routes exec to the best-matching user-defined arm, or the
+    /// built-in `default` when none is a confident match. Arms are user-defined in the inspector.
+    AiSwitch,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -637,6 +641,9 @@ const STRING_SWITCH_IN: [Port; 1] = [p("value", PortType::Text, true)];
 // Camera switch: one required camera input (the entity to match against the arms).
 const CAMERA_SWITCH_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
 
+// AI switch: one required text input (the message to route by meaning across the arms).
+const AI_SWITCH_IN: [Port; 1] = [p("text", PortType::Text, true)];
+
 // AI If: optional image + question text. Both are optional at the port level so a
 // text-only question (no image wired) works. The node errors at runtime if no question.
 const ASK_AI_IN: [Port; 2] = [
@@ -724,7 +731,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 59] = [
+    pub const ALL: [NodeKind; 60] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -784,6 +791,7 @@ impl NodeKind {
         NodeKind::ReplyToSender,
         NodeKind::AiAnswer,
         NodeKind::ReplyWithRecording,
+        NodeKind::AiSwitch,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -850,6 +858,7 @@ impl NodeKind {
             NodeKind::ReplyToSender => "reply_to_sender",
             NodeKind::AiAnswer => "ai_answer",
             NodeKind::ReplyWithRecording => "reply_with_recording",
+            NodeKind::AiSwitch => "ai_switch",
         }
     }
 
@@ -919,6 +928,7 @@ impl NodeKind {
             NodeKind::ReplyToSender => "Reply to Sender",
             NodeKind::AiAnswer => "AI Answer",
             NodeKind::ReplyWithRecording => "Reply with Recording",
+            NodeKind::AiSwitch => "AI Switch",
         }
     }
 
@@ -943,6 +953,7 @@ impl NodeKind {
             | NodeKind::OnEvent
             | NodeKind::StringSwitch
             | NodeKind::CameraSwitch
+            | NodeKind::AiSwitch
             | NodeKind::TimeGate => "Control",
             NodeKind::NumLt
             | NodeKind::NumLte
@@ -1016,7 +1027,7 @@ impl NodeKind {
             NodeKind::ForEach => &EXEC_OUT_FOR_EACH,
             NodeKind::FlipFlop => &EXEC_OUT_FLIP_FLOP,
             // Dynamic: arms come from config, not a static slice. See GraphNode::output_port.
-            NodeKind::StringSwitch | NodeKind::CameraSwitch => &NO_PORTS,
+            NodeKind::StringSwitch | NodeKind::CameraSwitch | NodeKind::AiSwitch => &NO_PORTS,
             NodeKind::Comment => &NO_PORTS,
             NodeKind::Reroute => &NO_PORTS, // pure passthrough, no exec pins
             NodeKind::TimeGate => &EXEC_OUT_TIME_GATE, // "out" fires when countdown expires
@@ -1085,6 +1096,7 @@ impl NodeKind {
             NodeKind::ReplyToSender => &REPLY_TO_SENDER_IN,
             NodeKind::AiAnswer => &AI_ANSWER_IN,
             NodeKind::ReplyWithRecording => &REPLY_RECORDING_IN,
+            NodeKind::AiSwitch => &AI_SWITCH_IN,
         }
     }
 
@@ -1145,6 +1157,7 @@ impl NodeKind {
             NodeKind::ReplyToSender => &REPLY_TO_SENDER_OUT,
             NodeKind::AiAnswer => &AI_ANSWER_OUT,
             NodeKind::ReplyWithRecording => &REPLY_RECORDING_OUT,
+            NodeKind::AiSwitch => &NO_PORTS, // exec outputs are dynamic arms (+ "default")
         }
     }
 
@@ -1249,6 +1262,7 @@ impl NodeKind {
             NodeKind::ReplyToSender => json!({ "message": "", "timeout_secs": "35" }),
             NodeKind::AiAnswer => json!({ "prompt": "", "timeout_secs": "30" }),
             NodeKind::ReplyWithRecording => json!({ "caption": "", "timeout_secs": "120" }),
+            NodeKind::AiSwitch => json!({ "arms": ["arm_1", "arm_2"], "timeout_secs": "30" }),
         }
     }
 }
@@ -1313,9 +1327,10 @@ impl GraphNode {
 
     /// Look up one output port by name (config-aware), incl. the kind's exec_out pins.
     pub fn output_port(&self, name: &str) -> Option<ResolvedPort> {
-        // StringSwitch: exec outputs are user-defined arm labels + the fixed "default" arm.
-        // These are instance-level (stored in config), not on the static kind.
-        if self.kind == NodeKind::StringSwitch {
+        // StringSwitch / AiSwitch: exec outputs are user-defined arm labels + the fixed "default"
+        // arm. These are instance-level (stored in config), not on the static kind. AiSwitch shares
+        // StringSwitch's arm shape — it just picks the arm by meaning instead of exact match.
+        if self.kind == NodeKind::StringSwitch || self.kind == NodeKind::AiSwitch {
             let arms = string_switch_arms(&self.config);
             if arms.iter().any(|a| a == name) || name == "default" {
                 return Some(ResolvedPort {

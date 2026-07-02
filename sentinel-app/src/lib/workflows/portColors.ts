@@ -70,7 +70,7 @@ const NODE_KIND_COLOR: Record<string, string> = {
   draw_bbox: portColor.person, blur_outside_bbox: portColor.person,
   // AI
   describe_image: portColor.dictionary, ask_ai: portColor.dictionary,
-  ai_answer: portColor.dictionary,
+  ai_answer: portColor.dictionary, ai_switch: portColor.dictionary,
   // Telegram (bot reply)
   reply_to_sender: "#229ed9", reply_with_recording: "#229ed9",
   // Alerts
