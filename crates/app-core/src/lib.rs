@@ -14,6 +14,7 @@ pub mod config;
 pub mod db;
 pub mod device_actions;
 pub mod devices;
+pub mod event_queue;
 pub mod go2rtc;
 pub mod listen;
 pub mod map;

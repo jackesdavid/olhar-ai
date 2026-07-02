@@ -276,41 +276,32 @@ async fn motion_push(State(st): State<AppState>, headers: HeaderMap, body: Optio
         return (StatusCode::BAD_REQUEST, "motion body required").into_response();
     };
 
-    if let Some(mut conn) = st.redis.clone() {
-        // bbox is a Bbox port (canonical xyxy). The edge reports xywh, so convert here:
-        // [x, y, w, h] → [x1, y1, x2, y2]. Sent as a JSON array; flow seeds it into a
-        // PortValue::Bbox for the OnEvent("motion").bbox output.
-        let [x, y, w, h] = ev.bbox;
-        let bbox_xyxy = [x, y, x + w, y + h];
-        let mut payload = serde_json::json!({
-            "camera": ev.camera_ip,
-            "score": ev.score.round() as i64,
-            "area": ev.area,
-            "blobs": ev.blobs,
-            "bbox": bbox_xyxy,
-        });
-        if let (Some(obj), Some(f)) = (payload.as_object_mut(), ev.frame_b64) {
-            obj.insert("frame".to_string(), serde_json::Value::String(f));
-        }
-        let msg = json!({
-            "tenant": tenant.to_string(),
-            "event": "motion",
-            "payload": payload,
-        });
-        let _: Result<i64, _> = redis::cmd("PUBLISH")
-            .arg("flow:inject")
-            .arg(msg.to_string())
-            .query_async(&mut conn)
-            .await;
-    } else {
-        log::warn!("motion event dropped: REDIS_URL not configured");
+    // bbox is a Bbox port (canonical xyxy). The edge reports xywh, so convert here:
+    // [x, y, w, h] → [x1, y1, x2, y2]. Sent as a JSON array; flow seeds it into a
+    // PortValue::Bbox for the OnEvent("motion").bbox output.
+    let [x, y, w, h] = ev.bbox;
+    let bbox_xyxy = [x, y, x + w, y + h];
+    let mut payload = serde_json::json!({
+        "camera": ev.camera_ip,
+        "score": ev.score.round() as i64,
+        "area": ev.area,
+        "blobs": ev.blobs,
+        "bbox": bbox_xyxy,
+    });
+    if let (Some(obj), Some(f)) = (payload.as_object_mut(), ev.frame_b64) {
+        obj.insert("frame".to_string(), serde_json::Value::String(f));
     }
+    // Durable inbound trigger: enqueue into the Postgres event_queue (card #57). Flow's
+    // event_consumer claims it and fires the tenant's OnEvent("motion") handlers — it survives
+    // a flow restart and is never dropped (unlike the old Redis flow:inject, which vanished
+    // whenever REDIS_URL was unset).
+    app_core::event_queue::enqueue(&st.db, tenant, "motion", "edge", &payload);
     StatusCode::NO_CONTENT.into_response()
 }
 
-/// The edge reports disk usage is near/over the configured limit (box token → tenant).
-/// Publishes an `edge:full-disk` system event to the Redis flow:inject fabric so tenant
-/// `OnEvent("edge:full-disk")` workflow graphs can react (send alert, stop recordings, etc.).
+/// The edge reports disk usage is near/over the configured limit (box token → tenant). Enqueues
+/// an `edge:full-disk` event into the durable `event_queue` so tenant `OnEvent("edge:full-disk")`
+/// workflow graphs can react (send alert, stop recordings, etc.).
 async fn disk_alert_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<serde_json::Value>>) -> Response {
     let tenant = match box_tenant(&st, &headers).await {
         Ok(Some(t)) => t,
@@ -318,20 +309,7 @@ async fn disk_alert_push(State(st): State<AppState>, headers: HeaderMap, body: O
         Err(resp) => return resp,
     };
     let payload = body.map(|Json(v)| v).unwrap_or_default();
-    if let Some(mut conn) = st.redis.clone() {
-        let msg = json!({
-            "tenant": tenant.to_string(),
-            "event":  "edge:full-disk",
-            "payload": payload,
-        });
-        let _: Result<i64, _> = redis::cmd("PUBLISH")
-            .arg("flow:inject")
-            .arg(msg.to_string())
-            .query_async(&mut conn)
-            .await;
-    } else {
-        log::warn!("edge:full-disk event dropped: REDIS_URL not configured");
-    }
+    app_core::event_queue::enqueue(&st.db, tenant, "edge:full-disk", "edge", &payload);
     StatusCode::NO_CONTENT.into_response()
 }
 

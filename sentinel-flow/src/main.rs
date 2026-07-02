@@ -15,6 +15,7 @@
 //! / `TELEGRAM_PAIRING_CODE` (notification fallback when not set in Postgres).
 mod bus;
 mod engine;
+mod event_consumer;
 mod events;
 mod http;
 mod state;
@@ -50,15 +51,17 @@ fn main() {
     // shell. `Db::block` bridges sqlx from there safely (it spawns, never block_on).
     engine::spawn_poller(state.clone());
     log::info!("Workflow engine + trigger poller started");
+    // Durable inbound triggers: claim from the Postgres event_queue and fire OnEvent handlers
+    // (card #57 — replaces the lossy Redis flow:inject injector). Runs on its own std thread.
+    event_consumer::spawn(state.clone());
     // Telegram pairing moved to sentinel-notification (card #57) — flow no longer polls.
 
     // Now build the tokio runtime for the HTTP control plane.
     let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");
     rt.block_on(async move {
-        // Bridge this pod's events onto the Redis fabric (multi-pod SSE relay) + consume
-        // externally-injected events (edge motion via control) into the engine.
+        // Bridge this pod's live run-progress events onto the Redis fabric (multi-pod SSE relay).
+        // Inbound trigger events now arrive via the durable event_queue consumer (spawned above).
         bus::spawn_republisher(state.clone());
-        bus::spawn_injector(state.clone());
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {
             Ok(l) => l,
