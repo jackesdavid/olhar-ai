@@ -1,207 +1,187 @@
 # Telegram Bot — Workflow-Graph Brain + Inbound Commands
 
-**Board card:** #15 Telegram bot: workflow-graph brain + inbound commands (ToDo)
-**Goal:** Make the Telegram bot's response logic a live workflow graph — when a user sends a message, the engine fires a cross-graph event, not hardcoded Rust handlers. Define which existing nodes cover which commands and which new nodes must be built.
+**Board card:** #15 Telegram bot: workflow-graph brain + inbound commands (In Progress)
+**Depends on:** #57 (notification service + durable queues) — **DONE**. This plan is refreshed to
+build on what #57 shipped.
+**Goal:** Make the bot's response logic a live **workflow graph**. A paired user's message fires an
+`On event("telegram_message")` trigger; the graph does the work (route, snapshot, ask AI, reply).
+**Hard rule:** everything is **tenant-scoped** — only the tenant that owns a `chat_id` receives its
+`telegram_message` events (naturally satisfied: one long-poll poller per tenant, and we only enqueue
+for `chat_id`s already paired in *that* tenant's beacon store).
 
 ---
 
-## Architecture principle
+## What #57 changed (why this plan is much smaller now)
 
-The "bot brain" is a **workflow graph**. When a paired Telegram user sends a message:
-
-1. The long-poll loop (`sentinel-flow/src/pairing.rs` → `notification/handler.rs`) receives the update.
-2. If it isn't a pairing code, and the `chat_id` is a known paired target, it calls `engine.fire_event(tenant_id, "telegram_message", payload)`.
-3. Every graph in that tenant that has an **`On event("telegram_message")`** entry node fires with the message payload injected as its entry `PortValues`.
-4. The graph nodes do the work — routing, camera queries, AI calls, replies.
-
-The user builds the bot brain in the workflow editor using the familiar **`On event`** node — no new trigger type, no new UI concept. They set the event name to `telegram_message` (a well-known constant, listed in the event picker).
+The old plan's hardest piece — getting an engine handle into the Telegram long-poll thread — **no
+longer exists**. #57 moved pairing into `sentinel-notification` and built the durable **`event_queue`**
+rail (producer → Postgres → flow's `event_consumer` → `engine::fire_event`). So inbound is now a
+one-line **enqueue**, not an engine bridge.
 
 ```
-On event("telegram_message") → Get Telegram message → ...graph logic...
+INBOUND  (new work = the enqueue call + a system event)
+  Telegram getUpdates ─▶ notification pairing loop (handler.rs, per tenant)
+      not a pairing code? chat_id ∈ this tenant's beacons?
+        └─▶ app_core::event_queue::enqueue(db, tenant, "telegram_message", "telegram", payload)
+  Postgres event_queue ─▶ flow event_consumer (DEPLOYED) ─▶ fire_event
+        └─▶ OnEvent("telegram_message") graphs run with payload as typed outputs
+
+OUTBOUND (new work = 2 nodes + a send_video path)
+  graph … ─▶ [Reply to sender]  (text/photo: synchronous send to the sender's chat_id)
+  graph … ─▶ [Reply with recording] (video: fetch clip from edge → object store → queue → send_video)
 ```
 
----
-
-## Existing nodes that apply — no changes needed
-
-| Use case | Node(s) |
-|---|---|
-| Route `/snapshot` vs `/ask` vs `/status` | **String switch** on `command` output of `Get Telegram message` |
-| Take a camera photo | **Camera snapshot** — wire `args` from `Get Telegram message` to `camera` input |
-| Rate-limit spam | **Cooldown** — gate the whole graph or per-command branch |
-| Conditional logic | **If**, **And**, **Or**, **Not**, **Compare**, **Text compare** |
-| Describe what a camera sees (text caption) | **Describe image** — then wire `description` to **Reply to sender** |
-| Detect motion / people | **Person detection**, **Motion detection**, **Get current frame** |
-| Create or read alerts | **Create alert**, **Get last alert**, **Deliver alert** |
-| Format a reply string | **Format** |
-| Debug | **Print**, **Show image** |
-| Loop over detections | **For each** + **Break person detection** |
-| Entry point for the bot brain | **On event** — event name: `telegram_message` |
+**Current gap being closed:** `handler.rs:115-131` advances the update offset then, for any
+non-pairing message, hits `continue` — the message is **silently dropped**. We replace that `continue`
+with the enqueue.
 
 ---
 
-## New nodes to build
+## Phase 1 — Inbound: `telegram_message` as a durable event (the core)
 
-Three focused additions. The `On event` node already handles the entry point.
+**1a. Register `telegram_message` as a system event** so every tenant's `On event` node shows typed
+outputs with no prior registration.
+- `crates/app-core/src/workflows/repo.rs` → `system_events()` (`repo.rs:282-319`, next to `motion`).
+- Fields (all derived at enqueue time — see 1b): `text:Text`, `chat_id:Num`, `from_name:Text`,
+  `command:Text`, `args:Text`. (`command`/`args` are computed once at the source so no parse node is
+  needed downstream — `String switch` wires straight to `command`.)
 
-### 1. `Get Telegram message` — source node
+**1b. Enqueue instead of dropping** in the long-poll loop.
+- `crates/app-core/src/notification/handler.rs` `spawn_pairing` loop (`handler.rs:108-131`). The loop
+  already owns `db: Option<Db>` + `tenant_id` + `store` (the tenant's `NotificationStore`).
+- New branch when `parse_pairing_code(...)` is false:
+  ```
+  // known sender only (tenant-scoped): chat_id must be an enabled paired target
+  if store.lock().targets.iter().any(|t| t.enabled && t.chat_id == u.chat_id) {
+      let (command, args) = split_command(&u.text);   // "/snap cam1" → ("/snap","cam1")
+      let payload = json!({ "text": u.text, "chat_id": u.chat_id,
+                            "from_name": u.sender_label, "command": command, "args": args });
+      if let Some(db) = &db { app_core::event_queue::enqueue(db, tenant_id, "telegram_message", "telegram", &payload); }
+  }
+  ```
+- `split_command`: first whitespace-delimited word is `command` **iff** it starts with `/` (else
+  `command=""`, `args=text`); remainder is `args`. Small pure helper in `handler.rs` (unit-testable).
+- `Update` already projects `{ update_id, chat_id, text, sender_label }` (`client.rs:101`).
 
-Reads the event payload that `fire_event` injected into the run's entry `PortValues`. Placed right after `On event("telegram_message")`.
+**No flow changes needed for inbound** — `event_consumer::payload_to_portvalues` already maps
+`{text, chat_id, command, args}` → `Text`/`Num` outputs, and a base64-JPEG string → `Image` (so a
+future inbound photo rides inline). `fire_event` no-ops when a tenant has no handler graph.
+
+**Security check:** we enqueue only for `chat_id`s in the *current poller's* tenant store, so a message
+can never fan out to another tenant. Matches the hard rule.
+
+---
+
+## Phase 2 — `Reply to sender` node (text + photo, synchronous)
+
+Sends back to the **specific chat that triggered the run** (not a configured beacon). Synchronous
+in-process send — a bot reply is interactive, so immediate delivery + real `ok`/`result` beats queue
+latency. (Heavy/lossy-sensitive alert sends still go through the #57 queue; short replies don't.)
 
 | | |
 |---|---|
-| **Inputs** | none |
-| **Outputs** | `text` (Text), `chat_id` (Num), `from_name` (Text), `command` (Text — first word if starts with `/`, else empty), `args` (Text — everything after the command, or full text) |
-| **Config** | none |
-| **Behavior** | Pure source — reads from `ctx.entry_values`. If `command` is empty, `String switch` default arm fires naturally. |
-
-**Where to add:**
-- `domain.rs`: `NodeKind::GetTelegramMessage` + ports + `NodeKind::ALL`
-- `node.rs`: `run_get_telegram_message()` — extract fields from `ctx.entry_values`
-
-**Sample usage:**
-```
-On event("telegram_message") → Get Telegram message
-  → command → String switch (arms: /snapshot, /ask, /status)
-```
-
----
-
-### 2. `Reply to sender` — action node
-
-Sends a text or photo reply back to the `chat_id` that triggered this run. Unlike `Notify recipient`, this targets the specific chat that sent the message — not a configured outbound recipient.
-
-| | |
-|---|---|
+| **Kind** | `NodeKind::ReplyToSender` — category **"Telegram"** (new category) |
 | **Inputs** | `message*` (Text), `chat_id*` (Num), `image` (Image, optional) |
-| **Outputs** | `ok` (bool), `result` (Text) |
-| **Config** | `message` (literal fallback) |
-| **Behavior** | Calls `notification::client::send_photo()` if image wired, else `send_message()`. Resolves bot token the same way `Notify recipient` does (tenant → global → env). |
-| **Timeout** | 35 s (same class as notify/deliver) |
+| **Outputs** | `ok` (Bool), `result` (Text) |
+| **Behavior** | Resolve tenant bot token from `sys.notif_cfg` (same handle `NotifyRecipient` uses, `recipients.rs:23`). If `image` wired → `notification::client::send_photo(cfg, chat_id, message, &jpeg)`; else `send_message(cfg, chat_id, message)`. Return `ok`+`result`. |
+| **Timeout** | 35 s (notify class). |
 
-**Where to add:**
-- `domain.rs`: `NodeKind::ReplyToSender` + ports
-- `node.rs`: `run_reply_to_sender()` — thin wrapper over `notification::client`
-
-**Sample usage:**
-```
-Get Telegram message → (chat_id) ──────────────────────────────┐
-Get Telegram message → (args) → Camera snapshot → (image) → Reply to sender
-```
+- `domain.rs`: variant + ports + category arm + slug/label + add to `ALL` (bump size).
+- `node.rs`: dispatch arm → `node/telegram.rs::run_reply_to_sender` (new submodule); calls
+  `crate::notification::client` directly (same crate) with `sys.notif_cfg`.
+- No new client code, no schema change.
 
 ---
 
-### 3. `Ask AI` — text-in/text-out AI node
+## Phase 3 — `AI Answer` node (text-in → text-out)
 
-Sends a text prompt (with optional image and context) to Claude and returns a plain-text response in a single turn. Complements `Describe image` (image-only caption) and `AI If` (binary routing).
+Single-turn Claude: prompt in, plain text out. **Note the collision:** `NodeKind::AskAi` already
+exists — it's the yes/no "AI Branch" node (`ai.rs:25`, outputs `Bool`). So this is a **new** kind.
 
 | | |
 |---|---|
-| **Inputs** | `prompt*` (Text), `context` (Text, optional), `image` (Image, optional) |
-| **Outputs** | `response` (Text), `ok` (bool) |
-| **Config** | `prompt` (literal), `timeout_secs` (default 30) |
-| **Behavior** | Single-turn Claude call — no tool-use loop (too slow for Telegram). If `image` is wired, sends it as a vision message. If `context` is wired, prepends it to the user message. |
+| **Kind** | `NodeKind::AiAnswer` — label "AI Answer", category **"AI"** |
+| **Inputs** | `prompt*` (Text), `image` (Image, optional) |
+| **Outputs** | `response` (Text), `ok` (Bool) |
+| **Config** | `prompt` (literal fallback) |
+| **Behavior** | New `Vision::ask_text(prompt, image: Option<&[u8]>) -> Result<String>` on the trait (`ports.rs:38`), `LocalVision` impl delegating to a new `agent::vision::ask_text` that mirrors `describe_image`'s single POST (`vision.rs:25`) but takes a free-text prompt (higher `max_tokens`, image optional). Auth via `AgentConfig::from_env` (`ANTHROPIC_API_KEY` + `ANTHROPIC_MODEL`, default `claude-opus-4-8`). |
+| **Timeout** | 30 s. No tool-use loop (that's ~15 s+; single turn is ~2-3 s). |
 
-**Where to add:**
-- `crates/app-core/src/agent/` — add `ask_single_turn(prompt, image_opt, context_opt, cfg) → Result<String>` (or reuse `client::ask()` with an empty tool registry)
-- `domain.rs`: `NodeKind::AskAi` + ports
-- `node.rs`: `run_ask_ai()` — calls the single-turn helper under timeout
-
-**Sample usage:**
-```
-Get Telegram message → (args) → Ask AI(prompt="You are Sentinel. Answer: {p1}", p1=args)
-  → response → Reply to sender
-```
+- `node.rs` dispatch arm → `ai::run_ai_answer` (mirror `run_describe_image`, `ai.rs:5`).
+- Startup warn if `ANTHROPIC_API_KEY` unset (offline → node returns `ok:false`, `response:""`).
 
 ---
 
-## Reference workflow graphs
+## Phase 4 — Video reply (finish the #57 half-built path)
 
-### Graph A — Basic command bot
+Reply to the sender with a **recording clip**. #57 already built the media rails (`media::put/get`,
+`notification_queue.video_key`, and a consumer stub that logs *"video send lands with #15"*
+`consumer.rs:49-51`). Remaining work, all small:
 
+1. **Edge clip fetch** — new GET on the edge + a `recording.rs` helper: `GET {edge_api}/recording/{clip_id}`
+   → mp4 bytes (`resolve_edge_api_base`, `recording.rs:92`; only start/stop exist today).
+2. **`send_video`** — add to `notification/client.rs` (multipart `sendVideo`, mirror `send_photo`
+   `client.rs:34`); add a video arm to `dispatch` (`handler.rs:64`).
+3. **Raw chat_id in the outbound queue** — the queue targets only beacon labels today. Migration
+   **0036**: `ALTER TABLE notification_queue ADD COLUMN chat_id bigint NULL`; consumer sends direct to
+   `chat_id` when set (else beacon path). Thread `chat_id` through `queue::enqueue`.
+4. **`Reply with recording` node** (`NodeKind::ReplyWithRecording`, "Telegram"): inputs
+   `clip_id*` (Text, from `Start recording`'s `clip_id` output `domain.rs:646`), `chat_id*` (Num),
+   `caption` (Text). Fetches clip → `media::put(bytes,"video/mp4","mp4")` → `queue::enqueue(chat_id,
+   video_key)`. Async by design (video is heavy) — outputs `queued:Bool`.
+
+*Phase 4 is the one slice that touches the edge + a migration; Phases 1-3 ship the interactive
+text/photo bot on their own. Ship 1-3 first, then 4.*
+
+---
+
+## Phase 5 — Palette, invariants, docs
+
+- **Node count**: `NodeKind::ALL: [NodeKind; 56]` (`domain.rs:685`) → bump to `59` (Phases 2-4 add
+  ReplyToSender, AiAnswer, ReplyWithRecording). Update the `56` in `CLAUDE.md:64`.
+- **Category**: add `"Telegram"` arm in `NodeKind::category` (`domain.rs:874-927`).
+- `slug()`/`label()`/`from_slug` round-trip covered by `slug_round_trips_all_kinds` (`domain.rs:1921`).
+- Update `docs/workflow-nodes.md` (node catalog) + a "Bot brain" recipe section.
+- Agent chat tools (`agent/tools.rs`) need **no** change — it doesn't list workflow nodes (per CLAUDE.md).
+
+---
+
+## Reference graphs (unchanged in spirit; `command` now comes straight off `On event`)
+
+**A — Command bot**
 ```
 On event("telegram_message")
-  ↓
-[Get Telegram message]
-  ├─ command ──▶ [String switch (arms: /snapshot, /ask, /status)]
-  │                 ├─ /snapshot ──▶ [Camera snapshot (camera=args)] ──▶ [Reply to sender (image)]
-  │                 ├─ /ask ──▶ [Ask AI (prompt=args)] ──▶ (response) ──▶ [Reply to sender]
-  │                 ├─ /status ──▶ [Format "Connected ✓ — try /snapshot <cam>"] ──▶ [Reply to sender]
-  │                 └─ default ──▶ [Reply to sender "Unknown command. Try /snapshot, /ask, /status"]
-  └─ chat_id ─────────────────────────────────────────────────────────────▶ all Reply to sender nodes
+  ├ command ─▶ String switch(/snapshot, /ask, /status)
+  │   ├ /snapshot ▶ Camera snapshot(camera=args) ▶ Reply to sender(image, chat_id)
+  │   ├ /ask      ▶ AI Answer(prompt=args)        ▶ Reply to sender(response, chat_id)
+  │   ├ /status   ▶ Format "Connected ✓"          ▶ Reply to sender(chat_id)
+  │   └ default   ▶ Reply to sender("Try /snapshot, /ask, /status", chat_id)
+  └ chat_id ─▶ (wired into every Reply to sender)
 ```
+**B — Free-text AI bot**: `On event → Cooldown(30s) → AI Answer(prompt=text) → Reply to sender`.
+**C — Snapshot + `/clip` video**: `String switch → /clip ▶ Start recording … Stop recording → Reply with recording(clip_id, chat_id)`.
 
 ---
 
-### Graph B — AI free-text bot
+## Open decisions (resolve before/while building)
 
-No command syntax — every message goes to Claude with Sentinel context.
-
-```
-On event("telegram_message")
-  ↓
-[Get Telegram message]
-  ├─ text ──▶ [Cooldown(30s)] ──▶ [Ask AI (prompt="You are Sentinel. {p1}", p1=text)]
-  │                                    └─ response ──▶ [Reply to sender]
-  └─ chat_id ──────────────────────────────────────────▶ [Reply to sender]
-```
-
----
-
-### Graph C — Motion alert with Telegram snooze
-
-```
-On event("telegram_message")  (Concurrency: SkipIfRunning)
-  ↓
-[Get Telegram message]
-  └─ command → String switch
-       ├─ /snap ──▶ [Camera snapshot(camera=args)] ──▶ [Reply to sender (with image)]
-       └─ /snooze ──▶ [Cooldown(3600s)] ──▶ [Reply to sender "Alerts snoozed 1h"]
-  └─ chat_id ──▶ all Reply to sender
-```
-
----
-
-## Implementation phases
-
-### Phase 1 — Engine: fire cross-graph event from Telegram long-poll
-1. `crates/app-core/src/notification/handler.rs`: after the pairing-code check fails AND `chat_id` is a known paired target → call `engine.fire_event(tenant_id, "telegram_message", payload)` where payload is `PortValues { text, chat_id, from_name }`.
-2. `sentinel-flow/src/pairing.rs`: pass an engine event channel (or `Arc<Engine>`) into the pairing spawner so `fire_event` is reachable from the long-poll thread.
-3. The engine's existing `fire_event()` already scans all tenant graphs for matching `OnEvent` entry nodes — no new dispatch logic needed.
-4. Register `"telegram_message"` as a well-known event name in the editor's event picker (alongside any future system events).
-
-### Phase 2 — `Get Telegram message` node
-- `domain.rs` + `node.rs` (~20 lines each).
-- Reads `text`, `chat_id`, `from_name` from `ctx.entry_values`; derives `command` + `args` inline.
-
-### Phase 3 — `Reply to sender` node
-- `domain.rs` + `node.rs` — calls `notification::client::send_message/send_photo` with the wired `chat_id`.
-- Bot token resolved same way as `Notify recipient`.
-
-### Phase 4 — `Ask AI` node
-- `crates/app-core/src/agent/` — `ask_single_turn()` helper.
-- `domain.rs` + `node.rs` under 30 s timeout.
-- Log missing `ANTHROPIC_API_KEY` as warning at startup.
-
-### Phase 5 — Palette + docs
-- Category: `Get Telegram message` + `Reply to sender` → **"Telegram"**; `Ask AI` → **"Vision / AI"**.
-- Update `docs/workflow-nodes.md`.
-
----
-
-## Open decisions
-
-1. **Engine handle in long-poll thread**: the pairing loop uses `std::thread`; `fire_event` lives on the async runtime. Bridge: `tokio::sync::mpsc::Sender<FireEventCmd>` passed into the pairing spawner, consumed by an async task in the engine.
-2. **`Ask AI` tool-use**: single-turn keeps latency ~2-3 s (acceptable for Telegram). Full tool-use loop (15+ s) deferred to follow-up card linked to #16.
-3. **Event name casing**: `"telegram_message"` (snake_case) matches the existing event naming convention in the codebase.
-4. **No-args `/snapshot`**: `args` is empty → `Camera snapshot` falls back to `camera = "first"`. Acceptable v1 behavior.
+1. **Reply transport** — *recommend* synchronous send for text/photo (interactive UX, real `ok`),
+   queued for video (heavy). Alternative: everything through the queue (uniform, but replies get poll
+   latency + no real `ok`). **Leaning: sync text/photo, queued video.**
+2. **Enqueue scope** — enqueue *every* message from a paired chat (simple; `fire_event` no-ops with no
+   handler) vs. only when a `telegram_message` handler graph exists (needs a listener-count check).
+   **Leaning: enqueue all paired-chat messages; revisit if event_queue gets noisy.** (GC already
+   retires processed rows.)
+3. **Ship boundary** — Phases 1-3 (text/photo bot) as the first shippable slice, Phase 4 (video) as a
+   second commit on the same card. **Leaning: yes, split.**
+4. **AI backend** — Anthropic direct (`ANTHROPIC_API_KEY`) for `AI Answer`, not the RunPod vision
+   sidecar (`AI_SERVICE_URL`, which is image-only). Confirm the key is set in the flow pod's env.
 
 ---
 
 ## Out of scope (v1)
 
-- Inline keyboard buttons / callback queries
-- Multi-turn stateful conversations (each graph run is stateless per message)
-- `/arm` / `/disarm` commands (need confirmation flow)
-- Cross-graph routing beyond what `On event` + fan-out already provides
-- `List cameras` node for rich `/status` replies
+- Inline keyboards / callback queries; multi-turn stateful conversations (each run is stateless).
+- `/arm` `/disarm` (need a confirm flow); a `List cameras` node for rich `/status`.
+- Full tool-use agentic loop in `AI Answer` (single-turn only; agentic reply is a follow-up linked to #16).
+- Inbound **photos** from users (payload already supports an inline base64 image, but no node consumes it yet).
