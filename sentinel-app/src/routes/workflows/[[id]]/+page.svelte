@@ -858,8 +858,14 @@
     "num_lt","num_lte","num_gt","num_gte","num_eq","num_ne","compare","and","or","not","text_compare",
   ]);
   // Get/Set Variable are simple one-port nodes → render them narrower than the default.
+  // Otherwise grow the node to fit its header title (icon + text + right padding) so long
+  // labels — e.g. "When Event: telegram_message" — aren't clipped. Capped to stay sane.
+  const NODE_W_MAX = 320;
   function nodeW(n: Node): number {
-    return n.kind === "get_variable" || n.kind === "set_variable" ? 120 : NODE_W;
+    if (n.kind === "get_variable" || n.kind === "set_variable") return 120;
+    const title = nodeTitle(n, catalog[n.kind]);
+    const est = 46 + Math.ceil(title.length * 6.6); // 32 icon+pad + text + ~14 right pad
+    return Math.min(NODE_W_MAX, Math.max(NODE_W, est));
   }
   function isCompareOrLogic(kind: string): boolean {
     return PURE_KINDS.has(kind);
@@ -2624,18 +2630,8 @@
                   >
                     {nodeTitle(n, k)}
                   </text>
-                  <!-- delete badge on the selected node — the touch path for removing a node -->
-                  {#if sel && !editLocked}
-                    <g
-                      class="cursor-pointer"
-                      role="presentation"
-                      onpointerdown={(ev) => ev.stopPropagation()}
-                      onclick={() => removeNode(n)}
-                    >
-                      <circle cx={nw} cy="0" r={isTouch ? 11 : 9} class="fill-destructive" />
-                      <path d="M{nw - 3.5} -3.5 l7 7 M{nw + 3.5} -3.5 l-7 7" style="stroke: var(--destructive-foreground)" stroke-width="1.6" stroke-linecap="round" />
-                    </g>
-                  {/if}
+                  <!-- No on-canvas delete badge: select + press Delete/Backspace to remove a node
+                       (see the keydown handler), or use the inspector's Delete button. -->
                   <!-- Category-tinted header underline — each node family gets a
                        coloured seam under its title (the strongest at-a-glance cue). -->
                   <line
