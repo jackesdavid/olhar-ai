@@ -25,5 +25,6 @@ pub mod persons;
 pub mod ports;
 pub mod presence;
 pub mod tenancy;
+pub mod tracking;
 pub mod voice;
 pub mod workflows;

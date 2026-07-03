@@ -1073,6 +1073,15 @@ mod tests {
         fn ask_yes_no(&self, _: &str, _: Option<&[u8]>) -> Result<bool, String> {
             Ok(self.0)
         }
+        fn ask_text(&self, _: &str, _: Option<&[u8]>) -> Result<String, String> {
+            Ok("stub".into())
+        }
+        fn classify(&self, _: &str, _: &[String]) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+        fn extract(&self, _: &str, _: &str) -> Result<String, String> {
+            Ok(String::new())
+        }
     }
 
     fn ctx_with_vision(answer: bool) -> ToolContext {
@@ -1605,28 +1614,28 @@ mod tests {
         let t = uuid::Uuid::nil();
         let mut e = WorkflowEngine::new();
         let p = ConcurrencyPolicy::SkipIfRunning;
-        assert_eq!(e.decide(t, 1, &p), Fire::Spawn);
-        e.on_spawn(t, 1);
-        assert_eq!(e.decide(t, 1, &p), Fire::Skip);
-        assert!(!e.on_finish(t, 1));
-        assert_eq!(e.decide(t, 1, &p), Fire::Spawn);
+        assert_eq!(e.decide(t, uuid::Uuid::from_u128(1), &p), Fire::Spawn);
+        e.on_spawn(t, uuid::Uuid::from_u128(1));
+        assert_eq!(e.decide(t, uuid::Uuid::from_u128(1), &p), Fire::Skip);
+        assert!(!e.on_finish(t, uuid::Uuid::from_u128(1)));
+        assert_eq!(e.decide(t, uuid::Uuid::from_u128(1), &p), Fire::Spawn);
 
         let mut q = WorkflowEngine::new();
         let qp = ConcurrencyPolicy::QueueSingle { max_queued: 1 };
-        assert_eq!(q.decide(t, 1, &qp), Fire::Spawn);
-        q.on_spawn(t, 1);
-        assert_eq!(q.decide(t, 1, &qp), Fire::Queue);
-        q.on_queue(t, 1);
-        assert_eq!(q.decide(t, 1, &qp), Fire::Skip);
-        assert!(q.on_finish(t, 1));
+        assert_eq!(q.decide(t, uuid::Uuid::from_u128(1), &qp), Fire::Spawn);
+        q.on_spawn(t, uuid::Uuid::from_u128(1));
+        assert_eq!(q.decide(t, uuid::Uuid::from_u128(1), &qp), Fire::Queue);
+        q.on_queue(t, uuid::Uuid::from_u128(1));
+        assert_eq!(q.decide(t, uuid::Uuid::from_u128(1), &qp), Fire::Skip);
+        assert!(q.on_finish(t, uuid::Uuid::from_u128(1)));
 
         let mut c = WorkflowEngine::new();
         let cp = ConcurrencyPolicy::Concurrent { max_concurrent: 2 };
-        assert_eq!(c.decide(t, 2, &cp), Fire::Spawn);
-        c.on_spawn(t, 2);
-        assert_eq!(c.decide(t, 2, &cp), Fire::Spawn);
-        c.on_spawn(t, 2);
-        assert_eq!(c.decide(t, 2, &cp), Fire::Skip);
+        assert_eq!(c.decide(t, uuid::Uuid::from_u128(2), &cp), Fire::Spawn);
+        c.on_spawn(t, uuid::Uuid::from_u128(2));
+        assert_eq!(c.decide(t, uuid::Uuid::from_u128(2), &cp), Fire::Spawn);
+        c.on_spawn(t, uuid::Uuid::from_u128(2));
+        assert_eq!(c.decide(t, uuid::Uuid::from_u128(2), &cp), Fire::Skip);
     }
 
     #[test]
@@ -1636,18 +1645,18 @@ mod tests {
         let b = uuid::Uuid::from_u128(2);
         let mut e = WorkflowEngine::new();
         let p = ConcurrencyPolicy::SkipIfRunning;
-        e.on_spawn(a, 1);
-        assert_eq!(e.decide(a, 1, &p), Fire::Skip, "A's graph 1 is running");
+        e.on_spawn(a, uuid::Uuid::from_u128(1));
+        assert_eq!(e.decide(a, uuid::Uuid::from_u128(1), &p), Fire::Skip, "A's graph 1 is running");
         assert_eq!(
-            e.decide(b, 1, &p),
+            e.decide(b, uuid::Uuid::from_u128(1), &p),
             Fire::Spawn,
             "B's graph 1 is independent"
         );
         let base = Instant::now();
-        e.seed_cron_last(a, 1, base);
-        assert!(!e.cron_due(a, 1, 30, base + Duration::from_secs(10)));
+        e.seed_cron_last(a, uuid::Uuid::from_u128(1), base);
+        assert!(!e.cron_due(a, uuid::Uuid::from_u128(1), 30, base + Duration::from_secs(10)));
         assert!(
-            e.cron_due(b, 1, 30, base + Duration::from_secs(10)),
+            e.cron_due(b, uuid::Uuid::from_u128(1), 30, base + Duration::from_secs(10)),
             "B's cron is independent"
         );
     }
@@ -1955,12 +1964,12 @@ mod tests {
         let t = uuid::Uuid::nil();
         let mut e = WorkflowEngine::new();
         let base = Instant::now();
-        e.seed_cron_last(t, 1, base);
+        e.seed_cron_last(t, uuid::Uuid::from_u128(1), base);
         // 10s after the last fire → not due yet.
-        assert!(!e.cron_due(t, 1, 30, base + Duration::from_secs(10)));
+        assert!(!e.cron_due(t, uuid::Uuid::from_u128(1), 30, base + Duration::from_secs(10)));
         // 40s after the last fire → due (and re-arms at that instant).
-        assert!(e.cron_due(t, 1, 30, base + Duration::from_secs(40)));
+        assert!(e.cron_due(t, uuid::Uuid::from_u128(1), 30, base + Duration::from_secs(40)));
         // Just after re-arming → not due again.
-        assert!(!e.cron_due(t, 1, 30, base + Duration::from_secs(50)));
+        assert!(!e.cron_due(t, uuid::Uuid::from_u128(1), 30, base + Duration::from_secs(50)));
     }
 }
