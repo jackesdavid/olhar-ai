@@ -1551,6 +1551,11 @@ pub struct VariableDecl {
     pub name: String,
     #[serde(rename = "type")]
     pub ty: PortType,
+    /// Optional author-defined default value (as a string, interpreted per `ty`). Seeds the run's
+    /// variables map at run start so a `Get` before any `Set` returns it. Additive (`None` on old
+    /// graphs). Card #5b.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
 }
 
 fn one() -> u32 {

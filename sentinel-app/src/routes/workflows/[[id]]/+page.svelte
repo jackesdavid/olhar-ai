@@ -138,7 +138,7 @@
     | "SkipIfRunning"
     | { QueueSingle: { max_queued: number } }
     | { Concurrent: { max_concurrent: number } };
-  type Variable = { name: string; type: PortType };
+  type Variable = { name: string; type: PortType; default?: string | null };
   type Graph = {
     id: string;
     name: string;
@@ -1494,7 +1494,7 @@
 
   async function saveVariables(next: Variable[]) {
     if (!graph) return;
-    await data.setGraphVariables(graph.id, next.map((v) => ({ name: v.name, type: v.type })));
+    await data.setGraphVariables(graph.id, next.map((v) => ({ name: v.name, type: v.type, default: v.default ?? null })));
     await reload();
   }
   function uniqueVarName(existing: Variable[]): string {
@@ -1509,10 +1509,12 @@
   }
   // Edit a variable + re-sync the baked name/type on any Get/Set nodes that reference it,
   // so existing nodes keep a valid port type after a rename/retype.
-  async function editVariable(i: number, patch: { name?: string; type?: string }) {
+  async function editVariable(i: number, patch: { name?: string; type?: string; default?: string | null }) {
     if (editLocked || !graph) return;
     const old = variables[i];
     if (!old) return;
+    // Retyping a variable invalidates a default typed for the old type — clear it.
+    if (patch.type && patch.type !== old.type && patch.default === undefined) patch = { ...patch, default: null };
     const updated = { ...old, ...patch } as Variable;
     if (patch.name === "" || (patch.name && variables.some((v, j) => j !== i && v.name === patch.name))) return; // keep names non-empty + unique
     for (const n of graph.nodes) {
@@ -2569,6 +2571,7 @@
           bind:open={varsOpen}
           {variables}
           types={PAYLOAD_TYPES}
+          cameras={cameraOptions}
           disabled={editLocked}
           onAdd={addVariable}
           onEdit={editVariable}

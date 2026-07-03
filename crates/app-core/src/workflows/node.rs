@@ -270,6 +270,41 @@ pub fn resolve_camera_entity(query: &str, sys: &ToolContext) -> Option<crate::wo
     Some(crate::workflows::domain::CameraEntity { id: d.id.clone(), ip: d.ip.clone(), name: d.name.clone() })
 }
 
+/// Seed a run's variables map from the graph's declared defaults (card #5b), so a `Get Variable`
+/// before any `Set` returns the author's default instead of a type-zero. Called once at run start.
+/// Unparseable / typeless defaults are skipped (the `Get` then falls back to its type-zero).
+pub fn seed_variable_defaults(vars: &[crate::workflows::domain::VariableDecl], sys: &ToolContext) {
+    use crate::workflows::domain::PortType;
+    let mut seeded: Vec<(String, PortValue)> = Vec::new();
+    for v in vars {
+        let Some(raw) = v.default.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        let pv = match v.ty {
+            PortType::Text => PortValue::Text(raw.to_string()),
+            PortType::Recipient => PortValue::Recipient(raw.to_string()),
+            PortType::Num => match raw.parse::<i64>() {
+                Ok(n) => PortValue::Num(n),
+                Err(_) => continue,
+            },
+            PortType::Bool => PortValue::Bool(matches!(raw, "true" | "1" | "yes" | "on")),
+            PortType::Camera => match resolve_camera_entity(raw, sys) {
+                Some(c) => PortValue::Camera(c),
+                None => continue,
+            },
+            _ => continue, // Image/File/arrays/Bbox/Person/Face: no author-typable default
+        };
+        seeded.push((v.name.clone(), pv));
+    }
+    if seeded.is_empty() {
+        return;
+    }
+    let mut map = sys.variables.lock().unwrap();
+    for (name, pv) in seeded {
+        map.insert(name, pv);
+    }
+}
+
 /// Resolve a `Camera` config literal (the dropdown-stored device id) to a `PortValue::Camera`.
 /// Called by the engine when a `PortType::Camera` input port has no wired edge.
 pub fn resolve_camera_literal(config: &Value, key: &str, sys: &ToolContext) -> Option<PortValue> {

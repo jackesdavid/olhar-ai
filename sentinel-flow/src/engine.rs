@@ -231,6 +231,9 @@ fn execute_run(
     entry_payload: PortValues,
 ) -> (bool, String) {
     let (ctx, drain) = build_run_context(state, tenant, graph.id);
+    // Seed this run's variables from the graph's declared defaults (card #5b) — a Get before any
+    // Set then returns the author's default instead of a type-zero.
+    app_core::workflows::node::seed_variable_defaults(&graph.variables, &ctx);
     let graph_id = graph.id;
     let debug = graph.debug;
     let labels: std::collections::HashMap<u32, &'static str> =
