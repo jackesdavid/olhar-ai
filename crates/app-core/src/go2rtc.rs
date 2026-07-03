@@ -57,6 +57,19 @@ pub fn config_yaml(devices: &[Device]) -> String {
         }
         let user = d.username.as_deref().unwrap_or("");
         let pass = d.password.as_deref().unwrap_or("");
+        // Resilience: never emit a credential-less stream. If the URL doesn't already embed
+        // credentials and we have none cached (e.g. an emptied cache), connecting anyway sends
+        // BLANK auth (`rtsp://:@host/…`) — which trips some cameras' anti-brute-force lock
+        // (`RTSP/1.0 400 Server is locked`) and a reconnect storm that even correct creds can't
+        // recover from until the camera reboots. Skip the camera until its creds are known; the
+        // cloud re-stages them on the next config save and the next respawn picks them up.
+        if !rtsp.contains('@') && (user.is_empty() || pass.is_empty()) {
+            log::warn!(
+                "go2rtc: skipping camera {} — no cached credentials (avoids camera auth-lockout)",
+                d.ip
+            );
+            continue;
+        }
         let main = rtsp_url_with_creds(rtsp, user, pass);
 
         // Preview = substream if the camera exposes one, else the main stream.
