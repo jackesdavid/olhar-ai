@@ -186,6 +186,10 @@
   let selectedGraphId = $state<string | null>(null);
   let selectedNodeId = $state<number | null>(null);
   let pending = $state<{ node: number; port: string } | null>(null);
+  // Optimistic node ids: a just-added node renders instantly under a temporary NEGATIVE id
+  // (real per-graph ids are ≥ 0), swapped for the server id once the create resolves.
+  let tempIdSeq = -1;
+  const nextTempId = () => tempIdSeq--;
   // Editor tool/mode (touch-first): move = drag nodes, pan = drag canvas, link = tap ports to
   // wire (node body inert), break = tap a wire to delete it. Default preserves mouse behavior.
   let editorMode = $state<"move" | "pan" | "link" | "break">("move");
@@ -1419,33 +1423,46 @@
       x = 80 + (n % 5) * 48;
       y = 70 + (n % 5) * 40;
     }
-    const id = await data.addNode(graph.id, slug, x, y);
     // Default camera/recipient configs to the actual first item in each list; for a
     // synthesized event entry, pre-bind its event name.
     const cfg = { ...(catalog[slug]?.default_config ?? {}) };
-    let patched = false;
-    if ("camera" in cfg && devices[0]) {
-      cfg.camera = cameraKey(devices[0]); // bind by stable id (not name)
-      patched = true;
-    }
-    if ("recipient" in cfg && recipients[0]) {
-      cfg.recipient = recipients[0].label;
-      patched = true;
-    }
+    if ("camera" in cfg && devices[0]) cfg.camera = cameraKey(devices[0]); // bind by stable id (not name)
+    if ("recipient" in cfg && recipients[0]) cfg.recipient = recipients[0].label;
     if (presetEvent) {
       cfg.event = presetEvent;
       cfg.payload = eventFields(presetEvent); // bake payload ports onto the new event node
-      patched = true;
     }
     if (presetVariable) {
       cfg.variable = presetVariable.name;
       cfg.type = presetVariable.type; // bake the variable's name + type → its dynamic port
-      patched = true;
     }
-    if (patched) await data.setNodeConfig(graph.id, id, cfg);
-    selectedNodeId = id;
-    await reload();
-    return id;
+    // Optimistic: show the node NOW with a temporary (negative) id, persist in the background,
+    // then reconcile the server-assigned id. No full reload — the canvas updates instantly and we
+    // revert only if the server rejects it. (Mirrors the optimistic edge ops.)
+    const g = graph;
+    const gid = graph.id;
+    const tempId = nextTempId();
+    g.nodes.push({ id: tempId, kind: slug, x, y, config: cfg } as Node);
+    selectedNodeId = tempId;
+    (async () => {
+      try {
+        const realId = await data.addNode(gid, slug, x, y);
+        // Reconcile temp → real id on the node, any wires drawn in the meantime, and selection.
+        const node = g.nodes.find((nn) => nn.id === tempId);
+        if (node) node.id = realId;
+        for (const e of g.edges) {
+          if (e.from === tempId) e.from = realId;
+          if (e.to === tempId) e.to = realId;
+        }
+        if (selectedNodeId === tempId) selectedNodeId = realId;
+        await data.setNodeConfig(gid, realId, cfg);
+      } catch (err) {
+        g.nodes = g.nodes.filter((nn) => nn.id !== tempId);
+        if (selectedNodeId === tempId) selectedNodeId = null;
+        toast.error("Couldn't add node", { description: String(err) });
+      }
+    })();
+    return tempId;
   }
 
   // ---- workflow variables (left panel) -------------------------------------
@@ -1776,14 +1793,31 @@
     toast.info(`${what} — coming soon`);
   }
   async function removeNode(n: Node) {
-    if (!graph) return;
-    await data.removeNode(graph.id, n.id);
+    if (!graph || editLocked) return;
+    const g = graph;
+    const gid = graph.id;
+    // Optimistic: drop the node + its wires locally NOW, persist in the background, no reload.
+    // Capture what we removed so we can put it back if the server rejects the delete.
+    const nodeIdx = g.nodes.findIndex((x) => x.id === n.id);
+    if (nodeIdx < 0) return;
+    const removedNode = g.nodes[nodeIdx];
+    const removedEdges = g.edges.filter((e) => e.from === n.id || e.to === n.id);
+    g.nodes.splice(nodeIdx, 1);
+    g.edges = g.edges.filter((e) => e.from !== n.id && e.to !== n.id);
     if (selectedNodeId === n.id) selectedNodeId = null;
     if (nodeImages[n.id]) {
       const { [n.id]: _drop, ...rest } = nodeImages;
       nodeImages = rest;
     }
-    await reload();
+    // A temp-id node hasn't been persisted yet — nothing to delete server-side.
+    if (n.id < 0) return;
+    try {
+      await data.removeNode(gid, n.id);
+    } catch (err) {
+      g.nodes.splice(nodeIdx, 0, removedNode);
+      g.edges.push(...removedEdges);
+      toast.error("Couldn't delete node", { description: String(err) });
+    }
   }
   async function removeEdge(idx: number) {
     if (!graph || editLocked) return;
