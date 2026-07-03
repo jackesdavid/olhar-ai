@@ -413,6 +413,18 @@ fn load_cameras(control_url: &str, cache_path: &PathBuf, wait: u64) -> Vec<Devic
         .unwrap_or_default();
     match fetch_cameras(control_url, wait) {
         Ok(mut devices) => {
+            // Resilience: the cache is the DURABLE, only home for camera credentials (control
+            // hands them over once). Never let an empty pull wipe a populated cache — a transient
+            // empty/misrouted 200 response (box-token hiccup, race) would otherwise destroy the
+            // sole copy of the creds and leave the camera credential-less (→ go2rtc auth-lockout).
+            // A real "all cameras removed" is rare and recoverable; losing creds is neither.
+            if devices.is_empty() && !cached.is_empty() {
+                log::warn!(
+                    "control returned 0 cameras but cache has {} — keeping cache (creds are edge-only)",
+                    cached.len()
+                );
+                return cached;
+            }
             // Merge the edge-local creds + resolved RTSP into freshly-pulled cameras that
             // arrive without them (control hands creds over once; RTSP stays edge-only).
             for d in devices.iter_mut() {
