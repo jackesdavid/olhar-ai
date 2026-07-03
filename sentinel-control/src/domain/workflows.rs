@@ -58,6 +58,7 @@ pub fn router() -> Router<AppState> {
         .route("/workflows/:id/trigger", put(set_trigger))
         .route("/workflows/:id/concurrency", put(set_concurrency))
         .route("/workflows/:id/viewport", put(set_viewport))
+        .route("/workflows/:id/edge-vias", put(set_edge_vias))
         .route("/workflows/:id/variables", put(set_variables))
         .route("/workflows/:id/enabled", put(set_enabled))
         .route("/workflows/:id/run-orphans", put(set_run_orphans))
@@ -820,6 +821,24 @@ async fn set_viewport(
             y: b.y,
             zoom: b.zoom,
         };
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Persist the visual wire bend handles (card #1) so the user's wire organisation survives a
+/// reload. Purely cosmetic — replaces the whole map for the graph.
+async fn set_edge_vias(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<std::collections::HashMap<String, Vec<[i32; 2]>>>,
+) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        wf.graph_mut(id).ok_or("graph not found")?.edge_vias = b;
         Ok(())
     })
     .await?;

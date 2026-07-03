@@ -152,6 +152,7 @@
     nodes: Node[];
     edges: Edge[];
     viewport?: { x: number; y: number; zoom: number };
+    edge_vias?: Record<string, [number, number][]>;
     variables?: Variable[];
     last_run?: { at: string; status: string; trigger: string } | null;
   };
@@ -965,6 +966,21 @@
     if (g) g.viewport = v;
     data.setGraphViewport(id, v.x, v.y, v.zoom).catch(() => {});
   }
+  // Persist the visual wire bends (#1), debounced, so the user's organisation survives a reload.
+  // Mirrored onto the local graph so a re-select restores without a round-trip.
+  let viasSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  function saveEdgeVias() {
+    const id = selectedGraphId;
+    if (id == null || editLocked) return;
+    const payload: Record<string, [number, number][]> = {};
+    for (const [k, pts] of Object.entries(edgeVias)) {
+      payload[k] = pts.map((p) => [Math.round(p.x), Math.round(p.y)] as [number, number]);
+    }
+    const g = graphs.find((x) => x.id === id);
+    if (g) g.edge_vias = payload;
+    if (viasSaveTimer) clearTimeout(viasSaveTimer);
+    viasSaveTimer = setTimeout(() => void data.setEdgeVias(id, payload).catch(() => {}), 500);
+  }
   // The URL is the source of truth for which graph is open (/workflows/<id>).
   // openGraph / backToList only navigate; the $effect below applies the route to state,
   // so a refresh or a shared link lands straight in the right editor.
@@ -997,6 +1013,11 @@
     const v = graphs.find((x) => x.id === id)?.viewport;
     pan = v ? { x: v.x, y: v.y } : { x: 40, y: 40 };
     zoom = v?.zoom ?? 1;
+    // Seed the persisted wire bends (#1) so the user's organisation is restored.
+    const gv = graphs.find((x) => x.id === id)?.edge_vias;
+    edgeVias = gv
+      ? Object.fromEntries(Object.entries(gv).map(([k, pts]) => [k, pts.map(([x, y]) => ({ x, y }))]))
+      : {};
     clearLive();
     view = "editor";
     void reconcileEventNodes(id); // self-heal event nodes against the current registry
@@ -1952,7 +1973,7 @@
     // reload — the canvas updates instantly and we revert only if the server says no.
     graph.edges.splice(idx, 1);
     const vk = edgeViaKey(removed);
-    if (edgeVias[vk]) delete edgeVias[vk];
+    if (edgeVias[vk]) { delete edgeVias[vk]; saveEdgeVias(); }
     try {
       await data.removeEdge(gid, idx);
     } catch (err) {
@@ -2252,6 +2273,7 @@
     }
     if (dragVia) {
       dragVia = null;
+      saveEdgeVias(); // persist the bend after a drag
       return;
     }
     if (panning) {
@@ -2760,6 +2782,7 @@
                           if (ev.altKey) {
                             edgeVias[vk] = vias.filter((_, j) => j !== vi);
                             if (edgeVias[vk].length === 0) delete edgeVias[vk];
+                            saveEdgeVias();
                             return;
                           }
                           dragVia = { key: vk, idx: vi };

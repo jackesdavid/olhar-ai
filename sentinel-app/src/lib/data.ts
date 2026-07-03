@@ -269,6 +269,9 @@ export const data = {
   setGraphViewport: async (id: string, x: number, y: number, zoom: number): Promise<void> => {
     await api.put<void>(`/workflows/${id}/viewport`, { x, y, zoom });
   },
+  setEdgeVias: async (id: string, vias: Record<string, [number, number][]>): Promise<void> => {
+    await api.put<void>(`/workflows/${id}/edge-vias`, vias);
+  },
   setGraphVariables: async (id: string, variables: { name: string; type: string; default?: string | null }[]): Promise<void> => {
     await api.put<void>(`/workflows/${id}/variables`, variables);
   },

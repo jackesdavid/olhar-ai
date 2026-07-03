@@ -1542,6 +1542,11 @@ pub struct Graph {
     pub edges: Vec<Edge>,
     #[serde(default)]
     pub viewport: Viewport,
+    /// Visual wire bend/reroute handles per edge (card #1), keyed `"from:from_port:to:to_port"`,
+    /// each a list of `[x, y]` world points. Purely cosmetic — the logical edge is unchanged — so
+    /// the user's wire organisation survives a reload. Additive (`{}` on old graphs).
+    #[serde(default)]
+    pub edge_vias: std::collections::HashMap<String, Vec<[i32; 2]>>,
     /// Typed, per-graph variables (Unreal-style). Each spawns Get/Set Variable nodes whose
     /// port type follows its declared type. Additive — old graphs deserialize with `[]`.
     #[serde(default)]
@@ -1582,6 +1587,7 @@ impl Graph {
             nodes: Vec::new(),
             edges: Vec::new(),
             viewport: Viewport::default(),
+            edge_vias: std::collections::HashMap::new(),
             variables: Vec::new(),
         }
     }
