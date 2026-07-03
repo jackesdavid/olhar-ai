@@ -40,7 +40,7 @@ export const DEFAULT_CATEGORY_COLOR = "#64748b"; // Flow / utility fallback (sla
 export const CATEGORY_COLOR: Record<string, string> = {
   Cameras: portColor.camera, // sky
   Vision: portColor.person, // violet/magenta
-  AI: portColor.dictionary, // teal
+  AI: "#818cf8", // indigo — the AI family's own identity (not borrowed from a port type)
   Alerts: portColor.bool, // amber
   Recipients: portColor.recipient, // purple
   Text: portColor.num, // green
@@ -68,9 +68,8 @@ const NODE_KIND_COLOR: Record<string, string> = {
   break_person_detection: portColor.person, break_detection: portColor.person,
   break_face_detection: portColor.person, recognize_person: portColor.person,
   draw_bbox: portColor.person, blur_outside_bbox: portColor.person,
-  // AI
-  describe_image: portColor.dictionary, ask_ai: portColor.dictionary,
-  ai_answer: portColor.dictionary, ai_switch: portColor.dictionary,
+  // AI (indigo — the family's own identity, incl. the AI-powered AI Switch router)
+  describe_image: "#818cf8", ask_ai: "#818cf8", ai_answer: "#818cf8", ai_switch: "#818cf8",
   // Telegram (bot reply)
   reply_to_sender: "#229ed9", reply_with_recording: "#229ed9",
   // Alerts

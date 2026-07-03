@@ -1667,6 +1667,8 @@
     if (n.kind === "stop_recording") return CircleStop;
     if (n.kind === "emit_event" || n.kind === "on_event") return Zap;
     if (n.kind === "get_variable" || n.kind === "set_variable") return Variable;
+    // AI Switch lives in the Control palette (it's a router) but is AI-powered — give it the AI glyph.
+    if (n.kind === "ai_switch") return Sparkles;
     return CATEGORY_ICON[catalog[n.kind]?.category ?? ""] ?? Box;
   }
   // Node-aware header colour: Get/Set Variable nodes take their variable's TYPE colour, so a
@@ -1676,6 +1678,7 @@
       const t = typeof n.config?.type === "string" ? n.config.type : "text";
       return portColor[t as PortType] ?? headerColor(n.kind);
     }
+    if (n.kind === "ai_switch") return CATEGORY_COLOR.AI; // AI-powered router → AI colour
     return headerColor(n.kind);
   }
 
