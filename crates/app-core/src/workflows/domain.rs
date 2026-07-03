@@ -448,7 +448,11 @@ const GET_CURRENT_FRAME_OUT: [Port; 5] = [
     p("ok", PortType::Bool, false),
 ];
 
-const DESCRIBE_IMAGE_IN: [Port; 1] = [p("image", PortType::Image, true)];
+const DESCRIBE_IMAGE_IN: [Port; 2] = [
+    p("image", PortType::Image, true),
+    // Optional guiding question — when wired/set, the caption answers it about the frame.
+    p("question", PortType::Text, false),
+];
 const DESCRIBE_IMAGE_OUT: [Port; 2] = [
     p("description", PortType::Text, false),
     p("ok", PortType::Bool, false),
@@ -1195,7 +1199,7 @@ impl NodeKind {
             }
             NodeKind::GetCameraByName => json!({ "camera": "" }),
             NodeKind::BreakCamera => json!({}),
-            NodeKind::DescribeImage => json!({ "timeout_secs": "65" }),
+            NodeKind::DescribeImage => json!({ "label": "", "question": "", "timeout_secs": "65" }),
             NodeKind::NotifyRecipient => json!({ "message": "", "timeout_secs": "35" }),
             NodeKind::Format => json!({ "template": "{p1} — {p2}", "p1": "", "p2": "", "p3": "" }),
             NodeKind::Wait => json!({ "seconds": "1" }),

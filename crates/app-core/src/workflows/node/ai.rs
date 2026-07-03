@@ -12,7 +12,24 @@ pub(super) fn run_describe_image(config: &Value, inputs: &PortValues, sys: &Tool
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty())
         .unwrap_or("camera");
-    let description = sys.vision.describe(bytes, label)?;
+    // Optional guiding question (wired input or config literal). When present, the answer addresses
+    // it about the frame; otherwise we produce the generic scene caption.
+    let question = inputs
+        .get("question")
+        .and_then(PortValue::as_text)
+        .or_else(|| config.get("question").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let description = match question {
+        Some(q) => {
+            let prompt = format!(
+                "This is a still frame from a security camera named \"{label}\". Answer this about \
+                 what's visible, concisely and factually (no preamble): {q}"
+            );
+            sys.vision.ask_text(&prompt, Some(bytes))?
+        }
+        None => sys.vision.describe(bytes, label)?,
+    };
     let mut o = PortValues::new();
     o.insert("description".into(), PortValue::Text(description));
     o.insert("ok".into(), PortValue::Bool(true));
