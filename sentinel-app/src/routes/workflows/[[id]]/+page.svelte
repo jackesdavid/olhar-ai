@@ -487,8 +487,9 @@
     return out;
   }
   // What the add-node menu (ContextSearch) lists: all real kinds except the bare variable
-  // placeholders + canvas-only helpers, plus the per-variable Get/Set entries.
-  const HIDE_FROM_MENU = new Set(["get_variable", "set_variable", "comment", "reroute"]);
+  // placeholders (added via the Variables panel) + the reroute wire-helper (added by splitting a
+  // wire), plus the per-variable Get/Set entries. `comment` IS listed — it has no other add path.
+  const HIDE_FROM_MENU = new Set(["get_variable", "set_variable", "reroute"]);
   const menuKinds = $derived<PaletteKind[]>([
     ...(kinds as PaletteKind[]).filter((k) => !HIDE_FROM_MENU.has(k.slug)),
     ...variableNodeEntries(),
