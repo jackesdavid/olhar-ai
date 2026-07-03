@@ -177,6 +177,12 @@
   const PREVIEW_W = NODE_W - 16;
   function commentW(n: Node): number { return Math.max(120, Number(n.config.width) || 400); }
   function commentH(n: Node): number { return Math.max(60, Number(n.config.height) || 200); }
+  // AABB overlap: does node `n`'s box intersect the marquee box `b` (world coords)?
+  function nodeInBox(n: Node, b: { x0: number; y0: number; x1: number; y1: number }): boolean {
+    const w = n.kind === "comment" ? commentW(n) : nodeW(n);
+    const h = n.kind === "comment" ? commentH(n) : nodeHeight(n);
+    return n.x < b.x1 && n.x + w > b.x0 && n.y < b.y1 && n.y + h > b.y0;
+  }
   const PREVIEW_H = Math.round((PREVIEW_W * 9) / 16);
 
   // ---- state ---------------------------------------------------------------
@@ -190,6 +196,23 @@
   // (real per-graph ids are ≥ 0), swapped for the server id once the create resolves.
   let tempIdSeq = -1;
   const nextTempId = () => tempIdSeq--;
+  // Multi-selection: `selectedNodeId` stays the PRIMARY (drives the inspector); `selectedIds`
+  // is the full set (marquee + shift-click). A node is highlighted if it's in either.
+  let selectedIds = $state<Set<number>>(new Set());
+  const isSelected = (id: number) => selectedIds.has(id) || selectedNodeId === id;
+  // Rubber-band marquee (world coords) while drag-selecting on empty canvas in move mode.
+  let marquee = $state<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  // Copy/paste buffer: deep-cloned nodes (+ their internal edges) from the last copy/duplicate.
+  let clipboard: { nodes: Node[]; edges: Edge[] } = { nodes: [], edges: [] };
+  // Select exactly one node (replace the set); shift-click toggles instead (see onNodeSelect).
+  function selectOnly(id: number) {
+    selectedNodeId = id;
+    selectedIds = new Set([id]);
+  }
+  function clearSelection() {
+    selectedNodeId = null;
+    selectedIds = new Set();
+  }
   // Editor tool/mode (touch-first): move = drag nodes, pan = drag canvas, link = tap ports to
   // wire (node body inert), break = tap a wire to delete it. Default preserves mouse behavior.
   let editorMode = $state<"move" | "pan" | "link" | "break">("move");
@@ -656,7 +679,7 @@
   }
   // A node's border colour: emerald when running/selected, red when incomplete.
   function nodeBorderClass(n: Node): string {
-    if (nodeLive(n.id) || selectedNodeId === n.id) return "stroke-primary";
+    if (nodeLive(n.id) || isSelected(n.id)) return "stroke-primary";
     if (requiredUnfilled(n).length > 0) return "stroke-destructive/70";
     return "stroke-border hover:stroke-primary/50";
   }
@@ -1595,11 +1618,22 @@
       return;
     }
 
-    // Delete / Backspace: delete the selected node.
+    // Delete / Backspace: delete every selected node (the whole marquee/shift set).
     if ((e.key === "Delete" || e.key === "Backspace") && !editLocked) {
-      const sel = graph?.nodes.find((n) => n.id === selectedNodeId);
-      if (sel) { e.preventDefault(); removeNode(sel); }
+      const ids = selectedIds.size ? [...selectedIds] : selectedNodeId !== null ? [selectedNodeId] : [];
+      const targets = (graph?.nodes ?? []).filter((n) => ids.includes(n.id));
+      if (targets.length) { e.preventDefault(); for (const t of targets) removeNode(t); }
       return;
+    }
+
+    // Copy / Cut / Paste / Duplicate of the selection (Cmd/Ctrl).
+    if ((e.metaKey || e.ctrlKey) && !editLocked) {
+      const k = e.key.toLowerCase();
+      if (k === "c") { copySelection(); e.preventDefault(); return; }
+      if (k === "x") { copySelection(); deleteSelection(); e.preventDefault(); return; }
+      if (k === "v") { pasteClipboard(); e.preventDefault(); return; }
+      if (k === "d") { copySelection(); pasteClipboard(); e.preventDefault(); return; }
+      if (k === "a") { selectAll(); e.preventDefault(); return; }
     }
   }
 
@@ -1805,6 +1839,11 @@
     g.nodes.splice(nodeIdx, 1);
     g.edges = g.edges.filter((e) => e.from !== n.id && e.to !== n.id);
     if (selectedNodeId === n.id) selectedNodeId = null;
+    if (selectedIds.has(n.id)) {
+      const s = new Set(selectedIds);
+      s.delete(n.id);
+      selectedIds = s;
+    }
     if (nodeImages[n.id]) {
       const { [n.id]: _drop, ...rest } = nodeImages;
       nodeImages = rest;
@@ -1818,6 +1857,86 @@
       g.edges.push(...removedEdges);
       toast.error("Couldn't delete node", { description: String(err) });
     }
+  }
+  // ---- multi-node clipboard: copy / paste / duplicate the selection ---------
+  function selectedNodeList(): Node[] {
+    const ids = selectedIds.size
+      ? selectedIds
+      : selectedNodeId !== null
+        ? new Set([selectedNodeId])
+        : new Set<number>();
+    return (graph?.nodes ?? []).filter((n) => ids.has(n.id));
+  }
+  function selectAll() {
+    if (!graph) return;
+    selectedIds = new Set(graph.nodes.map((n) => n.id));
+    selectedNodeId = graph.nodes.at(-1)?.id ?? null;
+  }
+  function copySelection() {
+    const nodes = selectedNodeList();
+    const ids = new Set(nodes.map((n) => n.id));
+    const cloned = nodes.map(
+      (n) => ({ id: n.id, kind: n.kind, x: n.x, y: n.y, config: $state.snapshot(n.config), memoize: n.memoize }) as Node,
+    );
+    // Only wires whose BOTH ends are in the copied set travel with it (internal wiring).
+    const edges = (graph?.edges ?? []).filter((e) => ids.has(e.from) && ids.has(e.to)).map((e) => ({ ...e }));
+    clipboard = { nodes: cloned, edges };
+  }
+  function deleteSelection() {
+    for (const n of selectedNodeList()) removeNode(n);
+  }
+  // Paste the clipboard offset from the originals, recreating internal wiring. Optimistic:
+  // nodes + wires render instantly under temp ids, persisted + reconciled in the background.
+  async function pasteClipboard() {
+    if (!graph || editLocked || !clipboard.nodes.length) return;
+    const g = graph;
+    const gid = graph.id;
+    const OFFSET = 48;
+    const tempOf = new Map<number, number>();
+    const created: { tempId: number; kind: string; x: number; y: number; config: Record<string, unknown>; memoize?: boolean }[] = [];
+    for (const src of clipboard.nodes) {
+      const tempId = nextTempId();
+      tempOf.set(src.id, tempId);
+      const x = src.x + OFFSET;
+      const y = src.y + OFFSET;
+      const config = structuredClone(src.config) as Record<string, unknown>;
+      g.nodes.push({ id: tempId, kind: src.kind, x, y, config, memoize: src.memoize } as Node);
+      created.push({ tempId, kind: src.kind, x, y, config, memoize: src.memoize });
+    }
+    const internal = clipboard.edges.filter((e) => tempOf.has(e.from) && tempOf.has(e.to));
+    for (const e of internal) {
+      g.edges.push({ from: tempOf.get(e.from)!, from_port: e.from_port, to: tempOf.get(e.to)!, to_port: e.to_port });
+    }
+    selectedIds = new Set(created.map((c) => c.tempId));
+    selectedNodeId = created.at(-1)?.tempId ?? null;
+    (async () => {
+      try {
+        const realOf = new Map<number, number>();
+        for (const c of created) {
+          const realId = await data.addNode(gid, c.kind, c.x, c.y);
+          realOf.set(c.tempId, realId);
+          const node = g.nodes.find((nn) => nn.id === c.tempId);
+          if (node) node.id = realId;
+          if (selectedNodeId === c.tempId) selectedNodeId = realId;
+          await data.setNodeConfig(gid, realId, c.config);
+          if (c.memoize === false) await data.setNodeMemoize(gid, realId, false);
+        }
+        selectedIds = new Set([...selectedIds].map((id) => realOf.get(id) ?? id));
+        for (const e of internal) {
+          const fromTemp = tempOf.get(e.from)!;
+          const toTemp = tempOf.get(e.to)!;
+          const from = realOf.get(fromTemp)!;
+          const to = realOf.get(toTemp)!;
+          const local = g.edges.find(
+            (le) => le.from === fromTemp && le.to === toTemp && le.from_port === e.from_port && le.to_port === e.to_port,
+          );
+          if (local) { local.from = from; local.to = to; }
+          await data.addEdge(gid, from, e.from_port, to, e.to_port);
+        }
+      } catch (err) {
+        toast.error("Couldn't paste nodes", { description: String(err) });
+      }
+    })();
   }
   async function removeEdge(idx: number) {
     if (!graph || editLocked) return;
@@ -1938,8 +2057,24 @@
     const r = svgEl!.getBoundingClientRect();
     return { x: (e.clientX - r.left - pan.x) / zoom, y: (e.clientY - r.top - pan.y) / zoom };
   }
+  // Node click selection: shift toggles this node in the set; a plain click on an unselected node
+  // replaces the selection; a plain click within an existing multi-selection keeps it (so the group
+  // can be dragged). `selectedNodeId` (the primary) always follows the clicked node for the inspector.
+  function onNodeSelect(e: PointerEvent, n: Node) {
+    if (e.shiftKey) {
+      const next = new Set(selectedIds);
+      if (next.has(n.id)) next.delete(n.id);
+      else next.add(n.id);
+      selectedIds = next;
+      selectedNodeId = n.id;
+    } else if (!selectedIds.has(n.id)) {
+      selectOnly(n.id);
+    } else {
+      selectedNodeId = n.id;
+    }
+  }
   function startDrag(e: PointerEvent, n: Node) {
-    selectedNodeId = n.id; // selecting to view props is fine
+    onNodeSelect(e, n); // select (shift toggles; plain click replaces, or keeps a group to drag)
     if (editLocked) return; // …but no moving while the graph is active (running/armed)
     // Pan tool: a drag starting on a node pans the canvas instead of moving the node.
     if (editorMode === "pan") {
@@ -1957,17 +2092,20 @@
     svgEl?.setPointerCapture?.(e.pointerId);
     const wp = worldPoint(e);
     const base = { id: n.id, offX: wp.x - n.x, offY: wp.y - n.y };
-    if (n.kind === 'comment' && graph) {
+    // Group drag: a node in a multi-selection carries the rest of the set; otherwise a comment
+    // carries the nodes it encloses (its historical behaviour).
+    let enclosedIds: number[] = [];
+    if (selectedIds.has(n.id) && selectedIds.size > 1) {
+      enclosedIds = [...selectedIds].filter((id) => id !== n.id);
+    } else if (n.kind === 'comment' && graph) {
       const cw = commentW(n), ch = commentH(n);
-      const enclosedIds = graph.nodes
+      enclosedIds = graph.nodes
         .filter(r => r.kind !== 'comment'
           && r.x + NODE_W / 2 >= n.x && r.x + NODE_W / 2 <= n.x + cw
           && r.y + nodeHeight(r) / 2 >= n.y && r.y + nodeHeight(r) / 2 <= n.y + ch)
         .map(r => r.id);
-      drag = { ...base, enclosedIds };
-    } else {
-      drag = base;
     }
+    drag = { ...base, enclosedIds };
   }
   function startCommentResize(e: PointerEvent, n: Node) {
     e.stopPropagation();
@@ -1991,9 +2129,18 @@
       return;
     }
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pointers.size >= 2) { panning = null; return; } // 2nd finger → pinch, not pan
-    selectedNodeId = null; // clicking the empty canvas deselects the node
-    panning = { sx: e.clientX, sy: e.clientY, ox: pan.x, oy: pan.y };
+    if (pointers.size >= 2) { panning = null; marquee = null; return; } // 2nd finger → pinch
+    if (editorMode === "move") {
+      // Move tool: empty-canvas drag = rubber-band marquee select (Unreal-style). Shift keeps
+      // the current selection to add to it; a plain drag starts fresh.
+      if (!e.shiftKey) clearSelection();
+      const wp = worldPoint(e);
+      marquee = { x0: wp.x, y0: wp.y, x1: wp.x, y1: wp.y };
+    } else {
+      // Pan / link / break tools: empty-canvas drag pans the canvas.
+      clearSelection();
+      panning = { sx: e.clientX, sy: e.clientY, ox: pan.x, oy: pan.y };
+    }
     svgEl?.setPointerCapture?.(e.pointerId);
     e.preventDefault();
   }
@@ -2039,6 +2186,11 @@
     hoverWorld = worldPoint(e); // track the cursor for the `n`-to-add-here shortcut
     hoverClient = { x: e.clientX, y: e.clientY };
     if (pending) cursor = worldPoint(e); // drag the open wire end with the cursor
+    if (marquee) {
+      const wp = worldPoint(e);
+      marquee = { ...marquee, x1: wp.x, y1: wp.y };
+      return;
+    }
     if (dragVia) {
       const wp = worldPoint(e);
       const cur = edgeVias[dragVia.key] ? [...edgeVias[dragVia.key]] : [];
@@ -2079,6 +2231,20 @@
     }
     if (pointers.size < 2) gesture = null; // pinch ended (or a finger lifted)
     if (pointers.size === 0) pinching = false; // all fingers up → re-enable single-finger ops
+    if (marquee) {
+      const b = {
+        x0: Math.min(marquee.x0, marquee.x1), y0: Math.min(marquee.y0, marquee.y1),
+        x1: Math.max(marquee.x0, marquee.x1), y1: Math.max(marquee.y0, marquee.y1),
+      };
+      const additive = !!e?.shiftKey;
+      const hit = (graph?.nodes ?? []).filter((n) => nodeInBox(n, b)).map((n) => n.id);
+      const next = new Set(additive ? selectedIds : []);
+      for (const id of hit) next.add(id);
+      selectedIds = next;
+      selectedNodeId = hit.length ? hit[hit.length - 1] : additive ? selectedNodeId : null;
+      marquee = null;
+      return;
+    }
     if (dragVia) {
       dragVia = null;
       return;
@@ -2437,12 +2603,25 @@
               </defs>
 
               <g transform="translate({pan.x} {pan.y}) scale({zoom})">
+              <!-- rubber-band marquee (move tool, drag on empty canvas) -->
+              {#if marquee}
+                <rect
+                  x={Math.min(marquee.x0, marquee.x1)}
+                  y={Math.min(marquee.y0, marquee.y1)}
+                  width={Math.abs(marquee.x1 - marquee.x0)}
+                  height={Math.abs(marquee.y1 - marquee.y0)}
+                  class="pointer-events-none fill-primary/10 stroke-primary"
+                  stroke-width={1 / zoom}
+                  stroke-dasharray="{4 / zoom} {3 / zoom}"
+                  rx={2 / zoom}
+                />
+              {/if}
               <!-- comment boxes (behind edges and regular nodes) -->
               {#each graph.nodes.filter(cn => cn.kind === 'comment') as n (n.id)}
                 {@const cw = commentW(n)}
                 {@const ch = commentH(n)}
                 {@const col = String(n.config.color ?? COMMENT_DEFAULT_COLOR)}
-                {@const sel = selectedNodeId === n.id}
+                {@const sel = isSelected(n.id)}
                 <g transform="translate({n.x} {n.y})">
                   <rect
                     width={cw} height={ch} rx="10"
@@ -2591,7 +2770,7 @@
                 {@const k = effectiveKind(n)}
                 {@const h = nodeHeight(n)}
                 {@const nw = nodeW(n)}
-                {@const sel = selectedNodeId === n.id}
+                {@const sel = isSelected(n.id)}
                 {@const live = nodeLive(n.id)}
                 {@const invalid = requiredUnfilled(n).length > 0}
                 {@const CatIcon = categoryIcon(n)}
