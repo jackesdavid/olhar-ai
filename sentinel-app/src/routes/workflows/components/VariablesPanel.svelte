@@ -29,6 +29,28 @@
     onEdit: (i: number, patch: Partial<Variable>) => void;
     onRemove: (i: number) => void;
   } = $props();
+
+  // Resizable width (persisted to localStorage). Drag the right-edge handle.
+  let width = $state(224);
+  $effect(() => {
+    const s = Number(localStorage.getItem("wf-vars-w"));
+    if (s >= 180 && s <= 460) width = s;
+  });
+  function startResize(e: PointerEvent) {
+    const sx = e.clientX;
+    const sw = width;
+    const move = (ev: PointerEvent) => {
+      width = Math.max(180, Math.min(460, sw + (ev.clientX - sx)));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      try { localStorage.setItem("wf-vars-w", String(width)); } catch { /* ignore */ }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    e.preventDefault();
+  }
 </script>
 
 {#if !open}
@@ -41,14 +63,17 @@
     <PanelLeftOpen class="size-4 text-muted-foreground group-hover:text-foreground" />
   </button>
 {:else}
-  <div class="flex w-56 shrink-0 flex-col gap-2 overflow-y-auto rounded-xl border border-border bg-card/40 p-3">
+  <div
+    class="relative flex shrink-0 flex-col gap-1.5 overflow-y-auto rounded-xl border border-border bg-card/40 p-2.5"
+    style:width="{width}px"
+  >
     <div class="flex items-center justify-between gap-2">
-      <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Variables</span>
-      <div class="flex items-center gap-1">
-        <Button variant="ghost" size="icon" class="size-7" title="Add variable" disabled={disabled} onclick={onAdd}>
+      <span class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Variables</span>
+      <div class="flex items-center gap-0.5">
+        <Button variant="ghost" size="icon" class="size-6" title="Add variable" disabled={disabled} onclick={onAdd}>
           <Plus class="size-3.5" />
         </Button>
-        <Button variant="ghost" size="icon" class="size-7" title="Hide variables" onclick={() => (open = false)}>
+        <Button variant="ghost" size="icon" class="size-6" title="Hide variables" onclick={() => (open = false)}>
           <PanelLeftClose class="size-3.5" />
         </Button>
       </div>
@@ -60,41 +85,48 @@
       </p>
     {/if}
 
-    <div class="space-y-2">
+    <div class="space-y-1">
       {#each variables as v, i (i)}
-        <div class="space-y-1.5 rounded-lg border border-border bg-background/60 p-2">
-          <div class="flex items-center gap-1.5">
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <span
-              class="shrink-0 cursor-grab"
-              class:cursor-not-allowed={disabled}
-              draggable={!disabled}
-              title="Drag onto the canvas → Get / Set"
-              style:color={typeColor(v.type)}
-              ondragstart={(e) => e.dataTransfer?.setData("application/x-sentinel-variable", JSON.stringify({ name: v.name, type: v.type }))}
-            >
-              <GripVertical class="size-3.5" />
-            </span>
-            <Input
-              class="h-7 flex-1 text-xs"
-              value={v.name}
-              disabled={disabled}
-              onchange={(e) => onEdit(i, { name: e.currentTarget.value.trim() })}
-            />
-            <Button variant="ghost" size="icon" class="size-6 text-muted-foreground hover:text-destructive" title="Delete variable" disabled={disabled} onclick={() => onRemove(i)}>
-              <Trash2 class="size-3" />
-            </Button>
-          </div>
+        <!-- Compact one-line card: grip · name · type · delete -->
+        <div class="flex items-center gap-1 rounded-md border border-border bg-background/60 px-1 py-0.5">
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <span
+            class="shrink-0 cursor-grab"
+            class:cursor-not-allowed={disabled}
+            draggable={!disabled}
+            title="Drag onto the canvas → Get / Set"
+            style:color={typeColor(v.type)}
+            ondragstart={(e) => e.dataTransfer?.setData("application/x-sentinel-variable", JSON.stringify({ name: v.name, type: v.type }))}
+          >
+            <GripVertical class="size-3.5" />
+          </span>
+          <Input
+            class="h-6 min-w-0 flex-1 border-0 bg-transparent px-1 text-[11px] shadow-none focus-visible:ring-1"
+            value={v.name}
+            disabled={disabled}
+            onchange={(e) => onEdit(i, { name: e.currentTarget.value.trim() })}
+          />
           <select
-            class="h-7 w-full rounded-md border border-input bg-background px-2 text-xs disabled:opacity-50"
+            class="h-6 w-[68px] shrink-0 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"
             value={v.type}
             disabled={disabled}
             onchange={(e) => onEdit(i, { type: e.currentTarget.value })}
           >
             {#each types as t (t.value)}<option value={t.value}>{t.label}</option>{/each}
           </select>
+          <Button variant="ghost" size="icon" class="size-5 shrink-0 text-muted-foreground hover:text-destructive" title="Delete variable" disabled={disabled} onclick={() => onRemove(i)}>
+            <Trash2 class="size-3" />
+          </Button>
         </div>
       {/each}
     </div>
+
+    <!-- Right-edge resize handle -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize hover:bg-primary/30"
+      title="Drag to resize"
+      onpointerdown={startResize}
+    ></div>
   </div>
 {/if}
