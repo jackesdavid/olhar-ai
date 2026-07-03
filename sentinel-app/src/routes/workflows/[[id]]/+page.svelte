@@ -765,6 +765,17 @@
         ? { ...k, outputs: [port] }
         : { ...k, inputs: [...k.inputs, port] };
     }
+    // AI Extract: `value` output typed per config.type (so it wires straight into Camera/Notify) + found.
+    if (node.kind === "ai_extract") {
+      const ty = (typeof node.config?.type === "string" ? node.config.type : "text") as CatPort["type"];
+      return {
+        ...k,
+        outputs: [
+          { name: "value", type: ty, required: false },
+          { name: "found", type: "bool" as CatPort["type"], required: false },
+        ],
+      };
+    }
     const fields = payloadFields(node);
     if (fields.length === 0) return k;
     const ports: CatPort[] = fields.map((f) => ({ name: f.name, type: f.type, required: false }));
@@ -3576,6 +3587,21 @@
                         {#if clsWired}
                           <p class="mt-0.5 text-[10px] text-muted-foreground">Overridden by wired input</p>
                         {/if}
+                      {:else if key === "type" && selectedNode.kind === "ai_extract"}
+                        {@const EXTRACT_TYPES = [
+                          { value: "text", label: "Text" },
+                          { value: "camera", label: "Camera" },
+                          { value: "recipient", label: "Recipient" },
+                          { value: "num", label: "Number" },
+                        ]}
+                        {@const etv = String(selectedNode.config[key] ?? "text")}
+                        {@const etlabel = EXTRACT_TYPES.find((o) => o.value === etv)?.label ?? etv}
+                        <Select.Root type="single" disabled={editLocked} value={etv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "text" })}>
+                          <Select.Trigger class="h-8 w-full">{etlabel}</Select.Trigger>
+                          <Select.Content>
+                            {#each EXTRACT_TYPES as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                          </Select.Content>
+                        </Select.Root>
                       {:else if key === "operator" && selectedNode.kind === "text_compare"}
                         {@const TEXT_OPS = [
                           { value: "eq", label: "equals" },

@@ -386,6 +386,11 @@ pub enum NodeKind {
     /// from the `text` input's *meaning* — routes exec to the best-matching user-defined arm, or the
     /// built-in `default` when none is a confident match. Arms are user-defined in the inspector.
     AiSwitch,
+    /// AI: extract one typed value from a message (slot filling — the NLU companion to AiSwitch).
+    /// `field` (config) describes what to pull out; `type` (config) sets the output wire type and
+    /// resolution (a `camera` name → a real Camera entity, a `recipient` name → a Recipient, etc.).
+    /// Outputs `value` (typed per `type`) + `found`. One LLM call.
+    AiExtract,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -648,6 +653,14 @@ const CAMERA_SWITCH_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
 // AI switch: one required text input (the message to route by meaning across the arms).
 const AI_SWITCH_IN: [Port; 1] = [p("text", PortType::Text, true)];
 
+// AI extract: one required text input (the message to pull a value from).
+const AI_EXTRACT_IN: [Port; 1] = [p("text", PortType::Text, true)];
+// Static template outputs — the real `value` type is dynamic per config.type (GraphNode::output_ports).
+const AI_EXTRACT_OUT: [Port; 2] = [
+    p("value", PortType::Text, false),
+    p("found", PortType::Bool, false),
+];
+
 // AI If: optional image + question text. Both are optional at the port level so a
 // text-only question (no image wired) works. The node errors at runtime if no question.
 const ASK_AI_IN: [Port; 2] = [
@@ -735,7 +748,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 60] = [
+    pub const ALL: [NodeKind; 61] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -796,6 +809,7 @@ impl NodeKind {
         NodeKind::AiAnswer,
         NodeKind::ReplyWithRecording,
         NodeKind::AiSwitch,
+        NodeKind::AiExtract,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -863,6 +877,7 @@ impl NodeKind {
             NodeKind::AiAnswer => "ai_answer",
             NodeKind::ReplyWithRecording => "reply_with_recording",
             NodeKind::AiSwitch => "ai_switch",
+            NodeKind::AiExtract => "ai_extract",
         }
     }
 
@@ -933,6 +948,7 @@ impl NodeKind {
             NodeKind::AiAnswer => "AI Answer",
             NodeKind::ReplyWithRecording => "Reply with Recording",
             NodeKind::AiSwitch => "AI Switch",
+            NodeKind::AiExtract => "AI Extract",
         }
     }
 
@@ -945,7 +961,7 @@ impl NodeKind {
             | NodeKind::GetCurrentFrame
             | NodeKind::GetCameraByName
             | NodeKind::BreakCamera => "Cameras",
-            NodeKind::DescribeImage | NodeKind::AskAi | NodeKind::AiAnswer => "AI",
+            NodeKind::DescribeImage | NodeKind::AskAi | NodeKind::AiAnswer | NodeKind::AiExtract => "AI",
             NodeKind::ReplyToSender | NodeKind::ReplyWithRecording => "Telegram",
             NodeKind::Format => "Text",
             NodeKind::Wait
@@ -1101,6 +1117,7 @@ impl NodeKind {
             NodeKind::AiAnswer => &AI_ANSWER_IN,
             NodeKind::ReplyWithRecording => &REPLY_RECORDING_IN,
             NodeKind::AiSwitch => &AI_SWITCH_IN,
+            NodeKind::AiExtract => &AI_EXTRACT_IN,
         }
     }
 
@@ -1162,6 +1179,7 @@ impl NodeKind {
             NodeKind::AiAnswer => &AI_ANSWER_OUT,
             NodeKind::ReplyWithRecording => &REPLY_RECORDING_OUT,
             NodeKind::AiSwitch => &NO_PORTS, // exec outputs are dynamic arms (+ "default")
+            NodeKind::AiExtract => &AI_EXTRACT_OUT, // `value` type is refined per config (GraphNode)
         }
     }
 
@@ -1267,6 +1285,7 @@ impl NodeKind {
             NodeKind::AiAnswer => json!({ "prompt": "", "timeout_secs": "30" }),
             NodeKind::ReplyWithRecording => json!({ "caption": "", "timeout_secs": "120" }),
             NodeKind::AiSwitch => json!({ "arms": ["arm_1", "arm_2"], "timeout_secs": "30" }),
+            NodeKind::AiExtract => json!({ "field": "", "type": "text", "timeout_secs": "30" }),
         }
     }
 }
@@ -1317,6 +1336,12 @@ impl GraphNode {
             NodeKind::OnEvent => payload_ports(&self.config),
             // Get Variable: one `value` output typed by the variable.
             NodeKind::GetVariable => variable_port(&self.config, false),
+            // AI Extract: `value` typed per config.type (like a variable) + a static `found` bool.
+            NodeKind::AiExtract => {
+                let mut ports = variable_port(&self.config, false);
+                ports.push(ResolvedPort { name: "found".to_string(), ty: PortType::Bool, required: false });
+                ports
+            }
             k => k.output_ports().iter().map(ResolvedPort::from).collect(),
         }
     }

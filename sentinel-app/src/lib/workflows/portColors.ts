@@ -70,6 +70,7 @@ const NODE_KIND_COLOR: Record<string, string> = {
   draw_bbox: portColor.person, blur_outside_bbox: portColor.person,
   // AI (indigo — the family's own identity, incl. the AI-powered AI Switch router)
   describe_image: "#818cf8", ask_ai: "#818cf8", ai_answer: "#818cf8", ai_switch: "#818cf8",
+  ai_extract: "#818cf8",
   // Telegram (bot reply)
   reply_to_sender: "#229ed9", reply_with_recording: "#229ed9",
   // Alerts

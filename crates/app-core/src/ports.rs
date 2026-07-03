@@ -52,6 +52,8 @@ pub trait Vision: Send + Sync {
     fn ask_text(&self, prompt: &str, image: Option<&[u8]>) -> Result<String, String>;
     /// Route a message to one of `arms` (or `None` = no match). Backs the `AI Switch` node.
     fn classify(&self, text: &str, arms: &[String]) -> Result<Option<String>, String>;
+    /// Extract `field` from a message (empty string if absent). Backs the `AI Extract` node.
+    fn extract(&self, text: &str, field: &str) -> Result<String, String>;
 }
 
 /// Face recognition: a cosine kNN over the approved enrolled embeddings.
@@ -159,6 +161,9 @@ impl Vision for LocalVision {
     }
     fn classify(&self, text: &str, arms: &[String]) -> Result<Option<String>, String> {
         crate::agent::vision::classify_intent(text, arms)
+    }
+    fn extract(&self, text: &str, field: &str) -> Result<String, String> {
+        crate::agent::vision::extract_field(text, field)
     }
 }
 

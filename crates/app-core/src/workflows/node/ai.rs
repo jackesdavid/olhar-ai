@@ -1,6 +1,44 @@
-use super::{PortValue, PortValues};
+use super::{req_text, resolve_camera_entity, PortValue, PortValues};
 use crate::agent::tools::ToolContext;
 use serde_json::Value;
+
+/// AI Extract: pull one typed value out of a message (slot filling — the NLU companion to AI
+/// Switch). One LLM call extracts the `field`, then resolves it to the configured `type`: a
+/// `camera` name → a real Camera entity (wires into Camera snapshot), a `recipient` name → a
+/// Recipient, `num`/`bool`/`text` parsed. `found` reports whether a value came out (and, for a
+/// camera, whether it resolved) so the graph can branch to a "which one?" clarification.
+pub(super) fn run_ai_extract(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+    let text = req_text(inputs, "text")?;
+    let field = config
+        .get("field")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or("AI Extract: 'field' is required — describe what to extract (e.g. \"the camera name\")")?;
+    let ty = config.get("type").and_then(Value::as_str).unwrap_or("text");
+    let raw = sys.vision.extract(text, field)?;
+    let raw = raw.trim();
+    let value: Option<PortValue> = if raw.is_empty() {
+        None
+    } else {
+        match ty {
+            "camera" => resolve_camera_entity(raw, sys).map(PortValue::Camera),
+            "recipient" => Some(PortValue::Recipient(raw.to_string())),
+            "num" => raw.parse::<i64>().ok().map(PortValue::Num),
+            "bool" => Some(PortValue::Bool(matches!(
+                raw.to_ascii_lowercase().as_str(),
+                "true" | "1" | "yes" | "on"
+            ))),
+            _ => Some(PortValue::Text(raw.to_string())),
+        }
+    };
+    let mut o = PortValues::new();
+    o.insert("found".into(), PortValue::Bool(value.is_some()));
+    if let Some(v) = value {
+        o.insert("value".into(), v);
+    }
+    Ok(o)
+}
 
 pub(super) fn run_describe_image(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
     let bytes = inputs

@@ -197,6 +197,41 @@ pub fn classify_intent(text: &str, arms: &[String]) -> Result<Option<String>, St
     }
 }
 
+/// Extract one field from a message for the AI Extract node (slot filling). `field` describes what
+/// to pull out ("the camera name", "the recipient's name"); returns the extracted value verbatim,
+/// or an empty string when it's not present. One constrained call (`max_tokens: 40`).
+pub fn extract_field(text: &str, field: &str) -> Result<String, String> {
+    let cfg = AgentConfig::from_env()
+        .ok_or("AI Extract needs an ANTHROPIC_API_KEY — none configured.")?;
+    let system = format!(
+        "You extract a single value from a user's message. Extract {field}. Reply with ONLY that \
+         value, exactly as the user wrote it (no quotes, no extra words). If it is not present in \
+         the message, reply with an empty line."
+    );
+    let body = json!({
+        "model": cfg.model,
+        "max_tokens": 40,
+        "system": system,
+        "messages": [{ "role": "user", "content": text }]
+    });
+    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(30)).build();
+    let resp = agent
+        .post(ENDPOINT)
+        .set("x-api-key", &cfg.api_key)
+        .set("anthropic-version", ANTHROPIC_VERSION)
+        .set("content-type", "application/json")
+        .send_string(&body.to_string())
+        .map_err(|e| format!("AI Extract request failed: {e}"))?;
+    let parsed: Value = resp
+        .into_string()
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .ok_or("AI Extract response was not valid JSON.")?;
+    Ok(text_of(parsed.get("content").ok_or("AI Extract response had no content.")?)
+        .trim()
+        .to_string())
+}
+
 /// Ask a yes/no question about an optional image frame. Returns `true` for YES, `false`
 /// for NO. The model is forced to one-word answers via the system prompt and `max_tokens: 8`.
 /// When `image` is `None` the question is asked as plain text (useful for time/logic checks).
