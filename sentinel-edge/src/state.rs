@@ -240,6 +240,15 @@ impl AppState {
         }
     }
 
+    /// Push an object-tracker lifecycle event to control (box-authed) → durable event_queue →
+    /// `OnEvent("object_entered"/"object_exited")`. Best-effort like motion.
+    pub fn push_track_event(&self, ev: &TrackEventOut) {
+        let url = format!("{}/config/track-event", self.control_url);
+        if let Err(e) = self.box_agent().post(&url).send_json(ev) {
+            log::debug!("track-event push failed: {e}");
+        }
+    }
+
     /// Poll control for pending commands (box-authed), consumed once per cycle.
     pub fn check_commands(&self) -> EdgeCommands {
         let url = format!("{}/config/commands", self.control_url);
@@ -300,6 +309,20 @@ pub struct EdgeCommands {
 /// One motion observation the edge reports to control. Normalized signal only — the cloud
 /// applies per-graph sensitivity. Coordinates/areas are in the watcher's processing
 /// resolution (downscaled), so the cloud treats them as relative.
+/// An object-tracker lifecycle event pushed to control's `/config/track-event`. Matches control's
+/// `TrackEventIn`. `bbox` is canonical xyxy (source pixels).
+#[derive(serde::Serialize)]
+pub struct TrackEventOut {
+    pub kind: String, // "object_entered" | "object_exited"
+    pub camera_ip: String,
+    pub uuid: String,
+    pub class: String,
+    pub bbox: [i32; 4],
+    pub count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dwell_secs: Option<i64>,
+}
+
 #[derive(serde::Serialize)]
 pub struct MotionEvent {
     pub camera_ip: String,

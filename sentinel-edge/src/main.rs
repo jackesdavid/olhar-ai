@@ -21,6 +21,7 @@ mod logbuf;
 mod motion;
 mod recording;
 mod state;
+mod tracking;
 mod tailscale;
 
 use state::AppState;
@@ -119,6 +120,9 @@ fn main() {
     // Continuous motion detection (one OpenCV MOG2 watcher per camera). No-op stub unless
     // built with `--features motion`; the watchers POST normalized motion events to control.
     motion::spawn(&state);
+    // Continuous object tracking (one YOLOX+SORT worker per camera). Opt-in via TRACK_ENABLED=1;
+    // pushes object_entered/object_exited events to control.
+    tracking::spawn(&state);
 
     // Discovery loop: sweep the LAN for ONVIF cameras every 5 min — reconciling any camera
     // that changed IP (matched by stable ONVIF id) and pushing the sweep to control so the
