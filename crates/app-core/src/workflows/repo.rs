@@ -333,6 +333,40 @@ pub fn system_events() -> Vec<TenantEvent> {
                 field("args", PortType::Text),
             ],
         },
+        // The edge object tracker started tracking a new entity in a camera's view (card: edge
+        // tracking). `uuid` is the stable per-entity id (same across graphs + the map); `count` is
+        // how many of `class` are currently in view. The `Track` node routes this to its `entered`
+        // branch; a plain `OnEvent("object_entered")` also works.
+        TenantEvent {
+            name: "object_entered".to_string(),
+            category: "System".to_string(),
+            source: "system".to_string(),
+            description: Some("The tracker started tracking a new object in view".to_string()),
+            created_by_graph: None,
+            fields: vec![
+                field("uuid", PortType::Text),
+                field("class", PortType::Text),
+                field("camera", PortType::Camera),
+                field("bbox", PortType::Bbox),
+                field("count", PortType::Num),
+            ],
+        },
+        // A tracked entity left the camera's view (dropped after the tracker's lost-buffer window).
+        // `dwell_secs` is how long it was on screen. Routes to the `Track` node's `exited` branch.
+        TenantEvent {
+            name: "object_exited".to_string(),
+            category: "System".to_string(),
+            source: "system".to_string(),
+            description: Some("A tracked object left the camera's view".to_string()),
+            created_by_graph: None,
+            fields: vec![
+                field("uuid", PortType::Text),
+                field("class", PortType::Text),
+                field("camera", PortType::Camera),
+                field("dwell_secs", PortType::Num),
+                field("count", PortType::Num),
+            ],
+        },
     ]
 }
 

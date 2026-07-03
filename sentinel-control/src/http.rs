@@ -34,6 +34,7 @@ pub fn router(state: AppState) -> Router {
         .route("/config/logs", post(box_logs_push))
         .route("/config/motion", post(motion_push))
         .route("/config/disk-alert", post(disk_alert_push))
+        .route("/config/track-event", post(track_event_push))
         .route("/config/recording", get(recording_config))
         .route("/config/recordings/clip-metadata", post(clip_push))
         .merge(handlers::router())
@@ -310,6 +311,49 @@ async fn disk_alert_push(State(st): State<AppState>, headers: HeaderMap, body: O
     };
     let payload = body.map(|Json(v)| v).unwrap_or_default();
     app_core::event_queue::enqueue(&st.db, tenant, "edge:full-disk", "edge", &payload);
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// An object-tracker lifecycle event from the edge (card: edge tracking). `kind` is the event name
+/// (`object_entered` / `object_exited`); the rest is the typed payload the `Track` node / `OnEvent`
+/// reads. Bbox arrives canonical xyxy (the edge already works in source pixels). Durable-enqueued
+/// like motion, so it survives a flow restart.
+#[derive(serde::Deserialize)]
+struct TrackEventIn {
+    kind: String,
+    camera_ip: String,
+    uuid: String,
+    class: String,
+    bbox: [i32; 4],
+    count: i64,
+    #[serde(default)]
+    dwell_secs: Option<i64>,
+}
+
+async fn track_event_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<TrackEventIn>>) -> Response {
+    let tenant = match box_tenant(&st, &headers).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
+        Err(resp) => return resp,
+    };
+    let Some(Json(ev)) = body else {
+        return (StatusCode::BAD_REQUEST, "track-event body required").into_response();
+    };
+    // Only the tracking events are accepted (guards against a stray/mistyped kind enqueuing junk).
+    if ev.kind != "object_entered" && ev.kind != "object_exited" {
+        return (StatusCode::BAD_REQUEST, "unknown track-event kind").into_response();
+    }
+    let mut payload = json!({
+        "uuid": ev.uuid,
+        "class": ev.class,
+        "camera": ev.camera_ip,
+        "bbox": ev.bbox,
+        "count": ev.count,
+    });
+    if let (Some(obj), Some(d)) = (payload.as_object_mut(), ev.dwell_secs) {
+        obj.insert("dwell_secs".to_string(), json!(d));
+    }
+    app_core::event_queue::enqueue(&st.db, tenant, &ev.kind, "edge", &payload);
     StatusCode::NO_CONTENT.into_response()
 }
 
