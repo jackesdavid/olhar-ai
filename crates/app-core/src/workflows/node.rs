@@ -410,6 +410,7 @@ pub fn run_node(
         NodeKind::PersonDetection => vision::run_person_detection(inputs, sys),
         NodeKind::ObjectDetection => vision::run_object_detection(config, inputs, sys),
         NodeKind::BreakPersonDetection => vision::run_break_person_detection(inputs),
+        NodeKind::BreakTrackedObject => vision::run_break_tracked_object(inputs),
         NodeKind::BreakDetection => vision::run_break_detection(inputs),
         NodeKind::BreakFaceDetection => vision::run_break_face_detection(inputs),
         NodeKind::RecognizePerson => vision::run_recognize_person(config, inputs, sys),
@@ -511,6 +512,7 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::GetRecipient
         | NodeKind::GetLastAlert
         | NodeKind::BreakPersonDetection
+        | NodeKind::BreakTrackedObject
         | NodeKind::BreakDetection
         | NodeKind::BreakFaceDetection
         | NodeKind::EmitEvent
@@ -615,6 +617,14 @@ pub fn debug_summary(
         NodeKind::DeliverAlert => txt("result").map(clip).unwrap_or_else(|| "delivered".into()),
         NodeKind::CameraSnapshot => txt("result").map(clip).unwrap_or_else(|| "snapshot captured".into()),
         NodeKind::GetTrackedObjects => format!("{} tracked object(s)", num("count").unwrap_or(0)),
+        NodeKind::BreakTrackedObject => {
+            let cls = txt("class").unwrap_or("?");
+            let zone = txt("zone").filter(|z| !z.is_empty());
+            match zone {
+                Some(z) => format!("break {cls} (in zone '{z}')"),
+                None => format!("break {cls}"),
+            }
+        }
         NodeKind::GetCurrentFrame => {
             let kb = inputs.get("image").and_then(PortValue::as_image).map_or(0, <[u8]>::len) / 1024;
             format!("current frame ({} KB, {} ms old)", kb, num("age_ms").unwrap_or(0))

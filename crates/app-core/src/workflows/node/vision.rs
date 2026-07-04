@@ -66,6 +66,21 @@ pub(super) fn run_object_detection(
 }
 
 /// Destructure a PersonDetection element → bbox + confidence.
+/// Destructure a `TrackedObject` element (from `GetTrackedObjects`' `objects` array) into its
+/// fields — same Unreal-style "Break" shape as `run_break_person_detection`.
+pub(super) fn run_break_tracked_object(inputs: &PortValues) -> Result<PortValues, String> {
+    let t = inputs
+        .get("object")
+        .and_then(PortValue::as_tracked_object)
+        .ok_or("missing required input 'object'")?;
+    let mut o = PortValues::new();
+    o.insert("uuid".into(), PortValue::Text(t.uuid.clone()));
+    o.insert("class".into(), PortValue::Text(t.class.clone()));
+    o.insert("bbox".into(), PortValue::Bbox(t.bbox));
+    o.insert("zone".into(), PortValue::Text(t.zone.clone()));
+    Ok(o)
+}
+
 pub(super) fn run_break_person_detection(inputs: &PortValues) -> Result<PortValues, String> {
     let p = inputs
         .get("person")

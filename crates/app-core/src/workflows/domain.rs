@@ -286,6 +286,9 @@ pub enum NodeKind {
     /// tracked right now", for a graph that wants to check state on its own schedule instead of
     /// reacting to a transition. Loop the `objects` output with `ForEach`.
     GetTrackedObjects,
+    /// Destructure a `TrackedObject` element (from `GetTrackedObjects`' `objects` array) →
+    /// `uuid`/`class`/`bbox`/`zone`. Same Unreal-style "Break" shape as `BreakPersonDetection`.
+    BreakTrackedObject,
     DescribeImage,
     /// Renamed from `notify_beacon`; the alias keeps old `workflows.json` loadable.
     #[serde(alias = "notify_beacon")]
@@ -601,6 +604,13 @@ const BREAK_PERSON_OUT: [Port; 2] = [
     p("bbox", PortType::Bbox, false),
     p("confidence", PortType::Num, false),
 ];
+const BREAK_TRACKED_OBJECT_IN: [Port; 1] = [p("object", PortType::TrackedObject, true)];
+const BREAK_TRACKED_OBJECT_OUT: [Port; 4] = [
+    p("uuid", PortType::Text, false),
+    p("class", PortType::Text, false),
+    p("bbox", PortType::Bbox, false),
+    p("zone", PortType::Text, false),
+];
 const BREAK_DETECTION_IN: [Port; 1] = [p("detection", PortType::Person, true)];
 const BREAK_DETECTION_OUT: [Port; 2] = [
     p("bbox", PortType::Bbox, false),
@@ -824,7 +834,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 63] = [
+    pub const ALL: [NodeKind; 64] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -835,6 +845,7 @@ impl NodeKind {
         NodeKind::BreakCamera,
         NodeKind::Region,
         NodeKind::GetTrackedObjects,
+        NodeKind::BreakTrackedObject,
         NodeKind::DescribeImage,
         NodeKind::NotifyRecipient,
         NodeKind::Format,
@@ -916,6 +927,7 @@ impl NodeKind {
             NodeKind::PersonDetection => "person_detection",
             NodeKind::ObjectDetection => "object_detection",
             NodeKind::BreakPersonDetection => "break_person_detection",
+            NodeKind::BreakTrackedObject => "break_tracked_object",
             NodeKind::BreakDetection => "break_detection",
             NodeKind::BreakFaceDetection => "break_face_detection",
             NodeKind::RecognizePerson => "recognize_person",
@@ -989,6 +1001,7 @@ impl NodeKind {
             NodeKind::PersonDetection => "Detect People",
             NodeKind::ObjectDetection => "Detect Objects",
             NodeKind::BreakPersonDetection => "Unpack Person",
+            NodeKind::BreakTrackedObject => "Unpack Tracked Object",
             NodeKind::BreakDetection => "Unpack Detection",
             NodeKind::BreakFaceDetection => "Unpack Face",
             NodeKind::RecognizePerson => "Recognize Person",
@@ -1084,7 +1097,8 @@ impl NodeKind {
             | NodeKind::BlurOutsideBbox
             | NodeKind::GetImageSize
             | NodeKind::Region
-            | NodeKind::GetTrackedObjects => "Vision",
+            | NodeKind::GetTrackedObjects
+            | NodeKind::BreakTrackedObject => "Vision",
             NodeKind::RecordPresence => "Presence",
             NodeKind::Print | NodeKind::ShowImage | NodeKind::Comment => "Debug",
             NodeKind::Reroute => "Utility",
@@ -1164,6 +1178,7 @@ impl NodeKind {
             NodeKind::PersonDetection => &PERSON_DETECTION_IN,
             NodeKind::ObjectDetection => &OBJECT_DETECTION_IN,
             NodeKind::BreakPersonDetection => &BREAK_PERSON_IN,
+            NodeKind::BreakTrackedObject => &BREAK_TRACKED_OBJECT_IN,
             NodeKind::BreakDetection => &BREAK_DETECTION_IN,
             NodeKind::BreakFaceDetection => &BREAK_FACE_IN,
             NodeKind::RecognizePerson => &RECOGNIZE_PERSON_IN,
@@ -1232,6 +1247,7 @@ impl NodeKind {
             NodeKind::PersonDetection => &PERSON_DETECTION_OUT,
             NodeKind::ObjectDetection => &OBJECT_DETECTION_OUT,
             NodeKind::BreakPersonDetection => &BREAK_PERSON_OUT,
+            NodeKind::BreakTrackedObject => &BREAK_TRACKED_OBJECT_OUT,
             NodeKind::BreakDetection => &BREAK_DETECTION_OUT,
             NodeKind::BreakFaceDetection => &BREAK_FACE_OUT,
             NodeKind::RecognizePerson => &RECOGNIZE_PERSON_OUT,
@@ -1326,6 +1342,7 @@ impl NodeKind {
             NodeKind::PersonDetection => json!({ "timeout_secs": "30" }),
             NodeKind::ObjectDetection => json!({ "class": "person", "timeout_secs": "30" }),
             NodeKind::BreakPersonDetection => json!({}),
+            NodeKind::BreakTrackedObject => json!({}),
             NodeKind::BreakDetection => json!({}),
             NodeKind::BreakFaceDetection => json!({}),
             NodeKind::RecognizePerson => json!({ "max_distance": "0.4", "timeout_secs": "30" }),

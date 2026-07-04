@@ -73,6 +73,7 @@ const NODE_KIND_COLOR: Record<string, string> = {
   break_face_detection: portColor.person, recognize_person: portColor.person,
   draw_bbox: portColor.person, blur_outside_bbox: portColor.person,
   region: portColor.region, get_tracked_objects: portColor.tracked_object,
+  break_tracked_object: portColor.tracked_object,
   // AI (indigo — the family's own identity, incl. the AI-powered AI Switch router)
   describe_image: "#818cf8", ask_ai: "#818cf8", ai_answer: "#818cf8", ai_switch: "#818cf8",
   ai_extract: "#818cf8",

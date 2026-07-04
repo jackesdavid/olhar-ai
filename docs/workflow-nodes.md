@@ -105,7 +105,8 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 | **AI Answer** | `prompt*` (Text), `image` (Image, optional) | `response` (Text), `ok` | `prompt` (literal fallback), `timeout_secs` (default `30`) | Single-turn Claude — a free-text prompt (+ optional image for vision) → a plain-text answer. No tool-use loop, so it's fast enough for a chat reply. Complements **AI If** (yes/no routing) and **Describe image** (fixed caption). Needs `ANTHROPIC_API_KEY`. | `On event("telegram_message") → (args) → AI Answer(prompt=args) → (response) → Reply to sender` |
 | **AI Extract** | `text*` (Text) | `value` (**typed per `type`**), `found` (Bool) | `field` (what to extract, e.g. "the camera name"), `type` (Text / Camera / Recipient / Number), `timeout_secs` (default `30`) | Slot/entity extraction — the NLU companion to **AI Switch**. One LLM call pulls `field` out of the message and resolves it to `type`: a **Camera** name → a real Camera entity (wires straight into Camera snapshot), a **Recipient** name → a Recipient, Number/Text parsed. `found` is false when nothing matched (or a camera name didn't resolve) → branch to a clarification. Needs `ANTHROPIC_API_KEY`. | `AI Switch →snapshot AI Extract(field="camera name", type=Camera) → (value) Camera snapshot → Reply to sender` |
 | **Region** | `camera` (Camera, optional — wire override, else config `camera`) | `region` (**Region**) | `camera` (name/ip/"first"), `name`, `points` (drawn on a snapshot in the property panel) | Pure/reusable: a named line or zone. 2 points = a line, 3+ = a zone — which it means is decided by whichever `On event` reads it (card: edge tracking). Wire the SAME `Region` node into several `On event`s so they share one definition instead of each re-drawing it. | `Region(name="counter", points=[...]) → region → On event("object_entered").region` + `On event("object_exited").region` |
-| **Get tracked objects** | `camera*` | `objects` (**TrackedObject[]**), `count` | `camera` (name/ip/"first"), `timeout_secs` (default `10`) | Pull-based "state of the world": every currently-tracked entity on a camera right now (uuid, class, bbox, zone if inside one) — the query counterpart to `On event("object_entered"/"object_exited"/"line_crossed")`'s transition events. Use this when a graph wants to check state on its own schedule (e.g. a Cron) instead of reacting to a change. | `Cron 5s → Get tracked objects(camera="Front") → (objects) For each → ...` |
+| **Get tracked objects** | `camera*` | `objects` (**TrackedObject[]**), `count` | `camera` (name/ip/"first"), `timeout_secs` (default `10`) | Pull-based "state of the world": every currently-tracked entity on a camera right now (uuid, class, bbox, zone if inside one) — the query counterpart to `On event("object_entered"/"object_exited"/"line_crossed")`'s transition events. Use this when a graph wants to check state on its own schedule (e.g. a Cron) instead of reacting to a change. | `Cron 5s → Get tracked objects(camera="Front") → (objects) For each → Break tracked object` |
+| **Break tracked object** | `object*` (TrackedObject) | `uuid`, `class`, `bbox` (Bbox), `zone` | — | Destructures a `TrackedObject` element (from **Get tracked objects**' `objects` array) into its fields — the Break node this list was missing at first. `zone` is empty unless the object is currently inside a zone. | `For each(objects) → item → Break tracked object → (bbox) Draw BBox → Show image` |
 
 ### Alerts
 
@@ -206,14 +207,74 @@ Events let a fast path trigger a slower, decoupled handler without blocking it o
   available in the sub-run.
 - `On event` is inert on `Manual`/`Cron`/`OnNewAlert` triggers — it only fires on its event.
 
-**Gating by camera (card: edge tracking).** For `object_entered`/`object_exited`/
-`line_crossed`, `On event` gains a `camera` input (and, for those same three, a `region` input —
-wire a **Region** node into it for a line or zone; see the Vision/AI table above). These aren't
-decorative: an `On event` scoped to a camera (wired from **Get camera by name**, or just picked
-in its own config) only fires for THAT camera's tracking events — an unscoped one still fires
-for any, as before. This is the general pattern for "an event needs to be filtered before it
-triggers" — see `docs/ref/workflows.md`'s "Gated events" section for the mechanism if you're
-adding another one; it's an input + a resolver, never a new node kind.
+**Gating by camera/region (card: edge tracking).** `object_entered`/`object_exited`/
+`line_crossed` are a special case: `On event` gains `camera` + `region` inputs for them, and
+those inputs **filter delivery**, not just display a value — see the dedicated section below.
+This is the general pattern for "an event needs to be filtered before it triggers" — extend it
+(a new input + a `Graph::resolve_*` helper, see `docs/ref/workflows.md`'s "Gated events") rather
+than inventing a new node kind for the next thing that needs scoping.
+
+---
+
+## Object tracking (card: edge tracking)
+
+The edge runs a continuous YOLOX + SORT tracker for every distinct `(camera, class)` pair your
+**enabled** graphs actually reference — not a fixed always-on job, and not a dedicated node.
+Tracking lifecycle is just **three more system events** your existing `On event` already knows
+how to handle (like `motion`/`telegram_message`), plus one pull-based query node:
+
+| Event / node | Fires when | Fields |
+|---|---|---|
+| `On event("object_entered")` | A tracked entity is first confirmed (whole frame, or entering a zone if scoped — see below) | `uuid`, `class`, `camera`, `bbox`, `count`, `zone` |
+| `On event("object_exited")` | A tracked entity disappears (or leaves its zone) | `uuid`, `class`, `camera`, `dwell_secs`, `count`, `zone` |
+| `On event("line_crossed")` | A tracked entity's centre crosses a wired 2-point **Region** | `uuid`, `class`, `camera`, `line`, `direction` (`forward`/`backward`) |
+| **Get tracked objects** (node, camera input) | Called on demand (e.g. from a Cron) | `objects` (**TrackedObject[]**: `uuid`, `class`, `bbox`, `zone`), `count` |
+
+`object_entered`/`object_exited`/`line_crossed` are events (react to a transition); **Get
+tracked objects** is a node (ask "what's true right now"). Reach for whichever matches what
+you're actually trying to express.
+
+### Whole-frame vs zone-scoped enter/exit
+By default `object_entered`/`object_exited` mean "anywhere in the camera's frame". Wire a
+**Region** with **3+ points** into the `On event`'s `region` input and they instead mean
+"entered/exited THIS polygon": `zone` becomes the region's name, `bbox` stops being meaningful
+(the geometry that matters is the polygon, not a box), and `dwell_secs` on exit is time spent
+**inside the zone**, not just anywhere on camera — this is the built-in answer to "how long was
+someone in this area", no extra bookkeeping needed.
+
+### Zone trigger (config on `On event`, only shown once a region concept applies)
+- **Intersects** (default) — fires the moment the tracked bbox touches the polygon at all.
+  Looser; catches a partial/edge entry sooner and releases later.
+- **Centre inside** — fires only once the entity's centre point is inside the polygon.
+  Stricter; ignores someone just brushing past the zone's edge.
+
+### Reusing one Region across several nodes
+A **Region** is pure data — draw it once (click points on a live camera snapshot in its
+property panel), then wire its `region` output into every `On event` that needs that same
+geometry, instead of redrawing it per node:
+
+```
+[Region(name="counter", points=[3+ pts])] ── region ──┬──▶ On event("object_entered").region
+                                                       └──▶ On event("object_exited").region
+```
+
+2 points = a crossing line (meaningful to `line_crossed` only); 3+ points = a polygon zone
+(meaningful to `object_entered`/`object_exited` only) — the Region node itself doesn't enforce
+or care which; draw whichever shape the node you're wiring it into actually needs.
+
+### Scoping to one camera (and reusing that too)
+`camera` on `On event` works the same way as `region`: pick it in the node's own config, or wire
+a **Get camera by name** into several `On event`s so they all scope to the same physical camera
+without re-picking it per node. An **unscoped** `On event` (no camera set or wired) fires for
+**every** camera's tracking events — filter downstream with `If`/`Text compare` on the `camera`
+output instead, if that's what you actually want.
+
+### Tracking more than one class on the same camera
+`class` (any of the 80 COCO classes, default `person`) is a plain per-node dropdown — not
+wireable, since there's no "GetClassByName" node to point at, just a fixed string. Add more than
+one `On event` for the same camera with **different** classes and the edge runs one independent
+tracker per `(camera, class)` pair — a `person` tracker and a `car` tracker on the same feed
+never share or confuse uuids.
 
 ---
 
@@ -279,6 +340,90 @@ route on `command`, reply to `chat_id`.
 Only chats this tenant has paired (via `/pair`) ever fire the event, and the reply always goes
 back to the sender's `chat_id` — never another tenant's. Set the reply nodes **memoize = off** if
 the same graph handles many messages in a run.
+
+---
+
+## Worked example: alert on a perimeter line crossing
+
+```
+[Region(name="fence", camera="Backyard", points=[(0.0,0.5),(1.0,0.5)])]
+      │ region
+      ▼ (wired into the region input below)
+[On event("line_crossed")]   camera = "Backyard", class = "person"
+      │ uuid, line, direction
+      ▼
+[Format] "Someone crossed {p1} going {p2}"   (p1 = line, p2 = direction)
+      ▼
+[Create alert(level="warn")]
+```
+
+Draw the line once on a live snapshot in the Region node's property panel; `direction` tells you
+which way (`forward`/`backward`, relative to the two points' own order) — pick the point order
+so "forward" means whatever "in" is for this fence.
+
+## Worked example: how long did someone dwell in a zone?
+
+```
+[Region(name="counter", camera="Front desk", points=[3+ pts around the counter])]
+      │ region
+      ├──────────────────────────────────────────────┐
+      ▼                                               ▼
+[On event("object_entered")]                  [On event("object_exited")]
+  camera="Front desk", class="person"           camera="Front desk", class="person"
+      │ uuid                                          │ uuid, dwell_secs
+      ▼                                               ▼
+[Print "Visitor {p1} arrived"]                [Format "Visitor {p1} stayed {p2}s"]
+                                                       ▼
+                                               [Create alert(message=text)]
+```
+
+Wiring the **same** Region into both the `entered` and `exited` listeners means they always
+agree on which zone they're talking about. `dwell_secs` on `object_exited` is already the
+answer to "how long were they in the zone" — no manual start/stop timestamp bookkeeping needed.
+(It's in seconds; there's no arithmetic node yet to convert to minutes — for now, either work in
+seconds or divide client-side when you read the alert.)
+
+## Worked example: periodic occupancy check (pull instead of react)
+
+```
+Trigger: Cron { every_secs: 30 }
+
+[Get tracked objects(camera="Warehouse")]
+      │ count
+      ▼
+[Compare(operator=">", b=20)]
+      │ result
+      ▼
+[If] ──true──▶ [Create alert(message="Over capacity", level="warn")]
+```
+
+No `On event` at all here — this graph just asks "how many are there right now" every 30
+seconds. If you need to act on each individual tracked entity instead of just the total, loop
+`objects` with **For each** → **Break tracked object** to get its `uuid`/`class`/`bbox`/`zone`:
+
+```
+[Get tracked objects(camera="Warehouse")]
+      │ objects
+      ▼
+[For each] ──loop_body──▶ [Break tracked object] ──(bbox)──▶ [Draw BBox] ──▶ [Show image]
+```
+
+That's the quickest way to actually **see** what's tracked today: pair a snapshot of the same
+camera with `Draw BBox` per tracked entity and `Show image` to preview it on the canvas while
+the graph runs. There's no dedicated live-tracking dashboard page yet — this graph-based preview
+(or reading the raw `GET /devices/:ip/tracks` response) is the way to inspect it in the
+meantime.
+
+## Worked example: two classes, one camera, no cross-talk
+
+```
+[On event("object_entered")]  camera="Driveway", class="person"  →  Notify recipient("Person at driveway")
+[On event("object_entered")]  camera="Driveway", class="car"     →  Notify recipient("Car at driveway")
+```
+
+Two separate `On event` nodes, same camera, different `class`. The edge runs a `person` tracker
+and a `car` tracker on that camera as two independent jobs — each with its own uuid space — so
+a car parking never gets mistaken for a person entering, and vice versa.
 
 ---
 
