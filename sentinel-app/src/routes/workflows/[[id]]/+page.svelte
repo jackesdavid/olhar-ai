@@ -788,8 +788,7 @@
     // only. Extend this list + the backend's on_event_node match for the next event that needs
     // scoping — never a new node kind (see the same doc section).
     if (node.kind === "on_event") {
-      const trackingEvents = ["object_entered", "object_exited", "line_crossed"];
-      const isTracking = trackingEvents.includes(String(node.config?.event ?? ""));
+      const isTracking = TRACKING_EVENTS.includes(String(node.config?.event ?? ""));
       const gatingInputs: CatPort[] = isTracking
         ? [
             { name: "camera", type: "camera" as CatPort["type"], required: false },
@@ -1819,7 +1818,17 @@
   // payload schema onto the node so its dynamic ports (one per field) render + wire.
   function chooseEvent(node: Node, raw: string) {
     const ev = raw.trim();
-    saveNodeConfig(node, { ...node.config, event: ev, payload: eventFields(ev) });
+    const cfg: Record<string, unknown> = { ...node.config, event: ev, payload: eventFields(ev) };
+    // Bake the property panel's own displayed fallbacks (`class` "person", `zone_trigger`
+    // "intersects" — see `effectiveKind`'s on_event branch) into the SAVED config the moment a
+    // node becomes scoped to a tracking event, so a node the user never touches beyond picking
+    // the event still resolves to a real job server-side (`sync_tracking_config` reads only
+    // what's actually persisted, not the UI's display-time fallback).
+    if (TRACKING_EVENTS.includes(ev)) {
+      if (cfg.class === undefined) cfg.class = "person";
+      if (cfg.zone_trigger === undefined) cfg.zone_trigger = "intersects";
+    }
+    saveNodeConfig(node, cfg);
   }
   function addEventField() {
     newEventFields = [...newEventFields, { name: "", type: "text" }];
@@ -2400,6 +2409,10 @@
     };
   }
 
+  // The edge tracker's 3 gated events (see docs/ref/workflows.md's "Gated events" section) —
+  // keep this in sync with the same literal list in `sentinel-control`'s `sync_tracking_config`
+  // and `sentinel-edge`'s job resolution; a divergence here silently drops tracking jobs.
+  const TRACKING_EVENTS = ["object_entered", "object_exited", "line_crossed"];
   const LEVELS = ["debug", "info", "warn", "error"];
   const COCO_CLASSES = [
     "person","bicycle","car","motorcycle","airplane","bus","train","truck","boat",

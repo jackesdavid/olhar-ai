@@ -156,9 +156,14 @@ async fn sync_tracking_config(st: &AppState, tid: Uuid, graphs: &[WfGraph]) {
                 continue;
             }
             let Some(camera) = g.resolve_camera_selector(n) else { continue }; // not (yet) scoped to a camera
-            let class = n.config.get("class").and_then(|v| v.as_str()).unwrap_or("").trim();
+            // The property panel shows "person" as the class dropdown's value before the user
+            // ever touches it (sentinel-app's `class` row: `config[key] ?? "person"`) — mirror
+            // that display-time fallback here so an untouched-but-scoped OnEvent node still
+            // resolves to a real job instead of being silently dropped. An explicitly emptied
+            // value ("") still opts the node out.
+            let class = n.config.get("class").and_then(|v| v.as_str()).unwrap_or("person").trim();
             if class.is_empty() {
-                continue; // not (yet) scoped to a class either
+                continue; // explicitly cleared to blank — not scoped to a class
             }
             let acc = jobs.entry((camera.clone(), class.to_string())).or_default();
             let Some((name, points)) = g.resolve_region(n) else { continue }; // no region wired — whole-frame
