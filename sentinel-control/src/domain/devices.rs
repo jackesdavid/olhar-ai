@@ -1,8 +1,9 @@
 //! Tenant-scoped camera registry. ONVIF discovery + credential validation live on
 //! the edge (LAN side); the cloud only CRUDs the device records the edge pulls.
+use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::response::Json;
+use axum::http::{header, StatusCode};
+use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use serde::Deserialize;
@@ -20,6 +21,8 @@ pub fn router() -> Router<AppState> {
         .route("/devices/configured", get(configured))
         .route("/devices/streaming", get(streaming))
         .route("/devices/:ip/credentials", post(set_credentials))
+        .route("/devices/:ip/snapshot", get(snapshot))
+        .route("/devices/:ip/tracks", get(tracks))
         .route("/devices/rescan", post(rescan))
         .route("/devices/:ip", axum::routing::delete(remove))
 }
@@ -129,6 +132,85 @@ async fn upsert(UserClaims(c): UserClaims, State(st): State<AppState>, Json(devi
     .await?;
     st.bump(tid); // wake the edge's long-poll
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Proxy a live JPEG snapshot of camera `ip` from the tenant's edge box (`GET
+/// /snapshot/:ip` on the edge API) — used by the workflow editor's line-drawing UI (card:
+/// edge tracking) to show a frame to trace a crossing line over. Mirrors the recording
+/// `download` proxy's box-resolution + passthrough shape.
+async fn snapshot(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip): Path<String>) -> Result<Response, ApiErr> {
+    use crate::domain::recordings::{edge_api_base, normalize_host};
+    auth::require(&c, "devices.read")?;
+    let tid = tenant_of(&c)?;
+
+    let edge_host = store::box_host_for_tenant(&st.pool, tid)
+        .await
+        .map_err(|e| {
+            log::error!("box host lookup: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+        })?
+        .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "no edge box connected for this tenant"))?;
+
+    let base = edge_api_base(&normalize_host(&edge_host));
+    let url = format!("{base}/snapshot/{}", urlencoding::encode(&ip));
+
+    let resp = reqwest::get(&url).await.map_err(|e| {
+        log::error!("edge snapshot fetch {url}: {e}");
+        err(StatusCode::BAD_GATEWAY, format!("edge unreachable: {e}"))
+    })?;
+
+    if !resp.status().is_success() {
+        let edge_status = resp.status();
+        let our_status = if edge_status == reqwest::StatusCode::NOT_FOUND {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::BAD_GATEWAY
+        };
+        return Err(err(our_status, format!("edge returned {edge_status}")));
+    }
+
+    let stream = resp.bytes_stream();
+    Ok((
+        [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-store")],
+        Body::from_stream(stream),
+    )
+        .into_response())
+}
+
+/// Proxy the tracker's live "state of the world" for camera `ip` from the tenant's edge box
+/// (`GET /tracks/:ip` on the edge API) — the `GetTrackedObjects` node's backing call. JSON
+/// passthrough (unlike `snapshot`'s binary), otherwise the same box-resolution shape.
+async fn tracks(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip): Path<String>) -> Result<Response, ApiErr> {
+    use crate::domain::recordings::{edge_api_base, normalize_host};
+    auth::require(&c, "devices.read")?;
+    let tid = tenant_of(&c)?;
+
+    let edge_host = store::box_host_for_tenant(&st.pool, tid)
+        .await
+        .map_err(|e| {
+            log::error!("box host lookup: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+        })?
+        .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "no edge box connected for this tenant"))?;
+
+    let base = edge_api_base(&normalize_host(&edge_host));
+    let url = format!("{base}/tracks/{}", urlencoding::encode(&ip));
+
+    let resp = reqwest::get(&url).await.map_err(|e| {
+        log::error!("edge tracks fetch {url}: {e}");
+        err(StatusCode::BAD_GATEWAY, format!("edge unreachable: {e}"))
+    })?;
+
+    if !resp.status().is_success() {
+        return Err(err(StatusCode::BAD_GATEWAY, format!("edge returned {}", resp.status())));
+    }
+
+    let body = resp.bytes().await.map_err(|e| err(StatusCode::BAD_GATEWAY, format!("edge response read: {e}")))?;
+    Ok((
+        [(header::CONTENT_TYPE, "application/json")],
+        Body::from(body),
+    )
+        .into_response())
 }
 
 /// Remove the camera with `ip`, persist.

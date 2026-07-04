@@ -86,6 +86,7 @@
 
   import ContextSearch from "../components/ContextSearch.svelte";
   import VariablesPanel from "../components/VariablesPanel.svelte";
+  import RegionPointsEditor from "../components/RegionPointsEditor.svelte";
 
   // ---- types (the serialized core shapes) ----------------------------------
   type CatPort = { name: string; type: PortType; required: boolean };
@@ -587,6 +588,12 @@
     const d = devices.find((x) => (x.id && x.id === s) || x.ip === s || x.name === s);
     return d ? cameraKey(d) : (cameraOptions[0]?.value ?? "");
   }
+  // A node's `camera` config (id/ip/name/"first") resolved to the real device IP the
+  // Region-drawing UI needs to fetch a snapshot for (the snapshot proxy only knows exact IPs).
+  function resolvedCameraIp(stored: string): string {
+    const key = cameraValue(stored);
+    return devices.find((d) => cameraKey(d) === key)?.ip ?? "";
+  }
   // Resolve a stored value to a real option — falls back to the FIRST item in the
   // list (what "default to first" means) when the stored value is empty/missing.
   function resolveOpt(opts: { value: string; label: string }[], stored: string) {
@@ -776,11 +783,37 @@
         ],
       };
     }
+    // OnEvent: camera + region GATING inputs (they filter delivery, not just display a value —
+    // see docs/ref/workflows.md's "Gated events" section) for the edge tracker's three events
+    // only. Extend this list + the backend's on_event_node match for the next event that needs
+    // scoping — never a new node kind (see the same doc section).
+    if (node.kind === "on_event") {
+      const trackingEvents = ["object_entered", "object_exited", "line_crossed"];
+      const isTracking = trackingEvents.includes(String(node.config?.event ?? ""));
+      const gatingInputs: CatPort[] = isTracking
+        ? [
+            { name: "camera", type: "camera" as CatPort["type"], required: false },
+            { name: "region", type: "region" as CatPort["type"], required: false },
+          ]
+        : [];
+      // `class` + (for a region job) `zone_trigger` are plain config, not ports (there's no
+      // "GetClassByName" node to wire — a class is just a fixed string, low-risk to duplicate
+      // across a few nodes, unlike camera/region). Injected here rather than in the backend's
+      // static default_config so they only appear once the node is actually scoped to a
+      // tracking event, same spirit as camera/region.
+      const fields = payloadFields(node);
+      const outPorts: CatPort[] = fields.map((f) => ({ name: f.name, type: f.type, required: false }));
+      return {
+        ...k,
+        inputs: [...k.inputs, ...gatingInputs],
+        outputs: [...k.outputs, ...outPorts],
+        default_config: isTracking ? { ...k.default_config, class: "person", zone_trigger: "intersects" } : k.default_config,
+      };
+    }
     const fields = payloadFields(node);
     if (fields.length === 0) return k;
     const ports: CatPort[] = fields.map((f) => ({ name: f.name, type: f.type, required: false }));
     if (node.kind === "emit_event") return { ...k, inputs: [...k.inputs, ...ports] };
-    if (node.kind === "on_event") return { ...k, outputs: [...k.outputs, ...ports] };
     return k;
   }
 
@@ -3575,7 +3608,7 @@
                             {#each categoryOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
                           </Select.Content>
                         </Select.Root>
-                      {:else if key === "class" && selectedNode.kind === "object_detection"}
+                      {:else if key === "class" && (selectedNode.kind === "object_detection" || selectedNode.kind === "on_event")}
                         {@const clsWired = graph.edges.some((e) => e.to === selectedNode.id && e.to_port === "class")}
                         {@const clsv = String(selectedNode.config[key] ?? "person")}
                         <SearchableSelect
@@ -3587,6 +3620,29 @@
                         {#if clsWired}
                           <p class="mt-0.5 text-[10px] text-muted-foreground">Overridden by wired input</p>
                         {/if}
+                      {:else if key === "zone_trigger" && selectedNode.kind === "on_event"}
+                        {@const ZONE_TRIGGERS = [
+                          { value: "intersects", label: "Intersects (looser)" },
+                          { value: "centroid_inside", label: "Centre inside (stricter)" },
+                        ]}
+                        {@const ztv = String(selectedNode.config[key] ?? "intersects")}
+                        {@const ztlabel = ZONE_TRIGGERS.find((o) => o.value === ztv)?.label ?? ztv}
+                        <Select.Root type="single" disabled={editLocked} value={ztv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? "intersects" })}>
+                          <Select.Trigger class="h-8 w-full">{ztlabel}</Select.Trigger>
+                          <Select.Content>
+                            {#each ZONE_TRIGGERS as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                          </Select.Content>
+                        </Select.Root>
+                        <p class="mt-0.5 text-[10px] text-muted-foreground">Only matters if a Region (3+ points) is wired in below</p>
+                      {:else if key === "points" && selectedNode.kind === "region"}
+                        {@const regionCameraIp = resolvedCameraIp(String(selectedNode.config.camera ?? ""))}
+                        {@const regionPoints = (Array.isArray(selectedNode.config.points) ? selectedNode.config.points : []) as [number, number][]}
+                        <RegionPointsEditor
+                          cameraIp={regionCameraIp}
+                          points={regionPoints}
+                          disabled={editLocked}
+                          onchange={(next) => saveNodeConfig(selectedNode, { ...selectedNode.config, points: next })}
+                        />
                       {:else if key === "type" && selectedNode.kind === "ai_extract"}
                         {@const EXTRACT_TYPES = [
                           { value: "text", label: "Text" },
@@ -3718,6 +3774,8 @@
                           value={String(selectedNode.config[key] ?? "")}
                           oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)}
                         />
+                      {:else if port?.type === "region"}
+                        <p class="pt-1.5 text-xs text-muted-foreground">Wire a <span class="font-medium text-foreground">Region</span> node here for a line or zone — see Vision in the palette.</p>
                       {:else}
                         <Input class="h-8" disabled={editLocked} value={String(selectedNode.config[key] ?? "")} oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)} />
                       {/if}

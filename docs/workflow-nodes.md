@@ -104,6 +104,8 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 | **AI If** | `image` (Image, optional), `question` (Text, optional) | exec: `true`, `false` | `question` (string), `timeout_secs` (default `65`) | Asks the vision model a yes/no question about an optional image. Routes exec to `true` or `false` exactly like `If` but powered by Claude. `question` can be wired (Text) or set as a config literal; no image wired = text-only question (e.g. "Is it after 18:00?"). Fails the run if no question is provided. | `Camera snapshot → AI If(question="Is there smoke?") →true Create alert` |
 | **AI Answer** | `prompt*` (Text), `image` (Image, optional) | `response` (Text), `ok` | `prompt` (literal fallback), `timeout_secs` (default `30`) | Single-turn Claude — a free-text prompt (+ optional image for vision) → a plain-text answer. No tool-use loop, so it's fast enough for a chat reply. Complements **AI If** (yes/no routing) and **Describe image** (fixed caption). Needs `ANTHROPIC_API_KEY`. | `On event("telegram_message") → (args) → AI Answer(prompt=args) → (response) → Reply to sender` |
 | **AI Extract** | `text*` (Text) | `value` (**typed per `type`**), `found` (Bool) | `field` (what to extract, e.g. "the camera name"), `type` (Text / Camera / Recipient / Number), `timeout_secs` (default `30`) | Slot/entity extraction — the NLU companion to **AI Switch**. One LLM call pulls `field` out of the message and resolves it to `type`: a **Camera** name → a real Camera entity (wires straight into Camera snapshot), a **Recipient** name → a Recipient, Number/Text parsed. `found` is false when nothing matched (or a camera name didn't resolve) → branch to a clarification. Needs `ANTHROPIC_API_KEY`. | `AI Switch →snapshot AI Extract(field="camera name", type=Camera) → (value) Camera snapshot → Reply to sender` |
+| **Region** | `camera` (Camera, optional — wire override, else config `camera`) | `region` (**Region**) | `camera` (name/ip/"first"), `name`, `points` (drawn on a snapshot in the property panel) | Pure/reusable: a named line or zone. 2 points = a line, 3+ = a zone — which it means is decided by whichever `On event` reads it (card: edge tracking). Wire the SAME `Region` node into several `On event`s so they share one definition instead of each re-drawing it. | `Region(name="counter", points=[...]) → region → On event("object_entered").region` + `On event("object_exited").region` |
+| **Get tracked objects** | `camera*` | `objects` (**TrackedObject[]**), `count` | `camera` (name/ip/"first"), `timeout_secs` (default `10`) | Pull-based "state of the world": every currently-tracked entity on a camera right now (uuid, class, bbox, zone if inside one) — the query counterpart to `On event("object_entered"/"object_exited"/"line_crossed")`'s transition events. Use this when a graph wants to check state on its own schedule (e.g. a Cron) instead of reacting to a change. | `Cron 5s → Get tracked objects(camera="Front") → (objects) For each → ...` |
 
 ### Alerts
 
@@ -203,6 +205,15 @@ Events let a fast path trigger a slower, decoupled handler without blocking it o
 - Handler subtrees should be self-contained; data wired from outside the handler won't be
   available in the sub-run.
 - `On event` is inert on `Manual`/`Cron`/`OnNewAlert` triggers — it only fires on its event.
+
+**Gating by camera (card: edge tracking).** For `object_entered`/`object_exited`/
+`line_crossed`, `On event` gains a `camera` input (and, for those same three, a `region` input —
+wire a **Region** node into it for a line or zone; see the Vision/AI table above). These aren't
+decorative: an `On event` scoped to a camera (wired from **Get camera by name**, or just picked
+in its own config) only fires for THAT camera's tracking events — an unscoped one still fires
+for any, as before. This is the general pattern for "an event needs to be filtered before it
+triggers" — see `docs/ref/workflows.md`'s "Gated events" section for the mechanism if you're
+adding another one; it's an input + a resolver, never a new node kind.
 
 ---
 

@@ -5,7 +5,7 @@ use serde_json::Value;
 /// Edge recording calls go over the tailnet and must not hang the node (a bare `ureq::post`
 /// has no timeout). Cap below the node watchdog (15s) so a stalled edge fails fast with a
 /// clean error instead of leaking the watchdog's detached worker thread.
-fn edge_agent() -> ureq::Agent {
+pub(super) fn edge_agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(12))
         .build()
@@ -117,7 +117,7 @@ fn resolve_edge_base(sys: &ToolContext) -> Result<String, String> {
 
 /// Returns the edge API base URL (port 8080 via tailscale serve).
 /// go2rtc occupies port 443; the edge API is served separately on 8080.
-fn resolve_edge_api_base(sys: &ToolContext) -> Result<String, String> {
+pub(super) fn resolve_edge_api_base(sys: &ToolContext) -> Result<String, String> {
     let base = resolve_edge_base(sys)?;
     let bare = base
         .trim_start_matches("https://")

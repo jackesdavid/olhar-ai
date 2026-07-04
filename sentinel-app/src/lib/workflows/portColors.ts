@@ -1,6 +1,7 @@
 export type PortType =
   | "text" | "num" | "bool" | "image" | "recipient" | "dictionary" | "file" | "exec"
-  | "text_array" | "num_array" | "person_array" | "face_array" | "person" | "face" | "camera" | "bbox" | "any";
+  | "text_array" | "num_array" | "person_array" | "face_array" | "person" | "face" | "camera" | "bbox"
+  | "region" | "tracked_object" | "tracked_object_array" | "any";
 
 export const portColor: Record<PortType, string> = {
   text: "#60a5fa",
@@ -19,6 +20,9 @@ export const portColor: Record<PortType, string> = {
   face: "#fb7185",
   camera: "#38bdf8",
   bbox: "#f59e0b",
+  region: "#c084fc",
+  tracked_object: "#e879f9",
+  tracked_object_array: "#f0abfc",
   any: "#94a3b8",
 };
 
@@ -68,6 +72,7 @@ const NODE_KIND_COLOR: Record<string, string> = {
   break_person_detection: portColor.person, break_detection: portColor.person,
   break_face_detection: portColor.person, recognize_person: portColor.person,
   draw_bbox: portColor.person, blur_outside_bbox: portColor.person,
+  region: portColor.region, get_tracked_objects: portColor.tracked_object,
   // AI (indigo — the family's own identity, incl. the AI-powered AI Switch router)
   describe_image: "#818cf8", ask_ai: "#818cf8", ai_answer: "#818cf8", ai_switch: "#818cf8",
   ai_extract: "#818cf8",

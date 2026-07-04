@@ -335,8 +335,9 @@ pub fn system_events() -> Vec<TenantEvent> {
         },
         // The edge object tracker started tracking a new entity in a camera's view (card: edge
         // tracking). `uuid` is the stable per-entity id (same across graphs + the map); `count` is
-        // how many of `class` are currently in view. The `Track` node routes this to its `entered`
-        // branch; a plain `OnEvent("object_entered")` also works.
+        // how many of `class` are currently in view. `bbox` is `[0,0,0,0]` (meaningless) when
+        // `zone` is set — the node has a region-of-interest drawn (property panel), so this is a
+        // ZONE entry, not a whole-frame one; `zone` is empty/absent for whole-frame entries.
         TenantEvent {
             name: "object_entered".to_string(),
             category: "System".to_string(),
@@ -349,10 +350,12 @@ pub fn system_events() -> Vec<TenantEvent> {
                 field("camera", PortType::Camera),
                 field("bbox", PortType::Bbox),
                 field("count", PortType::Num),
+                field("zone", PortType::Text),
             ],
         },
-        // A tracked entity left the camera's view (dropped after the tracker's lost-buffer window).
-        // `dwell_secs` is how long it was on screen. Routes to the `Track` node's `exited` branch.
+        // A tracked entity left the camera's view (dropped after the tracker's lost-buffer window)
+        // — or left the configured zone, if the node has one drawn (see `object_entered`).
+        // `dwell_secs` is how long it was on screen (or in the zone).
         TenantEvent {
             name: "object_exited".to_string(),
             category: "System".to_string(),
@@ -364,6 +367,25 @@ pub fn system_events() -> Vec<TenantEvent> {
                 field("class", PortType::Text),
                 field("camera", PortType::Camera),
                 field("dwell_secs", PortType::Num),
+                field("count", PortType::Num),
+                field("zone", PortType::Text),
+            ],
+        },
+        // A tracked entity's centre crossed a configured virtual line (card: edge tracking, P3).
+        // `line` is the crossed line's name; `direction` is "forward"/"backward" relative to the
+        // line's own p1→p2 direction.
+        TenantEvent {
+            name: "line_crossed".to_string(),
+            category: "System".to_string(),
+            source: "system".to_string(),
+            description: Some("A tracked object crossed a configured virtual line".to_string()),
+            created_by_graph: None,
+            fields: vec![
+                field("uuid", PortType::Text),
+                field("class", PortType::Text),
+                field("camera", PortType::Camera),
+                field("line", PortType::Text),
+                field("direction", PortType::Text),
                 field("count", PortType::Num),
             ],
         },

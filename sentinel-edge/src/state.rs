@@ -1,6 +1,7 @@
 //! Shared edge state + go2rtc lifecycle. The edge is **config-light**: it has no
 //! local database. Its camera list is pulled from the control plane (`CONTROL_URL`)
 //! and cached to a local file so it survives a control-plane outage / offline boot.
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
@@ -24,6 +25,23 @@ pub struct AppState {
     pub go2rtc_bin: PathBuf,
     /// Ring-buffer + clip recording manager.
     pub recording: Arc<crate::recording::RecordingManager>,
+    /// The tracker's live "state of the world" — each (camera, job class) worker overwrites its
+    /// own entry every detection cycle (never partial-updates another job's), so `GET /tracks/:ip`
+    /// can answer "what's tracked right now" without a per-request round trip to the tracker
+    /// itself. Card: edge tracking — the `GetTrackedObjects` node's backing store.
+    pub live_tracks: Mutex<HashMap<(String, String), Vec<LiveTrackOut>>>,
+}
+
+/// One currently-tracked entity, as reported by `GET /tracks/:ip` — mirrors
+/// `app_core::workflows::domain::TrackedObjectInfo` (the node-facing shape control maps this
+/// onto). `zone` is the zone's name if the job has one AND this track is currently inside it,
+/// empty otherwise (no zone configured, or outside it).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LiveTrackOut {
+    pub uuid: String,
+    pub class: String,
+    pub bbox: [i32; 4],
+    pub zone: String,
 }
 
 impl AppState {
@@ -77,6 +95,7 @@ impl AppState {
             go2rtc_config,
             go2rtc_bin,
             recording,
+            live_tracks: Mutex::new(HashMap::new()),
         })
     }
 
@@ -310,10 +329,12 @@ pub struct EdgeCommands {
 /// applies per-graph sensitivity. Coordinates/areas are in the watcher's processing
 /// resolution (downscaled), so the cloud treats them as relative.
 /// An object-tracker lifecycle event pushed to control's `/config/track-event`. Matches control's
-/// `TrackEventIn`. `bbox` is canonical xyxy (source pixels).
+/// `TrackEventIn`. `bbox` is canonical xyxy (source pixels); meaningless (`[0;4]`) for
+/// `line_crossed` (carries `line`/`direction` instead) and for a zone-scoped `object_entered`/
+/// `object_exited` (carries `zone` instead — see `Job::zone` in `tracking.rs`).
 #[derive(serde::Serialize)]
 pub struct TrackEventOut {
-    pub kind: String, // "object_entered" | "object_exited"
+    pub kind: String, // "object_entered" | "object_exited" | "line_crossed"
     pub camera_ip: String,
     pub uuid: String,
     pub class: String,
@@ -321,6 +342,16 @@ pub struct TrackEventOut {
     pub count: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dwell_secs: Option<i64>,
+    /// The crossed line's name (`line_crossed` only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
+    /// `"forward"` | `"backward"`, relative to the line's own `p1→p2` direction (`line_crossed` only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
+    /// The zone's name, when this `object_entered`/`object_exited` is zone-scoped (the job has a
+    /// `Polygon` configured) rather than whole-frame.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
 }
 
 #[derive(serde::Serialize)]

@@ -24,7 +24,7 @@ use app_core::workflows::{
 
 use super::{blocking, err, tenant_of, ApiErr};
 use crate::auth::{self, UserClaims};
-use crate::AppState;
+use crate::{store, AppState};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -108,16 +108,104 @@ where
     T: Send + 'static,
 {
     let db = st.db.clone();
-    let out = blocking(move || {
+    let (out, graphs) = blocking(move || {
         let mut wf = Workflows::from_graphs(workflows::repo::load(&db, tid));
         let out = f(&mut wf)?;
         workflows::repo::save(&db, tid, &wf.graphs);
-        Ok::<T, String>(out)
+        Ok::<(T, Vec<WfGraph>), String>((out, wf.graphs))
     })
     .await?
     .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     poke_reload().await;
+    sync_tracking_config(st, tid, &graphs).await;
     Ok(out)
+}
+
+/// One (camera, class) job's accumulated config while walking the graphs.
+#[derive(Default)]
+struct JobAcc {
+    lines: Vec<Value>,
+    /// This job's zone (region of interest) + how it's judged, if any `object_entered`/
+    /// `object_exited` node for it has one drawn. At most one is meaningful per job — see
+    /// `sync_tracking_config`'s doc.
+    zone: Option<(Value, String)>,
+}
+
+/// Extract every enabled graph's `OnEvent("object_entered"/"object_exited"/"line_crossed")`
+/// node with a resolved `camera` (a config literal, or wired from `GetCameraByName` — see
+/// `Graph::resolve_camera_selector`) and `class` configured (card: edge tracking) into this
+/// tenant's box(es) `tracking_config.trackers` — the edge's next boot (or restart) then runs
+/// exactly the jobs the graphs currently declare. Two nodes naming the same camera+class share
+/// one job: their `region` inputs (wired from a `Region` node — see `Graph::resolve_region`) are
+/// merged as lines (`line_crossed`, 2-point regions) or the job's zone (entered/exited, 3+-point
+/// regions; whichever node's is seen last wins — drawing one on more than one node for the same
+/// camera+class is a user-error the editor should eventually warn about, but isn't rejected
+/// here). Runs after every graph mutation via `mutate`'s single choke point. Best-effort: logged,
+/// never fails the request — a sync hiccup just means the edge keeps its last-known config.
+async fn sync_tracking_config(st: &AppState, tid: Uuid, graphs: &[WfGraph]) {
+    use std::collections::BTreeMap;
+
+    let mut jobs: BTreeMap<(String, String), JobAcc> = BTreeMap::new();
+    for g in graphs.iter().filter(|g| g.enabled) {
+        for n in &g.nodes {
+            if n.kind != WfNodeKind::OnEvent {
+                continue;
+            }
+            let event = n.config.get("event").and_then(|v| v.as_str()).unwrap_or("");
+            if !matches!(event, "object_entered" | "object_exited" | "line_crossed") {
+                continue;
+            }
+            let Some(camera) = g.resolve_camera_selector(n) else { continue }; // not (yet) scoped to a camera
+            let class = n.config.get("class").and_then(|v| v.as_str()).unwrap_or("").trim();
+            if class.is_empty() {
+                continue; // not (yet) scoped to a class either
+            }
+            let acc = jobs.entry((camera.clone(), class.to_string())).or_default();
+            let Some((name, points)) = g.resolve_region(n) else { continue }; // no region wired — whole-frame
+            if event == "line_crossed" {
+                if points.len() == 2 {
+                    acc.lines.push(json!({ "camera": camera, "name": name, "p1": points[0], "p2": points[1] }));
+                }
+            } else if points.len() >= 3 {
+                let trigger = n.config.get("zone_trigger").and_then(|v| v.as_str()).unwrap_or("intersects");
+                acc.zone = Some((json!({ "camera": camera, "name": name, "points": points }), trigger.to_string()));
+            }
+        }
+    }
+
+    let trackers: Vec<Value> = jobs
+        .into_iter()
+        .map(|((camera, class), acc)| {
+            let mut t = json!({ "camera": camera, "class": class, "lines": acc.lines });
+            if let (Some(obj), Some((zone, trigger))) = (t.as_object_mut(), acc.zone) {
+                obj.insert("zone".to_string(), zone);
+                obj.insert("zone_trigger".to_string(), json!(trigger));
+            }
+            t
+        })
+        .collect();
+
+    let boxes = match store::list_boxes(&st.pool, tid).await {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("sync_tracking_config: list_boxes failed: {e}");
+            return;
+        }
+    };
+    for b in boxes {
+        // Preserve the box's own enabled/detect_ms (set via the tracking-config API, not the
+        // graph editor) — only `trackers` is graph-derived and gets fully replaced.
+        let current = store::tracking_config_by_id(&st.pool, tid, b.id).await.unwrap_or_default();
+        let mut cfg = current.unwrap_or_else(|| json!({}));
+        if let Some(obj) = cfg.as_object_mut() {
+            obj.entry("enabled").or_insert(json!(false));
+            obj.entry("detect_ms").or_insert(json!(400));
+            obj.insert("trackers".to_string(), json!(trackers));
+        }
+        if let Err(e) = store::set_tracking_config(&st.pool, tid, b.id, cfg).await {
+            log::warn!("sync_tracking_config: set_tracking_config failed for box {}: {e}", b.id);
+        }
+    }
 }
 
 // ---- read -------------------------------------------------------------------

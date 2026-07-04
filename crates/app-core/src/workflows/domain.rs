@@ -56,6 +56,15 @@ pub enum PortType {
     /// A camera device reference (stable device id, carried as a string on the wire).
     /// Distinct from `Text` so the editor enforces camera-to-camera wiring.
     Camera,
+    /// A reusable named line/zone (card: edge tracking) — 2 points is a crossing line, 3+ is a
+    /// polygon region. Produced by `Region`; consumed by `OnEvent`'s `region` input
+    /// (`object_entered`/`object_exited`/`line_crossed`), which reads it per its own event kind.
+    Region,
+    /// One currently-tracked entity, as reported by `GetTrackedObjects` — the "state of the
+    /// world" query counterpart to the entered/exited/crossed *events*.
+    TrackedObject,
+    /// `TrackedObject[]` — `GetTrackedObjects`' main output, iterated by `ForEach`.
+    TrackedObjectArray,
     /// Wildcard — compatible with ANY type at wire time. Used by `ForEach` (`items`/`item`)
     /// so one loop node handles every array/element type. See [`Graph::compatible`].
     Any,
@@ -69,6 +78,31 @@ pub struct CameraEntity {
     pub id: String,
     pub ip: String,
     pub name: String,
+}
+
+/// A reusable named line/zone, as it appears on the wire — produced by `Region`. Normalized
+/// `0.0..1.0` frame coordinates, resolution-independent (same convention as the edge's
+/// `app_core::tracking::Line`/`Polygon`, which this maps directly onto). Whether it means a line
+/// or a zone is purely by point count, decided by whichever `OnEvent` reads it: exactly 2 points
+/// is a crossing line (`line_crossed`'s `p1`/`p2`); 3+ is a polygon (`object_entered`/
+/// `object_exited`'s zone) — a node that gets the wrong shape just doesn't fire, not an error.
+#[derive(Debug, Clone)]
+pub struct RegionValue {
+    pub camera: String,
+    pub name: String,
+    pub points: Vec<(f32, f32)>,
+}
+
+/// One currently-tracked entity as `GetTrackedObjects` reports it — the "state of the world"
+/// query counterpart to the `object_entered`/`object_exited`/`line_crossed` *events*. `zone` is
+/// the name of the region it's currently inside, empty if none (either it's not in any configured
+/// zone, or its job doesn't have one).
+#[derive(Debug, Clone)]
+pub struct TrackedObjectInfo {
+    pub uuid: String,
+    pub class: String,
+    pub bbox: BBox,
+    pub zone: String,
 }
 
 /// A bounding box in **canonical xyxy pixel coordinates**: top-left `(x1,y1)` → bottom-right
@@ -192,6 +226,25 @@ fn variable_port(config: &Value, required: bool) -> Vec<ResolvedPort> {
     }]
 }
 
+/// `OnEvent`'s extra, config-derived input ports: `camera` + `region`, wireable (from
+/// `GetCameraByName` / `Region`) — present only when the configured event is one of the edge
+/// tracker's three. These GATE delivery (see `engine::on_event_node`), not just display a value:
+/// a scoped `OnEvent` only fires for a matching camera/region, an unscoped one fires for any.
+/// This is the general mechanism for "events with inputs that filter the trigger" — extend this
+/// list (and the matching gate in `on_event_node`) rather than inventing a new node kind for the
+/// next event that needs scoping (see `docs/ref/workflows.md`).
+fn on_event_input_ports(config: &Value) -> Vec<ResolvedPort> {
+    let event = config.get("event").and_then(|v| v.as_str()).unwrap_or("");
+    if matches!(event, "object_entered" | "object_exited" | "line_crossed") {
+        vec![
+            ResolvedPort { name: "camera".to_string(), ty: PortType::Camera, required: false },
+            ResolvedPort { name: "region".to_string(), ty: PortType::Region, required: false },
+        ]
+    } else {
+        Vec::new()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Node kinds + their port declarations
 // ---------------------------------------------------------------------------
@@ -220,6 +273,19 @@ pub enum NodeKind {
     /// Like Unreal's Break node — use this when you need the raw strings from a camera
     /// that arrived on a `Camera` typed wire (e.g. from `OnEvent("motion")`).
     BreakCamera,
+    /// Pure data: a reusable named line/zone, drawn on a camera's live snapshot in the property
+    /// panel (card: edge tracking). Output as one `Region` value — wire it into `OnEvent`'s
+    /// `region` input (`object_entered`/`object_exited`/`line_crossed`) so several nodes share
+    /// the exact same geometry instead of each re-drawing it. 2 points is a line, 3+ a zone; which
+    /// it means is decided by whichever `OnEvent` reads it. No exec pins — activates whenever its
+    /// output is demanded, like `GetCameraByName`.
+    Region,
+    /// Action: query the edge tracker's live "state of the world" for a camera — every
+    /// currently-confirmed tracked entity (uuid, class, bbox, zone if inside one). The pull-based
+    /// counterpart to the `object_entered`/`object_exited`/`line_crossed` *events*: "what's
+    /// tracked right now", for a graph that wants to check state on its own schedule instead of
+    /// reacting to a transition. Loop the `objects` output with `ForEach`.
+    GetTrackedObjects,
     DescribeImage,
     /// Renamed from `notify_beacon`; the alias keeps old `workflows.json` loadable.
     #[serde(alias = "notify_beacon")]
@@ -442,6 +508,12 @@ const CAMERA_SNAPSHOT_OUT: [Port; 5] = [
     p("width", PortType::Num, false),
     p("height", PortType::Num, false),
     p("ok", PortType::Bool, false),
+];
+
+const GET_TRACKED_OBJECTS_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
+const GET_TRACKED_OBJECTS_OUT: [Port; 2] = [
+    p("objects", PortType::TrackedObjectArray, false),
+    p("count", PortType::Num, false),
 ];
 
 const GET_CURRENT_FRAME_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
@@ -718,6 +790,10 @@ const REPLY_RECORDING_OUT: [Port; 2] = [
 ];
 
 const GET_CAMERA_BY_NAME_OUT: [Port; 1] = [p("camera", PortType::Camera, false)];
+/// `Region`'s `camera` input is optional/wireable (from `GetCameraByName`) with a config-picker
+/// fallback — same wire-overrides-config pattern as `ObjectDetection`'s `class` input.
+const REGION_IN: [Port; 1] = [p("camera", PortType::Camera, false)];
+const REGION_OUT: [Port; 1] = [p("region", PortType::Region, false)];
 
 const BREAK_CAMERA_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
 const BREAK_CAMERA_OUT: [Port; 3] = [
@@ -748,7 +824,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 61] = [
+    pub const ALL: [NodeKind; 63] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -757,6 +833,8 @@ impl NodeKind {
         NodeKind::GetCurrentFrame,
         NodeKind::GetCameraByName,
         NodeKind::BreakCamera,
+        NodeKind::Region,
+        NodeKind::GetTrackedObjects,
         NodeKind::DescribeImage,
         NodeKind::NotifyRecipient,
         NodeKind::Format,
@@ -821,9 +899,11 @@ impl NodeKind {
             NodeKind::CreateAlert => "create_alert",
             NodeKind::DeliverAlert => "deliver_alert",
             NodeKind::CameraSnapshot => "camera_snapshot",
+            NodeKind::GetTrackedObjects => "get_tracked_objects",
             NodeKind::GetCurrentFrame => "get_current_frame",
             NodeKind::GetCameraByName => "get_camera_by_name",
             NodeKind::BreakCamera => "break_camera",
+            NodeKind::Region => "region",
             NodeKind::DescribeImage => "describe_image",
             NodeKind::NotifyRecipient => "notify_recipient",
             NodeKind::Format => "format",
@@ -892,9 +972,11 @@ impl NodeKind {
             NodeKind::CreateAlert => "Create Alert",
             NodeKind::DeliverAlert => "Send Alert",
             NodeKind::CameraSnapshot => "Snapshot",
+            NodeKind::GetTrackedObjects => "Get Tracked Objects",
             NodeKind::GetCurrentFrame => "Current Frame",
             NodeKind::GetCameraByName => "Find Camera",
             NodeKind::BreakCamera => "Unpack Camera",
+            NodeKind::Region => "Region",
             NodeKind::DescribeImage => "Describe Image",
             NodeKind::NotifyRecipient => "Notify",
             NodeKind::Format => "Format",
@@ -1000,7 +1082,9 @@ impl NodeKind {
             | NodeKind::DrawBbox
             | NodeKind::DrawText
             | NodeKind::BlurOutsideBbox
-            | NodeKind::GetImageSize => "Vision",
+            | NodeKind::GetImageSize
+            | NodeKind::Region
+            | NodeKind::GetTrackedObjects => "Vision",
             NodeKind::RecordPresence => "Presence",
             NodeKind::Print | NodeKind::ShowImage | NodeKind::Comment => "Debug",
             NodeKind::Reroute => "Utility",
@@ -1017,6 +1101,7 @@ impl NodeKind {
             self,
             NodeKind::GetCameraByName
                 | NodeKind::BreakCamera
+                | NodeKind::Region
                 | NodeKind::Compare
                 | NodeKind::NumLt
                 | NodeKind::NumLte
@@ -1062,9 +1147,11 @@ impl NodeKind {
             NodeKind::CreateAlert => &CREATE_ALERT_IN,
             NodeKind::DeliverAlert => &DELIVER_ALERT_IN,
             NodeKind::CameraSnapshot => &CAMERA_SNAPSHOT_IN,
+            NodeKind::GetTrackedObjects => &GET_TRACKED_OBJECTS_IN,
             NodeKind::GetCurrentFrame => &GET_CURRENT_FRAME_IN,
             NodeKind::GetCameraByName => &NO_PORTS,
             NodeKind::BreakCamera => &BREAK_CAMERA_IN,
+            NodeKind::Region => &REGION_IN,
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_IN,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_IN,
             NodeKind::Format => &FORMAT_IN,
@@ -1128,9 +1215,11 @@ impl NodeKind {
             NodeKind::CreateAlert => &CREATE_ALERT_OUT,
             NodeKind::DeliverAlert => &DELIVER_ALERT_OUT,
             NodeKind::CameraSnapshot => &CAMERA_SNAPSHOT_OUT,
+            NodeKind::GetTrackedObjects => &GET_TRACKED_OBJECTS_OUT,
             NodeKind::GetCurrentFrame => &GET_CURRENT_FRAME_OUT,
             NodeKind::GetCameraByName => &GET_CAMERA_BY_NAME_OUT,
             NodeKind::BreakCamera => &BREAK_CAMERA_OUT,
+            NodeKind::Region => &REGION_OUT,
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_OUT,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_OUT,
             NodeKind::Format => &FORMAT_OUT,
@@ -1212,11 +1301,13 @@ impl NodeKind {
             }
             NodeKind::DeliverAlert => json!({ "id": "", "timeout_secs": "35" }),
             NodeKind::CameraSnapshot => json!({ "camera": "first", "timeout_secs": "10" }),
+            NodeKind::GetTrackedObjects => json!({ "camera": "first", "timeout_secs": "10" }),
             NodeKind::GetCurrentFrame => {
                 json!({ "camera": "first", "max_age_ms": "2000", "timeout_secs": "10" })
             }
             NodeKind::GetCameraByName => json!({ "camera": "" }),
             NodeKind::BreakCamera => json!({}),
+            NodeKind::Region => json!({ "camera": "first", "name": "", "points": [] }),
             NodeKind::DescribeImage => json!({ "label": "", "question": "", "timeout_secs": "65" }),
             NodeKind::NotifyRecipient => json!({ "message": "", "timeout_secs": "35" }),
             NodeKind::Format => json!({ "template": "{p1} — {p2}", "p1": "", "p2": "", "p3": "" }),
@@ -1325,6 +1416,8 @@ impl GraphNode {
             NodeKind::EmitEvent => payload_ports(&self.config),
             // Set Variable: one `value` input typed by the variable (required).
             NodeKind::SetVariable => variable_port(&self.config, true),
+            // OnEvent: camera/region inputs, only for the edge tracker's events (see the fn doc).
+            NodeKind::OnEvent => on_event_input_ports(&self.config),
             k => k.input_ports().iter().map(ResolvedPort::from).collect(),
         }
     }
@@ -1623,6 +1716,65 @@ impl Graph {
 
     pub fn node_mut(&mut self, id: u32) -> Option<&mut GraphNode> {
         self.nodes.iter_mut().find(|n| n.id == id)
+    }
+
+    /// The node feeding `to_port` on `to`, if wired — the single generic building block behind
+    /// every "resolve what a node's input currently refers to" lookup (camera, region, …).
+    /// Graph-static: reads only config, no execution — every producer this is used to resolve
+    /// (`GetCameraByName`, `Region`) is a pure, config-only node, so its value is 100%
+    /// determined by the graph alone, without running anything.
+    pub fn wired_source(&self, to: u32, to_port: &str) -> Option<&GraphNode> {
+        let edge = self.edges.iter().find(|e| e.to == to && e.to_port == to_port)?;
+        self.node(edge.from)
+    }
+
+    /// What `node`'s `camera` input currently resolves to (an id/ip/name selector, NOT yet
+    /// resolved to a device — callers do that against their own device list): the wired
+    /// `GetCameraByName` node's own `config.camera`, or (no wire) `node`'s OWN `config.camera`
+    /// literal — the same wire-overrides-config pattern as `ObjectDetection`'s `class` input.
+    /// `None` if neither is set, meaning "unscoped" to callers like `on_event_node`.
+    pub fn resolve_camera_selector(&self, node: &GraphNode) -> Option<String> {
+        let cfg_str = |n: &GraphNode| n.config.get("camera").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        self.wired_source(node.id, "camera")
+            .filter(|n| n.kind == NodeKind::GetCameraByName)
+            .and_then(cfg_str)
+            .or_else(|| cfg_str(node))
+    }
+
+    /// What an `OnEvent`'s `region` input currently resolves to: the wired `Region` node's own
+    /// `name` + `points`. `None` if nothing's wired — unlike camera, a region has no
+    /// literal-picker fallback (there's no sensible way to hand-type a polygon), so it's wired or
+    /// it doesn't exist for this node. The `Region` node's OWN `camera` field is deliberately NOT
+    /// consulted here — it's only a preview reference for that node's drawing canvas; the job's
+    /// camera is always the reading `OnEvent`'s own (`resolve_camera_selector`), so a region
+    /// wired into a node scoped to a different camera is on the caller to catch, not silently
+    /// cross-applied here.
+    pub fn resolve_region(&self, node: &GraphNode) -> Option<(String, Vec<(f32, f32)>)> {
+        let region_node = self.wired_source(node.id, "region").filter(|n| n.kind == NodeKind::Region)?;
+        let name = region_node
+            .config
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())?
+            .to_string();
+        let points: Vec<(f32, f32)> = region_node
+            .config
+            .get("points")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| {
+                        let a = p.as_array()?;
+                        Some((a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if points.len() < 2 {
+            return None;
+        }
+        Some((name, points))
     }
 
     /// Add a node at (x, y); returns its new id. All new nodes default to memoize=false

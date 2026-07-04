@@ -107,6 +107,15 @@ pub struct Track {
     pub time_since_update: u32,
     first_ts_ms: u64,
     last_ts_ms: u64,
+    /// Centre at the end of the *previous* cycle (`None` for a track's first cycle) — the other
+    /// endpoint of the movement segment [`MultiTracker::check_crossings`] tests against each [`Line`].
+    prev_centre: Option<(f32, f32)>,
+    /// Whether this track was last considered inside the configured [`Polygon`] zone (`None`
+    /// before it's ever been evaluated) — [`MultiTracker::check_zone`] diffs against this to emit
+    /// `ZoneEntered`/`ZoneExited` only on a transition, not every cycle it's inside/outside.
+    zone_inside: Option<bool>,
+    /// When this track was last considered to have entered the zone — for `ZoneExited`'s `dwell_ms`.
+    zone_entered_ts_ms: Option<u64>,
 }
 
 impl Track {
@@ -124,6 +133,9 @@ impl Track {
             time_since_update: 0,
             first_ts_ms: ts_ms,
             last_ts_ms: ts_ms,
+            prev_centre: None,
+            zone_inside: None,
+            zone_entered_ts_ms: None,
         }
     }
     /// Current bbox estimate `[x1,y1,x2,y2]` from the filtered centre + smoothed size.
@@ -136,6 +148,13 @@ impl Track {
     }
     pub fn dwell_ms(&self) -> u64 {
         self.last_ts_ms.saturating_sub(self.first_ts_ms)
+    }
+    /// Whether this track is currently considered inside the job's zone (`None` if the job has no
+    /// zone configured, or this track has never been evaluated against one yet) — for a live
+    /// "state of the world" snapshot (`GetTrackedObjects`), not just the enter/exit transitions
+    /// `check_zone` emits events for.
+    pub fn zone_inside(&self) -> Option<bool> {
+        self.zone_inside
     }
     fn predict(&mut self) {
         self.kx.predict();
@@ -155,14 +174,88 @@ impl Track {
     }
 }
 
-/// Lifecycle events emitted by [`MultiTracker::update`]. The edge translates these into
-/// `object_entered` / `object_exited` cloud events.
+/// Lifecycle events emitted by [`MultiTracker::update`] / [`MultiTracker::update_with_lines`] /
+/// [`MultiTracker::update_full`]. The edge translates these into `object_entered` /
+/// `object_exited` / `line_crossed` cloud events.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TrackEvent {
-    /// A track became Confirmed for the first time.
+    /// A track became Confirmed for the first time (whole-frame — no zone configured).
     Entered { uuid: Uuid, class: u32, bbox: [f32; 4] },
-    /// A confirmed track was removed after `max_age` unmatched cycles.
+    /// A confirmed track was removed after `max_age` unmatched cycles (whole-frame).
     Exited { uuid: Uuid, class: u32, bbox: [f32; 4], dwell_ms: u64 },
+    /// A confirmed track's centre crossed a configured [`Line`] between this cycle and the last.
+    Crossed { uuid: Uuid, class: u32, line: String, direction: Direction },
+    /// A confirmed track's presence in a configured [`Polygon`] flipped outside → inside.
+    ZoneEntered { uuid: Uuid, class: u32, zone: String },
+    /// ... flipped inside → outside. `dwell_ms` is how long it was considered inside the zone.
+    ZoneExited { uuid: Uuid, class: u32, zone: String, dwell_ms: u64 },
+}
+
+/// A user-drawn virtual line for crossing detection, in **normalized** frame coordinates
+/// (`0.0..1.0` on both axes, origin top-left) — resolution-independent, so the same config
+/// works whatever size frame the camera happens to produce. Scaled to source pixels at test
+/// time via the frame's `(width, height)` (see [`MultiTracker::update_with_lines`]).
+///
+/// `Serialize`/`Deserialize` (`p1`/`p2` as `[x,y]` JSON arrays) so it rides the edge's
+/// `TrackingConfig` (control-pulled `tracking_config` jsonb) verbatim — no separate wire DTO.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Line {
+    /// Which camera this line applies to (id/ip/name — the edge resolves it against its device
+    /// list the same way every other camera-config field does). `MultiTracker` itself doesn't
+    /// use this field — it's a pure per-camera tracker instance already — the edge filters
+    /// `tracking_config.lines` down to a camera's own lines before passing them in.
+    #[serde(default)]
+    pub camera: String,
+    pub name: String,
+    pub p1: (f32, f32),
+    pub p2: (f32, f32),
+}
+
+/// Which way a track crossed a [`Line`], relative to its `p1 → p2` direction: `Forward` is the
+/// side the line's direction "turns left" away from ((p1→p2) × (p1→point) goes negative→positive);
+/// `Backward` is the reverse. Arbitrary but consistent — pick the line's endpoint order to mean
+/// whatever "in"/"out" is for the use case (e.g. p1=door frame, p2=inside the room).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Forward,
+    Backward,
+}
+
+impl Direction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Direction::Forward => "forward",
+            Direction::Backward => "backward",
+        }
+    }
+}
+
+/// A closed "region of interest" polygon for zone-scoped enter/exit, in **normalized** frame
+/// coordinates (same `0.0..1.0` convention as [`Line`]) — an alternative to whole-frame
+/// Entered/Exited: when a job configures a zone, entered/exited means crossing into/out of THIS
+/// shape specifically, not just being tracked anywhere in the frame. Needs 3+ points to be
+/// meaningful (fewer are simply never entered/exited — see [`MultiTracker::check_zone`]).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Polygon {
+    /// Which camera this zone applies to — same convention/caveat as [`Line::camera`].
+    #[serde(default)]
+    pub camera: String,
+    pub name: String,
+    pub points: Vec<(f32, f32)>,
+}
+
+/// How a track's presence in a [`Polygon`] is judged. Defaults to `Intersects` — the more
+/// forgiving option — so a config that sets a `zone` but omits `zone_trigger` still does
+/// something sensible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoneTrigger {
+    /// The track's bbox overlaps the polygon at all — looser, catches a partial/edge entry.
+    #[default]
+    Intersects,
+    /// The track's centre point is inside the polygon — stricter, the object's middle must be
+    /// substantially inside, not just brushing the boundary.
+    CentroidInside,
 }
 
 /// The tracker: hold and evolve the set of [`Track`]s across detection cycles.
@@ -192,6 +285,12 @@ impl MultiTracker {
     /// update matched tracks, age/remove the rest, spawn new tracks. `ts_ms` is this frame's wall
     /// time (for dwell). Returns the lifecycle events that occurred this cycle.
     pub fn update(&mut self, dets: &[Detection], ts_ms: u64) -> Vec<TrackEvent> {
+        // Snapshot each track's resting centre from the END of the last cycle — keyed by uuid (not
+        // index) so it survives this cycle's removals/spawns unambiguously. Restored onto the
+        // surviving tracks as `prev_centre` below, for `check_crossings` to diff against.
+        let before: std::collections::HashMap<Uuid, (f32, f32)> =
+            self.tracks.iter().map(|t| (t.uuid, t.centre())).collect();
+
         let mut events = Vec::new();
         for t in &mut self.tracks {
             t.predict();
@@ -270,6 +369,112 @@ impl MultiTracker {
             }
         }
 
+        // Freshly-spawned tracks aren't in `before` → `prev_centre` stays `None` (no crossing test
+        // fires on a track's first cycle; there's no "previous frame" segment to test yet).
+        for t in &mut self.tracks {
+            t.prev_centre = before.get(&t.uuid).copied();
+        }
+
+        events
+    }
+
+    /// Like [`Self::update`], plus line-crossing: after the normal tracking cycle, test every
+    /// **confirmed** track's movement segment (`prev_centre → centre`, this cycle) against every
+    /// `Line` (scaled from normalized to `frame_wh` source pixels) and append a `Crossed` event per
+    /// hit. `frame_wh` is the JPEG's `(width, height)` in pixels this cycle's detections came from.
+    pub fn update_with_lines(
+        &mut self,
+        dets: &[Detection],
+        ts_ms: u64,
+        frame_wh: (f32, f32),
+        lines: &[Line],
+    ) -> Vec<TrackEvent> {
+        let mut events = self.update(dets, ts_ms);
+        events.extend(self.check_crossings(frame_wh, lines));
+        events
+    }
+
+    /// Segment-intersect each confirmed track's `(prev_centre, centre)` movement this cycle against
+    /// each line (scaled to pixels via `frame_wh`); a track with no `prev_centre` yet (its first
+    /// cycle) is skipped — there's nothing to test against.
+    fn check_crossings(&self, frame_wh: (f32, f32), lines: &[Line]) -> Vec<TrackEvent> {
+        let mut events = Vec::new();
+        if lines.is_empty() {
+            return events;
+        }
+        let (fw, fh) = frame_wh;
+        for t in self.tracks.iter().filter(|t| t.state == TrackState::Confirmed) {
+            let Some(prev) = t.prev_centre else { continue };
+            let cur = t.centre();
+            for line in lines {
+                let p1 = (line.p1.0 * fw, line.p1.1 * fh);
+                let p2 = (line.p2.0 * fw, line.p2.1 * fh);
+                if let Some(direction) = crossing_direction(p1, p2, prev, cur) {
+                    events.push(TrackEvent::Crossed {
+                        uuid: t.uuid,
+                        class: t.class,
+                        line: line.name.clone(),
+                        direction,
+                    });
+                }
+            }
+        }
+        events
+    }
+
+    /// Like [`Self::update`], plus line-crossing (when `lines` is non-empty) AND/OR zone-scoped
+    /// enter/exit (when `zone` is `Some`) — the general form both [`Self::update_with_lines`] and
+    /// a bare [`Self::update`] are special cases of. `frame_wh` is the JPEG's `(width, height)` in
+    /// pixels this cycle's detections came from (only actually used if `lines`/`zone` need it).
+    pub fn update_full(
+        &mut self,
+        dets: &[Detection],
+        ts_ms: u64,
+        frame_wh: (f32, f32),
+        lines: &[Line],
+        zone: Option<(&Polygon, ZoneTrigger)>,
+    ) -> Vec<TrackEvent> {
+        let mut events = self.update(dets, ts_ms);
+        if !lines.is_empty() {
+            events.extend(self.check_crossings(frame_wh, lines));
+        }
+        if let Some((z, trigger)) = zone {
+            events.extend(self.check_zone(frame_wh, z, trigger, ts_ms));
+        }
+        events
+    }
+
+    /// Diff every **confirmed** track's presence in `zone` (scaled to pixels via `frame_wh`)
+    /// against its last-known state, emitting `ZoneEntered`/`ZoneExited` only on a transition —
+    /// a track that's simply *still* inside/outside produces nothing every cycle. `zone` needs
+    /// 3+ points to be meaningful; fewer and every track is (silently) considered never inside.
+    fn check_zone(&mut self, frame_wh: (f32, f32), zone: &Polygon, trigger: ZoneTrigger, ts_ms: u64) -> Vec<TrackEvent> {
+        let mut events = Vec::new();
+        if zone.points.len() < 3 {
+            return events;
+        }
+        let (fw, fh) = frame_wh;
+        let poly: Vec<(f32, f32)> = zone.points.iter().map(|&(x, y)| (x * fw, y * fh)).collect();
+        for t in self.tracks.iter_mut().filter(|t| t.state == TrackState::Confirmed) {
+            let inside = match trigger {
+                ZoneTrigger::CentroidInside => point_in_polygon(t.centre(), &poly),
+                ZoneTrigger::Intersects => bbox_intersects_polygon(t.bbox(), &poly),
+            };
+            match (t.zone_inside, inside) {
+                (None, true) | (Some(false), true) => {
+                    t.zone_inside = Some(true);
+                    t.zone_entered_ts_ms = Some(ts_ms);
+                    events.push(TrackEvent::ZoneEntered { uuid: t.uuid, class: t.class, zone: zone.name.clone() });
+                }
+                (Some(true), false) => {
+                    let dwell_ms = t.zone_entered_ts_ms.map(|s| ts_ms.saturating_sub(s)).unwrap_or(0);
+                    t.zone_inside = Some(false);
+                    events.push(TrackEvent::ZoneExited { uuid: t.uuid, class: t.class, zone: zone.name.clone(), dwell_ms });
+                }
+                (None, false) => t.zone_inside = Some(false),
+                (Some(true), true) | (Some(false), false) => {} // no change — still inside/outside
+            }
+        }
         events
     }
 
@@ -312,6 +517,77 @@ fn xyxy_to_cxcywh(b: [f32; 4]) -> (f32, f32, f32, f32) {
 
 fn cxcywh_to_xyxy(cx: f32, cy: f32, w: f32, h: f32) -> [f32; 4] {
     [cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0]
+}
+
+/// Signed area ×2 of the triangle `(a,b,c)` — positive when `c` is left of ray `a→b`, negative when
+/// right, zero when collinear. The building block for segment intersection.
+fn orient(a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> f32 {
+    (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
+}
+
+/// Whether segment `a→b` properly intersects segment `c→d` (not infinite-line) — the shared
+/// building block for line-crossing and bbox/polygon overlap.
+fn segments_intersect(a: (f32, f32), b: (f32, f32), c: (f32, f32), d: (f32, f32)) -> bool {
+    let d1 = orient(c, d, a);
+    let d2 = orient(c, d, b);
+    let d3 = orient(a, b, c);
+    let d4 = orient(a, b, d);
+    (d1 > 0.0) != (d2 > 0.0) && (d3 > 0.0) != (d4 > 0.0)
+}
+
+/// Whether the movement segment `prev→cur` crosses the line segment `line_p1→line_p2` — proper
+/// segment intersection (not infinite-line), so a track passing near but outside the drawn line's
+/// extent doesn't false-positive. Returns the crossing [`Direction`] (relative to `line_p1→line_p2`)
+/// when it does, `None` otherwise (no crossing, or collinear/degenerate — never emit on a coin-flip).
+fn crossing_direction(
+    line_p1: (f32, f32),
+    line_p2: (f32, f32),
+    prev: (f32, f32),
+    cur: (f32, f32),
+) -> Option<Direction> {
+    if !segments_intersect(line_p1, line_p2, prev, cur) {
+        return None;
+    }
+    // prev right-of line_p1→line_p2 (< 0) crossing to left-of it (cur > 0): crossed "Forward".
+    let d1 = orient(line_p1, line_p2, prev);
+    Some(if d1 < 0.0 { Direction::Forward } else { Direction::Backward })
+}
+
+/// Ray-casting point-in-polygon test (even-odd rule). `poly` must have 3+ points (callers already
+/// guard this); a point exactly on an edge may go either way — an inherent tie-break, not a bug.
+fn point_in_polygon(p: (f32, f32), poly: &[(f32, f32)]) -> bool {
+    let mut inside = false;
+    let n = poly.len();
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = poly[i];
+        let (xj, yj) = poly[j];
+        if (yi > p.1) != (yj > p.1) && p.0 < (xj - xi) * (p.1 - yi) / (yj - yi) + xi {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// Whether an axis-aligned `bbox` (`[x1,y1,x2,y2]`) overlaps `poly` at all: any polygon vertex
+/// inside the bbox, any bbox corner inside the polygon, or any polygon edge crossing any bbox
+/// edge — covers full containment either way plus a partial/edge overlap. `poly` needs 3+ points.
+fn bbox_intersects_polygon(bbox: [f32; 4], poly: &[(f32, f32)]) -> bool {
+    let [x1, y1, x2, y2] = bbox;
+    if poly.iter().any(|&(x, y)| x >= x1 && x <= x2 && y >= y1 && y <= y2) {
+        return true;
+    }
+    let corners = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)];
+    if corners.iter().any(|&c| point_in_polygon(c, poly)) {
+        return true;
+    }
+    let bbox_edges = [(corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[3]), (corners[3], corners[0])];
+    let n = poly.len();
+    (0..n).any(|i| {
+        let (a, b) = (poly[i], poly[(i + 1) % n]);
+        bbox_edges.iter().any(|&(c, d)| segments_intersect(a, b, c, d))
+    })
 }
 
 /// Intersection-over-union of two `[x1,y1,x2,y2]` boxes.
@@ -450,5 +726,148 @@ mod tests {
         }
         assert_eq!(entered, 0, "low-confidence-only detections never spawn a confirmed track");
         assert_eq!(mt.count(), 0);
+    }
+
+    // ---- line-crossing (P3) -----------------------------------------------------------------
+
+    fn crossed_events(evs: &[TrackEvent]) -> Vec<(&str, Direction)> {
+        evs.iter()
+            .filter_map(|e| match e {
+                TrackEvent::Crossed { line, direction, .. } => Some((line.as_str(), *direction)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn crossing_a_line_emits_crossed_with_direction() {
+        let mut mt = MultiTracker::new(cfg());
+        let gate = Line { camera: "cam".to_string(), name: "gate".to_string(), p1: (0.5, 0.0), p2: (0.5, 1.0) }; // pixel x=50
+        let mut crossed = Vec::new();
+        for f in 0..8u64 {
+            let x = 10.0 + f as f32 * 13.0; // centre x: 30,43,56,69,82,95,108,121
+            let evs = mt.update_with_lines(
+                &[det(0, 0.9, [x, 40.0, x + 40.0, 80.0])],
+                f * 100,
+                (100.0, 100.0),
+                std::slice::from_ref(&gate),
+            );
+            crossed.extend(crossed_events(&evs).into_iter().map(|(l, d)| (l.to_string(), d)));
+        }
+        assert_eq!(crossed.len(), 1, "exactly one crossing of a single line by a single pass");
+        assert_eq!(crossed[0].0, "gate");
+        assert_eq!(crossed[0].1, Direction::Backward, "centre 43→56 vs line p1=(50,0)→p2=(50,100)");
+    }
+
+    #[test]
+    fn movement_confined_to_one_side_never_crosses() {
+        let mut mt = MultiTracker::new(cfg());
+        let gate = Line { camera: "cam".to_string(), name: "gate".to_string(), p1: (0.5, 0.0), p2: (0.5, 1.0) };
+        let mut crossed = Vec::new();
+        for f in 0..8u64 {
+            let x = 10.0 + f as f32 * 2.0; // centre x: 30..44, always left of pixel x=50
+            let evs = mt.update_with_lines(
+                &[det(0, 0.9, [x, 40.0, x + 40.0, 80.0])],
+                f * 100,
+                (100.0, 100.0),
+                std::slice::from_ref(&gate),
+            );
+            crossed.extend(crossed_events(&evs).into_iter().map(|(l, d)| (l.to_string(), d)));
+        }
+        assert!(crossed.is_empty(), "never reaches the line, so it never fires");
+    }
+
+    #[test]
+    fn multiple_lines_fire_independently() {
+        let mut mt = MultiTracker::new(cfg());
+        let lines = vec![
+            Line { camera: "cam".to_string(), name: "gate".to_string(), p1: (0.5, 0.0), p2: (0.5, 1.0) }, // pixel x=50
+            Line { camera: "cam".to_string(), name: "till".to_string(), p1: (0.9, 0.0), p2: (0.9, 1.0) }, // pixel x=90
+            Line { camera: "cam".to_string(), name: "far".to_string(), p1: (2.0, 0.0), p2: (2.0, 1.0) },  // pixel x=200, unreachable
+        ];
+        let mut crossed = Vec::new();
+        for f in 0..8u64 {
+            let x = 10.0 + f as f32 * 13.0; // centre x: 30,43,56,69,82,95,108,121
+            let evs = mt.update_with_lines(
+                &[det(0, 0.9, [x, 40.0, x + 40.0, 80.0])],
+                f * 100,
+                (100.0, 100.0),
+                &lines,
+            );
+            crossed.extend(crossed_events(&evs).into_iter().map(|(l, d)| (l.to_string(), d)));
+        }
+        let names: Vec<&str> = crossed.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(names, vec!["gate", "till"], "gate then till, each exactly once; far never reached");
+    }
+
+    // ---- zone enter/exit (polygon region of interest) ---------------------------------------
+
+    fn zone_square() -> Polygon {
+        // Pixel square x:[60,100] y:[0,100] once scaled by frame_wh=(100,100).
+        Polygon {
+            camera: "cam".to_string(),
+            name: "counter".to_string(),
+            points: vec![(0.6, 0.0), (1.0, 0.0), (1.0, 1.0), (0.6, 1.0)],
+        }
+    }
+
+    /// Runs the same L→R pass (bbox x1: 10,23,36,49,62,75,88,101 over 8 frames — confirms at
+    /// frame 2) and returns the frame indices at which `ZoneEntered`/`ZoneExited` first fired.
+    fn run_zone_pass(zone: &Polygon, trigger: ZoneTrigger) -> (Option<u64>, Option<u64>, Option<u64>) {
+        let mut mt = MultiTracker::new(cfg());
+        let (mut entered_at, mut exited_at, mut dwell) = (None, None, None);
+        for f in 0..8u64 {
+            let x = 10.0 + f as f32 * 13.0;
+            for e in mt.update_full(
+                &[det(0, 0.9, [x, 40.0, x + 40.0, 80.0])],
+                f * 100,
+                (100.0, 100.0),
+                &[],
+                Some((zone, trigger)),
+            ) {
+                match e {
+                    TrackEvent::ZoneEntered { .. } if entered_at.is_none() => entered_at = Some(f),
+                    TrackEvent::ZoneExited { dwell_ms, .. } if exited_at.is_none() => {
+                        exited_at = Some(f);
+                        dwell = Some(dwell_ms);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        (entered_at, exited_at, dwell)
+    }
+
+    #[test]
+    fn centroid_inside_zone_emits_entered_then_exited_with_dwell() {
+        let zone = zone_square();
+        let (entered_at, exited_at, dwell) = run_zone_pass(&zone, ZoneTrigger::CentroidInside);
+        // Centre crosses x=60 between f2(56)→f3(69): enters at f3. Crosses x=100 between
+        // f5(95)→f6(108): exits at f6. dwell = ts(f6) - ts(f3) = 600 - 300 = 300ms.
+        assert_eq!(entered_at, Some(3), "centroid enters the zone at frame 3");
+        assert_eq!(exited_at, Some(6), "centroid leaves the zone at frame 6");
+        assert_eq!(dwell, Some(300));
+    }
+
+    #[test]
+    fn intersects_trigger_fires_earlier_and_releases_later_than_centroid() {
+        let zone = zone_square();
+        let (in_entered, in_exited, _) = run_zone_pass(&zone, ZoneTrigger::Intersects);
+        let (ci_entered, ci_exited, _) = run_zone_pass(&zone, ZoneTrigger::CentroidInside);
+        // Intersects only needs the bbox to touch the zone — fires the moment the track is
+        // first Confirmed (frame 2, bbox already overlapping) and releases only once the whole
+        // bbox has cleared the zone (frame 7) — a strictly wider window than CentroidInside's.
+        assert_eq!(in_entered, Some(2), "bbox already overlaps on first confirmed frame");
+        assert_eq!(in_exited, Some(7), "bbox clears the zone only once fully past it");
+        assert!(in_entered < ci_entered, "intersects enters no later than centroid");
+        assert!(in_exited > ci_exited, "intersects exits no earlier than centroid");
+    }
+
+    #[test]
+    fn zone_with_fewer_than_three_points_never_fires() {
+        let degenerate = Polygon { camera: "cam".to_string(), name: "bad".to_string(), points: vec![(0.6, 0.0), (1.0, 1.0)] };
+        let (entered_at, exited_at, _) = run_zone_pass(&degenerate, ZoneTrigger::Intersects);
+        assert_eq!(entered_at, None);
+        assert_eq!(exited_at, None);
     }
 }

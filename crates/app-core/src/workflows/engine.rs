@@ -136,14 +136,29 @@ pub fn run_subpath_eventful(
     )
 }
 
-/// Find the `OnEvent` node subscribing to `event`, if any (first match in node order).
-pub fn on_event_node(graph: &Graph, event: &str) -> Option<u32> {
+/// Find the `OnEvent` node subscribing to `event`, if any (first match in node order) — GATED by
+/// camera when both the node and the event have one: `event_camera` is the firing event's own
+/// camera (`payload["camera"]`, `None` for events with no camera concept, e.g. `telegram_message`);
+/// `devices` resolves a node's `camera` input (an id/ip/name selector, wired from
+/// `GetCameraByName` or a plain config literal — see `Graph::resolve_camera_selector`) to compare
+/// against it. A node with no camera scoped (the common case today) matches any camera, same as
+/// before this existed. This is the general "event inputs gate the trigger" mechanism — the place
+/// to extend for the next input that should filter delivery, not a new node kind.
+pub fn on_event_node(graph: &Graph, event: &str, event_camera: Option<&str>, devices: &[crate::devices::Device]) -> Option<u32> {
     graph
         .nodes
         .iter()
         .find(|n| {
-            n.kind == NodeKind::OnEvent
-                && n.config.get("event").and_then(|v| v.as_str()) == Some(event)
+            if n.kind != NodeKind::OnEvent || n.config.get("event").and_then(|v| v.as_str()) != Some(event) {
+                return false;
+            }
+            let Some(want_ip) = event_camera else { return true }; // event has no camera concept
+            match graph.resolve_camera_selector(n) {
+                None => true, // node isn't scoped to a camera — matches any
+                Some(sel) => crate::device_actions::resolve_device(devices, &sel)
+                    .map(|idx| devices[idx].ip == want_ip)
+                    .unwrap_or(false),
+            }
         })
         .map(|n| n.id)
 }
@@ -1534,7 +1549,7 @@ mod tests {
         );
 
         // The handler runs only when its event fires (a sub-run seeded at the OnEvent node).
-        let entry = on_event_node(&g, "seen").expect("OnEvent found by name");
+        let entry = on_event_node(&g, "seen", None, &[]).expect("OnEvent found by name");
         assert_eq!(entry, on);
         let outs2 = run_subpath_eventful(
             &g,
@@ -1554,6 +1569,53 @@ mod tests {
             !outs2.contains_key(&em),
             "the sub-run runs ONLY the handler subtree"
         );
+    }
+
+    /// Two test cameras: "hall" (10.0.0.1) and "lobby" (10.0.0.2) — mirrors
+    /// `test_ctx_with_cameras`'s fixtures, just as a plain `Vec<Device>` (no `ToolContext` needed
+    /// for graph-static camera resolution).
+    fn two_test_devices() -> Vec<crate::devices::Device> {
+        use crate::devices::Device;
+        vec![
+            Device { id: "urn:uuid:aaa".into(), ip: "10.0.0.1".into(), xaddr: "".into(), name: "hall".into(), manufacturer: None, model: None, username: None, password: None, rtsp_url: None, rtsp_sub_url: None },
+            Device { id: "".into(), ip: "10.0.0.2".into(), xaddr: "".into(), name: "lobby".into(), manufacturer: None, model: None, username: None, password: None, rtsp_url: None, rtsp_sub_url: None },
+        ]
+    }
+
+    #[test]
+    fn on_event_node_camera_gate_scoped_vs_unscoped() {
+        let devices = two_test_devices();
+        let mut g = Graph::new("g");
+        // Scoped: OnEvent("object_entered") with camera="hall" (a plain config literal, no wire).
+        let scoped = g.add_node(NodeKind::OnEvent, 0, 0);
+        g.node_mut(scoped).unwrap().config = json!({ "event": "object_entered", "camera": "hall" });
+        // Fires for hall's ip, not lobby's.
+        assert_eq!(on_event_node(&g, "object_entered", Some("10.0.0.1"), &devices), Some(scoped));
+        assert_eq!(on_event_node(&g, "object_entered", Some("10.0.0.2"), &devices), None);
+
+        // Unscoped (no camera set) matches any camera — today's behaviour, unchanged.
+        let mut g2 = Graph::new("g2");
+        let unscoped = g2.add_node(NodeKind::OnEvent, 0, 0);
+        g2.node_mut(unscoped).unwrap().config = json!({ "event": "object_entered" });
+        assert_eq!(on_event_node(&g2, "object_entered", Some("10.0.0.1"), &devices), Some(unscoped));
+        assert_eq!(on_event_node(&g2, "object_entered", Some("10.0.0.2"), &devices), Some(unscoped));
+
+        // An event with no camera concept (event_camera=None) never filters, even on a scoped node.
+        assert_eq!(on_event_node(&g, "object_entered", None, &devices), Some(scoped));
+    }
+
+    #[test]
+    fn on_event_node_camera_wired_from_get_camera_by_name() {
+        let devices = two_test_devices();
+        let mut g = Graph::new("g");
+        let cam = g.add_node(NodeKind::GetCameraByName, 0, 0);
+        g.node_mut(cam).unwrap().config = json!({ "camera": "lobby" });
+        let on = g.add_node(NodeKind::OnEvent, 0, 0);
+        g.node_mut(on).unwrap().config = json!({ "event": "object_exited" });
+        g.add_edge(cam, "camera", on, "camera").unwrap();
+
+        assert_eq!(on_event_node(&g, "object_exited", Some("10.0.0.2"), &devices), Some(on), "resolves the wired GetCameraByName, not a literal");
+        assert_eq!(on_event_node(&g, "object_exited", Some("10.0.0.1"), &devices), None);
     }
 
     #[test]
@@ -1587,7 +1649,7 @@ mod tests {
             .expect("payload OUTPUT port wires by type");
 
         // Firing the handler with a payload seeds the OnEvent's "msg" output for downstream.
-        let entry = on_event_node(&g, "seen").unwrap();
+        let entry = on_event_node(&g, "seen", None, &[]).unwrap();
         let mut payload = PortValues::new();
         payload.insert("msg".into(), PortValue::Text("hello".into()));
         let outs = run_subpath_eventful(

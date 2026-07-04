@@ -1,74 +1,213 @@
-//! On-edge object tracker (card: edge tracking) — one worker per camera running the YOLOX detector
+//! On-edge object tracker (card: edge tracking) — one worker per **tracking job** (a `camera` +
+//! `class` pair, e.g. "person on the front door cam") running the YOLOX detector
 //! ([`app_core::agent::detector`]) on a detection cadence, feeding the pure-Rust SORT/ByteTrack
-//! [`app_core::tracking::MultiTracker`], and pushing `object_entered` / `object_exited` lifecycle
-//! events to control (→ durable event_queue → `OnEvent`).
+//! [`app_core::tracking::MultiTracker`], and pushing `object_entered` / `object_exited` /
+//! `line_crossed` lifecycle events to control (→ durable event_queue → `OnEvent`).
 //!
 //! Mirrors [`crate::motion`]'s reconciler + supervised-worker shape, but needs **no OpenCV**: the
-//! detector + tracker work directly on the JPEG frames the edge already serves via go2rtc. Gated on
-//! `TRACK_ENABLED=1` (off by default — YOLOX is heavier than MOG2, so tracking is opt-in until the
-//! per-camera Track-node config lands). `TRACK_CLASS` (default `person`) and `TRACK_DETECT_MS`
-//! (default 400) tune it.
+//! detector + tracker work directly on the JPEG frames the edge already serves via go2rtc.
+//!
+//! **Jobs, not cameras, are the unit of work**: the same camera can be tracked for several
+//! classes at once (person + car), each from its own `OnEvent` node in the graph editor (camera +
+//! class + — for `line_crossed` — a line, all drawn in that node's property panel) — each such
+//! node is one independent job with its own uuid space and its own `MultiTracker`, so tracking two
+//! classes on one camera never conflates or duplicates entities.
+//!
+//! Config resolves from control's per-tenant `tracking_config` (`GET /config/tracking`, box-authed,
+//! fetched once at [`spawn`] — mirrors `recording::RecordingConfig`'s fetch-once-at-boot pattern):
+//! `enabled` + `detect_ms` are box-global; `trackers` is the job list (each `{camera, class,
+//! lines[]}`), extracted from every enabled graph's matching `OnEvent` nodes on save. When control
+//! is unreachable or has no jobs configured yet, `TRACK_ENABLED=1` + `TRACK_CLASS` (default
+//! `person`) + `TRACK_CAMERA` (default `*` — every camera with a stream, like the pre-per-job
+//! behaviour; a specific id/ip/name/`"first"` scopes to one) + `TRACK_LINES` (optional,
+//! `name:x1,y1,x2,y2;...` normalized `0.0..1.0` frame coords) synthesize a single dev/single-box
+//! fallback job.
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use app_core::agent::detector::{self, Detection};
-use app_core::tracking::{MultiTracker, TrackEvent, TrackerConfig};
+use app_core::tracking::{Line, MultiTracker, Polygon, TrackEvent, TrackerConfig, ZoneTrigger};
 
 use crate::state::{AppState, TrackEventOut};
 
-struct Cfg {
+/// One resolved tracking job: a class to detect on a camera (`"*"` = every camera with a stream,
+/// matching the pre-per-job behaviour; a specific id/ip/name/`"first"` scopes to one), that job's
+/// own crossing lines, and an optional zone: when set, `object_entered`/`object_exited` mean
+/// entering/leaving THIS polygon specifically (see `run_track`'s event translation) instead of
+/// the whole-frame track lifecycle. The manager reconciles one worker per (job, resolved camera ip).
+struct Job {
+    camera: String,
     class_name: String,
     class_id: u32,
+    lines: Vec<Line>,
+    zone: Option<Polygon>,
+    zone_trigger: ZoneTrigger,
+}
+
+struct Cfg {
     detect_gap: Duration,
+    jobs: Vec<Job>,
 }
 
 impl Cfg {
-    /// Returns `None` when tracking is disabled or the class name is unknown (→ manager no-ops).
-    fn from_env() -> Option<Cfg> {
-        let on = std::env::var("TRACK_ENABLED").map(|v| matches!(v.trim(), "1" | "true" | "yes")).unwrap_or(false);
-        if !on {
+    /// Resolve tracking config for this box: control's per-tenant `tracking_config` (`GET
+    /// /config/tracking`, box-authed) is authoritative when it has any jobs; otherwise (control
+    /// unreachable, or a box not yet configured from the graph editor) `TRACK_ENABLED=1`
+    /// synthesizes one dev/single-box fallback job from the `TRACK_*` env vars. Returns `None`
+    /// when tracking ends up disabled, or every configured job's class is unrecognized.
+    fn load(control_url: &str) -> Option<Cfg> {
+        let remote = fetch_remote(control_url);
+        let env_on = std::env::var("TRACK_ENABLED").map(|v| matches!(v.trim(), "1" | "true" | "yes")).unwrap_or(false);
+        let enabled = env_on || remote.as_ref().map(|r| r.enabled).unwrap_or(false);
+        if !enabled {
             return None;
         }
-        let class_name = std::env::var("TRACK_CLASS").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "person".to_string());
-        let class_id = detector::class_id_for_name(&class_name)?;
-        let ms = std::env::var("TRACK_DETECT_MS").ok().and_then(|s| s.trim().parse().ok()).unwrap_or(400u64).max(100);
-        Some(Cfg { class_name, class_id, detect_gap: Duration::from_millis(ms) })
+        let ms = remote
+            .as_ref()
+            .and_then(|r| r.detect_ms)
+            .or_else(|| std::env::var("TRACK_DETECT_MS").ok().and_then(|s| s.trim().parse().ok()))
+            .unwrap_or(400u64)
+            .max(100);
+
+        let mut jobs: Vec<Job> = remote
+            .map(|r| r.trackers)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|t| {
+                let class_id = detector::class_id_for_name(&t.class)?;
+                Some(Job { camera: t.camera, class_name: t.class, class_id, lines: t.lines, zone: t.zone, zone_trigger: t.zone_trigger })
+            })
+            .collect();
+
+        // Dev/single-box fallback: control has no jobs for this box (unreachable, or none
+        // configured yet from the graph editor) — synthesize one from the env vars, same shape
+        // tracking had before per-job config landed. No env-var zone syntax — a fallback job is
+        // always whole-frame; draw a zone from the graph editor's OnEvent property panel instead.
+        if jobs.is_empty() {
+            let class_name = std::env::var("TRACK_CLASS").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "person".to_string());
+            if let Some(class_id) = detector::class_id_for_name(&class_name) {
+                let camera = std::env::var("TRACK_CAMERA").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "*".to_string());
+                let lines = std::env::var("TRACK_LINES").ok().map(|s| parse_lines(&s)).unwrap_or_default();
+                jobs.push(Job { camera, class_name, class_id, lines, zone: None, zone_trigger: ZoneTrigger::Intersects });
+            }
+        }
+        if jobs.is_empty() {
+            return None; // enabled, but nothing recognizable to track
+        }
+        Some(Cfg { detect_gap: Duration::from_millis(ms), jobs })
     }
 }
 
-/// Spawn the tracking manager: every 30s reconcile one worker per camera that has a resolvable
-/// stream, exactly like the motion manager. No-op (returns immediately) unless `TRACK_ENABLED=1`.
+/// The subset of control's `tracking_config` jsonb the edge cares about — mirrors
+/// `sentinel-edge::recording::RecordingConfig`'s shape/fetch style. `#[serde(default)]`
+/// everywhere so an older/partial config (or the DB column's bare `{}` default) still parses.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RemoteConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    detect_ms: Option<u64>,
+    #[serde(default)]
+    trackers: Vec<TrackerSpec>,
+}
+
+/// One `{camera, class, lines, zone}` job as control reports it — extracted from every enabled
+/// graph's `OnEvent("object_entered"/"object_exited"/"line_crossed")` nodes on save (grouped so
+/// two nodes naming the same camera+class share one job/uuid-space, their lines merged). `zone`
+/// (drawn in the same property panel, a "region of interest" alternative to whole-frame
+/// enter/exit) is only meaningful set on ONE of those nodes per camera+class — control keeps
+/// whichever it saw last; see `sync_tracking_config`.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct TrackerSpec {
+    camera: String,
+    class: String,
+    #[serde(default)]
+    lines: Vec<Line>,
+    #[serde(default)]
+    zone: Option<Polygon>,
+    #[serde(default)]
+    zone_trigger: ZoneTrigger,
+}
+
+/// `GET /config/tracking` (box-authed) → this box's tenant's tracking config, if reachable.
+/// Best-effort like `recording`'s `fetch_config`: `None` on any failure, never fatal.
+fn fetch_remote(control_url: &str) -> Option<RemoteConfig> {
+    let url = format!("{control_url}/config/tracking");
+    let mut req = ureq::AgentBuilder::new().timeout(Duration::from_secs(10)).build().get(&url);
+    if let Ok(t) = std::env::var("BOX_TOKEN") {
+        let t = t.trim();
+        if !t.is_empty() {
+            req = req.set("Authorization", &format!("Bearer {t}"));
+        }
+    }
+    match req.call() {
+        Ok(resp) => resp.into_json::<RemoteConfig>().ok(),
+        Err(e) => {
+            log::debug!("tracking config fetch failed (using env-var fallback): {e}");
+            None
+        }
+    }
+}
+
+/// Parse `TRACK_LINES` — one or more `name:x1,y1,x2,y2` line defs (normalized `0.0..1.0` frame
+/// coords), `;`-separated, e.g. `"gate:0.5,0.0,0.5,1.0;till:0.0,0.9,1.0,0.9"`. A malformed entry
+/// is skipped (logged), not fatal — the rest of the config still loads. `camera` is left empty —
+/// meaningless here, since the env-var fallback's single job already carries its own `camera`.
+fn parse_lines(raw: &str) -> Vec<Line> {
+    raw.split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter_map(|entry| {
+            let (name, coords) = entry.split_once(':')?;
+            let nums: Vec<f32> = coords.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+            let [x1, y1, x2, y2] = nums[..] else {
+                log::warn!("TRACK_LINES: skipping malformed line entry {entry:?}");
+                return None;
+            };
+            Some(Line { camera: String::new(), name: name.trim().to_string(), p1: (x1, y1), p2: (x2, y2) })
+        })
+        .collect()
+}
+
+/// Spawn the tracking manager: every 30s reconcile one worker per (job, resolved camera ip) —
+/// a job's `camera == "*"` expands to every camera with a stream, a specific id/ip/name/`"first"`
+/// resolves to exactly one. No-op (returns immediately) unless tracking resolves enabled (control's
+/// `tracking_config` or `TRACK_ENABLED=1` — see [`Cfg::load`]).
 pub fn spawn(state: &Arc<AppState>) {
-    let Some(cfg) = Cfg::from_env() else {
-        log::info!("object tracking disabled (set TRACK_ENABLED=1 to enable)");
+    let Some(cfg) = Cfg::load(&state.control_url) else {
+        log::info!("object tracking disabled (enable via the box's tracking config, or TRACK_ENABLED=1)");
         return;
     };
     let cfg = Arc::new(cfg);
     let state = Arc::clone(state);
     std::thread::spawn(move || {
-        log::info!("object tracker: manager started (class={}, detect every {}ms)", cfg.class_name, cfg.detect_gap.as_millis());
-        let mut running: HashMap<String, Arc<AtomicBool>> = HashMap::new();
+        log::info!("object tracker: manager started ({} job(s), detect every {}ms)", cfg.jobs.len(), cfg.detect_gap.as_millis());
+        // Keyed by (job index, resolved camera ip) — a "*" job expands to several entries.
+        let mut running: HashMap<(usize, String), Arc<AtomicBool>> = HashMap::new();
         loop {
-            let desired: Vec<String> = {
-                let devs = state.devices.lock().unwrap();
-                devs.iter().filter(|d| has_stream(d)).map(|d| d.ip.clone()).collect()
-            };
-            let want: HashSet<&String> = desired.iter().collect();
-            running.retain(|ip, stop| {
-                let keep = want.contains(ip);
+            let devices = state.devices.lock().unwrap().clone();
+            let desired: Vec<(usize, String)> = cfg
+                .jobs
+                .iter()
+                .enumerate()
+                .flat_map(|(ji, job)| resolve_job_cameras(job, &devices).into_iter().map(move |ip| (ji, ip)))
+                .collect();
+            let want: HashSet<&(usize, String)> = desired.iter().collect();
+            running.retain(|key, stop| {
+                let keep = want.contains(key);
                 if !keep {
                     stop.store(true, Ordering::Relaxed);
                 }
                 keep
             });
-            for ip in &desired {
-                if !running.contains_key(ip) {
+            for key in &desired {
+                if !running.contains_key(key) {
                     let stop = Arc::new(AtomicBool::new(false));
-                    running.insert(ip.clone(), Arc::clone(&stop));
-                    let (st, ip2, c) = (Arc::clone(&state), ip.clone(), Arc::clone(&cfg));
-                    std::thread::spawn(move || watch(st, ip2, c, stop));
+                    running.insert(key.clone(), Arc::clone(&stop));
+                    let (st, k, c) = (Arc::clone(&state), key.clone(), Arc::clone(&cfg));
+                    std::thread::spawn(move || watch(st, k.1, k.0, c, stop));
                 }
             }
             std::thread::sleep(Duration::from_secs(30));
@@ -76,24 +215,40 @@ pub fn spawn(state: &Arc<AppState>) {
     });
 }
 
+/// Which camera ip(s) a job's `camera` selector currently resolves to, restricted to cameras
+/// with a resolvable stream (mirrors the motion manager's `has_stream` gate).
+fn resolve_job_cameras(job: &Job, devices: &[app_core::devices::Device]) -> Vec<String> {
+    if job.camera == "*" {
+        return devices.iter().filter(|d| has_stream(d)).map(|d| d.ip.clone()).collect();
+    }
+    match app_core::device_actions::resolve_device(devices, &job.camera) {
+        Ok(idx) if has_stream(&devices[idx]) => vec![devices[idx].ip.clone()],
+        _ => Vec::new(),
+    }
+}
+
 fn has_stream(d: &app_core::devices::Device) -> bool {
     d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false)
 }
 
-/// One camera's supervised loop: run the tracker until stopped, retrying on error.
-fn watch(state: Arc<AppState>, ip: String, cfg: Arc<Cfg>, stop: Arc<AtomicBool>) {
-    log::info!("object tracker[{ip}]: starting");
+/// One (job, camera)'s supervised loop: run the tracker until stopped, retrying on error.
+fn watch(state: Arc<AppState>, ip: String, job_idx: usize, cfg: Arc<Cfg>, stop: Arc<AtomicBool>) {
+    let class_name = cfg.jobs[job_idx].class_name.clone();
+    log::info!("object tracker[{ip}/{job_idx}]: starting ({class_name})");
     while !stop.load(Ordering::Relaxed) {
-        run_track(&state, &ip, &cfg, &stop);
+        run_track(&state, &ip, &cfg.jobs[job_idx], cfg.detect_gap, &stop);
         if stop.load(Ordering::Relaxed) {
             break;
         }
         std::thread::sleep(Duration::from_secs(5));
     }
-    log::info!("object tracker[{ip}]: stopped");
+    // This job is gone (camera/class no longer desired) — drop its stale live-state entry so
+    // GET /tracks/:ip doesn't keep reporting long-departed tracks as still present.
+    state.live_tracks.lock().unwrap().remove(&(ip.clone(), class_name));
+    log::info!("object tracker[{ip}/{job_idx}]: stopped");
 }
 
-fn run_track(state: &Arc<AppState>, ip: &str, cfg: &Cfg, stop: &AtomicBool) {
+fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, stop: &AtomicBool) {
     // Edge-tuned lifecycle: confirm fast (2 hits), exit after ~a few unmatched detection cycles.
     let tcfg = TrackerConfig { min_hits: 2, max_age: 8, ..TrackerConfig::default() };
     let mut tracker = MultiTracker::new(tcfg);
@@ -107,51 +262,125 @@ fn run_track(state: &Arc<AppState>, ip: &str, cfg: &Cfg, stop: &AtomicBool) {
         let jpeg = match app_core::go2rtc::frame_from(&agent, &base, ip) {
             Ok(b) => b,
             Err(_) => {
-                std::thread::sleep(cfg.detect_gap);
+                std::thread::sleep(detect_gap);
                 continue;
             }
         };
-        // YOLOX on the JPEG (pure tract, no OpenCV), filtered to the tracked class.
+        // YOLOX on the JPEG (pure tract, no OpenCV), filtered to this job's tracked class.
         let dets: Vec<Detection> = match detector::detect(&jpeg) {
-            Ok(v) => v.into_iter().filter(|d| d.class == cfg.class_id).collect(),
+            Ok(v) => v.into_iter().filter(|d| d.class == job.class_id).collect(),
             Err(e) => {
                 log::debug!("object tracker[{ip}]: detect failed: {e}");
-                std::thread::sleep(cfg.detect_gap);
+                std::thread::sleep(detect_gap);
                 continue;
             }
         };
         let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-        let events = tracker.update(&dets, now_ms);
+        // Lines/zone need the frame's pixel size to scale their normalized coords — skip that
+        // lookup entirely (and fall back to plain `update`) when neither is configured.
+        let events = if job.lines.is_empty() && job.zone.is_none() {
+            tracker.update(&dets, now_ms)
+        } else {
+            match detector::dimensions(&jpeg) {
+                Ok((w, h)) => tracker.update_full(&dets, now_ms, (w as f32, h as f32), &job.lines, job.zone.as_ref().map(|z| (z, job.zone_trigger))),
+                Err(e) => {
+                    log::debug!("object tracker[{ip}]: frame dimensions failed: {e}");
+                    tracker.update(&dets, now_ms)
+                }
+            }
+        };
         let count = tracker.count() as i64;
         if debug {
             log::info!("object tracker[{ip}]: {} det, {} tracked, {} event(s)", dets.len(), count, events.len());
         }
+        // Publish this cycle's "state of the world" for GET /tracks/:ip (the GetTrackedObjects
+        // node's backing store) — this job's own key only, never touching another job's entry.
+        let snapshot: Vec<crate::state::LiveTrackOut> = tracker
+            .confirmed()
+            .map(|t| crate::state::LiveTrackOut {
+                uuid: t.uuid.to_string(),
+                class: job.class_name.clone(),
+                bbox: to_i32(t.bbox()),
+                zone: match (&job.zone, t.zone_inside()) {
+                    (Some(z), Some(true)) => z.name.clone(),
+                    _ => String::new(),
+                },
+            })
+            .collect();
+        state.live_tracks.lock().unwrap().insert((ip.to_string(), job.class_name.clone()), snapshot);
         for ev in events {
+            // When a zone is configured, `object_entered`/`object_exited` mean entering/leaving
+            // THAT polygon (see `TrackEvent::ZoneEntered`/`ZoneExited` below) — the whole-frame
+            // lifecycle events are suppressed so the job only ever reports one enter/exit story,
+            // not both. Without a zone, whole-frame events are exactly what's pushed, as before.
             let out = match ev {
-                TrackEvent::Entered { uuid, bbox, .. } => TrackEventOut {
+                TrackEvent::Entered { uuid, bbox, .. } if job.zone.is_none() => TrackEventOut {
                     kind: "object_entered".into(),
                     camera_ip: ip.to_string(),
                     uuid: uuid.to_string(),
-                    class: cfg.class_name.clone(),
+                    class: job.class_name.clone(),
                     bbox: to_i32(bbox),
                     count,
                     dwell_secs: None,
+                    line: None,
+                    direction: None,
+                    zone: None,
                 },
-                TrackEvent::Exited { uuid, bbox, dwell_ms, .. } => TrackEventOut {
+                TrackEvent::Exited { uuid, bbox, dwell_ms, .. } if job.zone.is_none() => TrackEventOut {
                     kind: "object_exited".into(),
                     camera_ip: ip.to_string(),
                     uuid: uuid.to_string(),
-                    class: cfg.class_name.clone(),
+                    class: job.class_name.clone(),
                     bbox: to_i32(bbox),
                     count,
                     dwell_secs: Some((dwell_ms / 1000) as i64),
+                    line: None,
+                    direction: None,
+                    zone: None,
+                },
+                TrackEvent::Entered { .. } | TrackEvent::Exited { .. } => continue, // zone job: whole-frame events suppressed
+                TrackEvent::Crossed { uuid, line, direction, .. } => TrackEventOut {
+                    kind: "line_crossed".into(),
+                    camera_ip: ip.to_string(),
+                    uuid: uuid.to_string(),
+                    class: job.class_name.clone(),
+                    bbox: [0; 4], // not meaningful for a crossing — the uuid ties it back to the entity
+                    count,
+                    dwell_secs: None,
+                    line: Some(line),
+                    direction: Some(direction.as_str().to_string()),
+                    zone: None,
+                },
+                TrackEvent::ZoneEntered { uuid, zone, .. } => TrackEventOut {
+                    kind: "object_entered".into(),
+                    camera_ip: ip.to_string(),
+                    uuid: uuid.to_string(),
+                    class: job.class_name.clone(),
+                    bbox: [0; 4], // the tracker doesn't recompute a fresh bbox for a zone event
+                    count,
+                    dwell_secs: None,
+                    line: None,
+                    direction: None,
+                    zone: Some(zone),
+                },
+                TrackEvent::ZoneExited { uuid, zone, dwell_ms, .. } => TrackEventOut {
+                    kind: "object_exited".into(),
+                    camera_ip: ip.to_string(),
+                    uuid: uuid.to_string(),
+                    class: job.class_name.clone(),
+                    bbox: [0; 4],
+                    count,
+                    dwell_secs: Some((dwell_ms / 1000) as i64),
+                    line: None,
+                    direction: None,
+                    zone: Some(zone),
                 },
             };
             log::info!("object tracker[{ip}]: {} {} (count={count})", out.kind, out.uuid);
             state.push_track_event(&out);
         }
         // Pace to the detection cadence (detection itself costs tens of ms).
-        if let Some(rem) = cfg.detect_gap.checked_sub(tick.elapsed()) {
+        if let Some(rem) = detect_gap.checked_sub(tick.elapsed()) {
             std::thread::sleep(rem);
         }
     }

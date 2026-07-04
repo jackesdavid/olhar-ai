@@ -37,6 +37,7 @@ pub fn router(state: AppState) -> Router {
         .route("/config/track-event", post(track_event_push))
         .route("/config/recording", get(recording_config))
         .route("/config/recordings/clip-metadata", post(clip_push))
+        .route("/config/tracking", get(tracking_config))
         .merge(handlers::router())
         .merge(crate::domain::router())
         .nest_service("/edge", ServeDir::new(edge_dist))
@@ -315,9 +316,11 @@ async fn disk_alert_push(State(st): State<AppState>, headers: HeaderMap, body: O
 }
 
 /// An object-tracker lifecycle event from the edge (card: edge tracking). `kind` is the event name
-/// (`object_entered` / `object_exited`); the rest is the typed payload the `Track` node / `OnEvent`
-/// reads. Bbox arrives canonical xyxy (the edge already works in source pixels). Durable-enqueued
-/// like motion, so it survives a flow restart.
+/// (`object_entered` / `object_exited` / `line_crossed`); the rest is the typed payload an
+/// `OnEvent` node reads. Bbox arrives canonical xyxy (the edge already works in source pixels;
+/// meaningless — `[0;4]` — for `line_crossed` (carries `line`/`direction` instead) and for a
+/// zone-scoped `object_entered`/`object_exited` (carries `zone` instead). Durable-enqueued like
+/// motion, so it survives a flow restart.
 #[derive(serde::Deserialize)]
 struct TrackEventIn {
     kind: String,
@@ -328,6 +331,12 @@ struct TrackEventIn {
     count: i64,
     #[serde(default)]
     dwell_secs: Option<i64>,
+    #[serde(default)]
+    line: Option<String>,
+    #[serde(default)]
+    direction: Option<String>,
+    #[serde(default)]
+    zone: Option<String>,
 }
 
 async fn track_event_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<TrackEventIn>>) -> Response {
@@ -340,7 +349,7 @@ async fn track_event_push(State(st): State<AppState>, headers: HeaderMap, body: 
         return (StatusCode::BAD_REQUEST, "track-event body required").into_response();
     };
     // Only the tracking events are accepted (guards against a stray/mistyped kind enqueuing junk).
-    if ev.kind != "object_entered" && ev.kind != "object_exited" {
+    if ev.kind != "object_entered" && ev.kind != "object_exited" && ev.kind != "line_crossed" {
         return (StatusCode::BAD_REQUEST, "unknown track-event kind").into_response();
     }
     let mut payload = json!({
@@ -350,8 +359,17 @@ async fn track_event_push(State(st): State<AppState>, headers: HeaderMap, body: 
         "bbox": ev.bbox,
         "count": ev.count,
     });
-    if let (Some(obj), Some(d)) = (payload.as_object_mut(), ev.dwell_secs) {
-        obj.insert("dwell_secs".to_string(), json!(d));
+    if let Some(obj) = payload.as_object_mut() {
+        if let Some(d) = ev.dwell_secs {
+            obj.insert("dwell_secs".to_string(), json!(d));
+        }
+        if let (Some(line), Some(direction)) = (ev.line, ev.direction) {
+            obj.insert("line".to_string(), json!(line));
+            obj.insert("direction".to_string(), json!(direction));
+        }
+        if let Some(zone) = ev.zone {
+            obj.insert("zone".to_string(), json!(zone));
+        }
     }
     app_core::event_queue::enqueue(&st.db, tenant, &ev.kind, "edge", &payload);
     StatusCode::NO_CONTENT.into_response()
@@ -434,6 +452,30 @@ async fn recording_config(State(st): State<AppState>, headers: HeaderMap) -> Res
         Ok(None) => (StatusCode::UNAUTHORIZED, "unknown box token").into_response(),
         Err(e) => {
             log::error!("recording_config_by_token: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response()
+        }
+    }
+}
+
+/// Return the tracking config (card: edge tracking) for the authenticated edge box — the
+/// per-tenant enabled/class/detect_ms/lines the edge prefers over its env-var defaults.
+/// Mirrors [`recording_config`].
+async fn tracking_config(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let Some(tok) = token else {
+        return (StatusCode::UNAUTHORIZED, "box token required").into_response();
+    };
+    let hash = hex::encode(Sha256::digest(tok.as_bytes()));
+    match store::tracking_config_by_token(&st.pool, &hash).await {
+        Ok(Some(cfg)) => Json(cfg).into_response(),
+        Ok(None) => (StatusCode::UNAUTHORIZED, "unknown box token").into_response(),
+        Err(e) => {
+            log::error!("tracking_config_by_token: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response()
         }
     }

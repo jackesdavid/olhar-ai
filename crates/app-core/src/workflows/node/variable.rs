@@ -45,6 +45,9 @@ fn zero_value(ty: PortType) -> Option<PortValue> {
         | PortType::Person
         | PortType::Face
         | PortType::Camera
+        | PortType::Region
+        | PortType::TrackedObject
+        | PortType::TrackedObjectArray
         | PortType::Exec
         | PortType::Any => return None,
     })

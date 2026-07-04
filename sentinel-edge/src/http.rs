@@ -23,6 +23,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/devices", get(devices))
         .route("/streams", get(streams))
         .route("/snapshot/:ip", get(snapshot))
+        .route("/tracks/:ip", get(tracks))
         .route("/reload", post(reload))
         .route("/recordings", get(recordings_list))
         .route("/storage/stats", get(storage_stats))
@@ -111,6 +112,22 @@ async fn snapshot(State(state): State<Arc<AppState>>, Path(ip): Path<String>) ->
         )
             .into_response(),
     }
+}
+
+/// The tracker's live "state of the world" for camera `ip` (card: edge tracking) — every
+/// currently-confirmed track across every job (class) watching this camera, from the shared
+/// snapshot each job's worker publishes every detection cycle. No live computation here; this is
+/// just a read of the last-known state, so it's cheap even under repeated polling.
+async fn tracks(State(state): State<Arc<AppState>>, Path(ip): Path<String>) -> impl IntoResponse {
+    let out: Vec<_> = state
+        .live_tracks
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|((track_ip, _), _)| track_ip == &ip)
+        .flat_map(|(_, tracks)| tracks.clone())
+        .collect();
+    Json(out)
 }
 
 /// Re-read the device list from Postgres (and restart go2rtc if owned).

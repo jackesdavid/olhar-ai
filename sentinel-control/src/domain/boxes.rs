@@ -30,6 +30,7 @@ pub fn router() -> Router<AppState> {
         .route("/boxes/:id/logs/stream", get(box_logs_stream))
         .route("/internal/box-upstream", get(box_upstream))
         .route("/boxes/:id/recording-config", axum::routing::patch(patch_recording_config))
+        .route("/boxes/:id/tracking-config", axum::routing::patch(patch_tracking_config))
         .route("/boxes/:id/storage-stats", get(storage_stats))
 }
 
@@ -232,6 +233,29 @@ async fn patch_recording_config(
         .await
         .map_err(|e| {
             log::error!("set_recording_config: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+        })?;
+    if !updated {
+        return Err(err(StatusCode::NOT_FOUND, "box not found"));
+    }
+    Ok(axum::response::Json(body))
+}
+
+/// Update the object-tracking config (card: edge tracking) for a box — enabled/class/detect_ms/
+/// lines. Mirrors [`patch_recording_config`]; the edge picks it up on its next restart (like
+/// recording config — there's no live-reload poll for either yet).
+async fn patch_tracking_config(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<Uuid>,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> Result<axum::response::Json<serde_json::Value>, ApiErr> {
+    auth::require(&c, "settings.write")?;
+    let tid = tenant_of(&c)?;
+    let updated = store::set_tracking_config(&st.pool, tid, id, body.clone())
+        .await
+        .map_err(|e| {
+            log::error!("set_tracking_config: {e}");
             err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
         })?;
     if !updated {

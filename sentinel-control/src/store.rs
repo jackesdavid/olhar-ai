@@ -467,6 +467,46 @@ pub async fn set_recording_config(pool: &PgPool, tenant_id: Uuid, box_id: Uuid, 
     Ok(r.rows_affected() > 0)
 }
 
+// ---- tracking config (per box, card: edge tracking P3+) --------------------
+
+/// The tracking_config jsonb for a specific box, resolved by its token hash — mirrors
+/// [`recording_config_by_token`].
+pub async fn tracking_config_by_token(pool: &PgPool, token_hash: &str) -> sqlx::Result<Option<serde_json::Value>> {
+    let row: Option<(serde_json::Value,)> = sqlx::query_as(
+        "SELECT tracking_config FROM tenant_boxes WHERE token_hash = $1",
+    )
+    .bind(token_hash)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(v,)| v))
+}
+
+/// The tracking_config jsonb for a specific box, resolved by its id — used by the graph-save
+/// sync (`workflows::sync_tracking_config`) to read a box's current `enabled`/`detect_ms` before
+/// overwriting only `trackers` with what the graphs now declare.
+pub async fn tracking_config_by_id(pool: &PgPool, tenant_id: Uuid, box_id: Uuid) -> sqlx::Result<Option<serde_json::Value>> {
+    let row: Option<(serde_json::Value,)> = sqlx::query_as(
+        "SELECT tracking_config FROM tenant_boxes WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant_id)
+    .bind(box_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(v,)| v))
+}
+
+pub async fn set_tracking_config(pool: &PgPool, tenant_id: Uuid, box_id: Uuid, config: serde_json::Value) -> sqlx::Result<bool> {
+    let r = sqlx::query(
+        "UPDATE tenant_boxes SET tracking_config = $1 WHERE tenant_id = $2 AND id = $3",
+    )
+    .bind(config)
+    .bind(tenant_id)
+    .bind(box_id)
+    .execute(pool)
+    .await?;
+    Ok(r.rows_affected() > 0)
+}
+
 // ---- persistent edge commands (survive control restarts) -------------------
 
 /// Set a pending command flag for a box. Idempotent.

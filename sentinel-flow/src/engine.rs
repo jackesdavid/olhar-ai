@@ -386,13 +386,20 @@ pub fn fire_event(
     emitting_run_id: Option<Uuid>,
     payload: PortValues,
 ) {
+    // The firing event's own camera (if it has one — most system events don't), + this tenant's
+    // devices, so `on_event_node` can gate delivery to only the `OnEvent` nodes actually scoped
+    // to that camera (a plain config literal, or wired from `GetCameraByName`) instead of firing
+    // every listener in the tenant regardless of which camera the event is about.
+    let event_camera = payload.get("camera").and_then(app_core::workflows::PortValue::as_text).map(str::to_string);
+    let devices = app_core::devices::repo::load(&state.db, tenant);
+
     // Snapshot listeners (don't hold the store lock while spawning).
     let listeners: Vec<(Uuid, String, u32)> = {
         let s = state.store.lock().unwrap();
         s.iter()
             .filter(|(t, g)| *t == tenant && g.enabled)
             .filter_map(|(_, g)| {
-                workflows::on_event_node(g, &event).map(|e| (g.id, g.name.clone(), e))
+                workflows::on_event_node(g, &event, event_camera.as_deref(), &devices).map(|e| (g.id, g.name.clone(), e))
             })
             .collect()
     };

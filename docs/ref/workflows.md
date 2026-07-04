@@ -59,6 +59,47 @@ Events live in a per-tenant **registry** (`tenant_events` + `tenant_event_catego
 system catalog; the editor palette synthesizes per-event "On event: Foo" / "Emit event: Foo"
 entries grouped by category.
 
+## Gated events: inputs that filter delivery (card: edge tracking)
+
+**Standing decision: a new event-driven feature is a new *event* + gating inputs on `OnEvent`,
+never a new node kind.** This was tried once (a `Track` node with `entered`/`exited`/`crossed`
+exec-branch arms) and reverted — it needed new engine dispatch (matching a *set* of event kinds
+to one node, routing to a branch, seeding per-branch ports) that duplicates what `OnEvent` +
+the event registry already do generically. Extend the mechanism below instead.
+
+**The mechanism.** `OnEvent` can carry extra, config-derived **input** ports for a specific
+event — `GraphNode::input_ports`'s `on_event_input_ports(config)` (mirrors `payload_ports` for
+its dynamic *output* ports). Today: `camera` (`PortType::Camera`) and `region`
+(`PortType::Region`), present only when `config.event` is `object_entered`/`object_exited`/
+`line_crossed`. These aren't just displayed — they **gate whether the node fires at all**:
+
+- `Graph::resolve_camera_selector(node)` — the node's `camera` input's current value: the wired
+  `GetCameraByName`'s `config.camera`, or (no wire) the node's own `config.camera` literal. Same
+  wire-overrides-config pattern as `ObjectDetection`'s `class` input.
+- `Graph::resolve_region(node)` — the wired `Region` node's `name`+`points` (no literal fallback
+  — there's no sensible way to hand-type a polygon). `Region` is a pure, config-only node (like
+  `GetCameraByName`) whose whole job is holding reusable geometry; wire the SAME `Region` node
+  into several `OnEvent`s so they share one definition instead of each re-drawing it. Whether its
+  points mean a line or a zone is decided by the *reading* node, purely by count (2 = line,
+  `line_crossed`; 3+ = zone, `object_entered`/`object_exited`) — `Region` itself doesn't know or
+  care which.
+- `on_event_node(graph, event, event_camera, devices)` (`engine.rs`) is the actual gate: no
+  camera on the event (e.g. `telegram_message`) → no filtering. Node unscoped (no camera
+  resolved) → matches any camera (today's behavior, unchanged). Node scoped → the event's own
+  camera (`payload["camera"]`) must resolve to the SAME device. `sentinel-flow::fire_event` is
+  the one caller — it loads the tenant's devices once per fire and passes them through.
+
+**Extending this for the next scoping need** (e.g. gating by `class`, or a future zone-adjacent
+concept): add the input port in `on_event_input_ports`, a `Graph::resolve_*` helper beside
+`resolve_camera_selector`/`resolve_region`, and one more condition in `on_event_node`'s match —
+not a new node kind, not new dispatch plumbing.
+
+**Query counterpart.** `GetTrackedObjects` is the pull-based twin of the entered/exited/crossed
+*events* — "what's tracked right now" (an action node, camera in → `TrackedObjectArray` out,
+`GET {edge_api}/tracks/{ip}`) instead of "something just changed". Reach for this pattern
+(event for transitions + an on-demand `GetX` node for current state) before inventing a
+stateful/polling node kind for a "check on my own schedule" need.
+
 ## Run history + visibility
 
 `workflow_runs` (trigger_source manual|cron|event, source graph + event for event-runs,
@@ -82,4 +123,8 @@ Each run builds a `ToolContext` with the tenant's devices/alerts/beacons freshly
 frame source bound to the tenant's edge go2rtc (`EdgeFrameSource` over the tailnet box host).
 Editor catalog auto-derives from `NodeKind::ALL` — adding a node kind needs `domain.rs` (enum
 + ALL + slug/label/category/ports/default_config) + a `run_node` arm; no `agent/tools.rs`
-change (that's the chat agent, not workflow nodes).
+change (that's the chat agent, not workflow nodes). An edge-facing action node (camera in,
+network call out) reaches the tenant's edge via `resolve_edge_api_base(sys)` (tailnet, port
+8080 — `recording.rs`; reused by `GetTrackedObjects`), NOT the `frames`/go2rtc port, which is
+snapshot-only. If the new kind is really "react to X" rather than "fetch/do X", see **Gated
+events** above before reaching for a new node kind at all.

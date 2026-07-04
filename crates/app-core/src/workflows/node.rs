@@ -63,6 +63,10 @@ pub enum PortValue {
     Camera(crate::workflows::domain::CameraEntity),
     /// A bounding box (canonical xyxy pixels). Carried by `Bbox` ports.
     Bbox(crate::workflows::domain::BBox),
+    /// A reusable named line/zone (2 points = line, 3+ = polygon). Carried by `Region` ports.
+    Region(crate::workflows::domain::RegionValue),
+    /// One currently-tracked entity (element of `GetTrackedObjects`' `TrackedObjectArray`).
+    TrackedObject(crate::workflows::domain::TrackedObjectInfo),
 }
 
 impl PortValue {
@@ -135,6 +139,18 @@ impl PortValue {
     pub fn as_bbox(&self) -> Option<crate::workflows::domain::BBox> {
         match self {
             PortValue::Bbox(b) => Some(*b),
+            _ => None,
+        }
+    }
+    pub fn as_region(&self) -> Option<&crate::workflows::domain::RegionValue> {
+        match self {
+            PortValue::Region(r) => Some(r),
+            _ => None,
+        }
+    }
+    pub fn as_tracked_object(&self) -> Option<&crate::workflows::domain::TrackedObjectInfo> {
+        match self {
+            PortValue::TrackedObject(t) => Some(t),
             _ => None,
         }
     }
@@ -249,6 +265,9 @@ pub fn literal_for_named(config: &Value, name: &str, ty: PortType) -> Option<Por
         | PortType::Person
         | PortType::Face
         | PortType::Bbox
+        | PortType::Region
+        | PortType::TrackedObject
+        | PortType::TrackedObjectArray
         | PortType::Any => None,
     }
 }
@@ -372,9 +391,11 @@ pub fn run_node(
         NodeKind::CreateAlert => alerts::run_create_alert(config, inputs, sys),
         NodeKind::DeliverAlert => alerts::run_deliver_alert(inputs, sys),
         NodeKind::CameraSnapshot => camera::run_camera_snapshot(inputs, sys),
+        NodeKind::GetTrackedObjects => camera::run_get_tracked_objects(inputs, sys),
         NodeKind::GetCurrentFrame => camera::run_get_current_frame(config, inputs, sys),
         NodeKind::GetCameraByName => camera::run_get_camera_by_name(config, sys),
         NodeKind::BreakCamera => camera::run_break_camera(inputs),
+        NodeKind::Region => camera::run_region(config, inputs, sys),
         NodeKind::DescribeImage => ai::run_describe_image(config, inputs, sys),
         NodeKind::NotifyRecipient => recipients::run_notify_recipient(inputs, sys),
         NodeKind::Format => text::run_format(config, inputs),
@@ -456,7 +477,7 @@ pub fn run_node(
 /// so a stuck node aborts the run (and frees its concurrency slot) instead of hanging forever.
 pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duration> {
     let default_secs = match kind {
-        NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame => 10,
+        NodeKind::CameraSnapshot | NodeKind::GetCurrentFrame | NodeKind::GetTrackedObjects => 10,
         NodeKind::AskAi => 65,
         NodeKind::PersonDetection | NodeKind::ObjectDetection | NodeKind::MotionDetection => 30,
         NodeKind::MotionWatch => 20, // two camera grabs + the sample gap
@@ -508,6 +529,7 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::CameraSwitch
         | NodeKind::GetCameraByName
         | NodeKind::BreakCamera
+        | NodeKind::Region
         | NodeKind::Comment
         | NodeKind::Reroute
         | NodeKind::TimeGate
@@ -592,6 +614,7 @@ pub fn debug_summary(
         NodeKind::CreateAlert => txt("result").map(clip).unwrap_or_else(|| "alert created".into()),
         NodeKind::DeliverAlert => txt("result").map(clip).unwrap_or_else(|| "delivered".into()),
         NodeKind::CameraSnapshot => txt("result").map(clip).unwrap_or_else(|| "snapshot captured".into()),
+        NodeKind::GetTrackedObjects => format!("{} tracked object(s)", num("count").unwrap_or(0)),
         NodeKind::GetCurrentFrame => {
             let kb = inputs.get("image").and_then(PortValue::as_image).map_or(0, <[u8]>::len) / 1024;
             format!("current frame ({} KB, {} ms old)", kb, num("age_ms").unwrap_or(0))
@@ -786,6 +809,10 @@ pub fn debug_summary(
             let name = inputs.get("camera").and_then(PortValue::as_camera).map(|c| c.name.as_str()).unwrap_or("?");
             format!("break '{name}' → id/ip/name")
         }
+        NodeKind::Region => match outputs.get("region").and_then(PortValue::as_region) {
+            Some(r) => format!("region '{}' ({} point{})", r.name, r.points.len(), if r.points.len() == 1 { "" } else { "s" }),
+            None => "no region drawn".into(),
+        },
         NodeKind::Comment => "comment".into(),
         NodeKind::Reroute => "reroute".into(),
         NodeKind::StartRecording => {

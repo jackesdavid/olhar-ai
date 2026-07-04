@@ -70,6 +70,14 @@ pub fn detect(image_bytes: &[u8]) -> Result<Vec<Detection>, String> {
     Ok(nms(decode(&raw, ratio), IOU_THRESH))
 }
 
+/// The `(width, height)` of a JPEG/PNG frame in source pixels — for scaling normalized
+/// [`crate::tracking::Line`] coordinates to the same pixel space `Detection::xyxy` is in.
+pub fn dimensions(image_bytes: &[u8]) -> Result<(u32, u32), String> {
+    let img = image::load_from_memory(image_bytes)
+        .map_err(|e| format!("detector: decode frame: {e}"))?;
+    Ok((img.width(), img.height()))
+}
+
 /// Detect people only — `person`/`count`/`confidence` for the PersonDetection node.
 pub fn detect_person(image_bytes: &[u8]) -> Result<PersonResult, String> {
     let people: Vec<Detection> =

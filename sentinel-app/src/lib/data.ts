@@ -162,6 +162,17 @@ export const data = {
   // yet — callers fall back to file upload. The `ip` arg is kept for call-site compat.
   captureSnapshot: (_ip?: string): Promise<never> => cloudOnly("Camera capture"),
   ensureStreams: (): Promise<never> => cloudOnly("Live streams"),
+  /** A live JPEG snapshot of `ip` from the tenant's edge, via control's proxy (`GET
+   * /devices/:ip/snapshot`) — for the workflow editor's Region-drawing UI (card: edge
+   * tracking). Needs the Authorization header (image requests can't carry one), so this
+   * fetches a Blob rather than returning a plain `<img src>` URL. */
+  snapshotBlob: async (ip: string): Promise<Blob> => {
+    const headers: Record<string, string> = {};
+    if (auth.token) headers.Authorization = `Bearer ${auth.token}`;
+    const r = await fetch(`${API_BASE}/devices/${encodeURIComponent(ip)}/snapshot`, { headers });
+    if (!r.ok) throw new Error(`Snapshot failed (${r.status})`);
+    return r.blob();
+  },
 
   // ---- alerts -------------------------------------------------------------
   listAlerts: (): Promise<Alert[]> => api.get<Alert[]>("/alerts"),
