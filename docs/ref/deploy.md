@@ -33,8 +33,12 @@ stamps `LATEST_EDGE_VERSION`). Prereqs: **Docker Desktop running**; `gh` logged 
   The footer also shows the deployed commit (`VITE_COMMIT`, baked at build time).
 - **Edge**: `sentinel-edge/Cargo.toml` `version`. This drives `LATEST_EDGE_VERSION` (the
   Boxes "update available" badge) and the `v*` release tag. Tags track the edge version.
-- A "release" = bump web + edge together, commit, `task cloud-deploy`, and ship the edge
-  binary (below). Current: **web 0.4.1, edge 0.5.0**.
+  **Auto-bumped**: `task edge-publish` / `task edge-linux-publish` always bump the patch
+  version first (`task edge-bump-version` — keeps `Cargo.lock`'s own entry in lockstep too),
+  so a shipped edge binary's version always moves; you never need to (and shouldn't) hand-edit
+  it before publishing.
+- A "release" = bump web (by hand) + edge (automatic), commit, `task cloud-deploy`, and ship
+  the edge binary (below). Current: **web 0.4.1, edge 0.5.0**.
 
 ## The edge installer + binary (served by control)
 

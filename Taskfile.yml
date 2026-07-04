@@ -298,9 +298,27 @@ tasks:
       - rm -rf sentinel-edge/dist/ubuntu
       - 'echo "✓ sentinel-edge/dist/sentinel-edge-linux-x86_64-gnu ($(file sentinel-edge/dist/sentinel-edge-linux-x86_64-gnu | cut -d: -f2-))"'
 
-  edge-linux-publish:
-    desc: "Cross-build the Linux edge binary + scp to the VPS dist server as sentinel-edge-linux-x86_64 + redeploy control (bumps LATEST_EDGE_VERSION) + verify."
+  edge-bump-version:
+    desc: "Internal: bump sentinel-edge/Cargo.toml's patch version by 1. Every edge-publish/edge-linux-publish calls this FIRST, so a shipped binary's version always moves — never ships silently unchanged. Run standalone only if you want a bump with no build."
     cmds:
+      - |
+        set -e
+        CUR="$(awk -F'"' '/^version = /{print $2; exit}' sentinel-edge/Cargo.toml)"
+        NEXT="$(awk -F. -v OFS=. '{$3=$3+1; print}' <<< "$CUR")"
+        awk -v new="$NEXT" '!done && /^version = "/{sub(/"[^"]+"/, "\"" new "\""); done=1} {print}' \
+          sentinel-edge/Cargo.toml > sentinel-edge/Cargo.toml.bump && mv sentinel-edge/Cargo.toml.bump sentinel-edge/Cargo.toml
+        # Cargo.lock pins sentinel-edge's own version too — keep it in lockstep so a
+        # subsequent `cargo build` doesn't rewrite Cargo.lock as an unrelated-looking diff.
+        awk -v new="$NEXT" '
+          /^name = "sentinel-edge"$/ { print; getline; sub(/"[^"]+"/, "\"" new "\""); print; next }
+          { print }
+        ' sentinel-edge/Cargo.lock > sentinel-edge/Cargo.lock.bump && mv sentinel-edge/Cargo.lock.bump sentinel-edge/Cargo.lock
+        echo "✓ sentinel-edge version: ${CUR} → ${NEXT}"
+
+  edge-linux-publish:
+    desc: "Bump the edge version, cross-build the Linux edge binary + scp to the VPS dist server as sentinel-edge-linux-x86_64 + redeploy control (bumps LATEST_EDGE_VERSION) + verify."
+    cmds:
+      - task: edge-bump-version
       - task: edge-linux-build
       - |
         set -e
@@ -324,8 +342,9 @@ tasks:
         fi
 
   edge-publish:
-    desc: "Build the edge binary + scp to the VPS dist server + redeploy control (so LATEST_EDGE_VERSION matches) + verify. Full release in one shot."
+    desc: "Bump the edge version, build the edge binary + scp to the VPS dist server + redeploy control (so LATEST_EDGE_VERSION matches) + verify. Full release in one shot."
     cmds:
+      - task: edge-bump-version
       - task: edge-build
       - |
         set -e
