@@ -15,9 +15,12 @@
 //!
 //! Config resolves from control's per-tenant `tracking_config` (`GET /config/tracking`, box-authed,
 //! fetched once at [`spawn`] — mirrors `recording::RecordingConfig`'s fetch-once-at-boot pattern):
-//! `enabled` + `detect_ms` are box-global; `trackers` is the job list (each `{camera, class,
-//! lines[]}`), extracted from every enabled graph's matching `OnEvent` nodes on save. When control
-//! is unreachable or has no jobs configured yet, `TRACK_ENABLED=1` + `TRACK_CLASS` (default
+//! `detect_ms` is box-global; `trackers` is the job list (each `{camera, class, lines[]}`),
+//! extracted from every enabled graph's matching `OnEvent` nodes on save — **a job's mere
+//! presence in `trackers[]` is what enables tracking for it**, per-node, not some separate
+//! box-wide switch: wiring an `OnEvent(object_entered/object_exited/line_crossed)` node to a
+//! camera in a graph is both the config AND the enable action. When control is unreachable or
+//! has no jobs configured yet, `TRACK_ENABLED=1` + `TRACK_CLASS` (default
 //! `person`) + `TRACK_CAMERA` (default `*` — every camera with a stream, like the pre-per-job
 //! behaviour; a specific id/ip/name/`"first"` scopes to one) + `TRACK_LINES` (optional,
 //! `name:x1,y1,x2,y2;...` normalized `0.0..1.0` frame coords) synthesize a single dev/single-box
@@ -53,17 +56,15 @@ struct Cfg {
 
 impl Cfg {
     /// Resolve tracking config for this box: control's per-tenant `tracking_config` (`GET
-    /// /config/tracking`, box-authed) is authoritative when it has any jobs; otherwise (control
-    /// unreachable, or a box not yet configured from the graph editor) `TRACK_ENABLED=1`
+    /// /config/tracking`, box-authed) is authoritative when it has any jobs — a job existing in
+    /// `trackers[]` IS the enable signal, there is no separate box-level on/off switch. Otherwise
+    /// (control unreachable, or a box not yet configured from the graph editor) `TRACK_ENABLED=1`
     /// synthesizes one dev/single-box fallback job from the `TRACK_*` env vars. Returns `None`
-    /// when tracking ends up disabled, or every configured job's class is unrecognized.
+    /// when there are no configured jobs and no `TRACK_ENABLED=1` fallback, or every configured
+    /// job's class is unrecognized.
     fn load(control_url: &str) -> Option<Cfg> {
         let remote = fetch_remote(control_url);
         let env_on = std::env::var("TRACK_ENABLED").map(|v| matches!(v.trim(), "1" | "true" | "yes")).unwrap_or(false);
-        let enabled = env_on || remote.as_ref().map(|r| r.enabled).unwrap_or(false);
-        if !enabled {
-            return None;
-        }
         let ms = remote
             .as_ref()
             .and_then(|r| r.detect_ms)
@@ -81,11 +82,12 @@ impl Cfg {
             })
             .collect();
 
-        // Dev/single-box fallback: control has no jobs for this box (unreachable, or none
-        // configured yet from the graph editor) — synthesize one from the env vars, same shape
-        // tracking had before per-job config landed. No env-var zone syntax — a fallback job is
-        // always whole-frame; draw a zone from the graph editor's OnEvent property panel instead.
-        if jobs.is_empty() {
+        // Dev/single-box fallback: only when explicitly requested via TRACK_ENABLED=1 (control
+        // has no jobs for this box — unreachable, or none configured yet from the graph editor)
+        // — synthesize one from the env vars, same shape tracking had before per-job config
+        // landed. No env-var zone syntax — a fallback job is always whole-frame; draw a zone from
+        // the graph editor's OnEvent property panel instead.
+        if jobs.is_empty() && env_on {
             let class_name = std::env::var("TRACK_CLASS").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "person".to_string());
             if let Some(class_id) = detector::class_id_for_name(&class_name) {
                 let camera = std::env::var("TRACK_CAMERA").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "*".to_string());
@@ -94,7 +96,7 @@ impl Cfg {
             }
         }
         if jobs.is_empty() {
-            return None; // enabled, but nothing recognizable to track
+            return None; // no tracking jobs configured, and no TRACK_ENABLED=1 dev fallback
         }
         Some(Cfg { detect_gap: Duration::from_millis(ms), jobs })
     }
@@ -103,10 +105,10 @@ impl Cfg {
 /// The subset of control's `tracking_config` jsonb the edge cares about — mirrors
 /// `sentinel-edge::recording::RecordingConfig`'s shape/fetch style. `#[serde(default)]`
 /// everywhere so an older/partial config (or the DB column's bare `{}` default) still parses.
+/// The jsonb also carries a legacy `enabled` bool (dead: nothing ever sets it, and job presence
+/// in `trackers` is the real enable signal) — intentionally not deserialized here.
 #[derive(Debug, Clone, serde::Deserialize)]
 struct RemoteConfig {
-    #[serde(default)]
-    enabled: bool,
     #[serde(default)]
     detect_ms: Option<u64>,
     #[serde(default)]
@@ -173,11 +175,15 @@ fn parse_lines(raw: &str) -> Vec<Line> {
 
 /// Spawn the tracking manager: every 30s reconcile one worker per (job, resolved camera ip) —
 /// a job's `camera == "*"` expands to every camera with a stream, a specific id/ip/name/`"first"`
-/// resolves to exactly one. No-op (returns immediately) unless tracking resolves enabled (control's
-/// `tracking_config` or `TRACK_ENABLED=1` — see [`Cfg::load`]).
+/// resolves to exactly one. No-op (returns immediately) unless there's at least one tracking job
+/// (control's `tracking_config.trackers`, or a `TRACK_ENABLED=1` dev fallback — see [`Cfg::load`]).
 pub fn spawn(state: &Arc<AppState>) {
     let Some(cfg) = Cfg::load(&state.control_url) else {
-        log::info!("object tracking disabled (enable via the box's tracking config, or TRACK_ENABLED=1)");
+        log::info!(
+            "object tracking disabled: no tracking jobs configured (wire an OnEvent node for \
+             object_entered/object_exited/line_crossed to a camera in a graph, or set \
+             TRACK_ENABLED=1 for a dev fallback)"
+        );
         return;
     };
     let cfg = Arc::new(cfg);

@@ -120,8 +120,9 @@ fn main() {
     // Continuous motion detection (one OpenCV MOG2 watcher per camera). No-op stub unless
     // built with `--features motion`; the watchers POST normalized motion events to control.
     motion::spawn(&state);
-    // Continuous object tracking (one YOLOX+SORT worker per camera). Opt-in via TRACK_ENABLED=1;
-    // pushes object_entered/object_exited events to control.
+    // Continuous object tracking (one YOLOX+SORT worker per camera). Enabled per tracking job —
+    // i.e. per graph `OnEvent` node wired to a camera — not by any box-wide switch (TRACK_ENABLED=1
+    // only synthesizes a dev fallback job); pushes object_entered/object_exited events to control.
     tracking::spawn(&state);
 
     // Discovery loop: sweep the LAN for ONVIF cameras every 5 min — reconciling any camera
