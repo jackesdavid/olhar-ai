@@ -121,6 +121,23 @@ where
     Ok(out)
 }
 
+/// Tracker-tuning defaults — must match `sentinel-edge`'s own `default_min_hits`/`default_max_age`/
+/// etc. (`sentinel-edge/src/tracking.rs`) and the property panel's displayed defaults
+/// (`sentinel-app`'s `effectiveKind`/`chooseEvent`) — all three copies of these numbers need to
+/// move together if ever re-tuned.
+const DEFAULT_MIN_HITS: u32 = 2;
+const DEFAULT_MAX_AGE: u32 = 25;
+const DEFAULT_IOU_THRESH: f32 = 0.3;
+const DEFAULT_HIGH_THRESH: f32 = 0.5;
+const DEFAULT_LOW_THRESH: f32 = 0.1;
+
+/// Read a numeric config value, accepting both a JSON number and a numeric string (the editor
+/// stores node config fields as strings) — mirrors `vision.rs::run_recognize_person`'s
+/// `max_distance` parsing.
+fn config_num(config: &Value, key: &str) -> Option<f64> {
+    config.get(key).and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+}
+
 /// One (camera, class) job's accumulated config while walking the graphs.
 #[derive(Default)]
 struct JobAcc {
@@ -129,6 +146,15 @@ struct JobAcc {
     /// `object_exited` node for it has one drawn. At most one is meaningful per job — see
     /// `sync_tracking_config`'s doc.
     zone: Option<(Value, String)>,
+    /// Tracker tuning + debug-logging flag for this job — set on every visit to this
+    /// `(camera, class)` key (see the loop body), so with multiple nodes sharing a job the last
+    /// one visited wins, same "last wins" semantics as `zone`.
+    min_hits: u32,
+    max_age: u32,
+    iou_thresh: f32,
+    high_thresh: f32,
+    low_thresh: f32,
+    debug: bool,
 }
 
 /// Extract every enabled graph's `OnEvent("object_entered"/"object_exited"/"line_crossed")`
@@ -166,6 +192,14 @@ async fn sync_tracking_config(st: &AppState, tid: Uuid, graphs: &[WfGraph]) {
                 continue; // explicitly cleared to blank — not scoped to a class
             }
             let acc = jobs.entry((camera.clone(), class.to_string())).or_default();
+            // Tuning + debug apply regardless of whether this node has a region wired, so set
+            // them before the early-continue below.
+            acc.min_hits = config_num(&n.config, "min_hits").map(|v| v as u32).unwrap_or(DEFAULT_MIN_HITS);
+            acc.max_age = config_num(&n.config, "max_age").map(|v| v as u32).unwrap_or(DEFAULT_MAX_AGE);
+            acc.iou_thresh = config_num(&n.config, "iou_thresh").map(|v| v as f32).unwrap_or(DEFAULT_IOU_THRESH);
+            acc.high_thresh = config_num(&n.config, "high_thresh").map(|v| v as f32).unwrap_or(DEFAULT_HIGH_THRESH);
+            acc.low_thresh = config_num(&n.config, "low_thresh").map(|v| v as f32).unwrap_or(DEFAULT_LOW_THRESH);
+            acc.debug = g.debug;
             let Some((name, points)) = g.resolve_region(n) else { continue }; // no region wired — whole-frame
             if event == "line_crossed" {
                 if points.len() == 2 {
@@ -181,7 +215,17 @@ async fn sync_tracking_config(st: &AppState, tid: Uuid, graphs: &[WfGraph]) {
     let trackers: Vec<Value> = jobs
         .into_iter()
         .map(|((camera, class), acc)| {
-            let mut t = json!({ "camera": camera, "class": class, "lines": acc.lines });
+            let mut t = json!({
+                "camera": camera,
+                "class": class,
+                "lines": acc.lines,
+                "min_hits": acc.min_hits,
+                "max_age": acc.max_age,
+                "iou_thresh": acc.iou_thresh,
+                "high_thresh": acc.high_thresh,
+                "low_thresh": acc.low_thresh,
+                "debug": acc.debug,
+            });
             if let (Some(obj), Some((zone, trigger))) = (t.as_object_mut(), acc.zone) {
                 obj.insert("zone".to_string(), zone);
                 obj.insert("zone_trigger".to_string(), json!(trigger));

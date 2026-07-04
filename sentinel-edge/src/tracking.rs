@@ -35,11 +35,38 @@ use app_core::tracking::{Line, MultiTracker, Polygon, TrackEvent, TrackerConfig,
 
 use crate::state::{AppState, TrackEventOut};
 
+/// Tracker-tuning defaults — edge-calibrated (not `TrackerConfig::default()`'s generic
+/// ByteTrack-ish values): confirm fast, tolerate ~10s of unmatched detection cycles at the
+/// default 400ms cadence before exiting. A node's OnEvent property panel shows these same
+/// numbers as its own displayed defaults (`sentinel-app`'s `effectiveKind`/`chooseEvent`) — keep
+/// the two in sync. `max_age: 8` (~3.2s) was too tight in practice: a live test showed a
+/// continuously-present, stationary person getting two Enter/Exit pairs from ordinary detection
+/// jitter alone.
+fn default_min_hits() -> u32 {
+    2
+}
+fn default_max_age() -> u32 {
+    25
+}
+fn default_iou_thresh() -> f32 {
+    0.3
+}
+fn default_high_thresh() -> f32 {
+    0.5
+}
+fn default_low_thresh() -> f32 {
+    0.1
+}
+
 /// One resolved tracking job: a class to detect on a camera (`"*"` = every camera with a stream,
 /// matching the pre-per-job behaviour; a specific id/ip/name/`"first"` scopes to one), that job's
-/// own crossing lines, and an optional zone: when set, `object_entered`/`object_exited` mean
-/// entering/leaving THIS polygon specifically (see `run_track`'s event translation) instead of
-/// the whole-frame track lifecycle. The manager reconciles one worker per (job, resolved camera ip).
+/// own crossing lines, an optional zone (when set, `object_entered`/`object_exited` mean
+/// entering/leaving THIS polygon specifically — see `run_track`'s event translation — instead of
+/// the whole-frame track lifecycle), this job's own `TrackerConfig` tuning (per-node, so two jobs
+/// on the same box can be tuned independently), and whether to log verbose algorithm internals
+/// (state transitions, per-cycle counts) for this job — mirrors the originating graph's own
+/// "Debug" toggle (`Graph.debug`), OR'd with the box-wide `TRACK_DEBUG` env var at log time. The
+/// manager reconciles one worker per (job, resolved camera ip).
 struct Job {
     camera: String,
     class_name: String,
@@ -47,6 +74,24 @@ struct Job {
     lines: Vec<Line>,
     zone: Option<Polygon>,
     zone_trigger: ZoneTrigger,
+    min_hits: u32,
+    max_age: u32,
+    iou_thresh: f32,
+    high_thresh: f32,
+    low_thresh: f32,
+    debug: bool,
+}
+
+impl Job {
+    fn tracker_config(&self) -> TrackerConfig {
+        TrackerConfig {
+            high_thresh: self.high_thresh,
+            low_thresh: self.low_thresh,
+            iou_thresh: self.iou_thresh,
+            min_hits: self.min_hits,
+            max_age: self.max_age,
+        }
+    }
 }
 
 struct Cfg {
@@ -78,7 +123,20 @@ impl Cfg {
             .into_iter()
             .filter_map(|t| {
                 let class_id = detector::class_id_for_name(&t.class)?;
-                Some(Job { camera: t.camera, class_name: t.class, class_id, lines: t.lines, zone: t.zone, zone_trigger: t.zone_trigger })
+                Some(Job {
+                    camera: t.camera,
+                    class_name: t.class,
+                    class_id,
+                    lines: t.lines,
+                    zone: t.zone,
+                    zone_trigger: t.zone_trigger,
+                    min_hits: t.min_hits,
+                    max_age: t.max_age,
+                    iou_thresh: t.iou_thresh,
+                    high_thresh: t.high_thresh,
+                    low_thresh: t.low_thresh,
+                    debug: t.debug,
+                })
             })
             .collect();
 
@@ -92,7 +150,20 @@ impl Cfg {
             if let Some(class_id) = detector::class_id_for_name(&class_name) {
                 let camera = std::env::var("TRACK_CAMERA").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "*".to_string());
                 let lines = std::env::var("TRACK_LINES").ok().map(|s| parse_lines(&s)).unwrap_or_default();
-                jobs.push(Job { camera, class_name, class_id, lines, zone: None, zone_trigger: ZoneTrigger::Intersects });
+                jobs.push(Job {
+                    camera,
+                    class_name,
+                    class_id,
+                    lines,
+                    zone: None,
+                    zone_trigger: ZoneTrigger::Intersects,
+                    min_hits: default_min_hits(),
+                    max_age: default_max_age(),
+                    iou_thresh: default_iou_thresh(),
+                    high_thresh: default_high_thresh(),
+                    low_thresh: default_low_thresh(),
+                    debug: false,
+                });
             }
         }
         if jobs.is_empty() {
@@ -119,8 +190,11 @@ struct RemoteConfig {
 /// graph's `OnEvent("object_entered"/"object_exited"/"line_crossed")` nodes on save (grouped so
 /// two nodes naming the same camera+class share one job/uuid-space, their lines merged). `zone`
 /// (drawn in the same property panel, a "region of interest" alternative to whole-frame
-/// enter/exit) is only meaningful set on ONE of those nodes per camera+class — control keeps
-/// whichever it saw last; see `sync_tracking_config`.
+/// enter/exit), the tuning fields, and `debug` are only meaningful set on ONE of those nodes per
+/// camera+class — control keeps whichever it saw last; see `sync_tracking_config`. `#[serde(default
+/// = ...)]` on the tuning fields (rather than a bare `#[serde(default)]`, which would zero them)
+/// so an older config blob predating this feature still gets sane values, not an instantly-aged-
+/// out `max_age: 0`.
 #[derive(Debug, Clone, serde::Deserialize)]
 struct TrackerSpec {
     camera: String,
@@ -131,6 +205,18 @@ struct TrackerSpec {
     zone: Option<Polygon>,
     #[serde(default)]
     zone_trigger: ZoneTrigger,
+    #[serde(default = "default_min_hits")]
+    min_hits: u32,
+    #[serde(default = "default_max_age")]
+    max_age: u32,
+    #[serde(default = "default_iou_thresh")]
+    iou_thresh: f32,
+    #[serde(default = "default_high_thresh")]
+    high_thresh: f32,
+    #[serde(default = "default_low_thresh")]
+    low_thresh: f32,
+    #[serde(default)]
+    debug: bool,
 }
 
 /// `GET /config/tracking` (box-authed) → this box's tenant's tracking config, if reachable.
@@ -255,12 +341,16 @@ fn watch(state: Arc<AppState>, ip: String, job_idx: usize, cfg: Arc<Cfg>, stop: 
 }
 
 fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, stop: &AtomicBool) {
-    // Edge-tuned lifecycle: confirm fast (2 hits), exit after ~a few unmatched detection cycles.
-    let tcfg = TrackerConfig { min_hits: 2, max_age: 8, ..TrackerConfig::default() };
-    let mut tracker = MultiTracker::new(tcfg);
+    let mut tracker = MultiTracker::new(job.tracker_config());
     let base = app_core::go2rtc::base();
     let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(3)).build();
-    let debug = std::env::var("TRACK_DEBUG").map(|v| matches!(v.trim(), "1" | "true" | "yes")).unwrap_or(false);
+    // Verbose algorithm-internals logging: on if EITHER this job's own graph has its "Debug"
+    // toggle on (`Graph.debug`, synced onto the job's `debug` field — see `sync_tracking_config`
+    // and `TrackerSpec`), OR the box-wide `TRACK_DEBUG` env var is set. Never sent to control —
+    // these are diagnostic-only lines the box's own log stream carries (see `TrackEvent`'s
+    // `Lost`/`Revived`/`Removed` variants below).
+    let env_debug = std::env::var("TRACK_DEBUG").map(|v| matches!(v.trim(), "1" | "true" | "yes")).unwrap_or(false);
+    let debug = job.debug || env_debug;
 
     while !stop.load(Ordering::Relaxed) {
         let tick = std::time::Instant::now();
@@ -297,7 +387,13 @@ fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, s
         };
         let count = tracker.count() as i64;
         if debug {
-            log::info!("object tracker[{ip}]: {} det, {} tracked, {} event(s)", dets.len(), count, events.len());
+            let (tentative, confirmed, lost) = tracker.state_counts();
+            log::info!(
+                "object tracker[{ip}]: {} det, {} tracked ({tentative} tentative, {confirmed} confirmed, {lost} lost), {} event(s)",
+                dets.len(),
+                count,
+                events.len()
+            );
         }
         // Publish this cycle's "state of the world" for GET /tracks/:ip (the GetTrackedObjects
         // node's backing store) — this job's own key only, never touching another job's entry.
@@ -381,6 +477,28 @@ fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, s
                     direction: None,
                     zone: Some(zone),
                 },
+                // Diagnostic-only: internal state transitions, never relayed to control as a
+                // domain event — logged only when this job's debug flag (or TRACK_DEBUG) is on.
+                TrackEvent::Lost { uuid, .. } => {
+                    if debug {
+                        log::info!("object tracker[{ip}]: track {uuid} lost (unmatched this cycle)");
+                    }
+                    continue;
+                }
+                TrackEvent::Revived { uuid, cycles_lost, .. } => {
+                    if debug {
+                        log::info!("object tracker[{ip}]: track {uuid} revived (was lost {cycles_lost} cycle(s))");
+                    }
+                    continue;
+                }
+                TrackEvent::Removed { uuid, cycles_survived, was_confirmed, .. } => {
+                    if debug {
+                        log::info!(
+                            "object tracker[{ip}]: track {uuid} removed (unmatched {cycles_survived} cycle(s), was_confirmed={was_confirmed})"
+                        );
+                    }
+                    continue;
+                }
             };
             log::info!("object tracker[{ip}]: {} {} (count={count})", out.kind, out.uuid);
             state.push_track_event(&out);

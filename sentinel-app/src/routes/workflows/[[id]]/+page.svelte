@@ -795,18 +795,22 @@
             { name: "region", type: "region" as CatPort["type"], required: false },
           ]
         : [];
-      // `class` + (for a region job) `zone_trigger` are plain config, not ports (there's no
-      // "GetClassByName" node to wire — a class is just a fixed string, low-risk to duplicate
-      // across a few nodes, unlike camera/region). Injected here rather than in the backend's
-      // static default_config so they only appear once the node is actually scoped to a
-      // tracking event, same spirit as camera/region.
+      // `class` + (for a region job) `zone_trigger` + the tracker-tuning knobs are plain config,
+      // not ports (there's no "GetClassByName"/"GetTuning" node to wire — these are just fixed
+      // values, low-risk to duplicate across a few nodes, unlike camera/region). Injected here
+      // rather than in the backend's static default_config so they only appear once the node is
+      // actually scoped to a tracking event, same spirit as camera/region. The tuning defaults
+      // must match sentinel-edge's own (`default_min_hits`/etc., `sentinel-edge/src/tracking.rs`)
+      // and sentinel-control's `sync_tracking_config` fallback constants — all three move together.
       const fields = payloadFields(node);
       const outPorts: CatPort[] = fields.map((f) => ({ name: f.name, type: f.type, required: false }));
       return {
         ...k,
         inputs: [...k.inputs, ...gatingInputs],
         outputs: [...k.outputs, ...outPorts],
-        default_config: isTracking ? { ...k.default_config, class: "person", zone_trigger: "intersects" } : k.default_config,
+        default_config: isTracking
+          ? { ...k.default_config, class: "person", zone_trigger: "intersects", ...TRACKING_TUNING_DEFAULTS }
+          : k.default_config,
       };
     }
     const fields = payloadFields(node);
@@ -1827,6 +1831,9 @@
     if (TRACKING_EVENTS.includes(ev)) {
       if (cfg.class === undefined) cfg.class = "person";
       if (cfg.zone_trigger === undefined) cfg.zone_trigger = "intersects";
+      for (const [key, def] of Object.entries(TRACKING_TUNING_DEFAULTS)) {
+        if (cfg[key] === undefined) cfg[key] = def;
+      }
     }
     saveNodeConfig(node, cfg);
   }
@@ -2413,6 +2420,25 @@
   // keep this in sync with the same literal list in `sentinel-control`'s `sync_tracking_config`
   // and `sentinel-edge`'s job resolution; a divergence here silently drops tracking jobs.
   const TRACKING_EVENTS = ["object_entered", "object_exited", "line_crossed"];
+  // Per-job SORT/ByteTrack tuning, exposed on a tracking OnEvent node so different jobs can be
+  // tuned independently — edge-calibrated defaults (NOT the algorithm's generic ByteTrack-ish
+  // ones), must match `sentinel-edge`'s `default_min_hits`/etc. and `sentinel-control`'s
+  // `sync_tracking_config` fallback constants (`sentinel-edge/src/tracking.rs`,
+  // `sentinel-control/src/domain/workflows.rs`) — all three move together if ever re-tuned.
+  const TRACKING_TUNING_DEFAULTS: Record<string, string> = {
+    min_hits: "2",
+    max_age: "25",
+    iou_thresh: "0.3",
+    high_thresh: "0.5",
+    low_thresh: "0.1",
+  };
+  const TRACKING_TUNING_HELP: Record<string, string> = {
+    min_hits: "Consecutive matched detections before a track is confirmed (fires Entered).",
+    max_age: "Detection cycles a track may go unmatched before it exits (edge cadence: ~400ms/cycle by default).",
+    iou_thresh: "Minimum box overlap (0–1) required to match a detection to an existing track.",
+    high_thresh: "Detection confidence (0–1) required to match or start a track.",
+    low_thresh: "Detection confidence (0–1) that can still recover a lost track, but never starts one.",
+  };
   const LEVELS = ["debug", "info", "warn", "error"];
   const COCO_CLASSES = [
     "person","bicycle","car","motorcycle","airplane","bus","train","truck","boat",
@@ -3647,6 +3673,17 @@
                           </Select.Content>
                         </Select.Root>
                         <p class="mt-0.5 text-[10px] text-muted-foreground">Only matters if a Region (3+ points) is wired in below</p>
+                      {:else if key in TRACKING_TUNING_DEFAULTS && selectedNode.kind === "on_event"}
+                        <Input
+                          type="number"
+                          step={key === "min_hits" || key === "max_age" ? "1" : "0.05"}
+                          min="0"
+                          class="h-8"
+                          disabled={editLocked}
+                          value={String(selectedNode.config[key] ?? TRACKING_TUNING_DEFAULTS[key])}
+                          oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)}
+                        />
+                        <p class="mt-0.5 text-[10px] text-muted-foreground">{TRACKING_TUNING_HELP[key]}</p>
                       {:else if key === "points" && selectedNode.kind === "region"}
                         {@const regionCameraIp = resolvedCameraIp(String(selectedNode.config.camera ?? ""))}
                         {@const regionPoints = (Array.isArray(selectedNode.config.points) ? selectedNode.config.points : []) as [number, number][]}

@@ -189,6 +189,20 @@ pub enum TrackEvent {
     ZoneEntered { uuid: Uuid, class: u32, zone: String },
     /// ... flipped inside → outside. `dwell_ms` is how long it was considered inside the zone.
     ZoneExited { uuid: Uuid, class: u32, zone: String, dwell_ms: u64 },
+
+    // -- Diagnostic-only below: internal algorithm state transitions, never a domain lifecycle
+    // signal on their own (no `object_entered`/`object_exited`/`line_crossed` follows from these
+    // alone) — the edge logs them when a job's `debug` flag is on and never relays them to
+    // control. Kept in the same enum (rather than a separate diagnostics channel) so every
+    // caller gets them for free from the same `update()`/`update_full()` call.
+    /// A `Confirmed` track went unmatched this cycle → `Lost` (kept for up to `max_age` cycles).
+    Lost { uuid: Uuid, class: u32 },
+    /// A `Lost` track re-matched a detection before ageing out → `Confirmed` again, same uuid.
+    /// `cycles_lost` is how many consecutive cycles it had gone unmatched.
+    Revived { uuid: Uuid, class: u32, cycles_lost: u32 },
+    /// A track was dropped after exceeding `max_age` unmatched cycles. `was_confirmed` mirrors
+    /// whether an `Exited` accompanies this (it does iff the track had ever been confirmed).
+    Removed { uuid: Uuid, class: u32, cycles_survived: u32, was_confirmed: bool },
 }
 
 /// A user-drawn virtual line for crossing detection, in **normalized** frame coordinates
@@ -280,6 +294,19 @@ impl MultiTracker {
     pub fn count(&self) -> usize {
         self.confirmed().count()
     }
+    /// `(tentative, confirmed, lost)` track counts — diagnostic only, for a debug-mode caller to
+    /// log the algorithm's internal state breakdown (see `sentinel-edge`'s `run_track`).
+    pub fn state_counts(&self) -> (usize, usize, usize) {
+        let mut c = (0, 0, 0);
+        for t in &self.tracks {
+            match t.state {
+                TrackState::Tentative => c.0 += 1,
+                TrackState::Confirmed => c.1 += 1,
+                TrackState::Lost => c.2 += 1,
+            }
+        }
+        c
+    }
 
     /// Advance one detection cycle: predict every track, associate `dets` (ByteTrack two-stage),
     /// update matched tracks, age/remove the rest, spawn new tracks. `ts_ms` is this frame's wall
@@ -296,6 +323,10 @@ impl MultiTracker {
             t.predict();
             t.time_since_update += 1;
         }
+        // Diagnostic-only snapshot: how long each track had been unmatched going into this
+        // cycle, keyed by index — `apply()` below resets a matched track's `time_since_update`
+        // to 0, so this is the only place a `Revived` event can still report it.
+        let unmatched_before: Vec<u32> = self.tracks.iter().map(|t| t.time_since_update).collect();
 
         // Split detections by confidence (ByteTrack): high drive stage 1 + spawn; low only recover.
         let mut high: Vec<usize> = Vec::new();
@@ -329,15 +360,19 @@ impl MultiTracker {
         // Promote tentative→confirmed (emit Entered once) + revive Lost→Confirmed on re-match.
         for (ti, t) in self.tracks.iter_mut().enumerate() {
             if track_matched[ti] {
+                let was_lost = t.state == TrackState::Lost;
                 if t.hits >= self.cfg.min_hits && t.state != TrackState::Confirmed {
                     t.state = TrackState::Confirmed;
                     if !self.confirmed_emitted[ti] {
                         self.confirmed_emitted[ti] = true;
                         events.push(TrackEvent::Entered { uuid: t.uuid, class: t.class, bbox: t.bbox() });
+                    } else if was_lost {
+                        events.push(TrackEvent::Revived { uuid: t.uuid, class: t.class, cycles_lost: unmatched_before[ti] });
                     }
                 }
             } else if t.state == TrackState::Confirmed {
                 t.state = TrackState::Lost;
+                events.push(TrackEvent::Lost { uuid: t.uuid, class: t.class });
             }
         }
 
@@ -348,6 +383,12 @@ impl MultiTracker {
             if self.tracks[i].time_since_update > max_age {
                 let t = self.tracks.remove(i);
                 let emitted = self.confirmed_emitted.remove(i);
+                events.push(TrackEvent::Removed {
+                    uuid: t.uuid,
+                    class: t.class,
+                    cycles_survived: t.time_since_update,
+                    was_confirmed: emitted,
+                });
                 if emitted {
                     events.push(TrackEvent::Exited {
                         uuid: t.uuid,
