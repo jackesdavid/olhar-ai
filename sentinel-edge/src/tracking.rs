@@ -13,8 +13,9 @@
 //! node is one independent job with its own uuid space and its own `MultiTracker`, so tracking two
 //! classes on one camera never conflates or duplicates entities.
 //!
-//! Config resolves from control's per-tenant `tracking_config` (`GET /config/tracking`, box-authed,
-//! fetched once at [`spawn`] — mirrors `recording::RecordingConfig`'s fetch-once-at-boot pattern):
+//! Config resolves from control's per-tenant `tracking_config` (`GET /config/tracking`,
+//! box-authed, RE-FETCHED every ~30s by [`spawn`]'s reconcile loop — enabling a graph or editing
+//! an `OnEvent` node's camera/class/tuning takes effect live, no edge restart needed):
 //! `detect_ms` is box-global; `trackers` is the job list (each `{camera, class, lines[]}`),
 //! extracted from every enabled graph's matching `OnEvent` nodes on save — **a job's mere
 //! presence in `trackers[]` is what enables tracking for it**, per-node, not some separate
@@ -67,6 +68,7 @@ fn default_low_thresh() -> f32 {
 /// (state transitions, per-cycle counts) for this job — mirrors the originating graph's own
 /// "Debug" toggle (`Graph.debug`), OR'd with the box-wide `TRACK_DEBUG` env var at log time. The
 /// manager reconciles one worker per (job, resolved camera ip).
+#[derive(Debug, Clone)]
 struct Job {
     camera: String,
     class_name: String,
@@ -91,6 +93,14 @@ impl Job {
             min_hits: self.min_hits,
             max_age: self.max_age,
         }
+    }
+    /// A fingerprint of this job's full config, folded into `spawn`'s reconcile key alongside
+    /// the resolved camera ip — so an in-place edit (same camera+class, different tuning/zone/
+    /// class/etc., saved from the graph editor) produces a NEW key, causing the old worker to
+    /// stop and a fresh one to start with the new config, instead of the reconcile loop seeing
+    /// "same job, nothing to do" and leaving a stale worker running until the box restarts.
+    fn fingerprint(&self) -> String {
+        format!("{self:?}")
     }
 }
 
@@ -263,30 +273,58 @@ fn parse_lines(raw: &str) -> Vec<Line> {
 /// a job's `camera == "*"` expands to every camera with a stream, a specific id/ip/name/`"first"`
 /// resolves to exactly one. No-op (returns immediately) unless there's at least one tracking job
 /// (control's `tracking_config.trackers`, or a `TRACK_ENABLED=1` dev fallback — see [`Cfg::load`]).
+/// Spawn the tracking manager: every 30s, RE-FETCH control's tracking config (not just once at
+/// boot) and reconcile one worker per (job, resolved camera ip) — a job's `camera == "*"` expands
+/// to every camera with a stream, a specific id/ip/name/`"first"` resolves to exactly one. This
+/// means enabling a graph, or editing an `OnEvent` node's camera/class/region/tuning, takes
+/// effect within ~30s on its own — no edge restart needed (previously `Cfg::load` ran once at
+/// boot only, so a running box never noticed a graph change until it restarted).
+///
+/// The reconcile key is `(job.fingerprint(), ip)`, not `(job index, ip)`: a job's position in
+/// the list is stable across reloads as long as the SET of (camera, class) pairs doesn't change
+/// (`sync_tracking_config` groups by that key in a `BTreeMap`), so an in-place edit to an
+/// EXISTING job (e.g. the user raised `max_age`) would keep the same index and be invisible to
+/// an index-keyed diff. Folding the whole job's config into the key means an edit naturally
+/// produces a new key — the old worker stops, a new one starts with the fresh config.
 pub fn spawn(state: &Arc<AppState>) {
-    let Some(cfg) = Cfg::load(&state.control_url) else {
-        log::info!(
-            "object tracking disabled: no tracking jobs configured (wire an OnEvent node for \
-             object_entered/object_exited/line_crossed to a camera in a graph, or set \
-             TRACK_ENABLED=1 for a dev fallback)"
-        );
-        return;
-    };
-    let cfg = Arc::new(cfg);
     let state = Arc::clone(state);
     std::thread::spawn(move || {
-        log::info!("object tracker: manager started ({} job(s), detect every {}ms)", cfg.jobs.len(), cfg.detect_gap.as_millis());
-        // Keyed by (job index, resolved camera ip) — a "*" job expands to several entries.
-        let mut running: HashMap<(usize, String), Arc<AtomicBool>> = HashMap::new();
+        // Keyed by (job fingerprint, resolved camera ip).
+        let mut running: HashMap<(String, String), Arc<AtomicBool>> = HashMap::new();
+        let mut was_disabled = true; // suppress repeating the "disabled" log every 30s
         loop {
+            let Some(cfg) = Cfg::load(&state.control_url) else {
+                if !was_disabled {
+                    log::info!(
+                        "object tracking disabled: no tracking jobs configured (wire an OnEvent node for \
+                         object_entered/object_exited/line_crossed to a camera in a graph, or set \
+                         TRACK_ENABLED=1 for a dev fallback)"
+                    );
+                }
+                was_disabled = true;
+                for (_, stop) in running.drain() {
+                    stop.store(true, Ordering::Relaxed);
+                }
+                std::thread::sleep(Duration::from_secs(30));
+                continue;
+            };
+            if was_disabled {
+                log::info!("object tracker: manager started ({} job(s), detect every {}ms)", cfg.jobs.len(), cfg.detect_gap.as_millis());
+            }
+            was_disabled = false;
+            let detect_gap = cfg.detect_gap;
+
             let devices = state.devices.lock().unwrap().clone();
-            let desired: Vec<(usize, String)> = cfg
+            let desired: Vec<(String, String, Arc<Job>)> = cfg
                 .jobs
-                .iter()
-                .enumerate()
-                .flat_map(|(ji, job)| resolve_job_cameras(job, &devices).into_iter().map(move |ip| (ji, ip)))
+                .into_iter()
+                .flat_map(|job| {
+                    let job = Arc::new(job);
+                    let fp = job.fingerprint();
+                    resolve_job_cameras(&job, &devices).into_iter().map(move |ip| (fp.clone(), ip, Arc::clone(&job))).collect::<Vec<_>>()
+                })
                 .collect();
-            let want: HashSet<&(usize, String)> = desired.iter().collect();
+            let want: HashSet<(String, String)> = desired.iter().map(|(fp, ip, _)| (fp.clone(), ip.clone())).collect();
             running.retain(|key, stop| {
                 let keep = want.contains(key);
                 if !keep {
@@ -294,12 +332,13 @@ pub fn spawn(state: &Arc<AppState>) {
                 }
                 keep
             });
-            for key in &desired {
-                if !running.contains_key(key) {
+            for (fp, ip, job) in desired {
+                let key = (fp, ip.clone());
+                if !running.contains_key(&key) {
                     let stop = Arc::new(AtomicBool::new(false));
-                    running.insert(key.clone(), Arc::clone(&stop));
-                    let (st, k, c) = (Arc::clone(&state), key.clone(), Arc::clone(&cfg));
-                    std::thread::spawn(move || watch(st, k.1, k.0, c, stop));
+                    running.insert(key, Arc::clone(&stop));
+                    let st = Arc::clone(&state);
+                    std::thread::spawn(move || watch(st, ip, job, detect_gap, stop));
                 }
             }
             std::thread::sleep(Duration::from_secs(30));
@@ -323,21 +362,23 @@ fn has_stream(d: &app_core::devices::Device) -> bool {
     d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false)
 }
 
-/// One (job, camera)'s supervised loop: run the tracker until stopped, retrying on error.
-fn watch(state: Arc<AppState>, ip: String, job_idx: usize, cfg: Arc<Cfg>, stop: Arc<AtomicBool>) {
-    let class_name = cfg.jobs[job_idx].class_name.clone();
-    log::info!("object tracker[{ip}/{job_idx}]: starting ({class_name})");
+/// One (job, camera)'s supervised loop: run the tracker until stopped, retrying on error. Stops
+/// either because the job/camera is no longer desired, OR because the job's config changed (see
+/// `spawn`'s fingerprint-keyed reconcile) — either way a fresh worker with current config starts
+/// right back up if the job's still wanted.
+fn watch(state: Arc<AppState>, ip: String, job: Arc<Job>, detect_gap: Duration, stop: Arc<AtomicBool>) {
+    log::info!("object tracker[{ip}]: starting ({})", job.class_name);
     while !stop.load(Ordering::Relaxed) {
-        run_track(&state, &ip, &cfg.jobs[job_idx], cfg.detect_gap, &stop);
+        run_track(&state, &ip, &job, detect_gap, &stop);
         if stop.load(Ordering::Relaxed) {
             break;
         }
         std::thread::sleep(Duration::from_secs(5));
     }
-    // This job is gone (camera/class no longer desired) — drop its stale live-state entry so
-    // GET /tracks/:ip doesn't keep reporting long-departed tracks as still present.
-    state.live_tracks.lock().unwrap().remove(&(ip.clone(), class_name));
-    log::info!("object tracker[{ip}/{job_idx}]: stopped");
+    // This job is gone (camera/class no longer desired, or its config changed) — drop its stale
+    // live-state entry so GET /tracks/:ip doesn't keep reporting long-departed tracks as present.
+    state.live_tracks.lock().unwrap().remove(&(ip.clone(), job.class_name.clone()));
+    log::info!("object tracker[{ip}]: stopped");
 }
 
 fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, stop: &AtomicBool) {
