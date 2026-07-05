@@ -18,6 +18,7 @@
 mod go2rtc;
 mod http;
 mod logbuf;
+mod metrics;
 mod motion;
 mod recording;
 mod state;
@@ -124,6 +125,9 @@ fn main() {
     // i.e. per graph `OnEvent` node wired to a camera — not by any box-wide switch (TRACK_ENABLED=1
     // only synthesizes a dev fallback job); pushes object_entered/object_exited events to control.
     tracking::spawn(&state);
+    // Resource-usage sampler (CPU / memory / disk / GPU) — the latest snapshot rides the
+    // heartbeat as the X-Edge-Metrics header so the Boxes page can show if the box is healthy.
+    metrics::spawn();
 
     // Discovery loop: sweep the LAN for ONVIF cameras every 5 min — reconciling any camera
     // that changed IP (matched by stable ONVIF id) and pushing the sweep to control so the

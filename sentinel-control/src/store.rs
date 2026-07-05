@@ -134,6 +134,14 @@ pub struct BoxRow {
     pub recording_config: Option<serde_json::Value>,
     /// Reported platform, e.g. "macOS (aarch64)" / "Bazzite (x86_64)" (heartbeat).
     pub platform: Option<String>,
+    /// Resource usage (percent 0..100), reported on the heartbeat via `X-Edge-Metrics`.
+    /// `gpu_*` are null on boxes without an NVIDIA GPU. `metrics_at` = when last reported.
+    pub cpu_pct: Option<i32>,
+    pub mem_pct: Option<i32>,
+    pub disk_pct: Option<i32>,
+    pub gpu_pct: Option<i32>,
+    pub gpu_mem_pct: Option<i32>,
+    pub metrics_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// A camera the edge found via ONVIF WS-Discovery (surfaced in the cloud UI).
@@ -162,7 +170,8 @@ pub async fn create_box(pool: &PgPool, tenant_id: Uuid, name: &str, token_hash: 
 
 pub async fn list_boxes(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<BoxRow>> {
     sqlx::query_as::<_, BoxRow>(
-        "SELECT id, name, magicdns_host, version, last_seen, created_at, tailscale_state, ffmpeg_ok, health_at, recording_config, platform \
+        "SELECT id, name, magicdns_host, version, last_seen, created_at, tailscale_state, ffmpeg_ok, health_at, recording_config, platform, \
+                cpu_pct, mem_pct, disk_pct, gpu_pct, gpu_mem_pct, metrics_at \
          FROM tenant_boxes WHERE tenant_id = $1 ORDER BY name",
     )
     .bind(tenant_id)
@@ -189,7 +198,19 @@ pub async fn touch_box_by_token(
     tailscale: Option<&str>,
     ffmpeg: Option<bool>,
     platform: Option<&str>,
+    metrics: Option<app_core::edge_metrics::EdgeMetrics>,
 ) -> sqlx::Result<Option<Uuid>> {
+    // Resource metrics ride the same heartbeat as health; absent (pushes) → COALESCE keeps prior.
+    let (cpu, mem, disk, gpu, gpu_mem) = match metrics {
+        Some(m) => (
+            Some(m.cpu as i32),
+            Some(m.mem as i32),
+            Some(m.disk as i32),
+            m.gpu.map(|v| v as i32),
+            m.gpu_mem.map(|v| v as i32),
+        ),
+        None => (None, None, None, None, None),
+    };
     let row: Option<(Uuid,)> = sqlx::query_as(
         "UPDATE tenant_boxes
             SET last_seen = now(),
@@ -198,7 +219,13 @@ pub async fn touch_box_by_token(
                 tailscale_state = COALESCE($4, tailscale_state),
                 ffmpeg_ok = COALESCE($5, ffmpeg_ok),
                 platform = COALESCE($6, platform),
-                health_at = CASE WHEN $4 IS NOT NULL THEN now() ELSE health_at END
+                health_at = CASE WHEN $4 IS NOT NULL THEN now() ELSE health_at END,
+                cpu_pct = COALESCE($7, cpu_pct),
+                mem_pct = COALESCE($8, mem_pct),
+                disk_pct = COALESCE($9, disk_pct),
+                gpu_pct = COALESCE($10, gpu_pct),
+                gpu_mem_pct = COALESCE($11, gpu_mem_pct),
+                metrics_at = CASE WHEN $7 IS NOT NULL THEN now() ELSE metrics_at END
           WHERE token_hash = $1
         RETURNING tenant_id",
     )
@@ -208,6 +235,11 @@ pub async fn touch_box_by_token(
     .bind(tailscale)
     .bind(ffmpeg)
     .bind(platform)
+    .bind(cpu)
+    .bind(mem)
+    .bind(disk)
+    .bind(gpu)
+    .bind(gpu_mem)
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|(t,)| t))

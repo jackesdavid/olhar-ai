@@ -42,18 +42,27 @@ kanban-plugin: board
 	  - Plan: [[get-camera-room]]
 - [ ] #21 Map: presence history + logs panel in SidePanel
 	  - Plan: [[map-presence-history]]
+- [ ] #58 Draw Text: inside/outside bbox placement
+	  - Plan: [[draw-text-inside-outside-bbox]]
+- [ ] #59 Person Re-Identification (ReID) — body-appearance matching
+	  - Plan: [[reid-person-reidentification]]
+- [ ] #60 Editor keybinds: hold Space to pan (temp H) — workflow + map
+	  - Plan: [[editor-space-hold-pan]]
+- [ ] #61 Tab toggle: collapse/expand editor side panels
+	  - Plan: [[editor-panel-tab-toggle]]
 
 
 ## In Progress
 
-- [ ] #56 Workflow Variables — typed vars + Get/Set nodes
-	  - Plan: [[workflow-variables]]
-- [ ] #15 Telegram bot: workflow-graph brain + inbound commands
-	  - Plan: [[telegram-bot-two-way-research]]
+- [ ] #62 Edge resource monitoring — CPU / mem / disk / GPU
+	  - Plan: [[edge-resource-monitoring]]
+
 
 
 ## Review
 
+- [ ] #15 Telegram bot: workflow-graph brain + inbound commands
+	  - Plan: [[telegram-bot-two-way-research]]
 - [ ] #19 AI If node — yes/no question routes exec like If
 	  - Plan: [[ai-question-node]]
 - [ ] #22 Recordings: storage, names, filters, delete, sort, paginate
@@ -81,6 +90,8 @@ kanban-plugin: board
 ## Done
 
 **Complete**
+- [x] #56 Workflow Variables — typed vars + Get/Set nodes
+	  - Plan: [[workflow-variables]]
 - [x] #16 Chat agent on the web (TTS / STT / tools)
 	  - Plan: [[chat-agent-web]]
 - [x] #33 Telegram Beacons: fix enrollment + polish + observability
@@ -129,6 +140,6 @@ kanban-plugin: board
 
 %% kanban:settings
 ```
-{"kanban-plugin":"board","list-collapse":[false,false,false,false,false,false],"show-checkboxes":true,"date-display-format":"YYYY-MM-DD","hide-date-in-title":true}
+{"kanban-plugin":"board","list-collapse":[false,true,false,false,false,false],"show-checkboxes":true,"date-display-format":"YYYY-MM-DD","hide-date-in-title":true}
 ```
 %%

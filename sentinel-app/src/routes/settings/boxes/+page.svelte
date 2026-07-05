@@ -154,6 +154,26 @@
     return "";
   }
 
+  // ---- resource usage (CPU / memory / disk / GPU, reported on the heartbeat) -----
+  type Gauge = { label: string; pct: number };
+  function gauges(b: Box): Gauge[] {
+    const g: Gauge[] = [];
+    if (b.cpu_pct != null) g.push({ label: "CPU", pct: b.cpu_pct });
+    if (b.mem_pct != null) g.push({ label: "MEM", pct: b.mem_pct });
+    if (b.disk_pct != null) g.push({ label: "DSK", pct: b.disk_pct });
+    if (b.gpu_pct != null) g.push({ label: "GPU", pct: b.gpu_pct });
+    return g;
+  }
+  function hasMetrics(b: Box): boolean {
+    return b.cpu_pct != null || b.mem_pct != null || b.disk_pct != null;
+  }
+  // Monochrome by default; amber when elevated, destructive when a box is under pressure.
+  function barClass(pct: number): string {
+    if (pct >= 85) return "bg-destructive";
+    if (pct >= 70) return "bg-amber-500";
+    return "bg-foreground/60";
+  }
+
   // ---- restart / update ----------------------------------------------------
   let restartingId = $state<string | null>(null);
   async function restartBox(b: Box) {
@@ -214,6 +234,7 @@
               <th class="px-3 py-2 text-left font-medium">Version</th>
               <th class="px-3 py-2 text-left font-medium">Tailnet host</th>
               <th class="px-3 py-2 text-left font-medium">Health</th>
+              <th class="px-3 py-2 text-left font-medium">Resources</th>
               <th class="px-3 py-2 text-left font-medium">Last seen</th>
               <th class="px-3 py-2 text-right font-medium"></th>
             </tr>
@@ -264,6 +285,23 @@
                   </span>
                 </td>
                 <td class="px-3 py-2">
+                  {#if hasMetrics(b)}
+                    <div class="flex min-w-[7.5rem] flex-col gap-1">
+                      {#each gauges(b) as g (g.label)}
+                        <div class="flex items-center gap-1.5" title="{g.label} {g.pct}%">
+                          <span class="w-7 shrink-0 text-[9px] font-medium tabular-nums text-muted-foreground">{g.label}</span>
+                          <span class="relative h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                            <span class="absolute inset-y-0 left-0 rounded-full {barClass(g.pct)}" style="width: {g.pct}%"></span>
+                          </span>
+                          <span class="w-8 shrink-0 text-right text-[9px] tabular-nums text-muted-foreground">{g.pct}%</span>
+                        </div>
+                      {/each}
+                    </div>
+                  {:else}
+                    <span class="text-xs text-muted-foreground">—</span>
+                  {/if}
+                </td>
+                <td class="px-3 py-2">
                   {#if b.last_seen}
                     <span class="text-muted-foreground">{seen(b)}</span>
                   {:else}
@@ -284,7 +322,7 @@
               </tr>
             {/each}
             {#if list.length === 0}
-              <tr><td colspan={6}>
+              <tr><td colspan={7}>
                 <EmptyState
                   title="No edge boxes yet"
                   description="Create a box below, then run its installer on the on-prem machine to connect it."

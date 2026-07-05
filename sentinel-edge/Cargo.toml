@@ -36,3 +36,7 @@ opencv = "0.98"
 retina = "0.4"
 futures = "0.3"
 url = "2"
+# Resource-usage sampling (CPU / memory / disk) for the edge health monitor. Cross-platform
+# (Linux + macOS), pure-Rust — GPU is sampled separately by shelling out to `nvidia-smi`.
+sysinfo = { version = "0.30", default-features = false }
+

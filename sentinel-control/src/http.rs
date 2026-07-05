@@ -79,8 +79,9 @@ async fn box_tenant(st: &AppState, headers: &HeaderMap) -> Result<Option<uuid::U
     let host = headers.get("x-box-host").and_then(|v| v.to_str().ok());
     let version = headers.get("x-edge-version").and_then(|v| v.to_str().ok());
     let (ts, ff, plat) = box_health_headers(headers);
+    let metrics = box_metrics_header(headers);
     let hash = hex::encode(Sha256::digest(tok.as_bytes()));
-    match store::touch_box_by_token(&st.pool, &hash, host, version, ts, ff, plat).await {
+    match store::touch_box_by_token(&st.pool, &hash, host, version, ts, ff, plat, metrics).await {
         Ok(Some(tid)) => Ok(Some(tid)),
         Ok(None) => Err((StatusCode::UNAUTHORIZED, "unknown box token").into_response()),
         Err(e) => {
@@ -98,6 +99,15 @@ fn box_health_headers(headers: &HeaderMap) -> (Option<&str>, Option<bool>, Optio
     let ff = headers.get("x-edge-ffmpeg").and_then(|v| v.to_str().ok()).map(|v| v.trim() == "1");
     let plat = headers.get("x-edge-platform").and_then(|v| v.to_str().ok());
     (ts, ff, plat)
+}
+
+/// Parse the `X-Edge-Metrics` heartbeat header (compact JSON: cpu/mem/disk/gpu percents).
+/// Absent on the high-rate pushes → `None` keeps the prior snapshot via COALESCE.
+fn box_metrics_header(headers: &HeaderMap) -> Option<app_core::edge_metrics::EdgeMetrics> {
+    headers
+        .get("x-edge-metrics")
+        .and_then(|v| v.to_str().ok())
+        .and_then(app_core::edge_metrics::EdgeMetrics::from_header)
 }
 
 /// The camera list an edge box pulls, scoped to the box's tenant (box token required —
