@@ -110,9 +110,10 @@ comments and `docker login ghcr.io` first.)
    AI_IMAGE=ghcr.io/jackesdavid/sentinel-ai:gpu task ai-deploy   # = ai-build + ai-push
    ```
 2. **RunPod → Serverless → New Endpoint**: container image
-   `ghcr.io/jackesdavid/sentinel-ai:gpu`, pick a **GPU** worker (a 16 GB card is
-   plenty), workers **flex / scale-to-zero** (min 0). Start command stays the
-   image default (`python -u handler.py`).
+   `ghcr.io/jackesdavid/sentinel-ai:gpu`, pick a **GPU** worker — the cloud endpoint
+   is set to run on an **RTX A4500** (20 GB; a 16 GB card is otherwise plenty),
+   workers **flex / scale-to-zero** (min 0). Start command stays the image default
+   (`python -u handler.py`).
 3. Copy the **Endpoint ID** and a RunPod **API key** into `.env`:
    ```
    AI_SERVICE_URL=https://api.runpod.ai/v2/<endpoint_id>/runsync

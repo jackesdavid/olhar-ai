@@ -56,7 +56,8 @@ kanban-plugin: board
 
 - [ ] #62 Edge resource monitoring — CPU / mem / disk / GPU
 	  - Plan: [[edge-resource-monitoring]]
-
+- [ ] #63 Tenant Billing — per-tenant invoicing + cloud cost/margin
+	  - Plan: [[tenant-cloud-cost]]
 
 
 ## Review

@@ -1,7 +1,20 @@
 # Workflow List Improvements — Implementation Plan
 
-**Board card:** Workflow list improvements (ToDo)
+**Board card:** #18 Workflow list improvements (Done)
 **Goal:** Make the workflow list immediately actionable — search, last-run at a glance, a description, and a duplicate action.
+
+## Shipped (2026-07-01)
+Delivered as a full-width Recordings-style table, and adapted to the post-UUID data model
+(graph ids are `Uuid`; persistence is the JSON-blob `workflows` table, not a columnar
+`workflow_graphs` table — so `description`/`group` are `#[serde(default)]` fields, no migration):
+- **Last run** — `repo::last_run_by_graph` (`DISTINCT ON (graph_id)`), surfaced in a combined
+  Status·Last-run column with a `timeAgo()` helper.
+- **Description** — `Graph.description`, `PUT /workflows/:id/description`, shown as a caption
+  under the name + editable via `<Textarea>` in Configuration.
+- **Search / filter** — implemented **backend** (`GET /workflows?q=&group=`), not client-side.
+- **Duplicate** — `POST /workflows/:id/duplicate`.
+- **Groups / labels** (was out of scope below) — `Graph.group`, `PUT /workflows/:id/group`,
+  a group filter + rows clustered into section headers like the logs view.
 
 ## Phase 1 — Last run summary in list
 
@@ -55,5 +68,4 @@ Pure frontend — no backend change.
 ## Out of scope (v1)
 - Sort by column header (nice to have, client-side)
 - Bulk enable/disable
-- Tags / categories on workflows
 - Pagination (handle in a future scale pass)

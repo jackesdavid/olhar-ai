@@ -14,7 +14,7 @@ Sentinel is a cloud SaaS plus one on-prem appliance per site. Cameras are LAN-bo
 | `sentinel-app` | — | The SvelteKit web UI. Calls control (`API_BASE`) for everything; gateway (`GATEWAY_BASE`) for live. |
 | `sentinel-postgres` | 5432 | Shared Postgres (+ pgvector for face embeddings). |
 | `sentinel-redis` | 6379 (internal) | Shared event fabric (pub/sub, no persistence): flow's run-progress events (`events:<tenant>`, the SSE relay's source) + edge motion injected into the engine (`flow:inject`). `REDIS_URL`. |
-| `sentinel-ai` | — | Face detect/embed sidecar (InsightFace, GPU/CPU; RunPod). `AI_SERVICE_URL`. |
+| `sentinel-ai` | — | Face detect/embed sidecar (InsightFace, GPU/CPU). **Cloud = RunPod Serverless on an RTX A4500** (flex / scale-to-zero); `AI_SERVICE_URL`. |
 
 `crates/app-core` is the shared domain library (devices, workflows, alerts, ONVIF, go2rtc,
 agent/vision, `ports`, `db`) linked by control, flow, and edge. The frontend `lib/data.ts`

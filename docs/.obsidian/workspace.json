@@ -18,7 +18,7 @@
                   "kanban-plugin": "board",
                   "list-collapse": [
                     false,
-                    false,
+                    true,
                     false,
                     false,
                     false,
@@ -28,6 +28,20 @@
               },
               "icon": "lucide-trello",
               "title": "Task Board"
+            }
+          },
+          {
+            "id": "b228c390ac7d481f",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "plans/get-camera-room.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "get-camera-room"
             }
           }
         ]
@@ -196,41 +210,41 @@
   },
   "active": "ed375cc67003ec28",
   "lastOpenFiles": [
+    "plans/tenant-cloud-cost.md.tmp.43140.26a2e5b67b50",
+    "plans/tenant-cloud-cost.md.tmp.43140.a0b6b6414ac8",
+    "Task Board.md.tmp.66747.13becb2ef564",
+    "plans/tenant-cloud-cost.md",
+    "plans/get-camera-room.md",
+    "Task Board.md",
+    "plans/face-recognition-next-steps.md",
+    "plans/update-button-loading.md",
+    "plans/edge-resource-monitoring.md",
+    "plans/editor-panel-tab-toggle.md",
+    "plans/editor-space-hold-pan.md",
+    "plans/reid-person-reidentification.md.tmp.84899.e5f81c26e2b6",
+    "plans/reid-person-reidentification.md",
+    "plans/draw-text-inside-outside-bbox.md",
+    "plans/telegram-bot-two-way-research.md.tmp.13443.5185fc8307d7",
+    "plans/telegram-bot-two-way-research.md.tmp.13443.2103db75d69f",
+    "Task Board.md.tmp.13443.e962742c374a",
+    "plans/notification-queue-service.md",
+    "plans/telegram-bot-two-way-research.md",
+    "ref/deploy.md.tmp.93675.a9f0b7498424",
     "plans/workflow-variables.md",
     "workflow-nodes.md.tmp.3523.314baa0a528f",
     "Task Board.md.tmp.82943.d3faa5a5137c",
     "Task Board.md.tmp.82943.8b47896febaf",
-    "plans/telegram-bot-two-way-research.md",
-    "Task Board.md",
-    "Task Board.md.tmp.82943.9396fcf6f2f0",
     "plans/workflow-node-ux-refactor.md",
-    "Task Board.md.tmp.82967.d65c4d17767a",
-    "Task Board.md.tmp.82967.6e16ee0d1ede",
     "plans/map-presence-history.md",
-    "Task Board.md.tmp.98630.0897d5b93bea",
     "plans/time-gate-node.md",
     "plans/recordings-improvements.md",
-    "plans/update-button-loading.md",
     "plans/monochrome-rebrand.md",
-    "Task Board.md.tmp.8274.e0e49c706a5a",
     "plans/motion-triggered-recorder.md",
     "ref/map.md",
     "ref/ai-sidecar.md",
     "plans/workflow-runs-realtime.md",
     "plans/workflow-list-improvements.md",
     "plans/telegram-beacons-fix-polish.md",
-    "plans/string-switch-node.md",
-    "plans/show-image-node-rendering.md",
-    "plans/presence-bbox-positioning.md",
-    "plans/platform-logs-unified.md",
-    "plans/node-animation-timing.md",
-    "plans/multi-pod-flow-event-fabric.md",
-    "plans/motion-detection-node-v2.md",
-    "plans/missing-comparison-nodes.md",
-    "plans/map-walls-3d-depth.md",
-    "plans/map-redesign-2.md",
-    "plans/generic-object-detection-node.md",
-    "epics",
-    "Task Board.md.tmp.40582.c3436902c07d"
+    "plans/string-switch-node.md"
   ]
 }
