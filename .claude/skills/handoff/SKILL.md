@@ -57,7 +57,7 @@ Review → Done) — use the `/board` skill for the moves.
 ```
 ## <YYYY-MM-DD> — <area / headline>
 
-- **Branch:** <name> (pushed? merged to new-ui?)
+- **Branch:** <name> (pushed? merged to main?)
 - **Commits:** <short shas / range>
 - **Done:** <what shipped this session>
 - **State:** <build/check/cargo results; what's verified vs not>
