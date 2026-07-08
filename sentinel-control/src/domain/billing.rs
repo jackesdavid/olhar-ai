@@ -176,7 +176,7 @@ async fn subscribe(UserClaims(c): UserClaims, State(st): State<AppState>, Json(r
     auth::require(&c, "billing.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    let sub_ref = blocking(move || {
+    let (sub_ref, payment_url) = blocking(move || {
         let gw = payments::active_gateway().ok_or("no payment provider configured")?;
         let plan = plans::get(&db, &req.plan_id).ok_or("plan not found")?;
         let customer_ref = match payments::customer_ref(&db, tid, gw.provider()) {
@@ -190,11 +190,14 @@ async fn subscribe(UserClaims(c): UserClaims, State(st): State<AppState>, Json(r
         let sub_ref = gw.create_subscription(&customer_ref, plan.base_fee_brl, &req.billing_type, &plan.name)?;
         payments::record_subscription(&db, tid, gw.provider(), &sub_ref, &plan.id, &req.billing_type);
         subscriptions::set_plan(&db, tid, &plan.id)?;
-        Ok::<_, String>(sub_ref)
+        // Hosted checkout URL (Pix QR / boleto / card) for the first charge — the customer
+        // pays there. Best-effort: subscription is created either way.
+        let payment_url = gw.first_payment_url(&sub_ref);
+        Ok::<_, String>((sub_ref, payment_url))
     })
     .await?
     .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
-    Ok(Json(serde_json::json!({ "subscription_ref": sub_ref })))
+    Ok(Json(serde_json::json!({ "subscription_ref": sub_ref, "payment_url": payment_url })))
 }
 
 /// Asaas webhook: verify the access-token header, then apply the event to the tenant's

@@ -43,6 +43,16 @@ impl AsaasGateway {
             .into_json::<serde_json::Value>()
             .map_err(|e| format!("asaas {path}: bad JSON: {e}"))
     }
+
+    fn get(&self, path: &str) -> Result<serde_json::Value, String> {
+        ureq::get(&format!("{}{}", self.base, path))
+            .set("access_token", &self.api_key)
+            .timeout(Duration::from_secs(20))
+            .call()
+            .map_err(|e| format!("asaas {path}: {e}"))?
+            .into_json::<serde_json::Value>()
+            .map_err(|e| format!("asaas {path}: bad JSON: {e}"))
+    }
 }
 
 impl PaymentGateway for AsaasGateway {
@@ -78,6 +88,16 @@ impl PaymentGateway for AsaasGateway {
             .and_then(|v| v.as_str())
             .map(String::from)
             .ok_or_else(|| format!("asaas: subscription create returned no id: {out}"))
+    }
+
+    fn first_payment_url(&self, subscription_ref: &str) -> Option<String> {
+        let out = self.get(&format!("/subscriptions/{subscription_ref}/payments")).ok()?;
+        out.get("data")?
+            .as_array()?
+            .first()?
+            .get("invoiceUrl")
+            .and_then(|v| v.as_str())
+            .map(String::from)
     }
 
     fn verify_webhook(&self, token: Option<&str>) -> bool {

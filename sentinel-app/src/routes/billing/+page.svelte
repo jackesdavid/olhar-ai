@@ -75,7 +75,7 @@
     if (!picked || subscribing) return;
     subscribing = true;
     try {
-      await billing.subscribe({
+      const res = await billing.subscribe({
         plan_id: picked.id,
         billing_type: billingType,
         name: name.trim(),
@@ -84,7 +84,12 @@
       });
       picked = null;
       await load();
-      toast.success("Subscribed — your charge is on its way.");
+      if (res.payment_url) {
+        window.open(res.payment_url, "_blank", "noopener");
+        toast.success("Opening your payment page (Pix / boleto / card)…");
+      } else {
+        toast.success("Subscribed — your charge is on its way.");
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to subscribe");
     } finally {

@@ -24,6 +24,11 @@ pub trait PaymentGateway: Send + Sync {
     fn ensure_customer(&self, name: &str, email: &str, cpf_cnpj: Option<&str>) -> Result<String, String>;
     /// Create a monthly subscription for `value_brl`; return the subscription ref.
     fn create_subscription(&self, customer_ref: &str, value_brl: f64, billing_type: &str, description: &str) -> Result<String, String>;
+    /// The hosted checkout / Pix-boleto URL for the subscription's first charge, so the
+    /// customer can actually pay. `None` if unavailable (default for providers without one).
+    fn first_payment_url(&self, _subscription_ref: &str) -> Option<String> {
+        None
+    }
     /// Whether an inbound webhook carrying `token` is authentic.
     fn verify_webhook(&self, token: Option<&str>) -> bool;
     /// Parse a webhook body into a normalized event (`None` for events we ignore).

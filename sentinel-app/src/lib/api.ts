@@ -397,7 +397,8 @@ export const billing = {
   subscription: () => api.get<BillingSubscription | null>("/billing/subscription"),
   invoices: () => api.get<Invoice[]>("/billing/invoices"),
   invoice: (period: string) => api.get<InvoiceView>(`/billing/invoices/${period}`),
-  subscribe: (body: SubscribeBody) => api.post<{ subscription_ref: string }>("/billing/subscribe", body),
+  subscribe: (body: SubscribeBody) =>
+    api.post<{ subscription_ref: string; payment_url: string | null }>("/billing/subscribe", body),
 };
 
 /** Master cross-tenant billing + plan administration. */
