@@ -13,6 +13,7 @@
 
 pub mod fx;
 pub mod invoices;
+pub mod payments;
 pub mod plans;
 pub mod subscriptions;
 

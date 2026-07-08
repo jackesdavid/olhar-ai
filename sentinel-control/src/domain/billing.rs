@@ -3,15 +3,16 @@
 //! the `master` claim): list a period's invoices, close a period into an immutable
 //! invoice, and grant/reset a Beta trial.
 
+use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Json;
 use axum::routing::{get, post};
 use axum::Router;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use app_core::billing::{invoices, plans, subscriptions};
+use app_core::billing::{invoices, payments, plans, subscriptions};
 
 use super::{blocking, err, tenant_of, ApiErr};
 use crate::auth::{self, UserClaims};
@@ -23,9 +24,12 @@ pub fn router() -> Router<AppState> {
         .route("/billing/subscription", get(my_subscription))
         .route("/billing/invoices", get(my_invoices))
         .route("/billing/invoices/:period", get(my_invoice))
+        .route("/billing/subscribe", post(subscribe))
         .route("/admin/billing", get(admin_list))
         .route("/admin/billing/:tenant/close", post(admin_close))
         .route("/admin/billing/:tenant/trial", post(admin_grant_trial))
+        // Public: verified by the Asaas access-token header, not a JWT.
+        .route("/webhooks/asaas", post(asaas_webhook))
 }
 
 /// The current calendar month as `YYYY-MM` (the default billing period).
@@ -111,4 +115,64 @@ async fn admin_grant_trial(UserClaims(c): UserClaims, State(st): State<AppState>
         .await?
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(serde_json::json!({ "subscription_id": id })))
+}
+
+// ---- payments (Asaas) ----
+
+#[derive(Deserialize)]
+struct SubscribeReq {
+    plan_id: String,
+    billing_type: String, // 'PIX' | 'BOLETO' | 'CREDIT_CARD'
+    name: String,
+    email: String,
+    cpf_cnpj: Option<String>,
+}
+
+/// Convert the tenant onto a paid plan: create the provider customer + subscription, mirror
+/// the refs, and flip the billing subscription to the active plan.
+async fn subscribe(UserClaims(c): UserClaims, State(st): State<AppState>, Json(req): Json<SubscribeReq>) -> Result<Json<serde_json::Value>, ApiErr> {
+    auth::require(&c, "billing.write")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let sub_ref = blocking(move || {
+        let gw = payments::active_gateway().ok_or("no payment provider configured")?;
+        let plan = plans::get(&db, &req.plan_id).ok_or("plan not found")?;
+        let customer_ref = match payments::customer_ref(&db, tid, gw.provider()) {
+            Some(r) => r,
+            None => {
+                let r = gw.ensure_customer(&req.name, &req.email, req.cpf_cnpj.as_deref())?;
+                payments::upsert_customer(&db, tid, gw.provider(), &r);
+                r
+            }
+        };
+        let sub_ref = gw.create_subscription(&customer_ref, plan.base_fee_brl, &req.billing_type, &plan.name)?;
+        payments::record_subscription(&db, tid, gw.provider(), &sub_ref, &plan.id, &req.billing_type);
+        subscriptions::set_plan(&db, tid, &plan.id)?;
+        Ok::<_, String>(sub_ref)
+    })
+    .await?
+    .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(serde_json::json!({ "subscription_ref": sub_ref })))
+}
+
+/// Asaas webhook: verify the access-token header, then apply the event to the tenant's
+/// subscription status (which gates access). Public — no JWT.
+async fn asaas_webhook(State(st): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<StatusCode, ApiErr> {
+    let token = headers.get("asaas-access-token").and_then(|v| v.to_str().ok()).map(String::from);
+    let json: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|e| err(StatusCode::BAD_REQUEST, format!("bad json: {e}")))?;
+    let db = st.db.clone();
+    blocking(move || {
+        let gw = payments::active_gateway().ok_or("no payment provider configured")?;
+        if !gw.verify_webhook(token.as_deref()) {
+            return Err("invalid webhook token".to_string());
+        }
+        if let Some(ev) = gw.parse_event(&json) {
+            payments::apply_event(&db, gw.provider(), &ev);
+        }
+        Ok::<_, String>(())
+    })
+    .await?
+    .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    Ok(StatusCode::OK)
 }
