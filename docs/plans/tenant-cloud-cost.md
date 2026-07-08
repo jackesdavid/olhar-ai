@@ -4,6 +4,56 @@
 **Board card:** #63 Tenant Cloud Cost — view + calculate per-tenant spend (ToDo)
 **Goal:** Two linked outcomes: **(A) customer-facing invoicing** — each tenant billed a plan base fee + metered overage (GPU, storage, notifications), auditable and immutable per period; and **(B) internal COGS/margin** — what that tenant actually costs us to run, so we can see margin = invoice − cost. (A) is the primary v1 deliverable (decided 2026-07-07).
 
+## Build status — RESUME HERE (2026-07-08)
+
+**Branch:** `feat/tenant-billing` (off `main`). Everything stacked here to send in one go.
+Backend `cargo check --workspace` clean; frontend `svelte-check` clean for new files
+(pre-existing errors elsewhere untouched). **Not yet pushed / not deployed.**
+
+**Commits (newest first):**
+- `742389f` surface Pix/boleto payment link on subscribe (first_payment_url → invoiceUrl)
+- `b06e8ec` Phase 5b — billing UI (tenant `/billing` + master `/admin/billing`)
+- `1b66b7e` Phase 5a — master plan administration API
+- `4b10bff` Phase 4 — payments via Asaas, provider seam (+ `592f688` env wiring)
+- `3c56d75` Phase 3 — invoice computation + immutable API
+- `1f424bd` Phase 2 — plan/subscription model + BRL FX
+- `d9189ec` Phase 1 — per-tenant AI/GPU usage metering
+- (also `50cbb82` retired `new-ui` → `main` is the single mainline)
+
+**Done:** Phases 1–5 (metering → plans/subscriptions/FX → invoices → Asaas payments →
+UI + master plan admin) + the Pix/boleto payment link. Migrations **0039–0043**. New env:
+`AI_RATE_PER_SEC`, `PAYMENT_PROVIDER`, `ASAAS_BASE_URL`, `ASAAS_API_KEY`,
+`ASAAS_WEBHOOK_TOKEN` (documented in `.env.example` + wired in `deploy/vps/docker-compose.sentinel.yml`).
+
+**Pending / next:**
+1. **Real Asaas test on the Default tenant** (user registering on Asaas — runbook below).
+2. **Enforcement (Phase 2b, not built):** camera-cap block on device-create, self-service
+   trial auto-start on signup, expiry soft-lock (read-only + upgrade prompt). Helpers exist
+   (`subscriptions::camera_cap`, `expire_due_trials`) but aren't wired into the flows yet.
+3. Possibly push branch + open PR to `main` once the real test passes.
+
+### Real-test runbook (Asaas)
+Start in **sandbox** (validates 100% of our code with fake money, instant account); prod
+needs CNPJ approval.
+1. Register: sandbox.asaas.com (now) / asaas.com (prod later).
+2. API key: Asaas → Configurações → Integrações → API Key.
+3. Webhook (Asaas panel): URL `https://control.thesentinels.online/webhooks/asaas`, auth
+   token = `ASAAS_WEBHOOK_TOKEN`, events `PAYMENT_CONFIRMED`/`PAYMENT_RECEIVED`/`PAYMENT_OVERDUE`.
+4. VPS `/ibbf/sentinel.env`: `ASAAS_API_KEY`, `ASAAS_WEBHOOK_TOKEN`. For sandbox set
+   `ASAAS_BASE_URL: https://sandbox.asaas.com/api/v3` in the compose `environment:` (it
+   overrides env_file).
+5. Deploy: `task cloud-deploy` (OrbStack up) — applies migrations on control boot.
+6. **Perms gotcha:** `billing.read`/`billing.write` are NEW perms; the Default tenant's
+   Admin role (created earlier) lacks them → grant via Settings → Roles → Admin → enable
+   Billing, else the nav link won't even show.
+7. Test as Default Admin: `/billing` → Home (R$39,90) → Pix → name/email/CPF → Confirm →
+   opens Asaas checkout → pay → webhook flips `tenant_subscriptions.status` → `active`.
+8. Verify: DB `payment_subscriptions` + `tenant_subscriptions`; master `/admin/billing`
+   shows Default = Home/active; "Close" a period → invoice appears in `/billing`.
+
+**Open question for resume:** want `ASAAS_BASE_URL` pre-pointed at sandbox in the compose to
+ease the first test?
+
 ## Decisions locked (2026-07-07)
 
 - **Goal = customer invoicing + payment collection** (not just internal COGS). ⇒ needs a plan/subscription model on tenants, auditable per-unit metering, immutable period-closed invoices, **and a Brazilian payment gateway (Pix + boleto + cartão) — now in scope (Phase 4)**.
