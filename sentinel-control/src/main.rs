@@ -160,6 +160,16 @@ fn main() {
         log::info!("Assistant voice (TTS): {}", if app_core::voice::VoiceConfig::from_env().is_some() { "enabled" } else { "disabled (set ELEVENLABS_API_KEY)" });
         log::info!("Assistant transcription (STT): {}", if app_core::listen::SttConfig::from_env().is_some() { "enabled" } else { "disabled (set ELEVENLABS_API_KEY)" });
 
+        // Billing FX: refresh USD→BRL (for BRL invoicing) on boot, then daily. On failure
+        // the last recorded rate stays authoritative, so there is always a quote to use.
+        {
+            let db = db.clone();
+            std::thread::spawn(move || loop {
+                app_core::billing::fx::refresh_usd_brl(&db);
+                std::thread::sleep(std::time::Duration::from_secs(24 * 3600));
+            });
+        }
+
         let pending_creds = Arc::new(Mutex::new(HashMap::new()));
         let notifiers = Arc::new(Mutex::new(HashMap::new()));
         let pending_rescan = Arc::new(Mutex::new(std::collections::HashSet::new()));

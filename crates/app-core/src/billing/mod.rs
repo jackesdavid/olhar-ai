@@ -6,6 +6,14 @@
 //! Serverless endpoint by GPU-second (there is no per-request cost center), so we do the
 //! per-tenant attribution ourselves — we know the tenant at call time. Rows are
 //! append-only; a metering write must never fail the AI operation it measures.
+//!
+//! Phase 2: the **plan / subscription / FX** model — [`plans`] (the tier catalog),
+//! [`subscriptions`] (per-tenant plan + Beta trial lifecycle), and [`fx`] (USD↔BRL rates
+//! with a last-quote fallback). Customer invoices (Phase 3) build on these.
+
+pub mod fx;
+pub mod plans;
+pub mod subscriptions;
 
 use uuid::Uuid;
 
