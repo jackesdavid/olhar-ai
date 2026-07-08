@@ -13,6 +13,7 @@ mod admin_providers;
 mod agent;
 mod alerts;
 mod beacons;
+mod billing;
 mod boxes;
 mod devices;
 mod map;
@@ -30,6 +31,7 @@ pub fn router() -> Router<AppState> {
         .merge(devices::router())
         .merge(agent::router())
         .merge(alerts::router())
+        .merge(billing::router())
         .merge(persons::router())
         .merge(beacons::router())
         .merge(map::router())

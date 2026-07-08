@@ -12,6 +12,7 @@
 //! with a last-quote fallback). Customer invoices (Phase 3) build on these.
 
 pub mod fx;
+pub mod invoices;
 pub mod plans;
 pub mod subscriptions;
 
