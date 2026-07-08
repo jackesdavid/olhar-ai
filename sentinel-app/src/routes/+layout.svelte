@@ -23,6 +23,7 @@
   import Building2 from "@lucide/svelte/icons/building-2";
   import Bell from "@lucide/svelte/icons/bell";
   import HardDrive from "@lucide/svelte/icons/hard-drive";
+  import Wallet from "@lucide/svelte/icons/wallet";
   import LogOut from "@lucide/svelte/icons/log-out";
   import Undo2 from "@lucide/svelte/icons/undo-2";
 
@@ -256,8 +257,14 @@
     ...(inTenant && hasPerm("users.manage")
       ? [{ label: "Users", href: "/settings/users", icon: UsersRound }]
       : []),
+    ...(inTenant && hasPerm("billing.read")
+      ? [{ label: "Billing", href: "/billing", icon: Wallet }]
+      : []),
     ...(auth.me?.is_master
       ? [{ label: "Tenants", href: "/admin/tenants", icon: Building2 }]
+      : []),
+    ...(auth.me?.is_master
+      ? [{ label: "Billing", href: "/admin/billing", icon: Wallet }]
       : []),
     ...(auth.me?.is_master
       ? [{ label: "Providers", href: "/admin/providers", icon: Bell }]

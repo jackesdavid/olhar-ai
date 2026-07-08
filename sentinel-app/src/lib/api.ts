@@ -317,3 +317,97 @@ export const admin = {
   setTelegramProvider: (botToken: string) =>
     api.put<void>("/admin/telegram-provider", { bot_token: botToken }),
 };
+
+// ---- Billing (#63) ----------------------------------------------------------
+
+export type BillingPlan = {
+  id: string;
+  name: string;
+  base_fee_brl: number;
+  camera_cap: number;
+  trial_days: number | null;
+  included_gpu_sec: number;
+  included_storage_gb: number;
+  included_notifications: number;
+  overage_gpu_per_sec: number;
+  overage_storage_per_gb: number;
+  overage_notification_each: number;
+  active: boolean;
+};
+export type BillingSubscription = {
+  id: string;
+  tenant_id: string;
+  plan_id: string;
+  status: string;
+  started_at: string;
+  ended_at: string | null;
+};
+export type Invoice = {
+  id: string;
+  tenant_id: string;
+  period: string;
+  plan_id: string;
+  plan_name: string;
+  base_fee_brl: number;
+  fx_usd_brl: number | null;
+  total_brl: number;
+  status: string;
+  created_at: string;
+};
+export type InvoiceLineItem = {
+  driver: string;
+  qty: number;
+  unit: string;
+  included: number;
+  billable_qty: number;
+  rate_brl: number;
+  amount_brl: number;
+};
+export type InvoiceDraft = {
+  plan_name: string;
+  base_fee_brl: number;
+  total_brl: number;
+  line_items: InvoiceLineItem[];
+};
+export type InvoiceView = {
+  invoice: Invoice | null;
+  line_items: InvoiceLineItem[];
+  draft: InvoiceDraft | null;
+};
+export type TenantBilling = {
+  tenant_id: string;
+  tenant_name: string;
+  plan_id: string | null;
+  plan_name: string | null;
+  base_fee_brl: number | null;
+  status: string | null;
+  ended_at: string | null;
+};
+export type SubscribeBody = {
+  plan_id: string;
+  billing_type: "PIX" | "BOLETO" | "CREDIT_CARD";
+  name: string;
+  email: string;
+  cpf_cnpj?: string;
+};
+
+/** Tenant self-serve billing. */
+export const billing = {
+  plans: () => api.get<BillingPlan[]>("/billing/plans"),
+  subscription: () => api.get<BillingSubscription | null>("/billing/subscription"),
+  invoices: () => api.get<Invoice[]>("/billing/invoices"),
+  invoice: (period: string) => api.get<InvoiceView>(`/billing/invoices/${period}`),
+  subscribe: (body: SubscribeBody) => api.post<{ subscription_ref: string }>("/billing/subscribe", body),
+};
+
+/** Master cross-tenant billing + plan administration. */
+export const adminBilling = {
+  overview: () => api.get<TenantBilling[]>("/admin/billing/overview"),
+  invoices: (period: string) => api.get<Invoice[]>(`/admin/billing?period=${period}`),
+  close: (tenant: string, period: string) => api.post<Invoice>(`/admin/billing/${tenant}/close?period=${period}`),
+  grantTrial: (tenant: string) => api.post<{ subscription_id: string }>(`/admin/billing/${tenant}/trial`),
+  setPlan: (tenant: string, planId: string) =>
+    api.post<{ subscription_id: string }>(`/admin/billing/${tenant}/plan`, { plan_id: planId }),
+  plans: () => api.get<BillingPlan[]>("/admin/plans"),
+  upsertPlan: (plan: BillingPlan) => api.post<void>("/admin/plans", plan),
+};

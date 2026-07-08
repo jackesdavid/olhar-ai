@@ -1,0 +1,218 @@
+<script lang="ts">
+  import PageHeader from "$lib/components/page-header.svelte";
+  import { toast } from "svelte-sonner";
+
+  import Busy from "$lib/components/busy.svelte";
+  import Loader from "$lib/components/loader.svelte";
+  import EmptyState from "$lib/components/empty-state.svelte";
+  import Wallet from "@lucide/svelte/icons/wallet";
+
+  import * as Card from "$lib/components/ui/card";
+  import * as Dialog from "$lib/components/ui/dialog";
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import { Label } from "$lib/components/ui/label";
+  import { Badge } from "$lib/components/ui/badge";
+
+  import { billing, type BillingPlan, type BillingSubscription, type Invoice, type SubscribeBody } from "$lib/api";
+
+  let loading = $state(true);
+  let plans = $state<BillingPlan[]>([]);
+  let sub = $state<BillingSubscription | null>(null);
+  let invoices = $state<Invoice[]>([]);
+
+  let picked = $state<BillingPlan | null>(null);
+  let billingType = $state<SubscribeBody["billing_type"]>("PIX");
+  let name = $state("");
+  let email = $state("");
+  let cpf = $state("");
+  let subscribing = $state(false);
+
+  const brlFmt = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+  function brl(n: number | null | undefined): string {
+    return brlFmt.format(n ?? 0);
+  }
+
+  const currentPlan = $derived(plans.find((p) => p.id === sub?.plan_id) ?? null);
+
+  function statusVariant(status: string | undefined): "default" | "secondary" | "destructive" | "outline" {
+    if (status === "active") return "default";
+    if (status === "trialing") return "secondary";
+    if (status === "past_due" || status === "canceled" || status === "expired") return "destructive";
+    return "outline";
+  }
+
+  function trialNote(): string {
+    if (sub?.status !== "trialing" || !sub.ended_at) return "";
+    const days = Math.ceil((new Date(sub.ended_at).getTime() - Date.now()) / 86_400_000);
+    if (days < 0) return "Your trial has ended — pick a plan to continue.";
+    return `Trial — ${days} day${days === 1 ? "" : "s"} left. Pick a plan to keep Sentinel after it ends.`;
+  }
+
+  async function load() {
+    loading = true;
+    try {
+      [plans, sub, invoices] = await Promise.all([billing.plans(), billing.subscription(), billing.invoices()]);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load billing");
+    } finally {
+      loading = false;
+    }
+  }
+  $effect(() => {
+    load();
+  });
+
+  function choose(p: BillingPlan) {
+    picked = p;
+    billingType = "PIX";
+  }
+
+  const canSubscribe = $derived(!!picked && name.trim() && email.trim().includes("@"));
+
+  async function confirmSubscribe(e: SubmitEvent) {
+    e.preventDefault();
+    if (!picked || subscribing) return;
+    subscribing = true;
+    try {
+      await billing.subscribe({
+        plan_id: picked.id,
+        billing_type: billingType,
+        name: name.trim(),
+        email: email.trim(),
+        cpf_cnpj: cpf.trim() || undefined,
+      });
+      picked = null;
+      await load();
+      toast.success("Subscribed — your charge is on its way.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to subscribe");
+    } finally {
+      subscribing = false;
+    }
+  }
+
+  function isCurrent(p: BillingPlan): boolean {
+    return sub?.plan_id === p.id && sub?.status === "active";
+  }
+</script>
+
+<div class="space-y-6">
+  <PageHeader title="Billing" description="Your plan, payment, and invoices." icon={Wallet} />
+
+  {#if loading}
+    <Loader />
+  {:else}
+    {#if trialNote()}
+      <Card.Root class="border-amber-500/40">
+        <Card.Content class="py-4 text-sm">{trialNote()}</Card.Content>
+      </Card.Root>
+    {/if}
+
+    <Card.Root>
+      <Card.Header><Card.Title>Current plan</Card.Title></Card.Header>
+      <Card.Content class="flex items-center justify-between">
+        <div>
+          <p class="text-lg font-semibold">{currentPlan?.name ?? "No plan"}</p>
+          <p class="text-sm text-muted-foreground">
+            {currentPlan ? `${brl(currentPlan.base_fee_brl)}/mo · up to ${currentPlan.camera_cap} cameras` : "Choose a plan below."}
+          </p>
+        </div>
+        {#if sub}<Badge variant={statusVariant(sub.status)}>{sub.status}</Badge>{/if}
+      </Card.Content>
+    </Card.Root>
+
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {#each plans as p (p.id)}
+        <Card.Root class={isCurrent(p) ? "border-foreground" : ""}>
+          <Card.Header>
+            <Card.Title class="flex items-center justify-between">
+              {p.name}
+              {#if isCurrent(p)}<Badge variant="secondary" class="text-[10px]">current</Badge>{/if}
+            </Card.Title>
+          </Card.Header>
+          <Card.Content class="space-y-3">
+            <p class="text-2xl font-semibold">{p.base_fee_brl > 0 ? brl(p.base_fee_brl) : "Free"}<span class="text-sm font-normal text-muted-foreground">{p.base_fee_brl > 0 ? "/mo" : ""}</span></p>
+            <ul class="space-y-1 text-sm text-muted-foreground">
+              <li>Up to {p.camera_cap} cameras</li>
+              {#if p.trial_days}<li>{p.trial_days}-day free trial</li>{/if}
+            </ul>
+            <Button class="w-full" variant={isCurrent(p) ? "outline" : "default"} disabled={isCurrent(p) || p.base_fee_brl === 0} onclick={() => choose(p)}>
+              {#if isCurrent(p)}Current plan{:else if p.base_fee_brl === 0}Trial only{:else}Choose {p.name}{/if}
+            </Button>
+          </Card.Content>
+        </Card.Root>
+      {/each}
+    </div>
+
+    <Card.Root>
+      <Card.Header><Card.Title>Invoices</Card.Title></Card.Header>
+      <Card.Content class="overflow-x-auto">
+        <table class="w-full border-collapse text-sm">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="py-2 pr-4 text-left font-medium">Period</th>
+              <th class="px-3 py-2 text-left font-medium">Plan</th>
+              <th class="px-3 py-2 text-left font-medium">Status</th>
+              <th class="px-3 py-2 text-right font-medium">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each invoices as inv (inv.id)}
+              <tr class="border-b border-border/50 last:border-0">
+                <td class="py-2 pr-4 font-mono text-xs">{inv.period}</td>
+                <td class="px-3 py-2">{inv.plan_name}</td>
+                <td class="px-3 py-2"><Badge variant={inv.status === "final" ? "default" : "outline"} class="text-[10px]">{inv.status}</Badge></td>
+                <td class="px-3 py-2 text-right tabular-nums">{brl(inv.total_brl)}</td>
+              </tr>
+            {/each}
+            {#if invoices.length === 0}
+              <tr><td colspan={4}><EmptyState title="No invoices yet" description="Invoices appear here once a billing period closes." /></td></tr>
+            {/if}
+          </tbody>
+        </table>
+      </Card.Content>
+    </Card.Root>
+  {/if}
+</div>
+
+<!-- Subscribe / pay -->
+<Dialog.Root open={picked !== null} onOpenChange={(o) => { if (!o) picked = null; }}>
+  <Dialog.Content>
+    <Dialog.Header>
+      <Dialog.Title>Subscribe{picked ? ` — ${picked.name}` : ""}</Dialog.Title>
+      <Dialog.Description>
+        {picked ? `${brl(picked.base_fee_brl)}/mo, up to ${picked.camera_cap} cameras.` : ""}
+      </Dialog.Description>
+    </Dialog.Header>
+    <form class="space-y-3" onsubmit={confirmSubscribe}>
+      <div class="space-y-1.5">
+        <Label>Payment method</Label>
+        <div class="flex gap-2">
+          {#each ["PIX", "BOLETO", "CREDIT_CARD"] as bt (bt)}
+            <Button type="button" variant={billingType === bt ? "default" : "outline"} size="sm" onclick={() => (billingType = bt as SubscribeBody["billing_type"])}>
+              {bt === "CREDIT_CARD" ? "Card" : bt === "BOLETO" ? "Boleto" : "Pix"}
+            </Button>
+          {/each}
+        </div>
+      </div>
+      <div class="space-y-1.5">
+        <Label for="s-name">Full name</Label>
+        <Input id="s-name" bind:value={name} placeholder="Maria Silva" />
+      </div>
+      <div class="space-y-1.5">
+        <Label for="s-email">Email</Label>
+        <Input id="s-email" type="email" bind:value={email} placeholder="maria@empresa.com.br" />
+      </div>
+      <div class="space-y-1.5">
+        <Label for="s-cpf">CPF / CNPJ <span class="text-muted-foreground">(optional)</span></Label>
+        <Input id="s-cpf" bind:value={cpf} placeholder="000.000.000-00" />
+      </div>
+      <Dialog.Footer>
+        <Button type="submit" disabled={!canSubscribe || subscribing}>
+          {#if subscribing}<Busy />{/if} Confirm subscription
+        </Button>
+      </Dialog.Footer>
+    </form>
+  </Dialog.Content>
+</Dialog.Root>
