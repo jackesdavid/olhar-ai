@@ -131,7 +131,7 @@ async fn enroll(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id):
         if persons::find(&persons::repo::load(&db, tid), &id).is_none() {
             return Err("Person not found.".to_string());
         }
-        let embedding = app_core::agent::face::embed(&bytes)?;
+        let embedding = app_core::agent::face::embed(&db, tid, &bytes)?;
         persons::repo::insert_embedding(&db, tid, &id, &embedding, b.approved, &b.source)
     })
     .await?
@@ -179,7 +179,7 @@ async fn recognize(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b
     let bytes = decode_image(&b.image)?;
     let db = st.db.clone();
     let resp = blocking(move || {
-        let query = app_core::agent::face::embed(&bytes)?;
+        let query = app_core::agent::face::embed(&db, tid, &bytes)?;
         let matches = persons::repo::recognize(&db, tid, &query, 5);
         let matched = persons::best_match(&matches, b.max_distance.unwrap_or(0.4));
         Ok::<_, String>(RecognizeResp { query, matched })

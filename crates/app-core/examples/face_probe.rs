@@ -35,10 +35,21 @@ fn main() {
         .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Jpeg)
         .unwrap();
 
+    // Face embedding now runs on the GPU sidecar and meters usage per tenant, so it
+    // needs a DB handle + tenant. Connect via DATABASE_URL (skip cleanly if unset).
+    let db = match std::env::var("DATABASE_URL").ok().and_then(|u| app_core::db::Db::connect(&u).ok()) {
+        Some(db) => db,
+        None => {
+            eprintln!("set DATABASE_URL to run this probe (embed records ai_usage per tenant)");
+            return;
+        }
+    };
+    let tenant = app_core::tenancy::DEFAULT_TENANT_ID;
+
     // Twice: 1st pays the one-time model optimisation; 2nd is steady-state per-call.
     for pass in 1..=2 {
         let t = std::time::Instant::now();
-        match app_core::agent::face::embed(&bytes) {
+        match app_core::agent::face::embed(&db, tenant, &bytes) {
             Ok(v) => {
                 let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
                 eprintln!("[pass {pass}] embed OK: dims={}, norm={:.4}, TOTAL {:?}", v.len(), norm, t.elapsed());

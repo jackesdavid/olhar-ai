@@ -10,8 +10,10 @@
 //! sidecar via `AI_SERVICE_URL` / `AI_SERVICE_KEY` (see [`crate::agent::ai_service`]).
 
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 use crate::agent::ai_service;
+use crate::db::Db;
 
 /// ArcFace embedding dimensionality (the pgvector column is `vector(512)`).
 pub const EMBED_DIM: usize = 512;
@@ -31,11 +33,18 @@ pub struct FaceDetection {
 ///
 /// Returns a 512-d L2-normalized vector ready for cosine matching. Errors when the
 /// sidecar isn't configured, the request fails, or no face is found in the frame.
-pub fn embed(image_bytes: &[u8]) -> Result<Vec<f32>, String> {
-    let out = ai_service::call(
-        "face_detect_embed",
+///
+/// Every successful sidecar call is metered against `tenant_id` (the RunPod-billed time)
+/// via [`crate::billing`] — including the "no face found" case, which still consumed GPU.
+pub fn embed(db: &Db, tenant_id: Uuid, image_bytes: &[u8]) -> Result<Vec<f32>, String> {
+    let op = "face_detect_embed";
+    let outcome = ai_service::call(
+        op,
         json!({ "image_b64": ai_service::image_b64(image_bytes) }),
     )?;
+    // The job ran and was billed by RunPod — record it before we branch on the result.
+    crate::billing::record_ai_usage(db, tenant_id, op, outcome.delay_ms, outcome.exec_ms, true);
+    let out = outcome.output;
 
     if !out.get("face").and_then(Value::as_bool).unwrap_or(false) {
         return Err("No face found in the image — try a clearer, front-facing photo.".into());

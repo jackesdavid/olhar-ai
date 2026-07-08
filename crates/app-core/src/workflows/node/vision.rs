@@ -130,7 +130,7 @@ pub(super) fn run_recognize_person(
         .get("max_distance")
         .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
         .unwrap_or(0.4) as f32;
-    let embedding = crate::agent::face::embed(bytes)?;
+    let embedding = crate::agent::face::embed(&sys.db, sys.tenant_id, bytes)?;
     let matches = sys.recognizer.recognize(&embedding, 5);
     let mut o = PortValues::new();
     match crate::persons::best_match(&matches, max_distance) {

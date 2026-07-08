@@ -42,18 +42,32 @@ pub fn image_b64(bytes: &[u8]) -> String {
     B64.encode(bytes)
 }
 
-/// Call an op on the AI sidecar and return its `output` object.
+/// An AI-sidecar call's `output` plus the RunPod-billed time (milliseconds).
+///
+/// `delay_ms` is queue/cold-start (`delayTime`), `exec_ms` is worker execution
+/// (`executionTime`) — together they are what RunPod bills, and what billing attributes
+/// per tenant. Local (`--rp_serve_api`) calls report no timing, so both are `0`.
+pub struct CallOutcome {
+    pub output: Value,
+    pub delay_ms: u32,
+    pub exec_ms: u32,
+}
+
+/// Call an op on the AI sidecar and return its `output` plus the RunPod-billed time.
 ///
 /// Times the full round trip — request + any cold-start `/status` polling — and logs
-/// the start (with the target URL, so local-GPU vs RunPod is visible) and the elapsed
-/// milliseconds on finish. This is the wall-clock latency a detection/enrollment call
-/// actually costs.
-pub fn call(op: &str, input: Value) -> Result<Value, String> {
+/// the start (with the target URL, so local-GPU vs RunPod is visible) and, on finish,
+/// both the wall-clock and the RunPod-billed (`delay + exec`) milliseconds. The billed
+/// time is what [`crate::billing`] attributes per tenant.
+pub fn call(op: &str, input: Value) -> Result<CallOutcome, String> {
     let started = Instant::now();
     let result = call_inner(op, input);
     let ms = started.elapsed().as_millis();
     match &result {
-        Ok(_) => log::info!("ai_service: op '{op}' finished in {ms} ms"),
+        Ok(o) => log::info!(
+            "ai_service: op '{op}' finished in {ms} ms (billed: delay {} + exec {} ms)",
+            o.delay_ms, o.exec_ms
+        ),
         Err(e) => log::warn!("ai_service: op '{op}' failed after {ms} ms: {e}"),
     }
     result
@@ -64,7 +78,7 @@ pub fn call(op: &str, input: Value) -> Result<Value, String> {
 ///
 /// `input` should be a JSON object of the op's args (e.g. `{ "image_b64": ... }`);
 /// the `op` field is merged in here.
-fn call_inner(op: &str, mut input: Value) -> Result<Value, String> {
+fn call_inner(op: &str, mut input: Value) -> Result<CallOutcome, String> {
     let cfg = AiServiceConfig::from_env().ok_or(
         "AI service not configured — set AI_SERVICE_URL (and AI_SERVICE_KEY) in .env.",
     )?;
@@ -90,17 +104,17 @@ fn call_inner(op: &str, mut input: Value) -> Result<Value, String> {
     let v: Value =
         serde_json::from_str(&body).map_err(|e| format!("AI service returned invalid JSON: {e}"))?;
 
-    let out = resolve_output(&cfg, &agent, v)?;
+    let (out, delay_ms, exec_ms) = resolve_output(&cfg, &agent, v)?;
     if let Some(err) = out.get("error").and_then(Value::as_str) {
         return Err(format!("AI op '{op}': {err}"));
     }
-    Ok(out)
+    Ok(CallOutcome { output: out, delay_ms, exec_ms })
 }
 
-/// Resolve the RunPod envelope to an `output`, polling `/status/<id>` while the job
-/// is `IN_QUEUE`/`IN_PROGRESS` (cold start). Local `--rp_serve_api` returns
-/// `COMPLETED` synchronously, so the loop runs zero times there.
-fn resolve_output(cfg: &AiServiceConfig, agent: &ureq::Agent, mut v: Value) -> Result<Value, String> {
+/// Resolve the RunPod envelope to `(output, delay_ms, exec_ms)`, polling `/status/<id>`
+/// while the job is `IN_QUEUE`/`IN_PROGRESS` (cold start). Local `--rp_serve_api` returns
+/// `COMPLETED` synchronously (no timing fields → `0`), so the loop runs zero times there.
+fn resolve_output(cfg: &AiServiceConfig, agent: &ureq::Agent, mut v: Value) -> Result<(Value, u32, u32), String> {
     // `<base>/runsync` → `<base>/status/<id>` for polling.
     let base = cfg.url.trim_end_matches("/runsync").trim_end_matches("/run");
     let mut tries = 0;
@@ -138,5 +152,10 @@ fn resolve_output(cfg: &AiServiceConfig, agent: &ureq::Agent, mut v: Value) -> R
             }
         }
     }
-    Ok(v.get("output").cloned().unwrap_or(v))
+    // Billed time lives at the envelope top level (siblings of `output`). Absent on a
+    // local sidecar → 0. Read before moving `v` into the `output` fallback.
+    let delay_ms = v.get("delayTime").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let exec_ms = v.get("executionTime").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let output = v.get("output").cloned().unwrap_or(v);
+    Ok((output, delay_ms, exec_ms))
 }

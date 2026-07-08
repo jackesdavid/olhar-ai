@@ -9,7 +9,7 @@
 
 pub mod agent;
 pub mod alerts;
-pub mod platform_logs;
+pub mod billing;
 pub mod config;
 pub mod db;
 pub mod device_actions;
@@ -23,6 +23,7 @@ pub mod media;
 pub mod notification;
 pub mod onvif;
 pub mod persons;
+pub mod platform_logs;
 pub mod ports;
 pub mod presence;
 pub mod tenancy;
