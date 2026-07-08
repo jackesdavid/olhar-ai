@@ -26,8 +26,11 @@ pub fn router() -> Router<AppState> {
         .route("/billing/invoices/:period", get(my_invoice))
         .route("/billing/subscribe", post(subscribe))
         .route("/admin/billing", get(admin_list))
+        .route("/admin/billing/overview", get(admin_overview))
         .route("/admin/billing/:tenant/close", post(admin_close))
         .route("/admin/billing/:tenant/trial", post(admin_grant_trial))
+        .route("/admin/billing/:tenant/plan", post(admin_set_plan))
+        .route("/admin/plans", get(admin_list_plans).post(admin_upsert_plan))
         // Public: verified by the Asaas access-token header, not a JWT.
         .route("/webhooks/asaas", post(asaas_webhook))
 }
@@ -115,6 +118,45 @@ async fn admin_grant_trial(UserClaims(c): UserClaims, State(st): State<AppState>
         .await?
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(serde_json::json!({ "subscription_id": id })))
+}
+
+/// Every tenant with its current plan + status.
+async fn admin_overview(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<subscriptions::TenantBilling>>, ApiErr> {
+    require_master(&c)?;
+    let db = st.db.clone();
+    Ok(Json(blocking(move || subscriptions::overview(&db)).await?))
+}
+
+#[derive(Deserialize)]
+struct SetPlanReq {
+    plan_id: String,
+}
+
+/// Master override: put a tenant onto a plan directly (no payment).
+async fn admin_set_plan(UserClaims(c): UserClaims, State(st): State<AppState>, Path(tenant): Path<Uuid>, Json(req): Json<SetPlanReq>) -> Result<Json<serde_json::Value>, ApiErr> {
+    require_master(&c)?;
+    let db = st.db.clone();
+    let id = blocking(move || subscriptions::set_plan(&db, tenant, &req.plan_id))
+        .await?
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(serde_json::json!({ "subscription_id": id })))
+}
+
+/// The full plan catalog (active + inactive).
+async fn admin_list_plans(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<plans::Plan>>, ApiErr> {
+    require_master(&c)?;
+    let db = st.db.clone();
+    Ok(Json(blocking(move || plans::list_all(&db)).await?))
+}
+
+/// Create or edit a plan (price, cap, trial, quotas).
+async fn admin_upsert_plan(UserClaims(c): UserClaims, State(st): State<AppState>, Json(plan): Json<plans::Plan>) -> Result<StatusCode, ApiErr> {
+    require_master(&c)?;
+    let db = st.db.clone();
+    blocking(move || plans::upsert(&db, plan))
+        .await?
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---- payments (Asaas) ----
