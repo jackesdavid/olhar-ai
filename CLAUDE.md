@@ -58,8 +58,8 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
 - **Timestamps are RFC3339 `text`**, not `timestamptz` — sqlx is built without the chrono/time
   feature, so it can't decode `timestamptz`. Generate with `app_core::alerts::now_rfc3339()`.
 - **Migrations**: `crates/app-core/migrations/NNNN_*.sql`, embedded via `sqlx::migrate!`, applied
-  on `Db::connect` (control + flow boot). Additive; next number is **0044** (recent: 0039 = ai_usage,
-  0040 = billing_plans + tenant_subscriptions, 0041 = fx_rates, 0042 = invoices, 0043 = billing_payments). System
+  on `Db::connect` (control + flow boot). Additive; next number is **0045** (recent: 0040 = billing_plans,
+  0041 = fx_rates, 0042 = invoices, 0043 = billing_payments, 0044 = billing multi-currency). System
   events (e.g. `motion`, `telegram_message`) are a code catalog (`repo::system_events()`), not a migration.
 - **Workflow nodes**: 61 user-visible nodes in `NodeKind::ALL` (`crates/app-core/src/workflows/domain.rs`);
   execution in `node.rs` (same folder). Node catalog + port reference: [docs/workflow-nodes.md](docs/workflow-nodes.md).

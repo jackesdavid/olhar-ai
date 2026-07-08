@@ -125,14 +125,16 @@ pub fn camera_cap(db: &Db, tenant_id: Uuid) -> i32 {
         .unwrap_or(2)
 }
 
-/// One row of the master billing overview: a tenant and its current plan (if any).
+/// One row of the master billing overview: a tenant, its billing currency, and its current
+/// plan (if any). `base_fee` is the tier's price **in the tenant's currency**.
 #[derive(Debug, Clone, FromRow, serde::Serialize)]
 pub struct TenantBilling {
     pub tenant_id: Uuid,
     pub tenant_name: String,
+    pub currency: String,
     pub plan_id: Option<String>,
     pub plan_name: Option<String>,
-    pub base_fee_brl: Option<f64>,
+    pub base_fee: Option<f64>,
     pub status: Option<String>,
     /// Trial end (RFC3339) when the current subscription is a trial.
     pub ended_at: Option<String>,
@@ -144,14 +146,15 @@ pub fn overview(db: &Db) -> Vec<TenantBilling> {
     let pool = db.pool();
     db.block(async move {
         sqlx::query_as::<_, TenantBilling>(
-            "SELECT t.id AS tenant_id, t.name AS tenant_name,
-                    s.plan_id, p.name AS plan_name, p.base_fee_brl, s.status, s.ended_at
+            "SELECT t.id AS tenant_id, t.name AS tenant_name, t.currency,
+                    s.plan_id, p.name AS plan_name, pp.amount AS base_fee, s.status, s.ended_at
              FROM tenants t
              LEFT JOIN LATERAL (
                  SELECT plan_id, status, ended_at FROM tenant_subscriptions ts
                  WHERE ts.tenant_id = t.id ORDER BY started_at DESC LIMIT 1
              ) s ON true
              LEFT JOIN billing_plans p ON p.id = s.plan_id
+             LEFT JOIN plan_prices pp ON pp.plan_id = s.plan_id AND pp.currency = t.currency
              ORDER BY t.name",
         )
         .fetch_all(&pool)

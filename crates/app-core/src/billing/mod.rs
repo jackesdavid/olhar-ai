@@ -22,6 +22,21 @@ use uuid::Uuid;
 use crate::alerts::now_rfc3339;
 use crate::db::Db;
 
+/// The currency a tenant is billed in (`BRL` for Brazil, `USD` for the American market).
+/// Defaults to `BRL` when the tenant row is missing or unset.
+pub fn tenant_currency(db: &Db, tenant_id: Uuid) -> String {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_scalar::<_, String>("SELECT currency FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten()
+    })
+    .unwrap_or_else(|| "BRL".to_string())
+}
+
 /// Configured price per GPU-second for the AI endpoint (currency-agnostic — the caller's
 /// rate unit). Read from `AI_RATE_PER_SEC`; defaults to `0.0` so metering still records
 /// the billed milliseconds even before a rate is set (cost then stays `0`). The rate

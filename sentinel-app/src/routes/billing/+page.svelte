@@ -14,23 +14,24 @@
   import { Label } from "$lib/components/ui/label";
   import { Badge } from "$lib/components/ui/badge";
 
-  import { billing, type BillingPlan, type BillingSubscription, type Invoice, type SubscribeBody } from "$lib/api";
+  import { billing, type PricedPlan, type BillingSubscription, type Invoice, type SubscribeBody } from "$lib/api";
 
   let loading = $state(true);
-  let plans = $state<BillingPlan[]>([]);
+  let plans = $state<PricedPlan[]>([]);
   let sub = $state<BillingSubscription | null>(null);
   let invoices = $state<Invoice[]>([]);
 
-  let picked = $state<BillingPlan | null>(null);
+  let picked = $state<PricedPlan | null>(null);
   let billingType = $state<SubscribeBody["billing_type"]>("PIX");
   let name = $state("");
   let email = $state("");
   let cpf = $state("");
   let subscribing = $state(false);
 
-  const brlFmt = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
-  function brl(n: number | null | undefined): string {
-    return brlFmt.format(n ?? 0);
+  /** Format an amount in its own currency (BRL uses pt-BR, everything else en-US). */
+  function money(n: number | null | undefined, currency: string): string {
+    const locale = currency === "BRL" ? "pt-BR" : "en-US";
+    return new Intl.NumberFormat(locale, { style: "currency", currency }).format(n ?? 0);
   }
 
   const currentPlan = $derived(plans.find((p) => p.id === sub?.plan_id) ?? null);
@@ -63,7 +64,7 @@
     load();
   });
 
-  function choose(p: BillingPlan) {
+  function choose(p: PricedPlan) {
     picked = p;
     billingType = "PIX";
   }
@@ -97,7 +98,7 @@
     }
   }
 
-  function isCurrent(p: BillingPlan): boolean {
+  function isCurrent(p: PricedPlan): boolean {
     return sub?.plan_id === p.id && sub?.status === "active";
   }
 </script>
@@ -120,7 +121,7 @@
         <div>
           <p class="text-lg font-semibold">{currentPlan?.name ?? "No plan"}</p>
           <p class="text-sm text-muted-foreground">
-            {currentPlan ? `${brl(currentPlan.base_fee_brl)}/mo · up to ${currentPlan.camera_cap} cameras` : "Choose a plan below."}
+            {currentPlan ? `${money(currentPlan.amount, currentPlan.currency)}/mo · up to ${currentPlan.camera_cap} cameras` : "Choose a plan below."}
           </p>
         </div>
         {#if sub}<Badge variant={statusVariant(sub.status)}>{sub.status}</Badge>{/if}
@@ -137,13 +138,13 @@
             </Card.Title>
           </Card.Header>
           <Card.Content class="space-y-3">
-            <p class="text-2xl font-semibold">{p.base_fee_brl > 0 ? brl(p.base_fee_brl) : "Free"}<span class="text-sm font-normal text-muted-foreground">{p.base_fee_brl > 0 ? "/mo" : ""}</span></p>
+            <p class="text-2xl font-semibold">{p.amount > 0 ? money(p.amount, p.currency) : "Free"}<span class="text-sm font-normal text-muted-foreground">{p.amount > 0 ? "/mo" : ""}</span></p>
             <ul class="space-y-1 text-sm text-muted-foreground">
               <li>Up to {p.camera_cap} cameras</li>
               {#if p.trial_days}<li>{p.trial_days}-day free trial</li>{/if}
             </ul>
-            <Button class="w-full" variant={isCurrent(p) ? "outline" : "default"} disabled={isCurrent(p) || p.base_fee_brl === 0} onclick={() => choose(p)}>
-              {#if isCurrent(p)}Current plan{:else if p.base_fee_brl === 0}Trial only{:else}Choose {p.name}{/if}
+            <Button class="w-full" variant={isCurrent(p) ? "outline" : "default"} disabled={isCurrent(p) || p.amount === 0} onclick={() => choose(p)}>
+              {#if isCurrent(p)}Current plan{:else if p.amount === 0}Trial only{:else}Choose {p.name}{/if}
             </Button>
           </Card.Content>
         </Card.Root>
@@ -168,7 +169,7 @@
                 <td class="py-2 pr-4 font-mono text-xs">{inv.period}</td>
                 <td class="px-3 py-2">{inv.plan_name}</td>
                 <td class="px-3 py-2"><Badge variant={inv.status === "final" ? "default" : "outline"} class="text-[10px]">{inv.status}</Badge></td>
-                <td class="px-3 py-2 text-right tabular-nums">{brl(inv.total_brl)}</td>
+                <td class="px-3 py-2 text-right tabular-nums">{money(inv.total, inv.currency)}</td>
               </tr>
             {/each}
             {#if invoices.length === 0}
@@ -187,7 +188,7 @@
     <Dialog.Header>
       <Dialog.Title>Subscribe{picked ? ` — ${picked.name}` : ""}</Dialog.Title>
       <Dialog.Description>
-        {picked ? `${brl(picked.base_fee_brl)}/mo, up to ${picked.camera_cap} cameras.` : ""}
+        {picked ? `${money(picked.amount, picked.currency)}/mo, up to ${picked.camera_cap} cameras.` : ""}
       </Dialog.Description>
     </Dialog.Header>
     <form class="space-y-3" onsubmit={confirmSubscribe}>

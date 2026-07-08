@@ -31,9 +31,10 @@ pub struct InvoiceDraft {
     pub period: String,
     pub plan_id: String,
     pub plan_name: String,
-    pub base_fee_brl: f64,
+    pub currency: String,
+    pub base_fee: f64,
     pub fx_usd_brl: Option<f64>,
-    pub total_brl: f64,
+    pub total: f64,
     pub usage: TenantUsage,
     pub line_items: Vec<DraftLine>,
 }
@@ -46,8 +47,8 @@ pub struct DraftLine {
     pub unit: String,
     pub included: f64,
     pub billable_qty: f64,
-    pub rate_brl: f64,
-    pub amount_brl: f64,
+    pub rate: f64,
+    pub amount: f64,
 }
 
 /// A persisted invoice header.
@@ -58,9 +59,10 @@ pub struct Invoice {
     pub period: String,
     pub plan_id: String,
     pub plan_name: String,
-    pub base_fee_brl: f64,
+    pub currency: String,
+    pub base_fee: f64,
     pub fx_usd_brl: Option<f64>,
-    pub total_brl: f64,
+    pub total: f64,
     pub status: String,
     pub created_at: String,
 }
@@ -73,8 +75,8 @@ pub struct InvoiceLineItem {
     pub unit: String,
     pub included: f64,
     pub billable_qty: f64,
-    pub rate_brl: f64,
-    pub amount_brl: f64,
+    pub rate: f64,
+    pub amount: f64,
 }
 
 /// Aggregate a tenant's metered usage for `period` ('YYYY-MM'), matched by RFC3339 prefix.
@@ -127,19 +129,22 @@ pub fn usage_for_period(db: &Db, tenant_id: Uuid, period: &str) -> TenantUsage {
 pub fn compute(db: &Db, tenant_id: Uuid, period: &str) -> Option<InvoiceDraft> {
     let sub = subscriptions::current(db, tenant_id)?;
     let plan = plans::get(db, &sub.plan_id)?;
+    let currency = super::tenant_currency(db, tenant_id);
+    // The tier's price in the tenant's currency; 0 when the plan isn't priced there.
+    let base_fee = plans::price(db, &plan.id, &currency).unwrap_or(0.0);
     let usage = usage_for_period(db, tenant_id, period);
     let fx_usd_brl = fx::latest(db, "USD", "BRL").map(|f| f.rate);
 
     // The plan base fee, then one metered line per driver. billable = max(0, used -
-    // included); amount = billable * overage rate (BRL). v1 rates are 0 → amount 0.
+    // included); amount = billable * overage rate (invoice currency). v1 rates are 0 → 0.
     let line = |driver: &str, qty: f64, unit: &str, included: f64, rate: f64| DraftLine {
         driver: driver.to_string(),
         qty,
         unit: unit.to_string(),
         included,
         billable_qty: (qty - included).max(0.0),
-        rate_brl: rate,
-        amount_brl: (qty - included).max(0.0) * rate,
+        rate,
+        amount: (qty - included).max(0.0) * rate,
     };
 
     let line_items = vec![
@@ -149,8 +154,8 @@ pub fn compute(db: &Db, tenant_id: Uuid, period: &str) -> Option<InvoiceDraft> {
             unit: "month".to_string(),
             included: 0.0,
             billable_qty: 1.0,
-            rate_brl: plan.base_fee_brl,
-            amount_brl: plan.base_fee_brl,
+            rate: base_fee,
+            amount: base_fee,
         },
         line("gpu", usage.gpu_sec, "gpu_sec", plan.included_gpu_sec, plan.overage_gpu_per_sec),
         line("storage", usage.storage_gb, "gb", plan.included_storage_gb, plan.overage_storage_per_gb),
@@ -163,16 +168,17 @@ pub fn compute(db: &Db, tenant_id: Uuid, period: &str) -> Option<InvoiceDraft> {
         ),
     ];
 
-    let total_brl = line_items.iter().map(|l| l.amount_brl).sum();
+    let total = line_items.iter().map(|l| l.amount).sum();
 
     Some(InvoiceDraft {
         tenant_id,
         period: period.to_string(),
         plan_id: plan.id,
         plan_name: plan.name,
-        base_fee_brl: plan.base_fee_brl,
+        currency,
+        base_fee,
         fx_usd_brl,
-        total_brl,
+        total,
         usage,
         line_items,
     })
@@ -201,25 +207,26 @@ pub fn close_period(db: &Db, tenant_id: Uuid, period: &str) -> Result<Invoice, S
             .await?;
         sqlx::query(
             "INSERT INTO invoices
-                (id, tenant_id, period, plan_id, plan_name, base_fee_brl, fx_usd_brl,
-                 total_brl, status, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'final', $9)",
+                (id, tenant_id, period, plan_id, plan_name, currency, base_fee, fx_usd_brl,
+                 total, status, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'final', $10)",
         )
         .bind(invoice_id)
         .bind(tenant_id)
         .bind(&period_owned)
         .bind(&draft.plan_id)
         .bind(&draft.plan_name)
-        .bind(draft.base_fee_brl)
+        .bind(&draft.currency)
+        .bind(draft.base_fee)
         .bind(draft.fx_usd_brl)
-        .bind(draft.total_brl)
+        .bind(draft.total)
         .bind(&now)
         .execute(&mut *tx)
         .await?;
         for l in &draft.line_items {
             sqlx::query(
                 "INSERT INTO invoice_line_items
-                    (id, invoice_id, driver, qty, unit, included, billable_qty, rate_brl, amount_brl)
+                    (id, invoice_id, driver, qty, unit, included, billable_qty, rate, amount)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             )
             .bind(Uuid::new_v4())
@@ -229,8 +236,8 @@ pub fn close_period(db: &Db, tenant_id: Uuid, period: &str) -> Result<Invoice, S
             .bind(&l.unit)
             .bind(l.included)
             .bind(l.billable_qty)
-            .bind(l.rate_brl)
-            .bind(l.amount_brl)
+            .bind(l.rate)
+            .bind(l.amount)
             .execute(&mut *tx)
             .await?;
         }
@@ -278,7 +285,7 @@ pub fn list_for_period(db: &Db, period: &str) -> Vec<Invoice> {
     let period = period.to_string();
     db.block(async move {
         sqlx::query_as::<_, Invoice>(
-            "SELECT * FROM invoices WHERE period = $1 ORDER BY total_brl DESC",
+            "SELECT * FROM invoices WHERE period = $1 ORDER BY total DESC",
         )
         .bind(&period)
         .fetch_all(&pool)
@@ -292,7 +299,7 @@ pub fn line_items(db: &Db, invoice_id: Uuid) -> Vec<InvoiceLineItem> {
     let pool = db.pool();
     db.block(async move {
         sqlx::query_as::<_, InvoiceLineItem>(
-            "SELECT driver, qty, unit, included, billable_qty, rate_brl, amount_brl
+            "SELECT driver, qty, unit, included, billable_qty, rate, amount
              FROM invoice_line_items WHERE invoice_id = $1 ORDER BY id",
         )
         .bind(invoice_id)

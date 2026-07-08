@@ -22,8 +22,8 @@ pub trait PaymentGateway: Send + Sync {
     fn provider(&self) -> &'static str;
     /// Ensure a provider-side customer exists; return its ref.
     fn ensure_customer(&self, name: &str, email: &str, cpf_cnpj: Option<&str>) -> Result<String, String>;
-    /// Create a monthly subscription for `value_brl`; return the subscription ref.
-    fn create_subscription(&self, customer_ref: &str, value_brl: f64, billing_type: &str, description: &str) -> Result<String, String>;
+    /// Create a monthly subscription for `amount` (in the tenant's currency); return the ref.
+    fn create_subscription(&self, customer_ref: &str, amount: f64, billing_type: &str, description: &str) -> Result<String, String>;
     /// The hosted checkout / Pix-boleto URL for the subscription's first charge, so the
     /// customer can actually pay. `None` if unavailable (default for providers without one).
     fn first_payment_url(&self, _subscription_ref: &str) -> Option<String> {

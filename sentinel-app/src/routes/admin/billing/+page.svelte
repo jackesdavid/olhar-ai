@@ -16,19 +16,23 @@
   import { Label } from "$lib/components/ui/label";
   import { Badge } from "$lib/components/ui/badge";
 
-  import { adminBilling, type TenantBilling, type BillingPlan } from "$lib/api";
+  import { adminBilling, type TenantBilling, type PlanTier, type PlanWithPrices } from "$lib/api";
   import { auth } from "$lib/auth.svelte";
+
+  /** Currencies we sell in: Brazil and the American market. */
+  const CURRENCIES = ["BRL", "USD"] as const;
 
   const isMaster = auth.me?.is_master ?? false;
 
   let loading = $state(true);
   let rows = $state<TenantBilling[]>([]);
-  let plans = $state<BillingPlan[]>([]);
+  let plans = $state<PlanWithPrices[]>([]);
   let period = $state(currentPeriod());
   let busyTenant = $state<string | null>(null);
 
   let planPickerFor = $state<TenantBilling | null>(null);
-  let editPlan = $state<BillingPlan | null>(null);
+  let editPlan = $state<PlanTier | null>(null);
+  let editPrices = $state<Record<string, number>>({});
   let savingPlan = $state(false);
 
   function currentPeriod(): string {
@@ -36,9 +40,14 @@
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   }
 
-  const brlFmt = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
-  function brl(n: number | null | undefined): string {
-    return brlFmt.format(n ?? 0);
+  /** Format an amount in its own currency (BRL uses pt-BR, everything else en-US). */
+  function money(n: number | null | undefined, currency: string): string {
+    const locale = currency === "BRL" ? "pt-BR" : "en-US";
+    return new Intl.NumberFormat(locale, { style: "currency", currency }).format(n ?? 0);
+  }
+
+  function priceOf(p: PlanWithPrices, currency: string): number {
+    return p.prices.find((x) => x.currency === currency)?.amount ?? 0;
   }
 
   function statusVariant(status: string | null): "default" | "secondary" | "destructive" | "outline" {
@@ -59,11 +68,17 @@
     return `${days}d left`;
   }
 
-  const mrr = $derived(
-    rows
-      .filter((r) => r.status === "active")
-      .reduce((sum, r) => sum + (r.base_fee_brl ?? 0), 0),
+  /** MRR per currency — never blend BRL and USD into one number. */
+  const mrrByCurrency = $derived(
+    CURRENCIES.map((c) => ({
+      currency: c,
+      total: rows
+        .filter((r) => r.status === "active" && r.currency === c)
+        .reduce((sum, r) => sum + (r.base_fee ?? 0), 0),
+    })).filter((m) => m.total > 0),
   );
+
+  const activeCount = $derived(rows.filter((r) => r.status === "active").length);
 
   async function load() {
     loading = true;
@@ -97,7 +112,7 @@
     busyTenant = row.tenant_id;
     try {
       const inv = await adminBilling.close(row.tenant_id, period);
-      toast.success(`Closed ${period} for ${row.tenant_name}: ${brl(inv.total_brl)}`);
+      toast.success(`Closed ${period} for ${row.tenant_name}: ${money(inv.total, inv.currency)}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to close period");
     } finally {
@@ -123,7 +138,6 @@
     editPlan = {
       id: "",
       name: "",
-      base_fee_brl: 0,
       camera_cap: 1,
       trial_days: null,
       included_gpu_sec: 0,
@@ -134,6 +148,17 @@
       overage_notification_each: 0,
       active: true,
     };
+    editPrices = { BRL: 0, USD: 0 };
+  }
+
+  function openEditPlan(p: PlanWithPrices) {
+    const { prices, ...tier } = p;
+    editPlan = tier;
+    editPrices = Object.fromEntries(CURRENCIES.map((c) => [c, priceOf(p, c)]));
+  }
+
+  function planExists(id: string): boolean {
+    return plans.some((x) => x.id === id);
   }
 
   async function savePlan(e: SubmitEvent) {
@@ -144,8 +169,12 @@
       return;
     }
     savingPlan = true;
+    const id = editPlan.id.trim();
     try {
-      await adminBilling.upsertPlan({ ...editPlan, id: editPlan.id.trim() });
+      await adminBilling.upsertPlan({ ...editPlan, id });
+      for (const c of CURRENCIES) {
+        await adminBilling.setPrice(id, c, Number(editPrices[c]) || 0);
+      }
       editPlan = null;
       await load();
       toast.success("Plan saved");
@@ -183,11 +212,17 @@
       </Card.Content></Card.Root>
       <Card.Root><Card.Content class="pt-6">
         <p class="text-xs text-muted-foreground">Active subscriptions</p>
-        <p class="text-2xl font-semibold">{rows.filter((r) => r.status === "active").length}</p>
+        <p class="text-2xl font-semibold">{activeCount}</p>
       </Card.Content></Card.Root>
       <Card.Root><Card.Content class="pt-6">
         <p class="text-xs text-muted-foreground">MRR (active base fees)</p>
-        <p class="text-2xl font-semibold">{brl(mrr)}</p>
+        {#if mrrByCurrency.length === 0}
+          <p class="text-2xl font-semibold">—</p>
+        {:else}
+          <p class="text-2xl font-semibold">
+            {#each mrrByCurrency as m, i (m.currency)}{i > 0 ? " · " : ""}{money(m.total, m.currency)}{/each}
+          </p>
+        {/if}
       </Card.Content></Card.Root>
     </div>
 
@@ -207,13 +242,16 @@
           <tbody>
             {#each rows as r (r.tenant_id)}
               <tr class="border-b border-border/50 last:border-0">
-                <td class="py-2 pr-4 font-medium">{r.tenant_name}</td>
+                <td class="py-2 pr-4 font-medium">
+                  {r.tenant_name}
+                  <span class="ml-1.5 font-mono text-[10px] text-muted-foreground">{r.currency}</span>
+                </td>
                 <td class="px-3 py-2">{r.plan_name ?? "—"}</td>
                 <td class="px-3 py-2">
                   <Badge variant={statusVariant(r.status)} class="text-[10px]">{statusLabel(r.status)}</Badge>
                   {#if trialInfo(r)}<span class="ml-2 text-xs text-muted-foreground">{trialInfo(r)}</span>{/if}
                 </td>
-                <td class="px-3 py-2 text-right tabular-nums">{brl(r.base_fee_brl)}</td>
+                <td class="px-3 py-2 text-right tabular-nums">{money(r.base_fee, r.currency)}</td>
                 <td class="px-3 py-2">
                   <div class="flex justify-end gap-1.5">
                     <Button variant="outline" size="sm" disabled={busyTenant === r.tenant_id} onclick={() => (planPickerFor = r)}>
@@ -240,7 +278,9 @@
           <thead>
             <tr class="border-b border-border">
               <th class="py-2 pr-4 text-left font-medium">Plan</th>
-              <th class="px-3 py-2 text-right font-medium">Base fee</th>
+              {#each CURRENCIES as c (c)}
+                <th class="px-3 py-2 text-right font-medium">{c}</th>
+              {/each}
               <th class="px-3 py-2 text-right font-medium">Cameras</th>
               <th class="px-3 py-2 text-right font-medium">Trial</th>
               <th class="px-3 py-2 text-left font-medium">Active</th>
@@ -251,12 +291,14 @@
             {#each plans as p (p.id)}
               <tr class="border-b border-border/50 last:border-0">
                 <td class="py-2 pr-4 font-medium">{p.name} <span class="ml-1 font-mono text-xs text-muted-foreground">{p.id}</span></td>
-                <td class="px-3 py-2 text-right tabular-nums">{brl(p.base_fee_brl)}</td>
+                {#each CURRENCIES as c (c)}
+                  <td class="px-3 py-2 text-right tabular-nums">{money(priceOf(p, c), c)}</td>
+                {/each}
                 <td class="px-3 py-2 text-right tabular-nums">{p.camera_cap}</td>
                 <td class="px-3 py-2 text-right tabular-nums">{p.trial_days ? `${p.trial_days}d` : "—"}</td>
                 <td class="px-3 py-2"><Badge variant={p.active ? "default" : "outline"} class="text-[10px]">{p.active ? "yes" : "no"}</Badge></td>
                 <td class="px-3 py-2 text-right">
-                  <Button variant="ghost" size="sm" onclick={() => (editPlan = { ...p })}><Pencil class="size-3.5" /> Edit</Button>
+                  <Button variant="ghost" size="sm" onclick={() => openEditPlan(p)}><Pencil class="size-3.5" /> Edit</Button>
                 </td>
               </tr>
             {/each}
@@ -283,35 +325,39 @@
           onclick={() => planPickerFor && assignPlan(planPickerFor, p.id)}
         >
           <span>{p.name}</span>
-          <span class="text-muted-foreground">{brl(p.base_fee_brl)} · {p.camera_cap} cam</span>
+          <span class="text-muted-foreground">
+            {planPickerFor ? money(priceOf(p, planPickerFor.currency), planPickerFor.currency) : ""} · {p.camera_cap} cam
+          </span>
         </Button>
       {/each}
     </div>
   </Dialog.Content>
 </Dialog.Root>
 
-<!-- Create / edit a plan -->
+<!-- Create / edit a tier + its per-currency prices -->
 <Dialog.Root open={editPlan !== null} onOpenChange={(o) => { if (!o) editPlan = null; }}>
   <Dialog.Content>
     <Dialog.Header>
-      <Dialog.Title>{editPlan?.id ? "Edit plan" : "New plan"}</Dialog.Title>
-      <Dialog.Description>Prices are fixed BRL. Trial days blank = paid plan.</Dialog.Description>
+      <Dialog.Title>{editPlan && planExists(editPlan.id) ? "Edit plan" : "New plan"}</Dialog.Title>
+      <Dialog.Description>Prices are set per currency. Trial days blank = paid plan.</Dialog.Description>
     </Dialog.Header>
     {#if editPlan}
       <form class="space-y-3" onsubmit={savePlan}>
         <div class="grid grid-cols-2 gap-3">
           <div class="space-y-1.5">
             <Label for="p-id">Id (slug)</Label>
-            <Input id="p-id" bind:value={editPlan.id} placeholder="home" disabled={plans.some((x) => x.id === editPlan!.id)} />
+            <Input id="p-id" bind:value={editPlan.id} placeholder="home" disabled={planExists(editPlan.id)} />
           </div>
           <div class="space-y-1.5">
             <Label for="p-name">Name</Label>
             <Input id="p-name" bind:value={editPlan.name} placeholder="Home" />
           </div>
-          <div class="space-y-1.5">
-            <Label for="p-fee">Base fee (BRL)</Label>
-            <Input id="p-fee" type="number" step="0.01" bind:value={editPlan.base_fee_brl} />
-          </div>
+          {#each CURRENCIES as c (c)}
+            <div class="space-y-1.5">
+              <Label for={`p-price-${c}`}>Price ({c})</Label>
+              <Input id={`p-price-${c}`} type="number" step="0.01" bind:value={editPrices[c]} />
+            </div>
+          {/each}
           <div class="space-y-1.5">
             <Label for="p-cap">Camera cap</Label>
             <Input id="p-cap" type="number" bind:value={editPlan.camera_cap} />

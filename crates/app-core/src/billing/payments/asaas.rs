@@ -72,13 +72,13 @@ impl PaymentGateway for AsaasGateway {
             .ok_or_else(|| format!("asaas: customer create returned no id: {out}"))
     }
 
-    fn create_subscription(&self, customer_ref: &str, value_brl: f64, billing_type: &str, description: &str) -> Result<String, String> {
+    fn create_subscription(&self, customer_ref: &str, amount: f64, billing_type: &str, description: &str) -> Result<String, String> {
         // First charge tomorrow; Asaas then bills monthly on that day.
         let next_due = (chrono::Local::now() + chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
         let body = serde_json::json!({
             "customer": customer_ref,
             "billingType": billing_type,
-            "value": value_brl,
+            "value": amount,
             "nextDueDate": next_due,
             "cycle": "MONTHLY",
             "description": description,

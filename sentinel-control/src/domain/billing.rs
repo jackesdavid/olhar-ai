@@ -12,7 +12,7 @@ use axum::Router;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use app_core::billing::{invoices, payments, plans, subscriptions};
+use app_core::billing::{self, invoices, payments, plans, subscriptions};
 
 use super::{blocking, err, tenant_of, ApiErr};
 use crate::auth::{self, UserClaims};
@@ -31,6 +31,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/billing/:tenant/trial", post(admin_grant_trial))
         .route("/admin/billing/:tenant/plan", post(admin_set_plan))
         .route("/admin/plans", get(admin_list_plans).post(admin_upsert_plan))
+        .route("/admin/plans/:id/price", post(admin_set_price))
         // Public: verified by the Asaas access-token header, not a JWT.
         .route("/webhooks/asaas", post(asaas_webhook))
 }
@@ -56,10 +57,16 @@ fn require_master(c: &crate::auth::Claims) -> Result<(), ApiErr> {
 
 // ---- tenant self-serve (billing.read) ----
 
-async fn list_plans(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<plans::Plan>>, ApiErr> {
+/// Active tiers priced in the tenant's own currency (BRL or USD).
+async fn list_plans(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<plans::PricedPlan>>, ApiErr> {
     auth::require(&c, "billing.read")?;
+    let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    Ok(Json(blocking(move || plans::list_active(&db)).await?))
+    Ok(Json(blocking(move || {
+        let currency = billing::tenant_currency(&db, tid);
+        plans::list_active_priced(&db, &currency)
+    })
+    .await?))
 }
 
 async fn my_subscription(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Option<subscriptions::Subscription>>, ApiErr> {
@@ -142,18 +149,34 @@ async fn admin_set_plan(UserClaims(c): UserClaims, State(st): State<AppState>, P
     Ok(Json(serde_json::json!({ "subscription_id": id })))
 }
 
-/// The full plan catalog (active + inactive).
-async fn admin_list_plans(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<plans::Plan>>, ApiErr> {
+/// The full plan catalog (active + inactive), each tier with its per-currency prices.
+async fn admin_list_plans(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<plans::PlanWithPrices>>, ApiErr> {
     require_master(&c)?;
     let db = st.db.clone();
-    Ok(Json(blocking(move || plans::list_all(&db)).await?))
+    Ok(Json(blocking(move || plans::list_all_with_prices(&db)).await?))
 }
 
-/// Create or edit a plan (price, cap, trial, quotas).
+/// Create or edit a tier (cap, trial, quotas — money lives in prices).
 async fn admin_upsert_plan(UserClaims(c): UserClaims, State(st): State<AppState>, Json(plan): Json<plans::Plan>) -> Result<StatusCode, ApiErr> {
     require_master(&c)?;
     let db = st.db.clone();
     blocking(move || plans::upsert(&db, plan))
+        .await?
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct SetPriceReq {
+    currency: String,
+    amount: f64,
+}
+
+/// Set a tier's price in one currency (e.g. `home` = 39.90 BRL and 9.99 USD).
+async fn admin_set_price(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<String>, Json(req): Json<SetPriceReq>) -> Result<StatusCode, ApiErr> {
+    require_master(&c)?;
+    let db = st.db.clone();
+    blocking(move || plans::set_price(&db, &id, &req.currency.to_uppercase(), req.amount))
         .await?
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     Ok(StatusCode::NO_CONTENT)
@@ -179,6 +202,9 @@ async fn subscribe(UserClaims(c): UserClaims, State(st): State<AppState>, Json(r
     let (sub_ref, payment_url) = blocking(move || {
         let gw = payments::active_gateway().ok_or("no payment provider configured")?;
         let plan = plans::get(&db, &req.plan_id).ok_or("plan not found")?;
+        let currency = billing::tenant_currency(&db, tid);
+        let amount = plans::price(&db, &plan.id, &currency)
+            .ok_or_else(|| format!("plan '{}' has no price in {currency}", plan.id))?;
         let customer_ref = match payments::customer_ref(&db, tid, gw.provider()) {
             Some(r) => r,
             None => {
@@ -187,7 +213,7 @@ async fn subscribe(UserClaims(c): UserClaims, State(st): State<AppState>, Json(r
                 r
             }
         };
-        let sub_ref = gw.create_subscription(&customer_ref, plan.base_fee_brl, &req.billing_type, &plan.name)?;
+        let sub_ref = gw.create_subscription(&customer_ref, amount, &req.billing_type, &plan.name)?;
         payments::record_subscription(&db, tid, gw.provider(), &sub_ref, &plan.id, &req.billing_type);
         subscriptions::set_plan(&db, tid, &plan.id)?;
         // Hosted checkout URL (Pix QR / boleto / card) for the first charge — the customer

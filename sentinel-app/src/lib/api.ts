@@ -320,10 +320,10 @@ export const admin = {
 
 // ---- Billing (#63) ----------------------------------------------------------
 
-export type BillingPlan = {
+/** A subscription tier (master catalog) — money lives in per-currency prices. */
+export type PlanTier = {
   id: string;
   name: string;
-  base_fee_brl: number;
   camera_cap: number;
   trial_days: number | null;
   included_gpu_sec: number;
@@ -334,6 +334,12 @@ export type BillingPlan = {
   overage_notification_each: number;
   active: boolean;
 };
+/** A tier priced in one currency — what tenants see. */
+export type PricedPlan = PlanTier & { currency: string; amount: number };
+export type PlanPrice = { plan_id: string; currency: string; amount: number };
+/** A tier plus every currency it's priced in (master catalog). */
+export type PlanWithPrices = PlanTier & { prices: PlanPrice[] };
+
 export type BillingSubscription = {
   id: string;
   tenant_id: string;
@@ -348,9 +354,10 @@ export type Invoice = {
   period: string;
   plan_id: string;
   plan_name: string;
-  base_fee_brl: number;
+  currency: string;
+  base_fee: number;
   fx_usd_brl: number | null;
-  total_brl: number;
+  total: number;
   status: string;
   created_at: string;
 };
@@ -360,13 +367,14 @@ export type InvoiceLineItem = {
   unit: string;
   included: number;
   billable_qty: number;
-  rate_brl: number;
-  amount_brl: number;
+  rate: number;
+  amount: number;
 };
 export type InvoiceDraft = {
   plan_name: string;
-  base_fee_brl: number;
-  total_brl: number;
+  currency: string;
+  base_fee: number;
+  total: number;
   line_items: InvoiceLineItem[];
 };
 export type InvoiceView = {
@@ -377,9 +385,10 @@ export type InvoiceView = {
 export type TenantBilling = {
   tenant_id: string;
   tenant_name: string;
+  currency: string;
   plan_id: string | null;
   plan_name: string | null;
-  base_fee_brl: number | null;
+  base_fee: number | null;
   status: string | null;
   ended_at: string | null;
 };
@@ -391,9 +400,9 @@ export type SubscribeBody = {
   cpf_cnpj?: string;
 };
 
-/** Tenant self-serve billing. */
+/** Tenant self-serve billing. Plans come priced in the tenant's own currency. */
 export const billing = {
-  plans: () => api.get<BillingPlan[]>("/billing/plans"),
+  plans: () => api.get<PricedPlan[]>("/billing/plans"),
   subscription: () => api.get<BillingSubscription | null>("/billing/subscription"),
   invoices: () => api.get<Invoice[]>("/billing/invoices"),
   invoice: (period: string) => api.get<InvoiceView>(`/billing/invoices/${period}`),
@@ -409,6 +418,8 @@ export const adminBilling = {
   grantTrial: (tenant: string) => api.post<{ subscription_id: string }>(`/admin/billing/${tenant}/trial`),
   setPlan: (tenant: string, planId: string) =>
     api.post<{ subscription_id: string }>(`/admin/billing/${tenant}/plan`, { plan_id: planId }),
-  plans: () => api.get<BillingPlan[]>("/admin/plans"),
-  upsertPlan: (plan: BillingPlan) => api.post<void>("/admin/plans", plan),
+  plans: () => api.get<PlanWithPrices[]>("/admin/plans"),
+  upsertPlan: (plan: PlanTier) => api.post<void>("/admin/plans", plan),
+  setPrice: (planId: string, currency: string, amount: number) =>
+    api.post<void>(`/admin/plans/${planId}/price`, { currency, amount }),
 };
