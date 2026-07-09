@@ -47,12 +47,25 @@ pub fn enabled() -> bool {
     bucket().is_some()
 }
 
+/// `rust-s3` returns `Ok(ResponseData)` for HTTP 4xx/5xx. Unchecked, a rejected upload yields
+/// a key pointing at nothing, and a rejected fetch returns the XML error document *as the
+/// image bytes* — which we would then send to a recipient.
+fn ok_status(what: &str, code: u16, body: &[u8]) -> Result<(), String> {
+    if (200..300).contains(&code) {
+        return Ok(());
+    }
+    let detail: String = String::from_utf8_lossy(body).chars().take(200).collect();
+    Err(format!("media: {what}: HTTP {code} {detail}"))
+}
+
 /// Store bytes; returns the object key (`uuid.ext`).
 pub fn put(bytes: &[u8], content_type: &str, ext: &str) -> Result<String, String> {
     let b = bucket().ok_or("object store not configured")?;
     let key = format!("{}.{}", uuid::Uuid::new_v4(), ext);
-    b.put_object_with_content_type_blocking(&key, bytes, content_type)
+    let resp = b
+        .put_object_with_content_type_blocking(&key, bytes, content_type)
         .map_err(|e| e.to_string())?;
+    ok_status("put", resp.status_code(), resp.as_slice())?;
     Ok(key)
 }
 
@@ -60,6 +73,7 @@ pub fn put(bytes: &[u8], content_type: &str, ext: &str) -> Result<String, String
 pub fn get(key: &str) -> Result<Vec<u8>, String> {
     let b = bucket().ok_or("object store not configured")?;
     let resp = b.get_object_blocking(key).map_err(|e| e.to_string())?;
+    ok_status("get", resp.status_code(), resp.as_slice())?;
     Ok(resp.bytes().to_vec())
 }
 
@@ -71,7 +85,8 @@ pub fn get(key: &str) -> Result<Vec<u8>, String> {
 /// already gone is a success (S3 delete is idempotent) — a purge must be safe to retry.
 pub fn delete(key: &str) -> Result<(), String> {
     let b = bucket().ok_or("object store not configured")?;
-    b.delete_object_blocking(key).map_err(|e| e.to_string())?;
+    let resp = b.delete_object_blocking(key).map_err(|e| e.to_string())?;
+    ok_status("delete", resp.status_code(), resp.as_slice())?;
     Ok(())
 }
 
@@ -96,7 +111,8 @@ pub fn ensure_lifecycle(days: u32) -> Result<(), String> {
         .enable_all()
         .build()
         .map_err(|e| format!("media: lifecycle runtime: {e}"))?;
-    rt.block_on(b.put_bucket_lifecycle(config))
-        .map(|_| ())
-        .map_err(|e| format!("media: put lifecycle: {e}"))
+    let resp = rt
+        .block_on(b.put_bucket_lifecycle(config))
+        .map_err(|e| format!("media: put lifecycle: {e}"))?;
+    ok_status("put lifecycle", resp.status_code(), resp.as_slice())
 }

@@ -10,6 +10,7 @@
 pub mod agent;
 pub mod alerts;
 pub mod billing;
+pub mod clip_store;
 pub mod config;
 pub mod db;
 pub mod device_actions;
