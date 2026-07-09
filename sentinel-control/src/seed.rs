@@ -9,11 +9,17 @@ pub async fn run(pool: &PgPool) -> sqlx::Result<()> {
     for (key, desc) in rbac::PERMISSIONS {
         store::upsert_permission(pool, key, desc).await?;
     }
+    // A tenant backfilled by an old migration (the `Default` one) never went through
+    // provisioning and has no roles at all — give it the standard pair first.
+    let provisioned = store::ensure_tenant_roles(pool).await?;
+    if provisioned > 0 {
+        log::info!("seed: provisioned Admin+Viewer roles for {provisioned} tenant(s) that had none");
+    }
     // A permission added after a tenant existed would otherwise reach nobody: role grants
     // are seeded only at tenant creation, and the grant screen sits behind `roles.manage`.
-    let granted = store::sync_admin_roles(pool).await?;
+    let granted = store::sync_system_roles(pool, &rbac::viewer_perms()).await?;
     if granted > 0 {
-        log::info!("seed: granted {granted} new permission(s) to system Admin roles");
+        log::info!("seed: granted {granted} new permission(s) to system roles");
     }
 
     // Master (SaaS administrator) — no tenant, is_master.

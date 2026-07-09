@@ -843,15 +843,44 @@ pub async fn create_role(
     Ok(id)
 }
 
-/// Grant every catalogued permission to each tenant's system `Admin` role.
+/// Give tenants that have no roles at all the standard system pair: `Admin` (every action)
+/// and `Viewer` (read-only).
 ///
-/// Role permissions are only seeded when a tenant is created, so a permission added later
-/// (e.g. `billing.read`) stays invisible to every existing admin — nobody can even grant it,
-/// because the grant screen is itself behind `roles.manage`. The system `Admin` role means
-/// "everything", so keep it in step with the catalog on every boot. Custom roles and
-/// `Viewer` are never touched.
-pub async fn sync_admin_roles(pool: &PgPool) -> sqlx::Result<u64> {
-    let res = sqlx::query(
+/// The `Default` tenant predates `provision_tenant_with_admin` — migration 0011 backfilled it
+/// — so it never got roles. Anyone invited into such a tenant lands with zero permissions,
+/// and the effect is invisible while you sign in as master (master bypasses RBAC).
+///
+/// Roles are created, never **assigned**: handing someone admin is not a decision a boot
+/// sequence should make. Tenants that already have roles are untouched.
+pub async fn ensure_tenant_roles(pool: &PgPool) -> sqlx::Result<usize> {
+    let rows: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT t.id FROM tenants t
+         WHERE NOT EXISTS (SELECT 1 FROM roles r WHERE r.tenant_id = t.id)",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for (tenant_id,) in &rows {
+        let admin = create_role(pool, *tenant_id, "Admin", true).await?;
+        let admin_keys: Vec<String> = crate::rbac::all_perms().into_iter().map(String::from).collect();
+        set_role_permissions(pool, *tenant_id, admin, &admin_keys).await?;
+
+        let viewer = create_role(pool, *tenant_id, "Viewer", true).await?;
+        let viewer_keys: Vec<String> = crate::rbac::viewer_perms().into_iter().map(String::from).collect();
+        set_role_permissions(pool, *tenant_id, viewer, &viewer_keys).await?;
+    }
+    Ok(rows.len())
+}
+
+/// Keep the two **system** roles in step with the permission catalog: `Admin` gets every
+/// action, `Viewer` gets every read-only one (`*.read`).
+///
+/// Role grants are seeded only at tenant creation, so a permission added later (e.g.
+/// `billing.read`) reaches nobody — and the screen that would grant it sits behind
+/// `roles.manage`. A system role has fixed semantics; customise access with a **custom** role,
+/// which this never touches. Returns how many grants were added.
+pub async fn sync_system_roles(pool: &PgPool, viewer_keys: &[&str]) -> sqlx::Result<u64> {
+    let admin = sqlx::query(
         "INSERT INTO role_permissions (role_id, permission_key)
          SELECT r.id, p.key
          FROM roles r CROSS JOIN permissions p
@@ -860,10 +889,23 @@ pub async fn sync_admin_roles(pool: &PgPool) -> sqlx::Result<u64> {
     )
     .execute(pool)
     .await?;
-    Ok(res.rows_affected())
+
+    let keys: Vec<String> = viewer_keys.iter().map(|k| (*k).to_string()).collect();
+    let viewer = sqlx::query(
+        "INSERT INTO role_permissions (role_id, permission_key)
+         SELECT r.id, k
+         FROM roles r CROSS JOIN UNNEST($1::text[]) AS k
+         WHERE r.is_system AND r.name = 'Viewer'
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(&keys)
+    .execute(pool)
+    .await?;
+
+    Ok(admin.rows_affected() + viewer.rows_affected())
 }
 
-/// Whether `role_id` belongs to `tenant_id`. Every role-permission read/write goes through
+/// Whether `role_id` belongs to `tenant_id`./// Whether `role_id` belongs to `tenant_id`. Every role-permission read/write goes through
 /// this: the role id is a client-supplied UUID, and `role_permissions` carries no tenant of
 /// its own, so without the join a tenant admin could read or rewrite another tenant's roles.
 pub async fn role_in_tenant(pool: &PgPool, tenant_id: Uuid, role_id: Uuid) -> sqlx::Result<bool> {
