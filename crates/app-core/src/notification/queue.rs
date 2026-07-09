@@ -308,3 +308,66 @@ pub fn list(
         QueuePage { total, items }
     })
 }
+
+// ---- media reclamation -------------------------------------------------------------
+
+/// A terminal notification still pointing at staged media.
+#[derive(Debug, Clone)]
+pub struct PurgeableMedia {
+    pub id: Uuid,
+    pub image_key: Option<String>,
+    pub video_key: Option<String>,
+}
+
+/// Notifications that went terminal at least `grace_secs` ago and still reference objects.
+///
+/// A key shared with a notification that is **still in flight** is skipped: producers may
+/// stage one object and enqueue several rows against it, and reclaiming it early would send
+/// an empty attachment. Timestamps are RFC3339 text, so the comparison casts to `timestamptz`
+/// — a lexical `<` is wrong across differing UTC offsets.
+pub fn purgeable_media(db: &Db, grace_secs: i64, limit: i64) -> Vec<PurgeableMedia> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_as::<_, (Uuid, Option<String>, Option<String>)>(
+            "SELECT q.id, q.image_key, q.video_key
+             FROM notification_queue q
+             WHERE q.status IN ('sent', 'failed')
+               AND (q.image_key IS NOT NULL OR q.video_key IS NOT NULL)
+               AND COALESCE(q.sent_at, q.created_at)::timestamptz < now() - make_interval(secs => $1)
+               AND NOT EXISTS (
+                   SELECT 1 FROM notification_queue o
+                   WHERE o.status NOT IN ('sent', 'failed')
+                     AND ((q.image_key IS NOT NULL AND o.image_key = q.image_key)
+                       OR (q.video_key IS NOT NULL AND o.video_key = q.video_key))
+               )
+             ORDER BY COALESCE(q.sent_at, q.created_at)
+             LIMIT $2",
+        )
+        .bind(grace_secs as f64)
+        .bind(limit)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, image_key, video_key)| PurgeableMedia { id, image_key, video_key })
+        .collect()
+    })
+}
+
+/// Forget the object keys once their objects are gone. A key that outlives its object is a
+/// dangling pointer — the UI would offer an attachment that can't be fetched.
+pub fn clear_media_keys(db: &Db, ids: &[Uuid]) -> u64 {
+    if ids.is_empty() {
+        return 0;
+    }
+    let ids = ids.to_vec();
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query("UPDATE notification_queue SET image_key = NULL, video_key = NULL WHERE id = ANY($1)")
+            .bind(&ids)
+            .execute(&pool)
+            .await
+            .map(|r| r.rows_affected())
+            .unwrap_or(0)
+    })
+}

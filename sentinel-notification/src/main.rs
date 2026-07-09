@@ -32,6 +32,7 @@ fn main() {
 
     // The queue consumer runs on its own std thread (blocking); `Db::block` bridges sqlx.
     consumer::spawn(state.clone());
+    consumer::spawn_media_purge(state.clone());
     // This service now owns Telegram pairing (moved from sentinel-flow).
     pairing::spawn(state.clone());
 

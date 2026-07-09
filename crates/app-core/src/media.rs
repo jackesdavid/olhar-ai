@@ -9,6 +9,7 @@
 use std::sync::OnceLock;
 
 use s3::creds::Credentials;
+use s3::serde_types::{BucketLifecycleConfiguration, Expiration, LifecycleRule};
 use s3::{Bucket, Region};
 
 fn bucket() -> Option<&'static Bucket> {
@@ -60,4 +61,42 @@ pub fn get(key: &str) -> Result<Vec<u8>, String> {
     let b = bucket().ok_or("object store not configured")?;
     let resp = b.get_object_blocking(key).map_err(|e| e.to_string())?;
     Ok(resp.bytes().to_vec())
+}
+
+/// Remove an object.
+///
+/// This store is a **staging area between features**, not durable storage: media is uploaded,
+/// handed to a recipient once, and then has no reason to exist. Nothing reclaimed it before,
+/// so the bucket grew without bound on the same disk as Postgres. Deleting a key that is
+/// already gone is a success (S3 delete is idempotent) — a purge must be safe to retry.
+pub fn delete(key: &str) -> Result<(), String> {
+    let b = bucket().ok_or("object store not configured")?;
+    b.delete_object_blocking(key).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Expire every object after `days`, as a backstop for orphans.
+///
+/// The prompt reclaim happens in `sentinel-notification` the moment a notification goes
+/// terminal. This catches what that can't see: an object staged by `put` whose enqueue then
+/// failed, so no row ever pointed at it. Set from code rather than the compose file — the
+/// VPS compose is hand-maintained and never receives the repo's copy, so a rule declared
+/// there would simply never exist in production.
+///
+/// Idempotent: `PutBucketLifecycleConfiguration` replaces the whole configuration.
+pub fn ensure_lifecycle(days: u32) -> Result<(), String> {
+    let b = bucket().ok_or("object store not configured")?;
+    let rule = LifecycleRule::builder("Enabled")
+        .id("expire-staging")
+        .expiration(Expiration::new(None, Some(days), None))
+        .build();
+    let config = BucketLifecycleConfiguration::new(vec![rule]);
+    // `put_bucket_lifecycle` has no blocking variant; this runs once, off the hot path.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("media: lifecycle runtime: {e}"))?;
+    rt.block_on(b.put_bucket_lifecycle(config))
+        .map(|_| ())
+        .map_err(|e| format!("media: put lifecycle: {e}"))
 }

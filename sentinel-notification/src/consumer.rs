@@ -13,6 +13,16 @@ const MAX_ATTEMPTS: i32 = 5;
 /// wake this instantly; polling is the durable fallback.)
 const IDLE_POLL: Duration = Duration::from_millis(750);
 
+/// How often staged media is reclaimed.
+const PURGE_INTERVAL: Duration = Duration::from_secs(300);
+/// How long a terminal notification's media survives, so an operator can still inspect a
+/// just-failed send before its attachment disappears.
+const PURGE_GRACE_SECS: i64 = 3600;
+/// Objects reclaimed per pass — bounded so a backlog can't monopolise the thread.
+const PURGE_BATCH: i64 = 200;
+/// Backstop expiry for objects nothing points at (staged, then the enqueue failed).
+const ORPHAN_EXPIRY_DAYS: u32 = 3;
+
 pub fn spawn(state: Arc<AppState>) {
     std::thread::spawn(move || loop {
         match queue::claim_next(&state.db) {
@@ -21,6 +31,54 @@ pub fn spawn(state: Arc<AppState>) {
         }
     });
     log::info!("notification queue consumer started");
+}
+
+/// Reclaim staged media.
+///
+/// The object store is a hand-off between features, not durable storage: once a notification
+/// is terminal its snapshot/clip has no reader. Nothing deleted them, so the bucket grew
+/// forever on the same disk as Postgres — an eventual outage of the whole platform, not just
+/// notifications. The bucket lifecycle rule is a backstop for orphans (an object staged for a
+/// send that never enqueued); this is the prompt path.
+pub fn spawn_media_purge(state: Arc<AppState>) {
+    if !app_core::media::enabled() {
+        log::info!("media purge: object store not configured — nothing to reclaim");
+        return;
+    }
+    match app_core::media::ensure_lifecycle(ORPHAN_EXPIRY_DAYS) {
+        Ok(()) => log::info!("media purge: bucket expires orphans after {ORPHAN_EXPIRY_DAYS}d"),
+        Err(e) => log::warn!("media purge: could not set lifecycle ({e}) — prompt reclaim still runs"),
+    }
+    std::thread::spawn(move || loop {
+        let batch = queue::purgeable_media(&state.db, PURGE_GRACE_SECS, PURGE_BATCH);
+        let mut reclaimed = Vec::new();
+        for row in &batch {
+            // Only forget the keys once every object for that row is actually gone, or a
+            // failure would leave the object orphaned with nothing pointing at it.
+            let image_gone = row.image_key.as_deref().map(drop_object).unwrap_or(true);
+            let video_gone = row.video_key.as_deref().map(drop_object).unwrap_or(true);
+            if image_gone && video_gone {
+                reclaimed.push(row.id);
+            }
+        }
+        if !reclaimed.is_empty() {
+            let n = queue::clear_media_keys(&state.db, &reclaimed);
+            log::info!("media purge: reclaimed media for {n} notification(s)");
+        }
+        std::thread::sleep(PURGE_INTERVAL);
+    });
+    log::info!("media purge started (every {}s, {}s grace)", PURGE_INTERVAL.as_secs(), PURGE_GRACE_SECS);
+}
+
+/// Delete one object. S3 deletes are idempotent, so an already-missing key is a success.
+fn drop_object(key: &str) -> bool {
+    match app_core::media::delete(key) {
+        Ok(()) => true,
+        Err(e) => {
+            log::warn!("media purge: could not delete '{key}': {e}");
+            false
+        }
+    }
 }
 
 fn process(state: &AppState, job: queue::QueuedNotification) {
