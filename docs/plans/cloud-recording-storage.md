@@ -6,96 +6,111 @@ the edge box being stolen, smashed, or wiped — and bill the storage honestly.
 
 ## Why this is the strongest feature available
 
-Today a clip lives only on the edge's local ring (`max_storage_mb`, default 1 GB). If the
-burglar takes or destroys the box, the recording of them doing it goes with it. **The
-footage is only as safe as the hardware being stolen.** That is the single reason people pay
-for Ring/Nest cloud plans. Everything else here is secondary.
+A clip lives only on the edge's local ring (`max_storage_mb`, default 1 GB). If the burglar
+takes or destroys the box, the recording of them doing it goes with it. **The footage is only
+as safe as the hardware being stolen.** That is the one reason people pay for Ring/Nest cloud
+plans. Everything else here is secondary.
 
-## Economics (why it's affordable)
+## Decisions locked (2026-07-09)
 
-Assumptions: H.264 1080p ≈ 2 Mbps (0.25 MB/s), 30 s clip ≈ 7.5 MB, **motion-triggered**
-(what Sentinel already does), 30-day retention.
+**Retention is the product. The quota is a guardrail.** A customer buys *time* ("30 days of
+cloud recording"), not gigabytes — nobody can reason about GB. But the edge can be made to
+record **continuously via a workflow**, and without a cap that tenant becomes a silent loss.
+So the plan sells days; the GB quota exists only so the outliers pay.
 
-| | Clips/day | Stored | R2 @ $15/TB | Revenue | % of revenue |
+| Plan | Cameras | Retention | Included | Normal use | % of quota |
 |---|---|---|---|---|---|
-| Home (6 cam) | 120 | ~27 GB | $0.41/mo | $7.25 | ~6% |
-| Business (16 cam) | 960 | ~216 GB | $3.24/mo | $91 | ~4% |
+| Beta | 2 | **3 d** | 5 GB | 0.4 GB | 9% |
+| Home | 6 | **30 d** | 100 GB | 26 GB | 26% |
+| Business | 16 | **60 d** | 750 GB | 422 GB | 56% |
 
-Margin moves from ~97–99% to ~94–98%. **Storage cost is not the deciding factor.**
+Overage: **R$ 0,30 / US$ 0,06 per GB-month** (≈ 3.9× our R2 cost of R$ 0,077/GB-month).
+Nobody on normal motion-triggered use approaches the quota. A 16-camera Business tenant
+recording continuously stores ~19.8 TB, costs us ~R$ 1.567, and is billed ~R$ 5.850 of
+overage — margin holds at ~3.7×.
 
-**Continuous 24/7 recording does not work at these prices:** 2 Mbps × 24 h = 648 GB per
-camera per month → a 16-camera Business tenant is ~10.4 TB/mo = **$155/mo on $91 revenue**.
-It is a different product; do not offer it on these tiers.
-
-## Decisions locked
-
+- **Billing unit: GB-month.** Average bytes stored over the period, not bytes ingested.
 - **R2, not B2.** Zero egress at any volume, no CDN to configure. B2 is $6/TB vs R2's $15/TB,
   but that is ~$2/mo per Business tenant — not worth fronting B2 with Cloudflare.
-- **Motion clips only.** Continuous recording is out of scope (see above).
+- **Motion clips only.** Continuous recording is not a plan feature. It remains *possible*
+  through a workflow on the edge, and the overage is what makes that honest.
 - **The edge never holds R2 credentials.** Control mints presigned URLs.
+- **Keep the local clip after upload.** The edge ring stays the fast path for recent playback;
+  R2 is the durable copy.
+- **Money lives in `plan_prices`, quotas live in `billing_plans`.** This settles the
+  currency-blind overage rates: a GB is a GB in any currency, but a *rate* is money. Migration
+  0044 already moved prices to `plan_prices (plan, currency, amount)`; the overage rates join
+  them there, and `billing_plans` keeps `included_*` and the new `retention_days`.
 
-## Open decisions (decide before building)
-
-1. **Included or metered add-on?** The billing engine already has `included_storage_gb` and
-   `overage_storage_per_gb`. Recommend: included with a per-plan cap, overage beyond it.
-2. **Retention per plan** — *this is the cost lever*, not the price. Proposal: Beta 3 d /
-   Home 14 d / Business 30 d.
-3. **GB-month or ingest?** See "The billing change" — they differ, and only one is honest.
-4. **Overage rates are currency-blind.** `billing_plans.overage_*` is a single number, while
-   prices moved to `plan_prices (plan, currency, amount)` in migration 0044. Either move the
-   overage rates there too, or convert with `fx_rates`. Must be settled before a rate ≠ 0.
-5. **Keep the local clip after upload?** Recommend yes — the edge ring stays the fast path for
-   recent playback; R2 is the durable copy.
-6. **LGPD:** who is the controller? What is the deletion SLA?
+### LGPD
+The **customer is the controller**; we are the operator/processor. Consequences:
+- The customer can delete their cloud clips themselves, at any time, and **every deletion is
+  audited** (`platform_logs`).
+- Retention expiry is automatic (R2 lifecycle), and its justification is documented.
+- Deletion must reach R2, not just the row — a "delete my data" that leaves objects behind is
+  the whole problem.
+- Being the processor means we owe the customer a **DPA (contrato de operador)**. Flagged, not
+  drafted here.
 
 ## Architecture
 
-Direct **edge → R2**, so no video crosses the VPS (it has 75 GB of disk and a shared NIC).
+Direct **edge → R2**: no video crosses the VPS (75 GB of disk, one shared NIC).
 
-1. Edge finishes a clip and already posts metadata to `POST /config/recordings/clip-metadata`
-   (`ClipPush { camera_ip, clip_id, friendly_name, duration_secs, size_bytes, started_at }`,
-   handler `sentinel-control/src/http.rs::clip_push`).
+1. The edge finishes a clip and already posts metadata to
+   `POST /config/recordings/clip-metadata` — `ClipPush { camera_ip, clip_id, friendly_name,
+   duration_secs, size_bytes, started_at }`, handled by `sentinel-control/src/http.rs::clip_push`.
 2. Control answers with a **presigned PUT URL** + object key. Control holds the R2 key; the
-   edge holds nothing. `rust-s3` (already a dependency, 0.35) can presign.
-3. Edge uploads directly to R2, then confirms; control sets `recordings.cloud_key`.
+   edge holds nothing. `rust-s3` (already a dependency at 0.35) presigns.
+3. The edge uploads directly to R2, then confirms; control sets `recordings.cloud_key`.
 4. Playback: control mints a short-lived **presigned GET**; the app streams from R2. Zero VPS
    egress, and R2 charges none.
 
-**Object key encodes retention** — `{days}d/{tenant_id}/{yyyy}/{mm}/{clip_id}.mp4` — so R2
-lifecycle rules (one per tier: `3d/`, `14d/`, `30d/`) expire objects with no purge job. A plan
+**The object key encodes retention** — `{days}d/{tenant_id}/{yyyy}/{mm}/{clip_id}.mp4` — so one
+R2 lifecycle rule per tier (`3d/`, `30d/`, `60d/`) expires objects with no purge job. A plan
 upgrade changes the prefix for *new* clips; existing ones keep the retention they were stored
-under. Simple, and it never silently keeps data longer than promised.
+under, so we never silently keep data longer than promised.
 
-We already do exactly this pattern for minio staging: `media::ensure_lifecycle` sets the
-bucket rule from code at boot, because the VPS compose is hand-maintained and never receives
-the repo's copy.
+Set the lifecycle **from code at boot**, exactly as `media::ensure_lifecycle` already does for
+the minio staging bucket: the VPS compose is hand-maintained and never receives the repo's
+copy, so a rule declared there would simply never exist in production.
+
+## Clip state (requirement 10)
+
+`recordings.upload_state`: `pending | uploading | uploaded | failed`. The UI badges read:
+
+| Badge | State | Meaning |
+|---|---|---|
+| **Local** | `pending` | on the box only — not yet durable |
+| **In transit** | `uploading` | being copied to the cloud |
+| **Cloud** | `uploaded` | durable; survives the box |
+| **Failed** | `failed` | upload failed, retrying with backoff |
 
 ## Phases
 
 ### Phase 1 — Durable copy
-- Migration: `recordings` + `cloud_key text NULL`, `cloud_uploaded_at text NULL`,
-  `upload_state text NOT NULL DEFAULT 'pending'` (`pending|uploaded|failed`).
-- `app_core::media`: presign PUT/GET (a second bucket handle — R2 endpoint, separate from the
-  minio staging bucket; they are different stores with different jobs).
-- Control: extend `clip_push` to return the presigned PUT + key; add `POST
-  /config/recordings/:clip_id/uploaded` for the edge to confirm.
-- Edge: an upload queue with retry + backpressure. **Must not starve live view** — cap the
-  rate and never upload while a live session is active on that camera.
-- R2 bucket + one lifecycle rule per retention tier, set from code at boot.
+- Migration: `recordings + cloud_key text NULL, cloud_uploaded_at text NULL,
+  upload_state text NOT NULL DEFAULT 'pending'` (+ CHECK).
+- `app_core::media`: a **second** bucket handle for R2 (a different store with a different
+  job than the minio staging bucket) + `presign_put` / `presign_get`.
+- Control: `clip_push` returns the presigned PUT + key; new
+  `POST /config/recordings/:clip_id/uploaded` for the edge to confirm.
+- Edge: upload queue with retry + backpressure. **Must not starve live view** — rate-cap it and
+  never upload while a live session is active on that camera.
+- R2 bucket + one lifecycle rule per retention tier, applied at boot.
 
-### Phase 2 — Playback + UI
-- `GET /recordings/:id/url` → short-lived presigned GET.
-- Recordings page: a badge distinguishing *on the box* from *in the cloud*; play either.
-  Reuse the existing empty/loading states.
+### Phase 2 — Playback + clip state (requirements 9, 10)
+- `GET /recordings/:id/url` → short-lived presigned GET. **Cloud clips first** (simplest); the
+  existing edge clip endpoint keeps serving local ones.
+- Recordings page: the four badges above; play whichever copy exists.
 
 ### Phase 3 — Retention
-- `billing_plans + retention_days int`.
-- Prefix selection at presign time from the tenant's current plan.
+- `billing_plans + retention_days integer NOT NULL DEFAULT 0` (0 = no cloud recording).
+- Prefix chosen at presign time from the tenant's current plan.
 - Cancelled/deleted tenant → purge every object under `*/{tenant_id}/`.
 
 ### Phase 4 — **The billing change** (the substantive one)
 
-Storage is a **stock**, not a flow. Today `invoices::usage_for_period` does:
+Storage is a **stock**, not a flow. `invoices::usage_for_period` currently does:
 
 ```sql
 SELECT SUM(size_bytes) FROM recordings WHERE tenant_id = $1 AND started_at LIKE '2026-07%'
@@ -106,32 +121,42 @@ Two things are wrong with that as a storage charge:
 1. **It counts bytes we don't store.** Those rows describe clips on the *edge's* disk. The
    invoice already prints a "storage — N GB" line for footage that never left the customer's
    own hardware. Harmless only because `overage_storage_per_gb` is `0`; the day a rate is set,
-   we start billing people for their own disk.
-2. **It sums ingest, not occupancy.** A tenant who uploads 30 GB and keeps it 30 days is
-   charged the same as one who keeps it 3 days — but they cost 10× more. Retention, the thing
-   we actually pay for, would not appear in the bill at all.
+   we bill people for their own disk. **This is a correctness fix worth making even if cloud
+   recording is never built.**
+2. **It sums ingest, not occupancy.** A tenant who keeps 30 GB for 60 days is charged the same
+   as one who keeps it 3 days — but costs 20× more. Retention, the thing we actually pay for,
+   would not appear in the bill at all.
 
-The honest unit is **GB-month**: the average stored bytes over the period.
-
-- New table `tenant_storage_daily (tenant_id, day, bytes)`.
+The fix:
+- Migration 0047:
+  - `billing_plans + retention_days`; seed 3 / 30 / 60.
+  - `plan_prices + overage_gpu_per_sec, overage_storage_per_gb, overage_notification_each`
+    (money, per currency); **drop** the same three from `billing_plans`.
+  - `billing_plans.included_storage_gb` — seed 5 / 100 / 750 (currency-neutral, stays put).
+  - `tenant_storage_daily (tenant_id, day date, bytes bigint, PRIMARY KEY (tenant_id, day))`.
 - **pg_cron** samples it nightly (pure SQL, so it belongs there — see migration 0046):
-  `SUM(size_bytes) WHERE cloud_key IS NOT NULL AND upload_state = 'uploaded'`.
-- `usage_for_period` reads `AVG(bytes)` over the period's days → `storage_gb`.
-- The invoice line becomes `max(0, gb_month − included_storage_gb) × overage_storage_per_gb`,
-  which is what `compute()` already does — only the *input* changes.
+  `SUM(size_bytes) WHERE cloud_key IS NOT NULL AND upload_state = 'uploaded'` grouped by tenant.
+- `usage_for_period` reads `AVG(bytes)` over the period's sampled days → `storage_gb`.
+- `compute()` is unchanged: it already computes
+  `max(0, used − included) × overage_rate`. Only the *input* and the *rate's source* change.
 
-Also fix `usage_for_period` to count only `cloud_key IS NOT NULL`, regardless of which unit
-wins. That is a correctness fix worth doing even if cloud recording is never built.
+### Phase 5 — Storage visibility (requirements 7, 8)
+- **Master** (`/admin/billing` or a new `/admin/storage`): every tenant — **including Beta** —
+  with stored GB, GB-month for the period, quota, % used, and projected overage. Sorted by
+  cost. This is the view that catches a continuous-recording tenant before the invoice does.
+- **Tenant** (`/recordings` header or `/billing`): stored GB vs quota, retention in days, and
+  a plain sentence about what happens at the cap. No dead end: link to upgrade.
 
-### Phase 5 — LGPD
-- Deletion must reach R2, not just the row. A "delete my data" request that leaves objects
-  behind is the whole problem.
-- Encryption at rest (R2 default), per-tenant key prefix, documented retention justification.
+### Phase 6 — LGPD
+- Client-initiated delete (single clip + bulk), audited to `platform_logs`.
+- Cancel/delete tenant → purge objects.
+- Document retention justification; DPA drafted with counsel.
 
 ## Out of scope (v1)
 
-- Continuous 24/7 recording (economics above).
+- **Continuous 24/7 as a plan feature** (16 cameras ≈ 19.8 TB stored = R$ 1.567/mo of cost
+  against R$ 499 of revenue). It stays possible via workflow, priced through overage.
 - Cross-region replication.
-- Client-side encryption (the customer holding the key means we cannot transcode or thumbnail).
+- Client-side encryption (a customer-held key means we cannot transcode or thumbnail).
 - Migrating the minio staging bucket to R2 — it is a hand-off buffer with a 3-day expiry and
   belongs next to the services that use it.
