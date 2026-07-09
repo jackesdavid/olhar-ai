@@ -16,9 +16,17 @@
 # Placeholders filled on the VPS: __DB_PASS__, __EDGE_HOST__, __EDGE_TS_IP__
 services:
   sentinel-postgres:
-    image: pgvector/pgvector:pg17
+    # Postgres 17 + pgvector + pg_cron (deploy/postgres/Dockerfile). Deploy this BEFORE
+    # sentinel-control: migration 0046 hard-requires the scheduler.
+    image: ghcr.io/jackesdavid/sentinel-postgres:latest
     container_name: sentinel-postgres
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_cron
+      - -c
+      - cron.database_name=sentinel
     environment:
       POSTGRES_USER: sentinel
       POSTGRES_PASSWORD: __DB_PASS__

@@ -170,25 +170,6 @@ pub fn set_plan(db: &Db, tenant_id: Uuid, plan_id: &str) -> Result<Uuid, String>
     res.map(|_| id).map_err(|e| format!("set_plan: {e}"))
 }
 
-/// Flip due trials `trialing → expired` (past `ended_at`). Returns how many expired.
-/// Run periodically; the app soft-locks `expired` tenants (read-only + upgrade prompt).
-pub fn expire_due_trials(db: &Db) -> u64 {
-    let pool = db.pool();
-    db.block(async move {
-        // `ended_at::timestamptz` (not a text `<`): RFC3339 strings only sort correctly
-        // when their UTC offsets match. Same cast the pg_cron sweep uses.
-        sqlx::query(
-            "UPDATE tenant_subscriptions SET status = 'expired'
-             WHERE status = 'trialing' AND ended_at IS NOT NULL
-               AND ended_at::timestamptz < now()",
-        )
-        .execute(&pool)
-        .await
-        .map(|r| r.rows_affected())
-        .unwrap_or(0)
-    })
-}
-
 /// The camera cap for a tenant's current plan. Falls back to the Beta cap (2) for a
 /// tenant with no subscription yet, so signup can't exceed it before a plan is chosen.
 pub fn camera_cap(db: &Db, tenant_id: Uuid) -> i32 {

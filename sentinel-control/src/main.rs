@@ -177,14 +177,10 @@ fn main() {
         {
             let db = db.clone();
             std::thread::spawn(move || loop {
-                // Belt-and-braces with the pg_cron sweep (migration 0045): keeps the stored
-                // trial status honest where pg_cron isn't installed. Idempotent, so it's
-                // harmless when both run. The access gate resolves expiry at read time and
-                // never depends on either.
-                let expired = app_core::billing::subscriptions::expire_due_trials(&db);
-                if expired > 0 {
-                    log::info!("billing: {expired} trial(s) expired");
-                }
+                // Trial expiry belongs to pg_cron (migration 0046) — pure SQL, runs once
+                // regardless of replica count. Invoice closing stays here: its pricing math
+                // lives in `billing::invoices`, and a second copy in SQL would be a money
+                // bug waiting to drift.
                 let period = app_core::billing::invoices::previous_period();
                 let (closed, skipped) = app_core::billing::invoices::close_period_all(&db, &period);
                 log::info!("billing: period {period} — {closed} invoice(s) closed, {skipped} skipped");

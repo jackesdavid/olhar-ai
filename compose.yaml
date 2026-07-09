@@ -3,10 +3,19 @@
 # Connection string lives in .env as DATABASE_URL (see .env.example).
 services:
   db:
-    # Latest Postgres (17) with the pgvector extension prebuilt.
-    image: pgvector/pgvector:pg17
+    # Postgres 17 + pgvector + pg_cron (see deploy/postgres/Dockerfile).
+    build:
+      context: .
+      dockerfile: deploy/postgres/Dockerfile
+    image: sentinel-postgres:local
     container_name: sentinel-db
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_cron
+      - -c
+      - cron.database_name=sentinel
     environment:
       POSTGRES_DB: sentinel
       POSTGRES_USER: sentinel

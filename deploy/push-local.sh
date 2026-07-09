@@ -23,15 +23,19 @@ command -v docker >/dev/null 2>&1 || { echo "docker not found -- install/start D
 docker info >/dev/null 2>&1 || { echo "Docker daemon not running -- start Docker Desktop"; exit 1; }
 
 # Per-service Dockerfile + build-arg (mirrors the deploy.yml matrix).
+# NOTE: sentinel-postgres is intentionally NOT in ALL — a routine deploy must not restart
+# the database. Ship it explicitly: task cloud-deploy -- sentinel-postgres
 dockerfile_for() { case "$1" in
-  sentinel-app)     echo "deploy/app/Dockerfile" ;;
-  sentinel-landing) echo "deploy/landing/Dockerfile" ;;
-  *)                echo "Dockerfile" ;;
+  sentinel-app)      echo "deploy/app/Dockerfile" ;;
+  sentinel-landing)  echo "deploy/landing/Dockerfile" ;;
+  sentinel-postgres) echo "deploy/postgres/Dockerfile" ;;
+  *)                 echo "Dockerfile" ;;
 esac; }
 buildarg_for() { case "$1" in
-  sentinel-app)     echo "VITE_COMMIT=${SHA}" ;;
-  sentinel-landing) echo "" ;;
-  *)                echo "PACKAGE=$1" ;;
+  sentinel-app)      echo "VITE_COMMIT=${SHA}" ;;
+  sentinel-landing)  echo "" ;;
+  sentinel-postgres) echo "" ;;
+  *)                 echo "PACKAGE=$1" ;;
 esac; }
 
 echo ">> Logging in to GHCR as ${GH_USER}"
