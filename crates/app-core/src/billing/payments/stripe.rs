@@ -88,6 +88,22 @@ fn env_nonempty(key: &str) -> Option<String> {
     std::env::var(key).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
+/// The subscription id carried by an Invoice object.
+///
+/// Stripe **moved this field** in API `2025-05-28`: it used to be top-level
+/// `invoice.subscription`, and now lives at `parent.subscription_details.subscription`.
+/// We read the new location first and fall back to the legacy one, so both API versions
+/// work. Getting this wrong silently drops `invoice.payment_failed` — a delinquent
+/// customer would keep access.
+fn invoice_subscription(obj: &serde_json::Value) -> Option<String> {
+    obj.get("parent")
+        .and_then(|p| p.get("subscription_details"))
+        .and_then(|d| d.get("subscription"))
+        .and_then(|v| v.as_str())
+        .or_else(|| obj.get("subscription").and_then(|v| v.as_str()))
+        .map(String::from)
+}
+
 /// Our billing-type slugs → Stripe payment method types.
 fn payment_method(billing_type: &str) -> &'static str {
     match billing_type {
@@ -211,11 +227,11 @@ impl PaymentGateway for StripeGateway {
             }
             // Recurring cycles.
             "invoice.paid" | "invoice.payment_succeeded" => EventKind::StatusChanged {
-                subscription_ref: obj.get("subscription")?.as_str()?.to_string(),
+                subscription_ref: invoice_subscription(obj)?,
                 status: "active",
             },
             "invoice.payment_failed" => EventKind::StatusChanged {
-                subscription_ref: obj.get("subscription")?.as_str()?.to_string(),
+                subscription_ref: invoice_subscription(obj)?,
                 status: "past_due",
             },
             "customer.subscription.deleted" => EventKind::StatusChanged {
