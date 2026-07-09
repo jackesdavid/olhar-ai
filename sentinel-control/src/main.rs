@@ -17,6 +17,7 @@ use sqlx::PgPool;
 use app_core::db::Db;
 
 mod auth;
+mod billing_gate;
 mod domain;
 mod handlers;
 mod http;
@@ -166,6 +167,27 @@ fn main() {
             let db = db.clone();
             std::thread::spawn(move || loop {
                 app_core::billing::fx::refresh_usd_brl(&db);
+                std::thread::sleep(std::time::Duration::from_secs(24 * 3600));
+            });
+        }
+
+        // Billing: close the previous month's invoices, daily. `close_period` returns an
+        // existing `final` invoice untouched, so this is idempotent and safe to run from
+        // every control replica (and re-run all month once the period is closed).
+        {
+            let db = db.clone();
+            std::thread::spawn(move || loop {
+                // Belt-and-braces with the pg_cron sweep (migration 0045): keeps the stored
+                // trial status honest where pg_cron isn't installed. Idempotent, so it's
+                // harmless when both run. The access gate resolves expiry at read time and
+                // never depends on either.
+                let expired = app_core::billing::subscriptions::expire_due_trials(&db);
+                if expired > 0 {
+                    log::info!("billing: {expired} trial(s) expired");
+                }
+                let period = app_core::billing::invoices::previous_period();
+                let (closed, skipped) = app_core::billing::invoices::close_period_all(&db, &period);
+                log::info!("billing: period {period} — {closed} invoice(s) closed, {skipped} skipped");
                 std::thread::sleep(std::time::Duration::from_secs(24 * 3600));
             });
         }

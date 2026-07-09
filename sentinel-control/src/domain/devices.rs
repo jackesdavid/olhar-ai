@@ -123,13 +123,23 @@ async fn upsert(UserClaims(c): UserClaims, State(st): State<AppState>, Json(devi
     blocking(move || {
         let mut list = devices::repo::load(&db, tid);
         if let Some(existing) = list.iter_mut().find(|d| d.ip == device.ip) {
-            *existing = device;
+            *existing = device; // editing an existing camera never hits the plan cap
         } else {
+            // Adding one: the tenant's plan caps how many cameras it may run.
+            let cap = app_core::billing::subscriptions::camera_cap(&db, tid);
+            if list.len() as i32 >= cap {
+                return Err(format!(
+                    "Your plan allows {cap} camera{} — upgrade to add more.",
+                    if cap == 1 { "" } else { "s" }
+                ));
+            }
             list.push(device);
         }
         devices::repo::save(&db, tid, &list);
+        Ok::<_, String>(())
     })
-    .await?;
+    .await?
+    .map_err(|e| err(StatusCode::PAYMENT_REQUIRED, e))?;
     st.bump(tid); // wake the edge's long-poll
     Ok(StatusCode::NO_CONTENT)
 }

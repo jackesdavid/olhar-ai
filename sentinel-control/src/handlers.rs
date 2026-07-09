@@ -101,6 +101,17 @@ async fn signup(State(st): State<AppState>, Json(b): Json<SignupReq>) -> Result<
             .await
             .map_err(db_err)?;
 
+    // Self-service signup starts the 30-day Beta trial (2 cameras). Best-effort: a failure
+    // here must not fail the signup — the master can grant a trial later.
+    {
+        let db = st.db.clone();
+        if let Ok(Err(e)) =
+            tokio::task::spawn_blocking(move || app_core::billing::subscriptions::start_trial(&db, tenant_id)).await
+        {
+            log::warn!("signup: could not start trial for {tenant_id}: {e}");
+        }
+    }
+
     let claims = Claims {
         sub: user_id.to_string(),
         tid: Some(tenant_id.to_string()),

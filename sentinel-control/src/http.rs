@@ -39,7 +39,11 @@ pub fn router(state: AppState) -> Router {
         .route("/config/recordings/clip-metadata", post(clip_push))
         .route("/config/tracking", get(tracking_config))
         .merge(handlers::router())
-        .merge(crate::domain::router())
+        // Soft-lock: a lapsed/unpaid tenant is read-only (402 on writes).
+        .merge(crate::domain::router().layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::billing_gate::soft_lock,
+        )))
         .nest_service("/edge", ServeDir::new(edge_dist))
         .layer(CorsLayer::permissive())
         .with_state(state)

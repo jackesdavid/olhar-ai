@@ -5,6 +5,7 @@
 //! Periods are `'YYYY-MM'` and matched by RFC3339 **prefix** (`created_at LIKE '2026-07%'`),
 //! which is offset-agnostic — no fragile timestamp arithmetic.
 
+use chrono::Datelike;
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -127,7 +128,9 @@ pub fn usage_for_period(db: &Db, tenant_id: Uuid, period: &str) -> TenantUsage {
 /// Compute (without persisting) the invoice for a tenant's `period`, from its current plan
 /// + the period's usage + the latest FX rate. `None` if the tenant has no subscription.
 pub fn compute(db: &Db, tenant_id: Uuid, period: &str) -> Option<InvoiceDraft> {
-    let sub = subscriptions::current(db, tenant_id)?;
+    // The subscription in force during `period` — NOT today's. Billing a past month with
+    // the current plan would invoice a tenant for a month they hadn't subscribed.
+    let sub = subscriptions::active_during(db, tenant_id, period)?;
     let plan = plans::get(db, &sub.plan_id)?;
     let currency = super::tenant_currency(db, tenant_id);
     // The tier's price in the tenant's currency; 0 when the plan isn't priced there.
@@ -192,7 +195,7 @@ pub fn close_period(db: &Db, tenant_id: Uuid, period: &str) -> Result<Invoice, S
             return Ok(existing);
         }
     }
-    let draft = compute(db, tenant_id, period).ok_or("tenant has no subscription to bill")?;
+    let draft = compute(db, tenant_id, period).ok_or("tenant had no subscription during that period")?;
     let invoice_id = Uuid::new_v4();
     let now = now_rfc3339();
     let period_owned = period.to_string();
@@ -246,6 +249,37 @@ pub fn close_period(db: &Db, tenant_id: Uuid, period: &str) -> Result<Invoice, S
     });
     res.map_err(|e| format!("close_period: {e}"))?;
     get(db, tenant_id, period).ok_or_else(|| "close_period: invoice vanished after write".to_string())
+}
+
+/// Close `period` for every tenant that has a plan. Returns `(closed, skipped)`.
+///
+/// Idempotent by construction — [`close_period`] returns an existing `final` invoice
+/// untouched — so it is safe to run from several control replicas.
+pub fn close_period_all(db: &Db, period: &str) -> (usize, usize) {
+    let (mut closed, mut skipped) = (0, 0);
+    for row in subscriptions::overview(db) {
+        // Not a customer during `period` (or ever) → nothing to bill.
+        if row.plan_id.is_none() || subscriptions::active_during(db, row.tenant_id, period).is_none() {
+            skipped += 1;
+            continue;
+        }
+        match close_period(db, row.tenant_id, period) {
+            Ok(_) => closed += 1,
+            Err(e) => {
+                skipped += 1;
+                log::warn!("invoices: close {period} for {} failed: {e}", row.tenant_name);
+            }
+        }
+    }
+    (closed, skipped)
+}
+
+/// The calendar month before `now`, as `YYYY-MM` — the period a monthly job should close.
+pub fn previous_period() -> String {
+    let now = chrono::Local::now().date_naive();
+    let first = now.with_day(1).unwrap_or(now);
+    let prev = first.pred_opt().unwrap_or(first);
+    prev.format("%Y-%m").to_string()
 }
 
 /// One tenant's invoice for a period, if it exists.
