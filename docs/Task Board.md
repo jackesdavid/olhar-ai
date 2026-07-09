@@ -50,6 +50,8 @@ kanban-plugin: board
 	  - Plan: [[editor-space-hold-pan]]
 - [ ] #61 Tab toggle: collapse/expand editor side panels
 	  - Plan: [[editor-panel-tab-toggle]]
+- [ ] #64 Cloud recording storage (R2) + GB-month billing
+	  - Plan: [[cloud-recording-storage]]
 
 
 ## In Progress
