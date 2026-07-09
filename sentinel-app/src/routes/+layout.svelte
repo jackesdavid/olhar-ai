@@ -24,6 +24,9 @@
   import Bell from "@lucide/svelte/icons/bell";
   import HardDrive from "@lucide/svelte/icons/hard-drive";
   import Wallet from "@lucide/svelte/icons/wallet";
+  import { Button } from "$lib/components/ui/button";
+  import { billing } from "$lib/api";
+  import { billingLock, syncFromStatus } from "$lib/billing.svelte";
   import LogOut from "@lucide/svelte/icons/log-out";
   import Undo2 from "@lucide/svelte/icons/undo-2";
 
@@ -236,6 +239,15 @@
   // A tenant context exists for normal users always, and for the master only while
   // "acting as" a tenant (assume sets tenant_id). Tenant-scoped pages require it.
   const inTenant = $derived(auth.me?.tenant_id != null);
+
+  // Show the read-only banner before the tenant discovers it by clicking something.
+  $effect(() => {
+    if (!inTenant || !hasPerm("billing.read")) return;
+    billing
+      .subscription()
+      .then((s) => syncFromStatus(s?.status))
+      .catch(() => {});
+  });
   const mainNav = $derived(
     !inTenant
       ? []
@@ -461,6 +473,14 @@
             >
               <Undo2 class="size-3.5" /> Exit
             </button>
+          </div>
+        {/if}
+        {#if billingLock.locked}
+          <div
+            class="flex items-center justify-between gap-4 border-b border-border bg-muted/60 px-6 py-2.5 text-sm"
+          >
+            <span>{billingLock.message}</span>
+            <Button size="sm" onclick={() => goto("/billing")}>Choose a plan</Button>
           </div>
         {/if}
         <main class="flex-1 overflow-y-auto">

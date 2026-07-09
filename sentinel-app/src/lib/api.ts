@@ -5,6 +5,7 @@ import { goto } from "$app/navigation";
 
 import { API_BASE } from "./config";
 import { auth, logout } from "./auth.svelte";
+import { lock } from "./billing.svelte";
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
@@ -25,6 +26,13 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       void goto("/login");
     }
     throw new Error("Session expired — please sign in again.");
+  }
+  // Soft-lock: the tenant's subscription lapsed, so writes are refused but reads still
+  // work. Record it so the layout can show a banner, not just this one failed call.
+  if (r.status === 402) {
+    const msg = (await r.text()) || "Your subscription needs attention.";
+    lock(msg);
+    throw new Error(msg);
   }
   if (!r.ok) {
     const msg = (await r.text()) || `${method} ${path} failed (${r.status})`;
