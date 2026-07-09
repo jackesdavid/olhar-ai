@@ -62,6 +62,12 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
   0044 = billing multi-currency, 0045 = trial expiry, 0046 = pg_cron jobs). **pg_cron is real now** —
   `deploy/postgres/Dockerfile` bundles it; deploy `sentinel-postgres` before control. System
   events (e.g. `motion`, `telegram_message`) are a code catalog (`repo::system_events()`), not a migration.
+- **RBAC**: the action catalog is `sentinel-control/src/rbac.rs` `PERMISSIONS`; `seed.rs` upserts it
+  into the `permissions` table on boot **and** grants every action to each tenant's system `Admin`
+  role. Adding a permission there is enough — without that sync it would reach nobody, since role
+  grants are seeded only at tenant creation and the grant screen sits behind `roles.manage`.
+  `Viewer` and custom roles are never auto-granted. Any role-scoped query must join `roles` on
+  `tenant_id` — the role id comes from the client.
 - **Workflow nodes**: 61 user-visible nodes in `NodeKind::ALL` (`crates/app-core/src/workflows/domain.rs`);
   execution in `node.rs` (same folder). Node catalog + port reference: [docs/workflow-nodes.md](docs/workflow-nodes.md).
 - **Versioning**: web app = `sentinel-app/package.json` + the footer in `routes/+layout.svelte`;
