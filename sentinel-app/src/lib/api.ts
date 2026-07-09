@@ -334,17 +334,24 @@ export type PlanTier = {
   name: string;
   camera_cap: number;
   trial_days: number | null;
+  /** Days of cloud recording retention this tier sells. 0 = no cloud recording. */
+  retention_days: number;
   included_gpu_sec: number;
   included_storage_gb: number;
   included_notifications: number;
+  active: boolean;
+};
+/** Money is per-currency; quotas live on the tier. */
+export type PlanMoney = {
+  currency: string;
+  amount: number;
   overage_gpu_per_sec: number;
   overage_storage_per_gb: number;
   overage_notification_each: number;
-  active: boolean;
 };
 /** A tier priced in one currency — what tenants see. */
-export type PricedPlan = PlanTier & { currency: string; amount: number };
-export type PlanPrice = { plan_id: string; currency: string; amount: number };
+export type PricedPlan = PlanTier & PlanMoney;
+export type PlanPrice = { plan_id: string; currency: string; amount: number; overage_storage_per_gb: number };
 /** A tier plus every currency it's priced in (master catalog). */
 export type PlanWithPrices = PlanTier & { prices: PlanPrice[] };
 
@@ -428,6 +435,10 @@ export const adminBilling = {
     api.post<{ subscription_id: string }>(`/admin/billing/${tenant}/plan`, { plan_id: planId }),
   plans: () => api.get<PlanWithPrices[]>("/admin/plans"),
   upsertPlan: (plan: PlanTier) => api.post<void>("/admin/plans", plan),
-  setPrice: (planId: string, currency: string, amount: number) =>
-    api.post<void>(`/admin/plans/${planId}/price`, { currency, amount }),
+  setPrice: (planId: string, currency: string, amount: number, overageStoragePerGb = 0) =>
+    api.post<void>(`/admin/plans/${planId}/price`, {
+      currency,
+      amount,
+      overage_storage_per_gb: overageStoragePerGb,
+    }),
 };

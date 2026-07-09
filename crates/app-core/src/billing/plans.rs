@@ -15,32 +15,35 @@ pub struct Plan {
     pub camera_cap: i32,
     /// `Some(n)` for a trial plan (n-day window), `None` for a paid plan.
     pub trial_days: Option<i32>,
+    /// Days of cloud recording retention this tier sells. `0` = no cloud recording.
+    /// Retention is the product; the quota below is only a guardrail.
+    pub retention_days: i32,
     pub included_gpu_sec: f64,
     pub included_storage_gb: f64,
     pub included_notifications: i32,
-    /// Overage rates are expressed in the invoice's currency. All `0` for the v1 flat tiers.
-    pub overage_gpu_per_sec: f64,
-    pub overage_storage_per_gb: f64,
-    pub overage_notification_each: f64,
     pub active: bool,
 }
 
 /// A tier priced in one currency — what the UI and invoices actually consume.
+///
+/// Quotas (`included_*`) come from the tier: a GB is a GB in any currency. The rates come from
+/// the price row, because a rate is money.
 #[derive(Debug, Clone, FromRow, serde::Serialize)]
 pub struct PricedPlan {
     pub id: String,
     pub name: String,
     pub camera_cap: i32,
     pub trial_days: Option<i32>,
+    pub retention_days: i32,
     pub included_gpu_sec: f64,
     pub included_storage_gb: f64,
     pub included_notifications: i32,
-    pub overage_gpu_per_sec: f64,
-    pub overage_storage_per_gb: f64,
-    pub overage_notification_each: f64,
     pub active: bool,
     pub currency: String,
     pub amount: f64,
+    pub overage_gpu_per_sec: f64,
+    pub overage_storage_per_gb: f64,
+    pub overage_notification_each: f64,
 }
 
 /// One (plan, currency) price.
@@ -49,6 +52,7 @@ pub struct PlanPrice {
     pub plan_id: String,
     pub currency: String,
     pub amount: f64,
+    pub overage_storage_per_gb: f64,
 }
 
 /// Active tiers priced in `currency`, cheapest first.
@@ -57,7 +61,8 @@ pub fn list_active_priced(db: &Db, currency: &str) -> Vec<PricedPlan> {
     let currency = currency.to_string();
     db.block(async move {
         sqlx::query_as::<_, PricedPlan>(
-            "SELECT p.*, pp.currency, pp.amount
+            "SELECT p.*, pp.currency, pp.amount, pp.overage_gpu_per_sec,
+                    pp.overage_storage_per_gb, pp.overage_notification_each
              FROM billing_plans p
              JOIN plan_prices pp ON pp.plan_id = p.id AND pp.currency = $1
              WHERE p.active ORDER BY pp.amount",
@@ -66,6 +71,28 @@ pub fn list_active_priced(db: &Db, currency: &str) -> Vec<PricedPlan> {
         .fetch_all(&pool)
         .await
         .unwrap_or_default()
+    })
+}
+
+/// One tier priced in `currency` — the shape the invoice bills from.
+pub fn priced(db: &Db, plan_id: &str, currency: &str) -> Option<PricedPlan> {
+    let pool = db.pool();
+    let plan_id = plan_id.to_string();
+    let currency = currency.to_string();
+    db.block(async move {
+        sqlx::query_as::<_, PricedPlan>(
+            "SELECT p.*, pp.currency, pp.amount, pp.overage_gpu_per_sec,
+                    pp.overage_storage_per_gb, pp.overage_notification_each
+             FROM billing_plans p
+             JOIN plan_prices pp ON pp.plan_id = p.id AND pp.currency = $2
+             WHERE p.id = $1",
+        )
+        .bind(&plan_id)
+        .bind(&currency)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten()
     })
 }
 
@@ -138,7 +165,8 @@ pub fn prices(db: &Db, plan_id: &str) -> Vec<PlanPrice> {
     let plan_id = plan_id.to_string();
     db.block(async move {
         sqlx::query_as::<_, PlanPrice>(
-            "SELECT plan_id, currency, amount FROM plan_prices WHERE plan_id = $1 ORDER BY currency",
+            "SELECT plan_id, currency, amount, overage_storage_per_gb
+             FROM plan_prices WHERE plan_id = $1 ORDER BY currency",
         )
         .bind(&plan_id)
         .fetch_all(&pool)
@@ -153,26 +181,22 @@ pub fn upsert(db: &Db, plan: Plan) -> Result<(), String> {
     let res: Result<_, sqlx::Error> = db.block(async move {
         sqlx::query(
             "INSERT INTO billing_plans
-                (id, name, camera_cap, trial_days, included_gpu_sec, included_storage_gb,
-                 included_notifications, overage_gpu_per_sec, overage_storage_per_gb,
-                 overage_notification_each, active)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                (id, name, camera_cap, trial_days, retention_days, included_gpu_sec,
+                 included_storage_gb, included_notifications, active)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
              ON CONFLICT (id) DO UPDATE SET
-                name = $2, camera_cap = $3, trial_days = $4, included_gpu_sec = $5,
-                included_storage_gb = $6, included_notifications = $7,
-                overage_gpu_per_sec = $8, overage_storage_per_gb = $9,
-                overage_notification_each = $10, active = $11",
+                name = $2, camera_cap = $3, trial_days = $4, retention_days = $5,
+                included_gpu_sec = $6, included_storage_gb = $7,
+                included_notifications = $8, active = $9",
         )
         .bind(&plan.id)
         .bind(&plan.name)
         .bind(plan.camera_cap)
         .bind(plan.trial_days)
+        .bind(plan.retention_days)
         .bind(plan.included_gpu_sec)
         .bind(plan.included_storage_gb)
         .bind(plan.included_notifications)
-        .bind(plan.overage_gpu_per_sec)
-        .bind(plan.overage_storage_per_gb)
-        .bind(plan.overage_notification_each)
         .bind(plan.active)
         .execute(&pool)
         .await
@@ -180,19 +204,22 @@ pub fn upsert(db: &Db, plan: Plan) -> Result<(), String> {
     res.map(|_| ()).map_err(|e| format!("plans::upsert: {e}"))
 }
 
-/// Set one (plan, currency) price.
-pub fn set_price(db: &Db, plan_id: &str, currency: &str, amount: f64) -> Result<(), String> {
+/// Set one (plan, currency) price and its storage overage rate — both money, one row.
+pub fn set_price(db: &Db, plan_id: &str, currency: &str, amount: f64, overage_storage_per_gb: f64) -> Result<(), String> {
     let plan_id = plan_id.to_string();
     let currency = currency.to_string();
     let pool = db.pool();
     let res: Result<_, sqlx::Error> = db.block(async move {
         sqlx::query(
-            "INSERT INTO plan_prices (plan_id, currency, amount) VALUES ($1, $2, $3)
-             ON CONFLICT (plan_id, currency) DO UPDATE SET amount = $3",
+            "INSERT INTO plan_prices (plan_id, currency, amount, overage_storage_per_gb)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (plan_id, currency)
+             DO UPDATE SET amount = $3, overage_storage_per_gb = $4",
         )
         .bind(&plan_id)
         .bind(&currency)
         .bind(amount)
+        .bind(overage_storage_per_gb)
         .execute(&pool)
         .await
     });

@@ -173,13 +173,17 @@ async fn admin_upsert_plan(UserClaims(c): UserClaims, State(st): State<AppState>
 struct SetPriceReq {
     currency: String,
     amount: f64,
+    /// Storage overage, per GB-month, in this currency. Omitted = free (the Beta trial).
+    #[serde(default)]
+    overage_storage_per_gb: f64,
 }
 
-/// Set a tier's price in one currency (e.g. `home` = 39.90 BRL and 9.99 USD).
+/// Set a tier's money in one currency: base fee + storage overage rate. Quotas live on the
+/// tier (`POST /admin/plans`) — a GB is a GB in any currency, but a rate is money.
 async fn admin_set_price(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<String>, Json(req): Json<SetPriceReq>) -> Result<StatusCode, ApiErr> {
     require_master(&c)?;
     let db = st.db.clone();
-    blocking(move || plans::set_price(&db, &id, &req.currency.to_uppercase(), req.amount))
+    blocking(move || plans::set_price(&db, &id, &req.currency.to_uppercase(), req.amount, req.overage_storage_per_gb))
         .await?
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     Ok(StatusCode::NO_CONTENT)

@@ -33,6 +33,8 @@
   let planPickerFor = $state<TenantBilling | null>(null);
   let editPlan = $state<PlanTier | null>(null);
   let editPrices = $state<Record<string, number>>({});
+  /** Storage overage, per GB-month, per currency. */
+  let editOverage = $state<Record<string, number>>({});
   let savingPlan = $state(false);
 
   function currentPeriod(): string {
@@ -48,6 +50,10 @@
 
   function priceOf(p: PlanWithPrices, currency: string): number {
     return p.prices.find((x) => x.currency === currency)?.amount ?? 0;
+  }
+
+  function overageOf(p: PlanWithPrices, currency: string): number {
+    return p.prices.find((x) => x.currency === currency)?.overage_storage_per_gb ?? 0;
   }
 
   function statusVariant(status: string | null): "default" | "secondary" | "destructive" | "outline" {
@@ -140,21 +146,21 @@
       name: "",
       camera_cap: 1,
       trial_days: null,
+      retention_days: 0,
       included_gpu_sec: 0,
       included_storage_gb: 0,
       included_notifications: 0,
-      overage_gpu_per_sec: 0,
-      overage_storage_per_gb: 0,
-      overage_notification_each: 0,
       active: true,
     };
     editPrices = { BRL: 0, USD: 0 };
+    editOverage = { BRL: 0, USD: 0 };
   }
 
   function openEditPlan(p: PlanWithPrices) {
     const { prices, ...tier } = p;
     editPlan = tier;
     editPrices = Object.fromEntries(CURRENCIES.map((c) => [c, priceOf(p, c)]));
+    editOverage = Object.fromEntries(CURRENCIES.map((c) => [c, overageOf(p, c)]));
   }
 
   function planExists(id: string): boolean {
@@ -173,7 +179,7 @@
     try {
       await adminBilling.upsertPlan({ ...editPlan, id });
       for (const c of CURRENCIES) {
-        await adminBilling.setPrice(id, c, Number(editPrices[c]) || 0);
+        await adminBilling.setPrice(id, c, Number(editPrices[c]) || 0, Number(editOverage[c]) || 0);
       }
       editPlan = null;
       await load();
@@ -283,6 +289,7 @@
               {/each}
               <th class="px-3 py-2 text-right font-medium">Cameras</th>
               <th class="px-3 py-2 text-right font-medium">Trial</th>
+              <th class="px-3 py-2 text-right font-medium">Retention</th>
               <th class="px-3 py-2 text-left font-medium">Active</th>
               <th class="px-3 py-2 text-right font-medium"></th>
             </tr>
@@ -296,6 +303,7 @@
                 {/each}
                 <td class="px-3 py-2 text-right tabular-nums">{p.camera_cap}</td>
                 <td class="px-3 py-2 text-right tabular-nums">{p.trial_days ? `${p.trial_days}d` : "—"}</td>
+                <td class="px-3 py-2 text-right tabular-nums">{p.retention_days ? `${p.retention_days}d` : "—"}</td>
                 <td class="px-3 py-2"><Badge variant={p.active ? "default" : "outline"} class="text-[10px]">{p.active ? "yes" : "no"}</Badge></td>
                 <td class="px-3 py-2 text-right">
                   <Button variant="ghost" size="sm" onclick={() => openEditPlan(p)}><Pencil class="size-3.5" /> Edit</Button>
@@ -358,6 +366,20 @@
               <Input id={`p-price-${c}`} type="number" step="0.01" bind:value={editPrices[c]} />
             </div>
           {/each}
+          {#each CURRENCIES as c (c)}
+            <div class="space-y-1.5">
+              <Label for={`p-over-${c}`}>Storage overage / GB-mo ({c})</Label>
+              <Input id={`p-over-${c}`} type="number" step="0.01" bind:value={editOverage[c]} />
+            </div>
+          {/each}
+          <div class="space-y-1.5">
+            <Label for="p-ret">Cloud retention (days)</Label>
+            <Input id="p-ret" type="number" bind:value={editPlan.retention_days} />
+          </div>
+          <div class="space-y-1.5">
+            <Label for="p-quota">Included storage (GB)</Label>
+            <Input id="p-quota" type="number" bind:value={editPlan.included_storage_gb} />
+          </div>
           <div class="space-y-1.5">
             <Label for="p-cap">Camera cap</Label>
             <Input id="p-cap" type="number" bind:value={editPlan.camera_cap} />

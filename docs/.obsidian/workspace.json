@@ -210,6 +210,8 @@
   },
   "active": "ed375cc67003ec28",
   "lastOpenFiles": [
+    "plans/cloud-recording-storage.md.tmp.6187.dcba51268c56",
+    "plans/cloud-recording-storage.md",
     "plans/tenant-cloud-cost.md.tmp.43140.26a2e5b67b50",
     "plans/tenant-cloud-cost.md.tmp.43140.a0b6b6414ac8",
     "Task Board.md.tmp.66747.13becb2ef564",
@@ -233,7 +235,6 @@
     "plans/workflow-variables.md",
     "workflow-nodes.md.tmp.3523.314baa0a528f",
     "Task Board.md.tmp.82943.d3faa5a5137c",
-    "Task Board.md.tmp.82943.8b47896febaf",
     "plans/workflow-node-ux-refactor.md",
     "plans/map-presence-history.md",
     "plans/time-gate-node.md",
@@ -244,7 +245,6 @@
     "ref/ai-sidecar.md",
     "plans/workflow-runs-realtime.md",
     "plans/workflow-list-improvements.md",
-    "plans/telegram-beacons-fix-polish.md",
-    "plans/string-switch-node.md"
+    "plans/telegram-beacons-fix-polish.md"
   ]
 }

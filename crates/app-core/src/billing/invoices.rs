@@ -20,6 +20,9 @@ pub struct TenantUsage {
     pub gpu_sec: f64,
     /// GPU cost in the AI rate's currency (treated as USD; see `AI_RATE_PER_SEC`).
     pub gpu_cost_usd: f64,
+    /// **GB-month**: the average bytes we stored across the period's sampled days, not the
+    /// bytes ingested. Storage is a stock — keeping 30 GB for 60 days costs 20x keeping it
+    /// for 3, and a sum of uploads cannot tell those apart.
     pub storage_gb: f64,
     pub notifications: i64,
 }
@@ -83,6 +86,7 @@ pub struct InvoiceLineItem {
 /// Aggregate a tenant's metered usage for `period` ('YYYY-MM'), matched by RFC3339 prefix.
 pub fn usage_for_period(db: &Db, tenant_id: Uuid, period: &str) -> TenantUsage {
     let like = format!("{period}%");
+    let period_key = period.to_string();
     let pool = db.pool();
     db.block(async move {
         let (gpu_ms, gpu_cost): (i64, f64) = sqlx::query_as(
@@ -96,15 +100,19 @@ pub fn usage_for_period(db: &Db, tenant_id: Uuid, period: &str) -> TenantUsage {
         .await
         .unwrap_or((0, 0.0));
 
-        let bytes: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(size_bytes), 0)::bigint
-             FROM recordings WHERE tenant_id = $1 AND started_at LIKE $2",
+        // GB-month from the nightly samples (pg_cron, migration 0047). The old query summed
+        // `recordings.size_bytes` for the period — bytes sitting on the *edge's* own disk,
+        // which we never stored and must not bill.
+        let avg_bytes: f64 = sqlx::query_scalar(
+            "SELECT COALESCE(AVG(bytes), 0)::double precision
+             FROM tenant_storage_daily
+             WHERE tenant_id = $1 AND to_char(day, 'YYYY-MM') = $2",
         )
         .bind(tenant_id)
-        .bind(&like)
+        .bind(&period_key)
         .fetch_one(&pool)
         .await
-        .unwrap_or(0);
+        .unwrap_or(0.0);
 
         let notifications: i64 = sqlx::query_scalar(
             "SELECT COUNT(*)::bigint FROM notification_queue
@@ -119,7 +127,7 @@ pub fn usage_for_period(db: &Db, tenant_id: Uuid, period: &str) -> TenantUsage {
         TenantUsage {
             gpu_sec: gpu_ms as f64 / 1000.0,
             gpu_cost_usd: gpu_cost,
-            storage_gb: bytes as f64 / 1_000_000_000.0,
+            storage_gb: avg_bytes / 1_000_000_000.0,
             notifications,
         }
     })
@@ -131,10 +139,10 @@ pub fn compute(db: &Db, tenant_id: Uuid, period: &str) -> Option<InvoiceDraft> {
     // The subscription in force during `period` — NOT today's. Billing a past month with
     // the current plan would invoice a tenant for a month they hadn't subscribed.
     let sub = subscriptions::active_during(db, tenant_id, period)?;
-    let plan = plans::get(db, &sub.plan_id)?;
     let currency = super::tenant_currency(db, tenant_id);
-    // The tier's price in the tenant's currency; 0 when the plan isn't priced there.
-    let base_fee = plans::price(db, &plan.id, &currency).unwrap_or(0.0);
+    // Quotas come from the tier, rates from the price row — money is per-currency, a GB is not.
+    let plan = plans::priced(db, &sub.plan_id, &currency)?;
+    let base_fee = plan.amount;
     let usage = usage_for_period(db, tenant_id, period);
     let fx_usd_brl = fx::latest(db, "USD", "BRL").map(|f| f.rate);
 
