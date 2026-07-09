@@ -51,11 +51,41 @@ for svc in ${SERVICES}; do
 done
 
 EDGEVER="$(grep -m1 '^version' sentinel-edge/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+
+# The VPS compose is hand-maintained (it holds filled placeholders: __DB_PASS__,
+# __EDGE_HOST__…), so we never copy the repo's copy over it. But sentinel-postgres now needs
+# two runtime flags the stock pgvector image never had, or `CREATE EXTENSION pg_cron`
+# (migration 0046) fails and control won't boot. Patch those in place, idempotently, and
+# only when postgres is actually being deployed — a routine deploy must not touch the DB.
+PATCH_PG=""
+case " ${SERVICES} " in *" sentinel-postgres "*) PATCH_PG=1 ;; esac
+
 echo ">> Rolling the VPS (${VPS_SSH}) -- services: ${SERVICES} (edge ${EDGEVER})"
 ssh -i "${VPS_KEY}" -o IdentitiesOnly=yes "${VPS_SSH}" "set -e; cd /ibbf
   sed -i -E 's/(LATEST_EDGE_VERSION: ).*/\\1\"${EDGEVER}\"/' docker-compose.sentinel.yml
+
+  if [ -n '${PATCH_PG}' ]; then
+    cp docker-compose.sentinel.yml \"docker-compose.sentinel.yml.bak.\$(date +%s)\"
+    sed -i 's|image: pgvector/pgvector:pg17|image: ghcr.io/jackesdavid/sentinel-postgres:latest|' docker-compose.sentinel.yml
+    grep -q 'cron.database_name' docker-compose.sentinel.yml || \
+      sed -i '\\|image: ghcr.io/jackesdavid/sentinel-postgres:latest|a\\    command: [\"postgres\", \"-c\", \"shared_preload_libraries=pg_cron\", \"-c\", \"cron.database_name=sentinel\"]' docker-compose.sentinel.yml
+    echo '>> patched compose for pg_cron'
+  fi
+
   docker compose -f docker-compose.yml -f docker-compose.sentinel.yml pull ${SERVICES}
   docker compose -f docker-compose.yml -f docker-compose.sentinel.yml up -d ${SERVICES}
+
+  if [ -n '${PATCH_PG}' ]; then
+    for i in \$(seq 1 60); do
+      docker exec sentinel-postgres pg_isready -U sentinel -d sentinel >/dev/null 2>&1 && break
+      sleep 2
+    done
+    # Abort before anyone deploys control against a scheduler-less database.
+    docker exec sentinel-postgres psql -U sentinel -d sentinel -tAc 'SHOW shared_preload_libraries' | grep -q pg_cron \\
+      || { echo 'FATAL: pg_cron is not preloaded -- do NOT deploy control'; exit 1; }
+    echo '>> pg_cron preloaded OK'
+  fi
+
   docker image prune -f"
 
 echo "OK: deployed ${SERVICES} (commit ${SHA:0:7}, edge ${EDGEVER})"
