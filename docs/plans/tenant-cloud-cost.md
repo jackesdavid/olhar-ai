@@ -8,51 +8,70 @@
 
 **Branch:** `feat/tenant-billing` (off `main`). Everything stacked here to send in one go.
 Backend `cargo check --workspace` clean; frontend `svelte-check` clean for new files
-(pre-existing errors elsewhere untouched). **Not yet pushed / not deployed.**
+(the 9 reported errors are pre-existing, elsewhere). **Not yet pushed / not deployed.**
 
 **Commits (newest first):**
-- `742389f` surface Pix/boleto payment link on subscribe (first_payment_url → invoiceUrl)
-- `b06e8ec` Phase 5b — billing UI (tenant `/billing` + master `/admin/billing`)
+- `46e93b4` Phase 6b — **Stripe gateway** (BR + US), generalized provider seam
+- `5dee771` Phase 6a — **multi-currency** (BRL + USD)
+- `742389f` payment link on subscribe · `b06e8ec` Phase 5b — billing UI
 - `1b66b7e` Phase 5a — master plan administration API
-- `4b10bff` Phase 4 — payments via Asaas, provider seam (+ `592f688` env wiring)
-- `3c56d75` Phase 3 — invoice computation + immutable API
-- `1f424bd` Phase 2 — plan/subscription model + BRL FX
-- `d9189ec` Phase 1 — per-tenant AI/GPU usage metering
+- `4b10bff` Phase 4 — Asaas payments + seam (+ `592f688` env wiring)
+- `3c56d75` Phase 3 — invoices · `1f424bd` Phase 2 — plans/subs/FX · `d9189ec` Phase 1 — GPU metering
 - (also `50cbb82` retired `new-ui` → `main` is the single mainline)
 
-**Done:** Phases 1–5 (metering → plans/subscriptions/FX → invoices → Asaas payments →
-UI + master plan admin) + the Pix/boleto payment link. Migrations **0039–0043**. New env:
-`AI_RATE_PER_SEC`, `PAYMENT_PROVIDER`, `ASAAS_BASE_URL`, `ASAAS_API_KEY`,
-`ASAAS_WEBHOOK_TOKEN` (documented in `.env.example` + wired in `deploy/vps/docker-compose.sentinel.yml`).
+**Done:** Phases 1–6. Migrations **0039–0044**. Pricing: Beta 2cam/30d free · Home
+R$39,90 / **$9,99** · Business R$499 / **$149**.
+
+**Gateway decision (2026-07-08):** **Stripe now, Asaas later.** Stripe added recurring
+**Pix Automático** in 2026-04, so one integration serves Brazil *and* the American market
+(multi-currency Prices). Asaas stays in-repo behind the seam for when its cheaper Pix fees
+(0.22–0.35%) / native NF-e matter. `PAYMENT_PROVIDER` defaults to `stripe`.
+
+**Stripe shape (why the trait changed):** Stripe is *Checkout-style* — the Subscription
+exists only **after** payment, so `start_subscription()` returns `{payment_url, subscription_ref?,
+price_ref?}` and the ref arrives on `checkout.session.completed`. Webhooks are HMAC-signed
+over the raw body and **idempotent** (`payment_events` per event id). Consequence: the
+tenant moves onto the paid plan **only when payment confirms**, never optimistically (this
+changed Asaas too — it now records `pending` first). Our code **auto-creates the Stripe
+Product+Price** and persists `plan_provider_price.price_ref` for reuse.
+
+**Env:** `AI_RATE_PER_SEC`, `PAYMENT_PROVIDER=stripe`, `STRIPE_API_KEY`,
+`STRIPE_WEBHOOK_SECRET`, `STRIPE_SUCCESS_URL`/`STRIPE_CANCEL_URL` (+ Asaas vars kept).
+Documented in `.env.example`, wired in `deploy/vps/docker-compose.sentinel.yml`.
+Local `.env` already has a **test** `rk_test_…` key; `STRIPE_WEBHOOK_SECRET` still blank.
 
 **Pending / next:**
-1. **Real Asaas test on the Default tenant** (user registering on Asaas — runbook below).
-2. **Enforcement (Phase 2b, not built):** camera-cap block on device-create, self-service
-   trial auto-start on signup, expiry soft-lock (read-only + upgrade prompt). Helpers exist
-   (`subscriptions::camera_cap`, `expire_due_trials`) but aren't wired into the flows yet.
-3. Possibly push branch + open PR to `main` once the real test passes.
+1. **`STRIPE_WEBHOOK_SECRET`** — either `stripe listen --forward-to localhost:8790/webhooks/stripe`
+   (prints a `whsec_…`, no public URL needed) or add the VPS endpoint
+   `https://control.thesentinels.online/webhooks/stripe` and copy its signing secret.
+2. **Real end-to-end test on the Default tenant** (runbook below).
+3. **Enforcement (Phase 2b, NOT built):** camera-cap block on device-create, self-service
+   trial auto-start on signup, expiry soft-lock. Helpers exist (`subscriptions::camera_cap`,
+   `expire_due_trials`) but aren't wired into the flows.
+4. Push branch + PR to `main` once the test passes.
 
-### Real-test runbook (Asaas)
-Start in **sandbox** (validates 100% of our code with fake money, instant account); prod
-needs CNPJ approval.
-1. Register: sandbox.asaas.com (now) / asaas.com (prod later).
-2. API key: Asaas → Configurações → Integrações → API Key.
-3. Webhook (Asaas panel): URL `https://control.thesentinels.online/webhooks/asaas`, auth
-   token = `ASAAS_WEBHOOK_TOKEN`, events `PAYMENT_CONFIRMED`/`PAYMENT_RECEIVED`/`PAYMENT_OVERDUE`.
-4. VPS `/ibbf/sentinel.env`: `ASAAS_API_KEY`, `ASAAS_WEBHOOK_TOKEN`. For sandbox set
-   `ASAAS_BASE_URL: https://sandbox.asaas.com/api/v3` in the compose `environment:` (it
-   overrides env_file).
-5. Deploy: `task cloud-deploy` (OrbStack up) — applies migrations on control boot.
-6. **Perms gotcha:** `billing.read`/`billing.write` are NEW perms; the Default tenant's
-   Admin role (created earlier) lacks them → grant via Settings → Roles → Admin → enable
-   Billing, else the nav link won't even show.
-7. Test as Default Admin: `/billing` → Home (R$39,90) → Pix → name/email/CPF → Confirm →
-   opens Asaas checkout → pay → webhook flips `tenant_subscriptions.status` → `active`.
-8. Verify: DB `payment_subscriptions` + `tenant_subscriptions`; master `/admin/billing`
-   shows Default = Home/active; "Close" a period → invoice appears in `/billing`.
+### Real-test runbook (Stripe, test mode)
+1. Stripe dashboard in **Test mode**. The `rk_test_…` key is already in `.env`.
+2. Get `whsec_…` (see Pending #1) → `.env` / `sentinel.env`.
+3. **Do NOT create Product/Price by hand** — our code creates them on the first subscribe
+   (needs Products+Prices *write* on the restricted key; the "Recurring subscriptions and
+   billing" template covers it).
+4. **Test with card first** (`4242 4242 4242 4242`). Pix/boleto must be enabled on the
+   account under Settings → Payment methods.
+5. **Perms gotcha:** `billing.read`/`billing.write` are NEW perms; the Default tenant's
+   Admin role lacks them → grant via Settings → Roles → Admin, else the nav link won't show.
+6. Deploy (`task cloud-deploy`, OrbStack up) or run locally; migrations apply on control boot.
+7. As Default Admin: `/billing` → Home → card → Confirm → Stripe Checkout opens → pay →
+   `checkout.session.completed` webhook binds the subscription and flips the tenant to
+   `active`.
+8. Verify: DB `payment_subscriptions`, `payment_events`, `tenant_subscriptions`; master
+   `/admin/billing` shows Default = Home/active; "Close" a period → invoice in `/billing`.
 
-**Open question for resume:** want `ASAAS_BASE_URL` pre-pointed at sandbox in the compose to
-ease the first test?
+**Risk to watch:** the Price is created in the **tenant's currency**. Default tenant is
+`BRL` — the Stripe account must accept BRL. If it errors, test with
+`UPDATE tenants SET currency='USD'` and the $9,99 Home price.
+
+**Security note:** a `rk_test_…` key was pasted into a chat transcript — roll it after testing.
 
 ## Decisions locked (2026-07-07)
 
@@ -63,10 +82,11 @@ ease the first test?
 - **Shared VPS cost is NOT a customer invoice line.** On the invoice it's absorbed into the **plan base fee**. Measured per-tenant VPS allocation is deferred (Phase 5) — at $6.75/mo infra it's economically pointless; margin is ~99% regardless.
 - **Pricing = flat tiers, BRL, aggressive (seed usage).** Costs are pennies, so price on value/market, aggressively, to acquire customers + usage data:
   - **Beta (free trial) — 2 cameras — 30 days — R$ 0** (locked 2026-07-07). **Self-service:** signing up auto-starts the 30-day trial. At day 30 → **soft-lock + prompt** (view becomes read-only, prompt to pick a paid plan; data retained ~7 days before purge), not a hard lockout. Cap = 2 *active* cameras (swappable).
-  - **Home — up to 6 cameras — R$ 39,90/mo** (~$7.25, ~97% margin)
-  - **Business Basic — up to 16 cameras — R$ 499/mo** (~$91, ~R$31/cam, ~99% margin)
-- **Payments = Asaas (BR PSP), provider-owned subscriptions.** Recurring **Pix Automático + boleto + cartão**; Asaas owns the billing cycle, retries/dunning, and (later) NF-e. We create a subscription on trial→paid conversion, mirror charges into our `invoices`, and react to webhooks to gate access. **NF-e / nota fiscal deferred** — launch charging, add fiscal-note issuance in a later step (Asaas issues natively when we turn it on).
-- **Currency = BRL display, USD canonical, floating FX with last-quote fallback.** Our costs (Contabo, RunPod) are USD; BRL is the billing/display currency. **Plan base fees are fixed BRL numbers** (marketing stability — R$39,90 / R$499 don't float with the dollar). Floating USD→BRL conversion applies to **internal COGS and any USD-denominated usage overage** (e.g. RunPod GPU). See the FX design in Phase 2. *(Open: confirm base fee stays fixed-BRL vs. whole-plan-floats — recommended fixed.)*
+  - **Home — up to 6 cameras — R$ 39,90 / US$ 9,99 per month** (~97% margin)
+  - **Business Basic — up to 16 cameras — R$ 499 / US$ 149 per month** (~99% margin)
+  - Prices are per-currency rows in `plan_prices`; a tenant bills in `tenants.currency`.
+- **Payments = Stripe (superseded Asaas, 2026-07-08), provider-owned subscriptions.** Stripe gained recurring **Pix Automático** (2026-04), so one integration covers **Brazil + the American market** with multi-currency Prices (card, boleto, Pix). Asaas remains implemented behind the seam (`PAYMENT_PROVIDER=asaas`) for when its cheaper Pix fees / native NF-e win. **NF-e deferred** either way. The provider owns the billing cycle + dunning; we mirror charges into `invoices` and gate access from idempotent webhooks.
+- **Currency = multi-currency (BRL + USD) since Phase 6a.** Each tier is priced per currency; the tenant's `currency` selects it. FX (`fx_rates`, USD→BRL, floating with last-quote fallback) is kept for internal COGS and any USD-denominated overage. Originally BRL-only — Our costs (Contabo, RunPod) are USD; BRL is the billing/display currency. **Plan base fees are fixed BRL numbers** (marketing stability — R$39,90 / R$499 don't float with the dollar). Floating USD→BRL conversion applies to **internal COGS and any USD-denominated usage overage** (e.g. RunPod GPU). See the FX design in Phase 2. *(Open: confirm base fee stays fixed-BRL vs. whole-plan-floats — recommended fixed.)*
 
 ## Context — what exists today
 
