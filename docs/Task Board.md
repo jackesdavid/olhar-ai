@@ -56,8 +56,6 @@ kanban-plugin: board
 
 - [ ] #62 Edge resource monitoring — CPU / mem / disk / GPU
 	  - Plan: [[edge-resource-monitoring]]
-- [ ] #63 Tenant Billing — per-tenant invoicing + cloud cost/margin
-	  - Plan: [[tenant-cloud-cost]]
 
 
 ## Review
@@ -86,6 +84,8 @@ kanban-plugin: board
 - [ ] #31 RecordPresence node: room not changeable in property panel
 - [ ] #32 Map redesign — top-down 3D blueprint editor + live presence
 	  - Epic: [[map-redesign]]
+- [ ] #63 Tenant Billing — per-tenant invoicing + cloud cost/margin
+	  - Plan: [[tenant-cloud-cost]]
 
 
 ## Done

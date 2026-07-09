@@ -4,74 +4,55 @@
 **Board card:** #63 Tenant Cloud Cost — view + calculate per-tenant spend (ToDo)
 **Goal:** Two linked outcomes: **(A) customer-facing invoicing** — each tenant billed a plan base fee + metered overage (GPU, storage, notifications), auditable and immutable per period; and **(B) internal COGS/margin** — what that tenant actually costs us to run, so we can see margin = invoice − cost. (A) is the primary v1 deliverable (decided 2026-07-07).
 
-## Build status — RESUME HERE (2026-07-08)
+## Build status — SHIPPED (2026-07-09)
 
-**Branch:** `feat/tenant-billing` (off `main`). Everything stacked here to send in one go.
-Backend `cargo check --workspace` clean; frontend `svelte-check` clean for new files
-(the 9 reported errors are pre-existing, elsewhere). **Not yet pushed / not deployed.**
+**Merged to `main` and deployed to production.** Card #63 → Review.
+Backend `cargo check --workspace` clean; `svelte-check` clean for new files; app builds.
 
-**Commits (newest first):**
-- `46e93b4` Phase 6b — **Stripe gateway** (BR + US), generalized provider seam
-- `5dee771` Phase 6a — **multi-currency** (BRL + USD)
-- `742389f` payment link on subscribe · `b06e8ec` Phase 5b — billing UI
-- `1b66b7e` Phase 5a — master plan administration API
-- `4b10bff` Phase 4 — Asaas payments + seam (+ `592f688` env wiring)
-- `3c56d75` Phase 3 — invoices · `1f424bd` Phase 2 — plans/subs/FX · `d9189ec` Phase 1 — GPU metering
-- (also `50cbb82` retired `new-ui` → `main` is the single mainline)
+**Phases 1–6 + 2b complete.** Migrations **0039–0046**.
+Pricing: Beta 2 cam / 30-day trial · Home R$39,90 / $9,99 · Business R$499 / $149.
+Gateway: **Stripe** (BRL + USD; card, boleto, recurring Pix Automático). Asaas kept behind
+the seam (`PAYMENT_PROVIDER=asaas`) for its cheaper Pix fees / native NF-e.
 
-**Done:** Phases 1–6. Migrations **0039–0044**. Pricing: Beta 2cam/30d free · Home
-R$39,90 / **$9,99** · Business R$499 / **$149**.
+**Verified end-to-end against real Stripe test mode** (a real card payment on the Default
+tenant): Product+Price auto-created and reused, no optimistic activation, checkout →
+`checkout.session.completed` binds the subscription and activates the plan, bad HMAC → 401,
+duplicate event ignored, `invoice.payment_failed` → `past_due`, reactivation opens a fresh
+row. Enforcement verified too: trial auto-start on signup, camera cap 402 on the 3rd camera,
+a backdated trial reported `expired` while the DB still said `trialing`, write→402 /
+read→200, `/billing/subscribe` reachable while locked, active tenant + master unaffected.
 
-**Gateway decision (2026-07-08):** **Stripe now, Asaas later.** Stripe added recurring
-**Pix Automático** in 2026-04, so one integration serves Brazil *and* the American market
-(multi-currency Prices). Asaas stays in-repo behind the seam for when its cheaper Pix fees
-(0.22–0.35%) / native NF-e matter. `PAYMENT_PROVIDER` defaults to `stripe`.
+### Bugs this work surfaced (all fixed)
+1. **Stripe moved `invoice.subscription`** (API 2025-05-28) to
+   `parent.subscription_details.subscription`. Every invoice event parsed to `None`, so
+   `invoice.payment_failed` was silently dropped — a delinquent customer would have kept
+   access. Checkout still worked, which is why it looked fine.
+2. **The monthly job billed a month the tenant hadn't subscribed.** `compute()` used the
+   *current* plan for any period and wrote an **immutable** `final` invoice (R$39,90 for
+   June, to a tenant who joined in July). Now uses `subscriptions::active_during(period)`.
+3. **Trial expiry fail-open.** Parsing the RFC3339 `ended_at` in Rust meant an unexpected
+   format granted an indefinite trial. Expiry is now decided in SQL
+   (`ended_at::timestamptz < now()`), the same expression the sweep uses.
+4. **`pg_cron` never worked.** `pgvector/pgvector:pg17` doesn't ship it, so migration 0028's
+   `platform_logs` 30-day TTL had been silently skipped since it was written — the table grew
+   unbounded. `deploy/postgres/Dockerfile` now bundles it; migration 0046 fails loudly if it
+   is missing.
 
-**Stripe shape (why the trait changed):** Stripe is *Checkout-style* — the Subscription
-exists only **after** payment, so `start_subscription()` returns `{payment_url, subscription_ref?,
-price_ref?}` and the ref arrives on `checkout.session.completed`. Webhooks are HMAC-signed
-over the raw body and **idempotent** (`payment_events` per event id). Consequence: the
-tenant moves onto the paid plan **only when payment confirms**, never optimistically (this
-changed Asaas too — it now records `pending` first). Our code **auto-creates the Stripe
-Product+Price** and persists `plan_provider_price.price_ref` for reuse.
+### Periodic jobs
+- **pg_cron** (migration 0046): `trial-expiry-sweep` (hourly), `platform-logs-ttl` (daily).
+- **control threads**: USD→BRL FX refresh (needs outbound HTTP; pg_cron runs SQL only) and
+  the monthly invoice close (its pricing math lives in `billing::invoices` — a second copy
+  in SQL is a money bug waiting to drift).
 
-**Env:** `AI_RATE_PER_SEC`, `PAYMENT_PROVIDER=stripe`, `STRIPE_API_KEY`,
-`STRIPE_WEBHOOK_SECRET`, `STRIPE_SUCCESS_URL`/`STRIPE_CANCEL_URL` (+ Asaas vars kept).
-Documented in `.env.example`, wired in `deploy/vps/docker-compose.sentinel.yml`.
-Local `.env` already has a **test** `rk_test_…` key; `STRIPE_WEBHOOK_SECRET` still blank.
-
-**Pending / next:**
-1. **`STRIPE_WEBHOOK_SECRET`** — either `stripe listen --forward-to localhost:8790/webhooks/stripe`
-   (prints a `whsec_…`, no public URL needed) or add the VPS endpoint
-   `https://control.thesentinels.online/webhooks/stripe` and copy its signing secret.
-2. **Real end-to-end test on the Default tenant** (runbook below).
-3. **Enforcement (Phase 2b, NOT built):** camera-cap block on device-create, self-service
-   trial auto-start on signup, expiry soft-lock. Helpers exist (`subscriptions::camera_cap`,
-   `expire_due_trials`) but aren't wired into the flows.
-4. Push branch + PR to `main` once the test passes.
-
-### Real-test runbook (Stripe, test mode)
-1. Stripe dashboard in **Test mode**. The `rk_test_…` key is already in `.env`.
-2. Get `whsec_…` (see Pending #1) → `.env` / `sentinel.env`.
-3. **Do NOT create Product/Price by hand** — our code creates them on the first subscribe
-   (needs Products+Prices *write* on the restricted key; the "Recurring subscriptions and
-   billing" template covers it).
-4. **Test with card first** (`4242 4242 4242 4242`). Pix/boleto must be enabled on the
-   account under Settings → Payment methods.
-5. **Perms gotcha:** `billing.read`/`billing.write` are NEW perms; the Default tenant's
-   Admin role lacks them → grant via Settings → Roles → Admin, else the nav link won't show.
-6. Deploy (`task cloud-deploy`, OrbStack up) or run locally; migrations apply on control boot.
-7. As Default Admin: `/billing` → Home → card → Confirm → Stripe Checkout opens → pay →
-   `checkout.session.completed` webhook binds the subscription and flips the tenant to
-   `active`.
-8. Verify: DB `payment_subscriptions`, `payment_events`, `tenant_subscriptions`; master
-   `/admin/billing` shows Default = Home/active; "Close" a period → invoice in `/billing`.
-
-**Risk to watch:** the Price is created in the **tenant's currency**. Default tenant is
-`BRL` — the Stripe account must accept BRL. If it errors, test with
-`UPDATE tenants SET currency='USD'` and the $9,99 Home price.
-
-**Security note:** a `rk_test_…` key was pasted into a chat transcript — roll it after testing.
+### Post-deploy TODO (not done)
+1. `STRIPE_API_KEY` + `STRIPE_WEBHOOK_SECRET` in `/ibbf/sentinel.env`, and point the Stripe
+   webhook at `https://control.thesentinels.online/webhooks/stripe`. Until then
+   `/billing/subscribe` answers "no payment provider configured".
+2. Grant the new `billing.read` / `billing.write` perms to existing Admin roles
+   (Settings → Roles) — otherwise nobody sees the Billing nav item.
+3. **Roll the `rk_test_…` and `whsec_…` keys** — both were pasted into a chat transcript.
+4. Deploy order for any future DB recreate: `task cloud-deploy -- sentinel-postgres` first
+   (it patches the VPS compose + asserts pg_cron), then `task cloud-deploy`.
 
 ## Decisions locked (2026-07-07)
 
