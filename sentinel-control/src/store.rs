@@ -660,6 +660,59 @@ pub struct RecordingRow {
 }
 
 /// Persist clip metadata only — the video file stays on the edge and is proxied on download.
+/// Retention days the tenant's current plan sells. `0` when it has no plan, a plan with no
+/// cloud recording, or a subscription that no longer entitles them to one — in which case no
+/// clip is uploaded.
+///
+/// The status filter matters: an expired trial or an unpaid tenant is already read-only, and
+/// letting their edge keep filling the bucket would have us pay to store footage for someone
+/// we've stopped serving. A lapsed trial still stored as `trialing` is excluded the same way
+/// `subscriptions::current` resolves it — at read time, not by trusting the sweep.
+pub async fn tenant_retention_days(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<i32> {
+    let days: Option<i32> = sqlx::query_scalar(
+        "SELECT p.retention_days
+         FROM tenant_subscriptions s
+         JOIN billing_plans p ON p.id = s.plan_id
+         WHERE s.tenant_id = $1
+           AND s.status IN ('trialing', 'active')
+           AND NOT (s.status = 'trialing' AND s.ended_at IS NOT NULL
+                    AND s.ended_at::timestamptz < now())
+         ORDER BY s.started_at DESC
+         LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(days.unwrap_or(0))
+}
+
+/// Claim the clip for the cloud: record where it will live and that it is on its way.
+pub async fn set_clip_uploading(pool: &PgPool, id: i64, cloud_key: &str) -> sqlx::Result<()> {
+    sqlx::query("UPDATE recordings SET cloud_key = $2, upload_state = 'uploading' WHERE id = $1")
+        .bind(id)
+        .bind(cloud_key)
+        .execute(pool)
+        .await
+        .map(|_| ())
+}
+
+/// The edge confirmed the object is in the bucket. Scoped by tenant: `clip_id` comes from a
+/// box, and a box must not be able to mark another tenant's clip durable.
+pub async fn mark_clip_uploaded(pool: &PgPool, tenant_id: Uuid, clip_id: &str) -> sqlx::Result<u64> {
+    let now = app_core::alerts::now_rfc3339();
+    let res = sqlx::query(
+        "UPDATE recordings
+         SET upload_state = 'uploaded', cloud_uploaded_at = $3
+         WHERE tenant_id = $1 AND clip_id = $2 AND cloud_key IS NOT NULL",
+    )
+    .bind(tenant_id)
+    .bind(clip_id)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
 pub async fn insert_recording(
     pool: &PgPool,
     tenant_id: Uuid,

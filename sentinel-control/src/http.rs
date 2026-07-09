@@ -37,6 +37,7 @@ pub fn router(state: AppState) -> Router {
         .route("/config/track-event", post(track_event_push))
         .route("/config/recording", get(recording_config))
         .route("/config/recordings/clip-metadata", post(clip_push))
+        .route("/config/recordings/:clip_id/uploaded", post(clip_uploaded))
         .route("/config/tracking", get(tracking_config))
         .merge(handlers::router())
         // Soft-lock: a lapsed/unpaid tenant is read-only (402 on writes).
@@ -506,11 +507,70 @@ async fn clip_push(State(st): State<AppState>, headers: HeaderMap, body: Option<
     let Some(Json(clip)) = body else {
         return (StatusCode::BAD_REQUEST, "clip body required").into_response();
     };
-    match crate::domain::recordings::push_clip(&st.pool, tenant, clip).await {
-        Ok(id) => Json(serde_json::json!({ "id": id })).into_response(),
+    let clip_id = clip.clip_id.clone();
+    let started_at = clip.started_at.clone();
+    let id = match crate::domain::recordings::push_clip(&st.pool, tenant, clip).await {
+        Ok(id) => id,
         Err(e) => {
             log::error!("clip push failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
+            return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+        }
+    };
+
+    // Offer the edge a short-lived URL to upload the clip straight to R2 — no video crosses
+    // this VPS, and the edge never holds our credentials. Best-effort: a clip that isn't
+    // offered an upload is still recorded, it just stays local.
+    let upload = upload_ticket(&st, tenant, id, &clip_id, &started_at).await;
+    match upload {
+        Some((url, key)) => Json(serde_json::json!({ "id": id, "upload": { "url": url, "key": key } })).into_response(),
+        None => Json(serde_json::json!({ "id": id })).into_response(),
+    }
+}
+
+/// How long the edge has to finish the upload before the URL expires.
+const UPLOAD_URL_TTL_SECS: u32 = 3600;
+
+/// `Some((presigned_put_url, object_key))` when the tenant's plan sells cloud recording and the
+/// bucket's retention rules are proven present.
+async fn upload_ticket(st: &AppState, tenant: uuid::Uuid, id: i64, clip_id: &str, started_at: &str) -> Option<(String, String)> {
+    if !app_core::clip_store::armed() {
+        return None;
+    }
+    let days = crate::store::tenant_retention_days(&st.pool, tenant).await.unwrap_or(0);
+    if days <= 0 {
+        return None;
+    }
+    let key = app_core::clip_store::object_key(days, tenant, started_at, clip_id);
+
+    // `presign_put` drives its own runtime; calling it on this async task would panic.
+    let k = key.clone();
+    let url = tokio::task::spawn_blocking(move || app_core::clip_store::presign_put(&k, UPLOAD_URL_TTL_SECS))
+        .await
+        .ok()?
+        .map_err(|e| log::error!("clip upload presign: {e}"))
+        .ok()?;
+
+    if let Err(e) = crate::store::set_clip_uploading(&st.pool, id, &key).await {
+        log::error!("clip {clip_id}: could not mark uploading: {e}");
+        return None;
+    }
+    Some((url, key))
+}
+
+/// The edge confirms the object landed in the bucket. Until this arrives the clip stays
+/// `uploading` and the UI shows it as in transit, never as durable.
+async fn clip_uploaded(State(st): State<AppState>, headers: HeaderMap, axum::extract::Path(clip_id): axum::extract::Path<String>) -> Response {
+    let tenant = match box_tenant(&st, &headers).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
+        Err(resp) => return resp,
+    };
+    match crate::store::mark_clip_uploaded(&st.pool, tenant, &clip_id).await {
+        Ok(0) => (StatusCode::NOT_FOUND, "no such clip awaiting upload").into_response(),
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            log::error!("clip {clip_id} confirm failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "confirm failed").into_response()
         }
     }
 }

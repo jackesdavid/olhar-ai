@@ -16,6 +16,7 @@
 //! **The edge never holds these credentials.** Control signs a short-lived URL and the edge
 //! uploads straight to R2, so no video crosses the VPS (75 GB of disk, one shared NIC).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 use s3::creds::Credentials;
@@ -73,6 +74,19 @@ pub fn enabled() -> bool {
     bucket().is_some()
 }
 
+static ARMED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the bucket's retention rules are proven present, and clips may therefore be
+/// uploaded.
+///
+/// Storing footage we cannot expire is worse than not storing it: the customer is the LGPD
+/// controller and we would be holding their video indefinitely with no mechanism to stop.
+/// So [`ensure_retention_lifecycle`] arms this on success and disarms it on failure, and
+/// nothing hands out an upload URL while it is false.
+pub fn armed() -> bool {
+    ARMED.load(Ordering::Relaxed)
+}
+
 /// `rust-s3` marks presigning `async` for API symmetry even though it is pure signing. A
 /// throwaway current-thread runtime keeps this callable from the sync edge/control paths and
 /// avoids a shared runtime that several threads would contend on.
@@ -100,6 +114,9 @@ pub fn object_key(retention_days: i32, tenant_id: Uuid, started_at_rfc3339: &str
 }
 
 /// A short-lived URL the edge can `PUT` the clip to, without ever holding our credentials.
+///
+/// Blocking: drives a throwaway runtime, so it must not be called from inside an async task
+/// (tokio panics). Wrap in `spawn_blocking` from an axum handler.
 pub fn presign_put(key: &str, expiry_secs: u32) -> Result<String, String> {
     let b = bucket().ok_or("clip store not configured")?;
     block_on(b.presign_put(key, expiry_secs, None, None))?.map_err(|e| format!("clip_store: presign put: {e}"))
@@ -174,9 +191,11 @@ pub fn ensure_retention_lifecycle(tiers: &[i32]) -> Result<(), String> {
     ok_status("get lifecycle", code, got.as_bytes())?;
     for d in &days {
         if !got.contains(&format!("retain-{d}d")) {
+            ARMED.store(false, Ordering::Relaxed);
             return Err(format!("clip_store: lifecycle rule 'retain-{d}d' did not apply"));
         }
     }
+    ARMED.store(true, Ordering::Relaxed);
     Ok(())
 }
 

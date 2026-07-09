@@ -161,6 +161,23 @@ fn main() {
         log::info!("Assistant voice (TTS): {}", if app_core::voice::VoiceConfig::from_env().is_some() { "enabled" } else { "disabled (set ELEVENLABS_API_KEY)" });
         log::info!("Assistant transcription (STT): {}", if app_core::listen::SttConfig::from_env().is_some() { "enabled" } else { "disabled (set ELEVENLABS_API_KEY)" });
 
+        // Durable clip storage. Arm it only once the bucket's retention rules are proven
+        // present: storing footage we cannot expire is worse than not storing it — the
+        // customer is the LGPD controller and we would hold their video indefinitely.
+        // Until this succeeds, `clip_store::armed()` is false and no upload URL is issued.
+        if app_core::clip_store::enabled() {
+            let db = db.clone();
+            std::thread::spawn(move || {
+                let tiers = app_core::billing::plans::retention_tiers(&db);
+                match app_core::clip_store::ensure_retention_lifecycle(&tiers) {
+                    Ok(()) => log::info!("clip store: armed (retention {tiers:?} days)"),
+                    Err(e) => log::error!("clip store: DISARMED — retention rules not applied: {e}"),
+                }
+            });
+        } else {
+            log::info!("clip store: disabled (set R2_ENDPOINT/R2_BUCKET/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY)");
+        }
+
         // Billing FX: refresh USD→BRL (for BRL invoicing) on boot, then daily. On failure
         // the last recorded rate stays authoritative, so there is always a quote to use.
         {

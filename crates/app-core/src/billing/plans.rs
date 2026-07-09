@@ -263,3 +263,16 @@ pub fn set_provider_price_ref(db: &Db, plan_id: &str, provider: &str, price_ref:
     });
     res.map(|_| ()).map_err(|e| format!("plans::set_provider_price_ref: {e}"))
 }
+
+/// The distinct retention windows any plan sells — one bucket lifecycle rule per tier.
+pub fn retention_tiers(db: &Db) -> Vec<i32> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_scalar::<_, i32>(
+            "SELECT DISTINCT retention_days FROM billing_plans WHERE retention_days > 0 ORDER BY 1",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_default()
+    })
+}
