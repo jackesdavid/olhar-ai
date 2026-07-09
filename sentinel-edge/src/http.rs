@@ -183,8 +183,14 @@ async fn recording_stop(
 
     match result {
         Ok(Ok(meta)) => {
-            // Push the clip manifest to control so the DB + browsers know about it.
+            // Push the clip manifest to control so the DB + browsers know about it. Control
+            // answers with a presigned PUT when the tenant's plan sells cloud recording; that
+            // ticket is the only way this box can reach durable storage (it holds no cloud
+            // credential), so hand it to the upload worker.
             let control_url = state.control_url.clone();
+            let uploads = state.uploads.clone();
+            let clip_id = meta.clip_id.clone();
+            let clip_path = state.recording.clip_path(&clip_id);
             let payload = serde_json::json!({
                 "camera_ip":     meta.camera_ip,
                 "clip_id":       meta.clip_id,
@@ -194,21 +200,14 @@ async fn recording_stop(
                 "started_at":    meta.started_at,
             });
             tokio::task::spawn_blocking(move || {
-                let url = format!("{control_url}/config/recordings/clip-metadata");
-                let mut req = ureq::AgentBuilder::new()
-                    .timeout(std::time::Duration::from_secs(10))
-                    .build()
-                    .post(&url)
-                    .set("Content-Type", "application/json");
-                if let Ok(t) = std::env::var("BOX_TOKEN") {
-                    let t = t.trim();
-                    if !t.is_empty() {
-                        req = req.set("Authorization", &format!("Bearer {t}"));
-                    }
-                }
-                if let Err(e) = req.send_string(&payload.to_string()) {
-                    log::warn!("clip push failed: {e}");
-                }
+                let Some(url) = push_manifest(&control_url, &payload) else {
+                    return; // no cloud recording on this plan, or the push failed
+                };
+                let Some(path) = clip_path else {
+                    log::warn!("clip {clip_id}: file vanished before upload");
+                    return;
+                };
+                crate::clip_upload::enqueue(&uploads, crate::clip_upload::Job { clip_id, path, url });
             });
             Json(json!({
                 "clip_id": meta.clip_id,
@@ -231,6 +230,37 @@ async fn recording_stop(
             (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response()
         }
     }
+}
+
+/// POST the clip manifest to control (box-authed, blocking). Returns the presigned PUT URL when
+/// control offers one — it does only for a tenant whose plan sells cloud recording. A failure
+/// here costs nothing but durability: the clip is already on local disk and served from there.
+fn push_manifest(control_url: &str, payload: &serde_json::Value) -> Option<String> {
+    let url = format!("{control_url}/config/recordings/clip-metadata");
+    let mut req = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .post(&url)
+        .set("Content-Type", "application/json");
+    if let Ok(t) = std::env::var("BOX_TOKEN") {
+        let t = t.trim();
+        if !t.is_empty() {
+            req = req.set("Authorization", &format!("Bearer {t}"));
+        }
+    }
+    let resp = match req.send_string(&payload.to_string()) {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("clip push failed: {e}");
+            return None;
+        }
+    };
+    resp.into_json::<serde_json::Value>()
+        .ok()?
+        .get("upload")?
+        .get("url")?
+        .as_str()
+        .map(str::to_string)
 }
 
 /// Serve the raw clip file (used by control's download proxy).

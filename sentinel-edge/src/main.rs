@@ -15,6 +15,7 @@
 //!
 //! Optional env: `EDGE_OWN_GO2RTC=1` to spawn/own the go2rtc sidecar (set
 //! `GO2RTC_BIN` + `GO2RTC_CONFIG`); otherwise it uses whatever go2rtc is on :1984.
+mod clip_upload;
 mod go2rtc;
 mod http;
 mod logbuf;

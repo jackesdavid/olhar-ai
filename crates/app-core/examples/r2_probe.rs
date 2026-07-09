@@ -37,13 +37,21 @@ fn main() {
     let put_url = cs::presign_put(&key, 300).expect("presign put");
     println!("presign PUT        : ok ({} chars)", put_url.len());
 
+    // Stream from a file with an explicit Content-Length — byte-for-byte what
+    // `sentinel-edge::clip_upload::put` does. Handed an unsized reader ureq would fall back to
+    // `Transfer-Encoding: chunked`, which R2 rejects; this is the step that proves it doesn't.
     let body = b"fake-mp4-bytes";
+    let tmp = std::env::temp_dir().join("sentinel-r2-probe.mp4");
+    std::fs::write(&tmp, body).expect("write temp clip");
+    let file = std::fs::File::open(&tmp).expect("open temp clip");
     let put = ureq::put(&put_url)
         .set("Content-Type", "video/mp4")
-        .send_bytes(body)
+        .set("Content-Length", &body.len().to_string())
+        .send(file)
         .map(|r| r.status())
-        .unwrap_or_else(|e| panic!("upload through presigned PUT failed: {e}"));
-    println!("upload via PUT     : HTTP {put}");
+        .unwrap_or_else(|e| panic!("streamed upload through presigned PUT failed: {e}"));
+    std::fs::remove_file(&tmp).ok();
+    println!("upload via PUT     : HTTP {put} (streamed, Content-Length)");
 
     // 2. Presigned GET — what the browser streams from.
     let get_url = cs::presign_get(&key, 300).expect("presign get");

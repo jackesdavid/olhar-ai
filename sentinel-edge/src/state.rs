@@ -25,6 +25,9 @@ pub struct AppState {
     pub go2rtc_bin: PathBuf,
     /// Ring-buffer + clip recording manager.
     pub recording: Arc<crate::recording::RecordingManager>,
+    /// Queue of finished clips waiting to be pushed to durable cloud storage. Single consumer —
+    /// this box also serves live video, and parallel uploads would starve it.
+    pub uploads: std::sync::mpsc::SyncSender<crate::clip_upload::Job>,
     /// The tracker's live "state of the world" — each (camera, job class) worker overwrites its
     /// own entry every detection cycle (never partial-updates another job's), so `GET /tracks/:ip`
     /// can answer "what's tracked right now" without a per-request round trip to the tracker
@@ -85,6 +88,7 @@ impl AppState {
             .unwrap_or_else(|_| PathBuf::from("go2rtc"));
 
         let recording = crate::recording::RecordingManager::boot(&control_url);
+        let uploads = crate::clip_upload::spawn(control_url.clone());
 
         Arc::new(AppState {
             control_url,
@@ -95,6 +99,7 @@ impl AppState {
             go2rtc_config,
             go2rtc_bin,
             recording,
+            uploads,
             live_tracks: Mutex::new(HashMap::new()),
         })
     }

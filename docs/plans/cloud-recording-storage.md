@@ -83,20 +83,31 @@ copy, so a rule declared there would simply never exist in production.
 | **Local** | `pending` | on the box only — not yet durable |
 | **In transit** | `uploading` | being copied to the cloud |
 | **Cloud** | `uploaded` | durable; survives the box |
-| **Failed** | `failed` | upload failed, retrying with backoff |
+| **Failed** | `failed` | the edge exhausted its retries, or the ticket expired with the clip still in transit |
 
 ## Phases
 
-### Phase 1 — Durable copy
-- Migration: `recordings + cloud_key text NULL, cloud_uploaded_at text NULL,
-  upload_state text NOT NULL DEFAULT 'pending'` (+ CHECK).
-- `app_core::media`: a **second** bucket handle for R2 (a different store with a different
-  job than the minio staging bucket) + `presign_put` / `presign_get`.
-- Control: `clip_push` returns the presigned PUT + key; new
-  `POST /config/recordings/:clip_id/uploaded` for the edge to confirm.
-- Edge: upload queue with retry + backpressure. **Must not starve live view** — rate-cap it and
-  never upload while a live session is active on that camera.
-- R2 bucket + one lifecycle rule per retention tier, applied at boot.
+### Phase 1 — Durable copy — **shipped**
+- Migration 0047: `recordings + cloud_key, cloud_uploaded_at, upload_state` (+ CHECK).
+- `app_core::clip_store`: a **second** bucket handle for R2 (a different store with a different
+  job than the minio staging bucket) + `presign_put` / `presign_get` / `delete`.
+- Control: `clip_push` returns the presigned PUT + key; `POST /config/recordings/:clip_id/uploaded`
+  for the edge to confirm.
+- Edge (`clip_upload.rs`): bounded queue, **one upload at a time** — the box serves live video over
+  the same uplink. Four attempts over ~6 min, but a 4xx is permanent (an expired presign fails
+  identically every time, and the single consumer would make the next clip wait).
+- R2 bucket + one lifecycle rule per retention tier, applied at boot and **read back** to arm.
+
+Two things only the build revealed:
+
+- **The PUT must carry `Content-Length`.** Handed an unsized reader, ureq falls back to
+  `Transfer-Encoding: chunked`, which S3/R2 reject on a presigned PUT. Setting the header makes
+  ureq stream the file straight through, so a clip never sits in memory. `examples/r2_probe.rs`
+  exercises exactly this path against the real bucket.
+- **Nothing ever flipped `uploading` back.** Control sets it when it mints the ticket and only
+  the edge moves it forward, so a dead box / full queue / lost confirm left the row reading
+  "In transit" forever. Migration 0048 sweeps rows whose ticket has certainly expired (pg_cron,
+  hourly) to `failed`, keeping `cloud_key` so an orphaned object is still findable.
 
 ### Phase 2 — Playback + clip state (requirements 9, 10)
 - `GET /recordings/:id/url` → short-lived presigned GET. **Cloud clips first** (simplest); the
