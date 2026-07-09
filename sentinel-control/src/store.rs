@@ -843,25 +843,77 @@ pub async fn create_role(
     Ok(id)
 }
 
-pub async fn role_perm_keys(pool: &PgPool, role_id: Uuid) -> sqlx::Result<Vec<String>> {
-    let rows: Vec<(String,)> =
-        sqlx::query_as("SELECT permission_key FROM role_permissions WHERE role_id = $1 ORDER BY permission_key")
-            .bind(role_id)
-            .fetch_all(pool)
-            .await?;
+/// Grant every catalogued permission to each tenant's system `Admin` role.
+///
+/// Role permissions are only seeded when a tenant is created, so a permission added later
+/// (e.g. `billing.read`) stays invisible to every existing admin — nobody can even grant it,
+/// because the grant screen is itself behind `roles.manage`. The system `Admin` role means
+/// "everything", so keep it in step with the catalog on every boot. Custom roles and
+/// `Viewer` are never touched.
+pub async fn sync_admin_roles(pool: &PgPool) -> sqlx::Result<u64> {
+    let res = sqlx::query(
+        "INSERT INTO role_permissions (role_id, permission_key)
+         SELECT r.id, p.key
+         FROM roles r CROSS JOIN permissions p
+         WHERE r.is_system AND r.name = 'Admin'
+         ON CONFLICT DO NOTHING",
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+/// Whether `role_id` belongs to `tenant_id`. Every role-permission read/write goes through
+/// this: the role id is a client-supplied UUID, and `role_permissions` carries no tenant of
+/// its own, so without the join a tenant admin could read or rewrite another tenant's roles.
+pub async fn role_in_tenant(pool: &PgPool, tenant_id: Uuid, role_id: Uuid) -> sqlx::Result<bool> {
+    let row: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM roles WHERE id = $1 AND tenant_id = $2")
+        .bind(role_id)
+        .bind(tenant_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.is_some())
+}
+
+/// A role's granted permission keys. Tenant-scoped via a join on `roles`.
+pub async fn role_perm_keys(pool: &PgPool, tenant_id: Uuid, role_id: Uuid) -> sqlx::Result<Vec<String>> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT rp.permission_key FROM role_permissions rp
+         JOIN roles r ON r.id = rp.role_id
+         WHERE rp.role_id = $1 AND r.tenant_id = $2
+         ORDER BY rp.permission_key",
+    )
+    .bind(role_id)
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
     Ok(rows.into_iter().map(|(k,)| k).collect())
 }
 
-/// Replace a role's permission set (the matrix row).
-pub async fn set_role_permissions(pool: &PgPool, role_id: Uuid, keys: &[String]) -> sqlx::Result<()> {
+/// Replace a role's permission set (the matrix row). The `DELETE` is scoped by the same
+/// tenant join, so a mismatched role id removes nothing instead of wiping a stranger's role.
+pub async fn set_role_permissions(pool: &PgPool, tenant_id: Uuid, role_id: Uuid, keys: &[String]) -> sqlx::Result<()> {
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM role_permissions WHERE role_id = $1").bind(role_id).execute(&mut *tx).await?;
+    sqlx::query(
+        "DELETE FROM role_permissions rp
+         USING roles r
+         WHERE rp.role_id = r.id AND rp.role_id = $1 AND r.tenant_id = $2",
+    )
+    .bind(role_id)
+    .bind(tenant_id)
+    .execute(&mut *tx)
+    .await?;
     for k in keys {
-        sqlx::query("INSERT INTO role_permissions (role_id, permission_key) VALUES ($1,$2) ON CONFLICT DO NOTHING")
-            .bind(role_id)
-            .bind(k)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "INSERT INTO role_permissions (role_id, permission_key)
+             SELECT $1, $2 FROM roles WHERE id = $1 AND tenant_id = $3
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(role_id)
+        .bind(k)
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await
 }
@@ -909,11 +961,11 @@ pub async fn provision_tenant_with_admin(
 
     let admin_role = create_role(pool, tenant_id, "Admin", true).await?;
     let admin_keys: Vec<String> = crate::rbac::all_perms().into_iter().map(String::from).collect();
-    set_role_permissions(pool, admin_role, &admin_keys).await?;
+    set_role_permissions(pool, tenant_id, admin_role, &admin_keys).await?;
 
     let viewer_role = create_role(pool, tenant_id, "Viewer", true).await?;
     let viewer_keys: Vec<String> = crate::rbac::viewer_perms().into_iter().map(String::from).collect();
-    set_role_permissions(pool, viewer_role, &viewer_keys).await?;
+    set_role_permissions(pool, tenant_id, viewer_role, &viewer_keys).await?;
 
     let user_id = create_user(pool, Some(tenant_id), admin_email, password_hash, false).await?;
     grant_role(pool, user_id, admin_role).await?;

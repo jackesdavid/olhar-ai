@@ -9,6 +9,12 @@ pub async fn run(pool: &PgPool) -> sqlx::Result<()> {
     for (key, desc) in rbac::PERMISSIONS {
         store::upsert_permission(pool, key, desc).await?;
     }
+    // A permission added after a tenant existed would otherwise reach nobody: role grants
+    // are seeded only at tenant creation, and the grant screen sits behind `roles.manage`.
+    let granted = store::sync_admin_roles(pool).await?;
+    if granted > 0 {
+        log::info!("seed: granted {granted} new permission(s) to system Admin roles");
+    }
 
     // Master (SaaS administrator) — no tenant, is_master.
     let master_email = std::env::var("MASTER_EMAIL").unwrap_or_else(|_| "master@sentinel.local".into());

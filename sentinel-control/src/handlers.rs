@@ -203,7 +203,12 @@ async fn create_role(UserClaims(c): UserClaims, State(st): State<AppState>, Json
 
 async fn get_role_perms(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<Uuid>) -> Result<Json<Vec<String>>, ApiErr> {
     auth::require(&c, "roles.manage")?;
-    Ok(Json(store::role_perm_keys(&st.pool, id).await.map_err(db_err)?))
+    let tid = tenant_ctx(&c)?;
+    // Answer the same way as a write: a role from another tenant simply doesn't exist here.
+    if !store::role_in_tenant(&st.pool, tid, id).await.map_err(db_err)? {
+        return Err(err(StatusCode::NOT_FOUND, "role not found"));
+    }
+    Ok(Json(store::role_perm_keys(&st.pool, tid, id).await.map_err(db_err)?))
 }
 
 #[derive(Deserialize)]
@@ -213,7 +218,20 @@ struct SetPermsReq {
 
 async fn set_role_perms(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<Uuid>, Json(b): Json<SetPermsReq>) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "roles.manage")?;
-    store::set_role_permissions(&st.pool, id, &b.keys).await.map_err(db_err)?;
+    let tid = tenant_ctx(&c)?;
+    // The role id comes from the client. Refuse a role from another tenant outright rather
+    // than letting the scoped writes silently no-op.
+    if !store::role_in_tenant(&st.pool, tid, id).await.map_err(db_err)? {
+        return Err(err(StatusCode::NOT_FOUND, "role not found"));
+    }
+    // Unknown keys would silently vanish (the FK drops them); reject so the UI can't drift
+    // from the catalog.
+    for k in &b.keys {
+        if !crate::rbac::all_perms().contains(&k.as_str()) {
+            return Err(err(StatusCode::BAD_REQUEST, format!("unknown permission '{k}'")));
+        }
+    }
+    store::set_role_permissions(&st.pool, tid, id, &b.keys).await.map_err(db_err)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
