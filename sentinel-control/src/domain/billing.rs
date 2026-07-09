@@ -3,6 +3,8 @@
 //! the `master` claim): list a period's invoices, close a period into an immutable
 //! invoice, and grant/reset a Beta trial.
 
+use std::collections::HashMap;
+
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -32,8 +34,9 @@ pub fn router() -> Router<AppState> {
         .route("/admin/billing/:tenant/plan", post(admin_set_plan))
         .route("/admin/plans", get(admin_list_plans).post(admin_upsert_plan))
         .route("/admin/plans/:id/price", post(admin_set_price))
-        // Public: verified by the Asaas access-token header, not a JWT.
-        .route("/webhooks/asaas", post(asaas_webhook))
+        // Public: authenticated by the provider (Stripe HMAC / Asaas token), not a JWT.
+        .route("/webhooks/stripe", post(payments_webhook))
+        .route("/webhooks/asaas", post(payments_webhook))
 }
 
 /// The current calendar month as `YYYY-MM` (the default billing period).
@@ -193,53 +196,88 @@ struct SubscribeReq {
     cpf_cnpj: Option<String>,
 }
 
-/// Convert the tenant onto a paid plan: create the provider customer + subscription, mirror
-/// the refs, and flip the billing subscription to the active plan.
+/// Start a paid subscription: ensure the provider customer, then create the subscription
+/// (Asaas) or a hosted Checkout session (Stripe). The tenant is moved onto the paid plan
+/// only when the provider's webhook confirms payment — never optimistically here.
 async fn subscribe(UserClaims(c): UserClaims, State(st): State<AppState>, Json(req): Json<SubscribeReq>) -> Result<Json<serde_json::Value>, ApiErr> {
     auth::require(&c, "billing.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    let (sub_ref, payment_url) = blocking(move || {
+    let started = blocking(move || {
         let gw = payments::active_gateway().ok_or("no payment provider configured")?;
+        let provider = gw.provider();
         let plan = plans::get(&db, &req.plan_id).ok_or("plan not found")?;
         let currency = billing::tenant_currency(&db, tid);
         let amount = plans::price(&db, &plan.id, &currency)
             .ok_or_else(|| format!("plan '{}' has no price in {currency}", plan.id))?;
-        let customer_ref = match payments::customer_ref(&db, tid, gw.provider()) {
+
+        let customer_ref = match payments::customer_ref(&db, tid, provider) {
             Some(r) => r,
             None => {
                 let r = gw.ensure_customer(&req.name, &req.email, req.cpf_cnpj.as_deref())?;
-                payments::upsert_customer(&db, tid, gw.provider(), &r);
+                payments::upsert_customer(&db, tid, provider, &r);
                 r
             }
         };
-        let sub_ref = gw.create_subscription(&customer_ref, amount, &req.billing_type, &plan.name)?;
-        payments::record_subscription(&db, tid, gw.provider(), &sub_ref, &plan.id, &req.billing_type);
-        subscriptions::set_plan(&db, tid, &plan.id)?;
-        // Hosted checkout URL (Pix QR / boleto / card) for the first charge — the customer
-        // pays there. Best-effort: subscription is created either way.
-        let payment_url = gw.first_payment_url(&sub_ref);
-        Ok::<_, String>((sub_ref, payment_url))
+
+        let price_ref = plans::provider_price_ref(&db, &plan.id, provider);
+        let plan_ref = payments::PlanRef {
+            plan_id: &plan.id,
+            name: &plan.name,
+            amount,
+            currency: &currency,
+            price_ref: price_ref.as_deref(),
+        };
+        let started = gw.start_subscription(&customer_ref, &plan_ref, &req.billing_type, tid)?;
+
+        // Persist a freshly created provider price object so we reuse it next time.
+        if let Some(p) = &started.price_ref {
+            let _ = plans::set_provider_price_ref(&db, &plan.id, provider, p);
+        }
+        // Asaas knows the subscription now; park it as `pending` until payment confirms.
+        if let Some(sub_ref) = &started.subscription_ref {
+            payments::record_subscription(&db, tid, provider, sub_ref, &plan.id, &req.billing_type, "pending");
+        }
+        Ok::<_, String>(started)
     })
     .await?
     .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
-    Ok(Json(serde_json::json!({ "subscription_ref": sub_ref, "payment_url": payment_url })))
+
+    Ok(Json(serde_json::json!({
+        "subscription_ref": started.subscription_ref,
+        "payment_url": started.payment_url,
+    })))
 }
 
-/// Asaas webhook: verify the access-token header, then apply the event to the tenant's
-/// subscription status (which gates access). Public — no JWT.
-async fn asaas_webhook(State(st): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<StatusCode, ApiErr> {
-    let token = headers.get("asaas-access-token").and_then(|v| v.to_str().ok()).map(String::from);
-    let json: serde_json::Value =
-        serde_json::from_slice(&body).map_err(|e| err(StatusCode::BAD_REQUEST, format!("bad json: {e}")))?;
+/// Payment-provider webhook (public — authenticated by the provider's own scheme, not a
+/// JWT): Stripe signs the raw body (HMAC), Asaas sends a shared token. Events are applied
+/// **at most once** (`payment_events` idempotency) — providers retry deliveries.
+async fn payments_webhook(State(st): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<StatusCode, ApiErr> {
+    // Lowercased header map — the gateway looks up whatever it signs with.
+    let hdrs: HashMap<String, String> = headers
+        .iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_ascii_lowercase(), v.to_string())))
+        .collect();
     let db = st.db.clone();
     blocking(move || {
         let gw = payments::active_gateway().ok_or("no payment provider configured")?;
-        if !gw.verify_webhook(token.as_deref()) {
-            return Err("invalid webhook token".to_string());
+        if !gw.verify_webhook(&body, &hdrs) {
+            return Err("invalid webhook signature".to_string());
         }
-        if let Some(ev) = gw.parse_event(&json) {
-            payments::apply_event(&db, gw.provider(), &ev);
+        let Some(ev) = gw.parse_event(&body) else {
+            return Ok(()); // an event we don't care about
+        };
+        if !payments::mark_event_seen(&db, gw.provider(), &ev.event_id) {
+            log::info!("payments: duplicate webhook {} ignored", ev.event_id);
+            return Ok(());
+        }
+        match ev.kind {
+            payments::EventKind::StatusChanged { subscription_ref, status } => {
+                payments::apply_status(&db, gw.provider(), &subscription_ref, status);
+            }
+            payments::EventKind::SubscriptionStarted { subscription_ref, tenant_id, plan_id, billing_type } => {
+                payments::bind_subscription(&db, tenant_id, gw.provider(), &subscription_ref, &plan_id, &billing_type);
+            }
         }
         Ok::<_, String>(())
     })

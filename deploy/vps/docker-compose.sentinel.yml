@@ -51,7 +51,8 @@ services:
     env_file:
       # JWT_SECRET, GOOGLE_*, MASTER_*; ANTHROPIC_API_KEY (assistant chat — shared with flow);
       # ELEVENLABS_API_KEY (+ optional ELEVENLABS_VOICE_ID/MODEL_ID) for assistant TTS/STT.
-      # Billing (#63) secrets: ASAAS_API_KEY, ASAAS_WEBHOOK_TOKEN.
+      # Billing (#63) secrets: STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET (and, if using the
+      # Asaas provider instead, ASAAS_API_KEY + ASAAS_WEBHOOK_TOKEN).
       - sentinel.env
     environment:
       DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
@@ -66,9 +67,11 @@ services:
       # The workflow engine — control proxies Run / run-state / the SSE event relay to it.
       FLOW_URL: http://sentinel-flow:8787
       # Billing (#63): non-secret config. Rate for per-tenant GPU metering; payment gateway
-      # (asaas | stripe). Secrets (ASAAS_API_KEY, ASAAS_WEBHOOK_TOKEN) live in sentinel.env.
+      # (stripe serves BRL + USD; asaas is Brazil-only). Secrets live in sentinel.env.
       AI_RATE_PER_SEC: "0"
-      PAYMENT_PROVIDER: asaas
+      PAYMENT_PROVIDER: stripe
+      STRIPE_SUCCESS_URL: https://app.thesentinels.online/billing?paid=1
+      STRIPE_CANCEL_URL: https://app.thesentinels.online/billing
       ASAAS_BASE_URL: https://api.asaas.com/v3
     volumes:
       # Edge appliance binaries (shipped here by the release CI) served at /edge/<asset>.

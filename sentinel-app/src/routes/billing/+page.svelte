@@ -87,7 +87,7 @@
       await load();
       if (res.payment_url) {
         window.open(res.payment_url, "_blank", "noopener");
-        toast.success("Opening your payment page (Pix / boleto / card)…");
+        toast.success("Opening your payment page — your plan activates once payment clears.");
       } else {
         toast.success("Subscribed — your charge is on its way.");
       }
