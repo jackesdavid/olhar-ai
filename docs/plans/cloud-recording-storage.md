@@ -157,12 +157,17 @@ The fix:
 - `compute()` is unchanged: it already computes
   `max(0, used − included) × overage_rate`. Only the *input* and the *rate's source* change.
 
-### Phase 5 — Storage visibility (requirements 7, 8)
-- **Master** (`/admin/billing` or a new `/admin/storage`): every tenant — **including Beta** —
-  with stored GB, GB-month for the period, quota, % used, and projected overage. Sorted by
-  cost. This is the view that catches a continuous-recording tenant before the invoice does.
-- **Tenant** (`/recordings` header or `/billing`): stored GB vs quota, retention in days, and
-  a plain sentence about what happens at the cap. No dead end: link to upgrade.
+### Phase 5 — Storage visibility (requirements 7, 8) — **shipped**
+Both views come off one query in `app_core::billing::storage`, which keeps stock (`stored_bytes`,
+SUM over uploaded clips — what the customer sees "used") and flow (`gb_month`, AVG from the
+nightly `tenant_storage_daily` sampler — what the invoice charges) distinct. Overage is computed
+server-side so the UI never recomputes money.
+- **Master** `/admin/storage` — every tenant (Beta + unsubscribed included), heaviest GB-month
+  first, with stored-now, quota used, GB-month, and projected overage. `GET /admin/storage`.
+- **Tenant** strip on `/recordings` — stored vs quota, retention in days, a plain line about the
+  cap, and a "see plans" nudge when the plan has no cloud recording. `GET /billing/storage`.
+- **Note:** `gb_month` reads 0 until the nightly sampler (23:03 UTC) records its first day, even
+  when clips are already stored — the strip leans on `stored_bytes` for "used now" for that reason.
 
 ### Phase 6 — LGPD
 - Client-initiated delete (single clip + bulk), audited to `platform_logs`.
