@@ -68,6 +68,12 @@ fn env_nonempty(key: &str) -> Option<String> {
 }
 
 impl PaymentGateway for AsaasGateway {
+    /// Asaas takes recurring Pix natively — `billingType` is passed straight through, no mandate
+    /// object to build.
+    fn payment_methods(&self) -> &'static [&'static str] {
+        &["PIX", "BOLETO", "CREDIT_CARD"]
+    }
+
     fn provider(&self) -> &'static str {
         "asaas"
     }

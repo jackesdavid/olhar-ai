@@ -418,6 +418,8 @@ export type SubscribeBody = {
 /** Tenant self-serve billing. Plans come priced in the tenant's own currency. */
 export const billing = {
   plans: () => api.get<PricedPlan[]>("/billing/plans"),
+  /** Billing types the configured gateway can actually charge. Empty = subscribing unavailable. */
+  paymentMethods: () => api.get<SubscribeBody["billing_type"][]>("/billing/payment-methods"),
   subscription: () => api.get<BillingSubscription | null>("/billing/subscription"),
   invoices: () => api.get<Invoice[]>("/billing/invoices"),
   invoice: (period: string) => api.get<InvoiceView>(`/billing/invoices/${period}`),

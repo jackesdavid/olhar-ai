@@ -114,6 +114,17 @@ fn payment_method(billing_type: &str) -> &'static str {
 }
 
 impl PaymentGateway for StripeGateway {
+    /// **Pix is deliberately absent.** A recurring Pix charge runs on *Pix Automático*, which
+    /// needs a customer-authorized mandate — `payment_method_options[pix][mandate_options]`
+    /// carrying a per-charge ceiling and a schedule. [`Self::start_subscription`] sends neither,
+    /// so a Pix checkout could not renew even on an account where Stripe has enabled it. Add it
+    /// here only together with the mandate (and derive the ceiling from `plan.amount`: the
+    /// default is far below the Business tier, so a mandate at the default would pass at signup
+    /// and fail on the first renewal).
+    fn payment_methods(&self) -> &'static [&'static str] {
+        &["CREDIT_CARD", "BOLETO"]
+    }
+
     fn provider(&self) -> &'static str {
         "stripe"
     }

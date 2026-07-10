@@ -70,6 +70,11 @@ pub enum EventKind {
 pub trait PaymentGateway: Send + Sync {
     fn provider(&self) -> &'static str;
 
+    /// The billing types this gateway can actually charge, most-preferred first. The UI renders
+    /// exactly these and `subscribe` rejects anything else, so a method we cannot complete is
+    /// never offered — the customer finds out at the button, not at the payment page.
+    fn payment_methods(&self) -> &'static [&'static str];
+
     /// Ensure a provider-side customer exists; return its ref. `tax_id` is the Brazilian
     /// CPF/CNPJ (required by Asaas, optional for Stripe).
     fn ensure_customer(&self, name: &str, email: &str, tax_id: Option<&str>) -> Result<String, String>;

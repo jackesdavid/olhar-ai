@@ -22,7 +22,9 @@
   let invoices = $state<Invoice[]>([]);
 
   let picked = $state<PricedPlan | null>(null);
-  let billingType = $state<SubscribeBody["billing_type"]>("PIX");
+  /** What the gateway accepts, in preference order — the first is the default pick. */
+  let methods = $state<SubscribeBody["billing_type"][]>([]);
+  let billingType = $state<SubscribeBody["billing_type"]>("CREDIT_CARD");
   let name = $state("");
   let email = $state("");
   let cpf = $state("");
@@ -53,7 +55,12 @@
   async function load() {
     loading = true;
     try {
-      [plans, sub, invoices] = await Promise.all([billing.plans(), billing.subscription(), billing.invoices()]);
+      [plans, sub, invoices, methods] = await Promise.all([
+        billing.plans(),
+        billing.subscription(),
+        billing.invoices(),
+        billing.paymentMethods(),
+      ]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load billing");
     } finally {
@@ -66,10 +73,17 @@
 
   function choose(p: PricedPlan) {
     picked = p;
-    billingType = "PIX";
+    billingType = methods[0] ?? "CREDIT_CARD";
   }
 
-  const canSubscribe = $derived(!!picked && name.trim() && email.trim().includes("@"));
+  /** House style: no markup logic. Pix never reaches here today — see StripeGateway::payment_methods. */
+  function methodLabel(bt: SubscribeBody["billing_type"]): string {
+    if (bt === "CREDIT_CARD") return "Card";
+    if (bt === "BOLETO") return "Boleto";
+    return "Pix";
+  }
+
+  const canSubscribe = $derived(!!picked && methods.length > 0 && name.trim() && email.trim().includes("@"));
 
   async function confirmSubscribe(e: SubmitEvent) {
     e.preventDefault();
@@ -194,13 +208,17 @@
     <form class="space-y-3" onsubmit={confirmSubscribe}>
       <div class="space-y-1.5">
         <Label>Payment method</Label>
-        <div class="flex gap-2">
-          {#each ["PIX", "BOLETO", "CREDIT_CARD"] as bt (bt)}
-            <Button type="button" variant={billingType === bt ? "default" : "outline"} size="sm" onclick={() => (billingType = bt as SubscribeBody["billing_type"])}>
-              {bt === "CREDIT_CARD" ? "Card" : bt === "BOLETO" ? "Boleto" : "Pix"}
-            </Button>
-          {/each}
-        </div>
+        {#if methods.length === 0}
+          <p class="text-sm text-muted-foreground">No payment method is available right now. Please try again shortly.</p>
+        {:else}
+          <div class="flex gap-2">
+            {#each methods as bt (bt)}
+              <Button type="button" variant={billingType === bt ? "default" : "outline"} size="sm" onclick={() => (billingType = bt)}>
+                {methodLabel(bt)}
+              </Button>
+            {/each}
+          </div>
+        {/if}
       </div>
       <div class="space-y-1.5">
         <Label for="s-name">Full name</Label>

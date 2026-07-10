@@ -23,6 +23,7 @@ use crate::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/billing/plans", get(list_plans))
+        .route("/billing/payment-methods", get(payment_methods))
         .route("/billing/subscription", get(my_subscription))
         .route("/billing/invoices", get(my_invoices))
         .route("/billing/invoices/:period", get(my_invoice))
@@ -70,6 +71,17 @@ async fn list_plans(UserClaims(c): UserClaims, State(st): State<AppState>) -> Re
         plans::list_active_priced(&db, &currency)
     })
     .await?))
+}
+
+/// The billing types the configured gateway can actually charge. Empty when no provider is
+/// configured, which the UI reads as "subscribing is unavailable" rather than offering buttons
+/// that cannot work.
+async fn payment_methods(UserClaims(c): UserClaims) -> Result<Json<Vec<&'static str>>, ApiErr> {
+    auth::require(&c, "billing.read")?;
+    let methods = payments::active_gateway()
+        .map(|gw| gw.payment_methods().to_vec())
+        .unwrap_or_default();
+    Ok(Json(methods))
 }
 
 async fn my_subscription(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Option<subscriptions::Subscription>>, ApiErr> {
@@ -210,6 +222,15 @@ async fn subscribe(UserClaims(c): UserClaims, State(st): State<AppState>, Json(r
     let started = blocking(move || {
         let gw = payments::active_gateway().ok_or("no payment provider configured")?;
         let provider = gw.provider();
+        // The client picks the method, so trust it as far as the gateway does. Without this a
+        // stale UI (or a hand-rolled request) reaches the provider and comes back with its error.
+        if !gw.payment_methods().contains(&req.billing_type.as_str()) {
+            return Err(format!(
+                "{provider} does not accept {} — available: {}",
+                req.billing_type,
+                gw.payment_methods().join(", ")
+            ));
+        }
         let plan = plans::get(&db, &req.plan_id).ok_or("plan not found")?;
         let currency = billing::tenant_currency(&db, tid);
         let amount = plans::price(&db, &plan.id, &currency)
