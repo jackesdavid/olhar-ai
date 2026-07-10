@@ -5,6 +5,7 @@
 
   import Clapperboard from "@lucide/svelte/icons/clapperboard";
   import Download from "@lucide/svelte/icons/download";
+  import Play from "@lucide/svelte/icons/play";
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
   import Busy from "$lib/components/busy.svelte";
@@ -22,6 +23,7 @@
   import * as Dialog from "$lib/components/ui/dialog";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
+  import { Badge } from "$lib/components/ui/badge";
   import Loader from "$lib/components/loader.svelte";
   import EmptyState from "$lib/components/empty-state.svelte";
 
@@ -30,6 +32,7 @@
     type Recording,
     type RecordingListOpts,
     type RecordingCamera,
+    type UploadState,
   } from "$lib/api";
 
   // ---- query state -----------------------------------------------------------
@@ -155,6 +158,46 @@
       toast.error(String(e));
     } finally {
       downloading = null;
+    }
+  }
+
+  // ---- clip state badge ------------------------------------------------------
+
+  type BadgeSpec = { label: string; cls: string };
+  const STATE_BADGE: Record<UploadState, BadgeSpec> = {
+    // Cloud = durable, inked primary. Local/in-transit = muted. Failed = destructive.
+    uploaded:  { label: "Cloud",      cls: "border-primary/25 bg-primary/10 text-primary" },
+    uploading: { label: "In transit", cls: "border-white/15 bg-muted/40 text-muted-foreground animate-pulse" },
+    pending:   { label: "Local",      cls: "border-white/15 bg-muted/40 text-muted-foreground" },
+    failed:    { label: "Failed",     cls: "border-destructive/30 bg-destructive/10 text-destructive" },
+  };
+  function badgeFor(rec: Recording): BadgeSpec {
+    return STATE_BADGE[rec.upload_state] ?? STATE_BADGE.pending;
+  }
+
+  // ---- playback --------------------------------------------------------------
+  // Cloud clips stream straight from R2 (presigned GET) — no VPS egress, and they play even
+  // when the edge is offline, which is the whole reason for the durable copy. Local clips have
+  // no browser-streamable URL yet (the edge proxy needs the JWT bearer), so their action stays
+  // Download until Phase 2b wires an authenticated proxy stream.
+
+  let player      = $state<{ rec: Recording; url: string } | null>(null);
+  let playLoading = $state<number | null>(null);
+
+  function canPlay(rec: Recording): boolean {
+    return rec.upload_state === "uploaded";
+  }
+
+  async function play(rec: Recording) {
+    if (playLoading !== null) return;
+    playLoading = rec.id;
+    try {
+      const { url } = await recordings.cloudUrl(rec.id);
+      player = { rec, url };
+    } catch (e) {
+      toast.error("Could not open this clip for playback.");
+    } finally {
+      playLoading = null;
     }
   }
 
@@ -316,6 +359,24 @@
   </Dialog.Content>
 </Dialog.Root>
 
+<!-- cloud clip player -->
+<Dialog.Root open={player !== null} onOpenChange={(o: boolean) => { if (!o) player = null; }}>
+  <Dialog.Content class="max-w-3xl">
+    <Dialog.Header>
+      <Dialog.Title>{player?.rec.friendly_name || player?.rec.clip_id}</Dialog.Title>
+      <Dialog.Description>
+        {player ? `${cameraLabel(player.rec.camera_ip)} · ${fmtDate(player.rec.started_at)}` : ""}
+      </Dialog.Description>
+    </Dialog.Header>
+    {#if player}
+      <!-- svelte-ignore a11y_media_has_caption -->
+      <video src={player.url} controls autoplay class="w-full rounded-lg bg-black">
+        Your browser cannot play this clip.
+      </video>
+    {/if}
+  </Dialog.Content>
+</Dialog.Root>
+
 <div class="flex flex-col gap-6 p-6">
   <!-- header -->
   <PageHeader
@@ -470,14 +531,15 @@
                 {/if}
               </button>
             </Table.Head>
-            <Table.Head class="w-24 text-right">Actions</Table.Head>
+            <Table.Head class="w-28">Storage</Table.Head>
+            <Table.Head class="w-28 text-right">Actions</Table.Head>
           </Table.Row>
         </Table.Header>
         <Table.Body>
           {#each groups as group (group.key)}
             {#if groupBy !== "none"}
               <Table.Row class="bg-muted/20 hover:bg-muted/20">
-                <Table.Cell colspan={7} class="py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                <Table.Cell colspan={8} class="py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
                   {group.label}
                 </Table.Cell>
               </Table.Row>
@@ -512,8 +574,27 @@
                 </Table.Cell>
                 <Table.Cell class="text-sm">{fmtDuration(rec.duration_secs)}</Table.Cell>
                 <Table.Cell class="text-sm text-muted-foreground">{fmtSize(rec.size_bytes)}</Table.Cell>
+                <Table.Cell>
+                  {@const badge = badgeFor(rec)}
+                  <Badge variant="outline" class={badge.cls}>{badge.label}</Badge>
+                </Table.Cell>
                 <Table.Cell class="text-right">
                   <div class="flex justify-end gap-1">
+                    {#if canPlay(rec)}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title="Play"
+                        disabled={playLoading === rec.id}
+                        onclick={() => play(rec)}
+                      >
+                        {#if playLoading === rec.id}
+                          <Busy />
+                        {:else}
+                          <Play class="h-4 w-4" />
+                        {/if}
+                      </Button>
+                    {/if}
                     <Button
                       variant="ghost"
                       size="icon"

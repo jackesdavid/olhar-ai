@@ -183,6 +183,10 @@ export const platformLogs = {
 
 // ---- Recordings -------------------------------------------------------------
 
+/** Where a clip lives. `pending` = edge only, `uploading` = in transit, `uploaded` = durable
+ *  in the cloud, `failed` = upload gave up. Drives the badge + whether cloud playback is offered. */
+export type UploadState = "pending" | "uploading" | "uploaded" | "failed";
+
 export type Recording = {
   id: number;
   camera_ip: string;
@@ -193,6 +197,7 @@ export type Recording = {
   size_bytes: number;
   started_at: string;  // RFC3339
   created_at: string;  // RFC3339
+  upload_state: UploadState;
 };
 
 export type RecordingPage = {
@@ -226,6 +231,8 @@ export const recordings = {
     return api.get<RecordingPage>(`/recordings${qs ? `?${qs}` : ""}`);
   },
   cameras: () => api.get<RecordingCamera[]>("/recordings/cameras"),
+  /** Presigned R2 URL to stream a cloud clip. 409 if the clip isn't uploaded (play the edge copy). */
+  cloudUrl: (id: number) => api.get<{ url: string }>(`/recordings/${id}/url`),
   del: (id: number) => api.del<void>(`/recordings/${id}`),
   bulkDel: (ids: number[]) =>
     api.post<{ deleted: number }>("/recordings/bulk-delete", { ids }),

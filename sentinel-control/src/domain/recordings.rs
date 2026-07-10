@@ -26,8 +26,45 @@ pub fn router() -> Router<AppState> {
         .route("/recordings", get(list).post(create))
         .route("/recordings/cameras", get(list_cameras))
         .route("/recordings/bulk-delete", axum::routing::post(bulk_delete))
+        .route("/recordings/:id/url", get(cloud_url))
         .route("/recordings/:id/download", get(download))
         .route("/recordings/:id", axum::routing::delete(remove))
+}
+
+/// How long a playback URL stays valid. Long enough to watch a clip start-to-finish and seek
+/// around; short enough that a leaked URL expires before it's useful.
+const PLAYBACK_URL_TTL_SECS: u32 = 3600;
+
+/// A short-lived URL to stream a **cloud** clip straight from R2 — no bytes cross this VPS, and
+/// the clip survives the edge being offline (the whole point of the durable copy). Returns 409
+/// for a clip that isn't in the cloud: the caller should fall back to the edge download proxy.
+async fn cloud_url(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<impl IntoResponse, ApiErr> {
+    auth::require(&c, "recordings.read")?;
+    let tid = tenant_of(&c)?;
+
+    let key = store::recording_cloud_key(&st.pool, tid, id)
+        .await
+        .map_err(|e| {
+            log::error!("recording cloud key {id}: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+        })?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "recording not found"))?
+        .ok_or_else(|| err(StatusCode::CONFLICT, "clip is not in the cloud"))?;
+
+    // `presign_get` builds its own runtime — it must not run on the async worker.
+    let url = tokio::task::spawn_blocking(move || app_core::clip_store::presign_get(&key, PLAYBACK_URL_TTL_SECS))
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")))?
+        .map_err(|e| {
+            log::error!("presign get {id}: {e}");
+            err(StatusCode::BAD_GATEWAY, "could not sign playback url")
+        })?;
+
+    Ok(Json(serde_json::json!({ "url": url })))
 }
 
 #[derive(Deserialize)]

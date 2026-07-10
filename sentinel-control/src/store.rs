@@ -654,6 +654,9 @@ pub struct RecordingRow {
     pub size_bytes:    i64,
     pub started_at:    String,
     pub created_at:    String,
+    /// Where this clip lives: `pending` (edge only), `uploading` (in transit), `uploaded`
+    /// (durable in R2), `failed`. Drives the badge and whether cloud playback is offered.
+    pub upload_state:  String,
     // Enriched at query time — not a DB column.
     #[sqlx(default)]
     pub camera_name:   Option<String>,
@@ -780,7 +783,7 @@ pub async fn list_recordings_filtered(
     // $2/$3/$4 are optional filters: NULL means "skip this filter".
     let sql = format!(
         "SELECT r.id, r.camera_ip, r.clip_id, r.friendly_name, r.duration_secs, r.size_bytes,
-                r.started_at, r.created_at,
+                r.started_at, r.created_at, r.upload_state,
                 dc.name AS camera_name
            FROM recordings r
            LEFT JOIN discovered_cameras dc
@@ -813,11 +816,25 @@ pub async fn list_recordings_filtered(
 
 pub async fn get_recording(pool: &PgPool, tenant_id: Uuid, id: i64) -> sqlx::Result<Option<RecordingRow>> {
     sqlx::query_as::<_, RecordingRow>(
-        "SELECT id, camera_ip, clip_id, friendly_name, duration_secs, size_bytes, started_at, created_at, NULL::text AS camera_name
+        "SELECT id, camera_ip, clip_id, friendly_name, duration_secs, size_bytes, started_at, created_at, upload_state, NULL::text AS camera_name
            FROM recordings WHERE tenant_id = $1 AND id = $2",
     )
     .bind(tenant_id).bind(id)
     .fetch_optional(pool).await
+}
+
+/// The R2 object key for a durable clip, scoped by tenant. `Some(None)` means the clip exists
+/// but isn't in the cloud (still local / in transit / failed); `None` means no such clip for
+/// this tenant. `cloud_key` never leaves the server — it's the input to a presigned URL, not
+/// something the browser is handed.
+pub async fn recording_cloud_key(pool: &PgPool, tenant_id: Uuid, id: i64) -> sqlx::Result<Option<Option<String>>> {
+    let row: Option<(Option<String>, String)> = sqlx::query_as(
+        "SELECT cloud_key, upload_state FROM recordings WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant_id).bind(id)
+    .fetch_optional(pool).await?;
+    // Only an 'uploaded' clip is durable and streamable; a key present mid-upload isn't there yet.
+    Ok(row.map(|(key, state)| if state == "uploaded" { key } else { None }))
 }
 
 pub async fn delete_recording(pool: &PgPool, tenant_id: Uuid, id: i64) -> sqlx::Result<bool> {
