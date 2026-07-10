@@ -226,17 +226,24 @@ pub fn set_price(db: &Db, plan_id: &str, currency: &str, amount: f64, overage_st
     res.map(|_| ()).map_err(|e| format!("plans::set_price: {e}"))
 }
 
-/// The provider's price-object ref for a plan (e.g. a Stripe `price_...`).
-pub fn provider_price_ref(db: &Db, plan_id: &str, provider: &str) -> Option<String> {
+/// The provider's price-object ref for a plan **in one currency** (e.g. a Stripe `price_...`).
+///
+/// Keyed by currency because the provider's object is: a Stripe Price carries a single currency
+/// and amount. Looking one up without it hands a BRL Price to a USD tenant, who then pays
+/// R$ 39,90 instead of US$ 9,99.
+pub fn provider_price_ref(db: &Db, plan_id: &str, provider: &str, currency: &str) -> Option<String> {
     let plan_id = plan_id.to_string();
     let provider = provider.to_string();
+    let currency = currency.to_string();
     let pool = db.pool();
     db.block(async move {
         sqlx::query_scalar::<_, String>(
-            "SELECT price_ref FROM plan_provider_price WHERE plan_id = $1 AND provider = $2",
+            "SELECT price_ref FROM plan_provider_price
+             WHERE plan_id = $1 AND provider = $2 AND currency = $3",
         )
         .bind(&plan_id)
         .bind(&provider)
+        .bind(&currency)
         .fetch_optional(&pool)
         .await
         .ok()
@@ -244,19 +251,21 @@ pub fn provider_price_ref(db: &Db, plan_id: &str, provider: &str) -> Option<Stri
     })
 }
 
-/// Record the provider's price-object ref for a plan.
-pub fn set_provider_price_ref(db: &Db, plan_id: &str, provider: &str, price_ref: &str) -> Result<(), String> {
+/// Record the provider's price-object ref for a (plan, currency).
+pub fn set_provider_price_ref(db: &Db, plan_id: &str, provider: &str, currency: &str, price_ref: &str) -> Result<(), String> {
     let plan_id = plan_id.to_string();
     let provider = provider.to_string();
+    let currency = currency.to_string();
     let price_ref = price_ref.to_string();
     let pool = db.pool();
     let res: Result<_, sqlx::Error> = db.block(async move {
         sqlx::query(
-            "INSERT INTO plan_provider_price (plan_id, provider, price_ref) VALUES ($1, $2, $3)
-             ON CONFLICT (plan_id, provider) DO UPDATE SET price_ref = $3",
+            "INSERT INTO plan_provider_price (plan_id, provider, currency, price_ref) VALUES ($1, $2, $3, $4)
+             ON CONFLICT (plan_id, provider, currency) DO UPDATE SET price_ref = $4",
         )
         .bind(&plan_id)
         .bind(&provider)
+        .bind(&currency)
         .bind(&price_ref)
         .execute(&pool)
         .await

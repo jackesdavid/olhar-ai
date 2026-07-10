@@ -245,7 +245,7 @@ async fn subscribe(UserClaims(c): UserClaims, State(st): State<AppState>, Json(r
             }
         };
 
-        let price_ref = plans::provider_price_ref(&db, &plan.id, provider);
+        let price_ref = plans::provider_price_ref(&db, &plan.id, provider, &currency);
         let plan_ref = payments::PlanRef {
             plan_id: &plan.id,
             name: &plan.name,
@@ -255,9 +255,11 @@ async fn subscribe(UserClaims(c): UserClaims, State(st): State<AppState>, Json(r
         };
         let started = gw.start_subscription(&customer_ref, &plan_ref, &req.billing_type, tid)?;
 
-        // Persist a freshly created provider price object so we reuse it next time.
+        // Persist a freshly created provider price object so we reuse it next time — for this
+        // currency only. The Price the provider just minted carries `currency`; reusing it for
+        // another one charges that tenant in the wrong money.
         if let Some(p) = &started.price_ref {
-            let _ = plans::set_provider_price_ref(&db, &plan.id, provider, p);
+            let _ = plans::set_provider_price_ref(&db, &plan.id, provider, &currency, p);
         }
         // Asaas knows the subscription now; park it as `pending` until payment confirms.
         if let Some(sub_ref) = &started.subscription_ref {

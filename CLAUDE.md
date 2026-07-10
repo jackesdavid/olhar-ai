@@ -58,8 +58,9 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
 - **Timestamps are RFC3339 `text`**, not `timestamptz` — sqlx is built without the chrono/time
   feature, so it can't decode `timestamptz`. Generate with `app_core::alerts::now_rfc3339()`.
 - **Migrations**: `crates/app-core/migrations/NNNN_*.sql`, embedded via `sqlx::migrate!`, applied
-  on `Db::connect` (control + flow boot). Additive; next number is **0049** (recent: 0045 = trial expiry,
-  0046 = pg_cron jobs, 0047 = cloud recording + GB-month billing, 0048 = stuck-upload sweep). **pg_cron is real now** —
+  on `Db::connect` (control + flow boot). Additive; next number is **0050** (recent: 0046 = pg_cron jobs,
+  0047 = cloud recording + GB-month billing, 0048 = stuck-upload sweep, 0049 = per-currency provider price).
+  **pg_cron is real now** —
   `deploy/postgres/Dockerfile` bundles it; deploy `sentinel-postgres` before control. System
   events (e.g. `motion`, `telegram_message`) are a code catalog (`repo::system_events()`), not a migration.
 - **RBAC**: the action catalog is `sentinel-control/src/rbac.rs` `PERMISSIONS`; `seed.rs` upserts it
