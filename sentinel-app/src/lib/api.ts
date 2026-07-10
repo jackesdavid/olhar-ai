@@ -423,8 +423,28 @@ export type SubscribeBody = {
 };
 
 /** Tenant self-serve billing. Plans come priced in the tenant's own currency. */
+/** One tenant's storage picture: durable footage now (stock) + the billed GB-month + quota. */
+export type TenantStorage = {
+  tenant_id: string;
+  tenant_name: string;
+  currency: string;
+  plan_id: string | null;
+  plan_name: string | null;
+  retention_days: number;
+  included_storage_gb: number;
+  overage_per_gb: number;
+  /** Durable footage right now — what the customer sees "used". */
+  stored_bytes: number;
+  clip_count: number;
+  /** Average GB across the period's sampled days — the billed quantity. 0 until the first sample. */
+  gb_month: number;
+  projected_overage: number;
+};
+
 export const billing = {
   plans: () => api.get<PricedPlan[]>("/billing/plans"),
+  /** This tenant's storage usage vs quota. Null when the tenant has never stored a clip. */
+  storage: () => api.get<TenantStorage | null>("/billing/storage"),
   /** Billing types the configured gateway can actually charge. Empty = subscribing unavailable. */
   paymentMethods: () => api.get<SubscribeBody["billing_type"][]>("/billing/payment-methods"),
   subscription: () => api.get<BillingSubscription | null>("/billing/subscription"),
@@ -437,6 +457,8 @@ export const billing = {
 /** Master cross-tenant billing + plan administration. */
 export const adminBilling = {
   overview: () => api.get<TenantBilling[]>("/admin/billing/overview"),
+  /** Every tenant's storage, heaviest GB-month first — catches a runaway recorder. */
+  storage: () => api.get<TenantStorage[]>("/admin/storage"),
   invoices: (period: string) => api.get<Invoice[]>(`/admin/billing?period=${period}`),
   close: (tenant: string, period: string) => api.post<Invoice>(`/admin/billing/${tenant}/close?period=${period}`),
   grantTrial: (tenant: string) => api.post<{ subscription_id: string }>(`/admin/billing/${tenant}/trial`),

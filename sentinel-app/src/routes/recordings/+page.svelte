@@ -29,10 +29,12 @@
 
   import {
     recordings,
+    billing,
     type Recording,
     type RecordingListOpts,
     type RecordingCamera,
     type UploadState,
+    type TenantStorage,
   } from "$lib/api";
 
   // ---- query state -----------------------------------------------------------
@@ -43,6 +45,7 @@
   let items = $state<Recording[]>([]);
   let total = $state(0);
   let cameraList = $state<RecordingCamera[]>([]);
+  let storage = $state<TenantStorage | null>(null);
 
   let filterCamera = $state("");
   let filterFrom   = $state("");
@@ -311,11 +314,45 @@
     return cam ? cam.name : ip;
   }
 
+  // ---- storage strip ---------------------------------------------------------
+  // `stored_bytes` is the stock the customer sees "used"; `gb_month` (the billed average) stays
+  // in the billing screen. This strip answers "am I near the cap?", not "what's the invoice".
+
+  function fmtGB(bytes: number): string {
+    const gb = bytes / 1e9;
+    if (gb < 0.1) return `${(bytes / 1e6).toFixed(0)} MB`;
+    return `${gb.toFixed(gb < 10 ? 2 : 1)} GB`;
+  }
+  function money(n: number, currency: string): string {
+    const locale = currency === "BRL" ? "pt-BR" : "en-US";
+    return new Intl.NumberFormat(locale, { style: "currency", currency }).format(n);
+  }
+  /** Percent of quota used, clamped to 100 for the bar width. 0 when there's no quota. */
+  function usedPct(s: TenantStorage): number {
+    if (s.included_storage_gb <= 0) return 0;
+    return Math.min(100, (s.stored_bytes / 1e9 / s.included_storage_gb) * 100);
+  }
+  function barClass(s: TenantStorage): string {
+    const pct = usedPct(s);
+    if (pct >= 90) return "bg-destructive";
+    if (pct >= 75) return "bg-amber-500";
+    return "bg-primary";
+  }
+  /** True when the tenant's plan sells cloud recording at all. */
+  function hasCloud(s: TenantStorage | null): boolean {
+    return !!s && s.retention_days > 0;
+  }
+
   onMount(async () => {
     try {
       cameraList = await recordings.cameras();
     } catch {
       // non-fatal — dropdown falls back gracefully
+    }
+    try {
+      storage = await billing.storage();
+    } catch {
+      // non-fatal — the strip just doesn't render
     }
     await load();
   });
@@ -408,6 +445,44 @@
       </Button>
     {/snippet}
   </PageHeader>
+
+  <!-- cloud storage usage strip -->
+  {#if storage}
+    {#if hasCloud(storage)}
+      <div class="rounded-lg border border-white/10 bg-card/40 p-4">
+        <div class="flex items-baseline justify-between gap-4">
+          <div class="flex items-baseline gap-2">
+            <span class="text-sm font-semibold tabular-nums">{fmtGB(storage.stored_bytes)}</span>
+            <span class="text-sm text-muted-foreground">
+              stored of {storage.included_storage_gb} GB · {storage.retention_days}-day cloud retention
+            </span>
+          </div>
+          <span class="text-xs text-muted-foreground tabular-nums">
+            {storage.clip_count} clip{storage.clip_count === 1 ? "" : "s"} in the cloud
+          </span>
+        </div>
+        <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div class="h-full rounded-full transition-all {barClass(storage)}" style="width: {usedPct(storage)}%"></div>
+        </div>
+        {#if storage.projected_overage > 0}
+          <p class="mt-2 text-xs text-amber-500">
+            Over quota this month — about {money(storage.projected_overage, storage.currency)} in overage so far.
+          </p>
+        {:else}
+          <p class="mt-2 text-xs text-muted-foreground">
+            New clips upload automatically. Past {storage.retention_days} days, cloud copies expire on their own.
+          </p>
+        {/if}
+      </div>
+    {:else}
+      <div class="flex items-center justify-between rounded-lg border border-white/10 bg-card/40 p-4">
+        <p class="text-sm text-muted-foreground">
+          Your plan keeps clips on the box only. Cloud backup survives the box being stolen or wiped.
+        </p>
+        <Button href="/billing" variant="outline" size="sm">See plans</Button>
+      </div>
+    {/if}
+  {/if}
 
   <!-- filters + group-by bar -->
   <div class="flex flex-wrap items-end gap-3">

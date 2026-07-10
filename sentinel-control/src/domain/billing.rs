@@ -14,7 +14,7 @@ use axum::Router;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use app_core::billing::{self, invoices, payments, plans, subscriptions};
+use app_core::billing::{self, invoices, payments, plans, storage, subscriptions};
 
 use super::{blocking, err, tenant_of, ApiErr};
 use crate::auth::{self, UserClaims};
@@ -24,12 +24,14 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/billing/plans", get(list_plans))
         .route("/billing/payment-methods", get(payment_methods))
+        .route("/billing/storage", get(my_storage))
         .route("/billing/subscription", get(my_subscription))
         .route("/billing/invoices", get(my_invoices))
         .route("/billing/invoices/:period", get(my_invoice))
         .route("/billing/subscribe", post(subscribe))
         .route("/admin/billing", get(admin_list))
         .route("/admin/billing/overview", get(admin_overview))
+        .route("/admin/storage", get(admin_storage))
         .route("/admin/billing/:tenant/close", post(admin_close))
         .route("/admin/billing/:tenant/trial", post(admin_grant_trial))
         .route("/admin/billing/:tenant/plan", post(admin_set_plan))
@@ -82,6 +84,41 @@ async fn payment_methods(UserClaims(c): UserClaims) -> Result<Json<Vec<&'static 
         .map(|gw| gw.payment_methods().to_vec())
         .unwrap_or_default();
     Ok(Json(methods))
+}
+
+/// Enrich a storage row with the server-computed overage so the UI never recomputes money.
+fn storage_json(s: &storage::TenantStorage) -> serde_json::Value {
+    serde_json::json!({
+        "tenant_id": s.tenant_id,
+        "tenant_name": s.tenant_name,
+        "currency": s.currency,
+        "plan_id": s.plan_id,
+        "plan_name": s.plan_name,
+        "retention_days": s.retention_days,
+        "included_storage_gb": s.included_storage_gb,
+        "overage_per_gb": s.overage_per_gb,
+        "stored_bytes": s.stored_bytes,
+        "clip_count": s.clip_count,
+        "gb_month": s.gb_month,
+        "projected_overage": s.projected_overage(),
+    })
+}
+
+/// This tenant's own storage: durable footage vs quota, retention, projected overage.
+async fn my_storage(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<serde_json::Value>, ApiErr> {
+    auth::require(&c, "billing.read")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let row = blocking(move || storage::for_tenant(&db, tid)).await?;
+    Ok(Json(row.map(|s| storage_json(&s)).unwrap_or(serde_json::Value::Null)))
+}
+
+/// Every tenant's storage, heaviest first — the master's view to catch a runaway recorder.
+async fn admin_storage(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<serde_json::Value>>, ApiErr> {
+    require_master(&c)?;
+    let db = st.db.clone();
+    let rows = blocking(move || storage::overview(&db)).await?;
+    Ok(Json(rows.iter().map(storage_json).collect()))
 }
 
 async fn my_subscription(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Option<subscriptions::Subscription>>, ApiErr> {

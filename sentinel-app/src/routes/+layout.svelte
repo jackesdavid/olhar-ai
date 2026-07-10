@@ -279,6 +279,9 @@
       ? [{ label: "Billing", href: "/admin/billing", icon: Wallet }]
       : []),
     ...(auth.me?.is_master
+      ? [{ label: "Storage", href: "/admin/storage", icon: HardDrive }]
+      : []),
+    ...(auth.me?.is_master
       ? [{ label: "Providers", href: "/admin/providers", icon: Bell }]
       : []),
   ]);
