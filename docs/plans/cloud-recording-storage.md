@@ -109,10 +109,16 @@ Two things only the build revealed:
   "In transit" forever. Migration 0048 sweeps rows whose ticket has certainly expired (pg_cron,
   hourly) to `failed`, keeping `cloud_key` so an orphaned object is still findable.
 
-### Phase 2 — Playback + clip state (requirements 9, 10)
-- `GET /recordings/:id/url` → short-lived presigned GET. **Cloud clips first** (simplest); the
-  existing edge clip endpoint keeps serving local ones.
-- Recordings page: the four badges above; play whichever copy exists.
+### Phase 2 — Playback + clip state (requirements 9, 10) — **shipped**
+- `GET /recordings/:id/url` mints a short-lived presigned GET (1 h), only for an `uploaded`
+  clip; `cloud_key` stays server-side. 409 when the clip isn't in the cloud.
+- Recordings list projects `upload_state` and shows a badge per clip — Cloud / In transit /
+  Local / Failed. A Play action appears for cloud clips and streams straight from R2 (verified
+  end-to-end: object GET 200, range 206, CORS preflight allows the app origin, and the browser
+  played it with the Cloud badge).
+- **Phase 2b (pending):** local clips still only Download — a browser-streamable URL for them
+  needs the edge proxy to accept the JWT bearer (an `<video src>` can't send it). Play for
+  local clips waits on that.
 
 ### Phase 3 — Retention
 - `billing_plans + retention_days integer NOT NULL DEFAULT 0` (0 = no cloud recording).
