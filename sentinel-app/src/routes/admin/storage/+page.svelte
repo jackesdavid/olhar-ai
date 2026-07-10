@@ -4,11 +4,15 @@
   import { toast } from "svelte-sonner";
 
   import HardDrive from "@lucide/svelte/icons/hard-drive";
+  import Trash2 from "@lucide/svelte/icons/trash-2";
   import Loader from "$lib/components/loader.svelte";
+  import Busy from "$lib/components/busy.svelte";
 
   import * as Card from "$lib/components/ui/card";
   import * as Table from "$lib/components/ui/table";
+  import * as Dialog from "$lib/components/ui/dialog";
   import { Badge } from "$lib/components/ui/badge";
+  import { Button } from "$lib/components/ui/button";
 
   import { adminBilling, type TenantStorage } from "$lib/api";
   import { auth } from "$lib/auth.svelte";
@@ -65,10 +69,54 @@
     }
   }
 
+  // ---- purge ----------------------------------------------------------------
+  // Delete a tenant's cloud footage now, across every retention tier. Irreversible, so it's
+  // gated behind a confirm; only offered when the tenant actually has cloud clips.
+  let purgeTarget = $state<TenantStorage | null>(null);
+  let purging = $state<string | null>(null);
+
+  function canPurge(r: TenantStorage): boolean {
+    return r.clip_count > 0;
+  }
+
+  async function confirmPurge() {
+    if (!purgeTarget) return;
+    const t = purgeTarget;
+    purging = t.tenant_id;
+    purgeTarget = null;
+    try {
+      const res = await adminBilling.purgeStorage(t.tenant_id);
+      toast.success(`Purged ${res.objects_removed} object(s) from ${t.tenant_name}.`);
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Purge failed");
+    } finally {
+      purging = null;
+    }
+  }
+
   onMount(() => {
     if (isMaster) load();
   });
 </script>
+
+<!-- purge confirm -->
+<Dialog.Root open={purgeTarget !== null} onOpenChange={(o: boolean) => { if (!o) purgeTarget = null; }}>
+  <Dialog.Content>
+    <Dialog.Header>
+      <Dialog.Title>Purge {purgeTarget?.tenant_name}'s cloud footage?</Dialog.Title>
+      <Dialog.Description>
+        {purgeTarget ? `${purgeTarget.clip_count} clip(s), ${fmtGB(purgeTarget.stored_bytes)} in the bucket` : ""}
+        will be permanently deleted from cloud storage. Local copies on the edge box are not
+        touched. This is audited and cannot be undone.
+      </Dialog.Description>
+    </Dialog.Header>
+    <Dialog.Footer>
+      <Button variant="outline" onclick={() => (purgeTarget = null)}>Cancel</Button>
+      <Button variant="destructive" onclick={confirmPurge}>Purge</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
 
 <div class="flex flex-col gap-6 p-6">
   <PageHeader
@@ -109,6 +157,7 @@
             <Table.Head class="w-40">Quota used</Table.Head>
             <Table.Head class="text-right">GB-month</Table.Head>
             <Table.Head class="text-right">Projected overage</Table.Head>
+            <Table.Head class="w-12"></Table.Head>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -137,6 +186,23 @@
                   </Badge>
                 {:else}
                   <span class="text-muted-foreground">—</span>
+                {/if}
+              </Table.Cell>
+              <Table.Cell class="text-right">
+                {#if canPurge(r)}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    title="Purge cloud footage"
+                    disabled={purging === r.tenant_id}
+                    onclick={() => (purgeTarget = r)}
+                  >
+                    {#if purging === r.tenant_id}
+                      <Busy />
+                    {:else}
+                      <Trash2 class="h-4 w-4 text-destructive" />
+                    {/if}
+                  </Button>
                 {/if}
               </Table.Cell>
             </Table.Row>

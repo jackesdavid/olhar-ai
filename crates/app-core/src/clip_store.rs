@@ -157,6 +157,52 @@ pub fn delete(key: &str) -> Result<(), String> {
     }
 }
 
+/// Delete every object belonging to a tenant, across all retention tiers (card #64, Phase 3).
+///
+/// The key is `{days}d/{tenant}/…`, so a tenant's footage is spread under one prefix per tier
+/// it has ever used. We list each `{d}d/{tenant}/` prefix and delete what's there — paging
+/// through continuation tokens so a tenant with thousands of clips is fully cleared, not just
+/// the first page. Returns how many objects were removed.
+///
+/// This is **not** wired to subscription cancellation: cancelling isn't a deletion request, and
+/// the per-tier lifecycle already expires a lapsed tenant's clips within their retention window.
+/// This is the immediate, on-demand purge — a customer's "delete my data", or a tenant removed
+/// for good — and it must reach the object store, not just the DB row.
+///
+/// Idempotent and safe to retry: a missing object counts as already-deleted.
+pub fn purge_tenant(tenant_id: uuid::Uuid, tiers: &[i32]) -> Result<u64, String> {
+    let b = bucket().ok_or("clip store not configured")?;
+    let mut removed = 0u64;
+    for d in tiers.iter().copied().filter(|d| *d > 0) {
+        let prefix = format!("{d}d/{tenant_id}/");
+        let mut token: Option<String> = None;
+        loop {
+            // No delimiter: recurse into `…/{yyyy}/{mm}/` so every clip is seen, not just the
+            // year "folders". 1000 keys/page is R2's max.
+            let (page, code) = block_on(b.list_page(
+                prefix.clone(),
+                None,
+                token.clone(),
+                None,
+                Some(1000),
+            ))?
+            .map_err(|e| format!("clip_store: list {prefix}: {e}"))?;
+            if !(200..300).contains(&code) {
+                return Err(format!("clip_store: list {prefix}: HTTP {code}"));
+            }
+            for obj in &page.contents {
+                delete(&obj.key)?;
+                removed += 1;
+            }
+            match page.next_continuation_token {
+                Some(t) => token = Some(t),
+                None => break,
+            }
+        }
+    }
+    Ok(removed)
+}
+
 /// One expiry rule per retention tier, keyed to the `{days}d/` prefix.
 ///
 /// Idempotent: `PutBucketLifecycleConfiguration` replaces the whole configuration — which is

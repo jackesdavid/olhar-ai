@@ -823,6 +823,21 @@ pub async fn get_recording(pool: &PgPool, tenant_id: Uuid, id: i64) -> sqlx::Res
     .fetch_optional(pool).await
 }
 
+/// After the objects are gone from R2, detach the rows from the cloud: clear the key and drop
+/// the state back to `pending` (edge-only). The row survives — the clip may still be on the box —
+/// but nothing claims it's durable. Returns how many rows changed.
+pub async fn clear_tenant_cloud_keys(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<u64> {
+    let res = sqlx::query(
+        "UPDATE recordings
+         SET cloud_key = NULL, cloud_uploaded_at = NULL, upload_state = 'pending'
+         WHERE tenant_id = $1 AND cloud_key IS NOT NULL",
+    )
+    .bind(tenant_id)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
 /// The R2 object key for a durable clip, scoped by tenant. `Some(None)` means the clip exists
 /// but isn't in the cloud (still local / in transit / failed); `None` means no such clip for
 /// this tenant. `cloud_key` never leaves the server — it's the input to a presigned URL, not

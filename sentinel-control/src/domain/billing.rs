@@ -32,6 +32,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/billing", get(admin_list))
         .route("/admin/billing/overview", get(admin_overview))
         .route("/admin/storage", get(admin_storage))
+        .route("/admin/storage/:tenant/purge", post(admin_purge_storage))
         .route("/admin/billing/:tenant/close", post(admin_close))
         .route("/admin/billing/:tenant/trial", post(admin_grant_trial))
         .route("/admin/billing/:tenant/plan", post(admin_set_plan))
@@ -119,6 +120,46 @@ async fn admin_storage(UserClaims(c): UserClaims, State(st): State<AppState>) ->
     let db = st.db.clone();
     let rows = blocking(move || storage::overview(&db)).await?;
     Ok(Json(rows.iter().map(storage_json).collect()))
+}
+
+/// Purge a tenant's cloud footage now — delete every R2 object under `*/{tenant}/` and detach the
+/// rows. For a tenant leaving for good or a data-subject deletion; not run on mere cancellation
+/// (the lifecycle already expires a lapsed tenant's clips). Audited to `platform_logs`.
+async fn admin_purge_storage(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(tenant): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    require_master(&c)?;
+    let db = st.db.clone();
+    // Purge across every retention tier the catalog defines — a tenant may have clips under a
+    // prefix from an older plan, not just their current one.
+    let tiers = blocking({ let db = db.clone(); move || plans::retention_tiers(&db) }).await?;
+    let removed = tokio::task::spawn_blocking(move || app_core::clip_store::purge_tenant(tenant, &tiers))
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")))?
+        .map_err(|e| {
+            log::error!("purge tenant {tenant} storage: {e}");
+            err(StatusCode::BAD_GATEWAY, "purge failed")
+        })?;
+    let cleared = crate::store::clear_tenant_cloud_keys(&st.pool, tenant).await.map_err(|e| {
+        log::error!("clear cloud keys {tenant}: {e}");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+    })?;
+
+    // Audit: who purged what, when. This is the record a data-subject deletion is answered with.
+    st.log_queue.push(app_core::platform_logs::PlatformLog {
+        tenant_id: tenant,
+        module: "billing",
+        trace_id: None,
+        entity_id: Some(tenant.to_string()),
+        entity_type: Some("tenant"),
+        level: "warn",
+        message: format!("cloud storage purged: {removed} object(s) removed, {cleared} clip(s) detached"),
+        payload: Some(serde_json::json!({ "objects_removed": removed, "rows_cleared": cleared, "by": c.sub })),
+    });
+
+    Ok(Json(serde_json::json!({ "objects_removed": removed, "rows_cleared": cleared })))
 }
 
 async fn my_subscription(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Option<subscriptions::Subscription>>, ApiErr> {

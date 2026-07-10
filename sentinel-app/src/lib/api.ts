@@ -459,6 +459,9 @@ export const adminBilling = {
   overview: () => api.get<TenantBilling[]>("/admin/billing/overview"),
   /** Every tenant's storage, heaviest GB-month first — catches a runaway recorder. */
   storage: () => api.get<TenantStorage[]>("/admin/storage"),
+  /** Delete a tenant's cloud footage now (leaving for good / data-subject request). Audited. */
+  purgeStorage: (tenant: string) =>
+    api.post<{ objects_removed: number; rows_cleared: number }>(`/admin/storage/${tenant}/purge`),
   invoices: (period: string) => api.get<Invoice[]>(`/admin/billing?period=${period}`),
   close: (tenant: string, period: string) => api.post<Invoice>(`/admin/billing/${tenant}/close?period=${period}`),
   grantTrial: (tenant: string) => api.post<{ subscription_id: string }>(`/admin/billing/${tenant}/trial`),
