@@ -58,11 +58,11 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
 - **Timestamps are RFC3339 `text`**, not `timestamptz` — sqlx is built without the chrono/time
   feature, so it can't decode `timestamptz`. Generate with `app_core::alerts::now_rfc3339()`.
 - **Migrations**: `crates/app-core/migrations/NNNN_*.sql`, embedded via `sqlx::migrate!`, applied
-  on `Db::connect` (control + flow boot). Additive; next number is **0052** (recent: 0048 = stuck-upload sweep,
-  0049 = per-currency provider price, 0050 = generic `work_jobs` queue — UNLOGGED, category+kind+jsonb,
-  LISTEN/NOTIFY, 0051 = atomic claim + `running` status + `run_after`/reaper). **The `work_jobs` queue is the
-  home for async jobs** — clip-delete (#64) and workflow events run on it; `event_queue`/`notification_queue`
-  migrate onto it (event done). **pg_cron is real now** —
+  on `Db::connect` (control + flow boot). Additive; next number is **0053** (recent: 0049 = per-currency provider
+  price, 0050 = generic `work_jobs` queue, 0051 = atomic claim + `running` + `run_after`/reaper, 0052 = agnostic
+  `events` stream — card #66, Phase 1). **The `work_jobs` queue is the home for async jobs** — clip-delete (#64),
+  workflow events, and notification sends run on it. **The `events` table is the product event stream** (alerts,
+  presence, clips, auth) — distinct from `platform_logs` (low-level debug trace). **pg_cron is real now** —
   `deploy/postgres/Dockerfile` bundles it; deploy `sentinel-postgres` before control. System
   events (e.g. `motion`, `telegram_message`) are a code catalog (`repo::system_events()`), not a migration.
 - **RBAC**: the action catalog is `sentinel-control/src/rbac.rs` `PERMISSIONS`; `seed.rs` upserts it

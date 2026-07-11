@@ -226,6 +226,7 @@
     "/devices": "devices.read",
     "/live": "live.view",
     "/alerts": "alerts.read",
+    "/events": "alerts.read",
     "/beacons": "beacons.read",
     "/people": "persons.read",
     "/map": "map.read",

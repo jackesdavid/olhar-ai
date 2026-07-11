@@ -300,6 +300,49 @@ export const adminJobs = {
   },
 };
 
+// ---- Events (agnostic event stream, card #66) -------------------------------
+
+export type EventRow = {
+  id: number;
+  kind: string;
+  source: string;
+  severity: string;
+  title: string | null;
+  message: string | null;
+  camera: string | null;
+  clip_id: string | null;
+  room_id: number | null;
+  room_name: string | null;
+  device_id: string | null;
+  graph_id: number | null;
+  user_id: string | null;
+  data: unknown;
+  occurred_at: string; // RFC3339
+  created_at: string;  // RFC3339
+};
+export type EventKind = { kind: string; label: string };
+export type EventListOpts = {
+  kind?: string; source?: string; severity?: string; camera?: string;
+  from?: string; to?: string; after?: number; limit?: number;
+};
+
+export const events = {
+  list: (opts?: EventListOpts) => {
+    const p = new URLSearchParams();
+    if (opts?.kind) p.set("kind", opts.kind);
+    if (opts?.source) p.set("source", opts.source);
+    if (opts?.severity) p.set("severity", opts.severity);
+    if (opts?.camera) p.set("camera", opts.camera);
+    if (opts?.from) p.set("from", opts.from);
+    if (opts?.to) p.set("to", opts.to);
+    if (opts?.after != null) p.set("after", String(opts.after));
+    if (opts?.limit != null) p.set("limit", String(opts.limit));
+    const qs = p.toString();
+    return api.get<EventRow[]>(`/events${qs ? `?${qs}` : ""}`);
+  },
+  kinds: () => api.get<EventKind[]>("/events/kinds"),
+};
+
 // ---- Assistant (chat + voice) -----------------------------------------------
 
 export type ChatTurn = { role: "user" | "assistant"; content: string };

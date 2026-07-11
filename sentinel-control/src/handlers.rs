@@ -150,6 +150,15 @@ async fn login(State(st): State<AppState>, Json(b): Json<LoginReq>) -> Result<Js
         exp: auth::expiry_24h(),
     };
     let token = auth::issue(&st.jwt_secret, &claims).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    // First producer on the agnostic event stream (card #66): record the sign-in. A master token
+    // carries no tenant, so only tenant users land on a tenant's feed.
+    if let Some(tid) = user.tenant_id {
+        let mut ev = app_core::events::NewEvent::new(tid, "auth.login", "user");
+        ev.title = Some("Sign-in".to_string());
+        ev.message = Some(format!("{} signed in", email));
+        ev.user_id = Some(user.id);
+        st.event_queue.push(ev);
+    }
     Ok(Json(AuthResp { token, user_id: user.id, tenant_id: user.tenant_id, is_master: user.is_master, perms }))
 }
 

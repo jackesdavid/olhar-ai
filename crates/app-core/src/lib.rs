@@ -17,6 +17,7 @@ pub mod device_actions;
 pub mod devices;
 pub mod edge_metrics;
 pub mod event_queue;
+pub mod events;
 pub mod go2rtc;
 pub mod listen;
 pub mod map;

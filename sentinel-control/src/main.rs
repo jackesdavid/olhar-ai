@@ -61,6 +61,9 @@ pub struct AppState {
     /// Unified platform audit log queue (async, fire-and-forget). All modules push here;
     /// the drain task batch-inserts into platform_logs every 500 ms.
     pub log_queue: app_core::platform_logs::LogQueue,
+    /// Agnostic product-event stream queue (async, fire-and-forget) — card #66. Subsystems push
+    /// occurrences here; the drain batch-inserts into `events`. The debug trace is `log_queue`.
+    pub event_queue: app_core::events::EventQueue,
     /// Shared event fabric. `redis_url` opens per-client pub/sub connections for the SSE
     /// relay (subscribe `events:<tenant>`); `redis` is a multiplexed handle for publishing
     /// injected events (edge motion). Both `None` when `REDIS_URL` is unset → the relay
@@ -211,6 +214,7 @@ fn main() {
         let pending_rescan = Arc::new(Mutex::new(std::collections::HashSet::new()));
         let (log_bus, _) = tokio::sync::broadcast::channel::<String>(1024);
         let log_queue = app_core::platform_logs::LogQueue::spawn(pool.clone());
+        let event_queue = app_core::events::EventQueue::spawn(pool.clone());
 
         // Drain the clip-delete work queue: edge + cloud + row, per customer deletion request.
         clip_purge::spawn(pool.clone());
@@ -231,7 +235,7 @@ fn main() {
 
         let state = AppState {
             db, pool, jwt_secret, google, oauth_states, tailscale, http, pending_creds, notifiers,
-            pending_rescan, log_bus, log_queue, redis_url, redis,
+            pending_rescan, log_bus, log_queue, event_queue, redis_url, redis,
         };
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {
