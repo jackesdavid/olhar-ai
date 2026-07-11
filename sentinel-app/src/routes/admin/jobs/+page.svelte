@@ -32,6 +32,20 @@
   let categoryFilter = $state("");
   let page = $state(0);
 
+  // Auto-refresh: 0 = off. A silent reload each tick (no top-level spinner) so the panel updates
+  // in place without flicker.
+  const REFRESH_OPTIONS = [
+    { value: "0", label: "Off" },
+    { value: "5", label: "5s" },
+    { value: "10", label: "10s" },
+    { value: "20", label: "20s" },
+    { value: "60", label: "1 min" },
+  ];
+  let autoSecs = $state(0);
+  function autoLabel(secs: number): string {
+    return REFRESH_OPTIONS.find((o) => o.value === String(secs))?.label ?? "Off";
+  }
+
   const pageCount = $derived(Math.max(1, Math.ceil(total / PAGE_SIZE)));
 
   // Distinct categories present, for the KPI cards + the filter.
@@ -86,6 +100,20 @@
       loading = false;
     }
   }
+  // A quiet reload for the auto-refresh tick: no spinner, and a transient error keeps the last
+  // good data on screen instead of surfacing a toast every few seconds.
+  async function silentRefresh() {
+    try {
+      await Promise.all([loadStats(), loadList()]);
+    } catch { /* keep last good data */ }
+  }
+
+  // Reinstalls the interval whenever the cadence changes; cleared on change/unmount.
+  $effect(() => {
+    if (autoSecs <= 0) return;
+    const t = setInterval(silentRefresh, autoSecs * 1000);
+    return () => clearInterval(t);
+  });
 
   function onTenantChange(v: string) {
     tenantFilter = v === "_all" ? "" : v;
@@ -126,6 +154,16 @@
               <Select.Item value="_all" label="All tenants">All tenants</Select.Item>
               {#each tenants as t (t.id)}
                 <Select.Item value={t.id} label={t.name}>{t.name}</Select.Item>
+              {/each}
+            </Select.Content>
+          </Select.Root>
+          <Select.Root type="single" value={String(autoSecs)} onValueChange={(v) => (autoSecs = Number(v))}>
+            <Select.Trigger class="h-8 w-32 text-sm" title="Auto-refresh">
+              Auto: {autoLabel(autoSecs)}
+            </Select.Trigger>
+            <Select.Content>
+              {#each REFRESH_OPTIONS as opt (opt.value)}
+                <Select.Item value={opt.value} label={opt.label}>{opt.label}</Select.Item>
               {/each}
             </Select.Content>
           </Select.Root>
