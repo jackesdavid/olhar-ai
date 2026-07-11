@@ -1,5 +1,6 @@
 <script lang="ts">
   import "../app.css";
+  import "@fontsource/sora/600.css"; // brand wordmark (Sora 600) — logo lockup only
   import { onMount } from "svelte";
   import { toast } from "svelte-sonner";
   import { page } from "$app/stores";
@@ -9,7 +10,7 @@
   import type { Alert } from "$lib/types";
   import { navItems } from "$lib/nav";
   import { Toaster } from "$lib/components/ui/sonner";
-  import SentinelMark from "$lib/components/sentinel-mark.svelte";
+  import SentinelLogo from "$lib/components/sentinel-logo.svelte";
   import { theme, loadTheme, toggleTheme } from "$lib/theme.svelte";
   import Sun from "@lucide/svelte/icons/sun";
   import Moon from "@lucide/svelte/icons/moon";
@@ -316,19 +317,11 @@
             ? 'justify-center px-0'
             : 'px-4'}"
         >
-          <SentinelMark
-            size={32}
-            class="shrink-0 text-primary"
-            style="filter: drop-shadow(var(--brand-glow))"
+          <SentinelLogo
+            size={30}
+            wordmark={!navCollapsed}
+            subtitle="Monitoring & Automation"
           />
-          {#if !navCollapsed}
-            <div class="flex flex-col leading-tight">
-              <span class="text-sm font-semibold tracking-tight">Sentinel</span>
-              <span class="text-[10px] text-muted-foreground"
-                >Monitoring &amp; Automation</span
-              >
-            </div>
-          {/if}
         </div>
 
         <nav class="flex-1 space-y-0.5 overflow-y-auto p-2">

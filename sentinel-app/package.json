@@ -15,6 +15,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@fontsource/sora": "^5.2.8",
     "@internationalized/date": "^3.12.2",
     "@threlte/core": "^8.5.16",
     "@threlte/extras": "^9.21.0",

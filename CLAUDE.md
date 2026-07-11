@@ -21,6 +21,8 @@ matches your task:
   zones, drawn walls + SVG furniture markers, camera FOV), the `RecordPresence` node + live
   categorized presence pulse, the vertical file layout, and build status. (Active: branch
   `feat/map-redesign`.)
+- **[Brand](docs/ref/brand.md)** — the visual identity: the dot-field mark, the Sora sentence-case
+  wordmark (`--font-brand`), and the `SentinelLogo` lockup. Monochrome ink; form over colour.
 - **[Handoff log](docs/HANDOFF.md)** — rolling session memory (newest first): what changed, branch,
   pending, blockers. Save/resume it with the `/handoff` skill.
 

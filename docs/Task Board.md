@@ -58,8 +58,6 @@ kanban-plugin: board
 	  - Plan: [[agnostic-event-module]]
 - [ ] #67 Playback Timeline — unified inspection view (blocked on #66)
 	  - Plan: [[recording-playback-timeline]]
-- [ ] #68 Logo & brand-mark system
-	  - Plan: [[logo-brand-mark]]
 - [ ] #69 Favicons / app-icons / PWA / OG images (blocked on #68)
 	  - Plan: [[favicons-app-icons]]
 - [ ] #70 Branded email template system
@@ -67,6 +65,9 @@ kanban-plugin: board
 
 
 ## In Progress
+
+- [ ] #68 Logo & brand-mark system
+	  - Plan: [[logo-brand-mark]]
 
 
 

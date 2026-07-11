@@ -10,7 +10,7 @@
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import { Separator } from "$lib/components/ui/separator";
-  import SentinelMark from "$lib/components/sentinel-mark.svelte";
+  import SentinelLogo from "$lib/components/sentinel-logo.svelte";
 
   import { login, signup, loadMe, setToken, googleLoginUrl } from "$lib/auth.svelte";
 
@@ -64,13 +64,8 @@
 <div class="flex min-h-screen w-screen items-center justify-center p-6">
   <Card.Root class="w-full max-w-sm">
     <Card.Header class="items-center text-center">
-      <SentinelMark
-        size={40}
-        class="text-primary"
-        style="filter: drop-shadow(var(--brand-glow))"
-      />
-      <Card.Title class="mt-2 text-xl">Sentinel</Card.Title>
-      <Card.Description>
+      <SentinelLogo stacked size={52} />
+      <Card.Description class="mt-2">
         {mode === "signin" ? "Sign in to your workspace" : "Create a new workspace"}
       </Card.Description>
     </Card.Header>

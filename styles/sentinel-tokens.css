@@ -54,6 +54,9 @@
   --font-mono:
     "SF Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Code",
     "Roboto Mono", monospace;
+  /* Brand wordmark only (the Sentinel logo lockup) — NOT the UI body font.
+     Sora is self-hosted via @fontsource in the app; falls back to --font-sans. */
+  --font-brand: "Sora", var(--font-sans);
 }
 
 /* ── Light "Clean White" (default operative theme) ────────────────────────── */

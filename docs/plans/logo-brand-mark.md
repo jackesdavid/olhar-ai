@@ -7,6 +7,15 @@ wordmark lockup, light/dark variants, clear-space & min-size rules, and static e
 size/format the product needs (favicons #69, email #70, OG images, app chrome). Direction chosen:
 **explore fresh concepts first**, then commit and systematize.
 
+## Decisions locked (2026-07-11)
+
+- **Mark:** the **refined dot-field** (candidate #01) — outcome (A), the DNA is preserved, no
+  system-doc replacement. Canonical static mark = `rings=4`.
+- **Wordmark:** **Sora 600, sentence-case** ("Sentinel"), tracking `-0.02em`. UPPERCASE-tracked is
+  the sanctioned formal alternate. Scoped to the logo via `--font-brand`; UI body font unchanged.
+- **Status:** Phase 1 (explore) + Phase 2 (choose) done. Phase 3 (productionize) wired for the app;
+  see `docs/ref/brand.md`. Remaining Phase-3 exports (favicon/OG/email rasters) handed to #69/#70.
+
 ## Current state (grounding)
 
 - The identity today is the **dot-field mark**: `sentinel-app/src/lib/components/sentinel-mark.svelte`
