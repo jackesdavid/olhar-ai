@@ -120,10 +120,18 @@ Two things only the build revealed:
   needs the edge proxy to accept the JWT bearer (an `<video src>` can't send it). Play for
   local clips waits on that.
 
-### Phase 3 — Retention
-- `billing_plans + retention_days integer NOT NULL DEFAULT 0` (0 = no cloud recording).
-- Prefix chosen at presign time from the tenant's current plan.
-- Cancelled/deleted tenant → purge every object under `*/{tenant_id}/`.
+### Phase 3 — Retention — **shipped**
+- `billing_plans + retention_days` (0 = no cloud recording) — migration 0047.
+- Prefix chosen at presign time from the tenant's current plan (`tenant_retention_days` →
+  `object_key`), so one lifecycle rule per tier expires clips on their own.
+- `clip_store::purge_tenant` deletes every object under `{d}d/{tenant}/` across all tiers,
+  paging through continuation tokens; idempotent. `POST /admin/storage/:tenant/purge`
+  (master-only) runs it, detaches the rows, and audits to `platform_logs`. Surfaced as a
+  per-row purge action on `/admin/storage`, behind a confirm.
+- **Not** fired on cancellation by design: cancelling isn't a deletion request, and the
+  per-tier lifecycle already expires a lapsed tenant's clips within their retention window.
+  This is the immediate, audited purge — a tenant leaving for good, or the LGPD delete Phase 6
+  builds on.
 
 ### Phase 4 — **The billing change** (the substantive one)
 
