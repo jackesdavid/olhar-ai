@@ -55,12 +55,12 @@ async fn stats(UserClaims(c): UserClaims, State(st): State<AppState>, Query(qq):
 /// So a 1-hour window is per-minute; wider windows coarsen automatically instead of returning
 /// thousands of points.
 fn bucket_for(window_secs: i64) -> i64 {
-    // Per-minute for short windows; coarser for wide ones (~120 buckets), rounded up to a minute.
-    // Sub-minute windows (the "last minute" view) keep 5-second buckets so the chart isn't a single bar.
+    // Aim for ~40 buckets — few enough that a value label fits above every bar, rounded up to a
+    // whole minute. Sub-5-min windows (the "last minute" view) keep 5-second buckets.
     if window_secs <= 300 {
         return 5;
     }
-    let raw = (window_secs / 120).max(60);
+    let raw = (window_secs / 40).max(60);
     ((raw + 59) / 60) * 60
 }
 

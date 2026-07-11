@@ -113,6 +113,15 @@
   });
   const maxBar = $derived(Math.max(1, ...chartBars.map((b) => b.c)));
   const chartEmpty = $derived(chartBars.length === 0 || chartBars.every((b) => b.c === 0));
+  // Bar height as a % of the tallest; a non-zero bar keeps a visible floor.
+  function barPct(c: number): number {
+    return Math.max(c > 0 ? 4 : 0, (c / maxBar) * 100);
+  }
+  // Peak bar is inked solid; the rest lighten and fill to full ink on hover.
+  function barClass(c: number): string {
+    const base = "w-full rounded-t-sm transition-all";
+    return c === maxBar && c > 0 ? `${base} bg-primary` : `${base} bg-primary/55 group-hover:bg-primary`;
+  }
   function barTitle(b: { t: number; c: number }): string {
     const d = new Date(b.t * 1000);
     return `${d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })} · ${b.c}`;
@@ -259,22 +268,26 @@
     </div>
 
     <!-- jobs over time -->
-    <Card.Root>
+    <Card.Root class="animate-in fade-in duration-300">
       <Card.Content class="pt-6">
-        <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Jobs over time · {windowLabel(windowSecs)}</p>
+        <div class="flex items-baseline justify-between">
+          <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Jobs over time</p>
+          <span class="text-xs text-muted-foreground tabular-nums">{windowLabel(windowSecs)} · peak {maxBar}</span>
+        </div>
         {#if chartEmpty}
-          <p class="mt-4 text-sm text-muted-foreground">No jobs in this window.</p>
+          <p class="mt-6 text-sm text-muted-foreground">No jobs in this window.</p>
         {:else}
-          <div class="mt-4 flex h-28 items-end gap-px">
+          <div class="mt-6 flex h-36 items-end gap-[3px] border-b border-white/10">
             {#each chartBars as b (b.t)}
-              <div
-                class="flex-1 rounded-sm bg-primary/70 transition-[height] hover:bg-primary"
-                style="height: {Math.max(b.c > 0 ? 3 : 0, (b.c / maxBar) * 100)}%"
-                title={barTitle(b)}
-              ></div>
+              <div class="group flex h-full flex-1 flex-col items-center justify-end" title={barTitle(b)}>
+                {#if b.c > 0}
+                  <span class="mb-1 text-[9px] leading-none tabular-nums text-muted-foreground group-hover:text-foreground">{b.c}</span>
+                {/if}
+                <div class={barClass(b.c)} style="height: {barPct(b.c)}%"></div>
+              </div>
             {/each}
           </div>
-          <div class="mt-1 flex justify-between text-[10px] text-muted-foreground tabular-nums">
+          <div class="mt-2 flex justify-between text-[10px] text-muted-foreground tabular-nums">
             <span>{axisLabel(chartBars[0].t)}</span>
             <span>{axisLabel(chartBars[Math.floor(chartBars.length / 2)].t)}</span>
             <span>{axisLabel(chartBars[chartBars.length - 1].t)}</span>
@@ -283,16 +296,14 @@
       </Card.Content>
     </Card.Root>
 
-    <!-- per-category breakdown -->
+    <!-- per-category breakdown: the total is the focal number -->
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {#each categories as cat (cat)}
-        <Card.Root>
+        <Card.Root class="interactive animate-in fade-in duration-300">
           <Card.Content class="pt-6">
-            <div class="flex items-baseline justify-between">
-              <p class="text-sm font-semibold">{prettyCategory(cat)}</p>
-              <span class="text-xs text-muted-foreground tabular-nums">{categoryTotal(cat)} total</span>
-            </div>
-            <div class="mt-3 flex flex-wrap gap-1.5">
+            <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{prettyCategory(cat)}</p>
+            <p class="mt-1 text-4xl font-semibold tabular-nums tracking-tight">{categoryTotal(cat)}</p>
+            <div class="mt-4 flex flex-wrap gap-1.5">
               {#each ["pending", "running", "done", "failed"] as st (st)}
                 {#if count(cat, st) > 0}
                   <Badge variant="outline" class={statusClass(st)}>{st} {count(cat, st)}</Badge>
