@@ -16,6 +16,7 @@ mod beacons;
 mod billing;
 mod boxes;
 mod devices;
+mod jobs;
 mod map;
 mod persons;
 mod platform_logs;
@@ -40,6 +41,7 @@ pub fn router() -> Router<AppState> {
         .merge(admin_providers::router())
         .merge(platform_logs::router())
         .merge(recordings::router())
+        .merge(jobs::router())
 }
 
 /// The tenant this token operates in. The master's own (un-assumed) token carries no

@@ -215,6 +215,76 @@ pub fn enqueue_event_blocking(db: &Db, tenant_id: Uuid, event: &str, source: &st
     enqueue_one_blocking(db, tenant_id, EVENT_CATEGORY, EVENT_KIND, payload);
 }
 
+// ---- monitoring (master: system-wide async load) ----------------------------
+// One place to see every async job. All categories, all tenants (or one), so the operator can
+// read the system's load — what's queued, running, done, failing — at a glance.
+
+/// A count of jobs in one (category, status). The shape the load panel aggregates.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct CategoryStat {
+    pub category: String,
+    pub status:   String,
+    pub count:    i64,
+}
+
+/// A job row for the load panel. Payload is omitted — this is a volume view, not per-job detail.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct MonitorJob {
+    pub id:         Uuid,
+    pub tenant_id:  Uuid,
+    pub category:   String,
+    pub kind:       String,
+    pub status:     String,
+    pub attempts:   i32,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_error: Option<String>,
+}
+
+/// Job counts by (category, status), across all tenants or one. Master load overview.
+pub fn monitor_stats_blocking(db: &Db, tenant: Option<Uuid>) -> Vec<CategoryStat> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_as::<_, CategoryStat>(
+            "SELECT category, status, COUNT(*) AS count FROM work_jobs
+             WHERE ($1::uuid IS NULL OR tenant_id = $1)
+             GROUP BY category, status ORDER BY category, status",
+        )
+        .bind(tenant)
+        .fetch_all(&pool).await.unwrap_or_default()
+    })
+}
+
+/// Recent jobs (newest first), filterable by tenant / category / status. Master load detail.
+#[allow(clippy::too_many_arguments)]
+pub fn monitor_list_blocking(
+    db: &Db,
+    tenant: Option<Uuid>,
+    category: Option<&str>,
+    status: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> (i64, Vec<MonitorJob>) {
+    const FILTER: &str = "WHERE ($1::uuid IS NULL OR tenant_id = $1)
+          AND ($2::text IS NULL OR category = $2)
+          AND ($3::text IS NULL OR status = $3)";
+    let pool = db.pool();
+    let category = category.filter(|s| !s.is_empty()).map(str::to_string);
+    let status = status.filter(|s| !s.is_empty()).map(str::to_string);
+    db.block(async move {
+        let total: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM work_jobs {FILTER}"))
+            .bind(tenant).bind(category.clone()).bind(status.clone())
+            .fetch_one(&pool).await.unwrap_or(0);
+        let items = sqlx::query_as::<_, MonitorJob>(&format!(
+            "SELECT id, tenant_id, category, kind, status, attempts, created_at, updated_at, last_error
+             FROM work_jobs {FILTER} ORDER BY created_at DESC LIMIT $4 OFFSET $5"
+        ))
+        .bind(tenant).bind(category).bind(status).bind(limit).bind(offset)
+        .fetch_all(&pool).await.unwrap_or_default();
+        (total, items)
+    })
+}
+
 // ---- notification sends (migrated from notification_queue) ------------------
 // One send per job. The send is non-idempotent (a re-run is a duplicate Telegram), so it relies
 // on the atomic claim; transient failures reschedule with backoff via `retry_after`.

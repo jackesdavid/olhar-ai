@@ -23,6 +23,7 @@
   import Building2 from "@lucide/svelte/icons/building-2";
   import Bell from "@lucide/svelte/icons/bell";
   import HardDrive from "@lucide/svelte/icons/hard-drive";
+  import Activity from "@lucide/svelte/icons/activity";
   import Wallet from "@lucide/svelte/icons/wallet";
   import { Button } from "$lib/components/ui/button";
   import { billing } from "$lib/api";
@@ -280,6 +281,9 @@
       : []),
     ...(auth.me?.is_master
       ? [{ label: "Storage", href: "/admin/storage", icon: HardDrive }]
+      : []),
+    ...(auth.me?.is_master
+      ? [{ label: "System load", href: "/admin/jobs", icon: Activity }]
       : []),
     ...(auth.me?.is_master
       ? [{ label: "Providers", href: "/admin/providers", icon: Bell }]

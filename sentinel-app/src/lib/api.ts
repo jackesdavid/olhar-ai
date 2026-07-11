@@ -248,40 +248,37 @@ export const recordings = {
   },
 };
 
-// ---- Notification observability (read-only, tenant-scoped) -------------------
+// ---- Master: async work-queue load (all tenants or one) ---------------------
 
-export type QueueStats = {
-  pending: number;
-  sent_today: number;
-  failed_today: number;
-  queued_today: number;
-  hourly: { hour: string; count: number }[];
-};
-export type QueueItem = {
+/** A count of jobs in one (category, status) — the load overview aggregates these. */
+export type CategoryStat = { category: string; status: string; count: number };
+/** One job row for the load detail table (no payload — this is a volume view). */
+export type MonitorJob = {
   id: string;
+  tenant_id: string;
+  category: string;
+  kind: string;
   status: string;
-  target: string | null;
-  message: string;
   attempts: number;
-  image_key: string | null;
-  video_key: string | null;
-  result: string | null;
   created_at: string;
-  sent_at: string | null;
+  updated_at: string;
+  last_error: string | null;
 };
-export type QueuePage = { total: number; items: QueueItem[] };
-export type QueueListOpts = { status?: string; q?: string; limit?: number; offset?: number };
+export type JobsPage = { total: number; items: MonitorJob[] };
+export type JobsListOpts = { tenant?: string; category?: string; status?: string; limit?: number; offset?: number };
 
-export const notifications = {
-  stats: () => api.get<QueueStats>("/notifications/stats"),
-  queue: (opts?: QueueListOpts) => {
+export const adminJobs = {
+  /** Job counts by (category, status) — omit tenant for the whole system. */
+  stats: (tenant?: string) => api.get<CategoryStat[]>(`/admin/jobs/stats${tenant ? `?tenant=${tenant}` : ""}`),
+  list: (opts?: JobsListOpts) => {
     const p = new URLSearchParams();
+    if (opts?.tenant) p.set("tenant", opts.tenant);
+    if (opts?.category) p.set("category", opts.category);
     if (opts?.status) p.set("status", opts.status);
-    if (opts?.q) p.set("q", opts.q);
     if (opts?.limit != null) p.set("limit", String(opts.limit));
     if (opts?.offset != null) p.set("offset", String(opts.offset));
     const qs = p.toString();
-    return api.get<QueuePage>(`/notifications/queue${qs ? `?${qs}` : ""}`);
+    return api.get<JobsPage>(`/admin/jobs${qs ? `?${qs}` : ""}`);
   },
 };
 
