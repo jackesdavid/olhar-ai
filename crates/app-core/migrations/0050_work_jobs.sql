@@ -17,7 +17,7 @@
 --
 -- Consumers are idempotent (deleting an already-deleted object is success) and claim by
 -- (category, kind), oldest first. A crash leaves a job `pending` for the next pass. Timestamps
--- are RFC3339 text (sqlx has no timestamptz decoder; use app_core::timeutil::now_rfc3339()).
+-- are RFC3339 text (sqlx has no timestamptz decoder; use app_core::alerts::now_rfc3339()).
 --
 -- Latency: a producer raises `NOTIFY work_jobs` on enqueue so a LISTENing consumer wakes and
 -- drains immediately; a slow poll (fallback) still catches retries and any NOTIFY missed while a
