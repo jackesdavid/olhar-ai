@@ -638,7 +638,7 @@ fn list_alerts() -> ToolSpec {
             let alerts = ctx.alerts.lock().unwrap();
             let mut lines = Vec::new();
             for a in alerts.iter().rev() {
-                if today_only && !alerts::is_today(&a.created_at) {
+                if today_only && !crate::timeutil::is_today(&a.created_at) {
                     continue;
                 }
                 if level.is_some() && Some(a.level) != level {
@@ -677,7 +677,7 @@ fn alert_stats() -> ToolSpec {
             let alerts = ctx.alerts.lock().unwrap();
             let today: Vec<&alerts::Alert> = alerts
                 .iter()
-                .filter(|a| alerts::is_today(&a.created_at))
+                .filter(|a| crate::timeutil::is_today(&a.created_at))
                 .collect();
             let total = today.len();
             let pending = today.iter().filter(|a| !a.delivered()).count();

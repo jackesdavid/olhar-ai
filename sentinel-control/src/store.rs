@@ -706,7 +706,7 @@ pub async fn set_clip_uploading(pool: &PgPool, id: i64, cloud_key: &str) -> sqlx
 /// The edge confirmed the object is in the bucket. Scoped by tenant: `clip_id` comes from a
 /// box, and a box must not be able to mark another tenant's clip durable.
 pub async fn mark_clip_uploaded(pool: &PgPool, tenant_id: Uuid, clip_id: &str) -> sqlx::Result<u64> {
-    let now = app_core::alerts::now_rfc3339();
+    let now = app_core::timeutil::now_rfc3339();
     let res = sqlx::query(
         "UPDATE recordings
          SET upload_state = 'uploaded', cloud_uploaded_at = $3
@@ -738,7 +738,7 @@ pub async fn insert_recording(
     } else {
         friendly_name.to_string()
     };
-    let now = app_core::alerts::now_rfc3339();
+    let now = app_core::timeutil::now_rfc3339();
     let (id,): (i64,) = sqlx::query_as(
         "INSERT INTO recordings (tenant_id, camera_ip, clip_id, friendly_name, duration_secs, size_bytes, started_at, created_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",

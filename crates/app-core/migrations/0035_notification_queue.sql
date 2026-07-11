@@ -7,7 +7,7 @@
 --     (telegram_message), control (motion, edge:full-disk); consumer = sentinel-flow.
 -- Consumers claim due rows with `SELECT … FOR UPDATE SKIP LOCKED`, process, then mark
 -- terminal. Timestamps are RFC3339 `text` (sqlx is built without the timestamptz decoder;
--- generate with app_core::alerts::now_rfc3339()).
+-- generate with app_core::timeutil::now_rfc3339()).
 
 CREATE TABLE IF NOT EXISTS notification_queue (
     id              uuid PRIMARY KEY,

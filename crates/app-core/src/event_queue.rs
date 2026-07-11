@@ -10,7 +10,7 @@
 //! sqlx's `json` feature — the column is `jsonb`, cast at the query boundary).
 use uuid::Uuid;
 
-use crate::alerts::now_rfc3339;
+use crate::timeutil::now_rfc3339;
 use crate::db::Db;
 
 /// A claimed inbound event (status already flipped to `claimed`).

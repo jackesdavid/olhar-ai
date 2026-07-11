@@ -5,7 +5,7 @@
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::alerts::now_rfc3339;
+use crate::timeutil::now_rfc3339;
 use crate::db::Db;
 
 /// Slug of the free trial plan (seeded by migration 0040).

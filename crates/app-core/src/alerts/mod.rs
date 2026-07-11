@@ -99,19 +99,6 @@ impl Alert {
     }
 }
 
-/// Current local time as an RFC3339 string (the stored timestamp format).
-pub fn now_rfc3339() -> String {
-    chrono::Local::now().to_rfc3339()
-}
-
-/// Whether an RFC3339 timestamp falls on today's local date.
-pub fn is_today(created_at: &str) -> bool {
-    let today = chrono::Local::now().date_naive();
-    chrono::DateTime::parse_from_rfc3339(created_at)
-        .map(|dt| dt.with_timezone(&chrono::Local).date_naive() == today)
-        .unwrap_or(false)
-}
-
 /// Next monotonic id for a new alert.
 pub fn next_id(alerts: &[Alert]) -> u64 {
     alerts.iter().map(|a| a.id).max().map_or(1, |m| m + 1)
@@ -138,7 +125,7 @@ pub fn create(
         room_id,
         room_name,
         source,
-        created_at: now_rfc3339(),
+        created_at: crate::timeutil::now_rfc3339(),
         deliveries: Vec::new(),
     };
     alerts.push(alert.clone());
@@ -210,7 +197,7 @@ pub fn deliver(
         deliveries.push(Delivery {
             target: b.label.clone(),
             chat_id: b.chat_id,
-            at: now_rfc3339(),
+            at: crate::timeutil::now_rfc3339(),
             ok,
         });
     }
@@ -239,7 +226,7 @@ mod tests {
             room_id: None,
             room_name: None,
             source: "test".into(),
-            created_at: now_rfc3339(),
+            created_at: crate::timeutil::now_rfc3339(),
             deliveries: vec![],
         }
     }

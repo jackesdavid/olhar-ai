@@ -6,7 +6,7 @@
 //! lives elsewhere and never touches this claim path.
 use uuid::Uuid;
 
-use crate::alerts::now_rfc3339;
+use crate::timeutil::now_rfc3339;
 use crate::db::Db;
 
 /// A claimed send job (status already flipped to `sending`).

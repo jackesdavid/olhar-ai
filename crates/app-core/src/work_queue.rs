@@ -18,7 +18,7 @@ use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::alerts::now_rfc3339;
+use crate::timeutil::now_rfc3339;
 use crate::db::Db;
 
 /// The `NOTIFY`/`LISTEN` channel every consumer watches. Payload is the job's `category`.

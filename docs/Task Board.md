@@ -52,16 +52,20 @@ kanban-plugin: board
 	  - Plan: [[editor-panel-tab-toggle]]
 - [ ] #64 Cloud recording storage (R2) + GB-month billing
 	  - Plan: [[cloud-recording-storage]]
+- [ ] #65 User invite: onboarding email + set-password confirmation
+	  - Plan: [[invite-onboarding-email]]
+- [ ] #66 Agnostic event module — replace the Alert model
+	  - Plan: [[agnostic-event-module]]
 
 
 ## In Progress
 
-- [ ] #62 Edge resource monitoring — CPU / mem / disk / GPU
-	  - Plan: [[edge-resource-monitoring]]
 
 
 ## Review
 
+- [ ] #62 Edge resource monitoring — CPU / mem / disk / GPU
+	  - Plan: [[edge-resource-monitoring]]
 - [ ] #15 Telegram bot: workflow-graph brain + inbound commands
 	  - Plan: [[telegram-bot-two-way-research]]
 - [ ] #19 AI If node — yes/no question routes exec like If

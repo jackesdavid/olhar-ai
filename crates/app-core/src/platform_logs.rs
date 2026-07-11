@@ -35,7 +35,7 @@ pub struct PlatformLog {
 /// and swallowed — log writes must never crash the caller.
 pub fn insert_log_sync(db: &Db, log: PlatformLog) {
     let pool = db.pool();
-    let now = crate::alerts::now_rfc3339();
+    let now = crate::timeutil::now_rfc3339();
     let res: Result<(), sqlx::Error> = db.block(async move {
         sqlx::query(
             "INSERT INTO platform_logs \
@@ -66,7 +66,7 @@ pub fn insert_logs_sync(db: &Db, logs: Vec<PlatformLog>) {
         return;
     }
     let pool = db.pool();
-    let now = crate::alerts::now_rfc3339();
+    let now = crate::timeutil::now_rfc3339();
     let res: Result<(), sqlx::Error> = db.block(async move {
         let mut qb = sqlx::QueryBuilder::new(
             "INSERT INTO platform_logs \
@@ -145,7 +145,7 @@ async fn flush(batch: &mut Vec<PlatformLog>, pool: &PgPool) {
         return;
     }
     let to_insert: Vec<PlatformLog> = batch.drain(..).collect();
-    let now = crate::alerts::now_rfc3339();
+    let now = crate::timeutil::now_rfc3339();
     let mut qb = sqlx::QueryBuilder::new(
         "INSERT INTO platform_logs \
          (tenant_id, module, trace_id, entity_id, entity_type, level, message, payload, created_at) ",

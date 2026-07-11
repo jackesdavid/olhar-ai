@@ -49,7 +49,7 @@ impl LogBuf {
         r.next_seq += 1;
         r.buf.push_back(LogLine {
             seq,
-            ts: app_core::alerts::now_rfc3339(),
+            ts: app_core::timeutil::now_rfc3339(),
             level: level.to_string(),
             target: target.to_string(),
             message,
@@ -86,7 +86,7 @@ impl log::Log for RingLogger {
         let level = record.level();
         let target = record.target().to_string();
         let message = format!("{}", record.args());
-        let ts = app_core::alerts::now_rfc3339();
+        let ts = app_core::timeutil::now_rfc3339();
         eprintln!("[{ts} {level} {target}] {message}");
         self.buf
             .push(&level.to_string().to_lowercase(), &target, message);

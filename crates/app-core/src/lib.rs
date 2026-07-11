@@ -29,6 +29,7 @@ pub mod platform_logs;
 pub mod ports;
 pub mod presence;
 pub mod tenancy;
+pub mod timeutil;
 pub mod tracking;
 pub mod voice;
 pub mod work_queue;

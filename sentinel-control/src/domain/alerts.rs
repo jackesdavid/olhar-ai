@@ -48,7 +48,7 @@ async fn stats(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<
     let db = st.db.clone();
     let alerts = blocking(move || alerts::repo::load(&db, tid)).await?;
     let total = alerts.len() as u32;
-    let today = alerts.iter().filter(|a| alerts::is_today(&a.created_at)).count() as u32;
+    let today = alerts.iter().filter(|a| app_core::timeutil::is_today(&a.created_at)).count() as u32;
     let undelivered = alerts.iter().filter(|a| a.deliveries.is_empty()).count() as u32;
     let by_level = AlertLevel::ALL
         .iter()

@@ -15,7 +15,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::alerts::now_rfc3339;
+use crate::timeutil::now_rfc3339;
 use crate::db::Db;
 
 /// A new occurrence to record. Build with [`NewEvent::new`] then set the fields that apply;

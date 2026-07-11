@@ -20,7 +20,7 @@ pub mod subscriptions;
 
 use uuid::Uuid;
 
-use crate::alerts::now_rfc3339;
+use crate::timeutil::now_rfc3339;
 use crate::db::Db;
 
 /// The currency a tenant is billed in (`BRL` for Brazil, `USD` for the American market).

@@ -602,7 +602,7 @@ pub fn insert_run(
         .bind(source_graph_name)
         .bind(event_name)
         .bind(pod_name)
-        .bind(crate::alerts::now_rfc3339())
+        .bind(crate::timeutil::now_rfc3339())
         .execute(&pool)
         .await
     });
@@ -622,7 +622,7 @@ pub fn finish_run(db: &Db, run_id: Uuid, status: RunStatus, summary: &str) {
         .bind(run_id)
         .bind(status.as_str())
         .bind(summary)
-        .bind(crate::alerts::now_rfc3339())
+        .bind(crate::timeutil::now_rfc3339())
         .execute(&pool)
         .await
     });
@@ -766,7 +766,7 @@ pub fn mark_orphaned_runs(db: &Db, pod_name: &str) {
              WHERE status = 'running' AND pod_name = $1",
         )
         .bind(pod_name)
-        .bind(crate::alerts::now_rfc3339())
+        .bind(crate::timeutil::now_rfc3339())
         .execute(&pool)
         .await
     });

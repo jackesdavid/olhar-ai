@@ -99,7 +99,7 @@ pub fn create(
     detect_x: Option<f32>,
     detect_depth: Option<f32>,
 ) -> Presence {
-    let created_at = crate::alerts::now_rfc3339();
+    let created_at = crate::timeutil::now_rfc3339();
     let id = repo::insert(
         db,
         tenant_id,

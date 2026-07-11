@@ -7,7 +7,7 @@ use std::time::Duration;
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::alerts::now_rfc3339;
+use crate::timeutil::now_rfc3339;
 use crate::db::Db;
 
 #[derive(Debug, Clone, FromRow, serde::Serialize)]

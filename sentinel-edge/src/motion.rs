@@ -257,7 +257,7 @@ fn run_capture(state: &Arc<AppState>, ip: &str, p: &Params, stop: &AtomicBool) -
                     (largest_rect.width as f32 * sx).round() as i32,
                     (largest_rect.height as f32 * sy).round() as i32,
                 ],
-                at: app_core::alerts::now_rfc3339(),
+                at: app_core::timeutil::now_rfc3339(),
                 frame_b64: Some(frame_b64),
             };
             log::info!(
