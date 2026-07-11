@@ -18,6 +18,7 @@ use app_core::db::Db;
 
 mod auth;
 mod billing_gate;
+mod clip_purge;
 mod domain;
 mod handlers;
 mod http;
@@ -210,6 +211,9 @@ fn main() {
         let pending_rescan = Arc::new(Mutex::new(std::collections::HashSet::new()));
         let (log_bus, _) = tokio::sync::broadcast::channel::<String>(1024);
         let log_queue = app_core::platform_logs::LogQueue::spawn(pool.clone());
+
+        // Drain the clip-delete work queue: edge + cloud + row, per customer deletion request.
+        clip_purge::spawn(pool.clone());
 
         // Shared event fabric (optional). When set, the workflow SSE relay subscribes to
         // Redis (every flow pod's events) and the edge-motion endpoint publishes here.

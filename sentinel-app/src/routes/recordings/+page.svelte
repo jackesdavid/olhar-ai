@@ -174,7 +174,12 @@
     pending:   { label: "Local",      cls: "border-white/15 bg-muted/40 text-muted-foreground" },
     failed:    { label: "Failed",     cls: "border-destructive/30 bg-destructive/10 text-destructive" },
   };
+  const DELETING_BADGE: BadgeSpec = {
+    label: "Deleting",
+    cls: "border-white/15 bg-muted/40 text-muted-foreground animate-pulse",
+  };
   function badgeFor(rec: Recording): BadgeSpec {
+    if (rec.deleting) return DELETING_BADGE;
     return STATE_BADGE[rec.upload_state] ?? STATE_BADGE.pending;
   }
 
@@ -206,6 +211,13 @@
 
   // ---- delete single ---------------------------------------------------------
 
+  // Deletion is asynchronous: the request enqueues the cleanup jobs and the clip shows as
+  // "deleting" until they finish, then disappears. So we reload (to pick up the deleting flag)
+  // rather than drop the row optimistically, and reload once more shortly after to catch it gone.
+  function reloadSoon() {
+    setTimeout(() => load(), 4000);
+  }
+
   async function confirmDelete() {
     if (!deleteTarget) return;
     const id = deleteTarget.id;
@@ -213,11 +225,9 @@
     deleteTarget = null;
     try {
       await recordings.del(id);
-      items = items.filter((r) => r.id !== id);
-      total = Math.max(0, total - 1);
-      selected.delete(id);
-      selected = new Set(selected);
-      toast.success("Recording deleted");
+      toast.success("Deletion started — the clip is being removed.");
+      await load();
+      reloadSoon();
     } catch (e) {
       toast.error(String(e));
     } finally {
@@ -236,10 +246,10 @@
     bulkDeleting = true;
     try {
       const res = await recordings.bulkDel(ids);
-      items = items.filter((r) => !ids.includes(r.id));
-      total = Math.max(0, total - res.deleted);
       selected = new Set();
-      toast.success(`${res.deleted} recording${res.deleted !== 1 ? "s" : ""} deleted`);
+      toast.success(`Deleting ${res.deleted} recording${res.deleted !== 1 ? "s" : ""}…`);
+      await load();
+      reloadSoon();
     } catch (e) {
       toast.error(String(e));
     } finally {
@@ -660,7 +670,7 @@
                         variant="ghost"
                         size="icon"
                         title="Play"
-                        disabled={playLoading === rec.id}
+                        disabled={playLoading === rec.id || rec.deleting}
                         onclick={() => play(rec)}
                       >
                         {#if playLoading === rec.id}
@@ -674,7 +684,7 @@
                       variant="ghost"
                       size="icon"
                       title="Download"
-                      disabled={downloading === rec.id}
+                      disabled={downloading === rec.id || rec.deleting}
                       onclick={() => download(rec)}
                     >
                       {#if downloading === rec.id}
@@ -687,7 +697,7 @@
                       variant="ghost"
                       size="icon"
                       title="Delete"
-                      disabled={deleting === rec.id}
+                      disabled={deleting === rec.id || rec.deleting}
                       onclick={() => (deleteTarget = rec)}
                     >
                       {#if deleting === rec.id}

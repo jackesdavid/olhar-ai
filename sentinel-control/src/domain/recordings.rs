@@ -17,6 +17,8 @@ use axum::routing::get;
 use axum::Router;
 use serde::Deserialize;
 
+use app_core::work_queue;
+
 use super::{err, tenant_of, ApiErr};
 use crate::auth::{self, UserClaims};
 use crate::{store, AppState};
@@ -92,7 +94,7 @@ async fn list(
     let sort   = q.sort.as_deref().unwrap_or("started_at");
     let dir    = q.dir.as_deref().unwrap_or("desc");
 
-    let page = store::list_recordings_filtered(
+    let mut page = store::list_recordings_filtered(
         &st.pool, tid,
         q.camera_ip.as_deref(),
         q.from.as_deref(),
@@ -104,6 +106,17 @@ async fn list(
         log::error!("list recordings: {e}");
         err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
     })?;
+
+    // Mark clips with an in-flight delete so the UI can show them as "deleting". One extra query,
+    // scoped to this tenant's open jobs — the row is still present until the db job drops it.
+    if let Ok(open) = work_queue::open_recording_ids(&st.pool, tid).await {
+        if !open.is_empty() {
+            let open: std::collections::HashSet<i64> = open.into_iter().collect();
+            for item in &mut page.items {
+                item.deleting = open.contains(&item.id);
+            }
+        }
+    }
 
     Ok(Json(serde_json::json!({ "total": page.total, "items": page.items })))
 }
@@ -129,6 +142,57 @@ async fn create(
     Ok((StatusCode::CREATED, axum::Json(serde_json::json!({ "id": id }))))
 }
 
+/// The work-queue category for clip deletion, and its three actions. One delete request enqueues
+/// one job of each kind under a shared `request_id`; a per-kind consumer drains them idempotently.
+pub const DELETE_CATEGORY: &str = "clip_delete";
+pub const KIND_EDGE: &str = "edge";
+pub const KIND_CLOUD: &str = "cloud";
+pub const KIND_DB: &str = "db";
+
+/// Enqueue the three deletion jobs for one clip. Each carries its own target in the payload, so
+/// the queue — not the recording row — is the durable pointer: even once the `db` job drops the
+/// row, the `cloud` job still holds the key and finishes. Returns whether the clip existed.
+async fn enqueue_delete(st: &AppState, tenant: uuid::Uuid, id: i64) -> Result<bool, ApiErr> {
+    let Some((clip_id, cloud_key)) = store::recording_for_delete(&st.pool, tenant, id).await.map_err(|e| {
+        log::error!("recording_for_delete {id}: {e}");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+    })?
+    else {
+        return Ok(false);
+    };
+    let payload = serde_json::json!({
+        "recording_id": id.to_string(),  // text so the JSONB index / open-check matches cleanly
+        "clip_id": clip_id,
+        "cloud_key": cloud_key,
+    });
+    let jobs = vec![
+        work_queue::NewJob { kind: KIND_EDGE.into(),  payload: payload.clone() },
+        work_queue::NewJob { kind: KIND_CLOUD.into(), payload: payload.clone() },
+        work_queue::NewJob { kind: KIND_DB.into(),    payload },
+    ];
+    let request_id = uuid::Uuid::new_v4();
+    work_queue::enqueue(&st.pool, request_id, tenant, DELETE_CATEGORY, &jobs).await.map_err(|e| {
+        log::error!("enqueue delete {id}: {e}");
+        err(StatusCode::INTERNAL_SERVER_ERROR, "could not queue deletion")
+    })?;
+    Ok(true)
+}
+
+/// Audit a customer-initiated deletion — the durable record a data-subject request is answered
+/// with. Written at the moment of intent, so it survives even if the jobs finish much later.
+fn audit_delete(st: &AppState, tenant: uuid::Uuid, actor: &str, count: u64) {
+    st.log_queue.push(app_core::platform_logs::PlatformLog {
+        tenant_id: tenant,
+        module: "recordings",
+        trace_id: None,
+        entity_id: None,
+        entity_type: Some("recording"),
+        level: "info",
+        message: format!("customer requested deletion of {count} clip(s)"),
+        payload: Some(serde_json::json!({ "count": count, "by": actor })),
+    });
+}
+
 async fn remove(
     UserClaims(c): UserClaims,
     State(st): State<AppState>,
@@ -137,37 +201,13 @@ async fn remove(
     auth::require(&c, "recordings.write")?;
     let tid = tenant_of(&c)?;
 
-    // Look up the clip_id so we can delete it from the edge disk.
-    let rec = store::get_recording(&st.pool, tid, id).await.map_err(|e| {
-        log::error!("get recording {id}: {e}");
-        err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
-    })?;
-
-    if let Some(rec) = rec {
-        // Best-effort: proxy DELETE to edge. If edge returns 404 the file is already gone — still
-        // clean up the DB row. Only hard-fail on a network/5xx error.
-        if let Ok(Some(edge_host)) = store::box_host_for_tenant(&st.pool, tid).await {
-            let base = edge_api_base(&normalize_host(&edge_host));
-            let url = format!("{base}/recording/{}", urlencoding::encode(&rec.clip_id));
-            match reqwest::Client::new().delete(&url).send().await {
-                Ok(r) if r.status().is_server_error() => {
-                    log::warn!("edge delete {url}: edge returned {}", r.status());
-                    return Err(err(StatusCode::BAD_GATEWAY, "edge delete failed"));
-                }
-                Err(e) => {
-                    log::warn!("edge delete {url}: {e}");
-                    return Err(err(StatusCode::BAD_GATEWAY, format!("edge unreachable: {e}")));
-                }
-                _ => {} // 200 or 404 — both are fine, proceed to DB delete
-            }
-        }
+    // Enqueue the deletion and return — the clip shows as "deleting" (a job is open for it) until
+    // the jobs finish edge + cloud, then the db job drops the row. Durable across a restart.
+    if !enqueue_delete(&st, tid, id).await? {
+        return Err(err(StatusCode::NOT_FOUND, "recording not found"));
     }
-
-    store::delete_recording(&st.pool, tid, id).await.map_err(|e| {
-        log::error!("delete recording {id}: {e}");
-        err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
-    })?;
-    Ok(StatusCode::NO_CONTENT)
+    audit_delete(&st, tid, &c.sub, 1);
+    Ok(StatusCode::ACCEPTED)
 }
 
 /// Stream a clip from the edge over the tailnet, proxying through control so
@@ -272,7 +312,7 @@ async fn list_cameras(
     Ok(Json(result))
 }
 
-/// Bulk delete recordings by id — proxies each delete to the edge, then removes DB rows.
+/// Bulk delete recordings by id — enqueues the three deletion jobs for each clip.
 #[derive(Deserialize)]
 struct BulkDeleteBody {
     ids: Vec<i64>,
@@ -286,27 +326,16 @@ async fn bulk_delete(
     auth::require(&c, "recordings.write")?;
     let tid = tenant_of(&c)?;
 
-    let edge_base: Option<String> = store::box_host_for_tenant(&st.pool, tid)
-        .await
-        .ok()
-        .flatten()
-        .map(|h| edge_api_base(&normalize_host(&h)));
-
-    let mut deleted = 0u32;
+    let mut queued = 0u64;
     for id in &body.ids {
-        let rec = match store::get_recording(&st.pool, tid, *id).await {
-            Ok(Some(r)) => r,
-            _ => continue,
-        };
-        if let Some(ref base) = edge_base {
-            let url = format!("{base}/recording/{}", urlencoding::encode(&rec.clip_id));
-            let _ = reqwest::Client::new().delete(&url).send().await;
-        }
-        if store::delete_recording(&st.pool, tid, *id).await.is_ok() {
-            deleted += 1;
+        if enqueue_delete(&st, tid, *id).await? {
+            queued += 1;
         }
     }
-    Ok(Json(serde_json::json!({ "deleted": deleted })))
+    if queued > 0 {
+        audit_delete(&st, tid, &c.sub, queued);
+    }
+    Ok(Json(serde_json::json!({ "deleted": queued })))
 }
 
 // ---- edge push (called by the edge with BOX_TOKEN) --------------------------

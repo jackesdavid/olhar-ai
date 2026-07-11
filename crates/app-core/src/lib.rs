@@ -30,4 +30,5 @@ pub mod presence;
 pub mod tenancy;
 pub mod tracking;
 pub mod voice;
+pub mod work_queue;
 pub mod workflows;

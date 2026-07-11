@@ -177,10 +177,25 @@ server-side so the UI never recomputes money.
 - **Note:** `gb_month` reads 0 until the nightly sampler (23:03 UTC) records its first day, even
   when clips are already stored — the strip leans on `stored_bytes` for "used now" for that reason.
 
-### Phase 6 — LGPD
-- Client-initiated delete (single clip + bulk), audited to `platform_logs`.
-- Cancel/delete tenant → purge objects.
-- Document retention justification; DPA drafted with counsel.
+### Phase 6 — LGPD — **shipped (delete path)**
+Client-initiated delete (single + bulk) now reaches all three ends durably, through a **generic
+work queue** (`work_jobs`, migration 0050 — UNLOGGED, `category`+`kind`+JSONB payload,
+LISTEN/NOTIFY). Deleting inline was unsafe: a crash after the row was gone but before R2 was
+cleared would strand the object with no pointer to it.
+
+- One delete enqueues three messages under a `request_id`: `clip_delete` / `{edge, cloud, db}`.
+  Each carries its target in its payload, so the **queue is the durable pointer**, not the row.
+- Three independent named consumers (`clip-delete-{cloud,edge,db}`) each drain only their own leg,
+  idempotently. The only place that knows a delete is three actions is the enqueue site. A leg
+  whose service is down leaves its message `pending` and runs on return; a `failed` leg is a
+  visible gap in monitoring, never a blocker on the others.
+- Wake on `NOTIFY` (immediate) with a slow poll fallback (retries / missed wakeups).
+- The list marks a clip **Deleting** while any job is open for it (`open_recording_ids`); it
+  vanishes once the `db` leg drops the row. Deletion is audited to `platform_logs` at intent.
+- Master `POST /admin/storage/:tenant/purge` (Phase 3) still handles whole-tenant purge directly.
+
+Still open: migrate the other async work (notification sends, workflow-trigger events) onto
+`work_jobs` so all async jobs are monitorable in one place; DPA drafted with counsel (legal, not code).
 
 ## Out of scope (v1)
 

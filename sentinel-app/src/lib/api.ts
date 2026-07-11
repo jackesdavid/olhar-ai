@@ -198,6 +198,8 @@ export type Recording = {
   started_at: string;  // RFC3339
   created_at: string;  // RFC3339
   upload_state: UploadState;
+  /** A delete request is still working through the queue for this clip; it vanishes once done. */
+  deleting: boolean;
 };
 
 export type RecordingPage = {

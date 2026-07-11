@@ -657,9 +657,13 @@ pub struct RecordingRow {
     /// Where this clip lives: `pending` (edge only), `uploading` (in transit), `uploaded`
     /// (durable in R2), `failed`. Drives the badge and whether cloud playback is offered.
     pub upload_state:  String,
-    // Enriched at query time — not a DB column.
+    // Enriched at query time — not DB columns.
     #[sqlx(default)]
     pub camera_name:   Option<String>,
+    /// True while a delete request for this clip is still working through the queue. Set in the
+    /// list handler from `work_queue::open_recording_ids`, not stored.
+    #[sqlx(default)]
+    pub deleting:      bool,
 }
 
 /// Persist clip metadata only — the video file stays on the edge and is proxied on download.
@@ -818,6 +822,18 @@ pub async fn get_recording(pool: &PgPool, tenant_id: Uuid, id: i64) -> sqlx::Res
     sqlx::query_as::<_, RecordingRow>(
         "SELECT id, camera_ip, clip_id, friendly_name, duration_secs, size_bytes, started_at, created_at, upload_state, NULL::text AS camera_name
            FROM recordings WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant_id).bind(id)
+    .fetch_optional(pool).await
+}
+
+/// What enqueuing a delete needs: the edge-local `clip_id` and the cloud object key (if any), so
+/// each work-queue job can carry its own target in its payload. `cloud_key` is returned in **any**
+/// upload state — a `failed` or mid-`uploading` clip can have left an object in the bucket, and
+/// the delete must reach it too, not only `uploaded` ones.
+pub async fn recording_for_delete(pool: &PgPool, tenant_id: Uuid, id: i64) -> sqlx::Result<Option<(String, Option<String>)>> {
+    sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT clip_id, cloud_key FROM recordings WHERE tenant_id = $1 AND id = $2",
     )
     .bind(tenant_id).bind(id)
     .fetch_optional(pool).await
