@@ -265,16 +265,23 @@ export type MonitorJob = {
   last_error: string | null;
 };
 export type JobsPage = { total: number; items: MonitorJob[] };
-export type JobsListOpts = { tenant?: string; category?: string; status?: string; limit?: number; offset?: number };
+export type JobsListOpts = { tenant?: string; category?: string; status?: string; window?: number; limit?: number; offset?: number };
 
 export const adminJobs = {
-  /** Job counts by (category, status) — omit tenant for the whole system. */
-  stats: (tenant?: string) => api.get<CategoryStat[]>(`/admin/jobs/stats${tenant ? `?tenant=${tenant}` : ""}`),
+  /** Job counts by (category, status) within `window` seconds; omit tenant for the whole system. */
+  stats: (tenant?: string, window?: number) => {
+    const p = new URLSearchParams();
+    if (tenant) p.set("tenant", tenant);
+    if (window != null) p.set("window", String(window));
+    const qs = p.toString();
+    return api.get<CategoryStat[]>(`/admin/jobs/stats${qs ? `?${qs}` : ""}`);
+  },
   list: (opts?: JobsListOpts) => {
     const p = new URLSearchParams();
     if (opts?.tenant) p.set("tenant", opts.tenant);
     if (opts?.category) p.set("category", opts.category);
     if (opts?.status) p.set("status", opts.status);
+    if (opts?.window != null) p.set("window", String(opts.window));
     if (opts?.limit != null) p.set("limit", String(opts.limit));
     if (opts?.offset != null) p.set("offset", String(opts.offset));
     const qs = p.toString();

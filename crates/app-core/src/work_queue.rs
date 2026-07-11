@@ -241,45 +241,50 @@ pub struct MonitorJob {
     pub last_error: Option<String>,
 }
 
-/// Job counts by (category, status), across all tenants or one. Master load overview.
-pub fn monitor_stats_blocking(db: &Db, tenant: Option<Uuid>) -> Vec<CategoryStat> {
+/// Job counts by (category, status) within the last `window_secs`, across all tenants or one.
+/// Scoped to a recent window on purpose — the load view cares about the recent past and live work,
+/// not all-time history. `created_at` is cast to `timestamptz` so the window is offset-correct.
+pub fn monitor_stats_blocking(db: &Db, tenant: Option<Uuid>, window_secs: i64) -> Vec<CategoryStat> {
     let pool = db.pool();
     db.block(async move {
         sqlx::query_as::<_, CategoryStat>(
             "SELECT category, status, COUNT(*) AS count FROM work_jobs
              WHERE ($1::uuid IS NULL OR tenant_id = $1)
+               AND created_at::timestamptz >= now() - make_interval(secs => $2::double precision)
              GROUP BY category, status ORDER BY category, status",
         )
-        .bind(tenant)
+        .bind(tenant).bind(window_secs)
         .fetch_all(&pool).await.unwrap_or_default()
     })
 }
 
-/// Recent jobs (newest first), filterable by tenant / category / status. Master load detail.
+/// Recent jobs (newest first) within the last `window_secs`, filterable by tenant/category/status.
 #[allow(clippy::too_many_arguments)]
 pub fn monitor_list_blocking(
     db: &Db,
     tenant: Option<Uuid>,
     category: Option<&str>,
     status: Option<&str>,
+    window_secs: i64,
     limit: i64,
     offset: i64,
 ) -> (i64, Vec<MonitorJob>) {
     const FILTER: &str = "WHERE ($1::uuid IS NULL OR tenant_id = $1)
           AND ($2::text IS NULL OR category = $2)
-          AND ($3::text IS NULL OR status = $3)";
+          AND ($3::text IS NULL OR status = $3)
+          AND created_at::timestamptz >= now() - make_interval(secs => $4::double precision)";
     let pool = db.pool();
     let category = category.filter(|s| !s.is_empty()).map(str::to_string);
     let status = status.filter(|s| !s.is_empty()).map(str::to_string);
     db.block(async move {
         let total: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM work_jobs {FILTER}"))
-            .bind(tenant).bind(category.clone()).bind(status.clone())
+            .bind(tenant).bind(category.clone()).bind(status.clone()).bind(window_secs)
             .fetch_one(&pool).await.unwrap_or(0);
         let items = sqlx::query_as::<_, MonitorJob>(&format!(
             "SELECT id, tenant_id, category, kind, status, attempts, created_at, updated_at, last_error
-             FROM work_jobs {FILTER} ORDER BY created_at DESC LIMIT $4 OFFSET $5"
+             FROM work_jobs {FILTER} ORDER BY created_at DESC LIMIT $5 OFFSET $6"
         ))
-        .bind(tenant).bind(category).bind(status).bind(limit).bind(offset)
+        .bind(tenant).bind(category).bind(status).bind(window_secs).bind(limit).bind(offset)
         .fetch_all(&pool).await.unwrap_or_default();
         (total, items)
     })

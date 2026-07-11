@@ -32,6 +32,18 @@
   let categoryFilter = $state("");
   let page = $state(0);
 
+  // Time window — the panel counts only within it (recent past + live, not all history).
+  const WINDOW_OPTIONS = [
+    { value: "3600", label: "Last hour" },
+    { value: "86400", label: "Last day" },
+    { value: "259200", label: "Last 3 days" },
+    { value: "604800", label: "Last week" },
+  ];
+  let windowSecs = $state(86400); // default: last day
+  function windowLabel(secs: number): string {
+    return WINDOW_OPTIONS.find((o) => o.value === String(secs))?.label ?? "Last day";
+  }
+
   // Auto-refresh: 0 = off. A silent reload each tick (no top-level spinner) so the panel updates
   // in place without flicker.
   const REFRESH_OPTIONS = [
@@ -78,12 +90,13 @@
   }
 
   async function loadStats() {
-    stats = await adminJobs.stats(tenantFilter || undefined);
+    stats = await adminJobs.stats(tenantFilter || undefined, windowSecs);
   }
   async function loadList() {
     const res = await adminJobs.list({
       tenant: tenantFilter || undefined,
       category: categoryFilter || undefined,
+      window: windowSecs,
       limit: PAGE_SIZE,
       offset: page * PAGE_SIZE,
     });
@@ -125,6 +138,11 @@
     page = 0;
     loadList();
   }
+  function onWindowChange(v: string) {
+    windowSecs = Number(v);
+    page = 0;
+    refresh();
+  }
   function prevPage() { if (page > 0) { page--; loadList(); } }
   function nextPage() { if (page < pageCount - 1) { page++; loadList(); } }
 
@@ -146,6 +164,16 @@
     {#snippet actions()}
       {#if isMaster}
         <div class="flex items-center gap-2">
+          <Select.Root type="single" value={String(windowSecs)} onValueChange={onWindowChange}>
+            <Select.Trigger class="h-8 w-32 text-sm" title="Time window">
+              {windowLabel(windowSecs)}
+            </Select.Trigger>
+            <Select.Content>
+              {#each WINDOW_OPTIONS as opt (opt.value)}
+                <Select.Item value={opt.value} label={opt.label}>{opt.label}</Select.Item>
+              {/each}
+            </Select.Content>
+          </Select.Root>
           <Select.Root type="single" value={tenantFilter || "_all"} onValueChange={onTenantChange}>
             <Select.Trigger class="h-8 w-48 text-sm">
               {tenantFilter ? tenantName(tenantFilter) : "All tenants"}
