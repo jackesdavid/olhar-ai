@@ -27,3 +27,5 @@ workflows.json
 /bin/
 
 .env*.claude/worktrees/
+.env.bak.*
+.env.bak

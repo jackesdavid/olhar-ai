@@ -903,7 +903,6 @@ mod tests {
             crate::db::Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
             crate::tenancy::DEFAULT_TENANT_ID,
             std::sync::Arc::new(std::sync::Mutex::new(vec![])),
-            std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             None,
             tx,
         )
@@ -1065,7 +1064,6 @@ mod tests {
         let cfg = NodeKind::CreateAlert.default_config();
         let err = run_node(NodeKind::CreateAlert, &cfg, &PortValues::new(), &ctx).unwrap_err();
         assert!(err.contains("missing required input 'message'"), "got: {err}");
-        assert!(ctx.alerts.lock().unwrap().is_empty());
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! source output port to a target input port. The engine owns all edges and
 //! resolves wiring — a node never references another node.
 
-pub use crate::alerts::AlertLevel;
+pub use crate::events::AlertLevel;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};

@@ -69,7 +69,14 @@ auto-refresh polling for now (same pattern as the load panel); an SSE live feed 
   new `sentinel-control/src/domain/events.rs`, plus an SSE live feed (reuse the presence/runs SSE
   pattern). **Value on its own:** a single Events feed page.
 
-## Phase 2 — Replace Alerts with events
+## Phase 2 — Replace Alerts with events — **shipped**
+
+Full replacement (migration 0053 migrates rows → events, drops the `alerts` table; the
+`alerts` module is deleted). `now_rfc3339`/`is_today` relocated to `app_core::timeutil` first.
+Producers all emit `alert` events: the CreateAlert/DeliverAlert/GetLastAlert workflow nodes
+(rewired, kept working), the chat agent's alert tools, and control's `/alerts` endpoints (now a
+thin events view — the frontend page is unchanged). Beacon delivery centralised in
+`events::deliver_event_to_beacons`. Dead OnNewAlert engine machinery removed.
 
 - Rewrite the three alert producers to emit `events` (kind `alert`, carrying `severity` + room):
   `workflows/node/alerts.rs`, `agent/tools.rs`, `sentinel-control/src/domain/alerts.rs`.

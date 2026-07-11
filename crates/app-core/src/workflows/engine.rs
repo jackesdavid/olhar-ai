@@ -13,7 +13,7 @@ use super::domain::{
 use super::node::{self, PortValue, PortValues};
 use super::repo;
 use crate::agent::tools::{ToolContext, ToolUiEvent};
-use crate::alerts::{Alert, AlertLevel};
+
 use base64::Engine as _;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -994,49 +994,6 @@ impl WorkflowEngine {
         due
     }
 
-    /// Collect the levels of all NEW non-workflow alerts for `tenant` (id past its high-water
-    /// mark) and advance that tenant's mark ONCE to the max id seen (so the backlog fires once
-    /// and workflow-made alerts can't loop). Call this **once per tenant per tick**.
-    pub fn drain_new_alert_levels(
-        &mut self,
-        tenant: uuid::Uuid,
-        alerts: &[Alert],
-    ) -> Vec<AlertLevel> {
-        let seen = self.alert_seen_max.get(&tenant).copied().unwrap_or(0);
-        let mut levels = Vec::new();
-        let mut max_id = seen;
-        for a in alerts {
-            if a.id > seen {
-                max_id = max_id.max(a.id);
-                if a.source != "workflow" {
-                    levels.push(a.level);
-                }
-            }
-        }
-        self.alert_seen_max.insert(tenant, max_id);
-        levels
-    }
-
-    /// Whether any of this tick's new alert levels is at or above `min_level`.
-    pub fn levels_qualify(levels: &[AlertLevel], min_level: AlertLevel) -> bool {
-        let min_rank = level_rank(min_level);
-        levels.iter().any(|l| level_rank(*l) >= min_rank)
-    }
-
-    /// Single-graph convenience (drains + checks) for one tenant.
-    pub fn new_alert_fires(
-        &mut self,
-        tenant: uuid::Uuid,
-        alerts: &[Alert],
-        min_level: AlertLevel,
-    ) -> bool {
-        let levels = self.drain_new_alert_levels(tenant, alerts);
-        Self::levels_qualify(&levels, min_level)
-    }
-}
-
-fn level_rank(l: AlertLevel) -> usize {
-    AlertLevel::ALL.iter().position(|x| *x == l).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -1044,7 +1001,6 @@ mod tests {
     use super::super::domain::{Graph, NodeKind, PortType};
     use super::*;
     use crate::agent::detector::{PersonDetection, PersonResult};
-    use crate::alerts::{Alert, AlertLevel};
     use crate::ports::Vision;
     use serde_json::json;
 
@@ -1054,7 +1010,6 @@ mod tests {
             std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             crate::db::Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
             crate::tenancy::DEFAULT_TENANT_ID,
-            std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             None,
             tx,
@@ -1105,19 +1060,6 @@ mod tests {
         ctx.ui_tx = tx;
         ctx.vision = std::sync::Arc::new(StubVision(answer));
         ctx
-    }
-
-    fn alert(id: u64, level: AlertLevel, source: &str, msg: &str) -> Alert {
-        Alert {
-            id,
-            level,
-            message: msg.into(),
-            room_id: None,
-            room_name: None,
-            source: source.into(),
-            created_at: "2026-06-04T00:00:00Z".into(),
-            deliveries: vec![],
-        }
     }
 
     #[test]
@@ -1190,144 +1132,6 @@ mod tests {
         g.add_edge(a, "exec_out", b, "exec_in").unwrap();
         let outs = run_dag(&g, &ctx).unwrap();
         assert!(outs.contains_key(&a) && outs.contains_key(&b));
-    }
-
-    #[test]
-    fn fan_out_runs_the_source_once_and_both_consumers_see_its_value() {
-        // One source (GetLastAlert) feeding two Format consumers: the source must run
-        // exactly once (work-list settles it once) and both consumers read its output.
-        let ctx = test_ctx();
-        ctx.alerts
-            .lock()
-            .unwrap()
-            .push(alert(1, AlertLevel::Info, "operator", "boom"));
-        let mut g = Graph::new("g");
-        let gla = g.add_node(NodeKind::GetLastAlert, 0, 0);
-        let f1 = g.add_node(NodeKind::Format, 0, 0);
-        let f2 = g.add_node(NodeKind::Format, 0, 0);
-        g.node_mut(f1).unwrap().config["template"] = json!("1:{p1}");
-        g.node_mut(f2).unwrap().config["template"] = json!("2:{p1}");
-        g.add_edge(gla, "message", f1, "p1").unwrap();
-        g.add_edge(gla, "message", f2, "p1").unwrap();
-        let outs = run_dag(&g, &ctx).unwrap();
-        assert_eq!(outs[&f1]["text"].as_text(), Some("1:boom"));
-        assert_eq!(outs[&f2]["text"].as_text(), Some("2:boom"));
-    }
-
-    #[test]
-    fn run_dag_resolves_wired_input_in_topo_order() {
-        let ctx = test_ctx();
-        ctx.alerts
-            .lock()
-            .unwrap()
-            .push(alert(1, AlertLevel::Info, "operator", "hi there"));
-        let mut g = Graph::new("g");
-        let gla = g.add_node(NodeKind::GetLastAlert, 0, 0);
-        let fmt = g.add_node(NodeKind::Format, 0, 0);
-        g.node_mut(fmt).unwrap().config["template"] = json!("ALERT: {p1}");
-        g.add_edge(gla, "message", fmt, "p1").unwrap();
-        let outs = run_dag(&g, &ctx).unwrap();
-        assert_eq!(outs[&fmt]["text"].as_text(), Some("ALERT: hi there"));
-    }
-
-    #[test]
-    fn run_dag_stops_on_missing_required_input_without_io() {
-        let ctx = test_ctx();
-        ctx.alerts
-            .lock()
-            .unwrap()
-            .push(alert(1, AlertLevel::Info, "operator", "hi"));
-        let mut g = Graph::new("g");
-        let gla = g.add_node(NodeKind::GetLastAlert, 0, 0);
-        let ca = g.add_node(NodeKind::CreateAlert, 0, 0); // message "" -> missing
-        g.add_edge(gla, "room", ca, "room").unwrap(); // connect so it isn't skipped
-        let err = run_dag(&g, &ctx).unwrap_err();
-        assert!(
-            err.contains("missing required input 'message'"),
-            "got: {err}"
-        );
-        // create_alert errored before persisting — only the seed alert remains.
-        assert_eq!(ctx.alerts.lock().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn run_dag_skips_disconnected_nodes() {
-        let ctx = test_ctx();
-        ctx.alerts
-            .lock()
-            .unwrap()
-            .push(alert(1, AlertLevel::Info, "operator", "hi"));
-        let mut g = Graph::new("g");
-        // A lone, fully-wired-up create_alert with a literal message would normally
-        // persist an alert — but with no edges it's an orphan and must be skipped.
-        let ca = g.add_node(NodeKind::CreateAlert, 0, 0);
-        g.node_mut(ca).unwrap().config["message"] = json!("orphan should not fire");
-        let outs = run_dag(&g, &ctx).unwrap();
-        assert!(!outs.contains_key(&ca), "orphan node should not run");
-        assert_eq!(
-            ctx.alerts.lock().unwrap().len(),
-            1,
-            "no alert from the orphan"
-        );
-
-        // ...unless the graph opts in via run_orphans.
-        g.run_orphans = true;
-        let outs = run_dag(&g, &ctx).unwrap();
-        assert!(outs.contains_key(&ca), "orphan runs when run_orphans is on");
-        assert_eq!(
-            ctx.alerts.lock().unwrap().len(),
-            2,
-            "orphan created an alert"
-        );
-    }
-
-    #[test]
-    fn node_on_dead_branch_does_not_activate_or_error() {
-        // Repro of the reported bug: If1 goes false and its (only) true branch is the
-        // sole feeder of a *second* If's condition. The second If must NOT activate —
-        // its required `condition` is wired from a node the false branch gated off — so
-        // the run completes cleanly with no "missing required input 'condition'" error.
-        let ctx = test_ctx();
-        ctx.alerts
-            .lock()
-            .unwrap()
-            .push(alert(1, AlertLevel::Info, "op", "hi"));
-        let mut g = Graph::new("Test Workflow");
-        g.debug = true;
-
-        let if1 = g.add_node(NodeKind::If, 0, 0);
-        g.node_mut(if1).unwrap().config["condition"] = json!(false); // takes the false branch
-        let gla = g.add_node(NodeKind::GetLastAlert, 0, 0); // lives on if1's true branch
-        g.add_edge(if1, "true", gla, "exec_in").unwrap();
-
-        let if2 = g.add_node(NodeKind::If, 0, 0); // the "other if"
-        let pr = g.add_node(NodeKind::Print, 0, 0);
-        g.add_edge(gla, "ok", if2, "condition").unwrap(); // condition from the gated-off node
-        g.add_edge(if2, "true", pr, "exec_in").unwrap();
-
-        let activated = std::cell::RefCell::new(Vec::<u32>::new());
-        let res = run_dag_with(
-            &g,
-            &ctx,
-            &mut |id| activated.borrow_mut().push(id),
-            &mut |_, _, _| {},
-        );
-
-        let outs = res.expect("run must not error on a dead-branch dependency");
-        assert!(outs.contains_key(&if1), "if1 ran");
-        assert!(
-            !outs.contains_key(&gla),
-            "gla is gated off (if1 took false)"
-        );
-        assert!(
-            !outs.contains_key(&if2),
-            "if2 must NOT run — its condition source was gated off"
-        );
-        assert!(
-            !activated.borrow().contains(&if2),
-            "if2 must not even signal activation"
-        );
-        assert!(!outs.contains_key(&pr), "if2's downstream stays gated off");
     }
 
     #[test]
@@ -1724,42 +1528,6 @@ mod tests {
     }
 
     #[test]
-    fn new_alert_watcher_filters_and_advances_high_water() {
-        let t = uuid::Uuid::nil();
-        let alerts = vec![
-            alert(5, AlertLevel::Error, "operator", "old"),
-            alert(6, AlertLevel::Error, "workflow", "loop"),
-            alert(7, AlertLevel::Info, "operator", "new info"),
-            alert(8, AlertLevel::Debug, "operator", "noise"),
-        ];
-        let mut e = WorkflowEngine::new();
-        e.seed_alert_seen_max(t, 5);
-        assert!(e.new_alert_fires(t, &alerts, AlertLevel::Info));
-        assert!(!e.new_alert_fires(t, &alerts, AlertLevel::Info));
-        let mut e2 = WorkflowEngine::new();
-        e2.seed_alert_seen_max(t, 5);
-        assert!(!e2.new_alert_fires(t, &alerts, AlertLevel::Warn));
-    }
-
-    #[test]
-    fn alert_seen_max_getter_tracks_drain() {
-        let t = uuid::Uuid::nil();
-        let alerts = vec![
-            alert(5, AlertLevel::Error, "operator", "old"),
-            alert(9, AlertLevel::Info, "operator", "new"),
-        ];
-        let mut e = WorkflowEngine::new();
-        e.seed_alert_seen_max(t, 5);
-        assert_eq!(e.alert_seen_max(t), 5, "seeded watermark");
-        let _ = e.drain_new_alert_levels(t, &alerts);
-        assert_eq!(
-            e.alert_seen_max(t),
-            9,
-            "watermark advanced to the max id seen"
-        );
-    }
-
-    #[test]
     fn ask_ai_routes_true_branch_on_yes_answer() {
         let ctx = ctx_with_vision(true);
         let mut g = Graph::new("g");
@@ -1931,7 +1699,6 @@ mod tests {
             std::sync::Arc::new(std::sync::Mutex::new(vec![cam_a, cam_b])),
             crate::db::Db::lazy("postgres://x@localhost/x"),
             crate::tenancy::DEFAULT_TENANT_ID,
-            std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             None,
             tx,

@@ -18,6 +18,46 @@ use uuid::Uuid;
 use crate::timeutil::now_rfc3339;
 use crate::db::Db;
 
+/// Severity of an event, low → high. Relocated from the retired `alerts` module — the alert
+/// workflow nodes pick a level here, which maps to the event's `severity` string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AlertLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl AlertLevel {
+    /// Ascending severity — the order the CreateAlert node's level dropdown offers.
+    pub const ALL: [AlertLevel; 4] = [AlertLevel::Debug, AlertLevel::Info, AlertLevel::Warn, AlertLevel::Error];
+
+    pub fn label(self) -> &'static str {
+        match self { AlertLevel::Debug => "DEBUG", AlertLevel::Info => "INFO", AlertLevel::Warn => "WARN", AlertLevel::Error => "ERROR" }
+    }
+
+    /// The `events.severity` string this level stores as.
+    pub fn severity(self) -> &'static str {
+        match self { AlertLevel::Debug => "debug", AlertLevel::Info => "info", AlertLevel::Warn => "warn", AlertLevel::Error => "error" }
+    }
+
+    /// Parse a level name (case-insensitive).
+    pub fn parse(s: &str) -> Option<AlertLevel> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "debug" => Some(AlertLevel::Debug),
+            "info" => Some(AlertLevel::Info),
+            "warn" | "warning" => Some(AlertLevel::Warn),
+            "error" | "err" => Some(AlertLevel::Error),
+            _ => None,
+        }
+    }
+}
+
+impl Default for AlertLevel {
+    fn default() -> Self { AlertLevel::Info }
+}
+
 /// A new occurrence to record. Build with [`NewEvent::new`] then set the fields that apply;
 /// everything but `kind`/`source` is optional. `occurred_at` defaults to now — override it when
 /// the event describes a moment other than write time.
@@ -91,6 +131,137 @@ pub fn insert_events_sync(db: &Db, events: Vec<NewEvent>) {
     if let Err(e) = db.block(async move { insert_batch(&pool, &events).await }) {
         log::warn!("events::insert_events_sync failed: {e}");
     }
+}
+
+/// Insert one event and return its new id — for producers that chain the id (a workflow
+/// CreateAlert whose id feeds a DeliverAlert). Blocking; logs and returns `None` on error.
+pub fn insert_event_returning_sync(db: &Db, ev: NewEvent) -> Option<i64> {
+    let pool = db.pool();
+    let now = now_rfc3339();
+    db.block(async move {
+        sqlx::query_scalar::<_, i64>(
+            "INSERT INTO events \
+             (tenant_id, kind, source, severity, title, message, camera, clip_id, room_id, room_name, \
+              device_id, graph_id, user_id, data, occurred_at, created_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id",
+        )
+        .bind(ev.tenant_id)
+        .bind(&ev.kind).bind(&ev.source)
+        .bind(if ev.severity.is_empty() { "info" } else { &ev.severity })
+        .bind(ev.title.as_deref()).bind(ev.message.as_deref())
+        .bind(ev.camera.as_deref()).bind(ev.clip_id.as_deref())
+        .bind(ev.room_id).bind(ev.room_name.as_deref())
+        .bind(ev.device_id.as_deref()).bind(ev.graph_id).bind(ev.user_id)
+        .bind(ev.data.as_ref()).bind(&ev.occurred_at).bind(&now)
+        .fetch_one(&pool).await
+    })
+    .map_err(|e| log::warn!("events::insert_event_returning_sync failed: {e}"))
+    .ok()
+}
+
+// ---- sync reads (workflow nodes / agent on flow engine threads) --------------
+
+const SELECT_COLS: &str = "id, kind, source, severity, title, message, camera, clip_id, room_id, \
+    room_name, device_id, graph_id, user_id, data, occurred_at, created_at";
+
+/// One event by id, tenant-scoped. Blocking.
+pub fn event_by_id_sync(db: &Db, tenant_id: Uuid, id: i64) -> Option<EventRow> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_as::<_, EventRow>(&format!("SELECT {SELECT_COLS} FROM events WHERE tenant_id = $1 AND id = $2"))
+            .bind(tenant_id).bind(id).fetch_optional(&pool).await.ok().flatten()
+    })
+}
+
+/// The newest event of a kind for a tenant. Blocking. (GetLastAlert → kind='alert'.)
+pub fn latest_of_kind_sync(db: &Db, tenant_id: Uuid, kind: &str) -> Option<EventRow> {
+    let pool = db.pool();
+    let kind = kind.to_string();
+    db.block(async move {
+        sqlx::query_as::<_, EventRow>(&format!("SELECT {SELECT_COLS} FROM events WHERE tenant_id = $1 AND kind = $2 ORDER BY id DESC LIMIT 1"))
+            .bind(tenant_id).bind(&kind).fetch_optional(&pool).await.ok().flatten()
+    })
+}
+
+/// A kind's events, newest first, optionally since a timestamp. Blocking. (Agent's alert list /
+/// daily summary.) `since` = an RFC3339 lower bound on `occurred_at`; `None` = the full log.
+pub fn list_kind_sync(db: &Db, tenant_id: Uuid, kind: &str, since: Option<String>, limit: i64) -> Vec<EventRow> {
+    let pool = db.pool();
+    let kind = kind.to_string();
+    db.block(async move {
+        let mut qb = sqlx::QueryBuilder::new(format!("SELECT {SELECT_COLS} FROM events WHERE tenant_id = "));
+        qb.push_bind(tenant_id).push(" AND kind = ").push_bind(kind);
+        if let Some(s) = since {
+            qb.push(" AND occurred_at >= ").push_bind(s);
+        }
+        qb.push(" ORDER BY id DESC LIMIT ").push_bind(limit.clamp(1, 1000));
+        qb.build_query_as::<EventRow>().fetch_all(&pool).await.unwrap_or_default()
+    })
+}
+
+/// Local start-of-day as an RFC3339 lower bound, for "today's" filters.
+pub fn today_start_rfc3339() -> String {
+    format!("{}T00:00:00", &crate::timeutil::now_rfc3339()[..10])
+}
+
+/// Whether an alert event's `data.deliveries` records at least one successful beacon delivery.
+pub fn event_delivered(e: &EventRow) -> bool {
+    e.data.as_ref()
+        .and_then(|d| d.get("deliveries"))
+        .and_then(|d| d.as_array())
+        .map(|arr| arr.iter().any(|x| x.get("ok").and_then(|v| v.as_bool()).unwrap_or(false)))
+        .unwrap_or(false)
+}
+
+/// Replace an event's `data` (used to record beacon deliveries on an alert event). Blocking.
+pub fn set_data_sync(db: &Db, tenant_id: Uuid, id: i64, data: Value) {
+    let pool = db.pool();
+    let res: Result<_, sqlx::Error> = db.block(async move {
+        sqlx::query("UPDATE events SET data = $3 WHERE tenant_id = $1 AND id = $2")
+            .bind(tenant_id).bind(id).bind(&data).execute(&pool).await
+    });
+    if let Err(e) = res { log::warn!("events::set_data_sync failed: {e}"); }
+}
+
+/// Delete an event by id, tenant-scoped. Blocking. Returns whether a row was removed.
+pub fn delete_event_sync(db: &Db, tenant_id: Uuid, id: i64) -> bool {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query("DELETE FROM events WHERE tenant_id = $1 AND id = $2")
+            .bind(tenant_id).bind(id).execute(&pool).await.map(|r| r.rows_affected() > 0).unwrap_or(false)
+    })
+}
+
+/// Deliver an alert event to every enabled beacon, recording the per-beacon result in the event's
+/// `data.deliveries`. The one delivery path — shared by the DeliverAlert workflow node, the control
+/// `/alerts/:id/deliver` endpoint, and the chat agent's deliver tool (replaces `alerts::deliver`).
+/// Network IO is inline, so callers run it off a background thread.
+pub fn deliver_event_to_beacons(
+    db: &Db,
+    tenant_id: Uuid,
+    id: i64,
+    notif: &crate::notification::NotificationStore,
+    cfg: &crate::notification::NotificationConfig,
+) -> Result<String, String> {
+    let ev = event_by_id_sync(db, tenant_id, id).ok_or_else(|| format!("Alert {id} not found."))?;
+    let loc = ev.room_name.as_deref().unwrap_or("site");
+    let msg = format!("[{}] {} \u{2014} {}", ev.severity.to_uppercase(), loc, ev.message.clone().unwrap_or_default());
+
+    let beacons: Vec<crate::notification::NotificationTarget> = {
+        notif.lock().unwrap().iter().filter(|t| t.enabled).cloned().collect()
+    };
+    if beacons.is_empty() {
+        return Err("No live beacons to deliver to.".into());
+    }
+    let mut deliveries = Vec::new();
+    let mut ok_count = 0usize;
+    for b in &beacons {
+        let ok = crate::notification::dispatch(notif, cfg, Some(&b.label), &msg, None).is_ok();
+        if ok { ok_count += 1; }
+        deliveries.push(serde_json::json!({ "target": b.label, "chat_id": b.chat_id, "at": now_rfc3339(), "ok": ok }));
+    }
+    set_data_sync(db, tenant_id, id, serde_json::json!({ "deliveries": deliveries }));
+    Ok(format!("Delivered alert {id} to {ok_count}/{} beacon(s).", beacons.len()))
 }
 
 // ---- async queue (control) --------------------------------------------------

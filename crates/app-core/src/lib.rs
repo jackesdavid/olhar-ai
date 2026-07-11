@@ -8,7 +8,6 @@
 //! state under the OS app-data dir and never clobbers the ratatui app's JSON files.
 
 pub mod agent;
-pub mod alerts;
 pub mod billing;
 pub mod clip_store;
 pub mod config;

@@ -64,7 +64,6 @@ async fn chat(
     let resp = blocking(move || {
         // Stores freshly loaded from Postgres (devices/alerts/beacons can change between turns).
         let devices = Arc::new(std::sync::Mutex::new(app_core::devices::repo::load(&db, tid)));
-        let alerts = Arc::new(std::sync::Mutex::new(app_core::alerts::repo::load(&db, tid)));
         let notif: NotificationStore =
             Arc::new(std::sync::Mutex::new(app_core::notification::repo::load_beacons(&db, tid)));
         let notif_cfg = resolve_telegram_config(&db, tid);
@@ -73,7 +72,7 @@ async fn chat(
         // render them inline in the reply. The agent runs synchronously, so by the time `ask`
         // returns every event is already queued on this channel.
         let (tx, rx) = std::sync::mpsc::channel::<ToolUiEvent>();
-        let mut ctx = ToolContext::new_local(devices, db.clone(), tid, alerts, notif, notif_cfg, tx);
+        let mut ctx = ToolContext::new_local(devices, db.clone(), tid, notif, notif_cfg, tx);
         // Bind frames to THIS tenant's edge go2rtc (over the tailnet), so camera tools work in
         // the cloud — falls back to the configured/localhost go2rtc when no box is known yet.
         let base = match app_core::tenancy::box_host_for_tenant(&db, tid) {

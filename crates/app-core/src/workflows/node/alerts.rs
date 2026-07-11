@@ -1,19 +1,22 @@
+//! The alert workflow nodes, now backed by the agnostic event stream (card #66): CreateAlert
+//! records an `alert` event, GetLastAlert reads the newest one, DeliverAlert delivers it to
+//! beacons. The nodes are unchanged for users — only the store beneath them moved from the retired
+//! `alerts` table to `events`.
 use super::{PortValue, PortValues, req_text};
-use crate::agent::tools::{ToolContext, ToolUiEvent};
-use crate::alerts::{self, AlertLevel};
+use crate::agent::tools::ToolContext;
+use crate::events::{self, AlertLevel, NewEvent};
 use serde_json::Value;
 
 pub(super) fn run_get_last_alert(sys: &ToolContext) -> Result<PortValues, String> {
     let mut o = PortValues::new();
-    let alerts = sys.alerts.lock().unwrap();
-    match alerts.last() {
-        Some(a) => {
-            o.insert("id".into(), PortValue::Num(a.id as i64));
-            o.insert("level".into(), PortValue::Text(a.level.label().to_string()));
-            o.insert("message".into(), PortValue::Text(a.message.clone()));
-            o.insert("room".into(), PortValue::Text(a.room_name.clone().unwrap_or_default()));
-            o.insert("source".into(), PortValue::Text(a.source.clone()));
-            o.insert("created_at".into(), PortValue::Text(a.created_at.clone()));
+    match events::latest_of_kind_sync(&sys.db, sys.tenant_id, "alert") {
+        Some(e) => {
+            o.insert("id".into(), PortValue::Num(e.id));
+            o.insert("level".into(), PortValue::Text(e.severity.to_uppercase()));
+            o.insert("message".into(), PortValue::Text(e.message.unwrap_or_default()));
+            o.insert("room".into(), PortValue::Text(e.room_name.unwrap_or_default()));
+            o.insert("source".into(), PortValue::Text(e.source));
+            o.insert("created_at".into(), PortValue::Text(e.occurred_at));
             o.insert("ok".into(), PortValue::Bool(true));
         }
         None => {
@@ -48,19 +51,25 @@ pub(super) fn run_create_alert(
         Some(name) => {
             let rooms = crate::map::repo::load(&sys.db, sys.tenant_id);
             match rooms.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim())) {
-                Some(r) => (Some(r.id), Some(r.name.clone())),
+                Some(r) => (Some(r.id as i64), Some(r.name.clone())),
                 None => (None, Some(name.to_string())),
             }
         }
         None => (None, None),
     };
-    let a = alerts::create(&sys.alerts, Some(&sys.db), sys.tenant_id, level, message, room_id, room_name, source);
-    let _ = sys.ui_tx.send(ToolUiEvent::AlertsChanged);
+
+    let mut ev = NewEvent::new(sys.tenant_id, "alert", source);
+    ev.severity = level.severity().to_string();
+    ev.message = Some(message);
+    ev.room_id = room_id;
+    ev.room_name = room_name;
+    let id = events::insert_event_returning_sync(&sys.db, ev).ok_or("failed to record alert event")?;
+
     let mut o = PortValues::new();
-    o.insert("id".into(), PortValue::Num(a.id as i64));
+    o.insert("id".into(), PortValue::Num(id));
     o.insert(
         "result".into(),
-        PortValue::Text(format!("Raised alert {} [{}]", a.id, a.level.label())),
+        PortValue::Text(format!("Raised alert {id} [{}]", level.label())),
     );
     o.insert("ok".into(), PortValue::Bool(true));
     Ok(o)
@@ -70,13 +79,12 @@ pub(super) fn run_deliver_alert(inputs: &PortValues, sys: &ToolContext) -> Resul
     let id = inputs
         .get("id")
         .and_then(PortValue::as_num)
-        .ok_or("missing required input 'id'")? as u64;
+        .ok_or("missing required input 'id'")?;
     let cfg = sys
         .notif_cfg
         .as_ref()
         .ok_or("Notifications are not configured (set the Telegram bot token in Beacons).")?;
-    let result = alerts::deliver(&sys.alerts, Some(&sys.db), sys.tenant_id, &sys.notif, cfg, id)?;
-    let _ = sys.ui_tx.send(ToolUiEvent::AlertsChanged);
+    let result = events::deliver_event_to_beacons(&sys.db, sys.tenant_id, id, &sys.notif, cfg)?;
     let mut o = PortValues::new();
     o.insert("result".into(), PortValue::Text(result));
     o.insert("ok".into(), PortValue::Bool(true));

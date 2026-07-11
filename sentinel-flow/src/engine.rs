@@ -616,9 +616,6 @@ fn build_run_context(
     let devices = Arc::new(std::sync::Mutex::new(app_core::devices::repo::load(
         &state.db, tenant,
     )));
-    let alerts = Arc::new(std::sync::Mutex::new(app_core::alerts::repo::load(
-        &state.db, tenant,
-    )));
     let notif: NotificationStore = Arc::new(std::sync::Mutex::new(
         app_core::notification::repo::load_beacons(&state.db, tenant),
     ));
@@ -648,7 +645,6 @@ fn build_run_context(
         devices,
         state.db.clone(),
         tenant,
-        alerts,
         notif,
         notif_cfg,
         tx,

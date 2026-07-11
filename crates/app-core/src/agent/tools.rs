@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::alerts::{self, AlertLevel, AlertStore};
+use crate::events::{self, AlertLevel, NewEvent};
 use crate::db::Db;
 use crate::device_actions as actions;
 use crate::devices::DeviceStore;
@@ -81,7 +81,6 @@ pub struct ToolContext {
     pub db: Db,
     /// The tenant all this run's data is scoped to (every repo call uses it).
     pub tenant_id: uuid::Uuid,
-    pub alerts: AlertStore,
     pub notif: NotificationStore,
     /// Resolved Telegram config (saved config else env), or `None` when
     /// notifications aren't configured — the `send_notification` tool errors then.
@@ -118,7 +117,6 @@ impl ToolContext {
         devices: DeviceStore,
         db: Db,
         tenant_id: uuid::Uuid,
-        alerts: AlertStore,
         notif: NotificationStore,
         notif_cfg: Option<NotificationConfig>,
         ui_tx: Sender<ToolUiEvent>,
@@ -131,7 +129,6 @@ impl ToolContext {
             devices,
             db,
             tenant_id,
-            alerts,
             notif,
             notif_cfg,
             ui_tx,
@@ -596,19 +593,14 @@ fn create_alert() -> ToolSpec {
                 None => (None, None),
             };
 
-            let a = alerts::create(
-                &ctx.alerts,
-                Some(&ctx.db),
-                ctx.tenant_id,
-                level,
-                message.to_string(),
-                room_id,
-                room_name.clone(),
-                source,
-            );
-            let _ = ctx.ui_tx.send(ToolUiEvent::AlertsChanged);
+            let mut ev = NewEvent::new(ctx.tenant_id, "alert", source);
+            ev.severity = level.severity().to_string();
+            ev.message = Some(message.to_string());
+            ev.room_id = room_id.map(|r| r as i64);
+            ev.room_name = room_name.clone();
+            let id = events::insert_event_returning_sync(&ctx.db, ev).ok_or("failed to record alert event")?;
             let loc = room_name.map(|n| format!(" in {n}")).unwrap_or_default();
-            Ok(format!("Raised alert {} [{}]{loc}.", a.id, a.level.label()))
+            Ok(format!("Raised alert {id} [{}]{loc}.", level.label()))
         },
     }
 }
@@ -635,31 +627,29 @@ fn list_alerts() -> ToolSpec {
             let room = input.get("room").and_then(Value::as_str).filter(|s| !s.trim().is_empty());
             let undelivered_only = input.get("undelivered_only").and_then(Value::as_bool).unwrap_or(false);
 
-            let alerts = ctx.alerts.lock().unwrap();
+            let since = today_only.then(events::today_start_rfc3339);
+            let evs = events::list_kind_sync(&ctx.db, ctx.tenant_id, "alert", since, 500);
             let mut lines = Vec::new();
-            for a in alerts.iter().rev() {
-                if today_only && !crate::timeutil::is_today(&a.created_at) {
-                    continue;
-                }
-                if level.is_some() && Some(a.level) != level {
+            for e in &evs {
+                if level.is_some() && AlertLevel::parse(&e.severity) != level {
                     continue;
                 }
                 if let Some(r) = room {
-                    if a.room_name.as_deref().map(|n| !n.eq_ignore_ascii_case(r.trim())).unwrap_or(true) {
+                    if e.room_name.as_deref().map(|n| !n.eq_ignore_ascii_case(r.trim())).unwrap_or(true) {
                         continue;
                     }
                 }
-                if undelivered_only && a.delivered() {
+                if undelivered_only && events::event_delivered(e) {
                     continue;
                 }
-                let time = chrono::DateTime::parse_from_rfc3339(&a.created_at)
+                let time = chrono::DateTime::parse_from_rfc3339(&e.occurred_at)
                     .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M").to_string())
                     .unwrap_or_else(|_| "--:--".into());
-                let loc = a.room_name.clone().unwrap_or_else(|| "site".into());
-                let status = if a.delivered() { "delivered" } else { "pending" };
+                let loc = e.room_name.clone().unwrap_or_else(|| "site".into());
+                let status = if events::event_delivered(e) { "delivered" } else { "pending" };
                 lines.push(format!(
                     "#{} [{}] {time} {loc}: {} ({status})",
-                    a.id, a.level.label(), a.message
+                    e.id, e.severity.to_uppercase(), e.message.clone().unwrap_or_default()
                 ));
             }
             Ok(if lines.is_empty() { "No matching alerts.".into() } else { lines.join("\n") })
@@ -674,18 +664,14 @@ fn alert_stats() -> ToolSpec {
             by level, and the locations (rooms) with the most alerts.",
         input_schema: json!({ "type": "object", "properties": {}, "required": [] }),
         run: |_input, ctx| {
-            let alerts = ctx.alerts.lock().unwrap();
-            let today: Vec<&alerts::Alert> = alerts
-                .iter()
-                .filter(|a| crate::timeutil::is_today(&a.created_at))
-                .collect();
+            let today = events::list_kind_sync(&ctx.db, ctx.tenant_id, "alert", Some(events::today_start_rfc3339()), 1000);
             let total = today.len();
-            let pending = today.iter().filter(|a| !a.delivered()).count();
+            let pending = today.iter().filter(|e| !events::event_delivered(e)).count();
 
             let levels = AlertLevel::ALL
                 .iter()
                 .map(|l| {
-                    let n = today.iter().filter(|a| a.level == *l).count();
+                    let n = today.iter().filter(|e| AlertLevel::parse(&e.severity) == Some(*l)).count();
                     format!("{} {}", l.label(), n)
                 })
                 .collect::<Vec<_>>()
@@ -732,21 +718,12 @@ fn deliver_alert() -> ToolSpec {
         run: |input, ctx| {
             let id = input
                 .get("id")
-                .and_then(Value::as_u64)
+                .and_then(Value::as_i64)
                 .ok_or("Missing 'id'.")?;
             let cfg = ctx.notif_cfg.as_ref().ok_or(
                 "Notifications are not configured (set the Telegram bot token in Recipients).",
             )?;
-            let result = alerts::deliver(
-                &ctx.alerts,
-                Some(&ctx.db),
-                ctx.tenant_id,
-                &ctx.notif,
-                cfg,
-                id,
-            )?;
-            let _ = ctx.ui_tx.send(ToolUiEvent::AlertsChanged);
-            Ok(result)
+            events::deliver_event_to_beacons(&ctx.db, ctx.tenant_id, id, &ctx.notif, cfg)
         },
     }
 }
@@ -764,10 +741,9 @@ fn delete_alert() -> ToolSpec {
         run: |input, ctx| {
             let id = input
                 .get("id")
-                .and_then(Value::as_u64)
+                .and_then(Value::as_i64)
                 .ok_or("Missing 'id'.")?;
-            if alerts::delete(&ctx.alerts, Some(&ctx.db), ctx.tenant_id, id) {
-                let _ = ctx.ui_tx.send(ToolUiEvent::AlertsChanged);
+            if events::delete_event_sync(&ctx.db, ctx.tenant_id, id) {
                 Ok(format!("Deleted alert {id}."))
             } else {
                 Err(format!("Alert {id} not found."))
@@ -799,7 +775,6 @@ mod tests {
             std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
             crate::tenancy::DEFAULT_TENANT_ID,
-            std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             std::sync::Arc::new(std::sync::Mutex::new(vec![])),
             None,
             tx,
