@@ -4,13 +4,16 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use app_core::notification::{self, queue, repo, NotificationConfig, NotificationStore};
+use app_core::notification::{self, repo, NotificationConfig, NotificationStore};
+use app_core::work_queue;
 
 use crate::state::AppState;
 
 const MAX_ATTEMPTS: i32 = 5;
-/// Idle poll interval when the queue is empty. (A future Postgres LISTEN/NOTIFY ping can
-/// wake this instantly; polling is the durable fallback.)
+/// Jobs claimed per pass.
+const BATCH: i64 = 50;
+/// Idle poll interval when the queue is empty. (The queue's LISTEN/NOTIFY is a control-side
+/// latency win; notification has no PgPool, so it stays on the poll — durable regardless.)
 const IDLE_POLL: Duration = Duration::from_millis(750);
 
 /// How often staged media is reclaimed.
@@ -25,12 +28,21 @@ const ORPHAN_EXPIRY_DAYS: u32 = 3;
 
 pub fn spawn(state: Arc<AppState>) {
     std::thread::spawn(move || loop {
-        match queue::claim_next(&state.db) {
-            Some(job) => process(&state, job),
-            None => std::thread::sleep(IDLE_POLL),
+        let jobs = work_queue::claim_blocking(
+            &state.db,
+            work_queue::NOTIFICATION_CATEGORY,
+            work_queue::NOTIFICATION_KIND,
+            BATCH,
+        );
+        if jobs.is_empty() {
+            std::thread::sleep(IDLE_POLL);
+            continue;
+        }
+        for job in jobs {
+            process(&state, job);
         }
     });
-    log::info!("notification queue consumer started");
+    log::info!("notification send consumer started (work_jobs)");
 }
 
 /// Reclaim staged media.
@@ -50,7 +62,7 @@ pub fn spawn_media_purge(state: Arc<AppState>) {
         Err(e) => log::warn!("media purge: could not set lifecycle ({e}) — prompt reclaim still runs"),
     }
     std::thread::spawn(move || loop {
-        let batch = queue::purgeable_media(&state.db, PURGE_GRACE_SECS, PURGE_BATCH);
+        let batch = work_queue::purgeable_notification_media_blocking(&state.db, PURGE_GRACE_SECS, PURGE_BATCH);
         let mut reclaimed = Vec::new();
         for row in &batch {
             // Only forget the keys once every object for that row is actually gone, or a
@@ -62,7 +74,7 @@ pub fn spawn_media_purge(state: Arc<AppState>) {
             }
         }
         if !reclaimed.is_empty() {
-            let n = queue::clear_media_keys(&state.db, &reclaimed);
+            let n = work_queue::clear_notification_media_keys_blocking(&state.db, &reclaimed);
             log::info!("media purge: reclaimed media for {n} notification(s)");
         }
         std::thread::sleep(PURGE_INTERVAL);
@@ -81,37 +93,46 @@ fn drop_object(key: &str) -> bool {
     }
 }
 
-fn process(state: &AppState, job: queue::QueuedNotification) {
-    let backoff = backoff_secs(job.attempts);
+fn process(state: &AppState, job: work_queue::Job) {
+    // The send job's fields live in the payload; id/tenant_id/attempts come off the Job.
+    let p = &job.payload;
+    let target = p.get("target").and_then(|v| v.as_str());
+    let chat_id = p.get("chat_id").and_then(|v| v.as_i64());
+    let message = p.get("message").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let image_key = p.get("image_key").and_then(|v| v.as_str());
+    let video_key = p.get("video_key").and_then(|v| v.as_str());
+
+    // A transient failure reschedules with backoff until the attempts run out, then parks `failed`.
+    let fail = |state: &AppState, err: &str| {
+        if job.attempts >= MAX_ATTEMPTS {
+            work_queue::mark_failed_blocking(&state.db, job.id, err, MAX_ATTEMPTS);
+        } else {
+            work_queue::retry_after_blocking(&state.db, job.id, backoff_secs(job.attempts), err);
+        }
+    };
+
     let Some(cfg) = resolve_config(&state.db, job.tenant_id) else {
-        queue::mark_retry_or_fail(
-            &state.db,
-            job.id,
-            job.attempts,
-            MAX_ATTEMPTS,
-            backoff,
-            "no Telegram configuration for this tenant",
-        );
+        fail(state, "no Telegram configuration for this tenant");
         return;
     };
 
-    // Download any media the object store holds for this row.
-    let image = job.image_key.as_deref().and_then(|k| fetch_media(&job.id, k));
-    let video = job.video_key.as_deref().and_then(|k| fetch_media(&job.id, k));
+    // Download any media the object store holds for this send.
+    let image = image_key.and_then(|k| fetch_media(&job.id, k));
+    let video = video_key.and_then(|k| fetch_media(&job.id, k));
 
     // A direct bot reply (card #15) carries a raw chat_id → send straight to that chat, bypassing
     // beacon resolution. Otherwise resolve the tenant's beacon target(s) as before.
-    let result = match job.chat_id {
-        Some(chat_id) => send_to_chat(&cfg, chat_id, &job.message, image, video),
+    let result = match chat_id {
+        Some(chat_id) => send_to_chat(&cfg, chat_id, &message, image, video),
         None => {
             let store: NotificationStore =
                 Arc::new(Mutex::new(repo::load_beacons(&state.db, job.tenant_id)));
-            notification::dispatch(&store, &cfg, job.target.as_deref(), &job.message, image)
+            notification::dispatch(&store, &cfg, target, &message, image)
         }
     };
     match result {
-        Ok(result) => queue::mark_sent(&state.db, job.id, &result),
-        Err(e) => queue::mark_retry_or_fail(&state.db, job.id, job.attempts, MAX_ATTEMPTS, backoff, &e),
+        Ok(_) => work_queue::mark_done_blocking(&state.db, job.id),
+        Err(e) => fail(state, &e),
     }
 }
 

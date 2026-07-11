@@ -208,29 +208,31 @@ pub fn stats(db: &Db, tenant_id: uuid::Uuid) -> QueueStats {
                 q.fetch_one(&pool).await.unwrap_or(0)
             }
         };
+        // Reads the unified work_jobs queue (category='notification'). Status maps: pending/running
+        // = in flight, done = sent, failed = failed.
         let pending = scalar(
-            "SELECT count(*) FROM notification_queue WHERE tenant_id = $1 AND status IN ('queued','sending')",
+            "SELECT count(*) FROM work_jobs WHERE category = 'notification' AND tenant_id = $1 AND status IN ('pending','running')",
             false,
         )
         .await;
         let sent_today = scalar(
-            "SELECT count(*) FROM notification_queue WHERE tenant_id = $1 AND status = 'sent' AND created_at >= $2",
+            "SELECT count(*) FROM work_jobs WHERE category = 'notification' AND tenant_id = $1 AND status = 'done' AND created_at >= $2",
             true,
         )
         .await;
         let failed_today = scalar(
-            "SELECT count(*) FROM notification_queue WHERE tenant_id = $1 AND status = 'failed' AND created_at >= $2",
+            "SELECT count(*) FROM work_jobs WHERE category = 'notification' AND tenant_id = $1 AND status = 'failed' AND created_at >= $2",
             true,
         )
         .await;
         let queued_today = scalar(
-            "SELECT count(*) FROM notification_queue WHERE tenant_id = $1 AND created_at >= $2",
+            "SELECT count(*) FROM work_jobs WHERE category = 'notification' AND tenant_id = $1 AND created_at >= $2",
             true,
         )
         .await;
         let hourly = sqlx::query_as::<_, (String, i64)>(
-            "SELECT left(created_at, 13) AS hr, count(*) FROM notification_queue
-             WHERE tenant_id = $1 AND created_at >= $2 GROUP BY hr ORDER BY hr",
+            "SELECT left(created_at, 13) AS hr, count(*) FROM work_jobs
+             WHERE category = 'notification' AND tenant_id = $1 AND created_at >= $2 GROUP BY hr ORDER BY hr",
         )
         .bind(tenant_id)
         .bind(&today)
@@ -275,17 +277,24 @@ pub fn list(
     limit: i64,
     offset: i64,
 ) -> QueuePage {
-    const FILTER: &str = "WHERE tenant_id = $1
+    // Reads work_jobs (category='notification'). The UI filters/labels by the old status names, so
+    // map the incoming filter to the work_jobs status, and map back on the way out.
+    const FILTER: &str = "WHERE category = 'notification' AND tenant_id = $1
           AND ($2::text IS NULL OR status = $2)
-          AND ($3::text IS NULL OR lower(message) LIKE $3 OR lower(coalesce(target,'')) LIKE $3)";
+          AND ($3::text IS NULL OR lower(payload->>'message') LIKE $3 OR lower(coalesce(payload->>'target','')) LIKE $3)";
     let pool = db.pool();
-    let status = status.filter(|s| !s.is_empty()).map(str::to_string);
+    let status = status.filter(|s| !s.is_empty()).map(|s| match s {
+        "queued" => "pending",
+        "sending" => "running",
+        "sent" => "done",
+        other => other, // 'failed' is the same
+    }.to_string());
     let pattern = q
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty())
         .map(|s| format!("%{s}%"));
     db.block(async move {
-        let total: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM notification_queue {FILTER}"))
+        let total: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM work_jobs {FILTER}"))
             .bind(tenant_id)
             .bind(status.clone())
             .bind(pattern.clone())
@@ -293,8 +302,17 @@ pub fn list(
             .await
             .unwrap_or(0);
         let items = sqlx::query_as::<_, QueueItem>(&format!(
-            "SELECT id, status, target, message, attempts, image_key, video_key, result, created_at, sent_at
-             FROM notification_queue {FILTER}
+            "SELECT id,
+                    CASE status WHEN 'pending' THEN 'queued' WHEN 'running' THEN 'sending' WHEN 'done' THEN 'sent' ELSE status END AS status,
+                    payload->>'target' AS target,
+                    coalesce(payload->>'message','') AS message,
+                    attempts,
+                    payload->>'image_key' AS image_key,
+                    payload->>'video_key' AS video_key,
+                    last_error AS result,
+                    created_at,
+                    CASE WHEN status = 'done' THEN updated_at ELSE NULL END AS sent_at
+             FROM work_jobs {FILTER}
              ORDER BY created_at DESC LIMIT $4 OFFSET $5"
         ))
         .bind(tenant_id)

@@ -215,6 +215,95 @@ pub fn enqueue_event_blocking(db: &Db, tenant_id: Uuid, event: &str, source: &st
     enqueue_one_blocking(db, tenant_id, EVENT_CATEGORY, EVENT_KIND, payload);
 }
 
+// ---- notification sends (migrated from notification_queue) ------------------
+// One send per job. The send is non-idempotent (a re-run is a duplicate Telegram), so it relies
+// on the atomic claim; transient failures reschedule with backoff via `retry_after`.
+
+/// Category for outbound notification sends.
+pub const NOTIFICATION_CATEGORY: &str = "notification";
+/// Kind for a send — one action, so a single kind.
+pub const NOTIFICATION_KIND: &str = "send";
+
+/// Enqueue a notification send. `target` = beacon label (or `None` for all recipients);
+/// `chat_id` = a direct Telegram chat reply (or `None`); `image_key`/`video_key` = object-store
+/// keys. Replaces `notification::queue::enqueue`, on the unified queue.
+#[allow(clippy::too_many_arguments)]
+pub fn enqueue_notification_blocking(
+    db: &Db,
+    tenant_id: Uuid,
+    target: Option<&str>,
+    chat_id: Option<i64>,
+    message: &str,
+    image_key: Option<&str>,
+    video_key: Option<&str>,
+) {
+    let payload = serde_json::json!({
+        "target": target,
+        "chat_id": chat_id,
+        "message": message,
+        "image_key": image_key,
+        "video_key": video_key,
+    });
+    enqueue_one_blocking(db, tenant_id, NOTIFICATION_CATEGORY, NOTIFICATION_KIND, payload);
+}
+
+/// A terminal notification job whose staged media can be reclaimed.
+pub struct PurgeableMedia {
+    pub id:        Uuid,
+    pub image_key: Option<String>,
+    pub video_key: Option<String>,
+}
+
+/// Terminal notification sends past the grace window whose media keys are **not** still referenced
+/// by an in-flight send (one staged object may back several jobs). The object store can then drop
+/// the objects. Mirrors the old `notification::queue::purgeable_media`, reading keys from payload.
+pub fn purgeable_notification_media_blocking(db: &Db, grace_secs: i64, limit: i64) -> Vec<PurgeableMedia> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_as::<_, (Uuid, Option<String>, Option<String>)>(
+            "SELECT q.id, q.payload->>'image_key', q.payload->>'video_key'
+             FROM work_jobs q
+             WHERE q.category = 'notification' AND q.status IN ('done', 'failed')
+               AND (q.payload->>'image_key' IS NOT NULL OR q.payload->>'video_key' IS NOT NULL)
+               AND q.updated_at::timestamptz < now() - make_interval(secs => $1)
+               AND NOT EXISTS (
+                   SELECT 1 FROM work_jobs o
+                   WHERE o.category = 'notification' AND o.status NOT IN ('done', 'failed')
+                     AND ((q.payload->>'image_key' IS NOT NULL AND o.payload->>'image_key' = q.payload->>'image_key')
+                       OR (q.payload->>'video_key' IS NOT NULL AND o.payload->>'video_key' = q.payload->>'video_key'))
+               )
+             ORDER BY q.updated_at
+             LIMIT $2",
+        )
+        .bind(grace_secs).bind(limit)
+        .fetch_all(&pool).await
+        .unwrap_or_default()
+        .into_iter().map(|(id, image_key, video_key)| PurgeableMedia { id, image_key, video_key }).collect()
+    })
+}
+
+/// Strip the media keys from a job's payload once the objects are gone, so nothing points at a
+/// deleted attachment. Mirrors `notification::queue::clear_media_keys`.
+pub fn clear_notification_media_keys_blocking(db: &Db, ids: &[Uuid]) -> u64 {
+    let pool = db.pool();
+    let ids = ids.to_vec();
+    db.block(async move {
+        sqlx::query("UPDATE work_jobs SET payload = (payload - 'image_key') - 'video_key' WHERE id = ANY($1)")
+            .bind(&ids)
+            .execute(&pool).await
+            .map(|r| r.rows_affected()).unwrap_or(0)
+    })
+}
+
+/// Requeue with a backoff delay (blocking) — the send hit a transient error and has retries left.
+pub fn retry_after_blocking(db: &Db, id: Uuid, backoff_secs: i64, err: &str) {
+    let pool = db.pool();
+    let err = err.to_string();
+    if let Err(e) = db.block(async move { retry_after(&pool, id, backoff_secs, &err).await }) {
+        log::error!("work_queue::retry_after_blocking failed: {e}");
+    }
+}
+
 /// Mark done (blocking).
 pub fn mark_done_blocking(db: &Db, id: Uuid) {
     let pool = db.pool();

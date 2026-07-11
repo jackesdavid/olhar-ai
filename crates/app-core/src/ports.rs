@@ -247,7 +247,7 @@ impl Notifier for RemoteNotifier {
             Some(bytes) => return crate::notification::dispatch(store, cfg, target, message, Some(bytes)),
             None => None,
         };
-        crate::notification::queue::enqueue(
+        crate::work_queue::enqueue_notification_blocking(
             &self.db,
             self.tenant_id,
             target,
@@ -283,7 +283,7 @@ impl Notifier for RemoteNotifier {
             }
             None => None,
         };
-        crate::notification::queue::enqueue(
+        crate::work_queue::enqueue_notification_blocking(
             &self.db,
             self.tenant_id,
             None,
@@ -308,7 +308,7 @@ impl Notifier for RemoteNotifier {
             return Ok("sent".to_string());
         }
         let key = crate::media::put(&video, "video/mp4", "mp4")?;
-        crate::notification::queue::enqueue(
+        crate::work_queue::enqueue_notification_blocking(
             &self.db,
             self.tenant_id,
             None,
