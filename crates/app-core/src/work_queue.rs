@@ -258,6 +258,25 @@ pub fn monitor_stats_blocking(db: &Db, tenant: Option<Uuid>, window_secs: i64) -
     })
 }
 
+/// A time series of jobs created per `bucket_secs` bucket within the window — `(bucket_start_epoch,
+/// count)`, oldest first. Only non-empty buckets; the caller zero-fills the axis. Buckets are
+/// floored on the unix epoch so any bucket size (a minute, or coarser for a wide window) lines up.
+pub fn monitor_series_blocking(db: &Db, tenant: Option<Uuid>, window_secs: i64, bucket_secs: i64) -> Vec<(i64, i64)> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT (floor(extract(epoch FROM created_at::timestamptz) / $3) * $3)::bigint AS t,
+                    count(*)::bigint AS c
+             FROM work_jobs
+             WHERE ($1::uuid IS NULL OR tenant_id = $1)
+               AND created_at::timestamptz >= now() - make_interval(secs => $2::double precision)
+             GROUP BY t ORDER BY t",
+        )
+        .bind(tenant).bind(window_secs).bind(bucket_secs)
+        .fetch_all(&pool).await.unwrap_or_default()
+    })
+}
+
 /// Recent jobs (newest first) within the last `window_secs`, filterable by tenant/category/status.
 #[allow(clippy::too_many_arguments)]
 pub fn monitor_list_blocking(

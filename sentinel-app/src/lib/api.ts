@@ -267,6 +267,9 @@ export type MonitorJob = {
 export type JobsPage = { total: number; items: MonitorJob[] };
 export type JobsListOpts = { tenant?: string; category?: string; status?: string; window?: number; limit?: number; offset?: number };
 
+/** Jobs created per time bucket within the window. `t` = bucket-start unix epoch (seconds). */
+export type JobSeries = { bucket_secs: number; points: { t: number; c: number }[] };
+
 export const adminJobs = {
   /** Job counts by (category, status) within `window` seconds; omit tenant for the whole system. */
   stats: (tenant?: string, window?: number) => {
@@ -275,6 +278,14 @@ export const adminJobs = {
     if (window != null) p.set("window", String(window));
     const qs = p.toString();
     return api.get<CategoryStat[]>(`/admin/jobs/stats${qs ? `?${qs}` : ""}`);
+  },
+  /** Time series of jobs created per bucket, for the load-over-time chart. */
+  series: (tenant?: string, window?: number) => {
+    const p = new URLSearchParams();
+    if (tenant) p.set("tenant", tenant);
+    if (window != null) p.set("window", String(window));
+    const qs = p.toString();
+    return api.get<JobSeries>(`/admin/jobs/series${qs ? `?${qs}` : ""}`);
   },
   list: (opts?: JobsListOpts) => {
     const p = new URLSearchParams();

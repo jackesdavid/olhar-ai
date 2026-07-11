@@ -15,7 +15,7 @@
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
 
-  import { adminJobs, admin, type CategoryStat, type MonitorJob, type Tenant } from "$lib/api";
+  import { adminJobs, admin, type CategoryStat, type MonitorJob, type Tenant, type JobSeries } from "$lib/api";
   import { auth } from "$lib/auth.svelte";
   import { fmtTs } from "$lib/utils";
 
@@ -27,6 +27,7 @@
   let items = $state<MonitorJob[]>([]);
   let total = $state(0);
   let tenants = $state<Tenant[]>([]);
+  let series = $state<JobSeries | null>(null);
 
   let tenantFilter = $state(""); // "" = all tenants
   let categoryFilter = $state("");
@@ -34,6 +35,7 @@
 
   // Time window — the panel counts only within it (recent past + live, not all history).
   const WINDOW_OPTIONS = [
+    { value: "60", label: "Last minute" },
     { value: "3600", label: "Last hour" },
     { value: "86400", label: "Last day" },
     { value: "259200", label: "Last 3 days" },
@@ -92,6 +94,35 @@
   async function loadStats() {
     stats = await adminJobs.stats(tenantFilter || undefined, windowSecs);
   }
+  async function loadSeries() {
+    series = await adminJobs.series(tenantFilter || undefined, windowSecs);
+  }
+
+  // Zero-filled bars from the sparse series: the backend returns only non-empty buckets, so build
+  // the full axis (now-window → now, stepping bucket_secs) and look counts up. ~120 buckets max.
+  const chartBars = $derived.by(() => {
+    if (!series || series.bucket_secs <= 0) return [] as { t: number; c: number }[];
+    const bucket = series.bucket_secs;
+    const map = new Map(series.points.map((p) => [p.t, p.c]));
+    const now = Math.floor(Date.now() / 1000);
+    const start = Math.floor((now - windowSecs) / bucket) * bucket;
+    const end = Math.floor(now / bucket) * bucket;
+    const bars: { t: number; c: number }[] = [];
+    for (let t = start; t <= end; t += bucket) bars.push({ t, c: map.get(t) ?? 0 });
+    return bars;
+  });
+  const maxBar = $derived(Math.max(1, ...chartBars.map((b) => b.c)));
+  const chartEmpty = $derived(chartBars.length === 0 || chartBars.every((b) => b.c === 0));
+  function barTitle(b: { t: number; c: number }): string {
+    const d = new Date(b.t * 1000);
+    return `${d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })} · ${b.c}`;
+  }
+  function axisLabel(t: number): string {
+    // Show seconds on the short (sub-5-min) view, where minute-only labels would all read the same.
+    const opts: Intl.DateTimeFormatOptions =
+      windowSecs <= 300 ? { minute: "2-digit", second: "2-digit" } : { hour: "2-digit", minute: "2-digit" };
+    return new Date(t * 1000).toLocaleTimeString([], opts);
+  }
   async function loadList() {
     const res = await adminJobs.list({
       tenant: tenantFilter || undefined,
@@ -106,7 +137,7 @@
   async function refresh() {
     loading = true;
     try {
-      await Promise.all([loadStats(), loadList()]);
+      await Promise.all([loadStats(), loadList(), loadSeries()]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load jobs");
     } finally {
@@ -117,7 +148,7 @@
   // good data on screen instead of surfacing a toast every few seconds.
   async function silentRefresh() {
     try {
-      await Promise.all([loadStats(), loadList()]);
+      await Promise.all([loadStats(), loadList(), loadSeries()]);
     } catch { /* keep last good data */ }
   }
 
@@ -226,6 +257,31 @@
         <p class="text-2xl font-semibold tabular-nums">{categories.length}</p>
       </Card.Content></Card.Root>
     </div>
+
+    <!-- jobs over time -->
+    <Card.Root>
+      <Card.Content class="pt-6">
+        <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Jobs over time · {windowLabel(windowSecs)}</p>
+        {#if chartEmpty}
+          <p class="mt-4 text-sm text-muted-foreground">No jobs in this window.</p>
+        {:else}
+          <div class="mt-4 flex h-28 items-end gap-px">
+            {#each chartBars as b (b.t)}
+              <div
+                class="flex-1 rounded-sm bg-primary/70 transition-[height] hover:bg-primary"
+                style="height: {Math.max(b.c > 0 ? 3 : 0, (b.c / maxBar) * 100)}%"
+                title={barTitle(b)}
+              ></div>
+            {/each}
+          </div>
+          <div class="mt-1 flex justify-between text-[10px] text-muted-foreground tabular-nums">
+            <span>{axisLabel(chartBars[0].t)}</span>
+            <span>{axisLabel(chartBars[Math.floor(chartBars.length / 2)].t)}</span>
+            <span>{axisLabel(chartBars[chartBars.length - 1].t)}</span>
+          </div>
+        {/if}
+      </Card.Content>
+    </Card.Root>
 
     <!-- per-category breakdown -->
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
