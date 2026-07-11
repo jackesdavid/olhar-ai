@@ -6,6 +6,42 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-07-11 — Playback Timeline (#67) planned + researched (no code)
+
+- **Branch:** main (docs only; not deployed — nothing to deploy)
+- **Commits:** docs commit for board card #67 + plan note + this entry
+- **Done:**
+  - `/board plan` → new card **#67 "Playback Timeline — unified inspection view (blocked on #66)"**
+    in ToDo, plan note `docs/plans/recording-playback-timeline.md`.
+  - This is the **apex inspection screen** the user wants: the single place to see *all* events
+    from *all* modules laid along one playback clock, multi-camera in sync, jump ahead/back across
+    all cameras, detection bboxes on the viewport, and (future) tracker trajectories moving along
+    playback. It's the "time-travel Live module" #66's plan explicitly deferred.
+  - `/impeccable` pass: reconciled the user's rainbow NLE mockup with the monochrome ink theme
+    (cameras keyed by ink label not hue; markers = severity dots not flags; ink playhead + live
+    `.status-live` ping). Refined mockup at
+    `…/scratchpad/playback-timeline-impeccable.html` (scratchpad — throwaway, not in repo).
+  - Research pass folded into the plan appendix: rVFC master/slave multi-video sync, ~4–9
+    simultaneous decode ceiling + keyframe-snapshot/Birdseye fallbacks, fMP4/HLS+PROGRAM-DATE-TIME
+    seeking, RTCP clock alignment, Frigate/Shinobi prior art, tracker-replay data model
+    (timestamped polylines, model (c)).
+  - Grounding win recorded: the edge **already runs a ByteTrack `MultiTracker`**
+    (`crates/app-core/src/tracking.rs`) — future "trackers moving along video" = persist its
+    sampled trajectory, not a new tracker. Reuse `recordings.list`/`cloudUrl`, `events.list` (#66),
+    `/live` MSE plumbing.
+- **State:** planning only — no build/check/cargo run (no code changed). #66 Phase 1+2 already
+  landed on main (commits 722e477, e51737b, 0a602b8).
+- **Pending / next:** BLOCKED on #66 completing. When it lands, spike the two early-risk decisions
+  first — **container format (#8: MP4 vs fMP4/HLS, touches the edge recorder + #64)** and
+  **decode budget (#10: benchmark simultaneous 1080p decode on target hardware)**. Then build
+  Phase 1 (static multi-track day view).
+- **Blockers:** #66 (agnostic event module) not fully done — this view consumes the finished event
+  stream as its correlation backbone.
+- **Refs:** docs/plans/recording-playback-timeline.md, docs/plans/agnostic-event-module.md,
+  crates/app-core/src/tracking.rs, crates/app-core/src/events.rs, sentinel-app/src/lib/api.ts
+  (`recordings`, `events`)
+
+
 ## 2026-06-21 — Motion-triggered stream recorder (full implementation)
 
 - **Branch:** main (commit 5d32d0b, deployed)

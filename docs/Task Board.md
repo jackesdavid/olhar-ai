@@ -56,6 +56,8 @@ kanban-plugin: board
 	  - Plan: [[invite-onboarding-email]]
 - [ ] #66 Agnostic event module — replace the Alert model
 	  - Plan: [[agnostic-event-module]]
+- [ ] #67 Playback Timeline — unified inspection view (blocked on #66)
+	  - Plan: [[recording-playback-timeline]]
 
 
 ## In Progress
