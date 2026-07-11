@@ -184,7 +184,7 @@ fn enqueue_telegram_message(store: &NotificationStore, db: &Db, tenant_id: uuid:
         "command": command,
         "args": args,
     });
-    crate::event_queue::enqueue(db, tenant_id, "telegram_message", "telegram", &payload);
+    crate::work_queue::enqueue_event_blocking(db, tenant_id, "telegram_message", "telegram", &payload);
 }
 
 /// Register a paired chat if not already present. Returns true if newly added.

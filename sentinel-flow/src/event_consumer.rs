@@ -1,46 +1,60 @@
-//! Durable inbound-event consumer (card #57): claims rows from the shared `event_queue`
-//! (`app_core::event_queue`) and fires each into the engine as an `OnEvent` trigger. This
-//! replaces the lossy Redis `flow:inject` subscriber — an event now survives a flow restart
-//! and is never dropped when the fabric is down.
+//! Durable inbound-event consumer (card #57, unified onto `work_jobs` — card #64): claims
+//! `workflow_event` jobs from the shared generic queue (`app_core::work_queue`) and fires each
+//! into the engine as an `OnEvent` trigger. This replaces the lossy Redis `flow:inject`
+//! subscriber — an event survives a flow restart and is never dropped when the fabric is down.
 //!
-//! Runs on a std thread; the repo functions bridge sqlx via `Db::block`, so no tokio context is
-//! needed here (mirrors [`crate::engine`]'s poller and the notification consumer). Polling is the
-//! durable claim mechanism; a Postgres LISTEN/NOTIFY wakeup can front it later as a latency win.
+//! Runs on a std thread; the queue's `*_blocking` wrappers bridge sqlx via `Db::block`, so no
+//! tokio context is needed here (mirrors [`crate::engine`]'s poller and the notification consumer).
+//! Polling is the durable claim; the queue's LISTEN/NOTIFY wakeup is a control-side latency win —
+//! flow has no `PgPool`, so it stays on the poll.
 use std::sync::Arc;
 use std::time::Duration;
 
-use app_core::event_queue::{self, ClaimedEvent};
+use app_core::work_queue;
 use app_core::workflows::EventSource;
 
 use crate::state::AppState;
 
 /// Idle poll interval when the queue is empty.
 const IDLE_POLL: Duration = Duration::from_millis(500);
+/// Jobs claimed per pass.
+const BATCH: i64 = 50;
 
 pub fn spawn(state: Arc<AppState>) {
     std::thread::spawn(move || loop {
-        match event_queue::claim_next(&state.db) {
-            Some(ev) => process(&state, ev),
-            None => std::thread::sleep(IDLE_POLL),
+        let jobs = work_queue::claim_blocking(&state.db, work_queue::EVENT_CATEGORY, work_queue::EVENT_KIND, BATCH);
+        if jobs.is_empty() {
+            std::thread::sleep(IDLE_POLL);
+            continue;
+        }
+        for job in jobs {
+            process(&state, job);
         }
     });
-    log::info!("inbound event_queue consumer started");
+    log::info!("inbound workflow_event consumer started (work_jobs)");
 }
 
-fn process(state: &Arc<AppState>, ev: ClaimedEvent) {
-    let payload = payload_to_portvalues(Some(&ev.payload));
+fn process(state: &Arc<AppState>, job: work_queue::Job) {
+    // The payload is `{ event, source, fields }` — event/source are metadata, fields become the
+    // OnEvent node's port values.
+    let event = job.payload.get("event").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    if event.is_empty() {
+        log::warn!("workflow_event {}: missing event name; dropping", job.id);
+        work_queue::mark_failed_blocking(&state.db, job.id, "missing event name", 1);
+        return;
+    }
+    let source = job.payload.get("source").and_then(|v| v.as_str()).unwrap_or("system").to_string();
+    let payload = payload_to_portvalues(job.payload.get("fields"));
     // Fire as a System event → fans out to this tenant's OnEvent(event) handler graphs.
     crate::engine::fire_event(
         state,
-        ev.tenant_id,
-        EventSource::System {
-            label: ev.source.clone(),
-        },
-        ev.event.clone(),
+        job.tenant_id,
+        EventSource::System { label: source },
+        event,
         None,
         payload,
     );
-    event_queue::mark_done(&state.db, ev.id);
+    work_queue::mark_done_blocking(&state.db, job.id);
 }
 
 /// Map an inbound JSON payload object to typed `PortValues` (string→Text or Image,

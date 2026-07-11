@@ -33,6 +33,9 @@ const POLL: Duration = Duration::from_secs(30);
 /// How many jobs a consumer claims per pass.
 const BATCH: i64 = 50;
 
+/// How long a "not ready" job is held off the claim before the next attempt (store offline, etc).
+const RELEASE_DELAY_SECS: i64 = 30;
+
 /// Start the three clip-delete consumers, each named for the leg it drains.
 pub fn spawn(pool: PgPool) {
     spawn_consumer(pool.clone(), "clip-delete-cloud", KIND_CLOUD, delete_from_cloud);
@@ -101,7 +104,9 @@ where
             let id = job.id;
             match handler(pool.clone(), job).await {
                 Ok(true) => { let _ = work_queue::mark_done(pool, id).await; }
-                Ok(false) => {}  // not ready (e.g. store offline) — leave pending, retry later
+                // Not ready (e.g. store offline) — the claim flipped it to `running`, so hand it
+                // back to `pending` explicitly (with a short hold) rather than leave it stuck.
+                Ok(false) => { let _ = work_queue::release(pool, id, RELEASE_DELAY_SECS).await; }
                 Err(e) => {
                     log::warn!("[{name}] job {id}: {e}");
                     let _ = work_queue::mark_failed(pool, id, &e, MAX_ATTEMPTS).await;

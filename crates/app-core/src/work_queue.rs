@@ -3,18 +3,30 @@
 //! `category` (the domain) and `kind` (the action), keyed to a `request_id` so the several jobs
 //! of one request can be tracked together.
 //!
-//! Async-first: consumers wake on `LISTEN` and the producer `NOTIFY`s on enqueue, so latency is
-//! low without a tight poll. Consumers must be **idempotent** — a job may be delivered more than
-//! once (a NOTIFY plus a poll, or two replicas), and re-doing a done action must be a no-op.
+//! **Atomic claim.** `claim` locks a due job, flips it to `running`, and hands it to exactly one
+//! consumer (`FOR UPDATE SKIP LOCKED`). This lets non-idempotent work run on the queue safely —
+//! firing a workflow or sending a Telegram must not double-run. A `running` job whose consumer
+//! crashed is reaped: the claim also picks up `running` rows whose `updated_at` is older than
+//! [`STALE_SECS`], so a crash self-heals on the next pass. `run_after` schedules retries (backoff)
+//! instead of re-running immediately.
+//!
+//! **Two calling styles.** The async fns take `&PgPool` (control, which has one, uses these and
+//! also gets `LISTEN`/`NOTIFY` latency). The `*_blocking` wrappers take `&Db` for the services
+//! that run consumers on std threads with `Db::block` (flow, notification) and have no `PgPool`.
 
 use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::alerts::now_rfc3339;
+use crate::db::Db;
 
 /// The `NOTIFY`/`LISTEN` channel every consumer watches. Payload is the job's `category`.
 pub const CHANNEL: &str = "work_jobs";
+
+/// A `running` job untouched for this long is presumed abandoned (consumer crashed) and re-claimed.
+/// Generous — far longer than any legitimate handler — so a slow job is never stolen mid-flight.
+const STALE_SECS: i64 = 600;
 
 /// A claimed job. `payload` is self-contained — the consumer needs nothing else to act.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -46,9 +58,10 @@ pub async fn enqueue(
     let now = now_rfc3339();
     let mut tx = pool.begin().await?;
     for j in jobs {
+        // run_after = created_at → immediately due.
         sqlx::query(
-            "INSERT INTO work_jobs (request_id, tenant_id, category, kind, payload, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $6)",
+            "INSERT INTO work_jobs (request_id, tenant_id, category, kind, payload, created_at, updated_at, run_after)
+             VALUES ($1, $2, $3, $4, $5, $6, $6, $6)",
         )
         .bind(request_id).bind(tenant_id).bind(category).bind(&j.kind).bind(&j.payload).bind(&now)
         .execute(&mut *tx).await?;
@@ -59,35 +72,55 @@ pub async fn enqueue(
     tx.commit().await
 }
 
-/// Claim up to `limit` open jobs of a (category, kind), oldest first. Not row-locked — consumers
-/// are idempotent, so at worst a job is processed twice, which is harmless and simpler than
-/// holding locks across slow I/O (an R2 delete).
+/// Atomically claim up to `limit` jobs of a (category, kind): due `pending` rows, plus stale
+/// `running` rows (reaped), locked with `FOR UPDATE SKIP LOCKED` and flipped to `running` in the
+/// same transaction. Exactly-once handoff — a claimed job is invisible to other consumers until it
+/// is marked terminal or goes stale.
 pub async fn claim(pool: &PgPool, category: &str, kind: &str, limit: i64) -> sqlx::Result<Vec<Job>> {
-    sqlx::query_as::<_, Job>(
+    let now = now_rfc3339();
+    let stale_before = (chrono::Local::now() - chrono::Duration::seconds(STALE_SECS)).to_rfc3339();
+    let mut tx = pool.begin().await?;
+    let jobs = sqlx::query_as::<_, Job>(
         "SELECT id, request_id, tenant_id, category, kind, payload, attempts
          FROM work_jobs
-         WHERE category = $1 AND kind = $2 AND status = 'pending'
-         ORDER BY created_at LIMIT $3",
+         WHERE category = $1 AND kind = $2
+           AND ( (status = 'pending' AND run_after <= $3)
+              OR (status = 'running' AND updated_at < $4) )
+         ORDER BY run_after
+         LIMIT $5
+         FOR UPDATE SKIP LOCKED",
     )
-    .bind(category).bind(kind).bind(limit)
-    .fetch_all(pool).await
+    .bind(category).bind(kind).bind(&now).bind(&stale_before).bind(limit)
+    .fetch_all(&mut *tx).await?;
+
+    if !jobs.is_empty() {
+        let ids: Vec<Uuid> = jobs.iter().map(|j| j.id).collect();
+        sqlx::query(
+            "UPDATE work_jobs SET status = 'running', attempts = attempts + 1, updated_at = $2
+             WHERE id = ANY($1)",
+        )
+        .bind(&ids).bind(&now)
+        .execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    // Reflect the attempt bump the UPDATE just made, so a handler sees its real attempt count.
+    Ok(jobs.into_iter().map(|mut j| { j.attempts += 1; j }).collect())
 }
 
-/// Mark a job done. Idempotent on the row.
+/// Mark a job done. Terminal.
 pub async fn mark_done(pool: &PgPool, id: Uuid) -> sqlx::Result<()> {
     sqlx::query("UPDATE work_jobs SET status = 'done', updated_at = $2 WHERE id = $1")
         .bind(id).bind(now_rfc3339())
         .execute(pool).await.map(|_| ())
 }
 
-/// Record a failure: bump attempts, keep it `pending` for retry until `max_attempts`, then park it
-/// `failed` so a poisoned job can't spin forever.
+/// Record a failure: keep it `pending` for retry until `max_attempts`, then park it `failed` so a
+/// poisoned job can't spin forever. `attempts` was already bumped at claim, so compare it directly.
 pub async fn mark_failed(pool: &PgPool, id: Uuid, err: &str, max_attempts: i32) -> sqlx::Result<()> {
     sqlx::query(
         "UPDATE work_jobs
-         SET attempts = attempts + 1,
-             last_error = $2,
-             status = CASE WHEN attempts + 1 >= $3 THEN 'failed' ELSE 'pending' END,
+         SET last_error = $2,
+             status = CASE WHEN attempts >= $3 THEN 'failed' ELSE 'pending' END,
              updated_at = $4
          WHERE id = $1",
     )
@@ -95,9 +128,27 @@ pub async fn mark_failed(pool: &PgPool, id: Uuid, err: &str, max_attempts: i32) 
     .execute(pool).await.map(|_| ())
 }
 
-/// Summary of a request's jobs by status — the "did my deletion finish?" query. Consumers are
-/// independent, so a request is complete when nothing is left `pending`; anything `failed` is a
-/// leg that needs attention (surfaced in monitoring), not a blocker on the others.
+/// Return a claimed job to `pending` without counting it as a failure — for "not ready yet" (a
+/// dependency offline). `delay_secs` holds it off the claim for a beat so it doesn't busy-loop.
+pub async fn release(pool: &PgPool, id: Uuid, delay_secs: i64) -> sqlx::Result<()> {
+    let run_after = (chrono::Local::now() + chrono::Duration::seconds(delay_secs)).to_rfc3339();
+    sqlx::query("UPDATE work_jobs SET status = 'pending', run_after = $2, updated_at = $3 WHERE id = $1")
+        .bind(id).bind(&run_after).bind(now_rfc3339())
+        .execute(pool).await.map(|_| ())
+}
+
+/// Requeue a failed attempt with a backoff delay (records the error). For non-idempotent work that
+/// retries on transient errors — the notification send path (Phase 2). Distinct from `mark_failed`,
+/// which parks permanently; the caller decides when a job is out of retries.
+pub async fn retry_after(pool: &PgPool, id: Uuid, backoff_secs: i64, err: &str) -> sqlx::Result<()> {
+    let run_after = (chrono::Local::now() + chrono::Duration::seconds(backoff_secs)).to_rfc3339();
+    sqlx::query("UPDATE work_jobs SET status = 'pending', run_after = $2, last_error = $3, updated_at = $4 WHERE id = $1")
+        .bind(id).bind(&run_after).bind(err).bind(now_rfc3339())
+        .execute(pool).await.map(|_| ())
+}
+
+/// Summary of a request's jobs by status — the "did this finish?" query. A request is complete
+/// when nothing is left `pending`/`running`; anything `failed` is a leg that needs attention.
 pub async fn request_status(pool: &PgPool, request_id: Uuid) -> sqlx::Result<Vec<(String, String, i64)>> {
     sqlx::query_as::<_, (String, String, i64)>(
         "SELECT kind, status, COUNT(*) FROM work_jobs
@@ -117,4 +168,66 @@ pub async fn open_recording_ids(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<
     .bind(tenant_id)
     .fetch_all(pool).await?;
     Ok(ids.into_iter().filter_map(|s| s.parse::<i64>().ok()).collect())
+}
+
+// ---- blocking wrappers (for std-thread consumers with a `Db`, no PgPool) ----
+// These live here in app_core so they can reach `Db::pool()` (pub(crate)); a service on a std
+// thread calls them through its `Db` exactly like it called the old queue modules.
+
+/// Enqueue one job (the common case for single-message categories like `workflow_event`).
+pub fn enqueue_one_blocking(db: &Db, tenant_id: Uuid, category: &str, kind: &str, payload: serde_json::Value) {
+    let pool = db.pool();
+    let request_id = Uuid::new_v4();
+    let category = category.to_string();
+    let jobs = [NewJob { kind: kind.to_string(), payload }];
+    let res = db.block(async move { enqueue(&pool, request_id, tenant_id, &category, &jobs).await });
+    if let Err(e) = res {
+        log::error!("work_queue::enqueue_one_blocking failed: {e}");
+    }
+}
+
+/// Claim a batch (blocking). Returns empty on error (logged), like the old `claim_next` returning None.
+pub fn claim_blocking(db: &Db, category: &str, kind: &str, limit: i64) -> Vec<Job> {
+    let pool = db.pool();
+    let category = category.to_string();
+    let kind = kind.to_string();
+    db.block(async move { claim(&pool, &category, &kind, limit).await }).unwrap_or_else(|e| {
+        log::error!("work_queue::claim_blocking failed: {e}");
+        Vec::new()
+    })
+}
+
+// ---- workflow events (migrated from event_queue) ---------------------------
+// A workflow trigger is a single job: the action is always "fire the tenant's OnEvent handlers".
+// The event name and emitter go in the payload as metadata, kept separate from `fields` so the
+// consumer can hand only the fields to the port-value mapper.
+
+/// Category for inbound workflow-trigger events.
+pub const EVENT_CATEGORY: &str = "workflow_event";
+/// Kind for workflow-trigger events — one action, so a single kind.
+pub const EVENT_KIND: &str = "fire";
+
+/// Enqueue a workflow-trigger event. `event` is the name (`motion`, `telegram_message`, …),
+/// `source` the emitter label (`edge`, `telegram`); `fields` is the typed bag the `OnEvent` node
+/// exposes. Replaces `event_queue::enqueue`, durably, on the unified queue.
+pub fn enqueue_event_blocking(db: &Db, tenant_id: Uuid, event: &str, source: &str, fields: &serde_json::Value) {
+    let payload = serde_json::json!({ "event": event, "source": source, "fields": fields });
+    enqueue_one_blocking(db, tenant_id, EVENT_CATEGORY, EVENT_KIND, payload);
+}
+
+/// Mark done (blocking).
+pub fn mark_done_blocking(db: &Db, id: Uuid) {
+    let pool = db.pool();
+    if let Err(e) = db.block(async move { mark_done(&pool, id).await }) {
+        log::error!("work_queue::mark_done_blocking failed: {e}");
+    }
+}
+
+/// Mark failed (blocking).
+pub fn mark_failed_blocking(db: &Db, id: Uuid, err: &str, max_attempts: i32) {
+    let pool = db.pool();
+    let err = err.to_string();
+    if let Err(e) = db.block(async move { mark_failed(&pool, id, &err, max_attempts).await }) {
+        log::error!("work_queue::mark_failed_blocking failed: {e}");
+    }
 }

@@ -312,7 +312,7 @@ async fn motion_push(State(st): State<AppState>, headers: HeaderMap, body: Optio
     // event_consumer claims it and fires the tenant's OnEvent("motion") handlers — it survives
     // a flow restart and is never dropped (unlike the old Redis flow:inject, which vanished
     // whenever REDIS_URL was unset).
-    app_core::event_queue::enqueue(&st.db, tenant, "motion", "edge", &payload);
+    app_core::work_queue::enqueue_event_blocking(&st.db, tenant, "motion", "edge", &payload);
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -326,7 +326,7 @@ async fn disk_alert_push(State(st): State<AppState>, headers: HeaderMap, body: O
         Err(resp) => return resp,
     };
     let payload = body.map(|Json(v)| v).unwrap_or_default();
-    app_core::event_queue::enqueue(&st.db, tenant, "edge:full-disk", "edge", &payload);
+    app_core::work_queue::enqueue_event_blocking(&st.db, tenant, "edge:full-disk", "edge", &payload);
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -386,7 +386,7 @@ async fn track_event_push(State(st): State<AppState>, headers: HeaderMap, body: 
             obj.insert("zone".to_string(), json!(zone));
         }
     }
-    app_core::event_queue::enqueue(&st.db, tenant, &ev.kind, "edge", &payload);
+    app_core::work_queue::enqueue_event_blocking(&st.db, tenant, &ev.kind, "edge", &payload);
     StatusCode::NO_CONTENT.into_response()
 }
 
