@@ -83,6 +83,26 @@ pub(super) fn run_record_presence(config: &Value, inputs: &PortValues, sys: &Too
         detect_depth,
     );
 
+    // Mirror the presence onto the agnostic event stream (card #66, Phase 3) so the map pulse and
+    // the future time-travel timeline share one source. Anchored at the presence's own moment.
+    let mut ev = crate::events::NewEvent::new(sys.tenant_id, "presence", "workflow");
+    ev.occurred_at = p.created_at.clone();
+    ev.camera = camera.clone();
+    ev.room_id = room_id.map(|r| r as i64);
+    ev.room_name = room_name.clone();
+    ev.message = Some(match (&label, &room_name) {
+        (Some(l), Some(r)) => format!("{} ({}) in {}", category.slug(), l, r),
+        (Some(l), None) => format!("{} ({})", category.slug(), l),
+        (None, Some(r)) => format!("{} in {}", category.slug(), r),
+        (None, None) => category.slug().to_string(),
+    });
+    ev.data = Some(serde_json::json!({
+        "category": category.slug(),
+        "label": label,
+        "duration_secs": duration_secs,
+    }));
+    crate::events::insert_event_sync(&sys.db, ev);
+
     let _ = sys.ui_tx.send(ToolUiEvent::Presence {
         category: category.slug().to_string(),
         room_id,

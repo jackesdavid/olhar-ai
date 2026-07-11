@@ -509,6 +509,8 @@ async fn clip_push(State(st): State<AppState>, headers: HeaderMap, body: Option<
     };
     let clip_id = clip.clip_id.clone();
     let started_at = clip.started_at.clone();
+    let camera_ip = clip.camera_ip.clone();
+    let duration_secs = clip.duration_secs;
     let id = match crate::domain::recordings::push_clip(&st.pool, tenant, clip).await {
         Ok(id) => id,
         Err(e) => {
@@ -516,6 +518,16 @@ async fn clip_push(State(st): State<AppState>, headers: HeaderMap, body: Option<
             return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
         }
     };
+
+    // The recording is the timeline's scrub anchor (card #66, Phase 3): pin the event to when the
+    // clip began, carrying the clip id + camera + span so a future Live view can jump to it.
+    let mut ev = app_core::events::NewEvent::new(tenant, "clip.started", "edge");
+    ev.occurred_at = started_at.clone();
+    ev.camera = Some(camera_ip.clone());
+    ev.clip_id = Some(clip_id.clone());
+    ev.message = Some(format!("Recording on {camera_ip} ({duration_secs}s)"));
+    ev.data = Some(serde_json::json!({ "duration_secs": duration_secs, "recording_id": id }));
+    st.event_queue.push(ev);
 
     // Offer the edge a short-lived URL to upload the clip straight to R2 — no video crosses
     // this VPS, and the edge never holds our credentials. Best-effort: a clip that isn't

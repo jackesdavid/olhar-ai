@@ -59,7 +59,9 @@ either fails the run with an error.
 There are **no built-in events** — you define them by name. `Emit event("x")` fires the
 `On event("x")` handler subtree as a **decoupled, concurrent sub-run**, **dropped while that
 handler is still running** (coalesce-drop). Scope is the **same graph** (cross-graph is not
-available yet).
+available yet). Every `Emit event` also records a `workflow.custom` occurrence on the agnostic
+event stream (card #66) — so it doubles as the "push a custom event to the timeline" node; the
+event name + payload land in the feed with the emitting graph as `source`.
 
 ### Triggers (graph-level, not nodes)
 How a whole graph starts a run (set in the graph header, not a node):

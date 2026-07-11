@@ -89,37 +89,43 @@ thin events view — the frontend page is unchanged). Beacon delivery centralise
 - Frontend: `routes/alerts/` becomes a filtered view of the new events feed (kind = alert) or is
   folded into the Events page.
 
-## Phase 3 — Every subsystem registers events
+## Phase 3 — Every subsystem registers events — **shipped**
 
-- **Presence** (`0020` + `RecordPresence`): each presence record also emits a `presence` event
-  (camera, room, category, label) so the map pulse and the timeline share one source. Decide
-  whether presence rows are *projected* as events or *dual-written* (open decision 3).
-- **Recording lifecycle:** the edge already confirms clip upload to control
-  (`sentinel-control/src/http.rs:560`); the edge ring buffer knows start/stop. Emit
-  `clip.started` / `clip.stopped` events keyed by `clip_id` + `camera` + `started_at`/duration —
-  these are the anchors the time-travel view scrubs to.
-- **Auth:** `login` (`handlers.rs:133`) and `assume_tenant` (`:324`) emit `auth.login` events via
-  a control-side event writer (or the `sentinel-flow` `emit_event` seam).
-- Route **system events** through the existing `emit_event` seam so they *also* fan out to
-  workflow `OnEvent` listeners where a matching type exists.
+Dual-write chosen (open decision 3): each subsystem keeps its own table and *also* writes an
+`events` row — presence stays its own store, the event is a mirror. Three producers wired:
+- **Presence** — `RecordPresence` (`workflows/node/presence.rs`) emits a `presence` event after
+  `presence::create`, anchored at the presence's `created_at`, carrying camera / room / category /
+  label. One source for the map pulse and the timeline.
+- **Recording lifecycle** — `clip_push` (`sentinel-control/src/http.rs`) emits a `clip.started`
+  event on the finalised manifest, `occurred_at = started_at`, carrying `clip_id` + `camera` +
+  `duration_secs` (in `data`). This is the scrub anchor the time-travel view jumps to; the span is
+  the duration (a separate `clip.stopped` was unnecessary — the edge only reports post-finalise, and
+  duration already gives the end). `clip.stopped` stays in the catalog, unused, for later.
+- **Auth** — `login` (Phase 1) and `assume_tenant` both emit `auth.login`; the master-session one
+  is `source=system` so it reads as elevated access, not a tenant user's own sign-in.
 
-## Phase 4 — Workflow pure emit node
+System motion/tracking fires are deliberately **not** persisted (storm noise); they already surface
+downstream as presence/alert events. The `emit_event` seam persistence is Phase 4.
 
-- A user-facing node to **push a custom event into the stream** with a chosen kind/category +
-  typed payload, reusing `EmitEvent`'s existing payload-port machinery
-  (`domain.rs:1433 payload_ports`). Decide: extend `EmitEvent` (today it only fans out to
-  `OnEvent`, no persistence) to also record an occurrence, vs. a new dedicated node
-  (open decision 4). Update `NodeKind::ALL` + `docs/workflow-nodes.md`; the agent-tools catalog
-  auto-derives (no change needed per project note), but keep it verified.
+## Phase 4 — Workflow pure emit node — **shipped**
 
-## Phase 5 — Per-tenant retention + timeline readiness
+Chose to **extend `EmitEvent`** (open decision 4) rather than add a NodeKind: `fire_event`
+(`sentinel-flow/src/engine.rs`) records a `workflow.custom` occurrence for every
+`EventSource::Graph` emit — the deliberate user emits from the `EmitEvent` node — carrying the
+event name, emitting graph, and camera. Fan-out to `OnEvent` is unchanged. No `NodeKind::ALL`
+change (still 61 nodes), so the agent-tools catalog needs no touch; `docs/workflow-nodes.md`'s
+`Emit event` note updated to describe the timeline side-effect.
 
-- pg_cron nightly sweep deleting events older than **the tenant's plan `retention_days`** — one
-  job that joins `events` → newest `tenant_subscriptions` → `billing_plans.retention_days`
-  (mirrors the recordings retention model; do **not** use platform_logs' flat 30 days).
-- Confirm the schema carries precise `occurred_at` + `camera`/`clip_id`/duration so the future
-  Live time-travel view can place each event at the right playback offset. Verify the
-  `(tenant_id, camera, occurred_at)` index serves that query.
+## Phase 5 — Per-tenant retention + timeline readiness — **shipped**
+
+Migration **0054**: a dedicated `billing_plans.event_retention_days` (beta 7 / home 30 /
+business 90) — **not** the recordings `retention_days`, which is 0 for beta and would wipe a
+free tenant's whole feed. The `events-retention-sweep` pg_cron job (03:17 daily) deletes events
+past their tenant's plan window, joining `events` → newest `tenant_subscriptions` →
+`billing_plans.event_retention_days`, `COALESCE`-ing to 30 days for a tenant with no
+subscription (never to zero). Validated against local Postgres (query plans, cron registers).
+Timeline readiness: `0052`'s `(tenant_id, camera, occurred_at DESC)` index + precise
+`occurred_at` / `clip_id` / duration on `clip.started` serve the future time-travel scrub.
 
 ## Open decisions (grill before building)
 

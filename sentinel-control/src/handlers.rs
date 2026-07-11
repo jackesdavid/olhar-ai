@@ -333,6 +333,7 @@ struct AssumeResp {
 async fn assume_tenant(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<Uuid>) -> Result<Json<AssumeResp>, ApiErr> {
     require_master(&c)?;
     let tenant = store::find_tenant(&st.pool, id).await.map_err(db_err)?.ok_or(err(StatusCode::NOT_FOUND, "no such tenant"))?;
+    let master_uid = c.sub.parse::<Uuid>().ok();
     let perms: Vec<String> = crate::rbac::all_perms().into_iter().map(String::from).collect();
     let claims = Claims {
         sub: c.sub,
@@ -344,5 +345,12 @@ async fn assume_tenant(UserClaims(c): UserClaims, State(st): State<AppState>, Pa
     };
     let token = auth::issue(&st.jwt_secret, &claims).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     log::info!("master {} assumed tenant {}", claims.sub, tenant.slug);
+    // Record the master session on the tenant's own feed (card #66, Phase 3) — an auditable trace
+    // that someone with elevated access entered, distinct from a tenant user's own sign-in.
+    let mut ev = app_core::events::NewEvent::new(tenant.id, "auth.login", "system");
+    ev.title = Some("Master session".to_string());
+    ev.message = Some("A master operator assumed this tenant".to_string());
+    ev.user_id = master_uid;
+    st.event_queue.push(ev);
     Ok(Json(AssumeResp { token, tenant_id: tenant.id }))
 }

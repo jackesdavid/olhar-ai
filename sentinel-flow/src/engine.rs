@@ -391,6 +391,21 @@ pub fn fire_event(
     // to that camera (a plain config literal, or wired from `GetCameraByName`) instead of firing
     // every listener in the tenant regardless of which camera the event is about.
     let event_camera = payload.get("camera").and_then(app_core::workflows::PortValue::as_text).map(str::to_string);
+
+    // Record every deliberate graph emit (the EmitEvent node) as a first-class occurrence on the
+    // agnostic event stream (card #66, Phase 4). This makes EmitEvent double as the "push a custom
+    // event" node without a new NodeKind — the fan-out to OnEvent listeners below is unchanged.
+    // System-sourced fires (motion/tracking storms) are deliberately left out to keep the stream
+    // meaningful; they already surface downstream as presence/alert events.
+    if let EventSource::Graph { id, name } = &source {
+        let mut ev = app_core::events::NewEvent::new(tenant, "workflow.custom", "workflow");
+        ev.title = Some(event.clone());
+        ev.message = Some(format!("'{name}' emitted '{event}'"));
+        ev.camera = event_camera.clone();
+        ev.data = Some(serde_json::json!({ "event": event, "graph": name, "graph_id": id.to_string() }));
+        app_core::events::insert_event_sync(&state.db, ev);
+    }
+
     let devices = app_core::devices::repo::load(&state.db, tenant);
 
     // Snapshot listeners (don't hold the store lock while spawning).
