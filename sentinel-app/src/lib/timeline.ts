@@ -99,8 +99,10 @@ export type TLSegment = {
 };
 
 /** Merge clips whose neighbour starts within `gapToleranceSecs` of the previous clip's end.
- *  Input must be start-sorted (buildTracks guarantees it). */
-export function mergeSegments(clips: TLClip[], gapToleranceSecs = 2): TLSegment[] {
+ *  Input must be start-sorted (buildTracks guarantees it). The tolerance is generous (20s) so a
+ *  burst of ~40s motion clips separated by a few seconds reads as ONE recording session bar
+ *  instead of a row of thin slivers; genuine idle gaps (minutes) still split into separate bars. */
+export function mergeSegments(clips: TLClip[], gapToleranceSecs = 20): TLSegment[] {
   const segs: TLSegment[] = [];
   for (const c of clips) {
     const last = segs[segs.length - 1];
