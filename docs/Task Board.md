@@ -70,13 +70,12 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #72 Dark palette: deeper elevation ramp (Unreal-style)
-	  - Plan: [[dark-palette-elevation]]
-
 
 
 ## Review
 
+- [ ] #72 Dark palette: deeper elevation ramp (Unreal-style)
+	  - Plan: [[dark-palette-elevation]]
 - [ ] #62 Edge resource monitoring — CPU / mem / disk / GPU
 	  - Plan: [[edge-resource-monitoring]]
 - [ ] #15 Telegram bot: workflow-graph brain + inbound commands
