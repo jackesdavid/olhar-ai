@@ -52,7 +52,7 @@
   viewBox="0 0 {size} {size}"
   width={size}
   height={size}
-  class="rounded-lg border border-border bg-card/60"
+  class="rounded-lg border border-border bg-card"
   role="img"
   aria-label="Enrollment fingerprint"
 >

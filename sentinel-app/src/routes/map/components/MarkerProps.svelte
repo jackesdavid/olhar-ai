@@ -15,7 +15,7 @@
     const base =
       "flex aspect-square items-center justify-center rounded-md border p-1.5 text-primary transition-colors [&_svg]:size-6";
     const on = "border-primary/60 bg-primary/10";
-    const off = "border-border hover:bg-muted/50";
+    const off = "border-border hover:bg-hover";
     return `${base} ${marker?.icon === key ? on : off}`;
   }
 </script>

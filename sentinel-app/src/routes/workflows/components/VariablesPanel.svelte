@@ -59,7 +59,7 @@
 
 {#if !open}
   <button
-    class="interactive group flex w-7 shrink-0 items-center justify-center rounded-xl border border-border bg-card/40 hover:bg-muted/40"
+    class="interactive group flex w-7 shrink-0 items-center justify-center rounded-xl border border-border bg-card hover:bg-hover"
     title="Show variables"
     aria-label="Show variables"
     onclick={() => (open = true)}
@@ -68,7 +68,7 @@
   </button>
 {:else}
   <div
-    class="relative flex shrink-0 flex-col gap-1.5 overflow-y-auto rounded-xl border border-border bg-card/40 p-2.5"
+    class="relative flex shrink-0 flex-col gap-1.5 overflow-y-auto rounded-xl border border-border bg-card p-2.5"
     style:width="{width}px"
   >
     <div class="flex items-center justify-between gap-2">
@@ -92,7 +92,7 @@
     <div class="space-y-1">
       {#each variables as v, i (i)}
         <!-- Compact one-line card: grip · name · type · delete -->
-        <div class="flex items-center gap-1 rounded-md border border-border bg-background/60 px-1 py-0.5">
+        <div class="flex items-center gap-1 rounded-md border border-border bg-elev-1 px-1 py-0.5">
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <span
             class="shrink-0 cursor-grab"

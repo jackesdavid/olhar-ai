@@ -29,7 +29,7 @@
   const stats = $derived([
     { title: "Devices", value: devices.length, icon: Cpu, href: "/devices" },
     { title: "Cameras live", value: camerasReady, icon: Video, href: "/live" },
-    { title: "Open alerts", value: openAlerts, icon: Bell, href: "/alerts" },
+    { title: "Open alerts", value: openAlerts, icon: Bell, href: "/events?kind=alert" },
     { title: "Recipients", value: liveRecipients, icon: Radio, href: "/beacons" },
   ]);
 
@@ -106,7 +106,7 @@
         {@const Icon = action.icon}
         <a
           href={action.href}
-          class="interactive group flex items-start gap-3 rounded-xl border border-border bg-card/60 p-4"
+          class="interactive group flex items-start gap-3 rounded-xl border border-border bg-card p-4"
         >
           <div
             class="flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/15 group-hover:text-primary"

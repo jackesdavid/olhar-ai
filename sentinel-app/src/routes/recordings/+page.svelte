@@ -170,13 +170,13 @@
   const STATE_BADGE: Record<UploadState, BadgeSpec> = {
     // Cloud = durable, inked primary. Local/in-transit = muted. Failed = destructive.
     uploaded:  { label: "Cloud",      cls: "border-primary/25 bg-primary/10 text-primary" },
-    uploading: { label: "In transit", cls: "border-white/15 bg-muted/40 text-muted-foreground animate-pulse" },
-    pending:   { label: "Local",      cls: "border-white/15 bg-muted/40 text-muted-foreground" },
+    uploading: { label: "In transit", cls: "border-border bg-muted/40 text-muted-foreground animate-pulse" },
+    pending:   { label: "Local",      cls: "border-border bg-muted/40 text-muted-foreground" },
     failed:    { label: "Failed",     cls: "border-destructive/30 bg-destructive/10 text-destructive" },
   };
   const DELETING_BADGE: BadgeSpec = {
     label: "Deleting",
-    cls: "border-white/15 bg-muted/40 text-muted-foreground animate-pulse",
+    cls: "border-border bg-muted/40 text-muted-foreground animate-pulse",
   };
   function badgeFor(rec: Recording): BadgeSpec {
     if (rec.deleting) return DELETING_BADGE;
@@ -417,7 +417,7 @@
     </Dialog.Header>
     {#if player}
       <!-- svelte-ignore a11y_media_has_caption -->
-      <video src={player.url} controls autoplay class="w-full rounded-lg bg-black">
+      <video src={player.url} controls autoplay class="w-full rounded-lg bg-video-well">
         Your browser cannot play this clip.
       </video>
     {/if}
@@ -459,7 +459,7 @@
   <!-- cloud storage usage strip -->
   {#if storage}
     {#if hasCloud(storage)}
-      <div class="rounded-lg border border-white/10 bg-card/40 p-4">
+      <div class="rounded-lg border border-border bg-card p-4">
         <div class="flex items-baseline justify-between gap-4">
           <div class="flex items-baseline gap-2">
             <span class="text-sm font-semibold tabular-nums">{fmtGB(storage.stored_bytes)}</span>
@@ -485,7 +485,7 @@
         {/if}
       </div>
     {:else}
-      <div class="flex items-center justify-between rounded-lg border border-white/10 bg-card/40 p-4">
+      <div class="flex items-center justify-between rounded-lg border border-border bg-card p-4">
         <p class="text-sm text-muted-foreground">
           Your plan keeps clips on the box only. Cloud backup survives the box being stolen or wiped.
         </p>
@@ -553,7 +553,7 @@
     />
   {:else}
     {@const groups = groupedItems()}
-    <div class="rounded-lg border border-white/10 overflow-hidden">
+    <div class="rounded-lg border border-border overflow-hidden">
       <Table.Root>
         <Table.Header>
           <Table.Row>

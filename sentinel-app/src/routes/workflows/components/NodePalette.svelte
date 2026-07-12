@@ -91,7 +91,7 @@
 {#if open}
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
     <button
-      class="absolute inset-0 bg-background/40 backdrop-blur-sm duration-200 animate-in fade-in"
+      class="absolute inset-0 bg-overlay backdrop-blur-sm duration-200 animate-in fade-in"
       aria-label="Close"
       onclick={close}
     ></button>

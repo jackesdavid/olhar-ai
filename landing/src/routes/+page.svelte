@@ -207,7 +207,7 @@
   <!-- ===== privacy ===== -->
   <section id="privacy" class="py-24">
     <div use:reveal class="relative overflow-hidden rounded-3xl border border-primary/20 p-10 text-center md:p-14"
-      style="background:radial-gradient(600px 320px at 50% 0%, oklch(1 0 0 / 0.04), transparent 70%), oklch(0.11 0 0);">
+      style="background:radial-gradient(600px 320px at 50% 0%, var(--shimmer), transparent 70%), var(--elev-3);">
       <div class="mb-5 grid place-items-center">
         <SentinelMark size={48} class="text-primary drop-shadow-[0_0_18px_oklch(1_0_0/0.35)]" />
       </div>
@@ -282,11 +282,13 @@
     }
   }
 
-  /* live-feed mock: dot-grid (the halftone) + a soft scanning sweep */
+  /* live-feed mock: dot-grid (the halftone) + a soft scanning sweep.
+     The "screen" is recessed — elev-1 → elev-0 — so it reads as a display sunk
+     into its panel frame, not as another card. */
   .feed {
     background:
       radial-gradient(oklch(1 0 0 / 0.04) 1px, transparent 1.4px) 0 0 / 22px 22px,
-      radial-gradient(120% 80% at 50% 0%, oklch(0.16 0 0), oklch(0.08 0 0));
+      radial-gradient(120% 80% at 50% 0%, var(--elev-1), var(--elev-0));
   }
   .sweep {
     background: linear-gradient(90deg, transparent, oklch(1 0 0 / 0.06), transparent);

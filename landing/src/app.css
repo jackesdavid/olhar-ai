@@ -5,15 +5,39 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  /* Elevation ramp — same stops as the app. Landing is permanently dark
+     (app.html sets class="dark"), so it's where the Noir ramp is judged first. */
+  --color-elev-0: var(--elev-0);
+  --color-elev-1: var(--elev-1);
+  --color-elev-2: var(--elev-2);
+  --color-elev-3: var(--elev-3);
+  --color-elev-4: var(--elev-4);
+  --color-elev-5: var(--elev-5);
+  --color-elev-6: var(--elev-6);
+  --color-elev-7: var(--elev-7);
+  --color-hover: var(--hover);
+  --color-active: var(--active);
+  --color-overlay: var(--overlay);
+  --color-hud: var(--hud);
+
+  --color-well: var(--well);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
   --color-border: var(--border);
+  --color-input: var(--input);
   --color-ring: var(--ring);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -33,20 +57,22 @@
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
-    /* Subtle achromatic top shimmer. */
+    /* Subtle achromatic top shimmer (dot-field ambient). */
     background-image: radial-gradient(
       60% 45% at 50% -8%,
-      oklch(1 0 0 / 0.05),
+      var(--shimmer),
       transparent 70%
     );
     background-attachment: fixed;
     -webkit-font-smoothing: antialiased;
   }
   ::selection {
-    background: oklch(1 0 0 / 0.2);
+    background: var(--selection);
   }
 }
 
+/* Effects read from the shared tokens (styles/sentinel-tokens.css) — this file used
+   to fork them as literals, so a token change updated the app and silently not landing. */
 @layer utilities {
   /* Card/row that lifts on hover. */
   .interactive {
@@ -54,13 +80,11 @@
   }
   .interactive:hover {
     transform: translateY(-3px);
-    border-color: oklch(1 0 0 / 0.2);
-    box-shadow: 0 16px 40px -18px oklch(0 0 0 / 0.8);
+    border-color: var(--lift-border);
+    box-shadow: var(--lift-shadow);
   }
   .glow {
-    box-shadow:
-      0 0 0 1px oklch(1 0 0 / 0.14),
-      0 0 28px -8px oklch(1 0 0 / 0.2);
+    box-shadow: var(--glow-shadow);
   }
   .press {
     @apply transition-transform duration-100;
@@ -74,11 +98,11 @@
     0%,
     100% {
       opacity: 1;
-      box-shadow: 0 0 0 0 oklch(1 0 0 / 0.5);
+      box-shadow: 0 0 0 0 var(--pulse-color);
     }
     50% {
       opacity: 0.85;
-      box-shadow: 0 0 0 5px oklch(1 0 0 / 0);
+      box-shadow: 0 0 0 5px transparent;
     }
   }
   .status-live {
@@ -101,9 +125,9 @@
     animation: ping-ring 3.2s cubic-bezier(0.22, 1, 0.36, 1) infinite;
   }
 
-  /* White gradient text for hero headings. */
+  /* Inked gradient text for hero headings. */
   .text-grad {
-    background: linear-gradient(110deg, oklch(0.97 0 0), oklch(0.72 0 0) 60%, oklch(0.55 0 0));
+    background: linear-gradient(110deg, var(--grad-from), var(--grad-mid) 60%, var(--grad-to));
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;

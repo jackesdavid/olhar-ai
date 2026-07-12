@@ -226,7 +226,6 @@
     "/": null,
     "/devices": "devices.read",
     "/live": "live.view",
-    "/alerts": "alerts.read",
     "/events": "alerts.read",
     "/beacons": "beacons.read",
     "/people": "persons.read",
@@ -478,7 +477,7 @@
         {/if}
         {#if billingLock.locked}
           <div
-            class="flex items-center justify-between gap-4 border-b border-border bg-muted/60 px-6 py-2.5 text-sm"
+            class="flex items-center justify-between gap-4 border-b border-border bg-elev-1 px-6 py-2.5 text-sm"
           >
             <span>{billingLock.message}</span>
             <Button size="sm" onclick={() => goto("/billing")}>Choose a plan</Button>

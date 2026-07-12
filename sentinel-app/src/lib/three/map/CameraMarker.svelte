@@ -7,6 +7,12 @@
   import { DoubleSide, BufferGeometry, Float32BufferAttribute } from "three";
   import type { MapWall } from "$lib/types";
   import { fovPolygon } from "$lib/map/visibility";
+  import { mapInk } from "$lib/map/palette.svelte";
+
+  // Body + FOV ink track the theme — these were a hardcoded near-white, which put a
+  // white camera on the white floor of Clean White.
+  const bodyInk = $derived(mapInk.wallFill);
+  const edgeInk = $derived(mapInk.wallEdge);
 
   let {
     x,
@@ -49,7 +55,7 @@
 
 <!-- field-of-view: a flat polygon clipped by walls (line of sight) -->
 <T.Mesh geometry={fovGeo}>
-  <T.MeshBasicMaterial color="#e5e5e5" transparent opacity={0.1} depthWrite={false} side={DoubleSide} />
+  <T.MeshBasicMaterial color={bodyInk} transparent opacity={0.1} depthWrite={false} side={DoubleSide} />
 </T.Mesh>
 
 <!-- camera body glyph -->
@@ -64,5 +70,5 @@
   onpointerleave={() => pointer(false)}
 >
   <T.CylinderGeometry args={[0.32, 0.32, 0.36, 18]} />
-  <T.MeshStandardMaterial color="#e5e5e5" emissive="#ffffff" emissiveIntensity={0.35} roughness={0.5} />
+  <T.MeshStandardMaterial color={bodyInk} emissive={edgeInk} emissiveIntensity={0.35} roughness={0.5} />
 </T.Mesh>

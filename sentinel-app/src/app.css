@@ -5,6 +5,23 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  /* Elevation ramp — pick a stop, never a hand-rolled surface value.
+     Roles + values: styles/sentinel-tokens.css. */
+  --color-elev-0: var(--elev-0);
+  --color-elev-1: var(--elev-1);
+  --color-elev-2: var(--elev-2);
+  --color-elev-3: var(--elev-3);
+  --color-elev-4: var(--elev-4);
+  --color-elev-5: var(--elev-5);
+  --color-elev-6: var(--elev-6);
+  --color-elev-7: var(--elev-7);
+  --color-hover: var(--hover);
+  --color-active: var(--active);
+  --color-input-bg: var(--input-bg);
+  --color-overlay: var(--overlay);
+  --color-hud: var(--hud);
+  --color-video-well: var(--video-well);
+
   --color-well: var(--well);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -198,22 +215,29 @@
 /* ── Workflow editor chrome — theme-aware canvas/grid/port/glow tokens. ────────
    The port & category HUES stay fixed (lib/workflows/portColors.ts); only the
    editor CHROME (grid lines, socket holes, node glow, handle rings) flips with
-   the theme so the canvas reads correctly on white and on Noir. */
+   the theme so the canvas reads correctly on white and on Noir.
+
+   The canvas is --well (elev-0) and the node body is --wf-node-body (elev-4), so
+   a node reads as a panel raised off a recessed canvas. --wf-port-empty must sink
+   BELOW the node body to read as a punched hole — it is measured against the node,
+   not against the page. */
 :root {
+  --wf-node-body:   var(--elev-4);          /* node panel fill (was a --card/--popover color-mix) */
   --wf-grid-strong: oklch(0.15 0 0 / 24%);  /* major dot-field lattice */
   --wf-grid-weak:   oklch(0.15 0 0 / 11%);  /* minor dot-field lattice */
   --wf-node-glow:   oklch(0.35 0 0);        /* selected/live node halo */
   --wf-node-shadow: oklch(0 0 0 / 12%);     /* resting node elevation */
-  --wf-port-empty:  oklch(0.92 0 0);        /* unfilled port-socket hole */
+  --wf-port-empty:  oklch(0.90 0 0);        /* unfilled port-socket hole (sinks below the node body) */
   --wf-dot-ring:    oklch(0.20 0 0);        /* ring around wire bend handles */
   --wf-exec:        oklch(0.42 0 0);        /* control-flow (exec) pins + wires */
 }
 .dark {
-  --wf-grid-strong: oklch(1 0 0 / 16%);
-  --wf-grid-weak:   oklch(1 0 0 / 7%);
+  --wf-node-body:   var(--elev-4);          /* 0.265 — was color-mix(--card 55%, --popover 45%) */
+  --wf-grid-strong: oklch(1 0 0 / 18%);
+  --wf-grid-weak:   oklch(1 0 0 / 8%);
   --wf-node-glow:   oklch(0.90 0 0);
-  --wf-node-shadow: oklch(0 0 0 / 45%);
-  --wf-port-empty:  oklch(0.14 0 0);
+  --wf-node-shadow: oklch(0 0 0 / 55%);     /* now actually renders — the canvas is 0.145, not 0.04 */
+  --wf-port-empty:  var(--elev-1);          /* 0.170 — a hole in the 0.265 node body */
   --wf-dot-ring:    oklch(1 0 0);
   --wf-exec:        oklch(0.96 0 0);
 }

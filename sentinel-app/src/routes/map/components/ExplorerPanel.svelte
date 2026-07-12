@@ -21,7 +21,7 @@
   function rowClass(active: boolean): string {
     return active
       ? "border-primary/40 bg-primary/10 text-foreground"
-      : "border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground";
+      : "border-transparent text-muted-foreground hover:bg-hover hover:text-foreground";
   }
   function markerName(icon: string, label: string | null | undefined): string {
     return label?.trim() ? label : iconLabel(icon);

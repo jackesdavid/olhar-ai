@@ -343,7 +343,7 @@
   </div>
 
   <!-- transcript -->
-  <div bind:this={scroller} class="flex-1 space-y-4 overflow-y-auto rounded-xl border border-border bg-muted/20 p-4">
+  <div bind:this={scroller} class="flex-1 space-y-4 overflow-y-auto rounded-xl border border-border bg-elev-1 p-4">
     {#if messages.length === 0}
       <div class="flex h-full flex-col items-center justify-center gap-2 text-center text-muted-foreground">
         <p class="max-w-sm text-sm">Try "list my cameras", "what's on the hall camera?", or "show me recent alerts".</p>

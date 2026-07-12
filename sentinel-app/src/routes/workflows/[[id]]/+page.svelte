@@ -2612,7 +2612,7 @@
                 <!-- category root -->
                 <button
                   type="button"
-                  class="sticky top-0 z-10 flex w-full items-center gap-2 bg-card px-3 py-2 text-left text-sm font-semibold transition-colors hover:bg-muted/40"
+                  class="sticky top-0 z-10 flex w-full items-center gap-2 bg-card px-3 py-2 text-left text-sm font-semibold transition-colors hover:bg-hover"
                   onclick={() => toggleGroup(grp.key)}
                 >
                   <ChevronRight
@@ -3215,7 +3215,7 @@
           </div>
 
           <!-- left edge: touch tool palette (Move / Pan / Link / Break) -->
-          <div class="absolute left-3 top-1/2 flex -translate-y-1/2 flex-col gap-1 rounded-lg border border-border bg-background/75 p-1 shadow-lg backdrop-blur">
+          <div class="absolute left-3 top-1/2 flex -translate-y-1/2 flex-col gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur">
             {#each [
               { mode: "move", Icon: MousePointer2, label: "Move / select (V)", lock: true },
               { mode: "pan", Icon: Hand, label: "Pan (H)", lock: false },
@@ -3240,7 +3240,7 @@
             <div class="pointer-events-none absolute left-3 top-16 z-10 flex max-w-sm flex-col gap-1.5">
               {#each screenMsgs as msg (msg.id)}
                 <div
-                  class="flex items-center gap-2 rounded-lg border bg-background/85 px-3 py-1.5 font-mono text-xs shadow-lg backdrop-blur duration-200 animate-in fade-in slide-in-from-left-2 {screenMsgClass(msg.level)}"
+                  class="flex items-center gap-2 rounded-lg border bg-hud px-3 py-1.5 font-mono text-xs shadow-lg backdrop-blur duration-200 animate-in fade-in slide-in-from-left-2 {screenMsgClass(msg.level)}"
                 >
                   <Printer class="size-3 shrink-0" />
                   <span class="truncate">{msg.message}</span>
@@ -3251,7 +3251,7 @@
 
           <!-- top-center: transport -->
           <div
-            class="absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1 rounded-lg border border-border bg-background/75 p-1 shadow-lg backdrop-blur"
+            class="absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur"
           >
             <Button
               variant="ghost"
@@ -3273,7 +3273,7 @@
 
           <!-- top-right: zoom / pan -->
           <div
-            class="absolute right-3 top-3 flex items-center gap-1 rounded-lg border border-border bg-background/75 p-1 shadow-lg backdrop-blur"
+            class="absolute right-3 top-3 flex items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur"
           >
             <Button variant="ghost" size="icon" class="size-8" title="Zoom out" onclick={() => zoomBy(1 / 1.2)}><ZoomOut class="size-4" /></Button>
             <span class="w-10 text-center text-[11px] tabular-nums text-muted-foreground">{Math.round(zoom * 100)}%</span>
@@ -3284,12 +3284,12 @@
           <!-- bottom-center: wiring hint -->
           <div class="absolute bottom-3 left-1/2 -translate-x-1/2">
             {#if pending}
-              <div class="flex items-center gap-2 rounded-full border border-primary/40 bg-background/85 px-3 py-1 text-xs text-primary shadow-lg backdrop-blur">
+              <div class="flex items-center gap-2 rounded-full border border-primary/40 bg-hud px-3 py-1 text-xs text-primary shadow-lg backdrop-blur">
                 wiring from #{pending.node}.{pending.port} — click an input port
                 <button class="text-muted-foreground transition-colors hover:text-foreground" onclick={() => (pending = null)}>cancel</button>
               </div>
             {:else}
-              <div class="rounded-full border border-border bg-background/70 px-3 py-1 text-[11px] text-muted-foreground shadow-lg backdrop-blur">
+              <div class="rounded-full border border-border bg-hud px-3 py-1 text-[11px] text-muted-foreground shadow-lg backdrop-blur">
                 Click an output ●, then an input ○ to wire · click a wired input to unwire
               </div>
             {/if}
@@ -3299,7 +3299,7 @@
         {#if !panelOpen}
           <!-- collapsed: thin rail to reopen the panel -->
           <button
-            class="interactive group flex w-7 shrink-0 items-center justify-center rounded-xl border border-border bg-card/40 hover:bg-muted/40"
+            class="interactive group flex w-7 shrink-0 items-center justify-center rounded-xl border border-border bg-card hover:bg-hover"
             title="Show panel"
             aria-label="Show panel"
             onclick={togglePanel}
@@ -3331,7 +3331,7 @@
           style="width: {panelW}px"
         >
           <!-- configuration -->
-          <div class="space-y-3 rounded-xl border border-border bg-card/40 p-3">
+          <div class="space-y-3 rounded-xl border border-border bg-card p-3">
             <div class="flex items-center justify-between gap-2">
               <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Configuration</span>
               <div class="flex items-center gap-1">
@@ -3466,7 +3466,7 @@
           <!-- node property -->
           {#if selectedNode}
             {@const nk = catalog[selectedNode.kind]}
-            <div class="space-y-2.5 rounded-xl border border-border bg-card/40 p-3">
+            <div class="space-y-2.5 rounded-xl border border-border bg-card p-3">
               <div class="flex items-center justify-between gap-2">
                 <span class="flex min-w-0 items-center gap-2 text-sm font-medium">
                   <span class="size-1.5 shrink-0 rounded-full bg-primary"></span>
@@ -4040,9 +4040,9 @@
       {/if}
 
       <!-- row 2: console (collapsed by default) -->
-      <div class="shrink-0 overflow-hidden rounded-xl border border-border bg-card/40">
+      <div class="shrink-0 overflow-hidden rounded-xl border border-border bg-card">
         <button
-          class="flex w-full items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-muted/40"
+          class="flex w-full items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-hover"
           onclick={() => (consoleOpen = !consoleOpen)}
         >
           <span class="flex items-center gap-2 font-medium">
@@ -4179,7 +4179,7 @@
         <p class="py-8 text-center text-sm text-muted-foreground">No runs recorded yet.</p>
       {:else}
         {#each runsList as r (r.id)}
-          <div class="rounded-lg border border-border bg-card/40">
+          <div class="rounded-lg border border-border bg-card">
             <button
               class="interactive flex w-full items-center gap-2 px-3 py-2 text-left"
               onclick={() => toggleRunLogs(r.id)}
@@ -4224,10 +4224,10 @@
 </Dialog.Root>
 
 <style>
-  /* Node body fill — slightly elevated above the canvas so nodes read as distinct surfaces.
-     --card alone is too dark; mixing with --popover lifts it ~2 tonal steps. */
+  /* Node body fill — the "raised" stop of the elevation ramp, so nodes read as
+     panels lifted off the recessed canvas. */
   :global(.node-body) {
-    fill: color-mix(in srgb, var(--card) 55%, var(--popover) 45%);
+    fill: var(--wf-node-body);
   }
 
   /* Tactile ports: a subtle grow + halo on hover so pins feel clickable. */

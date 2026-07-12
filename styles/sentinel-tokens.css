@@ -4,33 +4,51 @@
 
    Brand identity: monochrome — no hue on surfaces or primary action. Branding is
    carried by form, not colour: the dot-field mark, radial falloff, generous space,
-   and one near-black↔white ink. Semantic colours (destructive red, amber "armed",
-   online green) survive because they communicate STATE, not brand.
+   and one near-black↔white ink. Semantic colours (destructive red, amber "armed")
+   survive because they communicate STATE, not brand.
 
    Two operative themes, toggled by the `.dark` class on <html> (default: light):
-     • Light "Clean White" — white canvas, near-black ink. The default.
-     • Dark  "Sentinel Noir" — near-black canvas, white ink.
+     • Light "Clean White"  — white canvas, near-black ink. The default.
+     • Dark  "Sentinel Noir" — graphite canvas, white ink.
 
-   Light surface stack (bottom → top):
-     0.93  --well       deepest inset: code, log output, scrollbar track
-     0.965 --background page base (soft gray, lets white cards lift)
-     0.99  --sidebar    nav rail (near-white, advances subtly)
-     1.00  --card       cards, sheets, panels (pure white)
-     0.95  --secondary  row hover, secondary bg
-     0.93  --accent     selected / active item bg
-     1.00  --popover    floating: dropdowns, tooltips, command palette
+   ── The elevation ramp (--elev-0 … --elev-7) ──────────────────────────────────
+   Surfaces are defined ONCE as an 8-stop ramp; every shadcn surface token is an
+   ALIAS onto a stop. Never hand-pick a surface value — pick a stop.
 
-   Dark surface stack (bottom → top):
-     0.04  --well · 0.07 --background · 0.10 --sidebar · 0.13 --card
-     0.17  --secondary · 0.22 --accent · 0.28 --popover
+     --elev-0  recessed  wells: editor canvas, code, log output, scrollbar track
+     --elev-1  sunken    INPUTS, sidebar rail, headers
+     --elev-2  base      page canvas
+     --elev-3  panel     cards, sheets — the default surface
+     --elev-4  raised    node body, nested panel, chips  (--muted)
+     --elev-5  float     popover, dropdown, tooltip      (--secondary)
+     --elev-6  hover     interactive hover               (--accent)
+     --elev-7  active    selected / pressed
 
-   Beyond the shadcn colour tokens, both themes also define a set of
-   *effect* variables (--lift-*, --glow-*, --selection, --pulse-color, --shimmer,
-   --brand-glow, --grad-*) so the utilities in app.css read correctly on either
-   canvas instead of baking in white-on-dark.  Add effects here, never per-file.
+   The stops are per-theme ROLES, not a cross-theme lightness ordinal. In dark the
+   ramp climbs monotonically 0.145 → 0.455; in light it cannot (the panel is already
+   pure white), so light expresses "raised" through shadow and "hover/active" by
+   going *down* in value. Reference stops by role and both themes do the right thing.
+
+   Dark is anchored on Unreal Engine's Slate palette, measured in OKLCH lightness:
+     #0A0A0A→0.145 recessed · #0F0F0F→0.170 header/input · #151515→0.196 background
+     #1E1E1E→0.235 panel · #242424→0.265 raised · #383838→0.365 dropdown
+     #575757→0.455 hover
+   Two UE traits are deliberate and load-bearing:
+     1. INPUTS SINK. --input-bg is elev-1, *below* the panel it sits on — inverting
+        the web convention where inputs are lighter than their card.
+     2. CHROME RECEDES. The dark sidebar (elev-1) is *darker* than the page canvas
+        (elev-2), as UE's title bars sit below its background. Light inverts this.
+
+   Beyond the shadcn colour tokens, both themes also define *effect* variables
+   (--lift-*, --glow-*, --selection, --pulse-color, --shimmer, --brand-glow,
+   --grad-*, --overlay, --hud, --video-well) so the utilities in app.css read
+   correctly on either canvas instead of baking in white-on-dark.  Add effects
+   here, never per-file — that includes landing.
 
    Usage (in each app's app.css):
      @import "../../styles/sentinel-tokens.css";
+   Any token added here must also be registered in BOTH `@theme inline` blocks
+   (sentinel-app/src/app.css and landing/src/app.css) to exist as a Tailwind class.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* ── Shared radius scale ──────────────────────────────────────────────────── */
@@ -61,18 +79,33 @@
 
 /* ── Light "Clean White" (default operative theme) ────────────────────────── */
 :root {
-  /* surfaces */
-  --well:                   oklch(0.93 0 0);   /* deepest inset: code, log, scrollbar track */
-  --background:             oklch(0.965 0 0);  /* page base — soft gray so white cards lift */
-  --card:                   oklch(1 0 0);      /* cards, panels — pure white */
+  /* elevation ramp — light expresses "raised" via shadow, so hover/active
+     descend in value rather than climbing. Roles match dark 1:1. */
+  --elev-0:                 oklch(0.93 0 0);   /* recessed — code, log, scrollbar track */
+  --elev-1:                 oklch(0.955 0 0);  /* sunken — inputs (recessed below the card) */
+  --elev-2:                 oklch(0.965 0 0);  /* base — page canvas */
+  --elev-3:                 oklch(1 0 0);      /* panel — cards (pure white, lifts off the page) */
+  --elev-4:                 oklch(0.975 0 0);  /* raised — chips, node body, nested panel */
+  --elev-5:                 oklch(1 0 0);      /* float — popover (white + shadow) */
+  --elev-6:                 oklch(0.95 0 0);   /* hover */
+  --elev-7:                 oklch(0.93 0 0);   /* active / selected */
+
+  /* surfaces — aliases onto the ramp */
+  --well:                   var(--elev-0);
+  --background:             var(--elev-2);
+  --card:                   var(--elev-3);
+  --popover:                var(--elev-5);
+  --muted:                  var(--elev-4);
+  --secondary:              var(--elev-5);
+  --accent:                 var(--elev-6);
+  --hover:                  var(--elev-6);
+  --active:                 var(--elev-7);
+  --input-bg:               var(--elev-1);    /* inputs sink below their panel */
+
   --card-foreground:        oklch(0.20 0 0);
-  --popover:                oklch(1 0 0);      /* floating surfaces */
   --popover-foreground:     oklch(0.20 0 0);
-  --secondary:              oklch(0.95 0 0);   /* row hover / secondary bg */
-  --secondary-foreground:   oklch(0.32 0 0);   /* supporting / secondary text */
-  --muted:                  oklch(0.95 0 0);
-  --muted-foreground:       oklch(0.52 0 0);   /* captions, timestamps, inactive */
-  --accent:                 oklch(0.93 0 0);   /* selected / active bg */
+  --secondary-foreground:   oklch(0.32 0 0);  /* supporting / secondary text */
+  --muted-foreground:       oklch(0.45 0 0);  /* captions, timestamps, inactive (AA on --card) */
   --accent-foreground:      oklch(0.18 0 0);
 
   /* text — near-black ink */
@@ -98,7 +131,7 @@
   --chart-4:                oklch(0.72 0 0);
   --chart-5:                oklch(0.58 0.22 25);
 
-  /* sidebar — near-white rail, one stop above the page */
+  /* sidebar — near-white rail: light chrome ADVANCES (dark chrome recedes) */
   --sidebar:                oklch(0.99 0 0);
   --sidebar-foreground:     oklch(0.30 0 0);
   --sidebar-primary:        oklch(0.15 0 0);
@@ -120,71 +153,101 @@
   --brand-glow:             0 0 12px oklch(0.15 0 0 / 12%);
   --code-border:            oklch(0.15 0 0 / 8%);
   --grad-from:              oklch(0.20 0 0);         /* hero gradient text */
-  --grad-mid:              oklch(0.40 0 0);
-  --grad-to:               oklch(0.58 0 0);
+  --grad-mid:               oklch(0.40 0 0);
+  --grad-to:                oklch(0.58 0 0);
+  --overlay:                oklch(0 0 0 / 35%);      /* dialog/sheet scrim */
+  --hud:                    oklch(1 0 0 / 85%);      /* backdrop-blur HUD over a canvas */
+  --video-well:             oklch(0 0 0);            /* video letterbox — true black, always */
 }
 
-/* ── Dark "Sentinel Noir" (toggled via .dark) ─────────────────────────────── */
+/* ── Dark "Sentinel Noir" (toggled via .dark) ──────────────────────────────────
+   Anchored on Unreal Engine's Slate ramp. The canvas sits at 0.196, high enough
+   that black drop-shadows actually render and nested surfaces separate — the old
+   0.07 canvas made both impossible. */
 .dark {
-  /* surfaces — 9 distinct stops */
-  --well:                   oklch(0.04 0 0);   /* deepest inset: code, log, scrollbar track */
-  --background:             oklch(0.07 0 0);   /* page base */
-  --card:                   oklch(0.13 0 0);   /* cards, panels */
-  --popover:                oklch(0.28 0 0);   /* floating: dropdowns, tooltips, command palette */
-  --secondary:              oklch(0.17 0 0);   /* row hover / secondary bg */
-  --muted:                  oklch(0.17 0 0);   /* same level as secondary */
-  --accent:                 oklch(0.22 0 0);   /* selected, active bg */
+  /* elevation ramp — 8 distinct stops, monotonic 0.145 → 0.455 */
+  --elev-0:                 oklch(0.145 0 0);  /* recessed — UE #0A0A0A */
+  --elev-1:                 oklch(0.170 0 0);  /* sunken   — UE #0F0F0F */
+  --elev-2:                 oklch(0.196 0 0);  /* base     — UE #151515 */
+  --elev-3:                 oklch(0.235 0 0);  /* panel    — UE #1E1E1E */
+  --elev-4:                 oklch(0.265 0 0);  /* raised   — UE #242424 */
+  --elev-5:                 oklch(0.305 0 0);  /* float */
+  --elev-6:                 oklch(0.365 0 0);  /* hover    — UE #383838 */
+  --elev-7:                 oklch(0.455 0 0);  /* active   — UE #575757 */
+
+  /* surfaces — aliases onto the ramp */
+  --well:                   var(--elev-0);
+  --background:             var(--elev-2);
+  --card:                   var(--elev-3);
+  --muted:                  var(--elev-4);
+  /* A popover shares elev-4 with --muted by design: it separates from the card
+     beneath it through shadow + border + z, not through tone. Pushing it higher
+     (elev-5) dropped --muted-foreground below AA on floating surfaces. */
+  --popover:                var(--elev-4);
+  --secondary:              var(--elev-5);
+  --accent:                 var(--elev-6);
+  --hover:                  var(--elev-6);
+  --active:                 var(--elev-7);
+  --input-bg:               var(--elev-1);    /* inputs SINK below their panel (UE) */
 
   /* text — 4 distinct stops */
   --foreground:             oklch(0.93 0 0);   /* body text, slightly off-white */
   --card-foreground:        oklch(0.93 0 0);
   --popover-foreground:     oklch(0.93 0 0);
-  --secondary-foreground:   oklch(0.76 0 0);   /* supporting / secondary text */
-  --accent-foreground:      oklch(0.93 0 0);
-  --muted-foreground:       oklch(0.52 0 0);   /* captions, timestamps, labels */
+  --secondary-foreground:   oklch(0.78 0 0);   /* supporting / secondary text */
+  --accent-foreground:      oklch(0.97 0 0);
+  /* Captions/timestamps. 0.64 is the floor that keeps AA (≥4.5:1) on every surface
+     that carries body text — elev-0 through elev-4. Was 0.52, which failed AA even
+     on the old, much darker card (3.65:1). */
+  --muted-foreground:       oklch(0.64 0 0);
 
   /* primary action — pure white */
   --primary:                oklch(1 0 0);
-  --primary-foreground:     oklch(0.07 0 0);
+  --primary-foreground:     var(--elev-0);
 
   /* semantic */
   --destructive:            oklch(0.7 0.19 22);
   --destructive-foreground: oklch(0.99 0 0);
 
-  /* edges */
-  --border:                 oklch(1 0 0 / 11%);
-  --input:                  oklch(1 0 0 / 14%);
+  /* edges — a touch stronger than before: the canvas is lighter now, so 11% white
+     no longer reads. UE leans on visible hairlines. */
+  --border:                 oklch(1 0 0 / 14%);
+  --input:                  oklch(1 0 0 / 18%);
   --ring:                   oklch(1 0 0);
 
-  /* charts — graduated gray scale */
+  /* charts — graduated gray scale, lifted clear of the 0.196 canvas */
   --chart-1:                oklch(0.95 0 0);
-  --chart-2:                oklch(0.76 0 0);
-  --chart-3:                oklch(0.57 0 0);
-  --chart-4:                oklch(0.40 0 0);
+  --chart-2:                oklch(0.80 0 0);
+  --chart-3:                oklch(0.65 0 0);
+  --chart-4:                oklch(0.50 0 0);
   --chart-5:                oklch(0.7 0.19 22);
 
-  /* sidebar — one stop below card so it recedes */
-  --sidebar:                oklch(0.10 0 0);
+  /* sidebar — elev-1: chrome RECEDES below the canvas (UE title bars) */
+  --sidebar:                var(--elev-1);
   --sidebar-foreground:     oklch(0.85 0 0);
   --sidebar-primary:        oklch(1 0 0);
-  --sidebar-primary-foreground: oklch(0.07 0 0);
-  --sidebar-accent:         oklch(0.17 0 0);
-  --sidebar-accent-foreground:  oklch(0.85 0 0);
-  --sidebar-border:         oklch(1 0 0 / 9%);
+  --sidebar-primary-foreground: var(--elev-0);
+  --sidebar-accent:         var(--elev-4);
+  --sidebar-accent-foreground:  oklch(0.97 0 0);
+  --sidebar-border:         oklch(1 0 0 / 10%);
   --sidebar-ring:           oklch(1 0 0);
 
-  /* effects — white ink on a dark canvas */
-  --lift-border:            oklch(1 0 0 / 20%);
-  --lift-shadow:            0 10px 30px -14px oklch(0 0 0 / 80%);
-  --glow-shadow:            0 0 0 1px oklch(1 0 0 / 14%), 0 0 28px -8px oklch(1 0 0 / 20%);
-  --selection:              oklch(1 0 0 / 20%);
-  --scroll-thumb:           oklch(1 0 0 / 14%);
-  --scroll-thumb-hover:     oklch(1 0 0 / 26%);
+  /* effects — white ink on a graphite canvas. Shadows finally work here: on the
+     old 0.07 canvas a black shadow rendered nothing at all. */
+  --lift-border:            oklch(1 0 0 / 26%);
+  --lift-shadow:            0 12px 32px -12px oklch(0 0 0 / 70%);
+  --glow-shadow:            0 0 0 1px oklch(1 0 0 / 16%), 0 0 28px -8px oklch(1 0 0 / 18%);
+  --selection:              oklch(1 0 0 / 22%);
+  --scroll-thumb:           oklch(1 0 0 / 18%);
+  --scroll-thumb-hover:     oklch(1 0 0 / 32%);
   --pulse-color:            oklch(1 0 0 / 50%);
-  --shimmer:                oklch(1 0 0 / 4%);
+  --shimmer:                oklch(1 0 0 / 5%);
   --brand-glow:             0 0 10px oklch(1 0 0 / 30%);
-  --code-border:            oklch(1 0 0 / 8%);
+  --code-border:            oklch(1 0 0 / 10%);
   --grad-from:              oklch(0.97 0 0);
-  --grad-mid:              oklch(0.72 0 0);
-  --grad-to:               oklch(0.55 0 0);
+  --grad-mid:               oklch(0.72 0 0);
+  --grad-to:                oklch(0.55 0 0);
+  --overlay:                oklch(0 0 0 / 65%);      /* real scrim — bg-black/10 was invisible */
+  --hud:                    oklch(0.235 0 0 / 88%);  /* HUDs read as panels over the well canvas (elev-3 + alpha for the blur) */
+  --video-well:             oklch(0 0 0);            /* true black — below elev-0, so video is a hole on purpose */
 }

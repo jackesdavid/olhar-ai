@@ -182,8 +182,10 @@
     return map[mod] ?? "bg-muted text-muted-foreground";
   }
 
+  // Categorical module hues. `workflow` and the fallback are achromatic, so they ride
+  // the theme ink rather than a literal — a near-white dot was invisible on Clean White.
   const MODULE_DOT: Record<string, string> = {
-    workflow: "#e5e5e5",
+    workflow: "var(--foreground)",
     edge:     "#60a5fa",
     presence: "#34d399",
     device:   "#a78bfa",
@@ -193,7 +195,7 @@
   function logDotColor(l: PlatformLog): string {
     const nk = (l.payload as Record<string, unknown> | null)?.node_kind as string | undefined;
     if (l.module === "workflow" && nk) return nodeKindColor(nk);
-    return MODULE_DOT[l.module] ?? "#64748b";
+    return MODULE_DOT[l.module] ?? "var(--muted-foreground)";
   }
 
   function setTraceFilter(traceId: string) {
@@ -232,7 +234,7 @@
   </div>
 
   <!-- filter panel -->
-  <div class="flex flex-col gap-2 rounded-lg border border-border bg-card/40 p-3">
+  <div class="flex flex-col gap-2 rounded-lg border border-border bg-card p-3">
     <div class="flex flex-wrap items-center gap-2">
       <!-- Module -->
       <div class="flex items-center gap-1.5">
@@ -450,7 +452,7 @@
       </div>
 
       <!-- pagination footer -->
-      <div class="flex items-center justify-between border-t border-border bg-card/40 px-3 py-1.5 text-xs text-muted-foreground">
+      <div class="flex items-center justify-between border-t border-border bg-card px-3 py-1.5 text-xs text-muted-foreground">
         <span class="tabular-nums">{shown.length} entries{nextCursor ? " · more available" : ""}</span>
         {#if nextCursor}
           <Button

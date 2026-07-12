@@ -48,7 +48,7 @@
   function tabClass(active: boolean): string {
     return active
       ? "bg-primary/15 text-primary"
-      : "text-muted-foreground hover:bg-muted/60 hover:text-foreground";
+      : "text-muted-foreground hover:bg-hover hover:text-foreground";
   }
 </script>
 
@@ -77,7 +77,7 @@
       </button>
       <button
         type="button"
-        class="interactive ml-auto inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+        class="interactive ml-auto inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
         title="Collapse panel"
         aria-label="Collapse panel"
         onclick={toggle}
@@ -97,7 +97,7 @@
   <div class="flex w-10 shrink-0 flex-col items-center rounded-xl border border-border bg-card py-2">
     <button
       type="button"
-      class="interactive inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+      class="interactive inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
       title="Show panel"
       aria-label="Show panel"
       onclick={toggle}

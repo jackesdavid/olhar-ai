@@ -266,12 +266,12 @@
 
           <div class="frame relative">
             {#if selected}
-              <div class="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-1.5 rounded-full border border-primary/30 bg-background/70 px-2.5 py-1 text-[11px] font-medium tracking-wide text-primary backdrop-blur">
+              <div class="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-1.5 rounded-full border border-primary/30 bg-hud px-2.5 py-1 text-[11px] font-medium tracking-wide text-primary backdrop-blur">
                 <StatusDot state="online" /> LIVE
               </div>
               {#if cloud}
                 <!-- MSE video over the gateway WS (token-gated, smooth H.264) -->
-                <video bind:this={videoEl} class="h-full w-full bg-black object-contain" autoplay muted playsinline></video>
+                <video bind:this={videoEl} class="h-full w-full bg-video-well object-contain" autoplay muted playsinline></video>
               {:else if selectedStream}
                 {#key selectedStream.name}
                   <iframe title="Live camera {selected.name}" src={selectedStream.player_url} allow="autoplay; fullscreen"></iframe>

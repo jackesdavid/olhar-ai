@@ -355,7 +355,9 @@
   shadow.camera.near={1}
   shadow.camera.far={400}
 />
-<T.DirectionalLight position={[-30, 18, -40]} intensity={0.8} color="#aab9c7" />
+<!-- Neutral fill light. This was #aab9c7 — a blue-tinted light casting a cool tint
+     over every surface in the scene, against the monochrome "no hue on surfaces" rule. -->
+<T.DirectionalLight position={[-30, 18, -40]} intensity={0.8} color="#ffffff" />
 
 <GroundGrid />
 

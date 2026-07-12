@@ -39,11 +39,11 @@
 </script>
 
 {#if open}
-  <div class="absolute inset-0 z-20 flex items-center justify-center bg-background/40 p-4 backdrop-blur-sm">
+  <div class="absolute inset-0 z-20 flex items-center justify-center bg-overlay p-4 backdrop-blur-sm">
     <div class="w-full max-w-md rounded-xl border border-border bg-card p-4 shadow-2xl">
       <div class="mb-3 flex items-center justify-between">
         <h2 class="text-sm font-semibold">Keyboard shortcuts</h2>
-        <button class="interactive rounded-md p-1 text-muted-foreground hover:bg-muted/60 hover:text-foreground" title="Close" onclick={onClose}>
+        <button class="interactive rounded-md p-1 text-muted-foreground hover:bg-hover hover:text-foreground" title="Close" onclick={onClose}>
           <X class="size-4" />
         </button>
       </div>

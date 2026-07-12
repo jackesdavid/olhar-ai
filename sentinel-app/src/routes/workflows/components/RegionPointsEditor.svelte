@@ -91,7 +91,7 @@
     <p class="text-xs text-destructive">{error}</p>
     <Button variant="outline" size="sm" onclick={loadSnapshot}>Retry</Button>
   {:else if imgSrc}
-    <div class="relative overflow-hidden rounded-md border border-border bg-black" style="aspect-ratio: 16/9">
+    <div class="relative overflow-hidden rounded-md border border-border bg-video-well" style="aspect-ratio: 16/9">
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
       <img
         bind:this={imgEl}

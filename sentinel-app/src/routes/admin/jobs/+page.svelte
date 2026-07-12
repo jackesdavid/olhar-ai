@@ -87,8 +87,8 @@
   function statusClass(status: string): string {
     if (status === "failed") return "border-destructive/30 bg-destructive/10 text-destructive";
     if (status === "running") return "border-primary/25 bg-primary/10 text-primary animate-pulse";
-    if (status === "pending") return "border-white/15 bg-muted/40 text-muted-foreground";
-    return "border-white/15 bg-muted/40 text-muted-foreground"; // done
+    if (status === "pending") return "border-border bg-muted/40 text-muted-foreground";
+    return "border-border bg-muted/40 text-muted-foreground"; // done
   }
 
   async function loadStats() {
@@ -277,7 +277,7 @@
         {#if chartEmpty}
           <p class="mt-6 text-sm text-muted-foreground">No jobs in this window.</p>
         {:else}
-          <div class="mt-6 flex h-36 items-end gap-[3px] border-b border-white/10">
+          <div class="mt-6 flex h-36 items-end gap-[3px] border-b border-border">
             {#each chartBars as b (b.t)}
               <div class="group flex h-full flex-1 flex-col items-center justify-end" title={barTitle(b)}>
                 {#if b.c > 0}
@@ -334,7 +334,7 @@
     {#if items.length === 0}
       <EmptyState title="No jobs" description="Nothing matches the current filter." />
     {:else}
-      <div class="rounded-lg border border-white/10 overflow-hidden">
+      <div class="rounded-lg border border-border overflow-hidden">
         <Table.Root>
           <Table.Header>
             <Table.Row>

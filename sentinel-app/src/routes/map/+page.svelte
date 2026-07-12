@@ -196,7 +196,7 @@
         </div>
 
         <!-- undo / redo (top-left) -->
-        <div class="absolute left-3 top-3 flex items-center gap-1 rounded-lg border border-border bg-background/75 p-1 shadow-lg backdrop-blur">
+        <div class="absolute left-3 top-3 flex items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur">
           <Button variant="ghost" size="icon" class="size-8" title="Undo (⌘Z)" disabled={!store.canUndo} onclick={() => store.undo()}>
             <Undo2 class="size-4" />
           </Button>
@@ -209,7 +209,7 @@
         </div>
 
         <!-- zoom / fit (top-right) -->
-        <div class="absolute right-3 top-3 flex items-center gap-1 rounded-lg border border-border bg-background/75 p-1 shadow-lg backdrop-blur">
+        <div class="absolute right-3 top-3 flex items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur">
           <Button variant="ghost" size="icon" class="size-8" title="Zoom out" onclick={() => viewport.zoomBy(1 / 1.2)}>
             <ZoomOut class="size-4" />
           </Button>
@@ -225,7 +225,7 @@
         </div>
 
         <!-- tool palette (center-right) -->
-        <div class="absolute right-3 top-1/2 flex -translate-y-1/2 flex-col items-center gap-1 rounded-lg border border-border bg-background/75 p-1 shadow-lg backdrop-blur">
+        <div class="absolute right-3 top-1/2 flex -translate-y-1/2 flex-col items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur">
           <Button variant={toolVariant("select")} size="icon" class="size-9" title="Select / move (V)" onclick={() => tools.setMode("select")}>
             <MousePointer2 class="size-4" />
           </Button>
@@ -256,7 +256,7 @@
         </div>
 
         <!-- presence legend (bottom-left) -->
-        <div class="absolute bottom-3 left-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border bg-background/75 px-2.5 py-1.5 text-[11px] text-muted-foreground shadow-lg backdrop-blur">
+        <div class="absolute bottom-3 left-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border bg-hud px-2.5 py-1.5 text-[11px] text-muted-foreground shadow-lg backdrop-blur">
           {#each CATEGORY_ORDER as cat (cat)}
             <span class="flex items-center gap-1.5">
               <span class="size-2 rounded-full" style="background:{CATEGORY_STYLE[cat].color}"></span>

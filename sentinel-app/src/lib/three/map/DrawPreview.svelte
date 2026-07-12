@@ -1,9 +1,14 @@
 <script lang="ts">
-  // Rubber-band preview while drawing any shape. Shows a translucent emerald
-  // guide from the pending start point to the snapped cursor.
+  // Rubber-band preview while drawing any shape. Shows a translucent guide from
+  // the pending start point to the snapped cursor, in the map's drawing ink.
   import { T } from "@threlte/core";
   import { BufferGeometry, Vector3 } from "three";
+  import { mapInk } from "$lib/map/palette.svelte";
   import type { ToolMode, Pt } from "$lib/map/tools.svelte";
+
+  // Preview ink tracks the theme — these were hardcoded near-whites, which meant the
+  // guide was invisible on Clean White. `wallEdge` is the map's drawing ink in both modes.
+  const guide = $derived(mapInk.wallEdge);
 
   let {
     mode = "wall",
@@ -82,21 +87,21 @@
 {#if seg}
   <T.Mesh position={[seg.midX, 0.2, seg.midZ]} rotation.y={-seg.angle}>
     <T.BoxGeometry args={[seg.len, 0.06, 0.14]} />
-    <T.MeshBasicMaterial color="#e5e5e5" transparent opacity={0.55} depthWrite={false} />
+    <T.MeshBasicMaterial color={guide} transparent opacity={0.55} depthWrite={false} />
   </T.Mesh>
 {/if}
 
 {#if (mode === "wall" || mode === "line") && from}
   <T.Mesh position={[from.x, 0.22, from.z]}>
     <T.SphereGeometry args={[0.16, 12, 12]} />
-    <T.MeshBasicMaterial color="#e5e5e5" />
+    <T.MeshBasicMaterial color={guide} />
   </T.Mesh>
 {/if}
 
 {#if (mode === "wall" || mode === "line") && to}
   <T.Mesh position={[to.x, 0.22, to.z]}>
     <T.SphereGeometry args={[0.13, 12, 12]} />
-    <T.MeshBasicMaterial color="#d4d4d4" transparent opacity={0.9} depthWrite={false} />
+    <T.MeshBasicMaterial color={guide} transparent opacity={0.9} depthWrite={false} />
   </T.Mesh>
 {/if}
 
@@ -104,12 +109,12 @@
 {#if rectPreview && rectGeo}
   <T.Group position={[rectPreview.cx, 0.1, rectPreview.cz]}>
     <T.Line geometry={rectGeo}>
-      <T.LineBasicMaterial color="#e5e5e5" transparent opacity={0.7} />
+      <T.LineBasicMaterial color={guide} transparent opacity={0.7} />
     </T.Line>
   </T.Group>
   <T.Mesh position={[from!.x, 0.22, from!.z]}>
     <T.SphereGeometry args={[0.14, 12, 12]} />
-    <T.MeshBasicMaterial color="#e5e5e5" />
+    <T.MeshBasicMaterial color={guide} />
   </T.Mesh>
 {/if}
 
@@ -117,12 +122,12 @@
 {#if circlePreview && circleGeo}
   <T.Group position={[circlePreview.cx, 0.1, circlePreview.cz]}>
     <T.Line geometry={circleGeo}>
-      <T.LineBasicMaterial color="#e5e5e5" transparent opacity={0.7} />
+      <T.LineBasicMaterial color={guide} transparent opacity={0.7} />
     </T.Line>
   </T.Group>
   <T.Mesh position={[circlePreview.cx, 0.22, circlePreview.cz]}>
     <T.SphereGeometry args={[0.14, 12, 12]} />
-    <T.MeshBasicMaterial color="#e5e5e5" />
+    <T.MeshBasicMaterial color={guide} />
   </T.Mesh>
 {/if}
 
@@ -130,19 +135,19 @@
 {#if triGeo}
   <T.Group position.y={0.1}>
     <T.Line geometry={triGeo}>
-      <T.LineBasicMaterial color="#e5e5e5" transparent opacity={0.7} />
+      <T.LineBasicMaterial color={guide} transparent opacity={0.7} />
     </T.Line>
   </T.Group>
   {#if from}
     <T.Mesh position={[from.x, 0.22, from.z]}>
       <T.SphereGeometry args={[0.14, 12, 12]} />
-      <T.MeshBasicMaterial color="#e5e5e5" />
+      <T.MeshBasicMaterial color={guide} />
     </T.Mesh>
   {/if}
   {#if draftB}
     <T.Mesh position={[draftB.x, 0.22, draftB.z]}>
       <T.SphereGeometry args={[0.13, 12, 12]} />
-      <T.MeshBasicMaterial color="#b0b0b0" />
+      <T.MeshBasicMaterial color={guide} />
     </T.Mesh>
   {/if}
 {/if}
@@ -151,6 +156,6 @@
 {#if (mode === "marker" || mode === "text") && to}
   <T.Mesh position={[to.x, 0.22, to.z]}>
     <T.SphereGeometry args={[0.13, 12, 12]} />
-    <T.MeshBasicMaterial color="#d4d4d4" transparent opacity={0.9} depthWrite={false} />
+    <T.MeshBasicMaterial color={guide} transparent opacity={0.9} depthWrite={false} />
   </T.Mesh>
 {/if}
