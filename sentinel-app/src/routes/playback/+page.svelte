@@ -12,6 +12,10 @@
   import Pause from "@lucide/svelte/icons/pause";
   import SkipBack from "@lucide/svelte/icons/skip-back";
   import SkipForward from "@lucide/svelte/icons/skip-forward";
+  import ChevronsLeft from "@lucide/svelte/icons/chevrons-left";
+  import ChevronsRight from "@lucide/svelte/icons/chevrons-right";
+  import EyeOff from "@lucide/svelte/icons/eye-off";
+  import Focus from "@lucide/svelte/icons/focus";
 
   import Loader from "$lib/components/loader.svelte";
   import Busy from "$lib/components/busy.svelte";
@@ -81,6 +85,30 @@
   }
   const shownEvents = $derived(evs.filter((e) => footageRelevant(e) && inCameraScope(e)));
   const markers = $derived(buildMarkers(shownEvents, pxPerSec));
+
+  // ---- track visibility (Phase 4: hide / solo) -------------------------------
+  let hidden = $state<Set<string>>(new Set());
+  let soloCamera = $state<string | null>(null);
+  const visibleTracks = $derived(
+    soloCamera
+      ? tracks.filter((t) => t.cameraIp === soloCamera)
+      : tracks.filter((t) => !hidden.has(t.cameraIp)),
+  );
+  const tracksFiltered = $derived(soloCamera !== null || hidden.size > 0);
+  function toggleHide(ip: string) {
+    const next = new Set(hidden);
+    if (next.has(ip)) next.delete(ip);
+    else next.add(ip);
+    hidden = next;
+    if (soloCamera === ip) soloCamera = null;
+  }
+  function toggleSolo(ip: string) {
+    soloCamera = soloCamera === ip ? null : ip;
+  }
+  function resetTracks() {
+    hidden = new Set();
+    soloCamera = null;
+  }
 
   function cameraLabel(): string {
     if (!cameraFilter) return "All cameras";
@@ -337,6 +365,29 @@
     seekTo(ps);
     void revealPlayhead();
   }
+  // Step the playhead to the next / previous event marker (markers are already time-sorted).
+  function jumpNextEvent() {
+    const m = markers.find((m) => m.ts > playheadMs + 500);
+    if (!m) {
+      toast.info("No later event.");
+      return;
+    }
+    seekTo(m.ts);
+    void revealPlayhead();
+  }
+  function jumpPrevEvent() {
+    let prev: number | null = null;
+    for (const m of markers) {
+      if (m.ts < playheadMs - 500) prev = m.ts;
+      else break;
+    }
+    if (prev == null) {
+      toast.info("No earlier event.");
+      return;
+    }
+    seekTo(prev);
+    void revealPlayhead();
+  }
   /** A finished clip flows into the next one (skipping any gap), else playback stops. */
   function onEnded() {
     const from = loadedClip ? loadedClip.endTs - 1 : playheadMs;
@@ -389,6 +440,8 @@
     else if (e.key === "ArrowLeft") { e.preventDefault(); seekTo(playheadMs - stepS * 1000); }
     else if (e.key === ".") { e.preventDefault(); jumpNextClip(); }
     else if (e.key === ",") { e.preventDefault(); jumpPrevClip(); }
+    else if (e.key === "]") { e.preventDefault(); jumpNextEvent(); }
+    else if (e.key === "[") { e.preventDefault(); jumpPrevEvent(); }
     else if (e.key === " " || e.key === "Enter") { e.preventDefault(); togglePlay(); }
   }
   function startDrag(e: PointerEvent) {
@@ -538,10 +591,22 @@
         <Button variant="outline" size="icon" class="size-9" title="Next clip (.)" onclick={jumpNextClip}>
           <SkipForward class="size-4" />
         </Button>
+
+        <span class="mx-1 h-5 w-px bg-border"></span>
+        <Button variant="outline" size="icon" class="size-9" title="Previous event ([)" onclick={jumpPrevEvent}>
+          <ChevronsLeft class="size-4" />
+        </Button>
+        <Button variant="outline" size="icon" class="size-9" title="Next event (])" onclick={jumpNextEvent}>
+          <ChevronsRight class="size-4" />
+        </Button>
+
         <span class="ml-2 text-sm font-semibold tabular-nums">{hms(playheadMs)}</span>
         <span class="text-xs text-muted-foreground">· {activeTrack?.cameraName ?? "—"}</span>
         <div class="ml-auto flex items-center gap-2">
-          <span class="hidden text-[11px] text-muted-foreground lg:block">Space · , / . clip · ← → step</span>
+          {#if tracksFiltered}
+            <Button variant="ghost" size="sm" class="h-8" onclick={resetTracks}>Show all cameras</Button>
+          {/if}
+          <span class="hidden text-[11px] text-muted-foreground lg:block">, / . clip · [ / ] event · Space play</span>
           <Button variant="outline" size="icon" class="size-8" title="Zoom out" disabled={pxIdx === 0} onclick={() => zoom(-1)}>
             <ZoomOut class="size-4" />
           </Button>
@@ -566,13 +631,29 @@
         <div class="flex h-7 items-center border-b border-border px-3">
           <span class="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Events</span>
         </div>
-        {#each tracks as t (t.cameraIp)}
-          <div class="flex h-11 items-center gap-2 border-b border-border/60 px-3">
+        {#each visibleTracks as t (t.cameraIp)}
+          <div class="flex h-11 items-center gap-1.5 border-b border-border/60 px-3">
             <span class="size-2 shrink-0 rounded-full bg-primary/60"></span>
-            <div class="min-w-0">
+            <div class="min-w-0 flex-1">
               <p class="truncate text-sm font-medium">{t.cameraName}</p>
               <p class="text-[11px] text-muted-foreground tabular-nums">{t.clips.length} clip{t.clips.length === 1 ? "" : "s"}</p>
             </div>
+            <button
+              type="button"
+              class="grid size-6 place-items-center rounded transition-colors hover:bg-muted/60 {soloCamera === t.cameraIp ? 'text-primary' : 'text-muted-foreground'}"
+              title={soloCamera === t.cameraIp ? "Exit solo" : "Solo this camera"}
+              onclick={() => toggleSolo(t.cameraIp)}
+            >
+              <Focus class="size-3.5" />
+            </button>
+            <button
+              type="button"
+              class="grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted/60"
+              title="Hide this camera"
+              onclick={() => toggleHide(t.cameraIp)}
+            >
+              <EyeOff class="size-3.5" />
+            </button>
           </div>
         {/each}
       </div>
@@ -631,7 +712,7 @@
             {#each markers as m (m.ts)}
               <div class="pointer-events-none absolute inset-y-0 w-px bg-primary/10" style="left: {markerLeft(m)}px"></div>
             {/each}
-            {#each tracks as t (t.cameraIp)}
+            {#each visibleTracks as t (t.cameraIp)}
               {@const segs = mergeSegments(t.clips)}
               <div class="relative h-11 border-b border-border/60">
                 <!-- gap baseline: no footage shows through as a dashed lane -->
