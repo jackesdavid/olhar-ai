@@ -62,7 +62,8 @@ once — never hand-roll a lockup inline.
   `mark.svg`; Sora self-hosted + `--font-brand`; `SentinelLogo` lockup; wired into sidebar + login;
   `docs/ref/brand.md`. Explored via the `svg-design` skill (6 concepts → #05 → 05a). `npm run build`
   clean; login lockup verified in-app.
-- **Pending:** favicons / app-icons / PWA / OG images from this mark (**#69**); email header art
-  (**#70**). Raster/outlined-text lockup exports (for email/OG, where Sora isn't available) are
-  produced there via headless render of `SentinelLogo`.
+- **Done (#69):** full favicon / app-icon / PWA-manifest / OG set generated from 05a (Noir tile +
+  off-white mark); `app.html` head + `theme-color` + OG/Twitter meta. **Shipped + deployed 2026-07-12.**
+- **Pending:** email header art (**#70**) — a raster lockup export (headless render of `SentinelLogo`,
+  since Sora isn't available in email clients).
 - **Backlog:** landing site (`landing/`, `sentinel-landing/`) asset swap; a fuller brand book.

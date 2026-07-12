@@ -7,10 +7,16 @@ wordmark lockup, light/dark variants, clear-space & min-size rules, and static e
 size/format the product needs (favicons #69, email #70, OG images, app chrome). Direction chosen:
 **explore fresh concepts first**, then commit and systematize.
 
-## ⚠️ Session state — PAUSED 2026-07-12 (direction pivoted; read before resuming)
+## Status — 2026-07-12: SHIPPED the 05a monochrome identity; warm direction deferred
 
-The 2026-07-11 "guarded-perimeter #05a + Sora" identity below is **committed on `main` but
-NOT deployed** (commits `0868d82`, `e43c3de`, `81b2f96`). Then the direction **fully reset**:
+**Decision:** ship the "guarded-perimeter #05a + Sora" monochrome identity (below) as final. #68 +
+**#69 → Done**, deployed to `app.thesentinels.online`. The warm/colour exploration is **parked as a
+future option, not superseding** — its concepts are saved in `docs/plans/logo-exploration/` if we
+ever revisit. `SentinelMark boundary` + Sora `--font-brand` + full favicon/PWA/OG set are live.
+
+<details><summary>Earlier this session: the direction briefly reset to warm/colour (parked)</summary>
+
+The 05a+Sora identity was built, then the direction briefly **reset**:
 
 - The user found the dot-field mark + every wordmark typeface (Sora, and outlined Chakra Petch /
   Rajdhani / Oxanium / Saira Stencil, and a hand-built monoline logotype) **too generic**.
@@ -29,8 +35,9 @@ replace the mark/favicons/OG/lockup + revise `[[design-system]]`/`[[monochrome-r
 `.claude/skills/logo-designer` (neonwatty). Both hand-author SVG; logo-designer runs parallel
 concept agents + a `logos/preview.html`. svgmaker MCP exists but user declined it (6 credits).
 
-**Resume:** open `docs/plans/logo-exploration/warm-concepts-overview.png`, get the user's pick (or
-a new direction), then Phase 3 refine → build → replace identity → deploy as one drop.
+If revived: open `docs/plans/logo-exploration/warm-concepts-overview.png`, get a pick, Phase-3
+refine → rebuild mark/favicons/OG/lockup → revise identity docs → deploy.
+</details>
 
 ## Decisions locked (2026-07-11)
 

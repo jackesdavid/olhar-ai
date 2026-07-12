@@ -64,15 +64,10 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #69 Favicons / app-icons / PWA / OG images
-	  - Plan: [[favicons-app-icons]]
-
 
 
 ## Review
 
-- [ ] #68 Logo & brand-mark system
-	  - Plan: [[logo-brand-mark]]
 - [ ] #62 Edge resource monitoring — CPU / mem / disk / GPU
 	  - Plan: [[edge-resource-monitoring]]
 - [ ] #15 Telegram bot: workflow-graph brain + inbound commands
@@ -106,6 +101,10 @@ kanban-plugin: board
 ## Done
 
 **Complete**
+- [x] #69 Favicons / app-icons / PWA / OG images
+	  - Plan: [[favicons-app-icons]]
+- [x] #68 Logo & brand-mark system
+	  - Plan: [[logo-brand-mark]]
 - [x] #56 Workflow Variables — typed vars + Get/Set nodes
 	  - Plan: [[workflow-variables]]
 - [x] #16 Chat agent on the web (TTS / STT / tools)
