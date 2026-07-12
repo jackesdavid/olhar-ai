@@ -68,11 +68,12 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #61 Tab toggle: collapse/expand editor side panels
-	  - Plan: [[editor-panel-tab-toggle]]
 
 
 ## Review
+
+- [ ] #61 Tab toggle: collapse/expand editor side panels
+	  - Plan: [[editor-panel-tab-toggle]]
 
 - [ ] #75 Workflow editor: one tabbed right rail (Details / Properties / Variables / Runs)
 	  - Plan: [[workflow-editor-tabbed-inspector]]
