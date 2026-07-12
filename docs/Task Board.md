@@ -70,6 +70,8 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #75 Workflow editor: one tabbed right rail (Details / Properties / Variables / Runs)
+	  - Plan: [[workflow-editor-tabbed-inspector]]
 
 
 ## Review

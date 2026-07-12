@@ -1,10 +1,11 @@
 <script lang="ts">
-  // Unreal-style Variables panel (left rail of the editor). Declare typed, per-graph
-  // variables; each row spawns Get/Set nodes for that variable onto the canvas.
+  // Unreal-style Variables panel — a tab body in the editor's right rail. Declare typed,
+  // per-graph variables; each row drags onto the canvas to spawn Get/Set nodes for it.
+  //
+  // This owns NO chrome of its own: width, collapse and scrolling all belong to the rail
+  // (see the tabbed rail in ../[[id]]/+page.svelte). It just renders the list.
   import Plus from "@lucide/svelte/icons/plus";
   import Trash2 from "@lucide/svelte/icons/trash-2";
-  import PanelLeftClose from "@lucide/svelte/icons/panel-left-close";
-  import PanelLeftOpen from "@lucide/svelte/icons/panel-left-open";
   import GripVertical from "@lucide/svelte/icons/grip-vertical";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -17,7 +18,6 @@
     types,
     cameras = [],
     disabled = false,
-    open = $bindable(true),
     onAdd,
     onEdit,
     onRemove,
@@ -26,61 +26,20 @@
     types: { value: string; label: string }[];
     cameras?: { value: string; label: string }[];
     disabled?: boolean;
-    open: boolean;
     onAdd: () => void;
     onEdit: (i: number, patch: Partial<Variable>) => void;
     onRemove: (i: number) => void;
   } = $props();
   // Which types accept an author-typed default (matches the engine seeding).
   const DEFAULTABLE = new Set(["text", "num", "bool", "camera", "recipient"]);
-
-  // Resizable width (persisted to localStorage). Drag the right-edge handle.
-  let width = $state(224);
-  $effect(() => {
-    const s = Number(localStorage.getItem("wf-vars-w"));
-    if (s >= 180 && s <= 460) width = s;
-  });
-  function startResize(e: PointerEvent) {
-    const sx = e.clientX;
-    const sw = width;
-    const move = (ev: PointerEvent) => {
-      width = Math.max(180, Math.min(460, sw + (ev.clientX - sx)));
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      try { localStorage.setItem("wf-vars-w", String(width)); } catch { /* ignore */ }
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    e.preventDefault();
-  }
 </script>
 
-{#if !open}
-  <button
-    class="interactive group flex w-7 shrink-0 items-center justify-center rounded-xl border border-border bg-card hover:bg-hover"
-    title="Show variables"
-    aria-label="Show variables"
-    onclick={() => (open = true)}
-  >
-    <PanelLeftOpen class="size-4 text-muted-foreground group-hover:text-foreground" />
-  </button>
-{:else}
-  <div
-    class="relative flex shrink-0 flex-col gap-1.5 overflow-y-auto rounded-xl border border-border bg-card p-2.5"
-    style:width="{width}px"
-  >
+  <div class="flex flex-col gap-1.5 rounded-xl border border-border bg-card p-2.5">
     <div class="flex items-center justify-between gap-2">
       <span class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Variables</span>
-      <div class="flex items-center gap-0.5">
-        <Button variant="ghost" size="icon" class="size-6" title="Add variable" disabled={disabled} onclick={onAdd}>
-          <Plus class="size-3.5" />
-        </Button>
-        <Button variant="ghost" size="icon" class="size-6" title="Hide variables" onclick={() => (open = false)}>
-          <PanelLeftClose class="size-3.5" />
-        </Button>
-      </div>
+      <Button variant="ghost" size="icon" class="size-6" title="Add variable" disabled={disabled} onclick={onAdd}>
+        <Plus class="size-3.5" />
+      </Button>
     </div>
 
     {#if variables.length === 0}
@@ -158,13 +117,4 @@
         </div>
       {/each}
     </div>
-
-    <!-- Right-edge resize handle -->
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      class="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize hover:bg-primary/30"
-      title="Drag to resize"
-      onpointerdown={startResize}
-    ></div>
   </div>
-{/if}

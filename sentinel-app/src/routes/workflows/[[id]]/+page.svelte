@@ -54,6 +54,9 @@
   import Zap from "@lucide/svelte/icons/zap";
   import Radar from "@lucide/svelte/icons/radar";
   import Variable from "@lucide/svelte/icons/variable";
+  import Settings2 from "@lucide/svelte/icons/settings-2";
+  import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
+  import RefreshCw from "@lucide/svelte/icons/refresh-cw";
   import Box from "@lucide/svelte/icons/box";
   import Binary from "@lucide/svelte/icons/binary";
   import Disc from "@lucide/svelte/icons/disc";
@@ -73,6 +76,7 @@
   import * as Select from "$lib/components/ui/select";
   import Loader from "$lib/components/loader.svelte";
   import EmptyState from "$lib/components/empty-state.svelte";
+  import SentinelMark from "$lib/components/sentinel-mark.svelte";
   import StatusDot from "$lib/components/status-dot.svelte";
   import {
     portColor,
@@ -343,11 +347,15 @@
     }
   }
 
-  // resizable right column (config/property panel)
+  // The right rail — one tabbed sidebar holding every side panel in the editor
+  // (Details / Properties / Variables / Runs). There is no left rail: variables moved
+  // in here, which gives the canvas its width back.
   const PANEL_MIN = 240;
   const PANEL_MAX = 560;
+  type RailTab = "details" | "properties" | "variables" | "runs";
   let panelW = $state(300);
   let panelOpen = $state(true);
+  let panelTab = $state<RailTab>("properties");
   let resizing = $state(false);
   function togglePanel() {
     panelOpen = !panelOpen;
@@ -356,6 +364,44 @@
     } catch {
       /* ignore */
     }
+  }
+  function selectTab(t: RailTab) {
+    panelTab = t;
+    panelOpen = true; // picking a tab on the collapsed rail reopens it
+    try {
+      localStorage.setItem("wf.panelTab", t);
+      localStorage.setItem("wf.panelOpen", "true");
+    } catch {
+      /* ignore */
+    }
+    // Clicking Runs always re-fetches, so you see the run you just kicked off. Claiming
+    // the graph here also stops the mount-restore effect below from fetching a second time.
+    if (t === "runs" && graph) {
+      runsLoadedFor = graph.id;
+      loadRuns(graph);
+    }
+  }
+  // The rail remembers its tab, so the editor can open straight onto Runs — in which case
+  // selectTab() never fired and nothing would have loaded the history.
+  let runsLoadedFor: string | null = null;
+  $effect(() => {
+    if (panelTab !== "runs" || !graph || runsLoadedFor === graph.id) return;
+    runsLoadedFor = graph.id;
+    loadRuns(graph);
+  });
+  const RAIL_TABS: { id: RailTab; label: string; icon: typeof Settings2 }[] = [
+    { id: "details", label: "Details", icon: Settings2 },
+    { id: "properties", label: "Properties", icon: SlidersHorizontal },
+    { id: "variables", label: "Variables", icon: Variable },
+    { id: "runs", label: "Runs", icon: History },
+  ];
+  // The selected tab sits on --active (elev-7); hover on an unselected one is --hover
+  // (elev-6). They must not be the same stop, or a hovered tab reads as the selected tab.
+  function tabClass(t: RailTab): string {
+    const base = "flex flex-1 items-center justify-center rounded-lg py-1.5 transition-colors";
+    return panelTab === t
+      ? `${base} bg-active text-foreground`
+      : `${base} text-muted-foreground hover:bg-hover hover:text-foreground`;
   }
   function startResize(e: PointerEvent) {
     resizing = true;
@@ -492,6 +538,17 @@
 
   const graph = $derived(graphs.find((g) => g.id === selectedGraphId) ?? null);
   const selectedNode = $derived(graph?.nodes.find((n) => n.id === selectedNodeId) ?? null);
+
+  // Selecting a node IS the intent to inspect it, so jump to Properties — the same move
+  // Unreal's Blueprint editor makes. Only on a fresh selection: deselecting leaves you
+  // where you are, and a collapsed rail stays collapsed.
+  let lastInspected: number | null = null;
+  $effect(() => {
+    const id = selectedNodeId;
+    if (id != null && id !== lastInspected) panelTab = "properties";
+    lastInspected = id;
+  });
+
   const nodeById = $derived(new Map(graph?.nodes.map((n) => [n.id, n]) ?? []));
   const nonCommentNodes = $derived(graph?.nodes.filter((n) => n.kind !== "comment") ?? []);
   // Set of "<toNodeId>:<toPort>" for every wired input — lets isFilled()/requiredUnfilled()
@@ -1231,6 +1288,10 @@
     if (savedW >= PANEL_MIN && savedW <= PANEL_MAX) panelW = savedW;
     const savedOpen = localStorage.getItem("wf.panelOpen");
     if (savedOpen != null) panelOpen = savedOpen === "true";
+    const savedTab = localStorage.getItem("wf.panelTab");
+    if (savedTab === "details" || savedTab === "properties" || savedTab === "variables" || savedTab === "runs") {
+      panelTab = savedTab;
+    }
     const savedConsoleH = Number(localStorage.getItem("wf.consoleH"));
     if (savedConsoleH >= CONSOLE_MIN && savedConsoleH <= CONSOLE_MAX) consoleH = savedConsoleH;
     (async () => {
@@ -1563,8 +1624,7 @@
     return tempId;
   }
 
-  // ---- workflow variables (left panel) -------------------------------------
-  let varsOpen = $state(true);
+  // ---- workflow variables (the Variables tab in the right rail) --------------
   const variables = $derived<Variable[]>(graph?.variables ?? []);
 
   async function saveVariables(next: Variable[]) {
@@ -1876,18 +1936,29 @@
     }
   });
 
-  // ---- recent-runs drawer (list view) --------------------------------------
-  async function openRuns(g: Graph) {
+  // ---- recent runs ----------------------------------------------------------
+  // Two entry points share one loader: the Runs TAB in the editor's rail (no graph arg —
+  // it's the graph you're editing), and the modal drawer on the workflow LIST view, which
+  // has no rail to put a tab in.
+  let runsLoading = $state(false);
+  async function loadRuns(g: Graph | null = graph) {
+    if (!g) return;
     runsGraph = g;
-    runsOpen = true;
     runsList = [];
     runsLogs = {};
     runsExpanded = null;
+    runsLoading = true;
     try {
       runsList = await data.runHistory<RunRecord[]>(g.id, 50);
     } catch (err) {
       toast.error("Couldn't load run history", { description: String(err) });
+    } finally {
+      runsLoading = false;
     }
+  }
+  async function openRuns(g: Graph) {
+    runsOpen = true;
+    await loadRuns(g);
   }
   async function toggleRunLogs(runId: string) {
     if (runsExpanded === runId) {
@@ -2667,20 +2738,9 @@
         {/if}
       </div>
 
-      <!-- row 1: variables panel + editor + resizable side panel -->
+      <!-- row 1: editor + the tabbed right rail (there is no left rail — variables live in it) -->
       <div class="flex min-h-0 flex-1 gap-1">
-        <!-- col 0: variables (Unreal-style) -->
-        <VariablesPanel
-          bind:open={varsOpen}
-          {variables}
-          types={PAYLOAD_TYPES}
-          cameras={cameraOptions}
-          disabled={editLocked}
-          onAdd={addVariable}
-          onEdit={editVariable}
-          onRemove={removeVariable}
-        />
-        <!-- col 1: the node editor -->
+        <!-- col 0: the node editor -->
         <div class="relative min-w-0 flex-1">
           <div
             class="absolute inset-0 touch-none overflow-hidden rounded-xl border border-border bg-well"
@@ -3297,15 +3357,28 @@
         </div>
 
         {#if !panelOpen}
-          <!-- collapsed: thin rail to reopen the panel -->
-          <button
-            class="interactive group flex w-7 shrink-0 items-center justify-center rounded-xl border border-border bg-card hover:bg-hover"
-            title="Show panel"
-            aria-label="Show panel"
-            onclick={togglePanel}
-          >
-            <PanelRightOpen class="size-4 text-muted-foreground group-hover:text-foreground" />
-          </button>
+          <!-- collapsed: an icon rail — click a tab to reopen straight into it -->
+          <div class="flex w-9 shrink-0 flex-col items-center gap-1 rounded-xl border border-border bg-card p-1">
+            <button
+              class="interactive group flex w-full items-center justify-center rounded-lg py-1.5 text-muted-foreground hover:bg-hover hover:text-foreground"
+              title="Show panel"
+              aria-label="Show panel"
+              onclick={togglePanel}
+            >
+              <PanelRightOpen class="size-4" />
+            </button>
+            <div class="my-0.5 h-px w-5 bg-border"></div>
+            {#each RAIL_TABS as t (t.id)}
+              <button
+                class="interactive flex w-full items-center justify-center rounded-lg py-1.5 text-muted-foreground hover:bg-hover hover:text-foreground"
+                title={t.label}
+                aria-label={t.label}
+                onclick={() => selectTab(t.id)}
+              >
+                <t.icon class="size-4" />
+              </button>
+            {/each}
+          </div>
         {:else}
         <!-- splitter: drag to resize the side panel -->
         <div
@@ -3325,23 +3398,47 @@
           ></div>
         </div>
 
-        <!-- col 2: configuration + node property -->
-        <div
-          class="flex shrink-0 flex-col gap-3 overflow-y-auto"
-          style="width: {panelW}px"
-        >
+        <!-- col 1: the tabbed rail — Details / Properties / Variables / Runs -->
+        <div class="flex min-h-0 shrink-0 flex-col gap-2" style="width: {panelW}px">
+          <!-- tab strip. Icon-only (the map's SidePanel does the same): four labels don't
+               fit at PANEL_MIN, and each tab body carries its own header anyway. -->
+          <div class="flex shrink-0 items-center gap-0.5 rounded-xl border border-border bg-card p-1">
+            {#each RAIL_TABS as t (t.id)}
+              <button
+                class={tabClass(t.id)}
+                aria-pressed={panelTab === t.id}
+                title={t.label}
+                aria-label={t.label}
+                onclick={() => selectTab(t.id)}
+              >
+                <t.icon class="size-4" />
+              </button>
+            {/each}
+            <div class="mx-0.5 h-5 w-px shrink-0 bg-border"></div>
+            <button
+              class="interactive flex shrink-0 items-center justify-center rounded-lg px-1.5 py-1.5 text-muted-foreground hover:bg-hover hover:text-foreground"
+              title="Hide panel"
+              aria-label="Hide panel"
+              onclick={togglePanel}
+            >
+              <PanelRightClose class="size-4" />
+            </button>
+          </div>
+
+          <!-- tab bodies. Properties HIDES rather than unmounts: RegionPointsEditor
+               re-fetches its camera snapshot on mount, so unmounting would cost a network
+               round-trip and a visible flicker on every tab switch. -->
+          <div class="relative min-h-0 flex-1">
+
+          {#if panelTab === "details"}
+          <div class="flex h-full flex-col gap-3 overflow-y-auto">
           <!-- configuration -->
           <div class="space-y-3 rounded-xl border border-border bg-card p-3">
             <div class="flex items-center justify-between gap-2">
               <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Configuration</span>
-              <div class="flex items-center gap-1">
-                <Button variant="ghost" size="icon" class="size-7" title="Delete workflow" onclick={() => openDelete(graph)}>
-                  <Trash2 class="size-3.5" />
-                </Button>
-                <Button variant="ghost" size="icon" class="size-7" title="Hide panel" onclick={togglePanel}>
-                  <PanelRightClose class="size-3.5" />
-                </Button>
-              </div>
+              <Button variant="ghost" size="icon" class="size-7" title="Delete workflow" onclick={() => openDelete(graph)}>
+                <Trash2 class="size-3.5" />
+              </Button>
             </div>
 
             <!-- Name -->
@@ -3462,8 +3559,14 @@
               </div>
             </div>
           </div>
+          </div>
+          {/if}
 
-          <!-- node property -->
+          <!-- ── Properties tab (hidden, not unmounted — see above) ──────────── -->
+          <div
+            class="flex h-full flex-col gap-3 overflow-y-auto"
+            class:hidden={panelTab !== "properties"}
+          >
           {#if selectedNode}
             {@const nk = catalog[selectedNode.kind]}
             <div class="space-y-2.5 rounded-xl border border-border bg-card p-3">
@@ -4011,10 +4114,92 @@
               {/if}
             </div>
           {:else}
-            <div class="rounded-xl border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
-              Select a node to edit its properties.
+            <div class="rounded-xl border border-dashed border-border p-6 text-center">
+              <SentinelMark size={28} class="mx-auto mb-2 text-muted-foreground/50" />
+              <p class="text-xs text-muted-foreground">Select a node to edit its properties.</p>
             </div>
           {/if}
+          </div>
+
+          <!-- ── Variables tab ───────────────────────────────────────────────── -->
+          {#if panelTab === "variables"}
+            <div class="h-full overflow-y-auto">
+              <VariablesPanel
+                {variables}
+                types={PAYLOAD_TYPES}
+                cameras={cameraOptions}
+                disabled={editLocked}
+                onAdd={addVariable}
+                onEdit={editVariable}
+                onRemove={removeVariable}
+              />
+            </div>
+          {/if}
+
+          <!-- ── Runs tab — run history without leaving the editor ────────────── -->
+          {#if panelTab === "runs"}
+            <div class="flex h-full flex-col gap-2 overflow-y-auto rounded-xl border border-border bg-card p-2.5">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Recent runs</span>
+                <div class="flex items-center gap-0.5">
+                  <Button variant="ghost" size="icon" class="size-6" title="Refresh" onclick={() => loadRuns()}>
+                    <RefreshCw class="size-3.5 {runsLoading ? 'animate-spin' : ''}" />
+                  </Button>
+                  <a
+                    href="/logs?module=workflow&entity_type=workflow_graph&entity_id={graph.id}"
+                    class="rounded-md px-1.5 py-0.5 text-[10px] text-primary hover:underline"
+                  >All logs →</a>
+                </div>
+              </div>
+
+              {#if runsLoading && runsList.length === 0}
+                <Loader size={28} />
+              {:else if runsList.length === 0}
+                <p class="rounded-lg border border-dashed border-border px-2 py-6 text-center text-[11px] text-muted-foreground">
+                  No runs recorded yet. Run the graph and its history lands here.
+                </p>
+              {:else}
+                <div class="space-y-1">
+                  {#each runsList as r (r.id)}
+                    <div class="rounded-md border border-border bg-elev-1">
+                      <button
+                        class="interactive flex w-full items-center gap-1.5 px-2 py-1.5 text-left"
+                        onclick={() => toggleRunLogs(r.id)}
+                      >
+                        {#if runsExpanded === r.id}<ChevronDown class="size-3 shrink-0 text-muted-foreground" />{:else}<ChevronRight class="size-3 shrink-0 text-muted-foreground" />{/if}
+                        <span class="inline-flex shrink-0 items-center rounded-full border px-1.5 py-0 text-[9px] font-medium capitalize {runStatusClass(r.status)}">
+                          {r.status}
+                        </span>
+                        <span class="truncate text-[11px] font-medium">{triggerSourceLabel(r.trigger_source)}</span>
+                        <span class="ml-auto shrink-0 text-[10px] text-muted-foreground">{fmtTs(r.started_at)}</span>
+                      </button>
+                      {#if runsExpanded === r.id}
+                        <div class="border-t border-border px-2 py-1.5">
+                          {#if r.result_summary}<p class="mb-1 text-[10px] text-muted-foreground">{r.result_summary}</p>{/if}
+                          {#if (runsLogs[r.id]?.length ?? 0) === 0}
+                            <p class="text-[10px] text-muted-foreground/60">No detailed signals recorded.</p>
+                          {:else}
+                            <div class="space-y-0.5 font-mono text-[10px] leading-relaxed">
+                              {#each runsLogs[r.id] as line (line.id)}
+                                <div class="flex gap-1.5">
+                                  <span class="w-8 shrink-0 uppercase {line.level === 'error' ? 'text-destructive' : line.level === 'warn' ? 'text-amber-400' : 'text-muted-foreground/60'}">{line.level}</span>
+                                  <span class="min-w-0 break-words {line.level === 'error' ? 'text-destructive' : 'text-muted-foreground'}">
+                                    {(line.payload?.label as string | undefined) ? `${line.payload?.label}: ` : ""}{line.message}
+                                  </span>
+                                </div>
+                              {/each}
+                            </div>
+                          {/if}
+                        </div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
+
+          </div>
         </div>
         {/if}
       </div>
