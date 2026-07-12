@@ -1,6 +1,6 @@
 <script lang="ts">
   import PageHeader from "$lib/components/page-header.svelte";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { toast } from "svelte-sonner";
 
   import Film from "@lucide/svelte/icons/film";
@@ -25,6 +25,7 @@
   import {
     buildTracks,
     buildMarkers,
+    mergeSegments,
     markerSeverity,
     dayBounds,
     dayOrigin,
@@ -36,6 +37,7 @@
     PX_PER_SEC_PRESETS,
     type TLClip,
     type TLTrack,
+    type TLSegment,
     type TLMarker,
   } from "$lib/timeline";
 
@@ -85,24 +87,29 @@
     return cameras.find((c) => c.ip === cameraFilter)?.name ?? cameraFilter;
   }
 
-  // ---- layout helpers (keep the markup logic-free) ---------------------------
-  function clipLeft(c: TLClip): number {
-    return xOf(c.startTs, originMs, pxPerSec);
+  // ---- track segment layout (merged recording sessions; keep markup logic-free) ----
+  function segLeft(s: TLSegment): number {
+    return xOf(s.startTs, originMs, pxPerSec);
   }
-  function clipWidth(c: TLClip): number {
-    return widthOf((c.endTs - c.startTs) / 1000, pxPerSec);
+  function segWidth(s: TLSegment, next?: TLSegment): number {
+    const w = widthOf((s.endTs - s.startTs) / 1000, pxPerSec);
+    if (!next) return w;
+    // Never overrun the next session's start — leaves a 1px sliver of real gap between sessions.
+    const cap = ((next.startTs - s.startTs) / 1000) * pxPerSec - 1;
+    return Math.max(1, Math.min(w, cap));
   }
-  function clipClass(c: TLClip): string {
-    // Uploaded clips read as durable ink; edge-only clips are dimmer with a dashed edge.
-    return c.uploaded
+  function segClass(s: TLSegment): string {
+    // Uploaded sessions read as durable ink; a run with edge-only footage is dimmer + dashed.
+    return s.uploaded
       ? "border-primary/40 bg-primary/15 hover:bg-primary/25"
       : "border-dashed border-primary/30 bg-primary/5 hover:bg-primary/10";
   }
-  function clipTitle(c: TLClip): string {
-    return `${c.label} · ${hhmm(c.startTs)}–${hhmm(c.endTs)}${c.uploaded ? "" : " · edge only"}`;
+  function segTitle(s: TLSegment): string {
+    const clips = `${s.clipCount} clip${s.clipCount === 1 ? "" : "s"}`;
+    return `${hhmm(s.startTs)}–${hhmm(s.endTs)} · ${clips}${s.uploaded ? "" : " · has edge-only footage"}`;
   }
-  function wideEnough(c: TLClip): boolean {
-    return clipWidth(c) > 44;
+  function segWide(s: TLSegment, next?: TLSegment): boolean {
+    return segWidth(s, next) > 44;
   }
 
   // ---- marker lane helpers ---------------------------------------------------
@@ -147,6 +154,7 @@
       loadedClip = null;
       playing = false;
       void resolveVideo();
+      void revealPlayhead();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load the timeline");
     } finally {
@@ -164,8 +172,12 @@
     day = todayISO();
     load();
   }
-  function zoom(delta: number) {
+  async function zoom(delta: number) {
+    // Anchor the playhead: keep it at the same on-screen x across the zoom so you don't lose your place.
+    const anchor = scrollEl ? playheadX - scrollEl.scrollLeft : 0;
     pxIdx = Math.min(PX_PER_SEC_PRESETS.length - 1, Math.max(0, pxIdx + delta));
+    await tick();
+    if (scrollEl) scrollEl.scrollLeft = Math.max(0, playheadX - anchor);
   }
 
   // ── playback (Phase 3): active camera + playhead + transport ────────────────
@@ -178,10 +190,14 @@
   let videoErr = $state("");
   let loadedClip = $state<TLClip | null>(null);
   let contentEl = $state<HTMLDivElement | null>(null);
+  let scrollEl = $state<HTMLDivElement | null>(null);
   let seekOnLoad = 0;
   let objectUrl = "";
   let raf = 0;
   let dragging = false;
+  // True from a seek until the video has actually reached the new spot — while set, the rAF loop
+  // must NOT write the playhead back from the (still-old) video time, so the click feels instant.
+  let seeking = false;
 
   const activeTrack = $derived(tracks.find((t) => t.cameraIp === activeCamera) ?? null);
   const activeClip = $derived(clipAt(activeTrack, playheadMs));
@@ -227,11 +243,13 @@
       loadedClip = null;
       videoSrc = "";
       videoErr = "";
+      seeking = false;
       releaseObjectUrl();
       return;
     }
     if (loadedClip && clip.id === loadedClip.id && videoEl) {
       videoEl.currentTime = Math.max(0, (playheadMs - clip.startTs) / 1000);
+      seeking = false;
       return;
     }
     videoBusy = true;
@@ -261,6 +279,7 @@
   function onLoadedMeta() {
     if (!videoEl) return;
     videoEl.currentTime = Math.max(0, seekOnLoad);
+    seeking = false;
     if (playing) void videoEl.play();
   }
 
@@ -268,8 +287,9 @@
     return Math.min(originMs + DAY_SECS * 1000, Math.max(originMs, ms));
   }
   function seekTo(ms: number, keepPlaying = playing) {
-    playheadMs = clampMs(ms);
+    playheadMs = clampMs(ms); // instant visual move — the video catches up after
     playing = keepPlaying;
+    seeking = true;
     void resolveVideo();
   }
   function setActive(ip: string) {
@@ -288,6 +308,17 @@
     if (playing) void videoEl?.play();
     else videoEl?.pause();
   }
+  // Scroll the timeline so the playhead is comfortably in view (after a clip jump or first load).
+  async function revealPlayhead() {
+    await tick();
+    if (!scrollEl) return;
+    const x = playheadX;
+    const left = scrollEl.scrollLeft;
+    const w = scrollEl.clientWidth;
+    if (x < left + 48 || x > left + w - 48) {
+      scrollEl.scrollLeft = Math.max(0, x - w / 2);
+    }
+  }
   function jumpNextClip() {
     const ns = nextClipStart(activeTrack, playheadMs);
     if (ns == null) {
@@ -295,6 +326,7 @@
       return;
     }
     seekTo(ns);
+    void revealPlayhead();
   }
   function jumpPrevClip() {
     const ps = prevClipStart(activeTrack, playheadMs);
@@ -303,6 +335,7 @@
       return;
     }
     seekTo(ps);
+    void revealPlayhead();
   }
   /** A finished clip flows into the next one (skipping any gap), else playback stops. */
   function onEnded() {
@@ -323,7 +356,7 @@
       return;
     }
     const step = () => {
-      if (videoEl && loadedClip && !videoEl.paused) {
+      if (videoEl && loadedClip && !videoEl.paused && !seeking) {
         playheadMs = loadedClip.startTs + videoEl.currentTime * 1000;
       }
       raf = requestAnimationFrame(step);
@@ -430,22 +463,6 @@
     >
       Events: {showAllKinds ? "all" : "footage"}
     </Button>
-
-    <div class="ml-auto flex items-center gap-1">
-      <Button variant="outline" size="icon" class="size-8" title="Zoom out" disabled={pxIdx === 0} onclick={() => zoom(-1)}>
-        <ZoomOut class="size-4" />
-      </Button>
-      <Button
-        variant="outline"
-        size="icon"
-        class="size-8"
-        title="Zoom in"
-        disabled={pxIdx === PX_PER_SEC_PRESETS.length - 1}
-        onclick={() => zoom(1)}
-      >
-        <ZoomIn class="size-4" />
-      </Button>
-    </div>
   </div>
 
   {#if loading}
@@ -468,6 +485,7 @@
               class="h-full w-full object-contain"
               playsinline
               onloadedmetadata={onLoadedMeta}
+              onseeked={() => (seeking = false)}
               onended={onEnded}
               onplay={() => (playing = true)}
               onpause={() => (playing = false)}
@@ -522,7 +540,22 @@
         </Button>
         <span class="ml-2 text-sm font-semibold tabular-nums">{hms(playheadMs)}</span>
         <span class="text-xs text-muted-foreground">· {activeTrack?.cameraName ?? "—"}</span>
-        <span class="ml-auto hidden text-[11px] text-muted-foreground md:block">Space play · , / . prev / next clip · ← → step</span>
+        <div class="ml-auto flex items-center gap-2">
+          <span class="hidden text-[11px] text-muted-foreground lg:block">Space · , / . clip · ← → step</span>
+          <Button variant="outline" size="icon" class="size-8" title="Zoom out" disabled={pxIdx === 0} onclick={() => zoom(-1)}>
+            <ZoomOut class="size-4" />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            class="size-8"
+            title="Zoom in"
+            disabled={pxIdx === PX_PER_SEC_PRESETS.length - 1}
+            onclick={() => zoom(1)}
+          >
+            <ZoomIn class="size-4" />
+          </Button>
+        </div>
       </div>
 
       <!-- timeline -->
@@ -545,7 +578,7 @@
       </div>
 
       <!-- scrolling time content -->
-      <div class="min-w-0 flex-1 overflow-x-auto">
+      <div class="min-w-0 flex-1 overflow-x-auto" bind:this={scrollEl}>
         <div
           class="relative"
           style="width: {contentWidth}px"
@@ -599,17 +632,18 @@
               <div class="pointer-events-none absolute inset-y-0 w-px bg-primary/10" style="left: {markerLeft(m)}px"></div>
             {/each}
             {#each tracks as t (t.cameraIp)}
+              {@const segs = mergeSegments(t.clips)}
               <div class="relative h-11 border-b border-border/60">
                 <!-- gap baseline: no footage shows through as a dashed lane -->
                 <div class="absolute inset-x-0 top-1/2 border-t border-dashed border-border/50"></div>
-                {#each t.clips as c (c.id)}
+                {#each segs as s, i (s.startTs)}
                   <div
-                    class="absolute top-1.5 bottom-1.5 z-[1] flex items-center overflow-hidden rounded-md border px-1.5 transition-colors {clipClass(c)}"
-                    style="left: {clipLeft(c)}px; width: {clipWidth(c)}px"
-                    title={clipTitle(c)}
+                    class="absolute top-1.5 bottom-1.5 z-[1] flex items-center overflow-hidden rounded-md border px-1.5 transition-colors {segClass(s)}"
+                    style="left: {segLeft(s)}px; width: {segWidth(s, segs[i + 1])}px"
+                    title={segTitle(s)}
                   >
-                    {#if wideEnough(c)}
-                      <span class="truncate text-[11px] text-primary">{hhmm(c.startTs)}</span>
+                    {#if segWide(s, segs[i + 1])}
+                      <span class="truncate text-[11px] text-primary tabular-nums">{hhmm(s.startTs)}</span>
                     {/if}
                   </div>
                 {/each}

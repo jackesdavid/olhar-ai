@@ -301,13 +301,14 @@ async fn list_cameras(
 ) -> Result<impl IntoResponse, ApiErr> {
     auth::require(&c, "recordings.read")?;
     let tid = tenant_of(&c)?;
-    let cameras = store::list_discovered(&st.pool, tid).await.map_err(|e| {
+    // The user-given camera names (`devices.name`), not the ONVIF/model string.
+    let cameras = store::list_camera_names(&st.pool, tid).await.map_err(|e| {
         log::error!("list cameras for recordings: {e}");
         err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
     })?;
     let result: Vec<_> = cameras
         .into_iter()
-        .map(|cam| serde_json::json!({ "ip": cam.ip, "name": cam.name }))
+        .map(|(ip, name)| serde_json::json!({ "ip": ip, "name": name }))
         .collect();
     Ok(Json(result))
 }

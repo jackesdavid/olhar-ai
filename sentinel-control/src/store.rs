@@ -407,6 +407,18 @@ pub async fn list_discovered(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec
     .await
 }
 
+/// (ip, display name) per configured camera — the **user-given** name from `devices.name`, not the
+/// raw ONVIF/model string in `discovered_cameras`. Everything user-facing (the recordings/playback
+/// camera list) should read this. Falls back to the ip when a camera has no name yet.
+pub async fn list_camera_names(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<(String, String)>> {
+    sqlx::query_as::<_, (String, String)>(
+        "SELECT ip, COALESCE(NULLIF(name, ''), ip) AS name FROM devices WHERE tenant_id = $1 ORDER BY name",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+}
+
 /// Mark a camera as configured (its credentials were relayed to the edge). The creds
 /// themselves are never stored — only this flag.
 pub async fn mark_configured(pool: &PgPool, tenant_id: Uuid, ip: &str) -> sqlx::Result<()> {
@@ -790,7 +802,7 @@ pub async fn list_recordings_filtered(
                 r.started_at, r.created_at, r.upload_state,
                 dc.name AS camera_name
            FROM recordings r
-           LEFT JOIN discovered_cameras dc
+           LEFT JOIN devices dc
                   ON dc.tenant_id = r.tenant_id AND dc.ip = r.camera_ip
           WHERE r.tenant_id = $1
             AND ($2::text IS NULL OR r.camera_ip = $2)

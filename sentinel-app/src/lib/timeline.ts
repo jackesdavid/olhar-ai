@@ -87,6 +87,34 @@ export function buildTracks(items: Recording[], cameras: RecordingCamera[]): TLT
     }));
 }
 
+/** A merged run of back-to-back clips — one recording "session" bar on the track. Playback still
+ *  resolves the individual clip under the playhead; this is only how the track *renders*, so
+ *  motion clips (~40s each, contiguous) read as one continuous block instead of a pile of
+ *  identical sub-pixel slivers that overlap under a min-width. */
+export type TLSegment = {
+  startTs: number;
+  endTs: number;
+  clipCount: number;
+  uploaded: boolean; // every clip in the run is in the cloud
+};
+
+/** Merge clips whose neighbour starts within `gapToleranceSecs` of the previous clip's end.
+ *  Input must be start-sorted (buildTracks guarantees it). */
+export function mergeSegments(clips: TLClip[], gapToleranceSecs = 2): TLSegment[] {
+  const segs: TLSegment[] = [];
+  for (const c of clips) {
+    const last = segs[segs.length - 1];
+    if (last && c.startTs - last.endTs <= gapToleranceSecs * 1000) {
+      last.endTs = Math.max(last.endTs, c.endTs);
+      last.clipCount += 1;
+      last.uploaded = last.uploaded && c.uploaded;
+    } else {
+      segs.push({ startTs: c.startTs, endTs: c.endTs, clipCount: 1, uploaded: c.uploaded });
+    }
+  }
+  return segs;
+}
+
 /** Ruler ticks across `[originMs, endMs]` at the smallest spacing keeping ticks ≥ `minPx` apart. */
 export function rulerTicks(
   originMs: number,
