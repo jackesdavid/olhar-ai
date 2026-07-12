@@ -147,7 +147,7 @@
       </Card.Content></Card.Root>
     </div>
 
-    <div class="rounded-lg border border-white/10 overflow-hidden">
+    <div class="rounded-lg border border-border overflow-hidden">
       <Table.Root>
         <Table.Header>
           <Table.Row>
