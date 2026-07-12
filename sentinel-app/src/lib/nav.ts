@@ -2,7 +2,6 @@ import type { Component } from "svelte";
 import LayoutDashboard from "@lucide/svelte/icons/layout-dashboard";
 import Cpu from "@lucide/svelte/icons/cpu";
 import Video from "@lucide/svelte/icons/video";
-import Bell from "@lucide/svelte/icons/bell";
 import Rss from "@lucide/svelte/icons/rss";
 import Radio from "@lucide/svelte/icons/radio";
 import Users from "@lucide/svelte/icons/users";
@@ -23,7 +22,6 @@ export const navItems: NavItem[] = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard },
   { label: "Devices", href: "/devices", icon: Cpu },
   { label: "Live", href: "/live", icon: Video },
-  { label: "Alerts", href: "/alerts", icon: Bell },
   { label: "Events", href: "/events", icon: Rss },
   { label: "Recipients", href: "/beacons", icon: Radio },
   { label: "People", href: "/people", icon: Users },

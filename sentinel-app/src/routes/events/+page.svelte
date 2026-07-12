@@ -5,13 +5,26 @@
 
   import Rss from "@lucide/svelte/icons/rss";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+  import Bell from "@lucide/svelte/icons/bell";
+  import Users from "@lucide/svelte/icons/users";
+  import Clapperboard from "@lucide/svelte/icons/clapperboard";
+  import Workflow from "@lucide/svelte/icons/workflow";
+  import LogIn from "@lucide/svelte/icons/log-in";
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
+  import Send from "@lucide/svelte/icons/send";
+  import Trash2 from "@lucide/svelte/icons/trash-2";
+  import Plus from "@lucide/svelte/icons/plus";
+
   import Loader from "$lib/components/loader.svelte";
   import Busy from "$lib/components/busy.svelte";
   import EmptyState from "$lib/components/empty-state.svelte";
 
   import * as Select from "$lib/components/ui/select";
+  import * as Dialog from "$lib/components/ui/dialog";
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import { Label } from "$lib/components/ui/label";
 
   import { events, type EventRow, type EventKind } from "$lib/api";
   import { fmtTs } from "$lib/utils";
@@ -26,6 +39,7 @@
 
   let kindFilter = $state("");
   let severityFilter = $state("");
+  let expanded = $state<Set<number>>(new Set());
 
   // Auto-refresh — silent reload of the newest page each tick.
   const REFRESH_OPTIONS = [
@@ -44,12 +58,27 @@
   function kindLabel(kind: string): string {
     return kinds.find((k) => k.kind === kind)?.label ?? kind;
   }
+  // Each kind wears a face — reinforces that one stream carries every subsystem.
+  function kindIcon(kind: string): typeof Rss {
+    if (kind === "alert") return Bell;
+    if (kind === "presence") return Users;
+    if (kind.startsWith("clip")) return Clapperboard;
+    if (kind.startsWith("workflow")) return Workflow;
+    if (kind.startsWith("auth")) return LogIn;
+    return Rss;
+  }
   // Severity reads through the dot-field: a status dot, colour only for state (warn/amber, error/red).
   function dotClass(severity: string): string {
     if (severity === "error") return "bg-destructive";
     if (severity === "warn") return "bg-amber-500";
     if (severity === "debug") return "bg-muted-foreground/40";
     return "bg-primary"; // info
+  }
+  function line(e: EventRow): string {
+    return e.title || e.message || kindLabel(e.kind);
+  }
+  function hasSubMessage(e: EventRow): boolean {
+    return !!e.message && e.message !== line(e);
   }
   // A concise line of the entity refs an event carries.
   function meta(e: EventRow): string {
@@ -59,8 +88,60 @@
     bits.push(e.source);
     return bits.join(" · ");
   }
-  function line(e: EventRow): string {
-    return e.title || e.message || kindLabel(e.kind);
+  function timeAgo(iso: string): string {
+    const then = new Date(iso).getTime();
+    if (!Number.isFinite(then)) return "";
+    const s = Math.max(0, (Date.now() - then) / 1000);
+    if (s < 60) return "just now";
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
+  }
+
+  function isAlert(e: EventRow): boolean {
+    return e.kind === "alert";
+  }
+  // The typed payload as a plain record (or null), so the template stays logic-free.
+  function payload(e: EventRow): Record<string, unknown> | null {
+    return e.data && typeof e.data === "object" ? (e.data as Record<string, unknown>) : null;
+  }
+  type Delivery = { target?: string; ok?: boolean; at?: string };
+  function deliveries(e: EventRow): Delivery[] {
+    const d = payload(e)?.deliveries;
+    return Array.isArray(d) ? (d as Delivery[]) : [];
+  }
+  function isDelivered(e: EventRow): boolean {
+    return deliveries(e).some((d) => d.ok);
+  }
+  // Entity refs worth showing in the detail panel, skipping the empty ones.
+  function refs(e: EventRow): { label: string; value: string }[] {
+    const out: { label: string; value: string }[] = [];
+    if (e.camera) out.push({ label: "Camera", value: e.camera });
+    if (e.clip_id) out.push({ label: "Clip", value: e.clip_id });
+    if (e.room_name) out.push({ label: "Room", value: e.room_name });
+    if (e.graph_id != null) out.push({ label: "Workflow", value: `#${e.graph_id}` });
+    if (e.device_id) out.push({ label: "Device", value: e.device_id });
+    if (e.user_id) out.push({ label: "User", value: e.user_id.slice(0, 8) });
+    out.push({ label: "Source", value: e.source });
+    out.push({ label: "Occurred", value: fmtTs(e.occurred_at) });
+    return out;
+  }
+  // The payload minus `deliveries` (rendered on its own), pretty-printed — or "" when empty.
+  function payloadJson(e: EventRow): string {
+    const p = payload(e);
+    if (!p) return "";
+    const rest = { ...p };
+    delete rest.deliveries;
+    return Object.keys(rest).length ? JSON.stringify(rest, null, 2) : "";
+  }
+
+  function toggleExpand(id: number) {
+    const next = new Set(expanded);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    expanded = next;
   }
 
   const opts = () => ({
@@ -112,7 +193,77 @@
   function onKind(v: string) { kindFilter = v === "_all" ? "" : v; load(); }
   function onSeverity(v: string) { severityFilter = v === "_all" ? "" : v; load(); }
 
+  // ---- actions (alert-kind events route through the /alerts endpoints) --------
+  let deliveringId = $state<number | null>(null);
+  async function doDeliver(e: EventRow) {
+    deliveringId = e.id;
+    try {
+      toast.success(await events.deliver(e.id));
+      await silentReload();
+    } catch (err) {
+      toast.error("Delivery failed", { description: String(err) });
+    } finally {
+      deliveringId = null;
+    }
+  }
+
+  let deleteTarget = $state<EventRow | null>(null);
+  let deleting = $state(false);
+  async function doDelete() {
+    if (!deleteTarget) return;
+    const target = deleteTarget;
+    deleting = true;
+    try {
+      await events.remove(target.id);
+      items = items.filter((x) => x.id !== target.id);
+      deleteTarget = null;
+      toast.success("Event deleted.");
+    } catch (err) {
+      toast.error("Delete failed", { description: String(err) });
+    } finally {
+      deleting = false;
+    }
+  }
+
+  // ---- raise an alert by hand -------------------------------------------------
+  const LEVELS = [
+    { value: "info", label: "Info" },
+    { value: "warn", label: "Warn" },
+    { value: "error", label: "Error" },
+    { value: "debug", label: "Debug" },
+  ];
+  let createOpen = $state(false);
+  let fLevel = $state("info");
+  let fMessage = $state("");
+  let fRoom = $state("");
+  let fSource = $state("");
+  let creating = $state(false);
+  const fLevelLabel = $derived(LEVELS.find((l) => l.value === fLevel)?.label ?? "Info");
+
+  function openCreate() {
+    fLevel = "info"; fMessage = ""; fRoom = ""; fSource = "";
+    createOpen = true;
+  }
+  async function doCreate() {
+    if (!fMessage.trim()) { toast.error("Enter a message first."); return; }
+    creating = true;
+    try {
+      await events.create(fLevel, fMessage.trim(), fRoom.trim() || null, fSource.trim() || null);
+      toast.success("Alert raised.");
+      createOpen = false;
+      await load();
+    } catch (err) {
+      toast.error("Couldn't raise alert", { description: String(err) });
+    } finally {
+      creating = false;
+    }
+  }
+
   onMount(async () => {
+    // Deep-link: /events?kind=alert&severity=warn pre-filters the feed.
+    const q = new URLSearchParams(window.location.search);
+    kindFilter = q.get("kind") ?? "";
+    severityFilter = q.get("severity") ?? "";
     try { kinds = await events.kinds(); } catch { /* filter falls back to slugs */ }
     await load();
   });
@@ -125,6 +276,9 @@
     icon={Rss}
   >
     {#snippet actions()}
+      <Button variant="outline" size="sm" onclick={openCreate}>
+        <Plus class="mr-2 h-4 w-4" /> New alert
+      </Button>
       <Select.Root type="single" value={String(autoSecs)} onValueChange={(v) => (autoSecs = Number(v))}>
         <Select.Trigger class="h-8 w-28 text-sm" title="Auto-refresh">Auto: {autoLabel(autoSecs)}</Select.Trigger>
         <Select.Content>
@@ -167,21 +321,83 @@
   {:else if items.length === 0}
     <EmptyState title="No events yet" description="Events appear here as things happen across your site." />
   {:else}
-    <div class="rounded-lg border border-white/10 divide-y divide-white/5">
+    <div class="overflow-hidden rounded-lg border border-border divide-y divide-white/5">
       {#each items as e (e.id)}
-        <div class="flex items-start gap-3 px-4 py-3 animate-in fade-in duration-200">
-          <span class="mt-1.5 h-2 w-2 shrink-0 rounded-full {dotClass(e.severity)}"></span>
-          <div class="min-w-0 flex-1">
-            <div class="flex items-center gap-2">
-              <Badge variant="outline" class="border-primary/25 bg-primary/10 text-primary">{kindLabel(e.kind)}</Badge>
-              <span class="truncate text-sm font-medium">{line(e)}</span>
+        {@const Icon = kindIcon(e.kind)}
+        {@const open = expanded.has(e.id)}
+        <div class="animate-in fade-in duration-200">
+          <!-- summary row -->
+          <button
+            type="button"
+            class="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-primary/5"
+            onclick={() => toggleExpand(e.id)}
+          >
+            <span class="mt-1.5 h-2 w-2 shrink-0 rounded-full {dotClass(e.severity)}"></span>
+            <span class="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary ring-1 ring-inset ring-primary/20">
+              <Icon class="size-3.5" />
+            </span>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <Badge variant="outline" class="border-primary/25 bg-primary/10 text-primary">{kindLabel(e.kind)}</Badge>
+                <span class="truncate text-sm font-medium">{line(e)}</span>
+                {#if isAlert(e) && isDelivered(e)}
+                  <Badge variant="outline" class="border-primary/30 bg-primary/10 text-primary">Sent</Badge>
+                {/if}
+              </div>
+              {#if hasSubMessage(e)}
+                <p class="mt-0.5 truncate text-sm text-muted-foreground">{e.message}</p>
+              {/if}
+              <p class="mt-0.5 text-xs text-muted-foreground">{meta(e)}</p>
             </div>
-            {#if e.message && e.message !== line(e)}
-              <p class="mt-0.5 truncate text-sm text-muted-foreground">{e.message}</p>
-            {/if}
-            <p class="mt-0.5 text-xs text-muted-foreground">{meta(e)}</p>
-          </div>
-          <span class="shrink-0 whitespace-nowrap text-xs text-muted-foreground tabular-nums">{fmtTs(e.occurred_at)}</span>
+            <span class="shrink-0 whitespace-nowrap text-xs text-muted-foreground tabular-nums" title={fmtTs(e.occurred_at)}>
+              {timeAgo(e.occurred_at)}
+            </span>
+            <ChevronRight class="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform {open ? 'rotate-90' : ''}" />
+          </button>
+
+          <!-- detail -->
+          {#if open}
+            <div class="border-t border-white/5 bg-muted/10 px-4 py-3 pl-16 animate-in fade-in slide-in-from-top-1 duration-150">
+              <dl class="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs sm:grid-cols-3">
+                {#each refs(e) as r (r.label)}
+                  <div class="flex flex-col">
+                    <dt class="font-semibold uppercase tracking-wide text-muted-foreground/70">{r.label}</dt>
+                    <dd class="truncate tabular-nums" title={r.value}>{r.value}</dd>
+                  </div>
+                {/each}
+              </dl>
+
+              {#if isAlert(e) && deliveries(e).length > 0}
+                <div class="mt-3">
+                  <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground/70">Deliveries</p>
+                  <ul class="mt-1 space-y-0.5 text-xs">
+                    {#each deliveries(e) as d (d.target)}
+                      <li class="flex items-center gap-2">
+                        <span class="h-1.5 w-1.5 rounded-full {d.ok ? 'bg-primary' : 'bg-destructive'}"></span>
+                        <span class="text-muted-foreground">{d.target ?? "beacon"}</span>
+                      </li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
+
+              {#if payloadJson(e)}
+                <pre class="mt-3 max-h-48 overflow-auto rounded-md border border-border bg-background p-2 text-[11px] leading-relaxed">{payloadJson(e)}</pre>
+              {/if}
+
+              <div class="mt-3 flex items-center gap-2">
+                {#if isAlert(e)}
+                  <Button variant="outline" size="sm" disabled={deliveringId === e.id} onclick={() => doDeliver(e)}>
+                    {#if deliveringId === e.id}<Busy class="mr-2" />{:else}<Send class="mr-2 h-3.5 w-3.5" />{/if}
+                    Deliver to recipients
+                  </Button>
+                {/if}
+                <Button variant="ghost" size="sm" class="text-destructive hover:text-destructive" onclick={() => (deleteTarget = e)}>
+                  <Trash2 class="mr-2 h-3.5 w-3.5" /> Delete
+                </Button>
+              </div>
+            </div>
+          {/if}
         </div>
       {/each}
     </div>
@@ -196,3 +412,60 @@
     {/if}
   {/if}
 </div>
+
+<!-- raise an alert -->
+<Dialog.Root bind:open={createOpen}>
+  <Dialog.Content class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>New alert</Dialog.Title>
+      <Dialog.Description>Raise an alert event into the feed.</Dialog.Description>
+    </Dialog.Header>
+    <div class="space-y-4">
+      <div class="space-y-2">
+        <Label>Level</Label>
+        <Select.Root type="single" bind:value={fLevel}>
+          <Select.Trigger class="w-full">{fLevelLabel}</Select.Trigger>
+          <Select.Content>
+            {#each LEVELS as l (l.value)}<Select.Item value={l.value} label={l.label}>{l.label}</Select.Item>{/each}
+          </Select.Content>
+        </Select.Root>
+      </div>
+      <div class="space-y-2">
+        <Label for="ev-message">Message</Label>
+        <Input id="ev-message" bind:value={fMessage} placeholder="Motion detected at the gate" />
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="space-y-2">
+          <Label for="ev-room">Room (optional)</Label>
+          <Input id="ev-room" bind:value={fRoom} placeholder="garage" />
+        </div>
+        <div class="space-y-2">
+          <Label for="ev-source">Source (optional)</Label>
+          <Input id="ev-source" bind:value={fSource} placeholder="operator" />
+        </div>
+      </div>
+    </div>
+    <Dialog.Footer>
+      <Button variant="outline" onclick={() => (createOpen = false)} disabled={creating}>Cancel</Button>
+      <Button onclick={doCreate} disabled={creating}>
+        {#if creating}<Busy class="mr-2" />Raising…{:else}Raise alert{/if}
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- delete confirm -->
+<Dialog.Root open={deleteTarget !== null} onOpenChange={(o) => { if (!o) deleteTarget = null; }}>
+  <Dialog.Content class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Delete event?</Dialog.Title>
+      <Dialog.Description>
+        Remove <span class="font-medium text-foreground">{deleteTarget ? line(deleteTarget) : ""}</span> from the feed. This can't be undone.
+      </Dialog.Description>
+    </Dialog.Header>
+    <Dialog.Footer>
+      <Button variant="outline" onclick={() => (deleteTarget = null)} disabled={deleting}>Cancel</Button>
+      <Button variant="destructive" onclick={doDelete} disabled={deleting}>{deleting ? "Deleting…" : "Delete"}</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>

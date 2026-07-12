@@ -341,6 +341,13 @@ export const events = {
     return api.get<EventRow[]>(`/events${qs ? `?${qs}` : ""}`);
   },
   kinds: () => api.get<EventKind[]>("/events/kinds"),
+  // Alert-kind events still route through the /alerts endpoints — a thin view over `events`
+  // (the alert *model* is gone; these are event operations kept under the historical path):
+  // deliver an alert event to the beacons, delete any event, or raise one by hand.
+  deliver: (id: number) => api.post<string>(`/alerts/${id}/deliver`),
+  remove: (id: number) => api.del<void>(`/alerts/${id}`),
+  create: (level: string, message: string, room?: string | null, source?: string | null) =>
+    api.post<EventRow>("/alerts", { level, message, room, source }),
 };
 
 // ---- Assistant (chat + voice) -----------------------------------------------
