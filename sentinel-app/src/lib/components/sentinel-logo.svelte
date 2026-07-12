@@ -41,7 +41,7 @@
   <SentinelMark
     {size}
     {animated}
-    rings={4}
+    boundary
     class="shrink-0 {markClass}"
     style="filter: drop-shadow(var(--brand-glow))"
   />

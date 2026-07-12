@@ -9,12 +9,14 @@ size/format the product needs (favicons #69, email #70, OG images, app chrome). 
 
 ## Decisions locked (2026-07-11)
 
-- **Mark:** the **refined dot-field** (candidate #01) — outcome (A), the DNA is preserved, no
-  system-doc replacement. Canonical static mark = `rings=4`.
+- **Mark:** the **guarded perimeter, #05a** — the dot-field + solid core inside a rounded
+  hexagonal boundary ("data in your control"). Outcome (A): dot-field DNA preserved, elevated.
+  Explored via the installed `svg-design` skill (6 concepts → #05 → tuned 05a). Rendered by
+  `SentinelMark boundary`; the bare pulsing field stays the "active"/loader expression.
 - **Wordmark:** **Sora 600, sentence-case** ("Sentinel"), tracking `-0.02em`. UPPERCASE-tracked is
   the sanctioned formal alternate. Scoped to the logo via `--font-brand`; UI body font unchanged.
-- **Status:** Phase 1 (explore) + Phase 2 (choose) done. Phase 3 (productionize) wired for the app;
-  see `docs/ref/brand.md`. Remaining Phase-3 exports (favicon/OG/email rasters) handed to #69/#70.
+- **Status:** Phase 1 (explore) + Phase 2 (choose) done. Phase 3 (productionize) wired for the app
+  + favicons + OG (#69 regenerated from 05a); see `docs/ref/brand.md`. Email rasters → #70.
 
 ## Current state (grounding)
 
