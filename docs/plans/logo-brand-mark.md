@@ -7,6 +7,31 @@ wordmark lockup, light/dark variants, clear-space & min-size rules, and static e
 size/format the product needs (favicons #69, email #70, OG images, app chrome). Direction chosen:
 **explore fresh concepts first**, then commit and systematize.
 
+## ⚠️ Session state — PAUSED 2026-07-12 (direction pivoted; read before resuming)
+
+The 2026-07-11 "guarded-perimeter #05a + Sora" identity below is **committed on `main` but
+NOT deployed** (commits `0868d82`, `e43c3de`, `81b2f96`). Then the direction **fully reset**:
+
+- The user found the dot-field mark + every wordmark typeface (Sora, and outlined Chakra Petch /
+  Rajdhani / Oxanium / Saira Stencil, and a hand-built monoline logotype) **too generic**.
+- **New brief (locked via the logo-designer skill's interview):** **Warm & human** vibe · an
+  **abstract** mark (drop hexagon + dots + monochrome) · **one confident warm accent** colour.
+- **5 warm concepts generated** (parallel agents, saved in `docs/plans/logo-exploration/`): coral
+  embrace, amber aperture, terracotta ripple, **rose ribbon** (my pick), tangerine overlap. See
+  `warm-concepts-overview.png`. **User has NOT picked yet** — that's the first resume step.
+
+**KEY OPEN DECISION on resume:** the new warm/colour direction will likely **supersede** the
+committed 05a+Sora identity. Do NOT deploy 05a+Sora as-is. Either (a) finish the warm direction and
+replace the mark/favicons/OG/lockup + revise `[[design-system]]`/`[[monochrome-rebrand]]`/`impeccable`/
+`docs/ref/brand.md` accordingly, or (b) if the reset is abandoned, revisit whether to ship 05a.
+
+**Tooling installed this session:** `.claude/skills/svg-design` (tryopendata, committed `c1c6d8c`) +
+`.claude/skills/logo-designer` (neonwatty). Both hand-author SVG; logo-designer runs parallel
+concept agents + a `logos/preview.html`. svgmaker MCP exists but user declined it (6 credits).
+
+**Resume:** open `docs/plans/logo-exploration/warm-concepts-overview.png`, get the user's pick (or
+a new direction), then Phase 3 refine → build → replace identity → deploy as one drop.
+
 ## Decisions locked (2026-07-11)
 
 - **Mark:** the **guarded perimeter, #05a** — the dot-field + solid core inside a rounded

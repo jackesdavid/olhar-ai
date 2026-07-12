@@ -6,6 +6,30 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-07-12 — Visual identity (#68/#69): built, then direction reset (PAUSED)
+
+- **Branch:** main (committed, **NOT deployed** — deploy intentionally held)
+- **Commits:** `0868d82` (Sora logo lockup #68), `e43c3de` (favicons/OG #69), `c1c6d8c`
+  (svg-design skill), `81b2f96` (guarded-perimeter mark 05a across logo/favicons/OG), + this stop.
+- **Done:** Shipped a full monochrome identity — `SentinelLogo` lockup (dot-field→**05a
+  guarded-perimeter** mark + Sora sentence-case wordmark), self-hosted Sora `--font-brand`, all
+  favicons/app-icons/PWA manifest/OG (generated via sharp/png-to-ico/headless-Chrome), `docs/ref/brand.md`.
+  Installed two logo skills (svg-design tryopendata, logo-designer neonwatty).
+- **State:** `npm run build` clean; login lockup + app icon + OG verified in-app. All committed, **not deployed**.
+- **THE PIVOT:** user rejected the dot-field + every wordmark typeface + a hand-built monoline as
+  "too generic", then **reset the whole direction**: drop monochrome+dots → **warm & human,
+  abstract mark, one warm accent colour**. 5 warm concepts generated (coral/amber/terracotta/**rose
+  ribbon**/tangerine), saved to `docs/plans/logo-exploration/`. **User has not picked yet.**
+- **Pending / next (resume here):** show `docs/plans/logo-exploration/warm-concepts-overview.png`,
+  get the pick, Phase-3 refine the chosen warm concept, then rebuild the mark + favicons + OG +
+  lockup to REPLACE the committed 05a+Sora identity, revise the identity docs/memories
+  ([[design-system]], [[monochrome-rebrand]], impeccable, brand.md), and deploy as one drop.
+- **Blockers:** none technical — awaiting the user's concept pick. Do NOT deploy 05a+Sora as-is
+  (likely to be superseded).
+- **Refs:** docs/plans/logo-brand-mark.md (⚠️ session-state section at top), docs/ref/brand.md,
+  docs/plans/logo-exploration/, sentinel-app/src/lib/components/{sentinel-mark,sentinel-logo}.svelte
+
+
 ## 2026-07-11 — Playback Timeline (#67) planned + researched (no code)
 
 - **Branch:** main (docs only; not deployed — nothing to deploy)
