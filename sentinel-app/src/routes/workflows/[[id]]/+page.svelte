@@ -58,6 +58,7 @@
   import Binary from "@lucide/svelte/icons/binary";
   import Disc from "@lucide/svelte/icons/disc";
   import CircleStop from "@lucide/svelte/icons/circle-stop";
+  import Folder from "@lucide/svelte/icons/folder";
   import DictionaryEditor from "$lib/components/dictionary-editor.svelte";
   import SearchableSelect from "$lib/components/searchable-select.svelte";
 
@@ -68,7 +69,6 @@
   import { Label } from "$lib/components/ui/label";
   import { Switch } from "$lib/components/ui/switch";
   import * as Card from "$lib/components/ui/card";
-  import * as Table from "$lib/components/ui/table";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Select from "$lib/components/ui/select";
   import Loader from "$lib/components/loader.svelte";
@@ -667,11 +667,13 @@
     return "Nothing to run — connect nodes or enable orphans";
   }
   // The emerald/amber/none marching-ants border on a list row.
-  function listRowAnim(g: Graph): string {
+  // The run state lives in the first-column dot now (it used to march a border around the row):
+  // running = the live primary pulse, armed/idle = amber, disabled = calm grey.
+  function dotState(g: Graph): "online" | "warn" | "offline" {
     const st = runStatus(g);
-    if (st === "running") return "list-running";
-    if (st === "idle") return "list-idle";
-    return "";
+    if (st === "running") return "online";
+    if (st === "idle") return "warn";
+    return "offline";
   }
   // Run-now in the editor: blocked while busy, active (armed/running), or not ready.
   function editorRunDisabled(): boolean {
@@ -1105,6 +1107,14 @@
   let wfGroupFilter = $state(""); // "" = all groups
   let allGroups = $state<string[]>([]);
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  // Which category roots are collapsed in the tree (by group key). Empty = all expanded.
+  let collapsedGroups = $state<Set<string>>(new Set());
+  function toggleGroup(key: string) {
+    const next = new Set(collapsedGroups);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    collapsedGroups = next;
+  }
 
   async function reload() {
     // The editor needs the full set (find the open graph); load unfiltered here and
@@ -1150,9 +1160,6 @@
     });
     return keys.map((k) => ({ key: k, label: k || "Ungrouped", rows: map.get(k)! }));
   });
-  const showGroupHeaders = $derived(
-    groupedGraphs.length > 1 || (groupedGraphs.length === 1 && groupedGraphs[0].key !== ""),
-  );
 
   function timeAgo(iso: string): string {
     const then = new Date(iso).getTime();
@@ -2478,73 +2485,67 @@
   {:else if view === "list"}
     {#snippet wfRow(g: Graph)}
       {@const st = runStatus(g)}
-      <Table.Row
-        class="cursor-pointer transition-colors hover:bg-primary/5 {listRowAnim(g)}"
-        onclick={() => openGraph(g.id)}
+      <div
+        class="group flex cursor-pointer items-center gap-3 border-l-2 border-transparent py-1.5 pl-9 pr-3 transition-colors hover:border-primary/40 hover:bg-primary/5"
+        role="button"
+        tabindex="0"
+        onclick={(e) => {
+          if ((e.target as HTMLElement).closest("[data-stop]")) return;
+          openGraph(g.id);
+        }}
+        onkeydown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            openGraph(g.id);
+          }
+        }}
       >
-        <Table.Cell>
-          <span class="flex items-center gap-2 font-medium">
-            <StatusDot state={g.enabled ? "online" : "offline"} />
-            {g.name}
-          </span>
-          {#if g.description}
-            <span class="mt-0.5 block truncate pl-4 text-xs text-muted-foreground">{g.description}</span>
+        <StatusDot state={dotState(g)} />
+        <span class="min-w-0 flex-1 truncate text-sm">
+          <span class="font-medium">{g.name}</span>
+          {#if g.description}<span class="ml-1.5 text-xs text-muted-foreground">— {g.description}</span>{/if}
+        </span>
+        <span class="hidden w-32 shrink-0 truncate text-xs text-muted-foreground md:inline">{triggerSummary(g.trigger)}</span>
+        <span class="hidden w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground sm:inline">{g.nodes.length}</span>
+        <span class="w-24 shrink-0 text-xs">
+          {#if st === "running"}
+            <span class="inline-flex items-center gap-1 font-medium text-primary">
+              <Busy size={11} />
+              {#if activity[g.id]?.trigger}{triggerSourceLabel(activity[g.id]?.trigger)}{:else}Running{/if}
+            </span>
+          {:else if g.last_run}
+            <span class="flex items-center gap-1 {lastRunClass(g.last_run.status)}">
+              {lastRunGlyph(g.last_run.status)} {timeAgo(g.last_run.at)}
+            </span>
+          {:else}
+            <span class="text-muted-foreground/50">—</span>
           {/if}
-        </Table.Cell>
-        <Table.Cell class="text-muted-foreground">{triggerSummary(g.trigger)}</Table.Cell>
-        <Table.Cell class="text-center tabular-nums text-muted-foreground">{g.nodes.length}</Table.Cell>
-        <Table.Cell>
-          <div class="flex flex-col gap-0.5">
-            {#if st === "running"}
-              <span
-                class="inline-flex w-fit items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
-              >
-                <Busy size={12} />
-                {#if activity[g.id]?.trigger}{triggerSourceLabel(activity[g.id]?.trigger)}{:else}Running{/if}
-              </span>
-            {:else if st === "idle"}
-              <span class="text-xs text-muted-foreground">Idle</span>
-            {:else}
-              <span class="text-xs text-muted-foreground/60">Disabled</span>
-            {/if}
-            {#if g.last_run}
-              <span class="flex items-center gap-1 text-[10px] {lastRunClass(g.last_run.status)}">
-                {lastRunGlyph(g.last_run.status)} {timeAgo(g.last_run.at)}
-              </span>
-            {/if}
-          </div>
-        </Table.Cell>
-        <Table.Cell onclick={(e) => e.stopPropagation()}>
+        </span>
+        <div data-stop>
           <Switch checked={g.enabled} onCheckedChange={(v) => toggleEnabled(g, v)} />
-        </Table.Cell>
-        <Table.Cell class="text-right" onclick={(e) => e.stopPropagation()}>
-          <div class="flex items-center justify-end gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              class="size-8 text-primary"
-              title={listRunTitle(g)}
-              disabled={listRunDisabled(g)}
-              onclick={() => runNow(g)}
-            >
-              {#if st === "running"}
-                <Busy />
-              {:else}
-                <Play class="size-4" />
-              {/if}
-            </Button>
-            <Button variant="ghost" size="icon" class="size-8" title="Duplicate" onclick={() => duplicateWorkflow(g)}>
-              <Copy class="size-4" />
-            </Button>
-            <Button variant="ghost" size="icon" class="size-8" title="Recent runs" onclick={() => openRuns(g)}>
-              <History class="size-4" />
-            </Button>
-            <Button variant="ghost" size="icon" class="size-8" title="Delete" onclick={() => openDelete(g)}>
-              <Trash2 class="size-4" />
-            </Button>
-          </div>
-        </Table.Cell>
-      </Table.Row>
+        </div>
+        <div class="flex items-center gap-0.5" data-stop>
+          <Button
+            variant="ghost"
+            size="icon"
+            class="size-7 text-primary"
+            title={listRunTitle(g)}
+            disabled={listRunDisabled(g)}
+            onclick={() => runNow(g)}
+          >
+            {#if st === "running"}<Busy />{:else}<Play class="size-3.5" />{/if}
+          </Button>
+          <Button variant="ghost" size="icon" class="size-7" title="Duplicate" onclick={() => duplicateWorkflow(g)}>
+            <Copy class="size-3.5" />
+          </Button>
+          <Button variant="ghost" size="icon" class="size-7" title="Recent runs" onclick={() => openRuns(g)}>
+            <History class="size-3.5" />
+          </Button>
+          <Button variant="ghost" size="icon" class="size-7" title="Delete" onclick={() => openDelete(g)}>
+            <Trash2 class="size-3.5" />
+          </Button>
+        </div>
+      </div>
     {/snippet}
 
     <div class="flex h-full flex-col gap-4 overflow-hidden p-6">
@@ -2604,36 +2605,33 @@
             </div>
           {/if}
         {:else}
-          <Table.Root>
-            <Table.Header class="sticky top-0 z-10 bg-card">
-              <Table.Row>
-                <Table.Head>Workflow</Table.Head>
-                <Table.Head class="w-40">Trigger</Table.Head>
-                <Table.Head class="w-16 text-center">Nodes</Table.Head>
-                <Table.Head class="w-40">Status · Last run</Table.Head>
-                <Table.Head class="w-20">Enabled</Table.Head>
-                <Table.Head class="w-36 text-right">Actions</Table.Head>
-              </Table.Row>
-            </Table.Header>
-            <Table.Body>
-              {#each groupedGraphs as grp (grp.key)}
-                {#if showGroupHeaders}
-                  <Table.Row class="bg-muted/20 hover:bg-muted/20">
-                    <Table.Cell
-                      colspan={6}
-                      class="py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-                    >
-                      {grp.label}
-                      <span class="ml-1 text-muted-foreground/60">({grp.rows.length})</span>
-                    </Table.Cell>
-                  </Table.Row>
+          <div class="divide-y divide-border/60">
+            {#each groupedGraphs as grp (grp.key)}
+              {@const collapsed = collapsedGroups.has(grp.key)}
+              <div>
+                <!-- category root -->
+                <button
+                  type="button"
+                  class="sticky top-0 z-10 flex w-full items-center gap-2 bg-card px-3 py-2 text-left text-sm font-semibold transition-colors hover:bg-muted/40"
+                  onclick={() => toggleGroup(grp.key)}
+                >
+                  <ChevronRight
+                    class="size-4 shrink-0 text-muted-foreground transition-transform {collapsed ? '' : 'rotate-90'}"
+                  />
+                  <Folder class="size-4 shrink-0 text-primary/70" />
+                  <span class="truncate">{grp.label}</span>
+                  <span class="text-xs font-normal text-muted-foreground/60">{grp.rows.length}</span>
+                </button>
+                {#if !collapsed}
+                  <div class="divide-y divide-border/40">
+                    {#each grp.rows as g (g.id)}
+                      {@render wfRow(g)}
+                    {/each}
+                  </div>
                 {/if}
-                {#each grp.rows as g (g.id)}
-                  {@render wfRow(g)}
-                {/each}
-              {/each}
-            </Table.Body>
-          </Table.Root>
+              </div>
+            {/each}
+          </div>
         {/if}
       </div>
     </div>

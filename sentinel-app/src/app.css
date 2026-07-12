@@ -186,37 +186,6 @@
     animation: node-glow 1s ease-in-out infinite;
   }
 
-  /* Marching-ants for running / idle list rows. */
-  @keyframes list-march {
-    to {
-      background-position:
-        12px 0,
-        -12px 100%,
-        0 -12px,
-        100% 12px;
-    }
-  }
-  .list-running,
-  .list-idle {
-    background-image:
-      linear-gradient(90deg, var(--march) 50%, transparent 0),
-      linear-gradient(90deg, var(--march) 50%, transparent 0),
-      linear-gradient(0deg, var(--march) 50%, transparent 0),
-      linear-gradient(0deg, var(--march) 50%, transparent 0);
-    background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
-    background-size: 12px 2px, 12px 2px, 2px 12px, 2px 12px;
-    background-position: 0 0, 0 100%, 0 0, 100% 0;
-    animation: list-march 0.6s linear infinite;
-  }
-  /* Running = white (executing now); idle = amber (armed — semantic, not brand). */
-  .list-running {
-    --march: var(--primary);
-  }
-  .list-idle {
-    --march: oklch(0.77 0.16 78);
-    animation-duration: 1.4s;
-  }
-
   /* Inked gradient text for hero headings (mode-aware). */
   .text-grad {
     background: linear-gradient(110deg, var(--grad-from), var(--grad-mid) 60%, var(--grad-to));
