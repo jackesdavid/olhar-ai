@@ -54,8 +54,6 @@ kanban-plugin: board
 	  - Plan: [[invite-onboarding-email]]
 - [ ] #66 Agnostic event module — replace the Alert model
 	  - Plan: [[agnostic-event-module]]
-- [ ] #67 Playback Timeline — unified inspection view (blocked on #66)
-	  - Plan: [[recording-playback-timeline]]
 - [ ] #70 Branded email template system
 	  - Plan: [[email-template-system]]
 - [ ] #71 Storage billing economics — R2 cost vs quota, no-loss guardrails
@@ -68,6 +66,8 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #67 Playback Timeline — unified inspection view
+	  - Plan: [[recording-playback-timeline]]
 
 
 ## Review

@@ -10,6 +10,7 @@ import MessageSquare from "@lucide/svelte/icons/message-square";
 import Workflow from "@lucide/svelte/icons/workflow";
 import ScrollText from "@lucide/svelte/icons/scroll-text";
 import Clapperboard from "@lucide/svelte/icons/clapperboard";
+import Film from "@lucide/svelte/icons/film";
 import Settings from "@lucide/svelte/icons/settings";
 
 export type NavItem = {
@@ -29,6 +30,7 @@ export const navItems: NavItem[] = [
   { label: "Chat", href: "/chat", icon: MessageSquare },
   { label: "Workflows", href: "/workflows", icon: Workflow },
   { label: "Recordings", href: "/recordings", icon: Clapperboard },
+  { label: "Playback", href: "/playback", icon: Film },
   { label: "Logs", href: "/logs", icon: ScrollText },
   { label: "Settings", href: "/settings", icon: Settings },
 ];

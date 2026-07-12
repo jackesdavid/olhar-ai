@@ -233,6 +233,7 @@
     "/chat": null,
     "/workflows": "workflows.read",
     "/recordings": "recordings.read",
+    "/playback": "recordings.read",
     "/logs": "devices.read",
     "/settings": "settings.read",
   };
