@@ -25,19 +25,27 @@ few high-churn / index gaps — measurably faster queries + fewer stalls with ze
   etc. (`0052`), `work_jobs` claim idx (`0050/0051`), `platform_logs` (`0028`), `recordings`,
   `presence`, `workflow_runs`. So the big win is **config**, not a rewrite — plus a few targeted checks.
 
-## Phase 1 — A tuned `postgresql.conf` (the 80% win)
+## Phase 1 — A tuned `postgresql.conf` (the biggest win)
 
 **First: measure the box.** SSH the VPS (`docs/ref/deploy.md`; `root@85.239.248.86`) → record total
 RAM, CPU cores, disk type. Every value below derives from that (PGTune methodology; see refs).
+
+> **Budget cap: Postgres gets ≤ 70% of VPS RAM — NOT the usual 75–80%.** This box is **shared** —
+> `sentinel-control`, `sentinel-flow`, `sentinel-gateway`, `sentinel-notification`, `sentinel-redis`
+> and MinIO all co-locate on it. Leave **≥ 30% headroom** for the OS page cache + those services so
+> nothing gets OOM-killed. Size `shared_buffers` (real allocation) + expected cache so the total
+> Postgres footprint stays under 70%, and pin it with the container memory limit in Phase 2.
 
 Author a versioned **`deploy/postgres/postgresql.tuned.conf`** and have the Dockerfile `COPY` it +
 `include` it (or reference via `-c config_file=`), keeping the two pg_cron flags. Parameters (fill
 from measured RAM `R` / cores `C`; these are the OLTP-web starting points to validate):
 
-- **Memory:** `shared_buffers = 25% R` · `effective_cache_size = 60–70% R` ·
-  `maintenance_work_mem = min(5% R, 1GB)` · `work_mem` = conservative
-  (`~ (R*0.25) / (max_connections * max_parallel_workers_per_gather)`, start ~16–32MB — it's
-  **per sort/hash node, per query**, so err low).
+- **Memory (stay within the 70% budget):** `shared_buffers ≈ 20–25% R` ·
+  `effective_cache_size ≈ 55–65% R` (a planner hint, but keep it inside the 70% cap since the OS
+  cache is shared with the other containers) · `maintenance_work_mem = min(5% R, 1GB)` ·
+  `work_mem` = conservative (`~ (R*0.2) / (max_connections * max_parallel_workers_per_gather)`,
+  start ~16–32MB — it's **per sort/hash node, per query**, so err low). Verify
+  `shared_buffers + peak(work_mem × concurrency) + maintenance_work_mem ≤ 70% R`.
 - **WAL / checkpoints:** `wal_compression = on` · `min_wal_size = 1GB` · `max_wal_size = 4–8GB` ·
   `checkpoint_completion_target = 0.9` · `checkpoint_timeout = 15–30min` · `wal_buffers = 16MB`.
   (Spreads checkpoint IO, cuts full-page-write churn — fewer periodic stalls.)
@@ -54,8 +62,8 @@ Apply, **restart `sentinel-postgres` before control** (migration ordering note),
 
 - **`shm_size`** on the postgres service ≈ `shared_buffers` (e.g. `256m`–`1g`) — the single sharpest
   Docker fix; unblocks parallel workers + big hash/sort.
-- Optional `deploy: resources` memory reservation/limit leaving host headroom (so Postgres' cache
-  math is honest and the OOM killer never picks it).
+- **`deploy: resources` memory limit ≈ 70% of VPS RAM** on the postgres container (enforces the
+  shared-box budget above; keeps the OS + co-located services safe from the OOM killer).
 - Consider `huge_pages` (needs host `vm.nr_hugepages` sysctl; document the caveat, likely v2).
 - Confirm the image ships a sane malloc (glibc is fine; note jemalloc as a future option).
 
