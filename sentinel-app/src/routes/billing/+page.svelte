@@ -14,12 +14,13 @@
   import { Label } from "$lib/components/ui/label";
   import { Badge } from "$lib/components/ui/badge";
 
-  import { billing, type PricedPlan, type BillingSubscription, type Invoice, type SubscribeBody } from "$lib/api";
+  import { billing, type PricedPlan, type BillingSubscription, type Invoice, type SubscribeBody, type TenantStorage } from "$lib/api";
 
   let loading = $state(true);
   let plans = $state<PricedPlan[]>([]);
   let sub = $state<BillingSubscription | null>(null);
   let invoices = $state<Invoice[]>([]);
+  let storage = $state<TenantStorage | null>(null);
 
   let picked = $state<PricedPlan | null>(null);
   /** What the gateway accepts, in preference order — the first is the default pick. */
@@ -38,6 +39,35 @@
 
   const currentPlan = $derived(plans.find((p) => p.id === sub?.plan_id) ?? null);
 
+  // ---- storage this period ---------------------------------------------------
+  // The recordings page shows the stock ("am I near the cap?"); billing owns the billed quantity:
+  // `gb_month` (the average GB held across sampled days) and the money it projects to.
+  /** Bytes → a compact "95 MB" / "1.24 GB" figure. */
+  function fmtGB(bytes: number): string {
+    const gb = bytes / 1e9;
+    if (gb < 0.1) return `${(bytes / 1e6).toFixed(0)} MB`;
+    return `${gb.toFixed(gb < 10 ? 2 : 1)} GB`;
+  }
+  /** Percent of quota the stored stock uses, clamped for the bar. 0 when there's no quota. */
+  function usedPct(s: TenantStorage): number {
+    if (s.included_storage_gb <= 0) return 0;
+    return Math.min(100, (s.stored_bytes / 1e9 / s.included_storage_gb) * 100);
+  }
+  function barClass(s: TenantStorage): string {
+    const pct = usedPct(s);
+    if (pct >= 90) return "bg-destructive";
+    if (pct >= 75) return "bg-amber-500";
+    return "bg-primary";
+  }
+  /** True when the tenant's plan sells cloud recording at all (retention > 0). */
+  function hasCloud(s: TenantStorage | null): boolean {
+    return !!s && s.retention_days > 0;
+  }
+  /** Whether an overage line is due this period. */
+  function hasOverage(s: TenantStorage): boolean {
+    return s.projected_overage > 0;
+  }
+
   function statusVariant(status: string | undefined): "default" | "secondary" | "destructive" | "outline" {
     if (status === "active") return "default";
     if (status === "trialing") return "secondary";
@@ -55,11 +85,12 @@
   async function load() {
     loading = true;
     try {
-      [plans, sub, invoices, methods] = await Promise.all([
+      [plans, sub, invoices, methods, storage] = await Promise.all([
         billing.plans(),
         billing.subscription(),
         billing.invoices(),
         billing.paymentMethods(),
+        billing.storage(),
       ]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load billing");
@@ -139,6 +170,46 @@
           </p>
         </div>
         {#if sub}<Badge variant={statusVariant(sub.status)}>{sub.status}</Badge>{/if}
+      </Card.Content>
+    </Card.Root>
+
+    <Card.Root>
+      <Card.Header><Card.Title>Storage this period</Card.Title></Card.Header>
+      <Card.Content>
+        {#if hasCloud(storage) && storage}
+          <div class="flex items-baseline justify-between">
+            <div>
+              <span class="text-2xl font-semibold tabular-nums">{fmtGB(storage.stored_bytes)}</span>
+              <span class="text-sm text-muted-foreground"> stored of {storage.included_storage_gb} GB</span>
+            </div>
+            <span class="text-xs text-muted-foreground">{storage.retention_days}-day cloud retention</span>
+          </div>
+
+          <div class="mt-3 h-2 w-full overflow-hidden rounded-full bg-muted">
+            <div class="h-full rounded-full transition-all {barClass(storage)}" style="width: {usedPct(storage)}%"></div>
+          </div>
+
+          <div class="mt-4 grid grid-cols-2 gap-4 border-t pt-4 text-sm">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Billed this month</p>
+              <p class="mt-1 text-lg font-semibold tabular-nums">{fmtGB(storage.gb_month * 1e9)}<span class="text-xs font-normal text-muted-foreground"> · GB-month avg</span></p>
+            </div>
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overage so far</p>
+              {#if hasOverage(storage)}
+                <p class="mt-1 text-lg font-semibold tabular-nums text-destructive">{money(storage.projected_overage, storage.currency)}</p>
+              {:else}
+                <p class="mt-1 text-lg font-semibold tabular-nums">{money(0, storage.currency)}<span class="text-xs font-normal text-muted-foreground"> · within plan</span></p>
+              {/if}
+            </div>
+          </div>
+
+          <p class="mt-3 text-xs text-muted-foreground">
+            {storage.clip_count} clip{storage.clip_count === 1 ? "" : "s"} in the cloud. GB-month is the average footage held across the month — the quantity your invoice bills, not the peak.
+          </p>
+        {:else}
+          <p class="text-sm text-muted-foreground">Cloud recording isn't included in your current plan. Choose a plan with cloud retention to keep footage off-site.</p>
+        {/if}
       </Card.Content>
     </Card.Root>
 
