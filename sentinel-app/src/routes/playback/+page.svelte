@@ -8,8 +8,13 @@
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import ZoomIn from "@lucide/svelte/icons/zoom-in";
   import ZoomOut from "@lucide/svelte/icons/zoom-out";
+  import Play from "@lucide/svelte/icons/play";
+  import Pause from "@lucide/svelte/icons/pause";
+  import SkipBack from "@lucide/svelte/icons/skip-back";
+  import SkipForward from "@lucide/svelte/icons/skip-forward";
 
   import Loader from "$lib/components/loader.svelte";
+  import Busy from "$lib/components/busy.svelte";
   import EmptyState from "$lib/components/empty-state.svelte";
 
   import * as Select from "$lib/components/ui/select";
@@ -27,8 +32,10 @@
     rulerTicks,
     widthOf,
     xOf,
+    tsOf,
     PX_PER_SEC_PRESETS,
     type TLClip,
+    type TLTrack,
     type TLMarker,
   } from "$lib/timeline";
 
@@ -133,6 +140,13 @@
       evs = evPage;
       cameras = cams;
       nowMs = Date.now();
+      // Open on real footage: earliest clip under the playhead, first camera active.
+      const starts = page.items.map((r) => Date.parse(r.started_at)).filter(Number.isFinite);
+      playheadMs = starts.length ? Math.min(...starts) : originMs;
+      activeCamera = tracks[0]?.cameraIp ?? "";
+      loadedClip = null;
+      playing = false;
+      void resolveVideo();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load the timeline");
     } finally {
@@ -154,8 +168,226 @@
     pxIdx = Math.min(PX_PER_SEC_PRESETS.length - 1, Math.max(0, pxIdx + delta));
   }
 
-  onMount(load);
+  // ── playback (Phase 3): active camera + playhead + transport ────────────────
+  let activeCamera = $state("");
+  let playheadMs = $state(0);
+  let playing = $state(false);
+  let videoEl = $state<HTMLVideoElement | null>(null);
+  let videoSrc = $state("");
+  let videoBusy = $state(false);
+  let videoErr = $state("");
+  let loadedClip = $state<TLClip | null>(null);
+  let contentEl = $state<HTMLDivElement | null>(null);
+  let seekOnLoad = 0;
+  let objectUrl = "";
+  let raf = 0;
+  let dragging = false;
+
+  const activeTrack = $derived(tracks.find((t) => t.cameraIp === activeCamera) ?? null);
+  const activeClip = $derived(clipAt(activeTrack, playheadMs));
+  const playheadX = $derived(xOf(playheadMs, originMs, pxPerSec));
+
+  function recById(id: number): Recording | undefined {
+    return recs.find((r) => r.id === id);
+  }
+  /** The clip covering `ms` on a track, or null (a gap). */
+  function clipAt(track: TLTrack | null, ms: number): TLClip | null {
+    if (!track) return null;
+    return track.clips.find((c) => ms >= c.startTs && ms < c.endTs) ?? null;
+  }
+  /** Start of the first clip that begins after `ms` (skips the current clip + any gap). */
+  function nextClipStart(track: TLTrack | null, ms: number): number | null {
+    return track?.clips.find((c) => c.startTs > ms)?.startTs ?? null;
+  }
+  /** Start of the clip to jump back to: this clip's own start if we're inside it, else the one before. */
+  function prevClipStart(track: TLTrack | null, ms: number): number | null {
+    if (!track) return null;
+    const here = clipAt(track, ms);
+    if (here && ms > here.startTs + 750) return here.startTs;
+    let prev: number | null = null;
+    for (const c of track.clips) {
+      if (c.startTs < ms - 750) prev = c.startTs;
+      else break;
+    }
+    return prev;
+  }
+
+  function releaseObjectUrl() {
+    if (objectUrl) {
+      URL.revokeObjectURL(objectUrl);
+      objectUrl = "";
+    }
+  }
+
+  /** Point the preview at the clip under the playhead (or clear it in a gap). Same clip → seek in
+   *  place; new clip → resolve its source (presigned R2 when uploaded, edge blob otherwise). */
+  async function resolveVideo() {
+    const clip = clipAt(activeTrack, playheadMs);
+    if (!clip) {
+      loadedClip = null;
+      videoSrc = "";
+      videoErr = "";
+      releaseObjectUrl();
+      return;
+    }
+    if (loadedClip && clip.id === loadedClip.id && videoEl) {
+      videoEl.currentTime = Math.max(0, (playheadMs - clip.startTs) / 1000);
+      return;
+    }
+    videoBusy = true;
+    videoErr = "";
+    seekOnLoad = Math.max(0, (playheadMs - clip.startTs) / 1000);
+    try {
+      releaseObjectUrl();
+      const rec = recById(clip.id);
+      let src = "";
+      if (rec && rec.upload_state === "uploaded") {
+        src = (await recordings.cloudUrl(clip.id)).url;
+      } else {
+        objectUrl = URL.createObjectURL(await recordings.download(clip.id));
+        src = objectUrl;
+      }
+      loadedClip = clip;
+      videoSrc = src;
+    } catch {
+      videoErr = "Couldn't load this clip.";
+      loadedClip = null;
+      videoSrc = "";
+    } finally {
+      videoBusy = false;
+    }
+  }
+
+  function onLoadedMeta() {
+    if (!videoEl) return;
+    videoEl.currentTime = Math.max(0, seekOnLoad);
+    if (playing) void videoEl.play();
+  }
+
+  function clampMs(ms: number): number {
+    return Math.min(originMs + DAY_SECS * 1000, Math.max(originMs, ms));
+  }
+  function seekTo(ms: number, keepPlaying = playing) {
+    playheadMs = clampMs(ms);
+    playing = keepPlaying;
+    void resolveVideo();
+  }
+  function setActive(ip: string) {
+    activeCamera = ip;
+    loadedClip = null;
+    void resolveVideo();
+  }
+  function togglePlay() {
+    if (!activeClip) {
+      const ns = nextClipStart(activeTrack, playheadMs);
+      if (ns == null) return;
+      seekTo(ns, true);
+      return;
+    }
+    playing = !playing;
+    if (playing) void videoEl?.play();
+    else videoEl?.pause();
+  }
+  function jumpNextClip() {
+    const ns = nextClipStart(activeTrack, playheadMs);
+    if (ns == null) {
+      toast.info("No later clip on this camera.");
+      return;
+    }
+    seekTo(ns);
+  }
+  function jumpPrevClip() {
+    const ps = prevClipStart(activeTrack, playheadMs);
+    if (ps == null) {
+      toast.info("No earlier clip on this camera.");
+      return;
+    }
+    seekTo(ps);
+  }
+  /** A finished clip flows into the next one (skipping any gap), else playback stops. */
+  function onEnded() {
+    const from = loadedClip ? loadedClip.endTs - 1 : playheadMs;
+    const ns = nextClipStart(activeTrack, from);
+    if (ns != null) seekTo(ns, true);
+    else {
+      playing = false;
+      if (loadedClip) playheadMs = loadedClip.endTs;
+    }
+  }
+
+  // Smoothly advance the playhead from the playing video (rAF, not the ~4Hz timeupdate).
+  $effect(() => {
+    if (!playing) {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+      return;
+    }
+    const step = () => {
+      if (videoEl && loadedClip && !videoEl.paused) {
+        playheadMs = loadedClip.startTs + videoEl.currentTime * 1000;
+      }
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+    };
+  });
+
+  // Keep a valid active camera as the track set changes.
+  $effect(() => {
+    if (tracks.length && !tracks.some((t) => t.cameraIp === activeCamera)) {
+      activeCamera = tracks[0].cameraIp;
+    }
+  });
+
+  // ---- seek by clicking / keyboard on the timeline ---------------------------
+  function timelineToMs(clientX: number): number {
+    if (!contentEl) return playheadMs;
+    return tsOf(clientX - contentEl.getBoundingClientRect().left, originMs, pxPerSec);
+  }
+  function onTimelineClick(e: MouseEvent) {
+    seekTo(timelineToMs(e.clientX));
+  }
+  function onTimelineKey(e: KeyboardEvent) {
+    const stepS = e.shiftKey ? 60 : 5;
+    if (e.key === "ArrowRight") { e.preventDefault(); seekTo(playheadMs + stepS * 1000); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); seekTo(playheadMs - stepS * 1000); }
+    else if (e.key === ".") { e.preventDefault(); jumpNextClip(); }
+    else if (e.key === ",") { e.preventDefault(); jumpPrevClip(); }
+    else if (e.key === " " || e.key === "Enter") { e.preventDefault(); togglePlay(); }
+  }
+  function startDrag(e: PointerEvent) {
+    dragging = true;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    e.stopPropagation();
+  }
+  function onDrag(e: PointerEvent) {
+    if (dragging) playheadMs = clampMs(timelineToMs(e.clientX));
+  }
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false;
+    seekTo(playheadMs);
+  }
+
+  /** Wall-clock `HH:MM:SS` of the playhead (seconds into the local day). */
+  function hms(ms: number): string {
+    const s = Math.max(0, Math.floor((ms - originMs) / 1000));
+    return `${String(Math.floor(s / 3600) % 24).padStart(2, "0")}:${String(Math.floor(s / 60) % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  }
+
+  onMount(() => {
+    load();
+    return () => {
+      releaseObjectUrl();
+      if (raf) cancelAnimationFrame(raf);
+    };
+  });
 </script>
+
+<svelte:window onpointermove={onDrag} onpointerup={endDrag} />
 
 <div class="flex h-full flex-col gap-4 p-6">
   <PageHeader
@@ -224,7 +456,77 @@
       description="Nothing was recorded on {day}. Pick another day, or set a workflow to record on motion."
     />
   {:else}
-    <div class="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-border">
+    <div class="flex min-h-0 flex-1 flex-col gap-3">
+      <!-- stage: active-camera preview + camera tiles -->
+      <div class="flex flex-col gap-3 lg:flex-row">
+        <div class="relative aspect-video w-full shrink-0 overflow-hidden rounded-xl border border-border bg-black lg:max-w-xl">
+          {#if videoSrc}
+            <!-- svelte-ignore a11y_media_has_caption -->
+            <video
+              bind:this={videoEl}
+              src={videoSrc}
+              class="h-full w-full object-contain"
+              playsinline
+              onloadedmetadata={onLoadedMeta}
+              onended={onEnded}
+              onplay={() => (playing = true)}
+              onpause={() => (playing = false)}
+            ></video>
+          {:else}
+            <div class="flex h-full w-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
+              {#if videoErr}
+                {videoErr}
+              {:else}
+                No footage on {activeTrack?.cameraName ?? "this camera"} at {hms(playheadMs)} — jump to the next clip.
+              {/if}
+            </div>
+          {/if}
+          {#if videoBusy}
+            <div class="absolute inset-0 grid place-items-center bg-black/40"><Busy /></div>
+          {/if}
+          <div class="pointer-events-none absolute left-0 top-0 flex items-center gap-2 p-2">
+            <span class="rounded-md bg-black/55 px-2 py-1 text-xs font-medium text-white">{activeTrack?.cameraName ?? "—"}</span>
+            <span class="rounded-md bg-black/55 px-2 py-1 text-xs text-white tabular-nums">{hms(playheadMs)}</span>
+          </div>
+        </div>
+
+        <div class="grid flex-1 auto-rows-min grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3">
+          {#each tracks as t (t.cameraIp)}
+            <button
+              type="button"
+              class="flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors {t.cameraIp === activeCamera
+                ? 'border-primary bg-primary/5'
+                : 'border-border hover:bg-muted/40'}"
+              onclick={() => setActive(t.cameraIp)}
+            >
+              <span class="size-2 shrink-0 rounded-full {clipAt(t, playheadMs) ? 'bg-primary' : 'bg-muted-foreground/40'}"></span>
+              <span class="min-w-0">
+                <span class="block truncate text-sm font-medium">{t.cameraName}</span>
+                <span class="block text-[11px] text-muted-foreground">{clipAt(t, playheadMs) ? "recording" : "no footage"}</span>
+              </span>
+            </button>
+          {/each}
+        </div>
+      </div>
+
+      <!-- transport -->
+      <div class="flex shrink-0 items-center gap-2 rounded-xl border border-border bg-card px-3 py-2">
+        <Button variant="outline" size="icon" class="size-9" title="Previous clip (,)" onclick={jumpPrevClip}>
+          <SkipBack class="size-4" />
+        </Button>
+        <Button size="icon" class="size-9" title={playing ? "Pause (Space)" : "Play (Space)"} onclick={togglePlay}>
+          {#if playing}<Pause class="size-4" />{:else}<Play class="size-4" />{/if}
+        </Button>
+        <Button variant="outline" size="icon" class="size-9" title="Next clip (.)" onclick={jumpNextClip}>
+          <SkipForward class="size-4" />
+        </Button>
+        <span class="ml-2 text-sm font-semibold tabular-nums">{hms(playheadMs)}</span>
+        <span class="text-xs text-muted-foreground">· {activeTrack?.cameraName ?? "—"}</span>
+        <span class="ml-auto hidden text-[11px] text-muted-foreground md:block">Space play · , / . prev / next clip · ← → step</span>
+      </div>
+
+      <!-- timeline -->
+      <div class="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-border">
       <!-- fixed track-header column -->
       <div class="w-44 shrink-0 border-r border-border bg-card">
         <div class="h-8 border-b border-border"></div>
@@ -244,7 +546,19 @@
 
       <!-- scrolling time content -->
       <div class="min-w-0 flex-1 overflow-x-auto">
-        <div class="relative" style="width: {contentWidth}px">
+        <div
+          class="relative"
+          style="width: {contentWidth}px"
+          bind:this={contentEl}
+          role="slider"
+          tabindex="0"
+          aria-label="Playhead — click or use arrow keys to scrub"
+          aria-valuemin={0}
+          aria-valuemax={DAY_SECS}
+          aria-valuenow={Math.round((playheadMs - originMs) / 1000)}
+          onclick={onTimelineClick}
+          onkeydown={onTimelineKey}
+        >
           <!-- ruler -->
           <div class="relative h-8 border-b border-border">
             {#each ticks as tk (tk.x)}
@@ -308,6 +622,20 @@
             <div class="pointer-events-none absolute inset-y-0 w-px bg-primary/40" style="left: {nowX}px"></div>
           {/if}
 
+          <!-- playhead: ink line + draggable head -->
+          {#if playheadX >= 0 && playheadX <= contentWidth}
+            <div class="pointer-events-none absolute inset-y-0 z-20 w-px bg-primary" style="left: {playheadX}px">
+              <button
+                type="button"
+                class="pointer-events-auto absolute -left-[7px] top-1.5 size-3.5 cursor-ew-resize rounded-full bg-primary shadow ring-2 ring-card"
+                title="Drag to scrub"
+                aria-label="Drag playhead"
+                onpointerdown={startDrag}
+                onclick={(e) => e.stopPropagation()}
+              ></button>
+            </div>
+          {/if}
+
           <!-- marker hover card: "same moment = same place" -->
           {#if hovered}
             <div
@@ -331,6 +659,7 @@
             </div>
           {/if}
         </div>
+      </div>
       </div>
     </div>
   {/if}
