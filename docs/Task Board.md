@@ -48,8 +48,6 @@ kanban-plugin: board
 	  - Plan: [[reid-person-reidentification]]
 - [ ] #60 Editor keybinds: hold Space to pan (temp H) — workflow + map
 	  - Plan: [[editor-space-hold-pan]]
-- [ ] #61 Tab toggle: collapse/expand editor side panels
-	  - Plan: [[editor-panel-tab-toggle]]
 - [ ] #64 Cloud recording storage (R2) + GB-month billing
 	  - Plan: [[cloud-recording-storage]]
 - [ ] #65 User invite: onboarding email + set-password confirmation
@@ -70,6 +68,8 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #61 Tab toggle: collapse/expand editor side panels
+	  - Plan: [[editor-panel-tab-toggle]]
 
 
 ## Review

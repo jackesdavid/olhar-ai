@@ -16,17 +16,40 @@
     store,
     tools,
     onGoLive,
-  }: { store: MapStore; tools: ToolState; onGoLive: (ip: string) => void } = $props();
+    // Bindable so the page's Tab shortcut can collapse/expand the panel too. This component
+    // stays the single writer of `map.panelOpen` — see the $effect below.
+    open = $bindable(true),
+  }: {
+    store: MapStore;
+    tools: ToolState;
+    onGoLive: (ip: string) => void;
+    open?: boolean;
+  } = $props();
 
   type Tab = "properties" | "explorer";
   let tab = $state<Tab>("properties");
-  let open = $state(true);
+
+  let restored = $state(false);
 
   onMount(() => {
     const t = localStorage.getItem("map.panelTab");
     if (t === "properties" || t === "explorer") tab = t;
     const o = localStorage.getItem("map.panelOpen");
     if (o != null) open = o === "true";
+    restored = true;
+  });
+
+  // `open` now has two writers — this panel's own button and the page's Tab shortcut (via
+  // bind:open) — so persist it here, where both land, instead of inside toggle(). Gated on
+  // `restored` so the first run can't clobber the stored value with the default.
+  $effect(() => {
+    const v = open;
+    if (!restored) return;
+    try {
+      localStorage.setItem("map.panelOpen", String(v));
+    } catch {
+      // ignore storage failures (private mode)
+    }
   });
 
   function setTab(t: Tab) {
@@ -39,11 +62,6 @@
   }
   function toggle() {
     open = !open;
-    try {
-      localStorage.setItem("map.panelOpen", String(open));
-    } catch {
-      // ignore storage failures (private mode)
-    }
   }
   function tabClass(active: boolean): string {
     return active

@@ -245,6 +245,15 @@
   }
 
   let consoleOpen = $state(false);
+  function toggleConsole() {
+    consoleOpen = !consoleOpen;
+    preTabPanels = null; // a manual toggle ends the Tab-collapsed group
+    try {
+      localStorage.setItem("wf.consoleOpen", String(consoleOpen));
+    } catch {
+      /* ignore */
+    }
+  }
   let logs = $state<LogLine[]>([]);
 
   // On-screen Print overlay (Unreal-style): transient text flashed over the canvas.
@@ -359,8 +368,35 @@
   let resizing = $state(false);
   function togglePanel() {
     panelOpen = !panelOpen;
+    preTabPanels = null; // a manual toggle ends the Tab-collapsed group
     try {
       localStorage.setItem("wf.panelOpen", String(panelOpen));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Tab collapses the editor's chrome — the right rail and the console — as ONE group, so a
+  // single keypress hands the canvas the whole window. Tab again restores each panel to
+  // exactly what it was: a panel you'd already closed by hand stays closed. Any manual toggle
+  // clears the memory, so the next Tab is a fresh collapse rather than a partial restore.
+  let preTabPanels: { rail: boolean; console: boolean } | null = null;
+  function toggleChrome() {
+    if (preTabPanels) {
+      panelOpen = preTabPanels.rail;
+      consoleOpen = preTabPanels.console;
+      preTabPanels = null;
+    } else if (!panelOpen && !consoleOpen) {
+      // Nothing left to collapse — Tab would look dead on a bare canvas. Open the rail.
+      panelOpen = true;
+    } else {
+      preTabPanels = { rail: panelOpen, console: consoleOpen };
+      panelOpen = false;
+      consoleOpen = false;
+    }
+    try {
+      localStorage.setItem("wf.panelOpen", String(panelOpen));
+      localStorage.setItem("wf.consoleOpen", String(consoleOpen));
     } catch {
       /* ignore */
     }
@@ -368,6 +404,7 @@
   function selectTab(t: RailTab) {
     panelTab = t;
     panelOpen = true; // picking a tab on the collapsed rail reopens it
+    preTabPanels = null; // …which also ends the Tab-collapsed group
     try {
       localStorage.setItem("wf.panelTab", t);
       localStorage.setItem("wf.panelOpen", "true");
@@ -1292,6 +1329,8 @@
     if (savedTab === "details" || savedTab === "properties" || savedTab === "variables" || savedTab === "runs") {
       panelTab = savedTab;
     }
+    const savedConsoleOpen = localStorage.getItem("wf.consoleOpen");
+    if (savedConsoleOpen != null) consoleOpen = savedConsoleOpen === "true";
     const savedConsoleH = Number(localStorage.getItem("wf.consoleH"));
     if (savedConsoleH >= CONSOLE_MIN && savedConsoleH <= CONSOLE_MAX) consoleH = savedConsoleH;
     (async () => {
@@ -1735,6 +1774,20 @@
     }
 
     if (inField) return;  // remaining shortcuts require no active text input
+
+    // Tab: collapse/expand the chrome (rail + console) as a group.
+    //
+    // Tab is THE focus-navigation key, so we only claim it when focus is NOT on a control:
+    // the `inField` guard above already lets it through while typing, and `onControl` lets
+    // it through while tabbing across buttons/links, so the editor never becomes a keyboard
+    // trap. Click the canvas (or land anywhere non-focusable) and Tab is the panel toggle.
+    if (e.key === "Tab") {
+      const onControl = !!el?.closest("button, a[href], [tabindex]:not([tabindex='-1'])");
+      if (onControl) return; // let the browser move focus
+      e.preventDefault();
+      toggleChrome();
+      return;
+    }
 
     // Tool shortcuts (mouse parity for the touch tool palette): v move, h pan, l link, b break.
     const toolKey: Record<string, typeof editorMode> = { v: "move", h: "pan", l: "link", b: "break" };
@@ -4228,7 +4281,7 @@
       <div class="shrink-0 overflow-hidden rounded-xl border border-border bg-card">
         <button
           class="flex w-full items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-hover"
-          onclick={() => (consoleOpen = !consoleOpen)}
+          onclick={toggleConsole}
         >
           <span class="flex items-center gap-2 font-medium">
             <Terminal class="size-4 text-muted-foreground" /> Console

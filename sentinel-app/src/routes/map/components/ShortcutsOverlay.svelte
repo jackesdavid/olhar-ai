@@ -13,6 +13,7 @@
         ["W", "Draw wall"],
         ["M", "Place furniture"],
         ["F", "Fit to view"],
+        ["Tab", "Show / hide the panel"],
       ],
     },
     {
@@ -22,7 +23,7 @@
         ["Shift + Arrows", "Grow room edge"],
         ["Shift + Alt + Arrows", "Shrink room edge"],
         ["[  /  ]", "Rotate (Shift = 1°)"],
-        ["Tab / ⇧Tab", "Cycle selection"],
+        ["C  /  ⇧C", "Cycle selection"],
         ["Delete", "Delete selection"],
         ["Esc", "Deselect"],
       ],

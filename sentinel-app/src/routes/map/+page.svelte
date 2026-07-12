@@ -90,9 +90,16 @@
   }
 
   let showHelp = $state(false);
+  let panelOpen = $state(true); // bound to SidePanel, so Tab can collapse it too
 
   function onKey(e: KeyboardEvent) {
-    handleMapKey(e, { store, tools, fit, toggleHelp: () => (showHelp = !showHelp) });
+    handleMapKey(e, {
+      store,
+      tools,
+      fit,
+      toggleHelp: () => (showHelp = !showHelp),
+      togglePanel: () => (panelOpen = !panelOpen),
+    });
   }
 
   $effect(() => {
@@ -268,7 +275,7 @@
         <ShortcutsOverlay open={showHelp} onClose={() => (showHelp = false)} />
       </div>
 
-      <SidePanel {store} {tools} onGoLive={goLive} />
+      <SidePanel {store} {tools} onGoLive={goLive} bind:open={panelOpen} />
     </div>
   {/if}
 </div>

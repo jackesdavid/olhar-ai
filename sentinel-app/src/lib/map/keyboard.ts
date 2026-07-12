@@ -3,7 +3,13 @@
 import type { MapStore } from "./store.svelte";
 import type { ToolState } from "./tools.svelte";
 
-type Ctx = { store: MapStore; tools: ToolState; fit: () => void; toggleHelp?: () => void };
+type Ctx = {
+  store: MapStore;
+  tools: ToolState;
+  fit: () => void;
+  toggleHelp?: () => void;
+  togglePanel?: () => void;
+};
 
 const ARROW: Record<string, { dx: number; dy: number; edge: "left" | "right" | "top" | "bottom" }> = {
   ArrowLeft: { dx: -1, dy: 0, edge: "left" },
@@ -18,9 +24,25 @@ function typingInto(): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!el?.isContentEditable;
 }
 
+// Tab is THE focus-navigation key, so we only claim it when focus isn't on a control —
+// otherwise the editor becomes a keyboard trap you can't Tab out of.
+function onControl(): boolean {
+  const el = document.activeElement as HTMLElement | null;
+  return !!el?.closest("button, a[href], [tabindex]:not([tabindex='-1'])");
+}
+
 export function handleMapKey(e: KeyboardEvent, ctx: Ctx): boolean {
   if (typingInto()) return false;
-  const { store, tools, fit, toggleHelp } = ctx;
+  const { store, tools, fit, toggleHelp, togglePanel } = ctx;
+
+  // Tab collapses/expands the side panel — the same gesture as the workflow editor.
+  // (It used to cycle the selection; that moved to C/⇧C.)
+  if (e.key === "Tab") {
+    if (onControl()) return false; // let the browser move focus
+    e.preventDefault();
+    togglePanel?.();
+    return true;
+  }
 
   // rotate the selection: [ = CCW, ] = CW (Shift = fine 1° step)
   if (e.key === "[" || e.key === "]") {
@@ -57,16 +79,16 @@ export function handleMapKey(e: KeyboardEvent, ctx: Ctx): boolean {
     return true;
   }
 
-  if (e.key === "Tab") {
-    e.preventDefault();
-    store.cycleSelection(e.shiftKey ? -1 : 1);
-    return true;
-  }
-
   switch (e.key) {
     case "Escape":
       tools.cancel();
       store.clearSelection();
+      return true;
+    // Cycle selection. This lived on Tab/⇧Tab; Tab now toggles the side panel in BOTH
+    // editors (the workflow editor uses it for the same gesture), so cycling moved to C/⇧C.
+    case "c":
+    case "C":
+      store.cycleSelection(e.shiftKey ? -1 : 1);
       return true;
     case "Delete":
     case "Backspace":
