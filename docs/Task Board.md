@@ -62,13 +62,16 @@ kanban-plugin: board
 	  - Plan: [[email-template-system]]
 - [ ] #71 Storage billing economics — R2 cost vs quota, no-loss guardrails
 	  - Plan: [[storage-billing-economics]]
-- [ ] #72 Dark palette: deeper elevation ramp (Unreal-style)
-	  - Plan: [[dark-palette-elevation]]
 - [ ] #73 Notification providers: fix configured badge + simpler config & enrollment
 	  - Plan: [[notification-provider-ux]]
+- [ ] #74 Postgres performance tuning — kill the default config
+	  - Plan: [[postgres-performance-tuning]]
 
 
 ## In Progress
+
+- [ ] #72 Dark palette: deeper elevation ramp (Unreal-style)
+	  - Plan: [[dark-palette-elevation]]
 
 
 
