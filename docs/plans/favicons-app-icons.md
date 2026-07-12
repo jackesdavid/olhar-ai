@@ -9,6 +9,16 @@ Graph / Twitter share images with meta — replacing today's lone stopgap PNG.
 **Blocked on #68** (needs the final mark/lockup). Uses `impeccable` + `frontend-design` for the OG
 image composition.
 
+## Status — done (2026-07-11)
+
+Generated from the locked dot-field mark (Noir tile + off-white dots): `favicon.svg`, `favicon.ico`
+(16/32/48), `favicon-16/32.png`, `apple-touch-icon.png` (180), `icon-192/512.png` + maskable
+variants, `og.png` (1200×630 lockup, Sora wordmark). `manifest.webmanifest` + full `app.html` head
+(icons, apple-touch, manifest, light/dark `theme-color`, OG/Twitter meta → `app.thesentinels.online`).
+Cruft removed (svelte/tauri/vite svg, logo-inspiration.gif, old favicon.png). Icons via `sharp`,
+`.ico` via `png-to-ico`, OG via headless Chrome (needs Sora). `npm run build` clean. Ships with #68
+as one identity drop.
+
 ## Current state (grounding)
 
 - `sentinel-app/src/app.html` links **one** icon: `<link rel="icon" href="…/favicon.png" />`. No
