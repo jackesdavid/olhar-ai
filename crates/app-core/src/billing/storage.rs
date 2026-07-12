@@ -71,9 +71,12 @@ fn query(db: &Db, tenant_id: Option<Uuid>) -> Vec<TenantStorage> {
                     COALESCE(p.retention_days, 0)      AS retention_days,
                     COALESCE(p.included_storage_gb, 0) AS included_storage_gb,
                     COALESCE(pp.overage_storage_per_gb, 0) AS overage_per_gb,
-                    COALESCE(r.stored_bytes, 0) AS stored_bytes,
-                    COALESCE(r.clip_count, 0)   AS clip_count,
-                    COALESCE(d.gb_month, 0)     AS gb_month
+                    -- SUM(bigint) and AVG(...) come back as `numeric`, which this sqlx build
+                    -- (no numeric decoder) can't read — an uncast column errors the whole
+                    -- fetch and empties the view. Cast to the struct's i64 / f64 at the source.
+                    COALESCE(r.stored_bytes, 0)::bigint           AS stored_bytes,
+                    COALESCE(r.clip_count, 0)                     AS clip_count,
+                    COALESCE(d.gb_month, 0)::double precision     AS gb_month
              FROM tenants t
              LEFT JOIN LATERAL (
                  SELECT plan_id, status FROM tenant_subscriptions ts
