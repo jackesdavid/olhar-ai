@@ -7,7 +7,7 @@
 // deployment (viewer and edge share a timezone) that lines up; a future tz-robust pass would
 // render straight from the RFC3339 offset.
 
-import type { Recording, RecordingCamera } from "$lib/api";
+import type { EventRow, Recording, RecordingCamera } from "$lib/api";
 
 /** Epoch milliseconds for an RFC3339 timestamp (NaN-safe: 0 on a bad parse). */
 export function parseTs(iso: string): number {
@@ -114,3 +114,52 @@ export function hhmm(tsMs: number): string {
 
 /** Zoom presets in px-per-second, coarse → fine. 0.02 ≈ a 24h day in ~1700px. */
 export const PX_PER_SEC_PRESETS = [0.02, 0.05, 0.1, 0.25, 0.5] as const;
+
+// ── event marker lane (Phase 2) ─────────────────────────────────────────────
+
+/** One clustered marker: every event that landed in the same time bucket ("same moment"). */
+export type TLMarker = {
+  ts: number; // bucket centre, epoch ms
+  events: EventRow[];
+  severity: "info" | "warn" | "error"; // the loudest severity in the bucket
+};
+
+/** Severities that outrank each other — the bucket wears its loudest. */
+const SEV_RANK: Record<string, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+
+/** Normalise an event severity to the three the lane paints (debug folds into info). */
+export function markerSeverity(sev: string): "info" | "warn" | "error" {
+  if (sev === "error") return "error";
+  if (sev === "warn") return "warn";
+  return "info";
+}
+
+/** Bucket width in seconds so a cluster spans ~a few px at the current zoom (min 1s). */
+export function bucketSecs(pxPerSec: number): number {
+  return Math.max(1, Math.round(6 / pxPerSec));
+}
+
+/** Cluster events into markers by rounding `occurred_at` to a zoom-dependent bucket. Input order
+ *  is preserved within a bucket; markers come out sorted by time. Non-parseable rows are dropped. */
+export function buildMarkers(events: EventRow[], pxPerSec: number): TLMarker[] {
+  const bMs = bucketSecs(pxPerSec) * 1000;
+  const byBucket = new Map<number, EventRow[]>();
+  for (const e of events) {
+    const t = parseTs(e.occurred_at);
+    if (!t) continue;
+    const key = Math.round(t / bMs) * bMs;
+    const list = byBucket.get(key);
+    if (list) list.push(e);
+    else byBucket.set(key, [e]);
+  }
+  return [...byBucket.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([ts, evs]) => ({
+      ts,
+      events: evs,
+      severity: evs.reduce<"info" | "warn" | "error">((acc, e) => {
+        const s = markerSeverity(e.severity);
+        return SEV_RANK[s] > SEV_RANK[acc] ? s : acc;
+      }, "info"),
+    }));
+}

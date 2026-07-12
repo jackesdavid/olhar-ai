@@ -16,9 +16,11 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
 
-  import { recordings, type Recording, type RecordingCamera } from "$lib/api";
+  import { recordings, events as eventsApi, type Recording, type RecordingCamera, type EventRow } from "$lib/api";
   import {
     buildTracks,
+    buildMarkers,
+    markerSeverity,
     dayBounds,
     dayOrigin,
     hhmm,
@@ -27,16 +29,20 @@
     xOf,
     PX_PER_SEC_PRESETS,
     type TLClip,
+    type TLMarker,
   } from "$lib/timeline";
 
   const DAY_SECS = 86_400;
 
   let loading = $state(true);
   let recs = $state<Recording[]>([]);
+  let evs = $state<EventRow[]>([]);
   let cameras = $state<RecordingCamera[]>([]);
   let cameraFilter = $state(""); // "" = all
+  let showAllKinds = $state(false); // false = footage-relevant only (hide auth.* / debug)
   let pxIdx = $state(1); // → 0.05 px/s
   let nowMs = $state(0);
+  let hovered = $state<TLMarker | null>(null);
 
   function todayISO(): string {
     return isoOf(new Date());
@@ -55,6 +61,17 @@
   const filtered = $derived(cameraFilter ? recs.filter((r) => r.camera_ip === cameraFilter) : recs);
   const tracks = $derived(buildTracks(filtered, cameras));
   const nowX = $derived(xOf(nowMs, originMs, pxPerSec));
+
+  // Events on the marker lane: drop noise (auth.* / debug) unless "All events" is on, and narrow
+  // to the selected camera (site-wide events with no camera stay visible either way).
+  function footageRelevant(e: EventRow): boolean {
+    return showAllKinds || (!e.kind.startsWith("auth") && e.severity !== "debug");
+  }
+  function inCameraScope(e: EventRow): boolean {
+    return !cameraFilter || !e.camera || e.camera === cameraFilter;
+  }
+  const shownEvents = $derived(evs.filter((e) => footageRelevant(e) && inCameraScope(e)));
+  const markers = $derived(buildMarkers(shownEvents, pxPerSec));
 
   function cameraLabel(): string {
     if (!cameraFilter) return "All cameras";
@@ -81,15 +98,39 @@
     return clipWidth(c) > 44;
   }
 
+  // ---- marker lane helpers ---------------------------------------------------
+  function markerLeft(m: TLMarker): number {
+    return xOf(m.ts, originMs, pxPerSec);
+  }
+  // State colour only — never brand hue: info = ink, warn = amber, error = red (matches the feed).
+  function sevClass(sev: "info" | "warn" | "error"): string {
+    if (sev === "error") return "bg-destructive";
+    if (sev === "warn") return "bg-amber-500";
+    return "bg-primary";
+  }
+  function markerClass(m: TLMarker): string {
+    return sevClass(m.severity);
+  }
+  function eventSevClass(e: EventRow): string {
+    return sevClass(markerSeverity(e.severity));
+  }
+  function eventLine(e: EventRow): string {
+    const who = e.camera || e.room_name || "site";
+    const what = e.title || e.message || e.kind;
+    return `${who} · ${what}`;
+  }
+
   async function load() {
     loading = true;
     try {
       const { from, to } = dayBounds(day);
-      const [page, cams] = await Promise.all([
+      const [page, evPage, cams] = await Promise.all([
         recordings.list({ from, to, sort: "started_at", dir: "asc", limit: 2000 }),
+        eventsApi.list({ from, to, limit: 1000 }),
         cameras.length ? Promise.resolve(cameras) : recordings.cameras(),
       ]);
       recs = page.items;
+      evs = evPage;
       cameras = cams;
       nowMs = Date.now();
     } catch (e) {
@@ -148,6 +189,16 @@
       </Select.Content>
     </Select.Root>
 
+    <Button
+      variant="outline"
+      size="sm"
+      class="h-8"
+      title="Which events show on the marker lane"
+      onclick={() => (showAllKinds = !showAllKinds)}
+    >
+      Events: {showAllKinds ? "all" : "footage"}
+    </Button>
+
     <div class="ml-auto flex items-center gap-1">
       <Button variant="outline" size="icon" class="size-8" title="Zoom out" disabled={pxIdx === 0} onclick={() => zoom(-1)}>
         <ZoomOut class="size-4" />
@@ -177,6 +228,9 @@
       <!-- fixed track-header column -->
       <div class="w-44 shrink-0 border-r border-border bg-card">
         <div class="h-8 border-b border-border"></div>
+        <div class="flex h-7 items-center border-b border-border px-3">
+          <span class="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Events</span>
+        </div>
         {#each tracks as t (t.cameraIp)}
           <div class="flex h-11 items-center gap-2 border-b border-border/60 px-3">
             <span class="size-2 shrink-0 rounded-full bg-primary/60"></span>
@@ -201,28 +255,80 @@
             {/each}
           </div>
 
-          <!-- tracks -->
-          {#each tracks as t (t.cameraIp)}
-            <div class="relative h-11 border-b border-border/60">
-              <!-- gap baseline: no footage shows through as a dashed lane -->
-              <div class="absolute inset-x-0 top-1/2 border-t border-dashed border-border/50"></div>
-              {#each t.clips as c (c.id)}
-                <div
-                  class="absolute top-1.5 bottom-1.5 flex items-center overflow-hidden rounded-md border px-1.5 transition-colors {clipClass(c)}"
-                  style="left: {clipLeft(c)}px; width: {clipWidth(c)}px"
-                  title={clipTitle(c)}
-                >
-                  {#if wideEnough(c)}
-                    <span class="truncate text-[11px] text-primary">{hhmm(c.startTs)}</span>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          {/each}
+          <!-- event marker lane: one dot per moment, coloured by the loudest severity -->
+          <div class="relative h-7 border-b border-border">
+            {#each markers as m (m.ts)}
+              <div
+                class="absolute top-1/2 z-10 -translate-x-1/2 -translate-y-1/2"
+                style="left: {markerLeft(m)}px"
+                role="button"
+                tabindex="0"
+                aria-label="{m.events.length} event(s) at {hhmm(m.ts)}"
+                onmouseenter={() => (hovered = m)}
+                onmouseleave={() => (hovered = null)}
+                onfocus={() => (hovered = m)}
+                onblur={() => (hovered = null)}
+              >
+                <span class="block size-2.5 rounded-full ring-2 ring-card {markerClass(m)}"></span>
+                {#if m.events.length > 1}
+                  <span class="absolute -right-2 -top-1 rounded-full bg-card px-1 text-[9px] font-semibold leading-tight text-muted-foreground tabular-nums ring-1 ring-border">
+                    {m.events.length}
+                  </span>
+                {/if}
+              </div>
+            {/each}
+          </div>
+
+          <!-- tracks, with faint spine lines dropping from each marker -->
+          <div class="relative">
+            {#each markers as m (m.ts)}
+              <div class="pointer-events-none absolute inset-y-0 w-px bg-primary/10" style="left: {markerLeft(m)}px"></div>
+            {/each}
+            {#each tracks as t (t.cameraIp)}
+              <div class="relative h-11 border-b border-border/60">
+                <!-- gap baseline: no footage shows through as a dashed lane -->
+                <div class="absolute inset-x-0 top-1/2 border-t border-dashed border-border/50"></div>
+                {#each t.clips as c (c.id)}
+                  <div
+                    class="absolute top-1.5 bottom-1.5 z-[1] flex items-center overflow-hidden rounded-md border px-1.5 transition-colors {clipClass(c)}"
+                    style="left: {clipLeft(c)}px; width: {clipWidth(c)}px"
+                    title={clipTitle(c)}
+                  >
+                    {#if wideEnough(c)}
+                      <span class="truncate text-[11px] text-primary">{hhmm(c.startTs)}</span>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/each}
+          </div>
 
           <!-- "now" guide (today only) -->
           {#if isToday && nowX >= 0 && nowX <= contentWidth}
             <div class="pointer-events-none absolute inset-y-0 w-px bg-primary/40" style="left: {nowX}px"></div>
+          {/if}
+
+          <!-- marker hover card: "same moment = same place" -->
+          {#if hovered}
+            <div
+              class="pointer-events-none absolute z-30 w-60 -translate-x-1/2 rounded-lg border border-border bg-popover p-2 shadow-lg"
+              style="left: {markerLeft(hovered)}px; top: 62px"
+            >
+              <p class="mb-1 text-[11px] font-semibold text-muted-foreground tabular-nums">
+                {hhmm(hovered.ts)} · {hovered.events.length} event{hovered.events.length === 1 ? "" : "s"}
+              </p>
+              <ul class="space-y-0.5">
+                {#each hovered.events.slice(0, 6) as e (e.id)}
+                  <li class="flex items-center gap-1.5 text-xs">
+                    <span class="size-1.5 shrink-0 rounded-full {eventSevClass(e)}"></span>
+                    <span class="truncate">{eventLine(e)}</span>
+                  </li>
+                {/each}
+                {#if hovered.events.length > 6}
+                  <li class="text-[11px] text-muted-foreground">+{hovered.events.length - 6} more</li>
+                {/if}
+              </ul>
+            </div>
           {/if}
         </div>
       </div>
