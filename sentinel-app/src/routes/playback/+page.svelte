@@ -336,6 +336,20 @@
     if (playing) void videoEl?.play();
     else videoEl?.pause();
   }
+  /** Keep the playhead in view *while playing* — the timeline scrolls itself as playback advances,
+   *  including when a finished clip auto-rolls into the next one (no user interaction). Lands the
+   *  playhead a third in from the left so there's runway ahead instead of it hugging the edge.
+   *  Skipped while dragging, so a manual scrub isn't fought by the follow. */
+  function followPlayhead() {
+    if (!scrollEl || dragging) return;
+    const x = playheadX;
+    const left = scrollEl.scrollLeft;
+    const w = scrollEl.clientWidth;
+    if (x < left || x > left + w - 96) {
+      scrollEl.scrollLeft = Math.max(0, x - w / 3);
+    }
+  }
+
   // Scroll the timeline so the playhead is comfortably in view (after a clip jump or first load).
   async function revealPlayhead() {
     await tick();
@@ -410,6 +424,9 @@
       if (videoEl && loadedClip && !videoEl.paused && !seeking) {
         playheadMs = loadedClip.startTs + videoEl.currentTime * 1000;
       }
+      // Runs even while `seeking` — an auto-advance into the next clip has already moved the
+      // playhead, so the timeline should chase it there rather than wait for the video to load.
+      followPlayhead();
       raf = requestAnimationFrame(step);
     };
     raf = requestAnimationFrame(step);
