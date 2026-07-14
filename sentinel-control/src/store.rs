@@ -1127,3 +1127,75 @@ pub async fn provision_tenant_with_admin(
 
     Ok((tenant_id, user_id, admin_keys))
 }
+
+// ---- box pairing (card #81) -------------------------------------------------
+// A box learns who it belongs to by someone typing a short code, instead of by four secrets pasted
+// onto a command line — which is what makes a double-click installer possible at all.
+//
+// Nothing secret is stored: the row holds only a HASH of the code. Redeeming mints a fresh box
+// token and a fresh Tailscale key on the spot (see `domain::boxes`), so a dump of `box_pairings`
+// yields nothing usable.
+
+/// Mint a pairing code for a box, superseding any unclaimed one it already has (a user who clicks
+/// "new code" expects the old one to stop working).
+pub async fn create_pairing(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    box_id: Uuid,
+    code_hash: &str,
+    expires_at: &str,
+) -> sqlx::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM box_pairings WHERE box_id = $1 AND claimed_at IS NULL")
+        .bind(box_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO box_pairings (code_hash, tenant_id, box_id, expires_at, created_at) \
+         VALUES ($1,$2,$3,$4,$5)",
+    )
+    .bind(code_hash)
+    .bind(tenant_id)
+    .bind(box_id)
+    .bind(expires_at)
+    .bind(app_core::timeutil::now_rfc3339())
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await
+}
+
+/// Spend a pairing code, atomically. Returns `(tenant_id, box_id)` for the winner and `None` for
+/// everything else — wrong, expired, or already claimed. **One statement**: two racing redeems
+/// cannot both succeed, because only one `UPDATE` can see `claimed_at IS NULL`.
+pub async fn claim_pairing(pool: &PgPool, code_hash: &str) -> sqlx::Result<Option<(Uuid, Uuid)>> {
+    let now = app_core::timeutil::now_rfc3339();
+    sqlx::query_as::<_, (Uuid, Uuid)>(
+        "UPDATE box_pairings SET claimed_at = $1 \
+         WHERE code_hash = $2 AND claimed_at IS NULL AND expires_at > $1 \
+         RETURNING tenant_id, box_id",
+    )
+    .bind(&now)
+    .bind(code_hash)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Point a box at a new token. The plaintext never lands in the DB — only its hash, exactly as at
+/// box creation.
+pub async fn rotate_box_token(pool: &PgPool, box_id: Uuid, token_hash: &str) -> sqlx::Result<bool> {
+    let n = sqlx::query("UPDATE tenant_boxes SET token_hash = $1 WHERE id = $2")
+        .bind(token_hash)
+        .bind(box_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    Ok(n > 0)
+}
+
+/// A box's display name — the Tailscale key description wants it.
+pub async fn box_name(pool: &PgPool, box_id: Uuid) -> sqlx::Result<Option<String>> {
+    sqlx::query_scalar("SELECT name FROM tenant_boxes WHERE id = $1")
+        .bind(box_id)
+        .fetch_optional(pool)
+        .await
+}

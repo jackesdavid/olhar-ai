@@ -29,3 +29,7 @@ workflows.json
 .env*.claude/worktrees/
 .env.bak.*
 .env.bak
+
+# The edge's local camera cache — the ONE place RTSP credentials live (CLAUDE.md).
+# It is written wherever the edge runs, including a dev checkout. Never track it.
+cameras-cache.json

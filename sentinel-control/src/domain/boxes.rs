@@ -32,6 +32,73 @@ pub fn router() -> Router<AppState> {
         .route("/boxes/:id/recording-config", axum::routing::patch(patch_recording_config))
         .route("/boxes/:id/tracking-config", axum::routing::patch(patch_tracking_config))
         .route("/boxes/:id/storage-stats", get(storage_stats))
+        .route("/boxes/:id/pairing-code", axum::routing::post(pairing_code))
+}
+
+/// How long a pairing code is good for. A code that hasn't been typed in fifteen minutes is a code
+/// someone left on a screen and walked away from.
+pub const PAIRING_TTL_SECS: i64 = 15 * 60;
+
+/// **Crockford base32.** `I`, `L`, `O` and `U` are absent on purpose: the first three get misread
+/// off a screen (as 1, 1, 0) and the fourth was dropped by Crockford to avoid spelling accidents.
+/// Decoding is forgiving about exactly those confusions — see [`normalize_code`].
+const CODE_ALPHABET: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/// A pairing code: 10 symbols of Crockford base32 ≈ 32^10 ≈ 1.1e15 — hopeless to guess inside a
+/// 15-minute window, especially against the rate limiter on the redeem path. Rendered `ABCDE-FGHIJ`
+/// because a human has to read it off one screen and type it into another.
+fn new_pairing_code() -> String {
+    let bytes = *Uuid::new_v4().as_bytes();
+    let pick = |i: usize| char::from(CODE_ALPHABET[usize::from(bytes[i]) % CODE_ALPHABET.len()]);
+    let s: String = (0..10).map(pick).collect();
+    format!("{}-{}", &s[..5], &s[5..])
+}
+
+/// Undo the ways a human mistypes a code: case, the dash, stray spaces, and Crockford's own
+/// confusable set (`O`→`0`, `I`/`L`→`1`). Applied on **both** sides — mint hashes the canonical
+/// form, redeem normalizes before hashing — so `abcde-fghij` and `ABCDEFGHIJ` are the same code.
+pub fn normalize_code(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| match c.to_ascii_uppercase() {
+            'O' => '0',
+            'I' | 'L' => '1',
+            other => other,
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
+struct PairingResp {
+    /// Shown once, in the browser. Only its hash is stored.
+    code: String,
+    expires_at: String,
+}
+
+/// Mint a pairing code for a box. The code is the ONLY thing the person at the appliance needs —
+/// it redeems (once, at `POST /enroll`) into a freshly-minted box token + Tailscale key.
+async fn pairing_code(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<PairingResp>, ApiErr> {
+    auth::require(&c, "devices.write")?;
+    let tid = tenant_of(&c)?;
+
+    // Prove the box is this tenant's before minting anything for it.
+    if store::box_name(&st.pool, id).await.map_err(db_err)?.is_none()
+        || !store::list_boxes(&st.pool, tid).await.map_err(db_err)?.iter().any(|b| b.id == id)
+    {
+        return Err(err(StatusCode::NOT_FOUND, "box not found"));
+    }
+
+    let code = new_pairing_code();
+    let expires_at = app_core::timeutil::plus_secs_rfc3339(PAIRING_TTL_SECS);
+    store::create_pairing(&st.pool, tid, id, &hash_token(&normalize_code(&code)), &expires_at)
+        .await
+        .map_err(db_err)?;
+
+    Ok(Json(PairingResp { code, expires_at }))
 }
 
 fn db_err(e: sqlx::Error) -> ApiErr {
@@ -45,8 +112,9 @@ pub fn hash_token(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
 }
 
-/// A fresh high-entropy box token (`sbx_<32 hex><32 hex>`). Shown once.
-fn new_token() -> String {
+/// A fresh high-entropy box token (`sbx_<32 hex><32 hex>`). Shown once — at box creation, or handed
+/// straight to the box when it redeems a pairing code (`http::enroll`).
+pub fn new_box_token() -> String {
     format!("sbx_{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
@@ -81,7 +149,7 @@ async fn create(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): 
     if name.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "box name required"));
     }
-    let token = new_token();
+    let token = new_box_token();
     let id = store::create_box(&st.pool, tid, name, &hash_token(&token)).await.map_err(db_err)?;
     let hostname = format!("sentinel-{}", &id.to_string()[..8]);
 
@@ -300,4 +368,51 @@ async fn storage_stats(
     })?;
 
     Ok(axum::response::Json(json))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A code is read off one screen and typed into another. Everything a human plausibly does to
+    /// it on the way — lowercase it, drop the dash, add a space, or confuse Crockford's lookalike
+    /// characters — must still land on the same code, because the alternative is a customer staring
+    /// at "that code isn't valid" while holding a valid code.
+    #[test]
+    fn normalize_forgives_how_humans_retype_a_code() {
+        let canonical = normalize_code("ABCDE-FGHJK");
+        for typed in ["abcde-fghjk", "ABCDEFGHJK", " abcde fghjk ", "abcde–fghjk", "ABCDE-fghjk"] {
+            assert_eq!(normalize_code(typed), canonical, "{typed:?} should be the same code");
+        }
+    }
+
+    /// Crockford's whole point: `O` is a zero, `I` and `L` are ones. Someone reading `0` off a
+    /// screen and typing `O` has not made a mistake we should punish them for.
+    #[test]
+    fn normalize_maps_the_confusable_characters() {
+        assert_eq!(normalize_code("O1IL"), "0111");
+    }
+
+    /// The alphabet must not *contain* the characters we fold away, or two distinct codes could
+    /// normalize onto each other and one would silently unlock the other's box.
+    #[test]
+    fn the_alphabet_excludes_everything_normalize_rewrites() {
+        for c in [b'I', b'L', b'O', b'U'] {
+            assert!(!CODE_ALPHABET.contains(&c), "{} must not be mintable", c as char);
+        }
+    }
+
+    #[test]
+    fn a_minted_code_survives_its_own_normalization() {
+        for _ in 0..200 {
+            let code = new_pairing_code();
+            assert_eq!(code.len(), 11, "ABCDE-FGHIJ");
+            let norm = normalize_code(&code);
+            assert_eq!(norm.len(), 10);
+            // Minting then normalizing must be idempotent — otherwise the hash we store would never
+            // match the hash we look up, and no code would ever redeem.
+            assert_eq!(normalize_code(&norm), norm);
+            assert!(norm.bytes().all(|b| CODE_ALPHABET.contains(&b)), "{code} left the alphabet");
+        }
+    }
 }

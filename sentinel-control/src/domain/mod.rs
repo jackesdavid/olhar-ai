@@ -14,7 +14,7 @@ mod agent;
 mod alerts;
 mod beacons;
 mod billing;
-mod boxes;
+pub mod boxes;
 mod devices;
 mod events;
 mod jobs;

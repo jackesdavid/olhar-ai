@@ -107,6 +107,12 @@ export const boxes = {
   update: (id: string) => api.post<void>(`/boxes/${id}/update`),
   /** The latest edge build the operator has published (for "update available"). */
   latestVersion: () => api.get<{ version: string }>("/edge-latest"),
+  /**
+   * Mint a pairing code for a box (card #81). The person at the appliance types it into the
+   * enrollment page the installer opens; redeeming it issues the box's real token, so this code —
+   * not the token — is the only thing that needs to travel.
+   */
+  pairingCode: (id: string) => api.post<{ code: string; expires_at: string }>(`/boxes/${id}/pairing-code`, {}),
   /** Recent persisted log tail for a box (oldest-first). */
   logs: (id: string, limit = 500) => api.get<BoxLog[]>(`/boxes/${id}/logs?limit=${limit}`),
   /** EventSource URL for a box's live log tail (token in query — EventSource can't set headers). */

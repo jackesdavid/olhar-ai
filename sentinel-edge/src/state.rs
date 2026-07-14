@@ -578,10 +578,14 @@ fn resolve_rtsp(devices: &mut [Device]) {
 }
 
 /// GET `{control_url}/config/cameras` → the camera list, scoped to this box's tenant.
-/// Presents `BOX_TOKEN` (set by the installer) as a bearer so control returns only this
-/// tenant's cameras, and reports `EDGE_PUBLIC_HOST` (this box's tailnet URL) so the
-/// gateway can resolve the tenant's live upstream. Without a token, control falls back
-/// to the default tenant (single-tenant / dev edges).
+/// Presents `BOX_TOKEN` (set by the installer, or by enrollment — see `crate::enroll`) as a bearer
+/// so control returns only this tenant's cameras, and reports `EDGE_PUBLIC_HOST` (this box's tailnet
+/// URL) so the gateway can resolve the tenant's live upstream.
+///
+/// **Without a token, control answers 401** — it does not fall back to any tenant. (It used to, and
+/// this comment used to say so; the fallback is now compiled out of release builds entirely, since
+/// this response carries RTSP credentials. See `sentinel-control`'s `untenanted_dev_config`.) A box
+/// with no token never gets this far anyway: it stops at the enrollment page in `main`.
 fn fetch_cameras(control_url: &str, wait: u64) -> Result<Vec<Device>, String> {
     let url = if wait > 0 {
         format!("{control_url}/config/cameras?wait={wait}")

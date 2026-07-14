@@ -16,6 +16,8 @@
 //! Optional env: `EDGE_OWN_GO2RTC=1` to spawn/own the go2rtc sidecar (set
 //! `GO2RTC_BIN` + `GO2RTC_CONFIG`); otherwise it uses whatever go2rtc is on :1984.
 mod clip_upload;
+mod enroll;
+mod envfile;
 mod frames;
 mod go2rtc;
 mod http;
@@ -74,6 +76,11 @@ fn main() {
     // for the in-UI log viewer — the edge is no longer a black box.
     let logs = logbuf::init();
 
+    // Read our own edge.env. systemd re-reads it on every start, but launchd bakes the values into
+    // the plist at INSTALL time — so a box that acquires its identity at runtime (enrollment, #81)
+    // would never see it on macOS. Loading it ourselves makes every platform behave the same.
+    envfile::load();
+
     let bind = std::env::var("EDGE_BIND").unwrap_or_else(|_| "0.0.0.0:8788".to_string());
 
     // Stamp the build version + platform in the very first log line — it rides the cloud log
@@ -83,6 +90,37 @@ fn main() {
         env!("CARGO_PKG_VERSION"),
         state::platform()
     );
+
+    // No identity yet → serve nothing but the enrollment page and wait for a pairing code (#81).
+    // Everything below this point assumes a box token, and one of those assumptions is dangerous:
+    // a camera pull with no token falls back to the DEFAULT TENANT, so an unenrolled box that took
+    // the normal path would pull down somebody else's cameras. It stops here instead.
+    if !enroll::enrolled() {
+        let control_url = AppState::control_url();
+        log::warn!(
+            "this box has no identity yet — open http://{bind} on this machine and enter the \
+             pairing code from your Boxes page (control: {control_url})"
+        );
+        let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");
+        rt.block_on(async move {
+            let listener = match tokio::net::TcpListener::bind(&bind).await {
+                Ok(l) => l,
+                Err(e) => {
+                    log::error!("failed to bind {bind}: {e}");
+                    std::process::exit(1);
+                }
+            };
+            log::info!("waiting to be paired on http://{bind}");
+            if let Err(e) = axum::serve(listener, enroll::router(control_url))
+                .with_graceful_shutdown(shutdown_signal())
+                .await
+            {
+                log::error!("server error: {e}");
+                std::process::exit(1);
+            }
+        });
+        return;
+    }
 
     // Auto-update: if control reports a newer version, run install.sh --update and let
     // the service manager relaunch us with the new binary. This means any restart

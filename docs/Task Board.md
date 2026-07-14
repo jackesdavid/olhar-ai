@@ -66,8 +66,6 @@ kanban-plugin: board
 	  - Epic: [[olharai-rebrand]]
 - [ ] #80 Windows edge — installer, service, self-update
 	  - Plan: [[edge-windows]]
-- [ ] #81 Box pairing — enroll by code
-	  - Plan: [[box-pairing-code]]
 - [ ] #82 macOS installer — signed + notarized .pkg
 	  - Plan: [[edge-macos-pkg]]
 - [ ] #83 Windows installer — signed .exe
@@ -75,6 +73,9 @@ kanban-plugin: board
 
 
 ## In Progress
+
+- [ ] #81 Box pairing — enroll by code
+	  - Plan: [[box-pairing-code]]
 
 
 

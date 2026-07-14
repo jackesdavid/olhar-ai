@@ -87,6 +87,7 @@
       // Hand the one-time token + command to the dedicated install view (not a modal —
       // the command is long and gets copied to another machine).
       pendingInstall.value = {
+        id: box.id,
         name: boxName,
         token: box.token,
         command: buildCommand(box.token, box.hostname, box.tailscale_key),

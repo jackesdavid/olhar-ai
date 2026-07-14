@@ -7,6 +7,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::time::Duration;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
@@ -26,6 +27,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/install.sh", get(install_script))
         .route("/edge-latest", get(edge_latest))
+        .route("/enroll", post(enroll))
         .route("/config/cameras", get(cameras))
         .route("/config/commands", get(commands))
         .route("/config/discovered", post(discovered_push))
@@ -56,6 +58,135 @@ async fn install_script() -> impl IntoResponse {
         [(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")],
         include_str!("../../sentinel-edge/install.sh"),
     )
+}
+
+// ---- enrollment by pairing code (card #81) ----------------------------------
+//
+// This endpoint is **unauthenticated by necessity**: the box redeeming a code has no credential yet
+// — acquiring one is the whole point. What protects it:
+//
+//   * the code's entropy (10 symbols of Crockford base32 ≈ 1.1e15) inside a 15-minute window,
+//   * single use, claimed atomically in one UPDATE,
+//   * the rate limiter below,
+//   * and one generic error for every failure — wrong, expired, already spent. A caller learns
+//     nothing from the response, so it can't be used as an oracle to sift valid codes.
+//
+// Nothing secret is stored to make this work: redeeming MINTS a fresh box token and a fresh
+// Tailscale key here, on the spot.
+
+/// Failed redeems allowed per client, per window. Generous for a human fat-fingering a code off a
+/// screen; nowhere near enough to search a 1.1e15 space.
+const ENROLL_MAX_FAILURES: u32 = 10;
+const ENROLL_WINDOW_SECS: u64 = 300;
+
+/// Per-client failure counters. In memory on purpose: one control pod, no moving parts, and it
+/// resets on deploy. Putting it in Postgres would mean an unauthenticated request writes a row —
+/// which is a DoS lever, not a defence.
+fn enroll_limiter() -> &'static std::sync::Mutex<HashMap<String, (u32, std::time::Instant)>> {
+    static LIMITER: std::sync::OnceLock<std::sync::Mutex<HashMap<String, (u32, std::time::Instant)>>> =
+        std::sync::OnceLock::new();
+    LIMITER.get_or_init(Default::default)
+}
+
+/// Who is asking. Control sits behind the VPS reverse proxy, so the peer address is the proxy —
+/// `X-Forwarded-For`'s first hop is the real client. An absent header collapses everyone into one
+/// shared bucket, which fails *closed* (stricter), not open.
+fn enroll_client(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn enroll_rate_limited(client: &str) -> bool {
+    let mut map = enroll_limiter().lock().unwrap();
+    let window = std::time::Duration::from_secs(ENROLL_WINDOW_SECS);
+    map.retain(|_, (_, at)| at.elapsed() < window);
+    map.get(client).map(|(n, _)| *n >= ENROLL_MAX_FAILURES).unwrap_or(false)
+}
+
+fn enroll_record_failure(client: &str) {
+    let mut map = enroll_limiter().lock().unwrap();
+    let e = map.entry(client.to_string()).or_insert((0, std::time::Instant::now()));
+    e.0 += 1;
+    e.1 = std::time::Instant::now();
+}
+
+#[derive(serde::Deserialize)]
+struct EnrollReq {
+    code: String,
+}
+
+/// Redeem a pairing code → everything the edge needs to become this tenant's box.
+async fn enroll(State(st): State<AppState>, headers: HeaderMap, Json(body): Json<EnrollReq>) -> Response {
+    // One message for every failure mode. Deliberately uninformative.
+    let refuse = || {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "that code isn't valid — check it and try again, or generate a new one" })),
+        )
+            .into_response()
+    };
+
+    let client = enroll_client(&headers);
+    if enroll_rate_limited(&client) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({ "error": "too many attempts — wait a few minutes and try again" })),
+        )
+            .into_response();
+    }
+
+    let code = crate::domain::boxes::normalize_code(&body.code);
+    if code.is_empty() {
+        enroll_record_failure(&client);
+        return refuse();
+    }
+
+    let hash = crate::domain::boxes::hash_token(&code);
+    let claimed = match crate::store::claim_pairing(&st.pool, &hash).await {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            enroll_record_failure(&client);
+            return refuse();
+        }
+        Err(e) => {
+            log::error!("enroll: claim failed: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "database error").into_response();
+        }
+    };
+    let (_tenant_id, box_id) = claimed;
+
+    // The code is spent. Mint the box's real credentials now — this is why none of them had to be
+    // stored anywhere.
+    let token = crate::domain::boxes::new_box_token();
+    if let Err(e) = crate::store::rotate_box_token(&st.pool, box_id, &crate::domain::boxes::hash_token(&token)).await {
+        log::error!("enroll: token rotate failed for box {box_id}: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not issue a token").into_response();
+    }
+
+    let name = crate::store::box_name(&st.pool, box_id).await.ok().flatten().unwrap_or_default();
+    let hostname = format!("sentinel-{}", &box_id.to_string()[..8]);
+    let tailscale_key = match &st.tailscale {
+        Some(ts) => ts
+            .mint_auth_key(&st.http, &format!("sentinel-edge {name}"))
+            .await
+            .map_err(|e| log::warn!("enroll: tailscale key mint failed for box {box_id}: {e}"))
+            .ok(),
+        None => None,
+    };
+
+    log::info!("box {box_id} ({name}) enrolled by pairing code");
+    Json(json!({
+        "box_id":        box_id,
+        "box_token":     token,
+        "hostname":      hostname,
+        "tailscale_key": tailscale_key,
+    }))
+    .into_response()
 }
 
 /// The latest edge build the operator has published (for the "update available" badge).
@@ -115,22 +246,31 @@ fn box_metrics_header(headers: &HeaderMap) -> Option<app_core::edge_metrics::Edg
         .and_then(app_core::edge_metrics::EdgeMetrics::from_header)
 }
 
-/// The camera list an edge box pulls, scoped to the box's tenant (box token required —
-/// this returns RTSP credentials and control is public). A dev box can opt into the
-/// default tenant with `ALLOW_UNTENANTED_CONFIG=1`.
+/// Whether a token-less `/config/cameras` may fall back to the default tenant. **Only ever true in
+/// a debug build.** The `cfg!` is the point: it makes the escape hatch a property of the binary, not
+/// of the environment it's deployed with — a release binary cannot be talked into serving one
+/// tenant's cameras (and their RTSP credentials) to an unauthenticated caller, no matter what env
+/// somebody sets on the VPS.
+fn untenanted_dev_config() -> bool {
+    cfg!(debug_assertions)
+        && std::env::var("ALLOW_UNTENANTED_CONFIG")
+            .map(|v| matches!(v.trim(), "1" | "true" | "yes"))
+            .unwrap_or(false)
+}
+
+/// The camera list an edge box pulls, scoped to the box's tenant.
+///
+/// **A box token is required, and in a release build there is no way around that.** This response
+/// carries RTSP credentials, control is a public endpoint, and the caller here is by definition
+/// unauthenticated-until-proven — so a no-token request must never be answered with *somebody's*
+/// cameras. The `ALLOW_UNTENANTED_CONFIG` escape hatch (a single-tenant dev edge pointed at the
+/// default tenant) is compiled out of release builds entirely: `debug_assertions` is off there, so
+/// the env var is not even read. Setting it on the VPS by accident does nothing.
 async fn cameras(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): RawQuery) -> Response {
     let tenant = match box_tenant(&st, &headers).await {
         Ok(Some(tid)) => tid,
-        Ok(None) => {
-            let dev = std::env::var("ALLOW_UNTENANTED_CONFIG")
-                .map(|v| matches!(v.trim(), "1" | "true" | "yes"))
-                .unwrap_or(false);
-            if dev {
-                DEFAULT_TENANT_ID
-            } else {
-                return (StatusCode::UNAUTHORIZED, "box token required").into_response();
-            }
-        }
+        Ok(None) if untenanted_dev_config() => DEFAULT_TENANT_ID,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
         Err(resp) => return resp,
     };
 
