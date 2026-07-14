@@ -74,9 +74,6 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #81 Box pairing — enroll by code
-	  - Plan: [[box-pairing-code]]
-
 
 
 ## Review
@@ -124,6 +121,8 @@ kanban-plugin: board
 	  - Plan: [[clip-local-retention]]
 - [ ] #79 Edge without OpenCV — pure-Rust motion
 	  - Plan: [[edge-pure-rust-motion]]
+- [ ] #81 Box pairing — enroll by code
+	  - Plan: [[box-pairing-code]]
 
 
 ## Done

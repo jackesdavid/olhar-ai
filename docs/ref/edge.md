@@ -223,6 +223,42 @@ child's stdout/stderr (target `go2rtc`). The push loop ships new lines to contro
 `/config/logs` → `box_logs` table + a `log_bus` broadcast → the web **/logs** page (full live
 tail with device/level/text filters; deep-linkable `?device=<ip>` / `?box=<id>`).
 
+## Enrollment — how a box learns whose it is (card #81)
+
+A box's identity is its **box token**. There are two ways to get one:
+
+1. **Pairing code (the default).** The Boxes page mints a short code (`ABCDE-FGHIJ`); the person at
+   the appliance types it into the page the edge serves at `http://localhost:8788` (`src/enroll.rs`),
+   and the edge redeems it at control's `POST /enroll`. This exists because a double-clicked
+   `.pkg`/`.exe` (#82/#83) cannot be handed four command-line arguments.
+2. **The headless one-liner** (`install.sh --box-token … --authkey …`) — unchanged, still the right
+   tool for a machine with no screen.
+
+**A box with no token serves *only* the enrollment page.** It does not build an `AppState`, and that
+is a correctness requirement, not tidiness: `/config/cameras` returns RTSP credentials, and an
+unenrolled box taking the normal boot path would ask for them with no token.
+
+Security of the redeem path, which is **unauthenticated by necessity** (the box has no credential
+yet — getting one is the point):
+
+- The DB row (`box_pairings`, migration 0055) stores **only a hash of the code**. Redeeming *mints* a
+  fresh box token (rotating `tenant_boxes.token_hash`) and a fresh Tailscale key on the spot, so
+  **nothing secret is at rest**.
+- Single use, claimed atomically in one `UPDATE … WHERE claimed_at IS NULL RETURNING`. 15-minute
+  expiry. Rate-limited per client.
+- Wrong, expired and already-spent codes return the **same** message — the endpoint is not an oracle.
+- Codes are **Crockford base32** (no `I`/`L`/`O`/`U`: they get misread off a screen), and
+  normalization folds case, the dash and the lookalikes, so a customer holding a valid code is never
+  told it's invalid.
+
+### The edge reads its own `edge.env`
+
+`src/envfile.rs`, loaded first thing in `main`. systemd re-reads `EnvironmentFile=` on every start,
+but **launchd copies the values into the plist at install time** — so a box that acquires its
+identity at runtime would never see it on macOS. Loading the file ourselves makes every platform
+behave the same (and spares the Windows service, #83, from plumbing an environment at all). An
+already-set variable wins over the file, so a dev override still works.
+
 ## Install / env
 
 `install.sh` (served at `control/edge/install.sh`, embedded in the control binary via
