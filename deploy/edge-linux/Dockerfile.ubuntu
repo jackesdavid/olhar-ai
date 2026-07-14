@@ -1,9 +1,11 @@
 # Build the sentinel-edge appliance binary for Debian/Ubuntu (glibc/apt) — amd64.
 #
-# Companion to ./Dockerfile (Fedora). The edge links OpenCV DYNAMICALLY, so the run host's
-# OpenCV soname must match the build's. Ubuntu 24.04 (noble) + Debian 12 (bookworm) both ship
-# OpenCV 4.6 (libopencv_video.so.406), which is what `install.sh`'s apt path installs
-# (`apt install libopencv-dev`). Ubuntu 22.04 ships 4.5 (.405) — build with UBUNTU=22.04 for it.
+# Companion to ./Dockerfile (Fedora). The edge is pure Rust (card #79) — this second image is not
+# about OpenCV any more, it is about **glibc**: a binary built against Fedora's glibc won't start on
+# an older Debian/Ubuntu. Building here pins the floor to Ubuntu 24.04 (noble) / Debian 12
+# (bookworm); use UBUNTU=22.04 for an older floor.
+#
+# (A static musl build would make this file — and the two-asset split — unnecessary.)
 #
 # Build context is the REPO ROOT:
 #   docker build -f deploy/edge-linux/Dockerfile.ubuntu --platform linux/amd64 \
@@ -12,12 +14,10 @@
 ARG UBUNTU=24.04
 FROM ubuntu:${UBUNTU} AS build
 
-# Toolchain + OpenCV headers/libs + libclang (opencv-rust generates bindings via clang).
-# Ubuntu's apt `cargo` can lag, so Rust comes from rustup.
+# Just a Rust toolchain (apt's `cargo` can lag, so Rust comes from rustup). This used to also pull
+# clang, libclang-dev, llvm-dev and libopencv-dev for opencv-rust's binding generator.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      curl ca-certificates pkg-config \
-      build-essential clang libclang-dev llvm-dev \
-      libopencv-dev \
+      curl ca-certificates pkg-config build-essential \
  && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
 ENV PATH=/root/.cargo/bin:$PATH

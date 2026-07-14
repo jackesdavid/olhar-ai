@@ -268,9 +268,8 @@ tasks:
       FEDORA: '{{.FEDORA | default "42"}}'
     cmds:
       - mkdir -p sentinel-edge/dist
-      # Build on Fedora (the appliance is Bazzite = immutable Fedora); the edge links
-      # OpenCV dynamically so the run host must have the same Fedora-major OpenCV — the
-      # edge runs in a matching Fedora distrobox/podman on Bazzite, so it lines up.
+      # Build on Fedora (the appliance is Bazzite = immutable Fedora). The edge is pure Rust,
+      # so this only pins the **glibc** floor — not an OpenCV soname, as it once did.
       - docker build --platform linux/amd64 -f deploy/edge-linux/Dockerfile
           --build-arg FEDORA={{.FEDORA}} --target artifact
           -o type=local,dest=sentinel-edge/dist/tmp .
@@ -279,7 +278,7 @@ tasks:
       - 'echo "✓ sentinel-edge/dist/sentinel-edge-linux-x86_64 ($(file sentinel-edge/dist/sentinel-edge-linux-x86_64 | cut -d: -f2-))"'
 
   edge-linux-build-ubuntu:
-    desc: "Cross-build the edge binary for Debian/Ubuntu (amd64, glibc/apt, OpenCV 4.6) → sentinel-edge/dist/sentinel-edge-linux-x86_64-gnu. Set UBUNTU=22.04 for OpenCV 4.5."
+    desc: "Cross-build the edge binary for Debian/Ubuntu (amd64, glibc/apt) → sentinel-edge/dist/sentinel-edge-linux-x86_64-gnu. Set UBUNTU=22.04 for an older glibc floor."
     vars:
       UBUNTU: '{{.UBUNTU | default "24.04"}}'
     cmds:

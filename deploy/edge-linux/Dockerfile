@@ -1,10 +1,9 @@
 # Build the sentinel-edge appliance binary for Linux (amd64).
 #
-# The edge links OpenCV (native C++, the motion watcher) DYNAMICALLY, so the runtime
-# host's OpenCV soname must match the build host's. We build on Fedora and run on a
-# matching Fedora userspace (the appliance is Bazzite — immutable Fedora — so the edge
-# runs inside a Fedora distrobox/toolbox or a podman container of the SAME Fedora major,
-# which makes the OpenCV version match by construction regardless of the host image).
+# The edge is **pure Rust** — no OpenCV, no native anything (card #79). This image used to exist
+# because the binary was soname-coupled to its build host's OpenCV; now it exists only to pin the
+# **glibc** it links against, so we build on the same Fedora major the appliance (Bazzite) tracks.
+# A static musl build would remove even that, and collapse the two Linux assets into one.
 #
 # Build context is the REPO ROOT (the edge links ../crates/app-core by path):
 #   docker build -f deploy/edge-linux/Dockerfile --platform linux/amd64 \
@@ -17,17 +16,11 @@
 ARG FEDORA=42
 FROM fedora:${FEDORA} AS build
 
-# Toolchain + OpenCV headers/libs + libclang (opencv-rust generates bindings via clang).
+# Just a Rust toolchain. (This used to also pull opencv, opencv-devel, clang, clang-devel and
+# llvm-devel — opencv-rust generated its bindings via libclang.)
 RUN dnf install -y --setopt=install_weak_deps=False \
-      rust cargo clang clang-devel llvm-devel \
-      opencv opencv-devel \
-      gcc gcc-c++ make pkgconf-pkg-config \
-      openssl-devel \
+      rust cargo gcc pkgconf-pkg-config \
  && dnf clean all
-
-# opencv-rust locates libclang via clang-sys; be explicit so it never guesses wrong.
-ENV LIBCLANG_PATH=/usr/lib64
-ENV RUSTFLAGS=""
 
 WORKDIR /src
 # Only the paths the edge build touches (keeps the context small + cache-friendly).
@@ -44,19 +37,20 @@ FROM scratch AS artifact
 COPY --from=build /src/sentinel-edge/target/release/sentinel-edge /out/sentinel-edge
 
 # ---------------------------------------------------------------------------
-# Self-contained runtime image — the appliance packaging for an IMMUTABLE host
-# (Bazzite / Silverblue) where you can't dnf-install OpenCV on the host itself.
-# Bakes the matching-soname OpenCV + ffmpeg + go2rtc + tailscale so the edge just runs.
+# Self-contained runtime image — appliance packaging for an IMMUTABLE host (Bazzite / Silverblue),
+# where layering packages on the host means a reboot. It bakes ffmpeg + go2rtc + tailscale so the
+# edge just runs.
+#
+# Its original reason is gone: it existed to guarantee a matching OpenCV soname on a host where you
+# can't dnf-install OpenCV. The edge links nothing now, so a bare binary + ffmpeg on the host works
+# too — this image is now a convenience, not a requirement.
+#
 # Build: docker build -f deploy/edge-linux/Dockerfile --target runtime -t sentinel-edge .
 # Run recipe: see deploy/edge-linux/entrypoint.sh.
 FROM fedora:${FEDORA} AS runtime
 ARG GO2RTC_URL=https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_amd64
-# Fedora splits OpenCV per-module; the `opencv` metapackage ships core/imgproc/imgcodecs/
-# videoio but NOT `opencv-video` — where MOG2 (BackgroundSubtractorMOG2) lives, which the
-# motion watcher links. Install it explicitly or the edge dies with `libopencv_video.so.411:
-# cannot open shared object file`.
 RUN dnf install -y --setopt=install_weak_deps=False \
-      opencv opencv-video ffmpeg-free iproute procps-ng ca-certificates \
+      ffmpeg-free iproute procps-ng ca-certificates \
  && dnf install -y 'dnf-command(config-manager)' \
  && dnf config-manager addrepo --from-repofile=https://pkgs.tailscale.com/stable/fedora/tailscale.repo \
  && dnf install -y tailscale \

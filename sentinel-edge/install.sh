@@ -64,9 +64,11 @@ fi
 os="$(uname -s)"; arch="$(uname -m)"
 case "$os" in
   Linux)
-    # OpenCV is linked dynamically → soname-coupled, so we ship a binary per glibc/OpenCV
-    # family and fetch the matching one: apt (Debian/Ubuntu, OpenCV 4.6) → the `-gnu` asset;
-    # dnf/rpm-ostree (Fedora/Bazzite, OpenCV 4.11) → the default asset.
+    # Two Linux assets, picked by package manager: apt (Debian/Ubuntu) → the `-gnu` asset;
+    # dnf/rpm-ostree (Fedora/Bazzite) → the default. This used to be about OpenCV's soname AND
+    # glibc; motion is pure Rust now (#79), so only the **glibc floor** is left — a binary built
+    # against Fedora's glibc won't start on an older Ubuntu. A single static musl build would
+    # collapse these into one asset; that's the next step, not this one.
     if command -v apt-get >/dev/null 2>&1; then
       EDGE_ASSET="sentinel-edge-linux-$arch-gnu"
     else
@@ -85,7 +87,9 @@ esac
 
 # Immutable/ostree host (Bazzite, Silverblue, Kinoite): the base OS is read-only, so package
 # installs go through `rpm-ostree` and only take effect on the NEXT boot. We detect it so the
-# dependency install (OpenCV, ffmpeg) uses rpm-ostree and we tell the operator to reboot.
+# ffmpeg install uses rpm-ostree. Since #79 the edge itself links nothing, so it starts and runs
+# BEFORE any reboot — a reboot is only needed to make a freshly-layered ffmpeg visible, which
+# costs snapshots, not the box.
 IMMUTABLE=0
 REBOOT_REQUIRED=0
 if [ "$os" = "Linux" ] && [ -f /run/ostree-booted ]; then IMMUTABLE=1; fi
@@ -194,29 +198,24 @@ if [ -n "$AUTHKEY" ]; then
     || echo "  'tailscale up' failed — check the auth key; the edge service will retry on boot." >&2
 fi
 
-# ---- 1b. runtime deps: ffmpeg + OpenCV --------------------------------------
-# ffmpeg: go2rtc shells out to it for JPEG frames (Live snapshot + GetCurrentFrame node) —
-#   without it those fail (`exec: "ffmpeg": not found`) while MSE/WebRTC still plays.
-# OpenCV: the per-camera MOG2 motion watcher links it DYNAMICALLY, so the runtime OpenCV
-#   major must match the build host's. Fedora splits it per-module; the `opencv` metapackage
-#   omits `opencv-video` (MOG2 lives there) → install it explicitly or the edge dies with
-#   `libopencv_video.so.NNN: cannot open shared object file`.
+# ---- 1b. runtime dep: ffmpeg ------------------------------------------------
+# ffmpeg is the ONLY runtime dependency: go2rtc shells out to it for JPEG frames (Live snapshot +
+# GetCurrentFrame node) — without it those fail (`exec: "ffmpeg": not found`) while MSE/WebRTC still
+# plays.
+#
+# The edge itself needs nothing. It used to link OpenCV for the MOG2 motion watcher, which meant
+# installing it here, matching its soname to the build host's, layering it via rpm-ostree on an
+# immutable OS — and REBOOTING before the box could start. Motion is pure Rust now (card #79), so
+# all of that is gone.
 if [ "$IMMUTABLE" = 1 ]; then
-  # Immutable Fedora (Bazzite / Silverblue / Kinoite): the base OS is read-only — layer the
-  # deps with rpm-ostree. They only become active after a REBOOT, so we flag that below.
-  pkgs="opencv opencv-video"
-  command -v ffmpeg >/dev/null 2>&1 || pkgs="$pkgs ffmpeg-free"
-  echo "▸ Layering runtime deps via rpm-ostree ($pkgs)…"
-  # shellcheck disable=SC2086
-  rpm-ostree install --idempotent --allow-inactive $pkgs \
-    || echo "  ⚠ rpm-ostree install failed — layer them manually: sudo rpm-ostree install $pkgs" >&2
-  # The layered OpenCV libs are present only after the next boot; if the video module isn't
-  # active yet, a reboot is required before the edge can start the motion watcher.
-  if ! ldconfig -p 2>/dev/null | grep -q 'libopencv_video\.so'; then
-    REBOOT_REQUIRED=1
-    echo "  ⚠ OpenCV layered but not active yet — a reboot is required (see the end of this install)." >&2
-  else
-    echo "✓ OpenCV already active"
+  # Immutable Fedora (Bazzite / Silverblue / Kinoite): the base OS is read-only — layer ffmpeg with
+  # rpm-ostree. Unlike the OpenCV libs the edge used to link, ffmpeg is spawned as a child process
+  # by go2rtc, so it does not have to be active before the edge can run: no reboot gate.
+  if ! command -v ffmpeg >/dev/null 2>&1; then
+    echo "▸ Layering ffmpeg via rpm-ostree…"
+    rpm-ostree install --idempotent --allow-inactive ffmpeg-free \
+      || echo "  ⚠ rpm-ostree install failed — layer it manually: sudo rpm-ostree install ffmpeg-free" >&2
+    command -v ffmpeg >/dev/null 2>&1 || REBOOT_REQUIRED=1
   fi
 else
   # Mutable OS (Debian/Ubuntu/Alpine/regular Fedora, macOS) — install in place, effective now.
@@ -245,47 +244,19 @@ else
       fi
     fi
   fi
-  if command -v ffmpeg >/dev/null 2>&1; then
-    echo "✓ ffmpeg present ($(command -v ffmpeg))"
-  else
-    echo "⚠ ffmpeg NOT found — live snapshots / GetCurrentFrame will fail until it is installed." >&2
-  fi
-
-  echo "▸ Installing OpenCV (motion detection)…"
-  if [ "$os" = "Linux" ]; then
-    if command -v apt-get >/dev/null 2>&1; then
-      apt-get update -qq && apt-get install -y libopencv-dev
-    elif command -v dnf >/dev/null 2>&1; then
-      # Fedora splits OpenCV per-module; `opencv` omits `opencv-video` (MOG2 lives there).
-      dnf install -y opencv opencv-video
-    elif command -v apk >/dev/null 2>&1; then
-      apk add --no-cache opencv
-    else
-      echo "  No supported package manager found — install OpenCV manually, then re-run." >&2
-    fi
-  else
-    if [ -n "${SUDO_USER:-}" ] && command -v sudo >/dev/null 2>&1 && sudo -u "$SUDO_USER" command -v brew >/dev/null 2>&1; then
-      sudo -u "$SUDO_USER" brew install opencv || true
-    elif command -v brew >/dev/null 2>&1; then
-      brew install opencv || true
-    else
-      echo "  Install OpenCV first:  brew install opencv  — then re-run." >&2
-    fi
-  fi
-  if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists opencv4 2>/dev/null; then
-    echo "✓ OpenCV present ($(pkg-config --modversion opencv4))"
-  else
-    echo "⚠ OpenCV not detected via pkg-config — the motion watcher will fail to start until it is installed." >&2
-  fi
+fi
+if command -v ffmpeg >/dev/null 2>&1; then
+  echo "✓ ffmpeg present ($(command -v ffmpeg))"
+else
+  echo "⚠ ffmpeg NOT found — live snapshots / GetCurrentFrame will fail until it is installed." >&2
 fi
 
 # ---- 2. binaries ------------------------------------------------------------
 echo "▸ Downloading sentinel-edge…"
 curl -fSL "$RELEASE_BASE/$EDGE_ASSET" -o "$PREFIX/sentinel-edge"
 chmod +x "$PREFIX/sentinel-edge"
-# Confirm the installed build's version. Best-effort: the binary links OpenCV dynamically, so
-# on an immutable host pre-reboot (deps not active yet) this can't run — the version was
-# already printed above from /edge-latest.
+# Confirm the installed build's version. The binary has no native dependencies (#79), so this
+# always runs — on any host, immutable or not, before any reboot.
 if ver="$("$PREFIX/sentinel-edge" --version 2>/dev/null)"; then
   echo "✓ Installed $ver"
 fi
@@ -347,15 +318,11 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
-  if [ "$REBOOT_REQUIRED" = 1 ]; then
-    # Deps were just layered (rpm-ostree) and aren't active yet — enable but don't start,
-    # or the edge would crash-loop on the not-yet-present OpenCV libs until the reboot.
-    systemctl enable sentinel-edge
-    echo "✓ Installed + enabled — it will start automatically after you reboot."
-  else
-    systemctl enable --now sentinel-edge
-    echo "✓ Installed. Status:  systemctl status sentinel-edge"
-  fi
+  # Always start it. This used to be gated on REBOOT_REQUIRED, because the edge linked OpenCV and
+  # would crash-loop until the rpm-ostree-layered libs became active on the next boot. It links
+  # nothing now (#79), so it runs immediately on an immutable host too.
+  systemctl enable --now sentinel-edge
+  echo "✓ Installed. Status:  systemctl status sentinel-edge"
 else
   echo "▸ Installing launchd agent…"
   PLIST=/Library/LaunchDaemons/io.sentinel.edge.plist
@@ -387,11 +354,10 @@ else
   echo "✓ Installed. Logs:  log stream --predicate 'process == \"sentinel-edge\"'"
 fi
 
+echo "✓ sentinel-edge is up. It joined the tailnet as '$HOSTNAME_' and pulls cameras from $CONTROL_URL."
 if [ "$REBOOT_REQUIRED" = 1 ]; then
   echo ""
-  echo "⚠  REBOOT REQUIRED — OpenCV was layered via rpm-ostree and activates on next boot."
-  echo "   Reboot now, then the edge starts automatically:  sudo systemctl reboot"
-  echo "   (After reboot:  systemctl status sentinel-edge)"
-else
-  echo "✓ sentinel-edge is up. It joined the tailnet as '$HOSTNAME_' and pulls cameras from $CONTROL_URL."
+  echo "ℹ  ffmpeg was layered via rpm-ostree and activates on next boot. The edge is already"
+  echo "   running (it links nothing); until you reboot, only snapshots + GetCurrentFrame will"
+  echo "   fail — live video, motion, tracking and recording all work.  sudo systemctl reboot"
 fi

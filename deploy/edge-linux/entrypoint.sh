@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Container entrypoint for the sentinel-edge appliance on an immutable host (Bazzite /
-# Fedora Silverblue / any rpm-ostree box) where you can't dnf-install OpenCV on the host.
+# Fedora Silverblue / any rpm-ostree box), where layering packages means a reboot.
 #
-# Everything the edge needs is baked into the image (OpenCV + ffmpeg + go2rtc + tailscale),
-# so the OpenCV soname matches by construction. We run tailscaled INSIDE the container, so
-# the container needs host networking + the tun device + NET_ADMIN:
+# Everything the edge needs is baked into the image (ffmpeg + go2rtc + tailscale). The edge binary
+# itself links nothing (card #79 — motion is pure Rust), so this container is now a convenience,
+# not a requirement. We run tailscaled INSIDE the container, so it needs host networking + the tun
+# device + NET_ADMIN:
 #
 #   podman run -d --name sentinel-edge --restart=always \
 #     --network=host --cap-add=NET_ADMIN --cap-add=NET_RAW --device=/dev/net/tun \
