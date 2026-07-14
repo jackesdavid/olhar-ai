@@ -146,22 +146,35 @@
 
   // ---- download --------------------------------------------------------------
 
+  // A clip in the cloud downloads FROM the cloud (presigned GET): no VPS egress, it works with the
+  // edge offline — and, since the box may be set to drop its local copy once the clip is durable
+  // (`delete_local_after_upload`), the edge proxy would simply 404 for a clip that is perfectly
+  // safe. The proxy stays the path for a clip that never made it to the cloud.
   async function download(rec: Recording) {
     if (downloading !== null) return;
     downloading = rec.id;
     try {
-      const blob = await recordings.download(rec.id);
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a");
-      a.href     = url;
+      const url = await downloadUrl(rec);
+      const a = document.createElement("a");
+      a.href = url.href;
       a.download = `${rec.friendly_name || rec.clip_id}.mp4`;
       a.click();
-      URL.revokeObjectURL(url);
+      if (url.revoke) URL.revokeObjectURL(url.href);
     } catch (e) {
       toast.error(String(e));
     } finally {
       downloading = null;
     }
+  }
+
+  /** `revoke` marks an object URL we minted and must release; a presigned R2 URL is not ours. */
+  async function downloadUrl(rec: Recording): Promise<{ href: string; revoke: boolean }> {
+    if (rec.upload_state === "uploaded") {
+      const { url } = await recordings.cloudUrl(rec.id);
+      return { href: url, revoke: false };
+    }
+    const blob = await recordings.download(rec.id);
+    return { href: URL.createObjectURL(blob), revoke: true };
   }
 
   // ---- clip state badge ------------------------------------------------------

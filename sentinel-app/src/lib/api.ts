@@ -124,6 +124,8 @@ export type RecordingConfig = {
   codec: string;
   cameras_always_warm: boolean;
   motion_var_threshold?: number;
+  /** Drop a clip's local file once the cloud confirms it's durable (the box becomes a spool). */
+  delete_local_after_upload?: boolean;
 };
 
 export type StorageStats = {

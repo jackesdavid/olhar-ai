@@ -191,6 +191,7 @@ async fn recording_stop(
             let uploads = state.uploads.clone();
             let clip_id = meta.clip_id.clone();
             let clip_path = state.recording.clip_path(&clip_id);
+            let delete_local = state.recording.config.delete_local_after_upload;
             let payload = serde_json::json!({
                 "camera_ip":     meta.camera_ip,
                 "clip_id":       meta.clip_id,
@@ -207,7 +208,10 @@ async fn recording_stop(
                     log::warn!("clip {clip_id}: file vanished before upload");
                     return;
                 };
-                crate::clip_upload::enqueue(&uploads, crate::clip_upload::Job { clip_id, path, url });
+                crate::clip_upload::enqueue(
+                    &uploads,
+                    crate::clip_upload::Job { clip_id, path, url, delete_local },
+                );
             });
             Json(json!({
                 "clip_id": meta.clip_id,

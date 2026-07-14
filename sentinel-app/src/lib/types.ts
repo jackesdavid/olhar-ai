@@ -18,6 +18,12 @@ export type Settings = {
   max_storage_mb: number;
   /** Directory on the edge where .mp4 clips are saved (default /opt/sentinel-edge/recordings). */
   recordings_path: string;
+  /**
+   * Delete a clip's local file once the cloud confirms it's durable — the box's disk becomes a
+   * transient spool instead of an archive. Requires a plan that sells cloud recording; without
+   * one nothing is ever uploaded and the local file is the only copy.
+   */
+  delete_local_after_upload: boolean;
 };
 
 /** A saved camera (matches `app_core::devices::Device`). */
@@ -302,4 +308,5 @@ export const DEFAULT_SETTINGS: Settings = {
   motion_var_threshold: 16,
   max_storage_mb: 10000,
   recordings_path: "/opt/sentinel-edge/recordings",
+  delete_local_after_upload: false,
 };

@@ -71,6 +71,16 @@ ffmpeg ring process, no segment files on disk between recordings.
   built-in codec layer rejects go2rtc's repackaged NALs with `forbidden sequence 00 00 00`,
   which is why we bypass it. Access units live in a `VecDeque<H264Frame>` capped at
   ~`pre_roll_secs` of frames.
+- **Cloud + eviction** (`src/clip_upload.rs`): on `stop`, the edge pushes the clip manifest to
+  control; if the tenant's plan sells cloud recording (an active/trialing subscription whose plan
+  has `retention_days > 0` — control's `upload_ticket`), control answers with a **presigned PUT**
+  and the bytes go straight from the box to R2. With `recording_config.delete_local_after_upload`
+  on (Settings → "Delete local copy once saved to the cloud"), the local `.mp4` **and its `.json`
+  sidecar** are deleted once — and only once — control confirms the clip is durable, so the disk is
+  a transient spool, not an archive. Off by default: with no cloud plan nothing is ever uploaded and
+  the local file is the only copy. Both files go, because `StorageStats` reads `size_bytes` out of
+  the sidecar and an orphan would make the box over-report its disk forever. Playback + Download
+  both prefer the cloud for an `uploaded` clip, so an evicted local file is never missed.
 - **Record** (`start`/`stop`): `start()` snapshots the ring from the last IDR (clean
   keyframe → no black frames) **and** installs the live sink under the same `MemRing` lock,
   so the boundary has no gap/overlap. One `ffmpeg -f h264 -i pipe:0 -c:v copy out.mp4`:

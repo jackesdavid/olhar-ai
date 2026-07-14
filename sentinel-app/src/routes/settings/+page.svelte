@@ -14,7 +14,7 @@
   import { Separator } from "$lib/components/ui/separator";
 
   import { DEFAULT_SETTINGS, type Settings, type Transport } from "$lib/types";
-  import { boxes, type StorageStats } from "$lib/api";
+  import { billing, boxes, type StorageStats } from "$lib/api";
   import { Input } from "$lib/components/ui/input";
 
   let settings = $state<Settings>({ ...DEFAULT_SETTINGS });
@@ -22,6 +22,9 @@
   let saving = $state(false);
   let boxIds = $state<string[]>([]);
   let storageStats = $state<(StorageStats & { boxId: string })[]>([]);
+  /** Does this tenant's plan actually sell cloud recording? Without it nothing is ever uploaded,
+   *  so "delete the local copy once it's in the cloud" would delete the only copy there is. */
+  let cloudRecording = $state(false);
 
   const transportOptions: { value: Transport; label: string }[] = [
     { value: "tcp", label: "TCP" },
@@ -57,7 +60,12 @@
         settings.motion_var_threshold = firstBox.recording_config.motion_var_threshold ?? 16;
         settings.max_storage_mb = firstBox.recording_config.max_storage_mb ?? 10000;
         settings.recordings_path = firstBox.recording_config.recordings_path ?? "/opt/sentinel-edge/recordings";
+        settings.delete_local_after_upload = firstBox.recording_config.delete_local_after_upload ?? false;
       }
+      // Mirror control's own rule for offering the edge an upload ticket (`upload_ticket` →
+      // `tenant_retention_days`): an active/trialing subscription on a plan that sells retention.
+      // Best-effort — a billing hiccup must not block the settings page.
+      loadCloudRecording();
       // Load storage stats for each box in the background (best-effort).
       for (const b of allBoxes) {
         boxes.storageStats(b.id).then((s) => {
@@ -71,6 +79,16 @@
       loading = false;
     }
   });
+
+  async function loadCloudRecording() {
+    try {
+      const [sub, plans] = await Promise.all([billing.subscription(), billing.plans()]);
+      const plan = plans.find((p) => p.id === sub?.plan_id);
+      cloudRecording = (plan?.retention_days ?? 0) > 0;
+    } catch {
+      cloudRecording = false; // can't prove the plan sells it → don't offer to delete the only copy
+    }
+  }
 
   async function save() {
     saving = true;
@@ -87,6 +105,8 @@
             codec: "copy",
             cameras_always_warm: snap.cameras_always_warm,
             motion_var_threshold: snap.motion_var_threshold,
+            // Never persist "delete the local copy" for a tenant with nowhere to copy it to.
+            delete_local_after_upload: cloudRecording && snap.delete_local_after_upload,
           })
         )
       );
@@ -118,6 +138,32 @@
   }
 
   const STORAGE_STEPS = [500, 1000, 2000, 5000, 10000, 20000, 50000, 100000];
+
+  function storageStepIndex(mb: number): number {
+    const exact = STORAGE_STEPS.indexOf(mb);
+    if (exact >= 0) return exact;
+    return STORAGE_STEPS.findIndex((s) => s >= mb);
+  }
+
+  /** With eviction on, the box's disk is a spool for clips in transit — not an archive. */
+  function storageLimitLabel(): string {
+    if (settings.delete_local_after_upload) return "Local spool size";
+    return "Max recording storage";
+  }
+
+  function storageLimitHint(): string {
+    if (settings.delete_local_after_upload) {
+      return "Headroom for clips waiting to reach the cloud (e.g. while the internet is down). Clips already in the cloud take no space here.";
+    }
+    return "Old clips are auto-deleted (oldest first) when total recording size exceeds this limit.";
+  }
+
+  function localRetentionHint(): string {
+    if (!cloudRecording) {
+      return "Your plan doesn't include cloud recording, so clips only ever exist on the appliance — there's nothing to fall back to.";
+    }
+    return "The appliance keeps a clip only until the cloud confirms it's safe, then frees the space. Clips still play and download from the cloud.";
+  }
 
   function sensitivityLabel(varThreshold: number): string {
     if (varThreshold <= 8) return "very high";
@@ -323,8 +369,24 @@
       <Separator />
 
       <div class="space-y-2">
+        <div class="flex items-center justify-between gap-4">
+          <div class="space-y-0.5">
+            <Label for="delete-local-after-upload">Delete local copy once saved to the cloud</Label>
+            <p class="text-xs text-muted-foreground">{localRetentionHint()}</p>
+          </div>
+          <Switch
+            id="delete-local-after-upload"
+            bind:checked={settings.delete_local_after_upload}
+            disabled={loading || !cloudRecording}
+          />
+        </div>
+      </div>
+
+      <Separator />
+
+      <div class="space-y-2">
         <div class="flex items-center justify-between">
-          <Label>Max recording storage</Label>
+          <Label>{storageLimitLabel()}</Label>
           <span class="text-sm tabular-nums text-muted-foreground">
             {formatMb(settings.max_storage_mb)}
           </span>
@@ -334,14 +396,12 @@
           min={0}
           max={STORAGE_STEPS.length - 1}
           step={1}
-          value={STORAGE_STEPS.indexOf(settings.max_storage_mb) >= 0
-            ? STORAGE_STEPS.indexOf(settings.max_storage_mb)
-            : STORAGE_STEPS.findIndex((s) => s >= settings.max_storage_mb)}
+          value={storageStepIndex(settings.max_storage_mb)}
           onValueChange={(v) => { settings.max_storage_mb = STORAGE_STEPS[v] ?? STORAGE_STEPS[STORAGE_STEPS.length - 1]; }}
           disabled={loading}
         />
         <p class="text-xs text-muted-foreground">
-          Old clips are auto-deleted (oldest first) when total recording size exceeds this limit.
+          {storageLimitHint()}
           A workflow event <strong>edge:full-disk</strong> fires when usage reaches 90%.
         </p>
       </div>

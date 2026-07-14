@@ -113,6 +113,11 @@ pub struct RecordingConfig {
     pub motion_var_threshold: f64,
     #[serde(default = "default_recordings_path")]
     pub recordings_path: String,
+    /// Delete a clip's local file as soon as R2 confirms it's durable, making this box's disk a
+    /// transient spool instead of a growing archive (card #78). Off by default — and it must stay
+    /// off for a tenant whose plan sells no cloud recording, where the local file is the ONLY copy.
+    #[serde(default)]
+    pub delete_local_after_upload: bool,
 }
 
 impl Default for RecordingConfig {
@@ -124,6 +129,7 @@ impl Default for RecordingConfig {
             cameras_always_warm: false,
             motion_var_threshold: 16.0,
             recordings_path: default_recordings_path(),
+            delete_local_after_upload: false,
         }
     }
 }

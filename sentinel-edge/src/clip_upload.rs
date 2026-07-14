@@ -7,8 +7,13 @@
 //!
 //! **One upload at a time.** This box is also serving live video over the same uplink, and a
 //! burst of parallel PUTs after a busy hour would stall it. Jobs queue on a bounded channel
-//! and a single consumer drains them; the local copy is never deleted on our account, so the
-//! worst case of a dropped job is a clip that stays local.
+//! and a single consumer drains them; a dropped job only ever costs durability, never the clip.
+//!
+//! **Eviction** (card #78, opt-in via `recording_config.delete_local_after_upload`): once — and
+//! only once — control has confirmed the clip is durable, the local `.mp4` and its sidecar are
+//! deleted, so the appliance's disk is a transient spool rather than a growing archive. Off by
+//! default: for a tenant on a plan without cloud recording nothing is ever uploaded, and the local
+//! file is the only copy there is.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
@@ -21,6 +26,8 @@ pub struct Job {
     /// The presigned PUT control minted for this clip. Expires (control's `UPLOAD_URL_TTL_SECS`,
     /// currently 1 h), which is what bounds our retries.
     pub url:     String,
+    /// Drop the local copy once the clip is durable — this box's `delete_local_after_upload`.
+    pub delete_local: bool,
 }
 
 /// Bounded, so a stalled uplink can't grow the queue without limit.
@@ -71,7 +78,24 @@ fn worker(control_url: String, rx: Receiver<Job>) {
             continue;
         }
         log::info!("clip {} is durable", job.clip_id);
+        // Only now — a clip whose confirm failed still reads `uploading` cloud-side and may yet be
+        // marked `failed`, so the local file stays its safety net.
+        if job.delete_local {
+            evict(&job);
+        }
     }
+}
+
+/// Drop the local `.mp4` **and its `.json` sidecar**. Both: `StorageStats::compute` and the
+/// storage evictor read `size_bytes` out of the sidecar, so an orphaned one would make this box
+/// over-report its disk usage forever.
+fn evict(job: &Job) {
+    if let Err(e) = std::fs::remove_file(&job.path) {
+        log::warn!("clip {}: uploaded, but could not drop the local copy: {e}", job.clip_id);
+        return; // leave the sidecar: it still describes a file that is really there
+    }
+    let _ = std::fs::remove_file(job.path.with_extension("json"));
+    log::info!("clip {}: local copy dropped (it lives in the cloud now)", job.clip_id);
 }
 
 fn upload(job: &Job) -> Result<(), Failure> {

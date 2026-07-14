@@ -64,14 +64,12 @@ kanban-plugin: board
 	  - Plan: [[postgres-performance-tuning]]
 - [ ] #76 OlharAI rebrand — domains, brand, app copy, landing rewrite
 	  - Epic: [[olharai-rebrand]]
-- [ ] #78 Clip local retention — evict local copy after cloud upload
-	  - Plan: [[clip-local-retention]]
 
 
 ## In Progress
 
-- [ ] #77 Edge frame hub — one decode per camera + motion-gated tracking
-	  - Plan: [[edge-frame-hub]]
+- [ ] #78 Clip local retention — evict local copy after cloud upload
+	  - Plan: [[clip-local-retention]]
 
 
 
@@ -114,6 +112,8 @@ kanban-plugin: board
 	  - Plan: [[tenant-cloud-cost]]
 - [ ] #67 Playback Timeline — unified inspection view
 	  - Plan: [[recording-playback-timeline]]
+- [ ] #77 Edge frame hub — one decode per camera + motion-gated tracking
+	  - Plan: [[edge-frame-hub]]
 
 
 ## Done
