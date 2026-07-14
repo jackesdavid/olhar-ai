@@ -24,8 +24,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use opencv::{core, imgcodecs, prelude::*};
-
 use crate::motion::{MotionDetector, Params};
 use crate::state::AppState;
 
@@ -41,8 +39,8 @@ pub struct Frame {
     pub seq: u64,
     /// The decoded frame: packed 8-bit BGR, `w * h * 3` bytes, row-major.
     pub bgr: Arc<Vec<u8>>,
-    pub w: i32,
-    pub h: i32,
+    pub w: u32,
+    pub h: u32,
     /// When this camera last had a frame whose **raw** MOG2 verdict qualified — not the 4s-throttled
     /// emit to control. Carried on *every* frame (not just the ones with motion) so a consumer
     /// sampling slower than the hub — the tracker, at `detect_ms` — cannot miss a burst of motion
@@ -147,12 +145,7 @@ fn has_stream(d: &app_core::devices::Device) -> bool {
 
 /// One camera's supervised source loop: run the pipeline until stopped, retrying on error.
 fn source(state: Arc<AppState>, ip: String, stop: Arc<AtomicBool>) {
-    let mut params = Params::from_env();
-    // Allow the box recording_config to override the MOG2 sensitivity.
-    let cfg_var = state.recording.config.motion_var_threshold;
-    if cfg_var > 0.0 {
-        params.var_threshold = cfg_var;
-    }
+    let params = motion_params(&state);
     log::info!(
         "frame hub[{ip}]: starting (fps={}, floor={}%, min_interval={}s, mog2_var={})",
         params.fps,
@@ -172,16 +165,22 @@ fn source(state: Arc<AppState>, ip: String, stop: Arc<AtomicBool>) {
     log::info!("frame hub[{ip}]: stopped");
 }
 
-/// Fetch → decode once → MOG2 → publish, until the stop flag is set (or an OpenCV op errors → the
-/// supervisor retries with a fresh background model).
-fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> opencv::Result<()> {
+/// Env tunables, with the box's `recording_config` allowed to override the MOG2 sensitivity.
+fn motion_params(state: &Arc<AppState>) -> Params {
     let mut params = Params::from_env();
     let cfg_var = state.recording.config.motion_var_threshold;
     if cfg_var > 0.0 {
         params.var_threshold = cfg_var;
     }
+    params
+}
+
+/// Fetch → decode once → MOG2 → publish, until the stop flag is set (or the pipeline errors → the
+/// supervisor retries with a fresh background model).
+fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String> {
+    let params = motion_params(state);
     let frame_gap = params.frame_gap();
-    let mut detector = MotionDetector::new(params)?;
+    let mut detector = MotionDetector::new(params);
 
     // Pull the latest decoded frame from the local go2rtc (`/api/frame.jpeg`) — always fresh, with
     // NO RTSP client buffer that can fall behind live motion (that buffer was why `VideoCapture`
@@ -212,17 +211,13 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> opencv::Result<()>
                 continue;
             }
         };
-        let buf = core::Vector::<u8>::from_slice(&jpeg);
-        let frame = match imgcodecs::imdecode(&buf, imgcodecs::IMREAD_COLOR) {
-            Ok(f) if !f.empty() => f,
-            _ => {
-                std::thread::sleep(frame_gap);
-                continue;
-            }
+        // The one decode. Every consumer of this camera works off the buffer it produces.
+        let Some((bgr, w, h)) = decode_bgr(&jpeg) else {
+            std::thread::sleep(frame_gap);
+            continue;
         };
-        let (w, h) = (frame.cols(), frame.rows());
 
-        let verdict = detector.feed(&frame)?;
+        let verdict = detector.feed(&bgr, w, h)?;
         if verdict.qualifies {
             motion_at = Some(t0);
         }
@@ -242,10 +237,7 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> opencv::Result<()>
         // Publish before emitting: the tracker's gate should see this frame's motion as early as
         // possible, and the POST to control below can block for as long as its timeout allows.
         seq += 1;
-        publish(
-            &slot,
-            Frame { seq, bgr: Arc::new(frame.data_bytes()?.to_vec()), w, h, motion_at },
-        );
+        publish(&slot, Frame { seq, bgr: Arc::new(bgr), w, h, motion_at });
 
         // The emit — and ONLY the emit — is throttled. The per-frame verdict above is not.
         let throttled = last_emit.map(|t| t.elapsed() < detector.params().min_interval).unwrap_or(false);
@@ -265,4 +257,23 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> opencv::Result<()>
 fn publish(slot: &Arc<Slot>, frame: Frame) {
     *slot.latest.lock().unwrap() = Some(Arc::new(frame));
     slot.ready.notify_all();
+}
+
+/// Decode a JPEG to packed 8-bit **BGR** — the layout both the motion model and the YOLOX detector
+/// want (`detector::detect_bgr`). `None` on a malformed/empty frame, which the caller treats as a
+/// dropped tick rather than an error.
+///
+/// The `image` crate has no BGR pixel type, so we decode to RGB and swap in place. That swap is the
+/// price of dropping OpenCV's `imdecode`, and it is cheap next to the decode itself.
+fn decode_bgr(jpeg: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+    let img = image::load_from_memory(jpeg).ok()?.to_rgb8();
+    let (w, h) = (img.width(), img.height());
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let mut buf = img.into_raw();
+    for px in buf.chunks_exact_mut(3) {
+        px.swap(0, 2);
+    }
+    Some((buf, w, h))
 }

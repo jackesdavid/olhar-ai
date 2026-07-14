@@ -64,13 +64,14 @@ kanban-plugin: board
 	  - Plan: [[postgres-performance-tuning]]
 - [ ] #76 OlharAI rebrand — domains, brand, app copy, landing rewrite
 	  - Epic: [[olharai-rebrand]]
-- [ ] #79 Edge without OpenCV — pure-Rust motion
-	  - Plan: [[edge-pure-rust-motion]]
 - [ ] #80 Windows edge — installer, service, self-update
 	  - Plan: [[edge-windows]]
 
 
 ## In Progress
+
+- [ ] #79 Edge without OpenCV — pure-Rust motion
+	  - Plan: [[edge-pure-rust-motion]]
 
 
 

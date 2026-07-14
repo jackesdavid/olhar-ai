@@ -2728,7 +2728,7 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "sentinel-edge"
-version = "0.5.36"
+version = "0.5.38"
 dependencies = [
  "app-core",
  "axum",
@@ -2736,6 +2736,8 @@ dependencies = [
  "chrono",
  "env_logger",
  "futures",
+ "image",
+ "imageproc",
  "log",
  "opencv",
  "retina",

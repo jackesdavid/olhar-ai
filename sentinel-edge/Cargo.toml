@@ -1,6 +1,6 @@
 [package]
 name = "sentinel-edge"
-version = "0.5.37"
+version = "0.5.38"
 edition = "2021"
 description = "The edge gateway — the ONLY thing that touches cameras. Wraps go2rtc (sentinel-rtc) + ONVIF and serves on-demand JPEG snapshots over REST so out-of-process services (sentinel-flow, the UI) reach the LAN-bound cameras without speaking RTSP/ONVIF themselves. Cameras are LAN-bound, so this tier is mandatory however cloud the rest becomes."
 
@@ -22,13 +22,12 @@ chrono = "0.4"
 base64 = "0.22"
 log = "0.4"
 env_logger = "0.11"
-# Continuous motion detection (OpenCV MOG2) — a core edge capability, so a required dep.
-# NATIVE: needs libopencv on the build + run host (Debian/Ubuntu `apt install libopencv-dev`,
-# macOS `brew install opencv`). The cloud crates build per-package (`-p sentinel-flow` …) so
-# they never pull OpenCV; only this edge crate does.
-# 0.98+ supports OpenCV 4.13 (Fedora 44 / latest Bazzite); 0.93 crashed its binding
-# generator on 4.13 ("unreachable code: Any other kind of class shouldn't be generated").
-opencv = "0.98"
+# Continuous motion detection — MOG2 (src/mog2.rs), morphology + blobs (imageproc), decode +
+# resize (image). All pure Rust: the edge has NO native dependency, so it cross-compiles to
+# Windows/ARM/musl with plain cargo and its binary isn't soname-coupled to the build host.
+# (It used to link OpenCV for exactly this; see card #79.)
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+imageproc = { version = "0.25", default-features = false }
 # RTSP ring buffer: connects to go2rtc's re-server (rtsp://127.0.0.1:8554/) for an
 # in-memory pre-roll ring. We use retina only for RTSP transport + RTP ordering and
 # do our OWN lenient H264 depacketization (retina's codec layer rejects go2rtc's
@@ -39,4 +38,13 @@ url = "2"
 # Resource-usage sampling (CPU / memory / disk) for the edge health monitor. Cross-platform
 # (Linux + macOS), pure-Rust — GPU is sampled separately by shelling out to `nvidia-smi`.
 sysinfo = { version = "0.30", default-features = false }
+
+# OpenCV, ONLY for the MOG2 parity test (`cargo test --features opencv-parity`), which runs our
+# pure-Rust model and OpenCV's side by side over the same frames and asserts they agree. It is not
+# in the default build and never ships — this is how we prove the port didn't change what the
+# cameras see, without keeping the native dependency that motivated the port.
+opencv = { version = "0.98", optional = true }
+
+[features]
+opencv-parity = ["dep:opencv"]
 

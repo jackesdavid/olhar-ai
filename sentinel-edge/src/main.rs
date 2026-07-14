@@ -21,6 +21,7 @@ mod go2rtc;
 mod http;
 mod logbuf;
 mod metrics;
+mod mog2;
 mod motion;
 mod recording;
 mod state;

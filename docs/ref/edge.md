@@ -110,14 +110,18 @@ A camera with four tracking jobs costs one decode, not five.
   frame, so a consumer sampling slower than the hub (the tracker, at `detect_ms`) can't miss a
   burst of motion between the frames it looked at.
 
-### Motion (OpenCV MOG2) — `src/motion.rs`
+### Motion (MOG2) — `src/motion.rs` + `src/mog2.rs`
 
-`motion.rs` is now the **algorithm**, not the threading: one `MotionDetector` per camera holds that
+`motion.rs` is the **algorithm**, not the threading: one `MotionDetector` per camera holds that
 camera's background model and is fed one decoded frame at a time by the hub. Per frame: downscale →
-**MOG2** adaptive background subtraction → `morphologyEx(OPEN)` denoise → `findContours`. When the
+**MOG2** adaptive background subtraction → morphological open (denoise) → contours. When the
 foreground share clears `MOTION_FLOOR_PCT` **and** a blob ≥ `MOTION_MIN_AREA` exists **and**
 `MOTION_MIN_INTERVAL_SECS` has elapsed since the last emit, the hub `POST /config/motion`s a
 normalized event `{camera_ip, score, area, blobs, bbox}` (box-token).
+
+**It is pure Rust** (card #79). `src/mog2.rs` is a port of OpenCV's `BackgroundSubtractorMOG2`
+(Zivkovic's adaptive GMM); morphology + contours come from `imageproc`, decode + resize from
+`image`. The edge has **no native dependency at all** — see "No OpenCV" below.
 
 **The throttle is on the emit, not on the verdict** — every frame gets a verdict; only the POST to
 control is rate-limited. That's what lets the tracker's motion gate react immediately instead of
@@ -132,6 +136,29 @@ many graphs at different sensitivities share the same single MOG2 pass. Tunables
 > `MOTION_MOG2_HISTORY` is counted in **frames, not seconds** — it has to be rescaled with
 > `MOTION_FPS` or the background model's time constant silently changes. 333 @ 4 fps ≈ the same
 > ~83s of adaptation as the old 500 @ 6 fps.
+
+### No OpenCV (card #79)
+
+The edge used to link OpenCV for MOG2 — its **only** native dependency, and the source of most of
+the pain in shipping it: the binary was soname-coupled to its build host (hence *two* Linux assets,
+`-gnu` for Debian/OpenCV 4.6 and the default for Fedora/OpenCV 4.11), `install.sh` had to layer
+OpenCV via `rpm-ostree` on Bazzite (**requiring a reboot**), and the appliance ran as a
+self-contained container just to guarantee a matching soname. It also kept `sentinel-edge` out of
+the cargo workspace and made every build need `libclang`.
+
+`src/mog2.rs` replaces it. The port is **exact**: `cargo test --features opencv-parity` runs our
+model and OpenCV's over the same frames and asserts the foreground masks agree on **every pixel of
+every frame**. That is not a decorative test — it caught the one real bug in the port, and a looser
+"within 1%" bound would have shipped it:
+
+> OpenCV's automatic learning rate (what you get from `learningRate = -1`, which is how the edge has
+> always called it) is **`α = 1/min(2·nframes, history)`**, not the constant `1/history`. It ramps:
+> α starts at 1/2, so a freshly-started watcher settles on the scene in seconds instead of the ~83s
+> a constant rate would take. With the constant, a box that just booted would have reported the
+> whole scene as motion for its first minute and a half.
+
+The `opencv` crate survives **only** as an optional dev dependency behind the `opencv-parity`
+feature. It is not in the default build and never ships.
 
 ## Object tracking + the motion gate — `src/tracking.rs`
 
