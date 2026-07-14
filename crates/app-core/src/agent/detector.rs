@@ -70,6 +70,20 @@ pub fn detect(image_bytes: &[u8]) -> Result<Vec<Detection>, String> {
     Ok(nms(decode(&raw, ratio), IOU_THRESH))
 }
 
+/// [`detect`] over an **already-decoded** frame: packed 8-bit **BGR** pixels (`w * h * 3` bytes,
+/// row-major, no padding) — exactly what OpenCV's `imdecode(…, IMREAD_COLOR)` hands back.
+///
+/// The edge decodes each camera's JPEG once, in its frame hub, and every consumer works off that
+/// one buffer (see `sentinel-edge/src/frames.rs`). Calling [`detect`] there would decode the same
+/// JPEG a second time — and, since the caller already knows the frame's size, [`dimensions`] would
+/// have decoded it a third. This entry point exists to make both of those go away; the cloud path
+/// (sentinel-flow's vision nodes, which only ever hold JPEG bytes) still calls [`detect`].
+pub fn detect_bgr(bgr: &[u8], w: u32, h: u32) -> Result<Vec<Detection>, String> {
+    let (input, ratio) = preprocess_bgr(bgr, w, h)?;
+    let raw = infer(input)?;
+    Ok(nms(decode(&raw, ratio), IOU_THRESH))
+}
+
 /// The `(width, height)` of a JPEG/PNG frame in source pixels — for scaling normalized
 /// [`crate::tracking::Line`] coordinates to the same pixel space `Detection::xyxy` is in.
 pub fn dimensions(image_bytes: &[u8]) -> Result<(u32, u32), String> {
@@ -158,20 +172,55 @@ fn preprocess(image_bytes: &[u8]) -> Result<(Array4<f32>, f32), String> {
     let img = image::load_from_memory(image_bytes)
         .map_err(|e| format!("detector: decode frame: {e}"))?
         .to_rgb8();
+    letterbox(&img, PixelOrder::Rgb)
+}
+
+/// [`preprocess`] over packed 8-bit BGR pixels (`w * h * 3`), for [`detect_bgr`].
+fn preprocess_bgr(bgr: &[u8], w: u32, h: u32) -> Result<(Array4<f32>, f32), String> {
+    let want = (w as usize) * (h as usize) * 3;
+    if want == 0 {
+        return Err("detector: empty frame".into());
+    }
+    if bgr.len() < want {
+        return Err(format!("detector: bgr buffer is {} bytes, want {want} for {w}x{h}", bgr.len()));
+    }
+    // `image` has no BGR8 pixel type, but resizing is channel-agnostic — it filters each of the
+    // three channels independently — so we can carry BGR bytes through an `RgbImage` and simply
+    // read them back in BGR order below. `PixelOrder` is what keeps that honest.
+    let img: image::RgbImage = image::ImageBuffer::from_raw(w, h, bgr[..want].to_vec())
+        .ok_or_else(|| "detector: bgr buffer does not match w*h*3".to_string())?;
+    letterbox(&img, PixelOrder::Bgr)
+}
+
+/// Which order the three bytes of each source pixel are in. The tensor is always written **BGR**
+/// (YOLOX trains on cv2-decoded BGR with no RGB swap); this only says how to read the source.
+#[derive(Clone, Copy)]
+enum PixelOrder {
+    Rgb,
+    Bgr,
+}
+
+/// Letterbox an 8-bit 3-channel image into a `[1,3,416,416]` BGR, raw-0..255 CHW tensor,
+/// preserving aspect (pad bottom/right with 114). Returns the tensor and the resize ratio `r`
+/// (`source_px = letterbox_px / r`).
+fn letterbox(img: &image::RgbImage, order: PixelOrder) -> Result<(Array4<f32>, f32), String> {
     let (w0, h0) = (img.width() as f32, img.height() as f32);
     if w0 == 0.0 || h0 == 0.0 {
         return Err("detector: empty frame".into());
     }
     let ratio = (INPUT as f32 / w0).min(INPUT as f32 / h0);
     let (nw, nh) = ((w0 * ratio).round() as u32, (h0 * ratio).round() as u32);
-    let resized = image::imageops::resize(&img, nw.max(1), nh.max(1), FilterType::Triangle);
+    let resized = image::imageops::resize(img, nw.max(1), nh.max(1), FilterType::Triangle);
 
-    // Pad-filled canvas, resized frame pinned to the top-left, channels in BGR order
-    // (YOLOX trains on cv2-decoded BGR with no RGB swap).
+    // Pad-filled canvas, resized frame pinned to the top-left, channels in BGR order.
     let mut arr = Array4::<f32>::from_elem((1, 3, INPUT, INPUT), PAD);
     for y in 0..resized.height() as usize {
         for x in 0..resized.width() as usize {
-            let [r, g, b] = resized.get_pixel(x as u32, y as u32).0;
+            let px = resized.get_pixel(x as u32, y as u32).0;
+            let [b, g, r] = match order {
+                PixelOrder::Rgb => [px[2], px[1], px[0]],
+                PixelOrder::Bgr => px,
+            };
             arr[[0, 0, y, x]] = b as f32;
             arr[[0, 1, y, x]] = g as f32;
             arr[[0, 2, y, x]] = r as f32;
@@ -274,6 +323,42 @@ fn iou(a: [f32; 4], b: [f32; 4]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`detect_bgr`] must build **exactly** the tensor [`detect`] builds for the same frame.
+    /// Getting the channel order or the letterbox wrong here would not error — per this module's
+    /// own warning, it would silently degrade detection accuracy — so pin the two paths together.
+    #[test]
+    fn preprocess_bgr_matches_preprocess() {
+        // Non-square and non-grey: a channel swap or a transposed letterbox has to show up.
+        let mut src = image::RgbImage::new(37, 23);
+        for (x, y, px) in src.enumerate_pixels_mut() {
+            *px = image::Rgb([(x * 7 % 256) as u8, (y * 11 % 256) as u8, ((x + y) * 3 % 256) as u8]);
+        }
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(src)
+            .write_to(&mut encoded, image::ImageFormat::Jpeg)
+            .expect("encode test jpeg");
+        let jpeg = encoded.into_inner();
+
+        // The hub hands the detector packed BGR straight out of OpenCV's `imdecode`. Derive it
+        // from the *decoded* JPEG (not the pre-encode original) so both paths see identical
+        // source pixels and the tensors must match bit for bit, JPEG's lossiness notwithstanding.
+        let decoded = image::load_from_memory(&jpeg).expect("decode test jpeg").to_rgb8();
+        let (w, h) = (decoded.width(), decoded.height());
+        let bgr: Vec<u8> = decoded.pixels().flat_map(|p| [p.0[2], p.0[1], p.0[0]]).collect();
+
+        let (from_jpeg, ratio_jpeg) = preprocess(&jpeg).expect("preprocess jpeg");
+        let (from_bgr, ratio_bgr) = preprocess_bgr(&bgr, w, h).expect("preprocess bgr");
+
+        assert_eq!(ratio_jpeg, ratio_bgr);
+        assert_eq!(from_jpeg, from_bgr);
+    }
+
+    #[test]
+    fn preprocess_bgr_rejects_a_short_buffer() {
+        let err = preprocess_bgr(&[0u8; 10], 37, 23).unwrap_err();
+        assert!(err.contains("bgr buffer"), "{err}");
+    }
 
     #[test]
     fn iou_identical_is_one() {

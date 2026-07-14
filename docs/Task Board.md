@@ -62,12 +62,17 @@ kanban-plugin: board
 	  - Plan: [[notification-provider-ux]]
 - [ ] #74 Postgres performance tuning — kill the default config
 	  - Plan: [[postgres-performance-tuning]]
+- [ ] #76 OlharAI rebrand — domains, brand, app copy, landing rewrite
+	  - Epic: [[olharai-rebrand]]
+- [ ] #78 Clip local retention — evict local copy after cloud upload
+	  - Plan: [[clip-local-retention]]
 
 
 ## In Progress
 
-- [ ] #67 Playback Timeline — unified inspection view
-	  - Plan: [[recording-playback-timeline]]
+- [ ] #77 Edge frame hub — one decode per camera + motion-gated tracking
+	  - Plan: [[edge-frame-hub]]
+
 
 
 ## Review
@@ -107,6 +112,8 @@ kanban-plugin: board
 	  - Epic: [[map-redesign]]
 - [ ] #63 Tenant Billing — per-tenant invoicing + cloud cost/margin
 	  - Plan: [[tenant-cloud-cost]]
+- [ ] #67 Playback Timeline — unified inspection view
+	  - Plan: [[recording-playback-timeline]]
 
 
 ## Done

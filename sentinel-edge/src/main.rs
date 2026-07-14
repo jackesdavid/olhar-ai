@@ -16,6 +16,7 @@
 //! Optional env: `EDGE_OWN_GO2RTC=1` to spawn/own the go2rtc sidecar (set
 //! `GO2RTC_BIN` + `GO2RTC_CONFIG`); otherwise it uses whatever go2rtc is on :1984.
 mod clip_upload;
+mod frames;
 mod go2rtc;
 mod http;
 mod logbuf;
@@ -119,9 +120,11 @@ fn main() {
     // recordings start instantly without a cold-start delay.
     state.warm_cameras();
 
-    // Continuous motion detection (one OpenCV MOG2 watcher per camera). No-op stub unless
-    // built with `--features motion`; the watchers POST normalized motion events to control.
-    motion::spawn(&state);
+    // The frame hub: one source thread per camera that fetches + decodes the frame ONCE, runs the
+    // continuous OpenCV MOG2 motion pass (POSTing normalized motion events to control), and
+    // publishes the decoded frame to every other consumer — so a camera with four tracking jobs
+    // costs one decode, not five.
+    frames::spawn(&state);
     // Continuous object tracking (one YOLOX+SORT worker per camera). Enabled per tracking job —
     // i.e. per graph `OnEvent` node wired to a camera — not by any box-wide switch (TRACK_ENABLED=1
     // only synthesizes a dev fallback job); pushes object_entered/object_exited events to control.

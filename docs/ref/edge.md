@@ -78,24 +78,73 @@ ffmpeg ring process, no segment files on disk between recordings.
   `stop()` clears the live sink → channel closes → relay drains → ffmpeg gets EOF and
   finalises the MP4. No concat step. Sidecar `<clip>.json` holds friendly name + metadata.
 
-## Motion detection (OpenCV MOG2) — `src/motion.rs`
+## The frame hub — `src/frames.rs` (one fetch, one decode, per camera)
 
-The edge owns **continuous** motion detection (it's the only thing near the cameras). A
-manager thread reconciles **one watcher thread per camera** (every 30s, against the live
-device list). Each watcher opens **go2rtc's local RTSP re-stream** (`rtsp://127.0.0.1:8554/cam_<ip>`
-— the preview/substream, already authenticated to the camera by go2rtc, so the watcher needs no
-creds and never touches the camera directly) via OpenCV `VideoCapture`, and per frame: downscale
-→ **MOG2** adaptive background subtraction → `morphologyEx(OPEN)` denoise → `findContours`.
-(go2rtc's RTSP is bound localhost-only in the generated config; override the base with
-`MOTION_GO2RTC_RTSP`.) When the foreground share clears `MOTION_FLOOR_PCT` **and** a blob ≥
-`MOTION_MIN_AREA` exists **and** `MOTION_MIN_INTERVAL_SECS` has elapsed since the last emit, it
-`POST /config/motion`s a normalized event `{camera_ip, score, area, blobs, bbox}` (box-token).
+Motion and every object-tracking job want the same thing: the latest frame of a camera. They
+used to each poll go2rtc's `/api/frame.jpeg` and decode the JPEG themselves, so a tracked camera
+decoded one frame **up to three times** per cycle (motion's `imdecode`, the detector's internal
+decode, and `detector::dimensions`'s second decode when the job had lines/zones).
+
+Now a manager thread reconciles **one source thread per camera** (every 30s, against the live
+device list). Each source pulls the latest frame from the local go2rtc `/api/frame.jpeg` (always
+fresh — no RTSP client buffer to fall behind live motion, which is why `VideoCapture` was dropped),
+**decodes it once**, runs that camera's MOG2 pass, and publishes a `Frame` to whoever subscribed.
+A camera with four tracking jobs costs one decode, not five.
+
+- The published `Frame` carries **plain byte buffers** (`bgr: Arc<Vec<u8>>` + `w`/`h`), never an
+  `opencv::Mat` — `Mat` isn't `Sync`, so it can't be shared across the worker threads. A consumer
+  that wants OpenCV wraps `bgr` back into a borrowed `Mat` for free.
+- Publishing is a **latest-value slot** (`Mutex` + `Condvar`), not a queue: a slow consumer misses
+  frames rather than backing the source up — the right trade for live video.
+- `Frame.motion_at` carries **when this camera last had a qualifying MOG2 frame**, on *every*
+  frame, so a consumer sampling slower than the hub (the tracker, at `detect_ms`) can't miss a
+  burst of motion between the frames it looked at.
+
+### Motion (OpenCV MOG2) — `src/motion.rs`
+
+`motion.rs` is now the **algorithm**, not the threading: one `MotionDetector` per camera holds that
+camera's background model and is fed one decoded frame at a time by the hub. Per frame: downscale →
+**MOG2** adaptive background subtraction → `morphologyEx(OPEN)` denoise → `findContours`. When the
+foreground share clears `MOTION_FLOOR_PCT` **and** a blob ≥ `MOTION_MIN_AREA` exists **and**
+`MOTION_MIN_INTERVAL_SECS` has elapsed since the last emit, the hub `POST /config/motion`s a
+normalized event `{camera_ip, score, area, blobs, bbox}` (box-token).
+
+**The throttle is on the emit, not on the verdict** — every frame gets a verdict; only the POST to
+control is rate-limited. That's what lets the tracker's motion gate react immediately instead of
+inheriting the 4s emit throttle.
 
 The edge is a **pure sensor** — it emits ONE normalized signal per camera, graph-agnostic.
 Per-graph **sensitivity** is a cloud-side threshold (`OnEvent("motion") → If score >= …`), so
 many graphs at different sensitivities share the same single MOG2 pass. Tunables (env):
-`MOTION_FPS` (6), `MOTION_FLOOR_PCT` (0.5), `MOTION_MIN_INTERVAL_SECS` (10), `MOTION_MIN_AREA`
-(300), `MOTION_PROC_W`/`MOTION_PROC_H` (480×270), `MOTION_MOG2_HISTORY` (500), `MOTION_MOG2_VAR` (16).
+`MOTION_FPS` (4), `MOTION_FLOOR_PCT` (0.5), `MOTION_MIN_INTERVAL_SECS` (4), `MOTION_MIN_AREA`
+(300), `MOTION_PROC_W`/`MOTION_PROC_H` (480×270), `MOTION_MOG2_HISTORY` (333), `MOTION_MOG2_VAR` (16).
+
+> `MOTION_MOG2_HISTORY` is counted in **frames, not seconds** — it has to be rescaled with
+> `MOTION_FPS` or the background model's time constant silently changes. 333 @ 4 fps ≈ the same
+> ~83s of adaptation as the old 500 @ 6 fps.
+
+## Object tracking + the motion gate — `src/tracking.rs`
+
+One worker per (tracking job × camera), each running YOLOX-Nano (`app_core::agent::detector`, tract,
+CPU) on the hub's already-decoded BGR buffer via `detector::detect_bgr` — no second JPEG decode, and
+no `dimensions()` call, since the hub already knows the frame size. `detect(&jpeg)` is untouched and
+is still what sentinel-flow's cloud vision nodes use.
+
+YOLOX is the most expensive thing on the box, and ungated it cost the same on an empty room at 3am
+as on a busy shop floor. `should_detect()` now runs the detector only when **any** of:
+
+1. **motion is active** — a qualifying frame within the last 3s (the raw verdict, not the emit);
+2. **a track is still alive** — including `Lost` ones. Load-bearing twice over: a person standing
+   perfectly still is absorbed into MOG2's background but is still there; and a track goes `Lost`
+   the instant it stops matching, needing `max_age` more **unmatched detection cycles** to become an
+   `object_exited`. Gating on `MultiTracker::count()` (confirmed only) would starve the tracker of
+   exactly those cycles and the exit event would never fire;
+3. **warmup** — a fresh worker's first 5s, to see whatever was *already static* in frame (a car
+   parked before the box booted never generates motion);
+4. **the idle sweep** — one cycle every 30s regardless (≈0.3% of a core), as insurance.
+
+An idle scene therefore runs no inference at all. `TRACK_MOTION_GATE=0` restores the old always-on
+behaviour.
 
 **OpenCV is a native dep** (the only one) → the edge is NOT in the cargo workspace (keeps the
 cloud image build pure-Rust). Build it from its own dir: `cd sentinel-edge && cargo build

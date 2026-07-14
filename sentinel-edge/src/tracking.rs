@@ -381,10 +381,56 @@ fn watch(state: Arc<AppState>, ip: String, job: Arc<Job>, detect_gap: Duration, 
     log::info!("object tracker[{ip}]: stopped");
 }
 
+/// How long after the last qualifying motion frame the scene still counts as "active". Must
+/// comfortably exceed the frame hub's frame period so continuous activity reads as continuous —
+/// and it keys off the raw per-frame verdict, never the 4s-throttled motion *emit*, or the gate
+/// would stutter in step with the throttle.
+const MOTION_HOLD: Duration = Duration::from_secs(3);
+/// A fresh worker always detects for this long, whatever motion says — it has to see what was
+/// **already static in frame** when it started. A car parked before the box booted never generates
+/// motion; without this it would never be detected, and so never enter.
+const WARMUP: Duration = Duration::from_secs(5);
+/// Even a scene with no motion and nothing tracked runs one detection cycle this often. Cheap
+/// insurance (≈1 inference / 30s) against anything that appears without tripping MOG2.
+const IDLE_SWEEP: Duration = Duration::from_secs(30);
+
+/// Should this cycle run the detector? YOLOX is by far the most expensive thing on the box, and
+/// ungated it costs the same on an empty room at 3am as on a busy shop floor — so skip it when
+/// there is provably nothing to see. A skipped cycle also leaves the tracker **untouched**: an
+/// un-ticked tracker can't age a track out, which is what we want, since nothing leaves a scene
+/// without generating motion.
+///
+/// - `motion_active` — the scene is moving (raw per-frame MOG2 verdict, never the throttled emit).
+/// - `holding_tracks` — any track still alive, **including `Lost` ones**. Two distinct reasons,
+///   and both are load-bearing:
+///   1. A person who walks in and then stands perfectly still stops producing motion (MOG2 absorbs
+///      a stationary subject into the background) but is still there — YOLOX keeps confirming them.
+///   2. A track goes `Lost` the moment it stops matching a detection, and only becomes an
+///      `object_exited` after `max_age` **unmatched cycles**. Gating on confirmed tracks alone
+///      (`MultiTracker::count()`) would close the gate the instant the subject left and starve the
+///      tracker of the very cycles it needs to fire the exit — the event would never arrive.
+/// - `since_start` — a fresh worker always detects for `WARMUP`, to see what was already static in
+///   frame when it started (a car parked before the box booted never generates motion).
+/// - `since_last_detect` — the idle sweep; `None` means we've never detected, so do.
+fn should_detect(
+    gated: bool,
+    motion_active: bool,
+    holding_tracks: bool,
+    since_start: Duration,
+    since_last_detect: Option<Duration>,
+) -> bool {
+    !gated
+        || motion_active
+        || holding_tracks
+        || since_start < WARMUP
+        || since_last_detect.map(|d| d >= IDLE_SWEEP).unwrap_or(true)
+}
+
 fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, stop: &AtomicBool) {
     let mut tracker = MultiTracker::new(job.tracker_config());
-    let base = app_core::go2rtc::base();
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(3)).build();
+    // Frames come from the per-camera hub: fetched once, decoded once, shared with motion and with
+    // every other tracking job on this camera (see `crate::frames`).
+    let mut frames = crate::frames::subscribe(ip);
     // Verbose algorithm-internals logging: on if EITHER this job's own graph has its "Debug"
     // toggle on (`Graph.debug`, synced onto the job's `debug` field — see `sync_tracking_config`
     // and `TrackerSpec`), OR the box-wide `TRACK_DEBUG` env var is set. Never sent to control —
@@ -392,19 +438,42 @@ fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, s
     // `Lost`/`Revived`/`Removed` variants below).
     let env_debug = std::env::var("TRACK_DEBUG").map(|v| matches!(v.trim(), "1" | "true" | "yes")).unwrap_or(false);
     let debug = job.debug || env_debug;
+    // The motion gate is the whole point of the hub: YOLOX is by far the most expensive thing on
+    // the box, and an empty room used to cost exactly as much as a busy one. `TRACK_MOTION_GATE=0`
+    // restores the old always-on behaviour for a scenario we haven't thought of.
+    let gated = std::env::var("TRACK_MOTION_GATE").map(|v| !matches!(v.trim(), "0" | "false" | "no")).unwrap_or(true);
+    let started = std::time::Instant::now();
+    let mut last_detect: Option<std::time::Instant> = None;
 
     while !stop.load(Ordering::Relaxed) {
         let tick = std::time::Instant::now();
-        // Latest decoded frame from local go2rtc (never the camera directly). Transient miss → retry.
-        let jpeg = match app_core::go2rtc::frame_from(&agent, &base, ip) {
-            Ok(b) => b,
-            Err(_) => {
-                std::thread::sleep(detect_gap);
-                continue;
-            }
+        // Newest frame this worker hasn't seen. A timeout means the camera is down or warming —
+        // loop so the stop flag is re-checked.
+        let Some(frame) = frames.next(Duration::from_millis(500)) else {
+            continue;
         };
-        // YOLOX on the JPEG (pure tract, no OpenCV), filtered to this job's tracked class.
-        let dets: Vec<Detection> = match detector::detect(&jpeg) {
+
+        // ---- the motion gate (see `should_detect`) ------------------------------------------
+        let motion_active = frame.motion_at.map(|t| t.elapsed() < MOTION_HOLD).unwrap_or(false);
+        let (tentative, confirmed, lost) = tracker.state_counts();
+        let holding_tracks = tentative + confirmed + lost > 0;
+        if !should_detect(
+            gated,
+            motion_active,
+            holding_tracks,
+            started.elapsed(),
+            last_detect.map(|t| t.elapsed()),
+        ) {
+            if let Some(rem) = detect_gap.checked_sub(tick.elapsed()) {
+                std::thread::sleep(rem);
+            }
+            continue;
+        }
+        last_detect = Some(tick);
+
+        // YOLOX on the hub's already-decoded BGR buffer (pure tract, no OpenCV, no second JPEG
+        // decode), filtered to this job's tracked class.
+        let dets: Vec<Detection> = match detector::detect_bgr(&frame.bgr, frame.w as u32, frame.h as u32) {
             Ok(v) => v.into_iter().filter(|d| d.class == job.class_id).collect(),
             Err(e) => {
                 log::debug!("object tracker[{ip}]: detect failed: {e}");
@@ -413,18 +482,18 @@ fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, s
             }
         };
         let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-        // Lines/zone need the frame's pixel size to scale their normalized coords — skip that
-        // lookup entirely (and fall back to plain `update`) when neither is configured.
+        // Lines/zone need the frame's pixel size to scale their normalized coords — the hub already
+        // knows it, so this no longer costs a second decode of the frame just to read its header.
         let events = if job.lines.is_empty() && job.zone.is_none() {
             tracker.update(&dets, now_ms)
         } else {
-            match detector::dimensions(&jpeg) {
-                Ok((w, h)) => tracker.update_full(&dets, now_ms, (w as f32, h as f32), &job.lines, job.zone.as_ref().map(|z| (z, job.zone_trigger))),
-                Err(e) => {
-                    log::debug!("object tracker[{ip}]: frame dimensions failed: {e}");
-                    tracker.update(&dets, now_ms)
-                }
-            }
+            tracker.update_full(
+                &dets,
+                now_ms,
+                (frame.w as f32, frame.h as f32),
+                &job.lines,
+                job.zone.as_ref().map(|z| (z, job.zone_trigger)),
+            )
         };
         let count = tracker.count() as i64;
         if debug {
@@ -553,4 +622,61 @@ fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, s
 
 fn to_i32(b: [f32; 4]) -> [i32; 4] {
     [b[0] as i32, b[1] as i32, b[2] as i32, b[3] as i32]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Long enough that neither WARMUP nor the idle sweep is what's answering.
+    fn settled() -> (Duration, Option<Duration>) {
+        (WARMUP + Duration::from_secs(1), Some(Duration::from_secs(1)))
+    }
+
+    #[test]
+    fn idle_scene_skips_the_detector() {
+        let (since_start, since_detect) = settled();
+        assert!(!should_detect(true, false, false, since_start, since_detect));
+    }
+
+    #[test]
+    fn motion_opens_the_gate() {
+        let (since_start, since_detect) = settled();
+        assert!(should_detect(true, true, false, since_start, since_detect));
+    }
+
+    /// The exit-correctness case. A subject who has left is a `Lost` track with no motion behind it
+    /// — and it needs `max_age` more *unmatched detection cycles* to become an `object_exited`. If
+    /// the gate closed here (as it would on confirmed-tracks-only), that event would never fire.
+    #[test]
+    fn a_lost_track_keeps_the_gate_open_so_the_exit_can_fire() {
+        let (since_start, since_detect) = settled();
+        assert!(should_detect(true, false, true, since_start, since_detect));
+    }
+
+    /// A person standing perfectly still is absorbed into MOG2's background — no motion, but they
+    /// are still there and YOLOX still sees them.
+    #[test]
+    fn a_still_subject_keeps_the_gate_open() {
+        let (since_start, since_detect) = settled();
+        assert!(should_detect(true, false, true, since_start, since_detect));
+    }
+
+    #[test]
+    fn a_fresh_worker_detects_whatever_was_already_in_frame() {
+        assert!(should_detect(true, false, false, Duration::from_secs(1), Some(Duration::from_secs(1))));
+    }
+
+    #[test]
+    fn the_idle_sweep_runs_a_cycle_eventually() {
+        let since_start = WARMUP + Duration::from_secs(1);
+        assert!(should_detect(true, false, false, since_start, Some(IDLE_SWEEP)));
+        assert!(should_detect(true, false, false, since_start, None));
+    }
+
+    #[test]
+    fn ungated_always_detects() {
+        let (since_start, since_detect) = settled();
+        assert!(should_detect(false, false, false, since_start, since_detect));
+    }
 }
