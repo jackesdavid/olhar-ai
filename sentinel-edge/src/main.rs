@@ -122,7 +122,7 @@ fn main() {
     state.warm_cameras();
 
     // The frame hub: one source thread per camera that fetches + decodes the frame ONCE, runs the
-    // continuous OpenCV MOG2 motion pass (POSTing normalized motion events to control), and
+    // continuous MOG2 motion pass (POSTing normalized motion events to control), and
     // publishes the decoded frame to every other consumer — so a camera with four tracking jobs
     // costs one decode, not five.
     frames::spawn(&state);

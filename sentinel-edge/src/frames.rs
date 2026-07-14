@@ -107,7 +107,7 @@ impl Sub {
 pub fn spawn(state: &Arc<AppState>) {
     let state = Arc::clone(state);
     std::thread::spawn(move || {
-        log::info!("frame hub: manager started (one decode per camera; OpenCV MOG2 motion)");
+        log::info!("frame hub: manager started (one decode per camera; pure-Rust MOG2 motion)");
         let mut running: HashMap<String, Arc<AtomicBool>> = HashMap::new();
         loop {
             let desired: Vec<String> = {
