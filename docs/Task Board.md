@@ -70,9 +70,6 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #79 Edge without OpenCV — pure-Rust motion
-	  - Plan: [[edge-pure-rust-motion]]
-
 
 
 ## Review
@@ -118,6 +115,8 @@ kanban-plugin: board
 	  - Plan: [[edge-frame-hub]]
 - [ ] #78 Clip local retention — evict local copy after cloud upload
 	  - Plan: [[clip-local-retention]]
+- [ ] #79 Edge without OpenCV — pure-Rust motion
+	  - Plan: [[edge-pure-rust-motion]]
 
 
 ## Done
