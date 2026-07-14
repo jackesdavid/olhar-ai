@@ -86,12 +86,24 @@ a CI runner (GitHub Actions is billing-blocked anyway — see [deploy ref](../re
    through a signed package. Simplest coexistence: keep binary self-update (the swapped binary is
    still individually signed, so the hardened runtime is satisfied), and use the `.pkg` for
    first install only. Confirm the swapped binary keeps its signature.
-3. **Bundle ffmpeg — which build, and its licence?** Static macOS ffmpeg builds vary in what they
-   enable; some configurations are GPL. We only need H264 decode + JPEG encode, so an LGPL build is
-   enough — but it has to be checked, not assumed, because we're **redistributing** it now (a `brew
-   install` on the customer's machine was their download, not ours).
-4. **Universal binary (arm64 + x86_64) or two packages?** `lipo` can fuse them into one `.pkg` that
-   works on both. Cheap, and halves the download choices a customer has to make. Leaning universal.
+3. ~~**Bundle ffmpeg — which build, and its licence?**~~ **Resolved by trying it.** We build ffmpeg
+   ourselves (`deploy/macos-pkg/build-ffmpeg.sh`), because the prebuilt option turned out to be
+   impossible, not merely unattractive:
+   - **`codesign` rejects 3 of the 4 macOS binaries `ffmpeg-static` publishes** — *"main executable
+     failed strict validation"* (malformed Mach-O). Notarization requires **every** executable
+     inside the package to carry a Developer ID signature, so an unsignable ffmpeg means an
+     unnotarizable installer, which means Gatekeeper blocks the download. Dead end.
+   - evermeet.cx's builds are well-formed but **Intel-only**, and download at a crawl from a
+     personal server — not a dependency a release build should have.
+   - Building with `--disable-gpl --disable-nonfree` also settles the licence: **LGPL v2.1+**,
+     verified, on a binary we redistribute commercially — instead of inheriting whatever a third
+     party's CI configured (most prebuilt macOS ffmpegs are GPL). It ships as a separate executable
+     that go2rtc *spawns*; we never link it.
+   - `ffprobe` is bundled too — the edge reads a finished clip's duration with it.
+4. ~~**Universal binary (arm64 + x86_64) or two packages?**~~ **Universal**, and it was nearly free:
+   since #79 the edge links nothing native, so both Mac architectures build from one machine with no
+   cross-toolchain. go2rtc ships both; ffmpeg we build for both; `lipo` fuses each. One file, one
+   download, no choice for the customer to get wrong.
 
 ## Out of scope (v1)
 

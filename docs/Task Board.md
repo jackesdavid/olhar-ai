@@ -74,6 +74,9 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #82 macOS installer — signed + notarized .pkg
+	  - Plan: [[edge-macos-pkg]]
+
 
 
 ## Review

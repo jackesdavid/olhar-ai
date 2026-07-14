@@ -333,6 +333,16 @@ tasks:
           exit 1
         fi
 
+  edge-pkg:
+    desc: "Build the macOS installer (.pkg) — UNSIGNED, for testing on this Mac only. Gatekeeper blocks it elsewhere."
+    cmds:
+      - ./deploy/macos-pkg/build.sh
+
+  edge-pkg-signed:
+    desc: "Build + sign + notarize the macOS installer (.pkg) — the release artifact. Needs MACOS_APP_CERT, MACOS_PKG_CERT, NOTARY_PROFILE (see deploy/macos-pkg/README.md)."
+    cmds:
+      - ./deploy/macos-pkg/build.sh --sign
+
   edge-publish:
     desc: "Bump the edge version, build the edge binary + scp to the VPS dist server + redeploy control (so LATEST_EDGE_VERSION matches) + verify. Full release in one shot."
     cmds:

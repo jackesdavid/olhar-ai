@@ -1,0 +1,71 @@
+#!/bin/sh
+# postinstall — the .pkg has laid the payload down; make it a running, pairable appliance.
+#
+# Runs as root, from the macOS Installer. Everything here is idempotent: this same script runs on a
+# fresh install AND on an upgrade over a working box, and an upgrade must not cost the customer
+# their identity or their clips.
+set -e
+
+PREFIX=/opt/sentinel-edge
+ENV_DIR=/etc/sentinel-edge
+PLIST=/Library/LaunchDaemons/io.sentinel.edge.plist
+LABEL=io.sentinel.edge
+CONTROL_URL="${SENTINEL_CONTROL_URL:-https://control.thesentinels.online}"
+
+mkdir -p "$PREFIX/recordings" "$ENV_DIR"
+
+# CONTROL_URL is not a secret (it's a public hostname), so it can ship inside a generic, signed
+# package. The box's actual identity — its token — is what pairing fetches at first boot, which is
+# the whole reason one package can serve every customer.
+#
+# Preserve an existing edge.env: on an upgrade it holds a box that is already enrolled, and
+# clobbering it would silently un-enroll a working appliance.
+if [ ! -f "$ENV_DIR/edge.env" ]; then
+  printf 'CONTROL_URL=%s\n' "$CONTROL_URL" > "$ENV_DIR/edge.env"
+  chmod 600 "$ENV_DIR/edge.env"
+elif ! grep -q '^CONTROL_URL=' "$ENV_DIR/edge.env"; then
+  printf 'CONTROL_URL=%s\n' "$CONTROL_URL" >> "$ENV_DIR/edge.env"
+fi
+
+chmod +x "$PREFIX/sentinel-edge" "$PREFIX/go2rtc" "$PREFIX/ffmpeg" 2>/dev/null || true
+
+# The edge reads edge.env itself (card #81), so the plist carries only what the FILE cannot know:
+# where to find the bundled ffmpeg/go2rtc. It deliberately does NOT bake in the box token — that
+# was the old install.sh behaviour, and it's exactly what made a generic installer impossible.
+cat > "$PLIST" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key><array><string>$PREFIX/sentinel-edge</string></array>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>$PREFIX:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>EDGE_OWN_GO2RTC</key><string>1</string>
+    <key>GO2RTC_BIN</key><string>$PREFIX/go2rtc</string>
+    <key>GO2RTC_CONFIG</key><string>$PREFIX/go2rtc.yaml</string>
+    <key>EDGE_CACHE</key><string>$PREFIX/cameras-cache.json</string>
+    <key>EDGE_ENV_FILE</key><string>$ENV_DIR/edge.env</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict></plist>
+PLISTEOF
+
+# Boot out any prior instance before bootstrapping, or a reinstall over a running service fails with
+# "Load failed: 5: Input/output error". (`load` is deprecated; this is the lesson install.sh already
+# learned the hard way.) KeepAlive is what makes the edge's own exit(0) — used by enrollment and by
+# the Boxes-page Restart button — come back as a restart rather than a death.
+launchctl bootout "system/$LABEL" 2>/dev/null || true
+launchctl bootstrap system "$PLIST" 2>/dev/null || launchctl bootstrap system "$PLIST"
+launchctl kickstart -k "system/$LABEL" 2>/dev/null || true
+
+# Hand the human the pairing page. They are standing at this machine — they just double-clicked the
+# installer on it — so localhost is exactly the right place to send them. `open` must run as the
+# logged-in user, not as root, or it opens nowhere.
+USER_UID=$(stat -f %u /dev/console)
+if [ -n "$USER_UID" ] && [ "$USER_UID" != "0" ]; then
+  # Give the daemon a moment to bind before we point a browser at it.
+  ( sleep 2; launchctl asuser "$USER_UID" open "http://localhost:8788" ) &
+fi
+
+exit 0
