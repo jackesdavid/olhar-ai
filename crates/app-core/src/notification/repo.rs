@@ -261,6 +261,58 @@ pub fn save_telegram(db: &Db, tenant_id: Uuid, bot_token: &str, pairing_code: &s
     }
 }
 
+/// Ensure the effective bot's **@username** is known, resolving it from Telegram once if it's
+/// missing and caching it — so the enrollment link/QR (which need the username) can always render.
+///
+/// Why this exists (card #73): a bot token can be present with no username — a global bot set before
+/// validate-on-save, or a token seeded via env/migration. Then `bot_username` comes back `None`, the
+/// `t.me/<username>?start=<code>` link can't be built, and the whole enrollment box silently
+/// vanishes. This self-heals every such tenant on their next config read: it calls `getMe` only when
+/// the username is missing (one time), then persists it to the store the token lives in (own vs
+/// global), so subsequent reads are free.
+///
+/// Returns the effective username (freshly resolved or already cached), or `None` if there's no
+/// usable token or Telegram couldn't be reached.
+pub fn ensure_bot_username(db: &Db, tenant_id: Uuid) -> Option<String> {
+    // The tenant's OWN token takes precedence over the global one (same order delivery uses).
+    let own = load_telegram(db, tenant_id).map(|(token, _)| token).filter(|t| !t.trim().is_empty());
+    let own_username = {
+        let pool = db.pool();
+        db.block(async move {
+            sqlx::query_scalar::<_, Option<String>>("SELECT bot_username FROM telegram_config WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .fetch_optional(&pool)
+                .await
+                .ok()
+                .flatten()
+                .flatten()
+        })
+    };
+    let global = load_global_telegram(db);
+    let global_token = global.as_ref().map(|(t, _)| t.clone()).filter(|t| !t.trim().is_empty());
+    let global_username = global.and_then(|(_, u)| u);
+
+    // Pick the effective (token, cached-username, where-to-save) triple.
+    let (token, cached, is_own) = match (&own, &global_token) {
+        (Some(t), _) => (t.clone(), own_username, true),
+        (None, Some(t)) => (t.clone(), global_username, false),
+        (None, None) => return None, // no token at all
+    };
+    if let Some(u) = cached.filter(|u| !u.trim().is_empty()) {
+        return Some(u); // already known — no network call
+    }
+
+    // Missing → resolve once and cache.
+    let cfg = super::NotificationConfig { bot_token: token, pairing_code: String::new() };
+    let username = super::client::get_me(&cfg).ok()?;
+    if is_own {
+        save_telegram_username(db, tenant_id, &username);
+    } else {
+        save_global_telegram_username(db, &username);
+    }
+    Some(username)
+}
+
 /// Persist a resolved per-tenant bot username. Best-effort.
 pub fn save_telegram_username(db: &Db, tenant_id: Uuid, username: &str) {
     let pool = db.pool();

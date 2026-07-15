@@ -95,8 +95,13 @@ async fn get_config(UserClaims(c): UserClaims, State(st): State<AppState>) -> Re
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     let state = blocking(move || {
-        let (pairing_code, bot_username, provider_configured) =
+        let (pairing_code, mut bot_username, provider_configured) =
             notification::repo::load_tenant_notification_state(&db, tid);
+        // The enrollment link/QR need the bot's @username. If a token is set but the username was
+        // never resolved (card #73), fill it now (one getMe, then cached) so the link can render.
+        if provider_configured && bot_username.as_deref().unwrap_or("").trim().is_empty() {
+            bot_username = notification::repo::ensure_bot_username(&db, tid);
+        }
         TelegramState { provider_configured, pairing_code, bot_username }
     })
     .await?;
