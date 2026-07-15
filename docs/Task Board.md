@@ -64,8 +64,6 @@ kanban-plugin: board
 	  - Plan: [[postgres-performance-tuning]]
 - [ ] #76 OlharAI rebrand — domains, brand, app copy, landing rewrite
 	  - Epic: [[olharai-rebrand]]
-- [ ] #85 Pairing progress UX — "code accepted" state
-	  - Plan: [[pairing-progress-ux]]
 
 
 ## In Progress
@@ -81,6 +79,8 @@ kanban-plugin: board
 
 - [ ] #84 Per-platform installer download
 	  - Plan: [[installer-download-button]]
+- [ ] #85 Pairing progress UX — "code accepted" state
+	  - Plan: [[pairing-progress-ux]]
 - [ ] #61 Tab toggle: collapse/expand editor side panels
 	  - Plan: [[editor-panel-tab-toggle]]
 
