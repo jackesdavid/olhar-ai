@@ -16,7 +16,10 @@
   import Copy from "@lucide/svelte/icons/copy";
   import Check from "@lucide/svelte/icons/check";
   import Link2 from "@lucide/svelte/icons/link-2";
+  import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+  import Share2 from "@lucide/svelte/icons/share-2";
   import EmptyState from "$lib/components/empty-state.svelte";
+  import QRCode from "qrcode";
 
   import * as Card from "$lib/components/ui/card";
   import * as Table from "$lib/components/ui/table";
@@ -46,15 +49,67 @@
   // ---- enrollment link copy ------------------------------------------------
   let copied = $state(false);
 
+  // ---- QR of the enrollment link -------------------------------------------
+  // Rendered client-side to an inline SVG (the `qrcode` lib, bundled — no external QR service, so
+  // no third party ever sees the pairing link). Regenerated whenever the effective link changes.
+  let qrSvg = $state("");
+  $effect(() => {
+    const link = currentLink();
+    if (!link) {
+      qrSvg = "";
+      return;
+    }
+    QRCode.toString(link, { type: "svg", margin: 1, width: 160 })
+      .then((svg) => (qrSvg = svg))
+      .catch(() => (qrSvg = ""));
+  });
+
   function enrollmentLink(username: string, code: string) {
     return `https://t.me/${username}?start=${code}`;
   }
+  /** The current enrollment link, or "" when the bot/code isn't ready. */
+  function currentLink(): string {
+    if (!config?.bot_username || !config.pairing_code) return "";
+    return enrollmentLink(config.bot_username, config.pairing_code);
+  }
 
   async function copyEnrollmentLink() {
-    if (!config?.bot_username || !config.pairing_code) return;
-    await navigator.clipboard.writeText(enrollmentLink(config.bot_username, config.pairing_code));
+    const link = currentLink();
+    if (!link) return;
+    await navigator.clipboard.writeText(link);
     copied = true;
     setTimeout(() => (copied = false), 2000);
+  }
+
+  /** True when the browser can offer the OS share sheet (mobile mostly) — so we only show Share
+   *  where it does something. */
+  function canShare(): boolean {
+    return typeof navigator !== "undefined" && typeof navigator.share === "function";
+  }
+  async function shareEnrollmentLink() {
+    const link = currentLink();
+    if (!link) return;
+    try {
+      await navigator.share({
+        title: "Connect Telegram to Sentinel",
+        text: "Tap to connect your Telegram to receive alerts:",
+        url: link,
+      });
+    } catch {
+      // User dismissed the share sheet — not an error worth a toast.
+    }
+  }
+
+  // ---- auto-generate the pairing code --------------------------------------
+  // Don't make the user invent a secret. A fresh strong code, editable for power users, rotatable.
+  function generateCode(): string {
+    const alphabet = "abcdefghjkmnpqrstuvwxyz23456789"; // no lookalikes
+    const bytes = crypto.getRandomValues(new Uint8Array(10));
+    return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
+  }
+  async function rotateCode() {
+    pairingCode = generateCode();
+    await saveCode();
   }
 
   // ---- Rename dialog -------------------------------------------------------
@@ -69,7 +124,14 @@
   let deleting = $state(false);
 
   async function loadBeacons() {
+    const before = beacons.length;
     beacons = await data.listBeacons();
+    // Live feedback: when a recipient finishes pairing (the `beacons-changed` event reloads us and
+    // the list grows), the user *sees* it worked — the whole point of the enrollment flow.
+    if (!loading && beacons.length > before) {
+      const added = beacons.length - before;
+      toast.success(added === 1 ? "A new recipient just paired." : `${added} new recipients just paired.`);
+    }
   }
 
   async function loadConfig() {
@@ -90,7 +152,13 @@
   }
 
   onMount(() => {
-    load();
+    load().then(() => {
+      // No code yet, but the bot is ready → offer a strong one pre-filled, so the user just clicks
+      // Save instead of inventing a secret. Not auto-saved — they stay in control.
+      if (config?.provider_configured && !config.pairing_code && !pairingCode) {
+        pairingCode = generateCode();
+      }
+    });
     const unlisten = onEvent("beacons-changed", () => loadBeacons());
     return () => {
       unlisten.then((un) => un());
@@ -227,13 +295,13 @@
       <Card.Content class="space-y-4">
         <div class="space-y-2">
           <Label for="pairing-code">Pairing code</Label>
-          <div class="flex gap-2">
+          <div class="flex flex-wrap gap-2">
             <Input
               id="pairing-code"
               bind:value={pairingCode}
-              placeholder="choose-a-secret"
+              placeholder="auto-generated"
               autocomplete="off"
-              class="max-w-xs"
+              class="max-w-xs font-mono"
             />
             <Button onclick={saveCode} disabled={savingCode} size="sm">
               {#if savingCode}
@@ -244,48 +312,69 @@
                 Save
               {/if}
             </Button>
+            <Button variant="outline" size="sm" onclick={rotateCode} disabled={savingCode} title="Generate a new code (revokes the old link)">
+              <RefreshCw class="size-3.5" />
+              New code
+            </Button>
           </div>
           <p class="text-xs text-muted-foreground">
-            Anyone who knows this code can pair their Telegram with your site.
+            A code is generated for you — share the link below, not the code. Rotating it revokes the
+            old link.
           </p>
         </div>
 
         {#if config.bot_username && config.pairing_code}
-          <div class="rounded-md border border-border bg-muted/40 p-3 text-sm space-y-3">
-            <div class="flex items-center gap-2">
-              <Link2 class="size-4 shrink-0 text-primary" />
-              <span class="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-                {enrollmentLink(config.bot_username, config.pairing_code)}
-              </span>
-              <div class="flex shrink-0 items-center gap-1">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  class="h-7 gap-1 text-xs"
-                  onclick={copyEnrollmentLink}
-                >
-                  {#if copied}
-                    <Check class="size-3 text-primary" />
-                    Copied
-                  {:else}
-                    <Copy class="size-3" />
-                    Copy
+          <div class="rounded-md border border-border bg-muted/40 p-4 text-sm">
+            <div class="flex flex-col gap-4 sm:flex-row sm:items-center">
+              {#if qrSvg}
+                <div class="shrink-0 self-center rounded-md bg-white p-2 [&>svg]:block [&>svg]:size-32">
+                  <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                  {@html qrSvg}
+                </div>
+              {/if}
+              <div class="min-w-0 flex-1 space-y-3">
+                <div>
+                  <p class="font-medium text-foreground">Add a recipient in 3 steps</p>
+                  <ol class="mt-1 list-decimal space-y-0.5 pl-5 text-xs text-muted-foreground">
+                    <li>Send them the link (or have them scan the code).</li>
+                    <li>They tap <strong>Start</strong> in Telegram.</li>
+                    <li>They appear in the list below — you'll see it here.</li>
+                  </ol>
+                </div>
+                <div class="flex items-center gap-2">
+                  <Link2 class="size-4 shrink-0 text-primary" />
+                  <span class="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+                    {enrollmentLink(config.bot_username, config.pairing_code)}
+                  </span>
+                </div>
+                <div class="flex flex-wrap items-center gap-1">
+                  <Button variant="outline" size="sm" class="h-7 gap-1 text-xs" onclick={copyEnrollmentLink}>
+                    {#if copied}
+                      <Check class="size-3 text-primary" />
+                      Copied
+                    {:else}
+                      <Copy class="size-3" />
+                      Copy link
+                    {/if}
+                  </Button>
+                  {#if canShare()}
+                    <Button variant="outline" size="sm" class="h-7 gap-1 text-xs" onclick={shareEnrollmentLink}>
+                      <Share2 class="size-3" />
+                      Share
+                    </Button>
                   {/if}
-                </Button>
-                <a
-                  href={enrollmentLink(config.bot_username, config.pairing_code)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class={buttonVariants({ variant: "outline", size: "sm" }) + " h-7 gap-1 text-xs"}
-                >
-                  <ExternalLink class="size-3" />
-                  Open
-                </a>
+                  <a
+                    href={enrollmentLink(config.bot_username, config.pairing_code)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class={buttonVariants({ variant: "outline", size: "sm" }) + " h-7 gap-1 text-xs"}
+                  >
+                    <ExternalLink class="size-3" />
+                    Open
+                  </a>
+                </div>
               </div>
             </div>
-            <p class="text-xs text-muted-foreground">
-              Share this link — tapping it opens Telegram and pairs the device automatically.
-            </p>
           </div>
         {/if}
       </Card.Content>
