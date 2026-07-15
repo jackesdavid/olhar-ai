@@ -72,9 +72,6 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #82 macOS installer — signed + notarized .pkg
-	  - Plan: [[edge-macos-pkg]]
-
 
 
 ## Review
@@ -116,6 +113,8 @@ kanban-plugin: board
 	  - Plan: [[tenant-cloud-cost]]
 - [ ] #67 Playback Timeline — unified inspection view
 	  - Plan: [[recording-playback-timeline]]
+- [ ] #82 macOS installer — signed + notarized .pkg
+	  - Plan: [[edge-macos-pkg]]
 - [ ] #77 Edge frame hub — one decode per camera + motion-gated tracking
 	  - Plan: [[edge-frame-hub]]
 - [ ] #78 Clip local retention — evict local copy after cloud upload
