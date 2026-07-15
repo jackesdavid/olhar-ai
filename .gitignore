@@ -36,3 +36,6 @@ cameras-cache.json
 
 # macOS installer build artifacts (ffmpeg source tree + ~200 MB of binaries + the .pkg).
 deploy/macos-pkg/build/
+
+# Windows installer build artifacts (payload + downloaded binaries + the zip).
+deploy/windows/build/

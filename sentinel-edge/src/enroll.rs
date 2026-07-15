@@ -55,11 +55,20 @@ pub async fn enroll(State(control_url): State<String>, Json(req): Json<EnrollReq
     match result {
         Ok(Ok(())) => {
             // Restart so the whole boot path runs with an identity: pull cameras, join the tailnet,
-            // start the hub. The supervisor (launchd KeepAlive / systemd Restart=always) brings us
-            // back — the same contract the Boxes-page Restart button already relies on.
+            // start the hub. We exit and let the service supervisor bring us back — the same
+            // contract the Boxes-page Restart button relies on.
+            //
+            // The exit CODE is platform-specific, because the supervisors disagree on what triggers
+            // a relaunch: systemd `Restart=always` and launchd `KeepAlive` relaunch on ANY exit, so
+            // Unix exits 0 (clean). Windows' WinSW wrapper only restarts on a NON-ZERO exit
+            // (`<onfailure action="restart">`), so there we exit 1 — a deliberate "please relaunch
+            // me", not an error.
             std::thread::spawn(|| {
                 std::thread::sleep(Duration::from_millis(600)); // let the response flush first
                 log::info!("enrolled — restarting to come up as a real box");
+                #[cfg(windows)]
+                std::process::exit(1);
+                #[cfg(not(windows))]
                 std::process::exit(0);
             });
             Json(json!({ "ok": true })).into_response()
