@@ -6,6 +6,50 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-07-15 — Edge perf + the whole install experience (#77–#83)
+
+- **Branch:** main (all committed **and pushed**; 0 ahead of origin). Control + app + edge 0.5.39
+  **deployed** to prod.
+- **Commits:** `ef48609` (#83 Windows installer bundle) ← `7c92fd3`,`9da44d0` (#80 Windows cross-compile
+  + runtime-aware) ← `244246a`,`f716ffc`,`608ba55`,`e85c24a`,`402e4f0` (#82 macOS .pkg signed) ←
+  `74885ea`,`d811142`,`77abfec` (#81 pairing) ← `1fa8094`,`904819c`,`a689f57`,`9090b5a` (#79 no OpenCV)
+  … and #77/#78 earlier in the run.
+- **Done (one long session):**
+  - **#77 frame hub** — one fetch+decode per camera shared by motion + every tracker; **motion-gated
+    tracking** (YOLOX only runs on motion / live tracks / warmup / 30s sweep). `src/frames.rs`.
+  - **#78 clip local retention** — opt-in `delete_local_after_upload`; Download prefers R2. Settings toggle.
+  - **#79 no OpenCV** — motion is pure-Rust MOG2 (`src/mog2.rs`), **proven pixel-identical to OpenCV**
+    (`cargo test --features opencv-parity`). Edge links nothing native now; reaped OpenCV from
+    install.sh + Linux Dockerfiles (no more reboot on Bazzite). THIS is what unblocked Windows.
+  - **#81 pairing** — enroll by short code (migration 0055 `box_pairings`, `POST /enroll`), edge serves
+    a pairing page when unenrolled (`src/enroll.rs`), reads its own `edge.env` (`src/envfile.rs`).
+    Hardened `/config/cameras` no-token fallback behind `cfg!(debug_assertions)`. **Validated e2e vs prod.**
+  - **#82 macOS .pkg** — signed + notarized, **Gatekeeper-accepted even quarantined**. Built ffmpeg
+    ourselves (LGPL, universal, signable). `deploy/macos-pkg/`. **DONE.** See [[apple-signing-82]] memory.
+  - **#80 Windows edge** — cross-compiles from macOS with **zero code changes** (mingw-gnu target,
+    `task edge-windows-build`); runtime-aware (`src/paths.rs` %ProgramData%, CREATE_NO_WINDOW on all
+    child spawns, TAILSCALE_BIN, self-update gated). 70MB self-contained .exe.
+  - **#83 Windows installer** — `deploy/windows/{install,uninstall}.ps1` + `build-installer.sh`: real
+    Windows SERVICE via WinSW (auto-start, restart-on-failure), pairing page. enroll.rs exits 1 on
+    Windows so WinSW relaunches after pairing. **Zip published:**
+    `https://control.thesentinels.online/edge/SentinelEdge-Windows-0.5.39.zip`.
+- **State:** macOS/Windows both build clean; MOG2 parity + gate + envfile tests pass. macOS .pkg
+  validated on real hardware end-to-end (pairing → token/key minted → cameras pulled → online).
+- **Pending / next:** ⏳ **User tests the Windows installer TONIGHT on their box (RTX 2060 Super).**
+  Watch for: service reaches `Running` (WinSW), box goes online after pairing (the exit-1 relaunch
+  contract), bundled go2rtc/ffmpeg produce frames. Log: `C:\ProgramData\Sentinel\SentinelEdge.out.log`.
+  Then: an Inno Setup **.exe GUI wrapper** + **code-signing cert** (deferred, needs user $) close #83;
+  a **per-platform download button** in the app (serve .pkg + .zip) closes the "customer downloads it"
+  journey; and an **enrollment-UX** intermediate "Code accepted — waiting for the appliance…" state.
+- **Blockers:** #83 final polish waits on the Windows test result + the signing-cert decision. #82's
+  only remaining touch is re-signing under the org account once Apple approves JDV GLOBAL SOLUTIONS
+  LTDA (D-U-N-S 574899435, emailed 2026-07-14).
+- **Refs:** docs/ref/edge.md (frame hub / MOG2 / pairing / no-OpenCV sections), docs/plans/{edge-frame-hub,
+  clip-local-retention,edge-pure-rust-motion,box-pairing-code,edge-macos-pkg,edge-windows,edge-windows-installer}.md,
+  deploy/{macos-pkg,windows}/, memory [[apple-signing-82]].
+
+---
+
 ## 2026-07-12 — Visual identity (#68/#69): built, then direction reset (PAUSED)
 
 - **Branch:** main (committed, **NOT deployed** — deploy intentionally held)
