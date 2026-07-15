@@ -277,6 +277,13 @@ tasks:
       - rm -rf sentinel-edge/dist/tmp
       - 'echo "✓ sentinel-edge/dist/sentinel-edge-linux-x86_64 ($(file sentinel-edge/dist/sentinel-edge-linux-x86_64 | cut -d: -f2-))"'
 
+  edge-windows-build:
+    desc: "Cross-build the edge for Windows (x86_64-pc-windows-gnu) from macOS/Linux. Needs mingw-w64 (brew install mingw-w64) + `rustup target add x86_64-pc-windows-gnu`. Pure Rust since #79, so it just works — no native deps, no MSVC SDK. Output: sentinel-edge/target/x86_64-pc-windows-gnu/release/sentinel-edge.exe"
+    dir: sentinel-edge
+    cmds:
+      - cargo build --release --target x86_64-pc-windows-gnu
+      - 'echo "✓ $(file target/x86_64-pc-windows-gnu/release/sentinel-edge.exe | cut -d: -f2-)"'
+
   edge-linux-build-ubuntu:
     desc: "Cross-build the edge binary for Debian/Ubuntu (amd64, glibc/apt) → sentinel-edge/dist/sentinel-edge-linux-x86_64-gnu. Set UBUNTU=22.04 for an older glibc floor."
     vars:

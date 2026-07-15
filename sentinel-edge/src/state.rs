@@ -407,6 +407,8 @@ pub fn platform() -> &'static str {
         } else if cfg!(target_os = "linux") {
             let distro = linux_distro().unwrap_or_else(|| "Linux".to_string());
             format!("{distro} ({arch})")
+        } else if cfg!(target_os = "windows") {
+            format!("Windows ({arch})")
         } else {
             format!("{} ({arch})", std::env::consts::OS)
         }

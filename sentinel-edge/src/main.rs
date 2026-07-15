@@ -23,6 +23,7 @@ mod go2rtc;
 mod http;
 mod logbuf;
 mod metrics;
+mod paths;
 mod mog2;
 mod motion;
 mod recording;
@@ -56,12 +57,24 @@ fn maybe_self_update(control_url: &str) {
         log::debug!("edge {current} is up to date (latest={latest})");
         return;
     }
-    log::warn!("auto-update: {current} → {latest} — spawning install.sh --update");
-    let script = format!(
-        "curl -fsSL {control_url}/install.sh | sh -s -- --update --control {control_url}"
-    );
-    let _ = std::process::Command::new("sh").arg("-c").arg(script).spawn();
-    // install.sh stops + replaces the binary + restarts the service on its own.
+    // The Unix path: shell out to install.sh, which stops the service, swaps the binary, and
+    // restarts. There's no `sh` or `install.sh` on Windows — and Windows can't overwrite a running
+    // .exe anyway, so its self-update is a different mechanism (a PowerShell installer that does the
+    // rename dance; card #83). Until that lands, a Windows box updates by re-running the installer,
+    // so we just note the available version instead of trying to run a shell that isn't there.
+    #[cfg(unix)]
+    {
+        log::warn!("auto-update: {current} → {latest} — spawning install.sh --update");
+        let script = format!(
+            "curl -fsSL {control_url}/install.sh | sh -s -- --update --control {control_url}"
+        );
+        let _ = std::process::Command::new("sh").arg("-c").arg(script).spawn();
+        // install.sh stops + replaces the binary + restarts the service on its own.
+    }
+    #[cfg(not(unix))]
+    {
+        log::warn!("auto-update: {current} → {latest} available — re-run the installer to update (self-update is installer-managed on this platform)");
+    }
 }
 
 fn main() {

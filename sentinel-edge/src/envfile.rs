@@ -21,7 +21,7 @@ use std::path::PathBuf;
 pub fn path() -> PathBuf {
     std::env::var("EDGE_ENV_FILE")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/etc/sentinel-edge/edge.env"))
+        .unwrap_or_else(|_| crate::paths::env_file())
 }
 
 /// Parse `KEY=VALUE` lines (blank lines and `#` comments ignored) into the process environment,

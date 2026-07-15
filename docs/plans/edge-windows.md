@@ -1,12 +1,46 @@
 # Windows edge appliance
 
-**Board card:** #80 Windows edge — installer, service, self-update (ToDo)
+**Board card:** #80 Windows edge — installer, service, self-update (In Progress)
 **Goal:** Ship `sentinel-edge` on Windows, so a customer can turn a PC they already own into the
 appliance — no Linux box, no reflash. Same binary contract as everywhere else: ONVIF discovery,
 go2rtc, motion, tracking, recording, tailnet.
 
 **Depends on [[edge-pure-rust-motion]] (#79)** — see "The gate" below. Related:
 [[edge-frame-hub]] (#77).
+
+---
+
+## STATUS (2026-07-14): it compiles + runs-ready; installer/service is what's left
+
+**The binary is proven.** The edge cross-compiles to Windows from macOS with **zero code changes to
+make it compile** — the whole dependency tree (tokio, axum, ureq/rustls, retina, image, imageproc,
+tract, sysinfo, app-core) goes across clean. This is entirely a dividend of #79: no OpenCV, nothing
+native, no MSVC SDK or vcpkg. `task edge-windows-build` produces `sentinel-edge.exe`.
+
+- Toolchain: `brew install mingw-w64` + `rustup target add x86_64-pc-windows-gnu`; the linker is
+  pinned in `sentinel-edge/.cargo/config.toml`. **Result is a PE32+ that links only Windows system
+  DLLs** (kernel32, ws2_32, bcrypt, ntdll, …) — the mingw runtime is static-linked in, so there is
+  **no `libgcc`/`libwinpthread` DLL baggage** to bundle. Self-contained `.exe`.
+- We went with the **GNU** target for a fast, dependency-light cross-build. The MSVC target
+  (`x86_64-pc-windows-msvc` via `cargo-xwin`) is the "native" choice Windows devs expect and can be
+  swapped later; for a headless service the GNU binary is functionally equivalent and ships nothing
+  extra. Decide before release (Open decisions).
+
+**Runtime Windows-awareness — done in this pass** (so the `.exe` doesn't just compile, it behaves):
+- `src/paths.rs` — config/data default to `%ProgramData%\Sentinel\` on Windows, `/etc`+`/opt` on
+  Unix. Wired into `envfile` (edge.env) and `recording` (recordings dir). Installer still overrides
+  via env.
+- `state::platform()` reports `Windows (x86_64)` for the Boxes badge.
+- Self-update: the `sh`-based `install.sh --update` path is `#[cfg(unix)]`; on Windows it logs that
+  updates are installer-managed (Windows can't overwrite a running `.exe` — the rename dance is #83).
+
+**Still to do (this card + spilling into #83):**
+- **Process children**: ffmpeg/ffprobe/go2rtc resolve by name on PATH (installer puts them there),
+  but each spawn needs `CREATE_NO_WINDOW` or a console flashes on every clip. See Phase 1.
+- **Tailscale on Windows** (Phase 2), **the service + failure-restart** and **the self-update rename
+  dance** (Phase 3–4, largely #83), and a real end-to-end run on Windows hardware (the user has a
+  Windows box w/ an RTX 2060 Super to test on — GPU is irrelevant to the CPU-only edge, just the
+  test machine).
 
 ---
 

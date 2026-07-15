@@ -64,13 +64,14 @@ kanban-plugin: board
 	  - Plan: [[postgres-performance-tuning]]
 - [ ] #76 OlharAI rebrand — domains, brand, app copy, landing rewrite
 	  - Epic: [[olharai-rebrand]]
-- [ ] #80 Windows edge — installer, service, self-update
-	  - Plan: [[edge-windows]]
 - [ ] #83 Windows installer — signed .exe
 	  - Plan: [[edge-windows-installer]]
 
 
 ## In Progress
+
+- [ ] #80 Windows edge — installer, service, self-update
+	  - Plan: [[edge-windows]]
 
 
 

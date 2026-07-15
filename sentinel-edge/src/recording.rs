@@ -138,7 +138,7 @@ fn default_motion_var() -> f64 { 16.0 }
 fn default_pre_roll() -> u32 { 10 }
 fn default_storage() -> u64 { 1000 }
 fn default_codec() -> String { "copy".to_string() }
-fn default_recordings_path() -> String { "/opt/sentinel-edge/recordings".to_string() }
+fn default_recordings_path() -> String { crate::paths::recordings_dir().to_string_lossy().into_owned() }
 
 // ---- storage stats ----------------------------------------------------------
 
