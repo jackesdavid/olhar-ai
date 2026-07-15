@@ -24,6 +24,7 @@ mod http;
 mod logbuf;
 mod metrics;
 mod paths;
+mod proc;
 mod mog2;
 mod motion;
 mod recording;

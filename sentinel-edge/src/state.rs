@@ -384,7 +384,7 @@ pub struct MotionEvent {
 pub fn ffmpeg_ok() -> bool {
     static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *OK.get_or_init(|| {
-        std::process::Command::new("ffmpeg")
+        crate::proc::command("ffmpeg")
             .arg("-version")
             .output()
             .map(|o| o.status.success())

@@ -42,7 +42,7 @@ pub fn respawn(state: &AppState) {
         );
         return;
     }
-    match std::process::Command::new(&state.go2rtc_bin)
+    match crate::proc::command(&state.go2rtc_bin)
         .arg("-config")
         .arg(&state.go2rtc_config)
         .stdout(std::process::Stdio::piped())

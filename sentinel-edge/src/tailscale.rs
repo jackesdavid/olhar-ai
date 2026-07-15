@@ -12,6 +12,19 @@
 //! it logs and continues rather than failing the service.
 use std::process::Command;
 
+/// A `tailscale` CLI command, with the console window suppressed on Windows.
+///
+/// The binary is resolved via `TAILSCALE_BIN` (default `"tailscale"`, found on PATH). On Windows
+/// Tailscale installs to `C:\Program Files\Tailscale\tailscale.exe` and is **not** on PATH by
+/// default, so the installer (#83) points `TAILSCALE_BIN` at the full path; on Linux/macOS the bare
+/// name resolves.
+fn ts() -> Command {
+    let bin = std::env::var("TAILSCALE_BIN").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "tailscale".to_string());
+    let mut cmd = Command::new(bin);
+    crate::proc::no_window(&mut cmd);
+    cmd
+}
+
 /// If `TS_AUTHKEY` is set, bring the node up and `serve` go2rtc over the tailnet.
 /// Idempotent: `tailscale up`/`serve` are safe to re-run. Best-effort — never fatal.
 pub fn ensure_up() {
@@ -28,7 +41,7 @@ pub fn ensure_up() {
         .ok()
         .filter(|s| !s.trim().is_empty());
 
-    let mut up = Command::new("tailscale");
+    let mut up = ts();
     // `--reset`: the appliance OWNS its tailscale identity (authkey-driven). Without it, a box
     // that already had tailscale configured (e.g. Bazzite's `ujust` sets `--operator=<user>`)
     // makes `tailscale up` refuse with "changing settings requires mentioning all non-default
@@ -79,7 +92,7 @@ pub fn ensure_up() {
 /// Best-effort + idempotent — safe to re-run periodically; a no-op (logged at debug) when
 /// Tailscale is stopped. Output is captured so a stopped daemon doesn't spam stderr.
 pub fn serve_go2rtc() {
-    match Command::new("tailscale")
+    match ts()
         .args(["serve", "--bg", "1984"])
         .output()
     {
@@ -96,7 +109,7 @@ pub fn serve_go2rtc() {
 /// Workflow nodes (recording, snapshots) call https://<magicdns>:8080/ to reach the API.
 /// Port 443 is reserved for go2rtc so the gateway is unaffected.
 pub fn serve_edge_api() {
-    match Command::new("tailscale")
+    match ts()
         .args(["serve", "--bg", "--https=8080", "8788"])
         .output()
     {
@@ -121,7 +134,7 @@ pub fn tailscale_state() -> &'static str {
     {
         return "disabled";
     }
-    let running = Command::new("tailscale")
+    let running = ts()
         .args(["status", "--json"])
         .output()
         .ok()
@@ -136,7 +149,7 @@ pub fn tailscale_state() -> &'static str {
     if !running {
         return "offline";
     }
-    let serving = Command::new("tailscale")
+    let serving = ts()
         .args(["serve", "status"])
         .output()
         .ok()
@@ -152,7 +165,7 @@ pub fn tailscale_state() -> &'static str {
 
 /// This node's MagicDNS name from `tailscale status --json` (`Self.DNSName`), if up.
 fn detect_dns_name() -> Option<String> {
-    let out = Command::new("tailscale")
+    let out = ts()
         .args(["status", "--json"])
         .output()
         .ok()?;

@@ -93,7 +93,7 @@ fn disk_pct() -> u8 {
 /// GPU utilization + memory-used percent via `nvidia-smi`. `(None, None)` when no NVIDIA GPU
 /// (command missing / non-zero exit / unparsable) — the UI then hides the GPU gauge.
 fn gpu_pct() -> (Option<u8>, Option<u8>) {
-    let out = std::process::Command::new("nvidia-smi")
+    let out = crate::proc::command("nvidia-smi")
         .args([
             "--query-gpu=utilization.gpu,memory.used,memory.total",
             "--format=csv,noheader,nounits",

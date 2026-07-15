@@ -25,7 +25,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::Write as _;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -304,7 +304,7 @@ impl RecordingManager {
         let max_pre    = requested_pre_roll_secs.min(self.config.pre_roll_secs);
 
         // --- Step 1: spawn ffmpeg -------------------------------------------
-        let mut ffmpeg = Command::new("ffmpeg")
+        let mut ffmpeg = crate::proc::command("ffmpeg")
             .args([
                 "-loglevel", "warning",
                 "-f", "h264",
@@ -791,7 +791,7 @@ impl H264Reassembler {
 // ---- helpers ----------------------------------------------------------------
 
 fn probe_duration(path: &PathBuf) -> Option<i32> {
-    let out = Command::new("ffprobe")
+    let out = crate::proc::command("ffprobe")
         .args([
             "-v", "error",
             "-show_entries", "format=duration",
