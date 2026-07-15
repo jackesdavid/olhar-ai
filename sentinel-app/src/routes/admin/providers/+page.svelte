@@ -54,13 +54,16 @@
     }
     saving = true;
     try {
-      await admin.setTelegramProvider(botToken);
+      // The endpoint validates the token with Telegram and returns the resolved state, so we show
+      // the real @username immediately — no second fetch, and a rejected token surfaces as an error.
+      provider = await admin.setTelegramProvider(botToken);
       botToken = "";
-      provider = await admin.getTelegramProvider();
-      toast.success("Telegram provider saved.");
+      toast.success(
+        provider.bot_username ? `Saved — verified as @${provider.bot_username}.` : "Global bot cleared.",
+      );
     } catch (err) {
       console.error("Failed to save Telegram provider", err);
-      toast.error("Failed to save", { description: String(err) });
+      toast.error(err instanceof Error ? err.message : "Failed to save the token.");
     } finally {
       saving = false;
     }
@@ -122,9 +125,19 @@
               class="max-w-sm"
             />
             <p class="text-xs text-muted-foreground">
-              The token is write-only — it is never returned to the UI.
+              The token is write-only — it is never returned to the UI. It's checked with Telegram on
+              save, so an invalid token is rejected instead of silently stored.
             </p>
           </div>
+
+          <details class="rounded-lg border border-border bg-well/50 px-3 py-2 text-sm">
+            <summary class="cursor-pointer text-muted-foreground">How do I get a bot token?</summary>
+            <ol class="mt-2 list-decimal space-y-1 pl-5 text-muted-foreground">
+              <li>In Telegram, open <a href="https://t.me/BotFather" target="_blank" rel="noopener" class="underline">@BotFather</a>.</li>
+              <li>Send <code>/newbot</code> and follow the prompts (name + a username ending in <code>bot</code>).</li>
+              <li>BotFather replies with a token like <code>123456:ABC-DEF…</code> — paste it above.</li>
+            </ol>
+          </details>
           <div class="flex justify-end">
             <Button onclick={save} disabled={saving}>
               {#if saving}

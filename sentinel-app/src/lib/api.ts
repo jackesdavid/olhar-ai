@@ -422,7 +422,7 @@ export const admin = {
     }),
   getTelegramProvider: () => api.get<import("./types").TelegramProviderState>("/admin/telegram-provider"),
   setTelegramProvider: (botToken: string) =>
-    api.put<void>("/admin/telegram-provider", { bot_token: botToken }),
+    api.put<import("./types").TelegramProviderState>("/admin/telegram-provider", { bot_token: botToken }),
 };
 
 // ---- Billing (#63) ----------------------------------------------------------

@@ -60,24 +60,39 @@ async fn set_provider(
     UserClaims(c): UserClaims,
     State(st): State<AppState>,
     Json(b): Json<SetProviderReq>,
-) -> Result<StatusCode, ApiErr> {
+) -> Result<Json<TelegramProviderState>, ApiErr> {
     if !c.master {
         return Err(err(StatusCode::FORBIDDEN, "master only"));
     }
     let db = st.db.clone();
-    blocking(move || {
-        let token = b.bot_token.trim().to_string();
-        notification::repo::save_global_telegram(&db, &token);
-        if !token.is_empty() {
-            let cfg = notification::NotificationConfig {
-                bot_token: token,
-                pairing_code: String::new(),
-            };
-            if let Ok(username) = notification::client::get_me(&cfg) {
-                notification::repo::save_global_telegram_username(&db, &username);
-            }
+    let token = b.bot_token.trim().to_string();
+
+    // Validate the token with Telegram BEFORE persisting it, and return the state we end up in.
+    // Previously a bad token was saved silently with no username, so the operator had no way to tell
+    // it never worked (the exact confusion card #73 is about). Now: an empty token clears the global
+    // bot; a non-empty one must authenticate (`getMe`) or it's rejected and never stored.
+    let outcome = blocking(move || -> Result<(Option<String>, i64), String> {
+        if token.is_empty() {
+            notification::repo::save_global_telegram(&db, "");
+            return Ok((None, notification::repo::count_tenant_telegram_bots(&db)));
         }
+        let cfg = notification::NotificationConfig { bot_token: token.clone(), pairing_code: String::new() };
+        let username = notification::client::get_me(&cfg)?; // Err → token rejected, nothing saved
+        notification::repo::save_global_telegram(&db, &token);
+        notification::repo::save_global_telegram_username(&db, &username);
+        Ok((Some(username), notification::repo::count_tenant_telegram_bots(&db)))
     })
     .await?;
-    Ok(StatusCode::NO_CONTENT)
+
+    match outcome {
+        Ok((bot_username, tenant_bot_count)) => Ok(Json(TelegramProviderState {
+            configured: bot_username.is_some(),
+            bot_username,
+            tenant_bot_count,
+        })),
+        Err(e) => {
+            log::warn!("global telegram token rejected: {e}");
+            Err(err(StatusCode::BAD_REQUEST, "Telegram rejected that token — double-check it and try again."))
+        }
+    }
 }
