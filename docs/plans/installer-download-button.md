@@ -1,6 +1,21 @@
 # Per-platform installer download button
 
-**Board card:** #84 Per-platform installer download (In Progress)
+**Board card:** #84 Per-platform installer download (Review)
+
+## STATUS (2026-07-15): shipped + deployed
+
+`GET /edge/installers` is live and returns all three (verified against prod, every URL 200):
+`macos pkg 82 MB` · `windows zip 130 MB` · `linux sh (one-liner)`. The install view leads with a
+per-OS Download button (browser-detected) + an "other platforms" disclosure, then the pairing code
+as step 2. Control + app deployed (commit d75866c).
+
+**Caught by the exists-check while shipping:** the signed macOS `.pkg` from #82 had been built +
+validated locally but never published to the dist server — so it was correctly *omitted* from the
+manifest (no 404 button) until I `scp`'d it to `/ibbf/edge-dist/`. The metadata gate did exactly its
+job. Lesson folded into memory [[apple-signing-82]]: publishing the `.pkg` is a real release step,
+not just building it.
+
+---
 **Goal:** A customer sees one obvious button that hands them the right installer for the machine
 they're on — the last mile of "turn a PC you already own into an appliance." No `curl` string to
 copy, no guessing which file.

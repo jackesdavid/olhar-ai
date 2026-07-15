@@ -74,13 +74,13 @@ kanban-plugin: board
 	  - Plan: [[edge-windows]]
 - [ ] #83 Windows installer — signed .exe
 	  - Plan: [[edge-windows-installer]]
-- [ ] #84 Per-platform installer download
-	  - Plan: [[installer-download-button]]
 
 
 
 ## Review
 
+- [ ] #84 Per-platform installer download
+	  - Plan: [[installer-download-button]]
 - [ ] #61 Tab toggle: collapse/expand editor side panels
 	  - Plan: [[editor-panel-tab-toggle]]
 
