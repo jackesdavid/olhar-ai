@@ -34,6 +34,19 @@
     }
   });
 
+  // The badge must tell the truth (card #73): a master with no GLOBAL bot but tenants running their
+  // own bot was being told "Not configured" while delivery worked. Three honest states, not two.
+  type ProviderState = "global" | "per-tenant" | "none";
+  function providerState(): ProviderState {
+    if (provider?.configured) return "global";
+    if ((provider?.tenant_bot_count ?? 0) > 0) return "per-tenant";
+    return "none";
+  }
+  function tenantBotNote(): string {
+    const n = provider?.tenant_bot_count ?? 0;
+    return `${n} tenant${n === 1 ? "" : "s"} use their own bot`;
+  }
+
   async function save() {
     if (!botToken.trim()) {
       toast.error("Enter a bot token.");
@@ -68,12 +81,16 @@
         Telegram Bot
         {#if loading}
           <Busy class="text-muted-foreground" />
-        {:else if provider?.configured}
+        {:else if providerState() === "global"}
           <Badge variant="outline" class="border-border bg-muted text-foreground">
-            Configured
-            {#if provider.bot_username}
+            Global bot active
+            {#if provider?.bot_username}
               · @{provider.bot_username}
             {/if}
+          </Badge>
+        {:else if providerState() === "per-tenant"}
+          <Badge variant="outline" class="border-border bg-muted text-muted-foreground">
+            No global bot · {tenantBotNote()}
           </Badge>
         {:else}
           <Badge variant="outline" class="border-amber-500/30 bg-amber-500/15 text-amber-400">
@@ -82,8 +99,9 @@
         {/if}
       </Card.Title>
       <Card.Description>
-        Create a bot with @BotFather and paste its token here. This bot is shared by all tenants —
-        each tenant sets their own pairing code in Recipients.
+        Create a bot with @BotFather and paste its token here. A global bot is shared by every
+        tenant as a fallback; a tenant can also set their own bot in Recipients, which takes
+        precedence. Either way, each tenant sets their own pairing code in Recipients.
       </Card.Description>
     </Card.Header>
     <Card.Content>

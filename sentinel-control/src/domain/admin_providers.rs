@@ -20,8 +20,13 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Serialize)]
 struct TelegramProviderState {
+    /// The **global** shared bot is set. (Named for backward-compat; it is specifically the global
+    /// token's state, not "does notification work at all" — that's what the count below clarifies.)
     configured: bool,
     bot_username: Option<String>,
+    /// Tenants running their own bot token instead of the global one. Lets the UI avoid telling a
+    /// master "Not configured" when delivery is in fact working per-tenant (card #73).
+    tenant_bot_count: i64,
 }
 
 async fn get_provider(
@@ -33,12 +38,14 @@ async fn get_provider(
     }
     let db = st.db.clone();
     let state = blocking(move || {
-        notification::repo::load_global_telegram(&db)
-            .map(|(token, username)| TelegramProviderState {
-                configured: !token.trim().is_empty(),
-                bot_username: username,
-            })
-            .unwrap_or(TelegramProviderState { configured: false, bot_username: None })
+        let (configured, bot_username) = notification::repo::load_global_telegram(&db)
+            .map(|(token, username)| (!token.trim().is_empty(), username))
+            .unwrap_or((false, None));
+        TelegramProviderState {
+            configured,
+            bot_username,
+            tenant_bot_count: notification::repo::count_tenant_telegram_bots(&db),
+        }
     })
     .await?;
     Ok(Json(state))

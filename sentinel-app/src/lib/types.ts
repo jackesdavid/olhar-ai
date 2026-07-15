@@ -108,8 +108,11 @@ export type TelegramConfigState = {
 
 /** Global Telegram provider state (master-only, matches `TelegramProviderState`). */
 export type TelegramProviderState = {
+  /** The GLOBAL shared bot is set — not "does notification work at all" (see tenant_bot_count). */
   configured: boolean;
   bot_username?: string;
+  /** Tenants running their own bot instead of the global one (card #73). */
+  tenant_bot_count: number;
 };
 
 /** A managed person (matches `app_core::persons::Person`). The hierarchy is

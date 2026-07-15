@@ -182,6 +182,24 @@ pub fn save_global_telegram_username(db: &Db, username: &str) {
     }
 }
 
+/// How many tenants have set their **own** Telegram bot token (not the global one). The
+/// master-only providers view uses this so its badge tells the truth: with no global bot set but
+/// tenants running their own, "Not configured" is a lie — delivery works. See card #73.
+pub fn count_tenant_telegram_bots(db: &Db) -> i64 {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM telegram_config WHERE bot_token IS NOT NULL AND trim(bot_token) <> ''",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            log::error!("notification::repo::count_tenant_telegram_bots query failed: {e}");
+            0
+        })
+    })
+}
+
 /// All tenants that have a pairing code set, merged with the global bot token as
 /// fallback. Used by sentinel-flow to bootstrap one pairing poller per configured tenant.
 pub fn load_all_telegram(db: &Db) -> Vec<(Uuid, super::NotificationConfig)> {
