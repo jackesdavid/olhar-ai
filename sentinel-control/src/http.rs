@@ -27,6 +27,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/install.sh", get(install_script))
         .route("/edge-latest", get(edge_latest))
+        .route("/edge/installers", get(installers))
         .route("/enroll", post(enroll))
         .route("/config/cameras", get(cameras))
         .route("/config/commands", get(commands))
@@ -58,6 +59,51 @@ async fn install_script() -> impl IntoResponse {
         [(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")],
         include_str!("../../sentinel-edge/install.sh"),
     )
+}
+
+/// The per-platform installer download set for the current edge version (card #84).
+///
+/// The web app renders whatever this returns, so a version bump is a control-only change — the
+/// filenames are built from `LATEST_EDGE_VERSION` + the fixed naming scheme, never hardcoded in the
+/// frontend. A file is only listed if it **actually exists** in `EDGE_DIST_DIR`: a download button
+/// that 404s is worse than an absent one, and this also gracefully covers "Windows isn't published
+/// for this version yet." Linux has no single file — it's the `/install.sh` one-liner, always shown.
+async fn installers() -> impl IntoResponse {
+    let version = std::env::var("LATEST_EDGE_VERSION").unwrap_or_else(|_| "0.1.0".to_string());
+    let dist = std::env::var("EDGE_DIST_DIR").unwrap_or_else(|_| "/edge-dist".to_string());
+
+    // Each downloadable file: (os, label, kind, filename). Built from the version + naming scheme
+    // used by deploy/macos-pkg/build.sh and deploy/windows/build-installer.sh.
+    let files = [
+        ("macos", "macOS (Apple Silicon + Intel)", "pkg", format!("Sentinel-Edge-{version}.pkg")),
+        ("windows", "Windows 10/11 (64-bit)", "zip", format!("SentinelEdge-Windows-{version}.zip")),
+    ];
+
+    let mut installers: Vec<serde_json::Value> = files
+        .iter()
+        .filter_map(|(os, label, kind, filename)| {
+            // Only offer what's on disk — the button must never 404.
+            let size = std::fs::metadata(std::path::Path::new(&dist).join(filename)).ok()?.len();
+            Some(json!({
+                "os": os,
+                "label": label,
+                "kind": kind,
+                "url": format!("/edge/{filename}"),
+                "size_bytes": size,
+            }))
+        })
+        .collect();
+
+    // Linux is always available as the one-liner — no single artifact to stat.
+    installers.push(json!({
+        "os": "linux",
+        "label": "Linux (one-line install)",
+        "kind": "sh",
+        "url": "/install.sh",
+        "size_bytes": serde_json::Value::Null,
+    }));
+
+    Json(json!({ "version": version, "installers": installers }))
 }
 
 // ---- enrollment by pairing code (card #81) ----------------------------------

@@ -9,12 +9,14 @@
   import Check from "@lucide/svelte/icons/check";
   import Terminal from "@lucide/svelte/icons/terminal";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+  import Download from "@lucide/svelte/icons/download";
 
   import * as Card from "$lib/components/ui/card";
   import { Button } from "$lib/components/ui/button";
   import { Label } from "$lib/components/ui/label";
   import { Separator } from "$lib/components/ui/separator";
-  import { boxes as boxApi } from "$lib/api";
+  import { boxes as boxApi, type Installer, type InstallerOS } from "$lib/api";
+  import { API_BASE } from "$lib/config";
   import { pendingInstall } from "$lib/box-install.svelte";
 
   const install = $derived(pendingInstall.value);
@@ -24,6 +26,8 @@
   let minting = $state(true);
   let online = $state(false);
   let showAdvanced = $state(false);
+  let installers = $state<Installer[]>([]);
+  let showAllPlatforms = $state(false);
   let timer: ReturnType<typeof setInterval> | null = null;
 
   // The token only exists in memory from the create step — on a refresh or direct hit
@@ -34,10 +38,53 @@
       return;
     }
     mint();
+    loadInstallers();
     // Watch the box arrive. The appliance checks in within seconds of being paired, and seeing it
     // happen is the whole confirmation the user needs — better than being told to go look.
     timer = setInterval(checkOnline, 4000);
   });
+
+  // ---- installer downloads (card #84) ----------------------------------------
+  // Control names the current per-platform files; we render what it gives us, so a version bump is
+  // a control-only change. Only files that exist on the dist server come back, so a button can't 404.
+  async function loadInstallers() {
+    try {
+      installers = (await boxApi.installers()).installers;
+    } catch {
+      installers = []; // best-effort — the headless command below still gets them there
+    }
+  }
+
+  function detectOS(): InstallerOS {
+    const ua = navigator.userAgent;
+    if (/Windows/i.test(ua)) return "windows";
+    if (/Mac OS X|Macintosh/i.test(ua)) return "macos";
+    return "linux";
+  }
+  const myOS = detectOS();
+
+  /** The installer for the machine the user is on, if we have one. */
+  function primaryInstaller(): Installer | undefined {
+    return installers.find((i) => i.os === myOS);
+  }
+  /** Everything except the primary — the "other platforms" list. */
+  function otherInstallers(): Installer[] {
+    const primary = primaryInstaller();
+    return installers.filter((i) => i !== primary);
+  }
+
+  function downloadHref(i: Installer): string {
+    return `${API_BASE}${i.url}`;
+  }
+  function sizeLabel(i: Installer): string {
+    if (i.size_bytes == null) return "";
+    const mb = i.size_bytes / (1024 * 1024);
+    return mb >= 1 ? ` · ${mb.toFixed(0)} MB` : "";
+  }
+  function kindLabel(i: Installer): string {
+    if (i.kind === "sh") return "one-line command";
+    return `.${i.kind}`;
+  }
 
   onDestroy(() => {
     if (timer) clearInterval(timer);
@@ -126,9 +173,49 @@
         </Card.Content>
       </Card.Root>
     {:else}
+      {#if primaryInstaller()}
+        <Card.Root>
+          <Card.Header>
+            <Card.Title>1 · Install on the appliance</Card.Title>
+            <Card.Description>Download and run this on the on-site machine.</Card.Description>
+          </Card.Header>
+          <Card.Content class="space-y-3">
+            {@const primary = primaryInstaller()}
+            {#if primary}
+              <Button href={downloadHref(primary)} download class="w-full justify-start gap-3" size="lg">
+                <Download class="size-4 shrink-0" />
+                <span>Download for {primary.label}<span class="text-xs opacity-70">{" "}({kindLabel(primary)}{sizeLabel(primary)})</span></span>
+              </Button>
+            {/if}
+
+            {#if otherInstallers().length > 0}
+              <Button variant="ghost" size="sm" class="-ml-2 text-muted-foreground" onclick={() => (showAllPlatforms = !showAllPlatforms)}>
+                {showAllPlatforms ? "Hide" : "Show"} other platforms
+              </Button>
+              {#if showAllPlatforms}
+                <div class="space-y-1.5">
+                  {#each otherInstallers() as i (i.os)}
+                    <a
+                      href={downloadHref(i)}
+                      download={i.kind !== "sh"}
+                      target={i.kind === "sh" ? "_blank" : undefined}
+                      rel="noopener"
+                      class="interactive flex items-center gap-2 rounded-md border border-border bg-well px-3 py-2 text-sm"
+                    >
+                      <Download class="size-3.5 shrink-0 text-muted-foreground" />
+                      {i.label}<span class="text-xs text-muted-foreground">{kindLabel(i)}{sizeLabel(i)}</span>
+                    </a>
+                  {/each}
+                </div>
+              {/if}
+            {/if}
+          </Card.Content>
+        </Card.Root>
+      {/if}
+
       <Card.Root>
         <Card.Header>
-          <Card.Title>Pairing code</Card.Title>
+          <Card.Title>{primaryInstaller() ? "2 · " : ""}Pairing code</Card.Title>
           <Card.Description>
             When the installer finishes, it opens a page on the appliance asking for this code.
           </Card.Description>

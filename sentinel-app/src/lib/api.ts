@@ -95,6 +95,17 @@ export type Box = {
 
 export type NewBox = { id: string; token: string; hostname: string; tailscale_key: string | null };
 
+export type InstallerOS = "macos" | "windows" | "linux";
+export type Installer = {
+  os: InstallerOS;
+  label: string;
+  kind: "pkg" | "zip" | "sh";
+  /** Path under the control host (e.g. "/edge/Sentinel-Edge-0.5.39.pkg"); prefix with API_BASE. */
+  url: string;
+  size_bytes: number | null;
+};
+export type InstallerManifest = { version: string; installers: Installer[] };
+
 export type BoxLog = { ts: string; level: string; target: string; message: string };
 
 export const boxes = {
@@ -107,6 +118,9 @@ export const boxes = {
   update: (id: string) => api.post<void>(`/boxes/${id}/update`),
   /** The latest edge build the operator has published (for "update available"). */
   latestVersion: () => api.get<{ version: string }>("/edge-latest"),
+  /** Per-platform installer downloads for the current edge version (card #84). Only lists files
+   *  that actually exist on the dist server, so a button never 404s. */
+  installers: () => api.get<InstallerManifest>("/edge/installers"),
   /**
    * Mint a pairing code for a box (card #81). The person at the appliance types it into the
    * enrollment page the installer opens; redeeming it issues the box's real token, so this code —
