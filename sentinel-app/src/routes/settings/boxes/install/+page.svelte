@@ -24,7 +24,11 @@
   let code = $state("");
   let expiresAt = $state("");
   let minting = $state(true);
+  // Pairing progress (card #85): waiting → accepted (code redeemed, box booting) → online.
+  let claimed = $state(false);
   let online = $state(false);
+  let stalled = $state(false); // "accepted" has lingered too long — box probably isn't coming up
+  let acceptedAt: number | null = null; // when we first saw `claimed` (plain — only the poll reads it)
   let showAdvanced = $state(false);
   let installers = $state<Installer[]>([]);
   let showAllPlatforms = $state(false);
@@ -107,15 +111,29 @@
   async function checkOnline() {
     if (!pendingInstall.value || online) return;
     try {
-      const list = await boxApi.list();
-      const me = list.find((b) => b.id === pendingInstall.value?.id);
-      if (me?.last_seen) {
+      const s = await boxApi.pairingStatus(pendingInstall.value.id);
+      if (s.claimed && acceptedAt === null) acceptedAt = Date.now();
+      claimed = s.claimed;
+      // Surface a stall if "accepted" lingers past a minute (box booting but not checking in — the
+      // launchd-blocked / SentinelOne case) so we nudge instead of spinning forever. Computed here,
+      // in the 4s poll, so it stays reactive without a separate timer.
+      stalled = s.claimed && !s.online && acceptedAt !== null && Date.now() - acceptedAt > 60_000;
+      if (s.online) {
         online = true;
         if (timer) clearInterval(timer);
       }
     } catch {
       // A failed poll is not worth a toast — the next one is four seconds away.
     }
+  }
+
+  // The three states the view renders. `accepted` is the new one — the code was redeemed and the
+  // appliance is restarting into a real box, but it hasn't checked in yet.
+  type PairPhase = "waiting" | "accepted" | "online";
+  function phase(): PairPhase {
+    if (online) return "online";
+    if (claimed) return "accepted";
+    return "waiting";
   }
 
   async function copy(text: string) {
@@ -170,6 +188,23 @@
             <p class="font-medium">"{install.name}" is online.</p>
             <p class="text-sm text-muted-foreground">The appliance checked in. You can add its cameras now.</p>
           </div>
+        </Card.Content>
+      </Card.Root>
+    {:else if phase() === "accepted"}
+      <Card.Root class="border-primary/30 bg-primary/5">
+        <Card.Content class="space-y-2 py-6">
+          <div class="flex items-center gap-3">
+            <RefreshCw class="size-5 shrink-0 animate-spin text-primary" />
+            <div>
+              <p class="font-medium">Code accepted — "{install.name}" is starting up…</p>
+              <p class="text-sm text-muted-foreground">The appliance is connecting. This usually takes a few seconds.</p>
+            </div>
+          </div>
+          {#if stalled}
+            <p class="pl-8 text-sm text-amber-700 dark:text-amber-400">
+              Taking longer than expected. Make sure the appliance is still running — check its logs, or reinstall.
+            </p>
+          {/if}
         </Card.Content>
       </Card.Root>
     {:else}

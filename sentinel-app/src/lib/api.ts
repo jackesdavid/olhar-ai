@@ -127,6 +127,9 @@ export const boxes = {
    * not the token — is the only thing that needs to travel.
    */
   pairingCode: (id: string) => api.post<{ code: string; expires_at: string }>(`/boxes/${id}/pairing-code`, {}),
+  /** Pairing progress for the install view (card #85): `claimed` = the code was redeemed, `online`
+   *  = the box has checked in since. Lets the UI show "code accepted, starting up…" before online. */
+  pairingStatus: (id: string) => api.get<{ claimed: boolean; online: boolean }>(`/boxes/${id}/pairing-status`),
   /** Recent persisted log tail for a box (oldest-first). */
   logs: (id: string, limit = 500) => api.get<BoxLog[]>(`/boxes/${id}/logs?limit=${limit}`),
   /** EventSource URL for a box's live log tail (token in query — EventSource can't set headers). */

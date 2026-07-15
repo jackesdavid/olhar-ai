@@ -33,6 +33,32 @@ pub fn router() -> Router<AppState> {
         .route("/boxes/:id/tracking-config", axum::routing::patch(patch_tracking_config))
         .route("/boxes/:id/storage-stats", get(storage_stats))
         .route("/boxes/:id/pairing-code", axum::routing::post(pairing_code))
+        .route("/boxes/:id/pairing-status", get(pairing_status))
+}
+
+#[derive(Serialize)]
+struct PairingStatus {
+    /// The most recent pairing code was redeemed by the appliance.
+    claimed: bool,
+    /// The box has checked in since that code was minted (this install succeeded).
+    online: bool,
+}
+
+/// Pairing progress for the install view (card #85): lets it show a "code accepted — starting up…"
+/// step between the code being redeemed and the box coming online, instead of sitting mutely on the
+/// code. One cheap poll, scoped to the one box being installed.
+async fn pairing_status(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<PairingStatus>, ApiErr> {
+    auth::require(&c, "devices.read")?;
+    let tid = tenant_of(&c)?;
+    let (claimed, online) = store::pairing_status(&st.pool, tid, id)
+        .await
+        .map_err(db_err)?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "box not found"))?;
+    Ok(Json(PairingStatus { claimed, online }))
 }
 
 /// How long a pairing code is good for. A code that hasn't been typed in fifteen minutes is a code

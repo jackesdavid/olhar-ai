@@ -1199,3 +1199,29 @@ pub async fn box_name(pool: &PgPool, box_id: Uuid) -> sqlx::Result<Option<String
         .fetch_optional(pool)
         .await
 }
+
+/// The two signals the install view needs to show pairing progress (card #85): whether the box's
+/// most recent pairing code was **claimed** (redeemed by the appliance), and whether the box is
+/// **online** (has checked in *since that code was minted* — an old `last_seen` from a previous
+/// install must not count as this install succeeding). One row per box, or `None` if the box isn't
+/// this tenant's.
+///
+/// `created_at` is RFC3339 text (0055); casting it to `timestamptz` normalizes its offset to UTC so
+/// the comparison against `last_seen` (a `now()` timestamptz) is correct.
+pub async fn pairing_status(pool: &PgPool, tenant_id: Uuid, box_id: Uuid) -> sqlx::Result<Option<(bool, bool)>> {
+    sqlx::query_as::<_, (bool, bool)>(
+        "SELECT \
+           (lp.claimed_at IS NOT NULL) AS claimed, \
+           (b.last_seen IS NOT NULL AND (lp.created_at IS NULL OR b.last_seen > lp.created_at::timestamptz)) AS online \
+         FROM tenant_boxes b \
+         LEFT JOIN LATERAL ( \
+           SELECT claimed_at, created_at FROM box_pairings p \
+           WHERE p.box_id = b.id ORDER BY p.created_at DESC LIMIT 1 \
+         ) lp ON true \
+         WHERE b.id = $1 AND b.tenant_id = $2",
+    )
+    .bind(box_id)
+    .bind(tenant_id)
+    .fetch_optional(pool)
+    .await
+}
