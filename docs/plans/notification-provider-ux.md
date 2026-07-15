@@ -7,6 +7,22 @@ enrolling recipients easier."
 **Goal:** The provider status the UI shows must match reality, and both **operator configuration**
 and **recipient enrollment** should be near-frictionless.
 
+## STATUS (2026-07-15): all three phases shipped + deployed
+
+- **Phase 1 (badge truth):** the master Providers badge no longer lies. Three states —
+  "Global bot active · @name" / "No global bot · N tenants use their own bot" / "Not configured".
+  Root cause was purely the badge reading only the global token; the read/persist path was fine.
+- **Phase 2 (operator config):** `PUT /admin/telegram-provider` validates the token with Telegram
+  (getMe) before persisting — invalid → 400 and NOT stored (verified against the real API); valid →
+  saved + @username returned so the UI shows "verified as @name". Plus a BotFather guidance collapsible.
+- **Phase 3 (recipient enrollment):** auto-generated pairing code (pre-filled, rotatable), inline QR
+  of the enrollment link (bundled `qrcode` lib → SVG, no external service), one-tap Share, live "a
+  new recipient just paired" toast, and a plain 3-step walkthrough.
+
+Deployed. Open decision 4 (multi-provider structure) untouched — Telegram is still the only provider.
+
+---
+
 ## Root cause — two disconnected token layers (grounding)
 
 Telegram has **two** token stores, and the admin badge only reads one of them:

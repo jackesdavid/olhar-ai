@@ -77,6 +77,8 @@ kanban-plugin: board
 
 ## Review
 
+- [ ] #73 Notification providers: configured badge + config & enrollment
+	  - Plan: [[notification-provider-ux]]
 - [ ] #84 Per-platform installer download
 	  - Plan: [[installer-download-button]]
 - [ ] #85 Pairing progress UX — "code accepted" state
