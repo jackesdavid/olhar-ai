@@ -66,8 +66,6 @@ kanban-plugin: board
 	  - Epic: [[olharai-rebrand]]
 - [ ] #80 Windows edge — installer, service, self-update
 	  - Plan: [[edge-windows]]
-- [ ] #82 macOS installer — signed + notarized .pkg
-	  - Plan: [[edge-macos-pkg]]
 - [ ] #83 Windows installer — signed .exe
 	  - Plan: [[edge-windows-installer]]
 

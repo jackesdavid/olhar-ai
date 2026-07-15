@@ -1,11 +1,56 @@
 # macOS installer — a signed `.pkg`
 
-**Board card:** #82 macOS installer — signed + notarized `.pkg` (ToDo)
+**Board card:** #82 macOS installer — signed + notarized `.pkg` (In Progress)
 **Goal:** A customer downloads one file, double-clicks it, types a pairing code, and has a working
 appliance. No terminal, no Homebrew, no `curl | sudo sh`.
 
 **Depends on [[box-pairing-code]] (#81)** — without it the installer has no way to receive the box's
 identity. Sibling: [[edge-windows-installer]] (#83).
+
+---
+
+## STATUS (2026-07-14): code done, blocked on Apple signing certs
+
+Everything except the signature is **built, committed, and validated end-to-end against production**:
+
+- `task edge-pkg` produces `Sentinel-Edge-<ver>.pkg` — edge + go2rtc + ffmpeg + ffprobe, all
+  universal (x86_64 + arm64), plus the launchd daemon. Scripts under `deploy/macos-pkg/`.
+- We **build ffmpeg ourselves** (`build-ffmpeg.sh`): the prebuilt static macOS binaries can't be
+  codesigned (malformed Mach-O → unnotarizable), and `--disable-gpl` gives LGPL certainty +
+  `--disable-autodetect` keeps it free of the build host's Homebrew dylibs. See Open decisions #3.
+- Verified on a real Mac: the package installs, the **bundled ffmpeg/ffprobe run** (where prebuilt
+  ones were killed by Gatekeeper), the unenrolled edge serves the pairing page, a code redeems into
+  a real box token + Tailscale key written to `edge.env`, and the re-launched edge pulls the
+  tenant's cameras and reports online.
+
+**Last mile — signing. The signing path is wired** (`task edge-pkg-signed` expects `MACOS_APP_CERT`,
+`MACOS_PKG_CERT`, `NOTARY_PROFILE`); unsigned, Gatekeeper refuses the package (worse than the curl|sh
+it replaces), so this is the last step, not polish.
+
+**This does NOT require the organization account.** A paid **individual** Apple Developer account
+issues both Developer ID certs (Application + Installer) and notarizes the same way — the only
+difference is cosmetic: the installer's signer name shows the person's legal name instead of the
+company. So the fast path is:
+- **Now:** sign with the existing individual account to ship #82. No code/script rework — signing is
+  just three env vars.
+- **In parallel:** org conversion for JDV GLOBAL SOLUTIONS LTDA (**D-U-N-S 574899435**), emailed to
+  Apple Support (topic "Inscrição no programa") on **2026-07-14**. When it lands, regenerate the two
+  certs in the company name and re-sign — a five-minute swap.
+
+**To sign (either account):** create Developer ID **Application** + **Installer** certs in the portal
+(CSR from Keychain Access), run `xcrun notarytool store-credentials <profile> --apple-id … --team-id
+… --password <app-specific>`, hand the two exact cert identity strings to `task edge-pkg-signed`, and
+verify with `spctl -a -vvv -t install` → must say "accepted, source=Notarized Developer ID".
+
+**Two follow-ups surfaced during the test (not blockers):**
+1. **launchd bootstrap fails on the test Mac (error 5), and it's host policy, not the package** — a
+   SentinelOne-managed corporate machine blocking a new system LaunchDaemon. The `postinstall` was
+   already hardened to never fail the install because of it (the daemon comes up on next boot). On an
+   unmanaged Mac, launchd `KeepAlive` handles the restart-after-enroll the journey relies on.
+2. **Enrollment UX gap** — the Boxes install view only advances when the box checks in, with a mute
+   window between "code accepted" and "box online" (and no feedback at all if the box is slow or
+   never boots). Worth an intermediate "Code accepted — waiting for the appliance to start…" state,
+   fired at redeem time. Candidate for its own card.
 
 ---
 
