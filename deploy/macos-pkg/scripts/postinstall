@@ -51,13 +51,27 @@ cat > "$PLIST" <<PLISTEOF
 </dict></plist>
 PLISTEOF
 
-# Boot out any prior instance before bootstrapping, or a reinstall over a running service fails with
-# "Load failed: 5: Input/output error". (`load` is deprecated; this is the lesson install.sh already
-# learned the hard way.) KeepAlive is what makes the edge's own exit(0) — used by enrollment and by
-# the Boxes-page Restart button — come back as a restart rather than a death.
-launchctl bootout "system/$LABEL" 2>/dev/null || true
-launchctl bootstrap system "$PLIST" 2>/dev/null || launchctl bootstrap system "$PLIST"
-launchctl kickstart -k "system/$LABEL" 2>/dev/null || true
+# Register + start the daemon — **best-effort, never fatal**. By the time postinstall runs, the
+# install has already succeeded: the binaries are on disk and the plist is in /Library/LaunchDaemons
+# with RunAtLoad, so the daemon comes up on the next boot no matter what happens below. Failing the
+# whole installer because we couldn't *start it this second* — which is what an unguarded bootstrap
+# under `set -e` did (it aborted with "Bootstrap failed: 5") — is the wrong trade: a box that needs
+# one reboot beats an install the customer sees fail.
+start_daemon() {
+  # bootout an old instance (upgrade path), then bootstrap. bootout is ASYNCHRONOUS, so bootstrapping
+  # while the previous instance is still tearing down returns "5: Input/output error" — retry through
+  # that window instead of dying on the first attempt. KeepAlive is what turns the edge's own exit(0)
+  # (enrollment, the Boxes-page Restart button) into a relaunch rather than a death.
+  launchctl bootout "system/$LABEL" 2>/dev/null || true
+  n=0
+  while ! launchctl bootstrap system "$PLIST" 2>/dev/null; do
+    n=$((n + 1))
+    [ "$n" -ge 10 ] && return 1
+    sleep 1
+  done
+  launchctl kickstart -k "system/$LABEL" 2>/dev/null || true
+}
+start_daemon || echo "sentinel-edge: not started now — it will come up on the next boot" >&2
 
 # Hand the human the pairing page. They are standing at this machine — they just double-clicked the
 # installer on it — so localhost is exactly the right place to send them. `open` must run as the
