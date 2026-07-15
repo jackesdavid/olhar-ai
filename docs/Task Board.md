@@ -64,6 +64,8 @@ kanban-plugin: board
 	  - Plan: [[postgres-performance-tuning]]
 - [ ] #76 OlharAI rebrand — domains, brand, app copy, landing rewrite
 	  - Epic: [[olharai-rebrand]]
+- [ ] #85 Pairing progress UX — "code accepted" state
+	  - Plan: [[pairing-progress-ux]]
 
 
 ## In Progress
@@ -72,6 +74,8 @@ kanban-plugin: board
 	  - Plan: [[edge-windows]]
 - [ ] #83 Windows installer — signed .exe
 	  - Plan: [[edge-windows-installer]]
+- [ ] #84 Per-platform installer download
+	  - Plan: [[installer-download-button]]
 
 
 
