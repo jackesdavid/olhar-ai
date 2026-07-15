@@ -99,7 +99,10 @@ done
 if [ "$SIGN" = 1 ]; then
   : "${MACOS_APP_CERT:?set MACOS_APP_CERT to your 'Developer ID Application: …' identity}"
   echo "▸ Signing executables…"
-  for bin in sentinel-edge go2rtc ffmpeg; do
+  # ALL FOUR — the same list the verify loop above uses. Missing one (ffprobe was omitted here once)
+  # doesn't fail the build; it fails NOTARIZATION, minutes later, with "not signed with a valid
+  # Developer ID certificate" for exactly the binary left out. Keep this list identical to line ~92.
+  for bin in sentinel-edge go2rtc ffmpeg ffprobe; do
     codesign --force --options runtime --timestamp -s "$MACOS_APP_CERT" "$PREFIX/$bin"
   done
 fi
