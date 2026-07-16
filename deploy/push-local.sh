@@ -72,6 +72,18 @@ ssh -i "${VPS_KEY}" -o IdentitiesOnly=yes "${VPS_SSH}" "set -e; cd /ibbf
     echo '>> patched compose for pg_cron'
   fi
 
+  # CLEAN=1: an interrupted prior deploy can leave a half-recreated container squatting the service
+  # name (\"Conflict. The container name ... is already in use\"), which then blocks every future
+  # \`up -d\`. Force-remove any container matching each service name first so compose recreates a
+  # fresh one. Removing a container never touches its named volumes, so this is safe for stateful
+  # services (e.g. postgres) too — only the container is replaced, the data volume persists.
+  if [ -n '${CLEAN}' ]; then
+    for svc in ${SERVICES}; do
+      echo \">> clean: dropping any container matching '\$svc'\"
+      docker rm -f \$(docker ps -aq --filter name=\"\$svc\") 2>/dev/null || true
+    done
+  fi
+
   docker compose -f docker-compose.yml -f docker-compose.sentinel.yml pull ${SERVICES}
   docker compose -f docker-compose.yml -f docker-compose.sentinel.yml up -d ${SERVICES}
 

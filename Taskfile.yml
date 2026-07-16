@@ -256,6 +256,23 @@ tasks:
     cmds:
       - ./deploy/push-local.sh {{.CLI_ARGS}}
 
+  cloud-deploy-clean:
+    desc: "Like cloud-deploy, but force-removes any orphaned service container on the VPS first — recovers a deploy left half-rolled by an interruption (the 'container name … is already in use' conflict). Subset: task cloud-deploy-clean -- sentinel-control"
+    cmds:
+      - CLEAN=1 ./deploy/push-local.sh {{.CLI_ARGS}}
+
+  clean-space:
+    desc: "Reclaim disk space — cargo clean (edge crate + workspace), drop the installer build dirs, prune Docker. Everything removed is a regenerable build artifact (the ffmpeg-universal build under deploy/macos-pkg/build takes ~20 min to rebuild)."
+    cmds:
+      # Rust target dirs are by far the biggest: the edge is a standalone crate (its own target/,
+      # incl. the windows-gnu/linux cross builds), the rest is the workspace.
+      - cargo clean --manifest-path sentinel-edge/Cargo.toml
+      - cargo clean
+      - rm -rf deploy/macos-pkg/build deploy/windows/build
+      # Unused images + build cache. Images backing running containers are kept.
+      - docker system prune -af
+      - 'echo "✓ free space now:"; df -h / | tail -1'
+
   edge-build:
     desc: Build the edge binary for the current platform (release; pure Rust, no native deps)
     dir: sentinel-edge
