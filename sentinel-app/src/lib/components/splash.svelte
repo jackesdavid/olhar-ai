@@ -5,8 +5,12 @@
   //
   // The mark enters rather than appearing: the splash is the first thing anyone sees, and a logo
   // that fades up and settles reads as the product waking up — which is literally what's
-  // happening behind it. The revolution then loops for as long as the wait lasts, so a slow boot
-  // looks like patience instead of a freeze.
+  // happening behind it. It then loops for as long as the wait lasts, so a slow boot looks like
+  // patience instead of a freeze.
+  //
+  // The mark's timings are fixed by `assets/BRAND.md` and are not ours to bend — an earlier pass
+  // slowed the orbit in the error state as a wordless "something is wrong" signal, which was a
+  // nice idea and not the brand's. The error state says so in words instead.
   import OlharMark from "./olhar-mark.svelte";
 
   let { state = "connecting", leaving = false }: { state?: "connecting" | "error"; leaving?: boolean } =
@@ -21,16 +25,8 @@
     if (s === "error") return "Can't reach Postgres. Start it with “task db-up” — retrying…";
     return "Bringing services online";
   }
-  // The wait slows the revolution — calm while it's working, and a visible change of state when
-  // it isn't. Nobody should have to read the copy to notice something went wrong.
-  function speedFor(s: "connecting" | "error"): number {
-    if (s === "error") return 24;
-    return 9;
-  }
-
   const title = $derived(titleFor(state));
   const detail = $derived(detailFor(state));
-  const speed = $derived(speedFor(state));
 </script>
 
 <div
@@ -41,7 +37,7 @@
   aria-live="polite"
 >
   <div class="glow enter rounded-full p-6">
-    <OlharMark size={176} animated {speed} class="text-primary" label="" />
+    <OlharMark size={176} animated class="text-primary" label="" />
   </div>
 
   <div class="enter enter-copy flex flex-col items-center gap-2 text-center">

@@ -1,40 +1,44 @@
 <script lang="ts">
-  // The OlharAI mark: an eclipse-eye. A dotted orbit ring (40 dots), a disc eclipsed by an
-  // offset circle to cut a crescent, a pupil, and a moon riding the ring.
+  // The OlharAI mark: "Eclipse in orbit" — an eclipsed disc (a gaze emerging from shadow) with a
+  // pupil, inside a dotted orbit ring with a small moon. Space + vision.
   //
-  // Two independent motions, deliberately:
+  // **`assets/BRAND.md` is the spec. It wins.** Geometry, timings and easings below are its
+  // numbers, not preferences — the dot pitch divides the circumference exactly (no seam), and the
+  // glance offsets are the designer's. Recompute the dasharray if you ever change `r`.
   //
-  //   • The moon revolves the ring, and the ring's 40 dots drift the opposite way at a quarter
-  //     speed — the satellite, calm and mechanical.
-  //   • The eye behaves like an EYE, not a planet: it holds still, gazes in saccades (quick
-  //     shifts, long fixations — how eyes actually move; a smoothly drifting pupil reads as
-  //     drunk), and blinks now and then.
+  // The motion (BRAND.md § Animation):
+  //   • Orbit ring — 360° / 90s linear.
+  //   • Moon — 360° / 24s linear, drawn BEFORE the disc so it passes *behind* it.
+  //   • Pupil breathe — scale 1→1.12→1 / 3.4s.
+  //   • Moving eye — the crescent-mask group AND the pupil group translate *together*: glance
+  //     left (-19,4), down (-8,16), return. 9s with holds. Because the disc stays put while the
+  //     opening travels inside it, the crescent thickens and thins as the eye looks around —
+  //     that's the form working, and it's why both groups must share one animation.
+  //   • `prefers-reduced-motion` → none.
   //
-  // Note for anyone reading the art: in the supplied SVGs the eclipse, pupil and moon all sit on
-  // one radial line at exactly 45°, which reads as "the moon casts the shadow". We deliberately
-  // do NOT animate that relationship — revolving the eclipse with the moon turned the eye into a
-  // planet. So the 45° alignment is now the mark's resting composition rather than a causal
-  // mechanism. That's an owner decision, not an oversight.
+  // Deviation, on purpose: the **blink** is NOT in BRAND.md — it's ours, kept because the owner
+  // asked for the centre to behave like an eye and endorsed it. The lid works *because* the
+  // opening is a hole in the disc: flattening it (scaleY→0.04) fills the crescent back in, so the
+  // eye genuinely reads as shut. Drop `blink` to get the spec exactly.
   //
-  // Ported from `assets/olhar-ai-mark-*.svg` into a component (rebrand card #76, Phase 2a): the
-  // static files can't give us `currentColor` theming (2d), per-instance mask ids (2e), or any
-  // motion at all — the supplied `mark-animated.svg` declares .orbit/.moon/.pupil and defines no
-  // animation (2c).
+  // Ported from the static art into a component (rebrand #76, Phase 2a): the files can't give us
+  // `currentColor` theming (2d), per-instance mask ids (2e), the <40px variant, or any motion —
+  // `mark-animated.svg` declares .orbit/.moon/.pupil and defines none (2c).
   let {
     size = 28,
     animated = true,
-    speed = 12,
+    blink = true,
     tile = false,
     class: klass = "",
     style = "",
     label = "OlharAI",
   }: {
     size?: number;
-    /** Animate the moon, the gaze and the blink. Honours `prefers-reduced-motion` either way. */
+    /** Animate orbit, moon, breathe and glance. Honours `prefers-reduced-motion` either way. */
     animated?: boolean;
-    /** Seconds for one moon revolution. Higher = calmer; this is a logo, not a spinner. */
-    speed?: number;
-    /** Draw the app-icon's ink tile behind the mark (the `boundary` role of the old mark). */
+    /** The one motion not in BRAND.md. Off = the spec exactly. */
+    blink?: boolean;
+    /** Draw the app-icon's ink tile behind the mark (BRAND.md: rx 14/120). */
     tile?: boolean;
     class?: string;
     style?: string;
@@ -47,12 +51,21 @@
   const uid = $props.id();
   const maskId = `olhar-ecl-${uid}`;
 
-  // The art's geometry, verbatim.
   const R_ORBIT = 50;
   const R_DISC = 31;
   const R_ECLIPSE = 27;
-  const ECL = { cx: 71, cy: 49 }; // the eye opening — also the pupil's home
-  const MOON = { cx: 95.4, cy: 24.6 };
+  const ECL = { cx: 71, cy: 49 }; // the opening — and the pupil's home
+  const MOON = { cx: 95.4, cy: 24.6 }; // on the orbit at 45°
+
+  // BRAND.md § The mark: under 40px the ring goes heavier and sparser, or it mushes. This is why
+  // the supplied lockups carry different ring values from the standalone mark — one mark, two
+  // size variants, not two marks.
+  const sm = $derived(size < 40);
+  const ring = $derived(
+    sm
+      ? { width: 3, dash: "0.1 9.717", opacity: 0.35, moon: 5 } // 32 dots
+      : { width: 2, dash: "0.1 7.754", opacity: 0.3, moon: 4 }, // 40 dots
+  );
 
   const ink = $derived(tile ? "var(--background)" : "currentColor");
 </script>
@@ -61,20 +74,21 @@
   viewBox="0 0 120 120"
   width={size}
   height={size}
-  class="olhar-mark {animated ? 'is-animated' : ''} {klass}"
+  class="olhar-mark {animated ? 'is-animated' : ''} {blink ? 'can-blink' : ''} {klass}"
   {style}
   fill="none"
   role={label ? "img" : "presentation"}
   aria-label={label || undefined}
   aria-hidden={label ? undefined : "true"}
-  style:--rev="{speed}s"
 >
-  <!-- The eye opening is a hole in the disc, so the "eyelid" is this circle flattening: scaleY→0
-       fills the crescent back in and the eye reads as shut. The pupil below blinks in lockstep. -->
+  <!-- The opening carries `glance` exactly as the pupil does (same keyframes, same duration), so
+       the negative space and the pupil travel as one eye. -->
   <mask id={maskId}>
     <rect width="120" height="120" fill="white" />
     <g class="lid">
-      <circle cx={ECL.cx} cy={ECL.cy} r={R_ECLIPSE} fill="black" />
+      <g class="glance">
+        <circle cx={ECL.cx} cy={ECL.cy} r={R_ECLIPSE} fill="black" />
+      </g>
     </g>
   </mask>
 
@@ -88,21 +102,23 @@
     cy="60"
     r={R_ORBIT}
     stroke={ink}
-    stroke-width="2"
-    stroke-dasharray="0.1 7.754"
+    stroke-width={ring.width}
+    stroke-dasharray={ring.dash}
     stroke-linecap="round"
-    opacity="0.3"
+    opacity={ring.opacity}
   />
+
+  <!-- Before the disc, per BRAND.md — the moon rides the ring and passes behind the eye. -->
+  <circle class="moon" cx={MOON.cx} cy={MOON.cy} r={ring.moon} fill={ink} />
 
   <circle cx="60" cy="60" r={R_DISC} fill={ink} mask="url(#{maskId})" />
 
-  <!-- Nested so blink and gaze can both use `transform` without fighting: the lid squashes the
-       group, the pupil shifts inside it. -->
+  <!-- Three nested groups so lid/glance/breathe can each drive `transform` without fighting. -->
   <g class="lid">
-    <circle class="gaze" cx={ECL.cx} cy={ECL.cy} r="6" fill={ink} />
+    <g class="glance">
+      <circle class="breathe" cx={ECL.cx} cy={ECL.cy} r="6" fill={ink} />
+    </g>
   </g>
-
-  <circle class="moon" cx={MOON.cx} cy={MOON.cy} r="4" fill={ink} />
 </svg>
 
 <style>
@@ -114,7 +130,8 @@
     transform-origin: 60px 60px;
   }
   .lid,
-  .gaze {
+  .glance,
+  .breathe {
     transform-box: view-box;
     transform-origin: 71px 49px;
   }
@@ -122,33 +139,67 @@
   /* A logo that animates through a user's reduced-motion preference is a logo that ignores them.
      The static state is the supplied art exactly, so nothing is lost. */
   @media (prefers-reduced-motion: no-preference) {
-    .is-animated .moon {
-      animation: olhar-revolve var(--rev, 12s) linear infinite;
-    }
     .is-animated .orbit {
-      animation: olhar-drift calc(var(--rev, 12s) * 4) linear infinite;
+      animation: olhar-orbit 90s linear infinite;
     }
-    /* Prime numbers-ish: 7s and 11s drift out of phase, so the mark never loops visibly. */
-    .is-animated .lid {
+    .is-animated .moon {
+      animation: olhar-moon 24s linear infinite;
+    }
+    .is-animated .breathe {
+      animation: olhar-breathe 3.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    .is-animated .glance {
+      animation: olhar-glance 9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    }
+    /* Ours, not the spec's. 7s against the glance's 9s so they drift out of phase. */
+    .is-animated.can-blink .lid {
       animation: olhar-blink 7s ease-in-out infinite;
-    }
-    .is-animated .gaze {
-      animation: olhar-gaze 11s ease-in-out infinite;
     }
   }
 
-  @keyframes olhar-revolve {
+  @keyframes olhar-orbit {
     to {
       transform: rotate(360deg);
     }
   }
-  @keyframes olhar-drift {
+  @keyframes olhar-moon {
     to {
-      transform: rotate(-360deg);
+      transform: rotate(360deg);
     }
   }
 
-  /* One blink per cycle, ~220ms of a 7s loop — closing faster than opening, as real lids do. */
+  @keyframes olhar-breathe {
+    0%,
+    100% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.12);
+    }
+  }
+
+  /* Glance left, glance down, return — each move followed by a hold. Eyes jump and fixate; they
+     never glide. */
+  @keyframes olhar-glance {
+    0%,
+    22% {
+      transform: translate(0, 0);
+    }
+    30%,
+    48% {
+      transform: translate(-19px, 4px);
+    }
+    56%,
+    74% {
+      transform: translate(-8px, 16px);
+    }
+    82%,
+    100% {
+      transform: translate(0, 0);
+    }
+  }
+
+  /* One blink per cycle, ~220ms of 7s — closing faster than opening, as real lids do. */
   @keyframes olhar-blink {
     0%,
     93%,
@@ -160,31 +211,6 @@
     }
     98% {
       transform: scaleY(1);
-    }
-  }
-
-  /* Saccades: the shift takes ~3% of the loop, then the eye FIXATES. Eyes jump and hold; they
-     never glide. The travel is small (≤5px in a 27px opening) — a glance, not a search. */
-  @keyframes olhar-gaze {
-    0%,
-    24% {
-      transform: translate(0, 0);
-    }
-    27%,
-    46% {
-      transform: translate(-4.5px, 1.5px);
-    }
-    49%,
-    68% {
-      transform: translate(3.5px, -3px);
-    }
-    71%,
-    88% {
-      transform: translate(1px, 3.5px);
-    }
-    91%,
-    100% {
-      transform: translate(0, 0);
     }
   }
 </style>
