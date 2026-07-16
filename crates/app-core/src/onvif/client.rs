@@ -217,15 +217,21 @@ fn envelope(header: &str, body: &str) -> String {
 
 /// Insert `user:pass@` into an `rtsp://` URL unless it already carries creds.
 /// Shared by the snapshot path and the live-stream path.
+///
+/// Creds are percent-encoded: unencoded, a password containing `@` makes the URL parser read
+/// the wrong host and a `:` splits the password, so a *correct* password comes back as an
+/// auth failure — a lie that sends the user hunting for a credential bug that isn't there.
 pub fn rtsp_url_with_creds(rtsp: &str, user: &str, pass: &str) -> String {
     if rtsp.contains('@') {
         rtsp.to_string()
     } else {
+        let user = crate::rtsp_probe::encode_userinfo(user);
+        let pass = crate::rtsp_probe::encode_userinfo(pass);
         rtsp.replacen("rtsp://", &format!("rtsp://{user}:{pass}@"), 1)
     }
 }
 
-fn snapshot_from_rtsp(rtsp: &str, user: &str, pass: &str) -> Result<Vec<u8>, String> {
+pub fn snapshot_from_rtsp(rtsp: &str, user: &str, pass: &str) -> Result<Vec<u8>, String> {
     if rtsp.trim().is_empty() {
         return Err(
             "Camera has no RTSP URL — validate its credentials first (Devices → Test credentials)."

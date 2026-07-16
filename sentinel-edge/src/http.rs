@@ -23,6 +23,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/devices", get(devices))
         .route("/streams", get(streams))
         .route("/snapshot/:ip", get(snapshot))
+        .route("/probe/:ip", post(probe))
         .route("/tracks/:ip", get(tracks))
         .route("/reload", post(reload))
         .route("/recordings", get(recordings_list))
@@ -83,6 +84,105 @@ async fn streams(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         })
         .collect();
     Json(list)
+}
+
+#[derive(serde::Deserialize)]
+struct ProbeReq {
+    username: String,
+    password: String,
+}
+
+/// Prove a camera's credentials **without persisting them** (card #88).
+///
+/// The old wizard saved first and then polled for a snapshot until one appeared. That inverted
+/// the order — unproven creds landed in `go2rtc.yaml`, aiming a reconnect loop at the camera —
+/// and the poll retried hard enough to trip a Tapo's RTSP lockout, so a single typo could take
+/// a *working* camera offline until someone power-cycled it. Worse, every failure surfaced as
+/// "wrong password", which sent users re-typing correct creds and deepening the lock.
+///
+/// So: probe once, persist nothing, and name the actual cause. Only a verified `ok` should be
+/// followed by `POST /devices/:ip/credentials`.
+async fn probe(
+    State(state): State<Arc<AppState>>,
+    Path(ip): Path<String>,
+    Json(req): Json<ProbeReq>,
+) -> impl IntoResponse {
+    let Some(device) = state.device_by_ip(&ip) else {
+        return (StatusCode::NOT_FOUND, format!("no device with ip {ip}")).into_response();
+    };
+    match tokio::task::spawn_blocking(move || probe_device(&device, &req.username, &req.password))
+        .await
+    {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("probe task failed: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+/// Resolve a stream URL for `device`, probe it once, and — only once the creds are proven —
+/// pull a single frame as visual proof for the user.
+fn probe_device(device: &app_core::devices::Device, user: &str, pass: &str) -> serde_json::Value {
+    use app_core::rtsp_probe::{self, ProbeStatus};
+
+    // Prefer the substream: same credentials, a fraction of the bandwidth of a 4K keyframe.
+    let cached = device
+        .rtsp_sub_url
+        .as_deref()
+        .or(device.rtsp_url.as_deref())
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .map(str::to_string);
+
+    // A camera whose creds were never set has no cached URL yet, so ONVIF is the only way to
+    // learn its stream path. ONVIF authenticates too, so a rejection there is already a verdict.
+    let url = match cached {
+        Some(u) => u,
+        None => {
+            let target = if device.xaddr.trim().is_empty() {
+                device.ip.clone()
+            } else {
+                device.xaddr.clone()
+            };
+            match app_core::onvif::client::resolve_stream_uris(&target, user, pass) {
+                Ok((main, sub)) => sub.unwrap_or(main),
+                Err(e) => {
+                    let rejected = e.contains("credentials likely rejected");
+                    let status = if rejected {
+                        ProbeStatus::AuthFailed
+                    } else {
+                        ProbeStatus::Error
+                    };
+                    let detail = if rejected {
+                        format!("Camera rejected the credentials over ONVIF: {e}")
+                    } else {
+                        format!("Couldn't ask the camera which streams it has: {e}")
+                    };
+                    return json!({ "status": status, "detail": detail, "snapshot": serde_json::Value::Null });
+                }
+            }
+        }
+    };
+
+    let verdict = rtsp_probe::probe(&url, user, pass);
+    log::info!("probe {} → {:?}: {}", device.ip, verdict.status, verdict.detail);
+
+    // The frame is proof for the user's eyes, not part of the verdict — a camera that
+    // authenticated but won't hand over a frame is still a credential success.
+    let snapshot = match verdict.status {
+        ProbeStatus::Ok => app_core::onvif::client::snapshot_from_rtsp(&url, user, pass)
+            .map(|b| {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD.encode(b)
+            })
+            .map_err(|e| log::warn!("probe {}: creds ok but no proof frame: {e}", device.ip))
+            .ok(),
+        _ => None,
+    };
+
+    json!({ "status": verdict.status, "detail": verdict.detail, "snapshot": snapshot })
 }
 
 /// Capture and return a JPEG snapshot for the camera at `ip` (binary; the FrameSource

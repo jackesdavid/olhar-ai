@@ -21,6 +21,7 @@ pub fn router() -> Router<AppState> {
         .route("/devices/configured", get(configured))
         .route("/devices/streaming", get(streaming))
         .route("/devices/:ip/credentials", post(set_credentials))
+        .route("/devices/:ip/probe", post(probe))
         .route("/devices/:ip/snapshot", get(snapshot))
         .route("/devices/:ip/tracks", get(tracks))
         .route("/devices/rescan", post(rescan))
@@ -84,6 +85,59 @@ async fn set_credentials(UserClaims(c): UserClaims, State(st): State<AppState>, 
     let _ = store::mark_configured(&st.pool, tid, &ip).await;
     st.bump(tid);
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Ask the tenant's edge to prove a camera's credentials, **without saving them anywhere**
+/// (card #88). The creds ride the request to the edge and are dropped after the probe — they
+/// are neither staged in `pending_creds` nor written to the DB.
+///
+/// This is the "test" half of test-then-save: the UI calls it first and only calls
+/// `set_credentials` on a verified `ok`. The edge returns a typed verdict (`ok`, `auth_failed`,
+/// `locked`, `not_found`, `unreachable`, `timeout`, `error`) so the UI can name the real cause
+/// instead of blaming the password for a locked or unreachable camera.
+async fn probe(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip): Path<String>, Json(b): Json<CredsReq>) -> Result<Response, ApiErr> {
+    use crate::domain::recordings::{edge_api_base, normalize_host};
+    // Read-only for our data (nothing is persisted), but it does drive a camera login, so it
+    // sits behind the same permission as setting credentials.
+    auth::require(&c, "devices.write")?;
+    let tid = tenant_of(&c)?;
+
+    let edge_host = store::box_host_for_tenant(&st.pool, tid)
+        .await
+        .map_err(|e| {
+            log::error!("box host lookup: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+        })?
+        .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "no edge box connected for this tenant"))?;
+
+    let base = edge_api_base(&normalize_host(&edge_host));
+    let url = format!("{base}/probe/{}", urlencoding::encode(&ip));
+
+    // The probe opens a real socket to the camera, so allow for a slow handshake — but bound
+    // it, or a wedged camera would hold the request open indefinitely.
+    let resp = st
+        .http
+        .post(&url)
+        .json(&serde_json::json!({ "username": b.username, "password": b.password }))
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| {
+            log::error!("edge probe {url}: {e}");
+            err(StatusCode::BAD_GATEWAY, format!("edge unreachable: {e}"))
+        })?;
+
+    if !resp.status().is_success() {
+        return Err(err(
+            StatusCode::BAD_GATEWAY,
+            format!("edge returned {}", resp.status()),
+        ));
+    }
+    let body = resp
+        .bytes()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, format!("edge response read: {e}")))?;
+    Ok(([(header::CONTENT_TYPE, "application/json")], Body::from(body)).into_response())
 }
 
 /// Cameras the tenant's edge found on its LAN (ONVIF), pushed up by the edge. The admin

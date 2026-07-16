@@ -35,6 +35,35 @@ export type EdgeDiscovered = {
   last_seen: string;
 };
 
+/** What the edge found when it tried the credentials against the camera (card #88).
+ *
+ * These are deliberately distinct causes, not one "failed": a locked camera and a wrong
+ * password need opposite advice from the user, and conflating them is what kept people
+ * re-typing correct credentials at a camera that had stopped listening. */
+export type ProbeStatus =
+  /** Credentials accepted; the stream is describable. */
+  | "ok"
+  /** The camera evaluated the credentials and rejected them. */
+  | "auth_failed"
+  /** The camera is refusing every RTSP client regardless of credentials — needs a power cycle. */
+  | "locked"
+  /** Signed in, but there's no stream at that path. */
+  | "not_found"
+  /** No TCP connection: wrong IP, camera off, or a network boundary. */
+  | "unreachable"
+  /** Connected, but the camera never answered. */
+  | "timeout"
+  /** Anything we couldn't classify — `detail` carries the raw reason. */
+  | "error";
+
+export type ProbeResult = {
+  status: ProbeStatus;
+  /** Operator-facing detail — the camera's own reason line where we have one. */
+  detail: string;
+  /** Base64 JPEG proof, present only on `ok`. */
+  snapshot: string | null;
+};
+
 const SETTINGS_KEY = "sentinel.settings";
 
 function cloudOnly(feature: string): never {
@@ -154,32 +183,19 @@ export const data = {
   rescan: async (): Promise<void> => {
     await api.post<void>("/devices/rescan");
   },
-  /** Set a camera's credentials and PROVE they work by pulling a live snapshot (card #88).
-   *  A frame only comes back if the RTSP creds authenticated and the edge's go2rtc connected, so a
-   *  returned blob IS the proof. Saves the creds, gives the edge a moment to apply them + resolve
-   *  the stream, then polls the snapshot until a frame arrives or ~`timeoutMs` elapses. */
-  testCredentials: async (
-    ip: string,
-    username: string,
-    password: string,
-    timeoutMs = 25_000,
-  ): Promise<{ ok: boolean; blob?: Blob }> => {
-    await api.post<void>(`/devices/${encodeURIComponent(ip)}/credentials`, { username, password });
-    const deadline = Date.now() + timeoutMs;
-    // The edge picks creds up on its next config poll (~1s, woken by control) and needs a beat to
-    // reconnect go2rtc's RTSP stream — don't probe instantly or the first frame is guaranteed to miss.
-    await new Promise((r) => setTimeout(r, 2500));
-    while (Date.now() < deadline) {
-      try {
-        const blob = await data.snapshotBlob(ip, 8000);
-        if (blob.size > 0) return { ok: true, blob };
-      } catch {
-        // not ready yet (creds still propagating, or wrong) — keep trying until the deadline
-      }
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-    return { ok: false };
-  },
+  /** Ask the edge to prove a camera's credentials, saving nothing (card #88).
+   *
+   *  This is the "test" half of test-then-save: call it first, and only call [`setCredentials`]
+   *  on a verified `ok`. The edge speaks RTSP to the camera once and reports what actually
+   *  happened, so the UI can tell "wrong password" apart from "camera locked" or "unreachable".
+   *
+   *  It replaced a save-then-poll loop that saved unproven creds (pointing go2rtc's reconnect
+   *  loop at the camera) and retried every 2s for 25s. That burst trips the RTSP lockout on
+   *  consumer cameras — a typo took a working camera offline until it was power-cycled — and
+   *  every failure read as "wrong password", so users re-typed correct creds and made it worse.
+   *  Hence: one attempt, no retries. Retrying is the bug, not the fix. */
+  probeCredentials: (ip: string, username: string, password: string): Promise<ProbeResult> =>
+    api.post<ProbeResult>(`/devices/${encodeURIComponent(ip)}/probe`, { username, password }),
   validateDevice: (): Promise<never> => cloudOnly("Credential validation"),
 
   // ---- live / snapshots (edge-owned, via the streaming gateway) ------------

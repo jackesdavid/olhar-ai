@@ -27,6 +27,7 @@ pub mod persons;
 pub mod platform_logs;
 pub mod ports;
 pub mod presence;
+pub mod rtsp_probe;
 pub mod tenancy;
 pub mod timeutil;
 pub mod tracking;

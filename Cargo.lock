@@ -122,6 +122,7 @@ dependencies = [
  "image",
  "imageproc",
  "log",
+ "md-5",
  "rand 0.8.6",
  "rust-s3",
  "serde",

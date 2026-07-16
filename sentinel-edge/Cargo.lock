@@ -122,6 +122,7 @@ dependencies = [
  "image",
  "imageproc",
  "log",
+ "md-5",
  "rand 0.8.6",
  "rust-s3",
  "serde",
@@ -2728,7 +2729,7 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "sentinel-edge"
-version = "0.5.40"
+version = "0.5.41"
 dependencies = [
  "app-core",
  "axum",

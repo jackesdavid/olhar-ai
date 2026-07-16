@@ -11,6 +11,8 @@ serde_json = "1"
 # WS-Security PasswordDigest + WS-Discovery UUIDs.
 ureq = { version = "2", features = ["json"] }
 sha1 = "0.10"
+# RTSP digest auth (rtsp_probe) — cameras challenge with MD5 digest.
+md-5 = "0.10"
 # Stripe webhook signature verification: HMAC-SHA256 over the raw request body.
 sha2 = "0.10"
 hmac = "0.12"

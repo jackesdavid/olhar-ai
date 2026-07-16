@@ -3,7 +3,7 @@
   import Cpu from "@lucide/svelte/icons/cpu";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { data, onEvent, type EdgeDiscovered } from "$lib/data";
+  import { data, onEvent, type EdgeDiscovered, type ProbeResult, type ProbeStatus } from "$lib/data";
   import { toast } from "svelte-sonner";
 
   import Radar from "@lucide/svelte/icons/radar";
@@ -73,10 +73,11 @@
   let editUser = $state("");
   let editPass = $state("");
   let savingDetail = $state(false);
-  // Credential test (card #88): prove the creds work by pulling a live snapshot.
+  // Credential test (card #88): the camera proves the creds before we save them.
   type TestState = "idle" | "testing" | "verified" | "failed";
   let testState = $state<TestState>("idle");
   let testSnapshotUrl = $state<string | null>(null);
+  let verdict = $state<ProbeResult | null>(null);
 
   // ---- Delete confirm dialog ----------------------------------------------
   let deleteOpen = $state(false);
@@ -177,38 +178,95 @@
 
   function resetTest() {
     testState = "idle";
-    if (testSnapshotUrl) URL.revokeObjectURL(testSnapshotUrl);
+    verdict = null;
+    // The proof frame is a data: URL now (the edge returns it inline), so there's no object
+    // URL to revoke — assigning null is enough to drop it.
     testSnapshotUrl = null;
   }
 
-  // Save the name + credentials, then PROVE the creds work by pulling a live snapshot (card #88).
-  // A returned frame means the RTSP creds authenticated and the edge's go2rtc connected — real proof,
-  // not "saved into a void."
+  // Test the credentials, and save them ONLY once the camera has proven them (card #88).
+  //
+  // The order matters more than it looks. Saving first hands unproven creds to the edge, which
+  // writes them into go2rtc's config and points a reconnect loop at the camera — so a typo didn't
+  // just fail, it overwrote a working camera's config and started an auth storm. Consumer cameras
+  // (Tapo, Reolink) lock their RTSP server after such a burst and then refuse *everyone* until
+  // they're power-cycled. Probe first, once; persist only on `ok`.
   async function saveAndTest() {
     if (!detail || !editUser.trim()) return;
     savingDetail = true;
     resetTest();
+    testState = "testing";
     try {
+      const res = await data.probeCredentials(detail.ip, editUser, editPass);
+      verdict = res;
+      if (res.status !== "ok") {
+        testState = "failed";
+        return; // Nothing is saved — the camera's config is left exactly as it was.
+      }
+      if (res.snapshot) testSnapshotUrl = `data:image/jpeg;base64,${res.snapshot}`;
+      // Proven — now it's safe to persist the name and hand the creds to the edge.
       const device: Device = { ...detail, name: editName.trim() || detail.name, username: null, password: null };
       await data.saveDevice(device);
+      await data.setCredentials(detail.ip, editUser, editPass);
       detail = device;
-      testState = "testing";
-      const res = await data.testCredentials(detail.ip, editUser, editPass);
-      if (res.ok && res.blob) {
-        testSnapshotUrl = URL.createObjectURL(res.blob);
-        testState = "verified";
-      } else {
-        testState = "failed";
-      }
+      testState = "verified";
       await loadDevices();
       await loadEdgeFound();
     } catch (err) {
-      console.error("Failed to save/test device", err);
+      console.error("Failed to test device", err);
+      verdict = null;
       testState = "failed";
-      toast.error("Failed to save the camera", { description: String(err) });
+      toast.error("Couldn't test the camera", { description: String(err) });
     } finally {
       savingDetail = false;
     }
+  }
+
+  // One cause, one piece of advice. `detail` from the edge is the operator-facing reason and is
+  // shown underneath, but the headline has to tell the user what to actually DO.
+  function verdictTitle(v: ProbeResult | null): string {
+    if (!v) return "Couldn't test this camera.";
+    const titles: Record<ProbeStatus, string> = {
+      ok: "Camera verified — the credentials work.",
+      auth_failed: "The camera rejected these credentials.",
+      locked: "The camera has locked its video stream.",
+      not_found: "Signed in, but found no video stream.",
+      unreachable: "Couldn't reach the camera.",
+      timeout: "The camera didn't answer.",
+      error: "Couldn't test this camera.",
+    };
+    return titles[v.status] ?? titles.error;
+  }
+
+  function verdictAdvice(v: ProbeResult | null): string {
+    if (!v) return "Something went wrong before we could reach the camera. Nothing was saved.";
+    const advice: Record<ProbeStatus, string> = {
+      ok: "",
+      auth_failed:
+        "Double-check the username and password. Many cameras need a separate account you create in their own app, not your cloud login. Nothing was saved.",
+      locked:
+        "It's refusing every connection, not just ours — cameras do this after repeated failed logins. Unplug it for about 30 seconds, then test again. Your saved credentials weren't changed.",
+      not_found:
+        "The credentials are right, but the camera didn't offer a stream at the expected path. It may need RTSP enabled in its own settings.",
+      unreachable:
+        "Nothing answered at this address. Check the camera is powered on and on the same network as your box — if its IP changed, try Rescan.",
+      timeout:
+        "It accepted the connection but never replied. It may be busy or half-crashed; a power cycle usually clears it.",
+      error: "Nothing was saved.",
+    };
+    return advice[v.status] ?? advice.error;
+  }
+
+  // Retrying a rejection or a lockout is exactly what causes a lockout, so don't invite it.
+  function canRetry(v: ProbeResult | null): boolean {
+    if (!v) return true;
+    return v.status !== "auth_failed" && v.status !== "locked";
+  }
+
+  function testButtonLabel(): string {
+    if (savingDetail) return "Testing…";
+    if (testState === "failed" && canRetry(verdict)) return "Test again";
+    return "Test & save";
   }
 
   async function saveDetail() {
@@ -429,25 +487,26 @@
             {#if testState === "testing"}
               <div class="flex items-center gap-3 text-sm text-muted-foreground">
                 <Busy />
-                Testing the connection to {detail.ip}… pulling a live frame to prove the credentials work.
+                Asking {detail.ip} to prove these credentials… nothing is saved until it does.
               </div>
             {:else if testState === "verified"}
               <div class="space-y-2">
                 <p class="flex items-center gap-2 text-sm font-medium text-primary">
-                  <Check class="size-4" /> Camera verified — the credentials work.
+                  <Check class="size-4" /> {verdictTitle(verdict)}
                 </p>
                 {#if testSnapshotUrl}
-                  <img src={testSnapshotUrl} alt="Live snapshot from {detail.ip}" class="w-full rounded-md border border-border" />
+                  <img src={testSnapshotUrl} alt="Live frame from {detail.ip}" class="w-full rounded-md border border-border" />
                 {/if}
               </div>
             {:else if testState === "failed"}
               <div class="space-y-1 text-sm">
                 <p class="flex items-center gap-2 font-medium text-destructive">
-                  <XCircle class="size-4" /> Couldn't get a picture from this camera.
+                  <XCircle class="size-4" /> {verdictTitle(verdict)}
                 </p>
-                <p class="text-muted-foreground">
-                  Check the username and password, and that the camera is on the same network as your edge. Then try again.
-                </p>
+                <p class="text-muted-foreground">{verdictAdvice(verdict)}</p>
+                {#if verdict?.detail}
+                  <p class="pt-1 text-xs text-muted-foreground/70">The camera said: {verdict.detail}</p>
+                {/if}
               </div>
             {/if}
           </div>
@@ -456,7 +515,7 @@
         <div class="flex flex-wrap gap-2">
           {#if editUser.trim()}
             <Button onclick={saveAndTest} disabled={savingDetail}>
-              {savingDetail ? "Saving…" : testState === "failed" ? "Save & test again" : "Save & test"}
+              {testButtonLabel()}
             </Button>
           {:else}
             <Button onclick={saveDetail} disabled={savingDetail}>
