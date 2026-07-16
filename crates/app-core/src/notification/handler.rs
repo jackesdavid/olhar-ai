@@ -105,6 +105,7 @@ pub fn spawn_pairing<F>(
     }
     thread::spawn(move || {
         let mut offset: i64 = 0; // 0 = take the current backlog once
+        let mut err_streak: u32 = 0;
         loop {
             if stop.load(Ordering::Relaxed) {
                 break; // a newer config replaced us
@@ -112,6 +113,7 @@ pub fn spawn_pairing<F>(
             // 15s long-poll so the stop flag is checked promptly on a config change.
             match client::get_updates(&cfg, offset, 15) {
                 Ok(updates) => {
+                    err_streak = 0;
                     for u in &updates {
                         offset = offset.max(u.update_id + 1); // ack
                         if parse_pairing_code(&u.text, &cfg.pairing_code) {
@@ -138,7 +140,14 @@ pub fn spawn_pairing<F>(
                         }
                     }
                 }
-                Err(_) => {
+                Err(e) => {
+                    // A persistent getUpdates failure (e.g. HTTP 409 when a webhook is set, or a
+                    // bad token) used to be totally silent. Surface it, but throttle: first
+                    // occurrence, then every ~12th retry (~once/minute at the 5s backoff).
+                    if err_streak == 0 || err_streak % 12 == 0 {
+                        log::warn!("pairing getUpdates failing for tenant {tenant_id}: {e}");
+                    }
+                    err_streak = err_streak.saturating_add(1);
                     if stop.load(Ordering::Relaxed) {
                         break;
                     }

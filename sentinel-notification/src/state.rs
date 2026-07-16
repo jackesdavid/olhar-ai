@@ -7,8 +7,10 @@ use std::sync::{Arc, Mutex};
 use app_core::db::Db;
 use uuid::Uuid;
 
-/// tenant → (its bot token, stop flag) for the running pairing pollers.
-pub type PairingStops = Arc<Mutex<HashMap<Uuid, (String, Arc<AtomicBool>)>>>;
+/// tenant → (its bot token, its pairing code, stop flag) for the running pairing pollers.
+/// The code is part of the identity because the poller captures it by value at spawn time —
+/// a rotated code must restart the poller, or it keeps matching the stale one.
+pub type PairingStops = Arc<Mutex<HashMap<Uuid, (String, String, Arc<AtomicBool>)>>>;
 
 pub struct AppState {
     pub db: Db,

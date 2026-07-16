@@ -37,7 +37,7 @@ fn sync(state: &Arc<AppState>) {
         let mut stops = state.pairing_stops.lock().unwrap();
         let removed: Vec<Uuid> = stops.keys().filter(|t| !active.contains(*t)).copied().collect();
         for t in removed {
-            let (_, flag) = stops.remove(&t).unwrap();
+            let (_, _, flag) = stops.remove(&t).unwrap();
             flag.store(true, Ordering::Relaxed);
             log::info!("pairing poller stopped for tenant {t} (config removed)");
         }
@@ -48,11 +48,14 @@ fn sync(state: &Arc<AppState>) {
             let stops = state.pairing_stops.lock().unwrap();
             match stops.get(&tenant) {
                 None => true,
-                Some((saved_token, _)) => saved_token != &cfg.bot_token,
+                // Restart on EITHER a new token or a rotated pairing code — the poller baked the
+                // code in at spawn time, so a code change alone must respawn it (else it keeps
+                // matching the stale code and silently ignores the new one).
+                Some((saved_token, saved_code, _)) => saved_token != &cfg.bot_token || saved_code != &cfg.pairing_code,
             }
         };
         if needs_start {
-            if let Some((_, flag)) = state.pairing_stops.lock().unwrap().remove(&tenant) {
+            if let Some((_, _, flag)) = state.pairing_stops.lock().unwrap().remove(&tenant) {
                 flag.store(true, Ordering::Relaxed);
             }
             start_tenant_poller(state, tenant, cfg);
@@ -66,7 +69,7 @@ fn start_tenant_poller(state: &Arc<AppState>, tenant: Uuid, cfg: notification::N
         .pairing_stops
         .lock()
         .unwrap()
-        .insert(tenant, (cfg.bot_token.clone(), Arc::clone(&stop)));
+        .insert(tenant, (cfg.bot_token.clone(), cfg.pairing_code.clone(), Arc::clone(&stop)));
 
     let store = Arc::new(std::sync::Mutex::new(notification::repo::load_beacons(&state.db, tenant)));
     let db = state.db.clone();
