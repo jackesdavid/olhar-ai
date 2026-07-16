@@ -48,6 +48,7 @@
 
   // ---- enrollment link copy ------------------------------------------------
   let copied = $state(false);
+  let copiedCmd = $state(false);
 
   // ---- QR of the enrollment link -------------------------------------------
   // Rendered client-side to an inline SVG (the `qrcode` lib, bundled — no external QR service, so
@@ -79,6 +80,20 @@
     await navigator.clipboard.writeText(link);
     copied = true;
     setTimeout(() => (copied = false), 2000);
+  }
+
+  /** The exact message a recipient pastes to the bot when the deep-link Start button won't
+   *  resend the payload — i.e. they've opened this bot before, so Telegram just reopens the chat
+   *  and drops the `start=` code. Pasting `/start <code>` always works. */
+  function startCommand(): string {
+    return config?.pairing_code ? `/start ${config.pairing_code}` : "";
+  }
+  async function copyStartCommand() {
+    const cmd = startCommand();
+    if (!cmd) return;
+    await navigator.clipboard.writeText(cmd);
+    copiedCmd = true;
+    setTimeout(() => (copiedCmd = false), 2000);
   }
 
   /** True when the browser can offer the OS share sheet (mobile mostly) — so we only show Share
@@ -372,6 +387,26 @@
                     <ExternalLink class="size-3" />
                     Open
                   </a>
+                </div>
+                <div class="rounded-md border border-dashed border-border/70 bg-background/40 p-2.5">
+                  <p class="text-xs text-muted-foreground">
+                    Bot doesn't respond after opening? If they've messaged it before, Telegram won't
+                    resend the code — paste this to the bot instead:
+                  </p>
+                  <div class="mt-1.5 flex items-center gap-2">
+                    <code class="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 font-mono text-xs text-foreground">
+                      {startCommand()}
+                    </code>
+                    <Button variant="outline" size="sm" class="h-7 gap-1 text-xs" onclick={copyStartCommand}>
+                      {#if copiedCmd}
+                        <Check class="size-3 text-primary" />
+                        Copied
+                      {:else}
+                        <Copy class="size-3" />
+                        Copy
+                      {/if}
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>
