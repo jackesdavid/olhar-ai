@@ -1,10 +1,17 @@
 <script lang="ts">
-  // The Sentinel logo lockup: the dot-field mark + the "Sentinel" wordmark
-  // (Sora, sentence-case — the locked brand type). Horizontal by default; set
-  // `stacked` for square contexts. `wordmark={false}` renders the mark alone
-  // (e.g. a collapsed sidebar). The wordmark uses --font-brand (Sora), scoped
-  // to the logo only — it does NOT change the app's UI font.
-  import SentinelMark from "./sentinel-mark.svelte";
+  // The OlharAI logo lockup: the eclipse-eye mark + the "OLHAR AI" wordmark. Horizontal by
+  // default; set `stacked` for square contexts. `wordmark={false}` renders the mark alone (e.g. a
+  // collapsed sidebar). The wordmark uses --font-brand (Sora), scoped to the logo only — it does
+  // NOT change the app's UI font.
+  //
+  // Per `assets/BRAND.md` § Typography: **Sora 600, UPPERCASE, letter-spacing 0.16em** (0.18em at
+  // display sizes), and the lockup sets the mark at ~1.6x the cap height with a gap of ~0.65x cap
+  // height. The old lockup was sentence-case at -0.02em tracking — the inverse of this brand, so
+  // none of those numbers survive.
+  //
+  // The file keeps its `sentinel-*` name on purpose: the rebrand renames what users see, not the
+  // codebase (see docs/plans/olharai-rebrand.md).
+  import OlharMark from "./olhar-mark.svelte";
 
   let {
     size = 30,
@@ -29,25 +36,31 @@
     markClass?: string;
   } = $props();
 
-  // Cap-height match + clear-space, derived from the mark size (the study's ratios).
-  const gap = $derived(Math.round(size * (stacked ? 0.24 : 0.36)));
-  const wm = $derived(Math.round(size * (stacked ? 0.5 : 0.66)));
+  // BRAND.md gives the lockup in CAP HEIGHTS, not font sizes: mark = 1.6x cap, gap = 0.65x cap.
+  // Sora's cap height is ~0.7em, so font-size = cap / 0.7. Verify against the font's real metrics
+  // if the lockup ever looks off — this constant is the one soft number here.
+  const SORA_CAP = 0.7;
+  const cap = $derived(size / 1.6);
+  const wm = $derived(Math.round((cap / SORA_CAP) * (stacked ? 0.82 : 1)));
+  const gap = $derived(Math.round(cap * (stacked ? 0.45 : 0.65)));
+  // 0.18em at display sizes, 0.16em otherwise (BRAND.md § Typography).
+  const tracking = $derived(size >= 48 ? "0.18em" : "0.16em");
 </script>
 
 <span
   class="sentinel-logo {stacked ? 'is-stacked' : ''} {klass}"
   style="gap:{gap}px"
 >
-  <SentinelMark
+  <OlharMark
     {size}
     {animated}
-    boundary
+    label=""
     class="shrink-0 {markClass}"
     style="filter: drop-shadow(var(--brand-glow))"
   />
   {#if wordmark}
     <span class="lockup-text">
-      <span class="wordmark" style="font-size:{wm}px">Sentinel</span>
+      <span class="wordmark" style="font-size:{wm}px; letter-spacing:{tracking}">OLHAR AI</span>
       {#if subtitle}<span class="subtitle">{subtitle}</span>{/if}
     </span>
   {/if}
@@ -70,8 +83,11 @@
   .wordmark {
     font-family: var(--font-brand);
     font-weight: 600;
-    letter-spacing: -0.02em;
+    /* Uppercase is the wordmark's styling, not the product's name — BRAND.md sets the mark as
+       "OLHAR AI" while copy uses the canonical name. Tracking is set inline (size-dependent). */
+    text-transform: uppercase;
     color: var(--foreground);
+    white-space: nowrap;
   }
   .subtitle {
     font-size: 0.5em;

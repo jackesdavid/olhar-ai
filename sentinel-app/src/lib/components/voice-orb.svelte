@@ -2,7 +2,7 @@
   // The voice-first centerpiece: the Sentinel hex dot-field mark, audio-reactive.
   // It swells with live audio amplitude (`level` 0..1) and tints by who's talking —
   // primary ink when Sentinel speaks, sky-blue when the operator speaks, dim when idle.
-  import SentinelMark from "$lib/components/sentinel-mark.svelte";
+  import OlharMark from "$lib/components/olhar-mark.svelte";
 
   let {
     level = 0,
@@ -36,6 +36,6 @@
   ></div>
   <!-- the mark itself, scaled by amplitude -->
   <div class="relative" style="transform:scale({scale});will-change:transform">
-    <SentinelMark {size} rings={6} animated={state === "idle"} />
+    <OlharMark {size} animated={state === "idle"} label="" />
   </div>
 </div>

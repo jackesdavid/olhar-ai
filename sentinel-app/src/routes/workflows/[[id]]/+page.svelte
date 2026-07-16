@@ -76,7 +76,7 @@
   import * as Select from "$lib/components/ui/select";
   import Loader from "$lib/components/loader.svelte";
   import EmptyState from "$lib/components/empty-state.svelte";
-  import SentinelMark from "$lib/components/sentinel-mark.svelte";
+  import OlharMark from "$lib/components/olhar-mark.svelte";
   import StatusDot from "$lib/components/status-dot.svelte";
   import {
     portColor,
@@ -4181,7 +4181,7 @@
             </div>
           {:else}
             <div class="rounded-xl border border-dashed border-border p-6 text-center">
-              <SentinelMark size={28} class="mx-auto mb-2 text-muted-foreground/50" />
+              <OlharMark size={28} class="mx-auto mb-2 text-muted-foreground/50" label="" />
               <p class="text-xs text-muted-foreground">Select a node to edit its properties.</p>
             </div>
           {/if}
