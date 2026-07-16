@@ -4,6 +4,7 @@
   import { toast } from "svelte-sonner";
 
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+  import WifiOff from "@lucide/svelte/icons/wifi-off";
   import Busy from "$lib/components/busy.svelte";
 
   import * as Card from "$lib/components/ui/card";
@@ -55,6 +56,101 @@
   let sourceBuffer: SourceBuffer | null = null;
   let bufQueue: ArrayBuffer[] = [];
 
+  // ---- Honest playback state (card #89) -----------------------------------------
+  // The badge must reflect what's actually on screen: LIVE only when the playhead is truly
+  // advancing, our loader while connecting, a clear error (never a green LIVE over black).
+  type Phase = "idle" | "connecting" | "live" | "stalled" | "error";
+  let phase = $state<Phase>("idle");
+  let errorMsg = $state("");
+  let retries = 0; // stall auto-retries since we were last live
+  const MAX_RETRIES = 3;
+  let watchdog: ReturnType<typeof setTimeout> | null = null; // no-first-frame timeout
+  let stallTimer: ReturnType<typeof setTimeout> | null = null; // frames-stopped-while-live timeout
+  let lastTime = 0; // last observed playhead, to detect real progress
+
+  function clearTimers() {
+    if (watchdog) { clearTimeout(watchdog); watchdog = null; }
+    if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
+  }
+
+  function fail(msg: string) {
+    clearTimers();
+    errorMsg = msg;
+    phase = "error";
+  }
+
+  /** Why a connect might have failed — codec-specific when we're on HD, else generic. */
+  function connectFailMsg(): string {
+    if (hd) {
+      return "Couldn't play the HD stream — this camera's HD codec may not be supported in your browser. Try SD.";
+    }
+    return "Couldn't connect to the live stream. The camera or your edge's live video may be unreachable.";
+  }
+
+  // An advancing playhead is the ONLY honest signal that frames are rendering → truly live.
+  function onProgress() {
+    if (!videoEl) return;
+    if (videoEl.currentTime > lastTime + 0.01) {
+      lastTime = videoEl.currentTime;
+      if (phase !== "live") {
+        phase = "live";
+        retries = 0;
+        errorMsg = "";
+      }
+      if (watchdog) { clearTimeout(watchdog); watchdog = null; }
+      armStall();
+    }
+  }
+
+  // Was live, then the playhead stopped advancing → treat as a stall and try to recover.
+  function armStall() {
+    if (stallTimer) clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      if (phase === "live") {
+        phase = "stalled";
+        autoRetry();
+      }
+    }, 4000);
+  }
+
+  function autoRetry() {
+    if (retries >= MAX_RETRIES) {
+      fail("The live stream keeps dropping. Check the camera and that your edge is online.");
+      return;
+    }
+    retries += 1;
+    const ip = selected?.ip;
+    if (ip) startStream(ip, true);
+  }
+
+  function manualRetry() {
+    retries = 0;
+    const ip = selected?.ip;
+    if (ip) startStream(ip);
+  }
+
+  // ---- badge + overlay specs (house style: named helpers, no markup ternaries) ---
+  function badgeSpec(): { text: string; dot: "online" | "warn" | "danger"; cls: string } | null {
+    switch (phase) {
+      case "live":
+        return { text: "LIVE", dot: "online", cls: "border-primary/30 bg-hud text-primary" };
+      case "connecting":
+        return { text: "Connecting…", dot: "warn", cls: "border-border bg-hud text-muted-foreground" };
+      case "stalled":
+        return { text: "Reconnecting…", dot: "warn", cls: "border-border bg-hud text-muted-foreground" };
+      case "error":
+        return { text: "No signal", dot: "danger", cls: "border-red-400/30 bg-hud text-red-400" };
+      default:
+        return null;
+    }
+  }
+  function showConnectingOverlay(): boolean {
+    return phase === "connecting" || phase === "stalled";
+  }
+  function connectingLabel(): string {
+    return phase === "stalled" ? "Reconnecting…" : "Connecting to camera…";
+  }
+
   function probeCodecs(): string {
     const v = ["avc1.640029", "avc1.64002A", "avc1.640033", "avc1.42E01E", "hvc1.1.6.L153.B0"];
     const a = ["mp4a.40.2", "mp4a.40.5", "flac", "opus"];
@@ -96,6 +192,7 @@
   }
 
   function stopStream() {
+    clearTimers();
     if (ws) {
       ws.onmessage = ws.onclose = ws.onerror = null;
       try { ws.close(); } catch { /* ignore */ }
@@ -104,15 +201,34 @@
     sourceBuffer = null;
     bufQueue = [];
     mediaSource = null;
+    lastTime = 0;
+    phase = "idle";
     if (videoEl) {
+      videoEl.removeEventListener("timeupdate", onProgress);
       videoEl.removeAttribute("src");
       try { videoEl.load(); } catch { /* ignore */ }
     }
   }
 
-  function startStream(ip: string) {
+  function startStream(ip: string, reconnecting = false) {
     stopStream();
-    if (!videoEl || !auth.token || !("MediaSource" in window)) return;
+    if (!videoEl || !auth.token || !("MediaSource" in window)) {
+      fail("Live video isn't supported in this browser.");
+      return;
+    }
+    // Nothing we send would decode → don't dangle on a black screen waiting for a frame.
+    if (probeCodecs() === "") {
+      fail("This browser can't play any of the camera's video codecs.");
+      return;
+    }
+    phase = reconnecting ? "stalled" : "connecting";
+    errorMsg = "";
+    lastTime = 0;
+    videoEl.addEventListener("timeupdate", onProgress);
+    // First-frame watchdog: if the playhead never advances, surface a real error instead of black.
+    watchdog = setTimeout(() => {
+      if (phase !== "live") fail(connectFailMsg());
+    }, 10000);
     const wsBase = GATEWAY_BASE.replace(/^http/, "ws");
     const url = `${wsBase}/api/ws?src=${streamName(ip)}&token=${encodeURIComponent(auth.token)}`;
     const socket = new WebSocket(url);
@@ -149,6 +265,7 @@
             sourceBuffer.addEventListener("updateend", onUpdateEnd);
           } catch (e) {
             console.error("addSourceBuffer failed", e);
+            fail(connectFailMsg()); // codec the browser can't decode → honest error, not black
           }
         }
       } else {
@@ -156,7 +273,18 @@
         flushBuf();
       }
     };
-    socket.onerror = () => {};
+    // An unexpected close/error (stopStream nulls these first, so this only fires for real drops):
+    // recover if we had video, else surface why nothing started.
+    socket.onclose = () => {
+      if (ws !== socket) return; // superseded by a newer stream
+      if (phase === "live" || phase === "stalled") {
+        phase = "stalled";
+        autoRetry();
+      } else {
+        fail("The live connection closed before video started. Your edge's live video may be unreachable.");
+      }
+    };
+    socket.onerror = () => {}; // onclose will follow with the recovery/fail decision
   }
 
   // (Re)start the stream whenever the selected camera — or the HD toggle — changes (cloud only).
@@ -266,13 +394,40 @@
 
           <div class="frame relative">
             {#if selected}
-              <div class="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-1.5 rounded-full border border-primary/30 bg-hud px-2.5 py-1 text-[11px] font-medium tracking-wide text-primary backdrop-blur">
-                <StatusDot state="online" /> LIVE
-              </div>
               {#if cloud}
+                {@const b = badgeSpec()}
+                <!-- Badge tells the truth: LIVE only when the playhead is advancing (see badgeSpec) -->
+                {#if b}
+                  <div class="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-1.5 rounded-full border {b.cls} px-2.5 py-1 text-[11px] font-medium tracking-wide backdrop-blur">
+                    <StatusDot state={b.dot} /> {b.text}
+                  </div>
+                {/if}
                 <!-- MSE video over the gateway WS (token-gated, smooth H.264) -->
                 <video bind:this={videoEl} class="h-full w-full bg-video-well object-contain" autoplay muted playsinline></video>
+                {#if showConnectingOverlay()}
+                  <div class="absolute inset-0 z-10 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+                    <Loader label={connectingLabel()} />
+                  </div>
+                {:else if phase === "error"}
+                  <div class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/80 p-6 text-center backdrop-blur-sm">
+                    <WifiOff class="size-8 text-red-400" />
+                    <p class="max-w-sm text-sm text-white/80">{errorMsg}</p>
+                    <div class="flex items-center gap-2">
+                      <Button size="sm" variant="outline" onclick={manualRetry}>
+                        <RefreshCw class="size-4" /> Retry
+                      </Button>
+                      {#if hd}
+                        <Button size="sm" variant="ghost" class="text-white/80 hover:text-white" onclick={() => (hd = false)}>
+                          Try SD
+                        </Button>
+                      {/if}
+                    </div>
+                  </div>
+                {/if}
               {:else if selectedStream}
+                <div class="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-1.5 rounded-full border border-primary/30 bg-hud px-2.5 py-1 text-[11px] font-medium tracking-wide text-primary backdrop-blur">
+                  <StatusDot state="online" /> LIVE
+                </div>
                 {#key selectedStream.name}
                   <iframe title="Live camera {selected.name}" src={selectedStream.player_url} allow="autoplay; fullscreen"></iframe>
                 {/key}

@@ -68,8 +68,6 @@ kanban-plugin: board
 	  - Plan: [[delay-trigger-recording-signal-flow]]
 - [ ] #87 Segmented continuous recording — cap clip size, crash-durable, incremental upload
 	  - Plan: [[segmented-continuous-recording]]
-- [ ] #89 Live badge + loading states (bug C)
-	  - Plan: [[live-badge-loading-states]]
 
 
 ## In Progress
@@ -78,6 +76,8 @@ kanban-plugin: board
 	  - Plan: [[edge-windows]]
 - [ ] #83 Windows installer — signed .exe
 	  - Plan: [[edge-windows-installer]]
+- [ ] #89 Live badge + loading states (bug C)
+	  - Plan: [[live-badge-loading-states]]
 
 
 
