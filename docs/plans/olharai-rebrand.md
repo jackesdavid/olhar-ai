@@ -19,12 +19,16 @@ rewrite, not just a find-replace of the brand name.
 
 1. **Canonical name/casing: `OlharAI`** — one word, capital O, capital AI. Use this exact casing
    everywhere (wordmark, `<title>`, OG tags, manifest, UI copy, AI self-description).
-2. **Keep the dot-field mark as-is.** The mark + Sora wordmark system (cards #68/#69) shipped
-   *yesterday* — well-documented (`docs/ref/brand.md`), fully componentized
-   (`SentinelLogo`/`SentinelMark`). Only the **wordmark text** changes ("Sentinel" → "OlharAI");
-   the mark itself, the monochrome-ink theme, and the dot-field visual language are untouched. This
-   makes the whole visual side of the rebrand mechanically cheap — one prop/string change plus a
-   favicon/OG re-export from the *same* master mark.
+2. **~~Keep the dot-field mark as-is.~~ SUPERSEDED 2026-07-16 — there is a new mark.** The owner
+   supplied a complete OlharAI identity in `assets/` (8 SVGs). It is **not** the dot-field: it's an
+   **eclipse/eye** — a dotted orbit ring, a disc eclipsed by an offset circle to cut a crescent, a
+   pupil, and a "moon" dot riding the ring. So the visual side is no longer "one string change":
+   **the mark itself is replaced**, and it becomes the *largest* slice of this epic rather than the
+   cheapest. See [Phase 2](#phase-2--brand-identity-the-new-mark).
+
+   The one thing that carries over: the orbit ring is **dotted** (`stroke-dasharray="0.1 7.754"` +
+   round caps), so the new mark *evolves* the dot-field language rather than discarding it. The
+   monochrome-ink theme is untouched — the supplied art is exactly our `#171717`/`#FAFAFA`.
 3. **`olharai.com.br` is a defensive redirect**, not a localized site: it 301s to `olharai.com`.
    Its DNS (and `olharai.com`'s) should be hosted on **Cloudflare**, matching how the existing
    domains (`thesentinels.online`, and apparently others — "like the other sentinels") are already
@@ -52,14 +56,21 @@ TLS is automatic: Traefik issues Let's Encrypt certs per `Host()` rule label, so
 `olharai.com` hostnames to the existing router rules (dual-`Host()`, matching the `ibbf.life`
 precedent) is enough for certs to provision themselves — no separate cert-management step.
 
-**Brand identity (already built, card #68/#69, 2026-07-12):** `SentinelMark`
-(`sentinel-app/src/lib/components/sentinel-mark.svelte`) is a pure procedural SVG with **no
-rendered text** — untouched except its `aria-label="Sentinel"`. The actual text wordmark is a
-*separate* component, `sentinel-logo.svelte` (`<span class="wordmark">Sentinel</span>`, one line)
-composed into the `SentinelLogo` lockup (mark + wordmark, used in the sidebar header and login
-card). Favicons/OG/PWA manifest were generated from the mark in `sentinel-app/static/` — need
-regenerating with the new wordmark for the OG image (the favicon/app-icon set is mark-only, no
-text, so those likely don't need touching).
+**Brand identity (built as #68/#69 on 2026-07-12; the mark is now being replaced — see Phase 2):**
+`SentinelMark` (`sentinel-app/src/lib/components/sentinel-mark.svelte`) is a pure procedural SVG
+with **no rendered text**, exposing `size`/`animated`/`rings`/`speed`/`boundary` and drawing in
+`currentColor`. **Eight call sites depend on that API** — `loader`, `busy`, `splash`, `empty-state`,
+`voice-orb`, `sentinel-logo`, `+layout`, and the component itself — and most use it for *motion*,
+not as a logo. That is why the new mark has to be ported into this component rather than dropped in
+as a file (Phase 2a).
+
+The text wordmark is a *separate* component, `sentinel-logo.svelte`
+(`<span class="wordmark">Sentinel</span>`), composed into the `SentinelLogo` lockup (sidebar header,
+login card) — it loads Sora via `--font-brand`.
+
+~~The favicon/app-icon set is mark-only, so those likely don't need touching.~~ **Wrong, now that
+the mark changes: every artifact in `sentinel-app/static/` is the old mark and must be re-cut**
+(Phase 2f).
 
 **~10 literal "Sentinel" UI strings** (`sentinel-app/src/...`): `app.html` `<title>`/OG
 `site_name`/`title`; `static/manifest.webmanifest` `name`/`short_name`; splash screen
@@ -108,21 +119,103 @@ throwaway bullet**. There's no pricing section at all.
 - **Once the transition window ends:** flip `thesentinels.online`'s Traefik rule to a redirect-only
   router (301 → the equivalent `olharai.com` host) and retire the dual-`Host()` rules.
 
-## Phase 2 — Brand identity: wordmark swap (mark unchanged)
+## Phase 2 — Brand identity: the new mark
 
-- `sentinel-logo.svelte`: change the wordmark string `"Sentinel"` → `"OlharAI"`.
-- `sentinel-mark.svelte`: update `aria-label="Sentinel"` → `"OlharAI"`.
-- Regenerate the **OG image** (`og.png`) from the updated `SentinelLogo` lockup (new wordmark) —
-  reuse #69's existing export pipeline (headless-Chrome render of the lockup), no new tooling.
-  Favicons/app-icons are mark-only (no text) — verify with a visual check, but likely untouched.
+**Input:** 8 SVGs in `assets/` (untracked as of writing — commit them as the masters):
+
+| File | viewBox | What it is |
+|---|---|---|
+| `olhar-ai-mark-black.svg` / `-white.svg` | 120×120 | the bare mark, ink / paper |
+| `olhar-ai-app-icon.svg` | 120×120 | mark on an `rx=14` ink tile |
+| `olhar-ai-mark-animated.svg` | 120×120 | app-icon tile + `.orbit` / `.moon` / `.pupil` hooks |
+| `olhar-ai-lockup-black.svg` / `-white.svg` | 480×120 | mark + `OLHAR AI`, Sora 600, tracking 7.5 |
+| `olhar-ai-oai-black.svg` / `-white.svg` | 240×120 | mark + `OAI` short lockup |
+
+The geometry is consistent across all 8 (same ring r=50, disc r=31, eclipse at 71,49 r=27, pupil
+r=6, moon at 95.4,24.6) — it's one mark, correctly drawn. What follows is what has to happen
+*around* it before it can ship.
+
+### 2a. The mark must become a component, not a file
+
+This is the real work, and the plan previously missed it. `SentinelMark`
+(`sentinel-app/src/lib/components/sentinel-mark.svelte`) is **procedural SVG with a behavioural
+API** — `size`, `animated`, `rings`, `speed`, `boundary`, all `currentColor`. Eight call sites lean
+on that API, and most want *motion*, not a logo: `loader.svelte`, `busy.svelte`, `splash.svelte`,
+`empty-state.svelte`, `voice-orb.svelte`, `sentinel-logo.svelte`, `+layout.svelte`.
+
+A static `<img src="mark.svg">` serves none of them. So: **port the new geometry into
+`sentinel-mark.svelte`**, keeping the prop surface so the call sites don't change. Map the old
+concepts onto the new form:
+
+- `boundary` → the app-icon's ink tile (the old rounded-hex perimeter's role).
+- `animated` + `speed` → the orbit/moon motion (see 2c), replacing the radial "ping".
+- `rings` → likely meaningless now (the dot-field had concentric rings; this has one orbit).
+  Decide: drop the prop, or repurpose it as orbit-dot density. **Don't silently ignore it.**
+
+### 2b. Outline the wordmark text — the lockups are wrong as supplied
+
+All three lockups render the wordmark as a live `<text font-family="Sora, sans-serif">`. That only
+looks right where Sora is loaded. As standalone SVG assets they will be **used exactly where it
+isn't**: favicon, OG image, email, README, any `<img>` embed, anyone's design tool. There the text
+silently falls back to the system sans — wrong tracking, wrong weight, wrong brand.
+
+**Convert the text to paths** for every standalone asset. Keep live text only inside
+`sentinel-logo.svelte`, where the app already loads Sora via `--font-brand` (that component
+composes mark + `<span class="wordmark">`, so it stays text and stays accessible).
+
+Note the supplied lockups say **`OLHAR AI`** — all-caps, spaced — while decision #1 locks the
+canonical name as **`OlharAI`** (one word). Those are different marks of the same brand and that's
+legitimate (a wordmark may be styled), but `sentinel-logo.svelte` currently renders sentence-case
+text. **Resolve before building** — see Open decisions.
+
+### 2c. `mark-animated.svg` has hooks but no animation
+
+It declares `.orbit`, `.moon`, `.pupil` and defines **no motion at all** — no `<style>`, no
+`@keyframes`, no `<animate>`. As shipped it's identical to the app icon. The classes say the intent
+(rotate the ring, travel the moon, maybe a blink), but the motion has to be written. The old mark's
+"calm ambient ping" with a `speed` prop is the bar; whatever we write should honour
+`prefers-reduced-motion`, which a logo that animates constantly must.
+
+### 2d. Fold black/white into `currentColor`
+
+The art hardcodes `#171717` / `#FAFAFA` in paired files. Our system uses one `currentColor`
+component and lets the theme decide — that's why there's no "dark logo" today. Collapsing the pairs
+means 3 masters instead of 6, and light/dark keeps working for free. Keep the fixed-colour variants
+only as the **exported** artifacts (email, OG, third parties) where `currentColor` can't resolve.
+
+### 2e. `mask id="ecl"` collides when inlined
+
+Every file hardcodes `id="ecl"`. Inline two of them in one document — mark in the sidebar, mark in
+a loader — and the duplicate id makes the second mask reference the first. Ids must be generated
+per-instance (`$props.id()` / a counter), which the procedural component gets to do naturally.
+
+### 2f. Re-export the raster set
+
+`sentinel-app/static/` holds #69's output: `favicon.ico`/`-16`/`-32`, `favicon.svg`,
+`apple-touch-icon.png`, `icon-192`/`-512` (+ `-maskable`), `og.png` (1200×630),
+`manifest.webmanifest`. **All of it is the old mark** and must be re-cut from the new one.
+`.claude/skills/logo-designer/scripts/export.sh` is the existing pipeline — reuse it.
+
+Two traps:
+- **Maskable icons**: `app-icon.svg` bakes its own `rx=14` tile. Android/iOS apply *their own* mask,
+  so a baked corner radius double-rounds and the art overruns the safe zone. Maskable variants need
+  the mark at ~80% within a full-bleed square, no baked rounding.
+- **Favicon at 16px**: the mark's fine details — the 7.75px-gap orbit dots, the r=4 moon — will mush.
+  Check the 16px render; the old mark was explicitly designed to survive it (`brand.md`). A
+  simplified favicon variant (drop the orbit, keep the eclipsed eye) may be needed.
+
+### 2g. The rest of the identity swap
+
+- `sentinel-logo.svelte`: wordmark `"Sentinel"` → the resolved OlharAI form (see 2b).
+- `sentinel-mark.svelte`: `aria-label="Sentinel"` → `"OlharAI"`.
 - `static/manifest.webmanifest`: `name`/`short_name` → "OlharAI".
 - `app.html`: `<title>`, `og:site_name`, `og:title` → "OlharAI".
-- Rewrite `docs/ref/brand.md`'s prose to reference OlharAI as the product name (mark/theme
-  sections stay factually the same, just the name references change).
-- Nice-to-have, not blocking: update the `impeccable` skill doc's header/description (currently
-  says "Design-excellence skill for the Sentinel web app") to say OlharAI, so future design work
-  doesn't keep teaching the old name — the dot-field/monochrome-ink *design language* it teaches is
-  unchanged, only the product-name references in its prose.
+- **Rewrite `docs/ref/brand.md` properly.** It documents the dot-field mark as the identity
+  ("a sensor's field of awareness… dense/bright at the centre"). That prose is now *false*, not
+  merely misnamed. Rewrite the mark section around the eclipse/eye and what it means; keep the
+  monochrome-ink and Sora sections, which still hold.
+- `static/brand/mark.svg` (the master) → the new mark.
+- Nice-to-have: the `impeccable` skill doc still teaches "dot-field" as the design language.
 
 ## Phase 3 — App surface copy sweep
 
@@ -179,6 +272,26 @@ pitch. Concretely surface, at minimum:
   and update if applicable.
 
 ## Open decisions (grill before building)
+
+**Raised by the new assets (2026-07-16):**
+
+1. **`OLHAR AI` or `OlharAI`?** The supplied lockups set the wordmark as all-caps, letter-spaced
+   `OLHAR AI`; decision #1 locks the canonical name as `OlharAI`, and `sentinel-logo.svelte` renders
+   sentence-case. A styled wordmark differing from the written name is normal (cf. the Sentinel
+   lockup's own sentence-case rule in `brand.md`) — but it must be *decided*, not drifted into.
+   Leaning: keep `OlharAI` in all copy/`<title>`/manifest, and treat `OLHAR AI` as the wordmark
+   lockup's styling only. **Owner's call — it's their art.**
+2. **What is `OAI` for?** The 240×120 short lockup implies a compact context (favicon wordmark?
+   collapsed sidebar? app icon?). Nothing in the plan asks for it. Confirm where it's meant to live,
+   or it ships unused.
+3. **Does `rings` survive?** The dot-field had concentric rings; the eclipse has one orbit. Drop the
+   prop (touching every call site that passes it) or repurpose it as orbit-dot density?
+4. **What motion do `.orbit`/`.moon`/`.pupil` imply?** The hooks name the intent but no animation is
+   defined (2c). Ring rotation + moon travel is the obvious read; a pupil blink is possible but
+   risks being gimmicky on a logo that sits in a sidebar all day. Owner's call.
+5. **A simplified 16px favicon variant?** If the orbit dots mush at favicon size (2f), do we ship a
+   reduced mark (eclipsed eye only) or accept the mush?
+
 
 1. **Pricing section on the landing page** — add one now as part of the copy rewrite, or keep
    deferring it (there's already a "Pricing simulator" card, #2, in the backlog)? No pricing

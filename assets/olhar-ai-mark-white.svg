@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480" viewBox="0 0 120 120" fill="none">
+  <mask id="ecl"><rect width="120" height="120" fill="white"></rect><circle cx="71" cy="49" r="27" fill="black"></circle></mask>
+  <circle cx="60" cy="60" r="50" stroke="#FAFAFA" stroke-width="2" stroke-dasharray="0.1 7.754" stroke-linecap="round" opacity="0.3"></circle>
+  <circle cx="60" cy="60" r="31" fill="#FAFAFA" mask="url(#ecl)"></circle>
+  <circle cx="71" cy="49" r="6" fill="#FAFAFA"></circle>
+  <circle cx="95.4" cy="24.6" r="4" fill="#FAFAFA"></circle>
+</svg>
