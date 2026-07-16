@@ -2190,7 +2190,7 @@
     // Clicking a wired input unwires it. The exception: exec_in with an output already
     // picked — the engine accepts converging exec paths, so that click adds a wire
     // instead. Data ports stay single-fed.
-    const addingFanIn = false && port === EXEC_IN_NAME && pending !== null;
+    const addingFanIn = port === EXEC_IN_NAME && pending !== null;
     if (existing >= 0 && !addingFanIn) {
       await removeEdge(existing);
       return;
