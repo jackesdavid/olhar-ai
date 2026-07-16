@@ -10,7 +10,7 @@
 //! All of this is opt-in via `TS_AUTHKEY`. With it unset the edge skips Tailscale
 //! entirely (LAN/one-box dev still works); if the `tailscale` CLI/daemon is missing
 //! it logs and continues rather than failing the service.
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -25,6 +25,59 @@ fn ts() -> Command {
     let mut cmd = Command::new(bin);
     crate::proc::no_window(&mut cmd);
     cmd
+}
+
+/// How long any single `tailscale` invocation may take before we give up on it.
+/// Generous enough for a slow control-plane round trip, short enough that a wedged daemon
+/// costs us one loop instead of the appliance.
+const TS_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Run a `tailscale` command with a hard timeout, killing it if it overruns.
+///
+/// **Every** tailscale call must go through here. `Command::output()` waits forever, and the
+/// CLI does hang: when the daemon is stopped, `tailscale serve --bg 1984` never returns. Since
+/// `ensure_up()` runs on the boot path *before* the HTTP server and the config poll, one hung
+/// `serve` didn't merely take the tailnet down — it stopped the edge from booting at all. The
+/// box then can't poll, so it can't be told to restart and can't self-update: it stays bricked
+/// until someone fixes Tailscale by hand, which is exactly the support call the appliance
+/// exists to avoid. A dead tailnet must cost us the tailnet, never the box.
+fn run(mut cmd: Command, what: &str) -> Option<std::process::Output> {
+    let mut child = match cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            log::debug!("tailscale {what}: CLI unavailable ({e})");
+            return None;
+        }
+    };
+
+    let deadline = Instant::now() + TS_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    log::warn!(
+                        "tailscale {what} hung for {}s — killing it and carrying on (is the daemon stopped?)",
+                        TS_TIMEOUT.as_secs()
+                    );
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                log::debug!("tailscale {what}: wait failed ({e})");
+                return None;
+            }
+        }
+    }
+    child.wait_with_output().ok()
 }
 
 /// If `TS_AUTHKEY` is set, bring the node up and `serve` go2rtc over the tailnet.
@@ -62,13 +115,14 @@ pub fn ensure_up() {
     // CLI `up --authkey` can exit non-zero even though the node is (or can be) up. So we do
     // NOT bail on a non-zero `up` — we still try to `serve`, which succeeds whenever the node
     // is up however it got there. Only a missing CLI is fatal to bring-up.
-    match up.status() {
-        Ok(s) if s.success() => log::info!("tailscale up — hostname={hostname} tags={tags:?}"),
-        Ok(s) => log::warn!(
-            "`tailscale up` exited with {s} (daemon may be app-managed / not logged in) — still trying serve"
+    match run(up, "up") {
+        Some(o) if o.status.success() => log::info!("tailscale up — hostname={hostname} tags={tags:?}"),
+        Some(o) => log::warn!(
+            "`tailscale up` exited with {} (daemon may be app-managed / not logged in) — still trying serve",
+            o.status
         ),
-        Err(e) => {
-            log::warn!("`tailscale` CLI not available ({e}); skipping tailnet setup");
+        None => {
+            log::warn!("`tailscale up` unavailable or hung; skipping tailnet setup this pass");
             return;
         }
     }
@@ -171,10 +225,9 @@ pub fn reassert() {
 /// Anything we can't read — CLI missing, daemon stopped, malformed JSON — counts as not running,
 /// which is the safe reading: it's precisely when we want to re-assert `up`.
 fn node_running() -> bool {
-    ts()
-        .args(["status", "--json"])
-        .output()
-        .ok()
+    let mut cmd = ts();
+    cmd.args(["status", "--json"]);
+    run(cmd, "status --json")
         .filter(|o| o.status.success())
         .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())
         .and_then(|v| {
@@ -189,16 +242,15 @@ fn node_running() -> bool {
 /// Best-effort + idempotent — safe to re-run periodically; a no-op (logged at debug) when
 /// Tailscale is stopped. Output is captured so a stopped daemon doesn't spam stderr.
 pub fn serve_go2rtc() {
-    match ts()
-        .args(["serve", "--bg", "1984"])
-        .output()
-    {
-        Ok(o) if o.status.success() => log::debug!("tailscale serve --bg 1984 ok"),
-        Ok(o) => log::debug!(
+    let mut cmd = ts();
+    cmd.args(["serve", "--bg", "1984"]);
+    match run(cmd, "serve --bg 1984") {
+        Some(o) if o.status.success() => log::debug!("tailscale serve --bg 1984 ok"),
+        Some(o) => log::debug!(
             "tailscale serve --bg 1984: {}",
             String::from_utf8_lossy(&o.stderr).trim()
         ),
-        Err(e) => log::debug!("tailscale serve unavailable: {e}"),
+        None => log::debug!("tailscale serve --bg 1984 unavailable or hung"),
     }
 }
 
@@ -206,16 +258,15 @@ pub fn serve_go2rtc() {
 /// Workflow nodes (recording, snapshots) call https://<magicdns>:8080/ to reach the API.
 /// Port 443 is reserved for go2rtc so the gateway is unaffected.
 pub fn serve_edge_api() {
-    match ts()
-        .args(["serve", "--bg", "--https=8080", "8788"])
-        .output()
-    {
-        Ok(o) if o.status.success() => log::info!("tailscale serve --https=8080 8788 ok (edge API on tailnet)"),
-        Ok(o) => log::warn!(
+    let mut cmd = ts();
+    cmd.args(["serve", "--bg", "--https=8080", "8788"]);
+    match run(cmd, "serve --https=8080 8788") {
+        Some(o) if o.status.success() => log::info!("tailscale serve --https=8080 8788 ok (edge API on tailnet)"),
+        Some(o) => log::warn!(
             "tailscale serve --https=8080 8788: {}",
             String::from_utf8_lossy(&o.stderr).trim()
         ),
-        Err(e) => log::warn!("tailscale serve (edge API) unavailable: {e}"),
+        None => log::warn!("tailscale serve (edge API) unavailable or hung"),
     }
 }
 
@@ -234,10 +285,9 @@ pub fn tailscale_state() -> &'static str {
     if !node_running() {
         return "offline";
     }
-    let serving = ts()
-        .args(["serve", "status"])
-        .output()
-        .ok()
+    let mut cmd = ts();
+    cmd.args(["serve", "status"]);
+    let serving = run(cmd, "serve status")
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).contains("1984"))
         .unwrap_or(false);
@@ -250,10 +300,9 @@ pub fn tailscale_state() -> &'static str {
 
 /// This node's MagicDNS name from `tailscale status --json` (`Self.DNSName`), if up.
 fn detect_dns_name() -> Option<String> {
-    let out = ts()
-        .args(["status", "--json"])
-        .output()
-        .ok()?;
+    let mut cmd = ts();
+    cmd.args(["status", "--json"]);
+    let out = run(cmd, "status --json")?;
     if !out.status.success() {
         return None;
     }

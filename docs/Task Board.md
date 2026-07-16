@@ -27,6 +27,8 @@ kanban-plugin: board
 - [ ] #10 Update available — reload to get the latest version.
 - [ ] #91 Event-storm backstop never engages (WF_GLOBAL_CAP dead)
 	  - Plan: [[event-storm-backstop-dead]]
+- [ ] #93 Box health copy leaks internals ("tailnet", "Tailscale") to users
+	  - Plan: [[box-health-copy-no-internals]]
 
 
 ## ToDo
@@ -88,58 +90,6 @@ kanban-plugin: board
 
 - [ ] #73 Notification providers: configured badge + config & enrollment
 	  - Plan: [[notification-provider-ux]]
-- [ ] #89 Live badge + loading states (bug C)
-	  - Plan: [[live-badge-loading-states]]
-- [ ] #84 Per-platform installer download
-	  - Plan: [[installer-download-button]]
-- [ ] #85 Pairing progress UX — "code accepted" state
-	  - Plan: [[pairing-progress-ux]]
-- [ ] #61 Tab toggle: collapse/expand editor side panels
-	  - Plan: [[editor-panel-tab-toggle]]
-- [ ] #75 Workflow editor: one tabbed right rail (Details / Properties / Variables / Runs)
-	  - Plan: [[workflow-editor-tabbed-inspector]]
-- [ ] #72 Dark palette: deeper elevation ramp (Unreal-style)
-	  - Plan: [[dark-palette-elevation]]
-- [ ] #62 Edge resource monitoring — CPU / mem / disk / GPU
-	  - Plan: [[edge-resource-monitoring]]
-- [ ] #15 Telegram bot: workflow-graph brain + inbound commands
-	  - Plan: [[telegram-bot-two-way-research]]
-- [ ] #19 AI If node — yes/no question routes exec like If
-	  - Plan: [[ai-question-node]]
-- [ ] #22 Recordings: storage, names, filters, delete, sort, paginate
-	  - Plan: [[recordings-improvements]]
-- [ ] #23 TimeGate node — debounced motion wait
-	  - Plan: [[time-gate-node]]
-- [ ] #24 Black & White Rebrand — Sentinel Noir
-	  - Plan: [[monochrome-rebrand]]
-- [ ] #25 Motion-triggered stream recorder
-	  - Plan: [[motion-triggered-recorder]]
-- [ ] #26 Unified Platform Logs — one table, one UI, all modules
-	  - Plan: [[platform-logs-unified]]
-- [ ] #27 Map: solid walls taller, richer material, deeper shadows
-	  - Plan: [[map-walls-3d-depth]]
-- [ ] #28 Draw BBox node — annotate image with bounding box
-	  - Plan: [[draw-bbox-node]]
-- [x] #29 Map Redesign 2 — wall style + architectural-neutral pass
-	  - Plan: [[map-redesign-2]]
-- [ ] #30 Free text (filled and wireframe) tool map
-- [ ] #31 RecordPresence node: room not changeable in property panel
-- [ ] #32 Map redesign — top-down 3D blueprint editor + live presence
-	  - Epic: [[map-redesign]]
-- [ ] #63 Tenant Billing — per-tenant invoicing + cloud cost/margin
-	  - Plan: [[tenant-cloud-cost]]
-- [ ] #67 Playback Timeline — unified inspection view
-	  - Plan: [[recording-playback-timeline]]
-- [ ] #82 macOS installer — signed + notarized .pkg
-	  - Plan: [[edge-macos-pkg]]
-- [ ] #77 Edge frame hub — one decode per camera + motion-gated tracking
-	  - Plan: [[edge-frame-hub]]
-- [ ] #78 Clip local retention — evict local copy after cloud upload
-	  - Plan: [[clip-local-retention]]
-- [ ] #79 Edge without OpenCV — pure-Rust motion
-	  - Plan: [[edge-pure-rust-motion]]
-- [ ] #81 Box pairing — enroll by code
-	  - Plan: [[box-pairing-code]]
 
 
 ## Done
@@ -147,12 +97,64 @@ kanban-plugin: board
 **Complete**
 - [x] Flip Flop workflow node — alternates exec A/B across runs (+ Compare)
 	  - Plan: [[flip-flop-node]]
+- [x] #79 Edge without OpenCV — pure-Rust motion
+	  - Plan: [[edge-pure-rust-motion]]
+- [x] #81 Box pairing — enroll by code
+	  - Plan: [[box-pairing-code]]
+- [x] #78 Clip local retention — evict local copy after cloud upload
+	  - Plan: [[clip-local-retention]]
+- [x] #77 Edge frame hub — one decode per camera + motion-gated tracking
+	  - Plan: [[edge-frame-hub]]
+- [x] #82 macOS installer — signed + notarized .pkg
+	  - Plan: [[edge-macos-pkg]]
+- [x] #67 Playback Timeline — unified inspection view
+	  - Plan: [[recording-playback-timeline]]
+- [x] #63 Tenant Billing — per-tenant invoicing + cloud cost/margin
+	  - Plan: [[tenant-cloud-cost]]
+- [x] #32 Map redesign — top-down 3D blueprint editor + live presence
+	  - Epic: [[map-redesign]]
+- [x] #31 RecordPresence node: room not changeable in property panel
+- [x] #30 Free text (filled and wireframe) tool map
+- [x] #89 Live badge + loading states (bug C)
+	  - Plan: [[live-badge-loading-states]]
 - [x] #69 Favicons / app-icons / PWA / OG images
 	  - Plan: [[favicons-app-icons]]
+- [x] #29 Map Redesign 2 — wall style + architectural-neutral pass
+	  - Plan: [[map-redesign-2]]
+- [x] #28 Draw BBox node — annotate image with bounding box
+	  - Plan: [[draw-bbox-node]]
+- [x] #85 Pairing progress UX — "code accepted" state
+	  - Plan: [[pairing-progress-ux]]
+- [x] #84 Per-platform installer download
+	  - Plan: [[installer-download-button]]
 - [x] #68 Logo & brand-mark system
 	  - Plan: [[logo-brand-mark]]
 - [x] #56 Workflow Variables — typed vars + Get/Set nodes
 	  - Plan: [[workflow-variables]]
+- [x] #27 Map: solid walls taller, richer material, deeper shadows
+	  - Plan: [[map-walls-3d-depth]]
+- [x] #26 Unified Platform Logs — one table, one UI, all modules
+	  - Plan: [[platform-logs-unified]]
+- [x] #25 Motion-triggered stream recorder
+	  - Plan: [[motion-triggered-recorder]]
+- [x] #24 Black & White Rebrand — Sentinel Noir
+	  - Plan: [[monochrome-rebrand]]
+- [x] #23 TimeGate node — debounced motion wait
+	  - Plan: [[time-gate-node]]
+- [x] #22 Recordings: storage, names, filters, delete, sort, paginate
+	  - Plan: [[recordings-improvements]]
+- [x] #19 AI If node — yes/no question routes exec like If
+	  - Plan: [[ai-question-node]]
+- [x] #15 Telegram bot: workflow-graph brain + inbound commands
+	  - Plan: [[telegram-bot-two-way-research]]
+- [x] #62 Edge resource monitoring — CPU / mem / disk / GPU
+	  - Plan: [[edge-resource-monitoring]]
+- [x] #72 Dark palette: deeper elevation ramp (Unreal-style)
+	  - Plan: [[dark-palette-elevation]]
+- [x] #75 Workflow editor: one tabbed right rail (Details / Properties / Variables / Runs)
+	  - Plan: [[workflow-editor-tabbed-inspector]]
+- [x] #61 Tab toggle: collapse/expand editor side panels
+	  - Plan: [[editor-panel-tab-toggle]]
 - [x] #16 Chat agent on the web (TTS / STT / tools)
 	  - Plan: [[chat-agent-web]]
 - [x] #33 Telegram Beacons: fix enrollment + polish + observability

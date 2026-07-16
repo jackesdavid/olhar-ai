@@ -87,7 +87,6 @@ pub fn encode_userinfo(s: &str) -> String {
 struct Url<'a> {
     host: &'a str,
     port: u16,
-    path: &'a str,
 }
 
 /// Split `rtsp://[user:pass@]host[:port]/path` into the parts we need to talk to it.
@@ -95,9 +94,9 @@ fn parse(url: &str) -> Option<Url<'_>> {
     let rest = url.strip_prefix("rtsp://")?;
     // Drop any embedded creds — we send our own via an auth header.
     let rest = rest.rsplit_once('@').map(|(_, r)| r).unwrap_or(rest);
-    let (authority, path) = match rest.find('/') {
-        Some(i) => (&rest[..i], &rest[i..]),
-        None => (rest, "/"),
+    let authority = match rest.find('/') {
+        Some(i) => &rest[..i],
+        None => rest,
     };
     let (host, port) = match authority.rsplit_once(':') {
         Some((h, p)) => (h, p.parse().ok()?),
@@ -106,7 +105,7 @@ fn parse(url: &str) -> Option<Url<'_>> {
     if host.is_empty() {
         return None;
     }
-    Some(Url { host, port, path })
+    Some(Url { host, port })
 }
 
 fn md5_hex(s: &str) -> String {
@@ -323,10 +322,10 @@ mod tests {
     #[test]
     fn parses_urls() {
         let u = parse("rtsp://192.168.1.184:554/stream2").unwrap();
-        assert_eq!((u.host, u.port, u.path), ("192.168.1.184", 554, "/stream2"));
+        assert_eq!((u.host, u.port), ("192.168.1.184", 554));
 
         let u = parse("rtsp://user:pw@10.0.0.5/live").unwrap();
-        assert_eq!((u.host, u.port, u.path), ("10.0.0.5", 554, "/live"));
+        assert_eq!((u.host, u.port), ("10.0.0.5", 554));
 
         // A password containing '@' must not be mistaken for the host separator.
         let u = parse("rtsp://user:p@ss@10.0.0.5:8554/live").unwrap();

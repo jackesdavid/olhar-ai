@@ -196,6 +196,7 @@
   },
   "active": "b11e42b646fa8cd4",
   "lastOpenFiles": [
+    "plans/box-health-copy-no-internals.md",
     "plans/edge-tailnet-self-heal.md",
     "plans/event-storm-backstop-dead.md",
     "plans/editor-exec-fan-in.md",
@@ -224,7 +225,6 @@
     "plans/dark-palette-elevation.md.tmp.60649.5b3da5f09df1",
     "plans/notification-provider-ux.md",
     "plans/storage-billing-economics.md",
-    "plans/get-camera-room.md",
     "plans/logo-exploration/warm-concepts-overview.png",
     "plans/logo-exploration/concept-5.svg",
     "plans/logo-exploration/concept-4.svg",

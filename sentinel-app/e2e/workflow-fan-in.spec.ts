@@ -88,8 +88,8 @@ async function withFanInGraph(page: Page, fn: () => Promise<void>): Promise<void
 
   try {
     await page.goto("/workflows");
-    // The list renders each graph as a button (not a table row).
-    const row = page.locator("button").filter({ hasText: wfName }).first();
+    // Each graph in the list exposes role=button (the element itself isn't a <button>).
+    const row = page.getByRole("button", { name: wfName }).first();
     await expect(row).toBeVisible({ timeout: 15_000 });
     await row.click();
 
@@ -109,14 +109,20 @@ test.describe("workflow exec fan-in", () => {
     await withFanInGraph(page, async () => {
       await expect(wires(page)).toHaveCount(1);
 
-      // Pick B's exec_out, then click C's exec_in — which A already feeds.
+      // Pick B's exec_out, then click C's exec_in — which A already feeds. The wire is
+      // pushed optimistically, so wait for the POST to land before reloading (a reload
+      // mid-flight would abort it and the edge would never persist).
       await execOut(page, B).click();
-      await execIn(page, C).click();
+      const [res] = await Promise.all([
+        page.waitForResponse((r) => r.url().includes("/edges") && r.request().method() === "POST"),
+        execIn(page, C).click(),
+      ]);
+      expect(res.status()).toBe(204);
 
       // Before the fix this REMOVED A's wire (count 0). Now both paths converge.
       await expect(wires(page)).toHaveCount(2);
 
-      // And it survives a reload, so the server accepted the second edge.
+      // And it survives a reload, so the server really stored the second edge.
       await page.reload();
       await expect(page.locator("svg[data-canvas]")).toBeVisible({ timeout: 10_000 });
       await expect(wires(page)).toHaveCount(2);
