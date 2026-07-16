@@ -77,7 +77,7 @@ ssh -i "${VPS_KEY}" -o IdentitiesOnly=yes "${VPS_SSH}" "set -e; cd /ibbf
   # \`up -d\`. Force-remove any container matching each service name first so compose recreates a
   # fresh one. Removing a container never touches its named volumes, so this is safe for stateful
   # services (e.g. postgres) too — only the container is replaced, the data volume persists.
-  if [ -n '${CLEAN}' ]; then
+  if [ -n '${CLEAN:-}' ]; then
     for svc in ${SERVICES}; do
       echo \">> clean: dropping any container matching '\$svc'\"
       docker rm -f \$(docker ps -aq --filter name=\"\$svc\") 2>/dev/null || true
