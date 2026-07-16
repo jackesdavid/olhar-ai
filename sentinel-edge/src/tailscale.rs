@@ -11,6 +11,8 @@
 //! entirely (LAN/one-box dev still works); if the `tailscale` CLI/daemon is missing
 //! it logs and continues rather than failing the service.
 use std::process::Command;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 /// A `tailscale` CLI command, with the console window suppressed on Windows.
 ///
@@ -36,6 +38,9 @@ pub fn ensure_up() {
         log::info!("TS_AUTHKEY empty — skipping Tailscale");
         return;
     }
+    // Capture whether EDGE_PUBLIC_HOST was an explicit install-time override BEFORE we ever auto-set
+    // it below (the OnceLock inside remembers the boot value).
+    host_is_explicit();
     let hostname = std::env::var("TS_HOSTNAME").unwrap_or_else(|_| "sentinel-edge".to_string());
     let tags = std::env::var("TS_TAGS")
         .ok()
@@ -68,22 +73,85 @@ pub fn ensure_up() {
         }
     }
 
-    // Expose the localhost-only go2rtc API over the tailnet (TLS via MagicDNS).
+    // WAIT for the rename to settle before we serve + report. `tailscale up --hostname=X` renames
+    // the node ASYNCHRONOUSLY (notably on the macOS GUI-managed daemon): reading `Self.DNSName`
+    // immediately after `up` races the rename and can capture the OLD node name. That stale name
+    // then gets `serve`d and reported to control as this box's live host — so the gateway resolves a
+    // dead node and Live is a black screen while localhost:1984 works fine. This is THE live-video
+    // bug. Blocking until the node reflects the requested hostname closes it.
+    let settled = wait_for_hostname(&hostname, Duration::from_secs(20));
+
+    // Expose the localhost-only go2rtc API over the tailnet (TLS via MagicDNS), and the edge API on
+    // 8080 (443 is reserved for go2rtc so the gateway is unaffected).
     serve_go2rtc();
-    // Also expose the edge API itself on port 8080 so workflow nodes (recording etc.)
-    // can reach it at https://<magicdns>:8080/ without colliding with go2rtc at port 443.
     serve_edge_api();
 
-    // Report this box's tailnet go2rtc URL to control (so the gateway can resolve the
-    // tenant's live upstream) — unless it was supplied explicitly at install time.
-    if std::env::var("EDGE_PUBLIC_HOST")
-        .map(|v| v.trim().is_empty())
-        .unwrap_or(true)
-    {
+    // Report this box's tailnet host to control (so the gateway can resolve the tenant's live
+    // upstream) — unless it was supplied explicitly at install time.
+    if !host_is_explicit() {
+        if let Some(dns) = settled.or_else(detect_dns_name) {
+            set_public_host(&dns);
+        }
+    }
+}
+
+/// Was `EDGE_PUBLIC_HOST` an explicit install-time override (rather than something we auto-detected)?
+/// If so we never touch it. Captured ONCE — the first call must happen before any auto-set, so
+/// `ensure_up` primes it up front.
+fn host_is_explicit() -> bool {
+    static EXPLICIT: OnceLock<bool> = OnceLock::new();
+    *EXPLICIT.get_or_init(|| std::env::var("EDGE_PUBLIC_HOST").map(|v| !v.trim().is_empty()).unwrap_or(false))
+}
+
+/// Set `EDGE_PUBLIC_HOST` from a MagicDNS name (idempotent; logs only on an actual change). The box
+/// sends this as `X-Box-Host` on every config poll, so correcting it here corrects what the gateway
+/// resolves within one poll.
+fn set_public_host(dns: &str) {
+    let url = format!("https://{}", dns.trim_end_matches('.'));
+    if std::env::var("EDGE_PUBLIC_HOST").ok().as_deref() != Some(url.as_str()) {
+        log::info!("EDGE_PUBLIC_HOST = {url}");
+        std::env::set_var("EDGE_PUBLIC_HOST", &url);
+    }
+}
+
+/// Poll `tailscale status` until `Self.DNSName`'s first label matches `hostname` — the `--hostname`
+/// rename is asynchronous, so this is what stops us serving/reporting the previous node. Returns the
+/// settled DNSName, or the last one seen at timeout (better a late guess than nothing).
+fn wait_for_hostname(hostname: &str, timeout: Duration) -> Option<String> {
+    let want = hostname.trim().to_ascii_lowercase();
+    let deadline = Instant::now() + timeout;
+    let mut last: Option<String> = None;
+    loop {
         if let Some(dns) = detect_dns_name() {
-            let url = format!("https://{}", dns.trim_end_matches('.'));
-            log::info!("detected EDGE_PUBLIC_HOST={url}");
-            std::env::set_var("EDGE_PUBLIC_HOST", url);
+            let first = dns.split('.').next().unwrap_or("").to_ascii_lowercase();
+            last = Some(dns.clone());
+            if first == want {
+                return Some(dns);
+            }
+        }
+        if Instant::now() >= deadline {
+            if let Some(d) = &last {
+                let got = d.split('.').next().unwrap_or("");
+                log::warn!("tailscale node still '{got}' after {}s waiting for '{want}' — reporting it anyway", timeout.as_secs());
+            }
+            return last;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+/// Re-assert tailnet exposure and correct a drifted host — called from the discovery loop so a box
+/// that came up before its node settled, or lost its serve, heals ITSELF within minutes with no
+/// restart and no terminal. This is what makes the live path self-recover for a real customer.
+pub fn reassert() {
+    if std::env::var("TS_AUTHKEY").map(|v| v.trim().is_empty()).unwrap_or(true) {
+        return;
+    }
+    serve_go2rtc();
+    serve_edge_api();
+    if !host_is_explicit() {
+        if let Some(dns) = detect_dns_name() {
+            set_public_host(&dns);
         }
     }
 }

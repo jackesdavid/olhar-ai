@@ -193,8 +193,10 @@ fn main() {
         let disco = std::sync::Arc::clone(&state);
         std::thread::spawn(move || loop {
             disco.rediscover();
-            // Re-assert the tailnet serve so go2rtc stays reachable if the daemon blipped.
-            tailscale::serve_go2rtc();
+            // Re-assert the tailnet exposure AND correct a drifted reported host, so a box that came
+            // up before its node settled heals itself here — no restart, no terminal (the live-video
+            // self-heal).
+            tailscale::reassert();
             // Start ring buffers for any newly discovered cameras (idempotent per IP).
             disco.warm_cameras();
             std::thread::sleep(std::time::Duration::from_secs(300));
