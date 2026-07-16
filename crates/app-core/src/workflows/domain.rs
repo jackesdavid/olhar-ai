@@ -1899,6 +1899,14 @@ impl Graph {
         {
             return Err(format!("input '{to_port}' is already wired"));
         }
+        // The same pin pair twice is a no-op wire the fan-in path would otherwise stack up.
+        if self
+            .edges
+            .iter()
+            .any(|e| e.from == from && e.from_port == from_port && e.to == to && e.to_port == to_port)
+        {
+            return Err("those pins are already wired".into());
+        }
         if self.reaches(to, from) && !is_exec {
             return Err("that link would create a data cycle".into());
         }

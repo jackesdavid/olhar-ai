@@ -147,6 +147,17 @@ pub fn reassert() {
     if std::env::var("TS_AUTHKEY").map(|v| v.trim().is_empty()).unwrap_or(true) {
         return;
     }
+    // A node that isn't Running can't serve anything, so re-running `serve` alone is useless: it
+    // fails, the box reports `offline`, and the tailnet-side of the product (Live, snapshots, the
+    // credential probe) stays dead. Until 0.5.42 that's exactly what happened — `reassert` only
+    // re-ran `serve`, so a Tailscale that stopped for ANY reason (quit, reboot, OS update, a
+    // daemon crash) left the box unreachable forever with no way back except re-enrolling. That's
+    // a support call for something the box can fix by itself.
+    if !node_running() {
+        log::warn!("tailscale node is not Running — re-running `up` to rejoin the tailnet");
+        ensure_up(); // up + wait for the rename + serve + report the host
+        return;
+    }
     serve_go2rtc();
     serve_edge_api();
     if !host_is_explicit() {
@@ -154,6 +165,24 @@ pub fn reassert() {
             set_public_host(&dns);
         }
     }
+}
+
+/// Is the local node joined and Running? (`BackendState` from `tailscale status --json`.)
+/// Anything we can't read — CLI missing, daemon stopped, malformed JSON — counts as not running,
+/// which is the safe reading: it's precisely when we want to re-assert `up`.
+fn node_running() -> bool {
+    ts()
+        .args(["status", "--json"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())
+        .and_then(|v| {
+            v.get("BackendState")
+                .and_then(|s| s.as_str())
+                .map(|s| s == "Running")
+        })
+        .unwrap_or(false)
 }
 
 /// Expose the localhost-only go2rtc API (`:1984`) over the tailnet (TLS via MagicDNS).
@@ -202,19 +231,7 @@ pub fn tailscale_state() -> &'static str {
     {
         return "disabled";
     }
-    let running = ts()
-        .args(["status", "--json"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())
-        .and_then(|v| {
-            v.get("BackendState")
-                .and_then(|s| s.as_str())
-                .map(|s| s == "Running")
-        })
-        .unwrap_or(false);
-    if !running {
+    if !node_running() {
         return "offline";
     }
     let serving = ts()

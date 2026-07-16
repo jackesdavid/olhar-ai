@@ -2187,7 +2187,11 @@
   async function clickInPort(node: Node, port: string) {
     if (!graph || editLocked) return;
     const existing = graph.edges.findIndex((e) => e.to === node.id && e.to_port === port);
-    if (existing >= 0) {
+    // Clicking a wired input unwires it. The exception: exec_in with an output already
+    // picked — the engine accepts converging exec paths, so that click adds a wire
+    // instead. Data ports stay single-fed.
+    const addingFanIn = port === EXEC_IN_NAME && pending !== null;
+    if (existing >= 0 && !addingFanIn) {
       await removeEdge(existing);
       return;
     }
@@ -2195,8 +2199,17 @@
       toast.info("Pick an output port first, then this input.");
       return;
     }
+    const from = pending;
+    const duplicate = graph.edges.some(
+      (e) => e.to === node.id && e.to_port === port && e.from === from.node && e.from_port === from.port,
+    );
+    if (duplicate) {
+      pending = null;
+      toast.info("Those pins are already wired.");
+      return;
+    }
     const gid = graph.id;
-    const newEdge: Edge = { from: pending.node, from_port: pending.port, to: node.id, to_port: port };
+    const newEdge: Edge = { from: from.node, from_port: from.port, to: node.id, to_port: port };
     pending = null;
     // Optimistic: show the wire immediately, persist in the background. Revert if
     // the server rejects it (e.g. type mismatch / cycle).

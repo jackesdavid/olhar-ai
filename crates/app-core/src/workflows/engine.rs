@@ -1179,6 +1179,21 @@ mod tests {
         assert!(err.contains("data cycle"), "got: {err}");
     }
 
+    #[test]
+    fn add_edge_accepts_exec_fan_in_but_rejects_duplicate_pins() {
+        let mut g = Graph::new("g");
+        let a = g.add_node(NodeKind::Format, 0, 0);
+        let b = g.add_node(NodeKind::Format, 0, 0);
+        let c = g.add_node(NodeKind::Format, 0, 0);
+        g.add_edge(a, "exec_out", c, "exec_in").unwrap();
+        // A second, different source converging on the same exec_in → allowed (fan-in).
+        assert!(g.add_edge(b, "exec_out", c, "exec_in").is_ok());
+        // The same pin pair again → rejected, so fan-in can't stack duplicate wires.
+        let err = g.add_edge(a, "exec_out", c, "exec_in").unwrap_err();
+        assert!(err.contains("already wired"), "got: {err}");
+        assert_eq!(g.edges.len(), 2);
+    }
+
     // Run a graph capturing the node-activation order + per-node debug summaries (no DB).
     fn run_capture(g: &Graph, ctx: &ToolContext) -> (Vec<u32>, Vec<(u32, String)>) {
         let acts = std::cell::RefCell::new(Vec::<u32>::new());

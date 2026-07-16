@@ -25,6 +25,8 @@ kanban-plugin: board
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
 - [ ] #9 We should encrypt the passwords in the db column level too
 - [ ] #10 Update available — reload to get the latest version.
+- [ ] #91 Event-storm backstop never engages (WF_GLOBAL_CAP dead)
+	  - Plan: [[event-storm-backstop-dead]]
 
 
 ## ToDo
@@ -76,6 +78,10 @@ kanban-plugin: board
 	  - Plan: [[edge-windows-installer]]
 - [ ] #88 Camera credential wizard (bug B)
 	  - Plan: [[camera-credential-wizard]]
+- [ ] #90 Editor: wire multiple exec outputs into one node (fan-in)
+	  - Plan: [[editor-exec-fan-in]]
+- [ ] #92 Edge tailnet self-heal — a stopped Tailscale strands the box
+	  - Plan: [[edge-tailnet-self-heal]]
 
 
 ## Review
