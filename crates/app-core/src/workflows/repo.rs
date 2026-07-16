@@ -218,6 +218,133 @@ pub fn get_node_state(
     })
 }
 
+/// Deletes a node's persisted state, so an idle node leaves no stale row.
+pub fn clear_node_state(db: &Db, tenant_id: Uuid, graph_id: Uuid, node_id: u32) {
+    let pool = db.pool();
+    let res: Result<_, sqlx::Error> = db.block(async move {
+        sqlx::query(
+            "DELETE FROM workflow_node_state WHERE tenant_id = $1 AND graph_id = $2 AND node_id = $3",
+        )
+        .bind(tenant_id)
+        .bind(graph_id)
+        .bind(node_id as i64)
+        .execute(&pool)
+        .await
+    });
+    if let Err(e) = res {
+        log::error!("workflows::repo::clear_node_state failed: {e}");
+    }
+}
+
+/// Arm a node's window, but only if it isn't armed already — the leading edge of a debounce.
+///
+/// Returns `true` if THIS caller armed it (and so owns firing `start`), `false` if it was
+/// already armed (a re-trigger, which should only extend). One conditional upsert, so two
+/// concurrent runs can't both think they opened the window: exactly one gets `true`.
+/// `expires_at` is RFC3339.
+pub fn try_arm_node_state(
+    db: &Db,
+    tenant_id: Uuid,
+    graph_id: Uuid,
+    node_id: u32,
+    expires_at: &str,
+) -> bool {
+    let pool = db.pool();
+    let json_str = serde_json::json!({ "state": "armed", "expires_at": expires_at }).to_string();
+    let res: Result<u64, sqlx::Error> = db.block(async move {
+        let r = sqlx::query(
+            "INSERT INTO workflow_node_state (tenant_id, graph_id, node_id, state_json)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (tenant_id, graph_id, node_id) DO UPDATE SET state_json = EXCLUDED.state_json
+             WHERE (workflow_node_state.state_json::jsonb ->> 'state') IS DISTINCT FROM 'armed'",
+        )
+        .bind(tenant_id)
+        .bind(graph_id)
+        .bind(node_id as i64)
+        .bind(json_str)
+        .execute(&pool)
+        .await?;
+        Ok(r.rows_affected())
+    });
+    match res {
+        Ok(n) => n == 1,
+        Err(e) => {
+            log::error!("workflows::repo::try_arm_node_state failed: {e}");
+            false
+        }
+    }
+}
+
+/// Push an armed node's expiry out to `expires_at`. No-op if it isn't armed any more (the
+/// window closed between the read and this write). Returns `true` if it extended.
+pub fn extend_node_state(
+    db: &Db,
+    tenant_id: Uuid,
+    graph_id: Uuid,
+    node_id: u32,
+    expires_at: &str,
+) -> bool {
+    let pool = db.pool();
+    let json_str = serde_json::json!({ "state": "armed", "expires_at": expires_at }).to_string();
+    let res: Result<u64, sqlx::Error> = db.block(async move {
+        let r = sqlx::query(
+            "UPDATE workflow_node_state SET state_json = $4
+             WHERE tenant_id = $1 AND graph_id = $2 AND node_id = $3
+               AND (state_json::jsonb ->> 'state') = 'armed'",
+        )
+        .bind(tenant_id)
+        .bind(graph_id)
+        .bind(node_id as i64)
+        .bind(json_str)
+        .execute(&pool)
+        .await?;
+        Ok(r.rows_affected())
+    });
+    match res {
+        Ok(n) => n == 1,
+        Err(e) => {
+            log::error!("workflows::repo::extend_node_state failed: {e}");
+            false
+        }
+    }
+}
+
+/// Close an armed window whose expiry has passed — the trailing edge of a debounce.
+///
+/// Returns `true` only if THIS caller closed it (and so owns firing `stop`). Returns `false`
+/// when a re-trigger extended `expires_at` into the future, or the window is already closed.
+/// Postgres compares the expiry against its own `now()`, so the decision is atomic with the
+/// write and immune to clock skew between pods.
+pub fn try_disarm_expired_node_state(
+    db: &Db,
+    tenant_id: Uuid,
+    graph_id: Uuid,
+    node_id: u32,
+) -> bool {
+    let pool = db.pool();
+    let res: Result<u64, sqlx::Error> = db.block(async move {
+        let r = sqlx::query(
+            "UPDATE workflow_node_state SET state_json = '{\"state\":\"idle\"}'
+             WHERE tenant_id = $1 AND graph_id = $2 AND node_id = $3
+               AND (state_json::jsonb ->> 'state') = 'armed'
+               AND (state_json::jsonb ->> 'expires_at')::timestamptz <= now()",
+        )
+        .bind(tenant_id)
+        .bind(graph_id)
+        .bind(node_id as i64)
+        .execute(&pool)
+        .await?;
+        Ok(r.rows_affected())
+    });
+    match res {
+        Ok(n) => n == 1,
+        Err(e) => {
+            log::error!("workflows::repo::try_disarm_expired_node_state failed: {e}");
+            false
+        }
+    }
+}
+
 /// Upserts the JSON state for a node. Best-effort (errors are logged, not propagated).
 pub fn set_node_state(
     db: &Db,

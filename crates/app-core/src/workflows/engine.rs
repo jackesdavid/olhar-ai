@@ -9,6 +9,7 @@
 //! the backend poller drives.
 use super::domain::{
     camera_switch_arms, string_switch_arms, ConcurrencyPolicy, Graph, NodeKind, PortType, EXEC_IN,
+    WINDOW_STOP_MARKER,
 };
 use super::node::{self, PortValue, PortValues};
 use super::repo;
@@ -710,6 +711,112 @@ fn forward_epoch(
                 }
             } else if graph.debug {
                 on_log(nid, "Time Gate: reset → no output", 0);
+            }
+            *steps += 1;
+            outputs.insert(nid, PortValues::new());
+            ran.insert(nid);
+            settle(&mut settled, &mut indeg);
+            continue;
+        }
+
+        // Delay Trigger: leading + trailing debounce. Two paths:
+        //
+        //  * Trigger (fed by a live exec pin) — try to arm. Winning the CAS means this is the
+        //    first signal of an idle window, so fire `start` HERE, in this run, and Start
+        //    Recording reaches the edge immediately. Losing means the window is already open,
+        //    so the signal only extends it.
+        //  * Expiry (the window consumer forced this node after the timer came due and it won
+        //    the disarm) — fire `stop`, and the node is already back to idle, ready to re-arm.
+        //
+        // Unlike Time Gate this never blocks. A node's handler runs to completion before the
+        // pass settles it, so blocking here would hold `start`'s downstream too. The wait lives
+        // in `work_jobs` instead — which also means it survives a pod restart.
+        if n.kind == NodeKind::DelayTrigger {
+            use chrono::Utc;
+            let cfg_secs = |key: &str, fallback: i64| -> i64 {
+                n.config
+                    .get(key)
+                    .and_then(|v| {
+                        v.as_i64()
+                            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+                    })
+                    .unwrap_or(fallback)
+            };
+            let wait_secs = cfg_secs("wait_secs", 10);
+            let extend_secs = cfg_secs("extend_secs", wait_secs);
+
+            // Trailing edge. The consumer already won the disarm, so this run owns the stop.
+            // The payload marker — not `forced` alone — is the test: a loop back-edge forces a
+            // node too, and that must not be mistaken for an expired window.
+            if forced.contains(&nid) && entry_payload.contains_key(WINDOW_STOP_MARKER) {
+                live_out.insert((nid, "stop".to_string()));
+                if graph.debug {
+                    on_log(nid, "Delay Trigger: window closed → stop", 0);
+                }
+                *steps += 1;
+                outputs.insert(nid, PortValues::new());
+                ran.insert(nid);
+                settle(&mut settled, &mut indeg);
+                continue;
+            }
+
+            let now_ts = Utc::now().timestamp();
+            let rfc = |ts: i64| {
+                chrono::DateTime::from_timestamp(ts, 0)
+                    .unwrap_or_else(Utc::now)
+                    .to_rfc3339()
+            };
+            let expires_at = rfc(now_ts + wait_secs);
+
+            if repo::try_arm_node_state(&sys.db, sys.tenant_id, graph.id, nid, &expires_at) {
+                // Leading edge: this signal opened the window, so it owns the start.
+                live_out.insert((nid, "start".to_string()));
+                crate::work_queue::enqueue_window_stop_blocking(
+                    &sys.db,
+                    sys.tenant_id,
+                    graph.id,
+                    nid,
+                    &expires_at,
+                );
+                if graph.debug {
+                    on_log(nid, &format!("Delay Trigger: armed for {wait_secs}s → start"), 0);
+                }
+            } else {
+                // Already armed: a re-trigger tops the window up, and only when that actually
+                // pushes the deadline out (Time Gate's rule: remaining = max(remaining, extend)).
+                let state = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid);
+                let expires_ts = state
+                    .as_ref()
+                    .and_then(|v| v.get("expires_at"))
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .map(|t| t.timestamp())
+                    .unwrap_or(now_ts);
+                let remaining = expires_ts - now_ts;
+                if remaining < extend_secs {
+                    repo::extend_node_state(
+                        &sys.db,
+                        sys.tenant_id,
+                        graph.id,
+                        nid,
+                        &rfc(now_ts + extend_secs),
+                    );
+                    if graph.debug {
+                        on_log(
+                            nid,
+                            &format!("Delay Trigger: extended +{}s", extend_secs - remaining),
+                            0,
+                        );
+                    }
+                } else if graph.debug {
+                    on_log(
+                        nid,
+                        &format!("Delay Trigger: re-trigger, {remaining}s remaining (no extend)"),
+                        0,
+                    );
+                }
+                // The scheduled stop still carries the old expiry — the consumer re-reads the
+                // state when it comes due and reschedules itself if the window moved.
             }
             *steps += 1;
             outputs.insert(nid, PortValues::new());

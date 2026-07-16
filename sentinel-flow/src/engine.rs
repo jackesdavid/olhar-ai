@@ -540,6 +540,54 @@ pub fn fire_system_event(state: &Arc<AppState>, tenant: Uuid, label: &str, event
     );
 }
 
+/// Run one node's subtree as its own run — the delivery half of a durable timer (card #86).
+///
+/// Forces `node_id` so only it and its live descendants execute; nothing else in the graph is
+/// seeded. Today this is a `DelayTrigger` whose quiet window elapsed, firing its trailing `stop`.
+/// The payload carries the window marker so the node can tell this from a re-trigger.
+pub fn spawn_node_subrun(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid, node_id: u32) {
+    let graph: WfGraph = match state::find_graph(&state.store, tenant, graph_id) {
+        Some(g) => g,
+        None => return,
+    };
+    let state = Arc::clone(state);
+    let run_id = Uuid::new_v4();
+    // Register before the thread starts — see spawn_graph_run.
+    mark_run_started(&state, tenant, graph_id, run_id, TriggerSource::Timer.as_str());
+    std::thread::spawn(move || {
+        workflows::repo::insert_run(
+            &state.db,
+            tenant,
+            run_id,
+            graph_id,
+            &graph.name,
+            TriggerSource::Timer,
+            None,
+            None,
+            None,
+            &state.pod_name,
+        );
+        events::publish(
+            &state.events,
+            "workflow-run-start",
+            serde_json::json!({ "tenant": tenant, "graph": graph_id, "name": graph.name, "run_id": run_id, "trigger": "timer" }),
+        );
+
+        let payload = crate::window_consumer::stop_payload();
+        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, Some(node_id), payload);
+
+        mark_run_finished(&state, tenant, graph_id);
+        if !ok {
+            log::warn!("window stop ({tenant}/{graph_id} node {node_id}) failed: {summary}");
+        }
+        events::publish(
+            &state.events,
+            "workflow-run",
+            serde_json::json!({ "tenant": tenant, "graph": graph_id, "name": graph.name, "ok": ok, "summary": summary, "run_id": run_id }),
+        );
+    });
+}
+
 /// Spawn one `OnEvent` handler sub-run for a listening graph (the coalesce key is already
 /// reserved by the caller and released here on finish). Visible like any other run: it gets
 /// a run record (trigger = event, source = the emitter) and live activity.

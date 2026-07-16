@@ -19,6 +19,7 @@ mod event_consumer;
 mod events;
 mod http;
 mod state;
+mod window_consumer;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -54,6 +55,9 @@ fn main() {
     // Durable inbound triggers: claim from the Postgres event_queue and fire OnEvent handlers
     // (card #57 — replaces the lossy Redis flow:inject injector). Runs on its own std thread.
     event_consumer::spawn(state.clone());
+    // Durable timing windows: deliver a DelayTrigger's trailing `stop` when its quiet window
+    // elapses (card #86). Resumes any window that was armed when the pod went down.
+    window_consumer::spawn(state.clone());
     // Telegram pairing moved to sentinel-notification (card #57) — flow no longer polls.
 
     // Now build the tokio runtime for the HTTP control plane.

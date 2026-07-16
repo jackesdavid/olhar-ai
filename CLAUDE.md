@@ -73,7 +73,7 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
   grants are seeded only at tenant creation and the grant screen sits behind `roles.manage`.
   `Viewer` and custom roles are never auto-granted. Any role-scoped query must join `roles` on
   `tenant_id` — the role id comes from the client.
-- **Workflow nodes**: 61 user-visible nodes in `NodeKind::ALL` (`crates/app-core/src/workflows/domain.rs`);
+- **Workflow nodes**: 65 user-visible nodes in `NodeKind::ALL` (`crates/app-core/src/workflows/domain.rs`);
   execution in `node.rs` (same folder). Node catalog + port reference: [docs/workflow-nodes.md](docs/workflow-nodes.md).
 - **Versioning**: web app = `sentinel-app/package.json` + the footer in `routes/+layout.svelte`;
   edge = `sentinel-edge/Cargo.toml` (drives `LATEST_EDGE_VERSION` + the `v*` release tag). Bump

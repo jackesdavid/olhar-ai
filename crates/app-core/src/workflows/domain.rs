@@ -433,6 +433,14 @@ pub enum NodeKind {
     /// runs extend and return immediately. Use to hold open a recording window past the last
     /// motion event.
     TimeGate,
+    /// Flow control: leading+trailing debounce (Unreal's Retriggerable Delay, plus a leading
+    /// pulse). The first signal of an idle window fires `start` immediately; each further
+    /// signal only extends the window; once `wait_secs` pass with no signal, `stop` fires
+    /// once and the node re-arms. So one burst of input = exactly one `start` … `stop` pair.
+    /// Unlike `TimeGate` it never blocks: `start` must reach its downstream in the triggering
+    /// run, so the trailing `stop` is delivered by a later run forced at this node, scheduled
+    /// on the durable `work_jobs` queue. Engine-driven (not `run_node`).
+    DelayTrigger,
     /// Variables: read a workflow variable's current value → one typed data output (`value`).
     /// Pure (no exec pins) — drop it anywhere and wire its output, no flow wires needed. The
     /// variable name + type are in config; the output port type follows the variable's type.
@@ -817,6 +825,17 @@ const NO_PORTS: [Port; 0] = [];
 // TimeGate exec outputs: a single `out` port (fires when the countdown expires).
 const EXEC_OUT_TIME_GATE: [Port; 1] = [p("out", PortType::Exec, false)];
 
+/// Marks an entry payload as a `DelayTrigger` window expiry — the trailing-edge delivery from
+/// the window consumer. The node tests for this rather than trusting `forced` alone, because a
+/// loop back-edge can force a node too and must not be mistaken for an expired window.
+pub const WINDOW_STOP_MARKER: &str = "__window_stop";
+
+// Delay Trigger exec outputs: `start` on the leading edge, `stop` on the trailing one.
+const EXEC_OUT_DELAY_TRIGGER: [Port; 2] = [
+    p("start", PortType::Exec, false),
+    p("stop", PortType::Exec, false),
+];
+
 // Universal control-flow ports — every node has an `exec_in` and, by default, an
 // `exec_out`. They carry no value; they sequence/gate execution. A node kind may
 // override its exec OUTPUTS (e.g. `If` splits into `true`/`false`).
@@ -834,7 +853,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 64] = [
+    pub const ALL: [NodeKind; 65] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -892,6 +911,7 @@ impl NodeKind {
         NodeKind::StartRecording,
         NodeKind::StopRecording,
         NodeKind::TimeGate,
+        NodeKind::DelayTrigger,
         NodeKind::GetVariable,
         NodeKind::SetVariable,
         NodeKind::ReplyToSender,
@@ -963,6 +983,7 @@ impl NodeKind {
             NodeKind::StartRecording => "start_recording",
             NodeKind::StopRecording => "stop_recording",
             NodeKind::TimeGate => "time_gate",
+            NodeKind::DelayTrigger => "delay_trigger",
             NodeKind::GetVariable => "get_variable",
             NodeKind::SetVariable => "set_variable",
             NodeKind::ReplyToSender => "reply_to_sender",
@@ -1037,6 +1058,7 @@ impl NodeKind {
             NodeKind::StartRecording => "Start Recording",
             NodeKind::StopRecording => "Stop Recording",
             NodeKind::TimeGate => "Time Gate",
+            NodeKind::DelayTrigger => "Delay Trigger",
             NodeKind::GetVariable => "Get Variable",
             NodeKind::SetVariable => "Set Variable",
             NodeKind::ReplyToSender => "Reply to Sender",
@@ -1069,7 +1091,8 @@ impl NodeKind {
             | NodeKind::StringSwitch
             | NodeKind::CameraSwitch
             | NodeKind::AiSwitch
-            | NodeKind::TimeGate => "Control",
+            | NodeKind::TimeGate
+            | NodeKind::DelayTrigger => "Control",
             NodeKind::NumLt
             | NodeKind::NumLte
             | NodeKind::NumGt
@@ -1150,6 +1173,7 @@ impl NodeKind {
             NodeKind::Comment => &NO_PORTS,
             NodeKind::Reroute => &NO_PORTS, // pure passthrough, no exec pins
             NodeKind::TimeGate => &EXEC_OUT_TIME_GATE, // "out" fires when countdown expires
+            NodeKind::DelayTrigger => &EXEC_OUT_DELAY_TRIGGER, // leading "start", trailing "stop"
             _ => &EXEC_OUT_DEFAULT,
         }
     }
@@ -1213,6 +1237,7 @@ impl NodeKind {
             NodeKind::StartRecording => &START_RECORDING_IN,
             NodeKind::StopRecording => &STOP_RECORDING_IN,
             NodeKind::TimeGate => &NO_PORTS, // exec-only; wait_secs/extend_secs are config
+            NodeKind::DelayTrigger => &NO_PORTS, // exec-only; wait_secs/extend_secs are config
             // Get has no inputs; Set's typed `value` input is dynamic (GraphNode::input_ports).
             NodeKind::GetVariable | NodeKind::SetVariable => &NO_PORTS,
             NodeKind::ReplyToSender => &REPLY_TO_SENDER_IN,
@@ -1278,6 +1303,7 @@ impl NodeKind {
             NodeKind::StartRecording => &START_RECORDING_OUT,
             NodeKind::StopRecording => &NO_PORTS,
             NodeKind::TimeGate => &NO_PORTS, // exec-only; fires via exec "out" port
+            NodeKind::DelayTrigger => &NO_PORTS, // exec-only; fires via exec "start"/"stop"
             // Get's typed `value` output is dynamic (GraphNode::output_ports); Set has none.
             NodeKind::GetVariable | NodeKind::SetVariable => &NO_PORTS,
             NodeKind::ReplyToSender => &REPLY_TO_SENDER_OUT,
@@ -1384,6 +1410,7 @@ impl NodeKind {
             NodeKind::StartRecording => json!({ "timeout_secs": "30" }),
             NodeKind::StopRecording => json!({ "timeout_secs": "15" }),
             NodeKind::TimeGate => json!({ "wait_secs": 10, "extend_secs": 10 }),
+            NodeKind::DelayTrigger => json!({ "wait_secs": 10, "extend_secs": 10 }),
             // `variable` = the declared variable's name; `type` = its wire type (baked in so the
             // dynamic port resolves without a graph lookup). Set by the Variables panel on create.
             NodeKind::GetVariable | NodeKind::SetVariable => {
@@ -1565,6 +1592,9 @@ pub enum TriggerSource {
     Cron,
     /// A cross-graph (or future system) event fired this graph's `OnEvent` handler.
     Event,
+    /// A durable timer came due and forced a run at one node — today, a `DelayTrigger`
+    /// whose quiet window elapsed, delivering its trailing `stop`.
+    Timer,
 }
 
 impl TriggerSource {
@@ -1573,6 +1603,7 @@ impl TriggerSource {
             TriggerSource::Manual => "manual",
             TriggerSource::Cron => "cron",
             TriggerSource::Event => "event",
+            TriggerSource::Timer => "timer",
         }
     }
 }

@@ -1,5 +1,7 @@
 ---
+
 kanban-plugin: board
+
 ---
 
 ## Backlog
@@ -60,8 +62,6 @@ kanban-plugin: board
 	  - Plan: [[postgres-performance-tuning]]
 - [ ] #76 OlharAI rebrand — domains, brand, app copy, landing rewrite
 	  - Epic: [[olharai-rebrand]]
-- [ ] #86 Delay Trigger node — decouple recording start/stop
-	  - Plan: [[delay-trigger-recording-signal-flow]]
 - [ ] #87 Segmented continuous recording — cap clip size, crash-durable, incremental upload
 	  - Plan: [[segmented-continuous-recording]]
 
@@ -72,23 +72,25 @@ kanban-plugin: board
 	  - Plan: [[edge-windows]]
 - [ ] #83 Windows installer — signed .exe
 	  - Plan: [[edge-windows-installer]]
-- [ ] #88 Camera credential wizard (bug B)
-	  - Plan: [[camera-credential-wizard]]
 - [ ] #92 Edge tailnet self-heal — a stopped Tailscale strands the box
 	  - Plan: [[edge-tailnet-self-heal]]
-- [ ] #91 Event-storm backstop never engages (WF_GLOBAL_CAP dead)
-	  - Plan: [[event-storm-backstop-dead]]
+- [ ] #86 Delay Trigger node — decouple recording start/stop
+	  - Plan: [[delay-trigger-recording-signal-flow]]
 
 
 ## Review
 
 - [ ] #73 Notification providers: configured badge + config & enrollment
 	  - Plan: [[notification-provider-ux]]
+- [ ] #88 Camera credential wizard (bug B)
+	  - Plan: [[camera-credential-wizard]]
 
 
 ## Done
 
 **Complete**
+- [x] #91 Event-storm backstop never engages (WF_GLOBAL_CAP dead)
+	  - Plan: [[event-storm-backstop-dead]]
 - [x] #90 Editor: wire multiple exec outputs into one node (fan-in)
 	  - Plan: [[editor-exec-fan-in]]
 - [x] Flip Flop workflow node — alternates exec A/B across runs (+ Compare)

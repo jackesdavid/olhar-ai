@@ -459,6 +459,9 @@ pub fn run_node(
         // TimeGate is engine-driven (reads/writes cross-run state, polls until expiry).
         // Never called through run_node — the engine handles it in forward_epoch.
         NodeKind::TimeGate => Ok(PortValues::new()),
+        // DelayTrigger is engine-driven too (arms/extends cross-run state and schedules its
+        // own trailing stop). Never called through run_node.
+        NodeKind::DelayTrigger => Ok(PortValues::new()),
         NodeKind::GetVariable => variable::run_get_variable(config, sys),
         NodeKind::SetVariable => variable::run_set_variable(config, inputs, sys),
         NodeKind::ReplyToSender => telegram::run_reply_to_sender(config, inputs, sys),
@@ -535,6 +538,7 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::Comment
         | NodeKind::Reroute
         | NodeKind::TimeGate
+        | NodeKind::DelayTrigger
         | NodeKind::GetVariable
         | NodeKind::SetVariable => return None,
     };
@@ -831,6 +835,9 @@ pub fn debug_summary(
         }
         NodeKind::StopRecording => "recording stopped".into(),
         NodeKind::TimeGate => "time gate".into(),
+        // The engine logs the real state transition (armed / extended / stopped) — this is
+        // only the fallback for a node that somehow reached the generic summary path.
+        NodeKind::DelayTrigger => "delay trigger".into(),
         NodeKind::GetVariable => {
             let name = config.get("variable").and_then(|v| v.as_str()).unwrap_or("?");
             format!("get ${name}")

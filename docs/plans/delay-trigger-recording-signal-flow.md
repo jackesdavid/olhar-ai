@@ -1,6 +1,8 @@
 # Delay Trigger node — decouple Start/Stop Recording via a leading+trailing debounce
 
-**Board card:** #86 Delay Trigger node — decouple recording start/stop (ToDo)
+**Board card:** #86 Delay Trigger node — decouple recording start/stop (In Progress)
+**Status:** built. Corrections found at implementation time are recorded in *Built — deltas from
+this plan* at the bottom; read that before trusting the phase details above.
 **Companion:** [[segmented-continuous-recording]] (#87 — caps clip size for long sessions)
 **Goal:** One clean node that owns the leading+trailing edge so `StartRecording` becomes a plain,
 stateless action called exactly once per clip.
@@ -191,3 +193,50 @@ retried — a double-stop is safe (edge stop of an already-stopped clip is a no-
 - Migrating existing saved graphs off the old `Start → TimeGate → Stop` pattern (both remain valid).
 - Exposing elapsed/remaining time as a wirable data output.
 - **Clip segmentation** — see companion [[segmented-continuous-recording]] (#87).
+
+---
+
+## Built — deltas from this plan
+
+The plan was written from an earlier read of the code. What actually shipped, and why it differs:
+
+- **`kind_str` doesn't exist** — the slug accessor is `NodeKind::slug()`. `from_slug` derives from
+  `ALL` (`ALL.into_iter().find(|k| k.slug() == s)`), so `slug_round_trips_all_kinds` covers the new
+  node automatically — no test edit, and no catch-all arm to miss.
+- **`NodeKind::ALL` 64 → 65** as planned. `CLAUDE.md` said "61 user-visible nodes" — already stale
+  by 3 before this card; corrected to 65.
+- **`work_queue` could not schedule anything.** `enqueue()` hard-codes `run_after = created_at`, so
+  "enqueue with a future `run_after`" needed building, not calling: added `enqueue_at` /
+  `enqueue_at_blocking` (no `NOTIFY` — waking a consumer for a job that isn't due only burns a poll),
+  `reschedule` / `reschedule_blocking`, the `WINDOW_CATEGORY`/`WINDOW_KIND` pair, and
+  `enqueue_window_stop_blocking`. `claim` already gates on `run_after <= now`, so it needed no change.
+- **Atomicity: conditional writes, not `SELECT … FOR UPDATE`.** `workflow_node_state` had no CAS of
+  any kind. Rather than the planned lock-then-update transaction, each transition is a single
+  conditional statement whose `rows_affected` says who won — simpler, atomic, and it never reads an
+  old value (so the `feedback_postgres_returning` rule doesn't even apply):
+  - `try_arm_node_state` — `INSERT … ON CONFLICT DO UPDATE … WHERE state IS DISTINCT FROM 'armed'`
+  - `extend_node_state` — `UPDATE … WHERE state = 'armed'`
+  - `try_disarm_expired_node_state` — `UPDATE … WHERE state = 'armed' AND expires_at::timestamptz <= now()`
+  Postgres compares against its **own** `now()`, so the decision is atomic with the write and immune
+  to clock skew between pods. (`state_json` is `TEXT`, hence the `::jsonb` cast.)
+- **`forced` alone is not a safe discriminator.** A loop back-edge also forces a node, which would
+  fake an expiry and fire a spurious `stop`. The expiry run is instead marked by
+  `WINDOW_STOP_MARKER` in the entry payload — inert for every other node, since only `OnEvent`
+  consumes `entry_payload`.
+- **The consumer owns the disarm.** `window_consumer` wins (or loses) `try_disarm_expired_node_state`
+  and only then forces the run; the engine block trusts that and just lights `stop`. On a loss it
+  re-reads the state: still armed → `reschedule_blocking` to the new expiry; idle → the cycle is over,
+  `mark_done_blocking`.
+- **`TriggerSource::Timer`** added (the enum had only Manual/Cron/Event), so a trailing stop reads as
+  its own trigger in run history rather than masquerading as an event.
+- **No engine unit test.** The plan assumed it would follow "the FlipFlop / Cooldown tests" — those
+  don't exist. Every stateful engine node is DB-driven, and the suite passes without Postgres only
+  because `get_node_state` swallows errors to `None`. A DB-backed test would break `cargo test` for
+  anyone without a database. The CAS semantics — the actual risk — were verified directly against
+  Postgres instead (all 8 cases: first arm wins, re-arm loses, early disarm loses, extend wins,
+  expired disarm wins, double disarm loses, extend-while-idle loses, re-arm after stop wins).
+
+## Still to verify at runtime
+
+The end-to-end path (motion burst → one `start`, quiet → one `stop`, restart mid-window still stops)
+has **not** been driven yet — it needs flow + Postgres + a graph firing real events.

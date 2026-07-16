@@ -72,6 +72,39 @@ pub async fn enqueue(
     tx.commit().await
 }
 
+/// Enqueue one job that only becomes due at `run_after` (RFC3339) — a durable timer.
+///
+/// [`enqueue`] always writes `run_after = created_at`, i.e. due immediately. This binds the
+/// caller's own moment instead, which [`claim`] already honours (it only takes rows whose
+/// `run_after <= now`). Used for `DelayTrigger`'s trailing edge: the stop is a row in Postgres,
+/// so it survives a pod restart rather than dying with a held thread. No `NOTIFY` — waking a
+/// consumer for a job that isn't due yet only burns a poll.
+pub async fn enqueue_at(
+    pool: &PgPool,
+    request_id: Uuid,
+    tenant_id: Uuid,
+    category: &str,
+    job: &NewJob,
+    run_after: &str,
+) -> sqlx::Result<()> {
+    let now = now_rfc3339();
+    sqlx::query(
+        "INSERT INTO work_jobs (request_id, tenant_id, category, kind, payload, created_at, updated_at, run_after)
+         VALUES ($1, $2, $3, $4, $5, $6, $6, $7)",
+    )
+    .bind(request_id).bind(tenant_id).bind(category).bind(&job.kind).bind(&job.payload).bind(&now).bind(run_after)
+    .execute(pool).await.map(|_| ())
+}
+
+/// Move a claimed job's next attempt to an explicit moment and return it to `pending`. Like
+/// [`release`], but the caller names the time rather than a delay — for a timer whose deadline
+/// moved (a debounce window that got extended).
+pub async fn reschedule(pool: &PgPool, id: Uuid, run_after: &str) -> sqlx::Result<()> {
+    sqlx::query("UPDATE work_jobs SET status = 'pending', run_after = $2, updated_at = $3 WHERE id = $1")
+        .bind(id).bind(run_after).bind(now_rfc3339())
+        .execute(pool).await.map(|_| ())
+}
+
 /// Atomically claim up to `limit` jobs of a (category, kind): due `pending` rows, plus stale
 /// `running` rows (reaped), locked with `FOR UPDATE SKIP LOCKED` and flipped to `running` in the
 /// same transaction. Exactly-once handoff — a claimed job is invisible to other consumers until it
@@ -186,6 +219,38 @@ pub fn enqueue_one_blocking(db: &Db, tenant_id: Uuid, category: &str, kind: &str
     }
 }
 
+/// Enqueue one job due at `run_after` (RFC3339), blocking. See [`enqueue_at`].
+pub fn enqueue_at_blocking(
+    db: &Db,
+    tenant_id: Uuid,
+    category: &str,
+    kind: &str,
+    payload: serde_json::Value,
+    run_after: &str,
+) {
+    let pool = db.pool();
+    let request_id = Uuid::new_v4();
+    let category = category.to_string();
+    let job = NewJob { kind: kind.to_string(), payload };
+    let run_after = run_after.to_string();
+    let res = db.block(async move {
+        enqueue_at(&pool, request_id, tenant_id, &category, &job, &run_after).await
+    });
+    if let Err(e) = res {
+        log::error!("work_queue::enqueue_at_blocking failed: {e}");
+    }
+}
+
+/// Reschedule a claimed job to an explicit moment, blocking. See [`reschedule`].
+pub fn reschedule_blocking(db: &Db, id: Uuid, run_after: &str) {
+    let pool = db.pool();
+    let run_after = run_after.to_string();
+    let res = db.block(async move { reschedule(&pool, id, &run_after).await });
+    if let Err(e) = res {
+        log::error!("work_queue::reschedule_blocking failed: {e}");
+    }
+}
+
 /// Claim a batch (blocking). Returns empty on error (logged), like the old `claim_next` returning None.
 pub fn claim_blocking(db: &Db, category: &str, kind: &str, limit: i64) -> Vec<Job> {
     let pool = db.pool();
@@ -213,6 +278,30 @@ pub const EVENT_KIND: &str = "fire";
 pub fn enqueue_event_blocking(db: &Db, tenant_id: Uuid, event: &str, source: &str, fields: &serde_json::Value) {
     let payload = serde_json::json!({ "event": event, "source": source, "fields": fields });
     enqueue_one_blocking(db, tenant_id, EVENT_CATEGORY, EVENT_KIND, payload);
+}
+
+// ---- workflow timing windows (DelayTrigger's trailing edge) -----------------
+// A debounce window's close is a scheduled job, not a held thread: `run_after` is the window's
+// expiry, so it survives a pod restart and fires late rather than never.
+
+/// Category for a workflow node's timing window.
+pub const WINDOW_CATEGORY: &str = "workflow_window";
+/// Kind for the trailing edge — close the window and let the node fire its `stop`.
+pub const WINDOW_KIND: &str = "stop";
+
+/// Schedule a `DelayTrigger`'s trailing stop for `expires_at` (RFC3339). The consumer re-reads
+/// the node's state when it comes due, so an extended window reschedules instead of firing.
+pub fn enqueue_window_stop_blocking(
+    db: &Db,
+    tenant_id: Uuid,
+    graph_id: Uuid,
+    node_id: u32,
+    expires_at: &str,
+) {
+    let payload = serde_json::json!({
+        "graph": graph_id, "node": node_id, "expires_at": expires_at,
+    });
+    enqueue_at_blocking(db, tenant_id, WINDOW_CATEGORY, WINDOW_KIND, payload, expires_at);
 }
 
 // ---- monitoring (master: system-wide async load) ----------------------------
