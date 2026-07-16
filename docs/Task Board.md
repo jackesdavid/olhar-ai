@@ -58,8 +58,6 @@ kanban-plugin: board
 	  - Plan: [[email-template-system]]
 - [ ] #71 Storage billing economics — R2 cost vs quota, no-loss guardrails
 	  - Plan: [[storage-billing-economics]]
-- [ ] #73 Notification providers: fix configured badge + simpler config & enrollment
-	  - Plan: [[notification-provider-ux]]
 - [ ] #74 Postgres performance tuning — kill the default config
 	  - Plan: [[postgres-performance-tuning]]
 - [ ] #76 OlharAI rebrand — domains, brand, app copy, landing rewrite
@@ -76,9 +74,6 @@ kanban-plugin: board
 	  - Plan: [[edge-windows]]
 - [ ] #83 Windows installer — signed .exe
 	  - Plan: [[edge-windows-installer]]
-- [ ] #89 Live badge + loading states (bug C)
-	  - Plan: [[live-badge-loading-states]]
-
 
 
 ## Review
@@ -87,13 +82,14 @@ kanban-plugin: board
 	  - Plan: [[notification-provider-ux]]
 - [ ] #88 Camera credential wizard (bug B)
 	  - Plan: [[camera-credential-wizard]]
+- [ ] #89 Live badge + loading states (bug C)
+	  - Plan: [[live-badge-loading-states]]
 - [ ] #84 Per-platform installer download
 	  - Plan: [[installer-download-button]]
 - [ ] #85 Pairing progress UX — "code accepted" state
 	  - Plan: [[pairing-progress-ux]]
 - [ ] #61 Tab toggle: collapse/expand editor side panels
 	  - Plan: [[editor-panel-tab-toggle]]
-
 - [ ] #75 Workflow editor: one tabbed right rail (Details / Properties / Variables / Runs)
 	  - Plan: [[workflow-editor-tabbed-inspector]]
 - [ ] #72 Dark palette: deeper elevation ramp (Unreal-style)
