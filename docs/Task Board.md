@@ -78,8 +78,6 @@ kanban-plugin: board
 	  - Plan: [[edge-windows]]
 - [ ] #83 Windows installer — signed .exe
 	  - Plan: [[edge-windows-installer]]
-- [ ] #88 Camera credential wizard (bug B)
-	  - Plan: [[camera-credential-wizard]]
 
 
 
@@ -87,6 +85,8 @@ kanban-plugin: board
 
 - [ ] #73 Notification providers: configured badge + config & enrollment
 	  - Plan: [[notification-provider-ux]]
+- [ ] #88 Camera credential wizard (bug B)
+	  - Plan: [[camera-credential-wizard]]
 - [ ] #84 Per-platform installer download
 	  - Plan: [[installer-download-button]]
 - [ ] #85 Pairing progress UX — "code accepted" state

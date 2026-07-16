@@ -20,6 +20,9 @@
   import { Label } from "$lib/components/ui/label";
   import { Badge } from "$lib/components/ui/badge";
   import Loader from "$lib/components/loader.svelte";
+  import Busy from "$lib/components/busy.svelte";
+  import Check from "@lucide/svelte/icons/check";
+  import XCircle from "@lucide/svelte/icons/circle-x";
   import EmptyState from "$lib/components/empty-state.svelte";
   import StatusDot from "$lib/components/status-dot.svelte";
 
@@ -70,6 +73,10 @@
   let editUser = $state("");
   let editPass = $state("");
   let savingDetail = $state(false);
+  // Credential test (card #88): prove the creds work by pulling a live snapshot.
+  type TestState = "idle" | "testing" | "verified" | "failed";
+  let testState = $state<TestState>("idle");
+  let testSnapshotUrl = $state<string | null>(null);
 
   // ---- Delete confirm dialog ----------------------------------------------
   let deleteOpen = $state(false);
@@ -164,7 +171,44 @@
     editName = d.name;
     editUser = d.username ?? "";
     editPass = d.password ?? "";
+    resetTest();
     detailOpen = true;
+  }
+
+  function resetTest() {
+    testState = "idle";
+    if (testSnapshotUrl) URL.revokeObjectURL(testSnapshotUrl);
+    testSnapshotUrl = null;
+  }
+
+  // Save the name + credentials, then PROVE the creds work by pulling a live snapshot (card #88).
+  // A returned frame means the RTSP creds authenticated and the edge's go2rtc connected — real proof,
+  // not "saved into a void."
+  async function saveAndTest() {
+    if (!detail || !editUser.trim()) return;
+    savingDetail = true;
+    resetTest();
+    try {
+      const device: Device = { ...detail, name: editName.trim() || detail.name, username: null, password: null };
+      await data.saveDevice(device);
+      detail = device;
+      testState = "testing";
+      const res = await data.testCredentials(detail.ip, editUser, editPass);
+      if (res.ok && res.blob) {
+        testSnapshotUrl = URL.createObjectURL(res.blob);
+        testState = "verified";
+      } else {
+        testState = "failed";
+      }
+      await loadDevices();
+      await loadEdgeFound();
+    } catch (err) {
+      console.error("Failed to save/test device", err);
+      testState = "failed";
+      toast.error("Failed to save the camera", { description: String(err) });
+    } finally {
+      savingDetail = false;
+    }
   }
 
   async function saveDetail() {
@@ -380,10 +424,45 @@
           Set the camera's credentials — your edge resolves the stream on its own network. The RTSP URL stays on the edge.
         </p>
 
+        {#if testState !== "idle"}
+          <div class="rounded-lg border border-border bg-well p-3">
+            {#if testState === "testing"}
+              <div class="flex items-center gap-3 text-sm text-muted-foreground">
+                <Busy />
+                Testing the connection to {detail.ip}… pulling a live frame to prove the credentials work.
+              </div>
+            {:else if testState === "verified"}
+              <div class="space-y-2">
+                <p class="flex items-center gap-2 text-sm font-medium text-primary">
+                  <Check class="size-4" /> Camera verified — the credentials work.
+                </p>
+                {#if testSnapshotUrl}
+                  <img src={testSnapshotUrl} alt="Live snapshot from {detail.ip}" class="w-full rounded-md border border-border" />
+                {/if}
+              </div>
+            {:else if testState === "failed"}
+              <div class="space-y-1 text-sm">
+                <p class="flex items-center gap-2 font-medium text-destructive">
+                  <XCircle class="size-4" /> Couldn't get a picture from this camera.
+                </p>
+                <p class="text-muted-foreground">
+                  Check the username and password, and that the camera is on the same network as your edge. Then try again.
+                </p>
+              </div>
+            {/if}
+          </div>
+        {/if}
+
         <div class="flex flex-wrap gap-2">
-          <Button onclick={saveDetail} disabled={savingDetail}>
-            {savingDetail ? "Saving…" : "Save"}
-          </Button>
+          {#if editUser.trim()}
+            <Button onclick={saveAndTest} disabled={savingDetail}>
+              {savingDetail ? "Saving…" : testState === "failed" ? "Save & test again" : "Save & test"}
+            </Button>
+          {:else}
+            <Button onclick={saveDetail} disabled={savingDetail}>
+              {savingDetail ? "Saving…" : "Save"}
+            </Button>
+          {/if}
         </div>
       </div>
     {/if}

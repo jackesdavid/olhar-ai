@@ -154,7 +154,32 @@ export const data = {
   rescan: async (): Promise<void> => {
     await api.post<void>("/devices/rescan");
   },
-  testCredentials: (): Promise<never> => cloudOnly("Credential test"),
+  /** Set a camera's credentials and PROVE they work by pulling a live snapshot (card #88).
+   *  A frame only comes back if the RTSP creds authenticated and the edge's go2rtc connected, so a
+   *  returned blob IS the proof. Saves the creds, gives the edge a moment to apply them + resolve
+   *  the stream, then polls the snapshot until a frame arrives or ~`timeoutMs` elapses. */
+  testCredentials: async (
+    ip: string,
+    username: string,
+    password: string,
+    timeoutMs = 25_000,
+  ): Promise<{ ok: boolean; blob?: Blob }> => {
+    await api.post<void>(`/devices/${encodeURIComponent(ip)}/credentials`, { username, password });
+    const deadline = Date.now() + timeoutMs;
+    // The edge picks creds up on its next config poll (~1s, woken by control) and needs a beat to
+    // reconnect go2rtc's RTSP stream — don't probe instantly or the first frame is guaranteed to miss.
+    await new Promise((r) => setTimeout(r, 2500));
+    while (Date.now() < deadline) {
+      try {
+        const blob = await data.snapshotBlob(ip, 8000);
+        if (blob.size > 0) return { ok: true, blob };
+      } catch {
+        // not ready yet (creds still propagating, or wrong) — keep trying until the deadline
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    return { ok: false };
+  },
   validateDevice: (): Promise<never> => cloudOnly("Credential validation"),
 
   // ---- live / snapshots (edge-owned, via the streaming gateway) ------------
@@ -166,10 +191,13 @@ export const data = {
    * /devices/:ip/snapshot`) — for the workflow editor's Region-drawing UI (card: edge
    * tracking). Needs the Authorization header (image requests can't carry one), so this
    * fetches a Blob rather than returning a plain `<img src>` URL. */
-  snapshotBlob: async (ip: string): Promise<Blob> => {
+  snapshotBlob: async (ip: string, timeoutMs?: number): Promise<Blob> => {
     const headers: Record<string, string> = {};
     if (auth.token) headers.Authorization = `Bearer ${auth.token}`;
-    const r = await fetch(`${API_BASE}/devices/${encodeURIComponent(ip)}/snapshot`, { headers });
+    // A per-request timeout so a stuck edge/go2rtc can't hang the caller (the credential test polls
+    // this in a loop and must keep moving).
+    const signal = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
+    const r = await fetch(`${API_BASE}/devices/${encodeURIComponent(ip)}/snapshot`, { headers, signal });
     if (!r.ok) throw new Error(`Snapshot failed (${r.status})`);
     return r.blob();
   },
