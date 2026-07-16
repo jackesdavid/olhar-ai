@@ -4,11 +4,11 @@
     "type": "split",
     "children": [
       {
-        "id": "1c3de9330a44663c",
+        "id": "0b69487012f0f97e",
         "type": "tabs",
         "children": [
           {
-            "id": "ed375cc67003ec28",
+            "id": "b11e42b646fa8cd4",
             "type": "leaf",
             "state": {
               "type": "kanban",
@@ -194,13 +194,20 @@
       "obsidian-excalidraw-plugin:New drawing": false
     }
   },
-  "active": "ed375cc67003ec28",
+  "active": "b11e42b646fa8cd4",
   "lastOpenFiles": [
+    "plans/live-playback-state.md",
+    "plans/live-badge-loading-states.md",
+    "plans/camera-credential-wizard.md",
+    "plans/segmented-continuous-recording.md",
+    "plans/delay-trigger-recording-signal-flow.md",
+    "plans/pairing-progress-ux.md",
+    "plans/installer-download-button.md",
+    "Task Board.md",
     "plans/edge-windows-installer.md",
     "plans/edge-macos-pkg.md",
     "plans/box-pairing-code.md",
     "plans/edge-pure-rust-motion.md",
-    "Task Board.md",
     "plans/edge-windows.md",
     "plans/clip-local-retention.md",
     "plans/edge-frame-hub.md",
@@ -226,17 +233,10 @@
     "plans/favicons-app-icons.md",
     "plans/logo-brand-mark.md",
     "Task Board.md.tmp.58033.d736ccef9d63",
-    "plans/recording-playback-timeline.md",
-    "plans/agnostic-event-module.md",
-    "plans/invite-onboarding-email.md",
     "plans/cloud-recording-storage.md.tmp.6187.dcba51268c56",
-    "plans/cloud-recording-storage.md",
     "plans/tenant-cloud-cost.md.tmp.43140.26a2e5b67b50",
     "plans/tenant-cloud-cost.md.tmp.43140.a0b6b6414ac8",
     "Task Board.md.tmp.66747.13becb2ef564",
-    "plans/tenant-cloud-cost.md",
-    "plans/face-recognition-next-steps.md",
-    "plans/update-button-loading.md",
     "plans/reid-person-reidentification.md.tmp.84899.e5f81c26e2b6"
   ]
 }
