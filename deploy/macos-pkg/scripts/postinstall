@@ -63,6 +63,12 @@ start_daemon() {
   # that window instead of dying on the first attempt. KeepAlive is what turns the edge's own exit(0)
   # (enrollment, the Boxes-page Restart button) into a relaunch rather than a death.
   launchctl bootout "system/$LABEL" 2>/dev/null || true
+  # ENABLE, not just bootout: `bootout` clears a *loaded* service, but if this label was ever
+  # `launchctl disable`d (a prior uninstall, or a stopped box) launchd keeps a persistent DISABLED
+  # override — and bootstrapping a disabled service fails with the very same "5: Input/output error",
+  # which looks identical to the async-teardown race but no amount of retrying clears it. Enabling
+  # first removes that override. (This is the real cause of a bootstrap-5 that survives retries.)
+  launchctl enable "system/$LABEL" 2>/dev/null || true
   n=0
   while ! launchctl bootstrap system "$PLIST" 2>/dev/null; do
     n=$((n + 1))
