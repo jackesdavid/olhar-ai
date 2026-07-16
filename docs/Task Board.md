@@ -143,6 +143,8 @@ kanban-plugin: board
 ## Done
 
 **Complete**
+- [x] Flip Flop workflow node — alternates exec A/B across runs (+ Compare)
+	  - Plan: [[flip-flop-node]]
 - [x] #69 Favicons / app-icons / PWA / OG images
 	  - Plan: [[favicons-app-icons]]
 - [x] #68 Logo & brand-mark system
