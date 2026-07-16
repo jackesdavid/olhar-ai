@@ -240,12 +240,19 @@ pub fn snapshot_from_rtsp(rtsp: &str, user: &str, pass: &str) -> Result<Vec<u8>,
     }
     let url = rtsp_url_with_creds(rtsp, user, pass);
 
-    // `-rw_timeout` (µs) makes ffmpeg abort a stalled RTSP socket read on its own; the
+    // `-timeout` (µs) makes ffmpeg abort a stalled RTSP socket read on its own; the
     // wall-clock kill below is a belt-and-suspenders guard in case the handshake itself
     // wedges, so an unreachable/hung camera can never block the caller forever.
+    //
+    // It MUST be `-timeout`, not `-rw_timeout`: the latter is an AVIO/protocol option that the
+    // RTSP demuxer doesn't have, so ffmpeg 7.x dies with "Option rw_timeout not found" before it
+    // ever dials the camera. That killed this whole function on every box with a modern ffmpeg —
+    // silently, because it's only the fallback behind go2rtc's frame.jpeg, and its error surfaces
+    // as a generic "couldn't get a snapshot". Found when the #88 probe returned verified-but-no-
+    // proof-frame; the bundled ffmpeg 7.1 lists only `-timeout` for the rtsp demuxer.
     let mut child = Command::new("ffmpeg")
         .args([
-            "-rw_timeout", "8000000", // 8s socket I/O timeout (microseconds)
+            "-timeout", "8000000", // 8s socket I/O timeout (microseconds)
             "-rtsp_transport", "tcp",
             "-i", &url,
             "-frames:v", "1",
