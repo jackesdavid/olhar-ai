@@ -1,7 +1,5 @@
 ---
-
 kanban-plugin: board
-
 ---
 
 ## Backlog
@@ -25,8 +23,6 @@ kanban-plugin: board
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
 - [ ] #9 We should encrypt the passwords in the db column level too
 - [ ] #10 Update available — reload to get the latest version.
-- [ ] #91 Event-storm backstop never engages (WF_GLOBAL_CAP dead)
-	  - Plan: [[event-storm-backstop-dead]]
 - [ ] #93 Box health copy leaks internals ("tailnet", "Tailscale") to users
 	  - Plan: [[box-health-copy-no-internals]]
 
@@ -35,8 +31,6 @@ kanban-plugin: board
 
 - [ ] #11 Update button stays loading until update completes
 	  - Plan: [[update-button-loading]]
-- [ ] #12 Node body: cooldown live state + wait config display
-	  - Plan: [[node-body-live-state]]
 - [ ] #13 Cooldown node: `reset` exec port
 	  - Plan: [[cooldown-reset-port]]
 - [ ] #14 The data time on the logs should locally time and we should see the date too — for the current day show only the time
@@ -80,10 +74,10 @@ kanban-plugin: board
 	  - Plan: [[edge-windows-installer]]
 - [ ] #88 Camera credential wizard (bug B)
 	  - Plan: [[camera-credential-wizard]]
-- [ ] #90 Editor: wire multiple exec outputs into one node (fan-in)
-	  - Plan: [[editor-exec-fan-in]]
 - [ ] #92 Edge tailnet self-heal — a stopped Tailscale strands the box
 	  - Plan: [[edge-tailnet-self-heal]]
+- [ ] #91 Event-storm backstop never engages (WF_GLOBAL_CAP dead)
+	  - Plan: [[event-storm-backstop-dead]]
 
 
 ## Review
@@ -95,8 +89,12 @@ kanban-plugin: board
 ## Done
 
 **Complete**
+- [x] #90 Editor: wire multiple exec outputs into one node (fan-in)
+	  - Plan: [[editor-exec-fan-in]]
 - [x] Flip Flop workflow node — alternates exec A/B across runs (+ Compare)
 	  - Plan: [[flip-flop-node]]
+- [x] #12 Node body: cooldown live state + wait config display
+	  - Plan: [[node-body-live-state]]
 - [x] #79 Edge without OpenCV — pure-Rust motion
 	  - Plan: [[edge-pure-rust-motion]]
 - [x] #81 Box pairing — enroll by code
@@ -203,6 +201,6 @@ kanban-plugin: board
 
 %% kanban:settings
 ```
-{"kanban-plugin":"board","list-collapse":[false,true,false,false,false,false],"show-checkboxes":true,"date-display-format":"YYYY-MM-DD","hide-date-in-title":true}
+{"kanban-plugin":"board","list-collapse":[false,true,false,false,false,false],"show-checkboxes":true,"date-display-format":"YYYY-MM-DD","hide-date-in-title":true,"full-list-lane-width":true,"move-tags":true,"tag-colors":[{"tagKey":"","color":"","backgroundColor":""}],"inline-metadata-position":"footer","move-task-metadata":true}
 ```
 %%

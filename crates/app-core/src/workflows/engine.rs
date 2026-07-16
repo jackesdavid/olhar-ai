@@ -957,10 +957,10 @@ impl WorkflowEngine {
         }
     }
 
-    /// Total in-flight runs across all tenants/graphs (the global safety backstop reads this).
-    pub fn total_running(&self) -> u32 {
-        self.runs.values().map(|r| r.running).sum()
-    }
+    // NOTE: no `total_running()` here on purpose. `runs` is per-graph policy accounting —
+    // only `fire_graph` (cron/manual) feeds it via `on_spawn`, so a sum of it silently omits
+    // every event handler. The pod-wide backstop counts the activity map instead
+    // (`sentinel_flow::engine::total_in_flight`), which both spawn paths register with.
 
     /// Seed a graph's cron timer to a prior fire instant (Phase 0.5 restore). The adapter
     /// computes this anchor from the persisted wall-clock fire time so a mid-interval restart

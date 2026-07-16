@@ -23,7 +23,17 @@ use app_core::workflows::{
 };
 
 use crate::events;
-use crate::state::{self, AppState, GraphActivity, WF_GLOBAL_CAP};
+use crate::state::{self, Activity, AppState, GraphActivity, WF_GLOBAL_CAP};
+
+/// Total in-flight runs across every tenant/graph — cron, manual **and** event handlers.
+///
+/// The global backstop reads this rather than `WorkflowEngine::runs`: that counter is only
+/// bumped by `on_spawn`, which just `fire_graph` (cron/manual) calls, so it cannot see an
+/// event storm at all. The activity map is the one place every run registers, via
+/// `mark_run_started` / `mark_run_finished` on both spawn paths.
+fn total_in_flight(activity: &Activity) -> u32 {
+    activity.lock().unwrap().values().map(|a| a.running).sum()
+}
 
 /// Spawn the 1 s trigger poller on a background thread. Across ALL tenants: fires due
 /// Cron graphs under each graph's concurrency policy, persisting the cron timing state
@@ -43,7 +53,7 @@ pub fn spawn_poller(state: Arc<AppState>) {
         };
 
         for (tenant, id, trigger, policy) in graphs {
-            if state.engine.lock().unwrap().total_running() >= WF_GLOBAL_CAP {
+            if total_in_flight(&state.activity) >= WF_GLOBAL_CAP {
                 break; // global backstop
             }
             let due = match &trigger {
@@ -98,9 +108,11 @@ pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid, sour
         None => return,
     };
     let state = Arc::clone(state);
+    let run_id = Uuid::new_v4();
+    // Register BEFORE the thread starts: the global backstop counts this map, so a burst
+    // could otherwise spawn past the ceiling while the threads were still starting up.
+    mark_run_started(&state, tenant, graph_id, run_id, source.as_str());
     std::thread::spawn(move || {
-        let run_id = Uuid::new_v4();
-        mark_run_started(&state, tenant, graph_id, run_id, source.as_str());
         workflows::repo::insert_run(
             &state.db,
             tenant,
@@ -446,7 +458,7 @@ pub fn fire_event(
 
     for (listener_id, listener_name, entry) in listeners {
         // Global backstop: don't let an event storm exceed the pod's run ceiling.
-        if state.engine.lock().unwrap().total_running() >= WF_GLOBAL_CAP {
+        if total_in_flight(&state.activity) >= WF_GLOBAL_CAP {
             events::publish(
                 &state.events,
                 "workflow-event",
@@ -551,9 +563,11 @@ fn spawn_event_handler(
         }
     };
     let state = Arc::clone(state);
+    let run_id = Uuid::new_v4();
+    // Register BEFORE the thread starts — see spawn_graph_run. This is the storm path the
+    // backstop exists for, so the dispatch loop must see each handler the moment it's taken.
+    mark_run_started(&state, tenant, listener_id, run_id, "event");
     std::thread::spawn(move || {
-        let run_id = Uuid::new_v4();
-        mark_run_started(&state, tenant, listener_id, run_id, "event");
         workflows::repo::insert_run(
             &state.db,
             tenant,
@@ -700,4 +714,46 @@ fn resolve_telegram_config(state: &Arc<AppState>, tenant: Uuid) -> Option<Notifi
         }
     }
     NotificationConfig::from_env()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn activity_with(runs: &[(&str, u32)]) -> Activity {
+        let mut m: HashMap<(Uuid, Uuid), GraphActivity> = HashMap::new();
+        for (trigger, running) in runs {
+            m.insert(
+                (Uuid::new_v4(), Uuid::new_v4()),
+                GraphActivity {
+                    running: *running,
+                    trigger: Some((*trigger).to_string()),
+                    ..Default::default()
+                },
+            );
+        }
+        Arc::new(Mutex::new(m))
+    }
+
+    /// The bug: the backstop summed `WorkflowEngine::runs`, which only `fire_graph`
+    /// (cron/manual) feeds — so an event storm read as 0 and the cap never engaged.
+    /// Whatever the backstop counts must include event-triggered runs.
+    #[test]
+    fn total_in_flight_counts_event_runs_not_just_cron() {
+        let only_events = activity_with(&[("event", 5)]);
+        assert_eq!(total_in_flight(&only_events), 5, "event runs must count");
+
+        let mixed = activity_with(&[("cron", 2), ("event", 3), ("manual", 1)]);
+        assert_eq!(total_in_flight(&mixed), 6, "every trigger source counts");
+
+        assert_eq!(total_in_flight(&activity_with(&[])), 0);
+    }
+
+    /// Graphs that have finished settle back to 0 and stop occupying the ceiling.
+    #[test]
+    fn total_in_flight_ignores_settled_graphs() {
+        let a = activity_with(&[("event", 0), ("cron", 4)]);
+        assert_eq!(total_in_flight(&a), 4);
+    }
 }

@@ -47,18 +47,41 @@ Set `max_concurrent: 10` and you get 10 concurrent runs, not the 8 the backstop 
 handlers that's 10 threads regardless of pod health. (At capacity the next event is **dropped**, not
 queued — `Concurrent` has no queue.)
 
-## Fix options (decide at implementation)
+## What was built (option b, not a — reasoning)
 
-- **(a) Recommended — make event runs reserve a slot.** Have `spawn_event_handler` call `engine.on_spawn`
-  before spawning and `on_finish` at the end, so `total_running()` counts them. Care: `on_finish` returns a
-  "drain queued" bool used by `QueueSingle` (`engine.rs:158-161`) — the event path must **not** drain that
-  queue. One source of truth, matches the backstop's intent.
-- **(b) Smaller — read the map that's actually incremented.** Have the backstop sum `state.activity`
-  instead of `WfEngine.runs`. Less invasive, but leaves two counters meaning "running".
+The plan leaned toward **(a)** "make event runs call `on_spawn`/`on_finish`". Reading the code at
+implementation time ruled that out — it was the wrong call for two reasons:
 
-Either way there are now **three** overlapping counters — `WfEngine.runs`, `state.activity`, and
-`state.event_runs` — each incremented by a different path. Consider consolidating, or at minimum document
-who owns what.
+1. **`on_finish` is coupled to the queue.** It decrements `queued` and returns "drain me"
+   (`engine.rs:158-161`). An event run calling it would silently swallow a queued `QueueSingle` cron fire.
+2. **`decide()` reads the same counter** for per-graph policy. Feeding event runs into `runs.running` would
+   make a cron fire get skipped because an *event handler* is running — a behaviour change well beyond the bug.
+
+**(b) is surgical and strictly correct.** `state.activity` is the one map *every* run registers with —
+`mark_run_started`/`mark_run_finished` are called by both `spawn_graph_run` and `spawn_event_handler`. So:
+
+- New `sentinel_flow::engine::total_in_flight(&Activity)` sums it, and **both** backstop sites read it —
+  the event fan-out (`engine.rs:~459`) *and* the cron poller (`engine.rs:~56`), which undercounted for the
+  same reason.
+- **`WorkflowEngine::total_running()` was deleted**, not just bypassed. Leaving a helper that silently omits
+  every event run is exactly the trap that caused this bug; a comment in its place explains why.
+- **Race fixed too:** `mark_run_started` used to run *inside* the spawned thread, so the dispatch loop could
+  check the ceiling, spawn, and check again before the thread registered — overshooting the cap precisely
+  during a storm. Both spawn paths now register **before** `thread::spawn`, matching how `event_runs` and
+  the old `on_spawn` reserve synchronously.
+- Tests: `sentinel-flow`'s first unit tests (`total_in_flight_counts_event_runs_not_just_cron`,
+  `total_in_flight_ignores_settled_graphs`).
+
+Counters now have clear owners: `WfEngine.runs` = per-graph policy accounting (cron/manual, feeds `decide`);
+`state.event_runs` = per-`(tenant, graph, event)` handler cap; `state.activity` = live in-flight, pod-wide —
+the UI badge **and** the global ceiling.
+
+## Known limitation (not introduced here)
+
+If a run panics outside a node, `mark_run_finished` never runs and `activity.running` leaks — which now
+wedges the ceiling, not just a UI badge. The intended design had the same hole (`on_finish` sits at the end
+of the same closure), and node panics are already contained by `run_node_timed`'s channel-disconnect path.
+An RAII guard around the decrement would close it properly.
 
 ## Verification
 
