@@ -158,8 +158,17 @@
     edges: Edge[];
     viewport?: { x: number; y: number; zoom: number };
     edge_vias?: Record<string, [number, number][]>;
-    variables?: Variable[];
+    variables?: VarDecl[];
     last_run?: { at: string; status: string; trigger: string } | null;
+  };
+  // A graph variable. `param` marks it as a user-facing INPUT (the UE "expose" flag); `description`
+  // is its help text in the setup form. Both additive — old graphs deserialize without them.
+  type VarDecl = {
+    name: string;
+    type: string;
+    default?: string | null;
+    param?: boolean;
+    description?: string | null;
   };
   type LogLine = {
     time: string;
@@ -602,7 +611,7 @@
     if (!getBase || !setBase) return [];
     const out: PaletteKind[] = [];
     for (const v of variables) {
-      const port: CatPort = { name: "value", type: v.type, required: false };
+      const port: CatPort = { name: "value", type: v.type as PortType, required: false };
       const pv = { name: v.name, type: v.type };
       out.push({ ...getBase, label: `Get: ${v.name}`, presetVariable: pv, inputs: [], outputs: [port] });
       out.push({ ...setBase, label: `Set: ${v.name}`, presetVariable: pv, inputs: [{ ...port, required: true }], outputs: [] });
@@ -1664,43 +1673,71 @@
   }
 
   // ---- workflow variables (the Variables tab in the right rail) --------------
-  const variables = $derived<Variable[]>(graph?.variables ?? []);
+  // Renders straight off the local graph, so mutating `graph.variables` in place updates the panel
+  // INSTANTLY — no await, no reload. Persistence is a debounced background PUT (mirrors the
+  // optimistic node ops + liveSaveConfig). Before this, every keystroke awaited a PUT *then* a full
+  // `GET /workflows` reload, which was the lag.
+  const variables = $derived<VarDecl[]>(graph?.variables ?? []);
 
-  async function saveVariables(next: Variable[]) {
-    if (!graph) return;
-    await data.setGraphVariables(graph.id, next.map((v) => ({ name: v.name, type: v.type, default: v.default ?? null })));
-    await reload();
+  let varsSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  // Persist the given graph's current variables in the background, debounced so typing a name or
+  // default doesn't PUT per keystroke. Reads the live array at fire time so the last edit wins.
+  function scheduleVarSave(gid: string) {
+    clearTimeout(varsSaveTimer);
+    varsSaveTimer = setTimeout(() => {
+      const g = graphs.find((x) => x.id === gid);
+      if (!g) return;
+      data
+        .setGraphVariables(
+          gid,
+          (g.variables ?? []).map((v) => ({
+            name: v.name,
+            type: v.type,
+            default: v.default ?? null,
+            param: v.param ?? false,
+            description: v.description ?? null,
+          })),
+        )
+        .catch((err) => console.error("Failed to save variables", err));
+    }, 400);
   }
-  function uniqueVarName(existing: Variable[]): string {
+  function uniqueVarName(existing: VarDecl[]): string {
     const taken = new Set(existing.map((v) => v.name));
     let i = existing.length + 1;
     while (taken.has(`var${i}`)) i++;
     return `var${i}`;
   }
-  async function addVariable() {
-    if (editLocked) return;
-    await saveVariables([...variables, { name: uniqueVarName(variables), type: "text" as PortType }]);
-  }
-  // Edit a variable + re-sync the baked name/type on any Get/Set nodes that reference it,
-  // so existing nodes keep a valid port type after a rename/retype.
-  async function editVariable(i: number, patch: { name?: string; type?: string; default?: string | null }) {
+  function addVariable() {
     if (editLocked || !graph) return;
-    const old = variables[i];
+    graph.variables = [...(graph.variables ?? []), { name: uniqueVarName(variables), type: "text" }];
+    scheduleVarSave(graph.id);
+  }
+  // Edit a variable + re-sync the baked name/type on any Get/Set nodes that reference it, so
+  // existing nodes keep a valid port type after a rename/retype. All local + background — instant.
+  function editVariable(i: number, patch: Partial<VarDecl>) {
+    if (editLocked || !graph) return;
+    const old = graph.variables?.[i];
     if (!old) return;
-    // Retyping a variable invalidates a default typed for the old type — clear it.
+    // Retyping invalidates a default typed for the old type — clear it.
     if (patch.type && patch.type !== old.type && patch.default === undefined) patch = { ...patch, default: null };
-    const updated = { ...old, ...patch } as Variable;
-    if (patch.name === "" || (patch.name && variables.some((v, j) => j !== i && v.name === patch.name))) return; // keep names non-empty + unique
-    for (const n of graph.nodes) {
-      if ((n.kind === "get_variable" || n.kind === "set_variable") && n.config?.variable === old.name) {
-        await data.setNodeConfig(graph.id, n.id, { variable: updated.name, type: updated.type });
+    if (patch.name === "" || (patch.name && variables.some((v, j) => j !== i && v.name === patch.name))) return; // non-empty + unique
+    const updated = { ...old, ...patch };
+    graph.variables = graph.variables!.map((v, j) => (j === i ? updated : v));
+    if (patch.name || patch.type) {
+      const gid = graph.id;
+      for (const n of graph.nodes) {
+        if ((n.kind === "get_variable" || n.kind === "set_variable") && n.config?.variable === old.name) {
+          n.config = { ...n.config, variable: updated.name, type: updated.type }; // local
+          data.setNodeConfig(gid, n.id, { variable: updated.name, type: updated.type }).catch((e) => console.error(e));
+        }
       }
     }
-    await saveVariables(variables.map((v, j) => (j === i ? updated : v)));
+    scheduleVarSave(graph.id);
   }
-  async function removeVariable(i: number) {
-    if (editLocked) return;
-    await saveVariables(variables.filter((_, j) => j !== i));
+  function removeVariable(i: number) {
+    if (editLocked || !graph) return;
+    graph.variables = (graph.variables ?? []).filter((_, j) => j !== i);
+    scheduleVarSave(graph.id);
   }
   // ---- drag a variable from the panel onto the canvas (Unreal-style) -------
   const VAR_DRAG_MIME = "application/x-sentinel-variable";
@@ -4194,6 +4231,7 @@
                 {variables}
                 types={PAYLOAD_TYPES}
                 cameras={cameraOptions}
+                recipients={recipientOptions}
                 disabled={editLocked}
                 onAdd={addVariable}
                 onEdit={editVariable}

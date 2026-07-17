@@ -327,7 +327,16 @@ export const data = {
   setEdgeVias: async (id: string, vias: Record<string, [number, number][]>): Promise<void> => {
     await api.put<void>(`/workflows/${id}/edge-vias`, vias);
   },
-  setGraphVariables: async (id: string, variables: { name: string; type: string; default?: string | null }[]): Promise<void> => {
+  setGraphVariables: async (
+    id: string,
+    variables: {
+      name: string;
+      type: string;
+      default?: string | null;
+      param?: boolean;
+      description?: string | null;
+    }[],
+  ): Promise<void> => {
     await api.put<void>(`/workflows/${id}/variables`, variables);
   },
   addNode: (graphId: string, kind: string, x: number, y: number): Promise<number> =>

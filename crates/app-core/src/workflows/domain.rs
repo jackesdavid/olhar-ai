@@ -1807,6 +1807,14 @@ pub struct VariableDecl {
     /// graphs). Card #5b.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
+    /// This variable is a user-facing **input** — the UE "expose as input" flag (card #102). Pure
+    /// metadata: the engine doesn't branch on it (an input's value IS its `default`, optionally
+    /// overridden per manual run). Drives the setup form + the run-time prompt. Additive.
+    #[serde(default)]
+    pub param: bool,
+    /// Help text for the input, shown beside it in the setup form. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 fn one() -> u32 {

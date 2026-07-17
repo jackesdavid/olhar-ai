@@ -72,8 +72,22 @@ kanban-plugin: board
 	  - Plan: [[olharai-domain-cutover]]
 - [ ] #100 Landing page — Olhar AI rebrand + copy rewrite
 	  - Plan: [[olharai-landing]]
-- [ ] #102 Workflow parameterization — input vars, clone, promote, templates
-	  - Plan: [[workflow-parameterization]]
+- [ ] #103 Remove per-run workflow toast
+	  - Plan: [[remove-workflow-run-toast]]
+- [ ] #104 Remove "Connection lost" startup toast
+	  - Plan: [[remove-connection-lost-toast]]
+- [ ] #105 Editor panel toggle — rebind off Tab
+	  - Plan: [[editor-panel-toggle-rebind]]
+- [ ] #106 Get/Set Variable node — width fits the variable name
+	  - Plan: [[get-variable-node-width]]
+- [ ] #107 Node input: inline-value indicator
+	  - Plan: [[node-input-inline-value-indicator]]
+- [ ] #108 Editor chrome-toggle — visible toolbar button
+	  - Plan: [[editor-chrome-toggle-button]]
+- [ ] #109 Comment node missing from add-node palette
+	  - Plan: [[comment-node-palette-restore]]
+- [ ] #110 Node palette — focus search on open
+	  - Plan: [[node-palette-search-autofocus]]
 
 
 ## In Progress
@@ -84,6 +98,8 @@ kanban-plugin: board
 	  - Plan: [[edge-windows-installer]]
 - [ ] #95 Graph instances — per-run context + live instance view
 	  - Plan: [[workflow-graph-instances]]
+- [ ] #102 Workflow parameterization — input vars, clone, promote, templates
+	  - Plan: [[workflow-parameterization]]
 
 
 ## Review
