@@ -72,6 +72,8 @@ kanban-plugin: board
 	  - Plan: [[olharai-domain-cutover]]
 - [ ] #100 Landing page — Olhar AI rebrand + copy rewrite
 	  - Plan: [[olharai-landing]]
+- [ ] #102 Workflow parameterization — input vars, clone, promote, templates
+	  - Plan: [[workflow-parameterization]]
 
 
 ## In Progress
@@ -80,6 +82,8 @@ kanban-plugin: board
 	  - Plan: [[edge-windows]]
 - [ ] #83 Windows installer — signed .exe
 	  - Plan: [[edge-windows-installer]]
+- [ ] #95 Graph instances — per-run context + live instance view
+	  - Plan: [[workflow-graph-instances]]
 
 
 ## Review
@@ -95,8 +99,6 @@ kanban-plugin: board
 	  - Plan: [[camera-credential-wizard]]
 - [x] #92 Edge tailnet self-heal — a stopped Tailscale strands the box
 	  - Plan: [[edge-tailnet-self-heal]]
-- [x] #95 Graph instances — per-run context + live instance view
-	  - Plan: [[workflow-graph-instances]]
 - [x] #97 Add camera manually — IP + ONVIF port, not just discovered
 	  - Plan: [[manual-camera-add]]
 - [x] #98 Edge ring reconcile — stop rings for cameras that left
