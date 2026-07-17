@@ -1,69 +1,74 @@
-# Brand — Sentinel identity reference
+# Brand — Olhar AI identity reference
 
-The visual identity: the **dot-field mark** + the **Sentinel wordmark**. Monochrome ink; branding
-carried by *form*, not colour. See also the `impeccable` skill and `[[design-system]]`.
+The visual identity: the **eclipse-eye mark** + the **OLHAR AI wordmark**. Monochrome ink; branding
+carried by *form*, not colour. The authoritative spec is **`assets/BRAND.md`** — this file is the
+codebase's map onto it. See also the `impeccable` skill and `[[design-system]]`.
 
-## The mark — guarded perimeter (dot-field #05a)
+*"olhar"* is Portuguese for *gaze*. The product watches; the mark is an eye.
 
-A hexagonal **dot-field** (a sensor's field of awareness, radial falloff to a bright focal
-**core**) contained within a **rounded hexagonal perimeter** — "data in your control". The
-concept: sentinel-nodes guarding a core you own, inside a guarded boundary. Verkada-clean.
+## The mark — "Eclipse in orbit"
 
-Two forms share the same DNA (one component, `sentinel-app/src/lib/components/sentinel-mark.svelte`,
-procedural SVG, `currentColor`, props `size`/`animated`/`rings`/`speed`/`boundary`):
+An **eclipsed disc** (a gaze emerging from shadow) with a **pupil**, inside a **dotted orbit ring**
+with a small **moon**. Space + vision. The ring is dotted at low opacity — it *evolves* the old
+dot-field language rather than discarding it; the monochrome ink is unchanged.
 
-- **`boundary` (the LOGO mark, #05a)** — rounded-hex perimeter + inner field + solid core. Used by
-  `SentinelLogo`, favicons, and the OG image. Master file: `static/brand/mark.svg`. Reads down to
-  16px (degrades to hexagon + core).
-- **default (the "active" field)** — the bare pulsing dot-field (no boundary), for loaders, splash,
-  empty states, voice — the sensor *in motion*. Left as-is; do not add the boundary there.
+Geometry (viewBox `0 0 120 120`, centre 60,60), verbatim from `assets/BRAND.md`:
+- Disc `r=31`, ink-filled. Crescent cut by masking a circle `r=27` at (71,49). Pupil `r=6`, same
+  centre. Orbit `r=50`, dotted (`stroke-dasharray="0.1 7.754"`, 40 dots), opacity 0.3. Moon `r=4` at
+  (95.4, 24.6), on the ring at 45°.
+- **Small variant (<40px)**: stroke 3, dasharray `0.1 9.717` (32 dots), opacity 0.35, moon `r=5` —
+  or the dots mush. Auto-selected by `size`.
+- **Minimal (<24px, e.g. a 16px favicon or an inline `busy` spinner)**: drop the orbit + moon, crop
+  to the eye. The eye carries the identity when the ring can't survive.
 
-## The wordmark — Sora, sentence-case
+One procedural component, `sentinel-app/src/lib/components/olhar-mark.svelte` (the file keeps its
+`sentinel-*` path — the rebrand renames what users see, not the codebase). `currentColor`, so one
+mark themes light/dark; per-instance mask ids so two marks on a page don't collide. Props:
+`size`/`animated`/`blink`/`tile`/`pace`/`label`. `landing/` has a byte-identical copy (separate build,
+no shared lib — intent to unify noted in card #100).
 
-"Sentinel" set in **Sora 600, sentence-case**, tracking `-0.02em`. Chosen for the "calm assistant,
-plain terms" brand (calm geometric; the UPPERCASE-tracked cut is the formal/institutional alternate,
-not the default). Sora is **self-hosted** via `@fontsource/sora/600.css` (imported once in
-`src/routes/+layout.svelte`) and exposed as the token **`--font-brand`** (`"Sora", var(--font-sans)`)
-in `styles/sentinel-tokens.css`. **Scope: the logo only** — it does NOT change the app's UI body
-font (`--font-sans`, still SF Pro/Inter stack).
+### Motion (BRAND.md § Animation)
+- Orbit ring rotates 360° / 90s. Moon 360° / 24s, drawn **before** the disc so it passes *behind* the
+  eye. Pupil "breathe" scale 1→1.12→1 / 3.4s.
+- **The eye behaves like an eye**, not a planet: it holds its place, gazes in **saccades** (quick
+  shifts, long fixations — a gliding pupil reads as drunk), and **blinks** (ours, not in BRAND.md, on
+  a `blink` prop; the lid is the eye-opening circle flattening so the crescent fills back in).
+- `prefers-reduced-motion` → none; the static state is the supplied art exactly.
+
+## The wordmark — Sora 600, UPPERCASE
+
+**"OLHAR AI"** set in **Sora 600, UPPERCASE**, letter-spacing **0.16em** (0.18em at display sizes).
+The short submark for tight spaces is **"OAI"** — a sub-mark of the same brand, not a separate one.
+The written product name is **"Olhar AI"** (two words); the wordmark styling is the uppercase lockup.
+
+Sora is self-hosted via `@fontsource/sora/600.css` (imported once in `src/routes/+layout.svelte`) and
+exposed as **`--font-brand`**. **Scope: the logo only** — it does not change the app's UI body font
+(`--font-sans`, SF Pro / Inter stack).
 
 ## The lockup — `SentinelLogo`
 
-`sentinel-app/src/lib/components/sentinel-logo.svelte` — the mark + wordmark, cap-height matched.
+`sentinel-app/src/lib/components/sentinel-logo.svelte` composes the mark + the OLHAR AI wordmark.
+Cap-height ratios from BRAND.md: mark ≈ 1.6× cap height, gap ≈ 0.65× cap. The component keeps its
+`SentinelLogo` name (codebase, not user-facing).
 
 | Prop | Default | Use |
 |---|---|---|
-| `size` | 30 | mark height in px; wordmark derives from it (`×0.66` horizontal, `×0.5` stacked) |
+| `size` | 30 | mark height in px; wordmark cap-height-matched to it |
 | `wordmark` | true | false = mark only (e.g. collapsed sidebar) |
 | `stacked` | false | wordmark under the mark (square/hero contexts) |
 | `animated` | false | a logo shouldn't ping constantly; on only where deliberate |
-| `subtitle` | "" | tagline under the wordmark (e.g. "Monitoring & Automation") |
 
-Clear-space + cap-height ratios live in the component (gap `×0.36` / `×0.24`). Change them there,
-once — never hand-roll a lockup inline.
+## Colour
 
-**In use:**
-- Sidebar header (`+layout.svelte`): `<SentinelLogo size={30} wordmark={!navCollapsed} subtitle="Monitoring & Automation" />`.
-- Login card (`login/+page.svelte`): `<SentinelLogo stacked size={52} />`.
-- Splash (`splash.svelte`): the animated **mark only** (a valid mark-only lockup).
+Strictly monochrome, OKLCH greys — **never a hue**. Ink on dark `#FAFAFA` on `#171717` (primary
+"Noir"); ink on light `#171717` on `#FAFAFA`. State colours (red/amber/green) are for UI status only,
+never the logo.
 
-## Do / don't
+## Assets
 
-- **Don't** recolour the mark or wordmark with a brand hue — monochrome ink only; only *state*
-  colour (danger/warn) survives, and the logo carries no state.
-- **Don't** set the wordmark in any font but Sora, or change its case away from sentence-case
-  (except the sanctioned UPPERCASE alternate).
-- **Don't** hand-place mark+text; use `SentinelLogo`.
-- **Do** use the mark alone below ~24px legibility (favicon uses a dedicated small treatment — #69).
-
-## Build status
-
-- **Done (#68):** mark = guarded-perimeter **#05a** (via `boundary` on `SentinelMark`) + master
-  `mark.svg`; Sora self-hosted + `--font-brand`; `SentinelLogo` lockup; wired into sidebar + login;
-  `docs/ref/brand.md`. Explored via the `svg-design` skill (6 concepts → #05 → 05a). `npm run build`
-  clean; login lockup verified in-app.
-- **Done (#69):** full favicon / app-icon / PWA-manifest / OG set generated from 05a (Noir tile +
-  off-white mark); `app.html` head + `theme-color` + OG/Twitter meta. **Shipped + deployed 2026-07-12.**
-- **Pending:** email header art (**#70**) — a raster lockup export (headless render of `SentinelLogo`,
-  since Sora isn't available in email clients).
-- **Backlog:** landing site (`landing/`, `sentinel-landing/`) asset swap; a fuller brand book.
+- Masters: `assets/olhar-ai-*.svg` (mark, app-icon, OLHAR AI + OAI lockups, animated) + `assets/BRAND.md`.
+- Rendered set: `sentinel-app/static/` (favicon `.ico`/`.svg`/16/32, apple-touch, icon-192/512 +
+  maskable). Re-cut from the mark by `sentinel-app/scripts/build-icons.mjs` — re-run on any change,
+  don't hand-edit.
+- **Still pending (#76):** `og.png` — needs the lockup rendered with Sora, which ships via npm and
+  isn't a system font, so the local `sharp` pipeline can't render it.

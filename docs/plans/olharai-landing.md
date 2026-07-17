@@ -51,6 +51,23 @@ doesn't do:
   `olharai.com`. Land the copy independently; the routing switch is #99's.
 - **#76 og.png** — the shared OG image regeneration lives in the epic.
 
+## Screenshot capture list (owner action)
+
+The `#see-it` section renders captioned placeholders until real captures are dropped into
+`landing/static/shots/`. Each slot shows its image the moment the file exists — no code change. Save
+each PNG at ~1600×1000 (16:10), from the deployed app on a real tenant:
+
+| Save as `landing/static/shots/…` | Screen | What should be in frame |
+|---|---|---|
+| `workflow-editor.png` | a workflow open in the editor | a real graph with a few wired nodes (the recording or notify graph reads well) |
+| `live-grid.png` | the Live page | the multi-camera grid, a real LIVE badge lit on a streaming feed |
+| `map-presence.png` | the Map page | the floor plan with a person/detection plotted |
+| `tracking-overlay.png` | a feed with tracking on | bounding boxes + labels drawn over people/objects |
+
+Redeploy `landing` after adding them. Crop out anything sensitive (real faces, addresses) — or use a
+demo tenant. The hero also has a hand-built mock feed; a real capture could replace it later, but it
+stands on its own.
+
 ## Verification
 
 - The landing renders the eclipse-eye, says "Olhar AI", and reads as a product a buyer understands in

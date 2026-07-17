@@ -11,9 +11,10 @@
   import Check from "@lucide/svelte/icons/check";
   import Lock from "@lucide/svelte/icons/lock";
   import Eye from "@lucide/svelte/icons/eye";
+  import MessageSquare from "@lucide/svelte/icons/message-square";
   import KeyRound from "@lucide/svelte/icons/key-round";
 
-  import SentinelMark from "$lib/components/sentinel-mark.svelte";
+  import OlharMark from "$lib/components/olhar-mark.svelte";
   import SensorField from "$lib/components/sensor-field.svelte";
 
   const APP = "https://app.thesentinels.online";
@@ -39,27 +40,49 @@
     return { destroy: () => io.disconnect() };
   }
 
+  // Capabilities, grounded in what actually ships — person/object/face detection, live tracking, the
+  // AI vision + chat, the 65-node visual workflow engine, event-triggered recording, notifications.
   const features = [
-    { icon: ScanFace, title: "Knows who belongs", body: "Enroll the people who matter once. Sentinel recognises family, staff, and regulars — and flags the faces it doesn't." },
-    { icon: Video, title: "Private live feeds", body: "Watch any camera in real time from anywhere, over an encrypted private link. Your video never sits on a public server." },
-    { icon: BellRing, title: "Alerts that matter", body: "No more endless motion pings. A clear message — to your phone or Telegram — only for the things you asked to hear about." },
-    { icon: Workflow, title: "Visual automations", body: "Drag-and-drop rules: if an unknown person appears at the back gate after dark, snap a photo and alert me. No code." },
-    { icon: MapPinned, title: "Every space, one place", body: "Map cameras to rooms and sites. Run a home, a shop, and an office from a single calm dashboard." },
-    { icon: Cpu, title: "Runs on your edge", body: "A small on-prem appliance does the heavy lifting next to your cameras — fast, resilient, and yours. The cloud just keeps you connected." },
+    { icon: Eye, title: "Sees what's there", body: "Person, object, and face detection on every camera — running locally on your edge, not a distant server. It knows a person from a passing car from a delivery van." },
+    { icon: ScanFace, title: "Knows who belongs", body: "Enroll the people who matter once. Olhar AI recognises family, staff, and regulars — and flags the faces it doesn't." },
+    { icon: Workflow, title: "Automates anything", body: "A visual builder with 65 blocks — detect, track, decide, record, notify, ask an AI. Wire them together: “if an unknown person is at the back gate after dark, record it and message me.” No code." },
+    { icon: Video, title: "Records what counts", body: "Event-triggered clips with pre-roll, so you catch the seconds before it happened — not endless footage of an empty driveway. Kept local or in the cloud, your choice." },
+    { icon: BellRing, title: "Tells you, your way", body: "A clear message to your phone or Telegram — with the annotated snapshot — only for the things you asked about. Or ask your cameras a question and the assistant answers." },
+    { icon: MapPinned, title: "Every space, one place", body: "Track who's where on a live floor plan. Map cameras to rooms and sites, and run a home, a shop, and an office from one calm dashboard." },
+  ];
+
+  // Real workflows from the product, shown as the templates a new user starts from.
+  const useCases = [
+    { icon: BellRing, tag: "Alerting", title: "Alert me when someone's at the gate", body: "A person is detected, a box is drawn around them, and a Telegram message lands with the snapshot. Quiet until it matters." },
+    { icon: Video, tag: "Recording", title: "Record only when it matters", body: "Motion or a detected person opens a clip — with the seconds before it started — and it closes on its own when the scene goes quiet." },
+    { icon: MessageSquare, tag: "AI assistant", title: "Ask your cameras anything", body: "Message the assistant on Telegram — “what's happening in the shop?” — and it looks at the live frame and tells you, in plain words." },
+    { icon: Eye, tag: "Tracking", title: "Track everything, live", body: "Follow people and objects across a camera in real time, boxes and labels drawn on the feed, positions plotted on your floor plan." },
+    { icon: ScanFace, tag: "Access", title: "Know who belongs", body: "Recognise the faces you enrolled, and raise a flag on the ones you didn't — at the front door, the stockroom, the school gate." },
+    { icon: Workflow, tag: "Custom", title: "Or build your own", body: "Every one above is a workflow you can open, change, and extend. 65 blocks, your logic, your cameras — start from a template or a blank canvas." },
   ];
 
   const steps = [
-    { n: "01", title: "Connect your cameras", body: "Install the Sentinel edge on a small box on-site. It finds your cameras and brings them online — securely, over a private network." },
-    { n: "02", title: "Teach it who matters", body: "Add the people you trust and the zones you care about. Sentinel starts recognising faces and watching the right corners." },
-    { n: "03", title: "Relax", body: "Get the live view when you want it and a clear alert when you need it. Build automations as your needs grow." },
+    { n: "01", title: "Connect your cameras", body: "Install the Olhar AI edge on a small box on-site. It finds your cameras and brings them online — securely, over a private network. No cloud can see them but you." },
+    { n: "02", title: "Pick what it should do", body: "Start from a template — alert on a person, record on motion, recognise faces — or wire your own in the visual builder. Tell it which cameras and which people matter." },
+    { n: "03", title: "Let it watch", body: "The live view when you want it, a clear alert when you need it, a clip when something happens. Add automations as your needs grow — no code, ever." },
+  ];
+
+  // Screenshot slots. `src` is set once a capture is dropped into landing/static/shots/ — until then
+  // the slot renders a captioned placeholder (never a broken image). `file` is the exact path to save
+  // the capture to; the capture list also lives in docs/plans/olharai-landing.md.
+  const shots = [
+    { file: "/shots/workflow-editor.png", src: "", title: "The visual builder", body: "Wire detection, logic, recording and notifications into a workflow — 65 blocks, no code. This is where every template above is made." },
+    { file: "/shots/live-grid.png",       src: "", title: "Live, all at once", body: "Every camera in one grid, streamed privately from your edge — with a real LIVE badge that only lights when video is actually flowing." },
+    { file: "/shots/map-presence.png",    src: "", title: "Who's where, on a floor plan", body: "A top-down blueprint of your space with people and detections plotted live as they move between rooms." },
+    { file: "/shots/tracking-overlay.png",src: "", title: "Detection & tracking, drawn on the feed", body: "Boxes and labels on the people and objects it sees, tracked frame to frame — the raw material your automations act on." },
   ];
 </script>
 
 <svelte:head>
-  <title>Sentinel — calm, private security intelligence</title>
-  <meta name="description" content="Sentinel turns your cameras into a calm, private security assistant — AI that knows who belongs, private live feeds, alerts that matter, and visual automations. For home and business." />
-  <meta property="og:title" content="Sentinel — calm, private security intelligence" />
-  <meta property="og:description" content="Your cameras, made calm. On-prem edge, AI recognition, private live feeds, smart alerts — private by design." />
+  <title>Olhar AI — cameras that understand and act</title>
+  <meta name="description" content="Olhar AI turns your cameras into a vision platform — person, object and face detection, live tracking, event-triggered recording, a visual automation engine, and an AI you can ask. Private, on your own edge. For home and business." />
+  <meta property="og:title" content="Olhar AI — cameras that understand and act" />
+  <meta property="og:description" content="Detection, tracking, recording, and a 65-block visual automation engine — running on your own edge. Cameras that understand and act." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://thesentinels.online" />
 </svelte:head>
@@ -72,11 +95,12 @@
   bind:this={hdr}>
   <div class="mx-auto flex h-16 w-full max-w-6xl items-center gap-7 px-6">
     <a href="/" class="flex items-center gap-2.5 font-semibold tracking-tight">
-      <SentinelMark size={26} class="text-primary drop-shadow-[0_0_10px_oklch(1_0_0/0.35)]" />
-      <span>Sentinel</span>
+      <OlharMark label="" size={26} class="text-primary drop-shadow-[0_0_10px_oklch(1_0_0/0.35)]" />
+      <span>Olhar AI</span>
     </a>
     <nav class="ml-3 hidden gap-7 text-sm font-medium text-muted-foreground md:flex">
       <a class="transition-colors hover:text-foreground" href="#features">Features</a>
+      <a class="transition-colors hover:text-foreground" href="#use-cases">Use cases</a>
       <a class="transition-colors hover:text-foreground" href="#how">How it works</a>
       <a class="transition-colors hover:text-foreground" href="#privacy">Privacy</a>
     </nav>
@@ -94,22 +118,22 @@
     <div class="relative mb-8 grid place-items-center">
       <span class="ping-ring absolute size-28 rounded-full border border-primary/30" style="animation-delay:0s"></span>
       <span class="ping-ring absolute size-28 rounded-full border border-primary/20" style="animation-delay:1.6s"></span>
-      <SentinelMark size={78} class="relative text-primary drop-shadow-[0_0_24px_oklch(1_0_0/0.3)]" />
+      <OlharMark label="" size={78} class="relative text-primary drop-shadow-[0_0_24px_oklch(1_0_0/0.3)]" />
     </div>
 
     <span use:reveal class="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3.5 py-1.5 text-xs font-semibold text-primary">
       <span class="status-live size-1.5 rounded-full bg-primary"></span>
-      Calm security intelligence
+      Cameras that understand
     </span>
 
     <h1 use:reveal={60} class="mt-6 max-w-3xl text-5xl font-extrabold leading-[1.04] tracking-tight md:text-7xl">
-      Your cameras,<br /><span class="text-grad">made calm.</span>
+      Cameras that understand,<br /><span class="text-grad">and act.</span>
     </h1>
 
     <p use:reveal={120} class="mt-6 max-w-xl text-lg text-muted-foreground">
-      Sentinel turns ordinary cameras into a private security assistant — it recognises the
-      people who matter, watches for what doesn't belong, and tells you only when it counts.
-      For your home and your business.
+      Olhar AI gives your cameras eyes and a brain. They detect people, objects, and faces,
+      track what moves, record what matters, and act on what they see — with a visual builder
+      you drive, and an AI you can just ask. Private, on your own edge. For home and business.
     </p>
 
     <div use:reveal={180} class="mt-9 flex flex-wrap items-center justify-center gap-3.5">
@@ -166,9 +190,9 @@
   <!-- ===== features ===== -->
   <section id="features" class="py-24">
     <div use:reveal class="mx-auto mb-14 max-w-2xl text-center">
-      <span class="text-sm font-bold tracking-wide text-primary">Everything, quietly handled</span>
-      <h2 class="mt-3 text-3xl font-extrabold tracking-tight md:text-[2.6rem]">Security that thinks, so you don't have to watch</h2>
-      <p class="mt-4 text-lg text-muted-foreground">Sentinel does the watching. You get clarity — who's there, what changed, and what to do about it.</p>
+      <span class="text-sm font-bold tracking-wide text-primary">A platform, not just a camera app</span>
+      <h2 class="mt-3 text-3xl font-extrabold tracking-tight md:text-[2.6rem]">Cameras that do the watching — and the thinking</h2>
+      <p class="mt-4 text-lg text-muted-foreground">From a live grid to detection, tracking, recording, and automation — it's one system, and it's yours.</p>
     </div>
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {#each features as f, i (f.title)}
@@ -184,11 +208,71 @@
     </div>
   </section>
 
+  <!-- ===== use cases (real workflows → templates) ===== -->
+  <section id="use-cases" class="py-24">
+    <div use:reveal class="mx-auto mb-14 max-w-2xl text-center">
+      <span class="text-sm font-bold tracking-wide text-primary">Start from a template</span>
+      <h2 class="mt-3 text-3xl font-extrabold tracking-tight md:text-[2.6rem]">What people build with it</h2>
+      <p class="mt-4 text-lg text-muted-foreground">Every one is a ready-made workflow you can open and change — or the starting point for your own.</p>
+    </div>
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {#each useCases as u, i (u.title)}
+        {@const Icon = u.icon}
+        <div use:reveal={(i % 3) * 80} class="interactive group relative overflow-hidden rounded-2xl border border-border bg-card/40 p-6 backdrop-blur-sm">
+          <div class="mb-4 flex items-center gap-3">
+            <div class="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary ring-1 ring-inset ring-primary/20">
+              <Icon class="size-[18px]" />
+            </div>
+            <span class="rounded-full border border-border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{u.tag}</span>
+          </div>
+          <h3 class="text-[16px] font-bold tracking-tight">{u.title}</h3>
+          <p class="mt-2 text-[14px] leading-relaxed text-muted-foreground">{u.body}</p>
+        </div>
+      {/each}
+    </div>
+  </section>
+
+  <!-- ===== the product, in screenshots ===== -->
+  <!-- SCREENSHOT SLOTS. These render captioned placeholders until real captures are dropped into
+       landing/static/shots/. See docs/plans/olharai-landing.md for the exact capture list. Each slot
+       shows a real screenshot once its file exists; keep the aspect ratio so the layout doesn't jump. -->
+  <section id="see-it" class="py-24">
+    <div use:reveal class="mx-auto mb-14 max-w-2xl text-center">
+      <span class="text-sm font-bold tracking-wide text-primary">See it working</span>
+      <h2 class="mt-3 text-3xl font-extrabold tracking-tight md:text-[2.6rem]">One calm surface for everything your cameras see</h2>
+    </div>
+    <div class="grid gap-4 md:grid-cols-2">
+      {#each shots as sh, i (sh.title)}
+        <figure use:reveal={(i % 2) * 90} class="overflow-hidden rounded-2xl border border-border bg-card/40 backdrop-blur-sm">
+          <div class="relative aspect-[16/10] overflow-hidden border-b border-border bg-gradient-to-br from-card to-background">
+            {#if sh.src}
+              <img src={sh.src} alt={sh.title} class="size-full object-cover" loading="lazy" />
+            {:else}
+              <!-- placeholder until the capture lands -->
+              <div class="absolute inset-0 grid place-items-center text-center">
+                <div class="space-y-2 px-6">
+                  <OlharMark label="" size={40} class="mx-auto text-primary/40" />
+                  <p class="font-mono text-xs text-muted-foreground/60">{sh.file}</p>
+                </div>
+              </div>
+              <span class="absolute left-3 top-3 size-4 border-l-2 border-t-2 border-primary/30"></span>
+              <span class="absolute bottom-3 right-3 size-4 border-b-2 border-r-2 border-primary/30"></span>
+            {/if}
+          </div>
+          <figcaption class="p-5">
+            <h3 class="text-[15px] font-bold tracking-tight">{sh.title}</h3>
+            <p class="mt-1 text-[13.5px] leading-relaxed text-muted-foreground">{sh.body}</p>
+          </figcaption>
+        </figure>
+      {/each}
+    </div>
+  </section>
+
   <!-- ===== how it works ===== -->
   <section id="how" class="py-24">
     <div use:reveal class="mx-auto mb-14 max-w-2xl text-center">
       <span class="text-sm font-bold tracking-wide text-primary">Up and running in minutes</span>
-      <h2 class="mt-3 text-3xl font-extrabold tracking-tight md:text-[2.6rem]">Three steps to a calmer space</h2>
+      <h2 class="mt-3 text-3xl font-extrabold tracking-tight md:text-[2.6rem]">Three steps to cameras that act</h2>
     </div>
     <div class="grid gap-4 md:grid-cols-3">
       {#each steps as s, i (s.n)}
@@ -209,7 +293,7 @@
     <div use:reveal class="relative overflow-hidden rounded-3xl border border-primary/20 p-10 text-center md:p-14"
       style="background:radial-gradient(600px 320px at 50% 0%, var(--shimmer), transparent 70%), var(--elev-3);">
       <div class="mb-5 grid place-items-center">
-        <SentinelMark size={48} class="text-primary drop-shadow-[0_0_18px_oklch(1_0_0/0.35)]" />
+        <OlharMark label="" size={48} class="text-primary drop-shadow-[0_0_18px_oklch(1_0_0/0.35)]" />
       </div>
       <span class="text-sm font-bold tracking-wide text-primary">Private by design</span>
       <h2 class="mx-auto mt-3 max-w-xl text-3xl font-extrabold tracking-tight md:text-[2.4rem]">Your footage is yours. Full stop.</h2>
@@ -233,7 +317,7 @@
     <div use:reveal class="flex flex-col items-center">
       <div class="relative mb-7 grid place-items-center">
         <span class="ping-ring absolute size-20 rounded-full border border-primary/30"></span>
-        <SentinelMark size={52} class="relative text-primary" />
+        <OlharMark label="" size={52} class="relative text-primary" />
       </div>
       <h2 class="mx-auto max-w-xl text-4xl font-extrabold tracking-tight md:text-5xl">Bring calm to your cameras today</h2>
       <p class="mx-auto mt-4 max-w-md text-lg text-muted-foreground">Create your workspace in a minute. Add a camera, meet your new assistant.</p>
@@ -251,9 +335,9 @@
 <footer class="border-t border-border">
   <div class="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-4 px-6 py-10">
     <a href="/" class="flex items-center gap-2 font-semibold">
-      <SentinelMark size={22} animated={false} class="text-primary" /> Sentinel
+      <OlharMark label="" size={22} animated={false} class="text-primary" /> Olhar AI
     </a>
-    <span class="text-[13px] text-muted-foreground/70">© 2026 Sentinel · Calm, private security intelligence</span>
+    <span class="text-[13px] text-muted-foreground/70">© 2026 Olhar AI · Calm, private security intelligence</span>
     <div class="ml-auto flex gap-6 text-[13px] text-muted-foreground">
       <a class="transition-colors hover:text-foreground" href={APP}>App</a>
       <a class="transition-colors hover:text-foreground" href="#features">Features</a>

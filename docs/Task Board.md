@@ -29,6 +29,8 @@ kanban-plugin: board
 	  - Plan: [[box-health-copy-no-internals]]
 - [ ] #98 Edge ring reconcile — stop rings for cameras that left
 	  - Plan: [[edge-ring-reconcile]]
+- [ ] #101 Ring pre-roll ignores time — stale frames after a gap
+	  - Plan: [[edge-ring-stale-preroll]]
 
 
 ## ToDo
