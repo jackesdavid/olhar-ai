@@ -225,28 +225,37 @@ the run reported `ok`. `clip_id` is optional, so it was never implicated.
 The root cause is structural, and this plan never addressed it: **the trailing edge runs from a
 timer, so it has none of the event's data** — yet it's meant to drive a branch that needs it.
 
-**Fix: the node HOLDS what it must hand on.** `DelayTrigger` gains a `camera` in/out pair:
+**Fix: nothing in the node — the consumer's camera is a literal.** An *unwired* `Camera` port
+resolves from the consuming node's own config (`resolve_camera_literal`), on **any** run, including
+one forced by a timer. So `StopRecording.camera` is unwired and set to the camera's stable ONVIF id.
+One wire removed from the reported graph; no node ports, no engine change, no schema.
 
-- **Arm** stores the camera as the wire subset (`{id, ip, name}`) in `workflow_node_state.carry`.
-  It's written once, by the signal that opened the window, and never by an extend — so `stop`
-  cannot disagree with `start` about which camera the clip belongs to.
-- **Extend** became `jsonb_set` on `expires_at` alone. It used to rewrite the whole document,
-  which would have silently dropped `carry` on the first re-trigger.
-- **The consumer reads `carry` before it disarms** (the disarm overwrites the row; reading back
-  after it is the `UPDATE … RETURNING` trap one step removed — see [[feedback_postgres_returning]]).
-  The order is safe: the row stays `armed` until we disarm it, so nobody can re-arm underneath us,
-  and an extend racing us only moves `expires_at`, which makes our disarm lose and we don't fire.
-- **The camera travels with the run** on `WINDOW_CARRY_KEY`, and the node re-emits it on `stop`.
-  `start` passes the live value straight through, so one port means one thing on both edges.
+Verified on the live graph:
 
-Why `camera` and not a generic `Any` carry: `PortValue` isn't serde, and the value must survive in
-Postgres until the window closes — possibly across a pod restart. A wildcard would mean base64
-images in a database row on every window. A typed `Camera` is small, identity-like, exactly what
-both edges need, and the editor enforces the wiring.
+```
+run: 2026-07-17T04:24:57 | timer | ok
+node 16 [Delay Trigger] Delay Trigger: window closed → stop
+node 7  [Stop Recording] Stop Recording
+node 7  [Stop Recording] recording stopped
+```
 
-**Graphs must be rewired** — the fix is not automatic. Route `OnEvent.camera → DelayTrigger.camera`,
-then feed **both** `StartRecording.camera` and `StopRecording.camera` from `DelayTrigger.camera`.
-A `DelayTrigger` with nothing wired to `camera` still cannot stop a recording, by construction.
+**Rejected: giving `DelayTrigger` a `camera` in/out pair** to hold the value across the window. It
+was built, reviewed and reverted (2c28b15 → reverted). It worked, and it was wrong: `DelayTrigger`
+is a **Control** node. A debounce must not know what a camera is — recording is merely its first
+customer, and the next one wouldn't be a camera at all. The owner's call, and the right one: the
+node has exec pins only — `start` on the leading edge, `stop` on the trailing one.
+
+The general rule this leaves behind: **the trailing edge runs from a timer, so it carries none of
+the event's data.** Anything the `stop` branch needs must come from a source that can resolve on
+*any* run — a config literal today. Wiring `stop`'s inputs from `OnEvent` or from `StartRecording`
+cannot work, because neither runs on that sub-run; that is the whole bug, and it's a property of
+the graph, not of the node.
+
+**Open, for a source node (e.g. a `create_id` node feeding both `start` and `stop`):** a pure source
+with no incoming edges is a "true orphan", and the engine gates orphans on `seed_entries`, which is
+false on a forced sub-run. A literal works precisely *because* it's config on the consuming node
+rather than a separate node. Making orphan sources activate on sub-runs is the engine change that
+would unlock that shape — tracked separately.
 
 ## Built — deltas from this plan
 

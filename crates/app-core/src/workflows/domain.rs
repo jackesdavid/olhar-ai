@@ -237,16 +237,8 @@ fn on_event_input_ports(config: &Value) -> Vec<ResolvedPort> {
     let event = config.get("event").and_then(|v| v.as_str()).unwrap_or("");
     if matches!(event, "object_entered" | "object_exited" | "line_crossed") {
         vec![
-            ResolvedPort {
-                name: "camera".to_string(),
-                ty: PortType::Camera,
-                required: false,
-            },
-            ResolvedPort {
-                name: "region".to_string(),
-                ty: PortType::Region,
-                required: false,
-            },
+            ResolvedPort { name: "camera".to_string(), ty: PortType::Camera, required: false },
+            ResolvedPort { name: "region".to_string(), ty: PortType::Region, required: false },
         ]
     } else {
         Vec::new()
@@ -838,23 +830,6 @@ const EXEC_OUT_TIME_GATE: [Port; 1] = [p("out", PortType::Exec, false)];
 /// loop back-edge can force a node too and must not be mistaken for an expired window.
 pub const WINDOW_STOP_MARKER: &str = "__window_stop";
 
-/// The entry-payload key carrying a `DelayTrigger`'s held camera to its trailing-edge run.
-///
-/// The trailing edge runs from a timer, not from the event — so it has none of the event's data.
-/// That is why a `stop` could fire and still do nothing: `StopRecording.camera` is required and
-/// was wired from `OnEvent`, which never runs on a forced sub-run, so the branch resolved to
-/// nothing and was skipped as dead (engine: "required input wired to a source that never ran").
-/// The node therefore HOLDS the camera it was armed with and re-emits it on `stop`, which is what
-/// makes it own both edges rather than only the timing of them.
-pub const WINDOW_CARRY_KEY: &str = "__window_carry";
-
-// Delay Trigger data ports: the camera it holds for the window's lifetime. Optional — a
-// DelayTrigger used purely for timing needn't carry anything.
-const DELAY_TRIGGER_IN: [Port; 1] = [p("camera", PortType::Camera, false)];
-// Re-emitted on BOTH edges from the same held value, so `start` and `stop` cannot disagree about
-// which camera the clip belongs to.
-const DELAY_TRIGGER_OUT: [Port; 1] = [p("camera", PortType::Camera, false)];
-
 // Delay Trigger exec outputs: `start` on the leading edge, `stop` on the trailing one.
 const EXEC_OUT_DELAY_TRIGGER: [Port; 2] = [
     p("start", PortType::Exec, false),
@@ -1103,10 +1078,7 @@ impl NodeKind {
             | NodeKind::GetCurrentFrame
             | NodeKind::GetCameraByName
             | NodeKind::BreakCamera => "Cameras",
-            NodeKind::DescribeImage
-            | NodeKind::AskAi
-            | NodeKind::AiAnswer
-            | NodeKind::AiExtract => "AI",
+            NodeKind::DescribeImage | NodeKind::AskAi | NodeKind::AiAnswer | NodeKind::AiExtract => "AI",
             NodeKind::ReplyToSender | NodeKind::ReplyWithRecording => "Telegram",
             NodeKind::Format => "Text",
             NodeKind::Wait
@@ -1265,7 +1237,7 @@ impl NodeKind {
             NodeKind::StartRecording => &START_RECORDING_IN,
             NodeKind::StopRecording => &STOP_RECORDING_IN,
             NodeKind::TimeGate => &NO_PORTS, // exec-only; wait_secs/extend_secs are config
-            NodeKind::DelayTrigger => &DELAY_TRIGGER_IN, // + wait_secs/extend_secs from config
+            NodeKind::DelayTrigger => &NO_PORTS, // exec-only; wait_secs/extend_secs are config
             // Get has no inputs; Set's typed `value` input is dynamic (GraphNode::input_ports).
             NodeKind::GetVariable | NodeKind::SetVariable => &NO_PORTS,
             NodeKind::ReplyToSender => &REPLY_TO_SENDER_IN,
@@ -1331,7 +1303,7 @@ impl NodeKind {
             NodeKind::StartRecording => &START_RECORDING_OUT,
             NodeKind::StopRecording => &NO_PORTS,
             NodeKind::TimeGate => &NO_PORTS, // exec-only; fires via exec "out" port
-            NodeKind::DelayTrigger => &DELAY_TRIGGER_OUT, // the held camera, on both edges
+            NodeKind::DelayTrigger => &NO_PORTS, // exec-only; fires via exec "start"/"stop"
             // Get's typed `value` output is dynamic (GraphNode::output_ports); Set has none.
             NodeKind::GetVariable | NodeKind::SetVariable => &NO_PORTS,
             NodeKind::ReplyToSender => &REPLY_TO_SENDER_OUT,
@@ -1504,11 +1476,7 @@ impl GraphNode {
             // AI Extract: `value` typed per config.type (like a variable) + a static `found` bool.
             NodeKind::AiExtract => {
                 let mut ports = variable_port(&self.config, false);
-                ports.push(ResolvedPort {
-                    name: "found".to_string(),
-                    ty: PortType::Bool,
-                    required: false,
-                });
+                ports.push(ResolvedPort { name: "found".to_string(), ty: PortType::Bool, required: false });
                 ports
             }
             k => k.output_ports().iter().map(ResolvedPort::from).collect(),
@@ -1804,10 +1772,7 @@ impl Graph {
     /// (`GetCameraByName`, `Region`) is a pure, config-only node, so its value is 100%
     /// determined by the graph alone, without running anything.
     pub fn wired_source(&self, to: u32, to_port: &str) -> Option<&GraphNode> {
-        let edge = self
-            .edges
-            .iter()
-            .find(|e| e.to == to && e.to_port == to_port)?;
+        let edge = self.edges.iter().find(|e| e.to == to && e.to_port == to_port)?;
         self.node(edge.from)
     }
 
@@ -1817,14 +1782,7 @@ impl Graph {
     /// literal — the same wire-overrides-config pattern as `ObjectDetection`'s `class` input.
     /// `None` if neither is set, meaning "unscoped" to callers like `on_event_node`.
     pub fn resolve_camera_selector(&self, node: &GraphNode) -> Option<String> {
-        let cfg_str = |n: &GraphNode| {
-            n.config
-                .get("camera")
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-        };
+        let cfg_str = |n: &GraphNode| n.config.get("camera").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
         self.wired_source(node.id, "camera")
             .filter(|n| n.kind == NodeKind::GetCameraByName)
             .and_then(cfg_str)
@@ -1840,9 +1798,7 @@ impl Graph {
     /// wired into a node scoped to a different camera is on the caller to catch, not silently
     /// cross-applied here.
     pub fn resolve_region(&self, node: &GraphNode) -> Option<(String, Vec<(f32, f32)>)> {
-        let region_node = self
-            .wired_source(node.id, "region")
-            .filter(|n| n.kind == NodeKind::Region)?;
+        let region_node = self.wired_source(node.id, "region").filter(|n| n.kind == NodeKind::Region)?;
         let name = region_node
             .config
             .get("name")
@@ -1975,9 +1931,11 @@ impl Graph {
             return Err(format!("input '{to_port}' is already wired"));
         }
         // The same pin pair twice is a no-op wire the fan-in path would otherwise stack up.
-        if self.edges.iter().any(|e| {
-            e.from == from && e.from_port == from_port && e.to == to && e.to_port == to_port
-        }) {
+        if self
+            .edges
+            .iter()
+            .any(|e| e.from == from && e.from_port == from_port && e.to == to && e.to_port == to_port)
+        {
             return Err("those pins are already wired".into());
         }
         if self.reaches(to, from) && !is_exec {

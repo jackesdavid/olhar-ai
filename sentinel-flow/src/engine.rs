@@ -402,10 +402,7 @@ pub fn fire_event(
     // devices, so `on_event_node` can gate delivery to only the `OnEvent` nodes actually scoped
     // to that camera (a plain config literal, or wired from `GetCameraByName`) instead of firing
     // every listener in the tenant regardless of which camera the event is about.
-    let event_camera = payload
-        .get("camera")
-        .and_then(app_core::workflows::PortValue::as_text)
-        .map(str::to_string);
+    let event_camera = payload.get("camera").and_then(app_core::workflows::PortValue::as_text).map(str::to_string);
 
     // Record every deliberate graph emit (the EmitEvent node) as a first-class occurrence on the
     // agnostic event stream (card #66, Phase 4). This makes EmitEvent double as the "push a custom
@@ -417,8 +414,7 @@ pub fn fire_event(
         ev.title = Some(event.clone());
         ev.message = Some(format!("'{name}' emitted '{event}'"));
         ev.camera = event_camera.clone();
-        ev.data =
-            Some(serde_json::json!({ "event": event, "graph": name, "graph_id": id.to_string() }));
+        ev.data = Some(serde_json::json!({ "event": event, "graph": name, "graph_id": id.to_string() }));
         app_core::events::insert_event_sync(&state.db, ev);
     }
 
@@ -430,8 +426,7 @@ pub fn fire_event(
         s.iter()
             .filter(|(t, g)| *t == tenant && g.enabled)
             .filter_map(|(_, g)| {
-                workflows::on_event_node(g, &event, event_camera.as_deref(), &devices)
-                    .map(|e| (g.id, g.name.clone(), e))
+                workflows::on_event_node(g, &event, event_camera.as_deref(), &devices).map(|e| (g.id, g.name.clone(), e))
             })
             .collect()
     };
@@ -550,13 +545,7 @@ pub fn fire_system_event(state: &Arc<AppState>, tenant: Uuid, label: &str, event
 /// Forces `node_id` so only it and its live descendants execute; nothing else in the graph is
 /// seeded. Today this is a `DelayTrigger` whose quiet window elapsed, firing its trailing `stop`.
 /// The payload carries the window marker so the node can tell this from a re-trigger.
-pub fn spawn_node_subrun(
-    state: &Arc<AppState>,
-    tenant: Uuid,
-    graph_id: Uuid,
-    node_id: u32,
-    carry: Option<serde_json::Value>,
-) {
+pub fn spawn_node_subrun(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid, node_id: u32) {
     let graph: WfGraph = match state::find_graph(&state.store, tenant, graph_id) {
         Some(g) => g,
         None => return,
@@ -564,13 +553,7 @@ pub fn spawn_node_subrun(
     let state = Arc::clone(state);
     let run_id = Uuid::new_v4();
     // Register before the thread starts — see spawn_graph_run.
-    mark_run_started(
-        &state,
-        tenant,
-        graph_id,
-        run_id,
-        TriggerSource::Timer.as_str(),
-    );
+    mark_run_started(&state, tenant, graph_id, run_id, TriggerSource::Timer.as_str());
     std::thread::spawn(move || {
         workflows::repo::insert_run(
             &state.db,
@@ -590,7 +573,7 @@ pub fn spawn_node_subrun(
             serde_json::json!({ "tenant": tenant, "graph": graph_id, "name": graph.name, "run_id": run_id, "trigger": "timer" }),
         );
 
-        let payload = crate::window_consumer::stop_payload(carry);
+        let payload = crate::window_consumer::stop_payload();
         let (ok, summary) = execute_run(&state, tenant, &graph, run_id, Some(node_id), payload);
 
         mark_run_finished(&state, tenant, graph_id);
@@ -735,7 +718,14 @@ fn build_run_context(
         }
     });
 
-    let mut ctx = ToolContext::new_local(devices, state.db.clone(), tenant, notif, notif_cfg, tx);
+    let mut ctx = ToolContext::new_local(
+        devices,
+        state.db.clone(),
+        tenant,
+        notif,
+        notif_cfg,
+        tx,
+    );
     // Bind the frame source to THIS tenant's edge go2rtc. The per-run keep-alive agent
     // keeps the connection warm across every `GetFrame`/`Snapshot` in the run, so a
     // `memoize=false` node in a loop re-grabs a fresh frame without re-handshaking.
