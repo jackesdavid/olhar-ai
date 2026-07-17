@@ -343,10 +343,15 @@ fn forward_epoch(
             forced.contains(&nid)
         } else if forced.contains(&nid) {
             true
-        } else if n.kind == NodeKind::GetVariable {
-            // A variable read re-evaluates every epoch (pure, no exec propagation) so a
-            // consumer sees the value as of when it runs — after any upstream `Set` — rather
-            // than a stale epoch-0 read. Cheap; never extends the run.
+        } else if n.kind.is_pure_source() {
+            // Pure sources re-evaluate every epoch (no exec propagation): a `GetVariable` consumer
+            // sees the value as of when it runs — after any upstream `Set` — rather than a stale
+            // epoch-0 read. Cheap; never extends the run.
+            //
+            // It also keeps them alive on SUB-RUNS. A source with no incoming edges is a true
+            // orphan, and orphans below fall back to `seed_entries`, which is false for every
+            // `OnEvent`/timer sub-path — so the source silently wouldn't run and its consumers'
+            // required inputs would be skipped as a dead branch. See `NodeKind::is_pure_source`.
             true
         } else if has_ord_exec {
             fed_live
@@ -1167,6 +1172,70 @@ mod tests {
         ctx.ui_tx = tx;
         ctx.vision = std::sync::Arc::new(StubVision(answer));
         ctx
+    }
+
+    /// The shape that silently died: a pure source with no incoming edges, feeding a required
+    /// input, inside a sub-run.
+    ///
+    /// An orphan falls back to `seed_entries` — false for every `OnEvent`/timer sub-path — so the
+    /// source never ran, the consumer's required input resolved to nothing, and the engine skipped
+    /// the whole branch as dead while the run reported `ok`. `GetVariable` was hand-exempted when
+    /// someone hit this; `GetCameraByName` wasn't, so it worked on cron/manual runs and quietly
+    /// did nothing on event-driven ones.
+    #[test]
+    fn a_pure_source_runs_on_a_subrun_and_keeps_its_consumer_alive() {
+        let dev = crate::devices::Device {
+            id: "cam-1".into(),
+            ip: "10.0.0.9".into(),
+            xaddr: String::new(),
+            name: "Hall".into(),
+            manufacturer: None,
+            model: None,
+            username: None,
+            password: None,
+            rtsp_url: None,
+            rtsp_sub_url: None,
+        };
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let ctx = ToolContext::new_local(
+            std::sync::Arc::new(std::sync::Mutex::new(vec![dev])),
+            crate::db::Db::lazy("postgres://sentinel:sentinel@localhost/sentinel_test"),
+            crate::tenancy::DEFAULT_TENANT_ID,
+            std::sync::Arc::new(std::sync::Mutex::new(vec![])),
+            None,
+            tx,
+        );
+
+        let mut g = Graph::new("g");
+        let entry = g.add_node(NodeKind::OnEvent, 0, 0);
+        g.node_mut(entry).unwrap().config["event"] = json!("motion");
+        // The orphan: no incoming edges at all — its value comes purely from config.
+        let src = g.add_node(NodeKind::GetCameraByName, 0, 0);
+        g.node_mut(src).unwrap().config["camera"] = json!("Hall");
+        // A consumer whose `camera` input is REQUIRED and wired to that orphan.
+        let sink = g.add_node(NodeKind::BreakCamera, 0, 0);
+        g.add_edge(src, "camera", sink, "camera").unwrap();
+        g.add_edge(entry, "exec_out", sink, "exec_in").unwrap();
+
+        let outs = run_subpath_eventful(
+            &g,
+            &ctx,
+            entry,
+            PortValues::new(),
+            &mut |_| {},
+            &mut |_, _, _| {},
+            &mut |_, _| {},
+        )
+        .unwrap();
+
+        assert!(
+            outs.contains_key(&src),
+            "the orphan source must run on a sub-run (it used to fall back to seed_entries=false)"
+        );
+        assert!(
+            outs.contains_key(&sink),
+            "its consumer must not be skipped as a dead branch"
+        );
     }
 
     #[test]

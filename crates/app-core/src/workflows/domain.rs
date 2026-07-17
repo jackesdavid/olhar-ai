@@ -1178,6 +1178,30 @@ impl NodeKind {
         }
     }
 
+    /// A value source with **no side effects** whose result depends only on its config plus a
+    /// cheap in-memory lookup — safe to evaluate on any run, in any epoch.
+    ///
+    /// These activate unconditionally, because the alternative silently breaks them. A source with
+    /// no incoming edges is a "true orphan", and orphans fall back to `seed_entries` — which is
+    /// **false on every sub-run** (`run_subpath_eventful` passes it so). An orphan source therefore
+    /// works on a cron/manual run and is *inert* inside any `OnEvent` or timer sub-path, taking its
+    /// consumers down with it: a required input wired to a node that never ran makes the engine
+    /// mark the whole branch dead, and skip it without an error. `GetVariable` was exempted by hand
+    /// when someone hit exactly this; the others were left broken. This is that exemption,
+    /// generalised — so the next source node doesn't have to rediscover it.
+    ///
+    /// Deliberately NOT included:
+    /// - `GetLastAlert` — a database query. Re-running it per epoch isn't free, and whether "last"
+    ///   should re-read mid-run is a real question, not an oversight.
+    /// - Anything with data inputs (`Region` takes a camera): activating before its producers ran
+    ///   would hand it empty inputs, trading a dead branch for a wrong answer.
+    pub fn is_pure_source(self) -> bool {
+        matches!(
+            self,
+            NodeKind::GetVariable | NodeKind::GetCameraByName | NodeKind::GetRecipient
+        )
+    }
+
     pub fn input_ports(self) -> &'static [Port] {
         match self {
             NodeKind::GetLastAlert => &NO_PORTS,
