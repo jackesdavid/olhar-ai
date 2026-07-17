@@ -1,6 +1,8 @@
 # One node-value store — Postgres for values, MinIO for media, no forks
 
 **Board card:** #94 Unified node value store — one place, media in MinIO (ToDo)
+**Depends on:** [[workflow-graph-instances]] (#95) — the value context belongs to an *instance*; this
+card is where those values live and how media stays out of Postgres.
 **Goal:** A node's output values live in **one** place, media lives in object storage as a URL, and
 everything that needs a past value reads that same store — the editor, `Show Image`, and a
 `DelayTrigger`'s trailing edge alike. Less code than today, not more.
@@ -60,21 +62,25 @@ goes away; only its value↔JSON codec is worth keeping.
 
 Net: three mechanisms → one, and a Postgres table stops carrying JPEGs.
 
-## Open decision — settle this first, it shapes the schema
+## Decision (settled by the owner, 2026-07-17) — and the bug it exposed
 
-**Does the trailing edge read the *last run's* values, or *the run that armed the window*?**
+**The trailing edge reads the values of the run that ARMED its window**, not the last run's. Not a
+preference: *"we can have concurrent runs of the workflow, and each concurrent call can create a new
+trigger call to start, and each stop should run in the correct context."* Once two contexts are live,
+"the last run" is simply the wrong answer.
 
-Identical in the reported graph; they diverge the moment a second event fires a new run while a
-window is open — the stop would then close the **newer** clip. That's precisely the
-multiple-clips-per-camera case the owner raised, and it decides the key:
+Pushing on that surfaced something worse. **A window is keyed `(tenant_id, graph_id, node_id)`** —
+`workflow_node_state`'s primary key. So there is exactly **one window per Delay Trigger, ever**. Put
+two cameras through one graph and:
 
-- `(tenant, graph, node)` — "last value". What exists today. Simplest; wrong under overlap.
-- `(tenant, graph, node, run)` — values per run; the window remembers its `run_id` and reads that.
-  Correct under overlap, and it needs a retention story (these rows must not accumulate forever).
+- Camera A's motion arms the window, starts A's clip.
+- Camera B's motion **cannot open its own window** — `try_arm` fails ("already armed"), so B merely
+  **extends A's**.
+- One `stop` fires, in one context. B's clip is never stopped.
 
-Leaning `(node, run)` with the window holding its `run_id`: the owner's "we can have multiple clips
-per camera" is a direct statement that overlap is real. But it's a schema decision, so decide before
-building, not during.
+Concurrent contexts don't just lose their values — **they collide**. This makes `(node, run)` the
+wrong key too: the *window itself* needs a context, or there can only ever be one. See
+[[workflow-graph-instances]] (#95), which this card now depends on.
 
 ## Phases
 

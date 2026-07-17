@@ -66,6 +66,8 @@ kanban-plugin: board
 	  - Plan: [[segmented-continuous-recording]]
 - [ ] #94 Unified node value store — one place, media in MinIO
 	  - Plan: [[unified-node-value-store]]
+- [ ] #95 Graph instances — per-run context + live instance view
+	  - Plan: [[workflow-graph-instances]]
 
 
 ## In Progress
