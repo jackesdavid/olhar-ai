@@ -952,3 +952,76 @@ impl RunRow {
         }
     }
 }
+
+// ---- an instance's value context (cards #95 phase 3 / #94) -------------------
+
+/// Read what nodes last produced in this instance.
+///
+/// Separate column from `state_json` on purpose: the window's writers rewrite that document whole
+/// (`try_arm` replaces it, the disarm sets `{"state":"idle"}`), so values kept there would be wiped
+/// by the very transitions they must outlive — the window closing is exactly when the stop branch
+/// needs them.
+pub fn get_node_values(
+    db: &Db,
+    tenant_id: Uuid,
+    graph_id: Uuid,
+    node_id: u32,
+    instance_key: &str,
+) -> Option<serde_json::Value> {
+    let pool = db.pool();
+    let instance_key = instance_key.to_string();
+    let res: Result<Option<(String,)>, sqlx::Error> = db.block(async move {
+        sqlx::query_as::<_, (String,)>(
+            "SELECT values_json FROM workflow_node_state
+              WHERE tenant_id = $1 AND graph_id = $2 AND node_id = $3 AND instance_key = $4",
+        )
+        .bind(tenant_id)
+        .bind(graph_id)
+        .bind(node_id as i64)
+        .bind(instance_key)
+        .fetch_optional(&pool)
+        .await
+    });
+    match res {
+        Ok(row) => row.and_then(|(s,)| serde_json::from_str(&s).ok()),
+        Err(e) => {
+            log::error!("workflows::repo::get_node_values failed: {e}");
+            None
+        }
+    }
+}
+
+/// Record what a node produced in this instance. Upsert, touching only `values_json` — a node that
+/// didn't run this time keeps what it produced last time, which is what lets a re-trigger (which
+/// never re-runs `StartRecording`) leave the arming run's `clip_id` intact.
+pub fn set_node_values(
+    db: &Db,
+    tenant_id: Uuid,
+    graph_id: Uuid,
+    node_id: u32,
+    instance_key: &str,
+    values: &serde_json::Value,
+) {
+    let pool = db.pool();
+    let instance_key = instance_key.to_string();
+    let json_str = values.to_string();
+    let res: Result<u64, sqlx::Error> = db.block(async move {
+        let r = sqlx::query(
+            "INSERT INTO workflow_node_state (tenant_id, graph_id, node_id, instance_key, values_json)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (tenant_id, graph_id, node_id, instance_key)
+             DO UPDATE SET values_json = EXCLUDED.values_json",
+        )
+        .bind(tenant_id)
+        .bind(graph_id)
+        .bind(node_id as i64)
+        .bind(instance_key)
+        .bind(json_str)
+        .execute(&pool)
+        .await?;
+        Ok(r.rows_affected())
+    });
+    if let Err(e) = res {
+        log::error!("workflows::repo::set_node_values failed: {e}");
+    }
+}

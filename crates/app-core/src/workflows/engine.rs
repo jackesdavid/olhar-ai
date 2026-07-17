@@ -257,6 +257,35 @@ fn run_driver(
             emit,
         )?;
     }
+
+    // Record what this run produced, so a later run of the SAME instance can read it — which is the
+    // only way a `DelayTrigger`'s trailing edge can ever see `camera` or `clip_id`, since it runs
+    // from a timer with no payload of its own.
+    //
+    // Only nodes that actually RAN are written. That's what makes a re-trigger correct: it doesn't
+    // re-run `StartRecording` (only `start` lights it, and a re-trigger lights nothing), so the
+    // arming run's `clip_id` survives untouched while the camera refreshes. Write everything in
+    // `outputs` instead and a stop run would immediately overwrite the values it had just resumed.
+    //
+    // Guarded to graphs that actually have a latent node: every other graph would be paying a write
+    // per node per run for a context nothing will ever read. #94 widens this store to the editor's
+    // live values and `Show Image`, at which point the guard goes.
+    if graph.nodes.iter().any(|n| n.kind == NodeKind::DelayTrigger) {
+        let instance_key = graph.instance_scope.key_for(entry_payload);
+        for nid in &ran {
+            let Some(produced) = outputs.get(nid) else {
+                continue;
+            };
+            if produced.is_empty() {
+                continue;
+            }
+            let mut one = crate::workflows::values::NodeValues::new();
+            one.insert(*nid, produced.clone());
+            let json = crate::workflows::values::to_json(&one);
+            repo::set_node_values(&sys.db, sys.tenant_id, graph.id, *nid, &instance_key, &json);
+        }
+    }
+
     Ok(outputs)
 }
 
@@ -293,6 +322,29 @@ fn forward_epoch(
     // in a per-camera graph is per-camera too. Scoping only one node kind would be the fork this
     // model exists to remove.
     let instance_key = graph.instance_scope.key_for(entry_payload);
+
+    // A window-stop run RESUMES its instance: it's fired by a timer and carries none of the event's
+    // data, so without the instance's stored values `StopRecording.camera` (from OnEvent) and
+    // `clip_id` (from StartRecording) resolve to nothing and the branch is skipped as dead — the
+    // original bug. Seeding them is what "the run never really ended" means in practice.
+    //
+    // Only on stop runs. Seeding every run would make stale values look live and revive branches the
+    // engine deliberately gated off.
+    if entry_payload.contains_key(WINDOW_STOP_MARKER) {
+        for n in &graph.nodes {
+            if outputs.contains_key(&n.id) {
+                continue;
+            }
+            let Some(stored) = repo::get_node_values(&sys.db, sys.tenant_id, graph.id, n.id, &instance_key)
+            else {
+                continue;
+            };
+            let vals = crate::workflows::values::from_json(&stored);
+            if let Some(pv) = vals.get(&n.id) {
+                outputs.insert(n.id, pv.clone());
+            }
+        }
+    }
 
     let mut live_out: HashSet<(u32, String)> = HashSet::new();
     let mut reentries: Vec<u32> = Vec::new();
