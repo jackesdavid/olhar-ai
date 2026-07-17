@@ -19,7 +19,7 @@
   // No nested ternaries in markup — resolve the copy in named helpers.
   function titleFor(s: "connecting" | "error"): string {
     if (s === "error") return "Waiting for database…";
-    return "Initializing OlharAI…";
+    return "Initializing Olhar AI…";
   }
   function detailFor(s: "connecting" | "error"): string {
     if (s === "error") return "Can't reach Postgres. Start it with “task db-up” — retrying…";

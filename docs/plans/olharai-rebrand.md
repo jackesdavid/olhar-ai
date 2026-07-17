@@ -17,8 +17,10 @@ rewrite, not just a find-replace of the brand name.
 
 ## Decisions locked in (from the user)
 
-1. **Canonical name/casing: `OlharAI`** — one word, capital O, capital AI. Use this exact casing
-   everywhere (wordmark, `<title>`, OG tags, manifest, UI copy, AI self-description).
+1. **Canonical name: `Olhar AI`** — two words (settled 2026-07-17, from BRAND.md, which supersedes
+   the earlier one-word lean). Used in `<title>`, OG/Twitter, manifest, UI copy and the AI's
+   self-description. The wordmark lockup stays `OLHAR AI` (uppercase, tracked); **`OAI` is the
+   short submark for tight spaces**, not a separate brand.
 2. **~~Keep the dot-field mark as-is.~~ SUPERSEDED 2026-07-16 — there is a new mark.** The owner
    supplied a complete OlharAI identity in `assets/` (8 SVGs). It is **not** the dot-field: it's an
    **eclipse/eye** — a dotted orbit ring, a disc eclipsed by an offset circle to cut a crescent, a

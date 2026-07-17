@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The OlharAI logo lockup: the eclipse-eye mark + the "OLHAR AI" wordmark. Horizontal by
+  // The Olhar AI logo lockup: the eclipse-eye mark + the "OLHAR AI" wordmark. Horizontal by
   // default; set `stacked` for square contexts. `wordmark={false}` renders the mark alone (e.g. a
   // collapsed sidebar). The wordmark uses --font-brand (Sora), scoped to the logo only — it does
   // NOT change the app's UI font.

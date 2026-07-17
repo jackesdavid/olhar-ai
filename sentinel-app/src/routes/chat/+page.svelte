@@ -308,7 +308,7 @@
   <div class="flex items-start justify-between gap-3 pb-2">
     <div>
       <h1 class="text-2xl font-semibold tracking-tight">Assistant</h1>
-      <p class="text-sm text-muted-foreground">Ask Sentinel about your cameras, alerts, and people.</p>
+      <p class="text-sm text-muted-foreground">Ask Olhar AI about your cameras, alerts, and people.</p>
     </div>
     <Button
       variant="ghost"
