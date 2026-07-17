@@ -82,6 +82,8 @@ kanban-plugin: board
 	  - Plan: [[delay-trigger-recording-signal-flow]]
 - [ ] #95 Graph instances — per-run context + live instance view
 	  - Plan: [[workflow-graph-instances]]
+- [ ] #97 Add camera manually — IP + ONVIF port, not just discovered
+	  - Plan: [[manual-camera-add]]
 
 
 ## Review

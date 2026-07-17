@@ -79,6 +79,96 @@
   let testSnapshotUrl = $state<string | null>(null);
   let verdict = $state<ProbeResult | null>(null);
 
+  // ---- Add camera manually (card #97) -------------------------------------
+  // For when discovery can't reach the camera — most often because the network drops the
+  // WS-Discovery multicast, even though the camera itself is perfectly reachable. The user supplies
+  // what discovery normally fills in (IP + ONVIF endpoint); the edge resolves the stream identically.
+  let manualOpen = $state(false);
+  let manualName = $state("");
+  let manualIp = $state("");
+  let manualPort = $state("2020");
+  let manualUser = $state("");
+  let manualPass = $state("");
+  let manualState = $state<TestState>("idle");
+  let manualVerdict = $state<ProbeResult | null>(null);
+  let manualSnapshotUrl = $state<string | null>(null);
+  let savingManual = $state(false);
+
+  function openManual() {
+    manualName = "";
+    manualIp = "";
+    manualPort = "2020";
+    manualUser = "";
+    manualPass = "";
+    manualState = "idle";
+    manualVerdict = null;
+    manualSnapshotUrl = null;
+    manualOpen = true;
+  }
+
+  const manualValid = $derived(
+    manualIp.trim().length > 0 && manualPort.trim().length > 0 && manualUser.trim().length > 0,
+  );
+
+  // Add-by-hand converges with the discovered path at saveDevice + the #88 probe: the probe resolves
+  // the stream over ONVIF from the xaddr we build, so it validates the port, the creds, and returns a
+  // proof frame in one shot. Persist only once the camera proves itself — same rule as the wizard.
+  async function saveManual() {
+    if (!manualValid) return;
+    savingManual = true;
+    manualState = "testing";
+    manualVerdict = null;
+    manualSnapshotUrl = null;
+    try {
+      const ip = manualIp.trim();
+      const port = manualPort.trim();
+      const device: Device = {
+        id: "", // backfilled by ONVIF id on the next successful discovery (IP match)
+        ip,
+        xaddr: `http://${ip}:${port}/onvif/device_service`,
+        name: manualName.trim() || `Camera ${ip}`,
+        username: null,
+        password: null,
+      };
+      await data.saveDevice(device);
+      const res = await data.probeCredentials(ip, manualUser, manualPass);
+      manualVerdict = res;
+      if (res.status !== "ok") {
+        manualState = "failed";
+        return;
+      }
+      if (res.snapshot) manualSnapshotUrl = `data:image/jpeg;base64,${res.snapshot}`;
+      await data.setCredentials(ip, manualUser, manualPass);
+      manualState = "verified";
+      await loadDevices();
+      await loadEdgeFound();
+    } catch (err) {
+      console.error("Failed to add camera manually", err);
+      manualVerdict = null;
+      manualState = "failed";
+      toast.error("Couldn't add the camera", { description: String(err) });
+    } finally {
+      savingManual = false;
+    }
+  }
+
+  // A wrong ONVIF port looks like "can't reach the camera" to the probe — so on the failure paths that
+  // a bad port produces, nudge toward it. On auth_failed the port was clearly fine (the camera
+  // answered and rejected creds), so don't muddy that verdict.
+  function manualAdvice(v: ProbeResult | null): string {
+    const base = verdictAdvice(v);
+    if (v && (v.status === "unreachable" || v.status === "timeout" || v.status === "error")) {
+      return `${base} If the camera is reachable but this keeps failing, double-check the ONVIF port — it's ${manualPort} here; Tapo uses 2020, many cameras use 80.`;
+    }
+    return base;
+  }
+
+  function manualButtonLabel(): string {
+    if (savingManual) return "Testing…";
+    if (manualState === "failed" && canRetry(manualVerdict)) return "Test again";
+    return "Add & test";
+  }
+
   // ---- Delete confirm dialog ----------------------------------------------
   let deleteOpen = $state(false);
   let deleteTarget = $state<Device | null>(null);
@@ -326,6 +416,9 @@
       <Button variant="outline" onclick={rescan} disabled={rescanning} title="Re-run ONVIF discovery on your edge box now (fixes cameras that changed IP)">
         <Radar class="size-4" /> {rescanning ? "Rescanning…" : "Rescan"}
       </Button>
+      <Button variant="outline" onclick={openManual} title="Add a camera by its IP when discovery can't find it (e.g. the network blocks discovery)">
+        <Plus class="size-4" /> Add manually
+      </Button>
     {/snippet}
   </PageHeader>
 
@@ -545,6 +638,90 @@
       <Button variant="destructive" onclick={doDelete} disabled={deleting}>
         {deleting ? "Deleting…" : "Delete"}
       </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- Add camera manually (card #97) -->
+<Dialog.Root bind:open={manualOpen}>
+  <Dialog.Content class="sm:max-w-lg">
+    <Dialog.Header>
+      <Dialog.Title>Add a camera by hand</Dialog.Title>
+      <Dialog.Description>
+        For a camera your box can reach but can't discover — usually when the network blocks camera
+        discovery. Enter its address and credentials; your edge resolves the stream the same way.
+      </Dialog.Description>
+    </Dialog.Header>
+
+    <div class="space-y-4">
+      <div class="space-y-2">
+        <Label for="m-name">Name</Label>
+        <Input id="m-name" bind:value={manualName} placeholder="e.g. Hall" />
+      </div>
+      <div class="grid grid-cols-[1fr_auto] gap-3">
+        <div class="space-y-2">
+          <Label for="m-ip">IP address</Label>
+          <Input id="m-ip" bind:value={manualIp} placeholder="192.168.1.187" />
+        </div>
+        <div class="space-y-2">
+          <Label for="m-port">ONVIF port</Label>
+          <Input id="m-port" bind:value={manualPort} placeholder="2020" class="w-28" />
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="space-y-2">
+          <Label for="m-user">Username</Label>
+          <Input id="m-user" bind:value={manualUser} placeholder="admin" />
+        </div>
+        <div class="space-y-2">
+          <Label for="m-pass">Password</Label>
+          <Input id="m-pass" type="password" bind:value={manualPass} placeholder="••••••" />
+        </div>
+      </div>
+      <p class="text-xs text-muted-foreground">
+        The ONVIF port is the camera's control port — Tapo uses <span class="font-medium">2020</span>,
+        many others use <span class="font-medium">80</span>. The camera's credentials are usually a
+        separate account you create in its own app, not your cloud login.
+      </p>
+
+      {#if manualState !== "idle"}
+        <div class="rounded-lg border border-border bg-well p-3">
+          {#if manualState === "testing"}
+            <div class="flex items-center gap-3 text-sm text-muted-foreground">
+              <Busy />
+              Asking {manualIp} to prove these details… nothing is saved until it does.
+            </div>
+          {:else if manualState === "verified"}
+            <div class="space-y-2">
+              <p class="flex items-center gap-2 text-sm font-medium text-primary">
+                <Check class="size-4" /> {verdictTitle(manualVerdict)}
+              </p>
+              {#if manualSnapshotUrl}
+                <img src={manualSnapshotUrl} alt="Live frame from {manualIp}" class="w-full rounded-md border border-border" />
+              {/if}
+            </div>
+          {:else if manualState === "failed"}
+            <div class="space-y-1 text-sm">
+              <p class="flex items-center gap-2 font-medium text-destructive">
+                <XCircle class="size-4" /> {verdictTitle(manualVerdict)}
+              </p>
+              <p class="text-muted-foreground">{manualAdvice(manualVerdict)}</p>
+              {#if manualVerdict?.detail}
+                <p class="pt-1 text-xs text-muted-foreground/70">The camera said: {manualVerdict.detail}</p>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
+    <Dialog.Footer>
+      {#if manualState === "verified"}
+        <Button onclick={() => (manualOpen = false)}>Done</Button>
+      {:else}
+        <Button variant="outline" onclick={() => (manualOpen = false)} disabled={savingManual}>Cancel</Button>
+        <Button onclick={saveManual} disabled={!manualValid || savingManual}>{manualButtonLabel()}</Button>
+      {/if}
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
