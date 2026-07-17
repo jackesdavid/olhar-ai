@@ -55,6 +55,10 @@ pub fn router() -> Router<AppState> {
         .route("/workflows/:id/description", put(set_description))
         .route("/workflows/:id/group", put(set_group))
         .route("/workflows/:id/duplicate", post(duplicate))
+        .route("/workflows/templates", get(list_templates))
+        .route("/workflows/templates/:id/use", post(use_template))
+        .route("/workflows/:id/template", put(set_template))
+        .route("/workflows/:id/global", put(set_global))
         .route("/workflows/:id/trigger", put(set_trigger))
         .route("/workflows/:id/concurrency", put(set_concurrency))
         .route("/workflows/:id/viewport", put(set_viewport))
@@ -838,6 +842,153 @@ async fn duplicate(
     })
     .await?;
     Ok(Json(new_id))
+}
+
+// ---- templates (card #102) --------------------------------------------------
+
+/// A template as the picker sees it — summary only, plus its input variables so the setup form
+/// knows what to ask. `global` distinguishes the shared catalog from a tenant's own templates.
+#[derive(serde::Serialize)]
+struct TemplateSummary {
+    id: uuid::Uuid,
+    name: String,
+    description: String,
+    global: bool,
+    inputs: Vec<workflows::domain::VariableDecl>,
+}
+
+fn to_summary(g: &WfGraph) -> TemplateSummary {
+    TemplateSummary {
+        id: g.id,
+        name: g.name.clone(),
+        description: g.description.clone(),
+        global: g.global,
+        inputs: g.variables.iter().filter(|v| v.param).cloned().collect(),
+    }
+}
+
+/// The templates a tenant can start from: its **own** (tenant-scoped, `template=true`) plus every
+/// **global** template across the platform (a master's shared catalog). De-duped by id.
+async fn list_templates(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<TemplateSummary>>, ApiErr> {
+    auth::require(&c, "workflows.read")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let out = blocking(move || {
+        let mut seen = std::collections::HashSet::new();
+        let mut out: Vec<TemplateSummary> = Vec::new();
+        // Own templates first, then globals — own wins on an id clash (a tenant can't shadow a
+        // global by id in practice, but de-dup keeps the list clean).
+        for g in workflows::repo::load(&db, tid).iter().filter(|g| g.template) {
+            if seen.insert(g.id) {
+                out.push(to_summary(g));
+            }
+        }
+        for (_owner, g) in workflows::repo::load_global_templates(&db) {
+            if seen.insert(g.id) {
+                out.push(to_summary(&g));
+            }
+        }
+        out
+    })
+    .await?;
+    Ok(Json(out))
+}
+
+/// Clone a template — the tenant's own or a global one — into the caller's tenant as a normal,
+/// runnable workflow. The copy is not a template and not global, disabled until the user fills its
+/// inputs and turns it on.
+async fn use_template(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<uuid::Uuid>, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    // Find the source template: the tenant's own, else a global one (which may live in another
+    // tenant). Cloning reads it cross-tenant, but only for `global` templates — a tenant can never
+    // reach another tenant's private graphs this way.
+    let source = blocking(move || {
+        if let Some(g) = workflows::repo::load(&db, tid)
+            .into_iter()
+            .find(|g| g.id == id && g.template)
+        {
+            return Ok(g);
+        }
+        workflows::repo::load_global_templates(&db)
+            .into_iter()
+            .find(|(_t, g)| g.id == id)
+            .map(|(_t, g)| g)
+            .ok_or_else(|| "template not found".to_string())
+    })
+    .await?
+    .map_err(|e| err(StatusCode::NOT_FOUND, e))?;
+
+    let new_id = mutate(&st, tid, move |wf| {
+        let mut copy = source;
+        copy.id = uuid::Uuid::new_v4();
+        copy.enabled = false;
+        copy.template = false;
+        copy.global = false;
+        let new_id = copy.id;
+        wf.graphs.push(copy);
+        Ok(new_id)
+    })
+    .await?;
+    Ok(Json(new_id))
+}
+
+/// Mark a graph as a template (or unmark it). Tenant-scoped — a user's own template.
+async fn set_template(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<BoolReq>,
+) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        let g = wf.graph_mut(id).ok_or("graph not found")?;
+        g.template = b.value;
+        // Unmarking a template can't leave it globally published.
+        if !b.value {
+            g.global = false;
+        }
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Publish a template to the **global** catalog (or unpublish it). **Master only** — a regular user
+/// can make their own templates but not shove one onto every tenant.
+async fn set_global(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<BoolReq>,
+) -> Result<StatusCode, ApiErr> {
+    if !c.master {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "only a platform master can publish a global template",
+        ));
+    }
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        let g = wf.graph_mut(id).ok_or("graph not found")?;
+        // A global template is still a template.
+        if b.value {
+            g.template = true;
+        }
+        g.global = b.value;
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn remove(

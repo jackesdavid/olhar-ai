@@ -88,6 +88,32 @@ pub fn load_all(db: &Db) -> Vec<(Uuid, Graph)> {
     })
 }
 
+/// Every **global** template across all tenants (card #102) — graphs a master flagged
+/// `global`, visible to the whole platform. A deliberate cross-tenant read: templates are meant
+/// to be shared. Returns `(owner_tenant, graph)`; the owner is kept only so "use" can find the
+/// source, never surfaced to other tenants.
+pub fn load_global_templates(db: &Db) -> Vec<(Uuid, Graph)> {
+    let pool = db.pool();
+    db.block(async move {
+        let rows = sqlx::query_as::<_, (Uuid, serde_json::Value)>(
+            "SELECT tenant_id, data FROM workflows
+              WHERE (data->>'global')::boolean IS TRUE AND (data->>'template')::boolean IS TRUE",
+        )
+        .fetch_all(&pool)
+        .await;
+        match rows {
+            Ok(rows) => rows
+                .into_iter()
+                .filter_map(|(tid, v)| serde_json::from_value::<Graph>(v).ok().map(|g| (tid, g)))
+                .collect(),
+            Err(e) => {
+                log::error!("workflows::repo::load_global_templates failed: {e}");
+                Vec::new()
+            }
+        }
+    })
+}
+
 /// Replace the whole graph set (delete-all + insert each as a JSON row), mirroring
 /// the in-memory store after every editor mutation. Best-effort.
 pub fn save(db: &Db, tenant_id: Uuid, graphs: &[Graph]) {

@@ -88,6 +88,10 @@ kanban-plugin: board
 	  - Plan: [[comment-node-palette-restore]]
 - [ ] #110 Node palette — focus search on open
 	  - Plan: [[node-palette-search-autofocus]]
+- [ ] #111 Scheduled workflow trigger — calendar schedule builder
+	  - Plan: [[workflow-schedule-trigger]]
+- [ ] #112 Enabled / Debug / Orphans → top-of-canvas icon toggles
+	  - Plan: [[editor-toggles-top-cluster]]
 
 
 ## In Progress

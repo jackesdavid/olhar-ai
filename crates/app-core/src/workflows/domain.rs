@@ -1776,6 +1776,16 @@ pub struct Graph {
     /// Emit a per-node debug log line during a run (for the editor console).
     #[serde(default)]
     pub debug: bool,
+    /// This graph is a **template** — a starting point to clone, not a graph that runs on its own
+    /// (card #102). Shown in the templates picker; "Use template" duplicates it into a normal
+    /// workflow. A user's own template is tenant-scoped like any graph. Additive.
+    #[serde(default)]
+    pub template: bool,
+    /// A **global** template — visible to *every* tenant, not just its owner. Only a master can set
+    /// this (the auth check is in control); it lives in the master's own tenant but is read
+    /// cross-tenant for the catalog. Meaningless unless `template` is also true. Additive.
+    #[serde(default)]
+    pub global: bool,
     #[serde(default = "one")]
     pub next_id: u32,
     #[serde(default)]
@@ -1824,6 +1834,8 @@ fn one() -> u32 {
 impl Graph {
     pub fn new(name: &str) -> Self {
         Graph {
+            template: false,
+            global: false,
             instance_scope: InstanceScope::default(),
             id: Uuid::new_v4(),
             name: name.to_string(),
