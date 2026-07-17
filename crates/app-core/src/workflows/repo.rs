@@ -366,19 +366,25 @@ pub fn set_node_state(
     tenant_id: Uuid,
     graph_id: Uuid,
     node_id: u32,
+    // Which instance of the graph this state belongs to ("" = the single instance). Must be part
+    // of the ON CONFLICT target, or it no longer matches the PK (0057 widened it) and every write
+    // fails — which is exactly what Cooldown/FlipFlop/TimeGate hit after phase 1.
+    instance_key: &str,
     state: &serde_json::Value,
 ) {
     let pool = db.pool();
     let json_str = state.to_string();
+    let instance_key = instance_key.to_string();
     let res: Result<_, sqlx::Error> = db.block(async move {
         sqlx::query(
-            "INSERT INTO workflow_node_state (tenant_id, graph_id, node_id, state_json) VALUES ($1, $2, $3, $4)
-             ON CONFLICT (tenant_id, graph_id, node_id) DO UPDATE SET state_json = EXCLUDED.state_json",
+            "INSERT INTO workflow_node_state (tenant_id, graph_id, node_id, instance_key, state_json) VALUES ($1, $2, $3, $5, $4)
+             ON CONFLICT (tenant_id, graph_id, node_id, instance_key) DO UPDATE SET state_json = EXCLUDED.state_json",
         )
         .bind(tenant_id)
         .bind(graph_id)
         .bind(node_id as i64)
         .bind(json_str)
+        .bind(instance_key)
         .execute(&pool)
         .await
     });

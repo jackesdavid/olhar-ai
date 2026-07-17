@@ -554,7 +554,8 @@ fn forward_epoch(
                 sys.tenant_id,
                 graph.id,
                 nid,
-                &serde_json::json!({ "is_a": !is_a }),
+                &instance_key,
+&serde_json::json!({ "is_a": !is_a }),
             );
             live_out.insert((nid, if is_a { "a" } else { "b" }.to_string()));
             let mut o = PortValues::new();
@@ -604,7 +605,8 @@ fn forward_epoch(
                     sys.tenant_id,
                     graph.id,
                     nid,
-                    &serde_json::json!({ "last_ms": now_ms }),
+                    &instance_key,
+&serde_json::json!({ "last_ms": now_ms }),
                 );
                 live_out.insert((nid, "exec_out".to_string()));
             }
@@ -683,7 +685,8 @@ fn forward_epoch(
                         sys.tenant_id,
                         graph.id,
                         nid,
-                        &serde_json::json!({
+                        &instance_key,
+&serde_json::json!({
                             "state": "armed",
                             "expires_at": chrono::DateTime::from_timestamp(new_expires_ts, 0)
                                 .unwrap_or_else(Utc::now)
@@ -719,7 +722,8 @@ fn forward_epoch(
                 sys.tenant_id,
                 graph.id,
                 nid,
-                &serde_json::json!({
+                &instance_key,
+&serde_json::json!({
                     "state": "armed",
                     "expires_at": chrono::DateTime::from_timestamp(expires_ts, 0)
                         .unwrap_or_else(Utc::now)
@@ -769,7 +773,8 @@ fn forward_epoch(
                 sys.tenant_id,
                 graph.id,
                 nid,
-                &serde_json::json!({ "state": "idle" }),
+                &instance_key,
+&serde_json::json!({ "state": "idle" }),
             );
             if fired {
                 live_out.insert((nid, "out".to_string()));
@@ -931,7 +936,8 @@ fn forward_epoch(
                     sys.tenant_id,
                     graph.id,
                     nid,
-                    &serde_json::json!({
+                    &instance_key,
+&serde_json::json!({
                         "jpeg_b64": base64::engine::general_purpose::STANDARD.encode(&jpeg),
                         "label": &label,
                     }),
