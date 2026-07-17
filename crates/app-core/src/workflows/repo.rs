@@ -248,9 +248,18 @@ pub fn try_arm_node_state(
     graph_id: Uuid,
     node_id: u32,
     expires_at: &str,
+    carry: Option<serde_json::Value>,
 ) -> bool {
     let pool = db.pool();
-    let json_str = serde_json::json!({ "state": "armed", "expires_at": expires_at }).to_string();
+    // `carry` is whatever the node must hand to its trailing edge (today: the camera). It is
+    // written ONCE, here, by the signal that opened the window — never by an extend — so `stop`
+    // is guaranteed to describe the same thing `start` did.
+    let json_str = serde_json::json!({
+        "state": "armed",
+        "expires_at": expires_at,
+        "carry": carry.unwrap_or(serde_json::Value::Null),
+    })
+    .to_string();
     let res: Result<u64, sqlx::Error> = db.block(async move {
         let r = sqlx::query(
             "INSERT INTO workflow_node_state (tenant_id, graph_id, node_id, state_json)
@@ -285,17 +294,20 @@ pub fn extend_node_state(
     expires_at: &str,
 ) -> bool {
     let pool = db.pool();
-    let json_str = serde_json::json!({ "state": "armed", "expires_at": expires_at }).to_string();
+    let expires_at = expires_at.to_string();
     let res: Result<u64, sqlx::Error> = db.block(async move {
         let r = sqlx::query(
-            "UPDATE workflow_node_state SET state_json = $4
+            // jsonb_set, NOT a whole-document write: replacing state_json here would silently
+            // drop `carry`, and the stop would lose the camera it's meant to hand on.
+            "UPDATE workflow_node_state
+                SET state_json = jsonb_set(state_json::jsonb, '{expires_at}', to_jsonb($4::text))::text
              WHERE tenant_id = $1 AND graph_id = $2 AND node_id = $3
                AND (state_json::jsonb ->> 'state') = 'armed'",
         )
         .bind(tenant_id)
         .bind(graph_id)
         .bind(node_id as i64)
-        .bind(json_str)
+        .bind(expires_at)
         .execute(&pool)
         .await?;
         Ok(r.rows_affected())
@@ -848,7 +860,16 @@ pub fn last_run_by_graph(db: &Db, tenant_id: Uuid) -> std::collections::HashMap<
             Vec::new()
         })
         .into_iter()
-        .map(|(gid, at, status, trigger)| (gid, LastRun { at, status, trigger }))
+        .map(|(gid, at, status, trigger)| {
+            (
+                gid,
+                LastRun {
+                    at,
+                    status,
+                    trigger,
+                },
+            )
+        })
         .collect()
     })
 }

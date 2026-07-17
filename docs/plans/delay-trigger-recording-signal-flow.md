@@ -196,6 +196,58 @@ retried — a double-stop is safe (edge stop of an already-stopped clip is a no-
 
 ---
 
+## Field fixes (2026-07-17) — it never called Stop Recording
+
+Reported from the "Recording By Person Detection" graph. Two independent faults; the graph was
+wired correctly all along.
+
+**1. The database rejected every trailing-edge run.** `0015` pins `workflow_runs.trigger_source`
+to `('manual','cron','event')`. This card added `TriggerSource::Timer` and concluded **"No
+migration"** (below) — right about `work_jobs`, wrong about this constraint:
+
+```
+new row for relation "workflow_runs" violates check constraint "workflow_runs_trigger_chk"
+```
+
+It hid itself: `insert_run` only logs, so the run still executed — but with no run row, every node
+log then failed `workflow_run_logs`' FK back to it. **The feature's own diagnostics were deleted by
+the bug that broke it**, so Runs showed nothing: 29427 `event`, 25171 `cron`, 3 `manual`, zero
+`timer`. Fixed by migration `0056`. The lesson for the next card: a new enum variant that reaches a
+`text` column is a schema change, whatever the queue does.
+
+**2. The stop fired and stopped nothing.** With runs recording, the trailing edge reached
+`StopRecording` — and the engine skipped it. Its `camera` port is **required** and was wired from
+`OnEvent`, which never runs on a forced sub-run (`engine.rs`: an `OnEvent` entry activates only
+when its event fires). So the input resolved to nothing, the engine marked the branch **dead**
+("required input wired to a source that never ran"), and the node was skipped **silently** while
+the run reported `ok`. `clip_id` is optional, so it was never implicated.
+
+The root cause is structural, and this plan never addressed it: **the trailing edge runs from a
+timer, so it has none of the event's data** — yet it's meant to drive a branch that needs it.
+
+**Fix: the node HOLDS what it must hand on.** `DelayTrigger` gains a `camera` in/out pair:
+
+- **Arm** stores the camera as the wire subset (`{id, ip, name}`) in `workflow_node_state.carry`.
+  It's written once, by the signal that opened the window, and never by an extend — so `stop`
+  cannot disagree with `start` about which camera the clip belongs to.
+- **Extend** became `jsonb_set` on `expires_at` alone. It used to rewrite the whole document,
+  which would have silently dropped `carry` on the first re-trigger.
+- **The consumer reads `carry` before it disarms** (the disarm overwrites the row; reading back
+  after it is the `UPDATE … RETURNING` trap one step removed — see [[feedback_postgres_returning]]).
+  The order is safe: the row stays `armed` until we disarm it, so nobody can re-arm underneath us,
+  and an extend racing us only moves `expires_at`, which makes our disarm lose and we don't fire.
+- **The camera travels with the run** on `WINDOW_CARRY_KEY`, and the node re-emits it on `stop`.
+  `start` passes the live value straight through, so one port means one thing on both edges.
+
+Why `camera` and not a generic `Any` carry: `PortValue` isn't serde, and the value must survive in
+Postgres until the window closes — possibly across a pod restart. A wildcard would mean base64
+images in a database row on every window. A typed `Camera` is small, identity-like, exactly what
+both edges need, and the editor enforces the wiring.
+
+**Graphs must be rewired** — the fix is not automatic. Route `OnEvent.camera → DelayTrigger.camera`,
+then feed **both** `StartRecording.camera` and `StopRecording.camera` from `DelayTrigger.camera`.
+A `DelayTrigger` with nothing wired to `camera` still cannot stop a recording, by construction.
+
 ## Built — deltas from this plan
 
 The plan was written from an earlier read of the code. What actually shipped, and why it differs:
