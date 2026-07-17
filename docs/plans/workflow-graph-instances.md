@@ -37,6 +37,29 @@ either. There can only ever be one.
 Today's single-camera graph works by accident: with one context, "the node's window" and "this
 context's window" are the same thing.
 
+## It's three layers, not one (found 2026-07-17, before building)
+
+The node-keyed window is only the middle of three places that assume one context per graph. An
+instance scope has to key **all** of them or the fix does nothing:
+
+| Layer | Keyed by | With two cameras |
+|---|---|---|
+| Concurrency gate (`sentinel-flow/src/engine.rs`, `fire_event`) | `(tenant, graph, event)` | B's event is **coalesce-dropped** while A's run is in flight |
+| Window (`workflow_node_state` PK) | `(tenant, graph, node)` | B can't arm, so B **extends A's** window |
+| Values (#94) | `(tenant, graph, node)` | B overwrites A's |
+
+The gate is the one that would have made a window fix useless: with `SkipIfRunning` — **the default,
+and what "Recording By Person Detection" is set to** — a listening graph allows *at most one*
+simultaneous event handler, keyed by event name. Camera B's `PersonDetection` never even starts.
+
+`Concurrent { max_concurrent }` raises the limit but doesn't fix it: the key still has no context, so
+N concurrent runs of one camera are as allowed as N of different cameras — which is backwards. What
+we want is one run **per instance**, concurrent **across** instances.
+
+So: **the instance key scopes the gate, the window, and the values.** That's the unification — an
+instance is the unit of concurrency, state, and value context, not three unrelated keys that happen
+to agree today because there's only ever one of everything.
+
 ## Why instances, and not another key
 
 The tempting fix is to add a discriminator to the window key (camera, say). That's a fork: the next
@@ -67,12 +90,17 @@ Give the run a life, and each of those stops being a feature and becomes a conse
 1. **What identifies an instance?** The `run_id` of the run that started it is the obvious answer, and
    `workflow_runs` already exists (id, tenant, graph, status, pod_name). Leaning: an instance IS a
    run row that hasn't finished — no new identity, just an honest `status`.
-2. **What makes a debounce retrigger, then?** THE question. If every event opens a new instance, a
-   re-trigger would start a second recording instead of extending the first — the debounce dies. So a
-   `DelayTrigger` must find *the instance it belongs to*. By what? Leaning: the node declares a
-   **scope expression** (default: the graph = today's behaviour; typically the camera), so B's motion
-   joins B's instance and A's joins A's. This is the crux — get it wrong and either the debounce or
-   the concurrency breaks.
+2. **What makes a debounce retrigger?** ~~THE question.~~ **SETTLED (owner, 2026-07-17): the GRAPH
+   declares its instance scope, exactly like Unreal.** The Blueprint is the graph; the actor is the
+   instance. A latent node never asks "which camera" — it asks for *its instance's* window, so
+   `DelayTrigger` stays exec-only and learns nothing about cameras (the thing already rejected once
+   today in `c3ee151`).
+   - `single` (default) — one instance per graph. **Byte-for-byte today's behaviour**, so every
+     existing graph is unaffected by the migration.
+   - `per-camera` — the instance key is the event's camera. `fire_event` already derives
+     `event_camera` from `payload["camera"]` for `on_event_node` gating, so the value is in hand.
+   Retrigger then falls out for free: same camera → same instance → extends. Different camera →
+   different instance → its own window and its own clip.
 3. **Does a waiting instance hold anything in memory?** It must not: #86's plan is explicit that a
    held thread would block the `start` branch, and the wait must survive a pod restart. An instance is
    rows + a `work_jobs` timer, exactly as the window is now.
