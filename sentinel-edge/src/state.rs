@@ -212,21 +212,26 @@ impl AppState {
     /// after each rediscover so newly added cameras get a ring without a manual restart.
     /// Only runs when `cameras_always_warm = true` in the box recording config.
     pub fn warm_cameras(&self) {
-        if !self.recording.config.cameras_always_warm {
-            return;
-        }
-        let ips: Vec<String> = self
+        // The current streamable set (rtsp_url resolved = creds valid + reachable).
+        let streamable: std::collections::HashSet<String> = self
             .devices.lock().unwrap()
             .iter()
             .filter(|d| d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false))
             .map(|d| d.ip.clone())
             .collect();
-        if ips.is_empty() {
-            log::debug!("warm_cameras: no cameras with resolved streams");
-            return;
-        }
-        for ip in &ips {
-            self.recording.start_ring(ip);
+
+        // ALWAYS reconcile — stop rings for cameras that left (IP change, removal, went
+        // un-streamable), regardless of warm mode. This is #98: a ring used to outlive its camera
+        // and retry a dead address forever, because start-only never subtracted. Runs on every
+        // reload, so `ring_sessions` mirrors the device set.
+        self.recording.reconcile_rings(&streamable);
+
+        // Only in warm mode do we PRE-open a ring for each present camera; otherwise rings start
+        // on demand at recording time.
+        if self.recording.config.cameras_always_warm {
+            for ip in &streamable {
+                self.recording.start_ring(ip);
+            }
         }
     }
 

@@ -179,6 +179,11 @@ impl StorageStats {
 struct H264Frame {
     data:        Vec<u8>, // H264 Annex-B bytes
     is_keyframe: bool,
+    /// Monotonic arrival time. Pre-roll is selected by THIS, not by frame count — a count-based
+    /// window can't tell "10 seconds ago" from "the tail of yesterday" left in the ring after a
+    /// disconnect, and would splice stale footage onto a new clip (#101). Monotonic so a wall-clock
+    /// jump can't corrupt the window.
+    at:          std::time::Instant,
 }
 
 struct MemRing {
@@ -273,10 +278,27 @@ impl RecordingManager {
         log::info!("ring[{camera_ip}]: started (RTSP raw-RTP, {}s in-memory pre-roll)", pre_roll_secs);
     }
 
-    #[allow(dead_code)]
     pub fn stop_ring(&self, camera_ip: &str) {
         if let Some(rs) = self.ring_sessions.lock().unwrap().remove(camera_ip) {
             let _ = rs.stop_tx.try_send(());
+        }
+    }
+
+    /// Stop every ring whose camera is no longer in `keep` — the fix for rings that outlive their
+    /// camera (#98). A camera changing IP, being removed, or going un-streamable left its old ring
+    /// retrying a dead address forever (DESCRIBE 404 every ~3s), because `start_ring` only ever adds
+    /// and nothing subtracted. Called on every reload, so `ring_sessions` mirrors the device set
+    /// instead of growing without bound.
+    pub fn reconcile_rings(&self, keep: &std::collections::HashSet<String>) {
+        let orphans: Vec<String> = self
+            .ring_sessions.lock().unwrap()
+            .keys()
+            .filter(|ip| !keep.contains(*ip))
+            .cloned()
+            .collect();
+        for ip in orphans {
+            log::info!("ring[{ip}]: camera no longer streamable — stopping its ring");
+            self.stop_ring(&ip);
         }
     }
 
@@ -324,8 +346,10 @@ impl RecordingManager {
         // Both happen under the one mem_ring lock so the next access unit the
         // collector completes goes to the live channel (not the snapshot) with
         // no gap or overlap at the boundary.
-        // Assume sub-stream ≤ 30 fps for the look-back window.
-        let max_frames = (max_pre as usize) * 30;
+        // The pre-roll window is a DURATION, not a frame count — so a ring holding frames from
+        // before a disconnect can never leak into this clip (#101). Frames older than `max_pre`
+        // were already evicted by the collector; this just picks the decodable start inside it.
+        let window = Duration::from_secs(max_pre.max(1) as u64);
         let (pre_roll_bytes, live_rx): (Vec<u8>, std::sync::mpsc::Receiver<Vec<u8>>) = {
             let rings = self.ring_sessions.lock().unwrap();
             let (live_tx, live_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(256);
@@ -333,10 +357,15 @@ impl RecordingManager {
                 None => vec![],
                 Some(rs) => {
                     let mut ring = rs.mem_ring.lock().unwrap();
-                    let win_start = ring.frames.len().saturating_sub(max_frames);
-                    // Earliest keyframe within the window → most pre-roll up to the
-                    // cap. If the GOP is longer than the window, fall back to the
-                    // last keyframe overall so the clip still starts decodable.
+                    let now = std::time::Instant::now();
+                    // First frame within the last `window` of wall-clock time.
+                    let win_start = ring.frames.iter()
+                        .position(|f| now.duration_since(f.at) <= window)
+                        .unwrap_or(ring.frames.len());
+                    // Earliest keyframe inside the window → most pre-roll. If the GOP is longer than
+                    // the window (no keyframe inside it), fall back to the last keyframe overall so
+                    // the clip still starts decodable — but never earlier than one GOP before the
+                    // window, which the age-eviction already bounds.
                     let start_idx = ring.frames.iter().enumerate()
                         .skip(win_start)
                         .find(|(_, f)| f.is_keyframe)
@@ -584,7 +613,7 @@ async fn run_rtsp_collector(
             break;
         }
 
-        let result = rtsp_stream_once(&rtsp_url, &camera_ip, max_frames, &mem_ring, &stop_rx).await;
+        let result = rtsp_stream_once(&rtsp_url, &camera_ip, max_frames, pre_roll_secs, &mem_ring, &stop_rx).await;
 
         match result {
             Ok(()) => break, // stop signal received inside
@@ -597,12 +626,19 @@ async fn run_rtsp_collector(
 }
 
 async fn rtsp_stream_once(
-    rtsp_url:   &str,
-    camera_ip:  &str,
-    max_frames: usize,
-    mem_ring:   &Arc<Mutex<MemRing>>,
-    stop_rx:    &std::sync::mpsc::Receiver<()>,
+    rtsp_url:      &str,
+    camera_ip:     &str,
+    max_frames:    usize,
+    pre_roll_secs: u32,
+    mem_ring:      &Arc<Mutex<MemRing>>,
+    stop_rx:       &std::sync::mpsc::Receiver<()>,
 ) -> Result<(), String> {
+    // A gap larger than this between consecutive frames is a discontinuity (reconnect, freeze),
+    // not a slow stream: at 30fps frames are ~33ms apart, so 2s is ~60 missing frames. On a gap the
+    // ring is stale by definition and gets cleared, so a clip started right after a reconnect never
+    // inherits pre-gap footage.
+    const GAP_RESET: Duration = Duration::from_secs(2);
+    let window = Duration::from_secs(pre_roll_secs.max(1) as u64);
     let url = rtsp_url.parse::<url::Url>().map_err(|e| format!("bad URL: {e}"))?;
 
     let mut session = retina::client::Session::describe(
@@ -648,11 +684,25 @@ async fn rtsp_stream_once(
         for frame in reasm.push(pkt.payload(), ts, marker) {
             if frame.data.is_empty() { continue; }
             let mut ring = mem_ring.lock().unwrap();
+            // Discontinuity? Everything already in the ring predates a gap — drop it, so pre-roll
+            // can never splice pre-gap frames onto what comes next (#101).
+            if let Some(last) = ring.frames.back() {
+                if frame.at.duration_since(last.at) > GAP_RESET {
+                    log::info!("ring-rtsp[{camera_ip}]: {:?} gap — clearing stale pre-roll", frame.at.duration_since(last.at));
+                    ring.frames.clear();
+                }
+            }
             // Forward to an active recording first (clone), then store in ring.
             if let Some(tx) = ring.live_sink.as_ref() {
                 let _ = tx.try_send(frame.data.clone()); // non-blocking; drop on full
             }
+            let now = frame.at;
             ring.frames.push_back(frame);
+            // Evict by AGE — the ring holds only the last `window` of real footage. A count cap
+            // stays as a hard memory backstop (a high-fps camera can't balloon it).
+            while ring.frames.front().map(|f| now.duration_since(f.at) > window).unwrap_or(false) {
+                ring.frames.pop_front();
+            }
             while ring.frames.len() > max_frames {
                 ring.frames.pop_front();
             }
@@ -777,7 +827,7 @@ impl H264Reassembler {
         }
         data.append(&mut self.au);
         self.reset_au();
-        Some(H264Frame { data, is_keyframe })
+        Some(H264Frame { data, is_keyframe, at: std::time::Instant::now() })
     }
 
     fn reset_au(&mut self) {

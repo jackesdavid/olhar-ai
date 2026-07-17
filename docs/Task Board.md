@@ -27,10 +27,6 @@ kanban-plugin: board
 - [ ] #10 Update available — reload to get the latest version.
 - [ ] #93 Box health copy leaks internals ("tailnet", "Tailscale") to users
 	  - Plan: [[box-health-copy-no-internals]]
-- [ ] #98 Edge ring reconcile — stop rings for cameras that left
-	  - Plan: [[edge-ring-reconcile]]
-- [ ] #101 Ring pre-roll ignores time — stale frames after a gap
-	  - Plan: [[edge-ring-stale-preroll]]
 
 
 ## ToDo
@@ -92,6 +88,10 @@ kanban-plugin: board
 	  - Plan: [[workflow-graph-instances]]
 - [ ] #97 Add camera manually — IP + ONVIF port, not just discovered
 	  - Plan: [[manual-camera-add]]
+- [ ] #98 Edge ring reconcile — stop rings for cameras that left
+	  - Plan: [[edge-ring-reconcile]]
+- [ ] #101 Ring pre-roll ignores time — stale frames after a gap
+	  - Plan: [[edge-ring-stale-preroll]]
 
 
 ## Review
