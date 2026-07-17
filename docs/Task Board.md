@@ -80,31 +80,31 @@ kanban-plugin: board
 	  - Plan: [[edge-windows]]
 - [ ] #83 Windows installer — signed .exe
 	  - Plan: [[edge-windows-installer]]
-- [ ] #92 Edge tailnet self-heal — a stopped Tailscale strands the box
-	  - Plan: [[edge-tailnet-self-heal]]
-- [ ] #86 Delay Trigger node — decouple recording start/stop
-	  - Plan: [[delay-trigger-recording-signal-flow]]
-- [ ] #95 Graph instances — per-run context + live instance view
-	  - Plan: [[workflow-graph-instances]]
-- [ ] #97 Add camera manually — IP + ONVIF port, not just discovered
-	  - Plan: [[manual-camera-add]]
-- [ ] #98 Edge ring reconcile — stop rings for cameras that left
-	  - Plan: [[edge-ring-reconcile]]
-- [ ] #101 Ring pre-roll ignores time — stale frames after a gap
-	  - Plan: [[edge-ring-stale-preroll]]
 
 
 ## Review
 
-- [ ] #73 Notification providers: configured badge + config & enrollment
-	  - Plan: [[notification-provider-ux]]
-- [ ] #88 Camera credential wizard (bug B)
-	  - Plan: [[camera-credential-wizard]]
 
 
 ## Done
 
 **Complete**
+- [x] #86 Delay Trigger node — decouple recording start/stop
+	  - Plan: [[delay-trigger-recording-signal-flow]]
+- [x] #88 Camera credential wizard (bug B)
+	  - Plan: [[camera-credential-wizard]]
+- [x] #92 Edge tailnet self-heal — a stopped Tailscale strands the box
+	  - Plan: [[edge-tailnet-self-heal]]
+- [x] #95 Graph instances — per-run context + live instance view
+	  - Plan: [[workflow-graph-instances]]
+- [x] #97 Add camera manually — IP + ONVIF port, not just discovered
+	  - Plan: [[manual-camera-add]]
+- [x] #98 Edge ring reconcile — stop rings for cameras that left
+	  - Plan: [[edge-ring-reconcile]]
+- [x] #101 Ring pre-roll ignores time — stale frames after a gap
+	  - Plan: [[edge-ring-stale-preroll]]
+- [x] #73 Notification providers: configured badge + config & enrollment
+	  - Plan: [[notification-provider-ux]]
 - [x] #91 Event-storm backstop never engages (WF_GLOBAL_CAP dead)
 	  - Plan: [[event-storm-backstop-dead]]
 - [x] #90 Editor: wire multiple exec outputs into one node (fan-in)
