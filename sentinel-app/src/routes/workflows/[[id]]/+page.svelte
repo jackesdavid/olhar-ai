@@ -31,6 +31,8 @@
   import X from "@lucide/svelte/icons/x";
   import Search from "@lucide/svelte/icons/search";
   import Copy from "@lucide/svelte/icons/copy";
+  import Bookmark from "@lucide/svelte/icons/bookmark";
+  import LayoutTemplate from "@lucide/svelte/icons/layout-template";
   import Link2 from "@lucide/svelte/icons/link-2";
   import Unplug from "@lucide/svelte/icons/unplug";
   import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
@@ -66,6 +68,7 @@
   import SearchableSelect from "$lib/components/searchable-select.svelte";
 
   import { Button } from "$lib/components/ui/button";
+  import { Badge } from "$lib/components/ui/badge";
   import { Input } from "$lib/components/ui/input";
   import { Textarea } from "$lib/components/ui/textarea";
   import { Slider } from "$lib/components/ui/slider";
@@ -159,6 +162,8 @@
     viewport?: { x: number; y: number; zoom: number };
     edge_vias?: Record<string, [number, number][]>;
     variables?: VarDecl[];
+    template?: boolean;
+    global?: boolean;
     last_run?: { at: string; status: string; trigger: string } | null;
   };
   // A graph variable. `param` marks it as a user-facing INPUT (the UE "expose" flag); `description`
@@ -1292,6 +1297,48 @@
       openGraph(id);
     } catch (err) {
       toast.error("Couldn't duplicate workflow", { description: String(err) });
+    }
+  }
+
+  // ---- templates (#102) ----------------------------------------------------
+  // Mark/unmark a graph as one of the tenant's own templates — optimistic, like the other list ops.
+  async function toggleTemplate(g: Graph) {
+    const next = !g.template;
+    g.template = next;
+    try {
+      await data.setGraphTemplate(g.id, next);
+    } catch (err) {
+      g.template = !next;
+      toast.error("Couldn't update template", { description: String(err) });
+    }
+  }
+
+  type TemplateSummary = { id: string; name: string; description: string; global: boolean; inputs: VarDecl[] };
+  let templatesOpen = $state(false);
+  let templates = $state<TemplateSummary[]>([]);
+  let templatesLoading = $state(false);
+
+  async function openTemplates() {
+    templatesOpen = true;
+    templatesLoading = true;
+    try {
+      templates = await data.listTemplates<TemplateSummary>();
+    } catch (err) {
+      toast.error("Couldn't load templates", { description: String(err) });
+    } finally {
+      templatesLoading = false;
+    }
+  }
+  // Clone a template into this tenant → open the new workflow to fill in its inputs.
+  async function useTemplate(t: TemplateSummary) {
+    try {
+      const id = await data.useTemplate(t.id);
+      templatesOpen = false;
+      await reload();
+      openGraph(id);
+      toast.info(`Created “${t.name}” — fill in its inputs and turn it on.`);
+    } catch (err) {
+      toast.error("Couldn't use template", { description: String(err) });
     }
   }
 
@@ -2734,6 +2781,15 @@
           >
             {#if st === "running"}<Busy />{:else}<Play class="size-3.5" />{/if}
           </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            class="size-7 {g.template ? 'text-primary' : ''}"
+            title={g.template ? 'A template — click to make it a normal workflow' : 'Save as a template'}
+            onclick={() => toggleTemplate(g)}
+          >
+            <Bookmark class="size-3.5" fill={g.template ? "currentColor" : "none"} />
+          </Button>
           <Button variant="ghost" size="icon" class="size-7" title="Duplicate" onclick={() => duplicateWorkflow(g)}>
             <Copy class="size-3.5" />
           </Button>
@@ -2754,7 +2810,10 @@
           <h1 class="text-2xl font-semibold tracking-tight">Workflows</h1>
           <p class="text-sm text-muted-foreground">Graph automations that run on a trigger or on demand.</p>
         </div>
-        <Button onclick={createWorkflow}><Plus class="size-4" /> New workflow</Button>
+        <div class="flex items-center gap-2">
+          <Button variant="outline" onclick={openTemplates}><LayoutTemplate class="size-4" /> Templates</Button>
+          <Button onclick={createWorkflow}><Plus class="size-4" /> New workflow</Button>
+        </div>
       </div>
 
       <!-- filter bar -->
@@ -4408,6 +4467,41 @@
     </div>
   {/if}
 </div>
+
+<!-- Templates picker (#102): browse own + global templates, clone one into this tenant -->
+<Dialog.Root bind:open={templatesOpen}>
+  <Dialog.Content class="sm:max-w-lg">
+    <Dialog.Header>
+      <Dialog.Title>Start from a template</Dialog.Title>
+      <Dialog.Description>A ready-made workflow, cloned into your workspace to fill in and turn on.</Dialog.Description>
+    </Dialog.Header>
+    <div class="max-h-[60vh] space-y-2 overflow-y-auto py-1">
+      {#if templatesLoading}
+        <p class="py-6 text-center text-sm text-muted-foreground">Loading…</p>
+      {:else if templates.length === 0}
+        <p class="py-6 text-center text-sm text-muted-foreground">
+          No templates yet. Save a workflow as a template with the bookmark, and it'll show up here.
+        </p>
+      {:else}
+        {#each templates as t (t.id)}
+          <div class="flex items-center gap-3 rounded-lg border border-border p-3">
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <span class="truncate text-sm font-medium">{t.name}</span>
+                {#if t.global}<Badge variant="outline" class="border-primary/30 text-primary">Global</Badge>{/if}
+              </div>
+              {#if t.description}<p class="truncate text-xs text-muted-foreground">{t.description}</p>{/if}
+              {#if t.inputs.length}
+                <p class="mt-1 text-[11px] text-muted-foreground/70">Asks for: {t.inputs.map((v) => v.name).join(", ")}</p>
+              {/if}
+            </div>
+            <Button size="sm" onclick={() => useTemplate(t)}>Use</Button>
+          </div>
+        {/each}
+      {/if}
+    </div>
+  </Dialog.Content>
+</Dialog.Root>
 
 <!-- Run inputs prompt (#102): fill in the graph's input variables before running -->
 <Dialog.Root bind:open={runPromptOpen}>

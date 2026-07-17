@@ -303,6 +303,19 @@ export const data = {
     await api.put<void>(`/workflows/${id}/group`, { value });
   },
   duplicateGraph: (id: string): Promise<string> => api.post<string>(`/workflows/${id}/duplicate`),
+
+  /** Templates a tenant can start from: its own + every global one (#102). */
+  listTemplates: <T = unknown>(): Promise<T[]> => api.get<T[]>("/workflows/templates"),
+  /** Clone a template into the caller's tenant as a normal, disabled workflow; returns its id. */
+  useTemplate: (id: string): Promise<string> => api.post<string>(`/workflows/templates/${id}/use`),
+  /** Mark/unmark a graph as one of the tenant's own templates. */
+  setGraphTemplate: async (id: string, value: boolean): Promise<void> => {
+    await api.put<void>(`/workflows/${id}/template`, { value });
+  },
+  /** Publish/unpublish a template to the GLOBAL catalog — master only (403 otherwise). */
+  setGraphGlobal: async (id: string, value: boolean): Promise<void> => {
+    await api.put<void>(`/workflows/${id}/global`, { value });
+  },
   deleteGraph: async (id: string): Promise<void> => {
     await api.del<void>(`/workflows/${id}`);
   },
