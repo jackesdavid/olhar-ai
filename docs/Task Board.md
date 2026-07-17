@@ -64,6 +64,8 @@ kanban-plugin: board
 	  - Epic: [[olharai-rebrand]]
 - [ ] #87 Segmented continuous recording — cap clip size, crash-durable, incremental upload
 	  - Plan: [[segmented-continuous-recording]]
+- [ ] #94 Unified node value store — one place, media in MinIO
+	  - Plan: [[unified-node-value-store]]
 
 
 ## In Progress
