@@ -1313,35 +1313,6 @@
     }
   }
 
-  type TemplateSummary = { id: string; name: string; description: string; global: boolean; inputs: VarDecl[] };
-  let templatesOpen = $state(false);
-  let templates = $state<TemplateSummary[]>([]);
-  let templatesLoading = $state(false);
-
-  async function openTemplates() {
-    templatesOpen = true;
-    templatesLoading = true;
-    try {
-      templates = await data.listTemplates<TemplateSummary>();
-    } catch (err) {
-      toast.error("Couldn't load templates", { description: String(err) });
-    } finally {
-      templatesLoading = false;
-    }
-  }
-  // Clone a template into this tenant → open the new workflow to fill in its inputs.
-  async function useTemplate(t: TemplateSummary) {
-    try {
-      const id = await data.useTemplate(t.id);
-      templatesOpen = false;
-      await reload();
-      openGraph(id);
-      toast.info(`Created “${t.name}” — fill in its inputs and turn it on.`);
-    } catch (err) {
-      toast.error("Couldn't use template", { description: String(err) });
-    }
-  }
-
   async function loadRefs() {
     try {
       const [d, r, m] = await Promise.all([data.listDevices(), data.listBeacons(), data.loadMap()]);
@@ -2811,7 +2782,7 @@
           <p class="text-sm text-muted-foreground">Graph automations that run on a trigger or on demand.</p>
         </div>
         <div class="flex items-center gap-2">
-          <Button variant="outline" onclick={openTemplates}><LayoutTemplate class="size-4" /> Templates</Button>
+          <Button variant="outline" onclick={() => goto("/workflows/templates")}><LayoutTemplate class="size-4" /> Templates</Button>
           <Button onclick={createWorkflow}><Plus class="size-4" /> New workflow</Button>
         </div>
       </div>
@@ -4467,41 +4438,6 @@
     </div>
   {/if}
 </div>
-
-<!-- Templates picker (#102): browse own + global templates, clone one into this tenant -->
-<Dialog.Root bind:open={templatesOpen}>
-  <Dialog.Content class="sm:max-w-lg">
-    <Dialog.Header>
-      <Dialog.Title>Start from a template</Dialog.Title>
-      <Dialog.Description>A ready-made workflow, cloned into your workspace to fill in and turn on.</Dialog.Description>
-    </Dialog.Header>
-    <div class="max-h-[60vh] space-y-2 overflow-y-auto py-1">
-      {#if templatesLoading}
-        <p class="py-6 text-center text-sm text-muted-foreground">Loading…</p>
-      {:else if templates.length === 0}
-        <p class="py-6 text-center text-sm text-muted-foreground">
-          No templates yet. Save a workflow as a template with the bookmark, and it'll show up here.
-        </p>
-      {:else}
-        {#each templates as t (t.id)}
-          <div class="flex items-center gap-3 rounded-lg border border-border p-3">
-            <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-2">
-                <span class="truncate text-sm font-medium">{t.name}</span>
-                {#if t.global}<Badge variant="outline" class="border-primary/30 text-primary">Global</Badge>{/if}
-              </div>
-              {#if t.description}<p class="truncate text-xs text-muted-foreground">{t.description}</p>{/if}
-              {#if t.inputs.length}
-                <p class="mt-1 text-[11px] text-muted-foreground/70">Asks for: {t.inputs.map((v) => v.name).join(", ")}</p>
-              {/if}
-            </div>
-            <Button size="sm" onclick={() => useTemplate(t)}>Use</Button>
-          </div>
-        {/each}
-      {/if}
-    </div>
-  </Dialog.Content>
-</Dialog.Root>
 
 <!-- Run inputs prompt (#102): fill in the graph's input variables before running -->
 <Dialog.Root bind:open={runPromptOpen}>
