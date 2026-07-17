@@ -27,6 +27,8 @@ kanban-plugin: board
 - [ ] #10 Update available — reload to get the latest version.
 - [ ] #93 Box health copy leaks internals ("tailnet", "Tailscale") to users
 	  - Plan: [[box-health-copy-no-internals]]
+- [ ] #98 Edge ring reconcile — stop rings for cameras that left
+	  - Plan: [[edge-ring-reconcile]]
 
 
 ## ToDo
@@ -68,6 +70,10 @@ kanban-plugin: board
 	  - Plan: [[unified-node-value-store]]
 - [ ] #96 Engine clarity — kill the ambiguity that hides bugs
 	  - Plan: [[workflow-engine-clarity]]
+- [ ] #99 Domain cutover — serve olharai.com / .com.br, transitional dual-domain
+	  - Plan: [[olharai-domain-cutover]]
+- [ ] #100 Landing page — Olhar AI rebrand + copy rewrite
+	  - Plan: [[olharai-landing]]
 
 
 ## In Progress
