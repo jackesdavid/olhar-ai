@@ -297,16 +297,21 @@ pub fn extend_node_state(
 ) -> bool {
     let pool = db.pool();
     let json_str = serde_json::json!({ "state": "armed", "expires_at": expires_at }).to_string();
+    let instance_key = instance_key.to_string();
     let res: Result<u64, sqlx::Error> = db.block(async move {
         let r = sqlx::query(
+            // instance_key MUST be in the WHERE: without it a re-trigger on one instance extends
+            // every armed instance's window for this node (the UPDATE has no LIMIT). Harmless under
+            // Single scope — one row, key "" — but wrong the moment a graph is PerCamera.
             "UPDATE workflow_node_state SET state_json = $4
-             WHERE tenant_id = $1 AND graph_id = $2 AND node_id = $3
+             WHERE tenant_id = $1 AND graph_id = $2 AND node_id = $3 AND instance_key = $5
                AND (state_json::jsonb ->> 'state') = 'armed'",
         )
         .bind(tenant_id)
         .bind(graph_id)
         .bind(node_id as i64)
         .bind(json_str)
+        .bind(instance_key)
         .execute(&pool)
         .await?;
         Ok(r.rows_affected())
