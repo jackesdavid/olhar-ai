@@ -359,7 +359,10 @@ export const data = {
   removeEdge: async (graphId: string, idx: number): Promise<void> => {
     await api.del<void>(`/workflows/${graphId}/edges/${idx}`);
   },
-  runGraph: (id: string): Promise<string> => api.post<string>(`/workflows/${id}/run`),
+  /** Manually run a graph. `inputs` (optional) supplies per-launch values for the graph's input
+   *  variables (#102), by variable name — they override the stored defaults for this run only. */
+  runGraph: (id: string, inputs?: Record<string, string>): Promise<string> =>
+    api.post<string>(`/workflows/${id}/run`, inputs && Object.keys(inputs).length ? { inputs } : undefined),
 
   // ---- workflow events + run history --------------------------------------
   listEvents: <T = unknown>(): Promise<T> => api.get<T>("/workflows/event-registry"),

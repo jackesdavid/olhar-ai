@@ -293,27 +293,14 @@ pub fn resolve_camera_entity(query: &str, sys: &ToolContext) -> Option<crate::wo
 /// before any `Set` returns the author's default instead of a type-zero. Called once at run start.
 /// Unparseable / typeless defaults are skipped (the `Get` then falls back to its type-zero).
 pub fn seed_variable_defaults(vars: &[crate::workflows::domain::VariableDecl], sys: &ToolContext) {
-    use crate::workflows::domain::PortType;
     let mut seeded: Vec<(String, PortValue)> = Vec::new();
     for v in vars {
         let Some(raw) = v.default.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
             continue;
         };
-        let pv = match v.ty {
-            PortType::Text => PortValue::Text(raw.to_string()),
-            PortType::Recipient => PortValue::Recipient(raw.to_string()),
-            PortType::Num => match raw.parse::<i64>() {
-                Ok(n) => PortValue::Num(n),
-                Err(_) => continue,
-            },
-            PortType::Bool => PortValue::Bool(matches!(raw, "true" | "1" | "yes" | "on")),
-            PortType::Camera => match resolve_camera_entity(raw, sys) {
-                Some(c) => PortValue::Camera(c),
-                None => continue,
-            },
-            _ => continue, // Image/File/arrays/Bbox/Person/Face: no author-typable default
-        };
-        seeded.push((v.name.clone(), pv));
+        if let Some(pv) = parse_variable_value(v.ty, raw, sys) {
+            seeded.push((v.name.clone(), pv));
+        }
     }
     if seeded.is_empty() {
         return;
@@ -322,6 +309,31 @@ pub fn seed_variable_defaults(vars: &[crate::workflows::domain::VariableDecl], s
     for (name, pv) in seeded {
         map.insert(name, pv);
     }
+}
+
+/// Parse a string into a typed `PortValue` for a variable of type `ty`. The single place both a
+/// declared **default** and a manual-run **input override** (#102) turn a string into a value, so
+/// an input entered at launch parses identically to a stored default. `None` for an unparseable or
+/// non-defaultable type (Image/File/arrays/Bbox/Person/Face) — the caller then falls back to the
+/// `Get`'s type-zero.
+pub fn parse_variable_value(
+    ty: crate::workflows::domain::PortType,
+    raw: &str,
+    sys: &ToolContext,
+) -> Option<PortValue> {
+    use crate::workflows::domain::PortType;
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    Some(match ty {
+        PortType::Text => PortValue::Text(raw.to_string()),
+        PortType::Recipient => PortValue::Recipient(raw.to_string()),
+        PortType::Num => PortValue::Num(raw.parse::<i64>().ok()?),
+        PortType::Bool => PortValue::Bool(matches!(raw, "true" | "1" | "yes" | "on")),
+        PortType::Camera => PortValue::Camera(resolve_camera_entity(raw, sys)?),
+        _ => return None,
+    })
 }
 
 /// Resolve a `Camera` config literal (the dropdown-stored device id) to a `PortValue::Camera`.
@@ -913,6 +925,24 @@ mod tests {
             None,
             tx,
         )
+    }
+
+    #[test]
+    fn parse_variable_value_matches_default_seeding() {
+        use crate::workflows::domain::PortType;
+        let sys = test_ctx();
+        // The types a manual-run input can carry — parsed identically to a stored default.
+        assert!(matches!(parse_variable_value(PortType::Text, "hi", &sys), Some(PortValue::Text(t)) if t == "hi"));
+        assert!(matches!(parse_variable_value(PortType::Num, "42", &sys), Some(PortValue::Num(42))));
+        assert!(matches!(parse_variable_value(PortType::Bool, "true", &sys), Some(PortValue::Bool(true))));
+        assert!(matches!(parse_variable_value(PortType::Bool, "nope", &sys), Some(PortValue::Bool(false))));
+        assert!(matches!(parse_variable_value(PortType::Recipient, "ops", &sys), Some(PortValue::Recipient(r)) if r == "ops"));
+        // Rejections fall back to the Get's type-zero, never a wrong value or a run failure.
+        assert!(parse_variable_value(PortType::Num, "not-a-number", &sys).is_none());
+        assert!(parse_variable_value(PortType::Text, "   ", &sys).is_none(), "blank is no value");
+        assert!(parse_variable_value(PortType::Image, "x", &sys).is_none(), "non-defaultable type");
+        // Camera needs a resolvable device; the empty test ctx has none → None (not a crash).
+        assert!(parse_variable_value(PortType::Camera, "192.168.1.1", &sys).is_none());
     }
 
     #[test]

@@ -68,7 +68,7 @@ pub fn spawn_poller(state: Arc<AppState>) {
             };
             if due {
                 workflows::repo::save_cron_fired(&state.db, tenant, id, crate::now_epoch_ms());
-                fire_graph(&state, tenant, id, &policy, TriggerSource::Cron);
+                fire_graph(&state, tenant, id, &policy, TriggerSource::Cron, std::collections::HashMap::new());
             }
         }
     });
@@ -82,6 +82,8 @@ pub fn fire_graph(
     graph_id: Uuid,
     policy: &ConcurrencyPolicy,
     source: TriggerSource,
+    // Manual-run input overrides (#102), raw strings by variable name; empty for cron/event.
+    inputs: std::collections::HashMap<String, String>,
 ) {
     let decision = state
         .engine
@@ -91,7 +93,7 @@ pub fn fire_graph(
     match decision {
         Fire::Spawn => {
             state.engine.lock().unwrap().on_spawn(tenant, graph_id);
-            spawn_graph_run(state, tenant, graph_id, source);
+            spawn_graph_run(state, tenant, graph_id, source, inputs);
         }
         Fire::Queue => state.engine.lock().unwrap().on_queue(tenant, graph_id),
         Fire::Skip => {}
@@ -102,7 +104,7 @@ pub fn fire_graph(
 /// a slot (`engine.on_spawn`). On finish it releases the slot and, if a queued fire
 /// is waiting (`QueueSingle`), reserves + spawns the next one. `source` (manual/cron) is
 /// recorded on the run.
-pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid, source: TriggerSource) {
+pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid, source: TriggerSource, inputs: std::collections::HashMap<String, String>) {
     let graph: WfGraph = match state::find_graph(&state.store, tenant, graph_id) {
         Some(g) => g,
         None => return,
@@ -146,7 +148,7 @@ pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid, sour
             serde_json::json!({ "tenant": tenant, "graph": graph_id, "name": graph.name, "run_id": run_id, "trigger": source.as_str() }),
         );
 
-        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, None, PortValues::new());
+        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, None, PortValues::new(), inputs.clone());
 
         mark_run_finished(&state, tenant, graph_id);
         if ok {
@@ -170,7 +172,7 @@ pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid, sour
         let drain_queued = state.engine.lock().unwrap().on_finish(tenant, graph_id);
         if drain_queued {
             state.engine.lock().unwrap().on_spawn(tenant, graph_id);
-            spawn_graph_run(&state, tenant, graph_id, source);
+            spawn_graph_run(&state, tenant, graph_id, source, std::collections::HashMap::new()); // v1: queued drain uses defaults
         }
     });
 }
@@ -241,11 +243,29 @@ fn execute_run(
     run_id: Uuid,
     entry: Option<u32>,
     entry_payload: PortValues,
+    // Per-launch input values (#102), raw strings by variable name. Empty for cron and for
+    // event/timer sub-runs (those get their data from `entry_payload`, a different channel). A
+    // manual run carries what the user typed in the prompt. Kept as raw strings so they're parsed
+    // HERE with this run's real context, rather than building a throwaway one in the HTTP handler.
+    input_overrides: std::collections::HashMap<String, String>,
 ) -> (bool, String) {
     let (ctx, drain) = build_run_context(state, tenant, graph.id);
     // Seed this run's variables from the graph's declared defaults (card #5b) — a Get before any
     // Set then returns the author's default instead of a type-zero.
     app_core::workflows::node::seed_variable_defaults(&graph.variables, &ctx);
+    // Then apply this run's input overrides ON TOP, so a value entered at launch beats the stored
+    // default while cron/event runs keep using the default (they pass none). Parsed against each
+    // variable's declared type; unknown names / unparseable values are dropped (the variable then
+    // keeps its default), so a stale prompt can't fail the run.
+    if !input_overrides.is_empty() {
+        for decl in &graph.variables {
+            if let Some(raw) = input_overrides.get(&decl.name) {
+                if let Some(pv) = app_core::workflows::node::parse_variable_value(decl.ty, raw, &ctx) {
+                    ctx.variables.lock().unwrap().insert(decl.name.clone(), pv);
+                }
+            }
+        }
+    }
     let graph_id = graph.id;
     let debug = graph.debug;
     let labels: std::collections::HashMap<u32, &'static str> =
@@ -583,7 +603,7 @@ pub fn spawn_node_subrun(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid, no
         );
 
         let payload = crate::window_consumer::stop_payload();
-        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, Some(node_id), payload);
+        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, Some(node_id), payload, std::collections::HashMap::new());
 
         mark_run_finished(&state, tenant, graph_id);
         if !ok {
@@ -659,7 +679,7 @@ fn spawn_event_handler(
             }],
         );
 
-        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, Some(entry), payload);
+        let (ok, summary) = execute_run(&state, tenant, &graph, run_id, Some(entry), payload, std::collections::HashMap::new());
 
         mark_run_finished(&state, tenant, listener_id);
         if !ok {

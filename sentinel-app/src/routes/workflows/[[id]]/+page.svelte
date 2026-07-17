@@ -1575,15 +1575,40 @@
       toast.error("Couldn't update", { description: String(err) });
     }
   }
-  async function runNow(g: Graph) {
+  // A manual run with the given input values (empty = use defaults).
+  async function doRun(g: Graph, inputs?: Record<string, string>) {
     running = true;
     try {
-      const msg = await data.runGraph(g.id);
+      const msg = await data.runGraph(g.id, inputs);
       toast.info(msg);
     } catch (err) {
       running = false;
       toast.error("Run", { description: String(err) });
     }
+  }
+
+  // Run prompt (#102): when a graph declares input variables (`param`), ask for their values before
+  // running — pre-filled with each input's current default. A graph with no inputs runs immediately.
+  let runPromptOpen = $state(false);
+  let runPromptGraph = $state<Graph | null>(null);
+  let runInputs = $state<Record<string, string>>({});
+  const runParams = $derived<VarDecl[]>((runPromptGraph?.variables ?? []).filter((v) => v.param));
+
+  function runNow(g: Graph) {
+    const params = (g.variables ?? []).filter((v) => v.param);
+    if (params.length === 0) {
+      doRun(g);
+      return;
+    }
+    runInputs = Object.fromEntries(params.map((v) => [v.name, v.default ?? ""]));
+    runPromptGraph = g;
+    runPromptOpen = true;
+  }
+
+  function confirmRun() {
+    const g = runPromptGraph;
+    runPromptOpen = false;
+    if (g) doRun(g, { ...runInputs });
   }
 
   // ---- trigger / concurrency ----------------------------------------------
@@ -4383,6 +4408,45 @@
     </div>
   {/if}
 </div>
+
+<!-- Run inputs prompt (#102): fill in the graph's input variables before running -->
+<Dialog.Root bind:open={runPromptOpen}>
+  <Dialog.Content class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Run {runPromptGraph?.name ?? "workflow"}</Dialog.Title>
+      <Dialog.Description>Fill in the inputs for this run. They're pre-filled with the defaults.</Dialog.Description>
+    </Dialog.Header>
+    <div class="space-y-3 py-1">
+      {#each runParams as v (v.name)}
+        <div class="space-y-1.5">
+          <label class="text-xs font-medium" for="run-in-{v.name}">
+            {v.name}
+            {#if v.description}<span class="ml-1 font-normal text-muted-foreground">— {v.description}</span>{/if}
+          </label>
+          {#if v.type === "bool"}
+            <select id="run-in-{v.name}" class="h-8 w-full rounded border border-input bg-background px-2 text-sm" bind:value={runInputs[v.name]}>
+              <option value="true">true</option><option value="false">false</option>
+            </select>
+          {:else if v.type === "camera"}
+            <select id="run-in-{v.name}" class="h-8 w-full rounded border border-input bg-background px-2 text-sm" bind:value={runInputs[v.name]}>
+              {#each cameraOptions as c (c.value)}<option value={c.value}>{c.label}</option>{/each}
+            </select>
+          {:else if v.type === "recipient"}
+            <select id="run-in-{v.name}" class="h-8 w-full rounded border border-input bg-background px-2 text-sm" bind:value={runInputs[v.name]}>
+              {#each recipientOptions as r (r.value)}<option value={r.value}>{r.label}</option>{/each}
+            </select>
+          {:else}
+            <Input id="run-in-{v.name}" type={v.type === "num" ? "number" : "text"} bind:value={runInputs[v.name]} />
+          {/if}
+        </div>
+      {/each}
+    </div>
+    <Dialog.Footer>
+      <Button variant="outline" onclick={() => (runPromptOpen = false)}>Cancel</Button>
+      <Button onclick={confirmRun} disabled={running}>Run</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
 
 <!-- Delete dialog -->
 <Dialog.Root bind:open={deleteOpen}>

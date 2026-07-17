@@ -99,6 +99,10 @@ async fn run_states(
 struct CreateRun {
     tenant_id: Uuid,
     graph_id: uuid::Uuid,
+    /// Per-launch values for the graph's input variables (#102), by variable name. Raw strings —
+    /// parsed here against each variable's declared type, exactly as a stored default would be.
+    #[serde(default)]
+    inputs: std::collections::HashMap<String, String>,
 }
 
 /// Request a manual run of a tenant's graph. Async-job style: the engine applies the
@@ -109,20 +113,23 @@ async fn create_run(
     Json(body): Json<CreateRun>,
 ) -> impl IntoResponse {
     // Manual fire honors the graph's concurrency policy (spawn/queue/skip).
-    let policy = crate::state::find_graph(&state.store, body.tenant_id, body.graph_id)
-        .map(|g| g.concurrency.clone());
-    let Some(policy) = policy else {
+    let graph = crate::state::find_graph(&state.store, body.tenant_id, body.graph_id);
+    let Some(graph) = graph else {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "no such graph" })),
         );
     };
+    let policy = graph.concurrency.clone();
+    // Raw input strings flow straight through — execute_run parses them against the graph's
+    // variable types with the run's real context.
     engine::fire_graph(
         &state,
         body.tenant_id,
         body.graph_id,
         &policy,
         app_core::workflows::TriggerSource::Manual,
+        body.inputs,
     );
     (
         StatusCode::ACCEPTED,

@@ -1194,12 +1194,18 @@ async fn remove_edge(
 async fn run(
     UserClaims(c): UserClaims,
     Path(id): Path<uuid::Uuid>,
+    // Optional per-launch input values (#102), `{ "inputs": { "<var>": "<value>" } }`. Absent for a
+    // plain run. `Option<Json<_>>` so a body-less POST still works.
+    body: Option<Json<serde_json::Value>>,
 ) -> Result<Json<String>, ApiErr> {
     auth::require(&c, "workflows.run")?;
     let tid = tenant_of(&c)?;
+    let inputs = body
+        .and_then(|Json(v)| v.get("inputs").cloned())
+        .unwrap_or_else(|| json!({}));
     let resp = reqwest::Client::new()
         .post(format!("{}/runs", flow_base()))
-        .json(&json!({ "graph_id": id, "tenant_id": tid }))
+        .json(&json!({ "graph_id": id, "tenant_id": tid, "inputs": inputs }))
         .send()
         .await;
     match resp {
