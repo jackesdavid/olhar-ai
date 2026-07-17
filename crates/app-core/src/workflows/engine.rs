@@ -284,6 +284,16 @@ fn forward_epoch(
 ) -> Result<Vec<u32>, String> {
     let mut indeg = indeg_tmpl.clone();
     let mut settled: HashSet<u32> = HashSet::new();
+    // Which instance of the graph is this run? The GRAPH decides (Unreal's model: the graph is the
+    // Blueprint, the instance is the actor) — no node ever learns what a camera is. `Single` yields
+    // "", which is byte-for-byte the behaviour before instances existed, so every graph alive today
+    // addresses the same state rows it always did.
+    //
+    // It scopes ALL latent node state, not just the DelayTrigger's window: a Cooldown or Time Gate
+    // in a per-camera graph is per-camera too. Scoping only one node kind would be the fork this
+    // model exists to remove.
+    let instance_key = graph.instance_scope.key_for(entry_payload);
+
     let mut live_out: HashSet<(u32, String)> = HashSet::new();
     let mut reentries: Vec<u32> = Vec::new();
     let total = graph.nodes.len();
@@ -480,7 +490,7 @@ fn forward_epoch(
         // FlipFlop: read cross-run state, fire `a` or `b`, write toggled state back.
         // Engine-driven (like ForEach) — no run_node call.
         if n.kind == NodeKind::FlipFlop {
-            let state = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid);
+            let state = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid, &instance_key);
             // State stores the branch to fire next. Missing = first run → fire A (is_a=true).
             let is_a = state
                 .as_ref()
@@ -526,7 +536,7 @@ fn forward_epoch(
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-            let state = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid);
+            let state = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid, &instance_key);
             let last_ms = state
                 .as_ref()
                 .and_then(|v| v.get("last_ms"))
@@ -593,7 +603,7 @@ fn forward_epoch(
                 })
                 .unwrap_or(wait_secs);
             let now_ts = Utc::now().timestamp();
-            let state = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid);
+            let state = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid, &instance_key);
             let is_armed = state
                 .as_ref()
                 .and_then(|v| v.get("state"))
@@ -679,7 +689,7 @@ fn forward_epoch(
 
             let fired = loop {
                 std::thread::sleep(Duration::from_millis(250));
-                let st = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid);
+                let st = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid, &instance_key);
                 let armed = st
                     .as_ref()
                     .and_then(|v| v.get("state"))
@@ -773,7 +783,7 @@ fn forward_epoch(
             };
             let expires_at = rfc(now_ts + wait_secs);
 
-            if repo::try_arm_node_state(&sys.db, sys.tenant_id, graph.id, nid, &expires_at) {
+            if repo::try_arm_node_state(&sys.db, sys.tenant_id, graph.id, nid, &instance_key, &expires_at) {
                 // Leading edge: this signal opened the window, so it owns the start.
                 live_out.insert((nid, "start".to_string()));
                 crate::work_queue::enqueue_window_stop_blocking(
@@ -781,6 +791,7 @@ fn forward_epoch(
                     sys.tenant_id,
                     graph.id,
                     nid,
+                    &instance_key,
                     &expires_at,
                 );
                 if graph.debug {
@@ -789,7 +800,7 @@ fn forward_epoch(
             } else {
                 // Already armed: a re-trigger tops the window up, and only when that actually
                 // pushes the deadline out (Time Gate's rule: remaining = max(remaining, extend)).
-                let state = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid);
+                let state = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid, &instance_key);
                 let expires_ts = state
                     .as_ref()
                     .and_then(|v| v.get("expires_at"))
@@ -804,6 +815,7 @@ fn forward_epoch(
                         sys.tenant_id,
                         graph.id,
                         nid,
+                        &instance_key,
                         &rfc(now_ts + extend_secs),
                     );
                     if graph.debug {

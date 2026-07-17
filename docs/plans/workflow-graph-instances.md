@@ -109,16 +109,21 @@ Give the run a life, and each of those stops being a feature and becomes a conse
 5. **Retention** — instance value contexts are per-run rows. `0054`'s nightly `events` sweep is the
    precedent.
 
-## Phases (sketch — decisions above come first)
+## Phases
 
-1. **Model** — an instance = an unfinished `workflow_runs` row + its value context. No new identity.
-2. **Scope** — how a latent node finds its instance (decision 2). Default scope = graph, so existing
-   graphs behave exactly as today.
-3. **Window per instance** — the window moves off `(graph, node)` onto the instance. This is the
-   migration that fixes the two-camera collision.
-4. **Values per instance** — #94's store, keyed by instance.
-5. **The live view** — list running instances per graph; open one and see its context (the owner's
-   "see the values of each run context").
+1. **Scope + all three keys — DONE (phase 1).** `InstanceScope` (`Single` default / `PerCamera`) on
+   the graph; `key_for(payload)` derives the key from the firing signal, accepting the camera as
+   either `Text` (raw wire) or `CameraEntity` (post-seeding) so an arm on either side lands on one
+   instance. Migration `0057` puts `instance_key` in `workflow_node_state`'s PK; the engine derives
+   it once per run and threads it through **every** latent read/write (not just the window —
+   scoping one node kind would be the fork this model removes); the stop job carries it, because the
+   trailing-edge run has no payload to re-derive it from; and the concurrency gate keys on it, which
+   is what actually lets two cameras run at once. `Single` → `""` → byte-for-byte today's behaviour.
+2. **Model** — an instance = an unfinished `workflow_runs` row + its value context. No new identity.
+3. **Values per instance** — #94's store, keyed by instance. This is where #86 finally closes.
+4. **The live view** — list running instances per graph; open one and see its context (the owner's
+   "see the values of each run context"). Also closes a known gap: the editor's frame read keys on
+   `""`, so a `PerCamera` graph's Show Image needs an instance to view.
 
 ## Verification
 

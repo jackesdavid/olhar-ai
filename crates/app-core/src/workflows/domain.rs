@@ -1658,6 +1658,54 @@ pub enum EventSource {
     System { label: String },
 }
 
+/// What a graph runs **one of** — its instance identity, in Unreal's sense: the graph is the
+/// Blueprint, an instance is the actor. Latent state (a `DelayTrigger`'s window) and the
+/// concurrency gate are both scoped to an instance, so two instances never collide.
+///
+/// Before this existed, everything was keyed `(tenant, graph, …)` with no context, which meant one
+/// window and one in-flight run per graph *forever*. Two cameras through one recording graph:
+/// B's event was coalesce-dropped while A ran, and if it did get through, B couldn't arm its own
+/// window — it silently extended A's, and B's clip was never stopped. Single-camera graphs worked
+/// by accident.
+///
+/// A latent node never asks "which camera"; it asks for **its instance's** window. That's what
+/// keeps `DelayTrigger` a Control node that knows nothing about cameras.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum InstanceScope {
+    /// One instance per graph — byte-for-byte the behaviour before instances existed. Default, so
+    /// every existing graph is unaffected.
+    Single,
+    /// One instance per camera: the event's camera is the instance key. Same camera re-triggers the
+    /// same window (the debounce survives); different cameras get their own window and their own
+    /// clip.
+    PerCamera,
+}
+
+impl Default for InstanceScope {
+    fn default() -> Self {
+        InstanceScope::Single
+    }
+}
+
+impl InstanceScope {
+    /// This signal's instance key. `""` is the single instance — never a missing value: a
+    /// `PerCamera` graph fired by an event with no camera has one honest instance, not a broken one.
+    pub fn key_for(&self, payload: &crate::workflows::PortValues) -> String {
+        match self {
+            InstanceScope::Single => String::new(),
+            InstanceScope::PerCamera => payload
+                .get("camera")
+                .map(|v| match v {
+                    // The wire carries a camera as Text (ip/id) before `seed_event_payload` upgrades
+                    // it; after, it's a CameraEntity. Accept both — the arm can happen either side.
+                    crate::workflows::PortValue::Camera(c) => c.id.clone(),
+                    other => other.as_text().unwrap_or_default().to_string(),
+                })
+                .unwrap_or_default(),
+        }
+    }
+}
+
 /// What happens when a graph fires while a previous run of the same graph is in flight.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ConcurrencyPolicy {
@@ -1717,6 +1765,10 @@ pub struct Graph {
     pub trigger: Trigger,
     #[serde(default)]
     pub concurrency: ConcurrencyPolicy,
+    /// What this graph runs one of (see [`InstanceScope`]). Additive: old graphs deserialize to
+    /// `Single`, which is exactly how they behaved before instances existed.
+    #[serde(default)]
+    pub instance_scope: InstanceScope,
     /// Run nodes that have no edges (orphans on the canvas). Default `false` —
     /// orphans are skipped so leftover/experimental nodes don't fire.
     #[serde(default)]
@@ -1764,6 +1816,7 @@ fn one() -> u32 {
 impl Graph {
     pub fn new(name: &str) -> Self {
         Graph {
+            instance_scope: InstanceScope::default(),
             id: Uuid::new_v4(),
             name: name.to_string(),
             description: String::new(),
@@ -2101,6 +2154,78 @@ impl Workflows {
 
     pub fn graph_mut(&mut self, id: Uuid) -> Option<&mut Graph> {
         self.graphs.iter_mut().find(|g| g.id == id)
+    }
+}
+
+#[cfg(test)]
+mod instance_scope_tests {
+    use super::*;
+    use crate::workflows::{PortValue, PortValues};
+
+    fn payload_with_camera(v: PortValue) -> PortValues {
+        let mut p = PortValues::new();
+        p.insert("camera".into(), v);
+        p
+    }
+
+    #[test]
+    fn single_is_one_instance_and_ignores_the_camera() {
+        // The default, and the migration's safety: every graph alive today is Single, keys on "",
+        // and addresses exactly the state rows it always did.
+        let s = InstanceScope::Single;
+        assert_eq!(s.key_for(&PortValues::new()), "");
+        assert_eq!(s.key_for(&payload_with_camera(PortValue::Text("10.0.0.9".into()))), "");
+        assert_eq!(InstanceScope::default(), InstanceScope::Single);
+    }
+
+    #[test]
+    fn per_camera_separates_cameras() {
+        // The whole point: A and B are different instances, so they can't share a window.
+        let s = InstanceScope::PerCamera;
+        let a = s.key_for(&payload_with_camera(PortValue::Text("cam-a".into())));
+        let b = s.key_for(&payload_with_camera(PortValue::Text("cam-b".into())));
+        assert_ne!(a, b);
+        assert_eq!(a, "cam-a");
+    }
+
+    #[test]
+    fn per_camera_is_stable_for_the_same_camera() {
+        // And the other half: the debounce only survives if a re-trigger lands on the SAME key.
+        let s = InstanceScope::PerCamera;
+        let first = s.key_for(&payload_with_camera(PortValue::Text("cam-a".into())));
+        let again = s.key_for(&payload_with_camera(PortValue::Text("cam-a".into())));
+        assert_eq!(first, again, "a re-trigger must find the same instance or the debounce dies");
+    }
+
+    #[test]
+    fn per_camera_accepts_the_camera_either_side_of_seeding() {
+        // The wire carries Text (ip/id); `seed_event_payload` upgrades it to a CameraEntity. A
+        // DelayTrigger can arm on either side of that, and both must key the same instance.
+        let s = InstanceScope::PerCamera;
+        let raw = s.key_for(&payload_with_camera(PortValue::Text("cam-1".into())));
+        let typed = s.key_for(&payload_with_camera(PortValue::Camera(CameraEntity {
+            id: "cam-1".into(),
+            ip: "10.0.0.9".into(),
+            name: "Hall".into(),
+        })));
+        assert_eq!(raw, typed, "Text and CameraEntity must resolve to one instance");
+    }
+
+    #[test]
+    fn per_camera_without_a_camera_is_one_honest_instance() {
+        // An event with no camera (telegram_message, say) in a per-camera graph: one instance,
+        // not a broken one. "" is a real key, not a missing value.
+        assert_eq!(InstanceScope::PerCamera.key_for(&PortValues::new()), "");
+    }
+
+    #[test]
+    fn scope_survives_json_and_old_graphs_have_none() {
+        let g: Graph = serde_json::from_str(r#"{"id":"00000000-0000-0000-0000-000000000000","name":"old"}"#).unwrap();
+        assert_eq!(g.instance_scope, InstanceScope::Single, "a graph saved before instances is Single");
+        let mut g2 = Graph::new("g");
+        g2.instance_scope = InstanceScope::PerCamera;
+        let back: Graph = serde_json::from_str(&serde_json::to_string(&g2).unwrap()).unwrap();
+        assert_eq!(back.instance_scope, InstanceScope::PerCamera);
     }
 }
 

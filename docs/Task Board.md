@@ -66,8 +66,6 @@ kanban-plugin: board
 	  - Plan: [[segmented-continuous-recording]]
 - [ ] #94 Unified node value store — one place, media in MinIO
 	  - Plan: [[unified-node-value-store]]
-- [ ] #95 Graph instances — per-run context + live instance view
-	  - Plan: [[workflow-graph-instances]]
 - [ ] #96 Engine clarity — kill the ambiguity that hides bugs
 	  - Plan: [[workflow-engine-clarity]]
 
@@ -82,6 +80,8 @@ kanban-plugin: board
 	  - Plan: [[edge-tailnet-self-heal]]
 - [ ] #86 Delay Trigger node — decouple recording start/stop
 	  - Plan: [[delay-trigger-recording-signal-flow]]
+- [ ] #95 Graph instances — per-run context + live instance view
+	  - Plan: [[workflow-graph-instances]]
 
 
 ## Review

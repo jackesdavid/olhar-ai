@@ -466,23 +466,32 @@ pub fn fire_event(
             );
             continue;
         }
-        // Coalesce-drop per listening graph: respect the graph's concurrency limit.
-        // Concurrent graphs allow up to max_concurrent simultaneous event handlers;
-        // all others allow at most 1 (classic coalesce-drop behaviour).
-        let key = (tenant, listener_id, event.clone());
-        {
-            let max_allowed: usize = {
-                let s = state.store.lock().unwrap();
-                s.iter()
-                    .find(|(t, g)| *t == tenant && g.id == listener_id)
-                    .map(|(_, g)| match &g.concurrency {
+        // Coalesce-drop per listening graph, PER INSTANCE: respect the graph's concurrency limit
+        // within an instance, and let different instances run side by side.
+        //
+        // The key used to be (tenant, graph, event) with no context, which made this the first of
+        // three layers that assumed one context per graph — and the one that hid the other two. With
+        // `SkipIfRunning` (the default), camera B's PersonDetection was dropped here while camera A's
+        // run was in flight, so B never reached the window it couldn't have armed anyway. Adding the
+        // instance means one run per instance, concurrent ACROSS instances, which is what a
+        // per-camera graph means. `Single` scope keys on "" and behaves exactly as before.
+        let (max_allowed, instance_key): (usize, String) = {
+            let s = state.store.lock().unwrap();
+            s.iter()
+                .find(|(t, g)| *t == tenant && g.id == listener_id)
+                .map(|(_, g)| {
+                    let max = match &g.concurrency {
                         app_core::workflows::domain::ConcurrencyPolicy::Concurrent {
                             max_concurrent,
                         } => *max_concurrent as usize,
                         _ => 1,
-                    })
-                    .unwrap_or(1)
-            };
+                    };
+                    (max, g.instance_scope.key_for(&payload))
+                })
+                .unwrap_or((1, String::new()))
+        };
+        let key = (tenant, listener_id, format!("{event}\u{1}{instance_key}"));
+        {
             let mut guard = state.event_runs.lock().unwrap();
             let count = guard.entry(key.clone()).or_insert(0);
             if *count >= max_allowed {

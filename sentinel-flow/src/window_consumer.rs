@@ -57,15 +57,23 @@ fn process(state: &Arc<AppState>, job: work_queue::Job) {
         return;
     };
     let node_id = node_id as u32;
+    // Which instance's window this closes. Absent on jobs enqueued before instances existed —
+    // those are Single-scope graphs, whose key is "" anyway, so the default is also the migration.
+    let instance_key = job
+        .payload
+        .get("instance")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
 
     // Close the window — but only if it's still armed AND still expired. This single conditional
     // write is what makes the cycle exactly-once: a re-trigger that extended the window loses
     // nothing (we simply don't win), and two consumers can't both fire the stop.
-    let won = workflows::repo::try_disarm_expired_node_state(&state.db, job.tenant_id, graph_id, node_id);
+    let won = workflows::repo::try_disarm_expired_node_state(&state.db, job.tenant_id, graph_id, node_id, &instance_key);
     if !won {
         // Either the window moved (extended past now) or it's already closed. Re-read the state:
         // still armed → follow it to its new expiry; otherwise the cycle is over and so is this job.
-        let state_json = workflows::repo::get_node_state(&state.db, job.tenant_id, graph_id, node_id);
+        let state_json = workflows::repo::get_node_state(&state.db, job.tenant_id, graph_id, node_id, &instance_key);
         let expires_at = state_json
             .as_ref()
             .filter(|v| v.get("state").and_then(|s| s.as_str()) == Some("armed"))

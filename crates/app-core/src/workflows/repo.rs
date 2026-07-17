@@ -201,15 +201,20 @@ pub fn get_node_state(
     tenant_id: Uuid,
     graph_id: Uuid,
     node_id: u32,
+    // Which instance of the graph this state belongs to ("" = the single instance).
+    instance_key: &str,
 ) -> Option<serde_json::Value> {
+    let instance_key = instance_key.to_string();
     let pool = db.pool();
     db.block(async move {
         sqlx::query_as::<_, (String,)>(
-            "SELECT state_json FROM workflow_node_state WHERE tenant_id = $1 AND graph_id = $2 AND node_id = $3",
+            "SELECT state_json FROM workflow_node_state
+              WHERE tenant_id = $1 AND graph_id = $2 AND node_id = $3 AND instance_key = $4",
         )
         .bind(tenant_id)
         .bind(graph_id)
         .bind(node_id as i64)
+        .bind(instance_key)
         .fetch_optional(&pool)
         .await
         .ok()
@@ -247,21 +252,25 @@ pub fn try_arm_node_state(
     tenant_id: Uuid,
     graph_id: Uuid,
     node_id: u32,
+    // Which instance of the graph this state belongs to ("" = the single instance).
+    instance_key: &str,
     expires_at: &str,
 ) -> bool {
     let pool = db.pool();
+    let instance_key = instance_key.to_string();
     let json_str = serde_json::json!({ "state": "armed", "expires_at": expires_at }).to_string();
     let res: Result<u64, sqlx::Error> = db.block(async move {
         let r = sqlx::query(
-            "INSERT INTO workflow_node_state (tenant_id, graph_id, node_id, state_json)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (tenant_id, graph_id, node_id) DO UPDATE SET state_json = EXCLUDED.state_json
+            "INSERT INTO workflow_node_state (tenant_id, graph_id, node_id, instance_key, state_json)
+             VALUES ($1, $2, $3, $5, $4)
+             ON CONFLICT (tenant_id, graph_id, node_id, instance_key) DO UPDATE SET state_json = EXCLUDED.state_json
              WHERE (workflow_node_state.state_json::jsonb ->> 'state') IS DISTINCT FROM 'armed'",
         )
         .bind(tenant_id)
         .bind(graph_id)
         .bind(node_id as i64)
         .bind(json_str)
+        .bind(instance_key)
         .execute(&pool)
         .await?;
         Ok(r.rows_affected())
@@ -282,6 +291,8 @@ pub fn extend_node_state(
     tenant_id: Uuid,
     graph_id: Uuid,
     node_id: u32,
+    // Which instance of the graph this state belongs to ("" = the single instance).
+    instance_key: &str,
     expires_at: &str,
 ) -> bool {
     let pool = db.pool();
@@ -320,18 +331,22 @@ pub fn try_disarm_expired_node_state(
     tenant_id: Uuid,
     graph_id: Uuid,
     node_id: u32,
+    // Which instance of the graph this state belongs to ("" = the single instance).
+    instance_key: &str,
 ) -> bool {
     let pool = db.pool();
+    let instance_key = instance_key.to_string();
     let res: Result<u64, sqlx::Error> = db.block(async move {
         let r = sqlx::query(
             "UPDATE workflow_node_state SET state_json = '{\"state\":\"idle\"}'
-             WHERE tenant_id = $1 AND graph_id = $2 AND node_id = $3
+             WHERE tenant_id = $1 AND graph_id = $2 AND node_id = $3 AND instance_key = $4
                AND (state_json::jsonb ->> 'state') = 'armed'
                AND (state_json::jsonb ->> 'expires_at')::timestamptz <= now()",
         )
         .bind(tenant_id)
         .bind(graph_id)
         .bind(node_id as i64)
+        .bind(instance_key)
         .execute(&pool)
         .await?;
         Ok(r.rows_affected())

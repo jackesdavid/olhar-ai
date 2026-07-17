@@ -296,10 +296,15 @@ pub fn enqueue_window_stop_blocking(
     tenant_id: Uuid,
     graph_id: Uuid,
     node_id: u32,
+    // The instance whose window this closes ("" = the single instance). It travels in the payload
+    // because the trailing-edge run can't re-derive it: that run is fired by a timer and carries
+    // none of the event's data, so there's no camera to key on. The job is the only thing that
+    // still knows which instance armed it.
+    instance_key: &str,
     expires_at: &str,
 ) {
     let payload = serde_json::json!({
-        "graph": graph_id, "node": node_id, "expires_at": expires_at,
+        "graph": graph_id, "node": node_id, "instance": instance_key, "expires_at": expires_at,
     });
     enqueue_at_blocking(db, tenant_id, WINDOW_CATEGORY, WINDOW_KIND, payload, expires_at);
 }

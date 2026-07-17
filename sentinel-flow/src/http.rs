@@ -173,7 +173,7 @@ async fn run_frame(
     // Fallback: persisted frame from workflow_node_state (survives flow restarts and browser refreshes).
     let db = state.db.clone();
     let saved = tokio::task::spawn_blocking(move || {
-        app_core::workflows::repo::get_node_state(&db, q.tenant, q.graph, q.node)
+        app_core::workflows::repo::get_node_state(&db, q.tenant, q.graph, q.node, "")
     })
     .await
     .ok()
@@ -205,7 +205,7 @@ async fn node_state(
 ) -> impl IntoResponse {
     let db = state.db.clone();
     let st = tokio::task::spawn_blocking(move || {
-        app_core::workflows::repo::get_node_state(&db, q.tenant, q.graph, q.node)
+        app_core::workflows::repo::get_node_state(&db, q.tenant, q.graph, q.node, "")
     })
     .await
     .ok()
