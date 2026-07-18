@@ -2700,10 +2700,11 @@
 
     <!-- ════════════════════ LIST ════════════════════ -->
   {:else if view === "list"}
-    {#snippet wfRow(g: Graph)}
+    {#snippet wfRow(g: Graph, i: number)}
       {@const st = runStatus(g)}
       <div
-        class="group flex cursor-pointer items-center gap-3 border-l-2 border-transparent py-1.5 pl-9 pr-3 transition-colors hover:border-primary/40 hover:bg-primary/5"
+        class="wf-row group flex cursor-pointer items-center gap-3 border-l-2 border-transparent py-1.5 pl-9 pr-3 transition-colors hover:border-primary/40 hover:bg-primary/5"
+        style="animation-delay: {Math.min(i, 14) * 26}ms"
         role="button"
         tabindex="0"
         onclick={(e) => {
@@ -2835,13 +2836,15 @@
           {/if}
         {:else}
           <div class="divide-y divide-border/60">
-            {#each groupedGraphs as grp (grp.key)}
+            {#each groupedGraphs as grp, gi (grp.key)}
               {@const collapsed = collapsedGroups.has(grp.key)}
+              {@const base = groupedGraphs.slice(0, gi).reduce((n, x) => n + x.rows.length, 0)}
               <div>
                 <!-- category root -->
                 <button
                   type="button"
-                  class="sticky top-0 z-10 flex w-full items-center gap-2 bg-card px-3 py-2 text-left text-sm font-semibold transition-colors hover:bg-hover"
+                  class="wf-group sticky top-0 z-10 flex w-full items-center gap-2 bg-card px-3 py-2 text-left text-sm font-semibold transition-colors hover:bg-hover"
+                  style="animation-delay: {Math.min(base, 14) * 26}ms"
                   onclick={() => toggleGroup(grp.key)}
                 >
                   <ChevronRight
@@ -2853,8 +2856,8 @@
                 </button>
                 {#if !collapsed}
                   <div class="divide-y divide-border/40">
-                    {#each grp.rows as g (g.id)}
-                      {@render wfRow(g)}
+                    {#each grp.rows as g, i (g.id)}
+                      {@render wfRow(g, base + i)}
                     {/each}
                   </div>
                 {/if}
@@ -4607,6 +4610,33 @@
 </Dialog.Root>
 
 <style>
+  /* Workflow list rows: a staggered fade + slide-in on first paint (impeccable entrance —
+     arrival that reads as the list settling into place). Keyed rows only animate when they
+     actually mount, so filtering/mutating doesn't re-run it. The per-row delay is set inline. */
+  @keyframes wf-row-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  :global(.wf-row) {
+    animation: wf-row-in 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  /* Group headers lead their block in. */
+  :global(.wf-group) {
+    animation: wf-row-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(.wf-row),
+    :global(.wf-group) {
+      animation: none;
+    }
+  }
+
   /* Node body fill — the "raised" stop of the elevation ramp, so nodes read as
      panels lifted off the recessed canvas. */
   :global(.node-body) {
