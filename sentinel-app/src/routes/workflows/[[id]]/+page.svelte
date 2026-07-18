@@ -52,6 +52,7 @@
   import Send from "@lucide/svelte/icons/send";
   import Type from "@lucide/svelte/icons/type";
   import Globe from "@lucide/svelte/icons/globe";
+  import { auth } from "$lib/auth.svelte";
   import Waypoints from "@lucide/svelte/icons/waypoints";
   import Zap from "@lucide/svelte/icons/zap";
   import Radar from "@lucide/svelte/icons/radar";
@@ -1303,6 +1304,21 @@
   }
 
   // ---- templates (#102) ----------------------------------------------------
+  const isMaster = $derived(auth.me?.is_master ?? false);
+
+  // Publish/unpublish a template to the GLOBAL catalog — master only (the endpoint 403s others).
+  async function toggleGlobal(g: Graph) {
+    const next = !g.global;
+    g.global = next;
+    if (next) g.template = true;
+    try {
+      await data.setGraphGlobal(g.id, next);
+    } catch (err) {
+      g.global = !next;
+      toast.error("Couldn't publish template", { description: String(err) });
+    }
+  }
+
   // Mark/unmark a graph as one of the tenant's own templates — optimistic, like the other list ops.
   async function toggleTemplate(g: Graph) {
     const next = !g.template;
@@ -2779,6 +2795,17 @@
           >
             <Bookmark class="size-3.5" fill={g.template ? "currentColor" : "none"} />
           </Button>
+          {#if isMaster && g.template}
+            <Button
+              variant="ghost"
+              size="icon"
+              class="size-7 {g.global ? 'text-primary' : ''}"
+              title={g.global ? 'Published globally — click to unpublish' : 'Publish to every tenant (global template)'}
+              onclick={() => toggleGlobal(g)}
+            >
+              <Globe class="size-3.5" />
+            </Button>
+          {/if}
           <Button variant="ghost" size="icon" class="size-7" title="Duplicate" onclick={() => duplicateWorkflow(g)}>
             <Copy class="size-3.5" />
           </Button>
