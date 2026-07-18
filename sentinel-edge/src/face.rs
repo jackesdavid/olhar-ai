@@ -1,24 +1,17 @@
 //! Edge face detection (#117 Phase 5) — runs YuNet ([`app_core::agent::face_detector`]) on the
 //! motion-emit path (already motion-gated + throttled by the hub) and POSTs a `face_detected` event
-//! to control → `OnEvent("face_detected")` → the cloud recognition pipeline. Opt-in per box via
-//! `FACE_DETECT=1` so it never adds inference cost to boxes that don't use face recognition.
+//! to control → `OnEvent("face_detected")` → the cloud recognition pipeline. Always on: it only runs
+//! on qualifying (throttled) motion frames, so the cost is bounded, and a `face_detected` graph just
+//! works with no toggle or env to set.
 use std::sync::Arc;
 
 use base64::Engine as _;
 
 use crate::state::{AppState, FaceEvent};
 
-/// Whether face detection is enabled on this box (env `FACE_DETECT`, default OFF).
-pub fn enabled() -> bool {
-    std::env::var("FACE_DETECT").map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on")).unwrap_or(false)
-}
-
 /// Detect faces in the just-emitted motion frame and, for the most prominent one, POST a
 /// `face_detected` event. Best-effort: logs + returns on any error. `(fw, fh)` = frame pixels.
 pub fn detect_and_push(state: &Arc<AppState>, ip: &str, jpeg: &[u8], (fw, fh): (u32, u32)) {
-    if !enabled() {
-        return;
-    }
     let faces = match app_core::agent::face_detector::detect(jpeg) {
         Ok(f) => f,
         Err(e) => {
