@@ -34,6 +34,19 @@ impl FaceBox {
 /// Detect faces in a JPEG/PNG frame → source-pixel boxes above [`CONF_THRESH`], post-NMS.
 pub fn detect(image_bytes: &[u8]) -> Result<Vec<FaceBox>, String> {
     let (input, ratio) = preprocess(image_bytes)?;
+    run_and_decode(input, ratio)
+}
+
+/// [`detect`] over the frame hub's **already-decoded** packed BGR buffer (`w*h*3`) — no second JPEG
+/// decode (the edge hook reuses the same frame motion saw).
+pub fn detect_bgr(bgr: &[u8], w: u32, h: u32) -> Result<Vec<FaceBox>, String> {
+    let (input, ratio) = preprocess_bgr(bgr, w, h)?;
+    run_and_decode(input, ratio)
+}
+
+/// Run the model on a prepared `[1,3,640,640]` tensor and decode the 12 per-stride outputs → NMS'd
+/// source-pixel boxes.
+fn run_and_decode(input: Array4<f32>, ratio: f32) -> Result<Vec<FaceBox>, String> {
     let tensor: Tensor = input.into();
     let out = model()?
         .run(tvec!(tensor.into()))
@@ -109,23 +122,51 @@ fn build_model() -> Result<Arc<TypedRunnableModel>, String> {
     Ok(plan)
 }
 
-/// Letterbox a frame into `[1,3,640,640]` BGR, raw 0–255 CHW (YuNet, like YOLOX, takes BGR with no
-/// `/255`). Returns the tensor + the resize ratio (`source_px = letterbox_px / ratio`).
+/// Source byte order of a decoded 3-channel image. The tensor is always written **BGR** (YuNet, like
+/// YOLOX, takes BGR with no `/255`); this only says how to read the source pixel.
+#[derive(Clone, Copy)]
+enum PixelOrder {
+    Rgb,
+    Bgr,
+}
+
 fn preprocess(image_bytes: &[u8]) -> Result<(Array4<f32>, f32), String> {
     let img = image::load_from_memory(image_bytes)
         .map_err(|e| format!("yunet: decode frame: {e}"))?
         .to_rgb8();
+    letterbox(&img, PixelOrder::Rgb)
+}
+
+/// [`preprocess`] over packed 8-bit BGR pixels (`w*h*3`). `image` has no BGR8 type, but resizing is
+/// channel-agnostic, so we carry BGR bytes through an `RgbImage` and read them back BGR.
+fn preprocess_bgr(bgr: &[u8], w: u32, h: u32) -> Result<(Array4<f32>, f32), String> {
+    let want = (w as usize) * (h as usize) * 3;
+    if want == 0 || bgr.len() < want {
+        return Err(format!("yunet: bgr buffer is {} bytes, want {want} for {w}x{h}", bgr.len()));
+    }
+    let img: image::RgbImage = image::ImageBuffer::from_raw(w, h, bgr[..want].to_vec())
+        .ok_or_else(|| "yunet: bgr buffer does not match w*h*3".to_string())?;
+    letterbox(&img, PixelOrder::Bgr)
+}
+
+/// Letterbox an 8-bit 3-channel image into a `[1,3,640,640]` BGR, raw 0–255 CHW tensor (aspect
+/// preserved, black-padded bottom/right). Returns the tensor + resize ratio (`source_px = px/ratio`).
+fn letterbox(img: &image::RgbImage, order: PixelOrder) -> Result<(Array4<f32>, f32), String> {
     let (w0, h0) = (img.width() as f32, img.height() as f32);
     if w0 == 0.0 || h0 == 0.0 {
         return Err("yunet: empty frame".into());
     }
     let ratio = (INPUT as f32 / w0).min(INPUT as f32 / h0);
     let (nw, nh) = ((w0 * ratio).round() as u32, (h0 * ratio).round() as u32);
-    let resized = image::imageops::resize(&img, nw.max(1), nh.max(1), FilterType::Triangle);
-    let mut arr = Array4::<f32>::zeros((1, 3, INPUT, INPUT)); // black pad (bottom/right)
+    let resized = image::imageops::resize(img, nw.max(1), nh.max(1), FilterType::Triangle);
+    let mut arr = Array4::<f32>::zeros((1, 3, INPUT, INPUT));
     for y in 0..resized.height() as usize {
         for x in 0..resized.width() as usize {
-            let [r, g, b] = resized.get_pixel(x as u32, y as u32).0;
+            let px = resized.get_pixel(x as u32, y as u32).0;
+            let [b, g, r] = match order {
+                PixelOrder::Rgb => [px[2], px[1], px[0]],
+                PixelOrder::Bgr => px,
+            };
             arr[[0, 0, y, x]] = b as f32;
             arr[[0, 1, y, x]] = g as f32;
             arr[[0, 2, y, x]] = r as f32;

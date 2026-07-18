@@ -237,16 +237,19 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
         // Publish before emitting: the tracker's gate should see this frame's motion as early as
         // possible, and the POST to control below can block for as long as its timeout allows.
         seq += 1;
-        publish(&slot, Frame { seq, bgr: Arc::new(bgr), w, h, motion_at });
+        // Keep the decoded BGR reachable after publishing (Arc, cheap clone) so face detection can
+        // reuse it — the hub decodes once; nothing decodes the JPEG a second time.
+        let bgr = Arc::new(bgr);
+        publish(&slot, Frame { seq, bgr: Arc::clone(&bgr), w, h, motion_at });
 
         // The emit — and ONLY the emit — is throttled. The per-frame verdict above is not.
         let throttled = last_emit.map(|t| t.elapsed() < detector.params().min_interval).unwrap_or(false);
         if verdict.qualifies && !throttled {
             last_emit = Some(Instant::now());
             crate::motion::push_event(state, ip, &jpeg, (w, h), &verdict, detector.params());
-            // Same gate + throttle as motion: on a qualifying frame, look for a face and (opt-in via
-            // FACE_DETECT) emit `face_detected` → the cloud recognition pipeline (#117).
-            crate::face::detect_and_push(state, ip, &jpeg, (w, h));
+            // Same gate + throttle as motion: on a qualifying frame, detect faces on the hub's BGR
+            // and emit one `face_detected` per face → the cloud recognition pipeline (#117).
+            crate::face::detect_and_push(state, ip, &bgr, (w, h), &jpeg);
         }
 
         // Cap the processing rate so a source uses a bounded slice of CPU.

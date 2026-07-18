@@ -158,8 +158,10 @@ fn cfg_f64(config: &Value, k: &str, d: f64) -> f64 {
         .unwrap_or(d)
 }
 
-/// Extract a 512-d face embedding from the image (the model/dim abstraction). `bbox` is accepted
-/// for a future crop-to-face; v1 embeds the most prominent face in the frame (the sidecar detects it).
+/// Extract a 512-d face embedding from the image. When a `bbox` is wired (from
+/// `OnEvent("face_detected")`), the frame is **cropped to that face** (+ margin) before embedding —
+/// so with several faces in one frame, each per-face event embeds ITS face, not always the largest.
+/// Without a bbox, the sidecar embeds the most prominent face in the whole frame.
 pub(super) fn run_face_embedding(
     _config: &Value,
     inputs: &PortValues,
@@ -169,13 +171,36 @@ pub(super) fn run_face_embedding(
         .get("image")
         .and_then(PortValue::as_image)
         .ok_or("Extract Face Embedding: missing required input 'image'")?;
-    let embedding = crate::agent::face::embed(&sys.db, sys.tenant_id, bytes)?;
+    // Crop to the face's bbox when provided (falls back to the whole frame on any decode error).
+    let cropped = inputs
+        .get("bbox")
+        .and_then(PortValue::as_bbox)
+        .and_then(|b| crop_to_bbox(bytes, b));
+    let embed_bytes: &[u8] = cropped.as_deref().unwrap_or(bytes);
+    let embedding = crate::agent::face::embed(&sys.db, sys.tenant_id, embed_bytes)?;
     let dim = embedding.len() as i64;
     let mut o = PortValues::new();
     o.insert("embedding".into(), PortValue::Embedding(embedding));
     o.insert("dim".into(), PortValue::Num(dim));
     o.insert("ok".into(), PortValue::Bool(true));
     Ok(o)
+}
+
+/// Crop a JPEG frame to a face `bbox` expanded by a 30% margin (clamped to the frame), re-encoded as
+/// JPEG for the sidecar. `None` on a decode/encode error → the caller embeds the full frame.
+fn crop_to_bbox(jpeg: &[u8], b: crate::workflows::domain::BBox) -> Option<Vec<u8>> {
+    let img = image::load_from_memory(jpeg).ok()?;
+    let (iw, ih) = (img.width() as i64, img.height() as i64);
+    let (bw, bh) = ((b.x2 - b.x1).max(1), (b.y2 - b.y1).max(1));
+    let (mx, my) = (bw * 3 / 10, bh * 3 / 10);
+    let x1 = (b.x1 - mx).clamp(0, iw - 1);
+    let y1 = (b.y1 - my).clamp(0, ih - 1);
+    let x2 = (b.x2 + mx).clamp(x1 + 1, iw);
+    let y2 = (b.y2 + my).clamp(y1 + 1, ih);
+    let cropped = img.crop_imm(x1 as u32, y1 as u32, (x2 - x1) as u32, (y2 - y1) as u32);
+    let mut buf = std::io::Cursor::new(Vec::new());
+    cropped.write_to(&mut buf, image::ImageFormat::Jpeg).ok()?;
+    Some(buf.into_inner())
 }
 
 /// Cosine distance → a 0..100 confidence percent.
