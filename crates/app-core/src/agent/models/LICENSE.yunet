@@ -1,10 +1,11 @@
 YuNet face detection model (face_detection_yunet_2023mar.onnx)
 ==============================================================
-Source:  OpenCV Zoo — https://github.com/opencv/opencv_zoo (models/face_detection_yunet)
-Model:   YuNet, from libfacedetection by Prof. Shiqi Yu and Wei Wu
-         https://github.com/ShiqiYu/libfacedetection
+Source:  libfacedetection — https://github.com/ShiqiYu/libfacedetection
+         (model: YuNet, by Prof. Shiqi Yu and Wei Wu)
 License: MIT
 
-MIT License — permits commercial use, modification, distribution, and private use, with
-attribution and inclusion of the license. Face detection weights only (~230 KB); the ArcFace
-embedder + recognition remain on the cloud AI sidecar.
+MIT — permits commercial use, modification, and distribution with attribution + this notice.
+
+NOTE: this is only the ~230 KB ONNX weights file. It is run in pure Rust via `tract` (like the
+YOLOX person detector); NO OpenCV / native library is used or linked. The ArcFace embedder +
+recognition remain on the cloud AI sidecar.

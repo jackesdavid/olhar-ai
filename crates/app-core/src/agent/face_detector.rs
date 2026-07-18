@@ -1,9 +1,10 @@
-//! Edge face detection (#117 Phase 5) — **YuNet** (OpenCV Zoo / libfacedetection, MIT), a tiny
-//! (~230 KB) fixed-input face detector run locally via `tract`, mirroring [`super::detector`]'s
-//! YOLOX loader. Fixed `[1,3,640,640]` input, standard ops only — tract-friendly (proven by the
-//! `yunet_loads_and_runs` test). Outputs per stride {8,16,32}: `cls`/`obj` (g·g), `bbox` (g·g·4),
-//! `kps` (g·g·10). We decode `score = √(cls·obj)`, `box = (grid + Δ)·stride` (exp for w/h), NMS,
-//! and map back to source pixels — the OpenCV `FaceDetectorYN` decode.
+//! Edge face detection (#117 Phase 5) — **YuNet** (libfacedetection, Shiqi Yu, MIT), a tiny
+//! (~230 KB) fixed-input face detector run locally via `tract` — **pure Rust, NO OpenCV** — exactly
+//! like [`super::detector`]'s YOLOX person detector. Fixed `[1,3,640,640]` input, standard ONNX ops
+//! only (tract-friendly, proven by the `yunet_loads_and_runs` test). Outputs per stride {8,16,32}:
+//! `cls`/`obj` (g·g), `bbox` (g·g·4), `kps` (g·g·10). We decode `score = √(cls·obj)`,
+//! `box = (grid + Δ)·stride` (exp for w/h), NMS, and map back to source pixels — YuNet's own
+//! anchor-free decode, reimplemented here in Rust (not a call into any library).
 use std::sync::{Arc, OnceLock};
 
 use image::imageops::FilterType;
@@ -50,9 +51,9 @@ pub fn detect(image_bytes: &[u8]) -> Result<Vec<FaceBox>, String> {
 
     let mut dets: Vec<FaceBox> = Vec::new();
     for (si, &stride) in STRIDES.iter().enumerate() {
-        // cls/obj are interchangeable here — score = √(cls·obj) is symmetric — so a cls/obj swap in
-        // the output order is harmless; only bbox (index 6+si) must be right, and it is by the ONNX
-        // graph's output order.
+        // YuNet decode. cls/obj are interchangeable here — score = √(cls·obj) is symmetric — so a
+        // cls/obj swap in the output order is harmless; only bbox (index 6+si) must be right, and it
+        // is by the ONNX graph's output order.
         let cls = read(si)?;
         let obj = read(3 + si)?;
         let bbox = read(6 + si)?;
