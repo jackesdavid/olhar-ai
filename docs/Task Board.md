@@ -108,6 +108,8 @@ kanban-plugin: board
 	  - Plan: [[dictionaries-tables]]
 - [ ] #114 Stop Recording missing camera on DelayTrigger stop
 	  - Plan: [[stop-recording-missing-camera]]
+- [ ] #115 Get Variable over-activation — fires on branches that don't use it
+	  - Plan: [[get-variable-over-activation]]
 
 
 ## Review

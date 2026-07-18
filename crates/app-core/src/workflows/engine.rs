@@ -245,6 +245,14 @@ fn run_driver(
     // Per-run iteration state for `ForEach` nodes (node id → next index), persisted across
     // epochs so each epoch advances the loop one element.
     let mut loop_state: HashMap<u32, usize> = HashMap::new();
+    // Deferred `GetVariable` log/UI emits (#115). A pure `GetVariable` activates on EVERY run/epoch
+    // (load-bearing for sub-runs — see the activation block in `forward_epoch`), so it fires even
+    // when the only nodes it feeds sit on an unreached exec branch, producing a misleading log line
+    // and canvas highlight. We can't decide at Get-run time whether its consumer will run (the Get
+    // runs producer-before-consumer), so `forward_epoch` buffers the Get's `on_log` here (once per
+    // node id, in activation order) and we flush below, after every epoch, keeping only those whose
+    // consumer actually ran. Activation/value semantics are untouched, so #114 can't regress.
+    let mut deferred_get_logs: Vec<(u32, String, u128)> = Vec::new();
     let mut reentries = forward_epoch(
         graph,
         sys,
@@ -262,6 +270,7 @@ fn run_driver(
         on_node,
         on_log,
         emit,
+        &mut deferred_get_logs,
     )?;
     // Later epochs: re-enter loops at the back-edge / ForEach targets until none fire.
     while !reentries.is_empty() {
@@ -283,7 +292,19 @@ fn run_driver(
             on_node,
             on_log,
             emit,
+            &mut deferred_get_logs,
         )?;
+    }
+
+    // Flush the deferred `GetVariable` logs (#115). Emit a Get's log line + canvas highlight only
+    // when ≥1 node it feeds (a data edge `from == get`) is in `ran` this run. A Get whose consumers
+    // all sat out on the other branch — or with no consumers at all — stays quiet. Emitted in
+    // activation order, once per Get (the buffer is already deduped), so a normal single-branch
+    // graph is unaffected (its Gets all feed ran nodes → all still logged).
+    for (nid, summary, elapsed) in &deferred_get_logs {
+        if graph.edges.iter().any(|e| e.from == *nid && ran.contains(&e.to)) {
+            on_log(*nid, summary, *elapsed);
+        }
     }
 
     // Record what this run produced, so a later run of the SAME instance can read it — which is the
@@ -364,6 +385,7 @@ fn forward_epoch(
     on_node: &mut dyn FnMut(u32),
     on_log: &mut dyn FnMut(u32, &str, u128),
     emit: &mut dyn FnMut(&str, &PortValues),
+    deferred_get_logs: &mut Vec<(u32, String, u128)>,
 ) -> Result<Vec<u32>, String> {
     let mut indeg = indeg_tmpl.clone();
     let mut settled: HashSet<u32> = HashSet::new();
@@ -970,11 +992,19 @@ fn forward_epoch(
         *steps += 1;
 
         if graph.debug {
-            on_log(
-                nid,
-                &node::debug_summary(n.kind, &n.config, &inputs, &o),
-                elapsed_ms,
-            );
+            let summary = node::debug_summary(n.kind, &n.config, &inputs, &o);
+            // A pure `GetVariable` activates every run/epoch even when the branch it feeds is never
+            // reached (#115). Defer its emit rather than logging here — `run_driver` flushes it only
+            // if a node it feeds actually ran. Buffer once per node id, in activation order; other
+            // kinds log inline as before. (Only `GetVariable`: the reported, conservative case —
+            // `GetCameraByName`/`GetRecipient` are left untouched.)
+            if n.kind == NodeKind::GetVariable {
+                if !deferred_get_logs.iter().any(|(id, _, _)| *id == nid) {
+                    deferred_get_logs.push((nid, summary, elapsed_ms));
+                }
+            } else {
+                on_log(nid, &summary, elapsed_ms);
+            }
         }
 
         if n.kind == NodeKind::ShowImage {
@@ -1583,6 +1613,88 @@ mod tests {
             .and_then(|m| m.get("text"))
             .and_then(PortValue::as_text);
         assert_eq!(got, Some("hello"), "Get reads the value Set wrote");
+    }
+
+    #[test]
+    fn get_variable_logs_only_on_the_branch_that_ran() {
+        // #115: a pure `GetVariable` activates every run, but its log line + canvas highlight
+        // (both driven by `on_log`) must only appear when a node it feeds actually ran. Build a
+        // two-branch graph: `If(false)` lights the `false` branch; each branch has its own `Get`
+        // feeding its branch's `Format`. Only the `false`-branch Get should log.
+        let ctx = test_ctx();
+        let mut g = Graph::new("g");
+        g.debug = true;
+
+        let gate = g.add_node(NodeKind::If, 0, 0);
+        g.node_mut(gate).unwrap().config["condition"] = json!(false); // → false branch runs
+
+        // TRUE branch (does NOT run): Get feeds the true-branch Format.
+        let get_a = g.add_node(NodeKind::GetVariable, 0, 0);
+        g.node_mut(get_a).unwrap().config["variable"] = json!("a");
+        g.node_mut(get_a).unwrap().config["type"] = json!("text");
+        let fmt_a = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(fmt_a).unwrap().config["template"] = json!("{p1}");
+        g.add_edge(gate, "true", fmt_a, "exec_in").unwrap();
+        g.add_edge(get_a, "value", fmt_a, "p1").unwrap();
+
+        // FALSE branch (runs): Get feeds the false-branch Format.
+        let get_b = g.add_node(NodeKind::GetVariable, 0, 0);
+        g.node_mut(get_b).unwrap().config["variable"] = json!("b");
+        g.node_mut(get_b).unwrap().config["type"] = json!("text");
+        let fmt_b = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(fmt_b).unwrap().config["template"] = json!("{p1}");
+        g.add_edge(gate, "false", fmt_b, "exec_in").unwrap();
+        g.add_edge(get_b, "value", fmt_b, "p1").unwrap();
+
+        let (_, logs) = run_capture(&g, &ctx);
+        let logged: HashSet<u32> = logs.iter().map(|(id, _)| *id).collect();
+        // Both Gets ACTIVATE (pure sources), but only the one feeding the branch that ran logs.
+        assert!(
+            logged.contains(&get_b),
+            "the Get feeding the branch that ran must log"
+        );
+        assert!(
+            !logged.contains(&get_a),
+            "the Get feeding the dead branch must NOT log/highlight (#115)"
+        );
+        // Sanity: the false branch's Format ran, the true branch's did not.
+        assert!(logged.contains(&fmt_b) && !logged.contains(&fmt_a));
+    }
+
+    #[test]
+    fn get_variable_with_no_consumers_stays_quiet() {
+        // A truly unused variable read (no outgoing edge) never lit a node → no log/highlight.
+        let ctx = test_ctx();
+        let mut g = Graph::new("g");
+        g.debug = true;
+        g.run_orphans = true; // let the edgeless Get participate in the run
+        let get = g.add_node(NodeKind::GetVariable, 0, 0);
+        g.node_mut(get).unwrap().config["variable"] = json!("x");
+        g.node_mut(get).unwrap().config["type"] = json!("text");
+        let (_, logs) = run_capture(&g, &ctx);
+        assert!(
+            !logs.iter().any(|(id, _)| *id == get),
+            "a Get with no consumers stays quiet"
+        );
+    }
+
+    #[test]
+    fn get_variable_feeding_a_node_that_ran_still_logs() {
+        // A normal single-branch graph is unaffected: the Get feeds a Format that runs → it logs.
+        let ctx = test_ctx();
+        let mut g = Graph::new("g");
+        g.debug = true;
+        let get = g.add_node(NodeKind::GetVariable, 0, 0);
+        g.node_mut(get).unwrap().config["variable"] = json!("greeting");
+        g.node_mut(get).unwrap().config["type"] = json!("text");
+        let fmt = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(fmt).unwrap().config["template"] = json!("{p1}");
+        g.add_edge(get, "value", fmt, "p1").unwrap();
+        let (_, logs) = run_capture(&g, &ctx);
+        assert!(
+            logs.iter().any(|(id, _)| *id == get),
+            "a Get feeding a node that ran still logs"
+        );
     }
 
     #[test]
