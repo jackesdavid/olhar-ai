@@ -1625,6 +1625,25 @@
       toast.error("Couldn't update", { description: String(err) });
     }
   }
+  // Tooltips for the top-of-canvas state toggles (Enabled / Debug / Orphans).
+  function enabledTitle(): string {
+    return graph?.enabled
+      ? "Armed — the workflow's trigger is live. Click to disarm."
+      : "Disarmed — click to arm this workflow's trigger.";
+  }
+  function debugTitle(): string {
+    if (editLocked) return "Debug — locked while the workflow is armed or running.";
+    return graph?.debug
+      ? "Debug on — logging each node's result to the console. Click to stop."
+      : "Debug off — log each node's result to the console during a run.";
+  }
+  function orphansTitle(): string {
+    if (editLocked) return "Run orphans — locked while the workflow is armed or running.";
+    return graph?.run_orphans
+      ? "Run orphans on — unconnected nodes run. Click to skip them."
+      : "Run orphans off — nodes with no connections are skipped during a run.";
+  }
+
   // A manual run with the given input values (empty = use defaults).
   async function doRun(g: Graph, inputs?: Record<string, string>) {
     running = true;
@@ -3514,26 +3533,60 @@
             </div>
           {/if}
 
-          <!-- top-center: transport -->
-          <div
-            class="absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur"
-          >
-            <Button
-              variant="ghost"
-              size="icon"
-              class="size-8 text-primary hover:text-primary"
-              title={editorRunTitle()}
-              disabled={editorRunDisabled()}
-              onclick={() => runNow(graph)}
-            >
-              {#if running}<Busy />{:else}<Play class="size-4" />{/if}
-            </Button>
-            <Button variant="ghost" size="icon" class="size-8" title="Pause (coming soon)" disabled={!isRunning} onclick={() => comingSoon("Pause")}>
-              <Pause class="size-4" />
-            </Button>
-            <Button variant="ghost" size="icon" class="size-8" title="Stop (coming soon)" disabled={!isRunning} onclick={() => comingSoon("Stop")}>
-              <Square class="size-4" />
-            </Button>
+          <!-- top-center: transport + graph state (Enabled / Debug / Orphans) -->
+          <div class="absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2">
+            <!-- transport -->
+            <div class="flex items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur">
+              <Button
+                variant="ghost"
+                size="icon"
+                class="size-8 text-primary hover:text-primary"
+                title={editorRunTitle()}
+                disabled={editorRunDisabled()}
+                onclick={() => runNow(graph)}
+              >
+                {#if running}<Busy />{:else}<Play class="size-4" />{/if}
+              </Button>
+              <Button variant="ghost" size="icon" class="size-8" title="Pause (coming soon)" disabled={!isRunning} onclick={() => comingSoon("Pause")}>
+                <Pause class="size-4" />
+              </Button>
+              <Button variant="ghost" size="icon" class="size-8" title="Stop (coming soon)" disabled={!isRunning} onclick={() => comingSoon("Stop")}>
+                <Square class="size-4" />
+              </Button>
+            </div>
+
+            <!-- graph state: Enabled → Debug → Orphans -->
+            <div class="flex items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur">
+              <Button
+                variant="ghost"
+                size="icon"
+                class="size-8 press {graph.enabled ? 'status-live bg-primary/15 text-primary ring-1 ring-inset ring-primary/40 hover:text-primary' : 'text-muted-foreground'}"
+                title={enabledTitle()}
+                onclick={() => toggleEnabled(graph, !graph.enabled)}
+              >
+                <Power class="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="size-8 press {graph.debug ? 'bg-primary/15 text-primary hover:text-primary' : 'text-muted-foreground'}"
+                title={debugTitle()}
+                disabled={editLocked}
+                onclick={() => toggleDebug(graph, !graph.debug)}
+              >
+                <Bug class="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="size-8 press {(graph.run_orphans ?? false) ? 'bg-primary/15 text-primary hover:text-primary' : 'text-muted-foreground'}"
+                title={orphansTitle()}
+                disabled={editLocked}
+                onclick={() => toggleRunOrphans(graph, !(graph.run_orphans ?? false))}
+              >
+                <Unplug class="size-4" />
+              </Button>
+            </div>
           </div>
 
           <!-- top-right: zoom / pan -->
@@ -3681,39 +3734,10 @@
               </div>
             </div>
 
-            <!-- Enabled -->
-            <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-x-3">
-              <Label class="flex items-center gap-1.5 text-xs text-muted-foreground"><Power class="size-3.5" /> Enabled</Label>
-              <div class="flex h-8 items-center">
-                <Switch checked={graph.enabled} onCheckedChange={(v) => toggleEnabled(graph, v)} />
-              </div>
-            </div>
-
-            <!-- Run orphans -->
-            <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">
-              <Label class="flex items-center gap-1.5 pt-2 text-xs text-muted-foreground"><Unplug class="size-3.5" /> Orphans</Label>
-              <div>
-                <div class="flex h-8 items-center">
-                  <Switch checked={graph.run_orphans ?? false} disabled={editLocked} onCheckedChange={(v) => toggleRunOrphans(graph, v)} />
-                </div>
-                <p class="text-[10px] leading-snug text-muted-foreground">
-                  When off, nodes with no connections are skipped during a run.
-                </p>
-              </div>
-            </div>
-
-            <!-- Debug -->
-            <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">
-              <Label class="flex items-center gap-1.5 pt-2 text-xs text-muted-foreground"><Bug class="size-3.5" /> Debug</Label>
-              <div>
-                <div class="flex h-8 items-center">
-                  <Switch checked={graph.debug ?? false} disabled={editLocked} onCheckedChange={(v) => toggleDebug(graph, v)} />
-                </div>
-                <p class="text-[10px] leading-snug text-muted-foreground">
-                  Log each node's result to the console during a run.
-                </p>
-              </div>
-            </div>
+            <!-- Enabled / Debug / Orphans now live as icon toggles at the top of the canvas (#112). -->
+            <p class="text-[11px] leading-snug text-muted-foreground">
+              Arm, Debug and Run-orphans are the three icon toggles at the top of the canvas.
+            </p>
 
             <!-- Trigger -->
             <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">

@@ -90,8 +90,6 @@ kanban-plugin: board
 	  - Plan: [[node-palette-search-autofocus]]
 - [ ] #111 Scheduled workflow trigger — calendar schedule builder
 	  - Plan: [[workflow-schedule-trigger]]
-- [ ] #112 Enabled / Debug / Orphans → top-of-canvas icon toggles
-	  - Plan: [[editor-toggles-top-cluster]]
 
 
 ## In Progress
@@ -104,6 +102,8 @@ kanban-plugin: board
 	  - Plan: [[workflow-graph-instances]]
 - [ ] #102 Workflow parameterization — input vars, clone, promote, templates
 	  - Plan: [[workflow-parameterization]]
+- [ ] #112 Enabled / Debug / Orphans → top-of-canvas icon toggles
+	  - Plan: [[editor-toggles-top-cluster]]
 
 
 ## Review
