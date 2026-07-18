@@ -10,8 +10,11 @@
 CREATE TABLE IF NOT EXISTS faces (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id   uuid NOT NULL,
-    -- The label. NULL = unknown. Deleting the person un-labels their stored faces (keeps the capture).
-    person_id   text REFERENCES persons(id) ON DELETE SET NULL,
+    -- The label. NULL = unknown. An app-level reference to persons(id) — NOT a hard FK, because
+    -- `persons`' PK is composite (tenant_id, id) since migration 0011, so `id` alone has no unique
+    -- constraint to reference. Deleting a person leaves the stored capture with a dangling label
+    -- (the app treats an unresolved person_id as unknown; a later cleanup can null it).
+    person_id   text,
     embedding   vector(512) NOT NULL,
     image_key   text,              -- MinIO object key of the face image (NULL = embedding-only)
     camera      text,
