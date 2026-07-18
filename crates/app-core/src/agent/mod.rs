@@ -16,6 +16,7 @@
 pub mod ai_service;
 pub mod client;
 pub mod detector;
+pub mod face_detector;
 pub mod domain;
 pub mod face;
 pub mod tools;

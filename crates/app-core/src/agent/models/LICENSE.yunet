@@ -1,0 +1,10 @@
+YuNet face detection model (face_detection_yunet_2023mar.onnx)
+==============================================================
+Source:  OpenCV Zoo — https://github.com/opencv/opencv_zoo (models/face_detection_yunet)
+Model:   YuNet, from libfacedetection by Prof. Shiqi Yu and Wei Wu
+         https://github.com/ShiqiYu/libfacedetection
+License: MIT
+
+MIT License — permits commercial use, modification, distribution, and private use, with
+attribution and inclusion of the license. Face detection weights only (~230 KB); the ArcFace
+embedder + recognition remain on the cloud AI sidecar.
