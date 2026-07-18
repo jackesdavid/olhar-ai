@@ -15,13 +15,17 @@ use crate::db::Db;
 use crate::timeutil::now_rfc3339;
 
 /// A cell's scalar type. Deliberately small for v1 (Text/Num/Bool) — richer cell types
-/// (Date, Camera, Recipient) are a later phase.
+/// A column's cell type. Text/Num/Bool are plain scalars; `Camera`/`Recipient` are
+/// entity references (a camera device id, a recipient label) — string-backed on the wire, but
+/// authored via a dropdown. Add new reference types here + in `Cell` + the frontend editor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CellType {
     Text,
     Num,
     Bool,
+    Camera,
+    Recipient,
 }
 
 impl CellType {
@@ -31,6 +35,8 @@ impl CellType {
             CellType::Text => Cell::Text(String::new()),
             CellType::Num => Cell::Num(0),
             CellType::Bool => Cell::Bool(false),
+            CellType::Camera => Cell::Camera(String::new()),
+            CellType::Recipient => Cell::Recipient(String::new()),
         }
     }
     /// Coerce an arbitrary cell to this column's type (used when a column is retyped).
@@ -39,6 +45,8 @@ impl CellType {
             CellType::Text => Cell::Text(c.as_text()),
             CellType::Num => Cell::Num(c.as_num().unwrap_or(0)),
             CellType::Bool => Cell::Bool(c.as_bool()),
+            CellType::Camera => Cell::Camera(c.as_text()),
+            CellType::Recipient => Cell::Recipient(c.as_text()),
         }
     }
 }
@@ -59,12 +67,16 @@ pub enum Cell {
     Text(String),
     Num(i64),
     Bool(bool),
+    /// A camera device id (the same stable id `PortValue::Camera` carries).
+    Camera(String),
+    /// A recipient label (the same handle `PortValue::Recipient` carries).
+    Recipient(String),
 }
 
 impl Cell {
     pub fn as_text(&self) -> String {
         match self {
-            Cell::Text(s) => s.clone(),
+            Cell::Text(s) | Cell::Camera(s) | Cell::Recipient(s) => s.clone(),
             Cell::Num(n) => n.to_string(),
             Cell::Bool(b) => b.to_string(),
         }
@@ -72,14 +84,16 @@ impl Cell {
     pub fn as_num(&self) -> Option<i64> {
         match self {
             Cell::Num(n) => Some(*n),
-            Cell::Text(s) => s.trim().parse().ok(),
+            Cell::Text(s) | Cell::Camera(s) | Cell::Recipient(s) => s.trim().parse().ok(),
             Cell::Bool(b) => Some(*b as i64),
         }
     }
     pub fn as_bool(&self) -> bool {
         match self {
             Cell::Bool(b) => *b,
-            Cell::Text(s) => matches!(s.trim(), "true" | "1" | "yes" | "on"),
+            Cell::Text(s) | Cell::Camera(s) | Cell::Recipient(s) => {
+                matches!(s.trim(), "true" | "1" | "yes" | "on")
+            }
             Cell::Num(n) => *n != 0,
         }
     }

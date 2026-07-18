@@ -13,11 +13,15 @@
   let {
     open = $bindable(false),
     dictId = null,
+    cameras = [],
+    recipients = [],
     onsaved,
   }: {
     open?: boolean;
     /** null → create a new dictionary; else load + edit this one. */
     dictId?: string | null;
+    cameras?: { value: string; label: string }[];
+    recipients?: { value: string; label: string }[];
     onsaved: (dict: Dictionary) => void;
   } = $props();
 
@@ -106,7 +110,7 @@
       {#if loading}
         <p class="text-sm text-muted-foreground">Loading…</p>
       {:else}
-        <TableEditor {columns} {rows} onchange={onTableChange} />
+        <TableEditor {columns} {rows} {cameras} {recipients} onchange={onTableChange} />
       {/if}
     </div>
 

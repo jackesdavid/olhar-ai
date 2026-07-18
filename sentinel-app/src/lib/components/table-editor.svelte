@@ -15,11 +15,15 @@
   let {
     columns = [],
     rows = [],
+    cameras = [],
+    recipients = [],
     disabled = false,
     onchange,
   }: {
     columns?: DictColumn[];
     rows?: DictCell[][];
+    cameras?: { value: string; label: string }[];
+    recipients?: { value: string; label: string }[];
     disabled?: boolean;
     onchange: (columns: DictColumn[], rows: DictCell[][]) => void;
   } = $props();
@@ -32,11 +36,15 @@
     { value: "text", label: "Text" },
     { value: "num", label: "Number" },
     { value: "bool", label: "Bool" },
+    { value: "camera", label: "Camera" },
+    { value: "recipient", label: "Recipient" },
   ];
 
   function zeroCell(type: CellType): DictCell {
     if (type === "num") return { t: "num", v: 0 };
     if (type === "bool") return { t: "bool", v: false };
+    if (type === "camera") return { t: "camera", v: "" };
+    if (type === "recipient") return { t: "recipient", v: "" };
     return { t: "text", v: "" };
   }
 
@@ -49,6 +57,8 @@
       const b = cell.t === "bool" ? cell.v : ["true", "1", "yes", "on"].includes(String(cell.v).trim());
       return { t: "bool", v: b };
     }
+    if (type === "camera") return { t: "camera", v: cell.t === "bool" ? String(cell.v) : String(cell.v ?? "") };
+    if (type === "recipient") return { t: "recipient", v: cell.t === "bool" ? String(cell.v) : String(cell.v ?? "") };
     return { t: "text", v: cell.t === "bool" ? String(cell.v) : String(cell.v ?? "") };
   }
 
@@ -184,6 +194,26 @@
                       {disabled}
                       oninput={(e) => setCell(ri, ci, { t: "num", v: parseInt(e.currentTarget.value, 10) || 0 })}
                     />
+                  {:else if col.type === "camera"}
+                    <select
+                      class="h-8 w-full min-w-[8rem] rounded border-0 bg-transparent px-2 text-sm focus-visible:ring-1 disabled:opacity-50"
+                      value={String(row[ci]?.v ?? "")}
+                      {disabled}
+                      onchange={(e) => setCell(ri, ci, { t: "camera", v: e.currentTarget.value })}
+                    >
+                      <option value="">—</option>
+                      {#each cameras as c (c.value)}<option value={c.value}>{c.label}</option>{/each}
+                    </select>
+                  {:else if col.type === "recipient"}
+                    <select
+                      class="h-8 w-full min-w-[8rem] rounded border-0 bg-transparent px-2 text-sm focus-visible:ring-1 disabled:opacity-50"
+                      value={String(row[ci]?.v ?? "")}
+                      {disabled}
+                      onchange={(e) => setCell(ri, ci, { t: "recipient", v: e.currentTarget.value })}
+                    >
+                      <option value="">—</option>
+                      {#each recipients as r (r.value)}<option value={r.value}>{r.label}</option>{/each}
+                    </select>
                   {:else}
                     <Input
                       class="h-8 border-0 shadow-none focus-visible:ring-1"

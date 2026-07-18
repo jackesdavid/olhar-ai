@@ -133,6 +133,22 @@ port selects the target (from a Table variable or a literal ref).
   - User explicitly asked for these nodes ("getAtIndex, getFirstByKey, … mutate through graphs,
     atomic + thread-safe") — the repo mutators are already atomic; nodes just call them.
 
+## Cell types beyond Text/Num/Bool (2026-07-18)
+
+Owner: "the dictionary should support all data types … cameras, recipient and soon." Added **Camera**
++ **Recipient** cell types (string-backed: a device id / a recipient label), designed to extend:
+- `CellType` + `Cell` gained `Camera`/`Recipient` (`dictionaries.rs`); `zero`/`coerce`/`as_*` arms.
+- Frontend `CellType`/`DictCell` unions; `table-editor.svelte` gained Camera/Recipient type options
+  and per-cell **dropdowns** (fed `cameras`/`recipients` props). Threaded from the editor page
+  (`cameraOptions`/`recipientOptions`) into `dictionary-modal`, and loaded directly in the
+  `/workflows/dictionaries` view (`listDevices`/`listBeacons`).
+- **Follow-up (runtime consumption):** a Camera/Recipient cell is read today as text (via
+  `DictGetCell.value` / the row `Dict`). Wiring a cell into a **Camera/Recipient node input port**
+  needs typed extraction (the row/cell output following the column type, or a "Get Cell as Camera"
+  variant) — typed edges block a Text→Camera wire. Authoring + storage done; typed downstream use TBD.
+- To add the next type (Date, …): extend `CellType`/`Cell` (+arms), the frontend unions, `TYPE_OPTIONS`,
+  `zeroCell`/`coerceCell`, and a cell renderer branch.
+
 ## Out of scope (v1)
 
 - Cell types beyond Text/Num/Bool (Date, Camera, Recipient cells later).

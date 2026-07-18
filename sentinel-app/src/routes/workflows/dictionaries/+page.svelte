@@ -21,6 +21,8 @@
   import { data, type Dictionary, type DictColumn, type DictCell } from "$lib/data";
 
   let dicts = $state<Dictionary[]>([]);
+  let cameras = $state<{ value: string; label: string }[]>([]);
+  let recipients = $state<{ value: string; label: string }[]>([]);
   let loading = $state(true);
   let saving = $state(false);
 
@@ -31,7 +33,14 @@
   async function load() {
     loading = true;
     try {
-      dicts = await data.listDictionaries();
+      const [ds, devs, beacons] = await Promise.all([
+        data.listDictionaries(),
+        data.listDevices().catch(() => []),
+        data.listBeacons().catch(() => []),
+      ]);
+      dicts = ds;
+      cameras = devs.map((d) => ({ value: d.id || d.ip || d.name, label: d.name }));
+      recipients = beacons.map((b) => ({ value: b.label, label: b.label }));
     } catch (err) {
       toast.error("Couldn't load dictionaries", { description: String(err) });
     } finally {
@@ -112,7 +121,7 @@
         <label for="dict-name" class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Name</label>
         <Input id="dict-name" placeholder="e.g. Store hours" bind:value={editing.name} />
       </div>
-      <TableEditor columns={editing.columns} rows={editing.rows} onchange={onTableChange} />
+      <TableEditor columns={editing.columns} rows={editing.rows} {cameras} {recipients} onchange={onTableChange} />
     </div>
   {:else}
     <PageHeader

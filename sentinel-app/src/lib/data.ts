@@ -25,15 +25,18 @@ import {
 export type UnlistenFn = () => void;
 
 // ---- Dictionaries (#113): named, typed-column tables ----
-/** A cell's scalar type. v1 is Text / Num / Bool. */
-export type CellType = "text" | "num" | "bool";
+/** A cell's type. Scalars (text/num/bool) + entity references (camera/recipient), extensible. */
+export type CellType = "text" | "num" | "bool" | "camera" | "recipient";
 /** One column of a dictionary's schema. `type` is serialized (Rust `#[serde(rename = "type")]`). */
 export type DictColumn = { name: string; type: CellType };
-/** One typed cell — tagged to survive schema round-trips: `{t, v}`. */
+/** One typed cell — tagged to survive schema round-trips: `{t, v}`. Camera = device id,
+ *  Recipient = label (both string-backed, authored via a dropdown). */
 export type DictCell =
   | { t: "text"; v: string }
   | { t: "num"; v: number }
-  | { t: "bool"; v: boolean };
+  | { t: "bool"; v: boolean }
+  | { t: "camera"; v: string }
+  | { t: "recipient"; v: string };
 /** A full dictionary (schema + rows), as returned by the API. */
 export type Dictionary = {
   id: string;

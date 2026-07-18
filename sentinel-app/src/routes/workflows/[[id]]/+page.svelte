@@ -4625,7 +4625,13 @@
 </Dialog.Root>
 
 <!-- Dictionary create/edit modal (from a Table variable row) -->
-<DictionaryModal bind:open={dictModalOpen} dictId={dictModalId} onsaved={onDictionarySaved} />
+<DictionaryModal
+  bind:open={dictModalOpen}
+  dictId={dictModalId}
+  cameras={cameraOptions}
+  recipients={recipientOptions}
+  onsaved={onDictionarySaved}
+/>
 
 <!-- Delete dialog -->
 <Dialog.Root bind:open={deleteOpen}>
