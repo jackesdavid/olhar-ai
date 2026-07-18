@@ -84,20 +84,23 @@ faces + relate a cluster to a person — see *Out of scope*.
 - **This is the heaviest phase** (edge inference) — sequenced last so Phases 1–4 ship a working cloud
   pipeline first, testable with a `Snapshot`/manual image feeding `FaceEmbedding`.
 
-## Open decisions (grill before building)
+## Decisions — LOCKED (owner, 2026-07-18)
 
-1. **Embedding port type** — new `PortType::Embedding(Vec<f32>)` (recommended) vs overloading `NumArray`.
-2. **Edge detector model + effort** — tract SCRFD/YOLOX-face on the edge (true to the ask, real work) vs
-   a pragmatic v1 where the edge emits on **person** detection and the **cloud** does precise face
-   detection (`face_detect` op) — less edge work, but detection isn't "on the edge". Recommend planning
-   edge detection but shipping the cloud pipeline (P1–4) first so this can be decided with the rest working.
-3. **Recognition gallery** — kNN over `person_embeddings` (enrolled) **+** `faces` (all stored) union, or
-   separate? A stored-unknown match lets clusters form pre-labeling. Recommend union with a `source` tag.
-4. **Top-K output shape** — `matches` as a #113 **Dictionary** (person→score), a Table, or best-scalars +
-   a `scores` NumArray. Lean: Dictionary (already built, consumable).
-5. **Store dedup** — skip near-duplicate embeddings (ε cosine) so a lingering face doesn't flood the store.
-6. **Embedding dim** — 512 (existing ArcFace/pgvector) vs 256 (needs a different sidecar model + a second
-   pgvector column/table). Recommend 512 for v1; keep the node's `dim` config for later.
+1. **Embedding port type** → a new **`PortType::Embedding` + `PortValue::Embedding(Vec<f32>)`** (typed
+   edges, not an i64 `NumArray`). One `Embedding` type; the model/dim is the producer's concern.
+2. **Detection location** → **ON THE EDGE (tract)** — a real edge face detector (SCRFD/YOLOX-face,
+   motion-gated) emits `face_detected` with a true bbox. This is Phase 5, built **last**: Phases 1–4
+   ship the cloud pipeline first, tested with a `Snapshot`/manual image, then the edge feeds real events.
+3. **Recognition gallery** → **union of `person_embeddings` (enrolled) + `faces` (all stored, labeled +
+   unknown)**, each match tagged `source = enrolled | stored`, so unknown faces match prior unknowns and
+   clusters form before anyone labels them.
+4. **Top-K output** → a **#113 Dictionary** (`person → score`) for `matches`, plus best-match scalars
+   (`person`, `confidence`, `found`).
+5. **Store dedup** → `StoreFace` has a `dedup_distance` config (default ON): skip an insert when an
+   existing embedding is within ε cosine, so a lingering face can't flood the store.
+6. **Embedding dim** → **512** (ArcFace, reuse `vector(512)` — the enrolled gallery and the new `faces`
+   table share one comparable size; a fixed vector size is required for the union kNN). The node keeps a
+   `dim`/`model` config for a future swap, but the store commits to 512.
 
 ## Out of scope (next phases — the "after this works" work)
 
