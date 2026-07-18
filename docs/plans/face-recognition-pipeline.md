@@ -116,9 +116,21 @@ faces + relate a cluster to a person — see *Out of scope*.
     the frame. 139 app-core tests green; workspace clean.
   - Testable now with `Snapshot → Extract Face Embedding → Recognize Face → If(found) → Store Face`
     (no edge/event needed yet).
-- **Phase 5 PENDING (edge detection + event):** add a tract face detector to the edge (motion-gated)
-  emitting a `face_detected` system event (frame/bbox/confidence/face_ratio/camera, mirror `motion.rs`
-  + `system_events()`), so `OnEvent("face_detected")` feeds the cloud pipeline with real detections.
+- **Phase 5 DONE (edge detection + event):**
+  - **Model chosen: YuNet** (OpenCV Zoo / libfacedetection, **MIT**, ~230 KB, fixed `[1,3,640,640]`,
+    standard ops) — tract-compatible (proven). `agent::face_detector` decodes the 12 per-stride
+    outputs (OpenCV `FaceDetectorYN` math) + NMS → source-pixel `FaceBox`es. `include_bytes!` +
+    `LICENSE.yunet`. (SCRFD would've been InsightFace's non-commercial license; YuNet is clean for a
+    commercial edge appliance and tiny.)
+  - `repo::system_events()`: `face_detected` (camera/bbox/confidence/face_ratio/frame).
+  - control: `POST /config/face` (`face_push`) → `enqueue_event_blocking("face_detected")`, mirroring
+    `motion_push`.
+  - edge: `FaceEvent` + `AppState::push_face`; `face.rs::detect_and_push` runs YuNet on the throttled
+    motion-emit path (`frames.rs`), **opt-in per box via `FACE_DETECT=1`** (no cost on boxes not using
+    it), emits the most-prominent face. Workspace + edge compile; 141 app-core tests green.
+  - **Remaining: edge version bump + native rebuild + `task edge-publish`**, then set `FACE_DETECT=1`
+    on the box. Then the full journey runs: edge YuNet → `face_detected` → Extract Face Embedding →
+    Recognize Face → Store Face.
 
 ## Out of scope (next phases — the "after this works" work)
 
