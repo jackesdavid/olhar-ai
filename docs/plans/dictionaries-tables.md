@@ -101,6 +101,29 @@ port selects the target (from a Table variable or a literal ref).
    reads may use the snapshot** — document the consistency contract.
 4. **Bounds** — max rows/cols per dictionary; cell size caps (guard the jsonb from unbounded growth).
 
+## Build status (2026-07-17)
+
+- **Phases 1–3 DONE + deployed** (commit `6b1c9ca`, control + app; migration 0059 applied in prod):
+  - Migration 0059 `dictionaries`; `app_core::dictionaries` (domain + CRUD repo + atomic
+    `SELECT … FOR UPDATE` row mutators + `apply`/`find_by_key`, 3 unit tests green).
+  - `PortType::Table` + `PortValue::Table(Dictionary)`; `parse_variable_value` still `None` for Table
+    (runtime resolution is Phase 4).
+  - Control `/dictionaries` CRUD (delete guarded via `referencing_workflows`); `data.ts` methods +
+    types (`Dictionary`/`DictColumn`/`DictCell`/`CellType`/`DictionaryInput`).
+  - `table-editor.svelte`, `/workflows/dictionaries` full view, `dictionary-modal.svelte` (big modal),
+    VariablesPanel Table reference editor (`VAR_TYPES` has "Dictionary" → `table`), Dictionaries nav
+    button. Build + svelte-check clean (9 pre-existing errors, 0 new).
+- **Phase 4 PENDING (runtime + nodes)** — the piece that makes dictionaries usable *inside* graphs:
+  1. `ToolContext.dictionaries` snapshot loaded at run start (flow engine, where `sys.variables`/
+     devices load); `parse_variable_value` Table arm resolves the id → `PortValue::Table`.
+  2. Dictionary nodes in `NodeKind::ALL` + `node.rs` execution (catalog auto-derives; update
+     `docs/workflow-nodes.md`). Proposed set: read — `DictGetRow`(at index), `DictFindRow`(first by
+     key), `DictGetCell`, `DictRowCount`; mutate (exec, atomic via `dictionaries::mutate`) —
+     `DictAddRow`, `DictUpdateRow`, `DictDeleteRow`, `DictSetCell`, `DictClear`. Rows in/out map to
+     `PortValue::Dict` (colname→text) for consumability. **Then redeploy sentinel-flow.**
+  - User explicitly asked for these nodes ("getAtIndex, getFirstByKey, … mutate through graphs,
+    atomic + thread-safe") — the repo mutators are already atomic; nodes just call them.
+
 ## Out of scope (v1)
 
 - Cell types beyond Text/Num/Bool (Date, Camera, Recipient cells later).

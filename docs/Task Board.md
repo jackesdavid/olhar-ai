@@ -27,6 +27,8 @@ kanban-plugin: board
 - [ ] #10 Update available — reload to get the latest version.
 - [ ] #93 Box health copy leaks internals ("tailnet", "Tailscale") to users
 	  - Plan: [[box-health-copy-no-internals]]
+- [ ] #114 Stop Recording missing camera on DelayTrigger stop
+	  - Plan: [[stop-recording-missing-camera]]
 
 
 ## ToDo

@@ -6,6 +6,48 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-07-17 — Dictionaries (#113 P1-3), editor toggles (#112) + a recording bug
+
+- **Branch:** `main` — **ahead of origin by ~4 commits, NOT pushed** (push on resume). #112 + #113 P1-3
+  are **deployed** to prod (control + app recreated, migration 0059 applied). `sentinel-flow` NOT
+  redeployed (no runtime changes landed yet).
+- **Commits:** `6b1c9ca` (#113 P1-3 dictionaries) ← `d61dd0a` (#112 editor toggles) ← `69e22bc`,
+  `b14215b`,`26b2873`,`7f1fe6a`,`fec3454`,`a266334` (#102 templates/perf/stagger, earlier this run).
+- **Done:**
+  - **#112 — Enabled/Debug/Orphans → top-of-canvas icon toggles.** Moved the three per-graph state
+    toggles out of the Details tab into a floating cluster beside the transport (Enabled `Power` →
+    Debug `Bug` → Orphans `Unplug`), HUD active-tint idiom; armed toggle gets a `status-live` pulse +
+    ring. Same handlers/endpoints/guards. In Progress (awaiting `/board review`).
+  - **#113 — Dictionaries, Phases 1–3** (named typed-column TABLES, reusable by reference). Migration
+    0059 + `app_core::dictionaries` (domain + CRUD + **atomic `SELECT … FOR UPDATE` row mutators**,
+    3 tests green); `PortType::Table` + `PortValue::Table`; control `/dictionaries` CRUD (delete
+    guarded while referenced); `data.ts` methods+types; `table-editor.svelte`, `/workflows/dictionaries`
+    full view, `dictionary-modal.svelte` (big modal), VariablesPanel Table reference editor + a
+    Dictionaries nav button. In Progress.
+- **State:** `task cargo` clean (1 pre-existing warning); `cargo test -p app-core --lib dictionaries`
+  3/3 green; app `npm run build` clean; svelte-check **9 errors, all pre-existing** (sensor-field ctx,
+  MapScene Drag ×2, `pending` null) — 0 new. Prod verified: control+app `Up`, `_sqlx_migrations` has 59.
+- **Pending / next:**
+  1. **#113 Phase 4 — runtime + dictionary nodes** (the piece that makes dictionaries usable *inside*
+     graphs, and the user explicitly asked for it). `ToolContext.dictionaries` snapshot + `parse_variable_value`
+     Table arm; add read/mutate Dict nodes to `NodeKind::ALL` + `node.rs` (mutators already atomic via
+     `dictionaries::mutate`); update `docs/workflow-nodes.md`; **redeploy sentinel-flow**. Full spec in
+     the plan's Build-status section.
+  2. **#114 (Bug) — Stop Recording "missing required input 'camera'"** on the DelayTrigger trailing
+     edge. Root-caused: the `stop` fires in a **separate timer run**; `sys.variables` is per-run (fresh
+     empty map), so `Get current_camera` in the stop run reads type-zero "" though the graph is wired.
+     0058 restored node *outputs* across the window but not the *variables map*. Fix directions in
+     `[[stop-recording-missing-camera]]` (lean: snapshot+restore the vars map like 0058, keyed by
+     instance).
+  3. User asked to implement "a card to show the workflow current data saved" — **likely #95** (Graph
+     instances → live instance view) or **#94** (unified node value store). Confirm which on resume.
+  4. Push `main` to origin.
+- **Blockers:** none — user stepped away mid-session ("handoff this section"); resume with Phase 4.
+- **Refs:** `docs/plans/dictionaries-tables.md` (Build status), `docs/plans/stop-recording-missing-camera.md`,
+  `crates/app-core/src/dictionaries.rs`, `sentinel-control/src/domain/dictionaries.rs`,
+  `sentinel-app/src/lib/components/{table-editor,dictionary-modal}.svelte`,
+  `sentinel-app/src/routes/workflows/dictionaries/+page.svelte`.
+
 ## 2026-07-15 — Edge perf + the whole install experience (#77–#83)
 
 - **Branch:** main (all committed **and pushed**; 0 ahead of origin). Control + app + edge 0.5.39
