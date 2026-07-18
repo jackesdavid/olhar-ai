@@ -757,20 +757,22 @@
 
   // ---- render decisions (kept out of the markup) ---------------------------
   // Run-now in the list: only a stopped, runnable, non-cron, complete graph.
-  function listRunDisabled(g: Graph): boolean {
+  // `unfilled` is computed ONCE per row (in the wfRow snippet) and threaded into both, so a row
+  // scans its nodes once instead of twice per render.
+  function listRunDisabled(g: Graph, unfilled: boolean): boolean {
     return (
       runStatus(g) !== "disabled" ||
       triggerKind(g.trigger) === "cron" ||
       !canRun(g) ||
-      graphHasUnfilled(g)
+      unfilled
     );
   }
-  function listRunTitle(g: Graph): string {
+  function listRunTitle(g: Graph, unfilled: boolean): string {
     const st = runStatus(g);
     if (st === "running") return "Running…";
     if (st === "idle") return "Active — stop it to run manually";
     if (triggerKind(g.trigger) === "cron") return "Runs on a schedule — use the editor to run manually";
-    if (graphHasUnfilled(g)) return "A node has a required input not filled";
+    if (unfilled) return "A node has a required input not filled";
     if (canRun(g)) return "Run now";
     return "Nothing to run — connect nodes or enable orphans";
   }
@@ -1362,12 +1364,18 @@
     if (savedConsoleH >= CONSOLE_MIN && savedConsoleH <= CONSOLE_MAX) consoleH = savedConsoleH;
     (async () => {
       try {
-        const cat = await data.nodeCatalog<{ kinds: CatKind[] }>();
-        catalog = Object.fromEntries(cat.kinds.map((k) => [k.slug, k]));
-        await reload();
-        await loadRefs();
-        await loadEvents();
-        await refreshActivity();
+        // Fire everything CONCURRENTLY. This was six serial awaits, so the view waited for the
+        // SUM of the round-trips (catalog → graphs → devices/beacons/map → events → runs). Now the
+        // slowest single call gates the view. `nodeCatalog` folds into `catalog` as it resolves.
+        await Promise.all([
+          data.nodeCatalog<{ kinds: CatKind[] }>().then((cat) => {
+            catalog = Object.fromEntries(cat.kinds.map((k) => [k.slug, k]));
+          }),
+          reload(),
+          loadRefs(),
+          loadEvents(),
+          refreshActivity(),
+        ]);
       } catch (err) {
         toast.error("Failed to load workflows", { description: String(err) });
       } finally {
@@ -1475,7 +1483,15 @@
       if (p.graph === selectedGraphId && p.running === 0) endLive();
     });
     // Re-seed from REST on every (re)connect — deltas emitted while disconnected are missed.
+    let streamOpened = false;
     const unOpen = onEvent("stream-open", () => {
+      // Skip the FIRST open — mount already fetched activity, so refreshing here just duplicates
+      // GET /workflows/runs at startup. Refresh only on a RE-open (reconnect), to re-sync after a
+      // dropped stream.
+      if (!streamOpened) {
+        streamOpened = true;
+        return;
+      }
       void refreshActivity();
     });
     return () => {
@@ -2702,6 +2718,7 @@
   {:else if view === "list"}
     {#snippet wfRow(g: Graph, i: number)}
       {@const st = runStatus(g)}
+      {@const unfilled = graphHasUnfilled(g)}
       <div
         class="wf-row group flex cursor-pointer items-center gap-3 border-l-2 border-transparent py-1.5 pl-9 pr-3 transition-colors hover:border-primary/40 hover:bg-primary/5"
         style="animation-delay: {Math.min(i, 14) * 26}ms"
@@ -2747,8 +2764,8 @@
             variant="ghost"
             size="icon"
             class="size-7 text-primary"
-            title={listRunTitle(g)}
-            disabled={listRunDisabled(g)}
+            title={listRunTitle(g, unfilled)}
+            disabled={listRunDisabled(g, unfilled)}
             onclick={() => runNow(g)}
           >
             {#if st === "running"}<Busy />{:else}<Play class="size-3.5" />{/if}
