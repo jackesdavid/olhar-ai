@@ -113,7 +113,16 @@ port selects the target (from a Table variable or a literal ref).
   - `table-editor.svelte`, `/workflows/dictionaries` full view, `dictionary-modal.svelte` (big modal),
     VariablesPanel Table reference editor (`VAR_TYPES` has "Dictionary" → `table`), Dictionaries nav
     button. Build + svelte-check clean (9 pre-existing errors, 0 new).
-- **Phase 4 PENDING (runtime + nodes)** — the piece that makes dictionaries usable *inside* graphs:
+- **Phase 4 DONE (runtime + nodes)** — `ToolContext.dictionaries` snapshot loaded at run start
+  (`sentinel-flow/src/engine.rs`); `parse_variable_value` + `resolve_table_literal` resolve a Table
+  id → `PortValue::Table` (engine hook beside Camera). **9 nodes** in `NodeKind::ALL` (65→74),
+  category "Dictionaries": read (pure) `DictRowCount`/`DictGetRow`/`DictFindRow`/`DictGetCell`;
+  mutate (exec, atomic via `dictionaries::mutate`) `DictAddRow`/`DictSetCell`/`DictUpdateRow`/
+  `DictDeleteRow`/`DictClear`. Rows in/out as colname→value `Dict`. Node-config Table picker
+  (dropdown) in the editor; `portColors.ts` gained `table`. Docs: `workflow-nodes.md` + CLAUDE.md
+  counts. 132 app-core tests green. **Redeploy sentinel-flow (+ app).**
+
+- **Phase 4 original spec (for reference):**
   1. `ToolContext.dictionaries` snapshot loaded at run start (flow engine, where `sys.variables`/
      devices load); `parse_variable_value` Table arm resolves the id → `PortValue::Table`.
   2. Dictionary nodes in `NodeKind::ALL` + `node.rs` execution (catalog auto-derives; update

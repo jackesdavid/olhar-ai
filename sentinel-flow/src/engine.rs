@@ -774,6 +774,12 @@ fn build_run_context(
         });
     }
     ctx.active_gates = std::sync::Arc::clone(&state.active_gates);
+    // Snapshot the tenant's dictionaries (#113) for run-start Table resolution + read nodes. Mutate
+    // nodes bypass this snapshot and hit the DB row under a lock, so cross-run writes stay visible.
+    ctx.dictionaries = app_core::dictionaries::list(&state.db, tenant)
+        .into_iter()
+        .map(|d| (d.id.to_string(), d))
+        .collect();
     (ctx, drain)
 }
 

@@ -106,6 +106,11 @@ pub struct ToolContext {
     pub variables: std::sync::Arc<
         std::sync::Mutex<std::collections::HashMap<String, crate::workflows::node::PortValue>>,
     >,
+    /// The tenant's dictionaries (#113), snapshotted at run start and keyed by id-string. Read
+    /// nodes and `Table` variable/literal resolution use this snapshot; mutate nodes write through
+    /// `db` (a live, row-locked transaction) so cross-run writes are seen. Empty for non-flow
+    /// callers (the chat agent, tests) — they don't touch dictionaries.
+    pub dictionaries: std::collections::HashMap<String, crate::dictionaries::Dictionary>,
 }
 
 impl ToolContext {
@@ -140,6 +145,7 @@ impl ToolContext {
                 std::collections::HashSet::new(),
             )),
             variables: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            dictionaries: std::collections::HashMap::new(),
         }
     }
 }

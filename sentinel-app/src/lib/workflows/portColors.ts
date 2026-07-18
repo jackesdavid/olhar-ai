@@ -1,5 +1,5 @@
 export type PortType =
-  | "text" | "num" | "bool" | "image" | "recipient" | "dictionary" | "file" | "exec"
+  | "text" | "num" | "bool" | "image" | "recipient" | "dictionary" | "table" | "file" | "exec"
   | "text_array" | "num_array" | "person_array" | "face_array" | "person" | "face" | "camera" | "bbox"
   | "region" | "tracked_object" | "tracked_object_array" | "any";
 
@@ -10,6 +10,7 @@ export const portColor: Record<PortType, string> = {
   image: "#f472b6",
   recipient: "#a78bfa",
   dictionary: "#2dd4bf",
+  table: "#5eead4",
   file: "#fb923c",
   exec: "#f4f4f5",
   text_array: "#93c5fd",

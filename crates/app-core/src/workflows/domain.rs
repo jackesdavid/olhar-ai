@@ -472,6 +472,29 @@ pub enum NodeKind {
     /// resolution (a `camera` name → a real Camera entity, a `recipient` name → a Recipient, etc.).
     /// Outputs `value` (typed per `type`) + `found`. One LLM call.
     AiExtract,
+    // ---- Dictionaries (#113): read + mutate a named typed-column table ----
+    /// Dictionary (read): number of rows in a `table` → `count` (Num). Pure.
+    DictRowCount,
+    /// Dictionary (read): the row at `index` → `row` (a colname→value Dictionary) + `found`. Pure.
+    DictGetRow,
+    /// Dictionary (read): the first row whose `column` cell equals `key` → `row` + `index` +
+    /// `found`. The "get first by key" lookup. Pure.
+    DictFindRow,
+    /// Dictionary (read): one cell at (`row`, `column`) → `value` (Text) + `found`. Pure.
+    DictGetCell,
+    /// Dictionary (mutate): append a row from a `values` map (colname→value), positioned + coerced
+    /// to the table's schema. Atomic (row-locked). Exec passthrough.
+    DictAddRow,
+    /// Dictionary (mutate): set one cell at (`row`, `column`) to `value`. Atomic. Exec passthrough.
+    DictSetCell,
+    /// Dictionary (mutate): replace the first row whose `column` cell equals `key` with a `values`
+    /// map. Atomic. Exec passthrough.
+    DictUpdateRow,
+    /// Dictionary (mutate): delete the first row whose `column` cell equals `key`. Atomic. Exec
+    /// passthrough.
+    DictDeleteRow,
+    /// Dictionary (mutate): remove all rows (keep the schema). Atomic. Exec passthrough.
+    DictClear,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -584,6 +607,66 @@ const HTTP_POST_OUT: [Port; 3] = [
     p("response", PortType::Text, false),
     p("ok", PortType::Bool, false),
 ];
+
+// ---- Dictionaries (#113) ----
+// A `row` is emitted / consumed as a colname→value string Dictionary (consumable by Format,
+// HTTP Post fields, etc.). The `table` port is a reference to a named dictionary (dropdown-picked
+// id, or wired from a Table variable).
+const DICT_ROW_COUNT_IN: [Port; 1] = [p("table", PortType::Table, true)];
+const DICT_ROW_COUNT_OUT: [Port; 1] = [p("count", PortType::Num, false)];
+
+const DICT_GET_ROW_IN: [Port; 2] = [
+    p("table", PortType::Table, true),
+    p("index", PortType::Num, true),
+];
+const DICT_GET_ROW_OUT: [Port; 2] = [
+    p("row", PortType::Dictionary, false),
+    p("found", PortType::Bool, false),
+];
+
+const DICT_FIND_ROW_IN: [Port; 3] = [
+    p("table", PortType::Table, true),
+    p("column", PortType::Text, true),
+    p("key", PortType::Text, true),
+];
+const DICT_FIND_ROW_OUT: [Port; 3] = [
+    p("row", PortType::Dictionary, false),
+    p("index", PortType::Num, false),
+    p("found", PortType::Bool, false),
+];
+
+const DICT_GET_CELL_IN: [Port; 3] = [
+    p("table", PortType::Table, true),
+    p("row", PortType::Num, true),
+    p("column", PortType::Text, true),
+];
+const DICT_GET_CELL_OUT: [Port; 2] = [
+    p("value", PortType::Text, false),
+    p("found", PortType::Bool, false),
+];
+
+const DICT_ADD_ROW_IN: [Port; 2] = [
+    p("table", PortType::Table, true),
+    p("values", PortType::Dictionary, false),
+];
+const DICT_SET_CELL_IN: [Port; 4] = [
+    p("table", PortType::Table, true),
+    p("row", PortType::Num, true),
+    p("column", PortType::Text, true),
+    p("value", PortType::Text, false),
+];
+const DICT_UPDATE_ROW_IN: [Port; 4] = [
+    p("table", PortType::Table, true),
+    p("column", PortType::Text, true),
+    p("key", PortType::Text, true),
+    p("values", PortType::Dictionary, false),
+];
+const DICT_DELETE_ROW_IN: [Port; 3] = [
+    p("table", PortType::Table, true),
+    p("column", PortType::Text, true),
+    p("key", PortType::Text, true),
+];
+const DICT_CLEAR_IN: [Port; 1] = [p("table", PortType::Table, true)];
 
 // If: a Bool condition routes the run down one of two exec branches.
 const IF_IN: [Port; 1] = [p("condition", PortType::Bool, true)];
@@ -857,7 +940,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 65] = [
+    pub const ALL: [NodeKind; 74] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -923,6 +1006,15 @@ impl NodeKind {
         NodeKind::ReplyWithRecording,
         NodeKind::AiSwitch,
         NodeKind::AiExtract,
+        NodeKind::DictRowCount,
+        NodeKind::DictGetRow,
+        NodeKind::DictFindRow,
+        NodeKind::DictGetCell,
+        NodeKind::DictAddRow,
+        NodeKind::DictSetCell,
+        NodeKind::DictUpdateRow,
+        NodeKind::DictDeleteRow,
+        NodeKind::DictClear,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -995,6 +1087,15 @@ impl NodeKind {
             NodeKind::ReplyWithRecording => "reply_with_recording",
             NodeKind::AiSwitch => "ai_switch",
             NodeKind::AiExtract => "ai_extract",
+            NodeKind::DictRowCount => "dict_row_count",
+            NodeKind::DictGetRow => "dict_get_row",
+            NodeKind::DictFindRow => "dict_find_row",
+            NodeKind::DictGetCell => "dict_get_cell",
+            NodeKind::DictAddRow => "dict_add_row",
+            NodeKind::DictSetCell => "dict_set_cell",
+            NodeKind::DictUpdateRow => "dict_update_row",
+            NodeKind::DictDeleteRow => "dict_delete_row",
+            NodeKind::DictClear => "dict_clear",
         }
     }
 
@@ -1070,6 +1171,15 @@ impl NodeKind {
             NodeKind::ReplyWithRecording => "Reply with Recording",
             NodeKind::AiSwitch => "AI Switch",
             NodeKind::AiExtract => "AI Extract",
+            NodeKind::DictRowCount => "Dictionary Row Count",
+            NodeKind::DictGetRow => "Dictionary Get Row",
+            NodeKind::DictFindRow => "Dictionary Find Row",
+            NodeKind::DictGetCell => "Dictionary Get Cell",
+            NodeKind::DictAddRow => "Dictionary Add Row",
+            NodeKind::DictSetCell => "Dictionary Set Cell",
+            NodeKind::DictUpdateRow => "Dictionary Update Row",
+            NodeKind::DictDeleteRow => "Dictionary Delete Row",
+            NodeKind::DictClear => "Dictionary Clear",
         }
     }
 
@@ -1131,6 +1241,15 @@ impl NodeKind {
             NodeKind::Reroute => "Utility",
             NodeKind::StartRecording | NodeKind::StopRecording => "Recording",
             NodeKind::GetVariable | NodeKind::SetVariable => "Variables",
+            NodeKind::DictRowCount
+            | NodeKind::DictGetRow
+            | NodeKind::DictFindRow
+            | NodeKind::DictGetCell
+            | NodeKind::DictAddRow
+            | NodeKind::DictSetCell
+            | NodeKind::DictUpdateRow
+            | NodeKind::DictDeleteRow
+            | NodeKind::DictClear => "Dictionaries",
         }
     }
 
@@ -1158,6 +1277,10 @@ impl NodeKind {
                 | NodeKind::TextCompare
                 | NodeKind::Reroute
                 | NodeKind::GetVariable
+                | NodeKind::DictRowCount
+                | NodeKind::DictGetRow
+                | NodeKind::DictFindRow
+                | NodeKind::DictGetCell
         )
     }
 
@@ -1273,6 +1396,15 @@ impl NodeKind {
             NodeKind::ReplyWithRecording => &REPLY_RECORDING_IN,
             NodeKind::AiSwitch => &AI_SWITCH_IN,
             NodeKind::AiExtract => &AI_EXTRACT_IN,
+            NodeKind::DictRowCount => &DICT_ROW_COUNT_IN,
+            NodeKind::DictGetRow => &DICT_GET_ROW_IN,
+            NodeKind::DictFindRow => &DICT_FIND_ROW_IN,
+            NodeKind::DictGetCell => &DICT_GET_CELL_IN,
+            NodeKind::DictAddRow => &DICT_ADD_ROW_IN,
+            NodeKind::DictSetCell => &DICT_SET_CELL_IN,
+            NodeKind::DictUpdateRow => &DICT_UPDATE_ROW_IN,
+            NodeKind::DictDeleteRow => &DICT_DELETE_ROW_IN,
+            NodeKind::DictClear => &DICT_CLEAR_IN,
         }
     }
 
@@ -1339,6 +1471,16 @@ impl NodeKind {
             NodeKind::ReplyWithRecording => &REPLY_RECORDING_OUT,
             NodeKind::AiSwitch => &NO_PORTS, // exec outputs are dynamic arms (+ "default")
             NodeKind::AiExtract => &AI_EXTRACT_OUT, // `value` type is refined per config (GraphNode)
+            NodeKind::DictRowCount => &DICT_ROW_COUNT_OUT,
+            NodeKind::DictGetRow => &DICT_GET_ROW_OUT,
+            NodeKind::DictFindRow => &DICT_FIND_ROW_OUT,
+            NodeKind::DictGetCell => &DICT_GET_CELL_OUT,
+            // Mutate nodes: exec passes through, no data out.
+            NodeKind::DictAddRow
+            | NodeKind::DictSetCell
+            | NodeKind::DictUpdateRow
+            | NodeKind::DictDeleteRow
+            | NodeKind::DictClear => &NO_PORTS,
         }
     }
 
@@ -1449,6 +1591,16 @@ impl NodeKind {
             NodeKind::ReplyWithRecording => json!({ "caption": "", "timeout_secs": "120" }),
             NodeKind::AiSwitch => json!({ "arms": ["arm_1", "arm_2"], "timeout_secs": "30" }),
             NodeKind::AiExtract => json!({ "field": "", "type": "text", "timeout_secs": "30" }),
+            // Dictionaries: `table` is a dictionary id (dropdown); the rest are literal fallbacks
+            // for the unwired input ports.
+            NodeKind::DictRowCount | NodeKind::DictClear => json!({ "table": "" }),
+            NodeKind::DictGetRow => json!({ "table": "", "index": "0" }),
+            NodeKind::DictFindRow => json!({ "table": "", "column": "", "key": "" }),
+            NodeKind::DictGetCell => json!({ "table": "", "row": "0", "column": "" }),
+            NodeKind::DictAddRow => json!({ "table": "", "values": {} }),
+            NodeKind::DictSetCell => json!({ "table": "", "row": "0", "column": "", "value": "" }),
+            NodeKind::DictUpdateRow => json!({ "table": "", "column": "", "key": "", "values": {} }),
+            NodeKind::DictDeleteRow => json!({ "table": "", "column": "", "key": "" }),
         }
     }
 }

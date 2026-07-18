@@ -187,6 +187,30 @@ type's zero value. The node's port type follows the variable's declared type.
 
 ---
 
+### Dictionaries
+
+A **Dictionary** is a named, tenant-scoped, **typed-column table** (columns-with-types = structure;
+data rows = typed values), created/edited in the **Dictionaries** view and reused across workflows.
+A variable of type **Dictionary** (`table`) references one by id. Every node below takes a `table`
+input — a dropdown-picked dictionary id, or a wire from a `Get Variable(<Table var>)`. A `row` is
+read/written as a `colname → value` string dictionary. **Read** nodes are pure and work off a
+run-start snapshot; **mutate** nodes are exec passthroughs that hit the live DB row under a
+`SELECT … FOR UPDATE` lock — so concurrent runs mutating the same dictionary are **atomic + thread-safe**.
+
+| Node | Inputs | Outputs | Config | Behavior | Sample usage |
+|---|---|---|---|---|---|
+| **Dictionary Row Count** | `table`* | `count` (Num) | `table` | **Pure.** Number of rows. | `Dict Row Count(orders) → (count) → Compare(b=0)` |
+| **Dictionary Get Row** | `table`*, `index`* (Num) | `row` (Dict), `found` (Bool) | `table`, `index` | **Pure.** The row at `index`. | `Get Row(hours, index=0) → (row) → Format` |
+| **Dictionary Find Row** | `table`*, `column`* (Text), `key`* (Text) | `row` (Dict), `index` (Num), `found` (Bool) | `table`, `column`, `key` | **Pure.** First row whose `column` cell equals `key` (get-first-by-key). | `Find Row(people, column=name, key=Ana)` |
+| **Dictionary Get Cell** | `table`*, `row`* (Num), `column`* (Text) | `value` (Text), `found` (Bool) | `table`, `row`, `column` | **Pure.** One cell. | `Get Cell(hours, row=0, column=open)` |
+| **Dictionary Add Row** | `table`*, `values` (Dict colname→value) | — | `table`, `values` | **Mutate** (atomic). Append a row, positioned + coerced to the schema. | `motion → Add Row(log, values={cam:$cam})` |
+| **Dictionary Set Cell** | `table`*, `row`* (Num), `column`* (Text), `value` (Text) | — | `table`, `row`, `column`, `value` | **Mutate** (atomic). Set one cell. | `Set Cell(state, row=0, column=armed, value=true)` |
+| **Dictionary Update Row** | `table`*, `column`* (Text), `key`* (Text), `values` (Dict) | — | `table`, `column`, `key`, `values` | **Mutate** (atomic). Replace the first row matching `key` in `column`. | `Update Row(people, column=id, key=7, values={seen:now})` |
+| **Dictionary Delete Row** | `table`*, `column`* (Text), `key`* (Text) | — | `table`, `column`, `key` | **Mutate** (atomic). Delete the first row matching `key`. | `Delete Row(cart, column=sku, key=A1)` |
+| **Dictionary Clear** | `table`* | — | `table` | **Mutate** (atomic). Remove all rows (keep the schema). | `nightly → Clear(daily_counts)` |
+
+---
+
 ## How to use events (`Emit event` / `On event`)
 
 Events let a fast path trigger a slower, decoupled handler without blocking it or piling up.

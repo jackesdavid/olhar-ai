@@ -14,6 +14,7 @@ mod alerts;
 mod ai;
 mod camera;
 mod control;
+mod dictionary;
 mod debug_node;
 mod logic;
 mod network;
@@ -338,8 +339,18 @@ pub fn parse_variable_value(
         PortType::Num => PortValue::Num(raw.parse::<i64>().ok()?),
         PortType::Bool => PortValue::Bool(matches!(raw, "true" | "1" | "yes" | "on")),
         PortType::Camera => PortValue::Camera(resolve_camera_entity(raw, sys)?),
+        // A Table default/override is a dictionary id; resolve it from the run-start snapshot.
+        PortType::Table => PortValue::Table(sys.dictionaries.get(raw)?.clone()),
         _ => return None,
     })
+}
+
+/// Resolve a `Table` config literal (the dropdown-stored dictionary id) to a `PortValue::Table`,
+/// from the run-start dictionaries snapshot. Called by the engine when a `PortType::Table` input
+/// port has no wired edge — the counterpart to [`resolve_camera_literal`].
+pub fn resolve_table_literal(config: &Value, key: &str, sys: &ToolContext) -> Option<PortValue> {
+    let id = config.get(key).and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty())?;
+    sys.dictionaries.get(id.trim()).cloned().map(PortValue::Table)
 }
 
 /// Resolve a `Camera` config literal (the dropdown-stored device id) to a `PortValue::Camera`.
@@ -488,6 +499,17 @@ pub fn run_node(
         // AiSwitch computes the chosen arm here; the engine reads o["arm"] to fire it (like AskAi).
         NodeKind::AiSwitch => ai::run_ai_switch(config, inputs, sys),
         NodeKind::AiExtract => ai::run_ai_extract(config, inputs, sys),
+        // Dictionaries (#113): read nodes work off the resolved `table` snapshot; mutate nodes
+        // act on the live DB row under a lock (thread-safe across concurrent runs).
+        NodeKind::DictRowCount => dictionary::run_row_count(inputs),
+        NodeKind::DictGetRow => dictionary::run_get_row(inputs),
+        NodeKind::DictFindRow => dictionary::run_find_row(inputs),
+        NodeKind::DictGetCell => dictionary::run_get_cell(inputs),
+        NodeKind::DictAddRow => dictionary::run_add_row(inputs, sys),
+        NodeKind::DictSetCell => dictionary::run_set_cell(inputs, sys),
+        NodeKind::DictUpdateRow => dictionary::run_update_row(inputs, sys),
+        NodeKind::DictDeleteRow => dictionary::run_delete_row(inputs, sys),
+        NodeKind::DictClear => dictionary::run_clear(inputs, sys),
     }
 }
 
@@ -513,6 +535,12 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         NodeKind::AiSwitch => 30,
         NodeKind::AiExtract => 30,
         NodeKind::ReplyWithRecording => 120, // fetch clip from edge + upload
+        // Dictionary mutators do a row-locked DB write.
+        NodeKind::DictAddRow
+        | NodeKind::DictSetCell
+        | NodeKind::DictUpdateRow
+        | NodeKind::DictDeleteRow
+        | NodeKind::DictClear => 15,
         // Inline (no watchdog): instant/pure nodes + the deliberate `Wait` sleep + the
         // engine-driven markers (ForEach/EmitEvent/OnEvent/ShowImage/FlipFlop).
         NodeKind::Wait
@@ -558,7 +586,11 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::TimeGate
         | NodeKind::DelayTrigger
         | NodeKind::GetVariable
-        | NodeKind::SetVariable => return None,
+        | NodeKind::SetVariable
+        | NodeKind::DictRowCount
+        | NodeKind::DictGetRow
+        | NodeKind::DictFindRow
+        | NodeKind::DictGetCell => return None,
     };
     let secs = config_u64(config, "timeout_secs").unwrap_or(default_secs);
     if secs == 0 {
@@ -881,6 +913,19 @@ pub fn debug_summary(
                 None => if found { "extracted".into() } else { "not found".into() },
             }
         }
+        NodeKind::DictRowCount => format!("{} row(s)", num("count").unwrap_or(0)),
+        NodeKind::DictGetRow | NodeKind::DictFindRow => {
+            if flag("found") { "row found".into() } else { "no matching row".into() }
+        }
+        NodeKind::DictGetCell => match txt("value") {
+            Some(v) if flag("found") => format!("cell: {}", clip(v)),
+            _ => "cell not found".into(),
+        },
+        NodeKind::DictAddRow => "row added".into(),
+        NodeKind::DictSetCell => "cell set".into(),
+        NodeKind::DictUpdateRow => "row updated".into(),
+        NodeKind::DictDeleteRow => "row deleted".into(),
+        NodeKind::DictClear => "dictionary cleared".into(),
     }
 }
 

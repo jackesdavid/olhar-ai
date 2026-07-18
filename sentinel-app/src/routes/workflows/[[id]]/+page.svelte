@@ -3927,6 +3927,20 @@
                             </Select.Content>
                           </Select.Root>
                         {/if}
+                      {:else if port?.type === "table"}
+                        {#if dictionaryOptions.length === 0}
+                          <p class="rounded border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">
+                            No dictionaries — <button class="underline" onclick={() => goto("/workflows/dictionaries")}>create one</button>.
+                          </p>
+                        {:else}
+                          {@const tv = resolveOpt(dictionaryOptions, String(selectedNode.config[key] ?? ""))}
+                          <Select.Root type="single" disabled={editLocked} value={tv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? tv })}>
+                            <Select.Trigger class="h-8 w-full">{dictionaryOptions.find((o) => o.value === tv)?.label ?? "Pick a dictionary"}</Select.Trigger>
+                            <Select.Content>
+                              {#each dictionaryOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                            </Select.Content>
+                          </Select.Root>
+                        {/if}
                       {:else if port?.type === "dictionary"}
                         {#key selectedNode.id + ":" + key}
                           <DictionaryEditor

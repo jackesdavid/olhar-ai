@@ -469,6 +469,11 @@ fn forward_epoch(
                 if let Some(cam) = node::resolve_camera_literal(&n.config, &port.name, sys) {
                     inputs.insert(port.name.clone(), cam);
                 }
+            } else if port.ty == PortType::Table {
+                // Table literals resolve a dictionary id against the run-start snapshot (needs sys).
+                if let Some(t) = node::resolve_table_literal(&n.config, &port.name, sys) {
+                    inputs.insert(port.name.clone(), t);
+                }
             } else if let Some(lit) = node::literal_for_named(&n.config, &port.name, port.ty) {
                 inputs.insert(port.name.clone(), lit);
             }
