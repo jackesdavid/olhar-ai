@@ -148,6 +148,163 @@ pub(super) fn run_recognize_person(
     Ok(o)
 }
 
+// ---- Face recognition pipeline (#117) ----
+
+/// Read a float config value (accepts number or numeric string).
+fn cfg_f64(config: &Value, k: &str, d: f64) -> f64 {
+    config
+        .get(k)
+        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+        .unwrap_or(d)
+}
+
+/// Extract a 512-d face embedding from the image (the model/dim abstraction). `bbox` is accepted
+/// for a future crop-to-face; v1 embeds the most prominent face in the frame (the sidecar detects it).
+pub(super) fn run_face_embedding(
+    _config: &Value,
+    inputs: &PortValues,
+    sys: &ToolContext,
+) -> Result<PortValues, String> {
+    let bytes = inputs
+        .get("image")
+        .and_then(PortValue::as_image)
+        .ok_or("Extract Face Embedding: missing required input 'image'")?;
+    let embedding = crate::agent::face::embed(&sys.db, sys.tenant_id, bytes)?;
+    let dim = embedding.len() as i64;
+    let mut o = PortValues::new();
+    o.insert("embedding".into(), PortValue::Embedding(embedding));
+    o.insert("dim".into(), PortValue::Num(dim));
+    o.insert("ok".into(), PortValue::Bool(true));
+    Ok(o)
+}
+
+/// Cosine distance → a 0..100 confidence percent.
+fn conf_pct(distance: f32) -> i64 {
+    (((1.0 - distance.max(0.0)) * 100.0).round().clamp(0.0, 100.0)) as i64
+}
+
+/// kNN-recognize an embedding against the tenant's union gallery (enrolled + stored). Outputs the
+/// best `person`/`person_id`/`confidence`, a `matches` Dictionary (label → score), and `found`.
+pub(super) fn run_recognize_face(
+    config: &Value,
+    inputs: &PortValues,
+    sys: &ToolContext,
+) -> Result<PortValues, String> {
+    let embedding = inputs
+        .get("embedding")
+        .and_then(PortValue::as_embedding)
+        .ok_or("Recognize Face: missing required input 'embedding'")?;
+    let top_k = cfg_i64(config, "top_k", 5).clamp(1, 50);
+    let max_distance = cfg_f64(config, "max_distance", 0.5) as f32;
+    let matches = crate::faces::recognize(&sys.db, sys.tenant_id, embedding, top_k);
+
+    // matches Dictionary: label (or "unknown:<ref8>") → score. Preserves kNN order (best first).
+    let dict: Vec<(String, String)> = matches
+        .iter()
+        .map(|m| {
+            let key = m.label.clone().unwrap_or_else(|| {
+                format!("unknown:{}", &m.reference[..m.reference.len().min(8)])
+            });
+            (key, conf_pct(m.distance).to_string())
+        })
+        .collect();
+
+    let mut o = PortValues::new();
+    o.insert("matches".into(), PortValue::Dict(dict));
+    match matches.first() {
+        Some(best) => {
+            let found = best.distance <= max_distance;
+            o.insert("found".into(), PortValue::Bool(found));
+            o.insert("confidence".into(), PortValue::Num(conf_pct(best.distance)));
+            // person = the name (blank when unknown or below threshold); person_id only when a
+            // labeled match won (wire → StoreFace.label).
+            let (person, person_id) = if found {
+                match &best.label {
+                    Some(name) => (name.clone(), best.reference.clone()),
+                    None => (String::new(), String::new()),
+                }
+            } else {
+                (String::new(), String::new())
+            };
+            o.insert("person".into(), PortValue::Text(person));
+            o.insert("person_id".into(), PortValue::Text(person_id));
+        }
+        None => {
+            o.insert("found".into(), PortValue::Bool(false));
+            o.insert("confidence".into(), PortValue::Num(0));
+            o.insert("person".into(), PortValue::Text(String::new()));
+            o.insert("person_id".into(), PortValue::Text(String::new()));
+        }
+    }
+    Ok(o)
+}
+
+/// Store a face: image → MinIO, embedding → the `faces` table. `label` (a person id) empty = unknown.
+/// Skips the insert when an existing stored face is within `dedup_distance` cosine.
+pub(super) fn run_store_face(
+    config: &Value,
+    inputs: &PortValues,
+    sys: &ToolContext,
+) -> Result<PortValues, String> {
+    let embedding = inputs
+        .get("embedding")
+        .and_then(PortValue::as_embedding)
+        .ok_or("Store Face: missing required input 'embedding'")?
+        .to_vec();
+
+    let mut o = PortValues::new();
+    let dedup = cfg_f64(config, "dedup_distance", 0.15) as f32;
+    if dedup > 0.0 {
+        if let Some(d) = crate::faces::nearest_stored_distance(&sys.db, sys.tenant_id, &embedding) {
+            if d <= dedup {
+                o.insert("stored".into(), PortValue::Bool(false));
+                return Ok(o);
+            }
+        }
+    }
+
+    let image_key = inputs
+        .get("image")
+        .and_then(PortValue::as_image)
+        .and_then(|bytes| crate::media::put(bytes, "image/jpeg", "jpg").ok());
+    let label = inputs
+        .get("label")
+        .and_then(PortValue::as_text)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let camera = inputs
+        .get("camera")
+        .and_then(PortValue::as_camera)
+        .map(|c| c.id.clone())
+        .or_else(|| inputs.get("camera").and_then(PortValue::as_text).map(str::to_string));
+    let bbox = inputs.get("bbox").and_then(PortValue::as_bbox).map(|b| {
+        serde_json::json!([b.x1, b.y1, b.x2, b.y2])
+    });
+    let source = config
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("snapshot")
+        .to_string();
+
+    let id = crate::faces::insert(
+        &sys.db,
+        sys.tenant_id,
+        crate::faces::NewFace {
+            person_id: label,
+            embedding,
+            image_key,
+            camera,
+            bbox,
+            confidence: 0.0,
+            face_ratio: 0.0,
+            source,
+        },
+    )?;
+    o.insert("stored".into(), PortValue::Bool(true));
+    o.insert("face_id".into(), PortValue::Text(id));
+    Ok(o)
+}
+
 pub(super) fn run_motion_detection(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
     let a = inputs.get("image_a").and_then(PortValue::as_image).ok_or("missing required input 'image_a'")?;
     let b = inputs.get("image_b").and_then(PortValue::as_image).ok_or("missing required input 'image_b'")?;

@@ -102,6 +102,24 @@ faces + relate a cluster to a person — see *Out of scope*.
    table share one comparable size; a fixed vector size is required for the union kNN). The node keeps a
    `dim`/`model` config for a future swap, but the store commits to 512.
 
+## Build status (2026-07-18)
+
+- **Phases 1–4 DONE (cloud pipeline):**
+  - Migration `0061_faces.sql` + `app_core::faces` (insert, union `recognize`, `nearest_stored_distance`,
+    `list`) — pgvector kNN over `person_embeddings` ∪ `faces`, `person_id` NULL = unknown.
+  - `PortType::Embedding` + `PortValue::Embedding(Vec<f32>)` + `as_embedding` accessor; `portColors.ts`.
+  - 3 nodes (Vision, `NodeKind::ALL` 74→77): **Extract Face Embedding** (image→embedding, the only
+    frame-taker), **Recognize Face** (embedding→best person/person_id/confidence + `matches` Dictionary,
+    kNN top_k/max_distance over the union gallery), **Store Face** (image→MinIO + embedding→`faces`,
+    labeled or unknown, dedup). `run_*` in `node/vision.rs`; docs in `workflow-nodes.md`.
+  - **The recognizer takes the EMBEDDING, not the image** (owner) — only Extract Face Embedding sees
+    the frame. 139 app-core tests green; workspace clean.
+  - Testable now with `Snapshot → Extract Face Embedding → Recognize Face → If(found) → Store Face`
+    (no edge/event needed yet).
+- **Phase 5 PENDING (edge detection + event):** add a tract face detector to the edge (motion-gated)
+  emitting a `face_detected` system event (frame/bbox/confidence/face_ratio/camera, mirror `motion.rs`
+  + `system_events()`), so `OnEvent("face_detected")` feeds the cloud pipeline with real detections.
+
 ## Out of scope (next phases — the "after this works" work)
 
 - Views to **auto-label** and **clusterize** similar faces (2D cluster canvas — mirrors #59's later phases).

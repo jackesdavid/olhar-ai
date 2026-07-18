@@ -31,8 +31,6 @@ kanban-plugin: board
 
 ## ToDo
 
-- [ ] #117 Face recognition pipeline — edge detect → embed → recognize → store
-	  - Plan: [[face-recognition-pipeline]]
 - [ ] #17 Face recognition: DetectFaces node + live-feed triggers
 	  - Plan: [[face-recognition-next-steps]]
 - [ ] #20 GetCameraRoom node — look up room name from a camera entity
@@ -103,6 +101,8 @@ kanban-plugin: board
 	  - Plan: [[update-button-loading]]
 - [ ] #116 Playback view fixes — clip-bar width, granular zoom, per-kind lanes, full-height
 	  - Plan: [[playback-view-fixes]]
+- [ ] #117 Face recognition pipeline — edge detect → embed → recognize → store
+	  - Plan: [[face-recognition-pipeline]]
 
 
 ## Review

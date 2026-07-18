@@ -47,6 +47,7 @@ fn zero_value(ty: PortType) -> Option<PortValue> {
         | PortType::Camera
         // Table is a reference resolved from sys at run start — no standalone zero.
         | PortType::Table
+        | PortType::Embedding
         | PortType::Region
         | PortType::TrackedObject
         | PortType::TrackedObjectArray

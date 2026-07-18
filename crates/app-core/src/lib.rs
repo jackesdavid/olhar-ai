@@ -18,6 +18,7 @@ pub mod dictionaries;
 pub mod edge_metrics;
 pub mod event_queue;
 pub mod events;
+pub mod faces;
 pub mod go2rtc;
 pub mod listen;
 pub mod map;

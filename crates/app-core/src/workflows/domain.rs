@@ -52,6 +52,10 @@ pub enum PortType {
     Person,
     /// A single `FaceDetection`.
     Face,
+    /// A face **embedding** — a fixed-length float vector (512-d ArcFace, #117). Produced by
+    /// `FaceEmbedding`, consumed by `RecognizeFace`/`StoreFace`. A real type so the model/dim is the
+    /// producer's concern and embedding wires can't be crossed with a plain `NumArray`.
+    Embedding,
     /// A bounding box — top-left/bottom-right pixel rectangle (canonical xyxy). A real type
     /// (not a bare `NumArray`) so producers normalise at the source and consumers never guess
     /// the coordinate convention. Produced by `Break*` nodes + `OnEvent("motion")`; consumed
@@ -332,6 +336,16 @@ pub enum NodeKind {
     BreakFaceDetection,
     /// Vision: match a face in an image against the enrolled people (pgvector kNN).
     RecognizePerson,
+    // ---- Face recognition pipeline (#117): embed → recognize → store ----
+    /// Extract a 512-d face embedding from an image (optionally cropped to a `bbox`). The
+    /// model/dim abstraction — calls the AI sidecar. Exec + data (`embedding`/`dim`/`ok`).
+    FaceEmbedding,
+    /// kNN-recognize an embedding against the tenant's union gallery (enrolled + stored). Config
+    /// `top_k`/`max_distance`; outputs the best `person`/`confidence`, a `matches` Dictionary, `found`.
+    RecognizeFace,
+    /// Store a face (image → MinIO, embedding → the `faces` table), labeled (a person id) or
+    /// unknown (empty label). Dedup by embedding distance. Exec passthrough; outputs `stored`/`face_id`.
+    StoreFace,
     /// Presence: record a categorized detection (person/known person/car/cat/dog/
     /// unknown) in a room — persisted and pulsed live on the map. Exec passes through.
     RecordPresence,
@@ -750,6 +764,36 @@ const RECOGNIZE_PERSON_OUT: [Port; 4] = [
     p("ok", PortType::Bool, false),        // true when a match within threshold
 ];
 
+// ---- Face recognition pipeline (#117) ----
+const FACE_EMBEDDING_IN: [Port; 2] = [
+    p("image", PortType::Image, true),
+    p("bbox", PortType::Bbox, false), // optional crop-to-face (edge already found it)
+];
+const FACE_EMBEDDING_OUT: [Port; 3] = [
+    p("embedding", PortType::Embedding, false),
+    p("dim", PortType::Num, false),
+    p("ok", PortType::Bool, false),
+];
+const RECOGNIZE_FACE_IN: [Port; 1] = [p("embedding", PortType::Embedding, true)];
+const RECOGNIZE_FACE_OUT: [Port; 5] = [
+    p("person", PortType::Text, false),        // best match's name ("" if none / unknown)
+    p("person_id", PortType::Text, false),     // best match's person id (wire → StoreFace.label)
+    p("confidence", PortType::Num, false),     // percent 0..100 of the best match
+    p("matches", PortType::Dictionary, false), // top-K: person/label → score
+    p("found", PortType::Bool, false),         // a match within max_distance
+];
+const STORE_FACE_IN: [Port; 5] = [
+    p("image", PortType::Image, false),
+    p("embedding", PortType::Embedding, true),
+    p("bbox", PortType::Bbox, false),
+    p("label", PortType::Text, false),  // a person id; empty = unknown
+    p("camera", PortType::Camera, false),
+];
+const STORE_FACE_OUT: [Port; 2] = [
+    p("stored", PortType::Bool, false), // false if skipped by dedup
+    p("face_id", PortType::Text, false),
+];
+
 // Print: a message to echo to the Console (+ optional on-screen flash).
 const PRINT_IN: [Port; 2] = [
     p("message", PortType::Text, false),
@@ -940,7 +984,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 74] = [
+    pub const ALL: [NodeKind; 77] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -977,6 +1021,9 @@ impl NodeKind {
         NodeKind::BreakDetection,
         NodeKind::BreakFaceDetection,
         NodeKind::RecognizePerson,
+        NodeKind::FaceEmbedding,
+        NodeKind::RecognizeFace,
+        NodeKind::StoreFace,
         NodeKind::RecordPresence,
         NodeKind::EmitEvent,
         NodeKind::OnEvent,
@@ -1047,6 +1094,9 @@ impl NodeKind {
             NodeKind::BreakDetection => "break_detection",
             NodeKind::BreakFaceDetection => "break_face_detection",
             NodeKind::RecognizePerson => "recognize_person",
+            NodeKind::FaceEmbedding => "face_embedding",
+            NodeKind::RecognizeFace => "recognize_face",
+            NodeKind::StoreFace => "store_face",
             NodeKind::RecordPresence => "record_presence",
             NodeKind::EmitEvent => "emit_event",
             NodeKind::OnEvent => "on_event",
@@ -1131,6 +1181,9 @@ impl NodeKind {
             NodeKind::BreakDetection => "Unpack Detection",
             NodeKind::BreakFaceDetection => "Unpack Face",
             NodeKind::RecognizePerson => "Recognize Person",
+            NodeKind::FaceEmbedding => "Extract Face Embedding",
+            NodeKind::RecognizeFace => "Recognize Face",
+            NodeKind::StoreFace => "Store Face",
             NodeKind::RecordPresence => "Record Presence",
             NodeKind::EmitEvent => "Send Event",
             NodeKind::OnEvent => "When Event",
@@ -1226,6 +1279,9 @@ impl NodeKind {
             | NodeKind::PersonDetection
             | NodeKind::ObjectDetection
             | NodeKind::RecognizePerson
+            | NodeKind::FaceEmbedding
+            | NodeKind::RecognizeFace
+            | NodeKind::StoreFace
             | NodeKind::BreakPersonDetection
             | NodeKind::BreakDetection
             | NodeKind::BreakFaceDetection
@@ -1357,6 +1413,9 @@ impl NodeKind {
             NodeKind::BreakDetection => &BREAK_DETECTION_IN,
             NodeKind::BreakFaceDetection => &BREAK_FACE_IN,
             NodeKind::RecognizePerson => &RECOGNIZE_PERSON_IN,
+            NodeKind::FaceEmbedding => &FACE_EMBEDDING_IN,
+            NodeKind::RecognizeFace => &RECOGNIZE_FACE_IN,
+            NodeKind::StoreFace => &STORE_FACE_IN,
             NodeKind::RecordPresence => &RECORD_PRESENCE_IN,
             NodeKind::EmitEvent => &NO_PORTS, // exec-only (universal exec_in/out); event name in config
             NodeKind::OnEvent => &NO_PORTS,   // entry: only an exec_out; activated by the event
@@ -1436,6 +1495,9 @@ impl NodeKind {
             NodeKind::BreakDetection => &BREAK_DETECTION_OUT,
             NodeKind::BreakFaceDetection => &BREAK_FACE_OUT,
             NodeKind::RecognizePerson => &RECOGNIZE_PERSON_OUT,
+            NodeKind::FaceEmbedding => &FACE_EMBEDDING_OUT,
+            NodeKind::RecognizeFace => &RECOGNIZE_FACE_OUT,
+            NodeKind::StoreFace => &STORE_FACE_OUT,
             NodeKind::RecordPresence => &RECORD_PRESENCE_OUT,
             NodeKind::EmitEvent => &NO_PORTS, // exec passes through, no data out
             NodeKind::OnEvent => &NO_PORTS,   // drives its subtree via exec_out only
@@ -1542,6 +1604,9 @@ impl NodeKind {
             NodeKind::BreakDetection => json!({}),
             NodeKind::BreakFaceDetection => json!({}),
             NodeKind::RecognizePerson => json!({ "max_distance": "0.4", "timeout_secs": "30" }),
+            NodeKind::FaceEmbedding => json!({ "timeout_secs": "30" }),
+            NodeKind::RecognizeFace => json!({ "top_k": "5", "max_distance": "0.5", "timeout_secs": "15" }),
+            NodeKind::StoreFace => json!({ "source": "snapshot", "dedup_distance": "0.15", "timeout_secs": "15" }),
             NodeKind::RecordPresence => {
                 json!({ "category": "person", "room": "", "label": "", "duration_secs": "8" })
             }

@@ -54,6 +54,8 @@ pub enum PortValue {
     /// A resolved reference to a named **Dictionary table** (#113) — carries the whole dictionary
     /// (id + schema + rows) so read nodes see its data and mutate nodes act on it by id.
     Table(crate::dictionaries::Dictionary),
+    /// A face embedding — a fixed-length float vector (512-d ArcFace, #117).
+    Embedding(Vec<f32>),
     /// Any file (bytes + name + MIME).
     File(FileVal),
     /// A typed array — elements are themselves `PortValue`s. Carried by the `*Array`
@@ -143,6 +145,12 @@ impl PortValue {
     pub fn as_bbox(&self) -> Option<crate::workflows::domain::BBox> {
         match self {
             PortValue::Bbox(b) => Some(*b),
+            _ => None,
+        }
+    }
+    pub fn as_embedding(&self) -> Option<&[f32]> {
+        match self {
+            PortValue::Embedding(v) => Some(v),
             _ => None,
         }
     }
@@ -263,6 +271,8 @@ pub fn literal_for_named(config: &Value, name: &str, ty: PortType) -> Option<Por
         // A Table literal is a dictionary uuid; resolving it to its rows needs sys.dictionaries,
         // so the engine resolves it (like Camera), not this pure config reader.
         PortType::Table => None,
+        // An embedding is produced by FaceEmbedding — never a config literal.
+        PortType::Embedding => None,
         // Arrays / detection elements / the Any wildcard are produced by upstream nodes
         // (or, for ForEach `items`, parsed from text in the engine) — never a config literal.
         PortType::TextArray
@@ -443,6 +453,9 @@ pub fn run_node(
         NodeKind::BreakDetection => vision::run_break_detection(inputs),
         NodeKind::BreakFaceDetection => vision::run_break_face_detection(inputs),
         NodeKind::RecognizePerson => vision::run_recognize_person(config, inputs, sys),
+        NodeKind::FaceEmbedding => vision::run_face_embedding(config, inputs, sys),
+        NodeKind::RecognizeFace => vision::run_recognize_face(config, inputs, sys),
+        NodeKind::StoreFace => vision::run_store_face(config, inputs, sys),
         NodeKind::RecordPresence => presence::run_record_presence(config, inputs, sys),
         // EmitEvent/OnEvent are exec-flow markers: the engine handles the event fire
         // (spawning the guarded sub-run) and the OnEvent entry, like the If/ShowImage
@@ -526,6 +539,8 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         NodeKind::PersonDetection | NodeKind::ObjectDetection | NodeKind::MotionDetection => 30,
         NodeKind::MotionWatch => 20, // two camera grabs + the sample gap
         NodeKind::RecognizePerson => 30,
+        NodeKind::FaceEmbedding => 30,
+        NodeKind::RecognizeFace | NodeKind::StoreFace => 15,
         NodeKind::DescribeImage => 65,
         NodeKind::HttpPost | NodeKind::NotifyRecipient | NodeKind::DeliverAlert => 35,
         NodeKind::CreateAlert | NodeKind::RecordPresence => 15,
@@ -744,6 +759,20 @@ pub fn debug_summary(
             } else {
                 "no match".into()
             }
+        }
+        NodeKind::FaceEmbedding => {
+            if flag("ok") { format!("embedded ({}-d)", num("dim").unwrap_or(0)) } else { "no face".into() }
+        }
+        NodeKind::RecognizeFace => {
+            if flag("found") {
+                let who = txt("person").filter(|s| !s.is_empty()).unwrap_or("unknown");
+                format!("matched {} ({}%)", who, num("confidence").unwrap_or(0))
+            } else {
+                "no match".into()
+            }
+        }
+        NodeKind::StoreFace => {
+            if flag("stored") { "face stored".into() } else { "skipped (duplicate)".into() }
         }
         NodeKind::RecordPresence => format!("presence recorded (#{})", num("id").unwrap_or(0)),
         NodeKind::EmitEvent => {
