@@ -211,6 +211,34 @@ fn run_driver(
         }
     }
 
+    // A window-stop run RESUMES its instance's VARIABLES. `sys.variables` is a fresh per-run map —
+    // the host seeds it with the graph's declared defaults — so without this a `Get` on the stop
+    // branch reads a type-zero for anything a `Set` wrote on the arming run, and StopRecording's
+    // required `camera`/`clip_id` inputs resolve to nothing → the branch is skipped as dead, the run
+    // reporting ok (#114). Restore the arming run's snapshot ON TOP of the defaults (snapshot wins),
+    // ONCE, before the epochs — a Set on the stop branch then still overrides it. Read from the
+    // DelayTrigger that owns THIS trailing edge (the forced entry) and this instance, so one
+    // camera's variables can't surface in another's stop. Done here rather than per-epoch so it
+    // can't clobber a Set that ran in an earlier epoch.
+    if entry_payload.contains_key(WINDOW_STOP_MARKER) {
+        let instance_key = graph.instance_scope.key_for(entry_payload);
+        for nid in initial_forced {
+            if graph.node(*nid).map(|n| n.kind) != Some(NodeKind::DelayTrigger) {
+                continue;
+            }
+            let Some(stored) =
+                repo::get_node_variables(&sys.db, sys.tenant_id, graph.id, *nid, &instance_key)
+            else {
+                continue;
+            };
+            let vars = crate::workflows::values::variables_from_json(&stored);
+            let mut map = sys.variables.lock().unwrap();
+            for (k, v) in vars {
+                map.insert(k, v);
+            }
+        }
+    }
+
     let mut outputs: HashMap<u32, PortValues> = HashMap::new();
     let mut ran: HashSet<u32> = HashSet::new();
     let mut steps: u32 = 0;
@@ -283,6 +311,30 @@ fn run_driver(
             one.insert(*nid, produced.clone());
             let json = crate::workflows::values::to_json(&one);
             repo::set_node_values(&sys.db, sys.tenant_id, graph.id, *nid, &instance_key, &json);
+        }
+        // Variables are a run-scoped map (`sys.variables`), not a node output — 0058's `values_json`
+        // doesn't carry them, so a `Get current_camera` on the trailing edge read a type-zero for
+        // whatever a `Set current_camera` wrote on the arming run (#114). Snapshot the whole map onto
+        // the DelayTrigger's OWN row whenever it ran this run (armed or extended the window), keyed
+        // by the same instance — the stop run restores it below. Gated to a DelayTrigger that
+        // actually ran so an unrelated run of the graph can't overwrite a live window's snapshot.
+        for n in graph
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::DelayTrigger && ran.contains(&n.id))
+        {
+            let vars_json = {
+                let map = sys.variables.lock().unwrap();
+                crate::workflows::values::variables_to_json(&map)
+            };
+            repo::set_node_variables(
+                &sys.db,
+                sys.tenant_id,
+                graph.id,
+                n.id,
+                &instance_key,
+                &vars_json,
+            );
         }
     }
 

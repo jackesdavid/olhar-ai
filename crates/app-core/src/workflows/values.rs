@@ -122,6 +122,40 @@ pub fn from_json(v: &Value) -> NodeValues {
     vals
 }
 
+/// A variables map (`name → value`) as tagged JSON — the DelayTrigger window's snapshot of
+/// `sys.variables`, so the trailing-edge stop run can restore what a `Set` wrote on the arming run.
+/// Same narrow codec as node values: a kind we don't persist (media, detector structs) is dropped
+/// **with a warning** rather than silently, because a variable that quietly vanishes is a dead
+/// branch again — the bug this exists to end.
+pub fn variables_to_json(vars: &HashMap<String, PortValue>) -> Value {
+    let mut out = serde_json::Map::new();
+    for (name, v) in vars {
+        match value_to_json(v) {
+            Some(j) => {
+                out.insert(name.clone(), j);
+            }
+            None => log::warn!(
+                "workflow variable '{name}' is a kind we don't persist (media belongs in MinIO — \
+                 see #94); the trailing-edge stop run will see it missing"
+            ),
+        }
+    }
+    Value::Object(out)
+}
+
+pub fn variables_from_json(v: &Value) -> HashMap<String, PortValue> {
+    let mut out = HashMap::new();
+    let Some(obj) = v.as_object() else {
+        return out;
+    };
+    for (name, jv) in obj {
+        if let Some(val) = value_from_json(jv) {
+            out.insert(name.clone(), val);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +241,36 @@ mod tests {
         assert!(value_from_json(&json!("bare string")).is_none());
         assert!(from_json(&json!({ "not-a-node": {} })).is_empty());
         assert!(from_json(&json!([])).is_empty());
+    }
+
+    #[test]
+    fn variables_snapshot_round_trips_by_name() {
+        // The trailing-edge case that #114 fixes: `Set current_camera` (a Camera var) and a plain
+        // text var written on the arming run must come back keyed by name on the stop run.
+        let mut vars: HashMap<String, PortValue> = HashMap::new();
+        vars.insert(
+            "current_camera".into(),
+            PortValue::Camera(CameraEntity { id: "cam-1".into(), ip: "10.0.0.9".into(), name: "Hall".into() }),
+        );
+        vars.insert("current_clip_id".into(), PortValue::Text("clip-abc".into()));
+
+        let back = variables_from_json(&variables_to_json(&vars));
+        match back.get("current_camera") {
+            Some(PortValue::Camera(c)) => assert_eq!(c.id, "cam-1"),
+            other => panic!("camera var didn't survive: {other:?}"),
+        }
+        assert_eq!(back.get("current_clip_id").and_then(PortValue::as_text), Some("clip-abc"));
+    }
+
+    #[test]
+    fn a_media_variable_is_dropped_not_faked() {
+        // An Image variable can't round-trip yet (#94) — it must vanish with a warning, never come
+        // back as an empty value that would satisfy a required input on the stop branch.
+        let mut vars: HashMap<String, PortValue> = HashMap::new();
+        vars.insert("frame".into(), PortValue::Image(vec![0xFF; 8]));
+        vars.insert("kept".into(), PortValue::Text("ok".into()));
+        let back = variables_from_json(&variables_to_json(&vars));
+        assert!(back.get("frame").is_none(), "media var is dropped, not faked");
+        assert_eq!(back.get("kept").and_then(PortValue::as_text), Some("ok"));
     }
 }

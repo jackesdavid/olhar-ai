@@ -43,6 +43,19 @@ Migration 0058 (`values_json`) persisted node **output values** across the delay
 3. **Instance-scoped variables (#95)** — if variables become per-instance persisted (not per-run),
    the stop run in the same instance reads what the start run wrote. The most general fix; largest.
 
+## Built (2026-07-17) — direction 1
+
+Mirrored 0058's `values_json` for the variables map. **Migration 0060** adds `variables_json` to
+`workflow_node_state` (additive, `DEFAULT '{}'`). `values.rs` gained `variables_to_json` /
+`variables_from_json` (drops non-persistable kinds like Image with a `log::warn!`, never fakes an
+empty value); `repo.rs` gained `get_node_variables` / `set_node_variables`. In `engine.rs`
+`run_driver`: **snapshot** the whole `sys.variables` onto the DelayTrigger's own row whenever it ran
+(armed/extended), keyed by `instance_scope.key_for(entry_payload)`; **restore** that snapshot onto
+`sys.variables` (on top of defaults, snapshot wins) once before the epochs on a `WINDOW_STOP_MARKER`
+run, from the forced DelayTrigger + this instance. `task cargo` clean; `cargo test -p app-core --lib`
+134 green (+2). Known limit: `spawn_node_subrun`/`stop_payload` don't thread a per-camera instance
+key (pre-existing #95 gap the values path shares) — correct for the default Single scope.
+
 ## Verify
 
 - Re-run "Recording By Movement": motion → start, quiet → **stop succeeds** with the right camera +

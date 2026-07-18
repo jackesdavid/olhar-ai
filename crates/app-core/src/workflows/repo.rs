@@ -1062,3 +1062,74 @@ pub fn set_node_values(
         log::error!("workflows::repo::set_node_values failed: {e}");
     }
 }
+
+/// Read the variables snapshot the DelayTrigger stored when it armed this instance's window.
+///
+/// A SEPARATE column from `state_json`/`values_json` for the same reason as values: the window's
+/// writers rewrite state_json whole, so anything kept there is wiped by the very transitions it has
+/// to outlive. `sys.variables` is a fresh map per run, so without this the trailing-edge stop run
+/// reads a type-zero for anything a `Set` wrote on the arming run — card #114.
+pub fn get_node_variables(
+    db: &Db,
+    tenant_id: Uuid,
+    graph_id: Uuid,
+    node_id: u32,
+    instance_key: &str,
+) -> Option<serde_json::Value> {
+    let pool = db.pool();
+    let instance_key = instance_key.to_string();
+    let res: Result<Option<(String,)>, sqlx::Error> = db.block(async move {
+        sqlx::query_as::<_, (String,)>(
+            "SELECT variables_json FROM workflow_node_state
+              WHERE tenant_id = $1 AND graph_id = $2 AND node_id = $3 AND instance_key = $4",
+        )
+        .bind(tenant_id)
+        .bind(graph_id)
+        .bind(node_id as i64)
+        .bind(instance_key)
+        .fetch_optional(&pool)
+        .await
+    });
+    match res {
+        Ok(row) => row.and_then(|(s,)| serde_json::from_str(&s).ok()),
+        Err(e) => {
+            log::error!("workflows::repo::get_node_variables failed: {e}");
+            None
+        }
+    }
+}
+
+/// Snapshot this instance's variables onto the DelayTrigger's row. Upsert touching only
+/// `variables_json`, keyed by the same (tenant, graph, node, instance_key) as the state and values —
+/// so camera A's snapshot can't be read by camera B's stop.
+pub fn set_node_variables(
+    db: &Db,
+    tenant_id: Uuid,
+    graph_id: Uuid,
+    node_id: u32,
+    instance_key: &str,
+    variables: &serde_json::Value,
+) {
+    let pool = db.pool();
+    let instance_key = instance_key.to_string();
+    let json_str = variables.to_string();
+    let res: Result<u64, sqlx::Error> = db.block(async move {
+        let r = sqlx::query(
+            "INSERT INTO workflow_node_state (tenant_id, graph_id, node_id, instance_key, variables_json)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (tenant_id, graph_id, node_id, instance_key)
+             DO UPDATE SET variables_json = EXCLUDED.variables_json",
+        )
+        .bind(tenant_id)
+        .bind(graph_id)
+        .bind(node_id as i64)
+        .bind(instance_key)
+        .bind(json_str)
+        .execute(&pool)
+        .await?;
+        Ok(r.rows_affected())
+    });
+    if let Err(e) = res {
+        log::error!("workflows::repo::set_node_variables failed: {e}");
+    }
+}
