@@ -31,6 +31,8 @@ kanban-plugin: board
 
 ## ToDo
 
+- [ ] #118 Edge detection timing metrics — motion/face detect ms + rate
+	  - Plan: [[edge-detection-metrics]]
 - [ ] #17 Face recognition: DetectFaces node + live-feed triggers
 	  - Plan: [[face-recognition-next-steps]]
 - [ ] #20 GetCameraRoom node — look up room name from a camera entity
