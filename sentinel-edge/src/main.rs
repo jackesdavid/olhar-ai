@@ -18,6 +18,7 @@
 mod clip_upload;
 mod enroll;
 mod envfile;
+mod face;
 mod frames;
 mod go2rtc;
 mod http;

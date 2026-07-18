@@ -244,6 +244,9 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
         if verdict.qualifies && !throttled {
             last_emit = Some(Instant::now());
             crate::motion::push_event(state, ip, &jpeg, (w, h), &verdict, detector.params());
+            // Same gate + throttle as motion: on a qualifying frame, look for a face and (opt-in via
+            // FACE_DETECT) emit `face_detected` → the cloud recognition pipeline (#117).
+            crate::face::detect_and_push(state, ip, &jpeg, (w, h));
         }
 
         // Cap the processing rate so a source uses a bounded slice of CPU.

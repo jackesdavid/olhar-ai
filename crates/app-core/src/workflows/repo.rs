@@ -480,6 +480,20 @@ pub fn system_events() -> Vec<TenantEvent> {
             ],
         },
         TenantEvent {
+            name: "face_detected".to_string(),
+            category: "System".to_string(),
+            source: "system".to_string(),
+            description: Some("Edge face detection (YuNet) — feeds the recognition pipeline".to_string()),
+            created_by_graph: None,
+            fields: vec![
+                field("camera", PortType::Camera),
+                field("bbox", PortType::Bbox),
+                field("confidence", PortType::Num), // 0..100
+                field("face_ratio", PortType::Num), // face area ÷ frame area, 0..100
+                field("frame", PortType::Image),
+            ],
+        },
+        TenantEvent {
             name: "edge:full-disk".to_string(),
             category: "System".to_string(),
             source: "system".to_string(),

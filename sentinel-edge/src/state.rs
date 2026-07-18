@@ -269,6 +269,13 @@ impl AppState {
         }
     }
 
+    pub fn push_face(&self, ev: &FaceEvent) {
+        let url = format!("{}/config/face", self.control_url);
+        if let Err(e) = self.box_agent().post(&url).send_json(ev) {
+            log::debug!("face push failed: {e}");
+        }
+    }
+
     /// Push an object-tracker lifecycle event to control (box-authed) → durable event_queue →
     /// `OnEvent("object_entered"/"object_exited")`. Best-effort like motion.
     pub fn push_track_event(&self, ev: &TrackEventOut) {
@@ -379,6 +386,19 @@ pub struct MotionEvent {
     pub at: String,
     /// The JPEG frame that triggered this event (base64), so the cloud can deliver it
     /// as an `Image` port on `OnEvent("motion")` without a second round-trip to the edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_b64: Option<String>,
+}
+
+/// One face detection reported to control (#117) → `OnEvent("face_detected")`. `bbox` is canonical
+/// xyxy in source pixels (YuNet already works in source space).
+#[derive(serde::Serialize)]
+pub struct FaceEvent {
+    pub camera_ip: String,
+    pub bbox: [i32; 4],   // xyxy
+    pub confidence: f64,  // 0..100
+    pub face_ratio: f64,  // face area ÷ frame area, 0..100
+    pub at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame_b64: Option<String>,
 }

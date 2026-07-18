@@ -36,6 +36,7 @@ pub fn router(state: AppState) -> Router {
         .route("/config/streaming", post(streaming_push))
         .route("/config/logs", post(box_logs_push))
         .route("/config/motion", post(motion_push))
+        .route("/config/face", post(face_push))
         .route("/config/disk-alert", post(disk_alert_push))
         .route("/config/track-event", post(track_event_push))
         .route("/config/recording", get(recording_config))
@@ -499,6 +500,48 @@ async fn motion_push(State(st): State<AppState>, headers: HeaderMap, body: Optio
     // a flow restart and is never dropped (unlike the old Redis flow:inject, which vanished
     // whenever REDIS_URL was unset).
     app_core::work_queue::enqueue_event_blocking(&st.db, tenant, "motion", "edge", &payload);
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// One face detection reported by the edge (YuNet). `bbox` is canonical xyxy source pixels.
+#[derive(serde::Deserialize)]
+struct FaceIn {
+    camera_ip: String,
+    #[serde(default)]
+    bbox: [i32; 4], // xyxy
+    #[serde(default)]
+    confidence: f64, // 0..100
+    #[serde(default)]
+    face_ratio: f64, // face area ÷ frame area, 0..100
+    #[allow(dead_code)]
+    #[serde(default)]
+    at: String,
+    #[serde(default)]
+    frame_b64: Option<String>,
+}
+
+/// The edge reports a face detection (box token → tenant). Durable-enqueued as a `face_detected`
+/// System event so the tenant's `OnEvent("face_detected")` graphs fire with the frame + bbox +
+/// confidence + face_ratio — the entry point of the face recognition pipeline (#117).
+async fn face_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<FaceIn>>) -> Response {
+    let tenant = match box_tenant(&st, &headers).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
+        Err(resp) => return resp,
+    };
+    let Some(Json(ev)) = body else {
+        return (StatusCode::BAD_REQUEST, "face body required").into_response();
+    };
+    let mut payload = serde_json::json!({
+        "camera": ev.camera_ip,
+        "bbox": ev.bbox, // already xyxy
+        "confidence": ev.confidence.round() as i64,
+        "face_ratio": ev.face_ratio.round() as i64,
+    });
+    if let (Some(obj), Some(f)) = (payload.as_object_mut(), ev.frame_b64) {
+        obj.insert("frame".to_string(), serde_json::Value::String(f));
+    }
+    app_core::work_queue::enqueue_event_blocking(&st.db, tenant, "face_detected", "edge", &payload);
     StatusCode::NO_CONTENT.into_response()
 }
 
