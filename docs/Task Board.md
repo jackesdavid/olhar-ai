@@ -31,11 +31,6 @@ kanban-plugin: board
 
 ## ToDo
 
-- [ ] #11 Update button stays loading until update completes
-	  - Plan: [[update-button-loading]]
-- [ ] #13 Cooldown node: `reset` exec port
-	  - Plan: [[cooldown-reset-port]]
-- [ ] #14 The data time on the logs should locally time and we should see the date too — for the current day show only the time
 - [ ] #17 Face recognition: DetectFaces node + live-feed triggers
 	  - Plan: [[face-recognition-next-steps]]
 - [ ] #20 GetCameraRoom node — look up room name from a camera entity
@@ -94,28 +89,30 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #80 Windows edge — installer, service, self-update
-	  - Plan: [[edge-windows]]
-- [ ] #83 Windows installer — signed .exe
-	  - Plan: [[edge-windows-installer]]
 - [ ] #95 Graph instances — per-run context + live instance view
 	  - Plan: [[workflow-graph-instances]]
 - [ ] #94 Unified node value store — one place, media in MinIO
 	  - Plan: [[unified-node-value-store]]
 - [ ] #102 Workflow parameterization — input vars, clone, promote, templates
 	  - Plan: [[workflow-parameterization]]
-- [ ] #112 Enabled / Debug / Orphans → top-of-canvas icon toggles
-	  - Plan: [[editor-toggles-top-cluster]]
 - [ ] #113 Dictionaries — reusable typed tables + nodes
 	  - Plan: [[dictionaries-tables]]
-- [ ] #114 Stop Recording missing camera on DelayTrigger stop
-	  - Plan: [[stop-recording-missing-camera]]
 - [ ] #115 Get Variable over-activation — fires on branches that don't use it
 	  - Plan: [[get-variable-over-activation]]
+- [ ] #11 Update button stays loading until update completes
+	  - Plan: [[update-button-loading]]
 
 
 ## Review
 
+- [ ] #83 Windows installer — signed .exe
+	  - Plan: [[edge-windows-installer]]
+- [ ] #112 Enabled / Debug / Orphans → top-of-canvas icon toggles
+	  - Plan: [[editor-toggles-top-cluster]]
+- [ ] #114 Stop Recording missing camera on DelayTrigger stop
+	  - Plan: [[stop-recording-missing-camera]]
+- [ ] #80 Windows edge — installer, service, self-update
+	  - Plan: [[edge-windows]]
 
 
 ## Done

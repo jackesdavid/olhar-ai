@@ -47,22 +47,24 @@
     return !!b.version && !!latest && b.version !== latest;
   }
 
-  async function load() {
-    loading = true;
+  async function load(silent = false) {
+    if (!silent) loading = true;
     try {
       [list, latest] = await Promise.all([
         boxApi.list(),
         boxApi.latestVersion().then((r) => r.version).catch(() => ""),
       ]);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load boxes");
+      if (!silent) toast.error(e instanceof Error ? e.message : "Failed to load boxes");
     } finally {
-      loading = false;
+      if (!silent) loading = false;
     }
   }
   $effect(() => {
     if (allowed) load();
     else loading = false;
+    // Stop any in-flight update poll when the view is torn down.
+    return () => updatePollStop?.();
   });
 
   function buildCommand(token: string, hostname: string, tsKey: string | null): string {
@@ -189,16 +191,47 @@
     }
   }
 
+  // The button stays loading from click until the box heartbeats the new version (~60–90s), so it
+  // reflects the real end-to-end update, not just the ~200ms API call (#11). A silent 5s poll
+  // watches `version`; a 3-minute cap avoids a button stuck forever if the edge never comes back.
   let updatingId = $state<string | null>(null);
+  let updatePollStop: (() => void) | null = null;
+
+  function stopUpdatePoll() {
+    updatePollStop?.();
+  }
+  function startUpdatePoll(boxId: string, name: string, target: string) {
+    stopUpdatePoll(); // never run two polls at once
+    let attempts = 0;
+    const id = setInterval(async () => {
+      attempts += 1;
+      await load(true);
+      const box = list.find((b) => b.id === boxId);
+      if (box && target && box.version === target) {
+        stopUpdatePoll();
+        toast.success(`"${name}" updated to v${target}`);
+      } else if (attempts >= 36) {
+        stopUpdatePoll();
+        toast.warning(`"${name}" update is taking longer than expected — check the box logs.`);
+      }
+    }, 5000);
+    updatePollStop = () => {
+      clearInterval(id);
+      updatePollStop = null;
+      updatingId = null;
+    };
+  }
+
   async function updateBox(b: Box) {
     updatingId = b.id;
+    const target = latest;
     try {
       await boxApi.update(b.id);
-      toast.success(`Update requested for "${b.name}"`, { description: `Updating to v${latest} — ready in ~60s.` });
+      toast.info(`Update started for "${b.name}" — waiting for v${target}…`);
+      startUpdatePoll(b.id, b.name, target);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to request update");
-    } finally {
       updatingId = null;
+      toast.error(e instanceof Error ? e.message : "Failed to request update");
     }
   }
 </script>
