@@ -126,11 +126,13 @@ faces + relate a cluster to a person — see *Out of scope*.
   - control: `POST /config/face` (`face_push`) → `enqueue_event_blocking("face_detected")`, mirroring
     `motion_push`.
   - edge: `FaceEvent` + `AppState::push_face`; `face.rs::detect_and_push` runs YuNet on the throttled
-    motion-emit path (`frames.rs`), **opt-in per box via `FACE_DETECT=1`** (no cost on boxes not using
-    it), emits the most-prominent face. Workspace + edge compile; 141 app-core tests green.
-  - **Remaining: edge version bump + native rebuild + `task edge-publish`**, then set `FACE_DETECT=1`
-    on the box. Then the full journey runs: edge YuNet → `face_detected` → Extract Face Embedding →
-    Recognize Face → Store Face.
+    motion-emit path (`frames.rs`) — **always on, no env/toggle** (owner): it only runs on qualifying
+    throttled motion frames, so cost is bounded and a `face_detected` graph just works. Emits the
+    most-prominent face. Workspace + edge compile; 141 app-core tests green.
+  - **Edge release:** `task edge-publish` (macOS x86_64 for the active box) → 0.5.44. The box updates
+    via install.sh --update (raw binary swap; `.pkg` is only first-install). Then the full journey
+    runs with NOTHING to configure: edge YuNet → `face_detected` → Extract Face Embedding → Recognize
+    Face → If → Store Face.
 
 ## Out of scope (next phases — the "after this works" work)
 
