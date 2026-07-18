@@ -31,6 +31,8 @@ kanban-plugin: board
 
 ## ToDo
 
+- [ ] #117 Face recognition pipeline — edge detect → embed → recognize → store
+	  - Plan: [[face-recognition-pipeline]]
 - [ ] #17 Face recognition: DetectFaces node + live-feed triggers
 	  - Plan: [[face-recognition-next-steps]]
 - [ ] #20 GetCameraRoom node — look up room name from a camera entity
