@@ -99,10 +99,11 @@ export type TLSegment = {
 };
 
 /** Merge clips whose neighbour starts within `gapToleranceSecs` of the previous clip's end.
- *  Input must be start-sorted (buildTracks guarantees it). The tolerance is generous (20s) so a
- *  burst of ~40s motion clips separated by a few seconds reads as ONE recording session bar
- *  instead of a row of thin slivers; genuine idle gaps (minutes) still split into separate bars. */
-export function mergeSegments(clips: TLClip[], gapToleranceSecs = 20): TLSegment[] {
+ *  Input must be start-sorted (buildTracks guarantees it). The tolerance is TIGHT (2s) so only
+ *  genuinely back-to-back footage (segmented continuous recording) reads as one bar — a real gap
+ *  between clips is NOT painted as footage, so a bar's right edge always lands on actual last-frame
+ *  time (#116: "the bar must honour the clip width"). */
+export function mergeSegments(clips: TLClip[], gapToleranceSecs = 2): TLSegment[] {
   const segs: TLSegment[] = [];
   for (const c of clips) {
     const last = segs[segs.length - 1];
@@ -142,8 +143,21 @@ export function hhmm(tsMs: number): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-/** Zoom presets in px-per-second, coarse → fine. 0.02 ≈ a 24h day in ~1700px. */
-export const PX_PER_SEC_PRESETS = [0.02, 0.05, 0.1, 0.25, 0.5] as const;
+/** Zoom presets in px-per-second, coarse → fine. 0.02 ≈ a 24h day in ~1700px; the fine end
+ *  (≥1 px/s → 1 min = ≥60px) resolves minute-by-minute so short clips are inspectable (#116). */
+export const PX_PER_SEC_PRESETS = [0.02, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8] as const;
+
+/** The ruler's current tick step (the smallest that keeps ticks ≥ minPx apart) as a human label —
+ *  shown on-screen so the user sees the zoom granularity. Mirrors `rulerTicks`' candidate pick. */
+export function zoomStepLabel(pxPerSec: number, minPx = 72): string {
+  const CANDIDATES: [number, string][] = [
+    [1, "1s"], [2, "2s"], [5, "5s"], [10, "10s"], [15, "15s"], [30, "30s"],
+    [60, "1 min"], [300, "5 min"], [600, "10 min"], [900, "15 min"], [1800, "30 min"],
+    [3600, "1 h"], [7200, "2 h"], [10800, "3 h"], [21600, "6 h"],
+  ];
+  const found = CANDIDATES.find(([s]) => s * pxPerSec >= minPx);
+  return (found ?? CANDIDATES[CANDIDATES.length - 1])[1];
+}
 
 // ── event marker lane (Phase 2) ─────────────────────────────────────────────
 

@@ -38,6 +38,7 @@
     widthOf,
     xOf,
     tsOf,
+    zoomStepLabel,
     PX_PER_SEC_PRESETS,
     type TLClip,
     type TLTrack,
@@ -84,7 +85,23 @@
     return !cameraFilter || !e.camera || e.camera === cameraFilter;
   }
   const shownEvents = $derived(evs.filter((e) => footageRelevant(e) && inCameraScope(e)));
-  const markers = $derived(buildMarkers(shownEvents, pxPerSec));
+  const markers = $derived(buildMarkers(shownEvents, pxPerSec)); // combined — for the faint spines
+
+  // One lane per event KIND in the explorer (#116). Each kind clusters independently.
+  const eventKinds = $derived([...new Set(shownEvents.map((e) => e.kind))].sort());
+  const markersByKind = $derived(
+    new Map(eventKinds.map((k) => [k, buildMarkers(shownEvents.filter((e) => e.kind === k), pxPerSec)])),
+  );
+  // The lanes span the ruler (h-8 = 32px) + one h-7 (28px) per kind (min one row); the hover card
+  // sits just under them.
+  const lanesBottom = $derived(32 + Math.max(1, eventKinds.length) * 28);
+
+  // Persisted, on-screen zoom level (#116).
+  const ZOOM_KEY = "playback.pxIdx";
+  const zoomLabel = $derived(zoomStepLabel(pxPerSec));
+  $effect(() => {
+    if (typeof localStorage !== "undefined") localStorage.setItem(ZOOM_KEY, String(pxIdx));
+  });
 
   // ---- track visibility (Phase 4: hide / solo) -------------------------------
   let hidden = $state<Set<string>>(new Set());
@@ -175,10 +192,20 @@
       evs = evPage;
       cameras = cams;
       nowMs = Date.now();
-      // Open on real footage: earliest clip under the playhead, first camera active.
+      // Open on the NEWEST footage — the clip closest to now (#116): the latest clip that already
+      // started (≤ now), else the last clip of the day. `revealPlayhead()` scrolls it into view.
       const starts = page.items.map((r) => Date.parse(r.started_at)).filter(Number.isFinite);
-      playheadMs = starts.length ? Math.min(...starts) : originMs;
-      activeCamera = tracks[0]?.cameraIp ?? "";
+      const started = starts.filter((s) => s <= nowMs);
+      playheadMs = started.length
+        ? Math.max(...started)
+        : starts.length
+          ? Math.max(...starts)
+          : originMs;
+      // The most recent clip's camera is the useful default to preview.
+      const newestRec = [...page.items]
+        .filter((r) => Number.isFinite(Date.parse(r.started_at)))
+        .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))[0];
+      activeCamera = newestRec?.camera_ip ?? tracks[0]?.cameraIp ?? "";
       loadedClip = null;
       playing = false;
       void resolveVideo();
@@ -482,6 +509,10 @@
   }
 
   onMount(() => {
+    // Restore the saved zoom level (#116) before the first load, so the timeline opens where the
+    // user left it. Clamp in case the preset list changed.
+    const saved = Number(localStorage.getItem(ZOOM_KEY));
+    if (Number.isInteger(saved) && saved >= 0 && saved < PX_PER_SEC_PRESETS.length) pxIdx = saved;
     load();
     return () => {
       releaseObjectUrl();
@@ -546,7 +577,7 @@
     <div class="flex min-h-0 flex-1 flex-col gap-3">
       <!-- stage: active-camera preview + camera tiles -->
       <div class="flex flex-col gap-3 lg:flex-row">
-        <div class="relative aspect-video w-full shrink-0 overflow-hidden rounded-xl border border-border bg-black lg:max-w-xl">
+        <div class="relative aspect-video w-full shrink-0 overflow-hidden rounded-xl border border-border bg-black lg:max-h-[38vh] lg:max-w-xl">
           {#if videoSrc}
             <!-- svelte-ignore a11y_media_has_caption -->
             <video
@@ -627,6 +658,7 @@
           <Button variant="outline" size="icon" class="size-8" title="Zoom out" disabled={pxIdx === 0} onclick={() => zoom(-1)}>
             <ZoomOut class="size-4" />
           </Button>
+          <span class="w-12 text-center text-[11px] tabular-nums text-muted-foreground" title="Ruler step at this zoom">{zoomLabel}</span>
           <Button
             variant="outline"
             size="icon"
@@ -640,158 +672,175 @@
         </div>
       </div>
 
-      <!-- timeline -->
+      <!-- timeline — fills the remaining height; the whole grid scrolls vertically (tracks + one
+           lane per event kind), the time content scrolls horizontally. -->
       <div class="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-border">
-      <!-- fixed track-header column -->
-      <div class="w-44 shrink-0 border-r border-border bg-card">
-        <div class="h-8 border-b border-border"></div>
-        <div class="flex h-7 items-center border-b border-border px-3">
-          <span class="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Events</span>
-        </div>
-        {#each visibleTracks as t (t.cameraIp)}
-          <div class="flex h-11 items-center gap-1.5 border-b border-border/60 px-3">
-            <span class="size-2 shrink-0 rounded-full bg-primary/60"></span>
-            <div class="min-w-0 flex-1">
-              <p class="truncate text-sm font-medium">{t.cameraName}</p>
-              <p class="text-[11px] text-muted-foreground tabular-nums">{t.clips.length} clip{t.clips.length === 1 ? "" : "s"}</p>
-            </div>
-            <button
-              type="button"
-              class="grid size-6 place-items-center rounded transition-colors hover:bg-muted/60 {soloCamera === t.cameraIp ? 'text-primary' : 'text-muted-foreground'}"
-              title={soloCamera === t.cameraIp ? "Exit solo" : "Solo this camera"}
-              onclick={() => toggleSolo(t.cameraIp)}
-            >
-              <Focus class="size-3.5" />
-            </button>
-            <button
-              type="button"
-              class="grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted/60"
-              title="Hide this camera"
-              onclick={() => toggleHide(t.cameraIp)}
-            >
-              <EyeOff class="size-3.5" />
-            </button>
-          </div>
-        {/each}
-      </div>
-
-      <!-- scrolling time content -->
-      <div class="min-w-0 flex-1 overflow-x-auto" bind:this={scrollEl}>
-        <div
-          class="relative"
-          style="width: {contentWidth}px"
-          bind:this={contentEl}
-          role="slider"
-          tabindex="0"
-          aria-label="Playhead — click or use arrow keys to scrub"
-          aria-valuemin={0}
-          aria-valuemax={DAY_SECS}
-          aria-valuenow={Math.round((playheadMs - originMs) / 1000)}
-          onclick={onTimelineClick}
-          onkeydown={onTimelineKey}
-        >
-          <!-- ruler -->
-          <div class="relative h-8 border-b border-border">
-            {#each ticks as tk (tk.x)}
-              <div class="absolute top-0 flex h-full flex-col items-start" style="left: {tk.x}px">
-                <div class="h-2 w-px bg-border"></div>
-                <span class="mt-0.5 pl-1 text-[10px] text-muted-foreground tabular-nums">{tk.label}</span>
+        <div class="flex min-h-0 w-full items-start overflow-y-auto">
+          <!-- fixed header column: ruler spacer · one row per event kind · one row per camera -->
+          <div class="w-44 shrink-0 border-r border-border bg-card">
+            <div class="h-8 border-b border-border"></div>
+            {#each eventKinds as k (k)}
+              <div class="flex h-7 items-center border-b border-border px-3">
+                <span class="truncate text-[10px] font-semibold uppercase tracking-wide text-muted-foreground" title={k}>{k}</span>
               </div>
             {/each}
-          </div>
-
-          <!-- event marker lane: one dot per moment, coloured by the loudest severity -->
-          <div class="relative h-7 border-b border-border">
-            {#each markers as m (m.ts)}
-              <div
-                class="absolute top-1/2 z-10 -translate-x-1/2 -translate-y-1/2"
-                style="left: {markerLeft(m)}px"
-                role="button"
-                tabindex="0"
-                aria-label="{m.events.length} event(s) at {hhmm(m.ts)}"
-                onmouseenter={() => (hovered = m)}
-                onmouseleave={() => (hovered = null)}
-                onfocus={() => (hovered = m)}
-                onblur={() => (hovered = null)}
-              >
-                <span class="block size-2.5 rounded-full ring-2 ring-card {markerClass(m)}"></span>
-                {#if m.events.length > 1}
-                  <span class="absolute -right-2 -top-1 rounded-full bg-card px-1 text-[9px] font-semibold leading-tight text-muted-foreground tabular-nums ring-1 ring-border">
-                    {m.events.length}
-                  </span>
-                {/if}
+            {#if eventKinds.length === 0}
+              <div class="flex h-7 items-center border-b border-border px-3">
+                <span class="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/50">No events</span>
               </div>
-            {/each}
-          </div>
-
-          <!-- tracks, with faint spine lines dropping from each marker -->
-          <div class="relative">
-            {#each markers as m (m.ts)}
-              <div class="pointer-events-none absolute inset-y-0 w-px bg-primary/10" style="left: {markerLeft(m)}px"></div>
-            {/each}
+            {/if}
             {#each visibleTracks as t (t.cameraIp)}
-              {@const segs = mergeSegments(t.clips)}
-              <div class="relative h-11 border-b border-border/60">
-                <!-- gap baseline: no footage shows through as a dashed lane -->
-                <div class="absolute inset-x-0 top-1/2 border-t border-dashed border-border/50"></div>
-                {#each segs as s, i (s.startTs)}
-                  <div
-                    class="absolute top-1.5 bottom-1.5 z-[1] flex items-center overflow-hidden rounded-md border px-1.5 transition-colors {segClass(s)}"
-                    style="left: {segLeft(s)}px; width: {segWidth(s, segs[i + 1])}px"
-                    title={segTitle(s)}
-                  >
-                    {#if segWide(s, segs[i + 1])}
-                      <span class="truncate text-[11px] text-primary tabular-nums">{hhmm(s.startTs)}</span>
-                    {/if}
+              <div class="flex h-11 items-center gap-1.5 border-b border-border/60 px-3">
+                <span class="size-2 shrink-0 rounded-full bg-primary/60"></span>
+                <div class="min-w-0 flex-1">
+                  <p class="truncate text-sm font-medium">{t.cameraName}</p>
+                  <p class="text-[11px] text-muted-foreground tabular-nums">{t.clips.length} clip{t.clips.length === 1 ? "" : "s"}</p>
+                </div>
+                <button
+                  type="button"
+                  class="grid size-6 place-items-center rounded transition-colors hover:bg-muted/60 {soloCamera === t.cameraIp ? 'text-primary' : 'text-muted-foreground'}"
+                  title={soloCamera === t.cameraIp ? "Exit solo" : "Solo this camera"}
+                  onclick={() => toggleSolo(t.cameraIp)}
+                >
+                  <Focus class="size-3.5" />
+                </button>
+                <button
+                  type="button"
+                  class="grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted/60"
+                  title="Hide this camera"
+                  onclick={() => toggleHide(t.cameraIp)}
+                >
+                  <EyeOff class="size-3.5" />
+                </button>
+              </div>
+            {/each}
+          </div>
+
+          <!-- scrolling time content -->
+          <div class="min-w-0 flex-1 overflow-x-auto" bind:this={scrollEl}>
+            <div
+              class="relative"
+              style="width: {contentWidth}px"
+              bind:this={contentEl}
+              role="slider"
+              tabindex="0"
+              aria-label="Playhead — click or use arrow keys to scrub"
+              aria-valuemin={0}
+              aria-valuemax={DAY_SECS}
+              aria-valuenow={Math.round((playheadMs - originMs) / 1000)}
+              onclick={onTimelineClick}
+              onkeydown={onTimelineKey}
+            >
+              <!-- ruler -->
+              <div class="relative h-8 border-b border-border">
+                {#each ticks as tk (tk.x)}
+                  <div class="absolute top-0 flex h-full flex-col items-start" style="left: {tk.x}px">
+                    <div class="h-2 w-px bg-border"></div>
+                    <span class="mt-0.5 pl-1 text-[10px] text-muted-foreground tabular-nums">{tk.label}</span>
                   </div>
                 {/each}
               </div>
-            {/each}
-          </div>
 
-          <!-- "now" guide (today only) -->
-          {#if isToday && nowX >= 0 && nowX <= contentWidth}
-            <div class="pointer-events-none absolute inset-y-0 w-px bg-primary/40" style="left: {nowX}px"></div>
-          {/if}
+              <!-- one event lane PER KIND: a dot per clustered moment, coloured by loudest severity -->
+              {#each eventKinds as k (k)}
+                <div class="relative h-7 border-b border-border">
+                  {#each markersByKind.get(k) ?? [] as m (m.ts)}
+                    <div
+                      class="absolute top-1/2 z-10 -translate-x-1/2 -translate-y-1/2"
+                      style="left: {markerLeft(m)}px"
+                      role="button"
+                      tabindex="0"
+                      aria-label="{m.events.length} {k} event(s) at {hhmm(m.ts)}"
+                      onmouseenter={() => (hovered = m)}
+                      onmouseleave={() => (hovered = null)}
+                      onfocus={() => (hovered = m)}
+                      onblur={() => (hovered = null)}
+                    >
+                      <span class="block size-2.5 rounded-full ring-2 ring-card {markerClass(m)}"></span>
+                      {#if m.events.length > 1}
+                        <span class="absolute -right-2 -top-1 rounded-full bg-card px-1 text-[9px] font-semibold leading-tight text-muted-foreground tabular-nums ring-1 ring-border">
+                          {m.events.length}
+                        </span>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              {/each}
+              {#if eventKinds.length === 0}
+                <div class="relative h-7 border-b border-border"></div>
+              {/if}
 
-          <!-- playhead: ink line + draggable head -->
-          {#if playheadX >= 0 && playheadX <= contentWidth}
-            <div class="pointer-events-none absolute inset-y-0 z-20 w-px bg-primary" style="left: {playheadX}px">
-              <button
-                type="button"
-                class="pointer-events-auto absolute -left-[7px] top-1.5 size-3.5 cursor-ew-resize rounded-full bg-primary shadow ring-2 ring-card"
-                title="Drag to scrub"
-                aria-label="Drag playhead"
-                onpointerdown={startDrag}
-                onclick={(e) => e.stopPropagation()}
-              ></button>
-            </div>
-          {/if}
-
-          <!-- marker hover card: "same moment = same place" -->
-          {#if hovered}
-            <div
-              class="pointer-events-none absolute z-30 w-60 -translate-x-1/2 rounded-lg border border-border bg-popover p-2 shadow-lg"
-              style="left: {markerLeft(hovered)}px; top: 62px"
-            >
-              <p class="mb-1 text-[11px] font-semibold text-muted-foreground tabular-nums">
-                {hhmm(hovered.ts)} · {hovered.events.length} event{hovered.events.length === 1 ? "" : "s"}
-              </p>
-              <ul class="space-y-0.5">
-                {#each hovered.events.slice(0, 6) as e (e.id)}
-                  <li class="flex items-center gap-1.5 text-xs">
-                    <span class="size-1.5 shrink-0 rounded-full {eventSevClass(e)}"></span>
-                    <span class="truncate">{eventLine(e)}</span>
-                  </li>
+              <!-- tracks, with faint spine lines dropping from each marker -->
+              <div class="relative">
+                {#each markers as m (m.ts)}
+                  <div class="pointer-events-none absolute inset-y-0 w-px bg-primary/10" style="left: {markerLeft(m)}px"></div>
                 {/each}
-                {#if hovered.events.length > 6}
-                  <li class="text-[11px] text-muted-foreground">+{hovered.events.length - 6} more</li>
-                {/if}
-              </ul>
+                {#each visibleTracks as t (t.cameraIp)}
+                  {@const segs = mergeSegments(t.clips)}
+                  <div class="relative h-11 border-b border-border/60">
+                    <!-- gap baseline: no footage shows through as a dashed lane -->
+                    <div class="absolute inset-x-0 top-1/2 border-t border-dashed border-border/50"></div>
+                    {#each segs as s, i (s.startTs)}
+                      <div
+                        class="absolute top-1.5 bottom-1.5 z-[1] flex items-center overflow-hidden rounded-md border px-1.5 transition-colors {segClass(s)}"
+                        style="left: {segLeft(s)}px; width: {segWidth(s, segs[i + 1])}px"
+                        title={segTitle(s)}
+                      >
+                        {#if segWide(s, segs[i + 1])}
+                          <span class="truncate text-[11px] text-primary tabular-nums">{hhmm(s.startTs)}</span>
+                        {/if}
+                      </div>
+                    {/each}
+                  </div>
+                {/each}
+              </div>
+
+              <!-- "now" guide (today only) — amber, distinct from the ink playhead -->
+              {#if isToday && nowX >= 0 && nowX <= contentWidth}
+                <div class="pointer-events-none absolute inset-y-0 z-10 w-px bg-amber-500/80" style="left: {nowX}px">
+                  <span class="absolute -top-0 left-0.5 rounded-sm bg-amber-500 px-1 text-[9px] font-semibold leading-tight text-white">now</span>
+                </div>
+              {/if}
+
+              <!-- playhead: ink line + draggable head -->
+              {#if playheadX >= 0 && playheadX <= contentWidth}
+                <div class="pointer-events-none absolute inset-y-0 z-20 w-px bg-primary" style="left: {playheadX}px">
+                  <button
+                    type="button"
+                    class="pointer-events-auto absolute -left-[7px] top-1.5 size-3.5 cursor-ew-resize rounded-full bg-primary shadow ring-2 ring-card"
+                    title="Drag to scrub"
+                    aria-label="Drag playhead"
+                    onpointerdown={startDrag}
+                    onclick={(e) => e.stopPropagation()}
+                  ></button>
+                </div>
+              {/if}
+
+              <!-- marker hover card: "same moment = same place" — sits just under the lanes -->
+              {#if hovered}
+                <div
+                  class="pointer-events-none absolute z-30 w-60 -translate-x-1/2 rounded-lg border border-border bg-popover p-2 shadow-lg"
+                  style="left: {markerLeft(hovered)}px; top: {lanesBottom}px"
+                >
+                  <p class="mb-1 text-[11px] font-semibold text-muted-foreground tabular-nums">
+                    {hhmm(hovered.ts)} · {hovered.events.length} event{hovered.events.length === 1 ? "" : "s"}
+                  </p>
+                  <ul class="space-y-0.5">
+                    {#each hovered.events.slice(0, 6) as e (e.id)}
+                      <li class="flex items-center gap-1.5 text-xs">
+                        <span class="size-1.5 shrink-0 rounded-full {eventSevClass(e)}"></span>
+                        <span class="truncate">{eventLine(e)}</span>
+                      </li>
+                    {/each}
+                    {#if hovered.events.length > 6}
+                      <li class="text-[11px] text-muted-foreground">+{hovered.events.length - 6} more</li>
+                    {/if}
+                  </ul>
+                </div>
+              {/if}
             </div>
-          {/if}
+          </div>
         </div>
-      </div>
       </div>
     </div>
   {/if}

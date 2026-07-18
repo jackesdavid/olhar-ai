@@ -83,8 +83,6 @@ kanban-plugin: board
 	  - Plan: [[node-palette-search-autofocus]]
 - [ ] #111 Scheduled workflow trigger — calendar schedule builder
 	  - Plan: [[workflow-schedule-trigger]]
-- [ ] #116 Playback view fixes — clip-bar width, granular zoom, per-kind lanes, full-height
-	  - Plan: [[playback-view-fixes]]
 
 
 ## In Progress
@@ -101,6 +99,8 @@ kanban-plugin: board
 	  - Plan: [[get-variable-over-activation]]
 - [ ] #11 Update button stays loading until update completes
 	  - Plan: [[update-button-loading]]
+- [ ] #116 Playback view fixes — clip-bar width, granular zoom, per-kind lanes, full-height
+	  - Plan: [[playback-view-fixes]]
 
 
 ## Review
