@@ -33,6 +33,7 @@
   import Copy from "@lucide/svelte/icons/copy";
   import Bookmark from "@lucide/svelte/icons/bookmark";
   import LayoutTemplate from "@lucide/svelte/icons/layout-template";
+  import Table2 from "@lucide/svelte/icons/table-2";
   import Link2 from "@lucide/svelte/icons/link-2";
   import Unplug from "@lucide/svelte/icons/unplug";
   import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
@@ -94,6 +95,7 @@
 
   import ContextSearch from "../components/ContextSearch.svelte";
   import VariablesPanel from "../components/VariablesPanel.svelte";
+  import DictionaryModal from "$lib/components/dictionary-modal.svelte";
   import RegionPointsEditor from "../components/RegionPointsEditor.svelte";
 
   // ---- types (the serialized core shapes) ----------------------------------
@@ -125,6 +127,22 @@
     { value: "recipient", label: "Recipient" },
     { value: "file", label: "File" },
     { value: "dictionary", label: "Dictionary" },
+  ];
+  // Variable types (the Variables panel). Mirrors PAYLOAD_TYPES but "Dictionary" here means a
+  // reference to a named typed-column table (PortType::Table, #113), not the flat string→string
+  // dictionary that HTTP Post's headers/fields use.
+  const VAR_TYPES: { value: string; label: string }[] = [
+    { value: "text", label: "Text" },
+    { value: "num", label: "Number" },
+    { value: "bool", label: "Bool" },
+    { value: "image", label: "Image" },
+    { value: "num_array", label: "Num array" },
+    { value: "text_array", label: "Text array" },
+    { value: "bbox", label: "Bounding box" },
+    { value: "camera", label: "Camera" },
+    { value: "recipient", label: "Recipient" },
+    { value: "file", label: "File" },
+    { value: "table", label: "Dictionary" },
   ];
   // A palette entry: a node kind, optionally pre-bound to an event name (for the
   // synthesized "On event: Foo" / "Emit event: Foo" entries).
@@ -515,6 +533,7 @@
   // live references for node dropdowns + per-graph run activity (polled)
   let devices = $state<{ id?: string; ip?: string; name: string; rtsp_url?: string | null }[]>([]);
   let recipients = $state<{ label: string; enabled: boolean }[]>([]);
+  let dictionaries = $state<{ id: string; name: string }[]>([]);
   let rooms = $state<{ id: number; name: string }[]>([]);
   type Activity = {
     running: number;
@@ -682,6 +701,31 @@
   const cameraKey = (d: { id?: string; ip?: string }) => d.id || d.ip || "";
   const cameraOptions = $derived(devices.map((d) => ({ value: cameraKey(d), label: d.name })));
   const recipientOptions = $derived(recipients.map((r) => ({ value: r.label, label: r.label })));
+  const dictionaryOptions = $derived(dictionaries.map((d) => ({ value: d.id, label: d.name })));
+
+  // Dictionary create/edit modal (opened from a Table variable row). `dictModalVar` is the
+  // variable index to point at the saved dictionary once a new one is created.
+  let dictModalOpen = $state(false);
+  let dictModalId = $state<string | null>(null);
+  let dictModalVar = $state<number | null>(null);
+  function openNewDictionary(i: number) {
+    dictModalVar = i;
+    dictModalId = null;
+    dictModalOpen = true;
+  }
+  function openEditDictionary(i: number, id: string) {
+    dictModalVar = i;
+    dictModalId = id;
+    dictModalOpen = true;
+  }
+  async function onDictionarySaved(saved: { id: string; name: string }) {
+    await reloadDictionaries();
+    // Point the originating variable at the new dictionary (only when creating a fresh one).
+    if (dictModalVar !== null && dictModalId === null) {
+      editVariable(dictModalVar, { default: saved.id });
+    }
+    dictModalVar = null;
+  }
   // Rooms for the `room` node dropdown (CreateAlert / RecordPresence). Stored BY NAME —
   // the flow node resolves the name to a room_id, and the map pulse locates by it. A
   // blank "(no room)" option keeps room optional (e.g. CreateAlert without a room).
@@ -1333,12 +1377,25 @@
 
   async function loadRefs() {
     try {
-      const [d, r, m] = await Promise.all([data.listDevices(), data.listBeacons(), data.loadMap()]);
+      const [d, r, m, dicts] = await Promise.all([
+        data.listDevices(),
+        data.listBeacons(),
+        data.loadMap(),
+        data.listDictionaries().catch(() => []),
+      ]);
       devices = d;
       recipients = r;
+      dictionaries = dicts.map((x) => ({ id: x.id, name: x.name }));
       rooms = (m.rooms ?? []).map((rm) => ({ id: rm.id, name: rm.name }));
     } catch (err) {
       console.error("Failed to load devices/recipients/rooms", err);
+    }
+  }
+  async function reloadDictionaries() {
+    try {
+      dictionaries = (await data.listDictionaries()).map((x) => ({ id: x.id, name: x.name }));
+    } catch (err) {
+      console.error("Failed to reload dictionaries", err);
     }
   }
   async function loadEvents() {
@@ -2847,6 +2904,7 @@
         </div>
         <div class="flex items-center gap-2">
           <Button variant="outline" onclick={() => goto("/workflows/templates")}><LayoutTemplate class="size-4" /> Templates</Button>
+          <Button variant="outline" onclick={() => goto("/workflows/dictionaries")}><Table2 class="size-4" /> Dictionaries</Button>
           <Button onclick={createWorkflow}><Plus class="size-4" /> New workflow</Button>
         </div>
       </div>
@@ -4355,13 +4413,16 @@
             <div class="h-full overflow-y-auto">
               <VariablesPanel
                 {variables}
-                types={PAYLOAD_TYPES}
+                types={VAR_TYPES}
                 cameras={cameraOptions}
                 recipients={recipientOptions}
+                dictionaries={dictionaryOptions}
                 disabled={editLocked}
                 onAdd={addVariable}
                 onEdit={editVariable}
                 onRemove={removeVariable}
+                onNewDictionary={openNewDictionary}
+                onEditDictionary={openEditDictionary}
               />
             </div>
           {/if}
@@ -4548,6 +4609,9 @@
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
+
+<!-- Dictionary create/edit modal (from a Table variable row) -->
+<DictionaryModal bind:open={dictModalOpen} dictId={dictModalId} onsaved={onDictionarySaved} />
 
 <!-- Delete dialog -->
 <Dialog.Root bind:open={deleteOpen}>

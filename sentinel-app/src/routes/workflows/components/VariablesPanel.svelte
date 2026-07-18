@@ -10,6 +10,7 @@
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import GripVertical from "@lucide/svelte/icons/grip-vertical";
   import Star from "@lucide/svelte/icons/star";
+  import Pencil from "@lucide/svelte/icons/pencil";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { typeColor } from "$lib/workflows/portColors";
@@ -27,21 +28,28 @@
     types,
     cameras = [],
     recipients = [],
+    dictionaries = [],
     disabled = false,
     onAdd,
     onEdit,
     onRemove,
+    onNewDictionary,
+    onEditDictionary,
   }: {
     variables: Variable[];
     types: { value: string; label: string }[];
     cameras?: { value: string; label: string }[];
     recipients?: { value: string; label: string }[];
+    dictionaries?: { value: string; label: string }[];
     disabled?: boolean;
     onAdd: () => void;
     onEdit: (i: number, patch: Partial<Variable>) => void;
     onRemove: (i: number) => void;
+    onNewDictionary?: (i: number) => void;
+    onEditDictionary?: (i: number, id: string) => void;
   } = $props();
-  // Which types accept an author-typed default (matches the engine seeding).
+  // Which types accept an author-typed default (matches the engine seeding). `table` is handled
+  // separately (a reference to a named dictionary, not an author-typed literal).
   const DEFAULTABLE = new Set(["text", "num", "bool", "camera", "recipient"]);
 </script>
 
@@ -95,7 +103,42 @@
           {#each types as t (t.value)}<option value={t.value}>{t.label}</option>{/each}
         </select>
         <!-- default-value editor, per type (blank = no default → the Get's type-zero) -->
-        {#if DEFAULTABLE.has(v.type)}
+        {#if v.type === "table"}
+          <!-- a Dictionary variable references a named dictionary by id; edit/create it live -->
+          <select
+            class="h-6 w-[92px] shrink-0 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"
+            title="Referenced dictionary"
+            value={v.default ?? ""}
+            disabled={disabled}
+            onchange={(e) => onEdit(i, { default: e.currentTarget.value || null })}
+          >
+            <option value="">—</option>
+            {#each dictionaries as d (d.value)}<option value={d.value}>{d.label}</option>{/each}
+          </select>
+          {#if v.default}
+            <Button
+              variant="ghost"
+              size="icon"
+              class="size-5 shrink-0 text-muted-foreground hover:text-foreground"
+              title="Edit this dictionary"
+              disabled={disabled}
+              onclick={() => onEditDictionary?.(i, v.default as string)}
+            >
+              <Pencil class="size-3" />
+            </Button>
+          {:else}
+            <Button
+              variant="ghost"
+              size="icon"
+              class="size-5 shrink-0 text-muted-foreground hover:text-foreground"
+              title="Create a new dictionary"
+              disabled={disabled}
+              onclick={() => onNewDictionary?.(i)}
+            >
+              <Plus class="size-3" />
+            </Button>
+          {/if}
+        {:else if DEFAULTABLE.has(v.type)}
           {#if v.type === "bool"}
             <select
               class="h-6 w-[58px] shrink-0 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"

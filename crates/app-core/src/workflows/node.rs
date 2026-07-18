@@ -50,6 +50,9 @@ pub enum PortValue {
     Recipient(String),
     /// An arbitrary string→string dictionary (HTTP headers / form fields).
     Dict(Vec<(String, String)>),
+    /// A resolved reference to a named **Dictionary table** (#113) — carries the whole dictionary
+    /// (id + schema + rows) so read nodes see its data and mutate nodes act on it by id.
+    Table(crate::dictionaries::Dictionary),
     /// Any file (bytes + name + MIME).
     File(FileVal),
     /// A typed array — elements are themselves `PortValue`s. Carried by the `*Array`
@@ -256,6 +259,9 @@ pub fn literal_for_named(config: &Value, name: &str, ty: PortType) -> Option<Por
         PortType::Exec => None,
         // Camera literals are resolved by the engine (needs sys.devices); not a plain config value.
         PortType::Camera => None,
+        // A Table literal is a dictionary uuid; resolving it to its rows needs sys.dictionaries,
+        // so the engine resolves it (like Camera), not this pure config reader.
+        PortType::Table => None,
         // Arrays / detection elements / the Any wildcard are produced by upstream nodes
         // (or, for ForEach `items`, parsed from text in the engine) — never a config literal.
         PortType::TextArray

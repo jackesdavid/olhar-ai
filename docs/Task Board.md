@@ -104,6 +104,8 @@ kanban-plugin: board
 	  - Plan: [[workflow-parameterization]]
 - [ ] #112 Enabled / Debug / Orphans → top-of-canvas icon toggles
 	  - Plan: [[editor-toggles-top-cluster]]
+- [ ] #113 Dictionaries — reusable typed tables + nodes
+	  - Plan: [[dictionaries-tables]]
 
 
 ## Review

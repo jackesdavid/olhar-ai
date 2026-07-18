@@ -24,6 +24,28 @@ import {
 /** Unsubscribe handle returned by [`onEvent`]. */
 export type UnlistenFn = () => void;
 
+// ---- Dictionaries (#113): named, typed-column tables ----
+/** A cell's scalar type. v1 is Text / Num / Bool. */
+export type CellType = "text" | "num" | "bool";
+/** One column of a dictionary's schema. `type` is serialized (Rust `#[serde(rename = "type")]`). */
+export type DictColumn = { name: string; type: CellType };
+/** One typed cell — tagged to survive schema round-trips: `{t, v}`. */
+export type DictCell =
+  | { t: "text"; v: string }
+  | { t: "num"; v: number }
+  | { t: "bool"; v: boolean };
+/** A full dictionary (schema + rows), as returned by the API. */
+export type Dictionary = {
+  id: string;
+  name: string;
+  columns: DictColumn[];
+  rows: DictCell[][];
+  created_at?: string;
+  updated_at?: string;
+};
+/** The create/update payload — name + schema + rows (rows conformed to columns server-side). */
+export type DictionaryInput = { name: string; columns: DictColumn[]; rows: DictCell[][] };
+
 /** A camera the tenant's edge found on its LAN (pushed up to the cloud). */
 export type EdgeDiscovered = {
   ip: string;
@@ -316,6 +338,22 @@ export const data = {
   setGraphGlobal: async (id: string, value: boolean): Promise<void> => {
     await api.put<void>(`/workflows/${id}/global`, { value });
   },
+  // ---- Dictionaries (#113): named typed-column tables, reusable across workflows ----
+  /** All of the tenant's dictionaries (schema + rows), newest first. */
+  listDictionaries: (): Promise<Dictionary[]> => api.get<Dictionary[]>("/dictionaries"),
+  /** One dictionary by id. */
+  getDictionary: (id: string): Promise<Dictionary> => api.get<Dictionary>(`/dictionaries/${id}`),
+  /** Create a dictionary from a name + schema + rows; returns its new id. */
+  createDictionary: (body: DictionaryInput): Promise<string> =>
+    api.post<string>("/dictionaries", body),
+  /** Replace a dictionary's full content (name, columns, rows). Returns the saved dictionary. */
+  updateDictionary: (id: string, body: DictionaryInput): Promise<Dictionary> =>
+    api.put<Dictionary>(`/dictionaries/${id}`, body),
+  /** Delete a dictionary. 409 (with the referencing workflow names) while a variable still uses it. */
+  deleteDictionary: async (id: string): Promise<void> => {
+    await api.del<void>(`/dictionaries/${id}`);
+  },
+
   deleteGraph: async (id: string): Promise<void> => {
     await api.del<void>(`/workflows/${id}`);
   },

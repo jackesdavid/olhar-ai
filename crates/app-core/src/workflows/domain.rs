@@ -31,6 +31,10 @@ pub enum PortType {
     Recipient,
     /// An arbitrary string→string dictionary (e.g. HTTP headers / form fields).
     Dictionary,
+    /// A reference to a named, typed-column **Dictionary table** (`dictionaries` table, #113) —
+    /// carried as the dictionary's uuid on the wire, resolved to a `PortValue::Table` at run start.
+    /// The structured cousin of `Dictionary`: columns-with-types + data rows, reusable + mutable.
+    Table,
     /// Any file (raw bytes + filename), like `Image` but for arbitrary types.
     File,
     /// Control flow ("white") — carries no value; sequences node execution.

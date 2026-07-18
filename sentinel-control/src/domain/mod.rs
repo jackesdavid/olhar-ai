@@ -16,6 +16,7 @@ mod beacons;
 mod billing;
 pub mod boxes;
 mod devices;
+mod dictionaries;
 mod events;
 mod jobs;
 mod map;
@@ -31,6 +32,7 @@ pub type ApiErr = (StatusCode, String);
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(devices::router())
+        .merge(dictionaries::router())
         .merge(agent::router())
         .merge(alerts::router())
         .merge(billing::router())
