@@ -104,6 +104,20 @@ wrong key too: the *window itself* needs a context, or there can only ever be on
 - No base64 in any Postgres row: `select` for `jpeg_b64` returns nothing.
 - A frame survives a pod restart (it's a URL now, not memory).
 
+## Status (2026-07-18) — implementing with #95
+
+- Codec (Phase 1) exists: `crates/app-core/src/workflows/values.rs` (`to_json`/`value_to_json`/
+  `value_from_json`; media/non-persistable kinds dropped with a warn, never base64'd into rows).
+  `repo::set_node_values`/`get_node_values` write/read `workflow_node_state.values_json` keyed by
+  instance — but `set_node_values` is currently only called on the DelayTrigger window path.
+- **This session:** Phase 2 — **persist every executed node's outputs at run end**, per instance, via
+  the existing codec (rows stay small; media dropped, not base64'd). This is the data the #95 live
+  instance view reads (`GET /workflows/:id/instance-values?key=`).
+- **Still deferred:** Phase 4 fork-collapse — the Show Image base64 write (`engine.rs` ~line 998) and
+  the in-memory `node_frames` cache (`sentinel-flow/src/state.rs`) both still exist; media → MinIO URL
+  via `media.rs` and deleting `node_frames` is the next slice. Phase 5 retention (sweep old value
+  rows) also pending — `0054`'s events sweep is the precedent.
+
 ## Out of scope
 
 - The parameterization epic (input variables, clone, promote-to-input, default templates) — related,

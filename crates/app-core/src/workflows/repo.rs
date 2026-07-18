@@ -1133,3 +1133,193 @@ pub fn set_node_variables(
         log::error!("workflows::repo::set_node_variables failed: {e}");
     }
 }
+
+// ---- live instances (card #95 phase 4) --------------------------------------
+
+/// One live/known instance of a graph.
+#[derive(Debug, Clone)]
+pub struct InstanceInfo {
+    /// The graph's `InstanceScope` applied to the firing signal — `""` for a `Single`-scope graph,
+    /// the camera id for `PerCamera`.
+    pub instance_key: String,
+    /// A latent window is still open in this instance: some node's `state_json` reads `state:armed`
+    /// (a `DelayTrigger`/`TimeGate` that armed and hasn't been disarmed). This is what "in flight"
+    /// means for the live view.
+    pub active: bool,
+    /// When the still-open window closes (the max armed `expires_at`, RFC3339). `None` when the
+    /// instance has only saved values and no live window. This is the one per-instance timestamp the
+    /// row carries — `workflow_node_state` has no generic mutation column (no migration this slice).
+    pub window_expires_at: Option<String>,
+}
+
+/// Enumerate a graph's instances.
+///
+/// The honest data source is **distinct `instance_key`s present in `workflow_node_state`** for the
+/// (tenant, graph): a row exists exactly when a run of that instance saved latent state (#95 phase 1)
+/// or node values (#94 phase 2), so this answers "which run contexts are alive or have saved data" —
+/// the question the live view asks. It deliberately does NOT invent an instance from `workflow_runs`,
+/// because runs are not yet instance-keyed (that's #95 phase 2, "an instance = an unfinished run
+/// row"); attributing a run to an instance here would be a guess. The caller enriches with the
+/// graph's latest run at the endpoint, flagged as best-effort.
+///
+/// `active`/`window_expires_at` are derived in Rust from each row's `state_json` (a small JSON blob
+/// whose `expires_at` is RFC3339 text inside the document, not a comparable SQL column), so grouping
+/// and the armed check happen here rather than in a jsonb query.
+pub fn list_instances(db: &Db, tenant_id: Uuid, graph_id: Uuid) -> Vec<InstanceInfo> {
+    let pool = db.pool();
+    let rows: Vec<(String, String)> = db.block(async move {
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT instance_key, state_json FROM workflow_node_state
+              WHERE tenant_id = $1 AND graph_id = $2",
+        )
+        .bind(tenant_id)
+        .bind(graph_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            log::error!("workflows::repo::list_instances query failed: {e}");
+            Vec::new()
+        })
+    });
+    instances_from_state_rows(rows)
+}
+
+/// Pure grouping of `(instance_key, state_json)` rows into instances: one entry per distinct key,
+/// `active` if any of its nodes' `state_json` reads `state:armed`, `window_expires_at` the latest
+/// armed `expires_at`. Split out from [`list_instances`] so it's testable without a DB.
+fn instances_from_state_rows(rows: Vec<(String, String)>) -> Vec<InstanceInfo> {
+    let mut by_key: std::collections::HashMap<String, InstanceInfo> = std::collections::HashMap::new();
+    for (key, state_json) in rows {
+        let entry = by_key.entry(key.clone()).or_insert(InstanceInfo {
+            instance_key: key,
+            active: false,
+            window_expires_at: None,
+        });
+        let Ok(state) = serde_json::from_str::<serde_json::Value>(&state_json) else {
+            continue;
+        };
+        if state.get("state").and_then(|v| v.as_str()) != Some("armed") {
+            continue;
+        }
+        entry.active = true;
+        if let Some(exp) = state.get("expires_at").and_then(|v| v.as_str()) {
+            // Keep the LATEST expiry across the instance's armed nodes (RFC3339 sorts lexically).
+            let keep = entry
+                .window_expires_at
+                .as_deref()
+                .map_or(true, |cur| exp > cur);
+            if keep {
+                entry.window_expires_at = Some(exp.to_string());
+            }
+        }
+    }
+
+    let mut out: Vec<InstanceInfo> = by_key.into_values().collect();
+    // Deterministic order: active instances first, then by key.
+    out.sort_by(|a, b| b.active.cmp(&a.active).then_with(|| a.instance_key.cmp(&b.instance_key)));
+    out
+}
+
+/// Every node's saved value context for one instance: `(node_id, parsed values_json)`, skipping rows
+/// with no saved values (`{}`). The caller decodes each blob with `values::from_json` and renders it.
+pub fn instance_node_values(
+    db: &Db,
+    tenant_id: Uuid,
+    graph_id: Uuid,
+    instance_key: &str,
+) -> Vec<(u32, serde_json::Value)> {
+    let pool = db.pool();
+    let instance_key = instance_key.to_string();
+    let rows: Vec<(i64, String)> = db.block(async move {
+        sqlx::query_as::<_, (i64, String)>(
+            "SELECT node_id, values_json FROM workflow_node_state
+              WHERE tenant_id = $1 AND graph_id = $2 AND instance_key = $3
+              ORDER BY node_id",
+        )
+        .bind(tenant_id)
+        .bind(graph_id)
+        .bind(instance_key)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            log::error!("workflows::repo::instance_node_values query failed: {e}");
+            Vec::new()
+        })
+    });
+    rows.into_iter()
+        .filter_map(|(nid, s)| {
+            let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+            match v.as_object() {
+                Some(o) if !o.is_empty() => Some((nid as u32, v)),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// The most recent run of one graph (`id`, `status`, `started_at`), if any. Used to annotate the
+/// instance list with the graph's latest run — best-effort, since runs aren't instance-keyed yet.
+pub fn latest_run_for_graph(
+    db: &Db,
+    tenant_id: Uuid,
+    graph_id: Uuid,
+) -> Option<(Uuid, String, String)> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_as::<_, (Uuid, String, String)>(
+            "SELECT id, status, started_at FROM workflow_runs
+              WHERE tenant_id = $1 AND graph_id = $2
+              ORDER BY started_at DESC LIMIT 1",
+        )
+        .bind(tenant_id)
+        .bind(graph_id)
+        .fetch_optional(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            log::error!("workflows::repo::latest_run_for_graph query failed: {e}");
+            None
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn instances_group_by_key_and_flag_armed_windows() {
+        // Two cameras through one PerCamera graph, each with a DelayTrigger row: cam-A armed
+        // (window open), cam-B idle (window closed). A third row for cam-A is a plain saved-value
+        // node (no window). The instance list must show BOTH cameras as distinct instances, cam-A
+        // active with its expiry, cam-B present but inactive.
+        let rows = vec![
+            ("cam-A".to_string(), r#"{"state":"armed","expires_at":"2026-07-18T10:00:00+00:00"}"#.to_string()),
+            ("cam-A".to_string(), "{}".to_string()), // a non-window node's state
+            ("cam-B".to_string(), r#"{"state":"idle"}"#.to_string()),
+        ];
+        let out = instances_from_state_rows(rows);
+        assert_eq!(out.len(), 2, "two distinct instances");
+        // active first, then by key
+        assert_eq!(out[0].instance_key, "cam-A");
+        assert!(out[0].active, "cam-A's window is armed");
+        assert_eq!(out[0].window_expires_at.as_deref(), Some("2026-07-18T10:00:00+00:00"));
+        assert_eq!(out[1].instance_key, "cam-B");
+        assert!(!out[1].active, "cam-B's window is idle");
+        assert_eq!(out[1].window_expires_at, None);
+    }
+
+    #[test]
+    fn instances_keep_the_latest_expiry_across_armed_nodes() {
+        // One instance, two armed latent nodes with different expiries: the instance reports the
+        // later one (the window is open until the last of them closes).
+        let rows = vec![
+            ("".to_string(), r#"{"state":"armed","expires_at":"2026-07-18T10:00:00+00:00"}"#.to_string()),
+            ("".to_string(), r#"{"state":"armed","expires_at":"2026-07-18T10:05:00+00:00"}"#.to_string()),
+        ];
+        let out = instances_from_state_rows(rows);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].instance_key, "");
+        assert!(out[0].active);
+        assert_eq!(out[0].window_expires_at.as_deref(), Some("2026-07-18T10:05:00+00:00"));
+    }
+}

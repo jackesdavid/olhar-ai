@@ -45,6 +45,7 @@
   import Bug from "@lucide/svelte/icons/bug";
   import Printer from "@lucide/svelte/icons/printer";
   import History from "@lucide/svelte/icons/history";
+  import Layers from "@lucide/svelte/icons/layers";
   // Node-category glyphs — give each node family a face on the canvas.
   import Camera from "@lucide/svelte/icons/camera";
   import Eye from "@lucide/svelte/icons/eye";
@@ -563,6 +564,49 @@
   let runsList = $state<RunRecord[]>([]);
   let runsLogs = $state<Record<string, PlatformLog[]>>({});
   let runsExpanded = $state<string | null>(null);
+
+  // Instance inspector (#95): a graph's live run contexts + their saved node values.
+  let instancesOpen = $state(false);
+  let instancesGraph = $state<Graph | null>(null);
+  let instancesList = $state<import("$lib/data").WorkflowInstance[]>([]);
+  let instancesLoading = $state(false);
+  let instanceSelected = $state<string | null>(null);
+  let instanceValues = $state<import("$lib/data").InstanceValues | null>(null);
+  let instanceValuesLoading = $state(false);
+
+  async function openInstances(g: Graph) {
+    instancesGraph = g;
+    instancesOpen = true;
+    instancesList = [];
+    instanceSelected = null;
+    instanceValues = null;
+    instancesLoading = true;
+    try {
+      instancesList = await data.listInstances(g.id);
+      // Auto-open the sole instance (the common Single-scope case) so there's no dead click.
+      if (instancesList.length === 1) selectInstance(instancesList[0].instance_key);
+    } catch (err) {
+      toast.error("Couldn't load instances", { description: String(err) });
+    } finally {
+      instancesLoading = false;
+    }
+  }
+  async function selectInstance(key: string) {
+    if (!instancesGraph) return;
+    instanceSelected = key;
+    instanceValues = null;
+    instanceValuesLoading = true;
+    try {
+      instanceValues = await data.getInstanceValues(instancesGraph.id, key);
+    } catch (err) {
+      toast.error("Couldn't load instance values", { description: String(err) });
+    } finally {
+      instanceValuesLoading = false;
+    }
+  }
+  function instanceLabel(key: string): string {
+    return key === "" ? "Default (single)" : key;
+  }
 
   // Per-node highlight controller (driven by workflow-node events): each node
   // lights up immediately on arrival and stays lit for at least MIN_HIGHLIGHT_MS.
@@ -2885,6 +2929,9 @@
           <Button variant="ghost" size="icon" class="size-7" title="Duplicate" onclick={() => duplicateWorkflow(g)}>
             <Copy class="size-3.5" />
           </Button>
+          <Button variant="ghost" size="icon" class="size-7" title="Live instances — saved run contexts" onclick={() => openInstances(g)}>
+            <Layers class="size-3.5" />
+          </Button>
           <Button variant="ghost" size="icon" class="size-7" title="Recent runs" onclick={() => openRuns(g)}>
             <History class="size-3.5" />
           </Button>
@@ -4758,6 +4805,69 @@
         {/each}
       {/if}
     </div>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- Live instances (#95): a graph's run contexts + the saved values of each — master/detail. -->
+<Dialog.Root bind:open={instancesOpen}>
+  <Dialog.Content class="max-w-3xl">
+    <Dialog.Header>
+      <Dialog.Title class="flex items-center gap-2">
+        <Layers class="size-4" /> Instances — {instancesGraph?.name ?? ""}
+      </Dialog.Title>
+      <Dialog.Description>Each run context that has saved data, and the last value every node produced in it.</Dialog.Description>
+    </Dialog.Header>
+    {#if instancesLoading}
+      <p class="py-8 text-center text-sm text-muted-foreground">Loading instances…</p>
+    {:else if instancesList.length === 0}
+      <p class="py-8 text-center text-sm text-muted-foreground">No saved run contexts yet — run this workflow, then check back.</p>
+    {:else}
+      <div class="grid max-h-[60vh] grid-cols-[minmax(0,14rem)_minmax(0,1fr)] gap-3 overflow-hidden">
+        <!-- instance list -->
+        <div class="space-y-1 overflow-y-auto pr-1">
+          {#each instancesList as inst (inst.instance_key)}
+            <button
+              class="interactive flex w-full items-center gap-2 rounded-lg border border-border px-2.5 py-2 text-left {instanceSelected === inst.instance_key ? 'border-primary bg-primary/10' : 'bg-card'}"
+              onclick={() => selectInstance(inst.instance_key)}
+            >
+              {#if inst.active}<span class="status-live size-1.5 shrink-0 rounded-full bg-primary"></span>{/if}
+              <span class="min-w-0 flex-1 truncate text-xs font-medium" title={instanceLabel(inst.instance_key)}>{instanceLabel(inst.instance_key)}</span>
+              {#if inst.updated_at}<span class="shrink-0 text-[10px] text-muted-foreground">{fmtTs(inst.updated_at)}</span>{/if}
+            </button>
+          {/each}
+        </div>
+        <!-- selected instance's per-node values -->
+        <div class="overflow-y-auto rounded-lg border border-border bg-card p-3">
+          {#if !instanceSelected}
+            <p class="py-8 text-center text-sm text-muted-foreground">Pick an instance to see its saved values.</p>
+          {:else if instanceValuesLoading}
+            <p class="py-8 text-center text-sm text-muted-foreground">Loading values…</p>
+          {:else if !instanceValues || instanceValues.nodes.length === 0}
+            <p class="py-8 text-center text-sm text-muted-foreground">No node values saved in this instance.</p>
+          {:else}
+            <div class="space-y-3">
+              {#each instanceValues.nodes as n (n.node_id)}
+                <div>
+                  <div class="mb-1 text-xs font-semibold tracking-tight">{n.label ?? `Node ${n.node_id}`}</div>
+                  {#if Object.keys(n.values).length === 0}
+                    <p class="text-[11px] text-muted-foreground/70">— no outputs —</p>
+                  {:else}
+                    <div class="space-y-0.5 font-mono text-[11px]">
+                      {#each Object.entries(n.values) as [port, val] (port)}
+                        <div class="flex gap-2">
+                          <span class="w-28 shrink-0 truncate text-muted-foreground" title={port}>{port}</span>
+                          <span class="min-w-0 flex-1 truncate" title={val}>{val}</span>
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
+    {/if}
   </Dialog.Content>
 </Dialog.Root>
 

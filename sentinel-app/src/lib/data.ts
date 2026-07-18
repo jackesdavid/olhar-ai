@@ -49,6 +49,24 @@ export type Dictionary = {
 /** The create/update payload — name + schema + rows (rows conformed to columns server-side). */
 export type DictionaryInput = { name: string; columns: DictColumn[]; rows: DictCell[][] };
 
+// ---- Graph instances (#95): a live run context + its saved node values ----
+/** One live instance of a graph (a run context with saved state / an armed latent window). */
+export type WorkflowInstance = {
+  instance_key: string;
+  active: boolean;
+  updated_at: string | null;
+  run_id: string | null;
+  status: string | null;
+};
+/** One node's last saved outputs within an instance (port name → display string). */
+export type InstanceNodeValues = {
+  node_id: number;
+  label: string | null;
+  values: Record<string, string>;
+};
+/** The full saved value context of one instance. */
+export type InstanceValues = { instance_key: string; nodes: InstanceNodeValues[] };
+
 /** A camera the tenant's edge found on its LAN (pushed up to the cloud). */
 export type EdgeDiscovered = {
   ip: string;
@@ -356,6 +374,14 @@ export const data = {
   deleteDictionary: async (id: string): Promise<void> => {
     await api.del<void>(`/dictionaries/${id}`);
   },
+
+  // ---- Graph instances (#95): inspect a graph's live run contexts + their saved values ----
+  /** Live instances of a graph (distinct run contexts with saved state / active windows). */
+  listInstances: (id: string): Promise<WorkflowInstance[]> =>
+    api.get<WorkflowInstance[]>(`/workflows/${id}/instances`),
+  /** The saved per-node value context of one instance (key may be "" for Single-scope graphs). */
+  getInstanceValues: (id: string, key: string): Promise<InstanceValues> =>
+    api.get<InstanceValues>(`/workflows/${id}/instance-values?key=${encodeURIComponent(key)}`),
 
   deleteGraph: async (id: string): Promise<void> => {
     await api.del<void>(`/workflows/${id}`);

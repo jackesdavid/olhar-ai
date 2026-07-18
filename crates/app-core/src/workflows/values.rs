@@ -122,6 +122,45 @@ pub fn from_json(v: &Value) -> NodeValues {
     vals
 }
 
+/// A short human display string for a persisted value — what the live instance view shows per port.
+/// Only the kinds the codec persists ever reach here from a stored row; the media/detector variants
+/// are handled anyway (a label, never bytes) so it stays total and never leaks base64.
+pub fn display_value(v: &PortValue) -> String {
+    match v {
+        PortValue::Text(s) => s.clone(),
+        PortValue::Num(n) => n.to_string(),
+        PortValue::Bool(b) => b.to_string(),
+        PortValue::Recipient(r) => r.clone(),
+        PortValue::Camera(c) => match (c.name.is_empty(), c.ip.is_empty()) {
+            (false, false) => format!("{} ({})", c.name, c.ip),
+            (false, true) => c.name.clone(),
+            (true, false) => c.ip.clone(),
+            (true, true) => c.id.clone(),
+        },
+        PortValue::Bbox(b) => format!("[{}, {}, {}, {}]", b.x1, b.y1, b.x2, b.y2),
+        PortValue::List(items) => {
+            let inner: Vec<String> = items.iter().take(8).map(display_value).collect();
+            let more = if items.len() > inner.len() { ", …" } else { "" };
+            format!("[{}{}]", inner.join(", "), more)
+        }
+        // Kinds the codec never persists — a label, not bytes, so a stray value can't leak base64.
+        PortValue::Image(b) => format!("image ({} KB)", b.len() / 1024),
+        PortValue::File(f) => {
+            if f.name.is_empty() {
+                format!("file ({} KB)", f.bytes.len() / 1024)
+            } else {
+                f.name.clone()
+            }
+        }
+        PortValue::Dict(m) => format!("{{{} fields}}", m.len()),
+        PortValue::Table(t) => format!("table {}", t.id),
+        PortValue::Person(_) => "person".to_string(),
+        PortValue::Face(_) => "face".to_string(),
+        PortValue::Region(_) => "region".to_string(),
+        PortValue::TrackedObject(_) => "tracked object".to_string(),
+    }
+}
+
 /// A variables map (`name → value`) as tagged JSON — the DelayTrigger window's snapshot of
 /// `sys.variables`, so the trailing-edge stop run can restore what a `Set` wrote on the arming run.
 /// Same narrow codec as node values: a kind we don't persist (media, detector structs) is dropped

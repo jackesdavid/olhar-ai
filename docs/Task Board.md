@@ -64,8 +64,6 @@ kanban-plugin: board
 	  - Epic: [[olharai-rebrand]]
 - [ ] #87 Segmented continuous recording — cap clip size, crash-durable, incremental upload
 	  - Plan: [[segmented-continuous-recording]]
-- [ ] #94 Unified node value store — one place, media in MinIO
-	  - Plan: [[unified-node-value-store]]
 - [ ] #96 Engine clarity — kill the ambiguity that hides bugs
 	  - Plan: [[workflow-engine-clarity]]
 - [ ] #99 Domain cutover — serve olharai.com / .com.br, transitional dual-domain
@@ -100,6 +98,8 @@ kanban-plugin: board
 	  - Plan: [[edge-windows-installer]]
 - [ ] #95 Graph instances — per-run context + live instance view
 	  - Plan: [[workflow-graph-instances]]
+- [ ] #94 Unified node value store — one place, media in MinIO
+	  - Plan: [[unified-node-value-store]]
 - [ ] #102 Workflow parameterization — input vars, clone, promote, templates
 	  - Plan: [[workflow-parameterization]]
 - [ ] #112 Enabled / Debug / Orphans → top-of-canvas icon toggles

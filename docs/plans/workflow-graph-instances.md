@@ -125,6 +125,22 @@ Give the run a life, and each of those stops being a feature and becomes a conse
    "see the values of each run context"). Also closes a known gap: the editor's frame read keys on
    `""`, so a `PerCamera` graph's Show Image needs an instance to view.
 
+## Status (2026-07-18) — implementing #94+#95 together
+
+- **Phase 1 DONE** (instance keying: migration 0057 `instance_key` in the `workflow_node_state` PK,
+  `InstanceScope`/`key_for`, the concurrency gate keyed by instance). Confirmed in code.
+- Related machinery landed since: the #114 fix (`variables_json`, migration 0060) snapshots/restores
+  the run's variables across a DelayTrigger window, keyed by instance — the same mechanism this epic
+  generalizes.
+- **This session's slice** (with #94): (a) **persist every executed node's outputs at run end**,
+  keyed by instance (#94 Phase 2 — today only the window path writes `values_json`); (b) the **live
+  instance view** (Phase 4 / pragmatic Phase 2) — list a graph's live instances (the distinct
+  instance keys with saved state/active windows) and open one to **see its per-node value context**.
+  This is the owner's "card to show the workflow current data saved / see the values of each run
+  context." Backend endpoints: `GET /workflows/:id/instances` + `GET /workflows/:id/instance-values?key=`.
+- **Deferred (still in this epic):** the full instance-as-run-row remodel, and the fork collapse
+  (delete `node_frames`, kill the Show Image base64 at `engine.rs:998`) which is #94 Phase 4.
+
 ## Verification
 
 - **Two cameras, one graph**: both record, both stop, neither extends the other's window. This fails

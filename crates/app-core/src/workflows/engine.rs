@@ -288,30 +288,32 @@ fn run_driver(
 
     // Record what this run produced, so a later run of the SAME instance can read it — which is the
     // only way a `DelayTrigger`'s trailing edge can ever see `camera` or `clip_id`, since it runs
-    // from a timer with no payload of its own.
+    // from a timer with no payload of its own. It's also the store the live instance view reads
+    // (#94 phase 2), so this now runs for EVERY graph — the guard that once limited it to graphs
+    // with a latent node is gone: the codec drops media (no base64 in a row), so a per-node write
+    // per run is cheap, and the editor's live values need the same rows a DelayTrigger does.
     //
     // Only nodes that actually RAN are written. That's what makes a re-trigger correct: it doesn't
     // re-run `StartRecording` (only `start` lights it, and a re-trigger lights nothing), so the
     // arming run's `clip_id` survives untouched while the camera refreshes. Write everything in
     // `outputs` instead and a stop run would immediately overwrite the values it had just resumed.
-    //
-    // Guarded to graphs that actually have a latent node: every other graph would be paying a write
-    // per node per run for a context nothing will ever read. #94 widens this store to the editor's
-    // live values and `Show Image`, at which point the guard goes.
-    if graph.nodes.iter().any(|n| n.kind == NodeKind::DelayTrigger) {
-        let instance_key = graph.instance_scope.key_for(entry_payload);
-        for nid in &ran {
-            let Some(produced) = outputs.get(nid) else {
-                continue;
-            };
-            if produced.is_empty() {
-                continue;
-            }
-            let mut one = crate::workflows::values::NodeValues::new();
-            one.insert(*nid, produced.clone());
-            let json = crate::workflows::values::to_json(&one);
-            repo::set_node_values(&sys.db, sys.tenant_id, graph.id, *nid, &instance_key, &json);
+    let instance_key = graph.instance_scope.key_for(entry_payload);
+    for nid in &ran {
+        let Some(produced) = outputs.get(nid) else {
+            continue;
+        };
+        if produced.is_empty() {
+            continue;
         }
+        let mut one = crate::workflows::values::NodeValues::new();
+        one.insert(*nid, produced.clone());
+        let json = crate::workflows::values::to_json(&one);
+        repo::set_node_values(&sys.db, sys.tenant_id, graph.id, *nid, &instance_key, &json);
+    }
+
+    // Variables snapshot stays DelayTrigger-only: it's the arming run's `sys.variables` restored on
+    // the trailing edge (#114), meaningless to a graph with no latent window.
+    if graph.nodes.iter().any(|n| n.kind == NodeKind::DelayTrigger) {
         // Variables are a run-scoped map (`sys.variables`), not a node output — 0058's `values_json`
         // doesn't carry them, so a `Get current_camera` on the trailing edge read a type-zero for
         // whatever a `Set current_camera` wrote on the arming run (#114). Snapshot the whole map onto

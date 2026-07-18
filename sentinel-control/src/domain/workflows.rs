@@ -52,6 +52,8 @@ pub fn router() -> Router<AppState> {
             "/workflows/:id",
             axum::routing::patch(rename).delete(remove),
         )
+        .route("/workflows/:id/instances", get(instances))
+        .route("/workflows/:id/instance-values", get(instance_values))
         .route("/workflows/:id/description", put(set_description))
         .route("/workflows/:id/group", put(set_group))
         .route("/workflows/:id/duplicate", post(duplicate))
@@ -484,6 +486,100 @@ async fn flow_get_json(url: &str) -> Value {
         Ok(r) if r.status().is_success() => r.json::<Value>().await.unwrap_or_else(|_| json!([])),
         _ => json!([]),
     }
+}
+
+// ---- live instances (#95 / #94) --------------------------------------------
+
+/// The live/known instances of one graph (#95 phase 4). Source: distinct `instance_key`s that have
+/// saved state or values in `workflow_node_state` (see `repo::list_instances`). `active` is per
+/// instance (an armed latent window); `run_id`/`status`/`updated_at` describe the graph's latest run
+/// and are the same for every row — runs aren't instance-keyed yet (#95 phase 2), so this is a
+/// best-effort annotation, not a per-instance attribution.
+async fn instances(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<Value>, ApiErr> {
+    auth::require(&c, "workflows.read")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let out = blocking(move || {
+        let instances = workflows::repo::list_instances(&db, tid, id);
+        let (run_id, status, updated_at) = match workflows::repo::latest_run_for_graph(&db, tid, id) {
+            Some((rid, status, started_at)) => {
+                (Some(rid.to_string()), Some(status), Some(started_at))
+            }
+            None => (None, None, None),
+        };
+        instances
+            .into_iter()
+            .map(|i| {
+                json!({
+                    "instance_key": i.instance_key,
+                    "active": i.active,
+                    "updated_at": updated_at,
+                    "run_id": run_id,
+                    "status": status,
+                })
+            })
+            .collect::<Vec<_>>()
+    })
+    .await?;
+    Ok(Json(json!(out)))
+}
+
+#[derive(Deserialize)]
+struct InstanceKeyQuery {
+    /// The instance to read. Absent or empty → the `Single`-scope instance (key `""`).
+    key: Option<String>,
+}
+
+/// One instance's saved value context: every node's persisted outputs, rendered to short display
+/// strings (#94 phase 2). Media never appears as bytes — the codec drops it and `display_value`
+/// labels the rest.
+async fn instance_values(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Query(q): Query<InstanceKeyQuery>,
+) -> Result<Json<Value>, ApiErr> {
+    auth::require(&c, "workflows.read")?;
+    let tid = tenant_of(&c)?;
+    let key = q.key.unwrap_or_default();
+    let db = st.db.clone();
+    let out = blocking(move || {
+        let graph = workflows::repo::load(&db, tid)
+            .into_iter()
+            .find(|g| g.id == id);
+        let nodes = workflows::repo::instance_node_values(&db, tid, id, &key)
+            .into_iter()
+            .map(|(nid, vals_json)| {
+                let decoded = workflows::values::from_json(&vals_json);
+                let mut values = serde_json::Map::new();
+                if let Some(pv) = decoded.get(&nid) {
+                    for (port, v) in pv {
+                        values.insert(
+                            port.clone(),
+                            Value::String(workflows::values::display_value(v)),
+                        );
+                    }
+                }
+                let label = graph.as_ref().and_then(|g| g.node(nid)).map(|n| {
+                    n.config
+                        .get("label")
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| n.kind.label().to_string())
+                });
+                json!({ "node_id": nid, "label": label, "values": Value::Object(values) })
+            })
+            .collect::<Vec<_>>();
+        json!({ "instance_key": key, "nodes": nodes })
+    })
+    .await?;
+    Ok(Json(out))
 }
 
 // ---- event registry + categories (per tenant) ------------------------------
