@@ -630,6 +630,73 @@ pub fn image_key_of(db: &Db, tenant_id: Uuid, id: &str) -> Option<Option<String>
     })
 }
 
+/// Everything the face-detail view shows: the stored row + its bbox + the person's display name.
+#[derive(Serialize)]
+pub struct FaceDetail {
+    #[serde(flatten)]
+    pub face: Face,
+    pub bbox: Option<[i64; 4]>,
+    pub person_name: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct FaceDetailRow {
+    id: String,
+    person_id: Option<String>,
+    image_key: Option<String>,
+    camera: Option<String>,
+    confidence: f32,
+    face_ratio: f32,
+    source: String,
+    created_at: String,
+    bbox: Option<serde_json::Value>,
+    person_name: Option<String>,
+}
+
+/// Full detail for one face (row + bbox + person name). `None` if not found / wrong tenant.
+pub fn get_detail(db: &Db, tenant_id: Uuid, id: &str) -> Option<FaceDetail> {
+    let pool = db.pool();
+    let id = id.to_string();
+    db.block(async move {
+        let row: Option<FaceDetailRow> = sqlx::query_as(
+            "SELECT f.id::text AS id, f.person_id, f.image_key, f.camera, f.confidence, \
+                    f.face_ratio, f.source, f.created_at, f.bbox, p.name AS person_name \
+             FROM faces f \
+             LEFT JOIN persons p ON p.tenant_id = f.tenant_id AND p.id = f.person_id \
+             WHERE f.tenant_id = $1 AND f.id = $2::uuid",
+        )
+        .bind(tenant_id)
+        .bind(&id)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten();
+        row.map(|r| {
+            let bb = r.bbox.and_then(|v| {
+                let a = v.as_array()?;
+                if a.len() != 4 {
+                    return None;
+                }
+                Some([a[0].as_i64()?, a[1].as_i64()?, a[2].as_i64()?, a[3].as_i64()?])
+            });
+            FaceDetail {
+                face: Face {
+                    id: r.id,
+                    person_id: r.person_id,
+                    image_key: r.image_key,
+                    camera: r.camera,
+                    confidence: r.confidence,
+                    face_ratio: r.face_ratio,
+                    source: r.source,
+                    created_at: r.created_at,
+                },
+                bbox: bb,
+                person_name: r.person_name,
+            }
+        })
+    })
+}
+
 /// Fetch `(image_key, bbox)` for a face — for the image proxy's crop/box rendering. Outer `None`
 /// = the face doesn't exist (or wrong tenant); inner options are its stored key + `[x1,y1,x2,y2]`.
 pub fn crop_info(db: &Db, tenant_id: Uuid, id: &str) -> Option<(Option<String>, Option<[i64; 4]>)> {

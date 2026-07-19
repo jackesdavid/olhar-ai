@@ -158,6 +158,11 @@ export type Face = {
   source: string;
   created_at: string;
 };
+/** Everything the face-detail (hero) view shows — the row + bbox + person name. */
+export type FaceDetail = Face & {
+  bbox: [number, number, number, number] | null;
+  person_name: string | null;
+};
 /** The enrolled person a cluster's centroid recognizes as (auto-suggest). */
 export type ClusterSuggestion = { person_id: string; name: string; confidence: number };
 /** A cluster of similar unknown faces — the unit of labeling. */

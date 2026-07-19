@@ -19,6 +19,7 @@ import {
   type RecognizeDetail,
   type Face,
   type FaceCluster,
+  type FaceDetail,
   type CanvasLayout,
   type Settings,
   type TelegramConfigState,
@@ -303,6 +304,8 @@ export const data = {
   listFaces: (): Promise<Face[]> => api.get<Face[]>("/faces"),
   listFaceClusters: (eps?: number): Promise<FaceCluster[]> =>
     api.get<FaceCluster[]>(`/faces/clusters${eps != null ? `?eps=${eps}` : ""}`),
+  faceDetail: (id: string): Promise<FaceDetail> =>
+    api.get<FaceDetail>(`/faces/${encodeURIComponent(id)}/detail`),
   faceLayout: (eps?: number, scope?: "unknown" | "known" | "all"): Promise<CanvasLayout> => {
     const q = new URLSearchParams();
     if (eps != null) q.set("eps", String(eps));

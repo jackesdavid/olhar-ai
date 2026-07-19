@@ -22,6 +22,7 @@ pub fn router() -> Router<AppState> {
         .route("/faces/clusters", get(clusters))
         .route("/faces/layout", get(layout))
         .route("/faces/:id/image", get(face_image))
+        .route("/faces/:id/detail", get(face_detail))
         .route("/faces/label", post(label))
         .route("/faces/reassign", post(reassign))
         .route("/faces/ignore", post(ignore))
@@ -105,6 +106,21 @@ async fn face_image(
     })
     .await?;
     Ok(([(header::CONTENT_TYPE, "image/jpeg")], out).into_response())
+}
+
+/// Full detail for one face — powers the face-detail (hero) view.
+async fn face_detail(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<faces::FaceDetail>, ApiErr> {
+    auth::require(&c, "persons.read")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    match blocking(move || faces::get_detail(&db, tid, &id)).await? {
+        Some(d) => Ok(Json(d)),
+        None => Err(err(StatusCode::NOT_FOUND, "face not found")),
+    }
 }
 
 #[derive(Deserialize)]

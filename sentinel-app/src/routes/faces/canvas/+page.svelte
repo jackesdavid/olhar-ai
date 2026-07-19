@@ -17,7 +17,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { data } from "$lib/data";
-  import type { Island, Person } from "$lib/types";
+  import type { Island, Person, FaceDetail } from "$lib/types";
 
   let canvasEl: HTMLCanvasElement;
   let wrapEl: HTMLDivElement;
@@ -45,6 +45,15 @@
   let query = $state("");
   let busy = $state(false);
   let confirmDel = $state(false); // two-step guard for the destructive delete
+  // Face detail (hero) overlay — click a face → cinematic reveal of all its data + actions.
+  let detail = $state<{ id: string; data: FaceDetail | null; from: { x: number; y: number; s: number }; box: boolean } | null>(null);
+  let hero = $state<{ x: number; y: number; w: number; h: number } | null>(null); // animated hero-img rect
+  let detailReady = $state(false); // gates the panel slide + backdrop fade
+  let busyDetail = $state(false);
+  let faceQuery = $state(""); // "assign to" autocomplete inside the detail
+  // In-flight fly animation of a re-matched face (plain var — read by the draw loop).
+  let flying: { faceId: string; x0: number; y0: number; x1: number; y1: number; t0: number; img: HTMLImageElement | null } | null = null;
+  const FLY_MS = 650;
 
   const imgs = new Map<string, HTMLImageElement>(); // face id → crop (lazy)
   const FACE_R = 15; // face thumbnail radius, world units
@@ -58,7 +67,7 @@
     resize();
     load(true);
     let raf = 0;
-    const loop = () => { if (dirty) { draw(); dirty = false; } raf = requestAnimationFrame(loop); };
+    const loop = () => { if (dirty || flying) { draw(); dirty = false; } raf = requestAnimationFrame(loop); };
     raf = requestAnimationFrame(loop);
     return () => { cancelAnimationFrame(raf); ro.disconnect(); };
   });
@@ -162,8 +171,9 @@
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText(String(is.size), c.x, c.y);
       } else {
-        // faces as circular thumbnails
+        // faces as rounded-square thumbnails
         for (const f of is.faces) {
+          if (flying && f.id === flying.faceId) continue; // it's mid-flight, drawn separately
           const p = toScreen(f.x, f.y);
           const fr = FACE_R * cam.scale;
           if (p.x + fr < 0 || p.x - fr > W || p.y + fr < 0 || p.y - fr > H) continue;
@@ -198,6 +208,26 @@
       ctx.font = `${is.label ? "600 " : ""}12px ui-sans-serif, system-ui`;
       ctx.textAlign = "center"; ctx.textBaseline = "top";
       ctx.fillText(label, c.x, c.y + rS + 6);
+    }
+
+    // a re-matched face flying to its new island (its landing triggers a recluster)
+    if (flying) {
+      const t = Math.min((performance.now() - flying.t0) / FLY_MS, 1);
+      const e = 1 - Math.pow(1 - t, 3); // easeOutCubic
+      const p = toScreen(flying.x0 + (flying.x1 - flying.x0) * e, flying.y0 + (flying.y1 - flying.y0) * e);
+      const fr = FACE_R * cam.scale * (1 - 0.35 * e);
+      const rr = Math.max(2, fr * 0.3);
+      ctx.save();
+      ctx.beginPath(); ctx.roundRect(p.x - fr, p.y - fr, fr * 2, fr * 2, rr); ctx.clip();
+      if (flying.img && flying.img.complete && flying.img.naturalWidth > 0) {
+        ctx.drawImage(flying.img, p.x - fr, p.y - fr, fr * 2, fr * 2);
+      } else {
+        ctx.fillStyle = "#2a3350"; ctx.fillRect(p.x - fr, p.y - fr, fr * 2, fr * 2);
+      }
+      ctx.restore();
+      ctx.strokeStyle = "#7aa2ff"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(p.x - fr, p.y - fr, fr * 2, fr * 2, rr); ctx.stroke();
+      if (t >= 1) { flying = null; recluster(); }
     }
   }
 
@@ -236,15 +266,119 @@
   function hitTest(e: PointerEvent) {
     const rect = canvasEl.getBoundingClientRect();
     const w = toWorld(e.clientX - rect.left, e.clientY - rect.top);
+    // Zoomed in (faces visible): a click on a face opens its detail.
+    if (cam.scale >= 0.45) {
+      for (const is of islands) {
+        if (Math.hypot(w.x - is.cx, w.y - is.cy) > is.radius + 8) continue;
+        let best: { id: string; x: number; y: number } | null = null;
+        let bd = FACE_R + 3;
+        for (const f of is.faces) {
+          const d = Math.hypot(w.x - f.x, w.y - f.y);
+          if (d < bd) { bd = d; best = f; }
+        }
+        if (best) { openDetail(best); return; }
+        break;
+      }
+    }
+    // Otherwise (or clicking gaps / when zoomed out) → island-level label popup.
     let hit: Island | null = null;
     for (const is of islands) {
-      const d = Math.hypot(w.x - is.cx, w.y - is.cy);
-      if (d <= is.radius + 8) { hit = is; break; }
+      if (Math.hypot(w.x - is.cx, w.y - is.cy) <= is.radius + 8) { hit = is; break; }
     }
     selected = hit;
     query = "";
     confirmDel = false;
     if (hit) syncSelScreen();
+  }
+
+  // ---- face detail (hero) ----
+  function targetRect() { return { x: window.innerWidth - 420 + 16, y: 20, w: 388, h: 300 }; }
+  async function openDetail(f: { id: string; x: number; y: number }) {
+    selected = null;
+    const cr = canvasEl.getBoundingClientRect();
+    const p = toScreen(f.x, f.y);
+    const fr = FACE_R * cam.scale;
+    const from = { x: cr.left + p.x - fr, y: cr.top + p.y - fr, s: fr * 2 };
+    detail = { id: f.id, data: null, from, box: false };
+    hero = { x: from.x, y: from.y, w: from.s, h: from.s };
+    detailReady = false;
+    faceQuery = "";
+    // two rAFs so the initial rect paints before we transition to the target
+    requestAnimationFrame(() => requestAnimationFrame(() => { if (detail) { hero = targetRect(); detailReady = true; } }));
+    try {
+      const d = await data.faceDetail(f.id);
+      if (detail?.id === f.id) detail = { ...detail, data: d };
+    } catch (e) {
+      toast.error("Couldn't load face", { description: String(e) });
+    }
+  }
+  function closeDetail() {
+    if (!detail) return;
+    detailReady = false;
+    hero = { x: detail.from.x, y: detail.from.y, w: detail.from.s, h: detail.from.s };
+    setTimeout(() => { detail = null; hero = null; }, 340);
+  }
+  function toggleDetailBox() { if (detail) detail = { ...detail, box: !detail.box }; }
+  function matchingMove(): Person[] {
+    const q = faceQuery.trim().toLowerCase();
+    return (q ? people.filter((p) => p.name.toLowerCase().includes(q)) : people).slice(0, 6);
+  }
+  function moveExact(): boolean {
+    const q = faceQuery.trim().toLowerCase();
+    return !!q && people.some((p) => p.name.toLowerCase() === q);
+  }
+  function startFly(faceId: string, targetName: string) {
+    let fd: { id: string; x: number; y: number } | null = null;
+    for (const is of islands) { const f = is.faces.find((x) => x.id === faceId); if (f) { fd = f; break; } }
+    const target = islands.find((is) => is.label === targetName) ?? null;
+    if (fd) flying = { faceId, x0: fd.x, y0: fd.y, x1: target?.cx ?? fd.x, y1: target ? target.cy : fd.y - 320, t0: performance.now(), img: imgs.get(faceId) ?? null };
+  }
+  async function moveFaceTo(p: Person) {
+    if (!detail) return;
+    busyDetail = true;
+    const faceId = detail.id;
+    try {
+      await data.reassignFace(faceId, p.id);
+      toast.success(`Moved to ${p.name}`);
+      startFly(faceId, p.name); // flies on the canvas; its landing triggers recluster
+      closeDetail();
+    } catch (e) {
+      toast.error("Couldn't move", { description: String(e) });
+    } finally {
+      busyDetail = false;
+    }
+  }
+  async function createFromDetail() {
+    const n = faceQuery.trim();
+    if (!n || !detail) return;
+    busyDetail = true;
+    const faceId = detail.id;
+    try {
+      await data.labelFaces([faceId], { newPersonName: n });
+      toast.success(`Assigned to ${n}`);
+      people = await data.listPeople();
+      startFly(faceId, n);
+      closeDetail();
+    } catch (e) {
+      toast.error("Couldn't assign", { description: String(e) });
+    } finally {
+      busyDetail = false;
+    }
+  }
+  async function deleteFromDetail() {
+    if (!detail) return;
+    busyDetail = true;
+    const faceId = detail.id;
+    try {
+      await data.deleteFaces([faceId]);
+      toast.success("Face deleted");
+      closeDetail();
+      recluster();
+    } catch (e) {
+      toast.error("Couldn't delete", { description: String(e) });
+    } finally {
+      busyDetail = false;
+    }
   }
   function syncSelScreen() {
     if (!selected) return;
@@ -392,3 +526,84 @@
     {/if}
   </div>
 </div>
+
+<!-- face detail (hero) overlay — click a face → cinematic reveal of its data + actions -->
+{#if detail}
+  <div class="fixed inset-0 z-30">
+    <button
+      class="absolute inset-0 bg-black/75 transition-opacity duration-300"
+      style:opacity={detailReady ? 1 : 0}
+      onclick={closeDetail}
+      aria-label="Close detail"
+    ></button>
+
+    {#if hero}
+      <img
+        src={data.faceImageUrl(detail.id, { box: detail.box })}
+        alt="face"
+        class="pointer-events-none fixed z-40 rounded-xl object-cover shadow-2xl ring-1 ring-white/15 transition-all duration-[360ms] ease-out"
+        style="left:{hero.x}px; top:{hero.y}px; width:{hero.w}px; height:{hero.h}px"
+      />
+    {/if}
+
+    <div
+      class="fixed right-0 top-0 z-30 flex h-full w-[420px] flex-col overflow-y-auto border-l border-border bg-background p-4 shadow-2xl transition-transform duration-300 ease-out"
+      style:transform={detailReady ? "translateX(0)" : "translateX(100%)"}
+    >
+      <div style="height:308px"></div>
+      <div class="flex items-start justify-between gap-2">
+        <div class="min-w-0">
+          <p class="truncate text-lg font-semibold">
+            {detail.data?.person_name ?? (detail.data && detail.data.person_id ? "Labeled" : "Unknown")}
+          </p>
+          <p class="text-xs text-muted-foreground">
+            {detail.data ? new Date(detail.data.created_at).toLocaleString() : "loading…"}
+          </p>
+        </div>
+        <button class="text-muted-foreground hover:text-foreground" onclick={closeDetail} aria-label="close"><X class="size-5" /></button>
+      </div>
+
+      <button class="mt-2 flex items-center gap-1.5 self-start text-xs text-muted-foreground hover:text-foreground" onclick={toggleDetailBox}>
+        <Frame class="size-3.5" /> {detail.box ? "Show face crop" : "Show full frame + box"}
+      </button>
+
+      {#if detail.data}
+        <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+          <div><dt class="text-muted-foreground">Camera</dt><dd class="truncate">{detail.data.camera || "—"}</dd></div>
+          <div><dt class="text-muted-foreground">Source</dt><dd>{detail.data.source}</dd></div>
+          <div><dt class="text-muted-foreground">Match confidence</dt><dd class="tabular-nums">{Math.round(detail.data.confidence)}%</dd></div>
+          <div><dt class="text-muted-foreground">Face size</dt><dd class="tabular-nums">{(detail.data.face_ratio * 100).toFixed(1)}% of frame</dd></div>
+          {#if detail.data.bbox}
+            <div class="col-span-2"><dt class="text-muted-foreground">Detection box</dt><dd class="tabular-nums">[{detail.data.bbox.join(", ")}]</dd></div>
+          {/if}
+        </dl>
+      {:else}
+        <p class="mt-3 text-xs text-muted-foreground">Loading details…</p>
+      {/if}
+
+      <div class="mt-auto space-y-2 pt-4">
+        <p class="text-xs font-medium text-muted-foreground">Assign this face to a person</p>
+        <Input placeholder="Search or name…" bind:value={faceQuery} class="h-8 text-xs" />
+        <div class="max-h-40 overflow-y-auto rounded-md border border-border">
+          {#each matchingMove() as p (p.id)}
+            <button class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-accent" disabled={busyDetail} onclick={() => moveFaceTo(p)}>
+              {p.name}
+            </button>
+          {/each}
+          {#if faceQuery.trim() && !moveExact()}
+            <button class="flex w-full items-center gap-2 border-t border-border px-2 py-1.5 text-left text-xs hover:bg-accent" disabled={busyDetail} onclick={createFromDetail}>
+              <UserPlus class="size-3.5 text-primary" /> Create “{faceQuery.trim()}”
+            </button>
+          {/if}
+        </div>
+        <button
+          class="flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:border-destructive hover:text-destructive"
+          disabled={busyDetail}
+          onclick={deleteFromDetail}
+        >
+          <Trash2 class="size-3.5" /> Delete face
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
