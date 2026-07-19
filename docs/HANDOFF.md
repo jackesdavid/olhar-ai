@@ -6,6 +6,52 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-07-19 — Faces: recognition pipeline hardening + the labeling/clustering workspace (#117, #119)
+
+- **Branch:** `main` — **ahead of origin by 17 commits, NOT pushed** (push on resume). Everything
+  committed, tree clean. All faces work is **deployed** to prod except the final `1ea8fe6` roll —
+  a flow+control deploy (`deploy-nogate.log`) was **still building at handoff time**; verify it
+  recreated flow+control and then it's fully live.
+- **Commits:** `1ea8fe6` (StoreFace pure sink) ← `c66c009` (delete both objects) ← `0adec6d`
+  (pre-crop + migration 0063) ← `723044c` (black-tile 404 fix) ← `9469080` (StoreFace conf/ratio
+  ports) ← `e32bf56` (detail hero + re-match) ← `98cfc11` (found=labeled) ← `a40c4b5` (delete +
+  crop-to-face + Context) ← `585f254` (scope filter) ← `72778f5`/`e08c114` (canvas P1/P2) ←
+  `7cf1e22` (grouping slider + autocomplete) ← `435e40b` (GPU image actually uses GPU) ←
+  `2dfd3e5`/`d9dc42e` (embed_face_crop fallback) ← `f991057` (grid view).
+- **Done:**
+  - **Faces workspace (#119)** — grid `/faces` + **2D similarity canvas** `/faces/canvas` (pan/zoom,
+    LOD islands, Unknown/Known/All scope, click→**hero detail** w/ metadata + Assign-move-fly + Delete
+    + Context), live **Grouping ε slider**, autocomplete labeling, per-face + per-island delete.
+  - **Pipeline fixes (#117):** `embed_face_crop` never drops a face (detect→align-free fallback);
+    `RecognizeFace found` = **labeled** match only (unknown-matches-unknown was firing True).
+  - **Image proxy:** **pre-crop at capture** (crop_key passthrough, migration 0063) + Cache-Control
+    immutable + retry + client throttle — killed the black-tile 404s under load. Delete purges both
+    frame + crop.
+  - **StoreFace** persists real confidence/face_ratio (new input ports); quality gating reverted OUT
+    of the node (pure sink) — belongs in the graph.
+  - **GPU sidecar bug found+fixed** (`sentinel-ai:gpu3`): image silently ran InsightFace on CPU
+    (onnxruntime CPU wheel shadowed the GPU wheel; CUDA libs off the linker path). Live RunPod A4000
+    benchmark: face_detect_embed 529 ms CPU → 218 ms GPU (only ~2.4×, overhead-bound). **Decision:
+    stay on CPU, scale via a dedicated CPU box, not GPU.** Endpoint torn down.
+- **State:** app builds + svelte-check clean (9 pre-existing baseline); workspace `cargo check` clean;
+  app-core tests green. Migrations 0061/0062 applied live; **0063 validated + applied live** (idempotent).
+  Image proxy verified (crop vs box; 39-concurrent → 0 404s after fix).
+- **Pending / next:**
+  - Run **`POST /faces/backfill-crops`** once (crop_key for ~128 existing faces).
+  - **Wire `When Event.confidence/face_ratio → Store Face`** in the "Face Test" graph (`5ef37805…`)
+    so detail shows real values (currently 0 for old rows). **Quality gate** = a 4-node graph pattern
+    (NumGte×2 → And → Branch before embed), NOT StoreFace config — must be added in the UI.
+  - **#3 face landmark points** in the detail (movie style) — NOT built; needs capturing the sidecar's
+    `kps` at embed time → store (new column) → draw as a Context-style toggle.
+  - More **filters** (by-date, by-similarity); canvas **lasso** (Phase 3).
+- **Blockers:** graph edits can't be applied programmatically — persistence is replace-all + the
+  direct prod-DB write is safety-blocked; hand to the UI. User was live-editing the graph.
+- **Refs:** memory `faces-workspace` / `face-pipeline-architecture` / `storeface-pure-sink` /
+  `face-recognize-found-labeled` / `faces-clustering-and-proxy` / `face-compute-stays-cpu`;
+  `crates/app-core/src/faces.rs`, `sentinel-control/src/domain/faces.rs`,
+  `sentinel-app/src/routes/faces/{+page,canvas/+page}.svelte`, `ai/sidecar/testdata/` (CPU-vs-GPU harness).
+
+
 ## 2026-07-17 — Dictionaries (#113 P1-3), editor toggles (#112) + a recording bug
 
 - **Branch:** `main` — **ahead of origin by ~4 commits, NOT pushed** (push on resume). #112 + #113 P1-3
