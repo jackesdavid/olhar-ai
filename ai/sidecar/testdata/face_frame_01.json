@@ -1,0 +1,24 @@
+{
+  "note": "Stored face-recognition test frame — captured live from the edge and stored by the StoreFace node. Use it to A/B a LOCAL sidecar (ai/sidecar/handler.py, CPU InsightFace) against the CLOUD reference embedding (RunPod GPU) that production produced for the exact same input. See compare_local.py.",
+  "source_face_id": "77b8f885-ca11-4c17-9de7-24c17e669a1b",
+  "run_id": "7244b346-3006-4ef9-9383-5a4a6a1d4010",
+  "captured_at": "2026-07-19T01:22:27.641607839+00:00",
+  "frame": "face_frame_01.jpg",
+  "frame_size": [640, 360],
+  "bbox": [290, 71, 355, 171],
+  "bbox_note": "xyxy in frame pixels — from the edge YuNet detector, delivered via the face_detected event",
+  "face_px": [65, 100],
+  "crop_margin_pct": 30,
+  "crop_region": [271, 41, 374, 201],
+  "crop_region_note": "what run_face_embedding's crop_to_bbox produces: bbox grown 30% each side, clamped to the frame; this is the exact input sent to the sidecar in production",
+  "camera": null,
+  "source": "snapshot",
+  "reference": {
+    "op": "face_detect_embed",
+    "provider": "RunPod GPU sidecar, InsightFace buffalo_l, 512-d L2-normalized ArcFace",
+    "dim": 512,
+    "embedding_file": "face_frame_01.embedding.json",
+    "recognized": false,
+    "recognize_result": "no match (stored as unknown)"
+  }
+}

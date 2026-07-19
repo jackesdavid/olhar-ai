@@ -176,8 +176,13 @@ pub(super) fn run_face_embedding(
         .get("bbox")
         .and_then(PortValue::as_bbox)
         .and_then(|b| crop_to_bbox(bytes, b));
-    let embed_bytes: &[u8] = cropped.as_deref().unwrap_or(bytes);
-    let embedding = crate::agent::face::embed(&sys.db, sys.tenant_id, embed_bytes)?;
+    // With a bbox, the edge already localized the face — use the crop-aware embed, which falls
+    // back to align-free embedding if the sidecar's SCRFD can't re-detect it (so we never drop a
+    // face the edge found). Without a bbox, embed the whole frame where "no face" is meaningful.
+    let embedding = match cropped.as_deref() {
+        Some(crop) => crate::agent::face::embed_face_crop(&sys.db, sys.tenant_id, crop)?,
+        None => crate::agent::face::embed(&sys.db, sys.tenant_id, bytes)?,
+    };
     let dim = embedding.len() as i64;
     let mut o = PortValues::new();
     o.insert("embedding".into(), PortValue::Embedding(embedding));

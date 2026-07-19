@@ -37,19 +37,50 @@ pub struct FaceDetection {
 /// Every successful sidecar call is metered against `tenant_id` (the RunPod-billed time)
 /// via [`crate::billing`] — including the "no face found" case, which still consumed GPU.
 pub fn embed(db: &Db, tenant_id: Uuid, image_bytes: &[u8]) -> Result<Vec<f32>, String> {
-    let op = "face_detect_embed";
-    let outcome = ai_service::call(
-        op,
-        json!({ "image_b64": ai_service::image_b64(image_bytes) }),
-    )?;
-    // The job ran and was billed by RunPod — record it before we branch on the result.
-    crate::billing::record_ai_usage(db, tenant_id, op, outcome.delay_ms, outcome.exec_ms, true);
-    let out = outcome.output;
-
-    if !out.get("face").and_then(Value::as_bool).unwrap_or(false) {
+    let out = call_detect_embed(db, tenant_id, image_bytes)?;
+    if !face_present(&out) {
         return Err("No face found in the image — try a clearer, front-facing photo.".into());
     }
+    parse_embedding(&out)
+}
 
+/// Embed a face the edge has ALREADY localized (a tight crop from a `face_detected` bbox).
+///
+/// Tries the full detect+align pipeline first (`face_detect_embed` — best quality, aligns via
+/// the detected landmarks). If the sidecar's SCRFD fails to *re-detect* the face inside the crop
+/// (common for small, off-angle, or frame-filling faces that the edge's YuNet still found), it
+/// falls back to `face_embed` — align-free, resize-to-112 — so a face the edge confidently
+/// detected is never silently dropped. Use ONLY when `image_bytes` is a pre-cropped face; for a
+/// whole frame (enrollment), use [`embed`], where "no face" is a meaningful error.
+pub fn embed_face_crop(db: &Db, tenant_id: Uuid, image_bytes: &[u8]) -> Result<Vec<f32>, String> {
+    let out = call_detect_embed(db, tenant_id, image_bytes)?;
+    if face_present(&out) {
+        return parse_embedding(&out);
+    }
+    // SCRFD missed it, but the edge already localized this crop — embed it align-free.
+    let op = "face_embed";
+    let outcome = ai_service::call(op, json!({ "image_b64": ai_service::image_b64(image_bytes) }))?;
+    crate::billing::record_ai_usage(db, tenant_id, op, outcome.delay_ms, outcome.exec_ms, true);
+    parse_embedding(&outcome.output)
+}
+
+/// Call the sidecar `face_detect_embed` op and meter the (billed) GPU time. Returns the raw
+/// output object; the caller decides what a missing face means.
+fn call_detect_embed(db: &Db, tenant_id: Uuid, image_bytes: &[u8]) -> Result<Value, String> {
+    let op = "face_detect_embed";
+    let outcome = ai_service::call(op, json!({ "image_b64": ai_service::image_b64(image_bytes) }))?;
+    // The job ran and was billed by RunPod — record it before we branch on the result.
+    crate::billing::record_ai_usage(db, tenant_id, op, outcome.delay_ms, outcome.exec_ms, true);
+    Ok(outcome.output)
+}
+
+/// Whether the sidecar detected a face in the frame.
+fn face_present(out: &Value) -> bool {
+    out.get("face").and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// Extract + validate the 512-d L2-normalized embedding from a sidecar response.
+fn parse_embedding(out: &Value) -> Result<Vec<f32>, String> {
     let embedding: Vec<f32> = out
         .get("embedding")
         .and_then(Value::as_array)
