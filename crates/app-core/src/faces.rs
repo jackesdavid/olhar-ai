@@ -906,14 +906,20 @@ pub fn delete(db: &Db, tenant_id: Uuid, ids: &[String]) -> Result<Vec<String>, S
     let pool = db.pool();
     let ids = ids.to_vec();
     db.block(async move {
-        let keys: Vec<(Option<String>,)> = sqlx::query_as(
-            "DELETE FROM faces WHERE tenant_id = $1 AND id = ANY($2::uuid[]) RETURNING image_key",
+        // Return BOTH objects (the full frame AND the pre-crop) so the caller purges each.
+        let keys: Vec<(Option<String>, Option<String>)> = sqlx::query_as(
+            "DELETE FROM faces WHERE tenant_id = $1 AND id = ANY($2::uuid[]) \
+             RETURNING image_key, crop_key",
         )
         .bind(tenant_id)
         .bind(&ids)
         .fetch_all(&pool)
         .await
         .map_err(|e| format!("faces::delete: {e}"))?;
-        Ok(keys.into_iter().filter_map(|(k,)| k).collect())
+        Ok(keys
+            .into_iter()
+            .flat_map(|(img, crop)| [img, crop])
+            .flatten()
+            .collect())
     })
 }
