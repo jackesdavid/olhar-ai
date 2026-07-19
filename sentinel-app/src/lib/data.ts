@@ -311,10 +311,11 @@ export const data = {
     return api.get<CanvasLayout>(`/faces/layout${s ? `?${s}` : ""}`);
   },
   /** A displayable crop URL (token-in-query so it works as `<img src>`). `bust` forces a reload. */
-  faceImageUrl: (id: string, bust?: number): string => {
+  faceImageUrl: (id: string, opts?: { box?: boolean; bust?: number }): string => {
     const qs = new URLSearchParams();
     if (auth.token) qs.set("token", auth.token);
-    if (bust) qs.set("t", String(bust));
+    if (opts?.box) qs.set("box", "1"); // full frame with the detection rectangle (context)
+    if (opts?.bust) qs.set("t", String(opts.bust));
     return `${API_BASE}/faces/${encodeURIComponent(id)}/image?${qs.toString()}`;
   },
   /** Label a whole cluster → an existing person (personId) or a new one (newPersonName). */
@@ -333,6 +334,9 @@ export const data = {
   ignoreFaces: async (faceIds: string[], ignored = true): Promise<void> => {
     await api.post<void>("/faces/ignore", { face_ids: faceIds, ignored });
   },
+  /** HARD-delete faces (rows + MinIO crops) — for false positives / junk. Not recoverable. */
+  deleteFaces: (faceIds: string[]): Promise<{ deleted: number }> =>
+    api.post<{ deleted: number }>("/faces/delete", { face_ids: faceIds }),
 
   // ---- beacons / telegram -------------------------------------------------
   listBeacons: (): Promise<NotificationTarget[]> => api.get<NotificationTarget[]>("/beacons"),

@@ -12,6 +12,8 @@
   import UserPlus from "@lucide/svelte/icons/user-plus";
   import Check from "@lucide/svelte/icons/check";
   import X from "@lucide/svelte/icons/x";
+  import Trash2 from "@lucide/svelte/icons/trash-2";
+  import Frame from "@lucide/svelte/icons/frame";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { data } from "$lib/data";
@@ -28,6 +30,8 @@
   let eps = $state(0.55);
   let epsTimer: ReturnType<typeof setTimeout> | undefined;
   let scope = $state<"unknown" | "known" | "all">("unknown");
+  let showBox = $state(false); // full frame + detection rectangle vs cropped face
+  function toggleBox() { showBox = !showBox; imgs.clear(); dirty = true; }
   const SCOPES: Array<{ v: "unknown" | "known" | "all"; label: string }> = [
     { v: "unknown", label: "Unknown" },
     { v: "known", label: "Known" },
@@ -40,6 +44,7 @@
   let selScreen = $state({ x: 0, y: 0 }); // screen coords of the selected island (for the popup)
   let query = $state("");
   let busy = $state(false);
+  let confirmDel = $state(false); // two-step guard for the destructive delete
 
   const imgs = new Map<string, HTMLImageElement>(); // face id → crop (lazy)
   const FACE_R = 15; // face thumbnail radius, world units
@@ -124,7 +129,7 @@
     if (im) return im.complete && im.naturalWidth > 0 ? im : null;
     im = new Image();
     im.onload = () => { dirty = true; };
-    im.src = data.faceImageUrl(id);
+    im.src = data.faceImageUrl(id, { box: showBox });
     imgs.set(id, im);
     return null;
   }
@@ -163,8 +168,9 @@
           const fr = FACE_R * cam.scale;
           if (p.x + fr < 0 || p.x - fr > W || p.y + fr < 0 || p.y - fr > H) continue;
           const im = getImg(f.id);
+          const rr = Math.max(2, fr * 0.3); // rounded-square corner
           ctx.save();
-          ctx.beginPath(); ctx.arc(p.x, p.y, fr, 0, Math.PI * 2); ctx.closePath(); ctx.clip();
+          ctx.beginPath(); ctx.roundRect(p.x - fr, p.y - fr, fr * 2, fr * 2, rr); ctx.clip();
           if (im) {
             ctx.drawImage(im, p.x - fr, p.y - fr, fr * 2, fr * 2);
           } else {
@@ -173,7 +179,7 @@
           ctx.restore();
           ctx.lineWidth = 1;
           ctx.strokeStyle = "rgba(255,255,255,0.12)";
-          ctx.beginPath(); ctx.arc(p.x, p.y, fr, 0, Math.PI * 2); ctx.stroke();
+          ctx.beginPath(); ctx.roundRect(p.x - fr, p.y - fr, fr * 2, fr * 2, rr); ctx.stroke();
         }
       }
 
@@ -237,6 +243,7 @@
     }
     selected = hit;
     query = "";
+    confirmDel = false;
     if (hit) syncSelScreen();
   }
   function syncSelScreen() {
@@ -272,6 +279,22 @@
   }
   function pick(p: Person) { commit({ personId: p.id }, p.name); }
   function createNew() { const n = query.trim(); if (n) commit({ newPersonName: n }, n); }
+  async function deleteIsland() {
+    if (!selected) return;
+    if (!confirmDel) { confirmDel = true; return; } // first click arms, second deletes
+    busy = true;
+    try {
+      const res = await data.deleteFaces(selected.faces.map((f) => f.id));
+      toast.success(`Deleted ${res.deleted} face${res.deleted === 1 ? "" : "s"}`);
+      islands = islands.filter((x) => x.key !== selected!.key);
+      selected = null; confirmDel = false;
+      dirty = true;
+    } catch (e) {
+      toast.error("Couldn't delete", { description: String(e) });
+    } finally {
+      busy = false;
+    }
+  }
   function confirmSuggestion() {
     if (selected?.suggestion) commit({ personId: selected.suggestion.person_id }, selected.suggestion.name);
   }
@@ -299,6 +322,9 @@
           oninput={(e) => onEps(parseFloat(e.currentTarget.value))} class="h-1 w-28 cursor-pointer accent-primary" />
         <span class="w-9 text-right text-xs tabular-nums">{eps.toFixed(2)}</span>
       </div>
+      <Button variant={showBox ? "default" : "outline"} onclick={toggleBox} title="Show the full frame with the detection box (context)">
+        <Frame class="size-4" /> Context
+      </Button>
       <Button variant="outline" onclick={() => load(true)} disabled={loading}>
         <RefreshCw class="size-4 {loading ? 'animate-spin' : ''}" /> Refresh
       </Button>
@@ -354,6 +380,14 @@
             </button>
           {/if}
         </div>
+        <!-- destructive: remove false-positive / far-away junk faces for good -->
+        <button
+          class="mt-1 flex w-full items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-colors {confirmDel ? 'bg-destructive text-destructive-foreground' : 'text-muted-foreground hover:text-destructive'}"
+          disabled={busy}
+          onclick={deleteIsland}
+        >
+          <Trash2 class="size-3.5" /> {confirmDel ? `Delete ${selected.size} — confirm?` : "Delete faces"}
+        </button>
       </div>
     {/if}
   </div>

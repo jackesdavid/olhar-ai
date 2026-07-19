@@ -630,6 +630,78 @@ pub fn image_key_of(db: &Db, tenant_id: Uuid, id: &str) -> Option<Option<String>
     })
 }
 
+/// Fetch `(image_key, bbox)` for a face — for the image proxy's crop/box rendering. Outer `None`
+/// = the face doesn't exist (or wrong tenant); inner options are its stored key + `[x1,y1,x2,y2]`.
+pub fn crop_info(db: &Db, tenant_id: Uuid, id: &str) -> Option<(Option<String>, Option<[i64; 4]>)> {
+    let pool = db.pool();
+    let id = id.to_string();
+    db.block(async move {
+        let row: Option<(Option<String>, Option<serde_json::Value>)> = sqlx::query_as(
+            "SELECT image_key, bbox FROM faces WHERE tenant_id = $1 AND id = $2::uuid",
+        )
+        .bind(tenant_id)
+        .bind(&id)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten();
+        row.map(|(k, bbox)| {
+            let bb = bbox.and_then(|v| {
+                let a = v.as_array()?;
+                if a.len() != 4 {
+                    return None;
+                }
+                Some([a[0].as_i64()?, a[1].as_i64()?, a[2].as_i64()?, a[3].as_i64()?])
+            });
+            (k, bb)
+        })
+    })
+}
+
+/// Render a stored FRAME for display. The stored image is the whole frame; by default crop it to
+/// the face `bbox` (+25% margin) so thumbnails show the face. With `draw_box`, instead return the
+/// full frame with the detection rectangle drawn (context for judging far / false-positive faces).
+/// Re-encoded JPEG; `None` on decode/encode error → caller serves the raw frame.
+pub fn render_face_image(jpeg: &[u8], bbox: [i64; 4], draw_box: bool) -> Option<Vec<u8>> {
+    let img = image::load_from_memory(jpeg).ok()?;
+    let (iw, ih) = (img.width() as i64, img.height() as i64);
+    let [x1, y1, x2, y2] = bbox;
+    let mut buf = std::io::Cursor::new(Vec::new());
+    if draw_box {
+        let mut rgb = img.to_rgb8();
+        let color = image::Rgb([90u8, 240, 150]);
+        let th = (((x2 - x1).max(y2 - y1)) / 55).clamp(2, 6);
+        for t in 0..th {
+            for x in x1.max(0)..=x2.min(iw - 1) {
+                for &y in &[y1 + t, y2 - t] {
+                    if y >= 0 && y < ih {
+                        rgb.put_pixel(x as u32, y as u32, color);
+                    }
+                }
+            }
+            for y in y1.max(0)..=y2.min(ih - 1) {
+                for &x in &[x1 + t, x2 - t] {
+                    if x >= 0 && x < iw {
+                        rgb.put_pixel(x as u32, y as u32, color);
+                    }
+                }
+            }
+        }
+        image::DynamicImage::ImageRgb8(rgb).write_to(&mut buf, image::ImageFormat::Jpeg).ok()?;
+    } else {
+        let (bw, bh) = ((x2 - x1).max(1), (y2 - y1).max(1));
+        let (mx, my) = (bw / 4, bh / 4);
+        let cx1 = (x1 - mx).clamp(0, iw - 1);
+        let cy1 = (y1 - my).clamp(0, ih - 1);
+        let cx2 = (x2 + mx).clamp(cx1 + 1, iw);
+        let cy2 = (y2 + my).clamp(cy1 + 1, ih);
+        img.crop_imm(cx1 as u32, cy1 as u32, (cx2 - cx1) as u32, (cy2 - cy1) as u32)
+            .write_to(&mut buf, image::ImageFormat::Jpeg)
+            .ok()?;
+    }
+    Some(buf.into_inner())
+}
+
 /// Set (or clear, with `None`) the label on faces — the reassign path. Returns rows affected.
 pub fn set_person(db: &Db, tenant_id: Uuid, ids: &[String], person_id: Option<&str>) -> Result<u64, String> {
     let pool = db.pool();

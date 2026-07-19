@@ -11,6 +11,8 @@
   import Users from "@lucide/svelte/icons/users";
   import X from "@lucide/svelte/icons/x";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
+  import Trash2 from "@lucide/svelte/icons/trash-2";
+  import Frame from "@lucide/svelte/icons/frame";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
   import LayoutDashboard from "@lucide/svelte/icons/layout-dashboard";
   import PageHeader from "$lib/components/page-header.svelte";
@@ -33,6 +35,7 @@
   let excluded = $state<Record<string, Set<string>>>({}); // per-cluster excluded face ids
   let eps = $state(0.55); // grouping distance (cosine) — tunable live; looser = bigger groups
   let reclustering = $state(false);
+  let showBox = $state(false); // full frame + detection rectangle vs cropped face
   let epsTimer: ReturnType<typeof setTimeout> | undefined;
 
   onMount(load);
@@ -139,6 +142,23 @@
       busyKey = null;
     }
   }
+  async function deleteFace(c: FaceCluster, faceId: string) {
+    try {
+      await data.deleteFaces([faceId]);
+      const i = clusters.findIndex((x) => x.key === c.key);
+      if (i >= 0) {
+        const ids = clusters[i].face_ids.filter((id) => id !== faceId);
+        if (ids.length === 0) clusters = clusters.filter((x) => x.key !== c.key);
+        else {
+          clusters[i] = { ...clusters[i], face_ids: ids, size: ids.length };
+          clusters = [...clusters];
+        }
+      }
+      toast.success("Face deleted");
+    } catch (e) {
+      toast.error("Couldn't delete", { description: String(e) });
+    }
+  }
   function toggleExcluded(key: string, faceId: string) {
     const cur = new Set(excluded[key] ?? []);
     if (cur.has(faceId)) cur.delete(faceId);
@@ -199,6 +219,9 @@
       <Button variant="outline" onclick={load} disabled={loading}>
         <RefreshCw class="size-4 {loading || reclustering ? 'animate-spin' : ''}" /> Refresh
       </Button>
+      <Button variant={showBox ? "default" : "outline"} onclick={() => (showBox = !showBox)} title="Show the full frame with the detection box (context)">
+        <Frame class="size-4" /> Context
+      </Button>
       <Button variant="outline" onclick={() => goto("/faces/canvas")}>
         <LayoutDashboard class="size-4" /> Canvas
       </Button>
@@ -240,7 +263,7 @@
           <!-- representative crop -->
           <div class="relative mb-2 overflow-hidden rounded-md border border-border bg-well">
             {#if c.representative.image_key}
-              <img src={data.faceImageUrl(c.representative.id)} alt="face" class="aspect-square w-full object-cover" />
+              <img src={data.faceImageUrl(c.representative.id, { box: showBox })} alt="face" class="aspect-square w-full object-cover" />
             {:else}
               <div class="grid aspect-square w-full place-items-center border border-dashed border-border text-muted-foreground">
                 <ScanFace class="size-7" />
@@ -322,13 +345,21 @@
             {#if expanded === c.key}
               <div class="mt-2 grid grid-cols-4 gap-1.5">
                 {#each c.face_ids as fid (fid)}
-                  <button
-                    class="relative overflow-hidden rounded border {excluded[c.key]?.has(fid) ? 'border-dashed border-border opacity-40' : 'border-border'}"
-                    title={excluded[c.key]?.has(fid) ? "Excluded — click to include" : "Click to exclude"}
-                    onclick={() => toggleExcluded(c.key, fid)}
-                  >
-                    <img src={data.faceImageUrl(fid)} alt="face" class="aspect-square w-full object-cover" />
-                  </button>
+                  <div class="group/thumb relative overflow-hidden rounded-md border {excluded[c.key]?.has(fid) ? 'border-dashed border-border opacity-40' : 'border-border'}">
+                    <img src={data.faceImageUrl(fid, { box: showBox })} alt="face" class="aspect-square w-full object-cover" />
+                    <button
+                      class="absolute inset-0"
+                      title={excluded[c.key]?.has(fid) ? "Excluded — click to include" : "Click to exclude"}
+                      onclick={() => toggleExcluded(c.key, fid)}
+                      aria-label="toggle exclude"
+                    ></button>
+                    <button
+                      class="absolute right-0.5 top-0.5 rounded bg-black/60 p-0.5 text-white/90 opacity-0 transition-opacity hover:bg-destructive group-hover/thumb:opacity-100"
+                      title="Delete this face (permanent)"
+                      onclick={(e) => { e.stopPropagation(); deleteFace(c, fid); }}
+                      aria-label="delete face"
+                    ><Trash2 class="size-3" /></button>
+                  </div>
                 {/each}
               </div>
             {/if}

@@ -25,6 +25,7 @@ pub fn router() -> Router<AppState> {
         .route("/faces/label", post(label))
         .route("/faces/reassign", post(reassign))
         .route("/faces/ignore", post(ignore))
+        .route("/faces/delete", post(delete_faces))
 }
 
 async fn list(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<Face>>, ApiErr> {
@@ -72,10 +73,15 @@ async fn layout(
 #[derive(Deserialize)]
 struct ImageQuery {
     token: String,
+    /// `?box=1` → full frame with the detection rectangle drawn (context); default = crop to face.
+    #[serde(rename = "box", default)]
+    show_box: Option<u8>,
 }
 
-/// Stream a face crop from MinIO by id. Token-in-query (like `run_frame`) so it works as `<img src>`.
-/// Tenant-gated on the `faces` row; 404 for a foreign-tenant id or a face with no stored image.
+/// Stream a face image by id. The stored object is the whole FRAME; by default we crop it to the
+/// face bbox (so `<img>` shows the face), or with `?box=1` draw the detection rectangle on the full
+/// frame. Token-in-query (like `run_frame`). Tenant-gated on the `faces` row; 404 for a foreign
+/// tenant / no stored image.
 async fn face_image(
     State(st): State<AppState>,
     Path(id): Path<String>,
@@ -85,14 +91,20 @@ async fn face_image(
     auth::require(&claims, "persons.read")?;
     let tid = tenant_of(&claims)?;
     let db = st.db.clone();
-    let key = match blocking(move || faces::image_key_of(&db, tid, &id)).await? {
-        Some(Some(k)) => k,
+    let (key, bbox) = match blocking(move || faces::crop_info(&db, tid, &id)).await? {
+        Some((Some(k), bb)) => (k, bb),
         _ => return Ok(StatusCode::NOT_FOUND.into_response()),
     };
     let bytes = blocking(move || app_core::media::get(&key))
         .await?
         .map_err(|e| err(StatusCode::NOT_FOUND, e))?;
-    Ok(([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response())
+    let draw_box = q.show_box.unwrap_or(0) != 0;
+    let out = blocking(move || match bbox {
+        Some(bb) => faces::render_face_image(&bytes, bb, draw_box).unwrap_or(bytes),
+        None => bytes,
+    })
+    .await?;
+    Ok(([(header::CONTENT_TYPE, "image/jpeg")], out).into_response())
 }
 
 #[derive(Deserialize)]
@@ -184,4 +196,35 @@ async fn ignore(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): 
         .await?
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct DeleteReq {
+    face_ids: Vec<String>,
+}
+
+/// HARD-delete faces — remove the rows AND purge their MinIO crops. For false positives / far,
+/// junk detections you never want back (unlike `ignore`, which is recoverable). Returns `{deleted}`.
+async fn delete_faces(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(b): Json<DeleteReq>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    auth::require(&c, "persons.write")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let n = b.face_ids.len();
+    let keys = blocking(move || faces::delete(&db, tid, &b.face_ids))
+        .await?
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    // Purge the crops off the object store (best-effort — a missing key isn't fatal).
+    blocking(move || {
+        for k in keys {
+            if let Err(e) = app_core::media::delete(&k) {
+                log::warn!("faces::delete_faces: media purge failed for {k}: {e}");
+            }
+        }
+    })
+    .await?;
+    Ok(Json(json!({ "deleted": n })))
 }
