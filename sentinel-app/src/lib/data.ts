@@ -19,6 +19,7 @@ import {
   type RecognizeDetail,
   type Face,
   type FaceCluster,
+  type CanvasLayout,
   type Settings,
   type TelegramConfigState,
 } from "./types";
@@ -302,6 +303,8 @@ export const data = {
   listFaces: (): Promise<Face[]> => api.get<Face[]>("/faces"),
   listFaceClusters: (eps?: number): Promise<FaceCluster[]> =>
     api.get<FaceCluster[]>(`/faces/clusters${eps != null ? `?eps=${eps}` : ""}`),
+  faceLayout: (eps?: number): Promise<CanvasLayout> =>
+    api.get<CanvasLayout>(`/faces/layout${eps != null ? `?eps=${eps}` : ""}`),
   /** A displayable crop URL (token-in-query so it works as `<img src>`). `bust` forces a reload. */
   faceImageUrl: (id: string, bust?: number): string => {
     const qs = new URLSearchParams();

@@ -169,6 +169,23 @@ export type FaceCluster = {
   suggestion: ClusterSuggestion | null;
 };
 
+// ---- 2D canvas layout (#119 Phase 1): islands positioned by similarity ----
+/** One face placed on the canvas (absolute pixel coords). */
+export type FaceDot = { id: string; x: number; y: number };
+/** A cluster rendered as a spatial island (centre, radius, fanned face positions). */
+export type Island = {
+  key: string;
+  size: number;
+  cx: number;
+  cy: number;
+  radius: number;
+  representative: Face;
+  suggestion: ClusterSuggestion | null;
+  faces: FaceDot[];
+};
+/** The whole canvas: islands positioned so similar clusters sit near each other. */
+export type CanvasLayout = { islands: Island[] };
+
 /** A recognition probe result: the query embedding (for the target point-cloud) plus
  * the best match (matches the Tauri `recognize_face` command). */
 export type RecognizeDetail = {

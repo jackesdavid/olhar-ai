@@ -20,6 +20,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/faces", get(list))
         .route("/faces/clusters", get(clusters))
+        .route("/faces/layout", get(layout))
         .route("/faces/:id/image", get(face_image))
         .route("/faces/label", post(label))
         .route("/faces/reassign", post(reassign))
@@ -50,6 +51,19 @@ async fn clusters(
     let db = st.db.clone();
     let eps = q.eps.unwrap_or(faces::CLUSTER_EPS);
     Ok(Json(blocking(move || faces::cluster_unlabeled(&db, tid, eps)).await?))
+}
+
+/// The 2D canvas layout: unknown faces grouped into islands positioned by similarity (#119 Phase 1).
+async fn layout(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Query(q): Query<ClusterQuery>,
+) -> Result<Json<faces::CanvasLayout>, ApiErr> {
+    auth::require(&c, "persons.read")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let eps = q.eps.unwrap_or(faces::CLUSTER_EPS);
+    Ok(Json(blocking(move || faces::layout_unlabeled(&db, tid, eps)).await?))
 }
 
 #[derive(Deserialize)]

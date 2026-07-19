@@ -240,14 +240,21 @@ fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
     1.0 - dot
 }
 
-/// Group the tenant's UNKNOWN, non-ignored faces into clusters of similar faces (single-link
-/// connected components at [`CLUSTER_EPS`]), each with an auto-suggested enrolled person (from the
-/// cluster centroid). Largest clusters first. On-demand; empty on error.
-pub fn cluster_unlabeled(db: &Db, tenant_id: Uuid, eps: f32) -> Vec<FaceCluster> {
-    // Clamp to a sane cosine range; [`CLUSTER_EPS`] is the caller's default.
-    let eps = eps.clamp(0.20, 0.90);
+/// Internal per-cluster core shared by the list (`cluster_unlabeled`) and canvas (`layout_unlabeled`)
+/// views: the member indices, its highest-confidence representative, the renormalized centroid, and
+/// the enrolled-person suggestion.
+struct ClusterCore {
+    idxs: Vec<usize>,
+    representative: Face,
+    face_ids: Vec<String>,
+    centroid: Vec<f32>,
+    suggestion: Option<ClusterSuggestion>,
+}
+
+/// Load the tenant's UNKNOWN, non-ignored faces (+ embeddings), newest first, capped at `MAX_CLUSTER_N`.
+fn load_unlabeled(db: &Db, tenant_id: Uuid) -> Vec<(Face, Vec<f32>)> {
     let pool = db.pool();
-    let items: Vec<(Face, Vec<f32>)> = db.block(async move {
+    db.block(async move {
         sqlx::query_as::<_, FaceEmbRow>(
             "SELECT id::text AS id, person_id, image_key, camera, confidence, face_ratio, source, \
                     created_at, embedding::float4[] AS embedding \
@@ -259,20 +266,18 @@ pub fn cluster_unlabeled(db: &Db, tenant_id: Uuid, eps: f32) -> Vec<FaceCluster>
         .fetch_all(&pool)
         .await
         .unwrap_or_else(|e| {
-            log::error!("faces::cluster_unlabeled query failed: {e}");
+            log::error!("faces::load_unlabeled query failed: {e}");
             Vec::new()
         })
     })
     .into_iter()
     .map(FaceEmbRow::into_face)
-    .collect();
+    .collect()
+}
 
+/// Single-link connected components (union-find) over faces within cosine distance `eps`.
+fn build_groups(items: &[(Face, Vec<f32>)], eps: f32) -> Vec<Vec<usize>> {
     let n = items.len();
-    if n == 0 {
-        return Vec::new();
-    }
-
-    // Union-find over pairs within CLUSTER_EPS.
     let mut parent: Vec<usize> = (0..n).collect();
     fn find(parent: &mut [usize], mut i: usize) -> usize {
         while parent[i] != i {
@@ -291,19 +296,23 @@ pub fn cluster_unlabeled(db: &Db, tenant_id: Uuid, eps: f32) -> Vec<FaceCluster>
             }
         }
     }
-
-    // Group indices by root.
     let mut groups: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
     for i in 0..n {
         let r = find(&mut parent, i);
         groups.entry(r).or_default().push(i);
     }
+    groups.into_values().collect()
+}
 
+/// Turn index-groups into cluster cores (representative, centroid, suggestion), largest first.
+fn build_cores(db: &Db, tenant_id: Uuid, items: &[(Face, Vec<f32>)], eps: f32) -> Vec<ClusterCore> {
+    if items.is_empty() {
+        return Vec::new();
+    }
     let dim = items[0].1.len();
-    let mut clusters: Vec<FaceCluster> = groups
-        .into_values()
+    let mut cores: Vec<ClusterCore> = build_groups(items, eps)
+        .into_iter()
         .map(|idxs| {
-            // Representative = highest-confidence face.
             let rep = *idxs
                 .iter()
                 .max_by(|&&a, &&b| items[a].0.confidence.total_cmp(&items[b].0.confidence))
@@ -311,7 +320,6 @@ pub fn cluster_unlabeled(db: &Db, tenant_id: Uuid, eps: f32) -> Vec<FaceCluster>
             let representative = items[rep].0.clone();
             let face_ids: Vec<String> = idxs.iter().map(|&i| items[i].0.id.clone()).collect();
 
-            // Centroid (mean, renormalized) → auto-suggest against enrolled people.
             let mut centroid = vec![0.0f32; dim];
             for &i in &idxs {
                 for (k, v) in items[i].1.iter().enumerate() {
@@ -330,12 +338,168 @@ pub fn cluster_unlabeled(db: &Db, tenant_id: Uuid, eps: f32) -> Vec<FaceCluster>
             )
             .map(|m| ClusterSuggestion { person_id: m.person_id, name: m.name, confidence: m.confidence });
 
-            FaceCluster { key: representative.id.clone(), size: face_ids.len(), face_ids, representative, suggestion }
+            ClusterCore { idxs, representative, face_ids, centroid, suggestion }
+        })
+        .collect();
+    cores.sort_by(|a, b| b.face_ids.len().cmp(&a.face_ids.len()));
+    cores
+}
+
+/// Group the tenant's UNKNOWN, non-ignored faces into clusters of similar faces (single-link
+/// connected components at `eps`), each with an auto-suggested enrolled person (from the cluster
+/// centroid). Largest clusters first. On-demand; empty on error.
+pub fn cluster_unlabeled(db: &Db, tenant_id: Uuid, eps: f32) -> Vec<FaceCluster> {
+    let eps = eps.clamp(0.20, 0.90);
+    let items = load_unlabeled(db, tenant_id);
+    build_cores(db, tenant_id, &items, eps)
+        .into_iter()
+        .map(|c| FaceCluster {
+            key: c.representative.id.clone(),
+            size: c.face_ids.len(),
+            face_ids: c.face_ids,
+            representative: c.representative,
+            suggestion: c.suggestion,
+        })
+        .collect()
+}
+
+// ---- 2D canvas layout (#119 Phase 1): islands positioned by similarity ----
+
+/// One face placed on the canvas (absolute pixel coords).
+#[derive(Serialize)]
+pub struct FaceDot {
+    pub id: String,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// A cluster rendered as a spatial "island": a centre, a radius sized by member count, the fanned
+/// face positions, and the same representative/suggestion as the list view.
+#[derive(Serialize)]
+pub struct Island {
+    pub key: String,
+    pub size: usize,
+    pub cx: f32,
+    pub cy: f32,
+    pub radius: f32,
+    pub representative: Face,
+    pub suggestion: Option<ClusterSuggestion>,
+    pub faces: Vec<FaceDot>,
+}
+
+/// The whole canvas: islands positioned so similar clusters sit near each other.
+#[derive(Serialize)]
+pub struct CanvasLayout {
+    pub islands: Vec<Island>,
+}
+
+/// Lay the tenant's unknown faces out as similarity islands: cluster at `eps`, place cluster
+/// centroids by stress majorization (inter-island distance ∝ centroid cosine distance), then fan
+/// each island's faces in a phyllotaxis spiral. Absolute pixel coordinates; largest island first.
+pub fn layout_unlabeled(db: &Db, tenant_id: Uuid, eps: f32) -> CanvasLayout {
+    let eps = eps.clamp(0.20, 0.90);
+    let items = load_unlabeled(db, tenant_id);
+    let cores = build_cores(db, tenant_id, &items, eps);
+    if cores.is_empty() {
+        return CanvasLayout { islands: Vec::new() };
+    }
+
+    // Island radius grows with sqrt(count) so face density stays roughly constant.
+    let radius_of = |n: usize| 44.0 + 15.0 * (n as f32).sqrt();
+
+    // Pairwise centroid cosine distances → 2D centre positions (stress majorization).
+    let k = cores.len();
+    let mut dist = vec![vec![0.0f32; k]; k];
+    for i in 0..k {
+        for j in (i + 1)..k {
+            let d = cosine_distance(&cores[i].centroid, &cores[j].centroid);
+            dist[i][j] = d;
+            dist[j][i] = d;
+        }
+    }
+    let centres = stress_layout(&dist, &cores.iter().map(|c| radius_of(c.face_ids.len())).collect::<Vec<_>>());
+
+    let islands = cores
+        .into_iter()
+        .enumerate()
+        .map(|(ci, c)| {
+            let (cx, cy) = centres[ci];
+            let r = radius_of(c.face_ids.len());
+            // Phyllotaxis (sunflower) fan: even, deterministic packing around the centre.
+            let n = c.idxs.len();
+            let faces: Vec<FaceDot> = c
+                .idxs
+                .iter()
+                .enumerate()
+                .map(|(fi, &_idx)| {
+                    let fr = if n <= 1 { 0.0 } else { r * 0.82 * ((fi as f32 + 0.5) / n as f32).sqrt() };
+                    let theta = fi as f32 * 2.399_963_2; // golden angle
+                    FaceDot {
+                        id: c.face_ids[fi].clone(),
+                        x: cx + fr * theta.cos(),
+                        y: cy + fr * theta.sin(),
+                    }
+                })
+                .collect();
+            Island {
+                key: c.representative.id.clone(),
+                size: c.face_ids.len(),
+                cx,
+                cy,
+                radius: r,
+                representative: c.representative,
+                suggestion: c.suggestion,
+                faces,
+            }
         })
         .collect();
 
-    clusters.sort_by(|a, b| b.size.cmp(&a.size));
-    clusters
+    CanvasLayout { islands }
+}
+
+/// Place `k` points in 2D so pairwise screen distance tracks `dist` (cosine), keeping islands at
+/// least their combined `radii` apart. Deterministic golden-angle init + gradient descent on the
+/// stress `Σ(target − d)²` — no RNG (stable layouts), no external lib.
+fn stress_layout(dist: &[Vec<f32>], radii: &[f32]) -> Vec<(f32, f32)> {
+    let k = dist.len();
+    if k == 0 {
+        return Vec::new();
+    }
+    if k == 1 {
+        return vec![(0.0, 0.0)];
+    }
+    // Pixels per unit cosine distance — sets how far apart similarity pushes islands.
+    const SCALE: f32 = 520.0;
+    let mut pos: Vec<(f32, f32)> = (0..k)
+        .map(|i| {
+            let a = i as f32 * 2.399_963_2;
+            let r = 30.0 + i as f32 * 8.0;
+            (r * a.cos(), r * a.sin())
+        })
+        .collect();
+    for _ in 0..300 {
+        let mut disp = vec![(0.0f32, 0.0f32); k];
+        for i in 0..k {
+            for j in 0..k {
+                if i == j {
+                    continue;
+                }
+                let dx = pos[i].0 - pos[j].0;
+                let dy = pos[i].1 - pos[j].1;
+                let d = (dx * dx + dy * dy).sqrt().max(1.0);
+                // Target = similarity distance, but never closer than the two islands' radii (+gap).
+                let target = (dist[i][j] * SCALE).max(radii[i] + radii[j] + 24.0);
+                let f = (target - d) / d * 0.5; // >0 apart, <0 together
+                disp[i].0 += dx * f;
+                disp[i].1 += dy * f;
+            }
+        }
+        for i in 0..k {
+            pos[i].0 += disp[i].0 / k as f32;
+            pos[i].1 += disp[i].1 / k as f32;
+        }
+    }
+    pos
 }
 
 /// One face by id (tenant-scoped).
