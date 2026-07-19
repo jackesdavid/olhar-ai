@@ -282,6 +282,23 @@ pub(super) fn run_store_face(
         .to_vec();
 
     let mut o = PortValues::new();
+
+    // Detection score + face-size (from the face_detected event). Quality gate FIRST — skip weak
+    // (low-confidence) or tiny (far) faces before they pollute the gallery, known or unknown. Only
+    // gate on the signals actually WIRED, so an unwired input can't silently skip everything.
+    let conf_in = inputs.get("confidence").and_then(PortValue::as_num);
+    let ratio_in = inputs.get("face_ratio").and_then(PortValue::as_num);
+    let min_conf = cfg_f64(config, "min_confidence", 0.0);
+    let min_ratio = cfg_f64(config, "min_face_ratio", 0.0);
+    let too_weak = conf_in.map(|c| (c as f64) < min_conf).unwrap_or(false)
+        || ratio_in.map(|r| (r as f64) < min_ratio).unwrap_or(false);
+    if too_weak {
+        o.insert("stored".into(), PortValue::Bool(false));
+        return Ok(o);
+    }
+    let confidence = conf_in.unwrap_or(0) as f32;
+    let face_ratio = ratio_in.unwrap_or(0) as f32;
+
     let dedup = cfg_f64(config, "dedup_distance", 0.15) as f32;
     if dedup > 0.0 {
         if let Some(d) = crate::faces::nearest_stored_distance(&sys.db, sys.tenant_id, &embedding) {
@@ -292,10 +309,18 @@ pub(super) fn run_store_face(
         }
     }
 
-    let image_key = inputs
-        .get("image")
-        .and_then(PortValue::as_image)
-        .and_then(|bytes| crate::media::put_face(bytes, "image/jpeg", "jpg").ok());
+    // The stored image is the whole FRAME (kept for the Context / full-frame+box view).
+    let frame = inputs.get("image").and_then(PortValue::as_image);
+    let image_key = frame.and_then(|b| crate::media::put_face(b, "image/jpeg", "jpg").ok());
+    let bb = inputs.get("bbox").and_then(PortValue::as_bbox);
+    let bbox = bb.map(|b| serde_json::json!([b.x1, b.y1, b.x2, b.y2]));
+    // Pre-crop the face → a small passthrough thumbnail so the image proxy serves reads WITHOUT
+    // decoding + cropping the frame each time (the read-concurrency fix). None → crop on read.
+    let crop_key = match (frame, bb) {
+        (Some(f), Some(b)) => crate::faces::render_face_image(f, [b.x1, b.y1, b.x2, b.y2], false)
+            .and_then(|c| crate::media::put_face(&c, "image/jpeg", "jpg").ok()),
+        _ => None,
+    };
     let label = inputs
         .get("label")
         .and_then(PortValue::as_text)
@@ -306,18 +331,11 @@ pub(super) fn run_store_face(
         .and_then(PortValue::as_camera)
         .map(|c| c.id.clone())
         .or_else(|| inputs.get("camera").and_then(PortValue::as_text).map(str::to_string));
-    let bbox = inputs.get("bbox").and_then(PortValue::as_bbox).map(|b| {
-        serde_json::json!([b.x1, b.y1, b.x2, b.y2])
-    });
     let source = config
         .get("source")
         .and_then(|v| v.as_str())
         .unwrap_or("snapshot")
         .to_string();
-    // Detection score + face-size (from the face_detected event) — wire them so the detail view
-    // and far-face triage have real values instead of 0.
-    let confidence = inputs.get("confidence").and_then(PortValue::as_num).unwrap_or(0) as f32;
-    let face_ratio = inputs.get("face_ratio").and_then(PortValue::as_num).unwrap_or(0) as f32;
 
     let id = crate::faces::insert(
         &sys.db,
@@ -331,6 +349,7 @@ pub(super) fn run_store_face(
             confidence,
             face_ratio,
             source,
+            crop_key,
         },
     )?;
     o.insert("stored".into(), PortValue::Bool(true));

@@ -27,6 +27,19 @@ pub fn router() -> Router<AppState> {
         .route("/faces/reassign", post(reassign))
         .route("/faces/ignore", post(ignore))
         .route("/faces/delete", post(delete_faces))
+        .route("/faces/backfill-crops", post(backfill_crops))
+}
+
+/// One-shot: generate pre-cropped thumbnails for faces stored before crop_key existed. Idempotent;
+/// returns `{ backfilled }` for this batch (call again if it equals the batch cap).
+async fn backfill_crops(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<serde_json::Value>, ApiErr> {
+    auth::require(&c, "persons.write")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let n = blocking(move || faces::backfill_crops(&db, tid, 1000))
+        .await?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(json!({ "backfilled": n })))
 }
 
 async fn list(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<Face>>, ApiErr> {
@@ -92,9 +105,16 @@ async fn face_image(
     auth::require(&claims, "persons.read")?;
     let tid = tenant_of(&claims)?;
     let db = st.db.clone();
-    let (key, bbox) = match blocking(move || faces::crop_info(&db, tid, &id)).await? {
-        Some((Some(k), bb)) => (k, bb),
+    let (image_key, crop_key, bbox) = match blocking(move || faces::crop_info(&db, tid, &id)).await? {
+        Some((Some(k), crop, bb)) => (k, crop, bb),
         _ => return Ok(StatusCode::NOT_FOUND.into_response()),
+    };
+    let draw_box = q.show_box.unwrap_or(0) != 0;
+    // Default read serves the PRE-CROPPED thumbnail directly (passthrough — no decode/crop). Context
+    // (?box=1) needs the full frame. Old faces have no crop_key → fall back to cropping the frame.
+    let (key, render) = match (&crop_key, draw_box) {
+        (Some(c), false) => (c.clone(), None),          // passthrough
+        _ => (image_key, if draw_box { Some(true) } else { Some(false) }), // render frame (box or crop)
     };
     // Retry the object fetch — a canvas view fires dozens of thumbnail requests at once, and a
     // transient MinIO/connection blip under that burst would otherwise surface as a (misleading)
@@ -112,10 +132,9 @@ async fn face_image(
     })
     .await?
     .map_err(|e| err(StatusCode::NOT_FOUND, e))?;
-    let draw_box = q.show_box.unwrap_or(0) != 0;
-    let out = blocking(move || match bbox {
-        Some(bb) => faces::render_face_image(&bytes, bb, draw_box).unwrap_or(bytes),
-        None => bytes,
+    let out = blocking(move || match (render, bbox) {
+        (Some(draw), Some(bb)) => faces::render_face_image(&bytes, bb, draw).unwrap_or(bytes),
+        _ => bytes, // passthrough crop, or no bbox
     })
     .await?;
     // The crop for a given (face id, box) never changes → let the browser cache it hard, so a

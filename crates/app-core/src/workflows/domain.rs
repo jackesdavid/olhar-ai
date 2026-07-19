@@ -1608,7 +1608,7 @@ impl NodeKind {
             NodeKind::RecognizePerson => json!({ "max_distance": "0.4", "timeout_secs": "30" }),
             NodeKind::FaceEmbedding => json!({ "timeout_secs": "30" }),
             NodeKind::RecognizeFace => json!({ "top_k": "5", "max_distance": "0.5", "timeout_secs": "15" }),
-            NodeKind::StoreFace => json!({ "source": "snapshot", "dedup_distance": "0.15", "timeout_secs": "15" }),
+            NodeKind::StoreFace => json!({ "source": "snapshot", "dedup_distance": "0.15", "min_confidence": "0", "min_face_ratio": "0", "timeout_secs": "15" }),
             NodeKind::RecordPresence => {
                 json!({ "category": "person", "room": "", "label": "", "duration_secs": "8" })
             }

@@ -21,6 +21,8 @@ pub struct NewFace {
     pub confidence: f32,
     pub face_ratio: f32,
     pub source: String,
+    /// Pre-cropped face thumbnail key (the proxy serves it as a passthrough); `None` = crop on read.
+    pub crop_key: Option<String>,
 }
 
 /// A stored face as returned (no embedding — that stays server-side).
@@ -71,8 +73,8 @@ pub fn insert(db: &Db, tenant_id: Uuid, f: NewFace) -> Result<String, String> {
     db.block(async move {
         let row: (String,) = sqlx::query_as(
             "INSERT INTO faces (tenant_id, person_id, embedding, image_key, camera, bbox, \
-                                confidence, face_ratio, source, created_at) \
-             VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10) RETURNING id::text",
+                                confidence, face_ratio, source, created_at, crop_key) \
+             VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id::text",
         )
         .bind(tenant_id)
         .bind(&f.person_id)
@@ -84,6 +86,7 @@ pub fn insert(db: &Db, tenant_id: Uuid, f: NewFace) -> Result<String, String> {
         .bind(f.face_ratio)
         .bind(&f.source)
         .bind(&now)
+        .bind(&f.crop_key)
         .fetch_one(&pool)
         .await
         .map_err(|e| format!("faces::insert: {e}"))?;
@@ -697,14 +700,19 @@ pub fn get_detail(db: &Db, tenant_id: Uuid, id: &str) -> Option<FaceDetail> {
     })
 }
 
-/// Fetch `(image_key, bbox)` for a face — for the image proxy's crop/box rendering. Outer `None`
-/// = the face doesn't exist (or wrong tenant); inner options are its stored key + `[x1,y1,x2,y2]`.
-pub fn crop_info(db: &Db, tenant_id: Uuid, id: &str) -> Option<(Option<String>, Option<[i64; 4]>)> {
+/// Fetch `(image_key, crop_key, bbox)` for a face — for the image proxy. Outer `None` = the face
+/// doesn't exist (or wrong tenant). `crop_key` (when present) is a pre-cropped thumbnail the proxy
+/// can serve as a passthrough; `image_key` is the full frame (for Context / on-the-fly crop).
+pub fn crop_info(
+    db: &Db,
+    tenant_id: Uuid,
+    id: &str,
+) -> Option<(Option<String>, Option<String>, Option<[i64; 4]>)> {
     let pool = db.pool();
     let id = id.to_string();
     db.block(async move {
-        let row: Option<(Option<String>, Option<serde_json::Value>)> = sqlx::query_as(
-            "SELECT image_key, bbox FROM faces WHERE tenant_id = $1 AND id = $2::uuid",
+        let row: Option<(Option<String>, Option<String>, Option<serde_json::Value>)> = sqlx::query_as(
+            "SELECT image_key, crop_key, bbox FROM faces WHERE tenant_id = $1 AND id = $2::uuid",
         )
         .bind(tenant_id)
         .bind(&id)
@@ -712,7 +720,7 @@ pub fn crop_info(db: &Db, tenant_id: Uuid, id: &str) -> Option<(Option<String>, 
         .await
         .ok()
         .flatten();
-        row.map(|(k, bbox)| {
+        row.map(|(k, crop, bbox)| {
             let bb = bbox.and_then(|v| {
                 let a = v.as_array()?;
                 if a.len() != 4 {
@@ -720,9 +728,67 @@ pub fn crop_info(db: &Db, tenant_id: Uuid, id: &str) -> Option<(Option<String>, 
                 }
                 Some([a[0].as_i64()?, a[1].as_i64()?, a[2].as_i64()?, a[3].as_i64()?])
             });
-            (k, bb)
+            (k, crop, bb)
         })
     })
+}
+
+/// Backfill pre-cropped thumbnails for faces captured before `crop_key` existed: for up to `limit`
+/// rows with a frame + bbox but no crop, fetch the frame, crop it, store the crop, and set
+/// `crop_key`. Returns how many it filled. Idempotent — call again for the next batch. Best-effort
+/// per row (a fetch/crop/store failure just skips that one).
+pub fn backfill_crops(db: &Db, tenant_id: Uuid, limit: i64) -> Result<usize, String> {
+    let pool = db.pool();
+    let rows: Vec<(String, String, Option<serde_json::Value>)> = db.block(async move {
+        sqlx::query_as(
+            "SELECT id::text, image_key, bbox FROM faces \
+             WHERE tenant_id = $1 AND crop_key IS NULL AND image_key IS NOT NULL AND bbox IS NOT NULL \
+             LIMIT $2",
+        )
+        .bind(tenant_id)
+        .bind(limit)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_default()
+    });
+    let mut done = 0usize;
+    for (id, image_key, bbox) in rows {
+        let bb = match bbox.as_ref().and_then(|v| {
+            let a = v.as_array()?;
+            if a.len() != 4 {
+                return None;
+            }
+            Some([a[0].as_i64()?, a[1].as_i64()?, a[2].as_i64()?, a[3].as_i64()?])
+        }) {
+            Some(b) => b,
+            None => continue,
+        };
+        let frame = match crate::media::get(&image_key) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let crop = match render_face_image(&frame, bb, false) {
+            Some(c) => c,
+            None => continue,
+        };
+        let crop_key = match crate::media::put_face(&crop, "image/jpeg", "jpg") {
+            Ok(k) => k,
+            Err(_) => continue,
+        };
+        let pool2 = db.pool();
+        let idc = id.clone();
+        let kc = crop_key.clone();
+        let _ = db.block(async move {
+            sqlx::query("UPDATE faces SET crop_key = $1 WHERE tenant_id = $2 AND id = $3::uuid")
+                .bind(&kc)
+                .bind(tenant_id)
+                .bind(&idc)
+                .execute(&pool2)
+                .await
+        });
+        done += 1;
+    }
+    Ok(done)
 }
 
 /// Render a stored FRAME for display. The stored image is the whole frame; by default crop it to
