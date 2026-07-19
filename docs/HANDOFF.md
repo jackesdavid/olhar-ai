@@ -43,7 +43,14 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
     (NumGte×2 → And → Branch before embed), NOT StoreFace config — must be added in the UI.
   - **#3 face landmark points** in the detail (movie style) — NOT built; needs capturing the sidecar's
     `kps` at embed time → store (new column) → draw as a Context-style toggle.
-  - More **filters** (by-date, by-similarity); canvas **lasso** (Phase 3).
+  - **Canvas lasso** (Phase 3): Shift-drag a lasso, then a click at the right spot opens the **bulk
+    label modal** for the enclosed faces (select-across-islands → stamp-label).
+  - **Canvas cap params:** (a) **max samples per island** — cap faces rendered per island (perf/density;
+    show "+N more"); (b) **max islands** — cap total islands returned. Both belong on `layout_faces`
+    (`?max_per_island=`, `?max_islands=`) + UI controls.
+  - **Auto-refresh dropdown** on the canvas — like the Events page (pick an interval; re-fetch layout on
+    a timer).
+  - More **filters** (by-date, by-similarity).
 - **Blockers:** graph edits can't be applied programmatically — persistence is replace-all + the
   direct prod-DB write is safety-blocked; hand to the UI. User was live-editing the graph.
 - **Refs:** memory `faces-workspace` / `face-pipeline-architecture` / `storeface-pure-sink` /
