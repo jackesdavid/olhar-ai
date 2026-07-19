@@ -27,6 +27,12 @@
   let loading = $state(true);
   let eps = $state(0.55);
   let epsTimer: ReturnType<typeof setTimeout> | undefined;
+  let scope = $state<"unknown" | "known" | "all">("unknown");
+  const SCOPES: Array<{ v: "unknown" | "known" | "all"; label: string }> = [
+    { v: "unknown", label: "Unknown" },
+    { v: "known", label: "Known" },
+    { v: "all", label: "All" },
+  ];
 
   // camera: world point at screen centre + scale (screen px per world unit)
   const cam = { x: 0, y: 0, scale: 1 };
@@ -70,7 +76,7 @@
   async function load(fit = false) {
     loading = true;
     try {
-      const [lay, pp] = await Promise.all([data.faceLayout(eps), data.listPeople()]);
+      const [lay, pp] = await Promise.all([data.faceLayout(eps, scope), data.listPeople()]);
       islands = lay.islands;
       people = pp;
       if (fit) fitView();
@@ -81,14 +87,20 @@
       loading = false;
     }
   }
-  async function recluster() {
+  async function recluster(fit = false) {
     try {
-      islands = (await data.faceLayout(eps)).islands;
+      islands = (await data.faceLayout(eps, scope)).islands;
       selected = null;
+      if (fit) fitView();
       dirty = true;
     } catch (e) {
       toast.error("Couldn't re-group", { description: String(e) });
     }
+  }
+  function setScope(v: "unknown" | "known" | "all") {
+    if (v === scope) return;
+    scope = v;
+    recluster(true);
   }
   function onEps(v: number) { eps = v; clearTimeout(epsTimer); epsTimer = setTimeout(recluster, 300); }
 
@@ -170,9 +182,14 @@
         ctx.strokeStyle = "#7aa2ff"; ctx.lineWidth = 2;
         ctx.beginPath(); ctx.arc(c.x, c.y, rS + 6, 0, Math.PI * 2); ctx.stroke();
       }
-      const label = is.suggestion ? `${is.suggestion.name} · ${is.size}` : `${is.size} face${is.size === 1 ? "" : "s"}`;
-      ctx.fillStyle = "rgba(255,255,255,0.6)";
-      ctx.font = "12px ui-sans-serif, system-ui";
+      // Labeled anchor → person name (brighter); unknown → suggestion or bare count.
+      const label = is.label
+        ? `${is.label} · ${is.size}`
+        : is.suggestion
+          ? `${is.suggestion.name} · ${is.size}`
+          : `${is.size} face${is.size === 1 ? "" : "s"}`;
+      ctx.fillStyle = is.label ? "rgba(160,190,255,0.95)" : "rgba(255,255,255,0.6)";
+      ctx.font = `${is.label ? "600 " : ""}12px ui-sans-serif, system-ui`;
       ctx.textAlign = "center"; ctx.textBaseline = "top";
       ctx.fillText(label, c.x, c.y + rS + 6);
     }
@@ -268,7 +285,15 @@
       <span class="text-sm text-muted-foreground">{islands.length} islands · similar faces sit together</span>
     </div>
     <div class="flex items-center gap-2">
-      <div class="flex items-center gap-2 rounded-md border border-border px-3 py-1.5" title="Grouping distance">
+      <div class="flex overflow-hidden rounded-md border border-border">
+        {#each SCOPES as s (s.v)}
+          <button
+            class="px-3 py-1.5 text-xs transition-colors {scope === s.v ? 'bg-primary text-primary-foreground' : 'hover:bg-accent'}"
+            onclick={() => setScope(s.v)}
+          >{s.label}</button>
+        {/each}
+      </div>
+      <div class="flex items-center gap-2 rounded-md border border-border px-3 py-1.5" title="Grouping distance (unknown faces only)">
         <span class="text-xs text-muted-foreground">Grouping</span>
         <input type="range" min="0.30" max="0.80" step="0.01" value={eps}
           oninput={(e) => onEps(parseFloat(e.currentTarget.value))} class="h-1 w-28 cursor-pointer accent-primary" />

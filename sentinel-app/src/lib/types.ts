@@ -181,6 +181,8 @@ export type Island = {
   radius: number;
   representative: Face;
   suggestion: ClusterSuggestion | null;
+  /** Person name when this is a labeled "anchor" island; null for an unknown cluster. */
+  label: string | null;
   faces: FaceDot[];
 };
 /** The whole canvas: islands positioned so similar clusters sit near each other. */

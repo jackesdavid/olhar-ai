@@ -249,26 +249,59 @@ struct ClusterCore {
     face_ids: Vec<String>,
     centroid: Vec<f32>,
     suggestion: Option<ClusterSuggestion>,
+    /// Person name when this is a KNOWN (labeled) island; `None` for an unknown cluster.
+    label: Option<String>,
 }
 
-/// Load the tenant's UNKNOWN, non-ignored faces (+ embeddings), newest first, capped at `MAX_CLUSTER_N`.
-fn load_unlabeled(db: &Db, tenant_id: Uuid) -> Vec<(Face, Vec<f32>)> {
+/// Which faces a canvas/list view shows.
+#[derive(Clone, Copy, PartialEq)]
+pub enum FaceScope {
+    /// Unlabeled captures awaiting a name (the default triage set).
+    Unknown,
+    /// Already-labeled faces, grouped by person (the "anchor" islands).
+    Known,
+    /// Both — labeled anchors + the unknown pile.
+    All,
+}
+
+impl FaceScope {
+    pub fn parse(s: &str) -> FaceScope {
+        match s {
+            "known" => FaceScope::Known,
+            "all" => FaceScope::All,
+            _ => FaceScope::Unknown,
+        }
+    }
+    /// SQL predicate (all cases exclude ignored faces).
+    fn predicate(&self) -> &'static str {
+        match self {
+            FaceScope::Unknown => "person_id IS NULL AND NOT ignored",
+            FaceScope::Known => "person_id IS NOT NULL AND NOT ignored",
+            FaceScope::All => "NOT ignored",
+        }
+    }
+}
+
+/// Load faces (+ embeddings) matching `scope`, newest first, capped at `MAX_CLUSTER_N`.
+fn load_faces(db: &Db, tenant_id: Uuid, scope: FaceScope) -> Vec<(Face, Vec<f32>)> {
     let pool = db.pool();
+    let sql = format!(
+        "SELECT id::text AS id, person_id, image_key, camera, confidence, face_ratio, source, \
+                created_at, embedding::float4[] AS embedding \
+         FROM faces WHERE tenant_id = $1 AND {} \
+         ORDER BY created_at DESC LIMIT $2",
+        scope.predicate()
+    );
     db.block(async move {
-        sqlx::query_as::<_, FaceEmbRow>(
-            "SELECT id::text AS id, person_id, image_key, camera, confidence, face_ratio, source, \
-                    created_at, embedding::float4[] AS embedding \
-             FROM faces WHERE tenant_id = $1 AND person_id IS NULL AND NOT ignored \
-             ORDER BY created_at DESC LIMIT $2",
-        )
-        .bind(tenant_id)
-        .bind(MAX_CLUSTER_N)
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_else(|e| {
-            log::error!("faces::load_unlabeled query failed: {e}");
-            Vec::new()
-        })
+        sqlx::query_as::<_, FaceEmbRow>(&sql)
+            .bind(tenant_id)
+            .bind(MAX_CLUSTER_N)
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_else(|e| {
+                log::error!("faces::load_faces query failed: {e}");
+                Vec::new()
+            })
     })
     .into_iter()
     .map(FaceEmbRow::into_face)
@@ -338,7 +371,52 @@ fn build_cores(db: &Db, tenant_id: Uuid, items: &[(Face, Vec<f32>)], eps: f32) -
             )
             .map(|m| ClusterSuggestion { person_id: m.person_id, name: m.name, confidence: m.confidence });
 
-            ClusterCore { idxs, representative, face_ids, centroid, suggestion }
+            ClusterCore { idxs, representative, face_ids, centroid, suggestion, label: None }
+        })
+        .collect();
+    cores.sort_by(|a, b| b.face_ids.len().cmp(&a.face_ids.len()));
+    cores
+}
+
+/// Group KNOWN (labeled) faces into one core per person — the "anchor" islands. No embedding
+/// clustering; the person id IS the group. `name_of` maps person id → display name.
+fn build_person_cores(
+    items: &[(Face, Vec<f32>)],
+    name_of: &std::collections::HashMap<String, String>,
+) -> Vec<ClusterCore> {
+    if items.is_empty() {
+        return Vec::new();
+    }
+    let dim = items[0].1.len();
+    let mut by_person: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+    for (i, (f, _)) in items.iter().enumerate() {
+        if let Some(pid) = &f.person_id {
+            by_person.entry(pid.clone()).or_default().push(i);
+        }
+    }
+    let mut cores: Vec<ClusterCore> = by_person
+        .into_iter()
+        .map(|(pid, idxs)| {
+            let rep = *idxs
+                .iter()
+                .max_by(|&&a, &&b| items[a].0.confidence.total_cmp(&items[b].0.confidence))
+                .unwrap();
+            let representative = items[rep].0.clone();
+            let face_ids: Vec<String> = idxs.iter().map(|&i| items[i].0.id.clone()).collect();
+            let mut centroid = vec![0.0f32; dim];
+            for &i in &idxs {
+                for (k, v) in items[i].1.iter().enumerate() {
+                    centroid[k] += v;
+                }
+            }
+            let norm = centroid.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if norm > 0.0 {
+                for x in &mut centroid {
+                    *x /= norm;
+                }
+            }
+            let label = Some(name_of.get(&pid).cloned().unwrap_or(pid));
+            ClusterCore { idxs, representative, face_ids, centroid, suggestion: None, label }
         })
         .collect();
     cores.sort_by(|a, b| b.face_ids.len().cmp(&a.face_ids.len()));
@@ -350,7 +428,7 @@ fn build_cores(db: &Db, tenant_id: Uuid, items: &[(Face, Vec<f32>)], eps: f32) -
 /// centroid). Largest clusters first. On-demand; empty on error.
 pub fn cluster_unlabeled(db: &Db, tenant_id: Uuid, eps: f32) -> Vec<FaceCluster> {
     let eps = eps.clamp(0.20, 0.90);
-    let items = load_unlabeled(db, tenant_id);
+    let items = load_faces(db, tenant_id, FaceScope::Unknown);
     build_cores(db, tenant_id, &items, eps)
         .into_iter()
         .map(|c| FaceCluster {
@@ -384,6 +462,8 @@ pub struct Island {
     pub radius: f32,
     pub representative: Face,
     pub suggestion: Option<ClusterSuggestion>,
+    /// Person name when this is a labeled "anchor" island; `None` for an unknown cluster.
+    pub label: Option<String>,
     pub faces: Vec<FaceDot>,
 }
 
@@ -393,13 +473,23 @@ pub struct CanvasLayout {
     pub islands: Vec<Island>,
 }
 
-/// Lay the tenant's unknown faces out as similarity islands: cluster at `eps`, place cluster
-/// centroids by stress majorization (inter-island distance ∝ centroid cosine distance), then fan
-/// each island's faces in a phyllotaxis spiral. Absolute pixel coordinates; largest island first.
-pub fn layout_unlabeled(db: &Db, tenant_id: Uuid, eps: f32) -> CanvasLayout {
+/// Lay faces out as similarity islands, filtered by `scope`. Unknown faces are embedding-clustered
+/// at `eps`; KNOWN faces are grouped into one "anchor" island per person. Island centres are placed
+/// by stress majorization (inter-island distance ∝ centroid cosine distance) and each island's faces
+/// fanned in a phyllotaxis spiral. Absolute pixel coordinates; largest island first.
+pub fn layout_faces(db: &Db, tenant_id: Uuid, eps: f32, scope: FaceScope) -> CanvasLayout {
     let eps = eps.clamp(0.20, 0.90);
-    let items = load_unlabeled(db, tenant_id);
-    let cores = build_cores(db, tenant_id, &items, eps);
+    let items = load_faces(db, tenant_id, scope);
+    // Split labeled vs unlabeled — each groups differently (by person vs by embedding).
+    let (known, unknown): (Vec<_>, Vec<_>) = items.into_iter().partition(|(f, _)| f.person_id.is_some());
+    let name_of: std::collections::HashMap<String, String> = if known.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        crate::persons::repo::load(db, tenant_id).into_iter().map(|p| (p.id, p.name)).collect()
+    };
+    let mut cores = build_person_cores(&known, &name_of);
+    cores.extend(build_cores(db, tenant_id, &unknown, eps));
+    cores.sort_by(|a, b| b.face_ids.len().cmp(&a.face_ids.len()));
     if cores.is_empty() {
         return CanvasLayout { islands: Vec::new() };
     }
@@ -442,13 +532,14 @@ pub fn layout_unlabeled(db: &Db, tenant_id: Uuid, eps: f32) -> CanvasLayout {
                 })
                 .collect();
             Island {
-                key: c.representative.id.clone(),
+                key: c.label.clone().unwrap_or_else(|| c.representative.id.clone()),
                 size: c.face_ids.len(),
                 cx,
                 cy,
                 radius: r,
                 representative: c.representative,
                 suggestion: c.suggestion,
+                label: c.label,
                 faces,
             }
         })

@@ -38,6 +38,8 @@ async fn list(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<J
 struct ClusterQuery {
     /// Grouping distance (cosine) — tunable live from the screen; defaults to `faces::CLUSTER_EPS`.
     eps: Option<f32>,
+    /// Which faces to show: "unknown" (default) · "known" · "all".
+    scope: Option<String>,
 }
 
 /// The triage feed: unknown faces grouped into clusters, each with an auto-suggested person.
@@ -63,7 +65,8 @@ async fn layout(
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     let eps = q.eps.unwrap_or(faces::CLUSTER_EPS);
-    Ok(Json(blocking(move || faces::layout_unlabeled(&db, tid, eps)).await?))
+    let scope = faces::FaceScope::parse(q.scope.as_deref().unwrap_or("unknown"));
+    Ok(Json(blocking(move || faces::layout_faces(&db, tid, eps, scope)).await?))
 }
 
 #[derive(Deserialize)]
