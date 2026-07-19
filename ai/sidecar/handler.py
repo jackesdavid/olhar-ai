@@ -182,6 +182,30 @@ def face_embed(inp: dict) -> dict:
     return {"embedding": [float(v) for v in normed.tolist()], "dim": int(normed.shape[0])}
 
 
+def diag(inp: dict) -> dict:
+    """Report the ACTUAL runtime execution providers so a silent CPU fallback is visible.
+
+    `available` = providers compiled into onnxruntime; `*_providers` = what each loaded
+    InsightFace session actually runs on. On a healthy GPU worker these include
+    'CUDAExecutionProvider'; if they're ['CPUExecutionProvider'] the CUDA EP failed to load
+    (missing libs / driver) and everything is silently on CPU."""
+    import onnxruntime as ort
+
+    app = _face_app()
+
+    def sess_providers(name):
+        m = app.models.get(name)
+        s = getattr(m, "session", None)
+        return s.get_providers() if s is not None else None
+
+    return {
+        "available": ort.get_available_providers(),
+        "detection_providers": sess_providers("detection"),
+        "recognition_providers": sess_providers("recognition"),
+        "onnxruntime_version": ort.__version__,
+    }
+
+
 # op name -> handler function. Extend this for future capabilities
 # (e.g. "detect_objects", "read_plate", ...).
 OPS = {
@@ -189,6 +213,7 @@ OPS = {
     "face_detect_embed": face_detect_embed,
     "face_detect": face_detect,
     "face_embed": face_embed,
+    "diag": diag,
 }
 
 

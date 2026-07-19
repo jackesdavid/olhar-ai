@@ -7,8 +7,8 @@ numpy<2
 # Newer opencv-python demands numpy>=2; keep it on a numpy 1.x-compatible release.
 opencv-python<4.11
 # Face pipeline: SCRFD (detect) + ArcFace (512-d embed), the `buffalo_l` model pack.
+# NOTE: insightface hard-depends on the CPU `onnxruntime` wheel. Do NOT add onnxruntime-gpu
+# here — pip would install both into the same namespace and the CPU one wins (no CUDA
+# provider). The Dockerfile purges both AFTER this and installs onnxruntime-gpu alone.
 insightface>=0.7.3
-# GPU ONNX runtime for InsightFace. Keep its CUDA major aligned with the Docker
-# base image's CUDA (see Dockerfile). 1.17+ targets CUDA 12.x on PyPI.
-onnxruntime-gpu>=1.17
 # torch/torchvision intentionally omitted — provided (with CUDA) by the base image.
