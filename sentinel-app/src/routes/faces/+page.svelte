@@ -12,6 +12,7 @@
   import X from "@lucide/svelte/icons/x";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+  import LayoutDashboard from "@lucide/svelte/icons/layout-dashboard";
   import PageHeader from "$lib/components/page-header.svelte";
   import EmptyState from "$lib/components/empty-state.svelte";
   import Loader from "$lib/components/loader.svelte";
@@ -197,6 +198,9 @@
       </div>
       <Button variant="outline" onclick={load} disabled={loading}>
         <RefreshCw class="size-4 {loading || reclustering ? 'animate-spin' : ''}" /> Refresh
+      </Button>
+      <Button variant="outline" onclick={() => goto("/faces/canvas")}>
+        <LayoutDashboard class="size-4" /> Canvas
       </Button>
       <Button variant="outline" onclick={() => goto("/people")}>
         <Users class="size-4" /> People
