@@ -18,6 +18,7 @@ pub mod boxes;
 mod devices;
 mod dictionaries;
 mod events;
+mod faces;
 mod jobs;
 mod map;
 mod persons;
@@ -33,6 +34,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .merge(devices::router())
         .merge(dictionaries::router())
+        .merge(faces::router())
         .merge(agent::router())
         .merge(alerts::router())
         .merge(billing::router())

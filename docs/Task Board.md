@@ -105,6 +105,8 @@ kanban-plugin: board
 	  - Plan: [[playback-view-fixes]]
 - [ ] #117 Face recognition pipeline — edge detect → embed → recognize → store
 	  - Plan: [[face-recognition-pipeline]]
+- [ ] #119 Faces view — cluster + bulk-label unknown faces → people
+	  - Plan: [[faces-labeling-view]]
 
 
 ## Review

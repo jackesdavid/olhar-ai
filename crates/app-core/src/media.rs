@@ -9,7 +9,7 @@
 use std::sync::OnceLock;
 
 use s3::creds::Credentials;
-use s3::serde_types::{BucketLifecycleConfiguration, Expiration, LifecycleRule};
+use s3::serde_types::{BucketLifecycleConfiguration, Expiration, LifecycleFilter, LifecycleRule};
 use s3::{Bucket, Region};
 
 fn bucket() -> Option<&'static Bucket> {
@@ -58,15 +58,31 @@ fn ok_status(what: &str, code: u16, body: &[u8]) -> Result<(), String> {
     Err(format!("media: {what}: HTTP {code} {detail}"))
 }
 
-/// Store bytes; returns the object key (`uuid.ext`).
-pub fn put(bytes: &[u8], content_type: &str, ext: &str) -> Result<String, String> {
+/// The two object prefixes. `staging/` is ephemeral (expired by the lifecycle rule); `faces/` is
+/// **retained** (#119 — the face gallery needs its crops to survive past the staging window).
+const STAGING_PREFIX: &str = "staging/";
+const FACES_PREFIX: &str = "faces/";
+
+fn put_prefixed(prefix: &str, bytes: &[u8], content_type: &str, ext: &str) -> Result<String, String> {
     let b = bucket().ok_or("object store not configured")?;
-    let key = format!("{}.{}", uuid::Uuid::new_v4(), ext);
+    let key = format!("{prefix}{}.{}", uuid::Uuid::new_v4(), ext);
     let resp = b
         .put_object_with_content_type_blocking(&key, bytes, content_type)
         .map_err(|e| e.to_string())?;
     ok_status("put", resp.status_code(), resp.as_slice())?;
     Ok(key)
+}
+
+/// Store EPHEMERAL bytes (notification snapshots, reply videos) → the `staging/` prefix, expired by
+/// [`ensure_lifecycle`]. Returns the object key.
+pub fn put(bytes: &[u8], content_type: &str, ext: &str) -> Result<String, String> {
+    put_prefixed(STAGING_PREFIX, bytes, content_type, ext)
+}
+
+/// Store a RETAINED face crop (#119) → the `faces/` prefix, exempt from the staging expiry so the
+/// Faces gallery keeps its images. Returns the object key.
+pub fn put_face(bytes: &[u8], content_type: &str, ext: &str) -> Result<String, String> {
+    put_prefixed(FACES_PREFIX, bytes, content_type, ext)
 }
 
 /// Fetch bytes by key.
@@ -101,8 +117,10 @@ pub fn delete(key: &str) -> Result<(), String> {
 /// Idempotent: `PutBucketLifecycleConfiguration` replaces the whole configuration.
 pub fn ensure_lifecycle(days: u32) -> Result<(), String> {
     let b = bucket().ok_or("object store not configured")?;
+    // Scope the expiry to the `staging/` prefix ONLY — `faces/` crops (#119) must be retained.
     let rule = LifecycleRule::builder("Enabled")
         .id("expire-staging")
+        .filter(LifecycleFilter::new(None, None, None, Some(STAGING_PREFIX.to_string()), None))
         .expiration(Expiration::new(None, Some(days), None))
         .build();
     let config = BucketLifecycleConfiguration::new(vec![rule]);

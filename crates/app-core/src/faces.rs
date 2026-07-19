@@ -157,7 +157,7 @@ pub fn list(db: &Db, tenant_id: Uuid, limit: i64) -> Vec<Face> {
         sqlx::query_as::<_, Face>(
             "SELECT id::text AS id, person_id, image_key, camera, confidence, face_ratio, source, \
                     created_at \
-             FROM faces WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2",
+             FROM faces WHERE tenant_id = $1 AND NOT ignored ORDER BY created_at DESC LIMIT $2",
         )
         .bind(tenant_id)
         .bind(limit)
@@ -167,5 +167,287 @@ pub fn list(db: &Db, tenant_id: Uuid, limit: i64) -> Vec<Face> {
             log::error!("faces::list query failed: {e}");
             Vec::new()
         })
+    })
+}
+
+// ---- Faces labeling view (#119) --------------------------------------------------------------
+
+/// Suggested identity for a cluster: the enrolled person its centroid recognizes as.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClusterSuggestion {
+    pub person_id: String,
+    pub name: String,
+    pub confidence: i64, // 0..100
+}
+
+/// A cluster of similar unknown faces — the unit of labeling in the triage view.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FaceCluster {
+    /// Stable key for UI keying (the representative face id — unique per cluster).
+    pub key: String,
+    pub face_ids: Vec<String>,
+    pub representative: Face,
+    pub size: usize,
+    pub suggestion: Option<ClusterSuggestion>,
+}
+
+/// One unknown face row + its embedding (clustering input).
+#[derive(FromRow)]
+struct FaceEmbRow {
+    id: String,
+    person_id: Option<String>,
+    image_key: Option<String>,
+    camera: Option<String>,
+    confidence: f32,
+    face_ratio: f32,
+    source: String,
+    created_at: String,
+    embedding: Vec<f32>,
+}
+
+impl FaceEmbRow {
+    fn into_face(self) -> (Face, Vec<f32>) {
+        let emb = self.embedding;
+        (
+            Face {
+                id: self.id,
+                person_id: self.person_id,
+                image_key: self.image_key,
+                camera: self.camera,
+                confidence: self.confidence,
+                face_ratio: self.face_ratio,
+                source: self.source,
+                created_at: self.created_at,
+            },
+            emb,
+        )
+    }
+}
+
+/// Cosine distance threshold for one-cluster-per-identity — equal to the recognition `max_distance`
+/// default, so faces that already recognize each other land in the same component.
+const CLUSTER_EPS: f32 = 0.40;
+/// Cap the O(n²) clustering pass — beyond this the unknown pile is degenerate; a flat list is served.
+const MAX_CLUSTER_N: i64 = 2000;
+
+/// Cosine distance of two L2-normalized ArcFace vectors (`1 - dot`).
+fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    1.0 - dot
+}
+
+/// Group the tenant's UNKNOWN, non-ignored faces into clusters of similar faces (single-link
+/// connected components at [`CLUSTER_EPS`]), each with an auto-suggested enrolled person (from the
+/// cluster centroid). Largest clusters first. On-demand; empty on error.
+pub fn cluster_unlabeled(db: &Db, tenant_id: Uuid) -> Vec<FaceCluster> {
+    let pool = db.pool();
+    let items: Vec<(Face, Vec<f32>)> = db.block(async move {
+        sqlx::query_as::<_, FaceEmbRow>(
+            "SELECT id::text AS id, person_id, image_key, camera, confidence, face_ratio, source, \
+                    created_at, embedding::float4[] AS embedding \
+             FROM faces WHERE tenant_id = $1 AND person_id IS NULL AND NOT ignored \
+             ORDER BY created_at DESC LIMIT $2",
+        )
+        .bind(tenant_id)
+        .bind(MAX_CLUSTER_N)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            log::error!("faces::cluster_unlabeled query failed: {e}");
+            Vec::new()
+        })
+    })
+    .into_iter()
+    .map(FaceEmbRow::into_face)
+    .collect();
+
+    let n = items.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    // Union-find over pairs within CLUSTER_EPS.
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]]; // path halving
+            i = parent[i];
+        }
+        i
+    }
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if cosine_distance(&items[i].1, &items[j].1) <= CLUSTER_EPS {
+                let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
+                if ri != rj {
+                    parent[ri] = rj;
+                }
+            }
+        }
+    }
+
+    // Group indices by root.
+    let mut groups: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+    for i in 0..n {
+        let r = find(&mut parent, i);
+        groups.entry(r).or_default().push(i);
+    }
+
+    let dim = items[0].1.len();
+    let mut clusters: Vec<FaceCluster> = groups
+        .into_values()
+        .map(|idxs| {
+            // Representative = highest-confidence face.
+            let rep = *idxs
+                .iter()
+                .max_by(|&&a, &&b| items[a].0.confidence.total_cmp(&items[b].0.confidence))
+                .unwrap();
+            let representative = items[rep].0.clone();
+            let face_ids: Vec<String> = idxs.iter().map(|&i| items[i].0.id.clone()).collect();
+
+            // Centroid (mean, renormalized) → auto-suggest against enrolled people.
+            let mut centroid = vec![0.0f32; dim];
+            for &i in &idxs {
+                for (k, v) in items[i].1.iter().enumerate() {
+                    centroid[k] += v;
+                }
+            }
+            let norm = centroid.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if norm > 0.0 {
+                for x in &mut centroid {
+                    *x /= norm;
+                }
+            }
+            let suggestion = crate::persons::best_match(
+                &crate::persons::repo::recognize(db, tenant_id, &centroid, 5),
+                CLUSTER_EPS,
+            )
+            .map(|m| ClusterSuggestion { person_id: m.person_id, name: m.name, confidence: m.confidence });
+
+            FaceCluster { key: representative.id.clone(), size: face_ids.len(), face_ids, representative, suggestion }
+        })
+        .collect();
+
+    clusters.sort_by(|a, b| b.size.cmp(&a.size));
+    clusters
+}
+
+/// One face by id (tenant-scoped).
+pub fn get(db: &Db, tenant_id: Uuid, id: &str) -> Option<Face> {
+    let pool = db.pool();
+    let id = id.to_string();
+    db.block(async move {
+        sqlx::query_as::<_, Face>(
+            "SELECT id::text AS id, person_id, image_key, camera, confidence, face_ratio, source, \
+                    created_at FROM faces WHERE tenant_id = $1 AND id = $2::uuid",
+        )
+        .bind(tenant_id)
+        .bind(&id)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten()
+    })
+}
+
+/// Cheap image-key lookup for the image proxy. Outer `None` = no such face in this tenant; inner
+/// `None` = the face has no stored image.
+pub fn image_key_of(db: &Db, tenant_id: Uuid, id: &str) -> Option<Option<String>> {
+    let pool = db.pool();
+    let id = id.to_string();
+    db.block(async move {
+        sqlx::query_as::<_, (Option<String>,)>(
+            "SELECT image_key FROM faces WHERE tenant_id = $1 AND id = $2::uuid",
+        )
+        .bind(tenant_id)
+        .bind(&id)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten()
+        .map(|(k,)| k)
+    })
+}
+
+/// Set (or clear, with `None`) the label on faces — the reassign path. Returns rows affected.
+pub fn set_person(db: &Db, tenant_id: Uuid, ids: &[String], person_id: Option<&str>) -> Result<u64, String> {
+    let pool = db.pool();
+    let ids = ids.to_vec();
+    let person_id = person_id.map(str::to_string);
+    db.block(async move {
+        sqlx::query("UPDATE faces SET person_id = $2 WHERE tenant_id = $1 AND id = ANY($3::uuid[])")
+            .bind(tenant_id)
+            .bind(&person_id)
+            .bind(&ids)
+            .execute(&pool)
+            .await
+            .map(|r| r.rows_affected())
+            .map_err(|e| format!("faces::set_person: {e}"))
+    })
+}
+
+/// Soft dismiss/restore junk crops. Returns rows affected.
+pub fn set_ignored(db: &Db, tenant_id: Uuid, ids: &[String], ignored: bool) -> Result<u64, String> {
+    let pool = db.pool();
+    let ids = ids.to_vec();
+    db.block(async move {
+        sqlx::query("UPDATE faces SET ignored = $2 WHERE tenant_id = $1 AND id = ANY($3::uuid[])")
+            .bind(tenant_id)
+            .bind(ignored)
+            .bind(&ids)
+            .execute(&pool)
+            .await
+            .map(|r| r.rows_affected())
+            .map_err(|e| format!("faces::set_ignored: {e}"))
+    })
+}
+
+/// **The promote transaction (#119).** Label a set of faces as `person_id` (which must already
+/// exist): copy each face's embedding into `person_embeddings` (approved, so it recognizes next time)
+/// AND stamp `faces.person_id` — all-or-nothing in one tx. The `INSERT … SELECT` copies vectors
+/// server-side (no round-trip). Returns the number of faces labeled.
+pub fn label_faces(db: &Db, tenant_id: Uuid, ids: &[String], person_id: &str) -> Result<u64, String> {
+    let pool = db.pool();
+    let ids = ids.to_vec();
+    let person_id = person_id.to_string();
+    db.block(async move {
+        let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query(
+            "INSERT INTO person_embeddings (tenant_id, person_id, embedding, approved, approved_at, source) \
+             SELECT f.tenant_id, $2, f.embedding, true, now(), 'labeled' \
+               FROM faces f WHERE f.tenant_id = $1 AND f.id = ANY($3::uuid[])",
+        )
+        .bind(tenant_id)
+        .bind(&person_id)
+        .bind(&ids)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("faces::label_faces enroll: {e}"))?;
+        let res = sqlx::query("UPDATE faces SET person_id = $2 WHERE tenant_id = $1 AND id = ANY($3::uuid[])")
+            .bind(tenant_id)
+            .bind(&person_id)
+            .bind(&ids)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("faces::label_faces stamp: {e}"))?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(res.rows_affected())
+    })
+}
+
+/// Delete faces (hard), returning their `image_key`s so the caller can purge the MinIO objects.
+pub fn delete(db: &Db, tenant_id: Uuid, ids: &[String]) -> Result<Vec<String>, String> {
+    let pool = db.pool();
+    let ids = ids.to_vec();
+    db.block(async move {
+        let keys: Vec<(Option<String>,)> = sqlx::query_as(
+            "DELETE FROM faces WHERE tenant_id = $1 AND id = ANY($2::uuid[]) RETURNING image_key",
+        )
+        .bind(tenant_id)
+        .bind(&ids)
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| format!("faces::delete: {e}"))?;
+        Ok(keys.into_iter().filter_map(|(k,)| k).collect())
     })
 }

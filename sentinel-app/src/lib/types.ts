@@ -146,6 +146,29 @@ export type RecognitionResult = {
   confidence: number;
 };
 
+// ---- Faces view (#119): stored captured faces, clustered for bulk labeling ----
+/** One stored face (no embedding — that stays server-side). `person_id` null = unknown. */
+export type Face = {
+  id: string;
+  person_id: string | null;
+  image_key: string | null;
+  camera: string | null;
+  confidence: number;
+  face_ratio: number;
+  source: string;
+  created_at: string;
+};
+/** The enrolled person a cluster's centroid recognizes as (auto-suggest). */
+export type ClusterSuggestion = { person_id: string; name: string; confidence: number };
+/** A cluster of similar unknown faces — the unit of labeling. */
+export type FaceCluster = {
+  key: string;
+  face_ids: string[];
+  representative: Face;
+  size: number;
+  suggestion: ClusterSuggestion | null;
+};
+
 /** A recognition probe result: the query embedding (for the target point-cloud) plus
  * the best match (matches the Tauri `recognize_face` command). */
 export type RecognizeDetail = {

@@ -17,6 +17,8 @@ import {
   type Person,
   type PersonEmbedding,
   type RecognizeDetail,
+  type Face,
+  type FaceCluster,
   type Settings,
   type TelegramConfigState,
 } from "./types";
@@ -295,6 +297,33 @@ export const data = {
   enrolledPersonIds: (): Promise<string[]> => api.get<string[]>("/persons/enrolled"),
   recognizeFace: (image: string, maxDistance?: number): Promise<RecognizeDetail> =>
     api.post<RecognizeDetail>("/persons/recognize", { image, max_distance: maxDistance }),
+
+  // ---- Faces view (#119): browse + cluster + bulk-label unknown faces ----
+  listFaces: (): Promise<Face[]> => api.get<Face[]>("/faces"),
+  listFaceClusters: (): Promise<FaceCluster[]> => api.get<FaceCluster[]>("/faces/clusters"),
+  /** A displayable crop URL (token-in-query so it works as `<img src>`). `bust` forces a reload. */
+  faceImageUrl: (id: string, bust?: number): string => {
+    const qs = new URLSearchParams();
+    if (auth.token) qs.set("token", auth.token);
+    if (bust) qs.set("t", String(bust));
+    return `${API_BASE}/faces/${encodeURIComponent(id)}/image?${qs.toString()}`;
+  },
+  /** Label a whole cluster → an existing person (personId) or a new one (newPersonName). */
+  labelFaces: (
+    faceIds: string[],
+    target: { personId?: string; newPersonName?: string },
+  ): Promise<{ person_id: string; labeled: number }> =>
+    api.post<{ person_id: string; labeled: number }>("/faces/label", {
+      face_ids: faceIds,
+      person_id: target.personId,
+      new_person_name: target.newPersonName,
+    }),
+  reassignFace: async (faceId: string, personId?: string): Promise<void> => {
+    await api.post<void>("/faces/reassign", { face_id: faceId, person_id: personId ?? null });
+  },
+  ignoreFaces: async (faceIds: string[], ignored = true): Promise<void> => {
+    await api.post<void>("/faces/ignore", { face_ids: faceIds, ignored });
+  },
 
   // ---- beacons / telegram -------------------------------------------------
   listBeacons: (): Promise<NotificationTarget[]> => api.get<NotificationTarget[]>("/beacons"),

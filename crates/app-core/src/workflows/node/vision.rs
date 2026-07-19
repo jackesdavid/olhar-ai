@@ -291,7 +291,7 @@ pub(super) fn run_store_face(
     let image_key = inputs
         .get("image")
         .and_then(PortValue::as_image)
-        .and_then(|bytes| crate::media::put(bytes, "image/jpeg", "jpg").ok());
+        .and_then(|bytes| crate::media::put_face(bytes, "image/jpeg", "jpg").ok());
     let label = inputs
         .get("label")
         .and_then(PortValue::as_text)
