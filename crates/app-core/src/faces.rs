@@ -224,9 +224,13 @@ impl FaceEmbRow {
     }
 }
 
-/// Cosine distance threshold for one-cluster-per-identity — equal to the recognition `max_distance`
-/// default, so faces that already recognize each other land in the same component.
-const CLUSTER_EPS: f32 = 0.40;
+/// Cosine distance threshold for grouping faces into one identity. Deliberately LOOSER than the
+/// recognition `max_distance` (0.40): recognition is a strict 1:1 gate, but clustering groups
+/// SURVEILLANCE crops of the same person — small, varied pose/lighting — whose ArcFace vectors spread
+/// wider (measured intra-person nearest-neighbour ~0.50–0.56 on real captures). At 0.40 nothing merges
+/// and every face is its own cluster; 0.55 groups same-person captures while staying below the
+/// cross-identity range. (Tunable later per-tenant if faces get higher-res.)
+pub const CLUSTER_EPS: f32 = 0.55;
 /// Cap the O(n²) clustering pass — beyond this the unknown pile is degenerate; a flat list is served.
 const MAX_CLUSTER_N: i64 = 2000;
 
@@ -239,7 +243,9 @@ fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
 /// Group the tenant's UNKNOWN, non-ignored faces into clusters of similar faces (single-link
 /// connected components at [`CLUSTER_EPS`]), each with an auto-suggested enrolled person (from the
 /// cluster centroid). Largest clusters first. On-demand; empty on error.
-pub fn cluster_unlabeled(db: &Db, tenant_id: Uuid) -> Vec<FaceCluster> {
+pub fn cluster_unlabeled(db: &Db, tenant_id: Uuid, eps: f32) -> Vec<FaceCluster> {
+    // Clamp to a sane cosine range; [`CLUSTER_EPS`] is the caller's default.
+    let eps = eps.clamp(0.20, 0.90);
     let pool = db.pool();
     let items: Vec<(Face, Vec<f32>)> = db.block(async move {
         sqlx::query_as::<_, FaceEmbRow>(
@@ -277,7 +283,7 @@ pub fn cluster_unlabeled(db: &Db, tenant_id: Uuid) -> Vec<FaceCluster> {
     }
     for i in 0..n {
         for j in (i + 1)..n {
-            if cosine_distance(&items[i].1, &items[j].1) <= CLUSTER_EPS {
+            if cosine_distance(&items[i].1, &items[j].1) <= eps {
                 let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
                 if ri != rj {
                     parent[ri] = rj;
@@ -320,7 +326,7 @@ pub fn cluster_unlabeled(db: &Db, tenant_id: Uuid) -> Vec<FaceCluster> {
             }
             let suggestion = crate::persons::best_match(
                 &crate::persons::repo::recognize(db, tenant_id, &centroid, 5),
-                CLUSTER_EPS,
+                eps,
             )
             .map(|m| ClusterSuggestion { person_id: m.person_id, name: m.name, confidence: m.confidence });
 

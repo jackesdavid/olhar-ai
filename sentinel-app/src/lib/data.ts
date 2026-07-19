@@ -300,7 +300,8 @@ export const data = {
 
   // ---- Faces view (#119): browse + cluster + bulk-label unknown faces ----
   listFaces: (): Promise<Face[]> => api.get<Face[]>("/faces"),
-  listFaceClusters: (): Promise<FaceCluster[]> => api.get<FaceCluster[]>("/faces/clusters"),
+  listFaceClusters: (eps?: number): Promise<FaceCluster[]> =>
+    api.get<FaceCluster[]>(`/faces/clusters${eps != null ? `?eps=${eps}` : ""}`),
   /** A displayable crop URL (token-in-query so it works as `<img src>`). `bust` forces a reload. */
   faceImageUrl: (id: string, bust?: number): string => {
     const qs = new URLSearchParams();

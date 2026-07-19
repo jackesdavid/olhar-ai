@@ -33,12 +33,23 @@ async fn list(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<J
     Ok(Json(blocking(move || faces::list(&db, tid, 1000)).await?))
 }
 
+#[derive(Deserialize)]
+struct ClusterQuery {
+    /// Grouping distance (cosine) — tunable live from the screen; defaults to `faces::CLUSTER_EPS`.
+    eps: Option<f32>,
+}
+
 /// The triage feed: unknown faces grouped into clusters, each with an auto-suggested person.
-async fn clusters(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<FaceCluster>>, ApiErr> {
+async fn clusters(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Query(q): Query<ClusterQuery>,
+) -> Result<Json<Vec<FaceCluster>>, ApiErr> {
     auth::require(&c, "persons.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    Ok(Json(blocking(move || faces::cluster_unlabeled(&db, tid)).await?))
+    let eps = q.eps.unwrap_or(faces::CLUSTER_EPS);
+    Ok(Json(blocking(move || faces::cluster_unlabeled(&db, tid, eps)).await?))
 }
 
 #[derive(Deserialize)]
