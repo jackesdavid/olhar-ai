@@ -241,27 +241,26 @@ pub(super) fn run_recognize_face(
 
     let mut o = PortValues::new();
     o.insert("matches".into(), PortValue::Dict(dict));
-    match matches.first() {
-        Some(best) => {
-            let found = best.distance <= max_distance;
-            o.insert("found".into(), PortValue::Bool(found));
-            o.insert("confidence".into(), PortValue::Num(conf_pct(best.distance)));
-            // person = the name (blank when unknown or below threshold); person_id only when a
-            // labeled match won (wire → StoreFace.label).
-            let (person, person_id) = if found {
-                match &best.label {
-                    Some(name) => (name.clone(), best.reference.clone()),
-                    None => (String::new(), String::new()),
-                }
-            } else {
-                (String::new(), String::new())
-            };
-            o.insert("person".into(), PortValue::Text(person));
-            o.insert("person_id".into(), PortValue::Text(person_id));
+    // `found` means "recognized a KNOWN (labeled) person". The union gallery also holds stored
+    // UNKNOWN faces (label = None) for dedup/re-id — a nearest match to one of those must NOT count
+    // as recognized (else every unknown that resembles a prior unknown fires the True branch). So
+    // pick the nearest LABELED match within threshold, not just the nearest anything.
+    let recognized = matches
+        .iter()
+        .find(|m| m.label.is_some() && m.distance <= max_distance);
+    match recognized {
+        Some(m) => {
+            o.insert("found".into(), PortValue::Bool(true));
+            o.insert("confidence".into(), PortValue::Num(conf_pct(m.distance)));
+            o.insert("person".into(), PortValue::Text(m.label.clone().unwrap_or_default()));
+            o.insert("person_id".into(), PortValue::Text(m.reference.clone()));
         }
         None => {
+            // No labeled match within threshold → unknown. Report the nearest distance (any kind)
+            // as confidence context, but found=false → the False branch stores it as unknown.
+            let conf = matches.first().map(|m| conf_pct(m.distance)).unwrap_or(0);
             o.insert("found".into(), PortValue::Bool(false));
-            o.insert("confidence".into(), PortValue::Num(0));
+            o.insert("confidence".into(), PortValue::Num(conf));
             o.insert("person".into(), PortValue::Text(String::new()));
             o.insert("person_id".into(), PortValue::Text(String::new()));
         }
