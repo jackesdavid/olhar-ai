@@ -46,17 +46,18 @@ pub fn embed(db: &Db, tenant_id: Uuid, image_bytes: &[u8]) -> Result<Vec<f32>, S
 
 /// Embed a face the edge has ALREADY localized (a tight crop from a `face_detected` bbox).
 ///
-/// The edge's YuNet already detected and localized this face, so we **skip the sidecar's
-/// redundant SCRFD detection** — the dominant cost (~2 s on the current CPU sidecar) — and embed
-/// the crop directly via the align-free `face_embed` op (ArcFace, resize-to-112). This is ~10×
-/// faster on CPU and can never fail with "no face" (so a face the edge found is never dropped).
-///
-/// The whole camera pipeline stays on this one path (embed → store → label → recognize), so its
-/// embeddings are mutually consistent; only faces enrolled from an uploaded photo take the
-/// landmark-aligned [`embed`] path. Use ONLY when `image_bytes` is a pre-cropped face.
-/// (A future refinement: have the edge send YuNet's 5 landmarks so `face_embed` can align without
-/// any detection — best quality *and* fast.)
+/// Tries the full detect+align pipeline first (`face_detect_embed` — best quality, aligns via
+/// the detected landmarks). If the sidecar's SCRFD fails to *re-detect* the face inside the crop
+/// (common for small, off-angle, or frame-filling faces that the edge's YuNet still found), it
+/// falls back to `face_embed` — align-free, resize-to-112 — so a face the edge confidently
+/// detected is never silently dropped. Use ONLY when `image_bytes` is a pre-cropped face; for a
+/// whole frame (enrollment), use [`embed`], where "no face" is a meaningful error.
 pub fn embed_face_crop(db: &Db, tenant_id: Uuid, image_bytes: &[u8]) -> Result<Vec<f32>, String> {
+    let out = call_detect_embed(db, tenant_id, image_bytes)?;
+    if face_present(&out) {
+        return parse_embedding(&out);
+    }
+    // SCRFD missed it, but the edge already localized this crop — embed it align-free.
     let op = "face_embed";
     let outcome = ai_service::call(op, json!({ "image_b64": ai_service::image_b64(image_bytes) }))?;
     crate::billing::record_ai_usage(db, tenant_id, op, outcome.delay_ms, outcome.exec_ms, true);
