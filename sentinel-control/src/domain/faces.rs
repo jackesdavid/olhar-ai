@@ -96,16 +96,38 @@ async fn face_image(
         Some((Some(k), bb)) => (k, bb),
         _ => return Ok(StatusCode::NOT_FOUND.into_response()),
     };
-    let bytes = blocking(move || app_core::media::get(&key))
-        .await?
-        .map_err(|e| err(StatusCode::NOT_FOUND, e))?;
+    // Retry the object fetch — a canvas view fires dozens of thumbnail requests at once, and a
+    // transient MinIO/connection blip under that burst would otherwise surface as a (misleading)
+    // 404 and a permanent black tile. The object is there; give it a few tries.
+    let bytes = blocking(move || {
+        let mut last = String::from("media unavailable");
+        for i in 0..4 {
+            match app_core::media::get(&key) {
+                Ok(b) => return Ok(b),
+                Err(e) => last = e,
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50 * (i + 1)));
+        }
+        Err(last)
+    })
+    .await?
+    .map_err(|e| err(StatusCode::NOT_FOUND, e))?;
     let draw_box = q.show_box.unwrap_or(0) != 0;
     let out = blocking(move || match bbox {
         Some(bb) => faces::render_face_image(&bytes, bb, draw_box).unwrap_or(bytes),
         None => bytes,
     })
     .await?;
-    Ok(([(header::CONTENT_TYPE, "image/jpeg")], out).into_response())
+    // The crop for a given (face id, box) never changes → let the browser cache it hard, so a
+    // session only ever bursts once (pans / zooms / re-opens hit cache, not MinIO).
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/jpeg"),
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+        ],
+        out,
+    )
+        .into_response())
 }
 
 /// Full detail for one face — powers the face-detail (hero) view.

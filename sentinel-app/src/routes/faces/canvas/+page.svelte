@@ -31,7 +31,7 @@
   let epsTimer: ReturnType<typeof setTimeout> | undefined;
   let scope = $state<"unknown" | "known" | "all">("unknown");
   let showBox = $state(false); // full frame + detection rectangle vs cropped face
-  function toggleBox() { showBox = !showBox; imgs.clear(); dirty = true; }
+  function toggleBox() { showBox = !showBox; imgs.clear(); attempts.clear(); pending.length = 0; dirty = true; }
   const SCOPES: Array<{ v: "unknown" | "known" | "all"; label: string }> = [
     { v: "unknown", label: "Unknown" },
     { v: "known", label: "Known" },
@@ -56,6 +56,10 @@
   const FLY_MS = 650;
 
   const imgs = new Map<string, HTMLImageElement>(); // face id → crop (lazy)
+  const attempts = new Map<string, number>(); // per-id load attempts (for retry/backoff)
+  const pending: string[] = []; // ids waiting for a load slot
+  let inflight = 0;
+  const MAX_INFLIGHT = 8; // cap concurrent crop fetches so we don't burst MinIO into 404s
   const FACE_R = 15; // face thumbnail radius, world units
   let dirty = true;
 
@@ -134,13 +138,28 @@
   }
 
   function getImg(id: string): HTMLImageElement | null {
-    let im = imgs.get(id);
+    const im = imgs.get(id);
     if (im) return im.complete && im.naturalWidth > 0 ? im : null;
-    im = new Image();
-    im.onload = () => { dirty = true; };
+    if (!attempts.has(id)) { attempts.set(id, 0); pending.push(id); pump(); }
+    return null;
+  }
+  function pump() {
+    while (inflight < MAX_INFLIGHT && pending.length) startLoad(pending.shift()!);
+  }
+  function startLoad(id: string) {
+    inflight++;
+    const im = new Image();
+    im.onload = () => { inflight--; dirty = true; pump(); };
+    im.onerror = () => {
+      // A transient 404 under a load burst — the object is there; back off and retry.
+      inflight--;
+      const n = (attempts.get(id) ?? 0) + 1;
+      attempts.set(id, n);
+      if (n < 4) setTimeout(() => { pending.push(id); pump(); }, 250 * n);
+      pump();
+    };
     im.src = data.faceImageUrl(id, { box: showBox });
     imgs.set(id, im);
-    return null;
   }
 
   function draw() {
@@ -299,7 +318,7 @@
     const p = toScreen(f.x, f.y);
     const fr = FACE_R * cam.scale;
     const from = { x: cr.left + p.x - fr, y: cr.top + p.y - fr, s: fr * 2 };
-    detail = { id: f.id, data: null, from, box: false };
+    detail = { id: f.id, data: null, from, box: showBox }; // inherit the canvas Context mode
     hero = { x: from.x, y: from.y, w: from.s, h: from.s };
     detailReady = false;
     faceQuery = "";
