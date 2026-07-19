@@ -314,6 +314,10 @@ pub(super) fn run_store_face(
         .and_then(|v| v.as_str())
         .unwrap_or("snapshot")
         .to_string();
+    // Detection score + face-size (from the face_detected event) — wire them so the detail view
+    // and far-face triage have real values instead of 0.
+    let confidence = inputs.get("confidence").and_then(PortValue::as_num).unwrap_or(0) as f32;
+    let face_ratio = inputs.get("face_ratio").and_then(PortValue::as_num).unwrap_or(0) as f32;
 
     let id = crate::faces::insert(
         &sys.db,
@@ -324,8 +328,8 @@ pub(super) fn run_store_face(
             image_key,
             camera,
             bbox,
-            confidence: 0.0,
-            face_ratio: 0.0,
+            confidence,
+            face_ratio,
             source,
         },
     )?;

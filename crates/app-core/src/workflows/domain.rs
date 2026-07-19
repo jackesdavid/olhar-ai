@@ -782,12 +782,14 @@ const RECOGNIZE_FACE_OUT: [Port; 5] = [
     p("matches", PortType::Dictionary, false), // top-K: person/label → score
     p("found", PortType::Bool, false),         // a match within max_distance
 ];
-const STORE_FACE_IN: [Port; 5] = [
+const STORE_FACE_IN: [Port; 7] = [
     p("image", PortType::Image, false),
     p("embedding", PortType::Embedding, true),
     p("bbox", PortType::Bbox, false),
     p("label", PortType::Text, false),  // a person id; empty = unknown
     p("camera", PortType::Camera, false),
+    p("confidence", PortType::Num, false), // detection score 0..100 (from face_detected)
+    p("face_ratio", PortType::Num, false), // face area ÷ frame area, 0..100 (far-face signal)
 ];
 const STORE_FACE_OUT: [Port; 2] = [
     p("stored", PortType::Bool, false), // false if skipped by dedup
