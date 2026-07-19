@@ -283,21 +283,11 @@ pub(super) fn run_store_face(
 
     let mut o = PortValues::new();
 
-    // Detection score + face-size (from the face_detected event). Quality gate FIRST — skip weak
-    // (low-confidence) or tiny (far) faces before they pollute the gallery, known or unknown. Only
-    // gate on the signals actually WIRED, so an unwired input can't silently skip everything.
-    let conf_in = inputs.get("confidence").and_then(PortValue::as_num);
-    let ratio_in = inputs.get("face_ratio").and_then(PortValue::as_num);
-    let min_conf = cfg_f64(config, "min_confidence", 0.0);
-    let min_ratio = cfg_f64(config, "min_face_ratio", 0.0);
-    let too_weak = conf_in.map(|c| (c as f64) < min_conf).unwrap_or(false)
-        || ratio_in.map(|r| (r as f64) < min_ratio).unwrap_or(false);
-    if too_weak {
-        o.insert("stored".into(), PortValue::Bool(false));
-        return Ok(o);
-    }
-    let confidence = conf_in.unwrap_or(0) as f32;
-    let face_ratio = ratio_in.unwrap_or(0) as f32;
+    // Detection score + face-size (from the face_detected event). StoreFace only STORES them — it
+    // makes no quality decision. Deciding WHICH faces to store belongs upstream in the graph
+    // (e.g. When Event → NumGte on face_ratio → Branch → StoreFace).
+    let confidence = inputs.get("confidence").and_then(PortValue::as_num).unwrap_or(0) as f32;
+    let face_ratio = inputs.get("face_ratio").and_then(PortValue::as_num).unwrap_or(0) as f32;
 
     let dedup = cfg_f64(config, "dedup_distance", 0.15) as f32;
     if dedup > 0.0 {
