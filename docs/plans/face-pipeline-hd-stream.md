@@ -50,6 +50,26 @@ face having moved between the two frames.
   flag, re-reading on config refresh (no restart).
 - Future extension (out of scope v1): per-**camera** override, not just per-tenant.
 
+## Hardware-acceleration reference (the probe's candidate methods)
+For the edge the workload is **decode** (H.264/H.265 → frames). Candidates, best-first per platform:
+
+| API | Vendor / OS | Decode | go2rtc | ffmpeg build needs |
+|---|---|---|---|---|
+| **VAAPI** | Intel + **AMD** iGPU/dGPU, Linux | ✅ | `#hardware=vaapi` | `--enable-vaapi` + `mesa-va-drivers` |
+| **QSV** | Intel only, Linux | ✅ | `#hardware=qsv` | `--enable-libvpl`/libmfx |
+| **CUDA / NVDEC** | NVIDIA only | ✅ | `#hardware=cuda` | `--enable-cuda --enable-cuvid` |
+| **VideoToolbox** | macOS (Intel + Apple Silicon) | ✅ | custom `ffmpeg:` template | ships in macOS ffmpeg |
+| **V4L2 M2M** | ARM SoCs (RPi, Rockchip) | ✅ | `#hardware` | distro ffmpeg |
+| **Vulkan Video** | cross-vendor, Linux (newer) | ✅ | custom | `--enable-vulkan` |
+| ~~VDPAU / AMF~~ | legacy / Windows-encode | — | — | skip for the edge |
+
+Platform → method the probe should try:
+- **Linux + AMD** → `vaapi` (Mesa); `vulkan` as a modern fallback. (No CUDA/QSV on AMD.)
+- **Linux + Intel** → `qsv` first, then `vaapi`.
+- **Linux + NVIDIA** → `cuda`.
+- **macOS (incl. Intel Macs, e.g. [[mac-edge-test-box]])** → `videotoolbox` (NOT vaapi/qsv/cuda — those follow the OS, not the chip).
+- **ARM SoC** → `v4l2m2m`.
+
 ## Phase 5 — GPU-accelerated decode (companion; makes HD affordable on the edge)
 HD's real cost is decoding 1080p/4K H.264 for `frame.jpeg` (go2rtc runs **ffmpeg** to transcode
 H.264→JPEG — the frame path today is CPU). Offloading that decode to the GPU's fixed-function video
@@ -73,10 +93,14 @@ The edge must **prove** GPU decode works before we offer/enable it — listing a
   3. Pick the best working method (`vaapi`/`qsv`/`cuda`/`videotoolbox`) or `none`.
 - **Report it to control**: extend the edge health/registration payload (today it already sends
   `X-Edge-Ffmpeg`; add `gpu_decode: { available, method }`). Control persists it per box.
-- **Gate the UI**: the Settings HD selector offers "HD (GPU)" only when the box reports a working
-  method; otherwise HD falls back to CPU decode (with a note that it's heavier). Runtime fallback too:
-  if a configured hwaccel start fails, the edge reverts to CPU decode and re-reports `none`.
-- Surface the detected capability on the edge/box detail (so the user can see "GPU decode: QuickSync ✓").
+- **Gating rule (hard):** HD face capture cannot be enabled unless EITHER (a) the box reports a working
+  hwaccel method, OR (b) the user explicitly opts into **CPU-HD** (shown as heavier, with the measured
+  cost). The default HD selector shows "HD (GPU · <method>)" when available, greyed with "needs GPU /
+  CPU-only" otherwise. Never silently enable HD on a box that can't sustain it.
+- **Runtime fallback:** if a configured hwaccel fails to start at runtime, the edge reverts to CPU
+  decode and re-reports `method: none` so the UI reflects reality (and can warn).
+- Surface the detected capability on the edge/box detail — e.g. "GPU decode: QuickSync ✓" / "VAAPI ✓" /
+  "none — CPU only". The probe candidates come from the reference matrix above (per-platform order).
 
 ## Phase 7 — Ship
 - Bump edge `Cargo.toml` + `LATEST_EDGE_VERSION`; build + `task edge-publish` (native OpenCV — build from
