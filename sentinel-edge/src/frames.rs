@@ -204,6 +204,9 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
     // config asks for it. The SAME frame feeds motion + face detection, so there's no temporal
     // mismatch and no bbox scaling — faces are just bigger.
     let hd = state.recording.config.face_capture_stream.eq_ignore_ascii_case("hd");
+    // Warm, continuous frames from the supervised persistent decoder (#120) — no frame.jpeg
+    // cold-start. `grab` is the FALLBACK go2rtc path used only while the decoder has no fresh frame.
+    crate::capture::ensure(ip, hd);
     let grab: fn(&ureq::Agent, &str, &str) -> Result<Vec<u8>, String> =
         if hd { app_core::go2rtc::frame_from_hd } else { app_core::go2rtc::frame_from };
     log::info!("frame hub[{ip}]: face capture = {} stream", if hd { "HD (main)" } else { "preview (sub)" });
@@ -218,14 +221,19 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
         let t0 = Instant::now();
         // Transient errors (stream warming, a dropped frame) skip this tick — keep the background
         // model and try again, never tear the source down.
-        let jpeg = match grab(&agent, &base, ip) {
-            Ok(b) => b,
-            Err(_) => {
-                std::thread::sleep(frame_gap);
-                continue;
-            }
+        // Prefer the warm decoder's freshest frame; fall back to the go2rtc frame.jpeg poll only when
+        // no fresh frame is available (decoder warming/restarting) so capture never stalls.
+        let jpeg = match crate::capture::latest_fresh(ip, Duration::from_secs(3)) {
+            Some(j) => (*j).clone(),
+            None => match grab(&agent, &base, ip) {
+                Ok(b) => b,
+                Err(_) => {
+                    std::thread::sleep(frame_gap);
+                    continue;
+                }
+            },
         };
-        let g_us = t0.elapsed().as_micros(); // the go2rtc frame.jpeg round-trip (the grab)
+        let g_us = t0.elapsed().as_micros(); // source cost: ~0 from the decoder, ~490ms on go2rtc fallback
         let d0 = Instant::now();
         // The one decode. Every consumer of this camera works off the buffer it produces.
         let Some((bgr, w, h)) = decode_bgr(&jpeg) else {
