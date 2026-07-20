@@ -51,6 +51,21 @@ face having moved between the two frames.
 - Future extension (out of scope v1): per-**camera** override, not just per-tenant.
 
 ## Status (2026-07-20)
+- **Phases 1–3 + measurement DONE + deployed** (`ec4ec3e`, edge **0.5.47** `2743cc2`): `frame_from_hd`
+  (grab `cam_<ip>_hd`); the edge publisher reads `face_capture_stream` on the box `recording_config`
+  and grabs HD vs preview (same frame → motion + face); a **Settings HD-face-capture toggle** gated on
+  the box's reported `hwaccel`; and a per-frame **capture-cost log** (`capture[ip]: mode=… WxH avg_decode=…ms fps`)
+  every ~10s → the Logs page. Edge 0.5.46→0.5.47 published. Box VideoToolbox capability verified.
+- **KNOWN GAP — measurement is HD-on-CPU only.** go2rtc still decodes HD on the CPU (`#media=video`, no
+  hwaccel), so the log shows preview-CPU vs HD-**CPU** — NOT HD+GPU. The harness is correct (it times the
+  real grab+decode), so once Phase 5 wires GPU into go2rtc the SAME log reflects the GPU cost.
+- **Rollout (in-product):** Boxes→Update (0.5.47) → Settings→HD on → Boxes→Restart (config reload) →
+  Logs for the numbers, Faces for bigger crops. (Setting is boot/reload-time, like `cameras_always_warm`.)
+- **Next: Phase 5** — a dedicated `cam_<ip>_face` go2rtc stream with `-hwaccel videotoolbox`, SEPARATE from
+  `cam_<ip>_hd` (leave Live HD untouched), pointed at by `frame_from_hd`; needs on-box verification that
+  VideoToolbox actually engages. Then the measurement covers all 3 modes (substream / HD-CPU / HD-GPU).
+
+### (earlier) Phase 6 status
 - **Phase 6 cloud side DONE + deployed** (`df8e801`): edge `hwaccel.rs` probe (functional `-init_hw_device`
   test, bounded subprocess), `X-Edge-Hwaccel` header, control ingest (migration **0064** `tenant_boxes.hwaccel`,
   `box_health_headers` + both `touch_box` upserts, COALESCE/backward-compatible), and a "GPU decode · <method>"
