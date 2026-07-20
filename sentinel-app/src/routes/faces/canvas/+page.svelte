@@ -4,10 +4,8 @@
   // LOD (density blobs when zoomed out → face thumbnails when zoomed in). Click an island to label
   // the whole cluster via the same autocomplete as the grid. A full view, never a modal.
   import { onMount } from "svelte";
-  import { goto } from "$app/navigation";
   import { toast } from "svelte-sonner";
   import ScanFace from "@lucide/svelte/icons/scan-face";
-  import LayoutGrid from "@lucide/svelte/icons/layout-grid";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
   import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
   import Lasso from "@lucide/svelte/icons/lasso";
@@ -101,6 +99,19 @@
   // In-flight fly animation of a re-matched face (plain var — read by the draw loop).
   let flying: { faceId: string; x0: number; y0: number; x1: number; y1: number; t0: number; img: HTMLImageElement | null } | null = null;
   const FLY_MS = 650;
+  // Layout tween: on a re-cluster (spread/grouping change) islands slide from their old spot to the
+  // new one instead of snapping. `animOff` = each island's current start-offset (decays to 0).
+  const animOff = new Map<string, { x: number; y: number; t0: number }>();
+  const LAYOUT_MS = 420;
+  const ZERO = { x: 0, y: 0 };
+  function islandOffset(key: string): { x: number; y: number } {
+    const a = animOff.get(key);
+    if (!a) return ZERO;
+    const t = (performance.now() - a.t0) / LAYOUT_MS;
+    if (t >= 1) { animOff.delete(key); return ZERO; }
+    const e = 1 - Math.pow(1 - t, 3); // easeOutCubic → offset fades to 0
+    return { x: a.x * (1 - e), y: a.y * (1 - e) };
+  }
 
   const imgs = new Map<string, HTMLImageElement>(); // face id → crop (lazy)
   const attempts = new Map<string, number>(); // per-id load attempts (for retry/backoff)
@@ -118,7 +129,7 @@
     resize();
     load(true);
     let raf = 0;
-    const loop = () => { if (dirty || flying) { draw(); dirty = false; } raf = requestAnimationFrame(loop); };
+    const loop = () => { if (dirty || flying || animOff.size) { draw(); dirty = false; } raf = requestAnimationFrame(loop); };
     raf = requestAnimationFrame(loop);
     return () => { cancelAnimationFrame(raf); ro.disconnect(); };
   });
@@ -154,7 +165,18 @@
   }
   async function recluster(fit = false) {
     try {
-      islands = (await data.faceLayout(layoutOpts())).islands;
+      const old = new Map(islands.map((is) => [is.key, { cx: is.cx, cy: is.cy }]));
+      const next = (await data.faceLayout(layoutOpts())).islands;
+      // Seed the slide: each surviving island starts at its old offset and eases to the new spot.
+      const t0 = performance.now();
+      animOff.clear();
+      if (!fit) {
+        for (const is of next) {
+          const o = old.get(is.key);
+          if (o && (o.cx !== is.cx || o.cy !== is.cy)) animOff.set(is.key, { x: o.cx - is.cx, y: o.cy - is.cy, t0 });
+        }
+      }
+      islands = next;
       selected = null;
       if (fit) fitView();
       dirty = true;
@@ -227,7 +249,8 @@
     const detail = cam.scale >= 0.45; // LOD: thumbnails vs blobs
     const margin = 60;
     for (const is of islands) {
-      const c = toScreen(is.cx, is.cy);
+      const off = islandOffset(is.key); // layout-tween slide (spread/grouping change)
+      const c = toScreen(is.cx + off.x, is.cy + off.y);
       const rS = is.radius * cam.scale;
       if (c.x + rS < -margin || c.x - rS > W + margin || c.y + rS < -margin || c.y - rS > H + margin) continue;
 
@@ -252,7 +275,7 @@
         // faces as rounded-square thumbnails
         for (const f of is.faces) {
           if (flying && f.id === flying.faceId) continue; // it's mid-flight, drawn separately
-          const p = toScreen(f.x, f.y);
+          const p = toScreen(f.x + off.x, f.y + off.y);
           const fr = FACE_R * cam.scale;
           if (p.x + fr < 0 || p.x - fr > W || p.y + fr < 0 || p.y - fr > H) continue;
           const im = getImg(f.id);
@@ -276,14 +299,15 @@
         ctx.strokeStyle = "#7aa2ff"; ctx.lineWidth = 2;
         ctx.beginPath(); ctx.arc(c.x, c.y, rS + 6, 0, Math.PI * 2); ctx.stroke();
       }
-      // Labeled anchor → person name (brighter); unknown → suggestion or bare count.
+      // Labeled anchor → person name (brighter). Unknown cluster: a suggestion is only a GUESS —
+      // prefix "probably" + italic so it never reads as a confirmed identity; else a bare count.
       const label = is.label
         ? `${is.label} · ${is.size}`
         : is.suggestion
-          ? `${is.suggestion.name} · ${is.size}`
+          ? `probably ${is.suggestion.name} · ${is.size}`
           : `${is.size} face${is.size === 1 ? "" : "s"}`;
       ctx.fillStyle = is.label ? "rgba(160,190,255,0.95)" : "rgba(255,255,255,0.6)";
-      ctx.font = `${is.label ? "600 " : ""}12px ui-sans-serif, system-ui`;
+      ctx.font = `${is.label ? "600 " : is.suggestion ? "italic " : ""}12px ui-sans-serif, system-ui`;
       ctx.textAlign = "center"; ctx.textBaseline = "top";
       ctx.fillText(label, c.x, c.y + rS + 6);
     }
@@ -654,9 +678,6 @@
       </select>
       <Button variant="outline" onclick={() => load(true)} disabled={loading}>
         <RefreshCw class="size-4 {loading ? 'animate-spin' : ''}" /> Refresh
-      </Button>
-      <Button variant="outline" onclick={() => goto("/faces")}>
-        <LayoutGrid class="size-4" /> Grid
       </Button>
     </div>
   </div>
