@@ -86,6 +86,9 @@ kanban-plugin: board
 - [ ] #111 Scheduled workflow trigger — calendar schedule builder
 	  - Plan: [[workflow-schedule-trigger]]
 
+- [ ] #121 Retire local builds — full CI/CD (build + host on GitHub)
+	  - Plan: [[retire-local-builds-ci]]
+
 
 ## In Progress
 
