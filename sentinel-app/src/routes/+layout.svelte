@@ -313,15 +313,30 @@
           : 'w-60'}"
       >
         <div
-          class="flex h-14 items-center gap-2.5 border-b border-sidebar-border {navCollapsed
+          class="flex h-14 items-center border-b border-sidebar-border {navCollapsed
             ? 'justify-center px-0'
-            : 'px-4'}"
+            : 'gap-2.5 px-4'}"
         >
-          <SentinelLogo
-            size={30}
-            wordmark={!navCollapsed}
-            subtitle="Monitoring & Automation"
-          />
+          {#if navCollapsed}
+            <button
+              class="interactive rounded-md p-1.5 text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+              title="Expand sidebar"
+              aria-label="Expand sidebar"
+              onclick={toggleNav}
+            >
+              <PanelLeftOpen class="size-5" />
+            </button>
+          {:else}
+            <SentinelLogo size={30} wordmark subtitle="Monitoring & Automation" />
+            <button
+              class="interactive ml-auto rounded-md p-1 text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+              title="Collapse sidebar"
+              aria-label="Collapse sidebar"
+              onclick={toggleNav}
+            >
+              <PanelLeftClose class="size-4" />
+            </button>
+          {/if}
         </div>
 
         <nav class="flex-1 space-y-0.5 overflow-y-auto p-2">
@@ -412,28 +427,18 @@
             <span class="size-1.5 rounded-full bg-primary status-live"></span>
             <span class="font-mono">v0.4.1</span>
             <span class="font-mono" title="Deployed commit">· {COMMIT}</span>
-            <div class="ml-auto flex items-center gap-0.5">
-              <button
-                class="interactive rounded-md p-1 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
-                title={themeLabel}
-                aria-label={themeLabel}
-                onclick={toggleTheme}
-              >
-                {#if theme.current === "dark"}
-                  <Sun class="size-4" />
-                {:else}
-                  <Moon class="size-4" />
-                {/if}
-              </button>
-              <button
-                class="interactive rounded-md p-1 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
-                title="Collapse sidebar"
-                aria-label="Collapse sidebar"
-                onclick={toggleNav}
-              >
-                <PanelLeftClose class="size-4" />
-              </button>
-            </div>
+            <button
+              class="interactive ml-auto rounded-md p-1 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+              title={themeLabel}
+              aria-label={themeLabel}
+              onclick={toggleTheme}
+            >
+              {#if theme.current === "dark"}
+                <Sun class="size-4" />
+              {:else}
+                <Moon class="size-4" />
+              {/if}
+            </button>
           {:else}
             <button
               class="interactive rounded-md p-1 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
@@ -446,14 +451,6 @@
               {:else}
                 <Moon class="size-4" />
               {/if}
-            </button>
-            <button
-              class="interactive rounded-md p-1 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
-              title="Expand sidebar"
-              aria-label="Expand sidebar"
-              onclick={toggleNav}
-            >
-              <PanelLeftOpen class="size-4" />
             </button>
           {/if}
         </div>
