@@ -309,10 +309,23 @@ export const data = {
   /** On-demand facial landmarks (5 keypoints, in the crop's pixel coords) for the detail overlay. */
   faceLandmarks: (id: string): Promise<{ landmarks: [number, number][] }> =>
     api.get<{ landmarks: [number, number][] }>(`/faces/${encodeURIComponent(id)}/landmarks`),
-  faceLayout: (eps?: number, scope?: "unknown" | "known" | "all"): Promise<CanvasLayout> => {
+  faceLayout: (opts: {
+    eps?: number;
+    scope?: "unknown" | "known" | "all";
+    maxPerIsland?: number;
+    maxIslands?: number;
+    minSize?: number;
+    since?: string;
+    until?: string;
+  } = {}): Promise<CanvasLayout> => {
     const q = new URLSearchParams();
-    if (eps != null) q.set("eps", String(eps));
-    if (scope) q.set("scope", scope);
+    if (opts.eps != null) q.set("eps", String(opts.eps));
+    if (opts.scope) q.set("scope", opts.scope);
+    if (opts.maxPerIsland != null) q.set("max_per_island", String(opts.maxPerIsland));
+    if (opts.maxIslands != null) q.set("max_islands", String(opts.maxIslands));
+    if (opts.minSize != null) q.set("min_size", String(opts.minSize));
+    if (opts.since) q.set("since", opts.since);
+    if (opts.until) q.set("until", opts.until);
     const s = q.toString();
     return api.get<CanvasLayout>(`/faces/layout${s ? `?${s}` : ""}`);
   },

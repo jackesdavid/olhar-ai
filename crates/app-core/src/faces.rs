@@ -285,13 +285,22 @@ impl FaceScope {
     }
 }
 
-/// Load faces (+ embeddings) matching `scope`, newest first, capped at `MAX_CLUSTER_N`.
-fn load_faces(db: &Db, tenant_id: Uuid, scope: FaceScope) -> Vec<(Face, Vec<f32>)> {
+/// Load faces (+ embeddings) matching `scope`, newest first, capped at `MAX_CLUSTER_N`. Optional
+/// `since`/`until` are RFC3339 bounds on `created_at` (text — sorts correctly, so a plain range works).
+fn load_faces(
+    db: &Db,
+    tenant_id: Uuid,
+    scope: FaceScope,
+    since: Option<String>,
+    until: Option<String>,
+) -> Vec<(Face, Vec<f32>)> {
     let pool = db.pool();
     let sql = format!(
         "SELECT id::text AS id, person_id, image_key, camera, confidence, face_ratio, source, \
                 created_at, embedding::float4[] AS embedding \
          FROM faces WHERE tenant_id = $1 AND {} \
+                AND ($3::text IS NULL OR created_at >= $3) \
+                AND ($4::text IS NULL OR created_at <= $4) \
          ORDER BY created_at DESC LIMIT $2",
         scope.predicate()
     );
@@ -299,6 +308,8 @@ fn load_faces(db: &Db, tenant_id: Uuid, scope: FaceScope) -> Vec<(Face, Vec<f32>
         sqlx::query_as::<_, FaceEmbRow>(&sql)
             .bind(tenant_id)
             .bind(MAX_CLUSTER_N)
+            .bind(since)
+            .bind(until)
             .fetch_all(&pool)
             .await
             .unwrap_or_else(|e| {
@@ -431,7 +442,7 @@ fn build_person_cores(
 /// centroid). Largest clusters first. On-demand; empty on error.
 pub fn cluster_unlabeled(db: &Db, tenant_id: Uuid, eps: f32) -> Vec<FaceCluster> {
     let eps = eps.clamp(0.20, 0.90);
-    let items = load_faces(db, tenant_id, FaceScope::Unknown);
+    let items = load_faces(db, tenant_id, FaceScope::Unknown, None, None);
     build_cores(db, tenant_id, &items, eps)
         .into_iter()
         .map(|c| FaceCluster {
@@ -476,13 +487,33 @@ pub struct CanvasLayout {
     pub islands: Vec<Island>,
 }
 
+/// Canvas filters/caps. All optional — `Default` = the full, uncapped layout.
+#[derive(Default, Clone)]
+pub struct LayoutOpts {
+    /// Cap the dots fanned per island (the island's `size` still reflects the true total → "+N more").
+    pub max_per_island: Option<usize>,
+    /// Cap the number of islands (largest first) — the rest are dropped.
+    pub max_islands: Option<usize>,
+    /// Hide islands smaller than this (noise/singleton suppression).
+    pub min_size: Option<usize>,
+    /// RFC3339 lower/upper bounds on `created_at`.
+    pub since: Option<String>,
+    pub until: Option<String>,
+}
+
 /// Lay faces out as similarity islands, filtered by `scope`. Unknown faces are embedding-clustered
 /// at `eps`; KNOWN faces are grouped into one "anchor" island per person. Island centres are placed
 /// by stress majorization (inter-island distance ∝ centroid cosine distance) and each island's faces
 /// fanned in a phyllotaxis spiral. Absolute pixel coordinates; largest island first.
-pub fn layout_faces(db: &Db, tenant_id: Uuid, eps: f32, scope: FaceScope) -> CanvasLayout {
+pub fn layout_faces(
+    db: &Db,
+    tenant_id: Uuid,
+    eps: f32,
+    scope: FaceScope,
+    opts: &LayoutOpts,
+) -> CanvasLayout {
     let eps = eps.clamp(0.20, 0.90);
-    let items = load_faces(db, tenant_id, scope);
+    let items = load_faces(db, tenant_id, scope, opts.since.clone(), opts.until.clone());
     // Split labeled vs unlabeled — each groups differently (by person vs by embedding).
     let (known, unknown): (Vec<_>, Vec<_>) = items.into_iter().partition(|(f, _)| f.person_id.is_some());
     let name_of: std::collections::HashMap<String, String> = if known.is_empty() {
@@ -493,6 +524,13 @@ pub fn layout_faces(db: &Db, tenant_id: Uuid, eps: f32, scope: FaceScope) -> Can
     let mut cores = build_person_cores(&known, &name_of);
     cores.extend(build_cores(db, tenant_id, &unknown, eps));
     cores.sort_by(|a, b| b.face_ids.len().cmp(&a.face_ids.len()));
+    // Filters/caps: min size, then keep the largest N islands.
+    if let Some(m) = opts.min_size {
+        cores.retain(|c| c.face_ids.len() >= m);
+    }
+    if let Some(m) = opts.max_islands {
+        cores.truncate(m);
+    }
     if cores.is_empty() {
         return CanvasLayout { islands: Vec::new() };
     }
@@ -518,13 +556,12 @@ pub fn layout_faces(db: &Db, tenant_id: Uuid, eps: f32, scope: FaceScope) -> Can
         .map(|(ci, c)| {
             let (cx, cy) = centres[ci];
             let r = radius_of(c.face_ids.len());
-            // Phyllotaxis (sunflower) fan: even, deterministic packing around the centre.
-            let n = c.idxs.len();
-            let faces: Vec<FaceDot> = c
-                .idxs
-                .iter()
-                .enumerate()
-                .map(|(fi, &_idx)| {
+            // Phyllotaxis (sunflower) fan: even, deterministic packing around the centre. When
+            // `max_per_island` caps the dots, fan only that many (Island.size keeps the true total).
+            let total = c.idxs.len();
+            let n = opts.max_per_island.map_or(total, |m| m.min(total)).max(1);
+            let faces: Vec<FaceDot> = (0..n)
+                .map(|fi| {
                     let fr = if n <= 1 { 0.0 } else { r * 0.82 * ((fi as f32 + 0.5) / n as f32).sqrt() };
                     let theta = fi as f32 * 2.399_963_2; // golden angle
                     FaceDot {

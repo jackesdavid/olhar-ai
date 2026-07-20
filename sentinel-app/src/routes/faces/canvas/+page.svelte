@@ -9,6 +9,8 @@
   import ScanFace from "@lucide/svelte/icons/scan-face";
   import LayoutGrid from "@lucide/svelte/icons/layout-grid";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+  import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
+  import Lasso from "@lucide/svelte/icons/lasso";
   import UserPlus from "@lucide/svelte/icons/user-plus";
   import Check from "@lucide/svelte/icons/check";
   import X from "@lucide/svelte/icons/x";
@@ -30,6 +32,41 @@
   let eps = $state(0.55);
   let epsTimer: ReturnType<typeof setTimeout> | undefined;
   let scope = $state<"unknown" | "known" | "all">("unknown");
+  // Filters / caps (feed the layout query). null = uncapped.
+  let maxPerIsland = $state<number | null>(null);
+  let maxIslands = $state<number | null>(null);
+  let minSize = $state<number | null>(null);
+  let since = $state(""); // yyyy-mm-dd
+  let until = $state("");
+  let showFilters = $state(false);
+  let filterTimer: ReturnType<typeof setTimeout> | undefined;
+  // Auto-refresh (seconds; 0 = off), like the Events page.
+  let autoSecs = $state(0);
+  const AUTO_OPTS = [0, 5, 15, 30, 60] as const;
+  // Lasso select → bulk label.
+  let lassoMode = $state(false);
+  let lassoPts = $state<{ x: number; y: number }[]>([]); // screen-space polygon
+  let lassoIds = $state<string[]>([]); // faces enclosed by the last lasso
+  let bulkQuery = $state("");
+  let bulkBusy = $state(false);
+  function activeFilters(): boolean {
+    return maxPerIsland != null || maxIslands != null || minSize != null || !!since || !!until;
+  }
+  function layoutOpts() {
+    return {
+      eps,
+      scope,
+      maxPerIsland: maxPerIsland ?? undefined,
+      maxIslands: maxIslands ?? undefined,
+      minSize: minSize ?? undefined,
+      since: since ? `${since}T00:00:00` : undefined,
+      until: until ? `${until}T23:59:59.999999999` : undefined,
+    };
+  }
+  function onFilterChange() { clearTimeout(filterTimer); filterTimer = setTimeout(() => recluster(true), 300); }
+  function numOrNull(v: string): number | null { return v ? Math.max(1, parseInt(v, 10)) : null; }
+  function clearFilters() { maxPerIsland = null; maxIslands = null; minSize = null; since = ""; until = ""; recluster(true); }
+  function toggleLasso() { lassoMode = !lassoMode; lassoPts = []; if (!lassoMode) lassoIds = []; }
   let showBox = $state(false); // full frame + detection rectangle vs cropped face
   function toggleBox() { showBox = !showBox; imgs.clear(); attempts.clear(); pending.length = 0; dirty = true; }
   const SCOPES: Array<{ v: "unknown" | "known" | "all"; label: string }> = [
@@ -101,7 +138,7 @@
   async function load(fit = false) {
     loading = true;
     try {
-      const [lay, pp] = await Promise.all([data.faceLayout(eps, scope), data.listPeople()]);
+      const [lay, pp] = await Promise.all([data.faceLayout(layoutOpts()), data.listPeople()]);
       islands = lay.islands;
       people = pp;
       if (fit) fitView();
@@ -114,7 +151,7 @@
   }
   async function recluster(fit = false) {
     try {
-      islands = (await data.faceLayout(eps, scope)).islands;
+      islands = (await data.faceLayout(layoutOpts())).islands;
       selected = null;
       if (fit) fitView();
       dirty = true;
@@ -122,6 +159,12 @@
       toast.error("Couldn't re-group", { description: String(e) });
     }
   }
+  // Auto-refresh: re-fetch the layout on the chosen interval (0 = off). Silent (no fit/toast churn).
+  $effect(() => {
+    if (autoSecs <= 0) return;
+    const t = setInterval(() => { if (!detail && !lassoMode) recluster(false); }, autoSecs * 1000);
+    return () => clearInterval(t);
+  });
   function setScope(v: "unknown" | "known" | "all") {
     if (v === scope) return;
     scope = v;
@@ -260,11 +303,17 @@
   // ---- interaction: pan / zoom / select ----
   let dragging = $state(false);
   let moved = false, lastX = 0, lastY = 0;
+  function relPt(e: PointerEvent) {
+    const rect = canvasEl.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
   function onPointerDown(e: PointerEvent) {
     canvasEl.setPointerCapture(e.pointerId);
+    if (lassoMode) { lassoPts = [relPt(e)]; return; } // draw a selection lasso instead of panning
     dragging = true; moved = false; lastX = e.clientX; lastY = e.clientY;
   }
   function onPointerMove(e: PointerEvent) {
+    if (lassoMode) { if (lassoPts.length) { lassoPts = [...lassoPts, relPt(e)]; dirty = true; } return; }
     if (!dragging) return;
     const dx = e.clientX - lastX, dy = e.clientY - lastY;
     if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
@@ -274,9 +323,56 @@
     dirty = true;
   }
   function onPointerUp(e: PointerEvent) {
+    if (lassoMode) { finishLasso(); return; }
     dragging = false;
     if (!moved) hitTest(e);
   }
+  // Close the lasso and collect every face dot inside the polygon (screen-space, even-odd rule).
+  function finishLasso() {
+    const poly = lassoPts;
+    lassoPts = [];
+    if (poly.length < 3) { dirty = true; return; }
+    const ids: string[] = [];
+    for (const is of islands) for (const f of is.faces) {
+      const p = toScreen(f.x, f.y);
+      if (pointInPoly(p.x, p.y, poly)) ids.push(f.id);
+    }
+    lassoIds = ids;
+    bulkQuery = "";
+    if (!ids.length) toast.info("Lasso caught no faces — draw around some dots.");
+    dirty = true;
+  }
+  function pointInPoly(x: number, y: number, poly: { x: number; y: number }[]): boolean {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+      if (((yi > y) !== (yj > y)) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+  function matchingBulk(): Person[] {
+    const q = bulkQuery.trim().toLowerCase();
+    return people.filter((p) => !q || p.name.toLowerCase().includes(q)).slice(0, 6);
+  }
+  function bulkExact(): Person | undefined {
+    const q = bulkQuery.trim().toLowerCase();
+    return people.find((p) => p.name.toLowerCase() === q);
+  }
+  async function bulkLabel(target: { personId?: string; newPersonName?: string }, name: string) {
+    if (!lassoIds.length) return;
+    bulkBusy = true;
+    try {
+      await data.labelFaces(lassoIds, target);
+      toast.success(`Labeled ${lassoIds.length} face${lassoIds.length === 1 ? "" : "s"} → ${name}`);
+      lassoIds = []; lassoMode = false;
+      await recluster(true);
+    } catch (e) {
+      toast.error("Couldn't label", { description: String(e) });
+    } finally {
+      bulkBusy = false;
+    }
+  }
+  function cancelBulk() { lassoIds = []; }
   function onWheel(e: WheelEvent) {
     e.preventDefault();
     const rect = canvasEl.getBoundingClientRect();
@@ -517,6 +613,43 @@
       <Button variant={showBox ? "default" : "outline"} onclick={toggleBox} title="Show the full frame with the detection box (context)">
         <Frame class="size-4" /> Context
       </Button>
+      <Button variant={lassoMode ? "default" : "outline"} onclick={toggleLasso} title="Lasso-select faces to bulk-label">
+        <Lasso class="size-4" /> Lasso
+      </Button>
+      <div class="relative">
+        <Button variant={activeFilters() ? "default" : "outline"} onclick={() => (showFilters = !showFilters)} title="Filter + cap the layout">
+          <SlidersHorizontal class="size-4" /> Filters
+        </Button>
+        {#if showFilters}
+          <div class="absolute right-0 top-full z-20 mt-1 w-64 space-y-3 rounded-md border border-border bg-background p-3 shadow-xl">
+            <label class="block text-xs"><span class="text-muted-foreground">Max faces / island</span>
+              <input type="number" min="1" placeholder="all" value={maxPerIsland ?? ""} class="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs"
+                oninput={(e) => { maxPerIsland = numOrNull(e.currentTarget.value); onFilterChange(); }} /></label>
+            <label class="block text-xs"><span class="text-muted-foreground">Max islands</span>
+              <input type="number" min="1" placeholder="all" value={maxIslands ?? ""} class="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs"
+                oninput={(e) => { maxIslands = numOrNull(e.currentTarget.value); onFilterChange(); }} /></label>
+            <label class="block text-xs"><span class="text-muted-foreground">Min island size</span>
+              <input type="number" min="1" placeholder="1" value={minSize ?? ""} class="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs"
+                oninput={(e) => { minSize = numOrNull(e.currentTarget.value); onFilterChange(); }} /></label>
+            <div class="flex gap-2">
+              <label class="block flex-1 text-xs"><span class="text-muted-foreground">From</span>
+                <input type="date" value={since} class="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs"
+                  oninput={(e) => { since = e.currentTarget.value; onFilterChange(); }} /></label>
+              <label class="block flex-1 text-xs"><span class="text-muted-foreground">To</span>
+                <input type="date" value={until} class="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs"
+                  oninput={(e) => { until = e.currentTarget.value; onFilterChange(); }} /></label>
+            </div>
+            {#if activeFilters()}
+              <button class="w-full text-xs text-muted-foreground hover:text-foreground" onclick={clearFilters}>Clear filters</button>
+            {/if}
+          </div>
+        {/if}
+      </div>
+      <select bind:value={autoSecs} class="h-9 rounded-md border border-border bg-background px-2 text-xs" title="Auto-refresh the layout on an interval">
+        {#each AUTO_OPTS as s (s)}
+          <option value={s}>{s === 0 ? "Manual" : `Auto ${s}s`}</option>
+        {/each}
+      </select>
       <Button variant="outline" onclick={() => load(true)} disabled={loading}>
         <RefreshCw class="size-4 {loading ? 'animate-spin' : ''}" /> Refresh
       </Button>
@@ -529,12 +662,39 @@
   <div bind:this={wrapEl} class="relative flex-1 overflow-hidden rounded-xl border border-border bg-[#0a0b0d]">
     <canvas
       bind:this={canvasEl}
-      class="block touch-none {dragging ? 'cursor-grabbing' : 'cursor-grab'}"
+      class="block touch-none {lassoMode ? 'cursor-crosshair' : dragging ? 'cursor-grabbing' : 'cursor-grab'}"
       onpointerdown={onPointerDown}
       onpointermove={onPointerMove}
       onpointerup={onPointerUp}
       onwheel={onWheel}
     ></canvas>
+
+    {#if lassoMode && lassoPts.length > 1}
+      <svg class="pointer-events-none absolute inset-0 z-10 h-full w-full">
+        <polygon points={lassoPts.map((p) => `${p.x},${p.y}`).join(" ")} fill="rgba(125,215,255,.12)" stroke="rgba(125,215,255,.9)" stroke-width="1.5" stroke-dasharray="4 3" />
+      </svg>
+    {/if}
+
+    {#if lassoIds.length}
+      <div class="absolute left-1/2 top-4 z-20 w-80 -translate-x-1/2 rounded-lg border border-border bg-background p-3 shadow-2xl">
+        <div class="flex items-center justify-between">
+          <p class="text-sm font-medium">{lassoIds.length} face{lassoIds.length === 1 ? "" : "s"} selected</p>
+          <button onclick={cancelBulk} class="text-muted-foreground hover:text-foreground" aria-label="cancel"><X class="size-4" /></button>
+        </div>
+        <p class="mt-1 text-xs text-muted-foreground">Label them all as…</p>
+        <Input placeholder="Search or name…" bind:value={bulkQuery} class="mt-2 h-8 text-xs" />
+        <div class="mt-1 max-h-44 overflow-y-auto rounded-md border border-border">
+          {#each matchingBulk() as p (p.id)}
+            <button class="flex w-full px-2 py-1.5 text-left text-xs hover:bg-accent" disabled={bulkBusy} onclick={() => bulkLabel({ personId: p.id }, p.name)}>{p.name}</button>
+          {/each}
+          {#if bulkQuery.trim() && !bulkExact()}
+            <button class="flex w-full items-center gap-2 border-t border-border px-2 py-1.5 text-left text-xs hover:bg-accent" disabled={bulkBusy} onclick={() => bulkLabel({ newPersonName: bulkQuery.trim() }, bulkQuery.trim())}>
+              <UserPlus class="size-3.5 text-primary" /> Create “{bulkQuery.trim()}”
+            </button>
+          {/if}
+        </div>
+      </div>
+    {/if}
 
     {#if loading}
       <div class="pointer-events-none absolute inset-0 grid place-items-center text-sm text-white/60">Laying out faces…</div>

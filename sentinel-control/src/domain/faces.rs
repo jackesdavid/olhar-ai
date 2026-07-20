@@ -56,6 +56,12 @@ struct ClusterQuery {
     eps: Option<f32>,
     /// Which faces to show: "unknown" (default) · "known" · "all".
     scope: Option<String>,
+    /// Canvas caps/filters (layout only; the list `clusters` endpoint ignores these).
+    max_per_island: Option<usize>,
+    max_islands: Option<usize>,
+    min_size: Option<usize>,
+    since: Option<String>,
+    until: Option<String>,
 }
 
 /// The triage feed: unknown faces grouped into clusters, each with an auto-suggested person.
@@ -82,7 +88,14 @@ async fn layout(
     let db = st.db.clone();
     let eps = q.eps.unwrap_or(faces::CLUSTER_EPS);
     let scope = faces::FaceScope::parse(q.scope.as_deref().unwrap_or("unknown"));
-    Ok(Json(blocking(move || faces::layout_faces(&db, tid, eps, scope)).await?))
+    let opts = faces::LayoutOpts {
+        max_per_island: q.max_per_island,
+        max_islands: q.max_islands,
+        min_size: q.min_size,
+        since: q.since.clone(),
+        until: q.until.clone(),
+    };
+    Ok(Json(blocking(move || faces::layout_faces(&db, tid, eps, scope, &opts)).await?))
 }
 
 #[derive(Deserialize)]
