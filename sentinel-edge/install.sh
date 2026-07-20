@@ -64,16 +64,10 @@ fi
 os="$(uname -s)"; arch="$(uname -m)"
 case "$os" in
   Linux)
-    # Two Linux assets, picked by package manager: apt (Debian/Ubuntu) → the `-gnu` asset;
-    # dnf/rpm-ostree (Fedora/Bazzite) → the default. This used to be about OpenCV's soname AND
-    # glibc; motion is pure Rust now (#79), so only the **glibc floor** is left — a binary built
-    # against Fedora's glibc won't start on an older Ubuntu. A single static musl build would
-    # collapse these into one asset; that's the next step, not this one.
-    if command -v apt-get >/dev/null 2>&1; then
-      EDGE_ASSET="sentinel-edge-linux-$arch-gnu"
-    else
-      EDGE_ASSET="sentinel-edge-linux-$arch"
-    fi ;;
+    # One static musl asset per arch — no glibc floor, runs on any distro (Debian/Ubuntu, Fedora/
+    # Bazzite, …). The edge is pure Rust (#79) + rustls, so there's nothing to dynamically link.
+    # (This replaced the old apt→`-gnu` / dnf→default split now that CI builds musl in release.yml.)
+    EDGE_ASSET="sentinel-edge-linux-$arch" ;;
   Darwin) EDGE_ASSET="sentinel-edge-macos-$arch" ;;
   *) echo "Unsupported OS: $os" >&2; exit 1 ;;
 esac
