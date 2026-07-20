@@ -85,8 +85,6 @@ kanban-plugin: board
 	  - Plan: [[node-palette-search-autofocus]]
 - [ ] #111 Scheduled workflow trigger — calendar schedule builder
 	  - Plan: [[workflow-schedule-trigger]]
-- [ ] #120 Face pipeline on primary (HD) stream — GPU decode + per-tenant selector
-	  - Plan: [[face-pipeline-hd-stream]]
 
 
 ## In Progress
@@ -109,6 +107,8 @@ kanban-plugin: board
 	  - Plan: [[face-recognition-pipeline]]
 - [ ] #119 Faces view — cluster + bulk-label unknown faces → people
 	  - Plan: [[faces-labeling-view]]
+- [ ] #120 Face pipeline on primary (HD) stream — GPU decode + per-tenant selector
+	  - Plan: [[face-pipeline-hd-stream]]
 
 
 ## Review
