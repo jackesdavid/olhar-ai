@@ -50,6 +50,18 @@ face having moved between the two frames.
   flag, re-reading on config refresh (no restart).
 - Future extension (out of scope v1): per-**camera** override, not just per-tenant.
 
+## Status (2026-07-20)
+- **Phase 6 cloud side DONE + deployed** (`df8e801`): edge `hwaccel.rs` probe (functional `-init_hw_device`
+  test, bounded subprocess), `X-Edge-Hwaccel` header, control ingest (migration **0064** `tenant_boxes.hwaccel`,
+  `box_health_headers` + both `touch_box` upserts, COALESCE/backward-compatible), and a "GPU decode · <method>"
+  badge on the Boxes page. All compiles; cloud deployed.
+- **NOT released to boxes yet.** The probe only reports once a box runs the new edge. Edge version stays
+  **0.5.45** on purpose — the 0.5.46 bump must be **atomic with `edge-publish`** (build+upload the binary,
+  THEN bump `LATEST_EDGE_VERSION`). A bare source bump made control advertise 0.5.46 with no binary →
+  self-update loop; reverted (VPS env + Cargo.toml back to 0.5.45). See [[edge-publish-version-check]].
+- **Next on #120:** `edge-publish` for **both** macOS + Linux assets, verify the probe picks the right method
+  on a real GPU box (badge lights up), then build Phases 1–5 (HD publish + per-tenant setting + GPU config).
+
 ## Hardware-acceleration reference (the probe's candidate methods)
 For the edge the workload is **decode** (H.264/H.265 → frames). Candidates, best-first per platform:
 
