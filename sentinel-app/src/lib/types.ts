@@ -10,6 +10,8 @@ export type Settings = {
   stt_autosend: boolean;
   transport: Transport;
   cameras_always_warm: boolean;
+  /** Face capture stream (#120): "preview" (substream, default) or "hd" (main stream). */
+  face_capture_stream: "preview" | "hd";
   /** Max ring buffer size in seconds; also the upper bound for per-recording pre-roll. */
   pre_roll_secs: number;
   /** MOG2 varThreshold for motion detection. Lower = more sensitive (default 16). */
@@ -354,6 +356,7 @@ export const DEFAULT_SETTINGS: Settings = {
   stt_autosend: false,
   transport: "auto",
   cameras_always_warm: false,
+  face_capture_stream: "preview",
   pre_roll_secs: 10,
   motion_var_threshold: 16,
   max_storage_mb: 10000,

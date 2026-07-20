@@ -200,11 +200,24 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
     let mut motion_at: Option<Instant> = None;
     let mut last_emit: Option<Instant> = None;
 
+    // #120 HD face capture: grab the main/HD stream instead of the preview substream when the box
+    // config asks for it. The SAME frame feeds motion + face detection, so there's no temporal
+    // mismatch and no bbox scaling — faces are just bigger.
+    let hd = state.recording.config.face_capture_stream.eq_ignore_ascii_case("hd");
+    let grab: fn(&ureq::Agent, &str, &str) -> Result<Vec<u8>, String> =
+        if hd { app_core::go2rtc::frame_from_hd } else { app_core::go2rtc::frame_from };
+    log::info!("frame hub[{ip}]: face capture = {} stream", if hd { "HD (main)" } else { "preview (sub)" });
+    // Resource measurement: avg grab+decode cost + fps per mode, logged every ~10s → the Logs page,
+    // so substream vs HD (±GPU decode) can be compared without touching the box.
+    let mut cap_at = Instant::now();
+    let mut cap_us = 0u128;
+    let mut cap_n = 0u32;
+
     while !stop.load(Ordering::Relaxed) {
         let t0 = Instant::now();
         // Transient errors (stream warming, a dropped frame) skip this tick — keep the background
         // model and try again, never tear the source down.
-        let jpeg = match app_core::go2rtc::frame_from(&agent, &base, ip) {
+        let jpeg = match grab(&agent, &base, ip) {
             Ok(b) => b,
             Err(_) => {
                 std::thread::sleep(frame_gap);
@@ -216,6 +229,22 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
             std::thread::sleep(frame_gap);
             continue;
         };
+        // Measurement: grab+decode is the capture cost we're comparing across modes.
+        cap_us += t0.elapsed().as_micros();
+        cap_n += 1;
+        if cap_at.elapsed() >= Duration::from_secs(10) {
+            log::info!(
+                "capture[{ip}]: mode={} {}x{} avg_decode={:.1}ms {} frames ({:.1} fps)",
+                if hd { "HD" } else { "preview" },
+                w, h,
+                cap_us as f64 / cap_n.max(1) as f64 / 1000.0,
+                cap_n,
+                cap_n as f64 / cap_at.elapsed().as_secs_f64(),
+            );
+            cap_at = Instant::now();
+            cap_us = 0;
+            cap_n = 0;
+        }
 
         let verdict = detector.feed(&bgr, w, h)?;
         if verdict.qualifies {

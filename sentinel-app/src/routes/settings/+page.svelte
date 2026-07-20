@@ -14,13 +14,20 @@
   import { Separator } from "$lib/components/ui/separator";
 
   import { DEFAULT_SETTINGS, type Settings, type Transport } from "$lib/types";
-  import { billing, boxes, type StorageStats } from "$lib/api";
+  import { billing, boxes, type StorageStats, type Box } from "$lib/api";
   import { Input } from "$lib/components/ui/input";
 
   let settings = $state<Settings>({ ...DEFAULT_SETTINGS });
   let loading = $state(true);
   let saving = $state(false);
   let boxIds = $state<string[]>([]);
+  // #120: a box that reported working GPU video decode (null = none capable → HD is CPU-only).
+  let gpuBox = $state<Box | null>(null);
+  function hwLabel(m: string): string {
+    return { vaapi: "VAAPI", qsv: "QuickSync", cuda: "CUDA", videotoolbox: "VideoToolbox", v4l2m2m: "V4L2" }[m] ?? m;
+  }
+  const hdOn = () => settings.face_capture_stream === "hd";
+  function setHd(on: boolean) { settings.face_capture_stream = on ? "hd" : "preview"; }
   let storageStats = $state<(StorageStats & { boxId: string })[]>([]);
   /** Does this tenant's plan actually sell cloud recording? Without it nothing is ever uploaded,
    *  so "delete the local copy once it's in the cloud" would delete the only copy there is. */
@@ -52,10 +59,13 @@
       ]);
       settings = { ...DEFAULT_SETTINGS, ...loaded };
       boxIds = allBoxes.map((b) => b.id);
+      // #120: the GPU-decode method a box reported (for the HD face-capture gate). First capable box.
+      gpuBox = allBoxes.find((b) => b.hwaccel && b.hwaccel !== "none") ?? null;
       // cameras_always_warm + pre_roll_secs live in each box's recording_config.
       const firstBox = allBoxes[0];
       if (firstBox?.recording_config != null) {
         settings.cameras_always_warm = firstBox.recording_config.cameras_always_warm ?? false;
+        settings.face_capture_stream = firstBox.recording_config.face_capture_stream ?? "preview";
         settings.pre_roll_secs = firstBox.recording_config.pre_roll_secs ?? 10;
         settings.motion_var_threshold = firstBox.recording_config.motion_var_threshold ?? 16;
         settings.max_storage_mb = firstBox.recording_config.max_storage_mb ?? 10000;
@@ -104,6 +114,7 @@
             recordings_path: snap.recordings_path,
             codec: "copy",
             cameras_always_warm: snap.cameras_always_warm,
+            face_capture_stream: snap.face_capture_stream,
             motion_var_threshold: snap.motion_var_threshold,
             // Never persist "delete the local copy" for a tenant with nowhere to copy it to.
             delete_local_after_upload: cloudRecording && snap.delete_local_after_upload,
@@ -315,6 +326,30 @@
         <Switch
           id="cameras-always-warm"
           bind:checked={settings.cameras_always_warm}
+          disabled={loading}
+        />
+      </div>
+
+      <Separator />
+
+      <div class="flex items-center justify-between">
+        <div class="space-y-0.5">
+          <Label for="hd-face-capture">HD face capture</Label>
+          <p class="text-xs text-muted-foreground">
+            Capture faces from the camera's main (HD) stream instead of the low-res preview — much
+            larger, sharper faces. Heavier to decode; best on a box with GPU video decode.
+            {#if gpuBox}
+              <span class="text-foreground">This box supports GPU decode ({hwLabel(gpuBox.hwaccel ?? "")}).</span>
+            {:else}
+              <span>No GPU-decode-capable box detected — HD would run on CPU (heavier).</span>
+            {/if}
+            Takes effect after the box reloads its config (Restart).
+          </p>
+        </div>
+        <Switch
+          id="hd-face-capture"
+          checked={hdOn()}
+          onCheckedChange={setHd}
           disabled={loading}
         />
       </div>

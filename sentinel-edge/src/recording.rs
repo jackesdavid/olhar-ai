@@ -109,6 +109,10 @@ pub struct RecordingConfig {
     pub codec: String,
     #[serde(default)]
     pub cameras_always_warm: bool,
+    /// Which camera stream feeds face capture (#120): "preview" (low-res substream, default) or
+    /// "hd" (the main/HD stream — sharper faces, heavier decode; gate on a GPU-decode-capable box).
+    #[serde(default = "default_capture_stream")]
+    pub face_capture_stream: String,
     #[serde(default = "default_motion_var")]
     pub motion_var_threshold: f64,
     #[serde(default = "default_recordings_path")]
@@ -127,6 +131,7 @@ impl Default for RecordingConfig {
             max_storage_mb: 1000,
             codec: "copy".to_string(),
             cameras_always_warm: false,
+            face_capture_stream: default_capture_stream(),
             motion_var_threshold: 16.0,
             recordings_path: default_recordings_path(),
             delete_local_after_upload: false,
@@ -138,6 +143,7 @@ fn default_motion_var() -> f64 { 16.0 }
 fn default_pre_roll() -> u32 { 10 }
 fn default_storage() -> u64 { 1000 }
 fn default_codec() -> String { "copy".to_string() }
+fn default_capture_stream() -> String { "preview".to_string() }
 fn default_recordings_path() -> String { crate::paths::recordings_dir().to_string_lossy().into_owned() }
 
 // ---- storage stats ----------------------------------------------------------

@@ -115,7 +115,17 @@ pub fn frame(ip: &str) -> Result<Vec<u8>, String> {
 /// run can re-grab a fresh frame cheaply without re-handshaking — and an off-box consumer
 /// (sentinel-flow) can target a particular tenant's edge go2rtc (`https://<edge-host>`).
 pub fn frame_from(agent: &ureq::Agent, base: &str, ip: &str) -> Result<Vec<u8>, String> {
-    let url = format!("{}/api/frame.jpeg?src={}", base.trim_end_matches('/'), stream_name(ip));
+    frame_src(agent, base, &stream_name(ip))
+}
+
+/// Like [`frame_from`] but grabs the camera's **HD / main** stream (`cam_<ip>_hd`) instead of the
+/// low-res preview — used for HD face capture (#120) so detection + the stored crop are hi-res.
+pub fn frame_from_hd(agent: &ureq::Agent, base: &str, ip: &str) -> Result<Vec<u8>, String> {
+    frame_src(agent, base, &stream_name_hd(ip))
+}
+
+fn frame_src(agent: &ureq::Agent, base: &str, src: &str) -> Result<Vec<u8>, String> {
+    let url = format!("{}/api/frame.jpeg?src={}", base.trim_end_matches('/'), src);
     let resp = agent.get(&url).call().map_err(|e| format!("go2rtc frame request failed: {e}"))?;
     let mut bytes = Vec::new();
     resp.into_reader()

@@ -148,6 +148,8 @@ export type RecordingConfig = {
   recordings_path: string;
   codec: string;
   cameras_always_warm: boolean;
+  /** Which stream feeds face capture (#120): "preview" (substream) or "hd" (main stream). */
+  face_capture_stream?: "preview" | "hd";
   motion_var_threshold?: number;
   /** Drop a clip's local file once the cloud confirms it's durable (the box becomes a spool). */
   delete_local_after_upload?: boolean;
