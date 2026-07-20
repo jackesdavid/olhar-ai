@@ -51,6 +51,18 @@ face having moved between the two frames.
 - Future extension (out of scope v1): per-**camera** override, not just per-tenant.
 
 ## Status (2026-07-20)
+- **MEASUREMENT VERDICT — GPU/Phase 5 is DEAD.** Split metric on the real box (HD 1280×720):
+  **grab ~405–595 ms, decode ~5 ms.** The bottleneck is go2rtc's per-request `frame.jpeg` cold
+  production (starving the hub to ~2 fps vs the 4 fps target), NOT decode CPU. VideoToolbox has
+  nothing to save. → **Phase 5 (GPU-in-go2rtc) abandoned.**
+- **FIX = warm persistent decoder (edge 0.5.49, `4309287`).** `capture.rs`: a supervised, always-on
+  ffmpeg per camera reads go2rtc's warm RTSP re-serve → continuous MJPEG; the hub reads the freshest
+  frame (grab → ~0 ms) and falls back to `frame.jpeg` only when no fresh frame exists. Resilient:
+  watchdog kills a wedged ffmpeg, exits caught, supervisor respawns with backoff. **Verify on-box:**
+  `capture[]` should show grab≈0 ms + ~4 fps; `capture-decoder` restart lines prove resilience.
+- (below: earlier phase status)
+
+### Prior status (2026-07-20)
 - **Phases 1–3 + measurement DONE + deployed** (`ec4ec3e`, edge **0.5.47** `2743cc2`): `frame_from_hd`
   (grab `cam_<ip>_hd`); the edge publisher reads `face_capture_stream` on the box `recording_config`
   and grabs HD vs preview (same frame → motion + face); a **Settings HD-face-capture toggle** gated on
