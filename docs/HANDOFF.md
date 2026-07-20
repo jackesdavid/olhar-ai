@@ -37,7 +37,8 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
   app-core tests green. Migrations 0061/0062 applied live; **0063 validated + applied live** (idempotent).
   Image proxy verified (crop vs box; 39-concurrent → 0 404s after fix).
 - **Pending / next:**
-  - Run **`POST /faces/backfill-crops`** once (crop_key for ~128 existing faces).
+  - ~~Run `POST /faces/backfill-crops`~~ **DONE 2026-07-19** — 153 backfilled, **172/172 faces have
+    crop_key**; verified crop read = 1.1 KB passthrough vs 25 KB frame (box=1).
   - **Wire `When Event.confidence/face_ratio → Store Face`** in the "Face Test" graph (`5ef37805…`)
     so detail shows real values (currently 0 for old rows). **Quality gate** = a 4-node graph pattern
     (NumGte×2 → And → Branch before embed), NOT StoreFace config — must be added in the UI.
