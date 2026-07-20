@@ -15,6 +15,7 @@
   import Check from "@lucide/svelte/icons/check";
   import X from "@lucide/svelte/icons/x";
   import Trash2 from "@lucide/svelte/icons/trash-2";
+  import EyeOff from "@lucide/svelte/icons/eye-off";
   import Frame from "@lucide/svelte/icons/frame";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -36,9 +37,9 @@
   let maxPerIsland = $state<number | null>(null);
   let maxIslands = $state<number | null>(null);
   let minSize = $state<number | null>(null);
+  let spread = $state(1); // inter-island spacing multiplier
   let since = $state(""); // yyyy-mm-dd
   let until = $state("");
-  let showFilters = $state(false);
   let filterTimer: ReturnType<typeof setTimeout> | undefined;
   // Auto-refresh (seconds; 0 = off), like the Events page.
   let autoSecs = $state(0);
@@ -50,7 +51,7 @@
   let bulkQuery = $state("");
   let bulkBusy = $state(false);
   function activeFilters(): boolean {
-    return maxPerIsland != null || maxIslands != null || minSize != null || !!since || !!until;
+    return maxPerIsland != null || maxIslands != null || minSize != null || spread !== 1 || !!since || !!until;
   }
   function layoutOpts() {
     return {
@@ -59,13 +60,15 @@
       maxPerIsland: maxPerIsland ?? undefined,
       maxIslands: maxIslands ?? undefined,
       minSize: minSize ?? undefined,
+      spread: spread !== 1 ? spread : undefined,
       since: since ? `${since}T00:00:00` : undefined,
       until: until ? `${until}T23:59:59.999999999` : undefined,
     };
   }
   function onFilterChange() { clearTimeout(filterTimer); filterTimer = setTimeout(() => recluster(true), 300); }
   function numOrNull(v: string): number | null { return v ? Math.max(1, parseInt(v, 10)) : null; }
-  function clearFilters() { maxPerIsland = null; maxIslands = null; minSize = null; since = ""; until = ""; recluster(true); }
+  function clearFilters() { maxPerIsland = null; maxIslands = null; minSize = null; spread = 1; since = ""; until = ""; recluster(true); }
+  function onSpread(v: number) { spread = v; clearTimeout(epsTimer); epsTimer = setTimeout(recluster, 250); }
   function toggleLasso() { lassoMode = !lassoMode; lassoPts = []; if (!lassoMode) lassoIds = []; }
   let showBox = $state(false); // full frame + detection rectangle vs cropped face
   function toggleBox() { showBox = !showBox; imgs.clear(); attempts.clear(); pending.length = 0; dirty = true; }
@@ -240,6 +243,12 @@
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText(String(is.size), c.x, c.y);
       } else {
+        // very subtle island disk — a visual reference for where each cluster sits
+        ctx.fillStyle = "rgba(120,150,255,0.035)";
+        ctx.beginPath(); ctx.arc(c.x, c.y, rS, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,0.07)";
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(c.x, c.y, rS, 0, Math.PI * 2); ctx.stroke();
         // faces as rounded-square thumbnails
         for (const f of is.faces) {
           if (flying && f.id === flying.faceId) continue; // it's mid-flight, drawn separately
@@ -373,6 +382,34 @@
     }
   }
   function cancelBulk() { lassoIds = []; }
+  async function bulkDelete() {
+    if (!lassoIds.length) return;
+    bulkBusy = true;
+    try {
+      const { deleted } = await data.deleteFaces(lassoIds);
+      toast.success(`Deleted ${deleted} face${deleted === 1 ? "" : "s"}`);
+      lassoIds = []; lassoMode = false;
+      await recluster(true);
+    } catch (e) {
+      toast.error("Couldn't delete", { description: String(e) });
+    } finally {
+      bulkBusy = false;
+    }
+  }
+  async function bulkIgnore() {
+    if (!lassoIds.length) return;
+    bulkBusy = true;
+    try {
+      await data.ignoreFaces(lassoIds, true);
+      toast.success(`Ignored ${lassoIds.length} face${lassoIds.length === 1 ? "" : "s"}`);
+      lassoIds = []; lassoMode = false;
+      await recluster(true);
+    } catch (e) {
+      toast.error("Couldn't ignore", { description: String(e) });
+    } finally {
+      bulkBusy = false;
+    }
+  }
   function onWheel(e: WheelEvent) {
     e.preventDefault();
     const rect = canvasEl.getBoundingClientRect();
@@ -604,47 +641,12 @@
           >{s.label}</button>
         {/each}
       </div>
-      <div class="flex items-center gap-2 rounded-md border border-border px-3 py-1.5" title="Grouping distance (unknown faces only)">
-        <span class="text-xs text-muted-foreground">Grouping</span>
-        <input type="range" min="0.30" max="0.80" step="0.01" value={eps}
-          oninput={(e) => onEps(parseFloat(e.currentTarget.value))} class="h-1 w-28 cursor-pointer accent-primary" />
-        <span class="w-9 text-right text-xs tabular-nums">{eps.toFixed(2)}</span>
-      </div>
       <Button variant={showBox ? "default" : "outline"} onclick={toggleBox} title="Show the full frame with the detection box (context)">
         <Frame class="size-4" /> Context
       </Button>
-      <Button variant={lassoMode ? "default" : "outline"} onclick={toggleLasso} title="Lasso-select faces to bulk-label">
+      <Button variant={lassoMode ? "default" : "outline"} onclick={toggleLasso} title="Lasso-select faces to bulk-label / delete / ignore">
         <Lasso class="size-4" /> Lasso
       </Button>
-      <div class="relative">
-        <Button variant={activeFilters() ? "default" : "outline"} onclick={() => (showFilters = !showFilters)} title="Filter + cap the layout">
-          <SlidersHorizontal class="size-4" /> Filters
-        </Button>
-        {#if showFilters}
-          <div class="absolute right-0 top-full z-20 mt-1 w-64 space-y-3 rounded-md border border-border bg-background p-3 shadow-xl">
-            <label class="block text-xs"><span class="text-muted-foreground">Max faces / island</span>
-              <input type="number" min="1" placeholder="all" value={maxPerIsland ?? ""} class="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs"
-                oninput={(e) => { maxPerIsland = numOrNull(e.currentTarget.value); onFilterChange(); }} /></label>
-            <label class="block text-xs"><span class="text-muted-foreground">Max islands</span>
-              <input type="number" min="1" placeholder="all" value={maxIslands ?? ""} class="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs"
-                oninput={(e) => { maxIslands = numOrNull(e.currentTarget.value); onFilterChange(); }} /></label>
-            <label class="block text-xs"><span class="text-muted-foreground">Min island size</span>
-              <input type="number" min="1" placeholder="1" value={minSize ?? ""} class="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs"
-                oninput={(e) => { minSize = numOrNull(e.currentTarget.value); onFilterChange(); }} /></label>
-            <div class="flex gap-2">
-              <label class="block flex-1 text-xs"><span class="text-muted-foreground">From</span>
-                <input type="date" value={since} class="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs"
-                  oninput={(e) => { since = e.currentTarget.value; onFilterChange(); }} /></label>
-              <label class="block flex-1 text-xs"><span class="text-muted-foreground">To</span>
-                <input type="date" value={until} class="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs"
-                  oninput={(e) => { until = e.currentTarget.value; onFilterChange(); }} /></label>
-            </div>
-            {#if activeFilters()}
-              <button class="w-full text-xs text-muted-foreground hover:text-foreground" onclick={clearFilters}>Clear filters</button>
-            {/if}
-          </div>
-        {/if}
-      </div>
       <select bind:value={autoSecs} class="h-9 rounded-md border border-border bg-background px-2 text-xs" title="Auto-refresh the layout on an interval">
         {#each AUTO_OPTS as s (s)}
           <option value={s}>{s === 0 ? "Manual" : `Auto ${s}s`}</option>
@@ -657,6 +659,41 @@
         <LayoutGrid class="size-4" /> Grid
       </Button>
     </div>
+  </div>
+
+  <!-- Persistent filter/tuning bar — always visible (no popover) -->
+  <div class="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs">
+    <div class="flex items-center gap-2" title="Grouping distance (unknown faces only)">
+      <SlidersHorizontal class="size-3.5 text-muted-foreground" />
+      <span class="text-muted-foreground">Grouping</span>
+      <input type="range" min="0.30" max="0.80" step="0.01" value={eps}
+        oninput={(e) => onEps(parseFloat(e.currentTarget.value))} class="h-1 w-24 cursor-pointer accent-primary" />
+      <span class="w-8 tabular-nums">{eps.toFixed(2)}</span>
+    </div>
+    <div class="flex items-center gap-2" title="Distance between islands">
+      <span class="text-muted-foreground">Spread</span>
+      <input type="range" min="0.5" max="3" step="0.1" value={spread}
+        oninput={(e) => onSpread(parseFloat(e.currentTarget.value))} class="h-1 w-24 cursor-pointer accent-primary" />
+      <span class="w-8 tabular-nums">{spread.toFixed(1)}×</span>
+    </div>
+    <label class="flex items-center gap-1.5"><span class="text-muted-foreground">Max/island</span>
+      <input type="number" min="1" placeholder="all" value={maxPerIsland ?? ""} class="h-7 w-16 rounded border border-border bg-background px-2"
+        oninput={(e) => { maxPerIsland = numOrNull(e.currentTarget.value); onFilterChange(); }} /></label>
+    <label class="flex items-center gap-1.5"><span class="text-muted-foreground">Max islands</span>
+      <input type="number" min="1" placeholder="all" value={maxIslands ?? ""} class="h-7 w-16 rounded border border-border bg-background px-2"
+        oninput={(e) => { maxIslands = numOrNull(e.currentTarget.value); onFilterChange(); }} /></label>
+    <label class="flex items-center gap-1.5"><span class="text-muted-foreground">Min size</span>
+      <input type="number" min="1" placeholder="1" value={minSize ?? ""} class="h-7 w-16 rounded border border-border bg-background px-2"
+        oninput={(e) => { minSize = numOrNull(e.currentTarget.value); onFilterChange(); }} /></label>
+    <label class="flex items-center gap-1.5"><span class="text-muted-foreground">From</span>
+      <input type="date" value={since} class="h-7 rounded border border-border bg-background px-2"
+        oninput={(e) => { since = e.currentTarget.value; onFilterChange(); }} /></label>
+    <label class="flex items-center gap-1.5"><span class="text-muted-foreground">To</span>
+      <input type="date" value={until} class="h-7 rounded border border-border bg-background px-2"
+        oninput={(e) => { until = e.currentTarget.value; onFilterChange(); }} /></label>
+    {#if activeFilters()}
+      <button class="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline" onclick={clearFilters}>Clear</button>
+    {/if}
   </div>
 
   <div bind:this={wrapEl} class="relative flex-1 overflow-hidden rounded-xl border border-border bg-[#0a0b0d]">
@@ -692,6 +729,14 @@
               <UserPlus class="size-3.5 text-primary" /> Create “{bulkQuery.trim()}”
             </button>
           {/if}
+        </div>
+        <div class="mt-2 flex gap-2">
+          <button class="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:border-foreground hover:text-foreground" disabled={bulkBusy} onclick={bulkIgnore}>
+            <EyeOff class="size-3.5" /> Ignore
+          </button>
+          <button class="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:border-destructive hover:text-destructive" disabled={bulkBusy} onclick={bulkDelete}>
+            <Trash2 class="size-3.5" /> Delete
+          </button>
         </div>
       </div>
     {/if}

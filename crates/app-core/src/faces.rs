@@ -496,6 +496,8 @@ pub struct LayoutOpts {
     pub max_islands: Option<usize>,
     /// Hide islands smaller than this (noise/singleton suppression).
     pub min_size: Option<usize>,
+    /// Multiplier on inter-island spacing (1.0 = default; >1 spreads islands apart).
+    pub spread: Option<f32>,
     /// RFC3339 lower/upper bounds on `created_at`.
     pub since: Option<String>,
     pub until: Option<String>,
@@ -548,7 +550,11 @@ pub fn layout_faces(
             dist[j][i] = d;
         }
     }
-    let centres = stress_layout(&dist, &cores.iter().map(|c| radius_of(c.face_ids.len())).collect::<Vec<_>>());
+    let centres = stress_layout(
+        &dist,
+        &cores.iter().map(|c| radius_of(c.face_ids.len())).collect::<Vec<_>>(),
+        opts.spread.unwrap_or(1.0),
+    );
 
     let islands = cores
         .into_iter()
@@ -591,7 +597,7 @@ pub fn layout_faces(
 /// Place `k` points in 2D so pairwise screen distance tracks `dist` (cosine), keeping islands at
 /// least their combined `radii` apart. Deterministic golden-angle init + gradient descent on the
 /// stress `Σ(target − d)²` — no RNG (stable layouts), no external lib.
-fn stress_layout(dist: &[Vec<f32>], radii: &[f32]) -> Vec<(f32, f32)> {
+fn stress_layout(dist: &[Vec<f32>], radii: &[f32], spread: f32) -> Vec<(f32, f32)> {
     let k = dist.len();
     if k == 0 {
         return Vec::new();
@@ -599,8 +605,9 @@ fn stress_layout(dist: &[Vec<f32>], radii: &[f32]) -> Vec<(f32, f32)> {
     if k == 1 {
         return vec![(0.0, 0.0)];
     }
-    // Pixels per unit cosine distance — sets how far apart similarity pushes islands.
-    const SCALE: f32 = 520.0;
+    // Pixels per unit cosine distance — sets how far apart similarity pushes islands. `spread`
+    // scales it (a user slider) so islands can be pulled tighter or pushed further apart.
+    let scale: f32 = 520.0 * spread.clamp(0.3, 4.0);
     let mut pos: Vec<(f32, f32)> = (0..k)
         .map(|i| {
             let a = i as f32 * 2.399_963_2;
@@ -619,7 +626,7 @@ fn stress_layout(dist: &[Vec<f32>], radii: &[f32]) -> Vec<(f32, f32)> {
                 let dy = pos[i].1 - pos[j].1;
                 let d = (dx * dx + dy * dy).sqrt().max(1.0);
                 // Target = similarity distance, but never closer than the two islands' radii (+gap).
-                let target = (dist[i][j] * SCALE).max(radii[i] + radii[j] + 24.0);
+                let target = (dist[i][j] * scale).max(radii[i] + radii[j] + 24.0);
                 let f = (target - d) / d * 0.5; // >0 apart, <0 together
                 disp[i].0 += dx * f;
                 disp[i].1 += dy * f;

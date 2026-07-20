@@ -60,6 +60,7 @@ struct ClusterQuery {
     max_per_island: Option<usize>,
     max_islands: Option<usize>,
     min_size: Option<usize>,
+    spread: Option<f32>,
     since: Option<String>,
     until: Option<String>,
 }
@@ -92,6 +93,7 @@ async fn layout(
         max_per_island: q.max_per_island,
         max_islands: q.max_islands,
         min_size: q.min_size,
+        spread: q.spread,
         since: q.since.clone(),
         until: q.until.clone(),
     };

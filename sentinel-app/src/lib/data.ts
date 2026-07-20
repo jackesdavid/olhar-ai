@@ -315,6 +315,7 @@ export const data = {
     maxPerIsland?: number;
     maxIslands?: number;
     minSize?: number;
+    spread?: number;
     since?: string;
     until?: string;
   } = {}): Promise<CanvasLayout> => {
@@ -324,6 +325,7 @@ export const data = {
     if (opts.maxPerIsland != null) q.set("max_per_island", String(opts.maxPerIsland));
     if (opts.maxIslands != null) q.set("max_islands", String(opts.maxIslands));
     if (opts.minSize != null) q.set("min_size", String(opts.minSize));
+    if (opts.spread != null) q.set("spread", String(opts.spread));
     if (opts.since) q.set("since", opts.since);
     if (opts.until) q.set("until", opts.until);
     const s = q.toString();
