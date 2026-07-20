@@ -482,6 +482,14 @@ export const data = {
   ): Promise<void> => {
     await api.put<void>(`/workflows/${id}/variables`, variables);
   },
+  /** Explicit Save (#122): write the whole current graph's canvas (nodes/edges/positions/configs/
+   *  viewport/wire-bends) in one call. Metadata (name/trigger/enabled/…) is preserved server-side. */
+  saveGraph: async (
+    graphId: string,
+    body: { nodes: unknown[]; edges: unknown[]; viewport?: unknown; edge_vias?: unknown; next_id?: number },
+  ): Promise<void> => {
+    await api.put<void>(`/workflows/${graphId}/graph`, body);
+  },
   addNode: (graphId: string, kind: string, x: number, y: number): Promise<number> =>
     api.post<number>(`/workflows/${graphId}/nodes`, { kind, x, y }),
   removeNode: async (graphId: string, nodeId: number): Promise<void> => {

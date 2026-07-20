@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { fade } from "svelte/transition";
   import { page } from "$app/stores";
-  import { goto } from "$app/navigation";
+  import { goto, beforeNavigate } from "$app/navigation";
   import { data, onEvent } from "$lib/data";
   import { platformLogs, type PlatformLog } from "$lib/api";
   import { fmtTs } from "$lib/utils";
@@ -14,6 +14,7 @@
 
   import Plus from "@lucide/svelte/icons/plus";
   import Play from "@lucide/svelte/icons/play";
+  import Save from "@lucide/svelte/icons/save";
   import Pause from "@lucide/svelte/icons/pause";
   import Square from "@lucide/svelte/icons/square";
   import Trash2 from "@lucide/svelte/icons/trash-2";
@@ -179,6 +180,7 @@
     debug?: boolean;
     nodes: Node[];
     edges: Edge[];
+    next_id?: number; // server-assigned next node id; client mints ids from here between saves (#122)
     viewport?: { x: number; y: number; zoom: number };
     edge_vias?: Record<string, [number, number][]>;
     variables?: VarDecl[];
@@ -232,10 +234,6 @@
   let selectedGraphId = $state<string | null>(null);
   let selectedNodeId = $state<number | null>(null);
   let pending = $state<{ node: number; port: string } | null>(null);
-  // Optimistic node ids: a just-added node renders instantly under a temporary NEGATIVE id
-  // (real per-graph ids are ≥ 0), swapped for the server id once the create resolves.
-  let tempIdSeq = -1;
-  const nextTempId = () => tempIdSeq--;
   // Multi-selection: `selectedNodeId` stays the PRIMARY (drives the inspector); `selectedIds`
   // is the full set (marquee + shift-click). A node is highlighted if it's in either.
   let selectedIds = $state<Set<number>>(new Set());
@@ -253,6 +251,40 @@
     selectedNodeId = null;
     selectedIds = new Set();
   }
+  // ---- explicit Save (#122): edits are LOCAL + instant; nothing persists until Save --------------
+  let dirty = $state(false);
+  let saving = $state(false);
+  function markDirty() { dirty = true; }
+  // A real (non-negative) client-assigned node id for a new local node (no server round-trip).
+  function nextNodeId(g: Graph): number {
+    const n = typeof g.next_id === "number" && g.next_id > 0 ? g.next_id : Math.max(0, ...g.nodes.map((x) => x.id)) + 1;
+    g.next_id = n + 1;
+    return n;
+  }
+  async function save() {
+    if (!graph || saving) return;
+    saving = true;
+    try {
+      await data.saveGraph(graph.id, {
+        nodes: $state.snapshot(graph.nodes),
+        edges: $state.snapshot(graph.edges),
+        viewport: $state.snapshot(graph.viewport),
+        edge_vias: $state.snapshot(graph.edge_vias),
+        next_id: graph.next_id,
+      });
+      dirty = false;
+    } catch (e) {
+      toast.error("Couldn't save workflow", { description: String(e) });
+    } finally {
+      saving = false;
+    }
+  }
+  // Backstop for leaving the editor by any OTHER path (a sidebar link, a browser back). Internal
+  // graph switches (openGraph/backToList) already save first, so `dirty` is false by the time this
+  // fires for them. A fire-and-forget save keeps the canvas from being lost. (#122)
+  beforeNavigate(() => {
+    if (dirty && !saving) void save();
+  });
   // Editor tool/mode (touch-first): move = drag nodes, pan = drag canvas, link = tap ports to
   // wire (node body inert), break = tap a wire to delete it. Default preserves mouse behavior.
   let editorMode = $state<"move" | "pan" | "link" | "break">("move");
@@ -1172,9 +1204,8 @@
     if (g) g.viewport = v;
     data.setGraphViewport(id, v.x, v.y, v.zoom).catch(() => {});
   }
-  // Persist the visual wire bends (#1), debounced, so the user's organisation survives a reload.
-  // Mirrored onto the local graph so a re-select restores without a round-trip.
-  let viasSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  // Mirror the visual wire bends (#1) onto the local graph so a re-select restores them; they
+  // persist with the rest of the canvas on Save (#122).
   function saveEdgeVias() {
     const id = selectedGraphId;
     if (id == null || editLocked) return;
@@ -1184,16 +1215,17 @@
     }
     const g = graphs.find((x) => x.id === id);
     if (g) g.edge_vias = payload;
-    if (viasSaveTimer) clearTimeout(viasSaveTimer);
-    viasSaveTimer = setTimeout(() => void data.setEdgeVias(id, payload).catch(() => {}), 500);
+    markDirty(); // wire bends are local; persist on Save (#122)
   }
   // The URL is the source of truth for which graph is open (/workflows/<id>).
   // openGraph / backToList only navigate; the $effect below applies the route to state,
   // so a refresh or a shared link lands straight in the right editor.
-  function openGraph(id: string) {
+  async function openGraph(id: string) {
+    if (dirty) await save(); // persist the current graph's canvas before switching (#122)
     void goto(`/workflows/${id}`, { keepFocus: true, noScroll: true });
   }
-  function backToList() {
+  async function backToList() {
+    if (dirty) await save();
     void goto("/workflows", { keepFocus: true, noScroll: true });
   }
   // Apply an open-graph route to editor state (was the body of openGraph).
@@ -1606,22 +1638,25 @@
       toast.error("Couldn't create workflow", { description: String(err) });
     }
   }
+  // Metadata (name/description/group/enabled/…) has its OWN controls + persists immediately. Update
+  // local state optimistically and DON'T reload — a reload would re-fetch the server graph and wipe
+  // unsaved canvas edits (#122).
   async function renameInline(name: string) {
     if (!graph) return;
     const n = name.trim();
     if (!n || n === graph.name) return;
+    graph.name = n;
     try {
       await data.renameGraph(graph.id, n);
-      await reload();
     } catch (err) {
       toast.error("Rename failed", { description: String(err) });
     }
   }
   async function saveDescription(v: string) {
     if (!graph || (graph.description ?? "") === v) return;
+    graph.description = v;
     try {
       await data.setGraphDescription(graph.id, v);
-      await reload();
     } catch (err) {
       toast.error("Couldn't save description", { description: String(err) });
     }
@@ -1630,9 +1665,9 @@
     if (!graph) return;
     const val = v.trim();
     if ((graph.group ?? "") === val) return;
+    graph.group = val;
     try {
       await data.setGraphGroup(graph.id, val);
-      await reload();
     } catch (err) {
       toast.error("Couldn't save group", { description: String(err) });
     }
@@ -1655,10 +1690,9 @@
     }
   }
   async function toggleEnabled(g: Graph, enabled: boolean) {
-    g.enabled = enabled; // optimistic — reflect the flip instantly
+    g.enabled = enabled; // optimistic — reflect the flip instantly; no reload (would wipe canvas)
     try {
       await data.setGraphEnabled(g.id, enabled);
-      await reload();
     } catch (err) {
       g.enabled = !enabled; // roll back on failure
       toast.error("Couldn't update", { description: String(err) });
@@ -1668,7 +1702,6 @@
     g.run_orphans = run_orphans; // optimistic
     try {
       await data.setGraphRunOrphans(g.id, run_orphans);
-      await reload();
     } catch (err) {
       g.run_orphans = !run_orphans; // roll back on failure
       toast.error("Couldn't update", { description: String(err) });
@@ -1678,7 +1711,6 @@
     g.debug = debug; // optimistic
     try {
       await data.setGraphDebug(g.id, debug);
-      await reload();
     } catch (err) {
       g.debug = !debug; // roll back on failure
       toast.error("Couldn't update", { description: String(err) });
@@ -1760,12 +1792,23 @@
     return "QueueSingle" in c ? c.QueueSingle.max_queued : c.Concurrent.max_concurrent;
   }
   async function applyTrigger(g: Graph, kind: string, everySecs: number) {
-    await data.setGraphTrigger(g.id, kind, everySecs);
-    await reload();
+    // Trigger persists immediately (its own endpoint); reflect locally with no reload —
+    // a reload would wipe unsaved canvas edits (#122).
+    g.trigger = kind === "cron" ? { Cron: { every_secs: everySecs } } : "Manual";
+    try {
+      await data.setGraphTrigger(g.id, kind, everySecs);
+    } catch (err) {
+      toast.error("Couldn't set trigger", { description: String(err) });
+    }
   }
   async function applyConcurrency(g: Graph, kind: string, max: number) {
-    await data.setGraphConcurrency(g.id, kind, max);
-    await reload();
+    g.concurrency =
+      kind === "queue" ? { QueueSingle: { max_queued: max } } : kind === "concurrent" ? { Concurrent: { max_concurrent: max } } : "SkipIfRunning";
+    try {
+      await data.setGraphConcurrency(g.id, kind, max);
+    } catch (err) {
+      toast.error("Couldn't set concurrency", { description: String(err) });
+    }
   }
 
   // ---- node + edge ops -----------------------------------------------------
@@ -1796,33 +1839,13 @@
       cfg.variable = presetVariable.name;
       cfg.type = presetVariable.type; // bake the variable's name + type → its dynamic port
     }
-    // Optimistic: show the node NOW with a temporary (negative) id, persist in the background,
-    // then reconcile the server-assigned id. No full reload — the canvas updates instantly and we
-    // revert only if the server rejects it. (Mirrors the optimistic edge ops.)
+    // Local + instant: a real client-assigned id, no server round-trip. Persists on Save (#122).
     const g = graph;
-    const gid = graph.id;
-    const tempId = nextTempId();
-    g.nodes.push({ id: tempId, kind: slug, x, y, config: cfg } as Node);
-    selectedNodeId = tempId;
-    (async () => {
-      try {
-        const realId = await data.addNode(gid, slug, x, y);
-        // Reconcile temp → real id on the node, any wires drawn in the meantime, and selection.
-        const node = g.nodes.find((nn) => nn.id === tempId);
-        if (node) node.id = realId;
-        for (const e of g.edges) {
-          if (e.from === tempId) e.from = realId;
-          if (e.to === tempId) e.to = realId;
-        }
-        if (selectedNodeId === tempId) selectedNodeId = realId;
-        await data.setNodeConfig(gid, realId, cfg);
-      } catch (err) {
-        g.nodes = g.nodes.filter((nn) => nn.id !== tempId);
-        if (selectedNodeId === tempId) selectedNodeId = null;
-        toast.error("Couldn't add node", { description: String(err) });
-      }
-    })();
-    return tempId;
+    const id = nextNodeId(g);
+    g.nodes.push({ id, kind: slug, x, y, config: cfg } as Node);
+    selectedNodeId = id;
+    markDirty();
+    return id;
   }
 
   // ---- workflow variables (the Variables tab in the right rail) --------------
@@ -1877,13 +1900,12 @@
     const updated = { ...old, ...patch };
     graph.variables = graph.variables!.map((v, j) => (j === i ? updated : v));
     if (patch.name || patch.type) {
-      const gid = graph.id;
       for (const n of graph.nodes) {
         if ((n.kind === "get_variable" || n.kind === "set_variable") && n.config?.variable === old.name) {
-          n.config = { ...n.config, variable: updated.name, type: updated.type }; // local
-          data.setNodeConfig(gid, n.id, { variable: updated.name, type: updated.type }).catch((e) => console.error(e));
+          n.config = { ...n.config, variable: updated.name, type: updated.type }; // local; persisted on Save (#122)
         }
       }
+      markDirty();
     }
     scheduleVarSave(graph.id);
   }
@@ -1941,10 +1963,8 @@
         candidateInputs.find((p) => p.type === cp.portType) ??
         candidateInputs.find((p) => p.type === "any");
       if (matchPort) {
-        try {
-          await data.addEdge(graph.id, cp.node, cp.port, id, matchPort.name);
-          await reload();
-        } catch {}
+        graph.edges.push({ from: cp.node, from_port: cp.port, to: id, to_port: matchPort.name });
+        markDirty();
       }
     }
   }
@@ -2003,6 +2023,13 @@
       const ids = selectedIds.size ? [...selectedIds] : selectedNodeId !== null ? [selectedNodeId] : [];
       const targets = (graph?.nodes ?? []).filter((n) => ids.includes(n.id));
       if (targets.length) { e.preventDefault(); for (const t of targets) removeNode(t); }
+      return;
+    }
+
+    // Save the canvas (⌘S / Ctrl-S) — works even when armed (nothing to save then, but harmless).
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      if (dirty) void save();
       return;
     }
 
@@ -2115,9 +2142,12 @@
     }
     if (updates.length === 0) return;
     try {
-      for (const idx of removeIdx.sort((a, b) => b - a)) await data.removeEdge(graphId, idx);
-      for (const u of updates) await data.setNodeConfig(graphId, u.id, u.config);
-      await reload();
+      for (const idx of removeIdx.sort((a, b) => b - a)) g.edges.splice(idx, 1);
+      for (const u of updates) {
+        const nn = g.nodes.find((x) => x.id === u.id);
+        if (nn) nn.config = u.config;
+      }
+      markDirty();
       toast.info(`Updated ${updates.length} event node(s) to the latest payload`);
     } catch (err) {
       console.error("reconcile event nodes failed", err);
@@ -2255,15 +2285,7 @@
       const { [n.id]: _drop, ...rest } = nodeImages;
       nodeImages = rest;
     }
-    // A temp-id node hasn't been persisted yet — nothing to delete server-side.
-    if (n.id < 0) return;
-    try {
-      await data.removeNode(gid, n.id);
-    } catch (err) {
-      g.nodes.splice(nodeIdx, 0, removedNode);
-      g.edges.push(...removedEdges);
-      toast.error("Couldn't delete node", { description: String(err) });
-    }
+    markDirty(); // node + its edges already removed from local state; persists on Save (#122)
   }
   // ---- multi-node clipboard: copy / paste / duplicate the selection ---------
   function selectedNodeList(): Node[] {
@@ -2292,75 +2314,38 @@
   function deleteSelection() {
     for (const n of selectedNodeList()) removeNode(n);
   }
-  // Paste the clipboard offset from the originals, recreating internal wiring. Optimistic:
-  // nodes + wires render instantly under temp ids, persisted + reconciled in the background.
-  async function pasteClipboard() {
+  // Paste the clipboard offset from the originals, recreating internal wiring. Local —
+  // nodes + wires get client ids and render instantly; persisted on Save (#122).
+  function pasteClipboard() {
     if (!graph || editLocked || !clipboard.nodes.length) return;
     const g = graph;
-    const gid = graph.id;
     const OFFSET = 48;
-    const tempOf = new Map<number, number>();
-    const created: { tempId: number; kind: string; x: number; y: number; config: Record<string, unknown>; memoize?: boolean }[] = [];
+    const realOf = new Map<number, number>();
+    const created: number[] = [];
     for (const src of clipboard.nodes) {
-      const tempId = nextTempId();
-      tempOf.set(src.id, tempId);
-      const x = src.x + OFFSET;
-      const y = src.y + OFFSET;
+      const id = nextNodeId(g);
+      realOf.set(src.id, id);
+      created.push(id);
       const config = structuredClone(src.config) as Record<string, unknown>;
-      g.nodes.push({ id: tempId, kind: src.kind, x, y, config, memoize: src.memoize } as Node);
-      created.push({ tempId, kind: src.kind, x, y, config, memoize: src.memoize });
+      g.nodes.push({ id, kind: src.kind, x: src.x + OFFSET, y: src.y + OFFSET, config, memoize: src.memoize } as Node);
     }
-    const internal = clipboard.edges.filter((e) => tempOf.has(e.from) && tempOf.has(e.to));
-    for (const e of internal) {
-      g.edges.push({ from: tempOf.get(e.from)!, from_port: e.from_port, to: tempOf.get(e.to)!, to_port: e.to_port });
+    for (const e of clipboard.edges) {
+      if (!realOf.has(e.from) || !realOf.has(e.to)) continue; // only fully-internal wires
+      g.edges.push({ from: realOf.get(e.from)!, from_port: e.from_port, to: realOf.get(e.to)!, to_port: e.to_port });
     }
-    selectedIds = new Set(created.map((c) => c.tempId));
-    selectedNodeId = created.at(-1)?.tempId ?? null;
-    (async () => {
-      try {
-        const realOf = new Map<number, number>();
-        for (const c of created) {
-          const realId = await data.addNode(gid, c.kind, c.x, c.y);
-          realOf.set(c.tempId, realId);
-          const node = g.nodes.find((nn) => nn.id === c.tempId);
-          if (node) node.id = realId;
-          if (selectedNodeId === c.tempId) selectedNodeId = realId;
-          await data.setNodeConfig(gid, realId, c.config);
-          if (c.memoize === false) await data.setNodeMemoize(gid, realId, false);
-        }
-        selectedIds = new Set([...selectedIds].map((id) => realOf.get(id) ?? id));
-        for (const e of internal) {
-          const fromTemp = tempOf.get(e.from)!;
-          const toTemp = tempOf.get(e.to)!;
-          const from = realOf.get(fromTemp)!;
-          const to = realOf.get(toTemp)!;
-          const local = g.edges.find(
-            (le) => le.from === fromTemp && le.to === toTemp && le.from_port === e.from_port && le.to_port === e.to_port,
-          );
-          if (local) { local.from = from; local.to = to; }
-          await data.addEdge(gid, from, e.from_port, to, e.to_port);
-        }
-      } catch (err) {
-        toast.error("Couldn't paste nodes", { description: String(err) });
-      }
-    })();
+    selectedIds = new Set(created);
+    selectedNodeId = created.at(-1) ?? null;
+    markDirty();
   }
-  async function removeEdge(idx: number) {
+  function removeEdge(idx: number) {
     if (!graph || editLocked) return;
     const removed = graph.edges[idx];
     if (!removed) return;
-    const gid = graph.id;
-    // Optimistic: drop the wire locally now, persist in the background. No full
-    // reload — the canvas updates instantly and we revert only if the server says no.
+    // Local edit — the canvas updates instantly; persisted on Save (#122).
     graph.edges.splice(idx, 1);
     const vk = edgeViaKey(removed);
     if (edgeVias[vk]) { delete edgeVias[vk]; saveEdgeVias(); }
-    try {
-      await data.removeEdge(gid, idx);
-    } catch (err) {
-      graph.edges.splice(idx, 0, removed);
-      toast.error("Couldn't remove wire", { description: String(err) });
-    }
+    markDirty();
   }
   // Drop the wire feeding a node's input port so the user can fill it manually.
   async function unlinkPort(nodeId: number, port: string) {
@@ -2398,53 +2383,30 @@
       toast.info("Those pins are already wired.");
       return;
     }
-    const gid = graph.id;
     const newEdge: Edge = { from: from.node, from_port: from.port, to: node.id, to_port: port };
     pending = null;
-    // Optimistic: show the wire immediately, persist in the background. Revert if
-    // the server rejects it (e.g. type mismatch / cycle).
-    graph.edges.push(newEdge);
-    try {
-      await data.addEdge(gid, newEdge.from, newEdge.from_port, newEdge.to, newEdge.to_port);
-    } catch (err) {
-      const i = graph.edges.indexOf(newEdge);
-      if (i >= 0) graph.edges.splice(i, 1);
-      toast.error("Can't wire that", { description: String(err) });
-    }
+    graph.edges.push(newEdge); // local + instant; persists on Save (#122)
+    markDirty();
   }
-  // Update the node's config in LOCAL state instantly, then persist debounced — NO reload. The old
-  // `await reload()` re-fetched + replaced the whole graph on every change, wiping the input you were
-  // typing into (the "text disappears + UI unstable" bug). Local state is already correct; the server
-  // just needs the value eventually.
-  let nodeCfgTimer: ReturnType<typeof setTimeout> | undefined;
+  // Update the node's config in LOCAL state instantly. Nothing persists until Save (#122) — no
+  // network, no reload (the old `await reload()` on every change is what wiped your input mid-type).
   function saveNodeConfig(n: Node, config: Record<string, unknown>) {
     if (!graph) return;
     n.config = config;
-    const gid = graph.id;
-    clearTimeout(nodeCfgTimer);
-    nodeCfgTimer = setTimeout(() => {
-      data.setNodeConfig(gid, n.id, config).catch((e) => console.error("save node config", e));
-    }, 350);
+    markDirty();
   }
 
-  // Live-save a single config field as the user types: update locally at once (so the
-  // value sticks + downstream reads it without pressing Enter) and debounce the backend
-  // write (config-only, no reload — that would fight the input mid-type).
-  let cfgSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  // Live-edit a single config field as the user types: update local state instantly. Persists on
+  // Save (#122) — no per-keystroke network write.
   function liveSaveConfig(n: Node, key: string, value: unknown) {
     if (!graph) return;
-    const gid = graph.id;
     n.config = { ...n.config, [key]: value };
-    const cfg = n.config;
-    clearTimeout(cfgSaveTimer);
-    cfgSaveTimer = setTimeout(() => {
-      data.setNodeConfig(gid, n.id, cfg).catch((err) => console.error("Failed to save node config", err));
-    }, 400);
+    markDirty();
   }
-  async function saveNodeMemoize(n: Node, memoize: boolean) {
+  function saveNodeMemoize(n: Node, memoize: boolean) {
     if (!graph) return;
-    await data.setNodeMemoize(graph.id, n.id, memoize);
-    await reload();
+    n.memoize = memoize; // local + instant; persists on Save (#122)
+    markDirty();
   }
   // Pick a file via a hidden browser input. Browsers don't expose real filesystem paths,
   // so we store the file name as the literal — the edge/pod resolves the actual path/URL
@@ -2649,6 +2611,17 @@
             const en = nodeById.get(eid);
             if (en) { en.x += dx; en.y += dy; }
           }
+          // Reroute dots (wire bends) travel with the group: shift the vias of any wire whose
+          // BOTH endpoints are moving, so the lasso moves nodes + their wiring together (#123).
+          if (dx || dy) {
+            const moving = new Set<number>([drag.id, ...drag.enclosedIds]);
+            for (const edge of graph.edges) {
+              if (!moving.has(edge.from) || !moving.has(edge.to)) continue;
+              const key = edgeViaKey(edge);
+              const pts = edgeVias[key];
+              if (pts?.length) edgeVias[key] = pts.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+            }
+          }
         }
       }
     }
@@ -2691,15 +2664,9 @@
       return;
     }
     if (drag && graph) {
-      const id = drag.id;
-      const enclosedIds = drag.enclosedIds ?? [];
-      const n = graph.nodes.find((x) => x.id === id);
       drag = null;
-      if (n) await data.moveNode(graph.id, id, n.x, n.y);
-      for (const eid of enclosedIds) {
-        const en = graph.nodes.find(x => x.id === eid);
-        if (en) await data.moveNode(graph.id, eid, en.x, en.y);
-      }
+      markDirty(); // positions already updated locally during the drag; persists on Save (#122)
+      saveEdgeVias(); // capture any wire bends that traveled with a group drag (#123)
     }
   }
   // Open the add-node menu, dropping the new node at the canvas center (touch has no cursor).
@@ -2809,7 +2776,15 @@
   }
 </script>
 
-<svelte:window onkeydown={onWindowKey} />
+<svelte:window
+  onkeydown={onWindowKey}
+  onbeforeunload={(e) => {
+    if (dirty) {
+      e.preventDefault();
+      e.returnValue = ""; // triggers the browser's native "unsaved changes" prompt
+    }
+  }}
+/>
 
 <div class="h-full">
   {#if loading}
@@ -3605,8 +3580,23 @@
             </div>
           {/if}
 
-          <!-- top-center: transport + graph state (Enabled / Debug / Orphans) -->
+          <!-- top-center: save + transport + graph state (Enabled / Debug / Orphans) -->
           <div class="absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2">
+            <!-- save (canvas edits persist here; metadata persists as you type) -->
+            <div class="flex items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur">
+              <Button
+                variant="ghost"
+                size="sm"
+                class="press h-8 gap-1.5 px-2.5 {dirty ? 'bg-primary/15 text-primary hover:text-primary' : 'text-muted-foreground'}"
+                title={dirty ? "Save changes (⌘S)" : "All changes saved"}
+                disabled={saving || !dirty}
+                onclick={save}
+              >
+                {#if saving}<Busy />{:else}<Save class="size-4" />{/if}
+                <span class="text-xs font-medium">{saving ? "Saving…" : dirty ? "Save" : "Saved"}</span>
+                {#if dirty && !saving}<span class="size-1.5 rounded-full bg-primary" aria-hidden="true"></span>{/if}
+              </Button>
+            </div>
             <!-- transport -->
             <div class="flex items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur">
               <Button

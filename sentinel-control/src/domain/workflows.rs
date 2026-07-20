@@ -70,6 +70,7 @@ pub fn router() -> Router<AppState> {
         .route("/workflows/:id/run-orphans", put(set_run_orphans))
         .route("/workflows/:id/debug", put(set_debug))
         .route("/workflows/:id/run", post(run))
+        .route("/workflows/:id/graph", put(save_graph))
         .route("/workflows/:id/nodes", post(add_node))
         .route(
             "/workflows/:id/nodes/:nid",
@@ -1362,6 +1363,49 @@ async fn set_node_config(
     mutate(&st, tid, move |wf| {
         let g = wf.graph_mut(id).ok_or("graph not found")?;
         g.node_mut(nid).ok_or("node not found")?.config = config;
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The editable canvas surface for the explicit-Save flow (#122): the editor holds all node/edge/
+/// position/config edits LOCALLY and writes the whole graph in one shot on Save. Replaces the
+/// canvas fields; graph METADATA (name, trigger, enabled, concurrency, variables, …) is preserved —
+/// those have their own controls.
+#[derive(serde::Deserialize)]
+struct GraphSave {
+    nodes: Vec<app_core::workflows::domain::GraphNode>,
+    edges: Vec<app_core::workflows::domain::Edge>,
+    #[serde(default)]
+    viewport: Option<app_core::workflows::domain::Viewport>,
+    #[serde(default)]
+    edge_vias: Option<std::collections::HashMap<String, Vec<[i32; 2]>>>,
+    #[serde(default)]
+    next_id: Option<u32>,
+}
+
+async fn save_graph(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(body): Json<GraphSave>,
+) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        let g = wf.graph_mut(id).ok_or("graph not found")?;
+        g.nodes = body.nodes;
+        g.edges = body.edges;
+        if let Some(vp) = body.viewport {
+            g.viewport = vp;
+        }
+        if let Some(vias) = body.edge_vias {
+            g.edge_vias = vias;
+        }
+        if let Some(n) = body.next_id {
+            g.next_id = n;
+        }
         Ok(())
     })
     .await?;
