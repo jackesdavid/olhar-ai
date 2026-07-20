@@ -57,18 +57,20 @@ jobs:
         if: matrix.cross
         run: cargo install cross --git https://github.com/cross-rs/cross --locked
 
+      # sentinel-edge is a STANDALONE crate (not in the root workspace), so build it via its own
+      # manifest — a bare `-p sentinel-edge` at the repo root can't see it.
       - name: Build (cross / linux-musl)
         if: matrix.cross
-        run: cross build --release --locked --target ${{ matrix.target }} -p sentinel-edge
+        run: cross build --release --locked --manifest-path sentinel-edge/Cargo.toml --target ${{ matrix.target }}
 
       - name: Build (native / macOS)
         if: ${{ !matrix.cross }}
-        run: cargo build --release --locked --target ${{ matrix.target }} -p sentinel-edge
+        run: cargo build --release --locked --manifest-path sentinel-edge/Cargo.toml --target ${{ matrix.target }}
 
       - name: Stage asset
         run: |
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/sentinel-edge" "dist/${{ matrix.asset }}"
+          cp "sentinel-edge/target/${{ matrix.target }}/release/sentinel-edge" "dist/${{ matrix.asset }}"
 
       - uses: actions/upload-artifact@v4
         with:
