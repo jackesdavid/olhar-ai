@@ -207,10 +207,11 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
     let grab: fn(&ureq::Agent, &str, &str) -> Result<Vec<u8>, String> =
         if hd { app_core::go2rtc::frame_from_hd } else { app_core::go2rtc::frame_from };
     log::info!("frame hub[{ip}]: face capture = {} stream", if hd { "HD (main)" } else { "preview (sub)" });
-    // Resource measurement: avg grab+decode cost + fps per mode, logged every ~10s → the Logs page,
-    // so substream vs HD (±GPU decode) can be compared without touching the box.
+    // Resource measurement: go2rtc grab vs edge decode, SPLIT + logged every ~10s → the Logs page,
+    // so we can tell which dominates (grab/frame-availability latency vs decode CPU) per preview/HD.
     let mut cap_at = Instant::now();
-    let mut cap_us = 0u128;
+    let mut grab_us = 0u128;
+    let mut dec_us = 0u128;
     let mut cap_n = 0u32;
 
     while !stop.load(Ordering::Relaxed) {
@@ -224,25 +225,31 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
                 continue;
             }
         };
+        let g_us = t0.elapsed().as_micros(); // the go2rtc frame.jpeg round-trip (the grab)
+        let d0 = Instant::now();
         // The one decode. Every consumer of this camera works off the buffer it produces.
         let Some((bgr, w, h)) = decode_bgr(&jpeg) else {
             std::thread::sleep(frame_gap);
             continue;
         };
-        // Measurement: grab+decode is the capture cost we're comparing across modes.
-        cap_us += t0.elapsed().as_micros();
+        // Measurement: split the go2rtc grab from the edge JPEG→BGR decode so we see which dominates.
+        grab_us += g_us;
+        dec_us += d0.elapsed().as_micros();
         cap_n += 1;
         if cap_at.elapsed() >= Duration::from_secs(10) {
+            let n = cap_n.max(1) as f64;
             log::info!(
-                "capture[{ip}]: mode={} {}x{} avg_decode={:.1}ms {} frames ({:.1} fps)",
+                "capture[{ip}]: mode={} {}x{} grab={:.1}ms decode={:.1}ms {} frames ({:.1} fps)",
                 if hd { "HD" } else { "preview" },
                 w, h,
-                cap_us as f64 / cap_n.max(1) as f64 / 1000.0,
+                grab_us as f64 / n / 1000.0,
+                dec_us as f64 / n / 1000.0,
                 cap_n,
                 cap_n as f64 / cap_at.elapsed().as_secs_f64(),
             );
             cap_at = Instant::now();
-            cap_us = 0;
+            grab_us = 0;
+            dec_us = 0;
             cap_n = 0;
         }
 
