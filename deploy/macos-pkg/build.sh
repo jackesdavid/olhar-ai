@@ -140,9 +140,15 @@ fi
 # why an unsigned build is a dev artifact, not a release. Stapling attaches the notarization ticket
 # so the check works on a machine that's offline.
 if [ "$SIGN" = 1 ]; then
-  : "${NOTARY_PROFILE:?set NOTARY_PROFILE (xcrun notarytool store-credentials …)}"
   echo "▸ Notarizing (this takes a few minutes)…"
-  xcrun notarytool submit "$OUT" --keychain-profile "$NOTARY_PROFILE" --wait
+  # CI passes the Apple-ID creds directly (no keychain profile); a local run uses the stored profile.
+  if [ -n "${NOTARY_APPLE_ID:-}" ]; then
+    xcrun notarytool submit "$OUT" \
+      --apple-id "$NOTARY_APPLE_ID" --password "${NOTARY_APP_PW:?}" --team-id "${NOTARY_TEAM_ID:?}" --wait
+  else
+    : "${NOTARY_PROFILE:?set NOTARY_PROFILE (xcrun notarytool store-credentials …) or NOTARY_APPLE_ID/APP_PW/TEAM_ID}"
+    xcrun notarytool submit "$OUT" --keychain-profile "$NOTARY_PROFILE" --wait
+  fi
   xcrun stapler staple "$OUT"
   echo "▸ Gatekeeper verdict:"
   spctl -a -vvv -t install "$OUT" || true
