@@ -620,10 +620,9 @@
     try {
       const res = await data.labelFaces(selected.faces.map((f) => f.id), target);
       toast.success(`Labeled ${res.labeled} face${res.labeled === 1 ? "" : "s"} as ${who}`);
-      islands = islands.filter((x) => x.key !== selected!.key);
       selected = null; query = "";
       if (target.newPersonName) people = await data.listPeople();
-      dirty = true;
+      await recluster(true); // membership changed → recompute the similarity islands
     } catch (e) {
       toast.error("Couldn't label", { description: String(e) });
     } finally {
@@ -639,9 +638,8 @@
     try {
       const res = await data.deleteFaces(selected.faces.map((f) => f.id));
       toast.success(`Deleted ${res.deleted} face${res.deleted === 1 ? "" : "s"}`);
-      islands = islands.filter((x) => x.key !== selected!.key);
       selected = null; confirmDel = false;
-      dirty = true;
+      await recluster(true); // the pile changed → recompute the similarity islands
     } catch (e) {
       toast.error("Couldn't delete", { description: String(e) });
     } finally {
