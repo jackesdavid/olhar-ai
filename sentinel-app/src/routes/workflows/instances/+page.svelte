@@ -2,7 +2,7 @@
   // Instances — a full view (not a modal): a graph's live run contexts and the saved value of every
   // node in each. Master/detail: pick an instance on the left, read its per-node values on the right.
   // Card #95. Graph selected via ?graph=<id>&name=<name>.
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
   import { toast } from "svelte-sonner";
@@ -24,7 +24,13 @@
   let values = $state<InstanceValues | null>(null);
   let valuesLoading = $state(false);
 
-  onMount(load);
+  onMount(() => {
+    load();
+    // Live view: poll while the page is open so a new camera's instance (and a running window
+    // closing) shows up on its own. Silent — no spinner flip, no toast on transient failure.
+    const timer = setInterval(() => void refresh(), 4000);
+    onDestroy(() => clearInterval(timer));
+  });
   async function load() {
     if (!graphId) {
       loading = false;
@@ -40,6 +46,22 @@
       toast.error("Couldn't load instances", { description: String(err) });
     } finally {
       loading = false;
+    }
+  }
+  // Background refresh: refetch the list (and the open instance's values) without disturbing the
+  // current selection or flashing a loader. Swallows transient errors — the next tick retries.
+  async function refresh() {
+    if (!graphId || document.hidden) return;
+    try {
+      instances = await data.listInstances(graphId);
+      if (selected && !instances.some((i) => i.instance_key === selected)) {
+        selected = null;
+        values = null;
+      } else if (selected) {
+        values = await data.getInstanceValues(graphId, selected);
+      }
+    } catch {
+      /* transient — next tick retries */
     }
   }
   async function select(key: string) {

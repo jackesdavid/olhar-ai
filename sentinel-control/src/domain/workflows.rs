@@ -18,8 +18,8 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use app_core::workflows::{
-    self, ConcurrencyPolicy, Graph as WfGraph, NodeKind as WfNodeKind, Trigger, VariableDecl,
-    Viewport, Workflows,
+    self, ConcurrencyPolicy, Graph as WfGraph, InstanceScope, NodeKind as WfNodeKind, Trigger,
+    VariableDecl, Viewport, Workflows,
 };
 
 use super::{blocking, err, tenant_of, ApiErr};
@@ -63,6 +63,7 @@ pub fn router() -> Router<AppState> {
         .route("/workflows/:id/global", put(set_global))
         .route("/workflows/:id/trigger", put(set_trigger))
         .route("/workflows/:id/concurrency", put(set_concurrency))
+        .route("/workflows/:id/instance-scope", put(set_instance_scope))
         .route("/workflows/:id/viewport", put(set_viewport))
         .route("/workflows/:id/edge-vias", put(set_edge_vias))
         .route("/workflows/:id/variables", put(set_variables))
@@ -1161,6 +1162,35 @@ async fn set_concurrency(
             other => return Err(format!("unknown concurrency kind '{other}'")),
         };
         wf.graph_mut(id).ok_or("graph not found")?.concurrency = policy;
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct InstanceScopeReq {
+    kind: String,
+}
+
+/// Set what a graph runs one of (#95). `single` = one instance per graph (today's default);
+/// `per_camera` = one instance per camera, so two cameras record + stop independently. Scopes the
+/// concurrency gate, each latent window, and the saved value context — see [`InstanceScope`].
+async fn set_instance_scope(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<InstanceScopeReq>,
+) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "workflows.write")?;
+    let tid = tenant_of(&c)?;
+    mutate(&st, tid, move |wf| {
+        let scope = match b.kind.as_str() {
+            "single" => InstanceScope::Single,
+            "per_camera" => InstanceScope::PerCamera,
+            other => return Err(format!("unknown instance scope '{other}'")),
+        };
+        wf.graph_mut(id).ok_or("graph not found")?.instance_scope = scope;
         Ok(())
     })
     .await?;

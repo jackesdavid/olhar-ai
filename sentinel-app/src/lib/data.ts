@@ -455,6 +455,10 @@ export const data = {
   setGraphConcurrency: async (id: string, kind: string, max?: number): Promise<void> => {
     await api.put<void>(`/workflows/${id}/concurrency`, { kind, max });
   },
+  /** What a graph runs one of (#95): "single" (default) or "per_camera". */
+  setGraphInstanceScope: async (id: string, kind: string): Promise<void> => {
+    await api.put<void>(`/workflows/${id}/instance-scope`, { kind });
+  },
   setGraphEnabled: async (id: string, enabled: boolean): Promise<void> => {
     await api.put<void>(`/workflows/${id}/enabled`, { value: enabled });
   },

@@ -176,6 +176,7 @@
     enabled: boolean;
     trigger: Trigger;
     concurrency: Concurrency;
+    instance_scope?: "Single" | "PerCamera"; // what the graph runs one of (#95)
     run_orphans?: boolean;
     debug?: boolean;
     nodes: Node[];
@@ -1810,6 +1811,14 @@
       toast.error("Couldn't set concurrency", { description: String(err) });
     }
   }
+  async function applyInstanceScope(g: Graph, kind: string) {
+    g.instance_scope = kind === "per_camera" ? "PerCamera" : "Single";
+    try {
+      await data.setGraphInstanceScope(g.id, kind);
+    } catch (err) {
+      toast.error("Couldn't set instance scope", { description: String(err) });
+    }
+  }
 
   // ---- node + edge ops -----------------------------------------------------
   async function addNodeKind(slug: string, presetEvent?: string, presetVariable?: { name: string; type: string }): Promise<number | null> {
@@ -2771,8 +2780,22 @@
     { value: "queue", label: "Queue (max N)" },
     { value: "concurrent", label: "Concurrent (max N)" },
   ];
+  const INSTANCE_OPTS = [
+    { value: "single", label: "Single (one at a time)" },
+    { value: "per_camera", label: "Per camera" },
+  ];
   function labelOf(opts: { value: string; label: string }[], v: string) {
     return opts.find((o) => o.value === v)?.label ?? v;
+  }
+  // Instance scope (#95): the API sends the enum as "Single"/"PerCamera"; the selector speaks
+  // "single"/"per_camera". Default (missing) is Single — byte-for-byte the pre-instances behaviour.
+  function instanceScopeKind(g: Graph): "single" | "per_camera" {
+    return g.instance_scope === "PerCamera" ? "per_camera" : "single";
+  }
+  function instanceScopeHint(g: Graph): string {
+    return instanceScopeKind(g) === "per_camera"
+      ? "Each camera gets its own run context, window and clip — two cameras record and stop independently."
+      : "One run context per graph. Switch to Per camera if this graph records or tracks multiple cameras at once.";
   }
 </script>
 
@@ -3847,6 +3870,34 @@
                 {#if concKind(graph.concurrency) !== "skip"}
                   <Input type="number" min="1" disabled={editLocked} value={concMax(graph.concurrency)} class="h-8" onchange={(e) => applyConcurrency(graph, concKind(graph.concurrency), Number(e.currentTarget.value))} />
                 {/if}
+              </div>
+            </div>
+
+            <!-- Instance scope (#95): what this graph runs one of. Per-camera lets two cameras
+                 record + stop independently instead of colliding on one shared window. -->
+            <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">
+              <Label class="pt-2 text-xs text-muted-foreground">Instances</Label>
+              <div class="space-y-1.5">
+                <Select.Root
+                  type="single"
+                  disabled={editLocked}
+                  value={instanceScopeKind(graph)}
+                  onValueChange={(v) => applyInstanceScope(graph, v ?? "single")}
+                >
+                  <Select.Trigger class="h-8 w-full">{labelOf(INSTANCE_OPTS, instanceScopeKind(graph))}</Select.Trigger>
+                  <Select.Content>
+                    {#each INSTANCE_OPTS as o (o.value)}
+                      <Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>
+                    {/each}
+                  </Select.Content>
+                </Select.Root>
+                <p class="text-[11px] leading-snug text-muted-foreground">{instanceScopeHint(graph)}</p>
+                <button
+                  class="inline-flex items-center gap-1 text-[11px] text-primary underline-offset-2 hover:underline"
+                  onclick={() => goto(`/workflows/instances?graph=${graph.id}&name=${encodeURIComponent(graph.name)}`)}
+                >
+                  <Layers class="size-3" /> View live instances
+                </button>
               </div>
             </div>
           </div>
