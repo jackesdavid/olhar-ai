@@ -2412,10 +2412,19 @@
       toast.error("Can't wire that", { description: String(err) });
     }
   }
-  async function saveNodeConfig(n: Node, config: Record<string, unknown>) {
+  // Update the node's config in LOCAL state instantly, then persist debounced — NO reload. The old
+  // `await reload()` re-fetched + replaced the whole graph on every change, wiping the input you were
+  // typing into (the "text disappears + UI unstable" bug). Local state is already correct; the server
+  // just needs the value eventually.
+  let nodeCfgTimer: ReturnType<typeof setTimeout> | undefined;
+  function saveNodeConfig(n: Node, config: Record<string, unknown>) {
     if (!graph) return;
-    await data.setNodeConfig(graph.id, n.id, config);
-    await reload();
+    n.config = config;
+    const gid = graph.id;
+    clearTimeout(nodeCfgTimer);
+    nodeCfgTimer = setTimeout(() => {
+      data.setNodeConfig(gid, n.id, config).catch((e) => console.error("save node config", e));
+    }, 350);
   }
 
   // Live-save a single config field as the user types: update locally at once (so the
