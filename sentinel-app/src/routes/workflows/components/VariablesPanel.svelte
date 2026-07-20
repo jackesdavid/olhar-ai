@@ -67,135 +67,142 @@
     </p>
   {/if}
 
-  <div class="space-y-1">
+  <div class="space-y-1.5">
     {#each variables as v, i (i)}
-      <!-- Compact one-line card: grip · name · type · default · promote · delete. A param variable
-           gets a primary-tinted border so inputs read at a glance. -->
+      <!-- Two-line card so nothing is cramped: row 1 = grip · name (grows) · type · promote ·
+           delete; row 2 = the default value on its own full-width line. A param variable gets a
+           primary-tinted border so inputs read at a glance. -->
       <div
-        class="flex items-center gap-1.5 rounded-md border bg-elev-1 px-1 py-0.5"
+        class="flex flex-col gap-1 rounded-md border bg-elev-1 px-1.5 py-1"
         class:border-border={!v.param}
         class:border-primary={v.param}
-        class:bg-primary={false}
       >
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <span
-          class="shrink-0 cursor-grab"
-          class:cursor-not-allowed={disabled}
-          draggable={!disabled}
-          title="Drag onto the canvas → Get / Set"
-          style:color={typeColor(v.type)}
-          ondragstart={(e) => e.dataTransfer?.setData("application/x-sentinel-variable", JSON.stringify({ name: v.name, type: v.type }))}
-        >
-          <GripVertical class="size-3.5" />
-        </span>
-        <Input
-          class="h-6 w-24 min-w-0 flex-[2] border-0 bg-transparent px-1 text-[11px] shadow-none focus-visible:ring-1"
-          value={v.name}
-          disabled={disabled}
-          onchange={(e) => onEdit(i, { name: e.currentTarget.value.trim() })}
-        />
-        <select
-          class="h-6 w-[96px] shrink-0 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"
-          value={v.type}
-          disabled={disabled}
-          onchange={(e) => onEdit(i, { type: e.currentTarget.value })}
-        >
-          {#each types as t (t.value)}<option value={t.value}>{t.label}</option>{/each}
-        </select>
-        <!-- default-value editor, per type (blank = no default → the Get's type-zero) -->
-        {#if v.type === "table"}
-          <!-- a Dictionary variable references a named dictionary by id; edit/create it live -->
-          <select
-            class="h-6 w-[92px] shrink-0 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"
-            title="Referenced dictionary"
-            value={v.default ?? ""}
-            disabled={disabled}
-            onchange={(e) => onEdit(i, { default: e.currentTarget.value || null })}
+        <!-- row 1: identity + actions -->
+        <div class="flex items-center gap-1.5">
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <span
+            class="shrink-0 cursor-grab"
+            class:cursor-not-allowed={disabled}
+            draggable={!disabled}
+            title="Drag onto the canvas → Get / Set"
+            style:color={typeColor(v.type)}
+            ondragstart={(e) => e.dataTransfer?.setData("application/x-sentinel-variable", JSON.stringify({ name: v.name, type: v.type }))}
           >
-            <option value="">—</option>
-            {#each dictionaries as d (d.value)}<option value={d.value}>{d.label}</option>{/each}
+            <GripVertical class="size-3.5" />
+          </span>
+          <Input
+            class="h-6 min-w-0 flex-1 border-0 bg-transparent px-1 text-[11px] shadow-none focus-visible:ring-1"
+            value={v.name}
+            disabled={disabled}
+            onchange={(e) => onEdit(i, { name: e.currentTarget.value.trim() })}
+          />
+          <select
+            class="h-6 w-[104px] shrink-0 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"
+            value={v.type}
+            disabled={disabled}
+            onchange={(e) => onEdit(i, { type: e.currentTarget.value })}
+          >
+            {#each types as t (t.value)}<option value={t.value}>{t.label}</option>{/each}
           </select>
-          {#if v.default}
-            <Button
-              variant="ghost"
-              size="icon"
-              class="size-5 shrink-0 text-muted-foreground hover:text-foreground"
-              title="Edit this dictionary"
-              disabled={disabled}
-              onclick={() => onEditDictionary?.(i, v.default as string)}
-            >
-              <Pencil class="size-3" />
-            </Button>
-          {:else}
-            <Button
-              variant="ghost"
-              size="icon"
-              class="size-5 shrink-0 text-muted-foreground hover:text-foreground"
-              title="Create a new dictionary"
-              disabled={disabled}
-              onclick={() => onNewDictionary?.(i)}
-            >
-              <Plus class="size-3" />
-            </Button>
-          {/if}
-        {:else if DEFAULTABLE.has(v.type)}
-          {#if v.type === "bool"}
-            <select
-              class="h-6 w-[58px] shrink-0 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"
-              title="Default value"
-              value={v.default ?? ""}
-              disabled={disabled}
-              onchange={(e) => onEdit(i, { default: e.currentTarget.value || null })}
-            >
-              <option value="">—</option><option value="true">true</option><option value="false">false</option>
-            </select>
-          {:else if v.type === "camera"}
-            <select
-              class="h-6 w-[92px] shrink-0 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"
-              title="Default camera"
-              value={v.default ?? (cameras[0]?.value ?? "")}
-              disabled={disabled}
-              onchange={(e) => onEdit(i, { default: e.currentTarget.value || null })}
-            >
-              <option value="">—</option>
-              {#each cameras as c (c.value)}<option value={c.value}>{c.label}</option>{/each}
-            </select>
-          {:else if v.type === "recipient"}
-            <select
-              class="h-6 w-[92px] shrink-0 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"
-              title="Default recipient"
-              value={v.default ?? (recipients[0]?.value ?? "")}
-              disabled={disabled}
-              onchange={(e) => onEdit(i, { default: e.currentTarget.value || null })}
-            >
-              <option value="">—</option>
-              {#each recipients as r (r.value)}<option value={r.value}>{r.label}</option>{/each}
-            </select>
-          {:else}
-            <Input
-              class="h-6 w-[72px] shrink-0 border-input bg-background px-1 text-[11px]"
-              type={v.type === "num" ? "number" : "text"}
-              placeholder="default"
-              value={v.default ?? ""}
-              disabled={disabled}
-              onchange={(e) => onEdit(i, { default: e.currentTarget.value.trim() || null })}
-            />
-          {/if}
+          <!-- promote to input: the UE "expose as input" flag -->
+          <Button
+            variant="ghost"
+            size="icon"
+            class="size-5 shrink-0 {v.param ? 'text-primary' : 'text-muted-foreground/50 hover:text-foreground'}"
+            title={v.param ? "This is an input — click to make it internal" : "Promote to an input (fill it in setup)"}
+            disabled={disabled}
+            onclick={() => onEdit(i, { param: !v.param })}
+          >
+            <Star class="size-3" fill={v.param ? "currentColor" : "none"} />
+          </Button>
+          <Button variant="ghost" size="icon" class="size-5 shrink-0 text-muted-foreground hover:text-destructive" title="Delete variable" disabled={disabled} onclick={() => onRemove(i)}>
+            <Trash2 class="size-3" />
+          </Button>
+        </div>
+
+        <!-- row 2: default value on its own full-width line (blank = no default → the Get's type-zero) -->
+        {#if v.type === "table" || DEFAULTABLE.has(v.type)}
+          <div class="flex items-center gap-1.5 pl-5">
+            <span class="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">Default</span>
+            {#if v.type === "table"}
+              <!-- a Dictionary variable references a named dictionary by id; edit/create it live -->
+              <select
+                class="h-6 min-w-0 flex-1 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"
+                title="Referenced dictionary"
+                value={v.default ?? ""}
+                disabled={disabled}
+                onchange={(e) => onEdit(i, { default: e.currentTarget.value || null })}
+              >
+                <option value="">—</option>
+                {#each dictionaries as d (d.value)}<option value={d.value}>{d.label}</option>{/each}
+              </select>
+              {#if v.default}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="size-5 shrink-0 text-muted-foreground hover:text-foreground"
+                  title="Edit this dictionary"
+                  disabled={disabled}
+                  onclick={() => onEditDictionary?.(i, v.default as string)}
+                >
+                  <Pencil class="size-3" />
+                </Button>
+              {:else}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="size-5 shrink-0 text-muted-foreground hover:text-foreground"
+                  title="Create a new dictionary"
+                  disabled={disabled}
+                  onclick={() => onNewDictionary?.(i)}
+                >
+                  <Plus class="size-3" />
+                </Button>
+              {/if}
+            {:else if v.type === "bool"}
+              <select
+                class="h-6 min-w-0 flex-1 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"
+                title="Default value"
+                value={v.default ?? ""}
+                disabled={disabled}
+                onchange={(e) => onEdit(i, { default: e.currentTarget.value || null })}
+              >
+                <option value="">—</option><option value="true">true</option><option value="false">false</option>
+              </select>
+            {:else if v.type === "camera"}
+              <select
+                class="h-6 min-w-0 flex-1 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"
+                title="Default camera"
+                value={v.default ?? (cameras[0]?.value ?? "")}
+                disabled={disabled}
+                onchange={(e) => onEdit(i, { default: e.currentTarget.value || null })}
+              >
+                <option value="">—</option>
+                {#each cameras as c (c.value)}<option value={c.value}>{c.label}</option>{/each}
+              </select>
+            {:else if v.type === "recipient"}
+              <select
+                class="h-6 min-w-0 flex-1 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"
+                title="Default recipient"
+                value={v.default ?? (recipients[0]?.value ?? "")}
+                disabled={disabled}
+                onchange={(e) => onEdit(i, { default: e.currentTarget.value || null })}
+              >
+                <option value="">—</option>
+                {#each recipients as r (r.value)}<option value={r.value}>{r.label}</option>{/each}
+              </select>
+            {:else}
+              <Input
+                class="h-6 min-w-0 flex-1 border-input bg-background px-1 text-[11px]"
+                type={v.type === "num" ? "number" : "text"}
+                placeholder="default"
+                value={v.default ?? ""}
+                disabled={disabled}
+                onchange={(e) => onEdit(i, { default: e.currentTarget.value.trim() || null })}
+              />
+            {/if}
+          </div>
         {/if}
-        <!-- promote to input: the UE "expose as input" flag -->
-        <Button
-          variant="ghost"
-          size="icon"
-          class="size-5 shrink-0 {v.param ? 'text-primary' : 'text-muted-foreground/50 hover:text-foreground'}"
-          title={v.param ? "This is an input — click to make it internal" : "Promote to an input (fill it in setup)"}
-          disabled={disabled}
-          onclick={() => onEdit(i, { param: !v.param })}
-        >
-          <Star class="size-3" fill={v.param ? "currentColor" : "none"} />
-        </Button>
-        <Button variant="ghost" size="icon" class="size-5 shrink-0 text-muted-foreground hover:text-destructive" title="Delete variable" disabled={disabled} onclick={() => onRemove(i)}>
-          <Trash2 class="size-3" />
-        </Button>
       </div>
     {/each}
   </div>
