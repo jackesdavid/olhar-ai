@@ -857,7 +857,9 @@ pub fn render_face_image(jpeg: &[u8], bbox: [i64; 4], draw_box: bool) -> Option<
                 }
             }
         }
-        image::DynamicImage::ImageRgb8(rgb).write_to(&mut buf, image::ImageFormat::Jpeg).ok()?;
+        image::DynamicImage::ImageRgb8(rgb)
+            .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 95))
+            .ok()?;
     } else {
         let (bw, bh) = ((x2 - x1).max(1), (y2 - y1).max(1));
         let (mx, my) = (bw / 4, bh / 4);
@@ -866,7 +868,7 @@ pub fn render_face_image(jpeg: &[u8], bbox: [i64; 4], draw_box: bool) -> Option<
         let cx2 = (x2 + mx).clamp(cx1 + 1, iw);
         let cy2 = (y2 + my).clamp(cy1 + 1, ih);
         img.crop_imm(cx1 as u32, cy1 as u32, (cx2 - cx1) as u32, (cy2 - cy1) as u32)
-            .write_to(&mut buf, image::ImageFormat::Jpeg)
+            .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 95))
             .ok()?;
     }
     Some(buf.into_inner())
