@@ -502,7 +502,11 @@
     hero = { x: detail.from.x, y: detail.from.y, w: detail.from.s, h: detail.from.s };
     setTimeout(() => { detail = null; hero = null; }, 340);
   }
-  function toggleDetailBox() { if (detail) detail = { ...detail, box: !detail.box }; }
+  function toggleDetailBox() {
+    if (!detail) return;
+    pointsOn = false; // the points overlay is crop-space; showing the full frame must exit it
+    detail = { ...detail, box: !detail.box };
+  }
   function loadDims(url: string): Promise<{ w: number; h: number }> {
     return new Promise((resolve, reject) => {
       const im = new Image();
