@@ -95,41 +95,42 @@ fn spawn_ffmpeg(ip: &str, hd: bool) -> std::io::Result<Child> {
 fn supervise(ip: &str, hd: bool, cam: Arc<Cam>) {
     log::info!("capture-decoder[{ip}]: starting (stream={})", if hd { "HD (main)" } else { "preview (sub)" });
     let mut backoff = Duration::from_millis(500);
+    let mut fails: u32 = 0;
     loop {
+        let ran_from = Instant::now();
         match spawn_ffmpeg(ip, hd) {
             Ok(mut child) => {
-                backoff = Duration::from_millis(500); // reset on a clean spawn
                 let stdout = match child.stdout.take() {
                     Some(s) => s,
                     None => {
                         let _ = child.kill();
+                        let _ = child.wait();
+                        std::thread::sleep(backoff);
                         continue;
                     }
                 };
                 let spawn_at = Instant::now();
                 let child = Arc::new(Mutex::new(child));
                 // Watchdog: kill a wedged ffmpeg (alive but not producing) so the read below unblocks.
+                // Generous warmup (HD streams take a moment); silent (the supervisor logs the policy).
                 let wd = {
                     let (cam_w, child_w) = (Arc::clone(&cam), Arc::clone(&child));
-                    std::thread::spawn(move || {
-                        loop {
-                            std::thread::sleep(Duration::from_secs(2));
-                            let mut c = child_w.lock().unwrap();
-                            match c.try_wait() {
-                                Ok(Some(_)) => break, // exited on its own → reader will EOF
-                                Ok(None) => {
-                                    let stale = match &*cam_w.latest.lock().unwrap() {
-                                        Some((_, at)) => at.elapsed() > Duration::from_secs(6),
-                                        None => spawn_at.elapsed() > Duration::from_secs(10), // warmup grace
-                                    };
-                                    if stale {
-                                        log::warn!("capture-decoder: killing a stalled ffmpeg");
-                                        let _ = c.kill();
-                                        break;
-                                    }
+                    std::thread::spawn(move || loop {
+                        std::thread::sleep(Duration::from_secs(2));
+                        let mut c = child_w.lock().unwrap();
+                        match c.try_wait() {
+                            Ok(Some(_)) => break, // exited on its own → reader will EOF
+                            Ok(None) => {
+                                let stale = match &*cam_w.latest.lock().unwrap() {
+                                    Some((_, at)) => at.elapsed() > Duration::from_secs(8),
+                                    None => spawn_at.elapsed() > Duration::from_secs(20),
+                                };
+                                if stale {
+                                    let _ = c.kill();
+                                    break;
                                 }
-                                Err(_) => break,
                             }
+                            Err(_) => break,
                         }
                     })
                 };
@@ -140,12 +141,28 @@ fn supervise(ip: &str, hd: bool, cam: Arc<Cam>) {
                     let _ = c.wait();
                 }
                 let _ = wd.join();
-                log::warn!("capture-decoder[{ip}]: ffmpeg ended — respawning");
             }
             Err(e) => log::warn!("capture-decoder[{ip}]: ffmpeg spawn failed: {e}"),
         }
+        // Backoff policy (the fix): reset ONLY after a healthy run — a fast-dying ffmpeg must NOT reset
+        // the backoff (that was the tight-loop storm). Repeated fast failures cool down HARD so we
+        // never hammer go2rtc; the hub keeps working on the frame.jpeg fallback the whole time.
+        if ran_from.elapsed() >= Duration::from_secs(30) {
+            if fails > 0 {
+                log::info!("capture-decoder[{ip}]: recovered — streaming again");
+            }
+            backoff = Duration::from_millis(500);
+            fails = 0;
+        } else {
+            fails += 1;
+            backoff = (backoff * 2).min(Duration::from_secs(30));
+            if fails == 5 {
+                log::warn!(
+                    "capture-decoder[{ip}]: repeated ffmpeg failures — backing off to 30s (frame.jpeg fallback active)"
+                );
+            }
+        }
         std::thread::sleep(backoff);
-        backoff = (backoff * 2).min(Duration::from_secs(10)); // exponential, capped
     }
 }
 
