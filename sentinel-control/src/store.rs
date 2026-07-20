@@ -134,6 +134,9 @@ pub struct BoxRow {
     pub recording_config: Option<serde_json::Value>,
     /// Reported platform, e.g. "macOS (aarch64)" / "Bazzite (x86_64)" (heartbeat).
     pub platform: Option<String>,
+    /// Working GPU video-decode method ("vaapi"/"qsv"/"cuda"/"videotoolbox"/"v4l2m2m") or "none"
+    /// (#120) — gates HD face capture. NULL until an updated edge reports it.
+    pub hwaccel: Option<String>,
     /// Resource usage (percent 0..100), reported on the heartbeat via `X-Edge-Metrics`.
     /// `gpu_*` are null on boxes without an NVIDIA GPU. `metrics_at` = when last reported.
     pub cpu_pct: Option<i32>,
@@ -170,7 +173,7 @@ pub async fn create_box(pool: &PgPool, tenant_id: Uuid, name: &str, token_hash: 
 
 pub async fn list_boxes(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<BoxRow>> {
     sqlx::query_as::<_, BoxRow>(
-        "SELECT id, name, magicdns_host, version, last_seen, created_at, tailscale_state, ffmpeg_ok, health_at, recording_config, platform, \
+        "SELECT id, name, magicdns_host, version, last_seen, created_at, tailscale_state, ffmpeg_ok, health_at, recording_config, platform, hwaccel, \
                 cpu_pct, mem_pct, disk_pct, gpu_pct, gpu_mem_pct, metrics_at \
          FROM tenant_boxes WHERE tenant_id = $1 ORDER BY name",
     )
@@ -198,6 +201,7 @@ pub async fn touch_box_by_token(
     tailscale: Option<&str>,
     ffmpeg: Option<bool>,
     platform: Option<&str>,
+    hwaccel: Option<&str>,
     metrics: Option<app_core::edge_metrics::EdgeMetrics>,
 ) -> sqlx::Result<Option<Uuid>> {
     // Resource metrics ride the same heartbeat as health; absent (pushes) → COALESCE keeps prior.
@@ -225,6 +229,7 @@ pub async fn touch_box_by_token(
                 disk_pct = COALESCE($9, disk_pct),
                 gpu_pct = COALESCE($10, gpu_pct),
                 gpu_mem_pct = COALESCE($11, gpu_mem_pct),
+                hwaccel = COALESCE($12, hwaccel),
                 metrics_at = CASE WHEN $7 IS NOT NULL THEN now() ELSE metrics_at END
           WHERE token_hash = $1
         RETURNING tenant_id",
@@ -240,6 +245,7 @@ pub async fn touch_box_by_token(
     .bind(disk)
     .bind(gpu)
     .bind(gpu_mem)
+    .bind(hwaccel)
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|(t,)| t))
@@ -255,6 +261,7 @@ pub async fn touch_box_identity(
     tailscale: Option<&str>,
     ffmpeg: Option<bool>,
     platform: Option<&str>,
+    hwaccel: Option<&str>,
 ) -> sqlx::Result<Option<(Uuid, Uuid)>> {
     let row: Option<(Uuid, Uuid)> = sqlx::query_as(
         "UPDATE tenant_boxes
@@ -264,6 +271,7 @@ pub async fn touch_box_identity(
                 tailscale_state = COALESCE($4, tailscale_state),
                 ffmpeg_ok = COALESCE($5, ffmpeg_ok),
                 platform = COALESCE($6, platform),
+                hwaccel = COALESCE($7, hwaccel),
                 health_at = CASE WHEN $4 IS NOT NULL THEN now() ELSE health_at END
           WHERE token_hash = $1
         RETURNING tenant_id, id",
@@ -274,6 +282,7 @@ pub async fn touch_box_identity(
     .bind(tailscale)
     .bind(ffmpeg)
     .bind(platform)
+    .bind(hwaccel)
     .fetch_optional(pool)
     .await?;
     Ok(row)

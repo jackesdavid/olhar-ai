@@ -84,6 +84,8 @@ export type Box = {
   recording_config: RecordingConfig | null;
   /** Reported platform, e.g. "macOS (aarch64)" / "Bazzite (x86_64)" (heartbeat). */
   platform: string | null;
+  /** Working GPU video-decode method ("vaapi"/"qsv"/"cuda"/"videotoolbox"/"v4l2m2m") or "none" (#120). */
+  hwaccel: string | null;
   /** Resource usage (percent 0..100), reported on the heartbeat. `gpu_*` null without an NVIDIA GPU. */
   cpu_pct: number | null;
   mem_pct: number | null;

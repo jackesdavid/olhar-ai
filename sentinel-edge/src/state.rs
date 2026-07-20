@@ -454,6 +454,7 @@ fn linux_distro() -> Option<String> {
 fn with_health(req: ureq::Request) -> ureq::Request {
     req.set("X-Edge-Tailscale", crate::tailscale::tailscale_state())
         .set("X-Edge-Ffmpeg", if ffmpeg_ok() { "1" } else { "0" })
+        .set("X-Edge-Hwaccel", crate::hwaccel::detect())
         .set("X-Edge-Platform", platform())
         // Resource usage (CPU/mem/disk/GPU) as compact ASCII JSON — sampled off-thread.
         .set("X-Edge-Metrics", &crate::metrics::header_value())

@@ -146,6 +146,10 @@
     if (s === "offline") return "border-destructive/30 bg-destructive/10 text-destructive";
     return "border-border bg-muted text-muted-foreground"; // disabled / unknown
   }
+  // Friendly name for a reported GPU-decode method (#120).
+  function hwLabel(m: string): string {
+    return { vaapi: "VAAPI", qsv: "QuickSync", cuda: "CUDA", videotoolbox: "VideoToolbox", v4l2m2m: "V4L2" }[m] ?? m;
+  }
   // Boxes whose Live path can't work: tailnet offline or not serving, or ffmpeg missing.
   const unhealthy = $derived(
     list.filter((b) => b.tailscale_state === "offline" || b.tailscale_state === "up" || b.ffmpeg_ok === false),
@@ -306,6 +310,15 @@
                     {#if b.platform}
                       <span class="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground" title="Reported platform (OS · arch)">
                         {b.platform}
+                      </span>
+                    {/if}
+                    {#if b.hwaccel && b.hwaccel !== "none"}
+                      <span class="inline-flex items-center rounded-full border border-foreground/30 bg-foreground/5 px-2 py-0.5 text-[10px] font-medium text-foreground" title="GPU video decode available — the box can run HD face capture (#120)">
+                        GPU decode · {hwLabel(b.hwaccel)}
+                      </span>
+                    {:else if b.hwaccel === "none"}
+                      <span class="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground" title="No GPU video decode — HD face capture would be CPU-only">
+                        CPU decode
                       </span>
                     {/if}
                     <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium {tsClass(b.tailscale_state)}" title="Tailscale state — go2rtc must be 'serving' over the tailnet for Live to work">

@@ -22,6 +22,7 @@ mod face;
 mod frames;
 mod go2rtc;
 mod http;
+mod hwaccel;
 mod logbuf;
 mod metrics;
 mod paths;
