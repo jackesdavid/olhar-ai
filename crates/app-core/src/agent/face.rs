@@ -64,6 +64,35 @@ pub fn embed_face_crop(db: &Db, tenant_id: Uuid, image_bytes: &[u8]) -> Result<V
     parse_embedding(&outcome.output)
 }
 
+/// Detect the most prominent face's 5 landmarks (eyes, nose, mouth corners) in a PRE-CROPPED face
+/// image, via the sidecar's `face_detect` op (SCRFD only — cheaper than the embed pipeline).
+/// Points are in the image's pixel coords; empty vec if the sidecar re-detected no face (common for
+/// tiny/off-angle crops). Billed like other sidecar calls. Used on-demand for the detail overlay.
+pub fn detect_landmarks(
+    db: &Db,
+    tenant_id: Uuid,
+    image_bytes: &[u8],
+) -> Result<Vec<[f32; 2]>, String> {
+    let op = "face_detect";
+    let outcome = ai_service::call(op, json!({ "image_b64": ai_service::image_b64(image_bytes) }))?;
+    crate::billing::record_ai_usage(db, tenant_id, op, outcome.delay_ms, outcome.exec_ms, true);
+    let first = outcome
+        .output
+        .get("faces")
+        .and_then(Value::as_array)
+        .and_then(|a| a.first());
+    let Some(kps) = first.and_then(|f| f.get("kps")).and_then(Value::as_array) else {
+        return Ok(vec![]);
+    };
+    Ok(kps
+        .iter()
+        .filter_map(|p| {
+            let a = p.as_array()?;
+            Some([a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32])
+        })
+        .collect())
+}
+
 /// Call the sidecar `face_detect_embed` op and meter the (billed) GPU time. Returns the raw
 /// output object; the caller decides what a missing face means.
 fn call_detect_embed(db: &Db, tenant_id: Uuid, image_bytes: &[u8]) -> Result<Value, String> {

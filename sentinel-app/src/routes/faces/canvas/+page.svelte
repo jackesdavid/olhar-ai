@@ -50,6 +50,13 @@
   let hero = $state<{ x: number; y: number; w: number; h: number } | null>(null); // animated hero-img rect
   let detailReady = $state(false); // gates the panel slide + backdrop fade
   let busyDetail = $state(false);
+  // Facial landmark overlay — on-demand 5 keypoints drawn over the crop, toggled like Context.
+  let pointsOn = $state(false);
+  let pointsBusy = $state(false);
+  let detailPoints = $state<{ pts: [number, number][]; w: number; h: number } | null>(null);
+  // Which landmark pairs to connect into the biometric constellation (InsightFace kps order:
+  // 0 right-eye, 1 left-eye, 2 nose, 3 right-mouth, 4 left-mouth).
+  const MESH: [number, number][] = [[0, 1], [0, 2], [1, 2], [2, 3], [2, 4], [3, 4]];
   let faceQuery = $state(""); // "assign to" autocomplete inside the detail
   // In-flight fly animation of a re-matched face (plain var — read by the draw loop).
   let flying: { faceId: string; x0: number; y0: number; x1: number; y1: number; t0: number; img: HTMLImageElement | null } | null = null;
@@ -311,7 +318,7 @@
   }
 
   // ---- face detail (hero) ----
-  function targetRect() { return { x: window.innerWidth - 420 + 16, y: 20, w: 388, h: 300 }; }
+  function targetRect() { return { x: window.innerWidth - 480 + 16, y: 20, w: 448, h: 356 }; }
   async function openDetail(f: { id: string; x: number; y: number }) {
     selected = null;
     const cr = canvasEl.getBoundingClientRect();
@@ -322,6 +329,7 @@
     hero = { x: from.x, y: from.y, w: from.s, h: from.s };
     detailReady = false;
     faceQuery = "";
+    pointsOn = false; detailPoints = null; // reset landmark overlay for the new face
     // two rAFs so the initial rect paints before we transition to the target
     requestAnimationFrame(() => requestAnimationFrame(() => { if (detail) { hero = targetRect(); detailReady = true; } }));
     try {
@@ -338,6 +346,37 @@
     setTimeout(() => { detail = null; hero = null; }, 340);
   }
   function toggleDetailBox() { if (detail) detail = { ...detail, box: !detail.box }; }
+  function loadDims(url: string): Promise<{ w: number; h: number }> {
+    return new Promise((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve({ w: im.naturalWidth, h: im.naturalHeight });
+      im.onerror = () => reject(new Error("image load failed"));
+      im.src = url;
+    });
+  }
+  // Toggle the on-demand landmark overlay. Points are in crop coords, so force the crop view (not
+  // the full frame). Fetches once per face; the SVG shares the crop's pixel viewBox so dots + image
+  // scale together (no manual object-cover math).
+  async function toggleDetailPoints() {
+    if (!detail) return;
+    pointsOn = !pointsOn;
+    if (!pointsOn) return;
+    if (detail.box) detail = { ...detail, box: false };
+    if (detailPoints) return;
+    pointsBusy = true;
+    try {
+      const [res, dims] = await Promise.all([
+        data.faceLandmarks(detail.id),
+        loadDims(data.faceImageUrl(detail.id, { box: false })),
+      ]);
+      detailPoints = { pts: res.landmarks, w: dims.w, h: dims.h };
+    } catch (e) {
+      detailPoints = { pts: [], w: 0, h: 0 };
+      toast.error("Couldn't detect landmarks", { description: String(e) });
+    } finally {
+      pointsBusy = false;
+    }
+  }
   function matchingMove(): Person[] {
     const q = faceQuery.trim().toLowerCase();
     return (q ? people.filter((p) => p.name.toLowerCase().includes(q)) : people).slice(0, 6);
@@ -557,19 +596,39 @@
     ></button>
 
     {#if hero}
-      <img
-        src={data.faceImageUrl(detail.id, { box: detail.box })}
-        alt="face"
-        class="pointer-events-none fixed z-40 rounded-xl object-cover shadow-2xl ring-1 ring-white/15 transition-all duration-[360ms] ease-out"
-        style="left:{hero.x}px; top:{hero.y}px; width:{hero.w}px; height:{hero.h}px"
-      />
+      {#if pointsOn && detailPoints && detailPoints.w > 0}
+        <!-- crop + landmark constellation share one pixel-space viewBox → they scale together -->
+        <svg
+          class="pointer-events-none fixed z-40 overflow-hidden rounded-xl shadow-2xl ring-1 ring-white/15"
+          style="left:{hero.x}px; top:{hero.y}px; width:{hero.w}px; height:{hero.h}px"
+          viewBox="0 0 {detailPoints.w} {detailPoints.h}"
+          preserveAspectRatio="xMidYMid slice"
+        >
+          <image href={data.faceImageUrl(detail.id, { box: false })} width={detailPoints.w} height={detailPoints.h} />
+          {#each MESH as [a, b] (a + "-" + b)}
+            {#if detailPoints.pts[a] && detailPoints.pts[b]}
+              <line x1={detailPoints.pts[a][0]} y1={detailPoints.pts[a][1]} x2={detailPoints.pts[b][0]} y2={detailPoints.pts[b][1]} stroke="rgba(125,215,255,.55)" stroke-width={Math.max(detailPoints.w, detailPoints.h) / 160} />
+            {/if}
+          {/each}
+          {#each detailPoints.pts as p (p[0] + "," + p[1])}
+            <circle cx={p[0]} cy={p[1]} r={Math.max(detailPoints.w, detailPoints.h) / 42} fill="rgba(125,215,255,.95)" stroke="white" stroke-width={Math.max(detailPoints.w, detailPoints.h) / 200} />
+          {/each}
+        </svg>
+      {:else}
+        <img
+          src={data.faceImageUrl(detail.id, { box: detail.box })}
+          alt="face"
+          class="pointer-events-none fixed z-40 rounded-xl object-cover shadow-2xl ring-1 ring-white/15 transition-all duration-[360ms] ease-out"
+          style="left:{hero.x}px; top:{hero.y}px; width:{hero.w}px; height:{hero.h}px"
+        />
+      {/if}
     {/if}
 
     <div
-      class="fixed right-0 top-0 z-30 flex h-full w-[420px] flex-col overflow-y-auto border-l border-border bg-background p-4 shadow-2xl transition-transform duration-300 ease-out"
+      class="fixed right-0 top-0 z-30 flex h-full w-[480px] flex-col overflow-y-auto border-l border-border bg-background p-4 shadow-2xl transition-transform duration-300 ease-out"
       style:transform={detailReady ? "translateX(0)" : "translateX(100%)"}
     >
-      <div style="height:308px"></div>
+      <div style="height:364px"></div>
       <div class="flex items-start justify-between gap-2">
         <div class="min-w-0">
           <p class="truncate text-lg font-semibold">
@@ -582,9 +641,14 @@
         <button class="text-muted-foreground hover:text-foreground" onclick={closeDetail} aria-label="close"><X class="size-5" /></button>
       </div>
 
-      <button class="mt-2 flex items-center gap-1.5 self-start text-xs text-muted-foreground hover:text-foreground" onclick={toggleDetailBox}>
-        <Frame class="size-3.5" /> {detail.box ? "Show face crop" : "Show full frame + box"}
-      </button>
+      <div class="mt-2 flex items-center gap-3 text-xs">
+        <button class="flex items-center gap-1.5 text-muted-foreground hover:text-foreground" onclick={toggleDetailBox}>
+          <Frame class="size-3.5" /> {detail.box ? "Show face crop" : "Show full frame + box"}
+        </button>
+        <button class="flex items-center gap-1.5 {pointsOn ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}" disabled={pointsBusy} onclick={toggleDetailPoints}>
+          <ScanFace class="size-3.5" /> {pointsBusy ? "Detecting…" : pointsOn ? "Hide points" : "Face points"}
+        </button>
+      </div>
 
       {#if detail.data}
         <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">

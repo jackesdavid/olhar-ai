@@ -23,6 +23,7 @@ pub fn router() -> Router<AppState> {
         .route("/faces/layout", get(layout))
         .route("/faces/:id/image", get(face_image))
         .route("/faces/:id/detail", get(face_detail))
+        .route("/faces/:id/landmarks", get(face_landmarks))
         .route("/faces/label", post(label))
         .route("/faces/reassign", post(reassign))
         .route("/faces/ignore", post(ignore))
@@ -162,6 +163,43 @@ async fn face_detail(
         Some(d) => Ok(Json(d)),
         None => Err(err(StatusCode::NOT_FOUND, "face not found")),
     }
+}
+
+/// On-demand facial landmarks for the detail overlay: detect the 5 keypoints on the stored CROP
+/// (in crop-pixel coords, so the client scales them straight onto the displayed thumbnail). One
+/// sidecar call per open — fine since it's a single face, not a burst. `landmarks: []` when the
+/// sidecar can't re-detect the crop.
+async fn face_landmarks(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    auth::require(&c, "persons.read")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let (image_key, crop_key, bbox) = match blocking(move || faces::crop_info(&db, tid, &id)).await? {
+        Some((Some(k), crop, bb)) => (k, crop, bb),
+        _ => return Err(err(StatusCode::NOT_FOUND, "face not found")),
+    };
+    // Prefer the pre-crop object; else crop the frame on the fly. Points are relative to this crop.
+    let crop_bytes = blocking(move || match crop_key {
+        Some(ck) => app_core::media::get(&ck),
+        None => {
+            let frame = app_core::media::get(&image_key)?;
+            match bbox {
+                Some(bb) => faces::render_face_image(&frame, bb, false)
+                    .ok_or_else(|| "crop failed".to_string()),
+                None => Ok(frame),
+            }
+        }
+    })
+    .await?
+    .map_err(|e| err(StatusCode::NOT_FOUND, e))?;
+    let db2 = st.db.clone();
+    let pts = blocking(move || app_core::agent::face::detect_landmarks(&db2, tid, &crop_bytes))
+        .await?
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, e))?;
+    Ok(Json(json!({ "landmarks": pts })))
 }
 
 #[derive(Deserialize)]

@@ -306,6 +306,9 @@ export const data = {
     api.get<FaceCluster[]>(`/faces/clusters${eps != null ? `?eps=${eps}` : ""}`),
   faceDetail: (id: string): Promise<FaceDetail> =>
     api.get<FaceDetail>(`/faces/${encodeURIComponent(id)}/detail`),
+  /** On-demand facial landmarks (5 keypoints, in the crop's pixel coords) for the detail overlay. */
+  faceLandmarks: (id: string): Promise<{ landmarks: [number, number][] }> =>
+    api.get<{ landmarks: [number, number][] }>(`/faces/${encodeURIComponent(id)}/landmarks`),
   faceLayout: (eps?: number, scope?: "unknown" | "known" | "all"): Promise<CanvasLayout> => {
     const q = new URLSearchParams();
     if (eps != null) q.set("eps", String(eps));
