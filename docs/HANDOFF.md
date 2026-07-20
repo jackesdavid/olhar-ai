@@ -42,8 +42,11 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
   - **Wire `When Event.confidence/face_ratio → Store Face`** in the "Face Test" graph (`5ef37805…`)
     so detail shows real values (currently 0 for old rows). **Quality gate** = a 4-node graph pattern
     (NumGte×2 → And → Branch before embed), NOT StoreFace config — must be added in the UI.
-  - **#3 face landmark points** in the detail (movie style) — NOT built; needs capturing the sidecar's
-    `kps` at embed time → store (new column) → draw as a Context-style toggle.
+  - ~~#3 face landmark points in the detail~~ **DONE 2026-07-19** (`b5d8753`) — shipped **on-demand**
+    instead of capture-time: `GET /faces/:id/landmarks` runs the sidecar's cheap `face_detect` on the
+    stored crop → "Face points" toggle draws the 5-keypoint constellation over the crop (one SVG,
+    shared pixel viewBox). Works for ALL existing faces, no edge/migration. Detail panel widened 420→480.
+    Verified: endpoint returns kps in ~0.9s.
   - **Canvas lasso** (Phase 3): Shift-drag a lasso, then a click at the right spot opens the **bulk
     label modal** for the enclosed faces (select-across-islands → stamp-label).
   - **Canvas cap params:** (a) **max samples per island** — cap faces rendered per island (perf/density;
