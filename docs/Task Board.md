@@ -27,8 +27,6 @@ kanban-plugin: board
 - [ ] #10 Update available — reload to get the latest version.
 - [ ] #93 Box health copy leaks internals ("tailnet", "Tailscale") to users
 	  - Plan: [[box-health-copy-no-internals]]
-- [ ] #130 Workflow node memoize off by default + Variable panel read-only
-	  - Plan: [[workflow-memoize-off-default]]
 
 
 ## ToDo
@@ -126,6 +124,8 @@ kanban-plugin: board
 ## Done
 
 **Complete**
+- [x] #130 Workflow node memoize off by default + Variable panel read-only
+	  - Plan: [[workflow-memoize-off-default]]
 - [x] #117 Face recognition pipeline — edge detect → embed → recognize → store
 	  - Plan: [[face-recognition-pipeline]]
 - [x] #115 Get Variable over-activation — fires on branches that don't use it
