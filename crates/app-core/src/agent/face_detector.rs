@@ -23,6 +23,10 @@ pub struct FaceBox {
     /// `[x1, y1, x2, y2]` in source pixels.
     pub xyxy: [f32; 4],
     pub score: f32,
+    /// The 5 facial landmarks (right eye, left eye, nose, right mouth, left mouth) in source
+    /// pixels — YuNet's `kps` output, decoded here. Threaded to the sidecar so ArcFace aligns from
+    /// these instead of re-detecting (SCRFD) inside the crop (card #122). `[[0,0];5]` if unavailable.
+    pub kps: [[f32; 2]; 5],
 }
 
 impl FaceBox {
@@ -70,6 +74,7 @@ fn run_and_decode(input: Array4<f32>, ratio: f32) -> Result<Vec<FaceBox>, String
         let cls = read(si)?;
         let obj = read(3 + si)?;
         let bbox = read(6 + si)?;
+        let kps = read(9 + si)?;
         let g = INPUT / stride;
         for idx in 0..(g * g) {
             if idx >= cls.len() || idx >= obj.len() {
@@ -89,6 +94,18 @@ fn run_and_decode(input: Array4<f32>, ratio: f32) -> Result<Vec<FaceBox>, String
             let cy = (row + bbox[b + 1]) * s;
             let w = bbox[b + 2].exp() * s;
             let h = bbox[b + 3].exp() * s;
+            // 5 landmarks: same anchor-relative decode as the box centre (linear, no exp), mapped
+            // back to source pixels. `k + 10 > kps.len()` guards a short/ragged output.
+            let k = idx * 10;
+            let mut lmk = [[0.0f32; 2]; 5];
+            if k + 10 <= kps.len() {
+                for (p, pt) in lmk.iter_mut().enumerate() {
+                    *pt = [
+                        (col + kps[k + 2 * p]) * s / ratio,
+                        (row + kps[k + 2 * p + 1]) * s / ratio,
+                    ];
+                }
+            }
             dets.push(FaceBox {
                 score,
                 xyxy: [
@@ -97,6 +114,7 @@ fn run_and_decode(input: Array4<f32>, ratio: f32) -> Result<Vec<FaceBox>, String
                     (cx + w * 0.5) / ratio,
                     (cy + h * 0.5) / ratio,
                 ],
+                kps: lmk,
             });
         }
     }

@@ -5,6 +5,34 @@
 falling back to the align-free `face_embed`. Aligned embeddings tighten every downstream distance
 (recognition margin, cluster purity, dedup) at once — the single highest-ROI quality lever.
 
+## Reconnaissance findings (2026-07-20 — grounds the steps below)
+- **The edge already computes `kps` and discards it.** `crates/app-core/src/agent/face_detector.rs`
+  runs YuNet with 12 outputs incl. `kps` (g·g·10 = 5 pts × xy) at output index **`9+si`**, but
+  `run_and_decode` only reads cls/obj/bbox and `FaceBox` keeps just `xyxy`+`score`. So this is
+  *surface it*, not *compute it* — decode `kps` (linear, like the bbox centre: `(grid+Δ)·stride/ratio`)
+  and carry it on `FaceBox` (stays `Copy`; `[[f32;2];5]`).
+- **Non-regressive rollout.** `run_face_embedding` (`workflows/node/vision.rs:165`) crops to bbox and
+  calls `embed_face_crop`, which already falls back to align-free `face_embed` when kps/SCRFD miss. So
+  the app-core plumbing can land first; **absent kps → existing fallback → zero behavior change** until
+  the edge emits kps AND the sidecar aligns from it.
+- **Coordinate translation is the fiddly bit.** The edge emits kps in SOURCE-frame pixels;
+  `run_face_embedding` crops to bbox+30% margin (`crop_to_bbox`, vision.rs:196). kps must be
+  translated into the crop's local coords (subtract crop origin) before the sidecar aligns — so
+  `crop_to_bbox` must also return the crop offset.
+- **Port + type:** `PortType`/`PortValue` live in `workflows/domain.rs` (Bbox at :56-63, Embedding at
+  :58 — the pattern to copy). `face_detected` is registered in `workflows/repo.rs:461 system_events()`
+  (entry :483). Sidecar bridge is `agent/face.rs` — `face_embed` op currently takes only `image_b64`.
+
+## Slices (revised, in build order)
+- **A — app-core plumbing (fully cargo-checkable, non-regressive):** decode+carry kps on `FaceBox`;
+  add `PortType::Landmarks` / `PortValue::Landmarks`; register `kps` on `face_detected` + expose as a
+  When Event output port; add `embed_face_crop_aligned(kps)` in `agent/face.rs`; thread kps +
+  crop-offset through `run_face_embedding`. Dormant (fallback) until B+C. **← current slice**
+- **B — edge emit:** `FaceEvent.kps` (`sentinel-edge/src/state.rs`) + emit in `sentinel-edge/src/face.rs`
+  + control ingest. Needs the out-of-workspace edge build (OpenCV) + an edge binary re-release.
+- **C — sidecar align:** `ai/sidecar` `face_embed` accepts `kps` → InsightFace `norm_crop` from the
+  provided landmarks (buffalo_l), skipping SCRFD. Only when B+C land does the quality win activate.
+
 ## Why
 Today `Extract Face Embedding` (`crates/app-core/src/workflows/node/vision.rs::run_face_embedding`)
 calls `agent::face::embed_face_crop`, which tries the sidecar's `face_detect_embed` (SCRFD re-detect +

@@ -89,8 +89,6 @@ kanban-plugin: board
 	  - Plan: [[workflow-schedule-trigger]]
 - [ ] #121 Retire local builds — full CI/CD (build + host on GitHub)
 	  - Plan: [[retire-local-builds-ci]]
-- [ ] #122 Face embeddings — landmark-aligned (kps → face_embed)
-	  - Plan: [[face-embed-landmark-align]]
 - [ ] #126 Face quality gate — blur + pose before embed
 	  - Plan: [[face-quality-gate-upstream]]
 - [ ] #127 pgvector face kNN — HNSW index + retrieve-then-rerank
@@ -121,6 +119,8 @@ kanban-plugin: board
 	  - Plan: [[face-pipeline-hd-stream]]
 - [ ] #125 Assert L2-normalization on face embeddings at store time
 	  - Plan: [[face-embedding-l2-normalization]]
+- [ ] #122 Face embeddings — landmark-aligned (kps → face_embed)
+	  - Plan: [[face-embed-landmark-align]]
 
 
 ## Review
