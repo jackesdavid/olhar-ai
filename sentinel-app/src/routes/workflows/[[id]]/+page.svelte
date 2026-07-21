@@ -567,7 +567,7 @@
   // live references for node dropdowns + per-graph run activity (polled)
   let devices = $state<{ id?: string; ip?: string; name: string; rtsp_url?: string | null }[]>([]);
   let recipients = $state<{ label: string; enabled: boolean }[]>([]);
-  let dictionaries = $state<{ id: string; name: string }[]>([]);
+  let dictionaries = $state<{ id: string; name: string; columns: { name: string; type: string }[] }[]>([]);
   let rooms = $state<{ id: number; name: string }[]>([]);
   type Activity = {
     running: number;
@@ -737,6 +737,15 @@
   const cameraOptions = $derived(devices.map((d) => ({ value: cameraKey(d), label: d.name })));
   const recipientOptions = $derived(recipients.map((r) => ({ value: r.label, label: r.label })));
   const dictionaryOptions = $derived(dictionaries.map((d) => ({ value: d.id, label: d.name })));
+  // Column picker for the Dictionary nodes (#113): once a node's `table` points at a dictionary, the
+  // `column` field lists that dictionary's columns with their type, so you don't type names blind.
+  const CELL_TYPE_LABEL: Record<string, string> = {
+    text: "Text", num: "Number", bool: "Bool", camera: "Camera", recipient: "Recipient",
+  };
+  function columnOptions(tableId: string): { value: string; label: string }[] {
+    const cols = dictionaries.find((d) => d.id === tableId)?.columns ?? [];
+    return cols.map((c) => ({ value: c.name, label: `${c.name} · ${CELL_TYPE_LABEL[c.type] ?? c.type}` }));
+  }
 
   // Dictionary create/edit modal (opened from a Table variable row). `dictModalVar` is the
   // variable index to point at the saved dictionary once a new one is created.
@@ -1420,7 +1429,7 @@
       ]);
       devices = d;
       recipients = r;
-      dictionaries = dicts.map((x) => ({ id: x.id, name: x.name }));
+      dictionaries = dicts.map((x) => ({ id: x.id, name: x.name, columns: x.columns ?? [] }));
       rooms = (m.rooms ?? []).map((rm) => ({ id: rm.id, name: rm.name }));
     } catch (err) {
       console.error("Failed to load devices/recipients/rooms", err);
@@ -1428,7 +1437,7 @@
   }
   async function reloadDictionaries() {
     try {
-      dictionaries = (await data.listDictionaries()).map((x) => ({ id: x.id, name: x.name }));
+      dictionaries = (await data.listDictionaries()).map((x) => ({ id: x.id, name: x.name, columns: x.columns ?? [] }));
     } catch (err) {
       console.error("Failed to reload dictionaries", err);
     }
@@ -3979,6 +3988,29 @@
                             <Select.Trigger class="h-8 w-full">{rv}</Select.Trigger>
                             <Select.Content>
                               {#each recipientOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                            </Select.Content>
+                          </Select.Root>
+                        {/if}
+                      {:else if key === "column"}
+                        <!-- Dictionary column picker (#113): the node's `table` selects the dictionary,
+                             then this lists its columns WITH their type — no more typing names blind. -->
+                        {@const tid = String(selectedNode.config.table ?? "")}
+                        {@const cols = columnOptions(tid)}
+                        {#if cols.length === 0}
+                          <Input
+                            class="h-8"
+                            disabled={editLocked}
+                            placeholder="column name"
+                            value={String(selectedNode.config[key] ?? "")}
+                            onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: e.currentTarget.value })}
+                          />
+                          {#if !tid}<p class="mt-1 text-[10px] leading-snug text-muted-foreground">Pick this node's dictionary above to choose a column.</p>{/if}
+                        {:else}
+                          {@const cvc = String(selectedNode.config[key] ?? "")}
+                          <Select.Root type="single" disabled={editLocked} value={cvc} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? cvc })}>
+                            <Select.Trigger class="h-8 w-full">{cols.find((o) => o.value === cvc)?.label ?? "Pick a column"}</Select.Trigger>
+                            <Select.Content>
+                              {#each cols as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
                             </Select.Content>
                           </Select.Root>
                         {/if}
