@@ -7,6 +7,51 @@ HD frame** (no temporal mismatch, no bbox scaling). Selectable **per tenant**, a
 the edge by **GPU-accelerated H.264 decode** — gated on an **edge capability probe** so it's never
 enabled on hardware that can't actually do it.
 
+## ⏭ CURRENT STATUS & NEXT STEPS (2026-07-21) — supersedes the phase plan below
+
+The approach changed from a **per-tenant `face_capture_stream` flag + GPU decode** to a cleaner
+**per-camera stream mode (Split / Unified)**. GPU/Phase-5 is dead (measurement verdict below). The
+"unified" mode is what delivers HD faces without dual-stream contention.
+
+**Design (built):** `Device.stream_mode` ∈ `{split, unified}` (default split).
+- **Split** = today, byte-for-byte: substream for preview/motion, main for HD/recording.
+- **Unified** = `go2rtc::config_yaml` points `cam_<ip>` at **main** (and `cam_<ip>_hd` aliases main), so
+  every consumer pulls **one** camera session. The edge frame hub reads `cam_<ip>` (=main) for a unified
+  camera; motion runs on its internal 480×270 downscale; faces crop full-res. No substream is pulled →
+  no contention. Recording (reads `cam_<ip>`) records main automatically in unified.
+
+**Built + DEPLOYED (cloud side), 2026-07-21:**
+- app-core: `Device.stream_mode` + `is_unified()` (`devices/mod.rs`); repo `COLS`+insert (`devices/repo.rs`);
+  `go2rtc::config_yaml` unified branch (`go2rtc.rs`); migration **0065** `devices.stream_mode` (validated
+  on live DB).
+- edge: frame hub per-camera stream selection (`sentinel-edge/src/frames.rs` — `unified = device.is_unified()`,
+  `hd = !unified && face_capture_stream=="hd"`). **Committed, NOT released.**
+- control: persists via the existing device upsert (no new endpoint).
+- app: Settings → **Devices** (moved under a Settings sidebar group) → device detail → **Stream mode:
+  Split / Unified (HD)** selector; `types.ts` `Device.stream_mode`.
+- Commit: `c69c4d8` (cloud deployed via CI); Settings IA move `bf6d904`.
+
+**NEXT STEPS (do these to finish #120):**
+1. **Release the edge binary 0.5.51** so the running edge honours `stream_mode` (today's 0.5.50 ignores
+   it → every camera behaves as Split, which is safe). Split is unchanged so a fleet release is safe, but
+   the Unified path is **untested on real hardware**. Use the safe order to avoid the self-update loop
+   ([[edge-publish-version-check]]): **upload the 0.5.51 binaries to the VPS FIRST (release.yml on tag
+   `v0.5.51`), THEN bump `LATEST_EDGE_VERSION`** (a plain push that bumps edge `Cargo.toml` would advertise
+   0.5.51 before the binary exists → loop). No local builds — go through CI.
+2. **Test on the 192.168.1.187 box** ([[mac-edge-test-box]]): flip that camera to Unified and confirm
+   (a) faces are HD/sharp, (b) exactly **one** camera RTSP session (no `ring-rtsp` timeouts — the original
+   contention), (c) motion **still fires** (downscaled main), (d) recording + live still work.
+3. **Substream-dependent node error log** (owner asked): currently **N/A** — in the unified design nothing
+   loses the substream (motion/detection run on downscaled main), so no node breaks. Only add this guard
+   if/when a node is introduced that genuinely requires a distinct low-res substream. Documented, not built.
+4. **Optional, later:** view-only face upscaling (CodeFormer sidecar) for the canvas/triage — **never** fed
+   to the embedder (it hallucinates identity). Recapture on HD (this card) is the real fix.
+
+Everything below is the ORIGINAL plan (per-tenant selector + GPU probe) — kept for history; the
+per-device Split/Unified model above replaces the selector and the GPU work.
+
+---
+
 ## Root cause (researched 2026-07-20)
 The entire face path runs on the **substream**. The edge's per-camera frame publisher
 (`sentinel-edge/src/frames.rs:207`) grabs frames via `app_core::go2rtc::frame_from(ip)`, hardwired to
