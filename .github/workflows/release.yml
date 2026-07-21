@@ -131,6 +131,10 @@ jobs:
   release:
     name: publish release
     needs: [build, pkg]
+    # Publish the edge binaries whenever the BUILDS succeed, even if the signed macOS `.pkg` job
+    # fails (its Apple cert-import is a separate, pre-existing infra issue that must not block the
+    # Linux/raw binaries the appliances actually pull). The `.pkg` just won't be attached when it fails.
+    if: ${{ always() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
