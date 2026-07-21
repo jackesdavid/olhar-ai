@@ -398,6 +398,11 @@ pub struct FaceEvent {
     pub bbox: [i32; 4],   // xyxy
     pub confidence: f64,  // 0..100
     pub face_ratio: f64,  // face area ÷ frame area, 0..100
+    /// YuNet's 5 landmarks, FLAT `[x0,y0,x1,y1,…]` in source pixels (right/left eye, nose,
+    /// right/left mouth). Flat so it survives the cloud's generic event-payload decoder → the
+    /// `face_detected` `kps` Landmarks port → ArcFace alignment (#122). Empty if unavailable.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub kps: Vec<i32>,
     pub at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame_b64: Option<String>,

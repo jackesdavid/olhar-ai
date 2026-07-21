@@ -514,6 +514,8 @@ struct FaceIn {
     confidence: f64, // 0..100
     #[serde(default)]
     face_ratio: f64, // face area ÷ frame area, 0..100
+    #[serde(default)]
+    kps: Vec<i32>, // YuNet 5 landmarks, flat [x0,y0,…] source px (#122)
     #[allow(dead_code)]
     #[serde(default)]
     at: String,
@@ -538,6 +540,7 @@ async fn face_push(State(st): State<AppState>, headers: HeaderMap, body: Option<
         "bbox": ev.bbox, // already xyxy
         "confidence": ev.confidence.round() as i64,
         "face_ratio": ev.face_ratio.round() as i64,
+        "kps": ev.kps, // flat [x0,y0,…] → face_detected Landmarks port → ArcFace align (#122)
     });
     if let (Some(obj), Some(f)) = (payload.as_object_mut(), ev.frame_b64) {
         obj.insert("frame".to_string(), serde_json::Value::String(f));

@@ -30,11 +30,15 @@ pub fn detect_and_push(state: &Arc<AppState>, ip: &str, bgr: &[u8], (fw, fh): (u
     log::info!("face detect[{ip}]: {} face(s)", faces.len());
     for face in &faces {
         let [x1, y1, x2, y2] = face.xyxy;
+        // Flatten YuNet's 5 landmarks to `[x0,y0,x1,y1,…]` (source pixels) for the cloud align path.
+        let kps: Vec<i32> =
+            face.kps.iter().flat_map(|&[x, y]| [x.round() as i32, y.round() as i32]).collect();
         let ev = FaceEvent {
             camera_ip: ip.to_string(),
             bbox: [x1.round() as i32, y1.round() as i32, x2.round() as i32, y2.round() as i32],
             confidence: (face.score * 100.0).clamp(0.0, 100.0) as f64,
             face_ratio: (face.area() / frame_area * 100.0).clamp(0.0, 100.0) as f64,
+            kps,
             at: app_core::timeutil::now_rfc3339(),
             frame_b64: Some(frame_b64.clone()),
         };
