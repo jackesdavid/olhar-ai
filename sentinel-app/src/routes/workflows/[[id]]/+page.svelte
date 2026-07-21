@@ -32,6 +32,8 @@
   import X from "@lucide/svelte/icons/x";
   import Search from "@lucide/svelte/icons/search";
   import Copy from "@lucide/svelte/icons/copy";
+  import CopyPlus from "@lucide/svelte/icons/copy-plus";
+  import ClipboardPaste from "@lucide/svelte/icons/clipboard-paste";
   import Bookmark from "@lucide/svelte/icons/bookmark";
   import LayoutTemplate from "@lucide/svelte/icons/layout-template";
   import Table2 from "@lucide/svelte/icons/table-2";
@@ -242,7 +244,7 @@
   // Rubber-band marquee (world coords) while drag-selecting on empty canvas in move mode.
   let marquee = $state<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   // Copy/paste buffer: deep-cloned nodes (+ their internal edges) from the last copy/duplicate.
-  let clipboard: { nodes: Node[]; edges: Edge[] } = { nodes: [], edges: [] };
+  let clipboard = $state<{ nodes: Node[]; edges: Edge[] }>({ nodes: [], edges: [] });
   // Select exactly one node (replace the set); shift-click toggles instead (see onNodeSelect).
   function selectOnly(id: number) {
     selectedNodeId = id;
@@ -3742,12 +3744,30 @@
             <Button variant="ghost" size="icon" class="size-8" title="Fit to view" onclick={fitView}><Maximize class="size-4" /></Button>
           </div>
 
-          <!-- bottom-center: wiring hint -->
+          <!-- bottom-center: wiring hint · selection actions (touch-reachable) · idle hint -->
           <div class="absolute bottom-3 left-1/2 -translate-x-1/2">
             {#if pending}
               <div class="flex items-center gap-2 rounded-full border border-primary/40 bg-hud px-3 py-1 text-xs text-primary shadow-lg backdrop-blur">
                 wiring from #{pending.node}.{pending.port} — click an input port
                 <button class="text-muted-foreground transition-colors hover:text-foreground" onclick={() => (pending = null)}>cancel</button>
+              </div>
+            {:else if selectedIds.size > 0 && !editLocked}
+              <!-- Selection actions: the copy/duplicate/paste/delete shortcuts are keyboard-only,
+                   so surface them as buttons for touch (tablet has no ⌘C/⌘V/Delete). -->
+              <div class="flex items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur">
+                <span class="px-1.5 text-[11px] text-muted-foreground">{selectedIds.size} selected</span>
+                <Button variant="ghost" size="icon" class="size-8" title="Duplicate (⌘D)" onclick={() => { copySelection(); pasteClipboard(); }}>
+                  <CopyPlus class="size-4" />
+                </Button>
+                <Button variant="ghost" size="icon" class="size-8" title="Copy (⌘C)" onclick={copySelection}>
+                  <Copy class="size-4" />
+                </Button>
+                <Button variant="ghost" size="icon" class="size-8" title="Paste (⌘V)" disabled={!clipboard.nodes.length} onclick={pasteClipboard}>
+                  <ClipboardPaste class="size-4" />
+                </Button>
+                <Button variant="ghost" size="icon" class="size-8 text-muted-foreground hover:text-destructive" title="Delete selection" onclick={deleteSelection}>
+                  <Trash2 class="size-4" />
+                </Button>
               </div>
             {:else}
               <div class="rounded-full border border-border bg-hud px-3 py-1 text-[11px] text-muted-foreground shadow-lg backdrop-blur">

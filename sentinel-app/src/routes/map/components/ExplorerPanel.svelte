@@ -53,7 +53,7 @@
                   <span class="ml-auto inline-flex items-center gap-1 text-[10px] text-muted-foreground"><Cctv class="size-3" />{room.cameras.length}</span>
                 {/if}
               </button>
-              <button type="button" class="interactive rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100" title="Delete room" onclick={() => store.deleteRoom(room.id)}>
+              <button type="button" class="interactive rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100 [@media(hover:none)]:opacity-100" title="Delete room" onclick={() => store.deleteRoom(room.id)}>
                 <Trash2 class="size-3.5" />
               </button>
             </div>
@@ -63,7 +63,7 @@
                   <li class="group flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground">
                     <Cctv class="size-3 shrink-0 opacity-70" />
                     <span class="truncate">{store.deviceName(cam.ip)}</span>
-                    <button type="button" class="interactive ml-auto rounded p-0.5 opacity-0 hover:text-destructive group-hover:opacity-100" title="Unassign camera" onclick={() => { store.selectRoom(room.id); store.unassignCamera(cam.ip); }}>
+                    <button type="button" class="interactive ml-auto rounded p-0.5 opacity-0 hover:text-destructive group-hover:opacity-100 [@media(hover:none)]:opacity-100" title="Unassign camera" onclick={() => { store.selectRoom(room.id); store.unassignCamera(cam.ip); }}>
                       <Trash2 class="size-3" />
                     </button>
                   </li>
@@ -92,7 +92,7 @@
               <span class="truncate">Wall {i + 1}</span>
               <span class="ml-auto text-[10px] tabular-nums text-muted-foreground">{wallLen(wall)}m</span>
             </button>
-            <button type="button" class="interactive rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100" title="Delete wall" onclick={() => store.deleteWall(wall.id)}>
+            <button type="button" class="interactive rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100 [@media(hover:none)]:opacity-100" title="Delete wall" onclick={() => store.deleteWall(wall.id)}>
               <Trash2 class="size-3.5" />
             </button>
           </li>
@@ -116,7 +116,7 @@
               <Armchair class="size-3.5 shrink-0 opacity-70" />
               <span class="truncate">{markerName(marker.icon, marker.label)}</span>
             </button>
-            <button type="button" class="interactive rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100" title="Delete marker" onclick={() => store.deleteMarker(marker.id)}>
+            <button type="button" class="interactive rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100 [@media(hover:none)]:opacity-100" title="Delete marker" onclick={() => store.deleteMarker(marker.id)}>
               <Trash2 class="size-3.5" />
             </button>
           </li>

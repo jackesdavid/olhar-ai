@@ -163,7 +163,7 @@
               <Button
                 variant="ghost"
                 size="icon"
-                class="size-8 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+                class="size-8 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100 [@media(hover:none)]:opacity-100"
                 title="Delete dictionary table"
                 onclick={(e) => { e.stopPropagation(); remove(d); }}
               >
