@@ -177,6 +177,49 @@ The note is a normal markdown document. Recommended shape:
 - Use `Edit` against `docs/Task Board.md`. After editing, confirm to the user in one line which
   card moved and to where (e.g. "Moved 'Image node' → Review").
 
+## GitHub Project mirror (shared with the co-founder)
+
+`docs/Task Board.md` stays the **source of truth**, but the board is MIRRORED to a shared GitHub
+Project the co-founder can see: **user `jackesdavid`, Project #3 "OAI Board"**
+(`github.com/users/jackesdavid/projects/3`). **After every board edit below, also update the GitHub
+Project** so the mirror never drifts.
+
+**Stable refs** (single-select `Status` field = the columns):
+
+| Obsidian column | GitHub Status | option id |
+|---|---|---|
+| Backlog | Backlog | `f75ad846` |
+| ToDo | Ready | `61e4505c` |
+| In Progress | In progress | `47fc9ee4` |
+| Review | In review | `df73e18b` |
+| Done | Done | `98236657` |
+| Bugs | Ready (prefix title `🐛 `) | `61e4505c` |
+
+- project id `PVT_kwHOAE3EiM4BeByU` · Status field id `PVTSSF_lAHOAE3EiM4BeByUzhYe_68`.
+- **Auth first**: `gh auth switch --user jackesdavid` (the account with the `project` scope + repo
+  access; the CLI otherwise flips to `jdvlemos-fitec`, which 404s).
+
+**Targeted update — the DEFAULT for a single card** (fast, preserves the rest of the Project):
+- **`plan`** (new card → ToDo/Ready): create it and set Status.
+  ```sh
+  ID=$(gh project item-create 3 --owner jackesdavid --title "#N <title>" --format json --jq .id)
+  gh project item-edit --id "$ID" --project-id PVT_kwHOAE3EiM4BeByU \
+    --field-id PVTSSF_lAHOAE3EiM4BeByUzhYe_68 --single-select-option-id 61e4505c
+  ```
+- **`implement` / `review` / `done`** (card changes column): find the item by its `#N ` prefix
+  (exact, trailing space — so `#12 ` never matches `#120`), then set the target column's option.
+  ```sh
+  ID=$(gh project item-list 3 --owner jackesdavid --format json --limit 500 \
+       --jq '.items[] | select(.title | startswith("#N ")) | .id')
+  gh project item-edit --id "$ID" --project-id PVT_kwHOAE3EiM4BeByU \
+    --field-id PVTSSF_lAHOAE3EiM4BeByUzhYe_68 --single-select-option-id <target option id>
+  ```
+  (A card without a `#N` prefix — a few legacy ones — matches on its full title instead.)
+
+**Full resync — only for bulk reconciliation**: `python3 .claude/skills/board/sync-github-project.py`
+wipes the Project and recreates every card from `docs/Task Board.md`. ⚠️ It erases any edit made
+directly in the GitHub Project, so prefer the targeted update above for normal card moves.
+
 ## Flow recap
 
 0. `/board plan <use-case>` — read the use case, create a planned card in ToDo.
@@ -185,3 +228,6 @@ The note is a normal markdown document. Recommended shape:
 3. `/board review` — card → Review when visual/UI review begins.
 4. (you eyeball the UI, tweak if needed) …
 5. `/board done` — card → Done; don't touch it again.
+
+Every step edits `docs/Task Board.md` **and** mirrors the change to GitHub Project #3 (see §GitHub
+Project mirror) — the targeted `gh project` update, not a full resync.
