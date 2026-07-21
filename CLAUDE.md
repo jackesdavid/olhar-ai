@@ -78,10 +78,14 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
   execution in `node.rs` (same folder). Node catalog + port reference: [docs/workflow-nodes.md](docs/workflow-nodes.md).
 - **Versioning**: web app = `sentinel-app/package.json` + the footer in `routes/+layout.svelte`;
   edge = `sentinel-edge/Cargo.toml` (drives `LATEST_EDGE_VERSION` + the `v*` release tag). Bump
-  together for a release. Current: web **0.4.1**, edge **0.5.41**. The edge is **out of the
-  cargo workspace** (links native OpenCV for motion) — build it from `sentinel-edge/`.
-- **GitHub Actions is billing-blocked** — deploy locally with `task cloud-deploy`; release the
-  edge binary by building locally + scp (see [deploy ref](docs/ref/deploy.md)).
+  together for a release. Current: web **0.4.1**, edge **0.5.51**. The edge is **out of the cargo
+  workspace** and builds **pure-Rust** — motion is a pure-Rust MOG2 port (#79), detectors are
+  `tract`; **OpenCV is an optional, test-only dep** (`opencv-parity` feature), NOT linked in the
+  release build. **When you bump `sentinel-edge/Cargo.toml`, sync `sentinel-edge/Cargo.lock` too** —
+  `release.yml` builds `--locked` and fails on a stale lock (the `edge-lock-check` CI guard catches it).
+- **Ship via GitHub CI** — push/merge to `main` → `deploy.yml` (services); tag `vX.Y.Z` → `release.yml`
+  (edge binaries → Release + VPS `/ibbf/edge-dist`). Do NOT use `task cloud-deploy`/`edge-publish`
+  (see [deploy ref](docs/ref/deploy.md)).
 - **No Claude attribution** in commits/PRs (no `Co-Authored-By: Claude`, no "Generated with").
 - UI house style: keep markup logic out of templates (named helpers returning bool/string), no
   nested ternaries; monochrome ink theme (Clean White / Sentinel Noir — no brand hue,
