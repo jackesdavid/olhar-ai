@@ -8,6 +8,7 @@ name: AI sidecar image
 
 on:
   push:
+    branches: [main]  # not on v* tags — a tag push must not rebuild the sidecar (avoids the dup)
     paths:
       - "ai/sidecar/**"
       - ".github/workflows/ai-sidecar.yml"
