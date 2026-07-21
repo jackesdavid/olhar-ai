@@ -103,24 +103,36 @@ pub fn detect_landmarks(
     tenant_id: Uuid,
     image_bytes: &[u8],
 ) -> Result<Vec<[f32; 2]>, String> {
+    let img_b64 = ai_service::image_b64(image_bytes);
+    // Prefer the dense 106-point landmarks (`face_landmarks` → InsightFace `landmark_2d_106`).
+    // Fall back to the detector's 5-point `kps` (`face_detect`) on an older sidecar that doesn't
+    // know the op, so the overlay still works during a staged deploy.
+    if let Ok(outcome) = ai_service::call("face_landmarks", json!({ "image_b64": &img_b64 })) {
+        crate::billing::record_ai_usage(db, tenant_id, "face_landmarks", outcome.delay_ms, outcome.exec_ms, true);
+        return Ok(parse_points(outcome.output.get("landmarks")));
+    }
     let op = "face_detect";
-    let outcome = ai_service::call(op, json!({ "image_b64": ai_service::image_b64(image_bytes) }))?;
+    let outcome = ai_service::call(op, json!({ "image_b64": &img_b64 }))?;
     crate::billing::record_ai_usage(db, tenant_id, op, outcome.delay_ms, outcome.exec_ms, true);
     let first = outcome
         .output
         .get("faces")
         .and_then(Value::as_array)
         .and_then(|a| a.first());
-    let Some(kps) = first.and_then(|f| f.get("kps")).and_then(Value::as_array) else {
-        return Ok(vec![]);
+    Ok(parse_points(first.and_then(|f| f.get("kps"))))
+}
+
+/// Parse a JSON `[[x,y], …]` landmark array into pixel-coord points; empty on absence/shape mismatch.
+fn parse_points(v: Option<&Value>) -> Vec<[f32; 2]> {
+    let Some(arr) = v.and_then(Value::as_array) else {
+        return vec![];
     };
-    Ok(kps
-        .iter()
+    arr.iter()
         .filter_map(|p| {
             let a = p.as_array()?;
             Some([a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32])
         })
-        .collect())
+        .collect()
 }
 
 /// Call the sidecar `face_detect_embed` op and meter the (billed) GPU time. Returns the raw

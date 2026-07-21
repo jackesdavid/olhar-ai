@@ -80,8 +80,11 @@ def _face_app():
 
         ctx_id = 0 if "CUDAExecutionProvider" in ort.get_available_providers() else -1
         print(f"[ai] InsightFace ctx_id={ctx_id} ({'GPU' if ctx_id >= 0 else 'CPU'})", flush=True)
+        # `landmark_2d_106` adds the 106-point dense face-landmark model (buffalo_l ships it) so the
+        # detail-view overlay can draw a full constellation, not just the detector's 5 kps. It runs as
+        # part of `app.get()`; a few ms per face on top of detect+recognize.
         app = insightface.app.FaceAnalysis(
-            name="buffalo_l", allowed_modules=["detection", "recognition"]
+            name="buffalo_l", allowed_modules=["detection", "recognition", "landmark_2d_106"]
         )
         app.prepare(ctx_id=ctx_id, det_size=(640, 640))
         _FACE_APP = app
@@ -158,6 +161,23 @@ def face_detect(inp: dict) -> dict:
     return {"face": len(faces) > 0, "count": len(faces), "faces": faces}
 
 
+def face_landmarks(inp: dict) -> dict:
+    """Dense facial landmarks for the most prominent face — the 106-point `landmark_2d_106`
+    constellation (buffalo_l), for the detail-view overlay.
+
+    Runs the full `app.get()` pipeline (so the landmark model actually fires) and returns the
+    largest face's 106 points. Falls back to the detector's 5 `kps` if the landmark model isn't
+    present. -> { face: bool, count: int, landmarks: [[x,y]*N] } (image pixel coords)."""
+    bgr = _decode_bgr(inp)
+    faces = _face_app().get(bgr)
+    if not faces:
+        return {"face": False, "count": 0, "landmarks": []}
+    f = max(faces, key=lambda x: (x.bbox[2] - x.bbox[0]) * (x.bbox[3] - x.bbox[1]))
+    dense = getattr(f, "landmark_2d_106", None)
+    pts = _kps(dense) if dense is not None else _kps(f.kps)
+    return {"face": True, "count": len(faces), "landmarks": pts}
+
+
 def face_embed(inp: dict) -> dict:
     """Embed a face crop only — no detection (ArcFace, 512-d, L2-normalized).
 
@@ -212,6 +232,7 @@ OPS = {
     "detect_person": detect_person,
     "face_detect_embed": face_detect_embed,
     "face_detect": face_detect,
+    "face_landmarks": face_landmarks,
     "face_embed": face_embed,
     "diag": diag,
 }

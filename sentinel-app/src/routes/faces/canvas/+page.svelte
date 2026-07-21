@@ -825,6 +825,9 @@
 
     {#if hero}
       {#if pointsOn && detailPoints && detailPoints.w > 0}
+        {@const dim = Math.max(detailPoints.w, detailPoints.h)}
+        {@const dense = detailPoints.pts.length > 12}
+        {@const dotR = dim / (dense ? 240 : 110)}
         <!-- crop + landmark constellation share one pixel-space viewBox → they scale together -->
         <svg
           class="pointer-events-none fixed z-40 overflow-hidden rounded-xl shadow-2xl ring-1 ring-white/15"
@@ -833,13 +836,17 @@
           preserveAspectRatio="xMidYMid slice"
         >
           <image href={data.faceImageUrl(detail.id, { box: false })} width={detailPoints.w} height={detailPoints.h} />
-          {#each MESH as [a, b] (a + "-" + b)}
-            {#if detailPoints.pts[a] && detailPoints.pts[b]}
-              <line x1={detailPoints.pts[a][0]} y1={detailPoints.pts[a][1]} x2={detailPoints.pts[b][0]} y2={detailPoints.pts[b][1]} stroke="rgba(125,215,255,.55)" stroke-width={Math.max(detailPoints.w, detailPoints.h) / 160} />
-            {/if}
-          {/each}
+          <!-- The 5-kps constellation lines only make sense for the 5-point order; a dense
+               landmark set (106) is drawn as bare dots, movie-style. -->
+          {#if !dense}
+            {#each MESH as [a, b] (a + "-" + b)}
+              {#if detailPoints.pts[a] && detailPoints.pts[b]}
+                <line x1={detailPoints.pts[a][0]} y1={detailPoints.pts[a][1]} x2={detailPoints.pts[b][0]} y2={detailPoints.pts[b][1]} stroke="rgba(125,215,255,.3)" stroke-width={dim / 260} />
+              {/if}
+            {/each}
+          {/if}
           {#each detailPoints.pts as p (p[0] + "," + p[1])}
-            <circle cx={p[0]} cy={p[1]} r={Math.max(detailPoints.w, detailPoints.h) / 42} fill="rgba(125,215,255,.95)" stroke="white" stroke-width={Math.max(detailPoints.w, detailPoints.h) / 200} />
+            <circle cx={p[0]} cy={p[1]} r={dotR} fill="rgba(150,220,255,.55)" />
           {/each}
         </svg>
       {:else}
