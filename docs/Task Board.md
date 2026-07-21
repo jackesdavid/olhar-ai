@@ -107,8 +107,6 @@ kanban-plugin: board
 	  - Plan: [[unified-node-value-store]]
 - [ ] #102 Workflow parameterization — input vars, clone, promote, templates
 	  - Plan: [[workflow-parameterization]]
-- [ ] #113 Dictionaries — reusable typed tables + nodes
-	  - Plan: [[dictionaries-tables]]
 - [ ] #11 Update button stays loading until update completes
 	  - Plan: [[update-button-loading]]
 - [ ] #119 Faces view — cluster + bulk-label unknown faces → people
@@ -121,19 +119,21 @@ kanban-plugin: board
 
 - [ ] #83 Windows installer — signed .exe
 	  - Plan: [[edge-windows-installer]]
-- [ ] #112 Enabled / Debug / Orphans → top-of-canvas icon toggles
-	  - Plan: [[editor-toggles-top-cluster]]
-- [ ] #114 Stop Recording missing camera on DelayTrigger stop
-	  - Plan: [[stop-recording-missing-camera]]
-- [ ] #115 Get Variable over-activation — fires on branches that don't use it
-	  - Plan: [[get-variable-over-activation]]
-- [ ] #117 Face recognition pipeline — edge detect → embed → recognize → store
-	  - Plan: [[face-recognition-pipeline]]
 
 
 ## Done
 
 **Complete**
+- [x] #117 Face recognition pipeline — edge detect → embed → recognize → store
+	  - Plan: [[face-recognition-pipeline]]
+- [x] #115 Get Variable over-activation — fires on branches that don't use it
+	  - Plan: [[get-variable-over-activation]]
+- [x] #114 Stop Recording missing camera on DelayTrigger stop
+	  - Plan: [[stop-recording-missing-camera]]
+- [x] #113 Dictionaries — reusable typed tables + nodes
+	  - Plan: [[dictionaries-tables]]
+- [x] #112 Enabled / Debug / Orphans → top-of-canvas icon toggles
+	  - Plan: [[editor-toggles-top-cluster]]
 - [x] #103 Remove per-run workflow toast
 	  - Plan: [[remove-workflow-run-toast]]
 - [x] #122 Face embeddings — landmark-aligned (kps → face_embed)
