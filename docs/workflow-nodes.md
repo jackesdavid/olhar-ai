@@ -212,6 +212,14 @@ run-start snapshot; **mutate** nodes are exec passthroughs that hit the live DB 
 | **Dictionary Delete Row** | `table`*, `column`* (Text), `key`* (Text) | — | `table`, `column`, `key` | **Mutate** (atomic). Delete the first row matching `key`. | `Delete Row(cart, column=sku, key=A1)` |
 | **Dictionary Clear** | `table`* | — | `table` | **Mutate** (atomic). Remove all rows (keep the schema). | `nightly → Clear(daily_counts)` |
 
+**Build a table in-graph** (pure; no DB — compose an unsaved table and pass it along a `table` wire):
+
+| Node | Inputs | Outputs | Config | Notes | Example |
+|---|---|---|---|---|---|
+| **Dictionary Schema** | — | `schema` (**Table**) | `columns` = `[{name, type}]` | **Pure.** An inline, unsaved empty table — the seed for composing rows. `type ∈ text\|num\|bool\|camera\|recipient`. | `Dictionary Schema(cols=[day:text, open:text]) → (schema)` |
+| **Create Dictionary Row** | `schema`* (**Table**) + **one input per column** (typed by the column's cell type) | `row` (**Dictionary** colname→value) | `columns` = `[{name, type}]` | **Pure.** Dynamic inputs mirror the columns. `schema` is a structural dependency — the column list is baked into config. | `Create Dictionary Row(schema, day=Mon, open=09:00) → (row)` |
+| **Add Dictionary Row** | `table`* (**Table**), `row`* (**Dictionary**) | `table` (**Table**) | — | **Pure** (in-memory, no DB). Coerce the `row` to the `table`'s schema and append it; emit the new `table`. | `Dictionary Schema → Create Row → Add Row → (table) → Dict Row Count` |
+
 ---
 
 ## How to use events (`Emit event` / `On event`)

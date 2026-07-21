@@ -5,9 +5,12 @@
 //! nodes ignore the snapshot's rows and act on the live DB row through `dictionaries::mutate`, which
 //! takes a `SELECT … FOR UPDATE` lock — so concurrent runs mutating the same dictionary serialize,
 //! and each mutation sees the others' writes.
+use serde_json::Value;
+use uuid::Uuid;
+
 use super::{PortValue, PortValues};
 use crate::agent::tools::ToolContext;
-use crate::dictionaries::{self, Cell, Dictionary, Mutation};
+use crate::dictionaries::{self, Cell, Column, Dictionary, Mutation};
 
 /// The resolved `table` input (a dictionary snapshot). Errors clearly when unset/unwired.
 fn table<'a>(inputs: &'a PortValues, node: &str) -> Result<&'a Dictionary, String> {
@@ -110,11 +113,15 @@ pub(super) fn run_get_cell(inputs: &PortValues) -> Result<PortValues, String> {
 
 // ---- Mutate nodes (atomic; hit the live DB row under a lock) ----------------------------------
 
-fn values_in(inputs: &PortValues) -> Vec<(String, String)> {
-    match inputs.get("values") {
+fn dict_pairs_in(inputs: &PortValues, key: &str) -> Vec<(String, String)> {
+    match inputs.get(key) {
         Some(PortValue::Dict(pairs)) => pairs.clone(),
         _ => Vec::new(),
     }
+}
+
+fn values_in(inputs: &PortValues) -> Vec<(String, String)> {
+    dict_pairs_in(inputs, "values")
 }
 
 pub(super) fn run_add_row(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
@@ -167,4 +174,123 @@ pub(super) fn run_clear(inputs: &PortValues, sys: &ToolContext) -> Result<PortVa
     let dict = table(inputs, "Dictionary Clear")?;
     dictionaries::mutate(&sys.db, sys.tenant_id, dict.id, Mutation::Clear)?;
     Ok(PortValues::new())
+}
+
+// ---- Build nodes (pure; compose a table in-graph, no DB) --------------------------------------
+
+/// Parse `config.columns` (`[{name, type}]`) into the schema's columns. Malformed → empty.
+fn columns_from_config(config: &Value) -> Vec<Column> {
+    config
+        .get("columns")
+        .and_then(|v| serde_json::from_value::<Vec<Column>>(v.clone()).ok())
+        .unwrap_or_default()
+}
+
+/// Coerce any scalar `PortValue` (a column input) to its cell text. References carry their string
+/// handle (camera id / recipient label); non-scalars stringify to empty.
+fn value_to_text(v: &PortValue) -> String {
+    match v {
+        PortValue::Text(s) | PortValue::Recipient(s) => s.clone(),
+        PortValue::Num(n) => n.to_string(),
+        PortValue::Bool(b) => b.to_string(),
+        PortValue::Camera(c) => c.id.clone(),
+        _ => String::new(),
+    }
+}
+
+/// `DictSchema` — build an inline, unsaved empty table from `config.columns` → `schema` (Table).
+pub(super) fn run_schema(config: &Value) -> Result<PortValues, String> {
+    let dict = Dictionary {
+        id: Uuid::nil(),
+        name: String::new(),
+        columns: columns_from_config(config),
+        rows: Vec::new(),
+        created_at: String::new(),
+        updated_at: String::new(),
+    };
+    Ok(out(vec![("schema", PortValue::Table(dict))]))
+}
+
+/// `DictMakeRow` — build a `row` (colname→value Dictionary) from one input per configured column.
+/// The `schema` input is a structural dependency; the column list is baked in `config.columns`.
+pub(super) fn run_make_row(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
+    let pairs = columns_from_config(config)
+        .iter()
+        .map(|col| {
+            let v = inputs.get(&col.name).map(value_to_text).unwrap_or_default();
+            (col.name.clone(), v)
+        })
+        .collect();
+    Ok(out(vec![("row", PortValue::Dict(pairs))]))
+}
+
+/// `DictAppendRow` — coerce a `row` Dictionary to the `table`'s schema and append it, in memory
+/// (no DB). Outputs the new `table`.
+pub(super) fn run_append_row(inputs: &PortValues) -> Result<PortValues, String> {
+    let dict = table(inputs, "Add Dictionary Row")?;
+    let row = cells_from_named(dict, &dict_pairs_in(inputs, "row"));
+    let mut next = dict.clone();
+    dictionaries::apply(&mut next, Mutation::AddRow(row))
+        .map_err(|e| format!("Add Dictionary Row: {e}"))?;
+    Ok(out(vec![("table", PortValue::Table(next))]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dictionaries::CellType;
+    use serde_json::json;
+
+    fn pv(inputs: Vec<(&str, PortValue)>) -> PortValues {
+        inputs.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
+    }
+
+    #[test]
+    fn schema_make_append_round_trip() {
+        // 1) Build an inline schema (day: Text, open: Text, h24: Bool).
+        let config = json!({
+            "columns": [
+                { "name": "day", "type": "text" },
+                { "name": "open", "type": "text" },
+                { "name": "h24", "type": "bool" },
+            ]
+        });
+        let schema_out = run_schema(&config).unwrap();
+        let PortValue::Table(schema) = schema_out.get("schema").unwrap() else {
+            panic!("schema is not a Table");
+        };
+        assert_eq!(schema.columns.len(), 3);
+        assert_eq!(schema.columns[2].ty, CellType::Bool);
+        assert!(schema.rows.is_empty());
+
+        // 2) Make a row from per-column inputs (bool arrives as a real Bool value).
+        let make_out = run_make_row(
+            &config,
+            &pv(vec![
+                ("day", PortValue::Text("Mon".into())),
+                ("open", PortValue::Text("09:00".into())),
+                ("h24", PortValue::Bool(true)),
+            ]),
+        )
+        .unwrap();
+        let PortValue::Dict(pairs) = make_out.get("row").unwrap() else {
+            panic!("row is not a Dict");
+        };
+        assert_eq!(pairs.len(), 3);
+        assert_eq!(pairs[0], ("day".into(), "Mon".into()));
+        assert_eq!(pairs[2], ("h24".into(), "true".into()));
+
+        // 3) Append the row into the schema table → typed, coerced cells.
+        let append_out = run_append_row(&pv(vec![
+            ("table", PortValue::Table(schema.clone())),
+            ("row", make_out.get("row").unwrap().clone()),
+        ]))
+        .unwrap();
+        let PortValue::Table(table) = append_out.get("table").unwrap() else {
+            panic!("table is not a Table");
+        };
+        assert_eq!(table.rows.len(), 1);
+        assert_eq!(table.rows[0][0], Cell::Text("Mon".into()));
+        assert_eq!(table.rows[0][2], Cell::Bool(true)); // "true" coerced to a real Bool
+    }
 }

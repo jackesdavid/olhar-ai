@@ -144,7 +144,7 @@
     { value: "camera", label: "Camera" },
     { value: "recipient", label: "Recipient" },
     { value: "file", label: "File" },
-    { value: "table", label: "Dictionary" },
+    { value: "table", label: "Dictionary Table" },
   ];
   // A palette entry: a node kind, optionally pre-bound to an event name (for the
   // synthesized "On event: Foo" / "Emit event: Foo" entries).
@@ -907,7 +907,7 @@
     const payloadNames = new Set(payloadFields(selectedNode).map((f) => f.name));
     const inputs = (nk?.inputs ?? []).filter((p) => p.type !== "exec" && !payloadNames.has(p.name));
     const rows: { key: string; port: CatPort | null }[] = inputs.map((p) => ({ key: p.name, port: p }));
-    const MANAGED_KEYS: Record<string, string[]> = { string_switch: ["arms"], ai_switch: ["arms"], camera_switch: ["arms"], comment: ["width", "height"] };
+    const MANAGED_KEYS: Record<string, string[]> = { string_switch: ["arms"], ai_switch: ["arms"], camera_switch: ["arms"], comment: ["width", "height"], dict_schema: ["columns"], dict_make_row: ["columns"] };
     const managedForKind = new Set(MANAGED_KEYS[selectedNode.kind] ?? []);
     for (const key of Object.keys(nk?.default_config ?? {})) {
       if (!inputs.some((p) => p.name === key) && !managedForKind.has(key)) rows.push({ key, port: null });
@@ -972,6 +972,15 @@
       return node.kind === "get_variable"
         ? { ...k, outputs: [port] }
         : { ...k, inputs: [...k.inputs, port] };
+    }
+    // Create Dictionary Row (#113): the schema's columns (baked into config.columns when a
+    // Dictionary Schema is wired) each become a typed input, so you fill the row field by field.
+    if (node.kind === "dict_make_row") {
+      const cols = Array.isArray(node.config?.columns) ? (node.config.columns as { name: string; type: string }[]) : [];
+      const colPorts: CatPort[] = cols
+        .filter((c) => c && String(c.name).trim())
+        .map((c) => ({ name: String(c.name), type: (c.type ?? "text") as CatPort["type"], required: false }));
+      return { ...k, inputs: [...k.inputs, ...colPorts] };
     }
     // AI Extract: `value` output typed per config.type (so it wires straight into Camera/Notify) + found.
     if (node.kind === "ai_extract") {
@@ -2404,7 +2413,48 @@
     const newEdge: Edge = { from: from.node, from_port: from.port, to: node.id, to_port: port };
     pending = null;
     graph.edges.push(newEdge); // local + instant; persists on Save (#122)
+    // Create Dictionary Row (#113): wiring a Dictionary Schema into `schema` bakes its columns
+    // onto the row node so each column shows up as a typed input.
+    if (node.kind === "dict_make_row" && port === "schema") bakeSchemaOnto(node, from.node);
     markDirty();
+  }
+  // Copy a Dictionary Schema node's columns onto a Create Dictionary Row node (#113), so its
+  // per-column input ports appear (effectiveKind reads config.columns). No-op unless the source
+  // is a dict_schema.
+  function bakeSchemaOnto(makeRow: Node, sourceId: number) {
+    const src = nodeById.get(sourceId);
+    if (!src || src.kind !== "dict_schema") return;
+    const cols = Array.isArray(src.config?.columns) ? $state.snapshot(src.config.columns) : [];
+    makeRow.config = { ...makeRow.config, columns: structuredClone(cols) };
+  }
+  // ---- Dictionary Schema node: inline columns editor (#113) -----------------
+  const CELL_TYPE_OPTS = [
+    { value: "text", label: "Text" }, { value: "num", label: "Number" }, { value: "bool", label: "Bool" },
+    { value: "camera", label: "Camera" }, { value: "recipient", label: "Recipient" },
+  ];
+  function schemaCols(node: Node): { name: string; type: string }[] {
+    return Array.isArray(node.config?.columns) ? ($state.snapshot(node.config.columns) as { name: string; type: string }[]) : [];
+  }
+  // Set a schema's columns, then re-bake into every connected Create Dictionary Row so its inputs
+  // follow the schema live.
+  function setSchemaColumns(node: Node, columns: { name: string; type: string }[]) {
+    node.config = { ...node.config, columns };
+    for (const e of graph?.edges ?? []) {
+      if (e.from === node.id && e.to_port === "schema") {
+        const mr = nodeById.get(e.to);
+        if (mr && mr.kind === "dict_make_row") mr.config = { ...mr.config, columns: structuredClone(columns) };
+      }
+    }
+    markDirty();
+  }
+  function addSchemaColumn(node: Node) {
+    setSchemaColumns(node, [...schemaCols(node), { name: `col${schemaCols(node).length + 1}`, type: "text" }]);
+  }
+  function editSchemaColumn(node: Node, i: number, patch: Partial<{ name: string; type: string }>) {
+    setSchemaColumns(node, schemaCols(node).map((c, j) => (j === i ? { ...c, ...patch } : c)));
+  }
+  function removeSchemaColumn(node: Node, i: number) {
+    setSchemaColumns(node, schemaCols(node).filter((_, j) => j !== i));
   }
   // Update the node's config in LOCAL state instantly. Nothing persists until Save (#122) — no
   // network, no reload (the old `await reload()` on every change is what wiped your input mid-type).
@@ -2925,7 +2975,7 @@
         </div>
         <div class="flex items-center gap-2">
           <Button variant="outline" onclick={() => goto("/workflows/templates")}><LayoutTemplate class="size-4" /> Templates</Button>
-          <Button variant="outline" onclick={() => goto("/workflows/dictionaries")}><Table2 class="size-4" /> Dictionaries</Button>
+          <Button variant="outline" onclick={() => goto("/workflows/dictionaries")}><Table2 class="size-4" /> Dictionary Tables</Button>
           <Button onclick={createWorkflow}><Plus class="size-4" /> New workflow</Button>
         </div>
       </div>
@@ -3931,7 +3981,43 @@
                   <Trash2 class="size-3.5" />
                 </Button>
               </div>
-              {#if configRows.length === 0}
+              {#if selectedNode.kind === "dict_schema"}
+                <!-- Dictionary Schema (#113): define the columns (the plan). These become the
+                     inputs of a Create Dictionary Row wired to this schema. -->
+                <div class="space-y-1.5">
+                  <div class="flex items-center justify-between">
+                    <Label class="text-xs text-muted-foreground">Columns</Label>
+                    <Button variant="ghost" size="icon" class="size-6" title="Add column" disabled={editLocked} onclick={() => addSchemaColumn(selectedNode)}>
+                      <Plus class="size-3.5" />
+                    </Button>
+                  </div>
+                  {#each schemaCols(selectedNode) as col, i (i)}
+                    <div class="flex items-center gap-1.5">
+                      <Input
+                        class="h-7 min-w-0 flex-1 text-xs"
+                        placeholder="name"
+                        value={col.name ?? ""}
+                        disabled={editLocked}
+                        onchange={(e) => editSchemaColumn(selectedNode, i, { name: e.currentTarget.value.trim() })}
+                      />
+                      <select
+                        class="h-7 w-[92px] shrink-0 rounded border border-input bg-background px-1 text-xs disabled:opacity-50"
+                        value={col.type ?? "text"}
+                        disabled={editLocked}
+                        onchange={(e) => editSchemaColumn(selectedNode, i, { type: e.currentTarget.value })}
+                      >
+                        {#each CELL_TYPE_OPTS as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
+                      </select>
+                      <Button variant="ghost" size="icon" class="size-6 shrink-0 text-muted-foreground hover:text-destructive" title="Remove column" disabled={editLocked} onclick={() => removeSchemaColumn(selectedNode, i)}>
+                        <Trash2 class="size-3" />
+                      </Button>
+                    </div>
+                  {/each}
+                  {#if schemaCols(selectedNode).length === 0}
+                    <p class="text-[11px] leading-snug text-muted-foreground">Add columns (name + type) — they become the inputs of a Create Dictionary Row.</p>
+                  {/if}
+                </div>
+              {:else if configRows.length === 0}
                 <p class="text-xs text-muted-foreground">This node has no settings.</p>
               {:else}
                 <div class="space-y-2.5">

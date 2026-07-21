@@ -42,7 +42,7 @@
       cameras = devs.map((d) => ({ value: d.id || d.ip || d.name, label: d.name }));
       recipients = beacons.map((b) => ({ value: b.label, label: b.label }));
     } catch (err) {
-      toast.error("Couldn't load dictionaries", { description: String(err) });
+      toast.error("Couldn't load dictionary tables", { description: String(err) });
     } finally {
       loading = false;
     }
@@ -104,14 +104,14 @@
 <div class="space-y-6">
   {#if editing}
     <PageHeader
-      title={editing.id ? "Edit dictionary" : "New dictionary"}
+      title={editing.id ? "Edit dictionary table" : "New dictionary table"}
       description="Define the columns (the structure), then add rows of typed values."
       icon={Table2}
     >
       {#snippet actions()}
         <Button variant="ghost" onclick={cancelEdit}>Cancel</Button>
         <Button class="press" disabled={saveDisabled()} onclick={save}>
-          {saving ? "Saving…" : "Save dictionary"}
+          {saving ? "Saving…" : "Save dictionary table"}
         </Button>
       {/snippet}
     </PageHeader>
@@ -125,7 +125,7 @@
     </div>
   {:else}
     <PageHeader
-      title="Dictionaries"
+      title="Dictionary Tables"
       description="Reusable typed tables — reference one from a workflow variable; edit it once and every workflow sees it."
       icon={Table2}
     >
@@ -134,21 +134,21 @@
           <ArrowLeft class="size-4" /> Workflows
         </Button>
         <Button class="press" onclick={startNew}>
-          <Plus class="size-4" /> New dictionary
+          <Plus class="size-4" /> New dictionary table
         </Button>
       {/snippet}
     </PageHeader>
 
     {#if loading}
-      <Loader label="Loading dictionaries…" />
+      <Loader label="Loading dictionary tables…" />
     {:else if dicts.length === 0}
       <EmptyState
-        title="No dictionaries yet"
+        title="No dictionary tables yet"
         description="Create a typed table of values you can reference from workflow variables and mutate through graphs."
       >
         {#snippet children()}
           <Button class="press" onclick={startNew}>
-            <Plus class="size-4" /> New dictionary
+            <Plus class="size-4" /> New dictionary table
           </Button>
         {/snippet}
       </EmptyState>
@@ -164,7 +164,7 @@
                 variant="ghost"
                 size="icon"
                 class="size-8 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
-                title="Delete dictionary"
+                title="Delete dictionary table"
                 onclick={(e) => { e.stopPropagation(); remove(d); }}
               >
                 <Trash2 class="size-4" />

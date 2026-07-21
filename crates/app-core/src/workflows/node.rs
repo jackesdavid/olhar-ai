@@ -564,6 +564,10 @@ pub fn run_node(
         NodeKind::DictUpdateRow => dictionary::run_update_row(inputs, sys),
         NodeKind::DictDeleteRow => dictionary::run_delete_row(inputs, sys),
         NodeKind::DictClear => dictionary::run_clear(inputs, sys),
+        // Build nodes: pure, compose a table in-graph (no DB).
+        NodeKind::DictSchema => dictionary::run_schema(config),
+        NodeKind::DictMakeRow => dictionary::run_make_row(config, inputs),
+        NodeKind::DictAppendRow => dictionary::run_append_row(inputs),
     }
 }
 
@@ -646,7 +650,10 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::DictRowCount
         | NodeKind::DictGetRow
         | NodeKind::DictFindRow
-        | NodeKind::DictGetCell => return None,
+        | NodeKind::DictGetCell
+        | NodeKind::DictSchema
+        | NodeKind::DictMakeRow
+        | NodeKind::DictAppendRow => return None,
     };
     let secs = config_u64(config, "timeout_secs").unwrap_or(default_secs);
     if secs == 0 {
@@ -996,6 +1003,9 @@ pub fn debug_summary(
         NodeKind::DictUpdateRow => "row updated".into(),
         NodeKind::DictDeleteRow => "row deleted".into(),
         NodeKind::DictClear => "dictionary cleared".into(),
+        NodeKind::DictSchema => "schema built".into(),
+        NodeKind::DictMakeRow => "row built".into(),
+        NodeKind::DictAppendRow => "row appended".into(),
     }
 }
 

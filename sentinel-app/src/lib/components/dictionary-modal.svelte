@@ -97,7 +97,7 @@
   <Dialog.Content class="max-h-[85vh] gap-4 overflow-y-auto sm:max-w-3xl">
     <Dialog.Header>
       <Dialog.Title class="flex items-center gap-2">
-        <Table2 class="size-4" /> {dictId ? "Edit dictionary" : "New dictionary"}
+        <Table2 class="size-4" /> {dictId ? "Edit dictionary table" : "New dictionary table"}
       </Dialog.Title>
       <Dialog.Description>Define the columns, then add rows of typed values.</Dialog.Description>
     </Dialog.Header>

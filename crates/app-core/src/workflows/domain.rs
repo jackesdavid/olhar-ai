@@ -223,6 +223,44 @@ fn payload_ports(config: &Value) -> Vec<ResolvedPort> {
         .unwrap_or_default()
 }
 
+/// Map a Dictionary column's cell-type string (`text`/`num`/`bool`/`camera`/`recipient`) to the
+/// `PortType` a `DictMakeRow` column input carries. Unknown → `Text`.
+fn cell_type_to_port(ty: &str) -> PortType {
+    match ty {
+        "num" => PortType::Num,
+        "bool" => PortType::Bool,
+        "camera" => PortType::Camera,
+        "recipient" => PortType::Recipient,
+        _ => PortType::Text,
+    }
+}
+
+/// The config-derived input ports of a `DictMakeRow`: the fixed `schema` (a Table, required —
+/// structural/UI dependency) plus one optional input per configured column, typed by the column's
+/// cell type. Mirrors [`payload_ports`]: the runtime column list is baked into `config.columns`.
+fn dict_row_ports(config: &Value) -> Vec<ResolvedPort> {
+    let mut ports = vec![ResolvedPort {
+        name: "schema".to_string(),
+        ty: PortType::Table,
+        required: true,
+    }];
+    if let Some(cols) = config.get("columns").and_then(|v| v.as_array()) {
+        for c in cols {
+            let name = match c.get("name").and_then(|v| v.as_str()) {
+                Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+                _ => continue,
+            };
+            let ty = c.get("type").and_then(|v| v.as_str()).unwrap_or("text");
+            ports.push(ResolvedPort {
+                name,
+                ty: cell_type_to_port(ty),
+                required: false,
+            });
+        }
+    }
+    ports
+}
+
 /// The single typed port of a Get/Set Variable node — derived from `config.type` (the
 /// variable's declared wire type, baked into the node at create time, same as `payload_ports`
 /// bakes event fields). `required` is set true for the Set value input, false for the Get
@@ -514,6 +552,14 @@ pub enum NodeKind {
     DictDeleteRow,
     /// Dictionary (mutate): remove all rows (keep the schema). Atomic. Exec passthrough.
     DictClear,
+    /// Dictionary (build): an inline, unsaved schema — `columns` from config → an empty
+    /// `schema` Table. Pure. The seed for composing a table in-graph (no DB).
+    DictSchema,
+    /// Dictionary (build): a `row` (colname→value Dictionary) from one input per configured
+    /// column, gated on a `schema` Table (structural). Pure.
+    DictMakeRow,
+    /// Dictionary (build): append a `row` to a `table` in memory → the new `table`. Pure; no DB.
+    DictAppendRow,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -686,6 +732,18 @@ const DICT_DELETE_ROW_IN: [Port; 3] = [
     p("key", PortType::Text, true),
 ];
 const DICT_CLEAR_IN: [Port; 1] = [p("table", PortType::Table, true)];
+
+// Build nodes (compose a table in-graph, no DB). DictSchema seeds an empty typed table from its
+// config columns; DictMakeRow's per-column inputs are dynamic (see `dict_row_ports`) — this static
+// list is the fallback (just `schema`); DictAppendRow appends a `row` Dictionary to a `table`.
+const DICT_SCHEMA_OUT: [Port; 1] = [p("schema", PortType::Table, false)];
+const DICT_MAKE_ROW_IN: [Port; 1] = [p("schema", PortType::Table, true)];
+const DICT_MAKE_ROW_OUT: [Port; 1] = [p("row", PortType::Dictionary, false)];
+const DICT_APPEND_ROW_IN: [Port; 2] = [
+    p("table", PortType::Table, true),
+    p("row", PortType::Dictionary, true),
+];
+const DICT_APPEND_ROW_OUT: [Port; 1] = [p("table", PortType::Table, false)];
 
 // If: a Bool condition routes the run down one of two exec branches.
 const IF_IN: [Port; 1] = [p("condition", PortType::Bool, true)];
@@ -991,7 +1049,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 77] = [
+    pub const ALL: [NodeKind; 80] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -1069,6 +1127,9 @@ impl NodeKind {
         NodeKind::DictUpdateRow,
         NodeKind::DictDeleteRow,
         NodeKind::DictClear,
+        NodeKind::DictSchema,
+        NodeKind::DictMakeRow,
+        NodeKind::DictAppendRow,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -1153,6 +1214,9 @@ impl NodeKind {
             NodeKind::DictUpdateRow => "dict_update_row",
             NodeKind::DictDeleteRow => "dict_delete_row",
             NodeKind::DictClear => "dict_clear",
+            NodeKind::DictSchema => "dict_schema",
+            NodeKind::DictMakeRow => "dict_make_row",
+            NodeKind::DictAppendRow => "dict_append_row",
         }
     }
 
@@ -1231,15 +1295,18 @@ impl NodeKind {
             NodeKind::ReplyWithRecording => "Reply with Recording",
             NodeKind::AiSwitch => "AI Switch",
             NodeKind::AiExtract => "AI Extract",
-            NodeKind::DictRowCount => "Dictionary Row Count",
-            NodeKind::DictGetRow => "Dictionary Get Row",
-            NodeKind::DictFindRow => "Dictionary Find Row",
-            NodeKind::DictGetCell => "Dictionary Get Cell",
-            NodeKind::DictAddRow => "Dictionary Add Row",
-            NodeKind::DictSetCell => "Dictionary Set Cell",
-            NodeKind::DictUpdateRow => "Dictionary Update Row",
-            NodeKind::DictDeleteRow => "Dictionary Delete Row",
-            NodeKind::DictClear => "Dictionary Clear",
+            NodeKind::DictRowCount => "Dictionary Table Row Count",
+            NodeKind::DictGetRow => "Dictionary Table Get Row",
+            NodeKind::DictFindRow => "Dictionary Table Find Row",
+            NodeKind::DictGetCell => "Dictionary Table Get Cell",
+            NodeKind::DictAddRow => "Dictionary Table Add Row",
+            NodeKind::DictSetCell => "Dictionary Table Set Cell",
+            NodeKind::DictUpdateRow => "Dictionary Table Update Row",
+            NodeKind::DictDeleteRow => "Dictionary Table Delete Row",
+            NodeKind::DictClear => "Dictionary Table Clear",
+            NodeKind::DictSchema => "Dictionary Schema",
+            NodeKind::DictMakeRow => "Create Dictionary Row",
+            NodeKind::DictAppendRow => "Add Dictionary Row",
         }
     }
 
@@ -1312,7 +1379,10 @@ impl NodeKind {
             | NodeKind::DictSetCell
             | NodeKind::DictUpdateRow
             | NodeKind::DictDeleteRow
-            | NodeKind::DictClear => "Dictionaries",
+            | NodeKind::DictClear
+            | NodeKind::DictSchema
+            | NodeKind::DictMakeRow
+            | NodeKind::DictAppendRow => "Dictionary Tables",
         }
     }
 
@@ -1344,6 +1414,9 @@ impl NodeKind {
                 | NodeKind::DictGetRow
                 | NodeKind::DictFindRow
                 | NodeKind::DictGetCell
+                | NodeKind::DictSchema
+                | NodeKind::DictMakeRow
+                | NodeKind::DictAppendRow
         )
     }
 
@@ -1471,6 +1544,11 @@ impl NodeKind {
             NodeKind::DictUpdateRow => &DICT_UPDATE_ROW_IN,
             NodeKind::DictDeleteRow => &DICT_DELETE_ROW_IN,
             NodeKind::DictClear => &DICT_CLEAR_IN,
+            NodeKind::DictSchema => &NO_PORTS, // inputs come from config columns only
+            // DictMakeRow's inputs are dynamic (schema + one per column, see GraphNode::input_ports);
+            // this static list is the fallback = just `schema`.
+            NodeKind::DictMakeRow => &DICT_MAKE_ROW_IN,
+            NodeKind::DictAppendRow => &DICT_APPEND_ROW_IN,
         }
     }
 
@@ -1550,6 +1628,10 @@ impl NodeKind {
             | NodeKind::DictUpdateRow
             | NodeKind::DictDeleteRow
             | NodeKind::DictClear => &NO_PORTS,
+            // Build nodes: pure, emit a composed value.
+            NodeKind::DictSchema => &DICT_SCHEMA_OUT,
+            NodeKind::DictMakeRow => &DICT_MAKE_ROW_OUT,
+            NodeKind::DictAppendRow => &DICT_APPEND_ROW_OUT,
         }
     }
 
@@ -1673,6 +1755,10 @@ impl NodeKind {
             NodeKind::DictSetCell => json!({ "table": "", "row": "0", "column": "", "value": "" }),
             NodeKind::DictUpdateRow => json!({ "table": "", "column": "", "key": "", "values": {} }),
             NodeKind::DictDeleteRow => json!({ "table": "", "column": "", "key": "" }),
+            // Build nodes compose a table in-graph. `columns` = `[{name, type}]` (same shape as a
+            // Dictionary's schema); DictSchema/DictMakeRow bake it, DictAppendRow is input-only.
+            NodeKind::DictSchema | NodeKind::DictMakeRow => json!({ "columns": [] }),
+            NodeKind::DictAppendRow => json!({}),
         }
     }
 }
@@ -1714,6 +1800,8 @@ impl GraphNode {
             NodeKind::SetVariable => variable_port(&self.config, true),
             // OnEvent: camera/region inputs, only for the edge tracker's events (see the fn doc).
             NodeKind::OnEvent => on_event_input_ports(&self.config),
+            // DictMakeRow: `schema` (Table) + one input per configured column (see `dict_row_ports`).
+            NodeKind::DictMakeRow => dict_row_ports(&self.config),
             k => k.input_ports().iter().map(ResolvedPort::from).collect(),
         }
     }
