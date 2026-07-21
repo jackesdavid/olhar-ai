@@ -113,6 +113,8 @@ kanban-plugin: board
 	  - Plan: [[faces-labeling-view]]
 - [ ] #120 Face pipeline on primary (HD) stream — GPU decode + per-tenant selector
 	  - Plan: [[face-pipeline-hd-stream]]
+- [ ] #129 Tuya integration — provider + workflow nodes to control devices
+	  - Plan: [[tuya-integration]]
 
 
 ## Review

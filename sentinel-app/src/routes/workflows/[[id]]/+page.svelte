@@ -568,6 +568,7 @@
 
   // live references for node dropdowns + per-graph run activity (polled)
   let devices = $state<{ id?: string; ip?: string; name: string; rtsp_url?: string | null }[]>([]);
+  let tuyaDevices = $state<{ device_id: string; name: string; online: boolean; functions_json?: string | null }[]>([]);
   let recipients = $state<{ label: string; enabled: boolean }[]>([]);
   let dictionaries = $state<{ id: string; name: string; columns: { name: string; type: string }[] }[]>([]);
   let rooms = $state<{ id: number; name: string }[]>([]);
@@ -738,6 +739,38 @@
   const cameraKey = (d: { id?: string; ip?: string }) => d.id || d.ip || "";
   const cameraOptions = $derived(devices.map((d) => ({ value: cameraKey(d), label: d.name })));
   const recipientOptions = $derived(recipients.map((r) => ({ value: r.label, label: r.label })));
+  // Tuya smart-home device + data-point pickers (mirrors the camera picker: bind by the stable
+  // device_id, label is the current name). The value widget for a `code` is typed from the
+  // device's `functions_json`.
+  type TuyaFn = { code: string; type: string; values?: string };
+  const tuyaDeviceOptions = $derived(
+    tuyaDevices.map((d) => ({ value: d.device_id, label: d.online ? d.name : `${d.name} (offline)` })),
+  );
+  function tuyaFunctions(deviceId: string): TuyaFn[] {
+    const raw = tuyaDevices.find((d) => d.device_id === deviceId)?.functions_json;
+    if (!raw) return [];
+    try {
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr : [];
+    } catch {
+      return [];
+    }
+  }
+  function tuyaCodeOptions(deviceId: string): { value: string; label: string }[] {
+    return tuyaFunctions(deviceId).map((f) => ({ value: f.code, label: f.code }));
+  }
+  function tuyaFunction(deviceId: string, code: string): TuyaFn | undefined {
+    return tuyaFunctions(deviceId).find((f) => f.code === code);
+  }
+  function tuyaEnumRange(fn?: TuyaFn): string[] {
+    if (!fn?.values) return [];
+    try {
+      const v = JSON.parse(fn.values);
+      return Array.isArray(v.range) ? v.range : [];
+    } catch {
+      return [];
+    }
+  }
   const dictionaryOptions = $derived(dictionaries.map((d) => ({ value: d.id, label: d.name })));
   // Column picker for the Dictionary nodes (#113): once a node's `table` points at a dictionary, the
   // `column` field lists that dictionary's columns with their type, so you don't type names blind.
@@ -1432,16 +1465,18 @@
 
   async function loadRefs() {
     try {
-      const [d, r, m, dicts] = await Promise.all([
+      const [d, r, m, dicts, tuya] = await Promise.all([
         data.listDevices(),
         data.listBeacons(),
         data.loadMap(),
         data.listDictionaries().catch(() => []),
+        data.listTuyaDevices().catch(() => []),
       ]);
       devices = d;
       recipients = r;
       dictionaries = dicts.map((x) => ({ id: x.id, name: x.name, columns: x.columns ?? [] }));
       rooms = (m.rooms ?? []).map((rm) => ({ id: rm.id, name: rm.name }));
+      tuyaDevices = tuya.map((t) => ({ device_id: t.device_id, name: t.name, online: t.online, functions_json: t.functions_json }));
     } catch (err) {
       console.error("Failed to load devices/recipients/rooms", err);
     }
@@ -1858,6 +1893,7 @@
     // synthesized event entry, pre-bind its event name.
     const cfg = { ...(catalog[slug]?.default_config ?? {}) };
     if ("camera" in cfg && devices[0]) cfg.camera = cameraKey(devices[0]); // bind by stable id (not name)
+    if ("tuya_device" in cfg && tuyaDevices[0]) cfg.tuya_device = tuyaDevices[0].device_id; // bind by stable id
     if ("recipient" in cfg && recipients[0]) cfg.recipient = recipients[0].label;
     if (presetEvent) {
       cfg.event = presetEvent;
@@ -4090,6 +4126,64 @@
                              baked onto the node and must not be edited here (editing would desync
                              the node from its declared variable + break the dynamic port type). -->
                         <Input class="h-8" value={String(selectedNode.config[key] ?? "")} disabled readonly aria-readonly="true" />
+                      {:else if key === "tuya_device"}
+                        {#if tuyaDeviceOptions.length === 0}
+                          <p class="rounded border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">
+                            No Tuya devices — sync them in Settings → Integrations.
+                          </p>
+                        {:else}
+                          {@const tv = String(selectedNode.config[key] ?? "")}
+                          {@const tlabel = tuyaDeviceOptions.find((o) => o.value === tv)?.label ?? "Select a device"}
+                          <Select.Root type="single" disabled={editLocked} value={tv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? tv, tuya_code: "" })}>
+                            <Select.Trigger class="h-8 w-full">{tlabel}</Select.Trigger>
+                            <Select.Content>
+                              {#each tuyaDeviceOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                            </Select.Content>
+                          </Select.Root>
+                        {/if}
+                      {:else if key === "tuya_code"}
+                        {@const tdev = String(selectedNode.config["tuya_device"] ?? "")}
+                        {@const copts = tuyaCodeOptions(tdev)}
+                        {#if copts.length === 0}
+                          <p class="rounded border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">
+                            Pick a device first, or re-sync to load its controls.
+                          </p>
+                        {:else}
+                          {@const cvv = String(selectedNode.config[key] ?? "")}
+                          {@const clbl = copts.find((o) => o.value === cvv)?.label ?? "Select a control"}
+                          <Select.Root type="single" disabled={editLocked} value={cvv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? cvv })}>
+                            <Select.Trigger class="h-8 w-full">{clbl}</Select.Trigger>
+                            <Select.Content>
+                              {#each copts as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                            </Select.Content>
+                          </Select.Root>
+                        {/if}
+                      {:else if key === "value" && selectedNode.kind === "tuya_control"}
+                        {@const tdev = String(selectedNode.config["tuya_device"] ?? "")}
+                        {@const tfn = tuyaFunction(tdev, String(selectedNode.config["tuya_code"] ?? ""))}
+                        {#if tfn?.type === "Boolean"}
+                          <div class="flex items-center gap-2">
+                            <Switch
+                              disabled={editLocked}
+                              checked={selectedNode.config[key] === true || selectedNode.config[key] === "true"}
+                              onCheckedChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v })}
+                            />
+                            <span class="text-xs text-muted-foreground">{selectedNode.config[key] === true || selectedNode.config[key] === "true" ? "On" : "Off"}</span>
+                          </div>
+                        {:else if tfn?.type === "Enum"}
+                          {@const range = tuyaEnumRange(tfn)}
+                          {@const ev = String(selectedNode.config[key] ?? "")}
+                          <Select.Root type="single" disabled={editLocked} value={ev} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? ev })}>
+                            <Select.Trigger class="h-8 w-full">{ev || "Select a value"}</Select.Trigger>
+                            <Select.Content>
+                              {#each range as r (r)}<Select.Item value={r} label={r}>{r}</Select.Item>{/each}
+                            </Select.Content>
+                          </Select.Root>
+                        {:else if tfn?.type === "Integer"}
+                          <Input type="number" class="h-8" disabled={editLocked} value={String(selectedNode.config[key] ?? "")} oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)} />
+                        {:else}
+                          <Input class="h-8" disabled={editLocked} value={String(selectedNode.config[key] ?? "")} oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)} />
+                        {/if}
                       {:else if key === "recipient" || port?.type === "recipient"}
                         {#if recipientOptions.length === 0}
                           <p class="rounded border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">

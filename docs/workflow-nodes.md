@@ -220,6 +220,19 @@ run-start snapshot; **mutate** nodes are exec passthroughs that hit the live DB 
 | **Create Dictionary Row** | `schema`* (**Table**) + **one input per column** (typed by the column's cell type) | `row` (**Dictionary** colname→value) | `columns` = `[{name, type}]` | **Pure.** Dynamic inputs mirror the columns. `schema` is a structural dependency — the column list is baked into config. | `Create Dictionary Row(schema, day=Mon, open=09:00) → (row)` |
 | **Add Dictionary Row** | `table`* (**Table**), `row`* (**Dictionary**) | `table` (**Table**) | — | **Pure** (in-memory, no DB). Coerce the `row` to the `table`'s schema and append it; emit the new `table`. | `Dictionary Schema → Create Row → Add Row → (table) → Dict Row Count` |
 
+### Smart Home (Tuya)
+
+Control smart-home devices (switches, plugs, lights) linked to the operator's single Tuya Cloud
+project. Devices are linked once (QR "Tuya App Account Authorization") and synced into the tenant's
+catalog from **Settings → Integrations**; the node dropdowns list them **by name** (stored by stable
+`device_id`). The `value` widget is typed to the chosen data point (Boolean → on/off switch, Enum →
+select, Integer → number). Credentials are operator-level (`TUYA_ACCESS_ID`/`TUYA_ACCESS_KEY` env).
+
+| Node | Inputs | Outputs | Config | Behavior | Sample usage |
+|---|---|---|---|---|---|
+| **Control Tuya Device** | — | `ok`, `response` (Text) | `tuya_device` (dropdown), `tuya_code` (data point, e.g. `switch_1`), `value` (typed to the point) | Sends one command to the device via the Tuya Cloud. Exec passes through. | `On event(motion) → Control Tuya Device(Entrada, switch_1, on)` |
+| **Read Tuya Status** | — | `value` (Text), `on` (Bool), `raw` (Text JSON) | `tuya_device`, `tuya_code` | Reads the current value of one data point (`on` is a convenience for Boolean points; `raw` is the full status). | `Read Tuya Status(Entrada, switch_1) → If(on) → …` |
+
 ---
 
 ## How to use events (`Emit event` / `On event`)

@@ -28,6 +28,7 @@
   import Wallet from "@lucide/svelte/icons/wallet";
   import Cpu from "@lucide/svelte/icons/cpu";
   import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
+  import Plug from "@lucide/svelte/icons/plug";
   import { Button } from "$lib/components/ui/button";
   import { billing } from "$lib/api";
   import { billingLock, syncFromStatus } from "$lib/billing.svelte";
@@ -282,6 +283,7 @@
           ...(hasPerm("devices.write") ? [{ label: "Edge boxes", href: "/settings/boxes", icon: HardDrive }] : []),
           ...(hasPerm("roles.manage") ? [{ label: "Roles", href: "/settings/roles", icon: ShieldCheck }] : []),
           ...(hasPerm("users.manage") ? [{ label: "Users", href: "/settings/users", icon: UsersRound }] : []),
+          ...(hasPerm("tuya.read") ? [{ label: "Integrations", href: "/settings/integrations", icon: Plug }] : []),
           ...(hasPerm("billing.read") ? [{ label: "Billing", href: "/billing", icon: Wallet }] : []),
         ],
   );
