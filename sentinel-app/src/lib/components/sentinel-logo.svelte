@@ -16,6 +16,7 @@
   let {
     size = 30,
     wordmark = true,
+    short = false,
     stacked = false,
     animated = false,
     subtitle = "",
@@ -26,6 +27,8 @@
     size?: number;
     /** Show the "Sentinel" wordmark. False = mark only. */
     wordmark?: boolean;
+    /** Compact wordmark: "OAI" instead of "OLHAR AI" (tight contexts like the sidebar rail). */
+    short?: boolean;
     /** Stack the wordmark under the mark (square contexts). */
     stacked?: boolean;
     /** Ping the mark. Off by default — a logo shouldn't animate constantly. */
@@ -60,7 +63,7 @@
   />
   {#if wordmark}
     <span class="lockup-text">
-      <span class="wordmark" style="font-size:{wm}px; letter-spacing:{tracking}">OLHAR AI</span>
+      <span class="wordmark" style="font-size:{wm}px; letter-spacing:{tracking}">{short ? "OAI" : "OLHAR AI"}</span>
       {#if subtitle}<span class="subtitle">{subtitle}</span>{/if}
     </span>
   {/if}

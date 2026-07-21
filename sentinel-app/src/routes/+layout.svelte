@@ -332,7 +332,7 @@
               <PanelLeftOpen class="size-5" />
             </button>
           {:else}
-            <SentinelLogo size={30} wordmark subtitle="Monitoring & Automation" />
+            <SentinelLogo size={24} short />
             <button
               class="interactive ml-auto rounded-md p-1 text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
               title="Collapse sidebar"
