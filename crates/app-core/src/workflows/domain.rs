@@ -560,6 +560,15 @@ pub enum NodeKind {
     DictMakeRow,
     /// Dictionary (build): append a `row` to a `table` in memory → the new `table`. Pure; no DB.
     DictAppendRow,
+    // ---- Smart home (Tuya) ----
+    /// Smart home: send one command to a linked Tuya device — pick the device + data point
+    /// (`code`, e.g. `switch_1`) from dropdowns and set a `value` typed to the point. Calls
+    /// the Tuya Cloud with the operator's project credentials. Exec passes through; outputs
+    /// `ok` + the raw `response`.
+    TuyaControl,
+    /// Smart home: read one data point's current value from a linked Tuya device → `value`
+    /// (Text), `on` (Bool convenience for Boolean points), and the full `raw` status JSON.
+    TuyaReadStatus,
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
@@ -671,6 +680,18 @@ const HTTP_POST_OUT: [Port; 3] = [
     p("status", PortType::Num, false),
     p("response", PortType::Text, false),
     p("ok", PortType::Bool, false),
+];
+
+// Smart home (Tuya): device + data point are config dropdowns (no data inputs), like the
+// camera picker on `GetCameraByName`.
+const TUYA_CONTROL_OUT: [Port; 2] = [
+    p("ok", PortType::Bool, false),
+    p("response", PortType::Text, false),
+];
+const TUYA_READ_STATUS_OUT: [Port; 3] = [
+    p("value", PortType::Text, false),
+    p("on", PortType::Bool, false),
+    p("raw", PortType::Text, false),
 ];
 
 // ---- Dictionaries (#113) ----
@@ -1049,7 +1070,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 80] = [
+    pub const ALL: [NodeKind; 82] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -1130,6 +1151,8 @@ impl NodeKind {
         NodeKind::DictSchema,
         NodeKind::DictMakeRow,
         NodeKind::DictAppendRow,
+        NodeKind::TuyaControl,
+        NodeKind::TuyaReadStatus,
     ];
 
     /// The `snake_case` wire name (matches the serde rename) — used by the
@@ -1217,6 +1240,8 @@ impl NodeKind {
             NodeKind::DictSchema => "dict_schema",
             NodeKind::DictMakeRow => "dict_make_row",
             NodeKind::DictAppendRow => "dict_append_row",
+            NodeKind::TuyaControl => "tuya_control",
+            NodeKind::TuyaReadStatus => "tuya_read_status",
         }
     }
 
@@ -1307,6 +1332,8 @@ impl NodeKind {
             NodeKind::DictSchema => "Dictionary Schema",
             NodeKind::DictMakeRow => "Create Dictionary Row",
             NodeKind::DictAppendRow => "Add Dictionary Row",
+            NodeKind::TuyaControl => "Control Tuya Device",
+            NodeKind::TuyaReadStatus => "Read Tuya Status",
         }
     }
 
@@ -1383,6 +1410,7 @@ impl NodeKind {
             | NodeKind::DictSchema
             | NodeKind::DictMakeRow
             | NodeKind::DictAppendRow => "Dictionary Tables",
+            NodeKind::TuyaControl | NodeKind::TuyaReadStatus => "Smart Home",
         }
     }
 
@@ -1549,6 +1577,8 @@ impl NodeKind {
             // this static list is the fallback = just `schema`.
             NodeKind::DictMakeRow => &DICT_MAKE_ROW_IN,
             NodeKind::DictAppendRow => &DICT_APPEND_ROW_IN,
+            // Device + data point + value all come from config dropdowns (no data inputs).
+            NodeKind::TuyaControl | NodeKind::TuyaReadStatus => &NO_PORTS,
         }
     }
 
@@ -1632,6 +1662,8 @@ impl NodeKind {
             NodeKind::DictSchema => &DICT_SCHEMA_OUT,
             NodeKind::DictMakeRow => &DICT_MAKE_ROW_OUT,
             NodeKind::DictAppendRow => &DICT_APPEND_ROW_OUT,
+            NodeKind::TuyaControl => &TUYA_CONTROL_OUT,
+            NodeKind::TuyaReadStatus => &TUYA_READ_STATUS_OUT,
         }
     }
 
@@ -1759,6 +1791,11 @@ impl NodeKind {
             // Dictionary's schema); DictSchema/DictMakeRow bake it, DictAppendRow is input-only.
             NodeKind::DictSchema | NodeKind::DictMakeRow => json!({ "columns": [] }),
             NodeKind::DictAppendRow => json!({}),
+            // `tuya_device` = the device dropdown (stores the stable device id); `tuya_code` =
+            // the data point dropdown (e.g. `switch_1`); `value` = the value literal, rendered
+            // by an adaptive widget typed to the point.
+            NodeKind::TuyaControl => json!({ "tuya_device": "", "tuya_code": "", "value": "", "timeout_secs": "15" }),
+            NodeKind::TuyaReadStatus => json!({ "tuya_device": "", "tuya_code": "", "timeout_secs": "15" }),
         }
     }
 }

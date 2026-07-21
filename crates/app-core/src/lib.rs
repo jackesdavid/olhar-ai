@@ -33,6 +33,7 @@ pub mod rtsp_probe;
 pub mod tenancy;
 pub mod timeutil;
 pub mod tracking;
+pub mod tuya;
 pub mod voice;
 pub mod work_queue;
 pub mod workflows;

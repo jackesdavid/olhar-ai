@@ -27,6 +27,8 @@ kanban-plugin: board
 - [ ] #10 Update available — reload to get the latest version.
 - [ ] #93 Box health copy leaks internals ("tailnet", "Tailscale") to users
 	  - Plan: [[box-health-copy-no-internals]]
+- [ ] #130 Workflow node memoize off by default + Variable panel read-only
+	  - Plan: [[workflow-memoize-off-default]]
 
 
 ## ToDo
@@ -113,6 +115,8 @@ kanban-plugin: board
 	  - Plan: [[faces-labeling-view]]
 - [ ] #120 Face pipeline on primary (HD) stream — GPU decode + per-tenant selector
 	  - Plan: [[face-pipeline-hd-stream]]
+- [ ] #129 Tuya integration — provider + workflow nodes to control devices
+	  - Plan: [[tuya-integration]]
 
 
 ## Review

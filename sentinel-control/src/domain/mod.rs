@@ -24,6 +24,7 @@ mod map;
 mod persons;
 mod platform_logs;
 pub(crate) mod recordings;
+mod tuya;
 mod workflows;
 
 /// `(status, message)` error tuple — axum turns it into the HTTP response.
@@ -48,6 +49,7 @@ pub fn router() -> Router<AppState> {
         .merge(recordings::router())
         .merge(jobs::router())
         .merge(events::router())
+        .merge(tuya::router())
 }
 
 /// The tenant this token operates in. The master's own (un-assumed) token carries no

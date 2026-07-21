@@ -23,6 +23,7 @@ import {
   type CanvasLayout,
   type Settings,
   type TelegramConfigState,
+  type TuyaDevice,
 } from "./types";
 
 /** Unsubscribe handle returned by [`onEvent`]. */
@@ -193,6 +194,14 @@ export const data = {
   setSettings: async (settings: Settings): Promise<void> => {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   },
+
+  // ---- Tuya smart home ----------------------------------------------------
+  /** Linked Tuya devices for the tenant (drives the node dropdowns + Integrations page). */
+  listTuyaDevices: (): Promise<TuyaDevice[]> => api.get<TuyaDevice[]>("/tuya/devices"),
+  /** Pull the project's linked devices from the Tuya Cloud and cache them. */
+  syncTuyaDevices: (): Promise<{ synced: number }> => api.post<{ synced: number }>("/tuya/sync", {}),
+  /** Whether the operator configured a Tuya project (env creds present). */
+  getTuyaProvider: (): Promise<{ configured: boolean }> => api.get<{ configured: boolean }>("/tuya/provider"),
 
   // ---- devices ------------------------------------------------------------
   listDevices: (): Promise<Device[]> => api.get<Device[]>("/devices"),

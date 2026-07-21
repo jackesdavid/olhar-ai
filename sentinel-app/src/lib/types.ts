@@ -44,6 +44,17 @@ export type Device = {
   stream_mode?: string | null;
 };
 
+/** A linked Tuya smart-home device (matches `app_core::tuya::TuyaDevice`). Credential-free. */
+export type TuyaDevice = {
+  device_id: string;
+  name: string;
+  category?: string | null;
+  product_id?: string | null;
+  online: boolean;
+  /** Raw Tuya `functions` array JSON (`[{code,type,values}]`) — types for the value widget. */
+  functions_json?: string | null;
+};
+
 /** A camera that answered a discovery probe (matches `app_core::onvif::DiscoveredDevice`). */
 export type DiscoveredDevice = {
   /** Stable ONVIF device id (WS-Addressing EndpointReference). */

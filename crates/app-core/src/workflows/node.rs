@@ -23,6 +23,7 @@ mod recipients;
 mod recording;
 mod telegram;
 mod text;
+mod tuya;
 mod variable;
 mod vision;
 
@@ -568,6 +569,8 @@ pub fn run_node(
         NodeKind::DictSchema => dictionary::run_schema(config),
         NodeKind::DictMakeRow => dictionary::run_make_row(config, inputs),
         NodeKind::DictAppendRow => dictionary::run_append_row(inputs),
+        NodeKind::TuyaControl => tuya::run_tuya_control(config, sys),
+        NodeKind::TuyaReadStatus => tuya::run_tuya_read_status(config, sys),
     }
 }
 
@@ -590,6 +593,8 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         NodeKind::HttpPost | NodeKind::NotifyRecipient | NodeKind::DeliverAlert => 35,
         NodeKind::CreateAlert | NodeKind::RecordPresence => 15,
         NodeKind::StartRecording | NodeKind::StopRecording => 30,
+        // Tuya Cloud round trips (token + call); the client's ureq agent caps at 12s.
+        NodeKind::TuyaControl | NodeKind::TuyaReadStatus => 15,
         NodeKind::ReplyToSender => 35,
         NodeKind::AiAnswer => 30,
         NodeKind::AiSwitch => 30,
@@ -1006,6 +1011,14 @@ pub fn debug_summary(
         NodeKind::DictSchema => "schema built".into(),
         NodeKind::DictMakeRow => "row built".into(),
         NodeKind::DictAppendRow => "row appended".into(),
+        NodeKind::TuyaControl => {
+            let code = config.get("tuya_code").and_then(Value::as_str).unwrap_or("?");
+            if flag("ok") { format!("Tuya {code} set") } else { format!("Tuya {code} failed") }
+        }
+        NodeKind::TuyaReadStatus => match txt("value") {
+            Some(v) if !v.is_empty() => format!("Tuya status: {}", clip(v)),
+            _ => "Tuya status read".into(),
+        },
     }
 }
 
