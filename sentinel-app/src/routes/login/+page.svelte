@@ -61,7 +61,7 @@
   );
 </script>
 
-<div class="flex min-h-screen w-screen items-center justify-center p-6">
+<div class="flex min-h-[100dvh] w-screen items-center justify-center p-6">
   <Card.Root class="w-full max-w-sm">
     <Card.Header class="items-center text-center">
       <SentinelLogo stacked size={52} />

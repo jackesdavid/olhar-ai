@@ -304,7 +304,7 @@
 
 <svelte:window onkeydown={onWindowKeydown} onkeyup={onWindowKeyup} />
 
-<div class="mx-auto flex h-[calc(100vh-7rem)] max-w-3xl flex-col">
+<div class="mx-auto flex h-[calc(100dvh-7rem)] max-w-3xl flex-col">
   <div class="flex items-start justify-between gap-3 pb-2">
     <div>
       <h1 class="text-2xl font-semibold tracking-tight">Assistant</h1>

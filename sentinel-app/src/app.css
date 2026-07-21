@@ -67,6 +67,13 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html,
+  body {
+    /* Tablet/app feel: no rubber-band bounce, and the browser never pinch/double-tap zooms the
+       page (canvases handle their own zoom). Height comes from 100dvh in the shell. */
+    overscroll-behavior: none;
+    touch-action: manipulation;
+  }
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);

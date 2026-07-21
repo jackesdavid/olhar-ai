@@ -127,6 +127,14 @@
       navCollapsed = true;
     cloudBoot();
 
+    // No browser pinch-zoom of the whole page on tablet/iPad — Safari ignores `user-scalable=no`,
+    // so block its `gesture*` events too. These are Safari's page-zoom, SEPARATE from the pointer
+    // events the workflow/map/faces canvases use for their own zoom, so this doesn't touch those.
+    const preventGesture = (e: Event) => e.preventDefault();
+    document.addEventListener("gesturestart", preventGesture, { passive: false });
+    document.addEventListener("gesturechange", preventGesture, { passive: false });
+    document.addEventListener("gestureend", preventGesture, { passive: false });
+
     if (COMMIT === "dev") return;
     let updateToasted = false;
     const checkVersion = async () => {
@@ -311,7 +319,7 @@
 
 {#if ready}
   {#if showShell}
-    <div class="flex h-screen w-screen overflow-hidden text-foreground">
+    <div class="flex h-[100dvh] w-screen overflow-hidden text-foreground">
       <aside
         class="flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 {navCollapsed
           ? 'w-16'

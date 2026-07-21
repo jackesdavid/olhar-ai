@@ -651,7 +651,7 @@
   }
 </script>
 
-<div class="flex h-[calc(100vh-8rem)] flex-col gap-3">
+<div class="flex h-[calc(100dvh-8rem)] flex-col gap-3">
   <div class="flex items-center justify-between gap-3">
     <div class="flex items-center gap-2">
       <ScanFace class="size-5" />

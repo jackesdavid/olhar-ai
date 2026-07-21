@@ -2,7 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- App-like on tablet/mobile: no browser pinch-zoom (canvases do their own zoom via pointer
+         events), fill notched screens (pairs with 100dvh). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 
     <!-- Favicons + app icons + PWA — re-cut from the OlharAI eclipse-eye by
          `scripts/build-icons.mjs`; geometry per assets/BRAND.md. Do not hand-edit these files. -->
