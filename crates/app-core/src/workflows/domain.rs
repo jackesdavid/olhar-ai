@@ -277,6 +277,18 @@ fn variable_port(config: &Value, required: bool) -> Vec<ResolvedPort> {
     }]
 }
 
+/// `TuyaControl`'s `value` input port, typed by the selected data point (baked into `value_type`
+/// by the editor when a `tuya_code` is chosen: `bool`/`num`/`text`). Wireable so a dynamic value
+/// can drive the device; when unwired the node falls back to the config literal. Mirrors
+/// `variable_port` (Set Variable). Optional — a config literal covers the common static case.
+fn tuya_value_port(config: &Value) -> Vec<ResolvedPort> {
+    let ty = config
+        .get("value_type")
+        .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())
+        .unwrap_or(PortType::Bool);
+    vec![ResolvedPort { name: "value".to_string(), ty, required: false }]
+}
+
 /// `OnEvent`'s extra, config-derived input ports: `camera` + `region`, wireable (from
 /// `GetCameraByName` / `Region`) — present only when the configured event is one of the edge
 /// tracker's three. These GATE delivery (see `engine::on_event_node`), not just display a value:
@@ -1794,7 +1806,7 @@ impl NodeKind {
             // `tuya_device` = the device dropdown (stores the stable device id); `tuya_code` =
             // the data point dropdown (e.g. `switch_1`); `value` = the value literal, rendered
             // by an adaptive widget typed to the point.
-            NodeKind::TuyaControl => json!({ "tuya_device": "", "tuya_code": "", "value": "", "timeout_secs": "15" }),
+            NodeKind::TuyaControl => json!({ "tuya_device": "", "tuya_code": "", "value": "", "value_type": "bool", "timeout_secs": "15" }),
             NodeKind::TuyaReadStatus => json!({ "tuya_device": "", "tuya_code": "", "timeout_secs": "15" }),
         }
     }
@@ -1835,6 +1847,9 @@ impl GraphNode {
             NodeKind::EmitEvent => payload_ports(&self.config),
             // Set Variable: one `value` input typed by the variable (required).
             NodeKind::SetVariable => variable_port(&self.config, true),
+            // Control Tuya Device: one `value` input typed by the selected data point (optional —
+            // config literal is the fallback). See `tuya_value_port`.
+            NodeKind::TuyaControl => tuya_value_port(&self.config),
             // OnEvent: camera/region inputs, only for the edge tracker's events (see the fn doc).
             NodeKind::OnEvent => on_event_input_ports(&self.config),
             // DictMakeRow: `schema` (Table) + one input per configured column (see `dict_row_ports`).

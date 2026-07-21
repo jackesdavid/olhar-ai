@@ -202,6 +202,10 @@ export const data = {
   syncTuyaDevices: (): Promise<{ synced: number }> => api.post<{ synced: number }>("/tuya/sync", {}),
   /** Whether the operator configured a Tuya project (env creds present). */
   getTuyaProvider: (): Promise<{ configured: boolean }> => api.get<{ configured: boolean }>("/tuya/provider"),
+  /** Set a device's friendly per-function labels (`{ code: label }`). Survives sync. */
+  setTuyaFunctionLabels: async (deviceId: string, labels: Record<string, string>): Promise<void> => {
+    await api.patch<void>(`/tuya/devices/${encodeURIComponent(deviceId)}/labels`, { labels });
+  },
 
   // ---- devices ------------------------------------------------------------
   listDevices: (): Promise<Device[]> => api.get<Device[]>("/devices"),

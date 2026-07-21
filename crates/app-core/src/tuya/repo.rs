@@ -8,7 +8,7 @@ use crate::timeutil::now_rfc3339;
 
 use super::domain::TuyaDevice;
 
-const COLS: &str = "device_id, name, category, product_id, online, functions_json";
+const COLS: &str = "device_id, name, category, product_id, online, functions_json, function_labels_json";
 
 /// The tenant's linked Tuya devices, ordered by name. Empty (and logged) on a query error.
 pub fn load(db: &Db, tenant_id: Uuid) -> Vec<TuyaDevice> {
@@ -73,5 +73,68 @@ pub fn upsert_many(db: &Db, tenant_id: Uuid, devices: &[TuyaDevice]) -> Result<(
     res.map_err(|e| {
         log::error!("tuya::repo::upsert_many failed: {e}");
         format!("database error: {e}")
+    })
+}
+
+/// Set a device's friendly per-function labels (`{ "<code>": "<label>" }` JSON) — a targeted
+/// update that survives sync (the column is not in `upsert_many`'s ON CONFLICT set).
+pub fn set_function_labels(db: &Db, tenant_id: Uuid, device_id: &str, labels_json: &str) -> Result<(), String> {
+    let pool = db.pool();
+    let device_id = device_id.to_string();
+    let labels_json = labels_json.to_string();
+    let res: Result<u64, sqlx::Error> = db.block(async move {
+        let r = sqlx::query("UPDATE tuya_devices SET function_labels_json = $3 WHERE tenant_id = $1 AND device_id = $2")
+            .bind(tenant_id)
+            .bind(&device_id)
+            .bind(&labels_json)
+            .execute(&pool)
+            .await?;
+        Ok(r.rows_affected())
+    });
+    match res {
+        Ok(0) => Err("device not found".to_string()),
+        Ok(_) => Ok(()),
+        Err(e) => {
+            log::error!("tuya::repo::set_function_labels failed: {e}");
+            Err(format!("database error: {e}"))
+        }
+    }
+}
+
+/// Record a linked Tuya app account for the tenant (OAuth). Idempotent by `(tenant_id, tuya_uid)`.
+pub fn link_account(db: &Db, tenant_id: Uuid, tuya_uid: &str) -> Result<(), String> {
+    let pool = db.pool();
+    let uid = tuya_uid.to_string();
+    let now = now_rfc3339();
+    let res: Result<(), sqlx::Error> = db.block(async move {
+        sqlx::query(
+            "INSERT INTO tuya_account_links (tenant_id, tuya_uid, linked_at) VALUES ($1, $2, $3) \
+             ON CONFLICT (tenant_id, tuya_uid) DO UPDATE SET linked_at = EXCLUDED.linked_at",
+        )
+        .bind(tenant_id)
+        .bind(&uid)
+        .bind(&now)
+        .execute(&pool)
+        .await?;
+        Ok(())
+    });
+    res.map_err(|e| {
+        log::error!("tuya::repo::link_account failed: {e}");
+        format!("database error: {e}")
+    })
+}
+
+/// The Tuya uid(s) this tenant has linked. Empty = not linked yet.
+pub fn linked_uids(db: &Db, tenant_id: Uuid) -> Vec<String> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_scalar::<_, String>("SELECT tuya_uid FROM tuya_account_links WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_else(|e| {
+                log::error!("tuya::repo::linked_uids query failed: {e}");
+                Vec::new()
+            })
     })
 }

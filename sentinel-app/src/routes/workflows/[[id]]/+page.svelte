@@ -568,7 +568,7 @@
 
   // live references for node dropdowns + per-graph run activity (polled)
   let devices = $state<{ id?: string; ip?: string; name: string; rtsp_url?: string | null }[]>([]);
-  let tuyaDevices = $state<{ device_id: string; name: string; online: boolean; functions_json?: string | null }[]>([]);
+  let tuyaDevices = $state<{ device_id: string; name: string; online: boolean; functions_json?: string | null; function_labels_json?: string | null }[]>([]);
   let recipients = $state<{ label: string; enabled: boolean }[]>([]);
   let dictionaries = $state<{ id: string; name: string; columns: { name: string; type: string }[] }[]>([]);
   let rooms = $state<{ id: number; name: string }[]>([]);
@@ -756,11 +756,30 @@
       return [];
     }
   }
+  // Friendly labels the user set on the Integrations page ({ code: label }); fall back to the code.
+  function tuyaLabels(deviceId: string): Record<string, string> {
+    const raw = tuyaDevices.find((d) => d.device_id === deviceId)?.function_labels_json;
+    if (!raw) return {};
+    try {
+      const o = JSON.parse(raw);
+      return o && typeof o === "object" ? o : {};
+    } catch {
+      return {};
+    }
+  }
   function tuyaCodeOptions(deviceId: string): { value: string; label: string }[] {
-    return tuyaFunctions(deviceId).map((f) => ({ value: f.code, label: f.code }));
+    const labels = tuyaLabels(deviceId);
+    return tuyaFunctions(deviceId).map((f) => ({ value: f.code, label: labels[f.code] || f.code }));
   }
   function tuyaFunction(deviceId: string, code: string): TuyaFn | undefined {
     return tuyaFunctions(deviceId).find((f) => f.code === code);
+  }
+  // The workflow PortType a Tuya data point maps to — baked into config.value_type so the node's
+  // dynamic `value` input port resolves (Boolean→bool, Integer→num, Enum/String→text).
+  function tuyaValueType(fn?: TuyaFn): "bool" | "num" | "text" {
+    if (fn?.type === "Boolean") return "bool";
+    if (fn?.type === "Integer") return "num";
+    return "text";
   }
   function tuyaEnumRange(fn?: TuyaFn): string[] {
     if (!fn?.values) return [];
@@ -1007,6 +1026,13 @@
       return node.kind === "get_variable"
         ? { ...k, outputs: [port] }
         : { ...k, inputs: [...k.inputs, port] };
+    }
+    // Control Tuya Device: a `value` input typed by the selected data point (baked into
+    // config.value_type when a code is picked) — wireable for a dynamic value; the config literal
+    // (adaptive widget) is the unwired fallback. Mirrors Set Variable.
+    if (node.kind === "tuya_control") {
+      const ty = (typeof node.config?.value_type === "string" ? node.config.value_type : "bool") as CatPort["type"];
+      return { ...k, inputs: [...k.inputs, { name: "value", type: ty, required: false }] };
     }
     // Create Dictionary Row (#113): the schema's columns (baked into config.columns when a
     // Dictionary Schema is wired) each become a typed input, so you fill the row field by field.
@@ -1476,7 +1502,7 @@
       recipients = r;
       dictionaries = dicts.map((x) => ({ id: x.id, name: x.name, columns: x.columns ?? [] }));
       rooms = (m.rooms ?? []).map((rm) => ({ id: rm.id, name: rm.name }));
-      tuyaDevices = tuya.map((t) => ({ device_id: t.device_id, name: t.name, online: t.online, functions_json: t.functions_json }));
+      tuyaDevices = tuya.map((t) => ({ device_id: t.device_id, name: t.name, online: t.online, functions_json: t.functions_json, function_labels_json: t.function_labels_json }));
     } catch (err) {
       console.error("Failed to load devices/recipients/rooms", err);
     }
@@ -4151,7 +4177,7 @@
                         {:else}
                           {@const cvv = String(selectedNode.config[key] ?? "")}
                           {@const clbl = copts.find((o) => o.value === cvv)?.label ?? "Select a control"}
-                          <Select.Root type="single" disabled={editLocked} value={cvv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? cvv })}>
+                          <Select.Root type="single" disabled={editLocked} value={cvv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? cvv, value_type: tuyaValueType(tuyaFunction(tdev, v ?? cvv)) })}>
                             <Select.Trigger class="h-8 w-full">{clbl}</Select.Trigger>
                             <Select.Content>
                               {#each copts as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}

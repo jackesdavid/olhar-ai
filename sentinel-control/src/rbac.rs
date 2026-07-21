@@ -26,6 +26,7 @@ pub const PERMISSIONS: &[(&str, &str)] = &[
     ("billing.read", "View billing, plan, and invoices"),
     ("billing.write", "Subscribe to a plan and manage payment"),
     ("tuya.read", "View and sync Tuya smart-home devices"),
+    ("tuya.write", "Link a Tuya account and edit device labels"),
 ];
 
 /// All action keys (the Admin role gets these — including `live.view`).

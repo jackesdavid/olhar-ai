@@ -569,7 +569,7 @@ pub fn run_node(
         NodeKind::DictSchema => dictionary::run_schema(config),
         NodeKind::DictMakeRow => dictionary::run_make_row(config, inputs),
         NodeKind::DictAppendRow => dictionary::run_append_row(inputs),
-        NodeKind::TuyaControl => tuya::run_tuya_control(config, sys),
+        NodeKind::TuyaControl => tuya::run_tuya_control(config, inputs, sys),
         NodeKind::TuyaReadStatus => tuya::run_tuya_read_status(config, sys),
     }
 }

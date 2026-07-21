@@ -41,6 +41,9 @@ pub struct TuyaDevice {
     pub product_id: Option<String>,
     pub online: bool,
     pub functions_json: Option<String>,
+    /// User-assigned friendly labels per data point, `{ "<code>": "<label>" }` JSON. Edited on the
+    /// Integrations page; preserved across sync (not in `upsert_many`'s ON CONFLICT set).
+    pub function_labels_json: Option<String>,
 }
 
 /// One controllable data point of a device (parsed from `functions_json`). `ty` is Tuya's

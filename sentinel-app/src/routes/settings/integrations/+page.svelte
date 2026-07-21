@@ -2,6 +2,7 @@
   import PageHeader from "$lib/components/page-header.svelte";
   import Plug from "@lucide/svelte/icons/plug";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import { onMount } from "svelte";
   import { data } from "$lib/data";
   import { toast } from "svelte-sonner";
@@ -9,14 +10,49 @@
   import * as Card from "$lib/components/ui/card";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
+  import { Input } from "$lib/components/ui/input";
   import type { TuyaDevice } from "$lib/types";
 
   let configured = $state<boolean | null>(null);
   let devices = $state<TuyaDevice[]>([]);
   let loading = $state(true);
   let syncing = $state(false);
+  // Per-device UI state: which rows are expanded, the in-progress label edits, and the saving flag.
+  let expanded = $state<Record<string, boolean>>({});
+  let edits = $state<Record<string, Record<string, string>>>({});
+  let savingLabels = $state<string | null>(null);
 
   onMount(reload);
+
+  type Fn = { code: string; type: string };
+
+  function functionsOf(d: TuyaDevice): Fn[] {
+    if (!d.functions_json) return [];
+    try {
+      const arr = JSON.parse(d.functions_json);
+      return Array.isArray(arr) ? arr.map((f) => ({ code: f.code, type: f.type })) : [];
+    } catch {
+      return [];
+    }
+  }
+  function labelsOf(d: TuyaDevice): Record<string, string> {
+    if (!d.function_labels_json) return {};
+    try {
+      const o = JSON.parse(d.function_labels_json);
+      return o && typeof o === "object" ? o : {};
+    } catch {
+      return {};
+    }
+  }
+  function toggle(d: TuyaDevice) {
+    const open = !expanded[d.device_id];
+    expanded = { ...expanded, [d.device_id]: open };
+    // Seed the edit buffer from the saved labels when opening.
+    if (open && !edits[d.device_id]) edits = { ...edits, [d.device_id]: { ...labelsOf(d) } };
+  }
+  function editLabel(deviceId: string, code: string, value: string) {
+    edits = { ...edits, [deviceId]: { ...(edits[deviceId] ?? {}), [code]: value } };
+  }
 
   async function reload() {
     loading = true;
@@ -48,6 +84,20 @@
       syncing = false;
     }
   }
+
+  async function saveLabels(d: TuyaDevice) {
+    savingLabels = d.device_id;
+    try {
+      await data.setTuyaFunctionLabels(d.device_id, edits[d.device_id] ?? {});
+      toast.success("Labels saved");
+      await reload();
+    } catch (err) {
+      console.error("Save labels failed", err);
+      toast.error("Couldn't save labels", { description: String(err) });
+    } finally {
+      savingLabels = null;
+    }
+  }
 </script>
 
 <div class="space-y-6">
@@ -71,8 +121,8 @@
           </Card.Title>
           <Card.Description>
             Control smart-home devices (switches, plugs, lights) linked to your Tuya / Smart Life
-            account. Use the <strong>Control Tuya Device</strong> and <strong>Read Tuya Status</strong>
-            nodes in a workflow.
+            account. Name each control below so it reads clearly in a workflow. Use the
+            <strong>Control Tuya Device</strong> and <strong>Read Tuya Status</strong> nodes.
           </Card.Description>
         </div>
         <Button variant="outline" onclick={sync} disabled={syncing || loading || configured === false}>
@@ -97,16 +147,54 @@
       {:else}
         <ul class="divide-y divide-border">
           {#each devices as d (d.device_id)}
-            <li class="flex items-center justify-between gap-3 py-2.5">
-              <div class="min-w-0">
-                <p class="truncate text-sm font-medium">{d.name}</p>
-                <p class="truncate text-xs text-muted-foreground">
-                  {d.category ?? "device"} · <span class="font-mono">{d.device_id}</span>
-                </p>
-              </div>
-              <Badge variant={d.online ? "secondary" : "outline"} class="shrink-0">
-                {d.online ? "Online" : "Offline"}
-              </Badge>
+            {@const fns = functionsOf(d)}
+            <li class="py-2.5">
+              <button
+                type="button"
+                class="interactive flex w-full items-center justify-between gap-3 text-left"
+                onclick={() => toggle(d)}
+              >
+                <div class="flex min-w-0 items-center gap-2">
+                  <ChevronRight class="size-4 shrink-0 text-muted-foreground transition-transform {expanded[d.device_id] ? 'rotate-90' : ''}" />
+                  <div class="min-w-0">
+                    <p class="truncate text-sm font-medium">{d.name}</p>
+                    <p class="truncate text-xs text-muted-foreground">
+                      {d.category ?? "device"} · {fns.length} control{fns.length === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                </div>
+                <Badge variant={d.online ? "secondary" : "outline"} class="shrink-0">
+                  {d.online ? "Online" : "Offline"}
+                </Badge>
+              </button>
+
+              {#if expanded[d.device_id]}
+                <div class="mt-3 space-y-2 pl-6">
+                  {#if fns.length === 0}
+                    <p class="text-xs text-muted-foreground">No controls reported — try Refresh devices.</p>
+                  {:else}
+                    {#each fns as f (f.code)}
+                      <div class="flex items-center gap-3">
+                        <div class="w-40 shrink-0">
+                          <p class="truncate font-mono text-xs">{f.code}</p>
+                          <p class="text-[10px] text-muted-foreground">{f.type}</p>
+                        </div>
+                        <Input
+                          class="h-8"
+                          placeholder="Friendly name (e.g. Luz da entrada)"
+                          value={edits[d.device_id]?.[f.code] ?? ""}
+                          oninput={(e) => editLabel(d.device_id, f.code, e.currentTarget.value)}
+                        />
+                      </div>
+                    {/each}
+                    <div class="flex justify-end pt-1">
+                      <Button size="sm" onclick={() => saveLabels(d)} disabled={savingLabels === d.device_id}>
+                        {savingLabels === d.device_id ? "Saving…" : "Save names"}
+                      </Button>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             </li>
           {/each}
         </ul>

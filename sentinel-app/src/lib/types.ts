@@ -53,6 +53,8 @@ export type TuyaDevice = {
   online: boolean;
   /** Raw Tuya `functions` array JSON (`[{code,type,values}]`) — types for the value widget. */
   functions_json?: string | null;
+  /** User-set friendly labels per data point, `{ "<code>": "<label>" }` JSON. */
+  function_labels_json?: string | null;
 };
 
 /** A camera that answered a discovery probe (matches `app_core::onvif::DiscoveredDevice`). */

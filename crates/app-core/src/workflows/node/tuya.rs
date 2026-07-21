@@ -19,13 +19,15 @@ fn config_or_missing(config: &Value, sys: &ToolContext) -> Result<(TuyaConfig, t
     Ok((cfg, device))
 }
 
-pub(super) fn run_tuya_control(config: &Value, sys: &ToolContext) -> Result<PortValues, String> {
+pub(super) fn run_tuya_control(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
     let (cfg, device) = config_or_missing(config, sys)?;
     let code = cfg_str(config, "tuya_code");
     if code.is_empty() {
         return Err("no Tuya data point selected — pick a 'code' (e.g. switch_1) in the node.".into());
     }
-    let raw = config.get("value").cloned().unwrap_or_else(|| Value::String(String::new()));
+    // A wired `value` input (dynamic) wins over the config literal (the adaptive widget fallback).
+    let raw = port_value_to_json(inputs.get("value"))
+        .unwrap_or_else(|| config.get("value").cloned().unwrap_or_else(|| Value::String(String::new())));
     let ty = function_type(device.functions_json.as_deref(), code);
     let value = coerce_value(&raw, ty.as_deref());
 
@@ -102,5 +104,16 @@ fn json_to_text(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         other => other.to_string(),
+    }
+}
+
+/// A wired `value` input (Bool/Num/Text) → JSON, so `coerce_value` handles it exactly like a
+/// config literal. `None` when nothing is wired (caller falls back to the config literal).
+fn port_value_to_json(v: Option<&PortValue>) -> Option<Value> {
+    match v? {
+        PortValue::Bool(b) => Some(Value::Bool(*b)),
+        PortValue::Num(n) => Some(Value::Number((*n).into())),
+        PortValue::Text(s) => Some(Value::String(s.clone())),
+        _ => None,
     }
 }

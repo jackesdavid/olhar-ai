@@ -86,7 +86,10 @@ fn token(cfg: &TuyaConfig) -> Result<String, String> {
 /// Every device linked to the project's app accounts, with its `functions` (type metadata)
 /// attached per device. The `functions` are what the editor needs to type the value widget,
 /// so we pay one extra call per device at sync time (rare, few devices).
-pub fn fetch_devices(cfg: &TuyaConfig) -> Result<Vec<TuyaDevice>, String> {
+/// `allowed_uids` scopes the result to devices owned by those linked Tuya app-account uids (the
+/// tenant's OAuth-linked accounts). Empty = no filter (the operator/Default-tenant case, which was
+/// linked via the console and has no per-tenant uid mapping).
+pub fn fetch_devices(cfg: &TuyaConfig, allowed_uids: &[String]) -> Result<Vec<TuyaDevice>, String> {
     let tok = token(cfg)?;
     let listing = call(cfg, "GET", "/v1.0/iot-01/associated-users/devices?size=100", Some(&tok), None)?;
     let devices = listing["result"]["devices"].as_array().cloned().unwrap_or_default();
@@ -96,6 +99,12 @@ pub fn fetch_devices(cfg: &TuyaConfig) -> Result<Vec<TuyaDevice>, String> {
         let device_id = d["id"].as_str().unwrap_or_default().to_string();
         if device_id.is_empty() {
             continue;
+        }
+        if !allowed_uids.is_empty() {
+            let uid = d["uid"].as_str().unwrap_or_default();
+            if !allowed_uids.iter().any(|u| u == uid) {
+                continue;
+            }
         }
         let functions_json = match call(cfg, "GET", &format!("/v1.0/devices/{device_id}/functions"), Some(&tok), None) {
             Ok(f) => f["result"]["functions"].to_string(),
@@ -111,6 +120,7 @@ pub fn fetch_devices(cfg: &TuyaConfig) -> Result<Vec<TuyaDevice>, String> {
             product_id: d["product_id"].as_str().map(str::to_string),
             online: d["online"].as_bool().unwrap_or(false),
             functions_json: Some(functions_json),
+            function_labels_json: None, // labels are user-set + preserved by upsert_many; sync never sets them
         });
     }
     Ok(out)
