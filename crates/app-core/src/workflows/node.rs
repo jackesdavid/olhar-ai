@@ -56,6 +56,8 @@ pub enum PortValue {
     Table(crate::dictionaries::Dictionary),
     /// A face embedding — a fixed-length float vector (512-d ArcFace, #117).
     Embedding(Vec<f32>),
+    /// The 5 facial landmarks for one face (source pixels). Carried by `Landmarks` ports (#122).
+    Landmarks(Vec<[f32; 2]>),
     /// Any file (bytes + name + MIME).
     File(FileVal),
     /// A typed array — elements are themselves `PortValue`s. Carried by the `*Array`
@@ -151,6 +153,12 @@ impl PortValue {
     pub fn as_embedding(&self) -> Option<&[f32]> {
         match self {
             PortValue::Embedding(v) => Some(v),
+            _ => None,
+        }
+    }
+    pub fn as_landmarks(&self) -> Option<&[[f32; 2]]> {
+        match self {
+            PortValue::Landmarks(v) => Some(v),
             _ => None,
         }
     }
@@ -273,6 +281,8 @@ pub fn literal_for_named(config: &Value, name: &str, ty: PortType) -> Option<Por
         PortType::Table => None,
         // An embedding is produced by FaceEmbedding — never a config literal.
         PortType::Embedding => None,
+        // Landmarks arrive from OnEvent("face_detected") (#122) — never a config literal.
+        PortType::Landmarks => None,
         // Arrays / detection elements / the Any wildcard are produced by upstream nodes
         // (or, for ForEach `items`, parsed from text in the engine) — never a config literal.
         PortType::TextArray
@@ -400,10 +410,41 @@ pub fn seed_event_payload(
                     }
                 }
             }
+            // `kps` arrives as a List of `[x,y]` pairs (each pair itself a 2-element List of nums,
+            // or a flat `[x0,y0,x1,y1,…]`) → PortValue::Landmarks (source pixels, #122). A malformed
+            // or empty payload just leaves the port unfilled (the embed node then falls back).
+            PortType::Landmarks => {
+                if let Some(PortValue::List(items)) = out.get(&port.name).cloned() {
+                    let pts = landmark_points(&items);
+                    if !pts.is_empty() {
+                        out.insert(port.name.clone(), PortValue::Landmarks(pts));
+                    }
+                }
+            }
             _ => {}
         }
     }
     out
+}
+
+/// Parse a `kps` payload `List` into `[x,y]` landmark points (source pixels, #122). Accepts either
+/// a FLAT list of numbers `[x0,y0,x1,y1,…]` — the edge wire format, which survives the generic event
+/// payload decoder that flattens nested arrays — or a nested list of 2-element `[x,y]` pairs. Short
+/// or malformed input yields only the complete pairs (empty → the embed node falls back).
+fn landmark_points(items: &[PortValue]) -> Vec<[f32; 2]> {
+    // Nested form: each element is itself a 2-element List.
+    if items.iter().any(|it| matches!(it, PortValue::List(_))) {
+        return items
+            .iter()
+            .filter_map(|it| {
+                let p = it.as_list()?;
+                Some([p.first()?.as_num()? as f32, p.get(1)?.as_num()? as f32])
+            })
+            .collect();
+    }
+    // Flat form: chunk the numbers into (x, y) pairs.
+    let nums: Vec<i64> = items.iter().filter_map(PortValue::as_num).collect();
+    nums.chunks_exact(2).map(|c| [c[0] as f32, c[1] as f32]).collect()
 }
 
 /// Get the full `Device` from `sys.devices` using a `CameraEntity`'s stable id.

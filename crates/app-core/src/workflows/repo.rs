@@ -490,6 +490,7 @@ pub fn system_events() -> Vec<TenantEvent> {
                 field("bbox", PortType::Bbox),
                 field("confidence", PortType::Num), // 0..100
                 field("face_ratio", PortType::Num), // face area ÷ frame area, 0..100
+                field("kps", PortType::Landmarks),  // 5 YuNet landmarks, source px (#122; empty until edge emits)
                 field("frame", PortType::Image),
             ],
         },

@@ -64,6 +64,36 @@ pub fn embed_face_crop(db: &Db, tenant_id: Uuid, image_bytes: &[u8]) -> Result<V
     parse_embedding(&outcome.output)
 }
 
+/// Like [`embed_face_crop`], but carries the edge's YuNet landmarks (crop-local pixels) so the
+/// sidecar can align the ArcFace crop from THEM when its own SCRFD re-detection misses — the case
+/// that today falls back to align-free, resize-to-112 (lower quality). Card #122.
+///
+/// Non-regressive by construction: the full detect+align pipeline (`face_detect_embed`) is still
+/// tried first and wins when SCRFD finds the face (best quality, unchanged). Only on a SCRFD miss do
+/// we pass `kps` to `face_embed`; a sidecar that doesn't yet understand `kps` simply ignores the
+/// field and embeds align-free exactly as before. Pass fewer than 5 points to force align-free.
+pub fn embed_face_crop_aligned(
+    db: &Db,
+    tenant_id: Uuid,
+    image_bytes: &[u8],
+    landmarks: &[[f32; 2]],
+) -> Result<Vec<f32>, String> {
+    let out = call_detect_embed(db, tenant_id, image_bytes)?;
+    if face_present(&out) {
+        return parse_embedding(&out);
+    }
+    // SCRFD missed. Embed align-free, but hand the edge's 5 landmarks to the sidecar so it can
+    // norm-crop align from them when supported (slice C); older sidecars ignore `kps`.
+    let op = "face_embed";
+    let mut params = json!({ "image_b64": ai_service::image_b64(image_bytes) });
+    if landmarks.len() == 5 {
+        params["kps"] = json!(landmarks);
+    }
+    let outcome = ai_service::call(op, params)?;
+    crate::billing::record_ai_usage(db, tenant_id, op, outcome.delay_ms, outcome.exec_ms, true);
+    parse_embedding(&outcome.output)
+}
+
 /// Detect the most prominent face's 5 landmarks (eyes, nose, mouth corners) in a PRE-CROPPED face
 /// image, via the sidecar's `face_detect` op (SCRFD only — cheaper than the embed pipeline).
 /// Points are in the image's pixel coords; empty vec if the sidecar re-detected no face (common for

@@ -61,6 +61,11 @@ pub enum PortType {
     /// the coordinate convention. Produced by `Break*` nodes + `OnEvent("motion")`; consumed
     /// by `DrawBbox`, `BlurOutsideBbox`, `RecordPresence`.
     Bbox,
+    /// The 5 facial landmarks (right/left eye, nose, right/left mouth) for ONE face, in source
+    /// pixels. A real type (not a bare `NumArray`) so producers normalise at the source. Produced by
+    /// `OnEvent("face_detected")` (YuNet `kps`); consumed by `FaceEmbedding` to align the ArcFace
+    /// crop instead of re-detecting (SCRFD) inside it (#122).
+    Landmarks,
     /// A camera device reference (stable device id, carried as a string on the wire).
     /// Distinct from `Text` so the editor enforces camera-to-camera wiring.
     Camera,

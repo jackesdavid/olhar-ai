@@ -172,15 +172,22 @@ pub(super) fn run_face_embedding(
         .and_then(PortValue::as_image)
         .ok_or("Extract Face Embedding: missing required input 'image'")?;
     // Crop to the face's bbox when provided (falls back to the whole frame on any decode error).
+    // The crop origin lets us translate source-pixel landmarks into the crop's local coordinates.
     let cropped = inputs
         .get("bbox")
         .and_then(PortValue::as_bbox)
         .and_then(|b| crop_to_bbox(bytes, b));
-    // With a bbox, the edge already localized the face — use the crop-aware embed, which falls
-    // back to align-free embedding if the sidecar's SCRFD can't re-detect it (so we never drop a
-    // face the edge found). Without a bbox, embed the whole frame where "no face" is meaningful.
-    let embedding = match cropped.as_deref() {
-        Some(crop) => crate::agent::face::embed_face_crop(&sys.db, sys.tenant_id, crop)?,
+    // The edge's YuNet landmarks (source pixels), when the `face_detected` event carried them (#122).
+    let landmarks = inputs.get("kps").and_then(PortValue::as_landmarks).unwrap_or(&[]);
+    // With a bbox, the edge already localized the face — use the crop-aware embed, which aligns from
+    // the edge landmarks (or SCRFD) and falls back to align-free if neither re-detects it (so we
+    // never drop a face the edge found). Without a bbox, embed the whole frame ("no face" is real).
+    let embedding = match cropped.as_ref() {
+        Some((crop, ox, oy)) => {
+            let local: Vec<[f32; 2]> =
+                landmarks.iter().map(|p| [p[0] - *ox as f32, p[1] - *oy as f32]).collect();
+            crate::agent::face::embed_face_crop_aligned(&sys.db, sys.tenant_id, crop, &local)?
+        }
         None => crate::agent::face::embed(&sys.db, sys.tenant_id, bytes)?,
     };
     let dim = embedding.len() as i64;
@@ -192,8 +199,10 @@ pub(super) fn run_face_embedding(
 }
 
 /// Crop a JPEG frame to a face `bbox` expanded by a 30% margin (clamped to the frame), re-encoded as
-/// JPEG for the sidecar. `None` on a decode/encode error → the caller embeds the full frame.
-fn crop_to_bbox(jpeg: &[u8], b: crate::workflows::domain::BBox) -> Option<Vec<u8>> {
+/// JPEG for the sidecar. Returns `(jpeg, x_off, y_off)` — the crop's top-left in SOURCE pixels, so
+/// the caller can translate source-pixel landmarks into the crop's local coordinates. The crop is
+/// not resized, so the offset is a pure subtraction. `None` on a decode/encode error → full frame.
+fn crop_to_bbox(jpeg: &[u8], b: crate::workflows::domain::BBox) -> Option<(Vec<u8>, i64, i64)> {
     let img = image::load_from_memory(jpeg).ok()?;
     let (iw, ih) = (img.width() as i64, img.height() as i64);
     let (bw, bh) = ((b.x2 - b.x1).max(1), (b.y2 - b.y1).max(1));
@@ -205,7 +214,7 @@ fn crop_to_bbox(jpeg: &[u8], b: crate::workflows::domain::BBox) -> Option<Vec<u8
     let cropped = img.crop_imm(x1 as u32, y1 as u32, (x2 - x1) as u32, (y2 - y1) as u32);
     let mut buf = std::io::Cursor::new(Vec::new());
     cropped.write_to(&mut buf, image::ImageFormat::Jpeg).ok()?;
-    Some(buf.into_inner())
+    Some((buf.into_inner(), x1, y1))
 }
 
 /// Cosine distance → a 0..100 confidence percent.

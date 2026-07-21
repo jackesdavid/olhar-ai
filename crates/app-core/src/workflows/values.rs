@@ -155,6 +155,7 @@ pub fn display_value(v: &PortValue) -> String {
         PortValue::Dict(m) => format!("{{{} fields}}", m.len()),
         PortValue::Table(t) => format!("table {}", t.id),
         PortValue::Embedding(v) => format!("embedding ({}-d)", v.len()),
+        PortValue::Landmarks(v) => format!("landmarks ({} pts)", v.len()),
         PortValue::Person(_) => "person".to_string(),
         PortValue::Face(_) => "face".to_string(),
         PortValue::Region(_) => "region".to_string(),
