@@ -261,6 +261,28 @@ pub fn save_telegram(db: &Db, tenant_id: Uuid, bot_token: &str, pairing_code: &s
     }
 }
 
+/// Resolve a tenant's EFFECTIVE Telegram config for SENDING, in the same order the test-send and
+/// pairing poller already use: the tenant's own bot if it has a token → the shared GLOBAL provider
+/// bot → the env fallback. `None` when no bot token exists anywhere.
+///
+/// The pairing_code stays the tenant's own (its enrolled recipients); the global bot only supplies
+/// the token. This is the single source of truth for every live send path (workflow
+/// `SendNotification`, alerts, chat agent) — before card #73 those resolved tenant→env and silently
+/// SKIPPED the global bot, so a tenant relying on the shared bot got "not configured" on real sends
+/// even though enrollment + test-send worked.
+pub fn resolve_effective_telegram(db: &Db, tenant_id: Uuid) -> Option<super::NotificationConfig> {
+    let (own_token, pairing_code) = load_telegram(db, tenant_id).unwrap_or_default();
+    if !own_token.trim().is_empty() {
+        return Some(super::NotificationConfig { bot_token: own_token, pairing_code });
+    }
+    if let Some((global_token, _)) = load_global_telegram(db) {
+        if !global_token.trim().is_empty() {
+            return Some(super::NotificationConfig { bot_token: global_token, pairing_code });
+        }
+    }
+    super::NotificationConfig::from_env()
+}
+
 /// Ensure the effective bot's **@username** is known, resolving it from Telegram once if it's
 /// missing and caching it — so the enrollment link/QR (which need the username) can always render.
 ///

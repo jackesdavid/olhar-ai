@@ -150,10 +150,6 @@ async fn deliver(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id)
 
 /// Resolve the tenant's active Telegram config: the saved row (if it has a token), else env.
 fn resolve_telegram(db: &app_core::db::Db, tid: uuid::Uuid) -> Option<NotificationConfig> {
-    if let Some((bot_token, pairing_code)) = app_core::notification::repo::load_telegram(db, tid) {
-        if !bot_token.trim().is_empty() {
-            return Some(NotificationConfig { bot_token, pairing_code });
-        }
-    }
-    NotificationConfig::from_env()
+    // tenant-own bot → shared GLOBAL provider bot → env (was tenant→env, skipping the global bot).
+    app_core::notification::repo::resolve_effective_telegram(db, tid)
 }

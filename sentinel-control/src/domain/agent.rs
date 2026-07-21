@@ -109,12 +109,8 @@ async fn chat(
 /// Resolve the tenant's Telegram config (saved config if it has a token, else none). Mirrors
 /// `sentinel-flow`'s `resolve_telegram_config` so `send_notification` works the same in chat.
 fn resolve_telegram_config(db: &app_core::db::Db, tenant: uuid::Uuid) -> Option<NotificationConfig> {
-    if let Some((bot_token, pairing_code)) = app_core::notification::repo::load_telegram(db, tenant) {
-        if !bot_token.trim().is_empty() {
-            return Some(NotificationConfig { bot_token, pairing_code });
-        }
-    }
-    None
+    // tenant-own bot → shared GLOBAL provider bot → env (was tenant→none, skipping the global bot).
+    app_core::notification::repo::resolve_effective_telegram(db, tenant)
 }
 
 /// Normalize a stored box host into a usable base URL with exactly one scheme.

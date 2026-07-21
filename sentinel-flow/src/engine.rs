@@ -786,17 +786,9 @@ fn build_run_context(
 /// Resolve the active Telegram config for `tenant`: the saved config (Postgres) if it has
 /// a non-empty token, else the environment.
 fn resolve_telegram_config(state: &Arc<AppState>, tenant: Uuid) -> Option<NotificationConfig> {
-    if let Some((bot_token, pairing_code)) =
-        app_core::notification::repo::load_telegram(&state.db, tenant)
-    {
-        if !bot_token.trim().is_empty() {
-            return Some(NotificationConfig {
-                bot_token,
-                pairing_code,
-            });
-        }
-    }
-    NotificationConfig::from_env()
+    // tenant-own bot → shared GLOBAL provider bot → env. The global fallback is the fix: a tenant
+    // relying on the shared bot used to get "not configured" here even though pairing/test worked.
+    app_core::notification::repo::resolve_effective_telegram(&state.db, tenant)
 }
 
 #[cfg(test)]
