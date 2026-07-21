@@ -69,8 +69,6 @@ kanban-plugin: board
 	  - Plan: [[olharai-domain-cutover]]
 - [ ] #100 Landing page — Olhar AI rebrand + copy rewrite
 	  - Plan: [[olharai-landing]]
-- [ ] #103 Remove per-run workflow toast
-	  - Plan: [[remove-workflow-run-toast]]
 - [ ] #104 Remove "Connection lost" startup toast
 	  - Plan: [[remove-connection-lost-toast]]
 - [ ] #105 Editor panel toggle — rebind off Tab
@@ -136,6 +134,8 @@ kanban-plugin: board
 ## Done
 
 **Complete**
+- [x] #103 Remove per-run workflow toast
+	  - Plan: [[remove-workflow-run-toast]]
 - [x] #122 Face embeddings — landmark-aligned (kps → face_embed)
 	  - Plan: [[face-embed-landmark-align]]
 - [x] #125 Assert L2-normalization on face embeddings at store time
