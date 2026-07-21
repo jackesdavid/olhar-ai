@@ -26,6 +26,8 @@
   import HardDrive from "@lucide/svelte/icons/hard-drive";
   import Activity from "@lucide/svelte/icons/activity";
   import Wallet from "@lucide/svelte/icons/wallet";
+  import Cpu from "@lucide/svelte/icons/cpu";
+  import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
   import { Button } from "$lib/components/ui/button";
   import { billing } from "$lib/api";
   import { billingLock, syncFromStatus } from "$lib/billing.svelte";
@@ -261,20 +263,23 @@
         ),
   );
 
-  // Tenant-admin screens, shown by permission (cloud mode only — `me` is null on desktop).
+  // Settings group — tenant configuration screens (Devices moved here off the main menu),
+  // shown by permission (cloud mode only — `me` is null on desktop).
+  const settingsItems = $derived(
+    !inTenant
+      ? []
+      : [
+          { label: "General", href: "/settings", icon: SlidersHorizontal },
+          ...(hasPerm("devices.read") ? [{ label: "Devices", href: "/settings/devices", icon: Cpu }] : []),
+          ...(hasPerm("devices.write") ? [{ label: "Edge boxes", href: "/settings/boxes", icon: HardDrive }] : []),
+          ...(hasPerm("roles.manage") ? [{ label: "Roles", href: "/settings/roles", icon: ShieldCheck }] : []),
+          ...(hasPerm("users.manage") ? [{ label: "Users", href: "/settings/users", icon: UsersRound }] : []),
+          ...(hasPerm("billing.read") ? [{ label: "Billing", href: "/billing", icon: Wallet }] : []),
+        ],
+  );
+
+  // Master-only platform screens.
   const adminItems = $derived([
-    ...(inTenant && hasPerm("devices.write")
-      ? [{ label: "Edge boxes", href: "/settings/boxes", icon: HardDrive }]
-      : []),
-    ...(inTenant && hasPerm("roles.manage")
-      ? [{ label: "Roles", href: "/settings/roles", icon: ShieldCheck }]
-      : []),
-    ...(inTenant && hasPerm("users.manage")
-      ? [{ label: "Users", href: "/settings/users", icon: UsersRound }]
-      : []),
-    ...(inTenant && hasPerm("billing.read")
-      ? [{ label: "Billing", href: "/billing", icon: Wallet }]
-      : []),
     ...(auth.me?.is_master
       ? [{ label: "Tenants", href: "/admin/tenants", icon: Building2 }]
       : []),
@@ -362,6 +367,35 @@
               {#if !navCollapsed}<span>{item.label}</span>{/if}
             </a>
           {/each}
+
+          {#if settingsItems.length > 0}
+            <div class="px-3 pb-1 pt-3 {navCollapsed ? 'hidden' : ''}">
+              <span
+                class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+                >Settings</span
+              >
+            </div>
+            {#each settingsItems as item (item.href)}
+              {@const Icon = item.icon}
+              {@const active = item.href === "/settings" ? $page.url.pathname === "/settings" : isActive(item.href)}
+              <a
+                href={item.href}
+                data-active={active}
+                title={navCollapsed ? item.label : undefined}
+                class="group relative flex items-center gap-3 rounded-md py-2 text-sm font-medium text-muted-foreground transition-colors duration-200 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground data-[active=true]:bg-sidebar-accent data-[active=true]:text-foreground {navCollapsed
+                  ? 'justify-center px-0'
+                  : 'px-3'}"
+              >
+                <span
+                  class="absolute left-0 top-1/2 h-5 -translate-y-1/2 rounded-r-full bg-primary transition-all duration-200 {active
+                    ? 'w-1 opacity-100'
+                    : 'w-0 opacity-0'}"
+                ></span>
+                <Icon class="size-4 shrink-0 transition-colors group-data-[active=true]:text-primary" />
+                {#if !navCollapsed}<span>{item.label}</span>{/if}
+              </a>
+            {/each}
+          {/if}
 
           {#if adminItems.length > 0}
             <div class="px-3 pb-1 pt-3 {navCollapsed ? 'hidden' : ''}">

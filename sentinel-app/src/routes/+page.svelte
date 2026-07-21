@@ -27,7 +27,7 @@
   const liveRecipients = $derived(recipients.filter((r) => r.enabled).length);
 
   const stats = $derived([
-    { title: "Devices", value: devices.length, icon: Cpu, href: "/devices" },
+    { title: "Devices", value: devices.length, icon: Cpu, href: "/settings/devices" },
     { title: "Cameras live", value: camerasReady, icon: Video, href: "/live" },
     { title: "Open alerts", value: openAlerts, icon: Bell, href: "/events?kind=alert" },
     { title: "Recipients", value: liveRecipients, icon: Radio, href: "/beacons" },

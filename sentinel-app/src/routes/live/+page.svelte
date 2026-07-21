@@ -356,7 +356,7 @@
             title="No camera streams yet"
             description="Add a camera and set its credentials on the Devices page — your edge resolves the stream automatically."
           >
-            <Button href="/devices" variant="outline">Go to Devices</Button>
+            <Button href="/settings/devices" variant="outline">Go to Devices</Button>
           </EmptyState>
         {:else}
           <div class="flex flex-wrap items-end justify-between gap-4">
