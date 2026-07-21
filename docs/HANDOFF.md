@@ -6,6 +6,39 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-07-21 — Tuya smart-home integration shipped (#129) + memoize bug (#130) + a migration outage
+
+- **Branch:** `main` — **pushed + deployed via CI**. Tree clean. HEAD `acb111e`.
+- **Commits:** `456f9cd` (memoize fix) → `5d791f2` (board) → `9c4f732` (merge Tuya #129) →
+  `eeb7ec1` (board skill → GitHub-first) → `acb111e` (hotfix: renumber migration 0062→0066).
+- **Done:**
+  - **Tuya integration (#129 → Done, issue #9 closed) — LIVE in prod.** New third-party provider +
+    2 workflow nodes (**Control Tuya Device** / **Read Tuya Status**, category Smart Home). app-core
+    `tuya/` module (HMAC-SHA256 client + repo + domain), migration **0066_tuya_devices**, control
+    `/tuya/*` routes + RBAC `tuya.read`, editor dropdowns (device/code by name) + adaptive value
+    widget, **Settings → Integrations** page. `TUYA_ACCESS_ID/KEY/ENDPOINT` set in
+    `/ibbf/sentinel.env`. Full detail: **docs/ref/tuya.md**.
+  - **Bug #130 (Done):** new workflow nodes now persist `memoize: false` (frontend was omitting it →
+    backend `default_true` flipped loop bodies ON, silently breaking iteration). Get/Set Variable
+    `variable`+`type` are read-only in the inspector. Deployed + tested.
+  - **Board process:** cards are now real **GitHub Issues assigned to `@me`** (not draft items) —
+    codified in `.claude/skills/board/SKILL.md` + memory. The board skill was rewritten to be
+    **GitHub Project #3 first** (`docs/Task Board.md` retired — don't edit it).
+- **State:** verified in prod — Integrations shows **Connected** + "Entrada" **Online**; the
+  Control node **toggled the physical relay** end-to-end. control+flow booted clean (migration 66
+  applied, success). `cargo check --workspace` + `svelte-check` were clean pre-merge.
+- **⚠️ Incident:** numbered the tuya migration `0062` trusting the **stale CLAUDE.md** "next 0062"
+  note — collided with `0062_faces_labeling` (repo was already at 0065) → **control+flow boot-loop
+  ~12 min** (gateway/live video stayed up). Fixed by renumber → `0066` + redeploy. **CLAUDE.md now
+  says always `ls` the migrations dir.** Lesson in docs/ref/tuya.md.
+- **Pending / next:** nothing blocking. Tuya v1 is **Default tenant only** (console QR link);
+  self-service multi-tenant pairing is future work (`tuya_uid` column is the hook).
+- **Blockers:** none.
+- **Refs:** **docs/ref/tuya.md**, `crates/app-core/src/tuya/`, `crates/app-core/src/workflows/node/tuya.rs`,
+  `sentinel-control/src/domain/tuya.rs`, `sentinel-app/src/routes/settings/integrations/+page.svelte`.
+
+---
+
 ## 2026-07-19 — Faces: recognition pipeline hardening + the labeling/clustering workspace (#117, #119)
 
 - **Branch:** `main` — **ahead of origin by 17 commits, NOT pushed** (push on resume). Everything

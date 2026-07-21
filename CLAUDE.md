@@ -17,6 +17,8 @@ matches your task:
   discovery + IP auto-reconcile, health reporting, the restart command, and `install.sh`.
 - **[Workflows engine](docs/ref/workflows.md)** — `sentinel-flow`: graph execution, loops,
   cross-graph events, run history, camera binding. (Node catalog: [docs/workflow-nodes.md](docs/workflow-nodes.md).)
+- **[Tuya integration](docs/ref/tuya.md)** — smart-home provider: one operator Tuya Cloud project
+  (HMAC-signed), per-tenant device catalog, the Control/Read Tuya nodes + Integrations page.
 - **[Map (floor plan)](docs/ref/map.md)** — the Map page: top-down 3D blueprint editor (rooms as
   zones, drawn walls + SVG furniture markers, camera FOV), the `RecordPresence` node + live
   categorized presence pulse, the vertical file layout, and build status. (Active: branch
