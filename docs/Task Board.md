@@ -117,10 +117,6 @@ kanban-plugin: board
 	  - Plan: [[faces-labeling-view]]
 - [ ] #120 Face pipeline on primary (HD) stream — GPU decode + per-tenant selector
 	  - Plan: [[face-pipeline-hd-stream]]
-- [ ] #125 Assert L2-normalization on face embeddings at store time
-	  - Plan: [[face-embedding-l2-normalization]]
-- [ ] #122 Face embeddings — landmark-aligned (kps → face_embed)
-	  - Plan: [[face-embed-landmark-align]]
 
 
 ## Review
@@ -140,6 +136,10 @@ kanban-plugin: board
 ## Done
 
 **Complete**
+- [x] #122 Face embeddings — landmark-aligned (kps → face_embed)
+	  - Plan: [[face-embed-landmark-align]]
+- [x] #125 Assert L2-normalization on face embeddings at store time
+	  - Plan: [[face-embedding-l2-normalization]]
 - [x] #86 Delay Trigger node — decouple recording start/stop
 	  - Plan: [[delay-trigger-recording-signal-flow]]
 - [x] #88 Camera credential wizard (bug B)
