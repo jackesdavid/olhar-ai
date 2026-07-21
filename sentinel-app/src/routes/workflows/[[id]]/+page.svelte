@@ -1516,14 +1516,13 @@
         ok: boolean;
         summary: string;
       };
-      // Run finished (ok or error) → drain remaining highlights, then stop. The console
-      // shows only the open graph; other graphs' completions still surface as toasts.
+      // Run finished (ok or error) → drain remaining highlights, then stop. Outcomes surface in
+      // the Console (open graph), the live node highlighting and the activity map — no per-run
+      // toast: it fired for every run of every graph in the tenant, which was pure noise (#103).
       if (gid === selectedGraphId) {
         endLive();
         logs = [{ time: fmtTs(new Date().toISOString()), name, ok, summary }, ...logs].slice(0, 200);
       }
-      if (ok) toast.success(`Workflow "${name}"`, { description: summary });
-      else toast.error(`Workflow "${name}" failed`, { description: summary });
     });
     // Per-node execution events (real-time, catch every node).
     const unNode = onEvent("workflow-node", (payload) => {
