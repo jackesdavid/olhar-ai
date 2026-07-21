@@ -1868,9 +1868,12 @@
       cfg.type = presetVariable.type; // bake the variable's name + type → its dynamic port
     }
     // Local + instant: a real client-assigned id, no server round-trip. Persists on Save (#122).
+    // memoize defaults to FALSE — matching Rust `Graph::add_node`. Sending it explicitly is
+    // required: omitting it makes the backend's `#[serde(default = "default_true")]` flip it ON,
+    // which silently breaks loop bodies (the node caches after one pass and won't iterate).
     const g = graph;
     const id = nextNodeId(g);
-    g.nodes.push({ id, kind: slug, x, y, config: cfg } as Node);
+    g.nodes.push({ id, kind: slug, x, y, config: cfg, memoize: false } as Node);
     selectedNodeId = id;
     markDirty();
     return id;
@@ -4082,6 +4085,11 @@
                             </Select.Content>
                           </Select.Root>
                         {/if}
+                      {:else if (key === "variable" || key === "type") && (selectedNode.kind === "get_variable" || selectedNode.kind === "set_variable")}
+                        <!-- The variable's name + type are owned by the Variables panel; they're
+                             baked onto the node and must not be edited here (editing would desync
+                             the node from its declared variable + break the dynamic port type). -->
+                        <Input class="h-8" value={String(selectedNode.config[key] ?? "")} disabled readonly aria-readonly="true" />
                       {:else if key === "recipient" || port?.type === "recipient"}
                         {#if recipientOptions.length === 0}
                           <p class="rounded border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">

@@ -27,6 +27,8 @@ kanban-plugin: board
 - [ ] #10 Update available — reload to get the latest version.
 - [ ] #93 Box health copy leaks internals ("tailnet", "Tailscale") to users
 	  - Plan: [[box-health-copy-no-internals]]
+- [ ] #130 Workflow node memoize off by default + Variable panel read-only
+	  - Plan: [[workflow-memoize-off-default]]
 
 
 ## ToDo
