@@ -175,7 +175,15 @@
       }
     });
     const unlisten = onEvent("beacons-changed", () => loadBeacons());
+    // Polling fallback: the `beacons-changed` SSE event isn't always delivered (cross-pod relay /
+    // dropped stream), so a newly-paired recipient could sit unseen until a manual refresh. Poll the
+    // list while the page is open — silent, paused when the tab is hidden. `loadBeacons` toasts when
+    // the list grows, so the new pair announces itself.
+    const poll = setInterval(() => {
+      if (!document.hidden) void loadBeacons();
+    }, 5000);
     return () => {
+      clearInterval(poll);
       unlisten.then((un) => un());
     };
   });
