@@ -200,16 +200,22 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
     let mut motion_at: Option<Instant> = None;
     let mut last_emit: Option<Instant> = None;
 
-    // #120 HD face capture: grab the main/HD stream instead of the preview substream when the box
-    // config asks for it. The SAME frame feeds motion + face detection, so there's no temporal
-    // mismatch and no bbox scaling — faces are just bigger.
-    let hd = state.recording.config.face_capture_stream.eq_ignore_ascii_case("hd");
+    // #120 stream mode. A UNIFIED camera runs the whole pipeline off the main stream — and in
+    // unified mode `cam_<ip>` already IS main (see go2rtc::config_yaml), so the hub pulls the plain
+    // (non-`_hd`) stream and gets full-res frames for both motion (downscaled internally) and face
+    // crops. SPLIT keeps the box-wide face_capture_stream choice (preview sub, or an explicit `_hd`
+    // pull — the latter is what caused dual-stream contention on single-profile cameras).
+    let unified = state.device_by_ip(ip).map(|d| d.is_unified()).unwrap_or(false);
+    let hd = !unified && state.recording.config.face_capture_stream.eq_ignore_ascii_case("hd");
     // Warm, continuous frames from the supervised persistent decoder (#120) — no frame.jpeg
     // cold-start. `grab` is the FALLBACK go2rtc path used only while the decoder has no fresh frame.
     crate::capture::ensure(ip, hd);
     let grab: fn(&ureq::Agent, &str, &str) -> Result<Vec<u8>, String> =
         if hd { app_core::go2rtc::frame_from_hd } else { app_core::go2rtc::frame_from };
-    log::info!("frame hub[{ip}]: face capture = {} stream", if hd { "HD (main)" } else { "preview (sub)" });
+    log::info!(
+        "frame hub[{ip}]: stream mode = {}",
+        if unified { "unified (main only)" } else if hd { "split → HD (main)" } else { "split → preview (sub)" }
+    );
     // Resource measurement: go2rtc grab vs edge decode, SPLIT + logged every ~10s → the Logs page,
     // so we can tell which dominates (grab/frame-availability latency vs decode CPU) per preview/HD.
     let mut cap_at = Instant::now();

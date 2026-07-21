@@ -142,6 +142,7 @@ mod tests {
             password: creds.then(|| "p".to_string()),
             rtsp_url: None,
             rtsp_sub_url: None,
+            stream_mode: None,
         }
     }
 

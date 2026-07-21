@@ -45,6 +45,20 @@ pub struct Device {
     #[serde(default)]
     #[sqlx(default)]
     pub rtsp_sub_url: Option<String>,
+    /// Stream mode (#120), a user choice persisted in the cloud `devices` table and pulled by
+    /// the edge. `None`/`"split"` = today's behaviour (substream for preview/motion, main for
+    /// HD/recording). `"unified"` = main-only: one camera session, motion runs on a downscaled
+    /// copy of the main frame, faces are cropped from the full-res main frame, and no substream
+    /// is pulled (avoids dual-stream contention on cameras that can't serve two profiles).
+    #[serde(default)]
+    pub stream_mode: Option<String>,
+}
+
+impl Device {
+    /// True when this camera should run the whole pipeline off the main stream only.
+    pub fn is_unified(&self) -> bool {
+        matches!(self.stream_mode.as_deref(), Some("unified"))
+    }
 }
 
 impl Device {
@@ -60,6 +74,7 @@ impl Device {
             password: None,
             rtsp_url: None,
             rtsp_sub_url: None,
+            stream_mode: None,
         }
     }
 

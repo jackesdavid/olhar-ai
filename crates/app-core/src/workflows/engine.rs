@@ -1354,6 +1354,7 @@ mod tests {
             password: None,
             rtsp_url: None,
             rtsp_sub_url: None,
+            stream_mode: None,
         };
         let (tx, _rx) = std::sync::mpsc::channel();
         let ctx = ToolContext::new_local(
@@ -1813,8 +1814,8 @@ mod tests {
     fn two_test_devices() -> Vec<crate::devices::Device> {
         use crate::devices::Device;
         vec![
-            Device { id: "urn:uuid:aaa".into(), ip: "10.0.0.1".into(), xaddr: "".into(), name: "hall".into(), manufacturer: None, model: None, username: None, password: None, rtsp_url: None, rtsp_sub_url: None },
-            Device { id: "".into(), ip: "10.0.0.2".into(), xaddr: "".into(), name: "lobby".into(), manufacturer: None, model: None, username: None, password: None, rtsp_url: None, rtsp_sub_url: None },
+            Device { id: "urn:uuid:aaa".into(), ip: "10.0.0.1".into(), xaddr: "".into(), name: "hall".into(), manufacturer: None, model: None, username: None, password: None, rtsp_url: None, rtsp_sub_url: None, stream_mode: None },
+            Device { id: "".into(), ip: "10.0.0.2".into(), xaddr: "".into(), name: "lobby".into(), manufacturer: None, model: None, username: None, password: None, rtsp_url: None, rtsp_sub_url: None, stream_mode: None },
         ]
     }
 
@@ -2113,6 +2114,7 @@ mod tests {
             password: None,
             rtsp_url: None,
             rtsp_sub_url: None,
+            stream_mode: None,
         };
         let cam_b = Device {
             id: "".into(),
@@ -2125,6 +2127,7 @@ mod tests {
             password: None,
             rtsp_url: None,
             rtsp_sub_url: None,
+            stream_mode: None,
         };
         let (tx, _rx) = std::sync::mpsc::channel();
         ToolContext::new_local(

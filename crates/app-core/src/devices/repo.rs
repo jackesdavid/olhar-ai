@@ -7,7 +7,7 @@ use crate::db::Db;
 
 use super::Device;
 
-const COLS: &str = "id, ip, xaddr, name, manufacturer, model, username, password, rtsp_url";
+const COLS: &str = "id, ip, xaddr, name, manufacturer, model, username, password, rtsp_url, stream_mode";
 
 /// The tenant's device list, ordered by name. Empty (and logged) on a query error.
 pub fn load(db: &Db, tenant_id: Uuid) -> Vec<Device> {
@@ -32,8 +32,8 @@ pub fn save(db: &Db, tenant_id: Uuid, devices: &[Device]) {
         for d in &devices {
             sqlx::query(
                 "INSERT INTO devices \
-                 (tenant_id, ip, id, xaddr, name, manufacturer, model, username, password, rtsp_url) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                 (tenant_id, ip, id, xaddr, name, manufacturer, model, username, password, rtsp_url, stream_mode) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
             )
             .bind(tenant_id)
             .bind(&d.ip)
@@ -45,6 +45,7 @@ pub fn save(db: &Db, tenant_id: Uuid, devices: &[Device]) {
             .bind(&d.username)
             .bind(&d.password)
             .bind(&d.rtsp_url)
+            .bind(&d.stream_mode)
             .execute(&mut *tx)
             .await?;
         }

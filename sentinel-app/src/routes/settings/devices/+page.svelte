@@ -72,6 +72,7 @@
   let editName = $state("");
   let editUser = $state("");
   let editPass = $state("");
+  let editStreamMode = $state("split"); // #120 — "split" | "unified"
   let savingDetail = $state(false);
   // Credential test (card #88): the camera proves the creds before we save them.
   type TestState = "idle" | "testing" | "verified" | "failed";
@@ -262,6 +263,7 @@
     editName = d.name;
     editUser = d.username ?? "";
     editPass = d.password ?? "";
+    editStreamMode = d.stream_mode === "unified" ? "unified" : "split";
     resetTest();
     detailOpen = true;
   }
@@ -295,7 +297,7 @@
       }
       if (res.snapshot) testSnapshotUrl = `data:image/jpeg;base64,${res.snapshot}`;
       // Proven — now it's safe to persist the name and hand the creds to the edge.
-      const device: Device = { ...detail, name: editName.trim() || detail.name, username: null, password: null };
+      const device: Device = { ...detail, name: editName.trim() || detail.name, stream_mode: editStreamMode, username: null, password: null };
       await data.saveDevice(device);
       await data.setCredentials(detail.ip, editUser, editPass);
       detail = device;
@@ -363,8 +365,8 @@
     if (!detail) return;
     savingDetail = true;
     try {
-      // Save the name only; relay credentials to the edge (never stored in the cloud).
-      const device: Device = { ...detail, name: editName.trim() || detail.name, username: null, password: null };
+      // Save the name + stream mode; relay credentials to the edge (never stored in the cloud).
+      const device: Device = { ...detail, name: editName.trim() || detail.name, stream_mode: editStreamMode, username: null, password: null };
       await data.saveDevice(device);
       if (editUser.length > 0) {
         await data.setCredentials(detail.ip, editUser, editPass);
@@ -574,6 +576,34 @@
         <p class="text-xs text-muted-foreground">
           Set the camera's credentials — your edge resolves the stream on its own network. The RTSP URL stays on the edge.
         </p>
+
+        <!-- Stream mode (#120): Split (sub + main) vs Unified (main only, HD faces). -->
+        <div class="space-y-2 rounded-lg border border-border bg-well p-3">
+          <Label class="text-sm font-medium">Stream mode</Label>
+          <div class="grid gap-2 sm:grid-cols-2">
+            <button
+              type="button"
+              class="rounded-md border px-3 py-2 text-left text-sm transition-colors {editStreamMode === 'split' ? 'border-primary bg-primary/10' : 'border-border hover:bg-primary/5'}"
+              onclick={() => (editStreamMode = "split")}
+            >
+              <span class="font-medium">Split</span>
+              <span class="mt-0.5 block text-[11px] leading-snug text-muted-foreground">Substream for preview + motion, main for HD/recording. Default.</span>
+            </button>
+            <button
+              type="button"
+              class="rounded-md border px-3 py-2 text-left text-sm transition-colors {editStreamMode === 'unified' ? 'border-primary bg-primary/10' : 'border-border hover:bg-primary/5'}"
+              onclick={() => (editStreamMode = "unified")}
+            >
+              <span class="font-medium">Unified (HD)</span>
+              <span class="mt-0.5 block text-[11px] leading-snug text-muted-foreground">Main stream only — sharp HD faces, no substream. One camera session.</span>
+            </button>
+          </div>
+          {#if editStreamMode === "unified"}
+            <p class="text-[11px] leading-snug text-muted-foreground">
+              Motion still runs (on a downscaled copy of the main frame). Use this when the camera can't serve two streams at once, or when you want HD faces.
+            </p>
+          {/if}
+        </div>
 
         {#if testState !== "idle"}
           <div class="rounded-lg border border-border bg-well p-3">

@@ -40,6 +40,8 @@ export type Device = {
   username?: string | null;
   password?: string | null;
   rtsp_url?: string | null;
+  /** Stream mode (#120): "split" (default) or "unified" (main-only pipeline). */
+  stream_mode?: string | null;
 };
 
 /** A camera that answered a discovery probe (matches `app_core::onvif::DiscoveredDevice`). */

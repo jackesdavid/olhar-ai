@@ -72,13 +72,17 @@ pub fn config_yaml(devices: &[Device]) -> String {
         }
         let main = rtsp_url_with_creds(rtsp, user, pass);
 
-        // Preview = substream if the camera exposes one, else the main stream.
+        // Preview = substream if the camera exposes one, else the main stream. In UNIFIED mode
+        // (#120) we deliberately ignore the substream and point the preview stream at MAIN, so
+        // every consumer (motion/detection, recording, live, snapshots — all read `cam_<ip>`)
+        // pulls the SAME single upstream session. `cam_<ip>_hd` stays as an alias to main so the
+        // Live page's `_hd` request still resolves and shares that one session (no second pull).
         let sub = d
             .rtsp_sub_url
             .as_deref()
             .filter(|s| !s.trim().is_empty())
             .map(|s| rtsp_url_with_creds(s, user, pass));
-        let preview = sub.as_deref().unwrap_or(&main);
+        let preview = if d.is_unified() { &main } else { sub.as_deref().unwrap_or(&main) };
 
         let name = stream_name(&d.ip);
         out.push_str(&format!("  {name}: {preview}#media=video\n"));
