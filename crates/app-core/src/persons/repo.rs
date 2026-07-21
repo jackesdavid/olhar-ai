@@ -209,8 +209,26 @@ pub fn enrolled_person_ids(db: &Db, tenant_id: Uuid) -> Vec<String> {
     })
 }
 
-/// Format an embedding as a pgvector text literal: `[0.1,0.2,…]`.
+/// L2-normalize an embedding to unit length (card #125). ArcFace vectors *should* already be
+/// unit-norm, but guaranteeing it at store time keeps the DB `<=>` cosine path and the in-Rust
+/// `1 - dot` clustering path in agreement, so sidecar contract drift can't silently skew results.
+/// A zero vector is passed through unchanged. (Mirrors `faces::l2_normalize`.)
+fn l2_normalize(embedding: &[f32]) -> Vec<f32> {
+    let norm = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+    debug_assert!(
+        norm == 0.0 || (norm - 1.0).abs() < 1e-2,
+        "person embedding not unit-norm at store time (‖v‖={norm}); sidecar contract drift?"
+    );
+    if norm > 0.0 {
+        embedding.iter().map(|x| x / norm).collect()
+    } else {
+        embedding.to_vec()
+    }
+}
+
+/// Format an embedding as a pgvector text literal: `[0.1,0.2,…]`, L2-normalized (card #125).
 fn vector_literal(embedding: &[f32]) -> String {
+    let embedding = l2_normalize(embedding);
     let mut s = String::with_capacity(embedding.len() * 8 + 2);
     s.push('[');
     for (i, v) in embedding.iter().enumerate() {

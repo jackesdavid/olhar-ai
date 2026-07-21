@@ -37,6 +37,8 @@ kanban-plugin: board
 	  - Plan: [[face-recognition-next-steps]]
 - [ ] #20 GetCameraRoom node — look up room name from a camera entity
 	  - Plan: [[get-camera-room]]
+- [ ] #80 Windows edge — installer, service, self-update
+	  - Plan: [[edge-windows]]
 - [ ] #21 Map: presence history + logs panel in SidePanel
 	  - Plan: [[map-presence-history]]
 - [ ] #58 Draw Text: inside/outside bbox placement
@@ -85,9 +87,20 @@ kanban-plugin: board
 	  - Plan: [[node-palette-search-autofocus]]
 - [ ] #111 Scheduled workflow trigger — calendar schedule builder
 	  - Plan: [[workflow-schedule-trigger]]
-
 - [ ] #121 Retire local builds — full CI/CD (build + host on GitHub)
 	  - Plan: [[retire-local-builds-ci]]
+- [ ] #122 Face embeddings — landmark-aligned (kps → face_embed)
+	  - Plan: [[face-embed-landmark-align]]
+- [ ] #126 Face quality gate — blur + pose before embed
+	  - Plan: [[face-quality-gate-upstream]]
+- [ ] #127 pgvector face kNN — HNSW index + retrieve-then-rerank
+	  - Plan: [[face-knn-hnsw-rerank]]
+- [ ] #123 Recognition scoring — per-person template + margin test
+	  - Plan: [[face-recognition-per-person-scoring]]
+- [ ] #124 Face clustering — kill single-link chaining
+	  - Plan: [[face-clustering-chaining-fix]]
+- [ ] #128 Similarity thresholds — per-tenant/camera calibration
+	  - Plan: [[face-threshold-calibration]]
 
 
 ## In Progress
@@ -100,18 +113,14 @@ kanban-plugin: board
 	  - Plan: [[workflow-parameterization]]
 - [ ] #113 Dictionaries — reusable typed tables + nodes
 	  - Plan: [[dictionaries-tables]]
-- [ ] #115 Get Variable over-activation — fires on branches that don't use it
-	  - Plan: [[get-variable-over-activation]]
 - [ ] #11 Update button stays loading until update completes
 	  - Plan: [[update-button-loading]]
-- [ ] #116 Playback view fixes — clip-bar width, granular zoom, per-kind lanes, full-height
-	  - Plan: [[playback-view-fixes]]
-- [ ] #117 Face recognition pipeline — edge detect → embed → recognize → store
-	  - Plan: [[face-recognition-pipeline]]
 - [ ] #119 Faces view — cluster + bulk-label unknown faces → people
 	  - Plan: [[faces-labeling-view]]
 - [ ] #120 Face pipeline on primary (HD) stream — GPU decode + per-tenant selector
 	  - Plan: [[face-pipeline-hd-stream]]
+- [ ] #125 Assert L2-normalization on face embeddings at store time
+	  - Plan: [[face-embedding-l2-normalization]]
 
 
 ## Review
@@ -122,8 +131,10 @@ kanban-plugin: board
 	  - Plan: [[editor-toggles-top-cluster]]
 - [ ] #114 Stop Recording missing camera on DelayTrigger stop
 	  - Plan: [[stop-recording-missing-camera]]
-- [ ] #80 Windows edge — installer, service, self-update
-	  - Plan: [[edge-windows]]
+- [ ] #115 Get Variable over-activation — fires on branches that don't use it
+	  - Plan: [[get-variable-over-activation]]
+- [ ] #117 Face recognition pipeline — edge detect → embed → recognize → store
+	  - Plan: [[face-recognition-pipeline]]
 
 
 ## Done
@@ -135,6 +146,8 @@ kanban-plugin: board
 	  - Plan: [[camera-credential-wizard]]
 - [x] #92 Edge tailnet self-heal — a stopped Tailscale strands the box
 	  - Plan: [[edge-tailnet-self-heal]]
+- [x] #116 Playback view fixes — clip-bar width, granular zoom, per-kind lanes, full-height
+	  - Plan: [[playback-view-fixes]]
 - [x] #97 Add camera manually — IP + ONVIF port, not just discovered
 	  - Plan: [[manual-camera-add]]
 - [x] #98 Edge ring reconcile — stop rings for cameras that left
