@@ -200,8 +200,17 @@ export const data = {
   listTuyaDevices: (): Promise<TuyaDevice[]> => api.get<TuyaDevice[]>("/tuya/devices"),
   /** Pull the project's linked devices from the Tuya Cloud and cache them. */
   syncTuyaDevices: (): Promise<{ synced: number }> => api.post<{ synced: number }>("/tuya/sync", {}),
-  /** Whether the operator configured a Tuya project (env creds present). */
-  getTuyaProvider: (): Promise<{ configured: boolean }> => api.get<{ configured: boolean }>("/tuya/provider"),
+  /** Whether Tuya is connected for this tenant + via which source (tenant creds / operator / none). */
+  getTuyaProvider: (): Promise<{ configured: boolean; source: "tenant" | "operator" | "none" }> =>
+    api.get<{ configured: boolean; source: "tenant" | "operator" | "none" }>("/tuya/provider"),
+  /** Save the tenant's own Tuya project credentials (validated server-side before saving). */
+  setTuyaConfig: async (access_id: string, access_key: string, endpoint: string): Promise<void> => {
+    await api.put<void>("/tuya/config", { access_id, access_key, endpoint });
+  },
+  /** Disconnect the tenant's Tuya account (remove saved credentials). */
+  deleteTuyaConfig: async (): Promise<void> => {
+    await api.del<void>("/tuya/config");
+  },
   /** Set a device's friendly per-function labels (`{ code: label }`). Survives sync. */
   setTuyaFunctionLabels: async (deviceId: string, labels: Record<string, string>): Promise<void> => {
     await api.patch<void>(`/tuya/devices/${encodeURIComponent(deviceId)}/labels`, { labels });

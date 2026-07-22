@@ -77,6 +77,12 @@ fn call(cfg: &TuyaConfig, method: &str, path: &str, token: Option<&str>, body: O
     }
 }
 
+/// Verify a set of credentials by fetching a token. `Ok(())` = the access_id/access_key/endpoint
+/// are valid; `Err` carries the Tuya error (wrong keys, wrong data center, unsubscribed API…).
+pub fn validate(cfg: &TuyaConfig) -> Result<(), String> {
+    token(cfg).map(|_| ())
+}
+
 /// A project token (grant_type=1). Valid ~2h; we fetch per operation (v1 — no cache).
 fn token(cfg: &TuyaConfig) -> Result<String, String> {
     let j = call(cfg, "GET", "/v1.0/token?grant_type=1", None, None)?;

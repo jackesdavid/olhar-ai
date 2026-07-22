@@ -11,8 +11,8 @@ fn cfg_str<'a>(config: &'a Value, key: &str) -> &'a str {
 }
 
 fn config_or_missing(config: &Value, sys: &ToolContext) -> Result<(TuyaConfig, tuya::TuyaDevice), String> {
-    let cfg = TuyaConfig::from_env()
-        .ok_or("Tuya is not configured — set TUYA_ACCESS_ID / TUYA_ACCESS_KEY on the server.")?;
+    let cfg = tuya::repo::resolve_config(&sys.db, sys.tenant_id)
+        .ok_or("Tuya is not connected — add your Tuya project credentials in Settings → Integrations.")?;
     let selector = cfg_str(config, "tuya_device");
     let device = tuya::repo::find_selector(&sys.db, sys.tenant_id, selector)
         .ok_or_else(|| format!("Tuya device '{selector}' not found — sync devices in Integrations."))?;

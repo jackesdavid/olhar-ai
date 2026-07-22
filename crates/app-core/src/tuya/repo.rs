@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::db::Db;
 use crate::timeutil::now_rfc3339;
 
-use super::domain::TuyaDevice;
+use super::domain::{TuyaConfig, TuyaDevice};
 
 const COLS: &str = "device_id, name, category, product_id, online, functions_json, function_labels_json";
 
@@ -120,6 +120,69 @@ pub fn link_account(db: &Db, tenant_id: Uuid, tuya_uid: &str) -> Result<(), Stri
     });
     res.map_err(|e| {
         log::error!("tuya::repo::link_account failed: {e}");
+        format!("database error: {e}")
+    })
+}
+
+/// The effective Tuya credentials for a tenant: their own saved config ("bring your own project"),
+/// else the operator env fallback (`TuyaConfig::from_env`). `None` when neither is set.
+pub fn resolve_config(db: &Db, tenant_id: Uuid) -> Option<TuyaConfig> {
+    load_config(db, tenant_id).or_else(TuyaConfig::from_env)
+}
+
+/// The tenant's own saved Tuya credentials (the `tuya_config` row), if any.
+pub fn load_config(db: &Db, tenant_id: Uuid) -> Option<TuyaConfig> {
+    let pool = db.pool();
+    db.block(async move {
+        let row: Option<(String, String, String)> =
+            sqlx::query_as("SELECT access_id, access_key, endpoint FROM tuya_config WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or_else(|e| {
+                    log::error!("tuya::repo::load_config failed: {e}");
+                    None
+                });
+        row.map(|(access_id, access_key, endpoint)| TuyaConfig { access_id, access_key, endpoint })
+    })
+}
+
+/// Save (upsert) the tenant's own Tuya credentials.
+pub fn save_config(db: &Db, tenant_id: Uuid, cfg: &TuyaConfig) -> Result<(), String> {
+    let pool = db.pool();
+    let cfg = cfg.clone();
+    let now = now_rfc3339();
+    let res: Result<(), sqlx::Error> = db.block(async move {
+        sqlx::query(
+            "INSERT INTO tuya_config (tenant_id, access_id, access_key, endpoint, updated_at) \
+             VALUES ($1, $2, $3, $4, $5) \
+             ON CONFLICT (tenant_id) DO UPDATE SET access_id = EXCLUDED.access_id, \
+               access_key = EXCLUDED.access_key, endpoint = EXCLUDED.endpoint, updated_at = EXCLUDED.updated_at",
+        )
+        .bind(tenant_id)
+        .bind(&cfg.access_id)
+        .bind(&cfg.access_key)
+        .bind(&cfg.endpoint)
+        .bind(&now)
+        .execute(&pool)
+        .await?;
+        Ok(())
+    });
+    res.map_err(|e| {
+        log::error!("tuya::repo::save_config failed: {e}");
+        format!("database error: {e}")
+    })
+}
+
+/// Remove the tenant's own Tuya credentials (disconnect → falls back to operator env, if any).
+pub fn delete_config(db: &Db, tenant_id: Uuid) -> Result<(), String> {
+    let pool = db.pool();
+    let res: Result<(), sqlx::Error> = db.block(async move {
+        sqlx::query("DELETE FROM tuya_config WHERE tenant_id = $1").bind(tenant_id).execute(&pool).await?;
+        Ok(())
+    });
+    res.map_err(|e| {
+        log::error!("tuya::repo::delete_config failed: {e}");
         format!("database error: {e}")
     })
 }
