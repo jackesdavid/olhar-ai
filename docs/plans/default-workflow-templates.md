@@ -39,10 +39,14 @@ presence/Map, Display nodes — all represented.
 
 ## Status / phasing
 - **Phase 1 (shipped):** seed infrastructure (`seed_templates.rs`, `store::tenant_id_by_slug`,
-  platform tenant, idempotent insert) + the L0 onboarding pilot. Validates the whole pipeline
-  (seed → picker → editor) before mass-authoring.
-- **Phase 2+:** author the L1–L6 functional templates into `templates()` (one builder fn each),
-  batch by batch. The operator gives each a visual pass in-editor afterwards.
+  platform tenant, idempotent insert) + the L0 onboarding pilot.
+- **Phase 2 (shipped):** all L1–L6 functional templates authored in `templates()` (one builder fn
+  each, stable ids 0x02–0x0C), each with a Title + Markdown doc node. Built via the validated domain
+  API — the `templates_build_*` test asserts every edge's ports **and types** resolve (it caught a
+  `Num→Text` mismatch → fixed with a `NumToText` node). Event-driven templates wire only `exec` from
+  `When Event` (payload/data ports need the event schema at runtime); required camera/chat_id inputs
+  are left for the operator to fill on clone, as documented in each canvas. **Operator visual pass +
+  real-run validation pending.**
 
 ## Out of scope (v1)
 - Advanced "recipes" (HTTP post, Flip flop, 2-frame Motion, Blur Outside Box, in-graph dictionary
