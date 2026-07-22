@@ -197,7 +197,7 @@
             <ol class="list-decimal space-y-2 border-t border-border px-6 py-3 text-sm text-muted-foreground">
               <li>
                 Create a free developer account at
-                <a href="https://iot.tuya.com" target="_blank" rel="noopener" class="inline-flex items-center gap-0.5 font-medium text-foreground underline">iot.tuya.com <ExternalLink class="size-3" /></a>.
+                <a href="https://platform.tuya.com" target="_blank" rel="noopener" class="inline-flex items-center gap-0.5 font-medium text-foreground underline">platform.tuya.com <ExternalLink class="size-3" /></a>.
               </li>
               <li><strong>Cloud → Development → Create Cloud Project.</strong> Development method: <strong>Smart Home</strong>. Pick the <strong>Data Center</strong> for your region (Brazil = Western America).</li>
               <li>Subscribe the APIs (free trial): <strong>IoT Core</strong>, <strong>Authorization</strong>, and <strong>Smart Home Basic Service</strong> (Service API → Go to Authorize).</li>
