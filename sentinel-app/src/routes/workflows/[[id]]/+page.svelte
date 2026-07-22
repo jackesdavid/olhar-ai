@@ -1240,15 +1240,16 @@
   const PURE_KINDS = new Set([
     "num_lt","num_lte","num_gt","num_gte","num_eq","num_ne","compare","and","or","not","text_compare",
   ]);
-  // Get/Set Variable are simple one-port nodes → render them narrower than the default.
-  // Otherwise grow the node to fit its header title (icon + text + right padding) so long
-  // labels — e.g. "When Event: telegram_message" — aren't clipped. Capped to stay sane.
+  // Grow every node to fit its header title (icon + text + right padding) so long labels —
+  // e.g. "When Event: telegram_message" or "Get current_recipient" — aren't clipped. Capped
+  // to stay sane. Get/Set Variable keep a tighter 120px floor so short names (e.g. "Get x")
+  // stay compact, but still widen to fit a long variable name.
   const NODE_W_MAX = 320;
   function nodeW(n: Node): number {
-    if (n.kind === "get_variable" || n.kind === "set_variable") return 120;
     const title = nodeTitle(n, catalog[n.kind]);
     const est = 46 + Math.ceil(title.length * 6.6); // 32 icon+pad + text + ~14 right pad
-    return Math.min(NODE_W_MAX, Math.max(NODE_W, est));
+    const floor = n.kind === "get_variable" || n.kind === "set_variable" ? 120 : NODE_W;
+    return Math.min(NODE_W_MAX, Math.max(floor, est));
   }
   function isCompareOrLogic(kind: string): boolean {
     return PURE_KINDS.has(kind);
