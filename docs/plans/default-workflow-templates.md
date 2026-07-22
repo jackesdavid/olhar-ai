@@ -49,3 +49,44 @@ presence/Map, Display nodes — all represented.
   composition) — a later L7.
 - Live-value Display nodes (Text/Gauge) in the docs — arrive with #135 Slice 2.
 - Localization of template copy beyond pt-BR.
+
+## Build spec (per template) — turnkey for `seed_templates.rs::templates()`
+Each = a `template(stable_id, name, desc)` graph + `add_node`/`add_edge` (validated) + a Title/
+Markdown doc node. `stable_id` 0x01 taken (onboarding); use 0x02.. next. `NodeKind`s below are the
+exact enum variants (`crates/app-core/src/workflows/domain.rs`); ports/config per `docs/workflow-nodes.md`.
+
+- **#1 Alerta de pessoa** — trigger `Cron{every_secs:2}`. `GetCurrentFrame`(memoize off) →`image`
+  `PersonDetection` →`count` `Compare{op:">",b:0}` →`result` `If` →true `Cooldown{window_secs:300}`
+  → `NotifyRecipient`(message + wire `image`). Teaches: Cron, live frame, detection, Compare/If,
+  Cooldown, notify-with-image.
+- **#2 Quem está na porta?** — trigger `Manual`. `CameraSnapshot` →`image` `DescribeImage`
+  {question:"tem alguém na porta?"} →`description` `NotifyRecipient`(message=description). Teaches:
+  snapshot, DescribeImage (vision LLM).
+- **#3 Snapshot anotado** — `Manual`. `CameraSnapshot`/`GetCurrentFrame` → `ObjectDetection`{class}
+  →`detections` `ForEach` →loop `BreakDetection` →`bbox` `DrawBbox`{style:"reticle"} →`image`
+  `DrawText` → `ShowImage`. Teaches: ForEach, Break*, DrawBbox/DrawText, Bbox type, ShowImage.
+- **#4 Clipe em movimento** — trigger event `On event("motion")`. `DelayTrigger` →start
+  `StartRecording`; →stop `StopRecording` →`clip_id` `ReplyWithRecording`/`NotifyRecipient`.
+  Teaches: DelayTrigger debounce, recording lifecycle.
+- **#5 Bot de comandos** — `OnEvent("telegram_message")` (outputs text/chat_id/command/args) →
+  `StringSwitch{arms:["/snap","/status"]}` →/snap `CameraSnapshot` →`image` `ReplyToSender`(wire
+  chat_id + image). Teaches: system events, StringSwitch, ReplyToSender.
+- **#6 Bot em linguagem natural** — `OnEvent("telegram_message")` → `AiSwitch{arms:[foto,pergunta,
+  status]}` →foto `AiExtract{field:"camera name",type:Camera}` →`value` `CameraSnapshot`;
+  pergunta `AiAnswer` →`response` `ReplyToSender`. Teaches: AiSwitch, AiExtract, AiAnswer.
+- **#7 Relatório diário** — trigger `Schedule{freq:daily,times}`. per-camera `GetCurrentFrame` →
+  `PersonDetection` →`count` `SetVariable`/`GetVariable(total)` → `DictAddRow`(log table) →
+  `Format` → `NotifyRecipient`. Teaches: Schedule, Variables, Dictionary mutate, Format.
+- **#8 Cruzamento de linha** — `Region{points: line}` shared into `OnEvent("line_crossed")` →
+  `DrawBbox` → `CreateAlert`/`NotifyRecipient`. Teaches: Region (line/zone), edge-tracking events.
+- **#9 Reconhecimento facial** — `OnEvent("face_detected")` → `FaceEmbedding` →`embedding`
+  `RecognizeFace{top_k:5}` →`found` `If` →true `NotifyRecipient`; →false `StoreFace`(label=""
+  unknown). Teaches: face pipeline (embed→kNN→union gallery), StoreFace.
+- **#10 Luz por presença** — `OnEvent("object_entered")` zona → `TuyaControl`(switch on); paired
+  `OnEvent("object_exited")` + empty → `TuyaControl`(off). Teaches: TuyaControl/Read, zones→action.
+- **#11 Presença viva no Mapa** — `Cron`/event → detect person in zona → `RecordPresence`
+  {category,label}. Teaches: RecordPresence, Map pulse.
+
+Note: verify exact port names against the catalog at build time; `add_edge` will fail loudly on a
+wrong port, which is the safety net. Some events (`motion`, `line_crossed`, `face_detected`,
+`object_entered/exited`, `telegram_message`) are the system-event catalog (`repo::system_events()`).
