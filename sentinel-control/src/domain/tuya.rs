@@ -124,22 +124,14 @@ async fn sync(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<J
     Ok(Json(json!({ "synced": synced })))
 }
 
-/// Whether Tuya is connected for this tenant, and via which source — so the UI shows the
-/// "connect your account" flow (`none`) vs. "connected via your account" (`tenant`) vs. the
-/// operator fallback (`operator`).
+/// Whether this tenant connected its own Tuya project — drives the UI: `none` shows the
+/// "connect your account" flow, `tenant` shows the device list. Strictly per-tenant (no operator
+/// fallback), so a tenant never sees another's devices.
 async fn provider(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Value>, ApiErr> {
     auth::require(&c, "tuya.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    let source = blocking(move || {
-        if tuya::repo::load_config(&db, tid).is_some() {
-            "tenant"
-        } else if TuyaConfig::from_env().is_some() {
-            "operator"
-        } else {
-            "none"
-        }
-    })
-    .await?;
-    Ok(Json(json!({ "configured": source != "none", "source": source })))
+    let connected = blocking(move || tuya::repo::load_config(&db, tid).is_some()).await?;
+    let source = if connected { "tenant" } else { "none" };
+    Ok(Json(json!({ "configured": connected, "source": source })))
 }

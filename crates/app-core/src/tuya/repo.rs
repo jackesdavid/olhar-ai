@@ -124,10 +124,11 @@ pub fn link_account(db: &Db, tenant_id: Uuid, tuya_uid: &str) -> Result<(), Stri
     })
 }
 
-/// The effective Tuya credentials for a tenant: their own saved config ("bring your own project"),
-/// else the operator env fallback (`TuyaConfig::from_env`). `None` when neither is set.
+/// The tenant's Tuya credentials ("bring your own project"). Strictly per-tenant — there is NO
+/// global env fallback, so one tenant can never see another's (or the operator's) devices. Every
+/// tenant, including the operator's own, connects its own project via the Integrations page.
 pub fn resolve_config(db: &Db, tenant_id: Uuid) -> Option<TuyaConfig> {
-    load_config(db, tenant_id).or_else(TuyaConfig::from_env)
+    load_config(db, tenant_id)
 }
 
 /// The tenant's own saved Tuya credentials (the `tuya_config` row), if any.
