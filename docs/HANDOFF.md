@@ -6,6 +6,40 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-07-22 — Tuya v2: friendly labels, dynamic typed I/O, self-service BYO project (#131)
+
+- **Branch:** `main` — pushed + deployed via CI (multiple deploys, all clean). HEAD `03c8d2d`.
+- **Commits:** `31a06c2` (labels + dynamic value input) → `86d49a9` (hide value_type) → `f94236a`
+  (per-tenant BYO creds) → `cef3e44` (privacy: strip global env fallback) → `5dd9b5e` (platform.tuya.com)
+  → `f19a295` (autocomplete off on credentials) → `9d7537a` (dynamic typed read output) → `03c8d2d`
+  (ForEach `completed` last).
+- **Done (card #131 → Done, issue #11):**
+  - **Friendly function labels** — name each data point (`switch_1 → "Luz Escada"`) on Integrations;
+    stored in `tuya_devices.function_labels_json`, preserved across sync. `PATCH /tuya/devices/:id/labels`.
+  - **Dynamic typed value** — Control's `value` **input** + Read's `value` **output** are typed by the
+    selected data point (Boolean→Bool/Integer→Num/Enum·String→Text), baked into `config.value_type`
+    (hidden), resolved in `GraphNode::input_ports`/`output_ports` like Set Variable.
+  - **Self-service "bring your own Tuya project"** (migration `0068_tuya_config`) — each tenant connects
+    its OWN Tuya project (guided walkthrough + Access ID/Secret form, validated before save). **Strictly
+    per-tenant, NO env fallback** (privacy — a tenant never sees another's devices). The HA/LocalTuya
+    pattern. `PUT/DELETE /tuya/config`, `provider` returns `{configured,source}`, RBAC `tuya.write`.
+  - **Autocomplete off** on all credential fields (Tuya/camera → `off`, new-password fields →
+    `new-password`); login kept intact.
+  - **ForEach `completed` pin renders last** (below item/index) — clearer loop layout.
+- **State:** all deployed + **dogfooded end-to-end in prod** (BYO connect → sync → toggle relay; the
+  user connected the Default tenant via the new flow). `cargo check --workspace` + `svelte-check` clean
+  on every deploy. Migration 0068 validated on live DB.
+- **Key finding (documented in docs/ref/tuya.md):** self-service to ONE Sentinel project is impossible
+  without an OEM app (OAuth = OEM-only; user/password = `1106`; console-QR automation = ToS-gray +
+  account-suspension risk; `x-frame-options: deny` + SOP + captcha block every browser trick). BYO
+  project is the clean, standard answer.
+- **Pending / next:** #132 (filter non-controllable String data points from the node dropdown), #133
+  (local control via edge using `local_key` — offline/fast). OEM app = deferred product call.
+- **Blockers:** none.
+- **Refs:** **docs/ref/tuya.md** (fully rewritten: BYO model + options map + local-control note + runbook).
+
+---
+
 ## 2026-07-21 — Tuya smart-home integration shipped (#129) + memoize bug (#130) + a migration outage
 
 - **Branch:** `main` — **pushed + deployed via CI**. Tree clean. HEAD `acb111e`.
