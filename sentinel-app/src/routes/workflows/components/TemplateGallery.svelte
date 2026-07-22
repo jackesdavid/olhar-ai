@@ -4,7 +4,6 @@
   import LayoutTemplate from "@lucide/svelte/icons/layout-template";
   import ArrowRight from "@lucide/svelte/icons/arrow-right";
   import Globe from "@lucide/svelte/icons/globe";
-  import Pencil from "@lucide/svelte/icons/pencil";
   import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
@@ -16,19 +15,13 @@
     templates,
     loading,
     usingId,
-    editableIds,
     onUse,
-    onEdit,
     onBack,
   }: {
     templates: TemplateSummary[];
     loading: boolean;
     usingId: string | null;
-    // Ids of templates that live in the CURRENT tenant → editable in place (own templates, or the
-    // shared globals when the operator has assumed the platform tenant). Others are clone-only.
-    editableIds: Set<string>;
     onUse: (t: TemplateSummary) => void;
-    onEdit: (t: TemplateSummary) => void;
     onBack: () => void;
   } = $props();
 </script>
@@ -69,12 +62,7 @@
               <span>Asks for {t.inputs.map((v) => v.name).join(", ")}</span>
             </div>
           {/if}
-          <div class="mt-4 flex items-center justify-end gap-2">
-            {#if editableIds.has(t.id)}
-              <Button variant="ghost" size="sm" onclick={() => onEdit(t)}>
-                <Pencil class="size-3.5" /> Edit
-              </Button>
-            {/if}
+          <div class="mt-4 flex justify-end">
             <Button size="sm" class="press" disabled={usingId === t.id} onclick={() => onUse(t)}>
               {usingId === t.id ? "Creating…" : "Use template"}
               {#if usingId !== t.id}<ArrowRight class="size-3.5" />{/if}

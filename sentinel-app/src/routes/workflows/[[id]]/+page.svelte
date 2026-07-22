@@ -1541,9 +1541,6 @@
   let templates = $state<TemplateSummary[]>([]);
   let templatesLoading = $state(false);
   let usingTemplateId = $state<string | null>(null);
-  // A template is editable in place when it lives in THIS tenant (own templates, or the shared
-  // globals once the operator has assumed the platform tenant). Its id then appears in `graphs`.
-  const editableTemplateIds = $derived(new Set(graphs.map((g) => g.id)));
   function listTabClass(t: "mine" | "templates"): string {
     const base = "flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition-colors -mb-px";
     return listTab === t
@@ -3339,9 +3336,7 @@
           {templates}
           loading={templatesLoading}
           usingId={usingTemplateId}
-          editableIds={editableTemplateIds}
           onUse={cloneTemplate}
-          onEdit={(t) => openGraph(t.id)}
           onBack={() => (listTab = "mine")}
         />
       {/if}
