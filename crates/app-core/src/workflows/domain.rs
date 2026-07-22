@@ -513,9 +513,6 @@ pub enum NodeKind {
     /// Display: a resizable box that renders `text` as Markdown. Zero exec, zero ports (static
     /// v1 — a live wired variant is a later enhancement).
     Markdown,
-    /// Display: a horizontal strip of icon+text chips with one `active` chip highlighted. Purely
-    /// decorative section labels — no content switching. Config `tabs` (list) + `active` + `color`.
-    Tabs,
     /// Wire organizer: a tiny pure passthrough node (any → any) used to bend and route
     /// wires cleanly across the canvas, like Unreal's reroute node. Zero config.
     Reroute,
@@ -1109,7 +1106,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 86] = [
+    pub const ALL: [NodeKind; 85] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -1170,7 +1167,6 @@ impl NodeKind {
         NodeKind::Title,
         NodeKind::Paragraph,
         NodeKind::Markdown,
-        NodeKind::Tabs,
         NodeKind::StartRecording,
         NodeKind::StopRecording,
         NodeKind::TimeGate,
@@ -1262,7 +1258,6 @@ impl NodeKind {
             NodeKind::Title => "title",
             NodeKind::Paragraph => "paragraph",
             NodeKind::Markdown => "markdown",
-            NodeKind::Tabs => "tabs",
             NodeKind::Reroute => "reroute",
             NodeKind::StartRecording => "start_recording",
             NodeKind::StopRecording => "stop_recording",
@@ -1358,7 +1353,6 @@ impl NodeKind {
             NodeKind::Title => "Title",
             NodeKind::Paragraph => "Paragraph",
             NodeKind::Markdown => "Markdown",
-            NodeKind::Tabs => "Tabs",
             NodeKind::Reroute => "Reroute",
             NodeKind::StartRecording => "Start Recording",
             NodeKind::StopRecording => "Stop Recording",
@@ -1449,7 +1443,7 @@ impl NodeKind {
             // Comment + Reroute are canvas organizers, not debug sinks.
             NodeKind::Comment | NodeKind::Reroute => "Utility",
             // Presentation nodes that render content on the canvas (docs + live values).
-            NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown | NodeKind::Tabs => "Display",
+            NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown => "Display",
             NodeKind::StartRecording | NodeKind::StopRecording => "Recording",
             NodeKind::GetVariable | NodeKind::SetVariable => "Variables",
             NodeKind::DictRowCount
@@ -1517,7 +1511,7 @@ impl NodeKind {
             NodeKind::StringSwitch | NodeKind::CameraSwitch | NodeKind::AiSwitch => &NO_PORTS,
             NodeKind::Comment => &NO_PORTS,
             // Display annotation nodes never execute — no exec pins (like Comment).
-            NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown | NodeKind::Tabs => &NO_PORTS,
+            NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown => &NO_PORTS,
             NodeKind::Reroute => &NO_PORTS, // pure passthrough, no exec pins
             NodeKind::TimeGate => &EXEC_OUT_TIME_GATE, // "out" fires when countdown expires
             NodeKind::DelayTrigger => &EXEC_OUT_DELAY_TRIGGER, // leading "start", trailing "stop"
@@ -1608,7 +1602,7 @@ impl NodeKind {
             NodeKind::AskAi => &ASK_AI_IN,
             NodeKind::Comment => &NO_PORTS,
             // Display annotation nodes: pure canvas decoration, no data/exec ports.
-            NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown | NodeKind::Tabs => &NO_PORTS,
+            NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown => &NO_PORTS,
             NodeKind::Reroute => &REROUTE_IN,
             NodeKind::StartRecording => &START_RECORDING_IN,
             NodeKind::StopRecording => &STOP_RECORDING_IN,
@@ -1694,7 +1688,7 @@ impl NodeKind {
             NodeKind::StringSwitch | NodeKind::CameraSwitch => &NO_PORTS, // exec outputs are dynamic arms (+ "default")
             NodeKind::AskAi => &NO_PORTS, // exec outputs are true/false branches only
             NodeKind::Comment => &NO_PORTS,
-            NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown | NodeKind::Tabs => &NO_PORTS,
+            NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown => &NO_PORTS,
             NodeKind::Reroute => &REROUTE_OUT,
             NodeKind::StartRecording => &START_RECORDING_OUT,
             NodeKind::StopRecording => &NO_PORTS,
@@ -1828,15 +1822,6 @@ impl NodeKind {
             NodeKind::Markdown => {
                 json!({ "text": "## Heading\n\n- point one\n- point two", "width": 340, "height": 220 })
             }
-            NodeKind::Tabs => json!({
-                "tabs": [
-                    { "icon": "circle", "label": "Live" },
-                    { "icon": "table", "label": "History" },
-                    { "icon": "sliders", "label": "Setup" }
-                ],
-                "active": 0,
-                "color": "#e5e7eb"
-            }),
             NodeKind::Reroute => json!({}),
             NodeKind::StartRecording => json!({ "timeout_secs": "30" }),
             NodeKind::StopRecording => json!({ "timeout_secs": "15" }),

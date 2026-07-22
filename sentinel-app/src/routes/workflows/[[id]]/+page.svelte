@@ -236,10 +236,9 @@
   // ---- display / annotation nodes (Title, Paragraph, Markdown, Tabs) -------
   // Rendered in the decoration layer (like Comment) with custom SVG bodies — no ports, no exec.
   // Reuse startDrag / startCommentResize / isSelected; sized by `dispW`/`dispH` below.
-  const DISPLAY_KINDS = ["title", "paragraph", "markdown", "tabs"];
+  const DISPLAY_KINDS = ["title", "paragraph", "markdown"];
   function isDisplayCard(kind: string): boolean { return DISPLAY_KINDS.includes(kind); }
   function isDecoration(kind: string): boolean { return kind === "comment" || isDisplayCard(kind); }
-  function isResizableCard(kind: string): boolean { return kind === "paragraph" || kind === "markdown"; }
   const TITLE_SIZES: Record<string, number> = { sm: 18, md: 26, lg: 34, xl: 46 };
   function titleFontSize(n: Node): number { return TITLE_SIZES[String(n.config.size ?? "lg")] ?? 34; }
   function titleW(n: Node): number {
@@ -247,28 +246,11 @@
     return Math.max(120, Math.round(t.length * titleFontSize(n) * 0.56) + 20);
   }
   function titleH(n: Node): number { return titleFontSize(n) + 18; }
-  // Tabs: a strip of icon+text chips.
-  const TAB_H = 34, TAB_PAD_X = 13, TAB_GAP = 8, TAB_ICON = 15;
-  function tabList(n: Node): { icon: string; label: string }[] {
-    return Array.isArray(n.config.tabs)
-      ? (n.config.tabs as unknown[]).map((t) => {
-          const o = (t ?? {}) as Record<string, unknown>;
-          return { icon: String(o.icon ?? "circle"), label: String(o.label ?? "Tab") };
-        })
-      : [];
-  }
-  function tabChipW(t: { label: string }): number { return TAB_PAD_X * 2 + TAB_ICON + 6 + Math.ceil(t.label.length * 7.2); }
-  function tabsW(n: Node): number {
-    const tabs = tabList(n);
-    if (!tabs.length) return 120;
-    return tabs.reduce((s, t) => s + tabChipW(t) + TAB_GAP, 0) - TAB_GAP;
-  }
   // Rendered box size for any decoration node (bounds / marquee / drag).
   function dispW(n: Node): number {
     switch (n.kind) {
       case "comment": case "paragraph": case "markdown": return commentW(n);
       case "title": return titleW(n);
-      case "tabs": return tabsW(n);
       default: return nodeW(n);
     }
   }
@@ -276,7 +258,6 @@
     switch (n.kind) {
       case "comment": case "paragraph": case "markdown": return commentH(n);
       case "title": return titleH(n);
-      case "tabs": return TAB_H;
       default: return nodeHeight(n);
     }
   }
@@ -322,29 +303,6 @@
     let y = 14;
     return raw.map((l) => { y += l.size + 6; return { ...l, y: y - l.size + Math.round(l.size * 0.8) }; });
   }
-  // Tabs: pre-laid-out chips with running x + width.
-  function tabLayout(n: Node): { icon: string; label: string; x: number; w: number; active: boolean }[] {
-    const active = Number(n.config.active ?? 0);
-    let x = 0;
-    return tabList(n).map((t, i) => { const w = tabChipW(t); const item = { ...t, x, w, active: i === active }; x += w + TAB_GAP; return item; });
-  }
-  // Curated single-`d` lucide-style glyphs for Tabs chips (24×24, stroke). Default → circle.
-  const TAB_ICON_PATHS: Record<string, string> = {
-    circle: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18",
-    square: "M4 4h16v16H4z",
-    activity: "M22 12h-4l-3 9L9 3l-3 9H2",
-    zap: "M13 2 3 14h9l-1 8 10-12h-9l1-8z",
-    star: "M12 2 15 9l7 .6-5.3 4.6L18.4 21 12 17l-6.4 4 1.7-6.8L2 9.6 9 9z",
-    check: "M20 6 9 17l-5-5",
-    clock: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M12 7.5V12l3 2",
-    sliders: "M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6",
-    list: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
-    table: "M3 3h18v18H3zM3 9h18M3 15h18M12 3v18",
-    bell: "M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0",
-    camera: "M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8",
-  };
-  const TAB_ICON_NAMES = Object.keys(TAB_ICON_PATHS);
-  function tabIconPath(name: string): string { return TAB_ICON_PATHS[name] ?? TAB_ICON_PATHS.circle; }
 
   // AABB overlap: does node `n`'s box intersect the marquee box `b` (world coords)?
   function nodeInBox(n: Node, b: { x0: number; y0: number; x1: number; y1: number }): boolean {
@@ -628,7 +586,7 @@
   // The selected tab sits on --active (elev-7); hover on an unselected one is --hover
   // (elev-6). They must not be the same stop, or a hovered tab reads as the selected tab.
   function tabClass(t: RailTab): string {
-    const base = "flex flex-1 items-center justify-center rounded-lg py-1.5 transition-colors";
+    const base = "flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-1.5 py-1.5 transition-colors";
     return panelTab === t
       ? `${base} bg-active text-foreground`
       : `${base} text-muted-foreground hover:bg-hover hover:text-foreground`;
@@ -1088,7 +1046,7 @@
     const payloadNames = new Set(payloadFields(selectedNode).map((f) => f.name));
     const inputs = (nk?.inputs ?? []).filter((p) => p.type !== "exec" && !payloadNames.has(p.name));
     const rows: { key: string; port: CatPort | null }[] = inputs.map((p) => ({ key: p.name, port: p }));
-    const MANAGED_KEYS: Record<string, string[]> = { string_switch: ["arms"], ai_switch: ["arms"], camera_switch: ["arms"], comment: ["width", "height"], dict_schema: ["columns"], dict_make_row: ["columns"], tuya_control: ["value_type"], tuya_read_status: ["value_type"], paragraph: ["width", "height"], markdown: ["width", "height"], tabs: ["tabs", "active"] };
+    const MANAGED_KEYS: Record<string, string[]> = { string_switch: ["arms"], ai_switch: ["arms"], camera_switch: ["arms"], comment: ["width", "height"], dict_schema: ["columns"], dict_make_row: ["columns"], tuya_control: ["value_type"], tuya_read_status: ["value_type"], paragraph: ["width", "height"], markdown: ["width", "height"] };
     const managedForKind = new Set(MANAGED_KEYS[selectedNode.kind] ?? []);
     for (const key of Object.keys(nk?.default_config ?? {})) {
       if (!inputs.some((p) => p.name === key) && !managedForKind.has(key)) rows.push({ key, port: null });
@@ -2750,22 +2708,6 @@
   function removeSchemaColumn(node: Node, i: number) {
     setSchemaColumns(node, schemaCols(node).filter((_, j) => j !== i));
   }
-  // ---- Tabs display node: chip list editor (icon + label + active) ----------
-  function tabsCfg(node: Node): { icon: string; label: string }[] {
-    return Array.isArray(node.config?.tabs) ? ($state.snapshot(node.config.tabs) as { icon: string; label: string }[]) : [];
-  }
-  function setTabsCfg(node: Node, tabs: { icon: string; label: string }[], active?: number) {
-    const cfg: Record<string, unknown> = { ...node.config, tabs };
-    if (active !== undefined) cfg.active = active;
-    else if (Number(node.config?.active ?? 0) >= tabs.length) cfg.active = Math.max(0, tabs.length - 1);
-    saveNodeConfig(node, cfg);
-  }
-  function addTab(node: Node) { setTabsCfg(node, [...tabsCfg(node), { icon: "circle", label: `Tab ${tabsCfg(node).length + 1}` }]); }
-  function editTab(node: Node, i: number, patch: Partial<{ icon: string; label: string }>) {
-    setTabsCfg(node, tabsCfg(node).map((t, j) => (j === i ? { ...t, ...patch } : t)));
-  }
-  function removeTab(node: Node, i: number) { setTabsCfg(node, tabsCfg(node).filter((_, j) => j !== i)); }
-  function setActiveTab(node: Node, i: number) { saveNodeConfig(node, { ...node.config, active: i }); }
   // Update the node's config in LOCAL state instantly. Nothing persists until Save (#122) — no
   // network, no reload (the old `await reload()` on every change is what wiped your input mid-type).
   function saveNodeConfig(n: Node, config: Record<string, unknown>) {
@@ -3962,27 +3904,6 @@
                     <polygon points="{w - 16},{h} {w},{h - 16} {w},{h}"
                       class="cursor-se-resize fill-muted-foreground/50"
                       onpointerdown={(ev) => { selectedNodeId = n.id; startCommentResize(ev, n); }} role="presentation" />
-                  {:else if n.kind === "tabs"}
-                    {@const col = String(n.config.color ?? "#e5e7eb")}
-                    <rect width={w} height={h} fill="transparent" class="cursor-move"
-                      onpointerdown={(ev) => startDrag(ev, n)} role="presentation" />
-                    {#each tabLayout(n) as t}
-                      <g transform="translate({t.x} 0)" class="pointer-events-none">
-                        <rect width={t.w} height={TAB_H} rx="8" stroke-width="1"
-                          class={t.active ? "fill-primary/15 stroke-primary" : "fill-background stroke-border"} />
-                        <path d={tabIconPath(t.icon)} fill="none" stroke-width="2"
-                          stroke-linecap="round" stroke-linejoin="round"
-                          stroke={t.active ? col : "currentColor"}
-                          class={t.active ? "" : "text-muted-foreground"}
-                          transform="translate({TAB_PAD_X} {(TAB_H - TAB_ICON) / 2}) scale({TAB_ICON / 24})" />
-                        <text x={TAB_PAD_X + TAB_ICON + 6} y={TAB_H / 2 + 4} font-size="13"
-                          class="select-none {t.active ? 'fill-foreground' : 'fill-muted-foreground'}">{t.label}</text>
-                      </g>
-                    {/each}
-                    {#if sel}
-                      <rect x="-4" y="-4" width={w + 8} height={h + 8} rx="10" fill="none"
-                        class="pointer-events-none stroke-primary" stroke-width="1.5" stroke-dasharray="4 3" />
-                    {/if}
                   {/if}
                 </g>
               {/each}
@@ -4208,8 +4129,8 @@
 
         <!-- col 1: the tabbed rail — Details / Properties / Variables / Runs -->
         <div class="flex min-h-0 shrink-0 flex-col gap-2" style="width: {panelW}px">
-          <!-- tab strip. Icon-only (the map's SidePanel does the same): four labels don't
-               fit at PANEL_MIN, and each tab body carries its own header anyway. -->
+          <!-- tab strip: icon + label. Labels truncate as the panel narrows; each tab body
+               also carries its own header. -->
           <div class="flex shrink-0 items-center gap-0.5 rounded-xl border border-border bg-card p-1">
             {#each RAIL_TABS as t (t.id)}
               <button
@@ -4219,7 +4140,8 @@
                 aria-label={t.label}
                 onclick={() => selectTab(t.id)}
               >
-                <t.icon class="size-4" />
+                <t.icon class="size-4 shrink-0" />
+                <span class="truncate text-xs font-medium">{t.label}</span>
               </button>
             {/each}
             <div class="mx-0.5 h-5 w-px shrink-0 bg-border"></div>
@@ -4448,38 +4370,6 @@
                   <Trash2 class="size-3.5" />
                 </Button>
               </div>
-              {#if selectedNode.kind === "tabs"}
-                <!-- Tabs display node: the icon+label chips + which one reads as active. -->
-                <div class="mb-3 space-y-1.5">
-                  <div class="flex items-center justify-between">
-                    <Label class="text-xs text-muted-foreground">Tabs</Label>
-                    <Button variant="ghost" size="icon" class="size-6" title="Add tab" disabled={editLocked} onclick={() => addTab(selectedNode)}>
-                      <Plus class="size-3.5" />
-                    </Button>
-                  </div>
-                  {#each tabsCfg(selectedNode) as t, i (i)}
-                    {@const active = Number(selectedNode.config.active ?? 0) === i}
-                    <div class="flex items-center gap-1.5">
-                      <button type="button" title="Set active" class="shrink-0 text-sm {active ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}" disabled={editLocked} onclick={() => setActiveTab(selectedNode, i)} aria-label="Set active">{active ? "●" : "○"}</button>
-                      <select
-                        class="h-7 w-[84px] shrink-0 rounded border border-input bg-background px-1 text-xs disabled:opacity-50"
-                        value={t.icon ?? "circle"}
-                        disabled={editLocked}
-                        onchange={(e) => editTab(selectedNode, i, { icon: e.currentTarget.value })}
-                      >
-                        {#each TAB_ICON_NAMES as name (name)}<option value={name}>{name}</option>{/each}
-                      </select>
-                      <Input class="h-7 min-w-0 flex-1 text-xs" placeholder="label" value={t.label ?? ""} disabled={editLocked} onchange={(e) => editTab(selectedNode, i, { label: e.currentTarget.value })} />
-                      <Button variant="ghost" size="icon" class="size-6 shrink-0 text-muted-foreground hover:text-destructive" title="Remove tab" disabled={editLocked} onclick={() => removeTab(selectedNode, i)}>
-                        <Trash2 class="size-3" />
-                      </Button>
-                    </div>
-                  {/each}
-                  {#if tabsCfg(selectedNode).length === 0}
-                    <p class="text-[11px] leading-snug text-muted-foreground">Add tabs (icon + label). The filled dot marks the active tab.</p>
-                  {/if}
-                </div>
-              {/if}
               {#if selectedNode.kind === "dict_schema"}
                 <!-- Dictionary Schema (#113): define the columns (the plan). These become the
                      inputs of a Create Dictionary Row wired to this schema. -->

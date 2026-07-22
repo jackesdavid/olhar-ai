@@ -23,15 +23,17 @@ today (Level 1 only, per the operator's call).
 - **Paragraph** — long multiline text, resizable. `config {text, color, width, height}`.
 - **Markdown** — rendered markdown, resizable. `config {text, width, height}`. (Static v1; a live
   wired variant is a later enhancement.)
-- **Tabs** — a visual strip of icon+text chips, one "active" chip highlighted; purely decorative
-  (no content switching — the operator rejected containers). `config {tabs:[{icon,label}], active, color}`.
+
+> **Not a node:** the earlier "Tabs" idea was a misread — the operator meant the **right
+> inspector panel's** tabs (Details / Properties / Variables / Runs), which now show **icon +
+> text** (was icon-only). There is no Tabs workflow node.
 
 **Live-sink family** (ShowImage-like: `exec_in` + a `value` data input, last value persisted +
 pushed over SSE; literal config as the unwired fallback):
 - **Text** — shows a wired Text value (or the literal), `config {text, bg_color, text_color}`.
 - **Gauge** — shows a wired Num as an arc, `config {label, min, max, color, size}`.
 
-## Phase 1 (Slice 1) — Annotation family: Title, Paragraph, Markdown, Tabs
+## Phase 1 (Slice 1) — Annotation family: Title, Paragraph, Markdown
 Frontend + `domain.rs` only. No `node.rs`/`engine.rs`/SSE.
 - **`crates/app-core/src/workflows/domain.rs`**: add the 4 `NodeKind`s to the enum + `ALL`; `slug`,
   `label`, `category` → new **"Display"** category; ports = `NO_PORTS` (input/output/exec_out) like

@@ -190,7 +190,6 @@ nodes — `Text`, `Gauge` — are a follow-up.)
 | **Title** | — | — | `text`, `color` (#RRGGBB), `size` (`sm`/`md`/`lg`/`xl`) | A big heading drawn on the canvas. Auto-sizes to the text. | *(label a section of the flow)* |
 | **Paragraph** | — | — | `text`, `color`, `width`, `height` | A resizable box of wrapped multiline text for a long description / help note. Drag the bottom-right grip to resize. | *(document what a subtree does)* |
 | **Markdown** | — | — | `text`, `width`, `height` | A resizable box that renders `text` as basic Markdown (headings `#`/`##`/`###`, bullets `-`/`*`) — SVG-native, no HTML embed. | *(a rich doc block on the canvas)* |
-| **Tabs** | — | — | `tabs` (list of `{icon, label}`), `active` (index), `color` | A horizontal strip of icon+text chips with one chip highlighted as active. Purely visual section labels — no content switching. | *(decorative section header)* |
 
 ### Variables
 

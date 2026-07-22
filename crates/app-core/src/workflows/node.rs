@@ -539,7 +539,7 @@ pub fn run_node(
         // Reroute is collapsed to a direct edge before the engine runs (see engine::flatten_reroutes).
         NodeKind::Comment | NodeKind::Reroute => Ok(PortValues::new()),
         // Display annotation nodes never execute — pure canvas decoration.
-        NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown | NodeKind::Tabs => Ok(PortValues::new()),
+        NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown => Ok(PortValues::new()),
         NodeKind::StartRecording => recording::run_start_recording(config, inputs, sys),
         NodeKind::StopRecording => recording::run_stop_recording(inputs, sys),
         // TimeGate is engine-driven (reads/writes cross-run state, polls until expiry).
@@ -653,7 +653,6 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::Title
         | NodeKind::Paragraph
         | NodeKind::Markdown
-        | NodeKind::Tabs
         | NodeKind::TimeGate
         | NodeKind::DelayTrigger
         | NodeKind::GetVariable
@@ -967,7 +966,7 @@ pub fn debug_summary(
         },
         NodeKind::Comment => "comment".into(),
         NodeKind::Reroute => "reroute".into(),
-        NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown | NodeKind::Tabs => "display".into(),
+        NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown => "display".into(),
         NodeKind::StartRecording => {
             let new = outputs.get("recording_new").and_then(|v| if let PortValue::Bool(b) = v { Some(*b) } else { None }).unwrap_or(true);
             txt("clip_id").map(|id| if new { format!("recording started: {id}") } else { format!("recording resumed: {id}") }).unwrap_or_else(|| "recording started".into())
