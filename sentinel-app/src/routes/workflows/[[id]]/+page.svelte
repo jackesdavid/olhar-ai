@@ -36,7 +36,6 @@
   import ClipboardPaste from "@lucide/svelte/icons/clipboard-paste";
   import Bookmark from "@lucide/svelte/icons/bookmark";
   import LayoutTemplate from "@lucide/svelte/icons/layout-template";
-  import ArrowRight from "@lucide/svelte/icons/arrow-right";
   import Workflow from "@lucide/svelte/icons/workflow";
   import Table2 from "@lucide/svelte/icons/table-2";
   import Link2 from "@lucide/svelte/icons/link-2";
@@ -76,7 +75,6 @@
   import SearchableSelect from "$lib/components/searchable-select.svelte";
 
   import { Button } from "$lib/components/ui/button";
-  import { Badge } from "$lib/components/ui/badge";
   import { Input } from "$lib/components/ui/input";
   import { Textarea } from "$lib/components/ui/textarea";
   import { Slider } from "$lib/components/ui/slider";
@@ -98,8 +96,10 @@
     COMMENT_DEFAULT_COLOR,
   } from "$lib/workflows/portColors";
   import type { PortType } from "$lib/workflows/portColors";
+  import { titleFontSize as dTitleFontSize, titleWidth, titleHeight, wrapText, mdLines } from "$lib/workflows/display";
 
   import ContextSearch from "../components/ContextSearch.svelte";
+  import TemplateGallery from "../components/TemplateGallery.svelte";
   import VariablesPanel from "../components/VariablesPanel.svelte";
   import DictionaryModal from "$lib/components/dictionary-modal.svelte";
   import RegionPointsEditor from "../components/RegionPointsEditor.svelte";
@@ -241,13 +241,10 @@
   const DISPLAY_KINDS = ["title", "paragraph", "markdown"];
   function isDisplayCard(kind: string): boolean { return DISPLAY_KINDS.includes(kind); }
   function isDecoration(kind: string): boolean { return kind === "comment" || isDisplayCard(kind); }
-  const TITLE_SIZES: Record<string, number> = { sm: 18, md: 26, lg: 34, xl: 46 };
-  function titleFontSize(n: Node): number { return TITLE_SIZES[String(n.config.size ?? "lg")] ?? 34; }
-  function titleW(n: Node): number {
-    const t = String(n.config.text ?? "Title") || "Title";
-    return Math.max(120, Math.round(t.length * titleFontSize(n) * 0.56) + 20);
-  }
-  function titleH(n: Node): number { return titleFontSize(n) + 18; }
+  // Title sizing wrappers over the pure helpers in $lib/workflows/display (dispW/dispH/render use these).
+  function titleFontSize(n: Node): number { return dTitleFontSize(n.config.size); }
+  function titleW(n: Node): number { return titleWidth(String(n.config.text ?? "Title"), dTitleFontSize(n.config.size)); }
+  function titleH(n: Node): number { return titleHeight(dTitleFontSize(n.config.size)); }
   // Rendered box size for any decoration node (bounds / marquee / drag).
   function dispW(n: Node): number {
     switch (n.kind) {
@@ -262,48 +259,6 @@
       case "title": return titleH(n);
       default: return nodeHeight(n);
     }
-  }
-  // Strip the common inline markdown emphasis markers (SVG <text> can't style them).
-  function stripInline(s: string): string {
-    return s.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*(.+?)\*/g, "$1").replace(/`(.+?)`/g, "$1");
-  }
-  // Wrap plain text into lines by an approximate char budget (SVG <text> does not wrap).
-  function wrapText(text: string, boxW: number, fontPx: number): string[] {
-    const cpl = Math.max(6, Math.floor((boxW - 20) / (fontPx * 0.55)));
-    const out: string[] = [];
-    for (const para of String(text).split("\n")) {
-      if (!para) { out.push(""); continue; }
-      let line = "";
-      for (const word of para.split(/\s+/)) {
-        let w = word;
-        while (w.length > cpl) { if (line) { out.push(line); line = ""; } out.push(w.slice(0, cpl)); w = w.slice(cpl); }
-        if (!line) line = w;
-        else if ((line + " " + w).length <= cpl) line += " " + w;
-        else { out.push(line); line = w; }
-      }
-      out.push(line);
-    }
-    return out;
-  }
-  type MdLine = { text: string; size: number; bold: boolean; bullet: boolean; indent: number; y: number };
-  // Minimal, SVG-safe markdown: per-line heading (#/##/###) + bullet (-/*) styling, each carrying a
-  // pre-computed baseline `y` (SVG <text> can't accumulate line height in a template). No foreignObject.
-  function mdLines(text: string, boxW: number): MdLine[] {
-    const raw: Omit<MdLine, "y">[] = [];
-    for (const rawLine of String(text).split("\n")) {
-      const line = stripInline(rawLine.replace(/\s+$/, ""));
-      let m: RegExpMatchArray | null;
-      if ((m = line.match(/^(#{1,3})\s+(.*)/))) {
-        const size = m[1].length === 1 ? 18 : m[1].length === 2 ? 15 : 13;
-        for (const w of wrapText(m[2], boxW, size)) raw.push({ text: w, size, bold: true, bullet: false, indent: 0 });
-      } else if ((m = line.match(/^\s*[-*]\s+(.*)/))) {
-        wrapText(m[1], boxW - 16, 12.5).forEach((w, i) => raw.push({ text: w, size: 12.5, bold: false, bullet: i === 0, indent: 16 }));
-      } else {
-        for (const w of wrapText(line, boxW, 12.5)) raw.push({ text: w, size: 12.5, bold: false, bullet: false, indent: 0 });
-      }
-    }
-    let y = 14;
-    return raw.map((l) => { y += l.size + 6; return { ...l, y: y - l.size + Math.round(l.size * 0.8) }; });
   }
 
   // AABB overlap: does node `n`'s box intersect the marquee box `b` (world coords)?
@@ -1586,6 +1541,9 @@
   let templates = $state<TemplateSummary[]>([]);
   let templatesLoading = $state(false);
   let usingTemplateId = $state<string | null>(null);
+  // A template is editable in place when it lives in THIS tenant (own templates, or the shared
+  // globals once the operator has assumed the platform tenant). Its id then appears in `graphs`.
+  const editableTemplateIds = $derived(new Set(graphs.map((g) => g.id)));
   function listTabClass(t: "mine" | "templates"): string {
     const base = "flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition-colors -mb-px";
     return listTab === t
@@ -3377,54 +3335,15 @@
         {/if}
       </div>
       {:else}
-        <!-- templates gallery (inline) — own templates + every global one (#102, #136) -->
-        <div class="min-h-0 flex-1 overflow-y-auto pt-1">
-          {#if templatesLoading}
-            <div class="p-12 text-center text-sm text-muted-foreground">Loading templates…</div>
-          {:else if templates.length === 0}
-            <div class="p-6">
-              <EmptyState
-                title="No templates yet"
-                description="Save a workflow as a template (the bookmark on its row) and it'll appear here to reuse."
-              >
-                <Button variant="outline" onclick={() => (listTab = "mine")}>Back to my workflows</Button>
-              </EmptyState>
-            </div>
-          {:else}
-            <div class="grid gap-4 pb-2 sm:grid-cols-2 lg:grid-cols-3">
-              {#each templates as t (t.id)}
-                <div class="interactive flex flex-col rounded-2xl border border-border bg-card p-5">
-                  <div class="mb-3 flex items-start justify-between gap-3">
-                    <div class="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                      <LayoutTemplate class="size-5" />
-                    </div>
-                    {#if t.global}
-                      <Badge variant="outline" class="border-primary/25 bg-primary/10 text-primary">
-                        <Globe class="mr-1 size-3" /> Global
-                      </Badge>
-                    {/if}
-                  </div>
-                  <h3 class="text-[15px] font-semibold tracking-tight">{t.name}</h3>
-                  {#if t.description}
-                    <p class="mt-1 line-clamp-2 text-sm text-muted-foreground">{t.description}</p>
-                  {/if}
-                  {#if t.inputs.length}
-                    <div class="mt-3 flex items-start gap-1.5 text-xs text-muted-foreground/80">
-                      <SlidersHorizontal class="mt-0.5 size-3.5 shrink-0" />
-                      <span>Asks for {t.inputs.map((v) => v.name).join(", ")}</span>
-                    </div>
-                  {/if}
-                  <div class="mt-4 flex justify-end">
-                    <Button size="sm" class="press" disabled={usingTemplateId === t.id} onclick={() => cloneTemplate(t)}>
-                      {usingTemplateId === t.id ? "Creating…" : "Use template"}
-                      {#if usingTemplateId !== t.id}<ArrowRight class="size-3.5" />{/if}
-                    </Button>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
+        <TemplateGallery
+          {templates}
+          loading={templatesLoading}
+          usingId={usingTemplateId}
+          editableIds={editableTemplateIds}
+          onUse={cloneTemplate}
+          onEdit={(t) => openGraph(t.id)}
+          onBack={() => (listTab = "mine")}
+        />
       {/if}
     </div>
 
