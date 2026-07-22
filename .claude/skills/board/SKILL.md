@@ -1,6 +1,6 @@
 ---
 name: board
-description: "Drive the team Kanban board — GitHub Project #3 \"OAI Board\" (github.com/users/jackesdavid/projects/3), shared with the co-founder and the SOURCE OF TRUTH. Turn a use case into a planned card, and move cards across columns (the Status field) as work progresses: plan → In progress → In review → Done. Each card is a short \"#N title\" draft item; detail lives in a plan note under docs/plans/, linked from the card body. Triggers: 'plan this use case', 'move the card', 'start implementation', 'this is in review now', 'mark it done', '/board'."
+description: "Drive the team Kanban board — GitHub Project #3 \"OAI Board\" (github.com/users/jackesdavid/projects/3), shared with the co-founder and the SOURCE OF TRUTH. Turn a use case into a planned card, and move cards across columns (the Status field) as work progresses: plan → In progress → In review → Done. Each card is a short \"#N title\" real GitHub Issue (assigned to the operator) added to the project; detail lives in a plan note under docs/plans/, linked from the card body. Triggers: 'plan this use case', 'move the card', 'start implementation', 'this is in review now', 'mark it done', '/board'."
 user-invocable: true
 argument-hint: "[plan|implement|review|done] [use-case name | card #N or keyword]"
 allowed-tools:
@@ -14,8 +14,9 @@ allowed-tools:
 # Task Board — GitHub Project #3
 
 The board is **GitHub Project #3 "OAI Board"** (`https://github.com/users/jackesdavid/projects/3`),
-shared with the co-founder, and it is the **single source of truth**. A card lives as a Project
-**draft item**; its **column is the item's `Status` field**. This skill creates cards and moves them
+shared with the co-founder, and it is the **single source of truth**. A card is a **real GitHub
+Issue** (in `jackesdavid/Sentinel`, assigned to the operator) added to the project — **never a draft
+item**; its **column is the project item's `Status` field**. This skill creates cards and moves them
 by editing that field via the `gh` CLI.
 
 > The old Obsidian file `docs/Task Board.md` is **retired** — do NOT read or edit it. GitHub is truth.
@@ -66,7 +67,7 @@ Read the first word of the argument; infer from the conversation if absent.
 
 | Arg | Action |
 |-----|--------|
-| `plan` | Draft a codebase-grounded plan note → `docs/plans/<slug>.md`, then **create a card** (draft item) in **Ready**, body linking the note. |
+| `plan` | Draft a codebase-grounded plan note → `docs/plans/<slug>.md`, then **create a card** (a real GitHub Issue, assigned to the operator) in **Ready**, body linking the note. |
 | `implement` / `start` | Set the card's Status → **In progress**; ensure its plan note exists/refreshed. |
 | `review` | Set Status → **In review**. |
 | `done` | Set Status → **Done**. |
@@ -88,23 +89,30 @@ Then tell the user e.g. "Moved #119 → In review."
 3. **Write the plan** to `docs/plans/<slug>.md` (`<slug>` kebab-case): phases (ordered, buildable
    slices), open decisions, out-of-scope. A normal markdown doc — plain repo links, **no
    `[[wikilinks]]`** (they don't render on GitHub).
-4. **Create the card** in Ready, body linking the note:
+4. **Create the card as a REAL GitHub Issue** (assigned to the operator — NEVER a draft item),
+   then add it to the project and set its column. Body links the note:
    ```sh
    N=<next number>; SLUG=<slug>
-   ID=$(gh project item-create 3 --owner jackesdavid --format json --jq .id \
-        --title "#$N <title>" \
-        --body "Plan: https://github.com/jackesdavid/Sentinel/blob/main/docs/plans/$SLUG.md")
+   # Real issue, assigned to the operator.
+   URL=$(gh issue create --repo jackesdavid/Sentinel --assignee jackesdavid \
+         --title "#$N <title>" \
+         --body "Plan: https://github.com/jackesdavid/Sentinel/blob/main/docs/plans/$SLUG.md")
+   # Add the issue to the board (returns the project item id).
+   ID=$(gh project item-add 3 --owner jackesdavid --url "$URL" --format json --jq .id)
    gh project item-edit --id "$ID" --project-id PVT_kwHOAE3EiM4BeByU \
      --field-id PVTSSF_lAHOAE3EiM4BeByUzhYe_68 --single-select-option-id 61e4505c   # Ready
    ```
+   (`gh issue create` prints the issue URL; `item-add` links it to Project #3. A GitHub issue
+   number is assigned automatically and is **separate** from the board's `#N` title id — the `#N`
+   in the title stays the stable board id.)
 5. Several clearly-independent features → one card each (each with its own note).
 
 ## Which card
 After the stage word, the rest is a card ref — match by `#N` or fuzzy title against the Project
 items (`gh project item-list 3 --owner jackesdavid --format json --limit 500`). No ref → the task
 being actively worked in **this** conversation. Several plausible + unsure → `AskUserQuestion` with
-the candidate titles. For `implement` with **no** existing card → create one directly in **In
-progress**, body linking its plan note.
+the candidate titles. For `implement` with **no** existing card → create one (same real-Issue flow
+as **Plan a card**, step 4) directly in **In progress**, body linking its plan note.
 
 ## The plan note (repo markdown)
 `docs/plans/<slug>.md` — a normal markdown doc:
