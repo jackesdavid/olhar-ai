@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { tick } from "svelte";
   import X from "@lucide/svelte/icons/x";
   import { Input } from "$lib/components/ui/input";
   import { portColor, typeColor } from "$lib/workflows/portColors";
@@ -33,10 +32,11 @@
 
   let search = $state("");
   let searchInputEl = $state<HTMLInputElement | null>(null);
-  // Focus the search on every open (the raw `autofocus` attr only fired reliably on first insert and
-  // raced the mount animation). `tick()` waits for the input to be in the DOM. (#110)
+  // Focus the search on every open. `requestAnimationFrame` (not `tick`) so we win the focus race
+  // with the pointer event that opened us — a wire-drop's canvas `pointerup` would otherwise
+  // re-focus the SVG right after a microtask focus, leaving the search unfocused. (#110)
   $effect(() => {
-    if (open && searchInputEl) tick().then(() => searchInputEl?.focus());
+    if (open) requestAnimationFrame(() => searchInputEl?.focus());
   });
 
   const filteredKinds = $derived.by(() => {
