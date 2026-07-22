@@ -15,8 +15,9 @@ cross-tenant by flag); "Use template" clones it into the caller's tenant as a no
   (master → navigate-as-tenant) to **polish the templates visually** in the real editor.
 - **Seeder:** `sentinel-control/src/seed_templates.rs`, called from `seed::run()` on control boot.
   Graphs are built via the validated domain API (`Graph::add_node`/`add_edge` — a mis-wire fails the
-  build, not prod). Insert is **`ON CONFLICT (id) DO NOTHING`** against a **stable per-template
-  UUID** (`stable_id`), so a redeploy never clobbers the operator's later visual edits. To ship a
+  build, not prod). Insert is **`ON CONFLICT (tenant_id, id) DO NOTHING`** (the `workflows` PK is the
+  composite `(tenant_id, id)`) against a **stable per-template UUID** (`stable_id`), so a redeploy
+  never clobbers the operator's later visual edits. To ship a
   revised template, give it a new stable id.
 - No migration, no new table, no per-tenant seed — global templates ARE the shared catalog.
 

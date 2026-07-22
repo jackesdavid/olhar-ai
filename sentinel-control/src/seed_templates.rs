@@ -43,7 +43,7 @@ pub async fn run(pool: &PgPool) -> sqlx::Result<()> {
     for g in templates() {
         let data = serde_json::to_value(&g).unwrap_or_else(|_| json!({}));
         let res = sqlx::query(
-            "INSERT INTO workflows (tenant_id, id, data) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
+            "INSERT INTO workflows (tenant_id, id, data) VALUES ($1, $2, $3) ON CONFLICT (tenant_id, id) DO NOTHING",
         )
         .bind(tenant_id)
         .bind(g.id)
