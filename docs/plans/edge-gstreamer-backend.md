@@ -3,7 +3,13 @@
 **Board card:** #138 Edge GStreamer media backend (per-box ffmpeg↔gstreamer switch + measurement)
 **Goal:** Let each edge box run **GStreamer instead of ffmpeg** for every media operation the edge
 does, switchable per box via a flag pushed from control, so we can A/B **measure CPU/mem** and decide
-whether GStreamer is lighter. ffmpeg stays the default; both coexist behind the flag.
+whether GStreamer is lighter. ffmpeg stays the default and both coexist behind the flag **for now**.
+
+**North star:** the per-box flag is a **migration path, not a permanent fork**. If the numbers hold
+up (GStreamer measurably lighter, at parity on every touchpoint below), the endgame is to **flip the
+default to GStreamer and then retire ffmpeg entirely** — drop the ffmpeg subprocesses, the
+`install.sh` ffmpeg dependency, and (pending the go2rtc `frame.jpeg` decision, B3 below) the ffmpeg
+system/bundled binary. The coexistence phase exists only to prove the numbers before that removal.
 
 ## Grounding — every ffmpeg touchpoint on the edge (the seam surface)
 All edge ffmpeg use goes through one spawn helper — `crate::proc::command(...)`
@@ -100,7 +106,14 @@ test box to `gstreamer`, compare `EdgeMetrics` vs an ffmpeg box on the same came
 5. **Apply hwaccel opportunistically in 2a** (a win ffmpeg doesn't get today) or keep 2a SW-only for
    a clean apples-to-apples first measurement?
 
-## Out of scope (v1)
-- go2rtc internals / native streaming (unchanged); its `frame.jpeg` ffmpeg residual.
+## Phase 4 (future, gated on the numbers) — retire ffmpeg
+Only once GStreamer has proven measurably lighter and at parity across A1–A6 on real boxes:
+flip the default `media_backend` to `gstreamer`, roll it out, then **remove ffmpeg** — the edge
+subprocesses (A1/A2/A3/A5), the `ffmpeg_ok`/hwaccel-probe ffmpeg calls (A4/A6), the `install.sh`
+ffmpeg dependency, and the macOS/Windows bundled ffmpeg binary. The go2rtc `frame.jpeg` residual
+(B3) must be resolved first (eliminate the fallback, or accept go2rtc keeping its own ffmpeg).
+
+## Out of scope (v1 — the coexistence phase, not the north star)
+- **Removing ffmpeg** — that's Phase 4, gated on the measurements. v1 keeps both, ffmpeg default.
+- go2rtc internals / native streaming (unchanged); its `frame.jpeg` ffmpeg residual (B3).
 - macOS/Windows GStreamer bundling (Linux appliance first).
-- Removing ffmpeg (both backends coexist behind the flag, ffmpeg is the default).
