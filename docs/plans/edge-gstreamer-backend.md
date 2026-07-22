@@ -51,9 +51,20 @@ touchpoints (verified inventory):
   `app_core::edge_metrics`) samples CPU/mem/disk/GPU and ships it on the heartbeat
   (`X-Edge-Metrics`). `frames.rs:219-249` already splits go2rtc-grab vs edge-decode cost. Reuse for
   the A/B.
-- **Bundling:** ffmpeg is a Linux system package (`install.sh:195-230`, apt/dnf/rpm-ostree) and
-  bundled on macOS/Windows. GStreamer needs the mirror — v1 targets the **Linux appliance** (system
-  `gstreamer1-plugins-*`); macOS/Windows bundling is deferred (heavier plugin graph).
+- **Bundling / first test box:** ffmpeg is a Linux system package (`install.sh:195-230`,
+  apt/dnf/rpm-ostree) and bundled on macOS/Windows. **The first test + measurement box is the
+  operator's macOS dev box** (see the `mac-edge-test-box` setup: manual `/tmp/sentinel-edge`
+  install) — GStreamer there is just `brew install gstreamer gst-plugins-{base,good,bad,ugly}
+  gst-libav`, so `gst-launch-1.0` is on PATH and we can measure immediately with **zero installer
+  bundling**. macOS hwaccel is **videotoolbox → the `vtdec` GStreamer element**, so the HW-decode
+  angle is testable on day one. Production bundling (Linux system `gstreamer1-plugins-*`; macOS pkg;
+  Windows installer) comes later, once the numbers justify shipping it.
+
+**Test setup (Phases 0–2 run here first):** the operator's **macOS** edge box (`mac-edge-test-box`):
+`brew install gstreamer gst-plugins-{base,good,bad,ugly} gst-libav`, then flip that one box's
+`media_backend` to `gstreamer` and compare `EdgeMetrics` against its ffmpeg baseline on the same
+cameras. macOS decode HW = `videotoolbox`/`vtdec`. Linux appliance validation + install packaging
+follow once the Mac numbers look right.
 
 ## Phase 0 — Measure first (baseline, no backend change)
 Quantify "ffmpeg is heavy" and set up the A/B before writing any GStreamer.
