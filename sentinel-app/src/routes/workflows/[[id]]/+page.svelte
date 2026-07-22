@@ -1156,10 +1156,18 @@
     return portName;
   }
 
+  // ForEach lays out its outputs as: `loop_body` (top) → `item`/`index` (the per-iteration data) →
+  // `completed` (bottom). `completed` fires once at the end, so it sits last, apart from the
+  // loop-body pins. This is `completed`'s visual row (below loop_body + the data pins).
+  const isForEach = (k: CatKind | undefined) => k?.slug === "for_each";
+  const forEachCompletedRow = (k: CatKind | undefined) => 1 + dataPorts(k, "out").length;
+
   // Output data ports stack BELOW exec-out pins that live in the body.
   // Multi-exec nodes: ALL exec rows are in the body → offset = execCount.
   // Single-exec node: exec pin is in the header → no body rows consumed → offset = 0.
+  // ForEach: only `loop_body` sits above the data pins (its `completed` moves to the bottom).
   function outDataOffset(k: CatKind | undefined): number {
+    if (isForEach(k)) return 1;
     const count = execOutPorts(k).length;
     return count > 1 ? count : 0;
   }
@@ -1168,7 +1176,9 @@
     const k = effectiveKind(n);
     const execCount = execOutPorts(k).length;
     const outRows = dataPorts(k, "out").length + outDataOffset(k);
-    const rows = Math.max(dataPorts(k, "in").length, outRows, execCount, 1);
+    // ForEach's `completed` pin sits at the bottom — make sure the node is tall enough for it.
+    const forEachRows = isForEach(k) ? forEachCompletedRow(k) + 1 : 0;
+    const rows = Math.max(dataPorts(k, "in").length, outRows, execCount, forEachRows, 1);
     return HEAD_H + nodeExprH(n) + rows * ROW_H;
   }
   // A ShowImage node grows to fit its preview thumbnail once a frame has arrived.
@@ -1191,7 +1201,10 @@
       const k = effectiveKind(node);
       const i = execOutPorts(k).findIndex((p) => p.name === port);
       // Multi-exec: all exec pins live in the body; single-exec: header position.
-      if (hasMultipleExecOuts(k)) return HEAD_H + Math.max(0, i) * ROW_H + ROW_H / 2;
+      if (hasMultipleExecOuts(k)) {
+        const row = isForEach(k) && port === "completed" ? forEachCompletedRow(k) : Math.max(0, i);
+        return HEAD_H + row * ROW_H + ROW_H / 2;
+      }
       return HEAD_H / 2;
     }
     const k = effectiveKind(node);
@@ -3514,7 +3527,8 @@
                        area stays clean and the arms read left-to-right with their labels. -->
                   {#each execOutPorts(k) as p, i}
                     {@const multi = hasMultipleExecOuts(k)}
-                    {@const ey = multi ? HEAD_H + i * ROW_H + ROW_H / 2 : HEAD_H / 2}
+                    {@const row = isForEach(k) && p.name === "completed" ? forEachCompletedRow(k) : i}
+                    {@const ey = multi ? HEAD_H + row * ROW_H + ROW_H / 2 : HEAD_H / 2}
                     {@const isP = pending && pending.node === n.id && pending.port === p.name}
                     <circle
                       cx={nw}
