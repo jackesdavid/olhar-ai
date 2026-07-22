@@ -18,6 +18,7 @@ mod engine;
 mod event_consumer;
 mod events;
 mod http;
+mod schedule_consumer;
 mod state;
 mod window_consumer;
 
@@ -58,6 +59,7 @@ fn main() {
     // Durable timing windows: deliver a DelayTrigger's trailing `stop` when its quiet window
     // elapses (card #86). Resumes any window that was armed when the pod went down.
     window_consumer::spawn(state.clone());
+    schedule_consumer::spawn(state.clone());
     // Telegram pairing moved to sentinel-notification (card #57) — flow no longer polls.
 
     // Now build the tokio runtime for the HTTP control plane.

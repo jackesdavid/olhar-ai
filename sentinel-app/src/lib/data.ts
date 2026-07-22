@@ -471,8 +471,8 @@ export const data = {
   deleteGraph: async (id: string): Promise<void> => {
     await api.del<void>(`/workflows/${id}`);
   },
-  setGraphTrigger: async (id: string, kind: string, everySecs?: number): Promise<void> => {
-    await api.put<void>(`/workflows/${id}/trigger`, { kind, every_secs: everySecs });
+  setGraphTrigger: async (id: string, kind: string, everySecs?: number, schedule?: unknown): Promise<void> => {
+    await api.put<void>(`/workflows/${id}/trigger`, { kind, every_secs: everySecs, schedule });
   },
   setGraphConcurrency: async (id: string, kind: string, max?: number): Promise<void> => {
     await api.put<void>(`/workflows/${id}/concurrency`, { kind, max });

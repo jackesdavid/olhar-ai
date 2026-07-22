@@ -66,8 +66,11 @@ event name + payload land in the feed with the emitting graph as `source`.
 ### Triggers (graph-level, not nodes)
 How a whole graph starts a run (set in the graph header, not a node):
 - **Manual** — only via Run-now.
-- **Cron { every_secs }** — a fresh run every N seconds.
-- **OnNewAlert { min_level }** — a run per new alert at/above a level.
+- **Cron { every_secs }** — a fresh run every N seconds (a stopwatch, no wall-clock time).
+- **Schedule** — a **calendar** schedule (#111): hourly at a minute, daily/weekly/monthly/yearly at
+  chosen wall-clock times, in a timezone. Durable via the `work_jobs` queue (survives a flow-pod
+  restart); next-occurrence math is `app_core::workflows::schedule` (chrono-tz, DST-correct). Built
+  from dropdowns in the graph header — no cron syntax.
 
 ### Concurrency policy (graph-level)
 What happens when a graph fires while a previous run is in flight:

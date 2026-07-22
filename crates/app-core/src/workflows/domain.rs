@@ -1987,6 +1987,44 @@ pub enum Trigger {
     Manual,
     /// Engine poller starts a fresh one-shot run every `every_secs`.
     Cron { every_secs: u64 },
+    /// Calendar schedule (#111) — fire at wall-clock times in a timezone (daily at 9am, weekly on
+    /// Mon/Wed, …). Durable via the `work_jobs` queue; next-occurrence math in [`super::schedule`].
+    Schedule(Schedule),
+}
+
+/// A recurring calendar schedule for a graph. Wall-clock, timezone-aware. Minute granularity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Schedule {
+    pub freq: ScheduleFreq,
+    /// IANA timezone (e.g. `America/Sao_Paulo`); empty → UTC.
+    #[serde(default)]
+    pub tz: String,
+    /// Local times of day to fire at, each `"HH:MM"`. Used by Daily/Weekly/Monthly/Yearly (one entry
+    /// = "daily at a time"; several = "N times a day"). Ignored by Hourly.
+    #[serde(default)]
+    pub times: Vec<String>,
+    /// Hourly: the minute of each hour to fire (0–59).
+    #[serde(default)]
+    pub minute: u8,
+    /// Weekly: weekdays to fire on, 0=Mon … 6=Sun.
+    #[serde(default)]
+    pub weekdays: Vec<u8>,
+    /// Monthly/Yearly: day of month (1–31; clamped to the month's length).
+    #[serde(default)]
+    pub day_of_month: u8,
+    /// Yearly: month (1–12).
+    #[serde(default)]
+    pub month: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduleFreq {
+    Hourly,
+    Daily,
+    Weekly,
+    Monthly,
+    Yearly,
 }
 
 impl Default for Trigger {

@@ -241,6 +241,24 @@ pub fn enqueue_at_blocking(
     }
 }
 
+/// Delete all still-pending jobs of a category (blocking). Used to reconcile schedule jobs (#111)
+/// on graph reload: clear the category, then re-enqueue from the current enabled graphs. Only
+/// `pending` rows are removed — a `running`/`done` job is never yanked out from under a consumer.
+pub fn delete_pending_by_category_blocking(db: &Db, category: &str) {
+    let pool = db.pool();
+    let category = category.to_string();
+    let res: Result<u64, sqlx::Error> = db.block(async move {
+        let r = sqlx::query("DELETE FROM work_jobs WHERE category = $1 AND status = 'pending'")
+            .bind(&category)
+            .execute(&pool)
+            .await?;
+        Ok(r.rows_affected())
+    });
+    if let Err(e) = res {
+        log::error!("work_queue::delete_pending_by_category_blocking failed: {e}");
+    }
+}
+
 /// Reschedule a claimed job to an explicit moment, blocking. See [`reschedule`].
 pub fn reschedule_blocking(db: &Db, id: Uuid, run_after: &str) {
     let pool = db.pool();

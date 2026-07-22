@@ -18,8 +18,8 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use app_core::workflows::{
-    self, ConcurrencyPolicy, Graph as WfGraph, InstanceScope, NodeKind as WfNodeKind, Trigger,
-    VariableDecl, Viewport, Workflows,
+    self, ConcurrencyPolicy, Graph as WfGraph, InstanceScope, NodeKind as WfNodeKind, Schedule,
+    Trigger, VariableDecl, Viewport, Workflows,
 };
 
 use super::{blocking, err, tenant_of, ApiErr};
@@ -1108,6 +1108,9 @@ async fn remove(
 struct TriggerReq {
     kind: String,
     every_secs: Option<u64>,
+    /// Present when `kind == "schedule"` (#111) — the calendar schedule config.
+    #[serde(default)]
+    schedule: Option<Schedule>,
 }
 
 async fn set_trigger(
@@ -1124,6 +1127,9 @@ async fn set_trigger(
             "cron" => Trigger::Cron {
                 every_secs: b.every_secs.unwrap_or(60).max(1),
             },
+            "schedule" => Trigger::Schedule(
+                b.schedule.clone().ok_or("schedule config is required for a scheduled trigger")?,
+            ),
             other => return Err(format!("unknown trigger kind '{other}'")),
         };
         let g = wf.graph_mut(id).ok_or("graph not found")?;

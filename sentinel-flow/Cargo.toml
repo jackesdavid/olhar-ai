@@ -27,6 +27,7 @@ base64 = "0.22"
 # in the REST/SSE layer (the run API + event payloads). It must be enabled here because the
 # release image builds `-p sentinel-flow` in isolation (no workspace feature unification).
 uuid = { version = "1", features = ["serde"] }
+chrono = "0.4"  # UTC "now" for the calendar-schedule consumer's next-occurrence math (#111)
 log = "0.4"
 env_logger = "0.11"
 # Shared event fabric (pub/sub): republish run-progress events to Redis (multi-pod SSE

@@ -65,6 +65,9 @@ pub fn spawn_poller(state: Arc<AppState>) {
                         .unwrap()
                         .cron_due(tenant, id, *every_secs, now)
                 }
+                // Calendar schedules (#111) fire via the durable `work_jobs` consumer
+                // (schedule_consumer), reconciled on reload — not this interval poller.
+                Trigger::Schedule(_) => false,
             };
             if due {
                 workflows::repo::save_cron_fired(&state.db, tenant, id, crate::now_epoch_ms());

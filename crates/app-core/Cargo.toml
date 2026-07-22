@@ -20,6 +20,9 @@ hex = "0.4"
 base64 = "0.22"
 rand = "0.8"
 chrono = "0.4"
+# IANA-timezone-aware datetime math for scheduled workflow triggers (#111) — DST-correct
+# "next occurrence" in a graph's timezone. Not a sqlx feature (timestamps stay RFC3339 text).
+chrono-tz = "0.9"
 # Agent vision + chat snapshots: decode/re-encode camera frames to bounded JPEG
 # (copied from the ratatui src/agent). JPEG-only to keep the build lean.
 image = { version = "0.25", default-features = false, features = ["jpeg"] }

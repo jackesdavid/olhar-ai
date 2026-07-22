@@ -114,7 +114,17 @@
   };
   type Node = { id: number; kind: string; x: number; y: number; config: Record<string, unknown>; memoize?: boolean };
   type Edge = { from: number; from_port: string; to: number; to_port: string };
-  type Trigger = "Manual" | { Cron: { every_secs: number } };
+  type ScheduleFreq = "hourly" | "daily" | "weekly" | "monthly" | "yearly";
+  type ScheduleT = {
+    freq: ScheduleFreq;
+    tz: string;
+    times: string[];
+    minute: number;
+    weekdays: number[]; // 0=Mon … 6=Sun
+    day_of_month: number;
+    month: number; // 1-12
+  };
+  type Trigger = "Manual" | { Cron: { every_secs: number } } | { Schedule: ScheduleT };
   type EventField = { name: string; type: PortType };
   type WorkflowEvent = { name: string; category: string; source: string; fields?: EventField[] };
   type EventCategory = { name: string; source: string };
@@ -905,7 +915,7 @@
   function listRunDisabled(g: Graph, unfilled: boolean): boolean {
     return (
       runStatus(g) !== "disabled" ||
-      triggerKind(g.trigger) === "cron" ||
+      triggerKind(g.trigger) !== "manual" ||
       !canRun(g) ||
       unfilled
     );
@@ -914,7 +924,7 @@
     const st = runStatus(g);
     if (st === "running") return "Running…";
     if (st === "idle") return "Active — stop it to run manually";
-    if (triggerKind(g.trigger) === "cron") return "Runs on a schedule — use the editor to run manually";
+    if (triggerKind(g.trigger) !== "manual") return "Runs on a schedule — use the editor to run manually";
     if (unfilled) return "A node has a required input not filled";
     if (canRun(g)) return "Run now";
     return "Nothing to run — connect nodes or enable orphans";
@@ -1879,16 +1889,50 @@
   }
 
   // ---- trigger / concurrency ----------------------------------------------
-  function triggerKind(t: Trigger): "manual" | "cron" {
+  function triggerKind(t: Trigger): "manual" | "cron" | "schedule" {
     if (t === "Manual") return "manual";
-    return "cron";
+    if (typeof t === "object" && "Cron" in t) return "cron";
+    return "schedule";
   }
   function triggerSecs(t: Trigger): number {
     return typeof t === "object" && "Cron" in t ? t.Cron.every_secs : 60;
   }
+  // ---- Calendar schedule (#111) ----
+  const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const SCHED_FREQ_OPTS: { value: ScheduleFreq; label: string }[] = [
+    { value: "hourly", label: "Every hour" },
+    { value: "daily", label: "Daily" },
+    { value: "weekly", label: "Weekly" },
+    { value: "monthly", label: "Monthly" },
+    { value: "yearly", label: "Yearly" },
+  ];
+  const BROWSER_TZ = typeof Intl !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().timeZone : "UTC";
+  function defaultSchedule(): ScheduleT {
+    return { freq: "daily", tz: BROWSER_TZ, times: ["09:00"], minute: 0, weekdays: [0, 1, 2, 3, 4], day_of_month: 1, month: 1 };
+  }
+  function schedOf(t: Trigger): ScheduleT {
+    return typeof t === "object" && "Schedule" in t ? { ...defaultSchedule(), ...t.Schedule } : defaultSchedule();
+  }
+  function ordinal(n: number): string {
+    const s = ["th", "st", "nd", "rd"], v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  }
+  function scheduleSummary(s: ScheduleT): string {
+    const times = s.times.length ? s.times.join(", ") : "—";
+    if (s.freq === "hourly") return `Hourly at :${String(s.minute).padStart(2, "0")}`;
+    if (s.freq === "weekly") {
+      const days = [...s.weekdays].sort((a, b) => a - b).map((d) => WEEKDAY_LABELS[d]).join(", ") || "—";
+      return `${days} at ${times}`;
+    }
+    if (s.freq === "monthly") return `Monthly on the ${ordinal(s.day_of_month)} at ${times}`;
+    if (s.freq === "yearly") return `${MONTH_LABELS[(s.month || 1) - 1]} ${s.day_of_month} at ${times}`;
+    return `Daily at ${times}`;
+  }
   function triggerSummary(t: Trigger): string {
     if (t === "Manual") return "Manual";
-    return `Every ${t.Cron.every_secs}s`;
+    if (typeof t === "object" && "Cron" in t) return `Every ${t.Cron.every_secs}s`;
+    return scheduleSummary(schedOf(t));
   }
   function concKind(c: Concurrency): "skip" | "queue" | "concurrent" {
     if (c === "SkipIfRunning") return "skip";
@@ -1907,6 +1951,40 @@
     } catch (err) {
       toast.error("Couldn't set trigger", { description: String(err) });
     }
+  }
+  // Switch trigger kind from the dropdown — schedule seeds/keeps its own config.
+  function onTriggerKind(g: Graph, kind: string) {
+    if (kind === "schedule") applySchedule(g, schedOf(g.trigger));
+    else applyTrigger(g, kind, triggerSecs(g.trigger));
+  }
+  async function applySchedule(g: Graph, sched: ScheduleT) {
+    g.trigger = { Schedule: sched } as Trigger;
+    try {
+      await data.setGraphTrigger(g.id, "schedule", undefined, sched);
+    } catch (err) {
+      toast.error("Couldn't set schedule", { description: String(err) });
+    }
+  }
+  // Merge one field change into the current schedule + persist.
+  function patchSchedule(g: Graph, patch: Partial<ScheduleT>) {
+    applySchedule(g, { ...schedOf(g.trigger), ...patch });
+  }
+  function toggleWeekday(g: Graph, day: number) {
+    const cur = schedOf(g.trigger).weekdays;
+    const next = cur.includes(day) ? cur.filter((d) => d !== day) : [...cur, day];
+    patchSchedule(g, { weekdays: next });
+  }
+  function setScheduleTime(g: Graph, i: number, value: string) {
+    const times = [...schedOf(g.trigger).times];
+    times[i] = value;
+    patchSchedule(g, { times });
+  }
+  function addScheduleTime(g: Graph) {
+    patchSchedule(g, { times: [...schedOf(g.trigger).times, "12:00"] });
+  }
+  function removeScheduleTime(g: Graph, i: number) {
+    const times = schedOf(g.trigger).times.filter((_, idx) => idx !== i);
+    patchSchedule(g, { times: times.length ? times : ["09:00"] });
   }
   async function applyConcurrency(g: Graph, kind: string, max: number) {
     g.concurrency =
@@ -2925,6 +3003,7 @@
   const TRIGGER_OPTS = [
     { value: "manual", label: "Manual (Run-now only)" },
     { value: "cron", label: "Cron (every N seconds)" },
+    { value: "schedule", label: "Schedule (calendar)" },
   ];
   const CONC_OPTS = [
     { value: "skip", label: "Skip if running" },
@@ -4002,7 +4081,7 @@
                   type="single"
                   disabled={editLocked}
                   value={triggerKind(graph.trigger)}
-                  onValueChange={(v) => applyTrigger(graph, v ?? "manual", triggerSecs(graph.trigger))}
+                  onValueChange={(v) => onTriggerKind(graph, v ?? "manual")}
                 >
                   <Select.Trigger class="h-8 w-full">{labelOf(TRIGGER_OPTS, triggerKind(graph.trigger))}</Select.Trigger>
                   <Select.Content>
@@ -4015,6 +4094,67 @@
                   <div class="flex items-center gap-2">
                     <Input type="number" min="1" disabled={editLocked} value={triggerSecs(graph.trigger)} class="h-8" onchange={(e) => applyTrigger(graph, "cron", Number(e.currentTarget.value))} />
                     <span class="text-xs text-muted-foreground">sec</span>
+                  </div>
+                {/if}
+                {#if triggerKind(graph.trigger) === "schedule"}
+                  {@const s = schedOf(graph.trigger)}
+                  <div class="space-y-2 rounded-md border border-border p-2">
+                    <Select.Root type="single" disabled={editLocked} value={s.freq} onValueChange={(v) => patchSchedule(graph, { freq: (v ?? "daily") as ScheduleFreq })}>
+                      <Select.Trigger class="h-8 w-full">{labelOf(SCHED_FREQ_OPTS, s.freq)}</Select.Trigger>
+                      <Select.Content>
+                        {#each SCHED_FREQ_OPTS as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
+                      </Select.Content>
+                    </Select.Root>
+
+                    {#if s.freq === "hourly"}
+                      <div class="flex items-center gap-2">
+                        <span class="text-xs text-muted-foreground">at minute</span>
+                        <Input type="number" min="0" max="59" disabled={editLocked} value={s.minute} class="h-8 w-20" onchange={(e) => patchSchedule(graph, { minute: Math.max(0, Math.min(59, Number(e.currentTarget.value))) })} />
+                      </div>
+                    {:else}
+                      {#if s.freq === "weekly"}
+                        <div class="flex flex-wrap gap-1">
+                          {#each WEEKDAY_LABELS as wd, i}
+                            <button type="button" disabled={editLocked} class="interactive rounded px-2 py-1 text-[11px] {s.weekdays.includes(i) ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}" onclick={() => toggleWeekday(graph, i)}>{wd}</button>
+                          {/each}
+                        </div>
+                      {/if}
+                      {#if s.freq === "monthly"}
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs text-muted-foreground">day</span>
+                          <Input type="number" min="1" max="31" disabled={editLocked} value={s.day_of_month} class="h-8 w-20" onchange={(e) => patchSchedule(graph, { day_of_month: Math.max(1, Math.min(31, Number(e.currentTarget.value))) })} />
+                        </div>
+                      {/if}
+                      {#if s.freq === "yearly"}
+                        <div class="flex items-center gap-2">
+                          <Select.Root type="single" disabled={editLocked} value={String(s.month)} onValueChange={(v) => patchSchedule(graph, { month: Number(v ?? 1) })}>
+                            <Select.Trigger class="h-8 w-24">{MONTH_LABELS[(s.month || 1) - 1]}</Select.Trigger>
+                            <Select.Content>
+                              {#each MONTH_LABELS as m, i}<Select.Item value={String(i + 1)} label={m}>{m}</Select.Item>{/each}
+                            </Select.Content>
+                          </Select.Root>
+                          <Input type="number" min="1" max="31" disabled={editLocked} value={s.day_of_month} class="h-8 w-20" onchange={(e) => patchSchedule(graph, { day_of_month: Math.max(1, Math.min(31, Number(e.currentTarget.value))) })} />
+                        </div>
+                      {/if}
+                      <div class="space-y-1">
+                        <span class="text-[11px] text-muted-foreground">Times</span>
+                        {#each s.times as t, i (i)}
+                          <div class="flex items-center gap-1">
+                            <Input type="time" disabled={editLocked} value={t} class="h-8" onchange={(e) => setScheduleTime(graph, i, e.currentTarget.value)} />
+                            {#if s.times.length > 1}
+                              <button type="button" disabled={editLocked} class="interactive px-1 text-xs text-muted-foreground hover:text-destructive" onclick={() => removeScheduleTime(graph, i)} aria-label="Remove time">✕</button>
+                            {/if}
+                          </div>
+                        {/each}
+                        <button type="button" disabled={editLocked} class="interactive text-[11px] text-muted-foreground hover:text-foreground" onclick={() => addScheduleTime(graph)}>+ Add time</button>
+                      </div>
+                    {/if}
+
+                    <div class="space-y-1">
+                      <span class="text-[11px] text-muted-foreground">Timezone</span>
+                      <Input disabled={editLocked} value={s.tz} placeholder="America/Sao_Paulo" class="h-8" onchange={(e) => patchSchedule(graph, { tz: e.currentTarget.value.trim() })} />
+                    </div>
+                    <p class="text-[11px] text-muted-foreground">{scheduleSummary(s)}</p>
                   </div>
                 {/if}
               </div>

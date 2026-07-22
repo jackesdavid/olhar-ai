@@ -135,6 +135,9 @@ impl AppState {
     /// there). Cheap; called on demand so a freshly-saved graph fires without a restart.
     pub fn reload_graphs(&self) {
         *self.store.lock().unwrap() = workflows::repo::load_all(&self.db);
+        // Re-arm calendar schedules from the freshly-loaded graphs (#111) — a trigger edit /
+        // enable / disable arrives via this reload, so schedule jobs refresh here.
+        crate::schedule_consumer::reconcile(self);
     }
 
     /// This tenant's go2rtc base for frame grabs (`https://<edge-host>`), cached for
