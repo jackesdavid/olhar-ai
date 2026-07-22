@@ -35,12 +35,14 @@ lib/workflows/
 2. **✅ DONE — `TemplateGallery.svelte`** — the Templates-tab row list (prop-driven). Also
    **✅ `DictionaryTablesTab.svelte`** — the whole Dictionary-Tables tab (list + inline editor),
    self-contained, extracted from the `/workflows/dictionaries` route.
-3. **⏳ NEXT — `WorkflowsList.svelte`** — the whole list mode (header, tabs, search/group filter,
-   grouped rows, run/delete/template toggles, activity dots). Big + coupled (~212 template lines,
-   ~40 identifiers, ~10 row actions). Cleanest via the target router refactor OR a single typed
-   `list` object prop (keeps state/SSE in the parent — safe but ~40-field object). File is 5463
-   lines as of this checkpoint.
-4. **`NodeInspector.svelte`** — the right rail (Details/Properties/Variables/Runs + the config field
+3. **✅ DONE — `WorkflowsList.svelte`** — the whole list mode (header, tabs, search/group filter,
+   grouped rows, run/delete/template toggles, activity dots). Extracted as a **presentational**
+   component (the safe option): parent keeps all state, SSE `activity`, and the run/delete dialogs;
+   the child receives a ~33-field prop contract (data + row-action callbacks + presentation helpers),
+   with `listTab` `$bindable`. Types copied verbatim so callback props stay assignable; `groupedGraphs`
+   + `listTabClass` moved into the child; the `.wf-row`/`.wf-group` `:global` styles moved with it.
+   `+page.svelte` 5529 → 5329 lines; `svelte-check` unchanged (9 errors / 4 warnings).
+4. **⏳ NEXT — `NodeInspector.svelte`** — the right rail (Details/Properties/Variables/Runs + the config field
    chain). Large + prop-heavy; extract behind an explicit prop/callback contract, no state move.
 5. **`WorkflowCanvas.svelte`** — the SVG canvas (nodes, edges, display cards, drag/marquee/resize,
    ports, previews). The heaviest; extract last, once the rail is out and the surface is smaller.
