@@ -97,6 +97,7 @@
   } from "$lib/workflows/portColors";
   import type { PortType } from "$lib/workflows/portColors";
   import { titleFontSize as dTitleFontSize, titleWidth, titleHeight, wrapText, mdLines } from "$lib/workflows/display";
+  import { timeAgo, lastRunGlyph, lastRunClass, triggerSourceLabel } from "$lib/workflows/format";
 
   import ContextSearch from "../components/ContextSearch.svelte";
   import TemplateGallery from "../components/TemplateGallery.svelte";
@@ -1500,26 +1501,6 @@
     return keys.map((k) => ({ key: k, label: k || "Ungrouped", rows: map.get(k)! }));
   });
 
-  function timeAgo(iso: string): string {
-    const then = new Date(iso).getTime();
-    if (!Number.isFinite(then)) return "";
-    const s = Math.max(0, (Date.now() - then) / 1000);
-    if (s < 60) return "just now";
-    const m = Math.floor(s / 60);
-    if (m < 60) return `${m}m ago`;
-    const h = Math.floor(m / 60);
-    if (h < 24) return `${h}h ago`;
-    return `${Math.floor(h / 24)}d ago`;
-  }
-
-  function lastRunGlyph(status: string): string {
-    return status === "ok" ? "✓" : status === "failed" ? "✗" : "•";
-  }
-  function lastRunClass(status: string): string {
-    if (status === "failed") return "text-destructive";
-    if (status === "running") return "text-primary";
-    return "text-muted-foreground";
-  }
 
   async function duplicateWorkflow(g: Graph) {
     try {
@@ -2538,13 +2519,6 @@
     if (status === "failed") return "text-destructive";
     return "text-amber-500"; // running
   }
-  function triggerSourceLabel(src?: string | null): string {
-    if (src === "cron") return "Cron";
-    if (src === "event") return "Event";
-    if (src === "manual") return "Manual";
-    return "Running";
-  }
-
   function comingSoon(what: string) {
     toast.info(`${what} — coming soon`);
   }
