@@ -36,6 +36,8 @@
   import ClipboardPaste from "@lucide/svelte/icons/clipboard-paste";
   import Bookmark from "@lucide/svelte/icons/bookmark";
   import LayoutTemplate from "@lucide/svelte/icons/layout-template";
+  import ArrowRight from "@lucide/svelte/icons/arrow-right";
+  import Workflow from "@lucide/svelte/icons/workflow";
   import Table2 from "@lucide/svelte/icons/table-2";
   import Link2 from "@lucide/svelte/icons/link-2";
   import Unplug from "@lucide/svelte/icons/unplug";
@@ -1576,6 +1578,47 @@
   // ---- templates (#102) ----------------------------------------------------
   const isMaster = $derived(auth.me?.is_master ?? false);
 
+  // List view: two tabs — the tenant's own workflows, and the template catalog (own + global)
+  // shown inline so a brand-new user meets the starter templates immediately (#136).
+  type TemplateSummary = { id: string; name: string; description: string; global: boolean; inputs: { name: string; type: string }[] };
+  let listTab = $state<"mine" | "templates">("mine");
+  let listTabInit = false; // pick the initial tab once, after the first load
+  let templates = $state<TemplateSummary[]>([]);
+  let templatesLoading = $state(false);
+  let usingTemplateId = $state<string | null>(null);
+  function listTabClass(t: "mine" | "templates"): string {
+    const base = "flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition-colors -mb-px";
+    return listTab === t
+      ? `${base} border-primary text-foreground`
+      : `${base} border-transparent text-muted-foreground hover:text-foreground`;
+  }
+  function showTemplatesTab() {
+    listTab = "templates";
+    if (!templates.length && !templatesLoading) void loadTemplates();
+  }
+  async function loadTemplates() {
+    templatesLoading = true;
+    try {
+      templates = await data.listTemplates<TemplateSummary>();
+    } catch (err) {
+      toast.error("Couldn't load templates", { description: String(err) });
+    } finally {
+      templatesLoading = false;
+    }
+  }
+  // Clone a template into this tenant, then open the new (disabled) workflow to fill its inputs.
+  async function cloneTemplate(t: TemplateSummary) {
+    usingTemplateId = t.id;
+    try {
+      const id = await data.useTemplate(t.id);
+      toast.info(`Created “${t.name}” — fill in its inputs and turn it on.`);
+      goto(`/workflows/${id}`);
+    } catch (err) {
+      usingTemplateId = null;
+      toast.error("Couldn't use template", { description: String(err) });
+    }
+  }
+
   // Publish/unpublish a template to the GLOBAL catalog — master only (the endpoint 403s others).
   async function toggleGlobal(g: Graph) {
     const next = !g.global;
@@ -1677,6 +1720,13 @@
           loadEvents(),
           refreshActivity(),
         ]);
+        // A brand-new user (no workflows yet) lands on the Templates tab so the starter catalog
+        // is the first thing they see, not an empty list (#136). Decide once, post-load.
+        if (!listTabInit) {
+          listTabInit = true;
+          if (graphs.length === 0) listTab = "templates";
+        }
+        void loadTemplates();
       } catch (err) {
         toast.error("Failed to load workflows", { description: String(err) });
       } finally {
@@ -3227,12 +3277,24 @@
           <p class="text-sm text-muted-foreground">Graph automations that run on a trigger or on demand.</p>
         </div>
         <div class="flex items-center gap-2">
-          <Button variant="outline" onclick={() => goto("/workflows/templates")}><LayoutTemplate class="size-4" /> Templates</Button>
           <Button variant="outline" onclick={() => goto("/workflows/dictionaries")}><Table2 class="size-4" /> Dictionary Tables</Button>
           <Button onclick={createWorkflow}><Plus class="size-4" /> New workflow</Button>
         </div>
       </div>
 
+      <!-- tabs: my workflows | templates — the catalog is inline so new users meet it (#136) -->
+      <div class="flex shrink-0 items-center gap-1 border-b border-border">
+        <button type="button" class={listTabClass("mine")} onclick={() => (listTab = "mine")}>
+          <Workflow class="size-4" /> My workflows
+          {#if graphs.length}<span class="rounded-full bg-muted px-1.5 text-xs text-muted-foreground">{graphs.length}</span>{/if}
+        </button>
+        <button type="button" class={listTabClass("templates")} onclick={showTemplatesTab}>
+          <LayoutTemplate class="size-4" /> Templates
+          {#if templates.length}<span class="rounded-full bg-muted px-1.5 text-xs text-muted-foreground">{templates.length}</span>{/if}
+        </button>
+      </div>
+
+      {#if listTab === "mine"}
       <!-- filter bar -->
       <div class="flex shrink-0 flex-wrap items-center gap-2">
         <div class="relative">
@@ -3273,9 +3335,12 @@
             <div class="p-6">
               <EmptyState
                 title="No workflows yet"
-                description="Create one to chain cameras, alerts, vision, and recipients into an automation."
+                description="Start from a ready-made template, or build one from scratch to chain cameras, alerts, vision, and recipients."
               >
-                <Button onclick={createWorkflow}><Plus class="size-4" /> New workflow</Button>
+                <div class="flex flex-wrap items-center justify-center gap-2">
+                  <Button onclick={showTemplatesTab}><LayoutTemplate class="size-4" /> Browse templates</Button>
+                  <Button variant="outline" onclick={createWorkflow}><Plus class="size-4" /> New workflow</Button>
+                </div>
               </EmptyState>
             </div>
           {/if}
@@ -3311,6 +3376,56 @@
           </div>
         {/if}
       </div>
+      {:else}
+        <!-- templates gallery (inline) — own templates + every global one (#102, #136) -->
+        <div class="min-h-0 flex-1 overflow-y-auto pt-1">
+          {#if templatesLoading}
+            <div class="p-12 text-center text-sm text-muted-foreground">Loading templates…</div>
+          {:else if templates.length === 0}
+            <div class="p-6">
+              <EmptyState
+                title="No templates yet"
+                description="Save a workflow as a template (the bookmark on its row) and it'll appear here to reuse."
+              >
+                <Button variant="outline" onclick={() => (listTab = "mine")}>Back to my workflows</Button>
+              </EmptyState>
+            </div>
+          {:else}
+            <div class="grid gap-4 pb-2 sm:grid-cols-2 lg:grid-cols-3">
+              {#each templates as t (t.id)}
+                <div class="interactive flex flex-col rounded-2xl border border-border bg-card p-5">
+                  <div class="mb-3 flex items-start justify-between gap-3">
+                    <div class="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                      <LayoutTemplate class="size-5" />
+                    </div>
+                    {#if t.global}
+                      <Badge variant="outline" class="border-primary/25 bg-primary/10 text-primary">
+                        <Globe class="mr-1 size-3" /> Global
+                      </Badge>
+                    {/if}
+                  </div>
+                  <h3 class="text-[15px] font-semibold tracking-tight">{t.name}</h3>
+                  {#if t.description}
+                    <p class="mt-1 line-clamp-2 text-sm text-muted-foreground">{t.description}</p>
+                  {/if}
+                  {#if t.inputs.length}
+                    <div class="mt-3 flex items-start gap-1.5 text-xs text-muted-foreground/80">
+                      <SlidersHorizontal class="mt-0.5 size-3.5 shrink-0" />
+                      <span>Asks for {t.inputs.map((v) => v.name).join(", ")}</span>
+                    </div>
+                  {/if}
+                  <div class="mt-4 flex justify-end">
+                    <Button size="sm" class="press" disabled={usingTemplateId === t.id} onclick={() => cloneTemplate(t)}>
+                      {usingTemplateId === t.id ? "Creating…" : "Use template"}
+                      {#if usingTemplateId !== t.id}<ArrowRight class="size-3.5" />{/if}
+                    </Button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
 
     <!-- ════════════════════ EDITOR ════════════════════ -->
