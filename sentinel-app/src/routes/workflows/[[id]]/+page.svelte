@@ -100,6 +100,7 @@
 
   import ContextSearch from "../components/ContextSearch.svelte";
   import TemplateGallery from "../components/TemplateGallery.svelte";
+  import DictionaryTablesTab from "../components/DictionaryTablesTab.svelte";
   import VariablesPanel from "../components/VariablesPanel.svelte";
   import DictionaryModal from "$lib/components/dictionary-modal.svelte";
   import RegionPointsEditor from "../components/RegionPointsEditor.svelte";
@@ -1536,12 +1537,12 @@
   // List view: two tabs — the tenant's own workflows, and the template catalog (own + global)
   // shown inline so a brand-new user meets the starter templates immediately (#136).
   type TemplateSummary = { id: string; name: string; description: string; global: boolean; inputs: { name: string; type: string }[] };
-  let listTab = $state<"mine" | "templates">("mine");
+  let listTab = $state<"mine" | "templates" | "dictionaries">("mine");
   let listTabInit = false; // pick the initial tab once, after the first load
   let templates = $state<TemplateSummary[]>([]);
   let templatesLoading = $state(false);
   let usingTemplateId = $state<string | null>(null);
-  function listTabClass(t: "mine" | "templates"): string {
+  function listTabClass(t: "mine" | "templates" | "dictionaries"): string {
     const base = "flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition-colors -mb-px";
     return listTab === t
       ? `${base} border-primary text-foreground`
@@ -3232,12 +3233,11 @@
           <p class="text-sm text-muted-foreground">Graph automations that run on a trigger or on demand.</p>
         </div>
         <div class="flex items-center gap-2">
-          <Button variant="outline" onclick={() => goto("/workflows/dictionaries")}><Table2 class="size-4" /> Dictionary Tables</Button>
           <Button onclick={createWorkflow}><Plus class="size-4" /> New workflow</Button>
         </div>
       </div>
 
-      <!-- tabs: my workflows | templates — the catalog is inline so new users meet it (#136) -->
+      <!-- tabs: my workflows | templates | dictionary tables — all inline (#136, #137) -->
       <div class="flex shrink-0 items-center gap-1 border-b border-border">
         <button type="button" class={listTabClass("mine")} onclick={() => (listTab = "mine")}>
           <Workflow class="size-4" /> My workflows
@@ -3246,6 +3246,9 @@
         <button type="button" class={listTabClass("templates")} onclick={showTemplatesTab}>
           <LayoutTemplate class="size-4" /> Templates
           {#if templates.length}<span class="rounded-full bg-muted px-1.5 text-xs text-muted-foreground">{templates.length}</span>{/if}
+        </button>
+        <button type="button" class={listTabClass("dictionaries")} onclick={() => (listTab = "dictionaries")}>
+          <Table2 class="size-4" /> Dictionary Tables
         </button>
       </div>
 
@@ -3331,7 +3334,7 @@
           </div>
         {/if}
       </div>
-      {:else}
+      {:else if listTab === "templates"}
         <TemplateGallery
           {templates}
           loading={templatesLoading}
@@ -3339,6 +3342,8 @@
           onUse={cloneTemplate}
           onBack={() => (listTab = "mine")}
         />
+      {:else}
+        <DictionaryTablesTab onChanged={reloadDictionaries} />
       {/if}
     </div>
 

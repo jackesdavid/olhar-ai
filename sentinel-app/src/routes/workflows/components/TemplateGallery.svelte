@@ -1,10 +1,10 @@
 <script lang="ts">
-  // The Templates tab of the workflows list — a grid of the tenant's own templates plus every
-  // global one. Self-contained + prop-driven (the parent owns the data + clone action). #102/#136/#137.
+  // The Templates tab of the workflows list — a row list (matching My workflows) of the tenant's
+  // own templates plus every global one. Prop-driven; the parent owns the data + clone action.
+  // #102/#136/#137.
   import LayoutTemplate from "@lucide/svelte/icons/layout-template";
   import ArrowRight from "@lucide/svelte/icons/arrow-right";
   import Globe from "@lucide/svelte/icons/globe";
-  import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
   import EmptyState from "$lib/components/empty-state.svelte";
@@ -26,10 +26,12 @@
   } = $props();
 </script>
 
-<div class="min-h-0 flex-1 overflow-y-auto pt-1">
-  {#if loading}
+{#if loading}
+  <div class="min-h-0 flex-1 overflow-y-auto rounded-xl border border-border">
     <div class="p-12 text-center text-sm text-muted-foreground">Loading templates…</div>
-  {:else if templates.length === 0}
+  </div>
+{:else if templates.length === 0}
+  <div class="min-h-0 flex-1 overflow-y-auto rounded-xl border border-border">
     <div class="p-6">
       <EmptyState
         title="No templates yet"
@@ -38,38 +40,35 @@
         <Button variant="outline" onclick={onBack}>Back to my workflows</Button>
       </EmptyState>
     </div>
-  {:else}
-    <div class="grid gap-4 pb-2 sm:grid-cols-2 lg:grid-cols-3">
+  </div>
+{:else}
+  <div class="min-h-0 flex-1 overflow-y-auto rounded-xl border border-border">
+    <div class="divide-y divide-border/60">
       {#each templates as t (t.id)}
-        <div class="interactive flex flex-col rounded-2xl border border-border bg-card p-5">
-          <div class="mb-3 flex items-start justify-between gap-3">
-            <div class="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
-              <LayoutTemplate class="size-5" />
+        <div class="group flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-primary/5">
+          <div class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <LayoutTemplate class="size-4" />
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2">
+              <span class="truncate text-sm font-medium">{t.name}</span>
+              {#if t.global}
+                <Badge variant="outline" class="shrink-0 border-primary/25 bg-primary/10 text-primary">
+                  <Globe class="mr-1 size-3" /> Global
+                </Badge>
+              {/if}
             </div>
-            {#if t.global}
-              <Badge variant="outline" class="border-primary/25 bg-primary/10 text-primary">
-                <Globe class="mr-1 size-3" /> Global
-              </Badge>
+            {#if t.description}<p class="truncate text-xs text-muted-foreground">{t.description}</p>{/if}
+            {#if t.inputs.length}
+              <p class="mt-0.5 truncate text-[11px] text-muted-foreground/70">Asks for {t.inputs.map((v) => v.name).join(", ")}</p>
             {/if}
           </div>
-          <h3 class="text-[15px] font-semibold tracking-tight">{t.name}</h3>
-          {#if t.description}
-            <p class="mt-1 line-clamp-2 text-sm text-muted-foreground">{t.description}</p>
-          {/if}
-          {#if t.inputs.length}
-            <div class="mt-3 flex items-start gap-1.5 text-xs text-muted-foreground/80">
-              <SlidersHorizontal class="mt-0.5 size-3.5 shrink-0" />
-              <span>Asks for {t.inputs.map((v) => v.name).join(", ")}</span>
-            </div>
-          {/if}
-          <div class="mt-4 flex justify-end">
-            <Button size="sm" class="press" disabled={usingId === t.id} onclick={() => onUse(t)}>
-              {usingId === t.id ? "Creating…" : "Use template"}
-              {#if usingId !== t.id}<ArrowRight class="size-3.5" />{/if}
-            </Button>
-          </div>
+          <Button size="sm" class="press shrink-0" disabled={usingId === t.id} onclick={() => onUse(t)}>
+            {usingId === t.id ? "Creating…" : "Use template"}
+            {#if usingId !== t.id}<ArrowRight class="size-3.5" />{/if}
+          </Button>
         </div>
       {/each}
     </div>
-  {/if}
-</div>
+  </div>
+{/if}
