@@ -326,7 +326,7 @@
   let consoleOpen = $state(false);
   function toggleConsole() {
     consoleOpen = !consoleOpen;
-    preTabPanels = null; // a manual toggle ends the Tab-collapsed group
+    preToggledPanels = null; // a manual toggle ends the collapsed group
     try {
       localStorage.setItem("wf.consoleOpen", String(consoleOpen));
     } catch {
@@ -447,7 +447,7 @@
   let resizing = $state(false);
   function togglePanel() {
     panelOpen = !panelOpen;
-    preTabPanels = null; // a manual toggle ends the Tab-collapsed group
+    preToggledPanels = null; // a manual toggle ends the collapsed group
     try {
       localStorage.setItem("wf.panelOpen", String(panelOpen));
     } catch {
@@ -455,21 +455,21 @@
     }
   }
 
-  // Tab collapses the editor's chrome — the right rail and the console — as ONE group, so a
-  // single keypress hands the canvas the whole window. Tab again restores each panel to
-  // exactly what it was: a panel you'd already closed by hand stays closed. Any manual toggle
-  // clears the memory, so the next Tab is a fresh collapse rather than a partial restore.
-  let preTabPanels: { rail: boolean; console: boolean } | null = null;
+  // Backtick (`) collapses the editor's chrome — the right rail and the console — as ONE group,
+  // so a single keypress hands the canvas the whole window. Pressing it again restores each panel
+  // to exactly what it was: a panel you'd already closed by hand stays closed. Any manual toggle
+  // clears the memory, so the next press is a fresh collapse rather than a partial restore.
+  let preToggledPanels: { rail: boolean; console: boolean } | null = null;
   function toggleChrome() {
-    if (preTabPanels) {
-      panelOpen = preTabPanels.rail;
-      consoleOpen = preTabPanels.console;
-      preTabPanels = null;
+    if (preToggledPanels) {
+      panelOpen = preToggledPanels.rail;
+      consoleOpen = preToggledPanels.console;
+      preToggledPanels = null;
     } else if (!panelOpen && !consoleOpen) {
-      // Nothing left to collapse — Tab would look dead on a bare canvas. Open the rail.
+      // Nothing left to collapse — the toggle would look dead on a bare canvas. Open the rail.
       panelOpen = true;
     } else {
-      preTabPanels = { rail: panelOpen, console: consoleOpen };
+      preToggledPanels = { rail: panelOpen, console: consoleOpen };
       panelOpen = false;
       consoleOpen = false;
     }
@@ -483,7 +483,7 @@
   function selectTab(t: RailTab) {
     panelTab = t;
     panelOpen = true; // picking a tab on the collapsed rail reopens it
-    preTabPanels = null; // …which also ends the Tab-collapsed group
+    preToggledPanels = null; // …which also ends the collapsed group
     try {
       localStorage.setItem("wf.panelTab", t);
       localStorage.setItem("wf.panelOpen", "true");
@@ -2182,15 +2182,10 @@
 
     if (inField) return;  // remaining shortcuts require no active text input
 
-    // Tab: collapse/expand the chrome (rail + console) as a group.
-    //
-    // Tab is THE focus-navigation key, so we only claim it when focus is NOT on a control:
-    // the `inField` guard above already lets it through while typing, and `onControl` lets
-    // it through while tabbing across buttons/links, so the editor never becomes a keyboard
-    // trap. Click the canvas (or land anywhere non-focusable) and Tab is the panel toggle.
-    if (e.key === "Tab") {
-      const onControl = !!el?.closest("button, a[href], [tabindex]:not([tabindex='-1'])");
-      if (onControl) return; // let the browser move focus
+    // Backtick (`): collapse/expand the chrome (rail + console) as a group. Rebound off Tab
+    // (#105) so Tab is left entirely to the browser's focus navigation — the `inField` guard
+    // above already keeps this from firing mid-typing, so no focus-based guard is needed.
+    if (e.key === "`") {
       e.preventDefault();
       toggleChrome();
       return;

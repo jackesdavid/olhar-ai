@@ -13,7 +13,7 @@
         ["W", "Draw wall"],
         ["M", "Place furniture"],
         ["F", "Fit to view"],
-        ["Tab", "Show / hide the panel"],
+        ["`", "Show / hide the panel"],
       ],
     },
     {

@@ -24,21 +24,14 @@ function typingInto(): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!el?.isContentEditable;
 }
 
-// Tab is THE focus-navigation key, so we only claim it when focus isn't on a control —
-// otherwise the editor becomes a keyboard trap you can't Tab out of.
-function onControl(): boolean {
-  const el = document.activeElement as HTMLElement | null;
-  return !!el?.closest("button, a[href], [tabindex]:not([tabindex='-1'])");
-}
-
 export function handleMapKey(e: KeyboardEvent, ctx: Ctx): boolean {
   if (typingInto()) return false;
   const { store, tools, fit, toggleHelp, togglePanel } = ctx;
 
-  // Tab collapses/expands the side panel — the same gesture as the workflow editor.
-  // (It used to cycle the selection; that moved to C/⇧C.)
-  if (e.key === "Tab") {
-    if (onControl()) return false; // let the browser move focus
+  // Backtick (`) collapses/expands the side panel — the same gesture as the workflow editor.
+  // Rebound off Tab (#105) so Tab is left to the browser's focus navigation; `typingInto`
+  // above already keeps this from firing mid-typing.
+  if (e.key === "`") {
     e.preventDefault();
     togglePanel?.();
     return true;
@@ -84,8 +77,8 @@ export function handleMapKey(e: KeyboardEvent, ctx: Ctx): boolean {
       tools.cancel();
       store.clearSelection();
       return true;
-    // Cycle selection. This lived on Tab/⇧Tab; Tab now toggles the side panel in BOTH
-    // editors (the workflow editor uses it for the same gesture), so cycling moved to C/⇧C.
+    // Cycle selection. This lived on Tab/⇧Tab; the panel toggle took Tab (now backtick, #105)
+    // in BOTH editors, so cycling moved to C/⇧C.
     case "c":
     case "C":
       store.cycleSelection(e.shiftKey ? -1 : 1);
