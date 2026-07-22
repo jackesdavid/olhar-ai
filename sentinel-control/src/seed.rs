@@ -43,5 +43,9 @@ pub async fn run(pool: &PgPool) -> sqlx::Result<()> {
             log::info!("seeded Demo tenant + admin: {demo_email}");
         }
     }
+
+    // Shared global workflow templates — the starter curriculum every tenant can clone (#136).
+    crate::seed_templates::run(pool).await?;
+
     Ok(())
 }

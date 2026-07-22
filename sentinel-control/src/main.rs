@@ -25,6 +25,7 @@ mod http;
 mod oauth;
 mod rbac;
 mod seed;
+mod seed_templates;
 mod store;
 mod tailscale;
 

@@ -919,6 +919,16 @@ pub async fn tenant_slug_taken(pool: &PgPool, slug: &str) -> sqlx::Result<bool> 
     Ok(n > 0)
 }
 
+/// The tenant id for a slug, if it exists. Used by the template seeder to resolve the
+/// stable `platform` tenant that owns the shared (global) workflow templates.
+pub async fn tenant_id_by_slug(pool: &PgPool, slug: &str) -> sqlx::Result<Option<Uuid>> {
+    let row: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM tenants WHERE slug = $1")
+        .bind(slug)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|(id,)| id))
+}
+
 // ---- roles + permissions ----------------------------------------------------
 
 pub async fn list_permissions(pool: &PgPool) -> sqlx::Result<Vec<(String, String)>> {
