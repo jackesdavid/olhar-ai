@@ -194,25 +194,6 @@
     return () => unsub?.();
   });
 
-  // Stream reconnect: show a persistent toast while the SSE connection is down.
-  $effect(() => {
-    if (!auth.me) return;
-    let disconnectToastId: string | number | undefined;
-    let unOpen: (() => void) | null = null;
-    let unClosed: (() => void) | null = null;
-    onEvent("stream-open", () => {
-      if (disconnectToastId != null) {
-        toast.dismiss(disconnectToastId);
-        disconnectToastId = undefined;
-      }
-    }).then((u) => { unOpen = u; });
-    onEvent("stream-closed", () => {
-      if (disconnectToastId == null)
-        disconnectToastId = toast.warning("Connection lost — reconnecting…", { duration: Infinity });
-    }).then((u) => { unClosed = u; });
-    return () => { unOpen?.(); unClosed?.(); };
-  });
-
   function isActive(href: string): boolean {
     const path = $page.url.pathname;
     if (href === "/") return path === "/";
