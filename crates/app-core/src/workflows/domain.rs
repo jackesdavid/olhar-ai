@@ -1421,8 +1421,9 @@ impl NodeKind {
             | NodeKind::GetTrackedObjects
             | NodeKind::BreakTrackedObject => "Vision",
             NodeKind::RecordPresence => "Presence",
-            NodeKind::Print | NodeKind::ShowImage | NodeKind::Comment => "Debug",
-            NodeKind::Reroute => "Utility",
+            NodeKind::Print | NodeKind::ShowImage => "Debug",
+            // Comment + Reroute are canvas organizers, not debug sinks.
+            NodeKind::Comment | NodeKind::Reroute => "Utility",
             NodeKind::StartRecording | NodeKind::StopRecording => "Recording",
             NodeKind::GetVariable | NodeKind::SetVariable => "Variables",
             NodeKind::DictRowCount

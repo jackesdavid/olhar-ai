@@ -36,7 +36,9 @@
     const q = search.trim().toLowerCase();
     const type = portType;
     return kinds
-      .filter((k) => k.slug !== "comment" && (!q || k.label.toLowerCase().includes(q) || k.slug.includes(q)))
+      // Comment has no ports, so hide it only in the "connect a wire" flow (portType != any);
+      // in the plain "Add node" menu it must be listed — it has no other add path. (#109)
+      .filter((k) => (portType === "any" || k.slug !== "comment") && (!q || k.label.toLowerCase().includes(q) || k.slug.includes(q)))
       .map((k) => ({
         ...k,
         _score: k.inputs.some((p) => p.type === type)
