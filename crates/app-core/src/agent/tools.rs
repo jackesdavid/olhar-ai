@@ -50,6 +50,16 @@ pub enum ToolUiEvent {
         label: String,
         jpeg: Vec<u8>,
     },
+    /// A workflow `Text`/`Gauge` display node received a value: render it live inside that
+    /// node (identified by `graph` + `node` id) on the editor canvas. `kind` is the node slug
+    /// (`text`/`gauge`); `value` is the resolved input value as JSON (string for Text, number
+    /// for Gauge). Like `ShowImage` but for a small typed value instead of a frame.
+    ShowValue {
+        graph: uuid::Uuid,
+        node: u32,
+        kind: String,
+        value: serde_json::Value,
+    },
     /// A workflow `RecordPresence` node fired: the map pulses a categorized dot in the
     /// room. Carries no image — just where/what/when, relayed to the browser over SSE.
     Presence {

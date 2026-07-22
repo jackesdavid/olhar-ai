@@ -66,6 +66,17 @@ pub fn publish_tool_event(bus: &EventBus, tenant: uuid::Uuid, graph: uuid::Uuid,
             "workflow-image",
             json!({ "tenant": tenant, "graph": graph, "node": node, "label": label }),
         ),
+        // Small typed value — sent inline over SSE (unlike ShowImage's out-of-band bytes).
+        ToolUiEvent::ShowValue {
+            graph,
+            node,
+            kind,
+            value,
+        } => publish(
+            bus,
+            "workflow-value",
+            json!({ "tenant": tenant, "graph": graph, "node": node, "kind": kind, "value": value }),
+        ),
         ToolUiEvent::Presence {
             category,
             room_id,

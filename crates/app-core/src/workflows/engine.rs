@@ -1040,6 +1040,33 @@ fn forward_epoch(
             }
         }
 
+        // Display live sinks (Text/Gauge): resolve the `value` input (wired, or the config literal
+        // fallback), persist it (survives refresh / flow restart), and push it live to the editor.
+        if matches!(n.kind, NodeKind::Text | NodeKind::Gauge) {
+            let value = match inputs.get("value") {
+                Some(PortValue::Text(s)) => serde_json::json!(s),
+                Some(PortValue::Num(v)) => serde_json::json!(v),
+                Some(PortValue::Bool(b)) => serde_json::json!(b),
+                _ => serde_json::Value::Null,
+            };
+            if !value.is_null() {
+                repo::set_node_state(
+                    &sys.db,
+                    sys.tenant_id,
+                    graph.id,
+                    nid,
+                    &instance_key,
+                    &serde_json::json!({ "value": &value }),
+                );
+                let _ = sys.ui_tx.send(ToolUiEvent::ShowValue {
+                    graph: graph.id,
+                    node: nid,
+                    kind: n.kind.slug().to_string(),
+                    value,
+                });
+            }
+        }
+
         // EmitEvent: fire the event so the host spawns the (guarded) handler sub-run.
         // The node's gathered inputs ARE the event's typed payload (one per field).
         if n.kind == NodeKind::EmitEvent {

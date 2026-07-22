@@ -428,6 +428,9 @@
   // expand button opens it larger in a modal.
   type NodeImage = { src: string; label: string };
   let nodeImages = $state<Record<number, NodeImage>>({});
+  // Display live sinks (Text/Gauge): the latest value that flowed into each node, by node id.
+  // Persisted node-state, so the readout survives a refresh; unset → the node shows its config literal.
+  let nodeValues = $state<Record<number, unknown>>({});
   let imageModalOpen = $state(false);
   let imageModal = $state<NodeImage | null>(null);
   function openImageModal(img: NodeImage) {
@@ -1229,8 +1232,27 @@
   function hasPreview(n: Node): boolean {
     return n.kind === "show_image" && !!nodeImages[n.id];
   }
+  // Display live sinks (Text/Gauge) show a value readout below their ports (like ShowImage's preview).
+  const TEXT_DISPLAY_H = 40;
+  const GAUGE_DISPLAY_H = 92;
+  function isValueSink(kind: string): boolean { return kind === "text" || kind === "gauge"; }
+  function valueDisplayH(n: Node): number { return n.kind === "gauge" ? GAUGE_DISPLAY_H : TEXT_DISPLAY_H; }
+  // The value a Text/Gauge node shows: the live runtime value, else its config literal.
+  function sinkValue(n: Node): unknown { return n.id in nodeValues ? nodeValues[n.id] : n.config?.value; }
+  function gaugeFraction(n: Node): number {
+    const min = Number(n.config?.min ?? 0), max = Number(n.config?.max ?? 100);
+    const v = Number(sinkValue(n) ?? min);
+    if (!Number.isFinite(v) || max <= min) return 0;
+    return Math.max(0, Math.min(1, (v - min) / (max - min)));
+  }
   function nodeHeight(n: Node): number {
-    const extra = hasPreview(n) ? PREVIEW_H + PAD : n.kind === "time_gate" ? 26 : 0;
+    const extra = hasPreview(n)
+      ? PREVIEW_H + PAD
+      : isValueSink(n.kind)
+        ? valueDisplayH(n) + PAD
+        : n.kind === "time_gate"
+          ? 26
+          : 0;
     return portsBottom(n) + PAD + extra;
   }
   // Local Y of the i-th data port within a node (the <g> is translated to n.x/n.y).
@@ -1386,6 +1408,7 @@
     selectedNodeId = null;
     pending = null;
     nodeImages = {}; // node ids restart per graph — drop the previous graph's previews
+    nodeValues = {}; // …same for Text/Gauge value readouts
     // Pre-fetch persisted ShowImage frames (DB-backed, survives flow restarts).
     const showNodes = graphs.find((x) => x.id === id)?.nodes.filter((n: Node) => n.kind === "show_image") ?? [];
     for (const n of showNodes) {
@@ -1395,6 +1418,13 @@
           const label = typeof n.config?.label === "string" ? n.config.label : "";
           nodeImages = { ...nodeImages, [n.id]: { src: `${url}&t=${Date.now()}`, label } };
         }
+      }).catch(() => {});
+    }
+    // Pre-fetch persisted Text/Gauge values (node-state JSON `{value}`).
+    const sinkNodes = graphs.find((x) => x.id === id)?.nodes.filter((n: Node) => isValueSink(n.kind)) ?? [];
+    for (const n of sinkNodes) {
+      fetch(data.nodeStateUrl(id, n.id)).then((r) => (r.ok ? r.json() : null)).then((st) => {
+        if (st && "value" in st) nodeValues = { ...nodeValues, [n.id]: st.value };
       }).catch(() => {});
     }
     logs = [];
@@ -1723,6 +1753,12 @@
       if (gid !== selectedGraphId) return; // node ids are per-graph — only the open one
       nodeImages = { ...nodeImages, [node]: { src: data.runFrameUrl(gid, node, Date.now()), label } };
     });
+    // Show value node (Text/Gauge): the small value rides SSE inline — render it live in the node.
+    const unValue = onEvent("workflow-value", (payload) => {
+      const p = payload as { graph: string; node: number; value: unknown };
+      if (p.graph !== selectedGraphId) return; // node ids are per-graph — only the open one
+      nodeValues = { ...nodeValues, [p.node]: p.value };
+    });
     // Cross-graph events: dispatched on the emitter, triggered/skipped on each listener.
     // Show the line in whichever graph's run view is open (matched by `graph`).
     const unEvent = onEvent("workflow-event", (payload) => {
@@ -1788,6 +1824,7 @@
       unLog.then((u) => u());
       unPrint.then((u) => u());
       unImage.then((u) => u());
+      unValue.then((u) => u());
       unEvent.then((u) => u());
       unActivity.then((u) => u());
       unOpen.then((u) => u());
@@ -3858,10 +3895,39 @@
                       </g>
                     </g>
                   {/if}
+
+                  <!-- Display live sinks (Text / Gauge): the value readout below the ports. -->
+                  {#if n.kind === "text"}
+                    {@const vy = portsBottom(n) + 4}
+                    {@const bg = String(n.config?.bg_color ?? "#1f2937")}
+                    {@const fg = String(n.config?.text_color ?? "#e5e7eb")}
+                    {@const val = String(sinkValue(n) ?? "")}
+                    <clipPath id="textval-clip-{n.id}"><rect x={8} y={vy} width={nw - 16} height={TEXT_DISPLAY_H - 6} rx="6" /></clipPath>
+                    <rect x={8} y={vy} width={nw - 16} height={TEXT_DISPLAY_H - 6} rx="6" fill={bg} />
+                    <text x={16} y={vy + (TEXT_DISPLAY_H - 6) / 2 + 4} font-size="13" fill={fg}
+                      clip-path="url(#textval-clip-{n.id})" class="pointer-events-none select-none">{val || "—"}</text>
+                  {:else if n.kind === "gauge"}
+                    {@const col = String(n.config?.color ?? "#22c55e")}
+                    {@const frac = gaugeFraction(n)}
+                    {@const cx = nw / 2}
+                    {@const cy = portsBottom(n) + 64}
+                    {@const r = 38}
+                    {@const a = Math.PI * (1 - frac)}
+                    {@const ex = cx + r * Math.cos(a)}
+                    {@const ey = cy - r * Math.sin(a)}
+                    <path d="M {cx - r} {cy} A {r} {r} 0 0 1 {cx + r} {cy}" fill="none" class="stroke-muted" stroke-width="7" stroke-linecap="round" />
+                    {#if frac > 0}
+                      <path d="M {cx - r} {cy} A {r} {r} 0 0 1 {ex} {ey}" fill="none" stroke={col} stroke-width="7" stroke-linecap="round" />
+                    {/if}
+                    <text x={cx} y={cy - 4} text-anchor="middle" font-size="16" font-weight="700" class="pointer-events-none select-none fill-foreground">{String(sinkValue(n) ?? "—")}</text>
+                    {#if n.config?.label}
+                      <text x={cx} y={cy + 14} text-anchor="middle" font-size="10" class="pointer-events-none select-none fill-muted-foreground">{String(n.config.label)}</text>
+                    {/if}
+                  {/if}
                 </g>
               {/each}
 
-              <!-- display cards (Title / Paragraph / Markdown / Tabs) — foreground, custom bodies, no ports -->
+              <!-- display cards (Title / Paragraph / Markdown) — foreground, custom bodies, no ports -->
               {#each displayNodes as n (n.id)}
                 {@const w = dispW(n)}
                 {@const h = dispH(n)}

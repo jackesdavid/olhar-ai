@@ -147,6 +147,8 @@ fn event_json(ev: ToolUiEvent) -> Option<Value> {
             json!({ "type": "print", "message": message, "level": level })
         }
         ToolUiEvent::Presence { .. } => return None,
+        // Workflow display-node value — editor-only (SSE), not surfaced in the chat agent.
+        ToolUiEvent::ShowValue { .. } => return None,
     })
 }
 

@@ -513,6 +513,12 @@ pub enum NodeKind {
     /// Display: a resizable box that renders `text` as Markdown. Zero exec, zero ports (static
     /// v1 — a live wired variant is a later enhancement).
     Markdown,
+    /// Display (live sink): shows a wired `value` (Text) — or the config literal — in a box on the
+    /// canvas. A sink like `ShowImage`: `exec_in` + `value`, exec passes through, no data out.
+    Text,
+    /// Display (live sink): shows a wired `value` (Num) as a gauge arc. `min`/`max`/`color`/`size`
+    /// + a `label` in config. Same sink shape as `Text`.
+    Gauge,
     /// Wire organizer: a tiny pure passthrough node (any → any) used to bend and route
     /// wires cleanly across the canvas, like Unreal's reroute node. Zero config.
     Reroute,
@@ -924,6 +930,9 @@ const PRINT_IN: [Port; 2] = [
 
 // Show image: a debug sink — an image in, flashed on the canvas. No data out.
 const SHOW_IMAGE_IN: [Port; 1] = [p("image", PortType::Image, true)];
+// Display sinks (Text/Gauge): one optional `value` input; unwired falls back to the config literal.
+const TEXT_DISPLAY_IN: [Port; 1] = [p("value", PortType::Text, false)];
+const GAUGE_DISPLAY_IN: [Port; 1] = [p("value", PortType::Num, false)];
 
 // Flip Flop: exec a/b outputs (alternating), plus is_a bool data output.
 const EXEC_OUT_FLIP_FLOP: [Port; 2] =
@@ -1106,7 +1115,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 85] = [
+    pub const ALL: [NodeKind; 87] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -1167,6 +1176,8 @@ impl NodeKind {
         NodeKind::Title,
         NodeKind::Paragraph,
         NodeKind::Markdown,
+        NodeKind::Text,
+        NodeKind::Gauge,
         NodeKind::StartRecording,
         NodeKind::StopRecording,
         NodeKind::TimeGate,
@@ -1258,6 +1269,8 @@ impl NodeKind {
             NodeKind::Title => "title",
             NodeKind::Paragraph => "paragraph",
             NodeKind::Markdown => "markdown",
+            NodeKind::Text => "text",
+            NodeKind::Gauge => "gauge",
             NodeKind::Reroute => "reroute",
             NodeKind::StartRecording => "start_recording",
             NodeKind::StopRecording => "stop_recording",
@@ -1353,6 +1366,8 @@ impl NodeKind {
             NodeKind::Title => "Title",
             NodeKind::Paragraph => "Paragraph",
             NodeKind::Markdown => "Markdown",
+            NodeKind::Text => "Text",
+            NodeKind::Gauge => "Gauge",
             NodeKind::Reroute => "Reroute",
             NodeKind::StartRecording => "Start Recording",
             NodeKind::StopRecording => "Stop Recording",
@@ -1443,7 +1458,7 @@ impl NodeKind {
             // Comment + Reroute are canvas organizers, not debug sinks.
             NodeKind::Comment | NodeKind::Reroute => "Utility",
             // Presentation nodes that render content on the canvas (docs + live values).
-            NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown => "Display",
+            NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown | NodeKind::Text | NodeKind::Gauge => "Display",
             NodeKind::StartRecording | NodeKind::StopRecording => "Recording",
             NodeKind::GetVariable | NodeKind::SetVariable => "Variables",
             NodeKind::DictRowCount
@@ -1603,6 +1618,9 @@ impl NodeKind {
             NodeKind::Comment => &NO_PORTS,
             // Display annotation nodes: pure canvas decoration, no data/exec ports.
             NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown => &NO_PORTS,
+            // Display live sinks: one optional `value` input (Text / Num).
+            NodeKind::Text => &TEXT_DISPLAY_IN,
+            NodeKind::Gauge => &GAUGE_DISPLAY_IN,
             NodeKind::Reroute => &REROUTE_IN,
             NodeKind::StartRecording => &START_RECORDING_IN,
             NodeKind::StopRecording => &STOP_RECORDING_IN,
@@ -1689,6 +1707,8 @@ impl NodeKind {
             NodeKind::AskAi => &NO_PORTS, // exec outputs are true/false branches only
             NodeKind::Comment => &NO_PORTS,
             NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown => &NO_PORTS,
+            // Display live sinks: exec passes through, no data out (like ShowImage).
+            NodeKind::Text | NodeKind::Gauge => &NO_PORTS,
             NodeKind::Reroute => &REROUTE_OUT,
             NodeKind::StartRecording => &START_RECORDING_OUT,
             NodeKind::StopRecording => &NO_PORTS,
@@ -1821,6 +1841,11 @@ impl NodeKind {
             }
             NodeKind::Markdown => {
                 json!({ "text": "## Heading\n\n- point one\n- point two", "width": 340, "height": 220 })
+            }
+            // `value` = the literal shown when the input port is unwired (also the port's fallback).
+            NodeKind::Text => json!({ "value": "", "bg_color": "#1f2937", "text_color": "#e5e7eb" }),
+            NodeKind::Gauge => {
+                json!({ "value": 0, "min": 0, "max": 100, "label": "", "color": "#22c55e", "size": 160 })
             }
             NodeKind::Reroute => json!({}),
             NodeKind::StartRecording => json!({ "timeout_secs": "30" }),

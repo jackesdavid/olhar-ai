@@ -48,7 +48,7 @@ Frontend + `domain.rs` only. No `node.rs`/`engine.rs`/SSE.
   (reuse color-picker + `<Textarea>` branches; a small list editor for Tabs).
 - Icons in the palette icon map; `docs/workflow-nodes.md` + `CLAUDE.md` node count.
 
-## Phase 2 (Slice 2) — Live sinks: Text, Gauge
+## Phase 2 (Slice 2) — Live sinks: Text, Gauge — **shipped**
 - **`domain.rs`**: 2 kinds; `input_ports` = `[value]` (Text for Text, Num for Gauge, optional);
   `exec_out` = default (sink passes exec through, like ShowImage); `output_ports` = `NO_PORTS`.
 - **`node.rs`**: run arms as sinks (return empty), mirroring `ShowImage`.

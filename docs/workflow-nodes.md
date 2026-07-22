@@ -181,15 +181,19 @@ reports `queued`, not delivered. Only paired chats (per tenant) ever fire the ev
 
 ### Display
 
-Presentation cards rendered **on the canvas** (foreground) for documenting a graph. No ports, no
-execution — pure config-driven decoration, positioned freely like any node. (Live-value display
-nodes — `Text`, `Gauge` — are a follow-up.)
+Content rendered **on the canvas**. **Title / Paragraph / Markdown** are pure decoration (no ports,
+no execution) for documenting a graph. **Text / Gauge** are live sinks (like `Show image`, but for a
+small value): `exec_in` + an optional `value` input; exec passes through, no data out. When exec
+reaches them they persist + display the value (survives refresh); unwired, they show their config
+literal. Each config value is editable in the property panel.
 
 | Node | Inputs | Outputs | Config | Behavior | Sample usage |
 |---|---|---|---|---|---|
 | **Title** | — | — | `text`, `color` (#RRGGBB), `size` (`sm`/`md`/`lg`/`xl`) | A big heading drawn on the canvas. Auto-sizes to the text. | *(label a section of the flow)* |
 | **Paragraph** | — | — | `text`, `color`, `width`, `height` | A resizable box of wrapped multiline text for a long description / help note. Drag the bottom-right grip to resize. | *(document what a subtree does)* |
 | **Markdown** | — | — | `text`, `width`, `height` | A resizable box that renders `text` as basic Markdown (headings `#`/`##`/`###`, bullets `-`/`*`) — SVG-native, no HTML embed. | *(a rich doc block on the canvas)* |
+| **Text** | `value` (Text, optional) | — | `value` (literal fallback), `bg_color`, `text_color` | Live sink: shows a wired Text value (or the literal) in a coloured box under its ports. | `Recognize person → (person) Text` (live name readout) |
+| **Gauge** | `value` (Num, optional) | — | `value` (literal), `min`, `max`, `label`, `color`, `size` | Live sink: shows a wired Num as a semicircular gauge arc + number. | `Person detection → (count) Gauge(min=0, max=20)` |
 
 ### Variables
 
