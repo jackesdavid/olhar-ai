@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import X from "@lucide/svelte/icons/x";
   import { Input } from "$lib/components/ui/input";
   import { portColor, typeColor } from "$lib/workflows/portColors";
@@ -31,6 +32,12 @@
   } = $props();
 
   let search = $state("");
+  let searchInputEl = $state<HTMLInputElement | null>(null);
+  // Focus the search on every open (the raw `autofocus` attr only fired reliably on first insert and
+  // raced the mount animation). `tick()` waits for the input to be in the DOM. (#110)
+  $effect(() => {
+    if (open && searchInputEl) tick().then(() => searchInputEl?.focus());
+  });
 
   const filteredKinds = $derived.by(() => {
     const q = search.trim().toLowerCase();
@@ -105,8 +112,7 @@
     </div>
 
     <div class="px-2 py-1.5">
-      <!-- svelte-ignore a11y_autofocus -->
-      <Input autofocus bind:value={search} placeholder="Search…" class="h-7 text-xs" />
+      <Input bind:ref={searchInputEl} bind:value={search} placeholder="Search…" class="h-7 text-xs" />
     </div>
 
     <div class="flex-1 overflow-y-auto px-2 pb-2">
