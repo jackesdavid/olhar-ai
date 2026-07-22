@@ -1764,6 +1764,7 @@
     const n = name.trim();
     if (!n || n === graph.name) return;
     graph.name = n;
+    markDirty(); // already auto-saved below; also light the Save indicator so it reflects every edit
     try {
       await data.renameGraph(graph.id, n);
     } catch (err) {
@@ -1773,6 +1774,7 @@
   async function saveDescription(v: string) {
     if (!graph || (graph.description ?? "") === v) return;
     graph.description = v;
+    markDirty(); // surface the edit in the Save indicator too (this setting also auto-saves)
     try {
       await data.setGraphDescription(graph.id, v);
     } catch (err) {
@@ -1784,6 +1786,7 @@
     const val = v.trim();
     if ((graph.group ?? "") === val) return;
     graph.group = val;
+    markDirty(); // surface the edit in the Save indicator too (this setting also auto-saves)
     try {
       await data.setGraphGroup(graph.id, val);
     } catch (err) {
@@ -1818,6 +1821,7 @@
   }
   async function toggleRunOrphans(g: Graph, run_orphans: boolean) {
     g.run_orphans = run_orphans; // optimistic
+    markDirty(); // surface the edit in the Save indicator too (this setting also auto-saves)
     try {
       await data.setGraphRunOrphans(g.id, run_orphans);
     } catch (err) {
@@ -1827,6 +1831,7 @@
   }
   async function toggleDebug(g: Graph, debug: boolean) {
     g.debug = debug; // optimistic
+    markDirty(); // surface the edit in the Save indicator too (this setting also auto-saves)
     try {
       await data.setGraphDebug(g.id, debug);
     } catch (err) {
@@ -1947,6 +1952,7 @@
     // Trigger persists immediately (its own endpoint); reflect locally with no reload —
     // a reload would wipe unsaved canvas edits (#122).
     g.trigger = kind === "cron" ? { Cron: { every_secs: everySecs } } : "Manual";
+    markDirty(); // surface the edit in the Save indicator too (this setting also auto-saves)
     try {
       await data.setGraphTrigger(g.id, kind, everySecs);
     } catch (err) {
@@ -1960,6 +1966,7 @@
   }
   async function applySchedule(g: Graph, sched: ScheduleT) {
     g.trigger = { Schedule: sched } as Trigger;
+    markDirty(); // surface the edit in the Save indicator too (this setting also auto-saves)
     try {
       await data.setGraphTrigger(g.id, "schedule", undefined, sched);
     } catch (err) {
@@ -1990,6 +1997,7 @@
   async function applyConcurrency(g: Graph, kind: string, max: number) {
     g.concurrency =
       kind === "queue" ? { QueueSingle: { max_queued: max } } : kind === "concurrent" ? { Concurrent: { max_concurrent: max } } : "SkipIfRunning";
+    markDirty(); // surface the edit in the Save indicator too (this setting also auto-saves)
     try {
       await data.setGraphConcurrency(g.id, kind, max);
     } catch (err) {
@@ -1998,6 +2006,7 @@
   }
   async function applyInstanceScope(g: Graph, kind: string) {
     g.instance_scope = kind === "per_camera" ? "PerCamera" : "Single";
+    markDirty(); // surface the edit in the Save indicator too (this setting also auto-saves)
     try {
       await data.setGraphInstanceScope(g.id, kind);
     } catch (err) {
@@ -2084,6 +2093,7 @@
   function addVariable() {
     if (editLocked || !graph) return;
     graph.variables = [...(graph.variables ?? []), { name: uniqueVarName(variables), type: "text" }];
+    markDirty(); // surface the change in the Save indicator (vars auto-save via scheduleVarSave)
     scheduleVarSave(graph.id);
   }
   // Edit a variable + re-sync the baked name/type on any Get/Set nodes that reference it, so
@@ -2103,13 +2113,14 @@
           n.config = { ...n.config, variable: updated.name, type: updated.type }; // local; persisted on Save (#122)
         }
       }
-      markDirty();
     }
+    markDirty(); // any variable edit (incl. default-only) should light the Save indicator; vars auto-save via scheduleVarSave
     scheduleVarSave(graph.id);
   }
   function removeVariable(i: number) {
     if (editLocked || !graph) return;
     graph.variables = (graph.variables ?? []).filter((_, j) => j !== i);
+    markDirty(); // surface the change in the Save indicator (vars auto-save via scheduleVarSave)
     scheduleVarSave(graph.id);
   }
   // ---- drag a variable from the panel onto the canvas (Unreal-style) -------
