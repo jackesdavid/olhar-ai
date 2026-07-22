@@ -28,14 +28,18 @@ lib/workflows/
 ```
 
 ## Phases (each: extract → `svelte-check` → commit → deploy → next)
-1. **Pure logic → `lib/workflows/display.ts`** — move the self-contained Display-node helpers
-   (`stripInline`, `wrapText`, `mdLines`, `titleFontSize`/`TITLE_SIZES`, `titleW`/`titleH`). No
-   reactive state, no template change. **Lowest risk — first.**
-2. **`TemplateGallery.svelte`** — the inline Templates-tab grid (props: `templates`, `loading`,
-   `usingId`, `onUse`, `onBack`). Self-contained, prop-driven.
-3. **`WorkflowsList.svelte`** — the whole list mode (header, tabs, search/group filter, grouped
-   rows, run/delete/template toggles, activity dots). It shares only `graphs` + navigation with the
-   editor; give it its own data load so `+page.svelte`'s list branch becomes `<WorkflowsList/>`.
+1. **✅ DONE — Pure logic → `lib/workflows/display.ts`** — Display-node helpers (`stripInline`,
+   `wrapText`, `mdLines`, `titleFontSize`/`TITLE_SIZES`, `titleWidth`/`titleHeight`).
+   Also **✅ `lib/workflows/format.ts`** (`timeAgo`, `lastRunGlyph`, `lastRunClass`,
+   `triggerSourceLabel`).
+2. **✅ DONE — `TemplateGallery.svelte`** — the Templates-tab row list (prop-driven). Also
+   **✅ `DictionaryTablesTab.svelte`** — the whole Dictionary-Tables tab (list + inline editor),
+   self-contained, extracted from the `/workflows/dictionaries` route.
+3. **⏳ NEXT — `WorkflowsList.svelte`** — the whole list mode (header, tabs, search/group filter,
+   grouped rows, run/delete/template toggles, activity dots). Big + coupled (~212 template lines,
+   ~40 identifiers, ~10 row actions). Cleanest via the target router refactor OR a single typed
+   `list` object prop (keeps state/SSE in the parent — safe but ~40-field object). File is 5463
+   lines as of this checkpoint.
 4. **`NodeInspector.svelte`** — the right rail (Details/Properties/Variables/Runs + the config field
    chain). Large + prop-heavy; extract behind an explicit prop/callback contract, no state move.
 5. **`WorkflowCanvas.svelte`** — the SVG canvas (nodes, edges, display cards, drag/marquee/resize,
