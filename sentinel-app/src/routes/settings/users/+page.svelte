@@ -171,7 +171,7 @@
             </div>
             <div class="space-y-1.5">
               <Label for="inv-pw">Temporary password</Label>
-              <Input id="inv-pw" type="password" bind:value={invitePassword} placeholder="At least 8 characters" />
+              <Input id="inv-pw" type="password" bind:value={invitePassword} placeholder="At least 8 characters" autocomplete="new-password" />
             </div>
           </div>
           <div class="space-y-1.5">

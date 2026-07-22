@@ -163,7 +163,7 @@
       </div>
       <div class="space-y-1.5">
         <Label for="t-pw">Admin password</Label>
-        <Input id="t-pw" type="password" bind:value={tPassword} placeholder="At least 8 characters" />
+        <Input id="t-pw" type="password" bind:value={tPassword} placeholder="At least 8 characters" autocomplete="new-password" />
       </div>
       <Dialog.Footer>
         <Button type="submit" disabled={!canCreate || creating}>

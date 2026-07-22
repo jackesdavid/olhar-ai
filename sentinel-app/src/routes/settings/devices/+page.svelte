@@ -565,11 +565,11 @@
         <div class="grid grid-cols-2 gap-3">
           <div class="space-y-2">
             <Label for="detail-user">Username</Label>
-            <Input id="detail-user" bind:value={editUser} placeholder="admin" />
+            <Input id="detail-user" bind:value={editUser} placeholder="admin" autocomplete="off" />
           </div>
           <div class="space-y-2">
             <Label for="detail-pass">Password</Label>
-            <Input id="detail-pass" type="password" bind:value={editPass} placeholder="••••••" />
+            <Input id="detail-pass" type="password" bind:value={editPass} placeholder="••••••" autocomplete="off" />
           </div>
         </div>
 
@@ -701,11 +701,11 @@
       <div class="grid grid-cols-2 gap-3">
         <div class="space-y-2">
           <Label for="m-user">Username</Label>
-          <Input id="m-user" bind:value={manualUser} placeholder="admin" />
+          <Input id="m-user" bind:value={manualUser} placeholder="admin" autocomplete="off" />
         </div>
         <div class="space-y-2">
           <Label for="m-pass">Password</Label>
-          <Input id="m-pass" type="password" bind:value={manualPass} placeholder="••••••" />
+          <Input id="m-pass" type="password" bind:value={manualPass} placeholder="••••••" autocomplete="off" />
         </div>
       </div>
       <p class="text-xs text-muted-foreground">

@@ -219,11 +219,11 @@
           </div>
           <div class="space-y-1.5">
             <Label for="tuya-id">Access ID</Label>
-            <Input id="tuya-id" placeholder="e.g. q4eusms3gyr7rsupqkjx" bind:value={accessId} />
+            <Input id="tuya-id" placeholder="e.g. q4eusms3gyr7rsupqkjx" autocomplete="off" bind:value={accessId} />
           </div>
           <div class="space-y-1.5">
             <Label for="tuya-key">Access Secret</Label>
-            <Input id="tuya-key" type="password" placeholder="from your project's Overview tab" bind:value={accessKey} />
+            <Input id="tuya-key" type="password" placeholder="from your project's Overview tab" autocomplete="off" bind:value={accessKey} />
           </div>
           <Button onclick={connect} disabled={connecting}>{connecting ? "Connecting…" : "Connect Tuya"}</Button>
           <p class="text-xs text-muted-foreground">
