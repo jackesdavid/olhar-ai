@@ -961,7 +961,7 @@
     const payloadNames = new Set(payloadFields(selectedNode).map((f) => f.name));
     const inputs = (nk?.inputs ?? []).filter((p) => p.type !== "exec" && !payloadNames.has(p.name));
     const rows: { key: string; port: CatPort | null }[] = inputs.map((p) => ({ key: p.name, port: p }));
-    const MANAGED_KEYS: Record<string, string[]> = { string_switch: ["arms"], ai_switch: ["arms"], camera_switch: ["arms"], comment: ["width", "height"], dict_schema: ["columns"], dict_make_row: ["columns"], tuya_control: ["value_type"] };
+    const MANAGED_KEYS: Record<string, string[]> = { string_switch: ["arms"], ai_switch: ["arms"], camera_switch: ["arms"], comment: ["width", "height"], dict_schema: ["columns"], dict_make_row: ["columns"], tuya_control: ["value_type"], tuya_read_status: ["value_type"] };
     const managedForKind = new Set(MANAGED_KEYS[selectedNode.kind] ?? []);
     for (const key of Object.keys(nk?.default_config ?? {})) {
       if (!inputs.some((p) => p.name === key) && !managedForKind.has(key)) rows.push({ key, port: null });
@@ -1033,6 +1033,19 @@
     if (node.kind === "tuya_control") {
       const ty = (typeof node.config?.value_type === "string" ? node.config.value_type : "bool") as CatPort["type"];
       return { ...k, inputs: [...k.inputs, { name: "value", type: ty, required: false }] };
+    }
+    // Read Tuya Status: the `value` output is typed by the selected data point (like the control
+    // node's input), so a read wires straight into the right type; `on`/`raw` stay static.
+    if (node.kind === "tuya_read_status") {
+      const ty = (typeof node.config?.value_type === "string" ? node.config.value_type : "text") as CatPort["type"];
+      return {
+        ...k,
+        outputs: [
+          { name: "value", type: ty, required: false },
+          { name: "on", type: "bool" as CatPort["type"], required: false },
+          { name: "raw", type: "text" as CatPort["type"], required: false },
+        ],
+      };
     }
     // Create Dictionary Row (#113): the schema's columns (baked into config.columns when a
     // Dictionary Schema is wired) each become a typed input, so you fill the row field by field.

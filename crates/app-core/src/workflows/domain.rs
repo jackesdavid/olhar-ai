@@ -289,6 +289,21 @@ fn tuya_value_port(config: &Value) -> Vec<ResolvedPort> {
     vec![ResolvedPort { name: "value".to_string(), ty, required: false }]
 }
 
+/// `TuyaReadStatus`'s outputs: `value` typed by the selected data point (`value_type`, like the
+/// control node's input) + the static `on` (Bool convenience) + `raw` (full status JSON). So the
+/// read value wires straight into the right type (e.g. `countdown_1` → Num).
+fn tuya_read_output_ports(config: &Value) -> Vec<ResolvedPort> {
+    let ty = config
+        .get("value_type")
+        .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())
+        .unwrap_or(PortType::Text);
+    vec![
+        ResolvedPort { name: "value".to_string(), ty, required: false },
+        ResolvedPort { name: "on".to_string(), ty: PortType::Bool, required: false },
+        ResolvedPort { name: "raw".to_string(), ty: PortType::Text, required: false },
+    ]
+}
+
 /// `OnEvent`'s extra, config-derived input ports: `camera` + `region`, wireable (from
 /// `GetCameraByName` / `Region`) — present only when the configured event is one of the edge
 /// tracker's three. These GATE delivery (see `engine::on_event_node`), not just display a value:
@@ -1807,7 +1822,7 @@ impl NodeKind {
             // the data point dropdown (e.g. `switch_1`); `value` = the value literal, rendered
             // by an adaptive widget typed to the point.
             NodeKind::TuyaControl => json!({ "tuya_device": "", "tuya_code": "", "value": "", "value_type": "bool", "timeout_secs": "15" }),
-            NodeKind::TuyaReadStatus => json!({ "tuya_device": "", "tuya_code": "", "timeout_secs": "15" }),
+            NodeKind::TuyaReadStatus => json!({ "tuya_device": "", "tuya_code": "", "value_type": "text", "timeout_secs": "15" }),
         }
     }
 }
@@ -1865,6 +1880,8 @@ impl GraphNode {
             NodeKind::OnEvent => payload_ports(&self.config),
             // Get Variable: one `value` output typed by the variable.
             NodeKind::GetVariable => variable_port(&self.config, false),
+            // Read Tuya Status: `value` typed by the selected data point (+ static `on`/`raw`).
+            NodeKind::TuyaReadStatus => tuya_read_output_ports(&self.config),
             // AI Extract: `value` typed per config.type (like a variable) + a static `found` bool.
             NodeKind::AiExtract => {
                 let mut ports = variable_port(&self.config, false);

@@ -48,16 +48,29 @@ pub(super) fn run_tuya_read_status(config: &Value, sys: &ToolContext) -> Result<
     )
     .unwrap_or_default();
     let found = status.iter().find(|(k, _)| k == code).map(|(_, v)| v.clone());
-    let (value_text, on) = match &found {
-        Some(v) => (json_to_text(v), as_bool(v)),
-        None => (String::new(), false),
+    let ty = function_type(device.functions_json.as_deref(), code);
+    let on = found.as_ref().map(as_bool).unwrap_or(false);
+    // `value` is typed by the data point (Boolean→Bool, Integer→Num, else Text) so it wires into
+    // the right port — mirroring the control node's dynamic input.
+    let value = match found.as_ref() {
+        Some(v) => typed_port_value(v, ty.as_deref()),
+        None => PortValue::Text(String::new()),
     };
 
     let mut o = PortValues::new();
-    o.insert("value".into(), PortValue::Text(value_text));
+    o.insert("value".into(), value);
     o.insert("on".into(), PortValue::Bool(on));
     o.insert("raw".into(), PortValue::Text(raw));
     Ok(o)
+}
+
+/// The `value` output as a typed `PortValue`, matching `tuya_read_output_ports`' port type.
+fn typed_port_value(v: &Value, ty: Option<&str>) -> PortValue {
+    match ty {
+        Some("Boolean") => PortValue::Bool(as_bool(v)),
+        Some("Integer") => PortValue::Num(as_i64(v).unwrap_or(0)),
+        _ => PortValue::Text(json_to_text(v)),
+    }
 }
 
 /// The Tuya type name (`Boolean`/`Integer`/`Enum`/`String`) of `code`, from `functions_json`.
