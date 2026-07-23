@@ -25,6 +25,7 @@ mod go2rtc;
 mod http;
 mod hwaccel;
 mod logbuf;
+mod media;
 mod metrics;
 mod paths;
 mod proc;

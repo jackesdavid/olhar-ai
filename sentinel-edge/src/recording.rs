@@ -229,7 +229,33 @@ struct Session {
     output:       PathBuf,
     started_at:   String,
     relay_thread: Option<std::thread::JoinHandle<()>>,
-    ffmpeg:       Child,
+    muxer:        Child,
+}
+
+/// Spawn the mp4 muxer for a recording (A2): reads raw Annex-B H264 from stdin, remuxes
+/// (no re-encode — same as ffmpeg's `-c:v copy`) into `output`.
+///
+/// **ffmpeg-only for now, even when `media_backend=gstreamer`** — card #138's GStreamer path was
+/// tried and rejected here: `fdsrc fd=0 ! h264parse ! mp4mux ! filesink` fails with "Buffer has no
+/// PTS" for a raw elementary stream fed over stdin, on both `filesrc` (a real file, ruling out a
+/// pipe-specific issue) and `fdsrc` (with `do-timestamp=true`, tried with/without an explicit
+/// `framerate` cap) — confirmed live against a real RTSP stream captured on the Jetson test box.
+/// `h264parse`/`mp4mux` need real PTS to remux, which a subprocess-only pipeline (no `appsrc`)
+/// can't hand-assign; fixing it needs `gstreamer-rs` bindings, which #79 rules out (the edge
+/// links nothing). See `docs/plans/edge-gstreamer-backend.md` (Phase 2b, blocked).
+fn spawn_muxer(output: &std::path::Path) -> std::io::Result<Child> {
+    crate::proc::command("ffmpeg")
+        .args([
+            "-loglevel", "warning",
+            "-f", "h264",
+            "-i", "pipe:0",
+            "-c:v", "copy",
+            "-movflags", "+faststart",
+            "-y",
+            output.to_str().unwrap_or_default(),
+        ])
+        .stdin(Stdio::piped())
+        .spawn()
 }
 
 // ---- manager ----------------------------------------------------------------
@@ -347,22 +373,11 @@ impl RecordingManager {
         let output     = self.dir.join(format!("{clip_id}.mp4"));
         let max_pre    = requested_pre_roll_secs.min(self.config.pre_roll_secs);
 
-        // --- Step 1: spawn ffmpeg -------------------------------------------
-        let mut ffmpeg = crate::proc::command("ffmpeg")
-            .args([
-                "-loglevel", "warning",
-                "-f", "h264",
-                "-i", "pipe:0",
-                "-c:v", "copy",
-                "-movflags", "+faststart",
-                "-y",
-                output.to_str().unwrap_or_default(),
-            ])
-            .stdin(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("ffmpeg spawn: {e}"))?;
+        // --- Step 1: spawn the muxer (ffmpeg — see spawn_muxer on why gstreamer isn't used here
+        // yet even when media_backend=gstreamer, card #138) ------------------
+        let mut muxer = spawn_muxer(&output).map_err(|e| format!("mux spawn: {e}"))?;
 
-        let mut ffmpeg_stdin = ffmpeg.stdin.take().expect("piped");
+        let mut muxer_stdin = muxer.stdin.take().expect("piped");
 
         // --- Step 2: snapshot pre-roll + install live sink ATOMICALLY -------
         // Both happen under the one mem_ring lock so the next access unit the
@@ -419,8 +434,8 @@ impl RecordingManager {
 
         // --- Step 3: write pre-roll, then hand stdin to the relay thread -----
         if !pre_roll_bytes.is_empty() {
-            ffmpeg_stdin.write_all(&pre_roll_bytes)
-                .map_err(|e| format!("ffmpeg pre-roll write: {e}"))?;
+            muxer_stdin.write_all(&pre_roll_bytes)
+                .map_err(|e| format!("pre-roll write: {e}"))?;
         }
 
         // With pre-roll present, live frames are contiguous with it (same GOP),
@@ -437,11 +452,11 @@ impl RecordingManager {
                     });
                     if is_idr { idr_seen = true; } else { continue; }
                 }
-                if ffmpeg_stdin.write_all(&frame_data).is_err() {
+                if muxer_stdin.write_all(&frame_data).is_err() {
                     break;
                 }
             }
-            // stdin drops here → ffmpeg gets EOF → finishes the MP4
+            // stdin drops here → the muxer gets EOF → finishes the MP4
         });
 
         log::info!("recording started: {clip_id}");
@@ -451,7 +466,7 @@ impl RecordingManager {
             output,
             started_at,
             relay_thread: Some(relay),
-            ffmpeg,
+            muxer,
         });
         Ok((clip_id, true))
     }
@@ -476,8 +491,8 @@ impl RecordingManager {
             t.join().ok();
         }
 
-        // Wait for ffmpeg to write the final moov atom
-        let _ = sess.ffmpeg.wait();
+        // Wait for the muxer to write the final moov atom
+        let _ = sess.muxer.wait();
 
         let size_bytes = fs::metadata(&sess.output).map(|m| m.len()).unwrap_or(0) as i64;
         if size_bytes < 1000 {
@@ -862,6 +877,8 @@ impl H264Reassembler {
 
 // ---- helpers ----------------------------------------------------------------
 
+/// Clip duration probe (A3). ffmpeg-only — see [`spawn_muxer`] on why card #138's GStreamer path
+/// doesn't apply here (there's no GStreamer-muxed clip to probe).
 fn probe_duration(path: &PathBuf) -> Option<i32> {
     let out = crate::proc::command("ffprobe")
         .args([

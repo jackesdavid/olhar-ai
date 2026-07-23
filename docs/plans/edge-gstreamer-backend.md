@@ -30,10 +30,47 @@
 - Open decisions resolved by the above: **#1 subprocess model** (`gst-launch-1.0` via `proc::command`,
   confirmed working) · **#2 flag transport** (extend `RecordingConfig`, confirmed) · **#4 v1 scope**
   (A1 first, confirmed) · **#5 SW-only for 2a** (confirmed, and it's what surfaced the `-libav` gap).
-- **Not yet done:** Phase 0 (tag `EdgeMetrics` heartbeat with active backend for a real A/B — CPU was
-  eyeballed via `ps`, not the metrics pipeline, this pass), Phase 2b/2c (recording mux, snapshot
-  fallback), Phase 3 (HW-decode element mapping + `install.sh` bundling + a control-side toggle UI),
-  a persisted/surfaced `gstreamer_ok` badge on the Boxes page.
+- **Control-side toggle + health shipped:** `gstreamer_ok` is now a real column (migration `0069`,
+  mirrors `ffmpeg_ok`) reported on `X-Edge-Gstreamer`, surfaced on Settings → Edge boxes. Once a box
+  reports it, a per-box `<select>` (ffmpeg/gstreamer) PATCHes `recording_config.media_backend`
+  (spreading the box's existing config so custom pre_roll/storage/etc. survive the write) — no
+  tenant-wide toggle, this is per-box on purpose for A/B, and it's gated behind `gstreamer_ok` so it
+  can't be flipped on a box that would just silently fall back anyway. Takes effect on next restart
+  (`RecordingManager` reads `media_backend` once at boot, like every other `recording_config` field).
+- **`install.sh` updated:** `--media-backend gstreamer` / `SENTINEL_MEDIA_BACKEND=gstreamer` installs
+  `gstreamer1.0-{tools,plugins-base,plugins-good,plugins-bad,plugins-ugly,libav}` (Linux, mutable +
+  rpm-ostree-layered) or the Homebrew equivalents (macOS) — opt-in only, ffmpeg install is untouched
+  and still the default. Writes `EDGE_MEDIA_BACKEND=$MEDIA_BACKEND` to `edge.env` either way.
+- **Phase 2b (recording mux, A2) tried and REJECTED — real blocker, not a config miss:**
+  `fdsrc fd=0 ! h264parse ! mp4mux faststart=true ! filesink` fails with **"Buffer has no PTS"**
+  for a raw Annex-B elementary stream fed over stdin. Confirmed on the Jetson test box with a
+  *clean* H264 sample (captured via `ffmpeg -c:v copy`, ruling out the go2rtc-repackaged-NAL
+  corruption that motivated the edge's own custom `H264Reassembler` in the first place) — tried
+  `filesrc` (rules out a pipe-specific issue) and `fdsrc do-timestamp=true`/`is-live` (not a
+  property on this fdsrc), with and without an explicit `framerate` cap before/after `h264parse`.
+  A synthetic `videotestsrc ! x264enc ! h264parse ! mp4mux` pipeline muxes fine in the same
+  environment — so `mp4mux` itself works, the problem is specifically that `h264parse` can't
+  invent PTS for a byte-stream with no timing metadata (this camera's SPS has no VUI timing info).
+  The standard fix is `appsrc` with manually-assigned buffer PTS — which needs `gstreamer-rs`
+  bindings, contradicting decision #1 (subprocess-only, because #79 rules out the edge linking
+  anything). **`spawn_muxer` now ignores `media_backend` and always uses ffmpeg for A2/A3** —
+  `RecordingConfig.media_backend` only drives `capture.rs`'s A1 live decode for now. Revisit only
+  if the project ever revisits the "no bindings" constraint.
+- **Phase 3 hwaccel (GStreamer HW-decode element) tried, shelved — inconclusive:** an explicit
+  `rtph264depay ! h264parse ! nvv4l2decoder ! nvvidconv ! …` pipeline DOES work on the Jetson (85/85
+  valid JPEGs) once `gstreamer1.0-plugins-bad` is also installed (`h264parse` lives there, not in
+  `-good`) — but a rough `ps %cpu` comparison against the SW `decodebin` path showed no clear win
+  (~15% HW vs ~17% SW, single noisy samples, not a rigorous run). Given the added fragility (an
+  extra system package, a Jetson/Tegra-only element name, bypassing `decodebin`'s codec-agnostic
+  autoplug so H264 vs H265 would need separate pipeline branches again) for an unproven gain, this
+  is shelved — exactly per the plan's own gating ("once SW parity is measured", Phase 0, which
+  hasn't been done rigorously via `EdgeMetrics` yet). Don't re-attempt without a proper Phase 0 A/B.
+- **Phase 2c (snapshot fallback, A5) decided: keep ffmpeg.** It's a one-off credential-test
+  snapshot (Devices → Test credentials), not a continuous operation — no measurement value, and
+  `app_core::onvif::client::snapshot_from_rtsp` is shared library code with only one caller
+  (edge `http.rs`), so converting it would add cross-crate backend plumbing for zero payoff.
+- **Not yet done:** Phase 0 (tag `EdgeMetrics` heartbeat with active backend for a rigorous A/B —
+  CPU was eyeballed via `ps`, not the metrics pipeline, both passes so far).
 **Goal:** Let each edge box run **GStreamer instead of ffmpeg** for every media operation the edge
 does, switchable per box via a flag pushed from control, so we can A/B **measure CPU/mem** and decide
 whether GStreamer is lighter. ffmpeg stays the default and both coexist behind the flag **for now**.

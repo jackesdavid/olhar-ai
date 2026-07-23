@@ -238,6 +238,33 @@
       toast.error(e instanceof Error ? e.message : "Failed to request update");
     }
   }
+
+  // ---- media backend (card #138: ffmpeg ↔ gstreamer per-box coexistence flag) ----
+  // Only offered once the box has actually reported gst-launch-1.0 on PATH — flipping it on a box
+  // that doesn't have GStreamer installed would just fall back to ffmpeg silently (safe, but a
+  // dead-end toggle is confusing). See docs/plans/edge-gstreamer-backend.md.
+  let backendChangingId = $state<string | null>(null);
+  function mediaBackend(b: Box): "ffmpeg" | "gstreamer" {
+    return b.recording_config?.media_backend ?? "ffmpeg";
+  }
+  async function setMediaBackend(b: Box, value: "ffmpeg" | "gstreamer") {
+    if (mediaBackend(b) === value || backendChangingId) return;
+    backendChangingId = b.id;
+    try {
+      // Spread the box's existing recording_config so a custom pre_roll/storage/etc. setting
+      // survives — the PATCH replaces the whole jsonb blob, the edge only defaults keys that
+      // are truly absent.
+      await boxApi.patchRecordingConfig(b.id, { ...(b.recording_config ?? {}), media_backend: value });
+      await load(true);
+      toast.success(`"${b.name}": media backend → ${value}`, {
+        description: "Takes effect on its next restart.",
+      });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to change media backend");
+    } finally {
+      backendChangingId = null;
+    }
+  }
 </script>
 
 <div class="space-y-6">
@@ -330,6 +357,20 @@
                       </span>
                     {/if}
                   </span>
+                  {#if b.gstreamer_ok}
+                    <!-- card #138: per-box ffmpeg↔gstreamer coexistence flag — only offered once
+                         the box has actually reported GStreamer on PATH. -->
+                    <select
+                      class="interactive mt-1 h-6 rounded-md border border-border bg-background px-1.5 text-[10px] font-medium text-muted-foreground disabled:opacity-50"
+                      title="Media backend this box uses for decode/mux (card #138) — takes effect on its next restart"
+                      value={mediaBackend(b)}
+                      disabled={backendChangingId === b.id}
+                      onchange={(e) => setMediaBackend(b, e.currentTarget.value as "ffmpeg" | "gstreamer")}
+                    >
+                      <option value="ffmpeg">ffmpeg</option>
+                      <option value="gstreamer">gstreamer</option>
+                    </select>
+                  {/if}
                 </td>
                 <td class="px-3 py-2">
                   {#if hasMetrics(b)}

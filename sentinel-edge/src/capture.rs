@@ -37,38 +37,7 @@ fn cam_for(ip: &str) -> Arc<Cam> {
         .clone()
 }
 
-/// Which tool the supervised decoder shells out to (card #138). Both branches emit the SAME wire
-/// format on stdout (concatenated JPEGs), so [`read_mjpeg`] is backend-agnostic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Backend {
-    Ffmpeg,
-    Gstreamer,
-}
-
-impl Backend {
-    /// Resolve the config string, falling back to `Ffmpeg` for anything unrecognized AND for
-    /// `"gstreamer"` on a box that doesn't actually have `gst-launch-1.0` on PATH — a stale or
-    /// mistaken flag must never leave a camera with no working decoder (`state::gstreamer_ok()`
-    /// mirrors `ffmpeg_ok()`).
-    fn resolve(config_value: &str) -> Self {
-        if config_value.eq_ignore_ascii_case("gstreamer") {
-            if crate::state::gstreamer_ok() {
-                return Backend::Gstreamer;
-            }
-            log::warn!(
-                "media_backend=gstreamer requested but gst-launch-1.0 isn't on PATH — using ffmpeg"
-            );
-        }
-        Backend::Ffmpeg
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Backend::Ffmpeg => "ffmpeg",
-            Backend::Gstreamer => "gstreamer",
-        }
-    }
-}
+use crate::media::Backend;
 
 /// Ensure a supervised decoder is running for `ip` on the sub/HD stream. Idempotent — spawns the
 /// supervisor exactly once per camera (the `hd` of the first call wins for its lifetime; the setting

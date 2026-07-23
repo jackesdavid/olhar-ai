@@ -34,6 +34,9 @@ RELEASE_BASE="${SENTINEL_RELEASE_BASE:-}"
 GO2RTC_BASE="${SENTINEL_GO2RTC_BASE:-https://github.com/AlexxIT/go2rtc/releases/latest/download}"
 PREFIX="${SENTINEL_PREFIX:-/opt/sentinel-edge}"
 ENV_DIR="${SENTINEL_ENV_DIR:-/etc/sentinel-edge}"
+# card #138: "ffmpeg" (default) or "gstreamer" — opt-in only, a coexistence/measurement flag, not
+# a permanent switch. See docs/plans/edge-gstreamer-backend.md.
+MEDIA_BACKEND="${SENTINEL_MEDIA_BACKEND:-ffmpeg}"
 UPDATE=0   # --update: only swap the binary + restart (keep env, Tailscale, service)
 
 while [ $# -gt 0 ]; do
@@ -45,6 +48,7 @@ while [ $# -gt 0 ]; do
     --box-token) BOX_TOKEN="$2"; shift 2 ;;
     --public-host) PUBLIC_HOST="$2"; shift 2 ;;
     --release-base) RELEASE_BASE="$2"; shift 2 ;;
+    --media-backend) MEDIA_BACKEND="$2"; shift 2 ;;
     --update) UPDATE=1; shift ;;
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
@@ -245,6 +249,55 @@ else
   echo "⚠ ffmpeg NOT found — live snapshots / GetCurrentFrame will fail until it is installed." >&2
 fi
 
+# ---- 1c. runtime dep: gstreamer (opt-in, card #138) -------------------------
+# Only installed when explicitly requested (--media-backend gstreamer /
+# SENTINEL_MEDIA_BACKEND=gstreamer) — ffmpeg stays the default runtime dependency above
+# regardless. This is the coexistence/measurement phase (docs/plans/edge-gstreamer-backend.md):
+# gst-launch-1.0 is a subprocess tool the edge shells out to, same shape as ffmpeg, no linking.
+if [ "$MEDIA_BACKEND" = "gstreamer" ] && ! command -v gst-launch-1.0 >/dev/null 2>&1; then
+  echo "▸ Installing GStreamer (media_backend=gstreamer)…"
+  if [ "$os" = "Linux" ]; then
+    if [ "$IMMUTABLE" = 1 ]; then
+      rpm-ostree install --idempotent --allow-inactive \
+        gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good \
+        gstreamer1-plugins-bad-free gstreamer1-plugins-ugly-free gstreamer1-libav \
+        || echo "  ⚠ rpm-ostree install failed — layer GStreamer manually" >&2
+      command -v gst-launch-1.0 >/dev/null 2>&1 || REBOOT_REQUIRED=1
+    elif command -v apt-get >/dev/null 2>&1; then
+      # `-libav` is load-bearing: some boxes (e.g. Jetson/L4T) ship base/good/bad/ugly WITHOUT a
+      # software H264/H265 decoder, so `decodebin` fails with "missing plugin" until this is
+      # installed too (found running the Jetson test box).
+      apt-get update -qq && apt-get install -y \
+        gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+        gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+    elif command -v dnf >/dev/null 2>&1; then
+      dnf install -y gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good \
+        gstreamer1-plugins-bad-free gstreamer1-plugins-ugly-free gstreamer1-libav
+    elif command -v apk >/dev/null 2>&1; then
+      apk add --no-cache gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad \
+        gst-plugins-ugly gst-libav
+    else
+      echo "  No supported package manager found — install GStreamer manually, then re-run." >&2
+    fi
+  else
+    # macOS (the plan's first test box): Homebrew, same non-root pattern as ffmpeg above.
+    if [ -n "${SUDO_USER:-}" ] && command -v sudo >/dev/null 2>&1 && sudo -u "$SUDO_USER" command -v brew >/dev/null 2>&1; then
+      sudo -u "$SUDO_USER" brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav || true
+    elif command -v brew >/dev/null 2>&1; then
+      brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav || true
+    else
+      echo "  Install GStreamer first:  brew install gstreamer gst-plugins-{base,good,bad,ugly} gst-libav  — then re-run." >&2
+    fi
+  fi
+fi
+if [ "$MEDIA_BACKEND" = "gstreamer" ]; then
+  if command -v gst-launch-1.0 >/dev/null 2>&1; then
+    echo "✓ gstreamer present ($(command -v gst-launch-1.0))"
+  else
+    echo "⚠ gstreamer NOT found — the edge falls back to ffmpeg for every operation until it is installed." >&2
+  fi
+fi
+
 # ---- 2. binaries ------------------------------------------------------------
 echo "▸ Downloading sentinel-edge…"
 curl -fSL "$RELEASE_BASE/$EDGE_ASSET" -o "$PREFIX/sentinel-edge"
@@ -289,6 +342,7 @@ EDGE_CACHE=$PREFIX/cameras-cache.json
 TS_AUTHKEY=$AUTHKEY
 TS_HOSTNAME=$HOSTNAME_
 TS_TAGS=$TAGS
+EDGE_MEDIA_BACKEND=$MEDIA_BACKEND
 PATH=$EDGE_PATH
 EOF
 chmod 600 "$ENV_DIR/edge.env"   # contains the auth key + box token

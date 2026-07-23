@@ -80,6 +80,8 @@ export type Box = {
   /** Edge health (reported on the heartbeat): serving | up | offline | disabled. */
   tailscale_state: string | null;
   ffmpeg_ok: boolean | null;
+  /** Whether gst-launch-1.0 is on PATH (card #138) — null until an updated edge reports it. */
+  gstreamer_ok: boolean | null;
   health_at: string | null;
   recording_config: RecordingConfig | null;
   /** Reported platform, e.g. "macOS (aarch64)" / "Bazzite (x86_64)" (heartbeat). */
@@ -137,7 +139,11 @@ export const boxes = {
   /** EventSource URL for a box's live log tail (token in query — EventSource can't set headers). */
   logsStreamUrl: (id: string) =>
     `${API_BASE}/boxes/${encodeURIComponent(id)}/logs/stream?token=${encodeURIComponent(auth.token ?? "")}`,
-  patchRecordingConfig: (id: string, config: RecordingConfig) =>
+  // Partial, not RecordingConfig: the edge fills in any missing key with its own default
+  // (serde `#[serde(default)]` per field), so a caller that only wants to change ONE knob (e.g.
+  // media_backend, card #138) can spread the box's existing `recording_config` and override just
+  // that key, without having to reconstruct the full shape.
+  patchRecordingConfig: (id: string, config: Partial<RecordingConfig>) =>
     api.patch<RecordingConfig>(`/boxes/${id}/recording-config`, config),
   storageStats: (id: string) => api.get<StorageStats>(`/boxes/${id}/storage-stats`),
 };
@@ -153,6 +159,10 @@ export type RecordingConfig = {
   motion_var_threshold?: number;
   /** Drop a clip's local file once the cloud confirms it's durable (the box becomes a spool). */
   delete_local_after_upload?: boolean;
+  /** Which media tool this box shells out to for decode/mux (card #138): "ffmpeg" (default) or
+   *  "gstreamer" — a per-box coexistence/measurement flag, not a permanent switch. See
+   *  docs/plans/edge-gstreamer-backend.md. */
+  media_backend?: "ffmpeg" | "gstreamer";
 };
 
 export type StorageStats = {
