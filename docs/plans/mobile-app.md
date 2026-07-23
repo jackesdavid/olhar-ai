@@ -36,6 +36,35 @@ The single most valuable slice: a phone that logs in and receives Sentinel alert
 
 **Done when:** a workflow `NotifyRecipient` to a recipient with a registered phone delivers a native push on iOS + Android, and Telegram delivery is byte-for-byte unchanged.
 
+---
+
+### Phase 1 status (2026-07-23)
+
+**Backend: done and deployed.** Migration `0070_push_devices`, `notification/push.rs` (Expo send),
+`channel` discriminator on the notification job, `/push/devices` CRUD + test, and `NotifyRecipient`
+resolving a phone label *before* the Telegram-config check. Deployed via the local path
+(`sentinel-control`, `sentinel-notification`, `sentinel-flow`, `sentinel-app`) while CI is billing-blocked.
+
+**App: built and installed on hardware**, not yet exercised. `sentinel-mobile/` on Expo SDK 57 —
+`tsc` clean, `expo-doctor` 20/20, signed and installed on the iPhone 11 as `com.olharai.app`.
+Renamed to **Olhar AI** and moved onto the shared design tokens (`src/styles/` mirroring
+`styles/sentinel-tokens.css`).
+
+**Environment gotchas that cost real time — do not rediscover them:**
+- `expo-modules-jsi@57.0.4` does not compile on Xcode 26.3 (`abs` is ambiguous). Fixed via
+  `patches/` + patch-package; delete when upstream fixes it.
+- `.npmrc legacy-peer-deps` is load-bearing (expo pins react, a transitive react-dom wants newer).
+- Signing needs an Apple ID **signed into Xcode** — a certificate in the keychain is not enough;
+  without an account `-allowProvisioningUpdates` cannot register the App ID.
+- An incremental build after patching node_modules leaves embedded frameworks unsigned, which the
+  device reports as `ApplicationVerificationFailed` (pointing at the app, not the framework). A
+  clean build signs correctly.
+- Installing with `devicectl` bypasses the step that points the app at Metro — the app then shows a
+  blank screen with no dev server. Use `expo run:ios`.
+
+**Still unproven:** login, keychain persistence, push-token issuance and end-to-end delivery. All
+need the app actually running on the phone.
+
 ## Phase 2 — Live camera view (like the Live Tab)
 
 - Camera list from `GET {control}/devices` (bearer). Derive stream name `cam_<ip→underscores>` client-side (mirror `streamName()` in the Live Tab; go2rtc naming lives in `crates/app-core/src/go2rtc.rs`).
