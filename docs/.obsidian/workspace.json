@@ -4,30 +4,17 @@
     "type": "split",
     "children": [
       {
-        "id": "0b69487012f0f97e",
+        "id": "e769a5a6857baded",
         "type": "tabs",
         "children": [
           {
-            "id": "b11e42b646fa8cd4",
+            "id": "7b31a9da3902a403",
             "type": "leaf",
             "state": {
-              "type": "kanban",
-              "state": {
-                "file": "Task Board.md",
-                "kanbanViewState": {
-                  "kanban-plugin": "board",
-                  "list-collapse": [
-                    false,
-                    true,
-                    false,
-                    false,
-                    false,
-                    false
-                  ]
-                }
-              },
-              "icon": "lucide-trello",
-              "title": "Task Board"
+              "type": "empty",
+              "state": {},
+              "icon": "lucide-file",
+              "title": "New tab"
             }
           }
         ]
@@ -195,8 +182,14 @@
       "obsidian-excalidraw-plugin:New drawing": false
     }
   },
-  "active": "b11e42b646fa8cd4",
+  "active": "7b31a9da3902a403",
   "lastOpenFiles": [
+    "plans/tracking-job-resolution.md",
+    "Task Board.md",
+    "plans/workflow-editor-refactor.md",
+    "plans/default-workflow-templates.md",
+    "plans/workflow-display-nodes.md",
+    "plans/editor-dirty-tracking-settings.md",
     "Task Board.md.tmp.45226.925ccf2831ec",
     "plans/tuya-integration.md",
     "plans/workflow-memoize-off-default.md",
@@ -217,7 +210,6 @@
     "plans/face-embed-landmark-align.md",
     "plans/retire-local-builds-ci.md",
     "plans/face-pipeline-hd-stream.md.tmp.5186.fea512e40644",
-    "plans/face-pipeline-hd-stream.md.tmp.5186.18a4a3682c0d",
     "plans/face-pipeline-hd-stream.md",
     "plans/faces-labeling-view.md",
     "plans/edge-detection-metrics.md",
@@ -228,11 +220,6 @@
     "plans/dictionaries-tables.md",
     "plans/editor-toggles-top-cluster.md",
     "plans/workflow-schedule-trigger.md",
-    "plans/workflow-graph-instances.md",
-    "plans/node-palette-search-autofocus.md",
-    "plans/comment-node-palette-restore.md",
-    "plans/editor-chrome-toggle-button.md",
-    "plans/node-input-inline-value-indicator.md",
     "plans/logo-exploration/warm-concepts-overview.png",
     "plans/logo-exploration/concept-5.svg",
     "plans/logo-exploration/concept-4.svg",

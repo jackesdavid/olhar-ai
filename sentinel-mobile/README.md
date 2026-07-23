@@ -29,6 +29,17 @@ npx expo start
 the SDK ships, while a transitive `react-dom` asks for a newer one — npm treats that as fatal and
 refuses to install. Do not delete it.
 
+### Known upstream break: Expo + Xcode 26.3
+
+`expo-modules-jsi@57.0.4` (the newest published) does not compile under Xcode 26.3's Swift type
+checker — one line in `JavaScriptCodable+Date.swift` is rejected as *"type of expression is ambiguous
+without a type annotation"*, and the whole iOS build fails with it. This is Expo's code, not ours.
+
+The fix binds the magnitude to an explicit `Double` before comparing — semantically identical.
+It is kept as a `patch-package` patch under `patches/` and reapplied by the `postinstall` hook, so a
+fresh `npm install` stays buildable. **If a future SDK bump fixes it upstream, delete the patch** —
+a stale patch that no longer applies fails the install loudly.
+
 ### EAS
 
 The project is **`@olharai/sentinel`** (id in `app.json` → `expo.extra.eas.projectId`), owned by the
