@@ -4656,24 +4656,40 @@
                           </Select.Content>
                         </Select.Root>
                       {:else if key === "event"}
-                        <!-- Event name persists like any other field (onchange → saveNodeConfig).
-                             Registration into the tenant registry (so other graphs can listen +
-                             it appears in the palette under its category) is an explicit step. -->
+                        <!-- Event name persists like any other field (→ chooseEvent → saveNodeConfig).
+                             Registration into the tenant registry (so other graphs can listen + it
+                             appears in the palette under its category) is an explicit step.
+                             A real Select, NOT a <datalist>: datalist never opens on iPad/iOS Safari
+                             and is inconsistent on Android, so on a tablet the picker looked like an
+                             empty text box with no hint that any event existed. The free-text input
+                             below stays as the escape hatch for a brand-new custom event name. -->
                         {@const evName = String(selectedNode.config[key] ?? "").trim()}
                         {@const known = events.find((e) => e.name === evName)}
-                        <Input
-                          class="h-8"
-                          list="wf-events"
+                        <Select.Root
+                          type="single"
                           disabled={editLocked}
-                          placeholder="EventName (e.g. Foo)"
-                          value={String(selectedNode.config[key] ?? "")}
-                          onchange={(e) => chooseEvent(selectedNode, e.currentTarget.value)}
-                        />
-                        <datalist id="wf-events">
-                          {#each events as e (e.name)}<option value={e.name}>{e.category}</option>{/each}
-                        </datalist>
-                        {#if evName && known}
+                          value={known ? evName : ""}
+                          onValueChange={(v) => { if (v) chooseEvent(selectedNode, v); }}
+                        >
+                          <Select.Trigger class="h-8 w-full">
+                            {known ? evName : evName || "Choose an event…"}
+                          </Select.Trigger>
+                          <Select.Content>
+                            {#each events as e (e.name)}
+                              <Select.Item value={e.name} label={e.name}>{e.name} · {e.category}</Select.Item>
+                            {/each}
+                          </Select.Content>
+                        </Select.Root>
+                        {#if known}
                           <p class="mt-1 text-[10px] text-muted-foreground">Registered · “{known.category}”</p>
+                        {:else}
+                          <Input
+                            class="mt-1.5 h-8"
+                            disabled={editLocked}
+                            placeholder="…or type a new event name"
+                            value={String(selectedNode.config[key] ?? "")}
+                            onchange={(e) => chooseEvent(selectedNode, e.currentTarget.value)}
+                          />
                         {/if}
                       {:else if key === "style" && selectedNode.kind === "draw_bbox"}
                         {@const STYLES = [
