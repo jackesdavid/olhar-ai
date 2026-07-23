@@ -17,7 +17,10 @@ export type PlayerConfig = {
 /** Messages the page posts back to React Native, so the UI can show honest state. */
 export type PlayerEvent =
   | { type: "phase"; phase: "connecting" | "live" | "stalled" | "error" }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  /** Step-by-step trace. The failure modes here are silent by nature — a socket that opens but
+   *  never delivers looks identical to one still connecting — so the player narrates itself. */
+  | { type: "log"; message: string };
 
 export function playerHtml({ wsBase, stream, token }: PlayerConfig): string {
   const url = `${wsBase}/api/ws?src=${encodeURIComponent(stream)}&token=${encodeURIComponent(token)}`;
@@ -31,12 +34,13 @@ export function playerHtml({ wsBase, stream, token }: PlayerConfig): string {
 <script>
 (function () {
   var v = document.getElementById('v');
-  var ws = null, ms = null, sb = null, queue = [];
+  var ws = null, ms = null, sb = null, queue = [], gotBinary = false;
 
   function post(msg) {
     if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify(msg));
   }
   function fail(m) { post({ type: 'error', message: m }); }
+  function log(m) { post({ type: 'log', message: m }); }
 
   // Offer only codecs this engine can actually decode; go2rtc picks a matching track (and
   // transcodes when it must). Sending an unsupported codec yields a black, silent stream.
@@ -93,37 +97,44 @@ export function playerHtml({ wsBase, stream, token }: PlayerConfig): string {
   function handshake() {
     if (sent || !msOpen || !wsOpen) return;
     sent = true;
-    try { ws.send(JSON.stringify({ type: 'mse', value: codecs })); } catch (e) {}
+    log('handshake: ' + codecs);
+    try { ws.send(JSON.stringify({ type: 'mse', value: codecs })); } catch (e) { fail('handshake failed: ' + e); }
   }
 
-  ms.addEventListener('sourceopen', function () { msOpen = true; handshake(); });
+  ms.addEventListener('sourceopen', function () { log('sourceopen'); msOpen = true; handshake(); });
 
   ws = new WebSocket(${JSON.stringify(url)});
   ws.binaryType = 'arraybuffer';
 
-  ws.onopen = function () { wsOpen = true; handshake(); };
+  ws.onopen = function () { log('ws open'); wsOpen = true; handshake(); };
   ws.onerror = function () { fail('Could not reach the live gateway.'); };
-  ws.onclose = function () { post({ type: 'phase', phase: 'stalled' }); };
+  ws.onclose = function (e) { log('ws closed code=' + e.code); post({ type: 'phase', phase: 'stalled' }); };
 
   ws.onmessage = function (ev) {
     if (typeof ev.data === 'string') {
       var msg = {};
       try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      log('server: ' + ev.data.slice(0, 120));
       if (msg.type === 'mse' && ms.readyState === 'open' && !sb) {
         try {
           sb = ms.addSourceBuffer(msg.value);
+          log('sourcebuffer ' + msg.value);
           sb.mode = 'segments';
           sb.addEventListener('updateend', function () { flush(); seekToLive(); });
         } catch (e) { fail('Codec rejected by the player.'); }
       }
       return;
     }
+    if (!gotBinary) { gotBinary = true; log('first media chunk ' + ev.data.byteLength + 'B'); }
     queue.push(ev.data);
     flush();
   };
 
   v.addEventListener('playing', function () { post({ type: 'phase', phase: 'live' }); });
   v.addEventListener('waiting', function () { post({ type: 'phase', phase: 'stalled' }); });
+  v.addEventListener('error', function () { fail('video element error: ' + (v.error && v.error.code)); });
+  // Autoplay can still be refused even muted; surface it instead of sitting on "Connecting".
+  v.play && v.play().catch(function (e) { log('autoplay refused: ' + e.name); });
 })();
 </script>`;
 }

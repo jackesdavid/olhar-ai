@@ -22,6 +22,7 @@ export default function Live() {
   const [hd, setHd] = useState(false);
   const [phase, setPhase] = useState<Phase>("connecting");
   const [playerError, setPlayerError] = useState<string | null>(null);
+  const [trace, setTrace] = useState<string[]>([]);
   const t = useTheme();
 
   useEffect(() => {
@@ -51,6 +52,7 @@ export default function Live() {
     } catch {
       return;
     }
+    if (msg.type === "log") setTrace((prev) => [...prev.slice(-7), msg.message]);
     if (msg.type === "phase") setPhase(msg.phase);
     if (msg.type === "error") {
       setPhase("error");
@@ -98,7 +100,9 @@ export default function Live() {
         {html ? (
           <WebView
             key={playerKey}
-            source={{ html }}
+            // Inline HTML loads as an opaque origin, and WKWebView blocks a WebSocket from one.
+            // Giving the page the gateway's own origin makes the connection same-origin.
+            source={{ html, baseUrl: GATEWAY_BASE }}
             originWhitelist={["*"]}
             style={{ flex: 1, backgroundColor: "#000" }}
             allowsInlineMediaPlayback
@@ -142,6 +146,16 @@ export default function Live() {
       ) : null}
 
       <ScrollView contentContainerStyle={{ padding: space.lg, gap: space.sm }}>
+        {trace.length > 0 && phase !== "live" ? (
+          <View style={{ backgroundColor: t.elev1, borderRadius: radius.md, padding: space.sm }}>
+            {trace.map((line, i) => (
+              <Text key={i} style={{ color: t.mutedForeground, fontSize: 11, fontFamily: "Menlo" }}>
+                {line}
+              </Text>
+            ))}
+          </View>
+        ) : null}
+
         <Heading>Cameras</Heading>
         {devices.map((d) => {
           const on = d.ip === selected;
@@ -152,6 +166,7 @@ export default function Live() {
                 setSelected(d.ip);
                 setPhase("connecting");
                 setPlayerError(null);
+                setTrace([]);
               }}
               style={{
                 backgroundColor: on ? t.elev7 : t.card,
