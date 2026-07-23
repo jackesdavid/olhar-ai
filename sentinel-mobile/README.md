@@ -16,24 +16,34 @@ exact phone. Recipient *groups* (fan out to several at once) are a later feature
 
 ## Running it
 
-This directory has never been installed or launched — the dependency versions in `package.json` are
-deliberately loose and **must** be aligned to the SDK before the first run:
+Installed and verified on Expo **SDK 57** — `tsc`, `expo-doctor` (20/20) and
+`expo export --platform ios` all pass.
 
 ```bash
 cd sentinel-mobile
 npm install
-npx expo install --fix     # pins every expo/react-native package to the SDK's versions
 npx expo start
 ```
 
+**`.npmrc` sets `legacy-peer-deps`** and it is load-bearing: Expo pins `react` to the exact version
+the SDK ships, while a transitive `react-dom` asks for a newer one — npm treats that as fatal and
+refuses to install. Do not delete it.
+
+### EAS
+
+The project is **`@olharai/sentinel`** (id in `app.json` → `expo.extra.eas.projectId`), owned by the
+**olharai** account. `eas whoami` must show it; log in as the account that owns OlharAI.
+
 ### Before push can work
 
-1. **`eas init`** (or reuse an existing EAS project) and put the real id in `app.json` →
-   `expo.extra.eas.projectId`. Without it `getExpoPushTokenAsync` throws; the app reports that
-   explicitly rather than failing silently.
-2. **Run on physical hardware.** A simulator cannot receive push; the Alerts tab says so.
-3. **iOS** additionally needs a development build (`npx expo run:ios` or an EAS build) — push does
-   not work in Expo Go on iOS.
+1. **A development build is required** — `expo-notifications` no longer delivers push in Expo Go on
+   either platform. Either
+   `eas build --profile development --platform ios` (cloud; needs Apple credentials — see card #82
+   for the existing signing setup, Team `3A4H2Y6ZVM`) or a local `npx expo run:ios --device`.
+2. **Physical hardware.** A simulator cannot receive push; the Alerts tab says so explicitly rather
+   than looking broken.
+3. Permission is requested on first launch after sign-in; if denied, the Alerts tab reports it and
+   points at system settings.
 
 ### Pointing at a local backend
 

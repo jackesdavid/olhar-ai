@@ -2,6 +2,7 @@
   "expo": {
     "name": "Sentinel",
     "slug": "sentinel",
+    "owner": "olharai",
     "version": "0.1.0",
     "orientation": "portrait",
     "scheme": "sentinel",
@@ -20,8 +21,9 @@
       "expo-status-bar"
     ],
     "extra": {
+      "router": {},
       "eas": {
-        "projectId": "REPLACE_WITH_EAS_PROJECT_ID"
+        "projectId": "9004ad49-076f-4759-86da-5376dddcce3b"
       }
     }
   }
