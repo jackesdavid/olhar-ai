@@ -21,7 +21,8 @@
       "expo-router",
       "expo-secure-store",
       "expo-notifications",
-      "expo-status-bar"
+      "expo-status-bar",
+      "expo-video"
     ],
     "extra": {
       "router": {},
