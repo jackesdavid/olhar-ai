@@ -1,18 +1,18 @@
 {
   "expo": {
     "name": "Sentinel",
-    "slug": "sentinel",
+    "slug": "olharai",
     "owner": "olharai",
     "version": "0.1.0",
     "orientation": "portrait",
-    "scheme": "sentinel",
+    "scheme": "olharai",
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "online.thesentinels.app"
+      "bundleIdentifier": "com.olharai.app"
     },
     "android": {
-      "package": "online.thesentinels.app"
+      "package": "com.olharai.app"
     },
     "plugins": [
       "expo-router",
@@ -23,7 +23,7 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "9004ad49-076f-4759-86da-5376dddcce3b"
+        "projectId": "4388df5f-6d84-459e-81c8-a6fe62fd3e8b"
       }
     }
   }
