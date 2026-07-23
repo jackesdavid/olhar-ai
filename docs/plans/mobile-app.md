@@ -65,6 +65,23 @@ Renamed to **Olhar AI** and moved onto the shared design tokens (`src/styles/` m
 **Still unproven:** login, keychain persistence, push-token issuance and end-to-end delivery. All
 need the app actually running on the phone.
 
+---
+
+### Phases 1-3 complete on iOS (2026-07-23)
+
+All three phases verified on the iPhone 11:
+- **Phase 1 - Push:** native notification delivered end to end; the phone is a Recipient in the
+  Notify Recipient node.
+- **Phase 2 - Live:** WebView MSE player. Smooth on Wi-Fi and 4G, SD/HD toggle works, auto-recovers
+  on drop. Two iOS-specific fixes were load-bearing: use ManagedMediaSource (not MediaSource), and
+  give the WebView the gateway origin (opaque about:blank blocks the WS). The 4G decode loop was
+  fixed by honouring the ms.streaming feed contract. Details: [[mobile-live-player]].
+- **Phase 3 - Recordings:** list + playback from the presigned R2 URL via expo-video.
+
+**Remaining for the mobile effort (not blocking iOS):** Android is untested (the "done when" wants
+both platforms); the Debug build cannot reach Metro so every iteration is a ~10-min Release build
+(no hot reload); phone-as-edge (Phase 4) and polish (Phase 5) are future work.
+
 ## Phase 2 — Live camera view (like the Live Tab)
 
 - Camera list from `GET {control}/devices` (bearer). Derive stream name `cam_<ip→underscores>` client-side (mirror `streamName()` in the Live Tab; go2rtc naming lives in `crates/app-core/src/go2rtc.rs`).
