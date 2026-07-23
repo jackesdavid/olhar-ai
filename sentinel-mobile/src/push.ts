@@ -10,10 +10,12 @@ import Constants from "expo-constants";
 import { Platform } from "react-native";
 import { api } from "./session";
 
-/** Foreground behaviour: a security alert should interrupt, so show it even with the app open. */
+/** Foreground behaviour: a security alert should interrupt, so show it even with the app open.
+ * `shouldShowBanner`/`shouldShowList` replaced the old single `shouldShowAlert` flag. */
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
   }),

@@ -6,16 +6,19 @@
     "orientation": "portrait",
     "scheme": "sentinel",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "online.thesentinels.app"
     },
     "android": {
-      "package": "online.thesentinels.app",
-      "edgeToEdgeEnabled": true
+      "package": "online.thesentinels.app"
     },
-    "plugins": ["expo-router", "expo-secure-store", "expo-notifications"],
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-notifications",
+      "expo-status-bar"
+    ],
     "extra": {
       "eas": {
         "projectId": "REPLACE_WITH_EAS_PROJECT_ID"
