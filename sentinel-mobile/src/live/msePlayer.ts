@@ -63,8 +63,21 @@ export function playerHtml({ wsBase, stream, token }: PlayerConfig): string {
     return out.join(',');
   }
 
+  // ManagedMediaSource gates feeding on a metered link: it drops ms.streaming to false to say
+  // "stop appending, the buffer is full enough for now" and raises startstreaming when it wants
+  // more. On cellular, ignoring this and appending anyway is what tripped the decoder into
+  // MEDIA_ERR_DECODE and the endless reconnect loop. Respect the flag; when it is undefined (plain
+  // MediaSource, or Wi-Fi where it stays true) this reads as "always feed", i.e. the old behaviour.
+  function wantsData() {
+    return ms && ms.streaming !== false;
+  }
+
   function flush() {
-    if (!sb || sb.updating || queue.length === 0) return;
+    if (!sb || sb.updating || queue.length === 0 || !wantsData()) return;
+    // Feed the decoder contiguously — never drop an fMP4 segment, which would leave a gap that
+    // itself decodes to an error. If a pause let the queue grow, appending it all is fine: the
+    // decoder stays happy and seekToLive() skips the playhead forward to the live edge afterwards,
+    // so the backlog costs latency, not correctness.
     try { sb.appendBuffer(queue.shift()); } catch (e) { queue = []; }
   }
 
@@ -100,9 +113,11 @@ export function playerHtml({ wsBase, stream, token }: PlayerConfig): string {
   v.disableRemotePlayback = true;
   v.src = URL.createObjectURL(ms);
 
-  // ManagedMediaSource asks the page to pause/resume feeding it. Honour the signal when present;
-  // ignoring it makes iOS tear the buffer down on a constrained connection.
+  // The two halves of the ManagedMediaSource contract. endstreaming needs no handler beyond
+  // letting ms.streaming go false (wantsData checks it); startstreaming means resume, so drain
+  // whatever piled up while paused.
   ms.addEventListener('startstreaming', function () { flush(); });
+  ms.addEventListener('endstreaming', function () { /* ms.streaming is now false; flush() will wait */ });
 
   var msOpen = false, wsOpen = false, sent = false;
   // The handshake must go out only once BOTH the socket is open AND MediaSource is ready —
