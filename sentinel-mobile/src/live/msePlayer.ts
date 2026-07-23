@@ -60,8 +60,11 @@ export function playerHtml({ wsBase, stream, token }: PlayerConfig): string {
     return out.join(',');
   }
 
+  // Live video has no value in a backlog: if chunks piled up we are already behind, and playing
+  // them through only pushes the delay further out. Drop to the newest few and carry on.
   function flush() {
     if (!sb || sb.updating || queue.length === 0) return;
+    if (queue.length > 8) { queue = queue.slice(-3); log('dropped backlog'); }
     try { sb.appendBuffer(queue.shift()); } catch (e) { queue = []; }
   }
 
@@ -72,7 +75,20 @@ export function playerHtml({ wsBase, stream, token }: PlayerConfig): string {
       if (!sb || !sb.buffered.length) return;
       var end = sb.buffered.end(sb.buffered.length - 1);
       var start = sb.buffered.start(0);
-      if (v.currentTime < start || end - v.currentTime > 1.5) v.currentTime = Math.max(start, end - 0.3);
+      var behind = end - v.currentTime;
+      if (v.currentTime < start || behind > 0.8) {
+        // Far behind (or outside the range): jump. A visible skip beats a permanent delay.
+        v.currentTime = Math.max(start, end - 0.15);
+        v.playbackRate = 1;
+      } else if (behind > 0.35) {
+        // Slightly behind: ease back by playing a touch faster. Imperceptible, and it avoids the
+        // stutter of seeking every few seconds.
+        v.playbackRate = 1.07;
+      } else {
+        v.playbackRate = 1;
+      }
+      // iOS keeps everything ever appended, which grows memory and drags the seek target back.
+      if (!sb.updating && end - start > 10) { try { sb.remove(start, end - 5); } catch (e) {} }
     } catch (e) {}
   }
 
