@@ -910,6 +910,27 @@
     saveNodeConfig(node, { ...node.config, arms: normalized });
   });
 
+  // Same class of bug for the plain `camera` row: the dropdown DISPLAYS the first camera when the
+  // stored value is empty (`cameraValue`'s fallback) but nothing persists it — and with a single
+  // camera the Select can NEVER fire `onValueChange`, because picking the value it already shows
+  // isn't a change. So the config stays "" while the panel claims a camera is selected. Downstream
+  // that is silently fatal: control's `sync_tracking_config` drops an OnEvent tracking job whose
+  // camera doesn't resolve, so tracking never starts and nothing tells the user why.
+  // Fix: persist what the panel already shows, once, when such a node is selected. Skipped when the
+  // camera arrives by a wire (the wire wins) or the graph is armed (no edits while running).
+  $effect(() => {
+    const node = selectedNode;
+    if (!node || editLocked || cameraOptions.length === 0) return;
+    const cfg = (node.config ?? {}) as Record<string, unknown>;
+    const showsCameraRow =
+      "camera" in cfg || !!effectiveKind(node)?.inputs.some((p) => p.name === "camera");
+    if (!showsCameraRow) return;
+    if (String(cfg.camera ?? "").trim()) return; // already stored — nothing to do
+    if (wiredInto(node.id, "camera")) return; // resolved from upstream, not this literal
+    const resolved = cameraValue("");
+    if (resolved) saveNodeConfig(node, { ...node.config, camera: resolved });
+  });
+
   // A graph can only do something when it has at least one wired node — unless it
   // opts into running orphans. With no edges and orphans off, every node is
   // skipped, so a run is a no-op and Run is disabled.
