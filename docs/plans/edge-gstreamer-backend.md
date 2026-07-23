@@ -69,6 +69,23 @@
   snapshot (Devices → Test credentials), not a continuous operation — no measurement value, and
   `app_core::onvif::client::snapshot_from_rtsp` is shared library code with only one caller
   (edge `http.rs`), so converting it would add cross-crate backend plumbing for zero payoff.
+- **Bug found + fixed: `decodebin` could autoplug a HW decoder it then couldn't feed into
+  `videoconvert`, breaking capture for EVERY camera on the box.** Root cause of "boxes with
+  media_backend=gstreamer aren't actually decoding": once `gstreamer1.0-plugins-bad` is also
+  installed (which `install.sh` now does for a future Phase 3, alongside `-good`/`-libav`),
+  `decodebin` on the Jetson test box started preferring `nvv4l2decoder` (from
+  `nvidia-l4t-gstreamer`, already installed) over `avdec_h264` (from `-libav`) — `nvv4l2decoder`'s
+  output is Tegra `NVMM` memory, which the pipeline's `videoconvert` can't accept, so EVERY camera
+  failed with `not-negotiated` and the box silently sat on go2rtc's `frame.jpeg` fallback forever
+  (`capture-decoder[…]: repeated gstreamer failures — backing off to 30s`). Reproduced live via
+  `gst-launch-1.0` against the box's real go2rtc-reserved RTSP streams (all 4: preview/HD ×
+  2 cameras), confirmed the fix by zero-ranking the known HW-decoder element names via
+  `GST_PLUGIN_FEATURE_RANK` on the `gst-launch-1.0` child (`capture.rs`'s `spawn_gst`) — verified
+  end-to-end against the real edge binary + real service (both cameras streaming steadily via
+  gstreamer with motion detection firing), then reverted the test box back to ffmpeg/the shipped
+  binary. This pins Phase 2a's "software decode only for now" design intent for real, instead of
+  it being an accident of which packages happen to be on a box — protects against the same class
+  of surprise from VAAPI/QSV/D3D11/VideoToolbox HW decoders on other platforms too.
 - **Not yet done:** Phase 0 (tag `EdgeMetrics` heartbeat with active backend for a rigorous A/B —
   CPU was eyeballed via `ps`, not the metrics pipeline, both passes so far).
 **Goal:** Let each edge box run **GStreamer instead of ffmpeg** for every media operation the edge

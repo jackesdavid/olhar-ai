@@ -118,6 +118,15 @@ fn spawn_ffmpeg(ip: &str, hd: bool, use_hwaccel: bool) -> std::io::Result<Child>
 /// (`nvv4l2decoder`/`vaapih264dec`/`vtdec`) is selected yet, so the first ffmpeg-vs-gstreamer
 /// measurement is apples-to-apples (both CPU-only). Mapping the box's detected [`crate::hwaccel`]
 /// method to a GStreamer HW element is Phase 3, once SW parity is measured.
+///
+/// `GST_PLUGIN_FEATURE_RANK` zero-ranks the known HW-decoder elements so `decodebin` can't
+/// autoplug one even if it's installed and otherwise the highest-ranked H264/H265 decoder on the
+/// box — found live on the Jetson test box: `videoconvert` only accepts system-memory
+/// `video/x-raw`, but once `gstreamer1.0-plugins-bad` is present too (installed by `install.sh`
+/// for a future Phase 3), `decodebin` prefers `nvv4l2decoder`, whose output is Tegra `NVMM`
+/// memory — `videoconvert` can't take that, so the pipeline fails outright with
+/// `not-negotiated`, for EVERY camera. Without this pin, capture silently breaks the moment the
+/// box happens to have any GPU-decoder GStreamer plugin installed.
 fn spawn_gst(ip: &str, hd: bool) -> std::io::Result<Child> {
     let pipeline = format!(
         "rtspsrc location={} protocols=tcp latency=200 ! decodebin ! videoconvert ! videorate ! \
@@ -127,6 +136,12 @@ fn spawn_gst(ip: &str, hd: bool) -> std::io::Result<Child> {
     crate::proc::command("gst-launch-1.0")
         .arg("-q") // quiet: no progress/property spam on stdout — only the fdsink's JPEG bytes
         .args(pipeline.split_whitespace())
+        .env(
+            "GST_PLUGIN_FEATURE_RANK",
+            "nvv4l2decoder:0,nvv4l2h264dec:0,nvv4l2h265dec:0,vaapih264dec:0,vaapih265dec:0,\
+             v4l2h264dec:0,v4l2h265dec:0,msdkh264dec:0,msdkh265dec:0,d3d11h264dec:0,d3d11h265dec:0,\
+             vtdec_hw:0",
+        )
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .stdin(Stdio::null())
