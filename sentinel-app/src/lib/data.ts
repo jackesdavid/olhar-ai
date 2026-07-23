@@ -383,6 +383,10 @@ export const data = {
 
   // ---- beacons / telegram -------------------------------------------------
   listBeacons: (): Promise<NotificationTarget[]> => api.get<NotificationTarget[]>("/beacons"),
+  /** Registered mobile push devices (card #139). Each device is its OWN Recipient, so the
+   *  workflow recipient pickers merge these with the Telegram beacons. */
+  listPushDevices: <T = { id: string; label: string; platform: string; enabled: boolean }>(): Promise<T[]> =>
+    api.get<T[]>("/push/devices"),
   getTelegramConfig: (): Promise<TelegramConfigState> => api.get<TelegramConfigState>("/telegram"),
   setPairingCode: async (pairingCode: string): Promise<void> => {
     await api.put<void>("/telegram", { pairing_code: pairingCode });

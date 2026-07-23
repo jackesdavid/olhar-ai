@@ -68,7 +68,7 @@ _Deliberately "prepare the ground," not full parity. The phone becomes just anot
 
 ## Open decisions
 1. **Push transport for Phase 1**: Expo Push service (one endpoint, fastest) vs. talk FCM/APNs directly (more control, more setup). Recommend Expo first, revisit if we outgrow it.
-2. **Recipient model**: is a "phone" its own Recipient row, or a delivery channel attached to an existing Recipient (so one Recipient can be Telegram *and* push)? Leaning: channels attached to a recipient identity, but MVP can ship phone-as-its-own-Recipient.
+2. ~~**Recipient model**~~ — **DECIDED (operator, 2026-07-23): a device is its OWN Recipient.** Chosen for send granularity — one send addresses one phone. Recipient **groups** (fan out to several at once) are a near-future feature and will layer on top; until then every recipient is distinct. Implemented that way: `NotifyRecipient` resolves the label against `push_devices` **before** requiring Telegram config (a push-only tenant must not be blocked by a missing bot token), and the editor's recipient picker merges push devices with the Telegram beacons.
 3. **Synthetic camera identity** (Phase 4): mint a synthetic IP for the phone camera vs. extend `configured_cameras`/`Device` to be non-IP-keyed.
 4. **Live renderer** (Phase 2): WebView-hosted MSE (reuse) vs. adding a WebRTC path at the gateway for native playback. Start WebView; measure.
 5. **Repo placement**: `sentinel-mobile/` in this monorepo vs. a separate repo. Leaning monorepo for shared types/config.

@@ -1610,15 +1610,22 @@
 
   async function loadRefs() {
     try {
-      const [d, r, m, dicts, tuya] = await Promise.all([
+      const [d, r, m, dicts, tuya, phones] = await Promise.all([
         data.listDevices(),
         data.listBeacons(),
         data.loadMap(),
         data.listDictionaries().catch(() => []),
         data.listTuyaDevices().catch(() => []),
+        data.listPushDevices().catch(() => []),
       ]);
       devices = d;
-      recipients = r;
+      // A registered phone is its own Recipient (card #139) — merge push devices into the picker
+      // alongside the Telegram beacons so a workflow can address one phone. Labels are the
+      // addressing key on both sides; drop a phone whose label collides with a beacon.
+      const phoneRows = phones
+        .filter((p) => p.label && !r.some((b) => b.label === p.label))
+        .map((p) => ({ label: p.label, enabled: p.enabled }));
+      recipients = [...r, ...phoneRows];
       dictionaries = dicts.map((x) => ({ id: x.id, name: x.name, columns: x.columns ?? [] }));
       rooms = (m.rooms ?? []).map((rm) => ({ id: rm.id, name: rm.name }));
       tuyaDevices = tuya.map((t) => ({ device_id: t.device_id, name: t.name, online: t.online, functions_json: t.functions_json, function_labels_json: t.function_labels_json }));
