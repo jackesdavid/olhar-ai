@@ -22,7 +22,6 @@ export default function Live() {
   const [hd, setHd] = useState(false);
   const [phase, setPhase] = useState<Phase>("connecting");
   const [playerError, setPlayerError] = useState<string | null>(null);
-  const [trace, setTrace] = useState<string[]>([]);
   /** Bumped to remount the WebView, which is how a stream restarts: a fresh socket and a fresh
    *  MediaSource. Reusing a MediaSource that has already errored does not work. */
   const [attempt, setAttempt] = useState(0);
@@ -55,7 +54,6 @@ export default function Live() {
     } catch {
       return;
     }
-    if (msg.type === "log") setTrace((prev) => [...prev.slice(-7), msg.message]);
     if (msg.type === "phase") setPhase(msg.phase);
     if (msg.type === "error") {
       setPhase("error");
@@ -163,16 +161,6 @@ export default function Live() {
       ) : null}
 
       <ScrollView contentContainerStyle={{ padding: space.lg, gap: space.sm }}>
-        {trace.length > 0 ? (
-          <View style={{ backgroundColor: t.elev1, borderRadius: radius.md, padding: space.sm }}>
-            {trace.map((line, i) => (
-              <Text key={i} style={{ color: t.mutedForeground, fontSize: 11, fontFamily: "Menlo" }}>
-                {line}
-              </Text>
-            ))}
-          </View>
-        ) : null}
-
         <Heading>Cameras</Heading>
         {devices.map((d) => {
           const on = d.ip === selected;
@@ -183,7 +171,6 @@ export default function Live() {
                 setSelected(d.ip);
                 setPhase("connecting");
                 setPlayerError(null);
-                setTrace([]);
                 setAttempt(0);
               }}
               style={{

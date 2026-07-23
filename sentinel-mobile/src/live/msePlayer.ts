@@ -40,7 +40,10 @@ export function playerHtml({ wsBase, stream, token }: PlayerConfig): string {
     if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify(msg));
   }
   function fail(m) { post({ type: 'error', message: m }); }
-  function log(m) { post({ type: 'log', message: m }); }
+  // Diagnostics were used to find the smoothness/recovery issues; kept as no-ops so the call
+  // sites still document the pipeline stages without spamming the bridge. Flip to post({...}) to
+  // debug again.
+  function log(m) { /* no-op */ }
 
   // Offer only codecs this engine can actually decode; go2rtc picks a matching track (and
   // transcodes when it must). Sending an unsupported codec yields a black, silent stream.
@@ -139,18 +142,6 @@ export function playerHtml({ wsBase, stream, token }: PlayerConfig): string {
     queue.push(ev.data);
     flush();
   };
-
-  // The measurement that ends the guessing: how far the playhead sits behind the newest frame,
-  // and how much is buffered. Growing drift means the player is falling behind the source;
-  // a big buffer with flat drift means iOS is holding data back.
-  setInterval(function () {
-    if (!sb || !sb.buffered.length) return;
-    try {
-      var e2 = sb.buffered.end(sb.buffered.length - 1), s2 = sb.buffered.start(0);
-      log('drift ' + (e2 - v.currentTime).toFixed(2) + 's  buffer ' + (e2 - s2).toFixed(1) +
-          's  queue ' + queue.length + (ms.streaming === false ? '  (iOS paused feed)' : ''));
-    } catch (e) {}
-  }, 2000);
 
   v.addEventListener('playing', function () { post({ type: 'phase', phase: 'live' }); });
   v.addEventListener('waiting', function () { post({ type: 'phase', phase: 'stalled' }); });
