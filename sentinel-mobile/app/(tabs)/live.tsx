@@ -23,6 +23,9 @@ export default function Live() {
   const [phase, setPhase] = useState<Phase>("connecting");
   const [playerError, setPlayerError] = useState<string | null>(null);
   const [trace, setTrace] = useState<string[]>([]);
+  /** Bumped to remount the WebView, which is how a stream restarts: a fresh socket and a fresh
+   *  MediaSource. Reusing a MediaSource that has already errored does not work. */
+  const [attempt, setAttempt] = useState(0);
   const t = useTheme();
 
   useEffect(() => {
@@ -39,7 +42,7 @@ export default function Live() {
 
   // Remounting the WebView is how we restart a stream: a new key throws away the old socket and
   // MediaSource instead of trying to reuse them.
-  const playerKey = `${selected}-${hd ? "hd" : "sd"}`;
+  const playerKey = `${selected}-${hd ? "hd" : "sd"}-${attempt}`;
   const html = useMemo(
     () => (selected && token ? playerHtml({ wsBase, stream: streamName(selected, hd), token }) : null),
     [selected, hd, token, wsBase],
@@ -60,11 +63,25 @@ export default function Live() {
     }
   }
 
+  // A live stream will drop — a decode error, a socket close, the box restarting. What matters is
+  // that it comes back on its own: an operator checking a camera should never have to know to
+  // leave the tab and come back. Restart on any non-playing state, backing off a little so a
+  // camera that is genuinely down does not spin.
+  useEffect(() => {
+    if (phase !== "error" && phase !== "stalled") return;
+    const delay = Math.min(1500 * (attempt + 1), 8000);
+    const timer = setTimeout(() => {
+      setPlayerError(null);
+      setPhase("connecting");
+      setAttempt((n) => n + 1);
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [phase]);
+
   function badgeLabel(): string {
-    if (playerError) return "Error";
     if (phase === "live") return "LIVE";
-    if (phase === "stalled") return "Reconnecting…";
-    return "Connecting…";
+    if (phase === "error" || phase === "stalled") return "Reconnecting…";
+    return attempt > 0 ? "Reconnecting…" : "Connecting…";
   }
 
   if (loadError) {
@@ -146,7 +163,7 @@ export default function Live() {
       ) : null}
 
       <ScrollView contentContainerStyle={{ padding: space.lg, gap: space.sm }}>
-        {trace.length > 0 && phase !== "live" ? (
+        {trace.length > 0 ? (
           <View style={{ backgroundColor: t.elev1, borderRadius: radius.md, padding: space.sm }}>
             {trace.map((line, i) => (
               <Text key={i} style={{ color: t.mutedForeground, fontSize: 11, fontFamily: "Menlo" }}>
@@ -167,6 +184,7 @@ export default function Live() {
                 setPhase("connecting");
                 setPlayerError(null);
                 setTrace([]);
+                setAttempt(0);
               }}
               style={{
                 backgroundColor: on ? t.elev7 : t.card,

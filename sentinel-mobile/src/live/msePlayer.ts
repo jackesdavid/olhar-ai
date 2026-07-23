@@ -60,11 +60,8 @@ export function playerHtml({ wsBase, stream, token }: PlayerConfig): string {
     return out.join(',');
   }
 
-  // Live video has no value in a backlog: if chunks piled up we are already behind, and playing
-  // them through only pushes the delay further out. Drop to the newest few and carry on.
   function flush() {
     if (!sb || sb.updating || queue.length === 0) return;
-    if (queue.length > 8) { queue = queue.slice(-3); log('dropped backlog'); }
     try { sb.appendBuffer(queue.shift()); } catch (e) { queue = []; }
   }
 
@@ -75,20 +72,17 @@ export function playerHtml({ wsBase, stream, token }: PlayerConfig): string {
       if (!sb || !sb.buffered.length) return;
       var end = sb.buffered.end(sb.buffered.length - 1);
       var start = sb.buffered.start(0);
-      var behind = end - v.currentTime;
-      if (v.currentTime < start || behind > 0.8) {
-        // Far behind (or outside the range): jump. A visible skip beats a permanent delay.
-        v.currentTime = Math.max(start, end - 0.15);
-        v.playbackRate = 1;
-      } else if (behind > 0.35) {
-        // Slightly behind: ease back by playing a touch faster. Imperceptible, and it avoids the
-        // stutter of seeking every few seconds.
-        v.playbackRate = 1.07;
-      } else {
-        v.playbackRate = 1;
-      }
-      // iOS keeps everything ever appended, which grows memory and drags the seek target back.
-      if (!sb.updating && end - start > 10) { try { sb.remove(start, end - 5); } catch (e) {} }
+      // Each correction is a visible jump, so the goal is to need them rarely. Landing at end-0.3
+      // (what the web does) leaves almost no headroom: playback drifts back over the threshold
+      // within seconds and jumps again. Landing further back buys ~1s of slack, which on this
+      // device turned a steady stutter into one occasional correction — at the cost of a little
+      // more delay, which the measurements show we can afford (drift was under 1s throughout).
+      if (v.currentTime < start || v.currentTime > end) v.currentTime = Math.max(start, end - 1.0);
+      else if (end - v.currentTime > 2.5) v.currentTime = end - 1.0;
+      // Trimming mid-playback can itself hiccup, so do it rarely and keep well clear of the
+      // playhead rather than every 12 seconds.
+      if (!sb.updating && end - start > 30) { try { sb.remove(start, end - 15); } catch (e) {} }
+      if (v.paused) v.play().catch(function () {});
     } catch (e) {}
   }
 
@@ -145,6 +139,18 @@ export function playerHtml({ wsBase, stream, token }: PlayerConfig): string {
     queue.push(ev.data);
     flush();
   };
+
+  // The measurement that ends the guessing: how far the playhead sits behind the newest frame,
+  // and how much is buffered. Growing drift means the player is falling behind the source;
+  // a big buffer with flat drift means iOS is holding data back.
+  setInterval(function () {
+    if (!sb || !sb.buffered.length) return;
+    try {
+      var e2 = sb.buffered.end(sb.buffered.length - 1), s2 = sb.buffered.start(0);
+      log('drift ' + (e2 - v.currentTime).toFixed(2) + 's  buffer ' + (e2 - s2).toFixed(1) +
+          's  queue ' + queue.length + (ms.streaming === false ? '  (iOS paused feed)' : ''));
+    } catch (e) {}
+  }, 2000);
 
   v.addEventListener('playing', function () { post({ type: 'phase', phase: 'live' }); });
   v.addEventListener('waiting', function () { post({ type: 'phase', phase: 'stalled' }); });
