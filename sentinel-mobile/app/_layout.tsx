@@ -1,22 +1,24 @@
 // Root layout + the session gate. A stored token means straight to the tabs; otherwise login.
-import { useEffect, useState } from "react";
+//
+// The gate MUST read the token from the session store rather than a snapshot in component state:
+// signing in updates the store, and a gate holding a stale `false` redirects the freshly signed-in
+// user straight back to the login screen.
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, View } from "react-native";
 import { useTheme } from "@/styles/theme";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { restore } from "@/session";
+import { currentToken, restore, subscribe } from "@/session";
 
 export default function RootLayout() {
   const [ready, setReady] = useState(false);
-  const [signedIn, setSignedIn] = useState(false);
+  const signedIn = !!useSyncExternalStore(subscribe, currentToken);
   const t = useTheme();
   const segments = useSegments();
   const router = useRouter();
 
   useEffect(() => {
-    restore()
-      .then((token) => setSignedIn(!!token))
-      .finally(() => setReady(true));
+    restore().finally(() => setReady(true));
   }, []);
 
   useEffect(() => {

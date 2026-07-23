@@ -16,13 +16,32 @@ export type Session = {
 
 let token: string | null = null;
 
+// The token is module state, but the route gate in `app/_layout.tsx` has to RE-RUN when it changes —
+// reading it once into component state means signing in leaves the gate believing you are signed
+// out, and it bounces you straight back to the login screen. So expose it as an external store.
+type Listener = () => void;
+const listeners = new Set<Listener>();
+
+function setToken(next: string | null) {
+  token = next;
+  listeners.forEach((l) => l());
+}
+
+/** Subscribe to sign-in/sign-out. Pair with `currentToken` via `useSyncExternalStore`. */
+export function subscribe(listener: Listener): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
 export function currentToken(): string | null {
   return token;
 }
 
 /** Restore a previous sign-in on app start. Returns null when there is none. */
 export async function restore(): Promise<string | null> {
-  token = await SecureStore.getItemAsync(TOKEN_KEY);
+  setToken(await SecureStore.getItemAsync(TOKEN_KEY));
   return token;
 }
 
@@ -37,14 +56,14 @@ export async function signIn(email: string, password: string): Promise<Session> 
     throw new Error((await r.text()) || `sign-in failed (${r.status})`);
   }
   const s = (await r.json()) as Session;
-  token = s.token;
   await SecureStore.setItemAsync(TOKEN_KEY, s.token);
+  setToken(s.token);
   return s;
 }
 
 export async function signOut(): Promise<void> {
-  token = null;
   await SecureStore.deleteItemAsync(TOKEN_KEY);
+  setToken(null);
 }
 
 /** Authenticated JSON call against the control plane. Throws on non-2xx. */

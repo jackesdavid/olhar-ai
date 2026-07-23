@@ -9,7 +9,10 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.olharai.app"
+      "bundleIdentifier": "com.olharai.app",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "Olhar AI connects to the development server and to cameras on your local network."
+      }
     },
     "android": {
       "package": "com.olharai.app"
