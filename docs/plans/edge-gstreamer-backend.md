@@ -2,6 +2,27 @@
 
 **Board card:** #138 Edge GStreamer media backend (per-box ffmpeg↔gstreamer switch + measurement)
 
+## Matrix — funcionalidade × ffmpeg × GStreamer (estado real, não o planejado)
+
+| # | Funcionalidade | ffmpeg | GStreamer | Vencedor / observação |
+|---|---|---|---|---|
+| A1 | **Decode ao vivo** (frame hub — preview/motion/face, `capture.rs`) | ✅ Único caminho até v0.5.52. Sem hwaccel aplicado (só detectado). | ✅ Shipped (v0.5.53), `decodebin` codec-agnóstico, mesmo wire format (JPEGs concatenados) — `read_mjpeg` não mudou. | **Empate funcional.** Nenhum aplica HW-decode hoje (GStreamer bloqueia de propósito, ver Fase 3). |
+| A2 | **Mux de gravação** (ring H264 → mp4, `-c:v copy`) | ✅ Único caminho, sempre. | ❌ **Tentado e rejeitado** — `h264parse` não consegue inventar PTS pra um elementary stream sem timing (precisaria de `appsrc`/bindings, proibido pela #79). | **ffmpeg, permanente.** `media_backend` não tem efeito aqui — `spawn_muxer` ignora o flag. |
+| A3 | **Probe de duração do clipe** | ✅ `ffprobe`, único caminho. | ❌ Não implementado (dependia de A2, que foi rejeitado). | **ffmpeg.** |
+| A4 | **Probe de capacidade HW-decode** (`hwaccel.rs`) | ✅ Detecta `vaapi/qsv/cuda/videotoolbox/v4l2m2m`, mas **nunca aplica** — só reportado pro cloud (`X-Edge-Hwaccel`). | ⚠️ Substituído por `gstreamer_ok()` — só checa se o binário existe no PATH, **não** checa cobertura de codec (achado real: Jetson sem `-libav` reporta `ok` e não decodifica nada). | **Nenhum é robusto.** ffmpeg detecta mas não usa; gstreamer nem detecta cobertura. |
+| A5 | **Snapshot de credencial** (Devices → Test credentials) | ✅ Único caminho, decisão explícita de manter (Fase 2c). | ❌ Fora de escopo — sem valor de medição (uso pontual, não contínuo). | **ffmpeg, por decisão.** |
+| A6 | **Presence check do binário** | ✅ `ffmpeg_ok()`, `OnceLock`. | ✅ `gstreamer_ok()` (mirror), mas sem checar codecs (ver A4). | Ambos existem; GStreamer é mais frágil (ver A4). |
+| B3 | **`go2rtc` `/api/frame.jpeg`** (usado por `EdgeFrameSource::current` — nó **"Get current frame"** dos workflows) | ✅ go2rtc chama ffmpeg internamente, sempre. | ❌ **Nunca envolvido** — descoberta de campo (2026-07-23): esse caminho **não** consulta o decoder quente do `capture.rs`, então `media_backend=gstreamer` não afeta o consumidor de ffmpeg de maior frequência num tenant típico. | **ffmpeg, sem alternativa hoje.** Bloqueia o north-star de aposentar o ffmpeg até ser corrigido. |
+| — | **Decode acelerado por GPU real (uso efetivo)** | ❌ `-hwaccel` nunca é passado no comando real (só a Fase A4 detecta). | ❌ Bloqueado de propósito (`GST_PLUGIN_FEATURE_RANK` zero-rank) — testado com `nvvidconv`+`nvv4l2decoder` na Jetson, **sem ganho de CPU** (~11% vs ~11%, 2 câmeras ~30% vs ~31%), fechado como não-vantagem. | **Nenhum usa GPU de fato**, e por medição real, não vale a pena para GStreamer neste hardware/carga. |
+| — | **Cobertura de codec sem branch manual** | ✅ ffmpeg auto-detecta H264/H265 na entrada. | ✅ `decodebin` também é codec-agnóstico — paridade. | Empate. |
+| — | **Modelo de processo** (restrição #79: edge não linka nada, build musl estático) | ✅ Subprocess via `proc::command`. | ✅ Subprocess via `gst-launch-1.0` (mesma restrição respeitada — sem bindings `gstreamer-rs`). | Empate por design. |
+| — | **Instalação / bundling** | ✅ Pacote de sistema (Linux apt/dnf/rpm-ostree) ou bundled (macOS/Windows) — sempre presente, é o default. | ⚠️ **Opt-in only** via `install.sh --media-backend gstreamer`; exige SSH pra habilitar numa caixa já instalada (achado de campo B) — sem ação in-app. | **ffmpeg** (zero-fricção); GStreamer tem gap de produto real. |
+| — | **Toggle + observabilidade por caixa** | ✅ Sempre ativo, sem toggle necessário. | ✅ Shipped: `gstreamer_ok` (migração `0069`) + badge + `<select>` por caixa em Settings → Edge boxes, gated corretamente. | Ambos OK, mas o gate em si depende do gap de instalação acima. |
+| — | **Uso de memória (RSS)** | Baseline não medido formalmente (não é o foco da comparação atual). | Software: paridade aproximada com ffmpeg. Com decode HW (`nvvidconv`): **~2,5× mais RSS** (buffers NVMM) — outro motivo pra manter fechado o HW path. | **ffmpeg/GStreamer-SW empatados; GStreamer-HW perde em memória.** |
+| — | **Robustez a decoder de HW "surpresa"** | N/A (não usa GStreamer). | 🐛 **Bug encontrado e corrigido:** `decodebin` autoplugava `nvv4l2decoder` sozinho quando `gstreamer1.0-plugins-bad` estava presente, quebrando `videoconvert` (`not-negotiated`) em TODAS as câmeras da caixa — corrigido fixando SW-only via `GST_PLUGIN_FEATURE_RANK`. | GStreamer tinha uma armadilha real de produção; já mitigada. |
+
+**Leitura rápida:** hoje o GStreamer só está pronto pra produção no touchpoint A1 (o mais pesado, o motivo original do card), com paridade de CPU/funcionalidade e zero ganho de HW-decode medido. Os outros touchpoints (A2/A3/A5/B3) continuam 100% ffmpeg — por decisão deliberada (A2/A3/A5) ou por gap ainda não resolvido (B3, o mais importante pro north-star). A adoção em produção também está travada por um gap de produto (instalação opt-in via SSH, achado B).
+
 ## Status (Phase 1 + Phase 2a shipped, in-progress)
 - **Phase 1 done:** `RecordingConfig.media_backend` (`"ffmpeg"` default / `"gstreamer"`, `recording.rs`)
   — no migration needed, `recording_config` is already a per-box jsonb column. `capture::Backend`
