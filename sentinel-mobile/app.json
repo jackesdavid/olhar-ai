@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Sentinel",
+    "slug": "sentinel",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "sentinel",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "online.thesentinels.app"
+    },
+    "android": {
+      "package": "online.thesentinels.app",
+      "edgeToEdgeEnabled": true
+    },
+    "plugins": ["expo-router", "expo-secure-store", "expo-notifications"],
+    "extra": {
+      "eas": {
+        "projectId": "REPLACE_WITH_EAS_PROJECT_ID"
+      }
+    }
+  }
+}
