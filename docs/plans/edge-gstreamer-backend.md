@@ -56,15 +56,32 @@
   anything). **`spawn_muxer` now ignores `media_backend` and always uses ffmpeg for A2/A3** —
   `RecordingConfig.media_backend` only drives `capture.rs`'s A1 live decode for now. Revisit only
   if the project ever revisits the "no bindings" constraint.
-- **Phase 3 hwaccel (GStreamer HW-decode element) tried, shelved — inconclusive:** an explicit
-  `rtph264depay ! h264parse ! nvv4l2decoder ! nvvidconv ! …` pipeline DOES work on the Jetson (85/85
-  valid JPEGs) once `gstreamer1.0-plugins-bad` is also installed (`h264parse` lives there, not in
-  `-good`) — but a rough `ps %cpu` comparison against the SW `decodebin` path showed no clear win
-  (~15% HW vs ~17% SW, single noisy samples, not a rigorous run). Given the added fragility (an
-  extra system package, a Jetson/Tegra-only element name, bypassing `decodebin`'s codec-agnostic
-  autoplug so H264 vs H265 would need separate pipeline branches again) for an unproven gain, this
-  is shelved — exactly per the plan's own gating ("once SW parity is measured", Phase 0, which
-  hasn't been done rigorously via `EdgeMetrics` yet). Don't re-attempt without a proper Phase 0 A/B.
+- **Phase 3 hwaccel (GStreamer HW-decode element) — retried with a rigorous A/B, CLOSED as no-win.**
+  Found the cleaner integration first: swap `videoconvert` → **`nvvidconv`** (Tegra's own converter,
+  from `nvidia-l4t-gstreamer`, already installed) — it bridges NVMM ↔ system memory generically, so
+  `decodebin ! nvvidconv ! …` lets `decodebin` freely autoplug `nvv4l2decoder` (HW) *or* `avdec_h264`
+  (SW) without the `not-negotiated` break that `videoconvert` hits on NVMM. No `GST_PLUGIN_FEATURE_RANK`
+  pin needed, no explicit per-codec depay/parse branch (`decodebin` stays codec-agnostic) — strictly
+  simpler than the earlier explicit-pipeline attempt. Confirmed working live (`NvMMLiteOpen`/
+  `NvMMLiteBlockCreate` in the log = real HW decode path).
+  **Measured properly this time** (`ps %cpu` sampled every 8s over a 45–50s steady-state window, not a
+  single eyeballed sample), on the real Jetson test box, two passes:
+  - **Single camera** (640×480 sub-stream, 6fps target): SW ~11.0% CPU (steady, 6 samples) vs HW
+    ~10.8% CPU (steady, 6 samples) — statistically the same. HW path uses **~2.5× the RSS** (NVMM
+    buffer overhead: 1.8% vs 0.7% `%mem`).
+  - **Both cameras concurrently** (realistic load — 640×480 + 1280×720, the box's actual 2-camera
+    setup): SW steady-state total ~28–31% CPU vs HW steady-state total ~30–32% CPU — again no
+    measurable win, HW trending slightly *higher* under combined load.
+  **Conclusion: HW decode is not worth it here.** At this fps/resolution the bottleneck is the RTSP
+  depay + JPEG re-encode + `videorate` stage, not H264 decode itself — offloading decode to the
+  Tegra's fixed-function block doesn't reduce total CPU, it just relocates a cheap-in-CPU-terms step
+  and adds memory overhead. **Closed, not "shelved pending measurement" anymore** — Phase 0's own
+  gate ("once SW parity is measured") is now satisfied and the answer is negative. Don't re-attempt
+  on this class of hardware/workload; the SW-only pin shipped in v0.5.53 (`GST_PLUGIN_FEATURE_RANK`
+  zero-ranking every known HW decoder in `capture.rs::spawn_gst`) stays as the permanent design, not
+  a placeholder — it's simpler, uses less memory, and performs the same. A future revisit would only
+  make sense at meaningfully higher fps/resolution/camera-count where decode itself (not encode)
+  becomes the dominant cost.
 - **Phase 2c (snapshot fallback, A5) decided: keep ffmpeg.** It's a one-off credential-test
   snapshot (Devices → Test credentials), not a continuous operation — no measurement value, and
   `app_core::onvif::client::snapshot_from_rtsp` is shared library code with only one caller
@@ -86,8 +103,11 @@
   binary. This pins Phase 2a's "software decode only for now" design intent for real, instead of
   it being an accident of which packages happen to be on a box — protects against the same class
   of surprise from VAAPI/QSV/D3D11/VideoToolbox HW decoders on other platforms too.
-- **Not yet done:** Phase 0 (tag `EdgeMetrics` heartbeat with active backend for a rigorous A/B —
-  CPU was eyeballed via `ps`, not the metrics pipeline, both passes so far).
+- **Not yet done:** Phase 0's *pipeline* half (tag `EdgeMetrics` heartbeat with active backend so
+  control can group CPU/mem by backend over time in production) — the hwaccel A/B itself is now
+  answered (above), but still via manual `ps` sampling on the test box, not the metrics pipeline.
+  Low priority now that HW decode is closed — the only remaining use would be tracking ffmpeg-vs-
+  gstreamer SW CPU on real tenant boxes, which isn't blocking anything.
 
 ## Field findings — macOS box, 2026-07-23 (first non-Jetson enablement)
 Enabling GStreamer on the operator's Mac (`MacInstalledBox`, 0.5.52, macOS x86_64, `videotoolbox`)
@@ -148,6 +168,7 @@ feature (it did).
 **Also worth noting:** `gstreamer_ok()` only probes the CLI binary, not codec coverage — already
 flagged as "worth hardening later" and independently confirmed by the Jetson's missing `-libav`.
 A box can report `true` and still have no working H264 decoder.
+
 **Goal:** Let each edge box run **GStreamer instead of ffmpeg** for every media operation the edge
 does, switchable per box via a flag pushed from control, so we can A/B **measure CPU/mem** and decide
 whether GStreamer is lighter. ffmpeg stays the default and both coexist behind the flag **for now**.
