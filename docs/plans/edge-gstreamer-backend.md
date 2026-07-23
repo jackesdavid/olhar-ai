@@ -88,6 +88,66 @@
   of surprise from VAAPI/QSV/D3D11/VideoToolbox HW decoders on other platforms too.
 - **Not yet done:** Phase 0 (tag `EdgeMetrics` heartbeat with active backend for a rigorous A/B —
   CPU was eyeballed via `ps`, not the metrics pipeline, both passes so far).
+
+## Field findings — macOS box, 2026-07-23 (first non-Jetson enablement)
+Enabling GStreamer on the operator's Mac (`MacInstalledBox`, 0.5.52, macOS x86_64, `videotoolbox`)
+surfaced one **scope-changing** defect and four UX gaps. It now runs
+`capture-decoder[…] backend=gstreamer` (confirmed in the log, `gstreamer_ok=t`,
+`recording_config.media_backend=gstreamer`).
+
+### A. SCOPE CHANGE — `Get current frame` never touches the GStreamer decoder
+Phase 2a assumed A1's warm decoder covers the hot frame path and B3 (`go2rtc`'s internal ffmpeg for
+`/api/frame.jpeg`) is only a cold-start fallback. **That is false for workflows.** The workflow node
+runs in `sentinel-flow` and resolves frames through `EdgeFrameSource` (`crates/app-core/src/ports.rs`):
+
+```rust
+impl FrameSource for EdgeFrameSource {
+    fn snapshot(&self, device) -> … { go2rtc::frame_from(&agent, &self.base, &device.ip) }
+    fn current(&self, device, _max_age_ms) -> … { Ok((self.snapshot(device)?, 0)) } // ignores max_age
+}
+```
+
+So **every** `Get current frame` — including a `Cron 2s` graph like the seeded "Alerta de pessoa"
+template — goes straight to `frame.jpeg`, i.e. **go2rtc shelling out to ffmpeg**, regardless of
+`media_backend`. It never consults `capture.rs`'s warm decoder, and it ignores `max_age_ms` (always
+a fresh snapshot at age 0). The warm grabber described in the node's docs exists only *inside* the
+edge (`frames.rs`, for motion/tracking/face), not on this remote path.
+
+**Consequence:** the continuous, highest-frequency ffmpeg consumer in a typical tenant is untouched
+by the GStreamer work, and the north-star (retire ffmpeg) cannot be reached without addressing it.
+**Likely cheap fix:** expose an edge endpoint serving `capture::latest_fresh` and have
+`EdgeFrameSource::current` use it honouring `max_age_ms`, falling back to `frame.jpeg` only when no
+fresh frame exists — exactly what `frames.rs` already does internally. This makes B3 a real
+cold-start fallback instead of the default, which is what Phase 2a assumed all along.
+
+### B. Enabling GStreamer requires SSH — no in-app path (chicken-and-egg)
+- The control toggle is **gated on `gstreamer_ok`**; `gstreamer_ok` is true only if `gst-launch-1.0`
+  is on the box PATH; the binary only arrives via `install.sh` with the **opt-in**
+  `--media-backend gstreamer`. There is **no in-app action** to provision it.
+- This contradicts the project rule *never require SSH/CLI/restart for a product capability — it is
+  an in-app action or automatic*. Choosing a media backend is a product capability.
+- Consider installing GStreamer by default (the north-star retires ffmpeg anyway), or an in-app
+  "prepare this box" action.
+
+### C. `--update` silently ignores `--media-backend`
+`install.sh` parses `--media-backend` into `MEDIA_BACKEND`, but update mode **`exit 0`s** (the
+`if [ "$UPDATE" = "1" ]` block) *before* the `1c. runtime dep: gstreamer` block. So
+`--update --media-backend gstreamer` accepts the flag and installs nothing, with no warning. At
+minimum warn; better, honour it.
+
+### D. The edge never logs the GStreamer probe
+Boot logs `ffmpeg found on PATH` but there is **no equivalent line for GStreamer** — `gstreamer_ok()`
+just returns false silently. An operator has no way to tell "not installed" from "installed but not
+found". Log the probe result + resolved path for both backends.
+
+### E. The UI does not explain the gate
+When `gstreamer_ok` is false the per-box select is simply absent, with no explanation. Show
+"GStreamer not detected on this box" plus what to do — otherwise it reads as a broken/missing
+feature (it did).
+
+**Also worth noting:** `gstreamer_ok()` only probes the CLI binary, not codec coverage — already
+flagged as "worth hardening later" and independently confirmed by the Jetson's missing `-libav`.
+A box can report `true` and still have no working H264 decoder.
 **Goal:** Let each edge box run **GStreamer instead of ffmpeg** for every media operation the edge
 does, switchable per box via a flag pushed from control, so we can A/B **measure CPU/mem** and decide
 whether GStreamer is lighter. ffmpeg stays the default and both coexist behind the flag **for now**.
