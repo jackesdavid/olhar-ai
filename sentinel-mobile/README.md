@@ -29,6 +29,30 @@ npx expo start
 the SDK ships, while a transitive `react-dom` asks for a newer one — npm treats that as fatal and
 refuses to install. Do not delete it.
 
+### Unresolved: the debug build cannot reach Metro
+
+On the iPhone 11 test device, a **Debug** build fails at startup with *"No script URL provided …
+unsanitizedScriptURLString = (null)"*. Verified along the way, so do not re-check these:
+
+- `ip.txt` is in the app bundle with the Mac's correct LAN IP, and Metro answers `/status` on that
+  IP from the Mac (200).
+- The dev symbols ARE in the prebuilt `React.framework` (`nm` finds `isPackagerRunning`), so
+  `RCT_DEV` is compiled in — the packager-probing code exists.
+- `DEBUG` is defined for Swift (`SWIFT_ACTIVE_COMPILATION_CONDITIONS`), so `bundleURL()` takes the
+  dev branch.
+- The macOS firewall is off. Phone and Mac are on the same Wi-Fi.
+- `NSLocalNetworkUsageDescription` was added, yet the app still never appears under Settings →
+  Privacy → Local Network, i.e. iOS records no local-network attempt at all.
+
+RN resolves the host by probing `http://<ip>:8081/status` **from the phone**, and returns nil when
+that probe fails — which matches Metro logging zero connections. The remaining suspect is the probe
+being blocked or never issued on the device.
+
+**Workaround in use: build Release** (`--configuration Release`), which embeds `main.jsbundle` and
+removes Metro from the picture entirely. Push still works — there is a single `.entitlements` file
+with `aps-environment: development`, used by both configurations. The cost is no hot reload: every
+JS change needs a rebuild (fast once the Release pods are compiled).
+
 ### Known upstream break: Expo + Xcode 26.3
 
 `expo-modules-jsi@57.0.4` (the newest published) does not compile under Xcode 26.3's Swift type
