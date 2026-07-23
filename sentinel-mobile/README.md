@@ -69,6 +69,22 @@ a stale patch that no longer applies fails the install loudly.
 The project is **`@olharai/sentinel`** (id in `app.json` → `expo.extra.eas.projectId`), owned by the
 **olharai** account. `eas whoami` must show it; log in as the account that owns OlharAI.
 
+### APNs credentials (the last link in the chain)
+
+Registering the phone and queuing a send both work without this, but Expo cannot deliver to iOS
+until an **APNs key** is attached to `@olharai/olharai`. The symptom is exact and surfaces in the
+app: *"expo push rejected: Could not find APNs credentials for com.olharai.app"*.
+
+Set it up with `eas credentials` (iOS → development → Push Notifications) — it needs an interactive
+terminal and an Apple login with 2FA, so it cannot be scripted.
+
+**Apple caps a team at 2 APNs keys.** As of 2026-07-23 this team is already at that cap, while the
+EAS account holds none of them — a `.p8` can only be downloaded at creation, so keys made elsewhere
+are unusable unless the file was kept. Either upload an existing `.p8` (Add a new push key → Key ID
++ file path) or check https://developer.apple.com/account/resources/authkeys/list to find an unused
+key before revoking anything. One APNs key serves every app on the team, so revoking one that is in
+use breaks push for that app.
+
 ### Before push can work
 
 1. **A development build is required** — `expo-notifications` no longer delivers push in Expo Go on

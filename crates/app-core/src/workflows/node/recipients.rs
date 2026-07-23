@@ -31,7 +31,7 @@ pub(super) fn run_notify_recipient(inputs: &PortValues, sys: &ToolContext) -> Re
                 &sys.db,
                 sys.tenant_id,
                 Some(label),
-                "Sentinel",
+                "Olhar AI",
                 message,
             );
             let mut o = PortValues::new();
