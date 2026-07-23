@@ -48,7 +48,7 @@ async fn register(
     State(st): State<AppState>,
     Json(b): Json<RegisterReq>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
-    auth::require(&c, "beacons.manage")?;
+    auth::require(&c, "beacons.write")?;
     let tid = tenant_of(&c)?;
     let token = b.device_token.trim().to_string();
     if token.is_empty() {
@@ -69,7 +69,7 @@ async fn remove(
     State(st): State<AppState>,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<StatusCode, ApiErr> {
-    auth::require(&c, "beacons.manage")?;
+    auth::require(&c, "beacons.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     let gone = blocking(move || push::delete(&db, tid, id)).await?;
@@ -93,7 +93,7 @@ async fn test_send(
     State(st): State<AppState>,
     Json(b): Json<TestReq>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
-    auth::require(&c, "beacons.manage")?;
+    auth::require(&c, "beacons.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     let sent = blocking(move || {
