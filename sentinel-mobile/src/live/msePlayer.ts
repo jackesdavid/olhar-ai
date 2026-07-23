@@ -40,10 +40,16 @@ export function playerHtml({ wsBase, stream, token }: PlayerConfig): string {
 
   // Offer only codecs this engine can actually decode; go2rtc picks a matching track (and
   // transcodes when it must). Sending an unsupported codec yields a black, silent stream.
+  // iPhone does NOT expose plain MediaSource. Apple ships ManagedMediaSource instead (iOS 17.1+),
+  // a variant that lets the system throttle buffering on cellular. Same API surface for our use,
+  // but it must be constructed from its own class and the element must opt out of remote playback
+  // BEFORE the source is attached, or attaching throws.
+  var MS = window.ManagedMediaSource || window.MediaSource;
+
   function probeCodecs() {
     var vids = ['avc1.640029','avc1.64002A','avc1.640033','avc1.42E01E','hvc1.1.6.L153.B0'];
     var auds = ['mp4a.40.2','mp4a.40.5','flac','opus'];
-    var ok = function (mime) { return 'MediaSource' in window && MediaSource.isTypeSupported(mime); };
+    var ok = function (mime) { return !!MS && MS.isTypeSupported(mime); };
     var out = [];
     vids.forEach(function (c) { if (ok('video/mp4; codecs="' + c + '"')) out.push(c); });
     auds.forEach(function (c) { if (ok('audio/mp4; codecs="' + c + '"')) out.push(c); });
@@ -66,14 +72,20 @@ export function playerHtml({ wsBase, stream, token }: PlayerConfig): string {
     } catch (e) {}
   }
 
-  if (!('MediaSource' in window)) { fail('This device cannot play the camera video codecs.'); return; }
+  if (!MS) { fail('No Media Source API in this WebView (neither ManagedMediaSource nor MediaSource).'); return; }
 
   var codecs = probeCodecs();
-  if (!codecs) { fail('No supported video codec.'); return; }
+  if (!codecs) { fail('The player supports none of the camera codecs (H.264/HEVC).'); return; }
 
   post({ type: 'phase', phase: 'connecting' });
-  ms = new MediaSource();
+  ms = new MS();
+  // Required by ManagedMediaSource, and harmless otherwise: without it, attaching the source throws.
+  v.disableRemotePlayback = true;
   v.src = URL.createObjectURL(ms);
+
+  // ManagedMediaSource asks the page to pause/resume feeding it. Honour the signal when present;
+  // ignoring it makes iOS tear the buffer down on a constrained connection.
+  ms.addEventListener('startstreaming', function () { flush(); });
 
   var msOpen = false, wsOpen = false, sent = false;
   // The handshake must go out only once BOTH the socket is open AND MediaSource is ready —
