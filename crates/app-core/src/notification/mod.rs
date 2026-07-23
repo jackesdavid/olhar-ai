@@ -14,6 +14,8 @@
 pub mod client;
 pub mod domain;
 pub mod handler;
+/// Mobile push — a Recipient channel parallel to Telegram (card #139).
+pub mod push;
 pub mod queue;
 pub mod repo;
 

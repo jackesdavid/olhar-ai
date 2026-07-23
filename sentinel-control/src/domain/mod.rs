@@ -23,6 +23,7 @@ mod jobs;
 mod map;
 mod persons;
 mod platform_logs;
+mod push_devices;
 pub(crate) mod recordings;
 mod tuya;
 mod workflows;
@@ -41,6 +42,7 @@ pub fn router() -> Router<AppState> {
         .merge(billing::router())
         .merge(persons::router())
         .merge(beacons::router())
+        .merge(push_devices::router())
         .merge(map::router())
         .merge(workflows::router())
         .merge(boxes::router())

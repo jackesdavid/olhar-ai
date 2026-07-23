@@ -111,6 +111,22 @@ fn process(state: &AppState, job: work_queue::Job) {
         }
     };
 
+    // Mobile push (card #139) — a parallel channel. Branch BEFORE `resolve_config`, which fails the
+    // job when the tenant has no Telegram config: a push-only tenant must not be blocked by that.
+    // Absent `channel` = "telegram", so jobs queued before this existed are unaffected.
+    if p.get("channel").and_then(|v| v.as_str()) == Some("push") {
+        let title = p.get("title").and_then(|v| v.as_str()).unwrap_or("Sentinel");
+        let tokens = app_core::notification::push::enabled_tokens(&state.db, job.tenant_id, target);
+        match app_core::notification::push::send(&tokens, title, &message) {
+            Ok(n) => {
+                log::info!("push delivered to {n} device(s) (tenant {})", job.tenant_id);
+                work_queue::mark_done_blocking(&state.db, job.id);
+            }
+            Err(e) => fail(state, &e),
+        }
+        return;
+    }
+
     let Some(cfg) = resolve_config(&state.db, job.tenant_id) else {
         fail(state, "no Telegram configuration for this tenant");
         return;

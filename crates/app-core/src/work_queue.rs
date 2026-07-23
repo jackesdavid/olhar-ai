@@ -444,11 +444,33 @@ pub fn enqueue_notification_blocking(
     video_key: Option<&str>,
 ) {
     let payload = serde_json::json!({
+        // Delivery channel (card #139). Absent/"telegram" = today's path; the consumer defaults to
+        // telegram so every pre-existing queued job keeps working unchanged.
+        "channel": "telegram",
         "target": target,
         "chat_id": chat_id,
         "message": message,
         "image_key": image_key,
         "video_key": video_key,
+    });
+    enqueue_one_blocking(db, tenant_id, NOTIFICATION_CATEGORY, NOTIFICATION_KIND, payload);
+}
+
+/// Queue a **mobile push** send (card #139) — same durable queue and retry/backoff as Telegram,
+/// distinguished only by `channel`. `target` optionally addresses one registered device by label;
+/// `None` fans out to every enabled device for the tenant.
+pub fn enqueue_push_notification_blocking(
+    db: &Db,
+    tenant_id: Uuid,
+    target: Option<&str>,
+    title: &str,
+    message: &str,
+) {
+    let payload = serde_json::json!({
+        "channel": "push",
+        "target": target,
+        "title": title,
+        "message": message,
     });
     enqueue_one_blocking(db, tenant_id, NOTIFICATION_CATEGORY, NOTIFICATION_KIND, payload);
 }
