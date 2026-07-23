@@ -1,6 +1,7 @@
 // Root layout + the session gate. A stored token means straight to the tabs; otherwise login.
 import { useEffect, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
+import { useTheme } from "@/styles/theme";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { restore } from "@/session";
@@ -8,12 +9,13 @@ import { restore } from "@/session";
 export default function RootLayout() {
   const [ready, setReady] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
+  const t = useTheme();
   const segments = useSegments();
   const router = useRouter();
 
   useEffect(() => {
     restore()
-      .then((t) => setSignedIn(!!t))
+      .then((token) => setSignedIn(!!token))
       .finally(() => setReady(true));
   }, []);
 
@@ -26,8 +28,8 @@ export default function RootLayout() {
 
   if (!ready) {
     return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-        <ActivityIndicator />
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.background }}>
+        <ActivityIndicator color={t.mutedForeground} />
       </View>
     );
   }

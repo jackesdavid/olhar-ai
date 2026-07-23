@@ -2,10 +2,12 @@
 // the point of Phase 1 — an operator who logs in and never opens Settings should still get alerts.
 // A push failure does NOT block sign-in; it is reported on the Alerts tab instead.
 import { useState } from "react";
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { KeyboardAvoidingView, Platform } from "react-native";
 import { useRouter } from "expo-router";
 import { signIn } from "@/session";
 import { registerThisDevice } from "@/push";
+import { Button, Danger, Input, Muted, Screen, Title } from "@/styles/ui";
+import { space } from "@/styles/theme";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -13,7 +15,6 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
-
   async function submit() {
     if (busy) return;
     setBusy(true);
@@ -31,13 +32,15 @@ export default function Login() {
   }
 
   return (
-    <KeyboardAvoidingView style={s.root} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-      <View style={s.card}>
-        <Text style={s.brand}>Sentinel</Text>
-        <Text style={s.sub}>Sign in to receive alerts on this phone.</Text>
+    <Screen>
+      <KeyboardAvoidingView
+        style={{ flex: 1, justifyContent: "center", padding: space.xl, gap: space.md }}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <Title>Olhar AI</Title>
+        <Muted>Sign in to receive alerts on this phone.</Muted>
 
-        <TextInput
-          style={s.input}
+        <Input
           placeholder="Email"
           autoCapitalize="none"
           autoComplete="email"
@@ -45,33 +48,12 @@ export default function Login() {
           value={email}
           onChangeText={setEmail}
         />
-        <TextInput
-          style={s.input}
-          placeholder="Password"
-          secureTextEntry
-          value={password}
-          onChangeText={setPassword}
-          onSubmitEditing={submit}
-        />
+        <Input placeholder="Password" secureTextEntry value={password} onChangeText={setPassword} onSubmitEditing={submit} />
 
-        {error ? <Text style={s.error}>{error}</Text> : null}
+        {error ? <Danger>{error}</Danger> : null}
 
-        <Pressable style={[s.button, busy && s.buttonBusy]} onPress={submit} disabled={busy}>
-          {busy ? <ActivityIndicator color="#fff" /> : <Text style={s.buttonText}>Sign in</Text>}
-        </Pressable>
-      </View>
-    </KeyboardAvoidingView>
+        <Button label="Sign in" onPress={submit} busy={busy} />
+      </KeyboardAvoidingView>
+    </Screen>
   );
 }
-
-const s = StyleSheet.create({
-  root: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: "#fff" },
-  card: { gap: 12 },
-  brand: { fontSize: 34, fontWeight: "600", letterSpacing: -0.5 },
-  sub: { fontSize: 15, color: "#666", marginBottom: 12 },
-  input: { borderWidth: 1, borderColor: "#ddd", borderRadius: 10, padding: 14, fontSize: 16 },
-  error: { color: "#b00020", fontSize: 14 },
-  button: { backgroundColor: "#111", borderRadius: 10, padding: 16, alignItems: "center", marginTop: 8 },
-  buttonBusy: { opacity: 0.7 },
-  buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-});
