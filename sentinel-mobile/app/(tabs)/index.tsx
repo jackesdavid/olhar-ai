@@ -7,7 +7,7 @@ import * as Notifications from "expo-notifications";
 import { useRouter } from "expo-router";
 import { registerThisDevice, sendTestPush } from "@/push";
 import { signOut } from "@/session";
-import { Body, Button, Card, Danger, Heading, Muted, Screen, Status, Strong, Title } from "@/styles/ui";
+import { Body, Button, Card, Danger, Heading, Muted, Screen, Status, Strong, ThemePicker, Title } from "@/styles/ui";
 import { radius, space, useTheme } from "@/styles/theme";
 
 type Received = { id: string; title: string; body: string; at: string };
@@ -103,6 +103,9 @@ export default function Alerts() {
             </View>
           ))
         )}
+
+        <Heading>Appearance</Heading>
+        <ThemePicker />
 
         <Pressable onPress={leave} style={{ marginTop: space.xxl, alignItems: "center", padding: space.md }}>
           <Muted>Sign out</Muted>

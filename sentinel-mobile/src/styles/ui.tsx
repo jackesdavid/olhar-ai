@@ -1,7 +1,7 @@
 // The shared primitives every screen builds from, so a screen never reaches for a colour literal.
 // Deliberately small — these mirror the web's card / button / muted-text roles, not a component kit.
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewProps } from "react-native";
-import { radius, space, typeScale, useTheme } from "./theme";
+import { radius, space, setThemePref, typeScale, useTheme, useThemePref, type ThemePref } from "./theme";
 
 export function Card({ style, ...rest }: ViewProps) {
   const t = useTheme();
@@ -93,6 +93,33 @@ export function Button({ label, onPress, busy, disabled }: { label: string; onPr
         <Text style={{ color: t.primaryForeground, fontSize: 16, fontWeight: "600" }}>{label}</Text>
       )}
     </Pressable>
+  );
+}
+
+/** Theme picker: System / Light / Dark, mirroring the web app's explicit choice. */
+export function ThemePicker() {
+  const t = useTheme();
+  const pref = useThemePref();
+  const options: { key: ThemePref; label: string }[] = [
+    { key: "system", label: "System" },
+    { key: "light", label: "Light" },
+    { key: "dark", label: "Dark" },
+  ];
+  return (
+    <View style={{ flexDirection: "row", gap: space.xs, backgroundColor: t.inputBg, borderRadius: radius.lg, padding: space.xs }}>
+      {options.map((o) => {
+        const on = pref === o.key;
+        return (
+          <Pressable
+            key={o.key}
+            onPress={() => setThemePref(o.key)}
+            style={{ flex: 1, alignItems: "center", paddingVertical: space.sm, borderRadius: radius.md, backgroundColor: on ? t.card : "transparent" }}
+          >
+            <Text style={{ color: on ? t.foreground : t.mutedForeground, fontWeight: on ? "600" : "400" }}>{o.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 

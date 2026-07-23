@@ -5,7 +5,7 @@
 // user straight back to the login screen.
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, View } from "react-native";
-import { useTheme } from "@/styles/theme";
+import { useLoadThemePref, useTheme } from "@/styles/theme";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { currentToken, restore, subscribe } from "@/session";
@@ -14,6 +14,7 @@ export default function RootLayout() {
   const [ready, setReady] = useState(false);
   const signedIn = !!useSyncExternalStore(subscribe, currentToken);
   const t = useTheme();
+  useLoadThemePref();
   const segments = useSegments();
   const router = useRouter();
 
