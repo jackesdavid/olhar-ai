@@ -422,6 +422,22 @@ pub fn ffmpeg_ok() -> bool {
     })
 }
 
+/// Whether `gst-launch-1.0` is on PATH (card #138 — the GStreamer media backend option for
+/// `capture.rs`'s live decode). Mirrors [`ffmpeg_ok`]: computed once, reported to the cloud so a
+/// box can be told apart before flipping its `media_backend` to `"gstreamer"`. NOT bundled by
+/// `install.sh` yet (coexistence phase) — an operator installs it manually to test
+/// (`brew install gstreamer gst-plugins-{base,good,bad,ugly} gst-libav` on macOS).
+pub fn gstreamer_ok() -> bool {
+    static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OK.get_or_init(|| {
+        crate::proc::command("gst-launch-1.0")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
+}
+
 /// A friendly platform string (`OS (arch)`, e.g. `macOS (aarch64)` / `Bazzite (x86_64)`)
 /// reported to control for the Boxes list. Computed once; the distro name comes from
 /// `/etc/os-release` on Linux (so a Bazzite box reads as "Bazzite", not just "Linux").
@@ -459,6 +475,7 @@ fn linux_distro() -> Option<String> {
 fn with_health(req: ureq::Request) -> ureq::Request {
     req.set("X-Edge-Tailscale", crate::tailscale::tailscale_state())
         .set("X-Edge-Ffmpeg", if ffmpeg_ok() { "1" } else { "0" })
+        .set("X-Edge-Gstreamer", if gstreamer_ok() { "1" } else { "0" })
         .set("X-Edge-Hwaccel", crate::hwaccel::detect())
         .set("X-Edge-Platform", platform())
         // Resource usage (CPU/mem/disk/GPU) as compact ASCII JSON — sampled off-thread.

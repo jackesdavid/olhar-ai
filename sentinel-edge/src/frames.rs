@@ -209,7 +209,7 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
     let hd = !unified && state.recording.config.face_capture_stream.eq_ignore_ascii_case("hd");
     // Warm, continuous frames from the supervised persistent decoder (#120) — no frame.jpeg
     // cold-start. `grab` is the FALLBACK go2rtc path used only while the decoder has no fresh frame.
-    crate::capture::ensure(ip, hd);
+    crate::capture::ensure(ip, hd, &state.recording.config.media_backend);
     let grab: fn(&ureq::Agent, &str, &str) -> Result<Vec<u8>, String> =
         if hd { app_core::go2rtc::frame_from_hd } else { app_core::go2rtc::frame_from };
     log::info!(

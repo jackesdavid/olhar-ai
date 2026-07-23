@@ -122,6 +122,14 @@ pub struct RecordingConfig {
     /// off for a tenant whose plan sells no cloud recording, where the local file is the ONLY copy.
     #[serde(default)]
     pub delete_local_after_upload: bool,
+    /// Which media tool the edge shells out to for camera decode (card #138): `"ffmpeg"` (default)
+    /// or `"gstreamer"`. A coexistence flag, NOT a permanent fork — see
+    /// `docs/plans/edge-gstreamer-backend.md`. Only `capture.rs`'s live decode (A1, the heaviest
+    /// operation) honours it so far; recording mux + the snapshot fallback stay on ffmpeg.
+    /// Falls back to ffmpeg at read time if `gst-launch-1.0` isn't actually on this box's PATH
+    /// (`state::gstreamer_ok()`), so a stale/mistaken flag never breaks capture.
+    #[serde(default = "default_media_backend")]
+    pub media_backend: String,
 }
 
 impl Default for RecordingConfig {
@@ -135,6 +143,7 @@ impl Default for RecordingConfig {
             motion_var_threshold: 16.0,
             recordings_path: default_recordings_path(),
             delete_local_after_upload: false,
+            media_backend: default_media_backend(),
         }
     }
 }
@@ -145,6 +154,7 @@ fn default_storage() -> u64 { 1000 }
 fn default_codec() -> String { "copy".to_string() }
 fn default_capture_stream() -> String { "preview".to_string() }
 fn default_recordings_path() -> String { crate::paths::recordings_dir().to_string_lossy().into_owned() }
+fn default_media_backend() -> String { "ffmpeg".to_string() }
 
 // ---- storage stats ----------------------------------------------------------
 
@@ -233,7 +243,13 @@ pub struct RecordingManager {
 
 impl RecordingManager {
     pub fn boot(control_url: &str) -> Arc<RecordingManager> {
-        let config = fetch_config(control_url).unwrap_or_default();
+        let mut config = fetch_config(control_url).unwrap_or_default();
+        // Local override for the media backend (card #138) — lets a single test box force
+        // "gstreamer" without waiting on a per-box control-side toggle, mirroring how
+        // EDGE_RECORDING_DIR overrides the pulled path below.
+        if let Ok(mb) = std::env::var("EDGE_MEDIA_BACKEND") {
+            config.media_backend = mb;
+        }
         let dir = std::env::var("EDGE_RECORDING_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(&config.recordings_path));
@@ -241,8 +257,8 @@ impl RecordingManager {
             log::warn!("recording: mkdir {:?}: {e}", dir);
         }
         log::info!(
-            "Recording dir {:?}, pre_roll={}s, always_warm={}",
-            dir, config.pre_roll_secs, config.cameras_always_warm
+            "Recording dir {:?}, pre_roll={}s, always_warm={}, media_backend={}",
+            dir, config.pre_roll_secs, config.cameras_always_warm, config.media_backend
         );
         Arc::new(RecordingManager {
             config,

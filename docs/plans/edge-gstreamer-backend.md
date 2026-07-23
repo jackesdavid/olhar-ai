@@ -1,6 +1,39 @@
 # Edge media backend — GStreamer alternative to ffmpeg, per-box flag + measured — Implementation Plan
 
 **Board card:** #138 Edge GStreamer media backend (per-box ffmpeg↔gstreamer switch + measurement)
+
+## Status (Phase 1 + Phase 2a shipped, in-progress)
+- **Phase 1 done:** `RecordingConfig.media_backend` (`"ffmpeg"` default / `"gstreamer"`, `recording.rs`)
+  — no migration needed, `recording_config` is already a per-box jsonb column. `capture::Backend`
+  enum threaded through `capture::ensure`/`supervise` (called from `frames.rs` alongside
+  `face_capture_stream`). `state::gstreamer_ok()` added (mirrors `ffmpeg_ok()`) + `X-Edge-Gstreamer`
+  heartbeat header (not yet persisted/surfaced on control — that's cheap to add once a box actually
+  needs the badge). A local `EDGE_MEDIA_BACKEND` env override was added for single-box testing
+  without a control-side toggle UI (not yet built).
+- **Phase 2a done — live MJPEG decode (A1) via GStreamer:** `capture::spawn_gst` runs
+  `rtspsrc ! decodebin ! videoconvert ! videorate ! video/x-raw,framerate=6/1 ! jpegenc ! fdsink` —
+  **codec-agnostic** (no per-H264/H265 branch) and emits the exact same wire format as ffmpeg
+  (concatenated JPEGs on stdout), so `read_mjpeg` needed zero changes. **Software-only** decode, per
+  the plan's open decision #5 (clean apples-to-apples vs ffmpeg's un-accelerated baseline).
+  A stale/wrong `media_backend=gstreamer` on a box without `gst-launch-1.0` silently falls back to
+  ffmpeg (`Backend::resolve`) — never leaves a camera with no working decoder.
+- **Validated live on the Jetson Orin Nano test box** (`192.168.10.200`, aarch64/Tegra, real RTSP
+  camera): the pipeline decoded 88/88 valid JPEG frames at the target 6fps with zero errors; a full
+  `sentinel-edge` build with `EDGE_MEDIA_BACKEND=gstreamer` ran the supervised decoder loop for 80+s
+  with no watchdog kills/respawns (`capture-decoder[…] backend=gstreamer`, one stable `gst-launch-1.0`
+  process, ~17% CPU on a 6-core Tegra — software H264 decode).
+- **Load-bearing discovery:** this Jetson's stock `gstreamer1.0-plugins-*` did NOT include a
+  software H264 decoder — `decodebin` failed with "missing plugin" until `gstreamer1.0-libav` was
+  installed. **`install.sh` (Phase 3) must add `-libav` alongside `-{base,good,bad,ugly}`** or the
+  SW-only path silently has no decoder on a fresh box (`gstreamer_ok()` only checks the CLI binary,
+  not codec coverage — worth hardening later).
+- Open decisions resolved by the above: **#1 subprocess model** (`gst-launch-1.0` via `proc::command`,
+  confirmed working) · **#2 flag transport** (extend `RecordingConfig`, confirmed) · **#4 v1 scope**
+  (A1 first, confirmed) · **#5 SW-only for 2a** (confirmed, and it's what surfaced the `-libav` gap).
+- **Not yet done:** Phase 0 (tag `EdgeMetrics` heartbeat with active backend for a real A/B — CPU was
+  eyeballed via `ps`, not the metrics pipeline, this pass), Phase 2b/2c (recording mux, snapshot
+  fallback), Phase 3 (HW-decode element mapping + `install.sh` bundling + a control-side toggle UI),
+  a persisted/surfaced `gstreamer_ok` badge on the Boxes page.
 **Goal:** Let each edge box run **GStreamer instead of ffmpeg** for every media operation the edge
 does, switchable per box via a flag pushed from control, so we can A/B **measure CPU/mem** and decide
 whether GStreamer is lighter. ffmpeg stays the default and both coexist behind the flag **for now**.

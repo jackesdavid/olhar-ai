@@ -18,6 +18,36 @@ pub fn detect() -> &'static str {
     M.get_or_init(probe).as_str()
 }
 
+/// ffmpeg **input-side** args to decode on the GPU for [`detect`]'s method — empty when there's
+/// nothing to add (`"none"`, or a method with no `-hwaccel` input flag). Insert these before `-i`.
+///
+/// `cuda` asks ffmpeg to keep the decoded frame in GPU memory (`-hwaccel_output_format cuda`) —
+/// cheaper than an implicit download when a filter chain can consume it there, but it means our
+/// software MJPEG encoder can't touch the frame directly; see [`decode_filter`].
+pub fn decode_args() -> &'static [&'static str] {
+    match detect() {
+        "cuda" => &["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
+        "vaapi" => &["-hwaccel", "vaapi"],
+        "qsv" => &["-hwaccel", "qsv"],
+        "videotoolbox" => &["-hwaccel", "videotoolbox"],
+        // v4l2m2m has no `-hwaccel` input flag (it's selected via an explicit `_v4l2m2m` decoder
+        // instead) and "none" obviously has nothing to add — CPU decode either way.
+        _ => &[],
+    }
+}
+
+/// A `-vf` filter chain (comma-joined, single arg) needed to make a GPU-resident decoded frame
+/// consumable by a software encoder, or `None` if [`decode_args`] already yields system-memory
+/// frames (or there's no hwaccel at all). Only `cuda` needs this — its `-hwaccel_output_format
+/// cuda` keeps frames on the GPU, so we must `hwdownload` before a CPU encoder (e.g. MJPEG, which
+/// has no CUDA-native encoder) can read them.
+pub fn decode_filter() -> Option<&'static str> {
+    match detect() {
+        "cuda" => Some("hwdownload,format=nv12"),
+        _ => None,
+    }
+}
+
 fn probe() -> String {
     if !crate::state::ffmpeg_ok() {
         return "none".to_string();

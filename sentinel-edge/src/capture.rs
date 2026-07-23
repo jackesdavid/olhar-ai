@@ -1,9 +1,14 @@
-//! Persistent per-camera frame decoder (#120). One **supervised**, long-lived `ffmpeg` reads go2rtc's
-//! WARM RTSP re-serve (`rtsp://127.0.0.1:8554/cam_<ip>[_hd]`) → a continuous MJPEG stream, so the frame
-//! hub reads the freshest decoded frame with **no per-request `frame.jpeg` cold-start** (which measured
-//! ~490 ms/grab). The ffmpeg consumer keeps go2rtc's producer warm on its own.
+//! Persistent per-camera frame decoder (#120). One **supervised**, long-lived decoder process reads
+//! go2rtc's WARM RTSP re-serve (`rtsp://127.0.0.1:8554/cam_<ip>[_hd]`) → a continuous MJPEG stream, so
+//! the frame hub reads the freshest decoded frame with **no per-request `frame.jpeg` cold-start**
+//! (which measured ~490 ms/grab). The consumer keeps go2rtc's producer warm on its own.
 //!
-//! **Resilient by design:** ffmpeg exits (stream drop) OR wedges (alive but no frames) are both
+//! **Two interchangeable [`Backend`]s** (card #138, `docs/plans/edge-gstreamer-backend.md`): `ffmpeg`
+//! (default) or `gstreamer`, picked per box via `RecordingConfig.media_backend`. Both emit the SAME
+//! wire format — concatenated JPEG images on stdout — so [`read_mjpeg`] doesn't care which produced
+//! them. This is a coexistence/measurement phase, not a permanent fork; see the plan doc.
+//!
+//! **Resilient by design:** the decoder exits (stream drop) OR wedges (alive but no frames) are both
 //! detected — a watchdog kills a stalled process so the read unblocks, and the supervisor respawns
 //! with exponential backoff. The hub always falls back to go2rtc `frame.jpeg` when there's no FRESH
 //! frame ([`latest_fresh`] returns `None`), so capture never stops even while a decoder is restarting.
@@ -32,16 +37,52 @@ fn cam_for(ip: &str) -> Arc<Cam> {
         .clone()
 }
 
+/// Which tool the supervised decoder shells out to (card #138). Both branches emit the SAME wire
+/// format on stdout (concatenated JPEGs), so [`read_mjpeg`] is backend-agnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Backend {
+    Ffmpeg,
+    Gstreamer,
+}
+
+impl Backend {
+    /// Resolve the config string, falling back to `Ffmpeg` for anything unrecognized AND for
+    /// `"gstreamer"` on a box that doesn't actually have `gst-launch-1.0` on PATH — a stale or
+    /// mistaken flag must never leave a camera with no working decoder (`state::gstreamer_ok()`
+    /// mirrors `ffmpeg_ok()`).
+    fn resolve(config_value: &str) -> Self {
+        if config_value.eq_ignore_ascii_case("gstreamer") {
+            if crate::state::gstreamer_ok() {
+                return Backend::Gstreamer;
+            }
+            log::warn!(
+                "media_backend=gstreamer requested but gst-launch-1.0 isn't on PATH — using ffmpeg"
+            );
+        }
+        Backend::Ffmpeg
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Backend::Ffmpeg => "ffmpeg",
+            Backend::Gstreamer => "gstreamer",
+        }
+    }
+}
+
 /// Ensure a supervised decoder is running for `ip` on the sub/HD stream. Idempotent — spawns the
 /// supervisor exactly once per camera (the `hd` of the first call wins for its lifetime; the setting
-/// is boot-time anyway).
-pub fn ensure(ip: &str, hd: bool) {
+/// is boot-time anyway). `media_backend` is the box's `RecordingConfig.media_backend` ("ffmpeg" or
+/// "gstreamer", card #138) — resolved once here, at the same point the caller already reads
+/// `face_capture_stream` (`frames.rs`).
+pub fn ensure(ip: &str, hd: bool, media_backend: &str) {
     let cam = cam_for(ip);
     if cam.started.swap(true, Ordering::SeqCst) {
         return;
     }
+    let backend = Backend::resolve(media_backend);
     let ip = ip.to_string();
-    std::thread::spawn(move || supervise(&ip, hd, cam));
+    std::thread::spawn(move || supervise(&ip, hd, cam, backend));
 }
 
 /// The freshest decoded JPEG for `ip`, only if newer than `max_age` — else `None` so the hub falls
@@ -65,40 +106,92 @@ fn stream_url(ip: &str, hd: bool) -> String {
     format!("rtsp://127.0.0.1:8554/{name}")
 }
 
-fn spawn_ffmpeg(ip: &str, hd: bool) -> std::io::Result<Child> {
+/// Build the full arg list for the decode ffmpeg, optionally with GPU decode (`use_hwaccel`).
+/// `-hwaccel …` must precede `-i`; the download filter (if any) goes on the encode side, right
+/// before the output format.
+fn ffmpeg_args(ip: &str, hd: bool, use_hwaccel: bool) -> Vec<String> {
+    let mut args: Vec<String> = vec!["-hide_banner".into(), "-loglevel".into(), "error".into()];
+    if use_hwaccel {
+        args.extend(crate::hwaccel::decode_args().iter().map(|s| s.to_string()));
+    }
+    args.extend(["-rtsp_transport".into(), "tcp".into(), "-i".into(), stream_url(ip, hd)]);
+    args.extend(["-an".into(), "-r".into(), "6".into(), "-q:v".into(), "2".into()]);
+    if use_hwaccel {
+        if let Some(filter) = crate::hwaccel::decode_filter() {
+            args.extend(["-vf".into(), filter.to_string()]);
+        }
+    }
+    args.extend(["-f".into(), "mjpeg".into(), "pipe:1".into()]);
+    args
+}
+
+fn spawn_ffmpeg(ip: &str, hd: bool, use_hwaccel: bool) -> std::io::Result<Child> {
     // Decode the warm RTSP → MJPEG at a modest fps (the hub throttles to ~4fps; 6 keeps frames fresh
     // without over-encoding). High JPEG quality (-q:v 2) so the derived face crops stay sharp.
+    // `use_hwaccel` asks for GPU decode via `crate::hwaccel` when the box detected one (#120 probe);
+    // `supervise()` turns it off for a camera whose GPU decode fails in practice even though the
+    // synthetic probe passed (e.g. a driver that only breaks under real load).
     crate::proc::command("ffmpeg")
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-rtsp_transport",
-            "tcp",
-            "-i",
-            &stream_url(ip, hd),
-            "-an",
-            "-r",
-            "6",
-            "-q:v",
-            "2",
-            "-f",
-            "mjpeg",
-            "pipe:1",
-        ])
+        .args(ffmpeg_args(ip, hd, use_hwaccel))
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .stdin(Stdio::null())
         .spawn()
 }
 
-fn supervise(ip: &str, hd: bool, cam: Arc<Cam>) {
-    log::info!("capture-decoder[{ip}]: starting (stream={})", if hd { "HD (main)" } else { "preview (sub)" });
+/// Same job as [`spawn_ffmpeg`] (warm RTSP → concatenated-JPEG on stdout at ~6fps), via GStreamer
+/// (card #138). `decodebin` auto-negotiates depay/parse/decoder for whatever codec the camera's
+/// stream actually carries (H264 or H265) — codec-agnostic, mirroring ffmpeg's own auto-detection —
+/// so this one pipeline covers every camera without a per-codec branch. `videoconvert` normalizes
+/// whatever raw format `decodebin` lands on (I420/NV12/…) to what `jpegenc` expects.
+///
+/// **Software decode only for now** (Phase 2a of the plan) — no HW-decode element
+/// (`nvv4l2decoder`/`vaapih264dec`/`vtdec`) is selected yet, so the first ffmpeg-vs-gstreamer
+/// measurement is apples-to-apples (both CPU-only). Mapping the box's detected [`crate::hwaccel`]
+/// method to a GStreamer HW element is Phase 3, once SW parity is measured.
+fn spawn_gst(ip: &str, hd: bool) -> std::io::Result<Child> {
+    let pipeline = format!(
+        "rtspsrc location={} protocols=tcp latency=200 ! decodebin ! videoconvert ! videorate ! \
+         video/x-raw,framerate=6/1 ! jpegenc quality=85 ! fdsink fd=1 sync=false",
+        stream_url(ip, hd)
+    );
+    crate::proc::command("gst-launch-1.0")
+        .arg("-q") // quiet: no progress/property spam on stdout — only the fdsink's JPEG bytes
+        .args(pipeline.split_whitespace())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .stdin(Stdio::null())
+        .spawn()
+}
+
+fn spawn(ip: &str, hd: bool, backend: Backend, use_hwaccel: bool) -> std::io::Result<Child> {
+    match backend {
+        Backend::Ffmpeg => spawn_ffmpeg(ip, hd, use_hwaccel),
+        Backend::Gstreamer => spawn_gst(ip, hd),
+    }
+}
+
+/// Consecutive fast (<30s) failures while GPU decode is on before we give up on it for this
+/// camera and fall back to CPU. The synthetic probe in `hwaccel::detect()` (open the hw device
+/// once, decode one null frame) can pass while the real thing still fails under load — a driver
+/// that only breaks on a genuine RTSP stream, or a codec profile it doesn't actually support.
+const HWACCEL_FAIL_LIMIT: u32 = 2;
+
+fn supervise(ip: &str, hd: bool, cam: Arc<Cam>, backend: Backend) {
+    log::info!(
+        "capture-decoder[{ip}]: starting (stream={}, backend={})",
+        if hd { "HD (main)" } else { "preview (sub)" },
+        backend.label()
+    );
     let mut backoff = Duration::from_millis(500);
     let mut fails: u32 = 0;
+    // GPU-decode fallback bookkeeping only applies to the ffmpeg branch — the gstreamer branch
+    // (Phase 2a) is software-only by design, so there's nothing to fall back from there yet.
+    let mut use_hwaccel = backend == Backend::Ffmpeg && crate::hwaccel::detect() != "none";
+    let mut hw_fails: u32 = 0;
     loop {
         let ran_from = Instant::now();
-        match spawn_ffmpeg(ip, hd) {
+        match spawn(ip, hd, backend, use_hwaccel) {
             Ok(mut child) => {
                 let stdout = match child.stdout.take() {
                     Some(s) => s,
@@ -142,7 +235,7 @@ fn supervise(ip: &str, hd: bool, cam: Arc<Cam>) {
                 }
                 let _ = wd.join();
             }
-            Err(e) => log::warn!("capture-decoder[{ip}]: ffmpeg spawn failed: {e}"),
+            Err(e) => log::warn!("capture-decoder[{ip}]: {} spawn failed: {e}", backend.label()),
         }
         // Backoff policy (the fix): reset ONLY after a healthy run — a fast-dying ffmpeg must NOT reset
         // the backoff (that was the tight-loop storm). Repeated fast failures cool down HARD so we
@@ -153,13 +246,27 @@ fn supervise(ip: &str, hd: bool, cam: Arc<Cam>) {
             }
             backoff = Duration::from_millis(500);
             fails = 0;
+            hw_fails = 0; // a healthy run vindicates GPU decode too — don't carry stale fails
         } else {
             fails += 1;
             backoff = (backoff * 2).min(Duration::from_secs(30));
             if fails == 5 {
                 log::warn!(
-                    "capture-decoder[{ip}]: repeated ffmpeg failures — backing off to 30s (frame.jpeg fallback active)"
+                    "capture-decoder[{ip}]: repeated {} failures — backing off to 30s (frame.jpeg fallback active)",
+                    backend.label()
                 );
+            }
+            // GPU decode fast-failing in practice despite passing the boot-time probe (#120) —
+            // fall back to CPU for this camera rather than retrying the same broken command forever.
+            if use_hwaccel {
+                hw_fails += 1;
+                if hw_fails >= HWACCEL_FAIL_LIMIT {
+                    use_hwaccel = false;
+                    log::warn!(
+                        "capture-decoder[{ip}]: GPU decode ({}) failing in practice — falling back to CPU decode for this camera",
+                        crate::hwaccel::detect()
+                    );
+                }
             }
         }
         std::thread::sleep(backoff);
