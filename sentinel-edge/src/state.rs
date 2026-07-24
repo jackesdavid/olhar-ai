@@ -419,21 +419,43 @@ impl AppState {
     /// The camera's **own** RTSP URL for the requested quality — what the edge dials now that it owns
     /// the ingest instead of proxying go2rtc's re-serve (card #138, G1/G5).
     ///
-    /// The stored URLs carry go2rtc's `#media=video` fragment, which is its own syntax, not RTSP —
-    /// `rtspsrc` would take it as part of the path and fail. Strip it here, once, rather than in each
-    /// consumer.
+    /// Mirrors `go2rtc::config_yaml`'s stream choice exactly, because the ingest must land on the
+    /// same stream the sidecar would have: substream for preview, main for HD, and main for both in
+    /// unified mode (#120). Credentials are **not** stored in the URL — they live on the device and
+    /// are injected here, the same way the sidecar config does it.
     pub fn camera_rtsp(&self, ip: &str, hd: bool) -> Option<String> {
         let devices = self.devices.lock().ok()?;
-        let d = devices.iter().find(|d| d.ip == ip)?;
-        // Fall back to main whenever the substream never resolved — a preview from the main stream
-        // beats no preview at all.
-        let url = if hd {
-            d.rtsp_url.clone()
-        } else {
-            d.rtsp_sub_url.clone().or_else(|| d.rtsp_url.clone())
-        }?;
-        Some(strip_go2rtc_fragment(&url))
+        pick_camera_rtsp(devices.iter().find(|d| d.ip == ip)?, hd)
     }
+}
+
+/// The dial URL for one device — split out from [`AppState::camera_rtsp`] so the credential
+/// injection and the stream choice can be tested without a whole app state. Getting this wrong is
+/// silent: the pipeline just reports `Unauthorized` and retries forever.
+fn pick_camera_rtsp(d: &app_core::devices::Device, hd: bool) -> Option<String> {
+    let rtsp = d.rtsp_url.as_deref()?;
+    let user = d.username.as_deref().unwrap_or("");
+    let pass = d.password.as_deref().unwrap_or("");
+    // Never dial credential-less: blank auth (`rtsp://:@host/…`) trips some cameras'
+    // anti-brute-force lock, and the reconnect storm then survives even correct credentials until
+    // the camera reboots. Same guard the sidecar config carries, for the same reason.
+    if !rtsp.contains('@') && (user.is_empty() || pass.is_empty()) {
+        log::warn!(
+            "ingest: no cached credentials for {} — not dialling (avoids auth-lockout)",
+            d.ip
+        );
+        return None;
+    }
+    let main = app_core::onvif::client::rtsp_url_with_creds(rtsp, user, pass);
+    let url = if hd || d.is_unified() {
+        main
+    } else {
+        d.rtsp_sub_url
+            .as_deref()
+            .map(|s| app_core::onvif::client::rtsp_url_with_creds(s, user, pass))
+            .unwrap_or(main)
+    };
+    Some(strip_go2rtc_fragment(&url))
 }
 
 /// Drop go2rtc's `#…` fragment from a stored RTSP URL.
@@ -701,7 +723,67 @@ fn fetch_cameras(control_url: &str, wait: u64) -> Result<Vec<Device>, String> {
 
 #[cfg(test)]
 mod camera_rtsp_tests {
-    use super::strip_go2rtc_fragment;
+    use super::{pick_camera_rtsp, strip_go2rtc_fragment};
+    use app_core::devices::Device;
+
+    fn cam(sub: Option<&str>, creds: bool) -> Device {
+        let mut d = Device {
+            id: String::new(),
+            ip: "10.0.0.2".into(),
+            xaddr: String::new(),
+            name: "cam".into(),
+            manufacturer: None,
+            model: None,
+            username: None,
+            password: None,
+            rtsp_url: Some("rtsp://10.0.0.2:554/stream1".into()),
+            rtsp_sub_url: None,
+            stream_mode: None,
+        };
+        d.rtsp_sub_url = sub.map(str::to_string);
+        if creds {
+            d.username = Some("u".into());
+            d.password = Some("p".into());
+        }
+        d
+    }
+
+    /// The bug this suite exists for: the stored URL carries no credentials, so a dial built from it
+    /// alone gets `Unauthorized` — and the pipeline just retries forever with no clue why.
+    #[test]
+    fn injects_the_devices_credentials_into_the_dial() {
+        let got = pick_camera_rtsp(&cam(None, true), true).unwrap();
+        assert!(got.contains("u:p@"), "credentials missing from {got}");
+    }
+
+    /// Preview must land on the substream and HD on main — the same choice the sidecar config makes,
+    /// or the ingest quietly decodes a different stream than every consumer expects.
+    #[test]
+    fn preview_takes_the_substream_and_hd_takes_main() {
+        let d = cam(Some("rtsp://10.0.0.2:554/stream2"), true);
+        assert!(pick_camera_rtsp(&d, false).unwrap().ends_with("/stream2"));
+        assert!(pick_camera_rtsp(&d, true).unwrap().ends_with("/stream1"));
+    }
+
+    #[test]
+    fn falls_back_to_main_when_there_is_no_substream() {
+        assert!(pick_camera_rtsp(&cam(None, true), false).unwrap().ends_with("/stream1"));
+    }
+
+    /// Unified mode (#120) means main-only — pulling the substream there is exactly the dual-stream
+    /// contention it exists to avoid.
+    #[test]
+    fn unified_mode_never_touches_the_substream() {
+        let mut d = cam(Some("rtsp://10.0.0.2:554/stream2"), true);
+        d.stream_mode = Some("unified".into());
+        assert!(pick_camera_rtsp(&d, false).unwrap().ends_with("/stream1"));
+    }
+
+    /// Dialling with blank auth can lock a camera out until it reboots — refusing is the safe answer.
+    #[test]
+    fn refuses_to_dial_without_credentials() {
+        assert_eq!(pick_camera_rtsp(&cam(None, false), false), None);
+    }
 
     /// `#media=video` is go2rtc's syntax, not RTSP. Left on, `rtspsrc` treats it as part of the path
     /// and the camera 404s — a failure that looks like bad credentials.
