@@ -112,7 +112,17 @@ for the first IDR and any camera dropout as footage, and re-reading the file onl
 muxer already knew. `probe_duration` survives as a last resort for a clip whose span was never
 recorded.
 
-⁷ **G2 feasibility PROVEN on the Mac (2026-07-24) — the server is still to be written.** The one
+⁷ **G2 built and module-verified on the Mac (2026-07-24).** `sentinel-edge/src/gst_mse.rs` serves the
+`/api/ws` contract itself (`rtspsrc → h264parse → cmafmux → appsink`, fanned out over a broadcast
+channel; one pipeline per stream, started on the first viewer, dropped after the last). Its live test
+(`gst_mse_it`, `--ignored`, needs `GST_IT_CAM`) passes against the real camera: `ftyp+moov` init
+segment, `codecs=avc1.640016`, three live fragments inside 15 s. The PTS→DTS pad probe replaces
+`h264timestamper` so Android/Jetson need one plugin less. **Still open before this is ✅:** install the
+new binary on the Mac edge (needs the operator's sudo) and repoint the **gateway** upstream from
+go2rtc `:1984` to the edge `:8788` — until that flip the browser still plays go2rtc's stream, so
+nothing user-visible has changed yet.
+
+**How the feasibility was proven first.** The one
 unknown that decided Stage 4 was *"can GStreamer emit fMP4 a browser `MediaSource` accepts, live from
 the camera?"*. Answer: **yes**, via `cmafmux` (gst-plugins-rs `isobmff`, ships with the Homebrew
 GStreamer). Proof in `experiments/gst-spike/src/bin/stage4.rs` — 32 live segments off the real camera;
