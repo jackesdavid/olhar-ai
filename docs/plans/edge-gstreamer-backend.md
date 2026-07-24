@@ -217,6 +217,14 @@ one HTTP seam, three unchanged consumers.
   anything). **`spawn_muxer` now ignores `media_backend` and always uses ffmpeg for A2/A3** —
   `RecordingConfig.media_backend` only drives `capture.rs`'s A1 live decode for now. Revisit only
   if the project ever revisits the "no bindings" constraint.
+
+  > **UNBLOCKED 2026-07-24 by the pivot.** That constraint has now been revisited: the migration
+  > moved from subprocess `gst-launch` to **linked `gstreamer-rs`** (see the Pivot section — Android
+  > has no subprocess model, so bindings are mandatory). The named fix — `appsrc` with
+  > manually-assigned buffer PTS — is therefore available, and the feed is already frame-aligned
+  > (the ring stores individual frames with `is_keyframe`; `live_rx` delivers one complete frame per
+  > message), so each buffer gets a well-defined PTS instead of asking `h264parse` to invent one.
+  > A2 is back in scope for Stage 3.
 - **Phase 3 hwaccel (GStreamer HW-decode element) — retried with a rigorous A/B, CLOSED as no-win.**
   Found the cleaner integration first: swap `videoconvert` → **`nvvidconv`** (Tegra's own converter,
   from `nvidia-l4t-gstreamer`, already installed) — it bridges NVMM ↔ system memory generically, so
