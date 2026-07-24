@@ -1,8 +1,8 @@
-# Filma AI landing page — rebrand + a rewrite that sells the platform
+# Olhar AI landing page — rebrand + a rewrite that sells the platform
 
-**Board card:** #100 Landing page — Filma AI rebrand + copy rewrite (ToDo)
-**Parent epic:** [[filma-rebrand]] (#76). Pairs with [[filma-domain-cutover]] (#99, routing).
-**Goal:** The public landing page is Filma AI — the eclipse-eye mark, the "Filma AI" name, the new
+**Board card:** #100 Landing page — Olhar AI rebrand + copy rewrite (ToDo)
+**Parent epic:** [[olharai-rebrand]] (#76). Pairs with [[olharai-domain-cutover]] (#99, routing).
+**Goal:** The public landing page is Olhar AI — the eclipse-eye mark, the "Olhar AI" name, the new
 domain — and its copy actually conveys what the platform does, which the owner has twice said it
 doesn't.
 
@@ -15,7 +15,7 @@ doesn't.
    The app's mark was replaced with the eclipse-eye (#76, `8f29a66`); the landing's was deliberately
    left, since the owner said we'd handle the landing separately. Port the eclipse-eye here too —
    ideally by lifting the app's `olhar-mark.svelte` rather than keeping two marks that will drift.
-   Name → "Filma AI"; wordmark → the FILMA AI lockup; favicon/OG → the new set.
+   Name → "Olhar AI"; wordmark → the OLHAR AI lockup; favicon/OG → the new set.
 
 2. **Rewrite the copy.** The epic records the owner's words: the current copy *"is not reflecting the
    true power of this application — it undersells the platform."* This is the real work, and it's
@@ -30,7 +30,7 @@ doesn't do:
 - Vision — person/object/face detection, tracking, presence (the workflow node catalog + Map).
 - Automation — the graph engine (`docs/ref/workflows.md`, the node catalog).
 - Recording — motion/event-triggered clips, cloud storage + billing.
-- Assistant — the chat agent (now "Filma AI").
+- Assistant — the chat agent (now "Olhar AI").
 - The appliance model — LAN-bound cameras, an on-prem edge, everything else cloud.
 
 ## Open decisions
@@ -48,7 +48,7 @@ doesn't do:
 ## Depends on / relates to
 
 - **#99 domain cutover** — the landing serves `thesentinels.online` today (Traefik) and will serve
-  `filma.ai`. Land the copy independently; the routing switch is #99's.
+  `olharai.com`. Land the copy independently; the routing switch is #99's.
 - **#76 og.png** — the shared OG image regeneration lives in the epic.
 
 ## Screenshot capture list (owner action)
@@ -70,7 +70,7 @@ stands on its own.
 
 ## Verification
 
-- The landing renders the eclipse-eye, says "Filma AI", and reads as a product a buyer understands in
+- The landing renders the eclipse-eye, says "Olhar AI", and reads as a product a buyer understands in
   one scroll.
 - No old dot-field mark or "Sentinel" copy remains in `landing/`.
 - Every capability claimed maps to something that actually ships.

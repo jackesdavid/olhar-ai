@@ -46,8 +46,8 @@ resolving a phone label *before* the Telegram-config check. Deployed via the loc
 (`sentinel-control`, `sentinel-notification`, `sentinel-flow`, `sentinel-app`) while CI is billing-blocked.
 
 **App: built and installed on hardware**, not yet exercised. `sentinel-mobile/` on Expo SDK 57 —
-`tsc` clean, `expo-doctor` 20/20, signed and installed on the iPhone 11 as `com.filma.app`.
-Renamed to **Filma AI** and moved onto the shared design tokens (`src/styles/` mirroring
+`tsc` clean, `expo-doctor` 20/20, signed and installed on the iPhone 11 as `com.olharai.app`.
+Renamed to **Olhar AI** and moved onto the shared design tokens (`src/styles/` mirroring
 `styles/sentinel-tokens.css`).
 
 **Environment gotchas that cost real time — do not rediscover them:**

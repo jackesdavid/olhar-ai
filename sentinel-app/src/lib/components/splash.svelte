@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Full-screen boot splash: the large Filma AI mark, its moon revolving, while the backend
+  // Full-screen boot splash: the large OlharAI mark, its moon revolving, while the backend
   // connects to Postgres and applies migrations. Shown until `boot_status` succeeds. Sits above
   // everything on the same living sensor-field background.
   //
@@ -19,7 +19,7 @@
   // No nested ternaries in markup — resolve the copy in named helpers.
   function titleFor(s: "connecting" | "error"): string {
     if (s === "error") return "Waiting for database…";
-    return "Initializing Filma AI…";
+    return "Initializing Olhar AI…";
   }
   function detailFor(s: "connecting" | "error"): string {
     if (s === "error") return "Can't reach Postgres. Start it with “task db-up” — retrying…";

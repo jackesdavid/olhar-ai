@@ -1,12 +1,12 @@
-# Filma AI cloud stack — dedicated server, greenfield (card #142).
+# OlharAI cloud stack — dedicated server, greenfield (card #142).
 # Self-contained: bundles Traefik + Let's Encrypt (the old ibbf VPS shared an external Traefik;
 # this box is dedicated, so Traefik lives here). Pulls prebuilt images from GHCR (CI builds them).
 #
-# Public hosts (filma.ai only — no thesentinels.online; this is a clean break):
-#   sentinel-control   → control.filma.ai     (API/backend, auth, RBAC, tenant APIs, /config/*)
-#   sentinel-app       → app.filma.ai         (web client SPA)
-#   sentinel-gateway   → gateway.filma.ai     (public live-video bridge, live.view-gated)
-#   sentinel-landing   → filma.ai             (marketing landing)
+# Public hosts (olharai.com only — no thesentinels.online; this is a clean break):
+#   sentinel-control   → control.olharai.com     (API/backend, auth, RBAC, tenant APIs, /config/*)
+#   sentinel-app       → app.olharai.com         (web client SPA)
+#   sentinel-gateway   → gateway.olharai.com     (public live-video bridge, live.view-gated)
+#   sentinel-landing   → olharai.com             (marketing landing)
 #
 # Internal-only (no Traefik): sentinel-flow, sentinel-notification, sentinel-ai, postgres, redis, minio.
 #
@@ -91,16 +91,16 @@ services:
       DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
       REDIS_URL: redis://sentinel-redis:6379
       CONTROL_BIND: 0.0.0.0:8790
-      OAUTH_REDIRECT_BASE: https://control.filma.ai
-      OAUTH_SUCCESS_REDIRECT: https://app.filma.ai/login
+      OAUTH_REDIRECT_BASE: https://control.olharai.com
+      OAUTH_SUCCESS_REDIRECT: https://app.olharai.com/login
       EDGE_DIST_DIR: /edge-dist
       LATEST_EDGE_VERSION: "0.1.3"
       AI_SERVICE_URL: http://sentinel-ai:8000/runsync
       FLOW_URL: http://sentinel-flow:8787
       AI_RATE_PER_SEC: "0"
       PAYMENT_PROVIDER: stripe
-      STRIPE_SUCCESS_URL: https://app.filma.ai/billing?paid=1
-      STRIPE_CANCEL_URL: https://app.filma.ai/billing
+      STRIPE_SUCCESS_URL: https://app.olharai.com/billing?paid=1
+      STRIPE_CANCEL_URL: https://app.olharai.com/billing
       ASAAS_BASE_URL: https://api.asaas.com/v3
     volumes:
       - ./edge-dist:/edge-dist:ro
@@ -113,7 +113,7 @@ services:
         condition: service_started
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.sentinel-control.rule=Host(`control.filma.ai`)"
+      - "traefik.http.routers.sentinel-control.rule=Host(`control.olharai.com`)"
       - "traefik.http.routers.sentinel-control.entrypoints=websecure"
       - "traefik.http.routers.sentinel-control.tls.certresolver=letsencrypt"
       - "traefik.http.services.sentinel-control.loadbalancer.server.port=8790"
@@ -142,7 +142,7 @@ services:
     restart: always
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.sentinel-app.rule=Host(`app.filma.ai`)"
+      - "traefik.http.routers.sentinel-app.rule=Host(`app.olharai.com`)"
       - "traefik.http.routers.sentinel-app.entrypoints=websecure"
       - "traefik.http.routers.sentinel-app.tls.certresolver=letsencrypt"
       - "traefik.http.services.sentinel-app.loadbalancer.server.port=80"
@@ -154,7 +154,7 @@ services:
     restart: always
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.sentinel-landing.rule=Host(`filma.ai`)"
+      - "traefik.http.routers.sentinel-landing.rule=Host(`olharai.com`)"
       - "traefik.http.routers.sentinel-landing.entrypoints=websecure"
       - "traefik.http.routers.sentinel-landing.tls.certresolver=letsencrypt"
       - "traefik.http.services.sentinel-landing.loadbalancer.server.port=80"
@@ -174,7 +174,7 @@ services:
       - "__EDGE_HOST__:__EDGE_TS_IP__"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.sentinel-gw.rule=Host(`gateway.filma.ai`)"
+      - "traefik.http.routers.sentinel-gw.rule=Host(`gateway.olharai.com`)"
       - "traefik.http.routers.sentinel-gw.entrypoints=websecure"
       - "traefik.http.routers.sentinel-gw.tls.certresolver=letsencrypt"
       - "traefik.http.services.sentinel-gw.loadbalancer.server.port=8789"

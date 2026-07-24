@@ -59,16 +59,16 @@ kanban-plugin: board
 	  - Plan: [[storage-billing-economics]]
 - [ ] #74 Postgres performance tuning — kill the default config
 	  - Plan: [[postgres-performance-tuning]]
-- [ ] #76 Filma AI rebrand — domains, brand, app copy, landing rewrite
-	  - Epic: [[filma-rebrand]]
+- [ ] #76 OlharAI rebrand — domains, brand, app copy, landing rewrite
+	  - Epic: [[olharai-rebrand]]
 - [ ] #87 Segmented continuous recording — cap clip size, crash-durable, incremental upload
 	  - Plan: [[segmented-continuous-recording]]
 - [ ] #96 Engine clarity — kill the ambiguity that hides bugs
 	  - Plan: [[workflow-engine-clarity]]
-- [ ] #99 Domain cutover — serve filma.ai / .com.br, transitional dual-domain
-	  - Plan: [[filma-domain-cutover]]
-- [ ] #100 Landing page — Filma AI rebrand + copy rewrite
-	  - Plan: [[filma-landing]]
+- [ ] #99 Domain cutover — serve olharai.com / .com.br, transitional dual-domain
+	  - Plan: [[olharai-domain-cutover]]
+- [ ] #100 Landing page — Olhar AI rebrand + copy rewrite
+	  - Plan: [[olharai-landing]]
 - [ ] #104 Remove "Connection lost" startup toast
 	  - Plan: [[remove-connection-lost-toast]]
 - [ ] #105 Editor panel toggle — rebind off Tab

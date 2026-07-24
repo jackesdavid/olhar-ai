@@ -98,7 +98,7 @@ async fn test_send(
     let db = st.db.clone();
     let sent = blocking(move || {
         let tokens = push::enabled_tokens(&db, tid, b.label.as_deref());
-        push::send(&tokens, "Filma AI", "Test notification — your phone is set up.")
+        push::send(&tokens, "Olhar AI", "Test notification — your phone is set up.")
     })
     .await?
     .map_err(|e| err(StatusCode::BAD_GATEWAY, e))?;

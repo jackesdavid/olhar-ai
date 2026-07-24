@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The Filma AI logo lockup: the eclipse-eye mark + the "FILMA AI" wordmark. Horizontal by
+  // The Olhar AI logo lockup: the eclipse-eye mark + the "OLHAR AI" wordmark. Horizontal by
   // default; set `stacked` for square contexts. `wordmark={false}` renders the mark alone (e.g. a
   // collapsed sidebar). The wordmark uses --font-brand (Sora), scoped to the logo only — it does
   // NOT change the app's UI font.
@@ -10,7 +10,7 @@
   // none of those numbers survive.
   //
   // The file keeps its `sentinel-*` name on purpose: the rebrand renames what users see, not the
-  // codebase (see docs/plans/filma-rebrand.md).
+  // codebase (see docs/plans/olharai-rebrand.md).
   import OlharMark from "./olhar-mark.svelte";
 
   let {
@@ -27,7 +27,7 @@
     size?: number;
     /** Show the "Sentinel" wordmark. False = mark only. */
     wordmark?: boolean;
-    /** Compact wordmark: "FAI" instead of "FILMA AI" (tight contexts like the sidebar rail). */
+    /** Compact wordmark: "OAI" instead of "OLHAR AI" (tight contexts like the sidebar rail). */
     short?: boolean;
     /** Stack the wordmark under the mark (square contexts). */
     stacked?: boolean;
@@ -63,7 +63,7 @@
   />
   {#if wordmark}
     <span class="lockup-text">
-      <span class="wordmark" style="font-size:{wm}px; letter-spacing:{tracking}">{short ? "FAI" : "FILMA AI"}</span>
+      <span class="wordmark" style="font-size:{wm}px; letter-spacing:{tracking}">{short ? "OAI" : "OLHAR AI"}</span>
       {#if subtitle}<span class="subtitle">{subtitle}</span>{/if}
     </span>
   {/if}
@@ -87,7 +87,7 @@
     font-family: var(--font-brand);
     font-weight: 600;
     /* Uppercase is the wordmark's styling, not the product's name — BRAND.md sets the mark as
-       "FILMA AI" while copy uses the canonical name. Tracking is set inline (size-dependent). */
+       "OLHAR AI" while copy uses the canonical name. Tracking is set inline (size-dependent). */
     text-transform: uppercase;
     color: var(--foreground);
     white-space: nowrap;

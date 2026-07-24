@@ -29,7 +29,7 @@ export default function Alerts() {
     const sub = Notifications.addNotificationReceivedListener((n) => {
       const c = n.request.content;
       setReceived((prev) => [
-        { id: n.request.identifier, title: c.title ?? "Filma AI", body: c.body ?? "", at: new Date().toLocaleTimeString() },
+        { id: n.request.identifier, title: c.title ?? "Olhar AI", body: c.body ?? "", at: new Date().toLocaleTimeString() },
         ...prev,
       ]);
     });

@@ -1,15 +1,15 @@
-# Filma AI cloud stack — dedicated-server standup
+# OlharAI cloud stack — dedicated-server standup
 
-Greenfield deploy of the whole stack on the new dedicated server, under `filma.ai`. Card **#142**;
-plan: [`docs/plans/filma-infra-migration.md`](../../docs/plans/filma-infra-migration.md).
+Greenfield deploy of the whole stack on the new dedicated server, under `olharai.com`. Card **#142**;
+plan: [`docs/plans/olharai-infra-migration.md`](../../docs/plans/olharai-infra-migration.md).
 
-This dir is self-contained: `docker-compose.filma.yml` bundles **Traefik + Let's Encrypt** (the old
+This dir is self-contained: `docker-compose.olharai.yml` bundles **Traefik + Let's Encrypt** (the old
 ibbf VPS shared an external Traefik; this box is dedicated). The `sentinel-*` app services run **2
 replicas** each; datastores (postgres/redis/minio) stay single.
 
 ## Placeholders to fill (in the compose, on the server)
 
-`docker-compose.filma.yml` has literal placeholders — replace before first `up`:
+`docker-compose.olharai.yml` has literal placeholders — replace before first `up`:
 
 | Placeholder | What |
 |---|---|
@@ -23,17 +23,17 @@ And `./sentinel.env` — copy from `sentinel.env.example`, fill, **do not commit
 ## Standup order (postgres FIRST — migration 0046 needs pg_cron)
 
 ```sh
-cd /filma            # or wherever this dir lives on the server
+cd /olharai            # or wherever this dir lives on the server
 cp sentinel.env.example sentinel.env && $EDITOR sentinel.env    # fill secrets
-$EDITOR docker-compose.filma.yml                              # fill __PLACEHOLDERS__
+$EDITOR docker-compose.olharai.yml                              # fill __PLACEHOLDERS__
 mkdir -p edge-dist                                             # edge binaries land here (release CI)
 
 # 1. Postgres first, wait healthy.
-docker compose -f docker-compose.filma.yml up -d sentinel-postgres
+docker compose -f docker-compose.olharai.yml up -d sentinel-postgres
 # 2. Then control (runs migrations + seeds master, permissions, L1–L6 templates on the empty DB).
-docker compose -f docker-compose.filma.yml up -d sentinel-control
+docker compose -f docker-compose.olharai.yml up -d sentinel-control
 # 3. Then the rest (Traefik, app, gateway, landing, flow, notification, ai, minio + init).
-docker compose -f docker-compose.filma.yml up -d
+docker compose -f docker-compose.olharai.yml up -d
 ```
 
 ## ⚠️ DNS is the cutover — operator does it
@@ -41,7 +41,7 @@ docker compose -f docker-compose.filma.yml up -d
 **Before** DNS points at this box, verify locally by faking the hostnames in `/etc/hosts` (or curl
 with `--resolve`). Only when the stack answers correctly does the operator point Cloudflare:
 
-- `filma.ai`, `app.filma.ai`, `control.filma.ai`, `gateway.filma.ai` → the new server IP.
+- `olharai.com`, `app.olharai.com`, `control.olharai.com`, `gateway.olharai.com` → the new server IP.
 - Traefik provisions Let's Encrypt certs automatically on first request per `Host()` rule.
 
 ## Replicas
@@ -50,7 +50,7 @@ with `--resolve`). Only when the stack answers correctly does the operator point
 redeploy:
 
 ```sh
-docker compose -f docker-compose.filma.yml up -d --scale sentinel-control=3
+docker compose -f docker-compose.olharai.yml up -d --scale sentinel-control=3
 ```
 
 Datastores are single by design — don't scale postgres/redis/minio (see the plan's Phase 1b).
@@ -61,5 +61,5 @@ Datastores are single by design — don't scale postgres/redis/minio (see the pl
   aim at the old host; retargeting them is Phase 2 of the plan.
 - **External integrations** (Google OAuth redirect URIs, Stripe dashboard URLs/webhooks, Telegram,
   Tuya) — batched at the end (plan Phase 4), after this stack is verified.
-- **Edge boxes** — reinstalled fresh against `control.filma.ai` (plan Phase 3).
-- **Brand strings / landing copy / the mark** — separate effort (`docs/plans/filma-rebrand.md`).
+- **Edge boxes** — reinstalled fresh against `control.olharai.com` (plan Phase 3).
+- **Brand strings / landing copy / the mark** — separate effort (`docs/plans/olharai-rebrand.md`).

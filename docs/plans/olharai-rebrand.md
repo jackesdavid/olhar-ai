@@ -1,8 +1,8 @@
-# Filma AI Rebrand — Implementation Plan
+# OlharAI Rebrand — Implementation Plan
 
-**Board card:** Epic — Filma AI rebrand (domains, brand, app, landing copy)
-**Goal:** Everything a user sees moves from **Sentinel** / `thesentinels.online` to **Filma AI** /
-`filma.ai`. Everything internal — repo name, service names (`sentinel-control`,
+**Board card:** Epic — OlharAI rebrand (domains, brand, app, landing copy)
+**Goal:** Everything a user sees moves from **Sentinel** / `thesentinels.online` to **OlharAI** /
+`olharai.com`. Everything internal — repo name, service names (`sentinel-control`,
 `sentinel-app`, `sentinel-edge`, `sentinel-flow`, `sentinel-gateway`, `sentinel-landing`,
 `sentinel-notification`), crate names, docker/Traefik router names, storage keys — **stays
 `sentinel-*`**, by explicit instruction. This is a user-facing rename + a full landing-page copy
@@ -10,19 +10,19 @@ rewrite, not a codebase rename.
 
 ## Context
 
-The owner bought `filma.ai` and `filma.ai.br` and wants the product's public identity to
-move to Filma AI. Separately (and explicitly called out): the current landing page copy "is not
+The owner bought `olharai.com` and `olharai.com.br` and wants the product's public identity to
+move to OlharAI. Separately (and explicitly called out): the current landing page copy "is not
 reflecting the true power of this application" — it undersells the platform and needs a real
 rewrite, not just a find-replace of the brand name.
 
 ## Decisions locked in (from the user)
 
-1. **Canonical name: `Filma AI`** — two words (settled 2026-07-17, from BRAND.md, which supersedes
+1. **Canonical name: `Olhar AI`** — two words (settled 2026-07-17, from BRAND.md, which supersedes
    the earlier one-word lean). Used in `<title>`, OG/Twitter, manifest, UI copy and the AI's
-   self-description. The wordmark lockup stays `FILMA AI` (uppercase, tracked); **`OAI` is the
+   self-description. The wordmark lockup stays `OLHAR AI` (uppercase, tracked); **`OAI` is the
    short submark for tight spaces**, not a separate brand.
 2. **~~Keep the dot-field mark as-is.~~ SUPERSEDED 2026-07-16 — there is a new mark.** The owner
-   supplied a complete Filma AI identity in `assets/` (8 SVGs). It is **not** the dot-field: it's an
+   supplied a complete OlharAI identity in `assets/` (8 SVGs). It is **not** the dot-field: it's an
    **eclipse/eye** — a dotted orbit ring, a disc eclipsed by an offset circle to cut a crescent, a
    pupil, and a "moon" dot riding the ring. So the visual side is no longer "one string change":
    **the mark itself is replaced**, and it becomes the *largest* slice of this epic rather than the
@@ -31,15 +31,15 @@ rewrite, not just a find-replace of the brand name.
    The one thing that carries over: the orbit ring is **dotted** (`stroke-dasharray="0.1 7.754"` +
    round caps), so the new mark *evolves* the dot-field language rather than discarding it. The
    monochrome-ink theme is untouched — the supplied art is exactly our `#171717`/`#FAFAFA`.
-3. **`filma.ai.br` is a defensive redirect**, not a localized site: it 301s to `filma.ai`.
-   Its DNS (and `filma.ai`'s) should be hosted on **Cloudflare**, matching how the existing
+3. **`olharai.com.br` is a defensive redirect**, not a localized site: it 301s to `olharai.com`.
+   Its DNS (and `olharai.com`'s) should be hosted on **Cloudflare**, matching how the existing
    domains (`thesentinels.online`, and apparently others — "like the other sentinels") are already
    set up.
-4. **Transitional dual-domain cutover.** Both `thesentinels.online` and `filma.ai` resolve
+4. **Transitional dual-domain cutover.** Both `thesentinels.online` and `olharai.com` resolve
    during a transition window — this repo already has working precedent for exactly this
    (`deploy/vps/docker-compose.sentinel.yml`'s Traefik gateway router already does
    `Host(\`gateway.thesentinels.online\`) || Host(\`gateway.ibbf.life\`)` for a legacy domain).
-   `thesentinels.online` eventually 301-redirects to `filma.ai` once the transition is done; no
+   `thesentinels.online` eventually 301-redirects to `olharai.com` once the transition is done; no
    hard cutover, no broken bookmarks/OAuth-redirects/Stripe-URLs on day one.
 
 ## Current state (grounding — full inventory, gathered this session)
@@ -55,7 +55,7 @@ fixtures/config (`sentinel-app/e2e/seed.ts`, `playwright.config.ts`, `.env.test.
 
 **No Terraform/IaC for DNS** — it's managed directly at the registrar/Cloudflare, not in this repo.
 TLS is automatic: Traefik issues Let's Encrypt certs per `Host()` rule label, so adding
-`filma.ai` hostnames to the existing router rules (dual-`Host()`, matching the `ibbf.life`
+`olharai.com` hostnames to the existing router rules (dual-`Host()`, matching the `ibbf.life`
 precedent) is enough for certs to provision themselves — no separate cert-management step.
 
 **Brand identity (built as #68/#69 on 2026-07-12; the mark is now being replaced — see Phase 2):**
@@ -101,25 +101,25 @@ throwaway bullet**. There's no pricing section at all.
 
 ## Phase 1 — Domain & infra
 
-- Add `filma.ai` + `filma.ai.br` to Cloudflare (matching the existing `thesentinels.online`
+- Add `olharai.com` + `olharai.com.br` to Cloudflare (matching the existing `thesentinels.online`
   setup — nameserver delegation at the registrar → Cloudflare).
-- DNS records for `filma.ai`: root (`sentinel-landing`), `app.`, `control.`, `gateway.` — same
+- DNS records for `olharai.com`: root (`sentinel-landing`), `app.`, `control.`, `gateway.` — same
   A/CNAME shape as today's `thesentinels.online` records, pointed at the same Contabo VPS IP.
-- `filma.ai.br`: a single record + a Cloudflare **Bulk Redirect** (or Page Rule) 301-ing
-  everything to `filma.ai` — no VPS-side routing needed for it at all.
+- `olharai.com.br`: a single record + a Cloudflare **Bulk Redirect** (or Page Rule) 301-ing
+  everything to `olharai.com` — no VPS-side routing needed for it at all.
 - `deploy/vps/docker-compose.sentinel.yml`: extend every Traefik router's `Host()` rule to match
   BOTH domains during the transition (`Host(\`app.thesentinels.online\`) ||
-  Host(\`app.filma.ai\`)`, etc.) — exactly the `gateway.ibbf.life` pattern already in this file.
+  Host(\`app.olharai.com\`)`, etc.) — exactly the `gateway.ibbf.life` pattern already in this file.
   Confirm Let's Encrypt issues certs for the new hostnames on first request (Traefik's ACME
   resolver does this automatically off the router rule).
-- Update the hardcoded domain in: `config.ts` (accept either suffix, prefer `filma.ai` as the
+- Update the hardcoded domain in: `config.ts` (accept either suffix, prefer `olharai.com` as the
   canonical fallback target), `app.html` OG/Twitter URLs, `stripe.rs` + `.env.example`
   (`STRIPE_SUCCESS_URL`/`CANCEL_URL`), `OAUTH_REDIRECT_BASE`/`OAUTH_SUCCESS_REDIRECT` in the
   compose file, `sentinel-edge/install.sh`.
 - Leave e2e test domain refs (`e2e-sentinel@thesentinels.online`, `playwright.config.ts`, etc.) for
   a later pass — not user-facing, not urgent, but note them so they don't silently rot.
 - **Once the transition window ends:** flip `thesentinels.online`'s Traefik rule to a redirect-only
-  router (301 → the equivalent `filma.ai` host) and retire the dual-`Host()` rules.
+  router (301 → the equivalent `olharai.com` host) and retire the dual-`Host()` rules.
 
 ## Phase 2 — Brand identity: the new mark
 
@@ -130,7 +130,7 @@ throwaway bullet**. There's no pricing section at all.
 | `olhar-ai-mark-black.svg` / `-white.svg` | 120×120 | the bare mark, ink / paper |
 | `olhar-ai-app-icon.svg` | 120×120 | mark on an `rx=14` ink tile |
 | `olhar-ai-mark-animated.svg` | 120×120 | app-icon tile + `.orbit` / `.moon` / `.pupil` hooks |
-| `olhar-ai-lockup-black.svg` / `-white.svg` | 480×120 | mark + `FILMA AI`, Sora 600, tracking 7.5 |
+| `olhar-ai-lockup-black.svg` / `-white.svg` | 480×120 | mark + `OLHAR AI`, Sora 600, tracking 7.5 |
 | `olhar-ai-oai-black.svg` / `-white.svg` | 240×120 | mark + `OAI` short lockup |
 
 The geometry is consistent across all 8 (same ring r=50, disc r=31, eclipse at 71,49 r=27, pupil
@@ -165,8 +165,8 @@ silently falls back to the system sans — wrong tracking, wrong weight, wrong b
 `sentinel-logo.svelte`, where the app already loads Sora via `--font-brand` (that component
 composes mark + `<span class="wordmark">`, so it stays text and stays accessible).
 
-Note the supplied lockups say **`FILMA AI`** — all-caps, spaced — while decision #1 locks the
-canonical name as **`Filma AI`** (one word). Those are different marks of the same brand and that's
+Note the supplied lockups say **`OLHAR AI`** — all-caps, spaced — while decision #1 locks the
+canonical name as **`OlharAI`** (one word). Those are different marks of the same brand and that's
 legitimate (a wordmark may be styled), but `sentinel-logo.svelte` currently renders sentence-case
 text. **Resolve before building** — see Open decisions.
 
@@ -208,10 +208,10 @@ Two traps:
 
 ### 2g. The rest of the identity swap
 
-- `sentinel-logo.svelte`: wordmark `"Sentinel"` → the resolved Filma AI form (see 2b).
-- `sentinel-mark.svelte`: `aria-label="Sentinel"` → `"Filma AI"`.
-- `static/manifest.webmanifest`: `name`/`short_name` → "Filma AI".
-- `app.html`: `<title>`, `og:site_name`, `og:title` → "Filma AI".
+- `sentinel-logo.svelte`: wordmark `"Sentinel"` → the resolved OlharAI form (see 2b).
+- `sentinel-mark.svelte`: `aria-label="Sentinel"` → `"OlharAI"`.
+- `static/manifest.webmanifest`: `name`/`short_name` → "OlharAI".
+- `app.html`: `<title>`, `og:site_name`, `og:title` → "OlharAI".
 - **Rewrite `docs/ref/brand.md` properly.** It documents the dot-field mark as the identity
   ("a sensor's field of awareness… dense/bright at the centre"). That prose is now *false*, not
   merely misnamed. Rewrite the mark section around the eclipse/eye and what it means; keep the
@@ -228,7 +228,7 @@ Update every literal "Sentinel" user-facing string found this session:
   Billing page + `billing.svelte.ts`.
 - **The AI's own self-description**: `agent/domain.rs`'s `DEFAULT_PERSONALITY` and
   `agent/vision.rs`'s system prompt — both currently say "You are Sentinel…"; change to "You are
-  Filma AI…" so the assistant's actual chat responses match the new brand (this is a behavior
+  OlharAI…" so the assistant's actual chat responses match the new brand (this is a behavior
   change, not just cosmetic — verify by asking the chat "what's your name" post-deploy).
 - The literal Telegram test message in `beacons.rs` ("Sentinel test ✓…").
 - Low-priority/optional: the `localStorage` key `"sentinel-theme"` — purely internal storage, not
@@ -265,7 +265,7 @@ pitch. Concretely surface, at minimum:
 - Cloudflare: add both domains, set up DNS records + the `.com.br` bulk redirect (as above).
 - Registrar: point nameservers to Cloudflare for both domains.
 - **Telegram @BotFather**: if you want the bot's own display name/bio (configured externally, not
-  in code — no `setMyName`/`setMyDescription` calls exist in this repo) to say Filma AI, that's a
+  in code — no `setMyName`/`setMyDescription` calls exist in this repo) to say OlharAI, that's a
   manual step via @BotFather, not something I can do from the codebase.
 - Stripe Dashboard: if the Stripe account/product display name shows "Sentinel" anywhere a customer
   sees it during checkout, update it there (separate from the `success_url`/`cancel_url` code
@@ -277,11 +277,11 @@ pitch. Concretely surface, at minimum:
 
 **Raised by the new assets (2026-07-16):**
 
-1. **`FILMA AI` or `Filma AI`?** The supplied lockups set the wordmark as all-caps, letter-spaced
-   `FILMA AI`; decision #1 locks the canonical name as `Filma AI`, and `sentinel-logo.svelte` renders
+1. **`OLHAR AI` or `OlharAI`?** The supplied lockups set the wordmark as all-caps, letter-spaced
+   `OLHAR AI`; decision #1 locks the canonical name as `OlharAI`, and `sentinel-logo.svelte` renders
    sentence-case. A styled wordmark differing from the written name is normal (cf. the Sentinel
    lockup's own sentence-case rule in `brand.md`) — but it must be *decided*, not drifted into.
-   Leaning: keep `Filma AI` in all copy/`<title>`/manifest, and treat `FILMA AI` as the wordmark
+   Leaning: keep `OlharAI` in all copy/`<title>`/manifest, and treat `OLHAR AI` as the wordmark
    lockup's styling only. **Owner's call — it's their art.**
 2. **What is `OAI` for?** The 240×120 short lockup implies a compact context (favicon wordmark?
    collapsed sidebar? app icon?). Nothing in the plan asks for it. Confirm where it's meant to live,
@@ -323,8 +323,8 @@ pitch. Concretely surface, at minimum:
   during the transition window.
 - `grep -ri "sentinel"` over `sentinel-app/src`, `landing/src`, and the two AI system-prompt files
   turns up nothing user-facing left unrenamed (internal identifiers excluded).
-- Chat: asking the AI assistant "what's your name?" gets an Filma AI answer, not Sentinel.
-- OG/Twitter link preview (a share-debugger tool) shows the Filma AI wordmark + correct title/domain.
+- Chat: asking the AI assistant "what's your name?" gets an OlharAI answer, not Sentinel.
+- OG/Twitter link preview (a share-debugger tool) shows the OlharAI wordmark + correct title/domain.
 - New landing copy reviewed against the real feature list above — every headline capability from
   Phase 4's list is represented somewhere on the page.
-- `filma.ai.br` redirects cleanly to `filma.ai` (any path).
+- `olharai.com.br` redirects cleanly to `olharai.com` (any path).

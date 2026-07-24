@@ -38,7 +38,7 @@
     pace = 1,
     class: klass = "",
     style = "",
-    label = "Filma AI",
+    label = "Olhar AI",
   }: {
     size?: number;
     /** Animate orbit, moon, breathe and glance. Honours `prefers-reduced-motion` either way. */

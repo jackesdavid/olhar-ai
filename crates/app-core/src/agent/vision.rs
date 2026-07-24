@@ -111,7 +111,7 @@ pub fn ask_text(prompt: &str, image: Option<&[u8]>) -> Result<String, String> {
     let body = json!({
         "model": cfg.model,
         "max_tokens": ANSWER_MAX_TOKENS,
-        "system": "You are Filma AI, a calm home + business monitoring assistant. Answer concisely \
+        "system": "You are Olhar AI, a calm home + business monitoring assistant. Answer concisely \
                    and plainly — no preamble. When shown an image, ground your answer in what's visible.",
         "messages": [{ "role": "user", "content": content }]
     });

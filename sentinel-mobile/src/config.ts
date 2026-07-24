@@ -6,6 +6,6 @@
 // Note `localhost` does NOT work from a physical device — use the LAN IP.
 const trim = (u: string) => u.replace(/\/+$/, "");
 
-export const CONTROL_BASE = trim(process.env.EXPO_PUBLIC_CONTROL_URL || "https://control.filma.ai");
+export const CONTROL_BASE = trim(process.env.EXPO_PUBLIC_CONTROL_URL || "https://control.olharai.com");
 
-export const GATEWAY_BASE = trim(process.env.EXPO_PUBLIC_GATEWAY_URL || "https://gateway.filma.ai");
+export const GATEWAY_BASE = trim(process.env.EXPO_PUBLIC_GATEWAY_URL || "https://gateway.olharai.com");
