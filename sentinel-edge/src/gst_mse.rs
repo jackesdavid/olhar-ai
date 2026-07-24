@@ -99,6 +99,58 @@ impl InitSegment {
     }
 }
 
+/// Regroups `mp4mux`'s per-box buffers back into whole fragments, so each viewer gets **one
+/// WebSocket message per fragment** instead of three.
+///
+/// `mp4mux` emits `moof`, then the 8-byte `mdat` header, then the payload — measured at 3 messages
+/// per fragment against go2rtc's 1, i.e. ~150 frames/s on the socket, each one an `onmessage` and an
+/// `appendBuffer` in the player. That overhead lands hardest on the mobile WebView.
+///
+/// The `mdat` header declares the box's total size, so we know exactly where the fragment ends and
+/// can emit it the moment its last byte arrives — coalescing costs **no** added latency, which
+/// waiting for the next `moof` would have.
+#[derive(Default)]
+struct Fragment {
+    bytes: Vec<u8>,
+    /// Payload bytes still owed to the open `mdat`; 0 means we are not inside one.
+    owed: usize,
+}
+
+/// Total size of the box starting at `b`, if it declares a usable one.
+fn box_size(b: &[u8]) -> Option<usize> {
+    let size = u32::from_be_bytes(b.get(..4)?.try_into().ok()?) as usize;
+    (size >= 8).then_some(size)
+}
+
+impl Fragment {
+    /// Feed one buffer; returns a complete fragment when this buffer closed one.
+    fn push(&mut self, bytes: &[u8]) -> Option<Vec<u8>> {
+        if self.owed > 0 {
+            self.bytes.extend_from_slice(bytes);
+            self.owed = self.owed.saturating_sub(bytes.len());
+            return (self.owed == 0).then(|| std::mem::take(&mut self.bytes));
+        }
+        let kind = bytes.get(4..8);
+        // A new `moof` while something is still buffered means the previous fragment never declared
+        // a size we could follow — flush it rather than gluing two fragments together.
+        let flushed = (kind == Some(b"moof") && !self.bytes.is_empty())
+            .then(|| std::mem::take(&mut self.bytes));
+        self.bytes.extend_from_slice(bytes);
+        // Only a *sized* mdat tells us where the fragment ends. Without one we must wait for the
+        // next `moof`, so an unsized mdat must not be mistaken for an already-complete one.
+        if kind == Some(b"mdat") {
+            if let Some(total) = box_size(bytes) {
+                // The header names the whole box, of which we already hold `bytes.len()`.
+                self.owed = total.saturating_sub(bytes.len());
+                if self.owed == 0 {
+                    return Some(std::mem::take(&mut self.bytes));
+                }
+            }
+        }
+        flushed
+    }
+}
+
 /// The `codecs=` string MSE needs, read from the `avcC` box in the init segment:
 /// `avc1.` + profile / constraint flags / level as hex (`01 64 00 16` → `avc1.640016`).
 fn codecs_from_init(init: &[u8]) -> Option<String> {
@@ -162,8 +214,9 @@ fn start(name: &str) -> Result<Arc<MseStream>, String> {
     // `mp4mux` hands the appsink one **box** per buffer, not one segment: `ftyp`, then `moov`, then
     // `moof`, `mdat`, … So the init segment is everything up to (not including) the first `moof`.
     let init_slot: Arc<Mutex<InitSegment>> = Arc::new(Mutex::new(InitSegment::default()));
+    let fragment: Arc<Mutex<Fragment>> = Arc::new(Mutex::new(Fragment::default()));
     {
-        let (tx, init_slot) = (tx.clone(), Arc::clone(&init_slot));
+        let (tx, init_slot, fragment) = (tx.clone(), Arc::clone(&init_slot), Arc::clone(&fragment));
         appsink.set_callbacks(
             gst_app::AppSinkCallbacks::builder()
                 .new_sample(move |sink| {
@@ -180,7 +233,9 @@ fn start(name: &str) -> Result<Arc<MseStream>, String> {
                         return Ok(gst::FlowSuccess::Ok);
                     }
                     drop(slot);
-                    let _ = tx.send(Arc::new(bytes.to_vec()));
+                    if let Some(whole) = fragment.lock().unwrap().push(bytes) {
+                        let _ = tx.send(Arc::new(whole));
+                    }
                     Ok(gst::FlowSuccess::Ok)
                 })
                 .build(),
@@ -241,6 +296,39 @@ mod tests {
         let got = init.finished().expect("closed by the moof");
         assert_eq!(got, b"\x00\x00\x00\x20ftyp....\x00\x00\x03\x46moovbody");
         assert!(!init.take_box(b"\x00\x00\x00\x08mdat"), "later boxes are live too");
+    }
+
+    fn boxed(kind: &[u8], size: u32, body: &[u8]) -> Vec<u8> {
+        let mut b = size.to_be_bytes().to_vec();
+        b.extend_from_slice(kind);
+        b.extend_from_slice(body);
+        b
+    }
+
+    /// The whole point of coalescing is that a fragment is emitted the instant its last byte lands —
+    /// not one fragment late. The mdat size field is what makes that possible, so pin the arithmetic.
+    #[test]
+    fn a_fragment_is_emitted_as_soon_as_its_mdat_is_full() {
+        let mut f = Fragment::default();
+        assert_eq!(f.push(&boxed(b"moof", 16, b"moofbody")), None);
+        // mdat declares 8 header + 12 payload; the header buffer alone must not close it.
+        assert_eq!(f.push(&boxed(b"mdat", 20, b"")), None);
+        assert_eq!(f.push(b"1234"), None, "still owed 8 bytes");
+        let whole = f.push(b"56789012").expect("last payload byte closes the fragment");
+        assert_eq!(whole.len(), 16 + 8 + 12);
+        assert_eq!(&whole[4..8], b"moof");
+    }
+
+    /// An mdat with no usable size must not swallow the following fragments into one message.
+    #[test]
+    fn an_unsized_mdat_falls_back_to_flushing_on_the_next_moof() {
+        let mut f = Fragment::default();
+        assert_eq!(f.push(&boxed(b"moof", 16, b"moofbody")), None);
+        assert_eq!(f.push(&boxed(b"mdat", 0, b"")), None);
+        assert_eq!(f.push(b"payload"), None);
+        let first = f.push(&boxed(b"moof", 16, b"moofbody")).expect("next moof flushes it");
+        assert_eq!(&first[4..8], b"moof");
+        assert!(first.ends_with(b"payload"));
     }
 
     #[test]
