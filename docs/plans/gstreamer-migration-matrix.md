@@ -5,8 +5,11 @@
 phone-as-edge portability — parity is enough, no need to be faster.
 
 **Legend:** ⬜ not started · 🟡 in progress · ✅ done & tested · ⛔ blocked · N/A not applicable
-**Gate:** every capability must pass on **Mac** (VideoToolbox) **and Jetson Nano** (aarch64 + NVDEC,
-the Android proxy) before it counts as ✅.
+**Deploy targets — ALL of these are clients, all must work** (operator, 2026-07-24): **Mac**
+(VideoToolbox `vtdec`), **Linux** (VAAPI/NVDEC), **Jetson Nano** (aarch64 + NVDEC — also the Android
+proxy), **Android** (MediaCodec `amcviddec`), **Windows — future** (D3D11 `d3d11h264dec` / Media
+Foundation `mfh264dec`). The Mac + Jetson are the two active gates now; a capability counts as ✅ once
+it passes on **both**, with the other platforms' HW-decode elements noted per row.
 
 ## Capability matrix — what each backend does for us
 
@@ -14,7 +17,7 @@ the Android proxy) before it counts as ✅.
 |---|---|---|---|---|---|---|---|---|
 | 0 | **Linked `gstreamer-rs` runtime** (not `gst-launch` subprocess) | n/a (new) | `gstreamer` + `gstreamer-app` crates, pipeline from Rust, `appsink` frame pull | the edge itself | 0 | ✅ | ⬜ | 🟡 |
 | A1 | **Live decode** (RTSP → raw frames, hot per-camera path) | ffmpeg MJPEG on `pipe:1`, **no hwaccel** (`capture.rs`) | `rtspsrc ! <hwdec> ! appsink` → motion/detector | edge motion + tract detector | 1 | ⬜ | ⬜ | ⬜ |
-| HW | **Hardware decode** (currently detected, never applied) | `hwaccel.rs` reports, never uses | `vtdec`(Mac) / `nvv4l2decoder`(Jetson) / `amcviddec`(Android) | A1 pipeline | 1 | ⛔¹ | ⬜ | 🟡 |
+| HW | **Hardware decode** (currently detected, never applied) | `hwaccel.rs` reports, never uses | `vtdec`(Mac) / `nvv4l2decoder`(Jetson) / `amcviddec`(Android) / `vaapi`·`nvh264dec`(Linux) / `d3d11h264dec`(Win) | A1 pipeline | 1 | ✅¹ | ⬜ | 🟡 |
 | A2 | **Recording mux** (H264 ring → fragmented mp4) | ffmpeg `-c:v copy` (`recording.rs`) | `appsrc ! h264parse ! mp4mux fragment-duration` | clip store / playback | 3 | ⬜ | ⬜ | ⬜ |
 | A3 | **Clip duration probe** | `ffprobe` (`recording.rs`) | GStreamer `discoverer` / pipeline query | recording metadata | 3 | ⬜ | ⬜ | ⬜ |
 | A4 | **HW-decode capability probe** | ffmpeg `-hwaccel` list (`hwaccel.rs`) | `gst_registry` element presence (`vtdec`/`nvv4l2decoder`…) | health report | 5 | ⬜ | ⬜ | ⬜ |
@@ -28,10 +31,11 @@ the Android proxy) before it counts as ✅.
 | G5 | **go2rtc sidecar lifecycle** (spawn/config/health) | edge manages the go2rtc process | removed (no sidecar) | edge `state.rs`, `main.rs` | 5 | ⬜ | ⬜ | ⬜ |
 | G6 | **Tailnet exposure** (MagicDNS TLS to go2rtc) | edge `tailscale.rs` → go2rtc | serve the GStreamer HTTP over the same tailnet | gateway reaches edge | 4 | ⬜ | ⬜ | ⬜ |
 
-¹ **HW / Mac ⛔:** field finding 2026-07-24 — `vtdec`/`vtdec_hw` fail "no valid frames decoded" on
-GStreamer 1.28.5 (even on a real MP4); `decodebin` falls back to software `avdec_h264`. Software decode
-works, so it does **not** block the migration; HW decode is proven on the Jetson instead (the
-Android-relevant path). Revisit Mac vtdec only if a desktop HW path is later wanted.
+¹ **HW / Mac ✅ (RESOLVED 2026-07-24):** `vtdec` (VideoToolbox HW decode) delivers all 120/120 frames
+via linked gstreamer-rs. The earlier "no valid frames" was a **synthetic-stream artifact** — `x264enc`'s
+default profile negotiation produces a stream VideoToolbox HW rejects; forcing an explicit
+`video/x-h264,profile=main` capsfilter fixes it. Real camera H264 always declares a standard profile in
+its SPS, so `rtspsrc`-fed decode (Stage 1) should not hit this at all. Proven in `experiments/gst-spike/`.
 
 ## Already pure-Rust (no migration needed — reused, feeds GStreamer)
 
@@ -46,7 +50,7 @@ Android-relevant path). Revisit Mac vtdec only if a desktop HW path is later wan
 | Stage | Scope | Mac | Jetson | Status |
 |---|---|---|---|---|
 | 0 | Linked `gstreamer-rs` foundation + appsink | ✅ | ⬜ | 🟡 (Mac done, Jetson pending) |
-| 1 | A1 live decode + HW decode + G1 ingest | ⬜ | ⬜ | ⬜ |
+| 1 | A1 live decode + HW decode + G1 ingest | 🟡 | ⬜ | ⬜ |
 | 2 | B3 + A5 snapshots (`jpegenc`) | ⬜ | ⬜ | ⬜ |
 | 3 | A2 recording mux + A3 duration | ⬜ | ⬜ | ⬜ |
 | 4 | G2 MSE contract + G4/G6 serving/tailnet | ⬜ | ⬜ | ⬜ |

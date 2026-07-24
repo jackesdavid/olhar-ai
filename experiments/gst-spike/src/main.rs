@@ -23,17 +23,17 @@ fn main() -> Result<()> {
     // Encode a synthetic 720p clip, then HW-decode it and hand frames to Rust. If `vtdec` is not
     // available the pipeline build fails loudly — that IS the signal we want on a box without HW.
     let n_buffers = 120;
-    // Stage 0 proves the LINKED gstreamer-rs path (pipeline + appsink frame pull) — decode via
-    // `decodebin`, which negotiates a working decoder. FIELD FINDING (Mac, GStreamer 1.28.5,
-    // 2026-07-24): the VideoToolbox element `vtdec`/`vtdec_hw` fails ("no valid frames decoded")
-    // even on a real MP4 — decodebin tries `vtdec_hw` then falls back to software `avdec_h264`.
-    // So HW decode is broken on THIS box; it is proven instead on the Jetson (`nvv4l2decoder`),
-    // which is the Android-relevant path (aarch64 + hardware codec). Software decode here is enough
-    // to validate the linked pipeline + appsink, which is Stage 0's actual gate.
+    // Stage 0 proves the LINKED gstreamer-rs path with REAL HW decode (vtdec / VideoToolbox).
+    // FIELD FINDING + FIX (Mac, GStreamer 1.28.5, 2026-07-24): forcing an explicit `profile=main`
+    // capsfilter on x264enc's output makes `vtdec` HW-decode all frames. Without it vtdec errors
+    // "no valid frames" — x264enc's DEFAULT negotiation produces a profile VideoToolbox HW rejects.
+    // This is a synthetic-stream artifact: real camera H264 always declares a standard profile in
+    // its SPS, so `rtspsrc`-fed vtdec (Stage 1) should not hit this. HW decode WORKS on this Mac.
     let desc = format!(
         "videotestsrc num-buffers={n_buffers} ! video/x-raw,width=1280,height=720,framerate=30/1 \
-         ! x264enc tune=zerolatency key-int-max=30 ! h264parse config-interval=-1 \
-         ! decodebin ! videoconvert ! video/x-raw,format=NV12 ! appsink name=out sync=false"
+         ! x264enc tune=zerolatency key-int-max=30 ! video/x-h264,profile=main \
+         ! h264parse config-interval=-1 ! vtdec ! videoconvert ! video/x-raw,format=NV12 \
+         ! appsink name=out sync=false"
     );
     println!("[spike] pipeline: {desc}");
 
@@ -103,6 +103,6 @@ fn main() -> Result<()> {
     println!("[spike] negotiated appsink caps: {caps}");
 
     anyhow::ensure!(got >= n_buffers as u64 - 2, "too few frames — HW decode/appsink path broken");
-    println!("[spike] ✅ STAGE 0 PASS on this box: linked gstreamer-rs + decodebin (software on this Mac) + appsink frame pull");
+    println!("[spike] ✅ STAGE 0 PASS on this box: linked gstreamer-rs + vtdec HW decode (VideoToolbox, profile=main) + appsink frame pull");
     Ok(())
 }
