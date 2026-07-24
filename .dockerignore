@@ -11,3 +11,8 @@ docs
 legacy
 .devtool
 ai
+# Build artefacts of the DESKTOP installers and the GStreamer spikes — 1.1GB of context that no
+# service image ever reads. Sending them crashed the daemon mid-transfer (rpc EOF at 1.39GB).
+deploy/macos-pkg/build
+deploy/windows/build
+experiments
