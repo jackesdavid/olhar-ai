@@ -18,7 +18,7 @@ it passes on **both**, with the other platforms' HW-decode elements noted per ro
 | 0 | **Linked `gstreamer-rs` runtime** (not `gst-launch` subprocess) | n/a (new) | `gstreamer` + `gstreamer-app` crates, pipeline from Rust, `appsink` frame pull | the edge itself | 0 | ✅ | ⬜ | 🟡 |
 | A1 | **Live decode** (RTSP → raw frames, hot per-camera path) | ffmpeg MJPEG on `pipe:1`, **no hwaccel** (`capture.rs`) | `rtspsrc ! <hwdec> ! appsink` → motion/detector | edge motion + tract detector | 1 | ✅² | ⬜ | 🟡 |
 | HW | **Hardware decode** (currently detected, never applied) | `hwaccel.rs` reports, never uses | `vtdec`(Mac) / `nvv4l2decoder`(Jetson) / `amcviddec`(Android) / `vaapi`·`nvh264dec`(Linux) / `d3d11h264dec`(Win) | A1 pipeline | 1 | ✅¹ | ⬜ | 🟡 |
-| A2 | **Recording mux** (H264 ring → fragmented mp4) | ffmpeg `-c:v copy` (`recording.rs`) | `appsrc ! h264parse ! mp4mux fragment-duration` | clip store / playback | 3 | ⬜ | ⬜ | ⬜ |
+| A2 | **Recording mux** (H264 ring → fragmented mp4) | ffmpeg `-c:v copy` (`recording.rs`) | `appsrc` (real per-frame PTS) `! h264parse ! mp4mux` | clip store / playback | 3 | 🟡⁵ | ⬜ | 🟡 |
 | A3 | **Clip duration probe** | `ffprobe` (`recording.rs`) | GStreamer `discoverer` / pipeline query | recording metadata | 3 | ⬜ | ⬜ | ⬜ |
 | A4 | **HW-decode capability probe** | ffmpeg `-hwaccel` list (`hwaccel.rs`) | `gst_registry` element presence (`vtdec`/`nvv4l2decoder`…) | health report | 5 | ⬜ | ⬜ | ⬜ |
 | A5 | **Snapshot fallback** (single-frame, cold) | raw `ffmpeg` (`onvif/client.rs`) | one-shot `rtspsrc ! decodebin ! jpegenc` (feature-gated) | **credential probe only** — no longer a snapshot fallback | 2 | ✅⁴ | ⬜ | 🟡 |
@@ -63,7 +63,7 @@ gate + default-flip open.
 | 0 | Linked `gstreamer-rs` foundation + appsink | ✅ | ⬜ | 🟡 (Mac done, Jetson pending) |
 | 1 | A1 live decode + HW decode + G1 ingest | 🟡 | ⬜ | ⬜ |
 | 2 | B3 + A5 snapshots (`jpegenc`) | ⬜ | ⬜ | ⬜ |
-| 3 | A2 recording mux + A3 duration | ⬜ | ⬜ | ⬜ |
+| 3 | A2 recording mux + A3 duration | 🟡 | ⬜ | 🟡 |
 | 4 | G2 MSE contract + G4/G6 serving/tailnet | ⬜ | ⬜ | ⬜ |
 | 5 | G3 WebRTC + retire go2rtc (G5) + ffmpeg (A4/A6) | ⬜ | ⬜ | ⬜ |
 
@@ -93,3 +93,14 @@ survives for the genuinely different job — the **credential probe** (`/probe/:
 arbitrary creds against a camera that may not be configured — and now runs on GStreamer where the
 runtime exists: app-core gained an optional `gst-linked` feature that the **edge forwards**, so the
 cloud services (control/flow), which have no GStreamer, keep the ffmpeg path untouched.
+
+⁵ **A2 built, awaiting real record+playback verification (2026-07-24).** The blocker the plan had
+recorded as REJECTED — `h264parse` cannot invent PTS for a raw byte stream — is gone now that the
+pivot made linked bindings the design: `src/gst_mux.rs` feeds `appsrc ! h264parse ! mp4mux` one
+buffer per access unit with **PTS taken from the frame's real capture time** (`H264Frame.at`), never
+an assumed framerate (which would yield clips that play at the wrong speed). Supporting change: the
+pre-roll and the live channel now carry `(bytes, Instant)` per frame instead of a flattened blob —
+shared plumbing, so the ffmpeg path was re-verified (its bytes land back-to-back exactly as the old
+concatenation did). Both build configs clean, tests pass in both. **NOT yet proven:** no clip has
+been recorded and played back — that is the only test that catches a PTS error, because a wrong PTS
+produces a playable-looking file with the wrong duration/speed rather than a loud failure.

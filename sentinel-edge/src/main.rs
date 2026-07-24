@@ -22,19 +22,21 @@ mod envfile;
 mod face;
 mod frames;
 mod go2rtc;
+#[cfg(feature = "gst-linked")]
+mod gst_mux;
 mod http;
 mod hwaccel;
 mod logbuf;
 mod media;
 mod metrics;
-mod paths;
-mod proc;
 mod mog2;
 mod motion;
+mod paths;
+mod proc;
 mod recording;
 mod state;
-mod tracking;
 mod tailscale;
+mod tracking;
 
 use state::AppState;
 
@@ -51,12 +53,19 @@ fn maybe_self_update(control_url: &str) {
         .call()
     {
         Ok(r) => r,
-        Err(e) => { log::debug!("version check skipped: {e}"); return; }
+        Err(e) => {
+            log::debug!("version check skipped: {e}");
+            return;
+        }
     };
     let latest = resp
         .into_json::<serde_json::Value>()
         .ok()
-        .and_then(|v| v.get("version").and_then(|s| s.as_str()).map(str::to_string))
+        .and_then(|v| {
+            v.get("version")
+                .and_then(|s| s.as_str())
+                .map(str::to_string)
+        })
         .unwrap_or_default();
     if latest.is_empty() || latest == current {
         log::debug!("edge {current} is up to date (latest={latest})");
@@ -73,7 +82,10 @@ fn maybe_self_update(control_url: &str) {
         let script = format!(
             "curl -fsSL {control_url}/install.sh | sh -s -- --update --control {control_url}"
         );
-        let _ = std::process::Command::new("sh").arg("-c").arg(script).spawn();
+        let _ = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .spawn();
         // install.sh stops + replaces the binary + restarts the service on its own.
     }
     #[cfg(not(unix))]
@@ -272,9 +284,18 @@ fn main() {
                         .map(|t| t.elapsed() >= alert_interval)
                         .unwrap_or(true);
                     if should_alert {
-                        log::warn!("storage: {}% full ({}/{} bytes) — pushing edge:full-disk alert",
-                            stats.pct, stats.used_bytes, stats.max_bytes);
-                        evict_state.push_disk_alert(stats.used_bytes, stats.max_bytes, stats.pct, &stats.path);
+                        log::warn!(
+                            "storage: {}% full ({}/{} bytes) — pushing edge:full-disk alert",
+                            stats.pct,
+                            stats.used_bytes,
+                            stats.max_bytes
+                        );
+                        evict_state.push_disk_alert(
+                            stats.used_bytes,
+                            stats.max_bytes,
+                            stats.pct,
+                            &stats.path,
+                        );
                         last_alert = Some(std::time::Instant::now());
                     }
                 }
