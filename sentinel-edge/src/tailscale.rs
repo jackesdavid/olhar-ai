@@ -21,7 +21,10 @@ use std::time::{Duration, Instant};
 /// default, so the installer (#83) points `TAILSCALE_BIN` at the full path; on Linux/macOS the bare
 /// name resolves.
 fn ts() -> Command {
-    let bin = std::env::var("TAILSCALE_BIN").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "tailscale".to_string());
+    let bin = std::env::var("TAILSCALE_BIN")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "tailscale".to_string());
     let mut cmd = Command::new(bin);
     crate::proc::no_window(&mut cmd);
     cmd
@@ -154,7 +157,11 @@ pub fn ensure_up() {
 /// `ensure_up` primes it up front.
 fn host_is_explicit() -> bool {
     static EXPLICIT: OnceLock<bool> = OnceLock::new();
-    *EXPLICIT.get_or_init(|| std::env::var("EDGE_PUBLIC_HOST").map(|v| !v.trim().is_empty()).unwrap_or(false))
+    *EXPLICIT.get_or_init(|| {
+        std::env::var("EDGE_PUBLIC_HOST")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+    })
 }
 
 /// Set `EDGE_PUBLIC_HOST` from a MagicDNS name (idempotent; logs only on an actual change). The box
@@ -198,7 +205,10 @@ fn wait_for_hostname(hostname: &str, timeout: Duration) -> Option<String> {
 /// that came up before its node settled, or lost its serve, heals ITSELF within minutes with no
 /// restart and no terminal. This is what makes the live path self-recover for a real customer.
 pub fn reassert() {
-    if std::env::var("TS_AUTHKEY").map(|v| v.trim().is_empty()).unwrap_or(true) {
+    if std::env::var("TS_AUTHKEY")
+        .map(|v| v.trim().is_empty())
+        .unwrap_or(true)
+    {
         return;
     }
     // A node that isn't Running can't serve anything, so re-running `serve` alone is useless: it
@@ -261,7 +271,9 @@ pub fn serve_edge_api() {
     let mut cmd = ts();
     cmd.args(["serve", "--bg", "--https=8080", "8788"]);
     match run(cmd, "serve --https=8080 8788") {
-        Some(o) if o.status.success() => log::info!("tailscale serve --https=8080 8788 ok (edge API on tailnet)"),
+        Some(o) if o.status.success() => {
+            log::info!("tailscale serve --https=8080 8788 ok (edge API on tailnet)")
+        }
         Some(o) => log::warn!(
             "tailscale serve --https=8080 8788: {}",
             String::from_utf8_lossy(&o.stderr).trim()

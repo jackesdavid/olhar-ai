@@ -23,6 +23,10 @@ use std::time::{Duration, Instant};
 struct Cam {
     latest: Mutex<Option<(Arc<Vec<u8>>, Instant)>>, // freshest JPEG + when it arrived
     started: AtomicBool,                            // supervisor spawned?
+    /// Live fMP4 for the `/api/ws` viewers, muxed on a `tee` branch of this camera's ONE pipeline
+    /// (card #138, G2) — not a second connection to the camera.
+    #[cfg(feature = "gst-linked")]
+    mse: Mutex<crate::gst_mse::Feed>,
 }
 
 fn cams() -> &'static Mutex<HashMap<String, Arc<Cam>>> {
@@ -37,6 +41,8 @@ fn cam_for(ip: &str) -> Arc<Cam> {
             Arc::new(Cam {
                 latest: Mutex::new(None),
                 started: AtomicBool::new(false),
+                #[cfg(feature = "gst-linked")]
+                mse: Mutex::new(crate::gst_mse::Feed::default()),
             })
         })
         .clone()
@@ -49,14 +55,48 @@ use crate::media::Backend;
 /// is boot-time anyway). `media_backend` is the box's `RecordingConfig.media_backend` ("ffmpeg" or
 /// "gstreamer", card #138) — resolved once here, at the same point the caller already reads
 /// `face_capture_stream` (`frames.rs`).
-pub fn ensure(ip: &str, hd: bool, media_backend: &str) {
+pub fn ensure(state: &crate::state::AppState, ip: &str, hd: bool) {
     let cam = cam_for(ip);
     if cam.started.swap(true, Ordering::SeqCst) {
         return;
     }
-    let backend = Backend::resolve(media_backend);
+    let backend = Backend::resolve(&state.recording.config.media_backend);
+    // The linked path dials the camera itself; the ffmpeg path still goes through go2rtc's re-serve,
+    // which is the whole difference between owning the ingest and renting it.
+    let url = match backend {
+        #[cfg(feature = "gst-linked")]
+        Backend::GstreamerLinked => state.camera_rtsp(ip, hd),
+        _ => None,
+    };
+    ensure_started(ip, hd, cam, backend, url);
+}
+
+/// Start the supervisor for a camera whose RTSP URL the caller already has — the same path as
+/// [`ensure`], minus the `AppState` lookup, so it can be driven from a test.
+fn ensure_started(ip: &str, hd: bool, cam: Arc<Cam>, backend: Backend, url: Option<String>) {
     let ip = ip.to_string();
-    std::thread::spawn(move || supervise(&ip, hd, cam, backend));
+    std::thread::spawn(move || supervise(&ip, hd, cam, backend, url));
+}
+
+/// Test-only entry point: dial `url` directly for `ip`, bypassing device state.
+#[cfg(test)]
+fn ensure_with_url(ip: &str, hd: bool, backend: &str, url: &str) {
+    let cam = cam_for(ip);
+    if cam.started.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    ensure_started(ip, hd, cam, Backend::resolve(backend), Some(url.to_string()));
+}
+
+/// What a live viewer needs for `ip`: the MSE init segment, the MIME for `addSourceBuffer`, and the
+/// live fragments from here on. `None` until the shared pipeline has muxed its first fragment.
+#[cfg(feature = "gst-linked")]
+pub fn mse_feed(
+    ip: &str,
+) -> Option<(Vec<u8>, String, tokio::sync::broadcast::Receiver<Arc<Vec<u8>>>)> {
+    let cam = cams().lock().unwrap().get(ip).cloned()?;
+    let feed = cam.mse.lock().unwrap().subscribe();
+    feed
 }
 
 /// The freshest decoded JPEG for `ip`, only if newer than `max_age` — else `None` so the hub falls
@@ -182,17 +222,27 @@ fn spawn(ip: &str, hd: bool, backend: Backend, use_hwaccel: bool) -> std::io::Re
 /// swap is the Jetson gate's job. Blocks until the pipeline errors, then returns so `supervise()`
 /// restarts it under the same backoff policy as the ffmpeg path.
 #[cfg(feature = "gst-linked")]
-fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>) -> Result<(), String> {
+fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Result<(), String> {
     use gstreamer as gst;
     use gstreamer::prelude::*;
     use gstreamer_app as gst_app;
 
     gst::init().map_err(|e| format!("gst init: {e}"))?; // idempotent
-    let url = stream_url(ip, hd);
+    // The camera's own URL when we have it; go2rtc's re-serve only as a fallback for a device whose
+    // RTSP never resolved. Owning the dial is what lets the sidecar go away.
+    let url = url.map(str::to_string).unwrap_or_else(|| stream_url(ip, hd));
+    // ONE connection, `tee`'d: the decode branch feeds motion + detectors, the mux branch feeds the
+    // live `/api/ws` viewers. Both leak-on-full — a consumer that stalls must never back the RTSP
+    // source up and take the other branch down with it.
+    let mux = crate::gst_mse::FRAGMENT_MS;
     let desc = format!(
-        "rtspsrc location=\"{url}\" protocols=tcp latency=200 ! decodebin ! videoconvert ! videorate \
-         ! video/x-raw,framerate=6/1 ! jpegenc quality=85 \
-         ! appsink name=out sync=false max-buffers=2 drop=true"
+        "rtspsrc location=\"{url}\" protocols=tcp latency=200 ! rtph264depay ! h264parse ! tee name=t \
+         t. ! queue max-size-buffers=64 leaky=downstream ! decodebin ! videoconvert ! videorate \
+            ! video/x-raw,framerate=6/1 ! jpegenc quality=85 \
+            ! appsink name=out sync=false max-buffers=2 drop=true \
+         t. ! queue max-size-buffers=64 leaky=downstream \
+            ! mp4mux fragment-duration={mux} streamable=true \
+            ! appsink name=mse sync=false"
     );
     let pipeline = gst::parse::launch(&desc)
         .map_err(|e| format!("parse: {e}"))?
@@ -214,6 +264,26 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>) -> Result<(), String> {
                         // Same contract as read_mjpeg: freshest JPEG becomes `cam.latest`.
                         *cam_cb.latest.lock().unwrap() =
                             Some((Arc::new(map.to_vec()), Instant::now()));
+                    }
+                }
+                Ok(gst::FlowSuccess::Ok)
+            })
+            .build(),
+    );
+
+    let mse_sink = pipeline
+        .by_name("mse")
+        .ok_or("mse appsink missing")?
+        .downcast::<gst_app::AppSink>()
+        .map_err(|_| "mse sink is not an appsink".to_string())?;
+    let cam_mse = Arc::clone(cam);
+    mse_sink.set_callbacks(
+        gst_app::AppSinkCallbacks::builder()
+            .new_sample(move |sink| {
+                let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                if let Some(buf) = sample.buffer() {
+                    if let Ok(map) = buf.map_readable() {
+                        cam_mse.mse.lock().unwrap().on_box(map.as_slice());
                     }
                 }
                 Ok(gst::FlowSuccess::Ok)
@@ -247,7 +317,7 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>) -> Result<(), String> {
 /// that only breaks on a genuine RTSP stream, or a codec profile it doesn't actually support.
 const HWACCEL_FAIL_LIMIT: u32 = 2;
 
-fn supervise(ip: &str, hd: bool, cam: Arc<Cam>, backend: Backend) {
+fn supervise(ip: &str, hd: bool, cam: Arc<Cam>, backend: Backend, url: Option<String>) {
     log::info!(
         "capture-decoder[{ip}]: starting (stream={}, backend={})",
         if hd { "HD (main)" } else { "preview (sub)" },
@@ -266,7 +336,7 @@ fn supervise(ip: &str, hd: bool, cam: Arc<Cam>, backend: Backend) {
         // the subprocess spawn below. It shares this loop's backoff/restart policy verbatim.
         if backend == Backend::GstreamerLinked {
             #[cfg(feature = "gst-linked")]
-            if let Err(e) = run_gst_linked(ip, hd, &cam) {
+            if let Err(e) = run_gst_linked(ip, hd, &cam, url.as_deref()) {
                 log::warn!("capture-decoder[{ip}]: gstreamer-linked: {e}");
             }
             #[cfg(not(feature = "gst-linked"))]
@@ -409,42 +479,43 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 
 #[cfg(all(test, feature = "gst-linked"))]
 mod gst_linked_it {
-    //! Integration test for the linked gstreamer-rs A1 path (card #138). Exercises the REAL public
-    //! API — `ensure` (backend "gstreamer-linked") → `latest_fresh` — against a live camera served
-    //! by the local go2rtc RTSP re-serve. Environment-specific, so `#[ignore]`d:
-    //!   GST_IT_CAM_IP=192.168.0.7 cargo test --features gst-linked -- --ignored gst_linked
-    //! Requires go2rtc running with `cam_<ip>` on 127.0.0.1:8554 (the edge's normal warm re-serve).
+    //! Integration test for the shared ingest (card #138, G1/A1/G2): ONE camera connection, `tee`'d
+    //! to the decode branch (JPEG for motion + detectors) and the mux branch (fMP4 for live
+    //! viewers). Both must come out of the same pipeline — that is the whole point, so both are
+    //! asserted here. Environment-specific, so `#[ignore]`d:
+    //!   GST_IT_CAM_URL='rtsp://user:pass@host/streamN' cargo test --features gst-linked -- --ignored gst_linked
     use std::time::Duration;
 
     #[test]
-    #[ignore = "needs a live camera + local go2rtc re-serve"]
-    fn linked_backend_publishes_jpeg_via_public_api() {
-        let ip = std::env::var("GST_IT_CAM_IP").expect("set GST_IT_CAM_IP to a live camera IP");
-        super::ensure(&ip, false, "gstreamer-linked");
-        // Poll up to ~20s for the linked pipeline to connect, decode, and publish a fresh JPEG.
-        let mut got = None;
-        for _ in 0..40 {
-            if let Some(j) = super::latest_fresh(&ip, Duration::from_secs(5)) {
-                got = Some(j);
+    #[ignore = "needs a live camera"]
+    fn one_connection_feeds_both_the_decoder_and_the_live_muxer() {
+        let url = std::env::var("GST_IT_CAM_URL").expect("set GST_IT_CAM_URL to a live camera RTSP URL");
+        let ip = "10.255.255.1"; // a key, not a dial — the URL above is what gets connected
+        super::ensure_with_url(ip, false, "gstreamer-linked", &url);
+
+        // Decode branch: a fresh JPEG lands in the slot every consumer reads.
+        let mut jpeg = None;
+        for _ in 0..60 {
+            if let Some(j) = super::latest_fresh(ip, Duration::from_secs(5)) {
+                jpeg = Some(j);
                 break;
             }
             std::thread::sleep(Duration::from_millis(500));
         }
-        let jpeg = got.expect("no JPEG from the linked backend within 20s");
-        assert!(
-            jpeg.len() > 1000,
-            "JPEG suspiciously small: {} bytes",
-            jpeg.len()
-        );
-        assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "not a JPEG (no SOI)");
-        assert_eq!(
-            &jpeg[jpeg.len() - 2..],
-            &[0xFF, 0xD9],
-            "not a JPEG (no EOI)"
-        );
-        println!(
-            "[gst-linked IT] linked A1 path published a {}-byte JPEG via ensure/latest_fresh",
-            jpeg.len()
-        );
+        let jpeg = jpeg.expect("decode branch produced no JPEG within 30s");
+        assert!(jpeg.starts_with(&[0xFF, 0xD8]), "not a JPEG: {:02x?}", &jpeg[..4.min(jpeg.len())]);
+
+        // Mux branch: an init segment a browser can start on, then live fragments.
+        let feed = super::mse_feed(ip).expect("mux branch produced no feed");
+        let (init, mime, mut rx) = feed;
+        assert_eq!(&init[4..8], b"ftyp", "init segment must open with ftyp");
+        assert!(init.windows(4).any(|w| w == b"moov"), "init segment must carry moov");
+        assert!(mime.starts_with("video/mp4; codecs=\"avc1."), "unexpected mime: {mime}");
+
+        let mut got = 0;
+        while got < 3 {
+            rx.blocking_recv().expect("fragment channel closed");
+            got += 1;
+        }
     }
 }

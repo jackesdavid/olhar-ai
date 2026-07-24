@@ -33,11 +33,12 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/recording/:clip_id",
             get(recording_get).delete(recording_delete),
         )
-        .layer(CorsLayer::permissive())
-        .with_state(state);
+        .layer(CorsLayer::permissive());
+    // The live MSE socket only exists on a GStreamer build — a released edge has no such route, and
+    // the gateway falls back to go2rtc when it 404s.
     #[cfg(feature = "gst-linked")]
     let router = router.route("/api/ws", get(mse_ws));
-    router
+    router.with_state(state)
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -222,7 +223,7 @@ async fn snapshot(State(state): State<Arc<AppState>>, Path(ip): Path<String>) ->
             .config
             .face_capture_stream
             .eq_ignore_ascii_case("hd");
-    crate::capture::ensure(&ip, hd, &state.recording.config.media_backend);
+    crate::capture::ensure(&state, &ip, hd);
 
     // Wait out a cold start (RTSP connect + first decoded frame) before giving up.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
@@ -501,34 +502,53 @@ async fn storage_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 #[cfg(feature = "gst-linked")]
 async fn mse_ws(
     ws: axum::extract::ws::WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let src = q.get("src").cloned().unwrap_or_default();
-    // The name is pasted into an RTSP URL, so keep it to the shape the edge itself generates.
-    if src.is_empty() || !src.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+    // The contract's stream name is go2rtc's (`cam_<ip with dots as underscores>[_hd]`); the ingest
+    // is keyed by camera, so translate here rather than teaching the pipeline go2rtc's naming.
+    let Some((ip, hd)) = stream_name_to_camera(&src) else {
         return (StatusCode::BAD_REQUEST, "bad src").into_response();
-    }
-    ws.on_upgrade(move |socket| mse_socket(socket, src))
+    };
+    // Idempotent: starts the shared pipeline if this camera has no consumer yet, joins it otherwise.
+    crate::capture::ensure(&state, &ip, hd);
+    ws.on_upgrade(move |socket| mse_socket(socket, ip))
+}
+
+/// `cam_192_168_0_7` → `("192.168.0.7", false)`, `cam_192_168_0_7_hd` → `(…, true)`.
+#[cfg(feature = "gst-linked")]
+fn stream_name_to_camera(src: &str) -> Option<(String, bool)> {
+    let rest = src.strip_prefix("cam_")?;
+    let (octets, hd) = match rest.strip_suffix("_hd") {
+        Some(o) => (o, true),
+        None => (rest, false),
+    };
+    // Only a dotted-quad may reach an RTSP dial — anything else is not a camera we know.
+    let ip = octets.replace('_', ".");
+    let ok = ip.split('.').count() == 4
+        && ip.split('.').all(|o| !o.is_empty() && o.bytes().all(|b| b.is_ascii_digit()));
+    ok.then_some((ip, hd))
 }
 
 #[cfg(feature = "gst-linked")]
-async fn mse_socket(mut socket: axum::extract::ws::WebSocket, src: String) {
+async fn mse_socket(mut socket: axum::extract::ws::WebSocket, ip: String) {
     use axum::extract::ws::Message;
 
-    // Starting a pipeline waits for the first keyframe, so it must not block the async runtime.
-    let name = src.clone();
-    let stream = match tokio::task::spawn_blocking(move || crate::gst_mse::attach(&name)).await {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => {
-            log::warn!("mse: {src} unavailable: {e}");
-            return;
+    // The pipeline needs a moment to reach its first fragment on a cold camera; poll rather than
+    // block the runtime, and give up rather than hold a socket open on a camera that never comes.
+    let mut feed = None;
+    for _ in 0..100 {
+        if let Some(f) = crate::capture::mse_feed(&ip) {
+            feed = Some(f);
+            break;
         }
-        Err(e) => {
-            log::warn!("mse: {src} attach panicked: {e}");
-            return;
-        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let Some((init, mime, mut fragments)) = feed else {
+        log::warn!("mse: {ip} produced no fragment within 10s");
+        return;
     };
-    let mut fragments = stream.subscribe();
 
     // The client speaks first, announcing what it can decode. We wait for it so the reply cannot
     // race ahead of the player's `sourceopen`.
@@ -540,18 +560,12 @@ async fn mse_socket(mut socket: axum::extract::ws::WebSocket, src: String) {
         }
     }
 
-    let hello = json!({ "type": "mse", "value": stream.mime }).to_string();
+    let hello = json!({ "type": "mse", "value": mime }).to_string();
     if socket.send(Message::Text(hello)).await.is_err() {
-        crate::gst_mse::detach(&src);
         return;
     }
     // `ftyp` + `moov` first — a fragment before it is undecodable.
-    if socket
-        .send(Message::Binary(stream.init.clone()))
-        .await
-        .is_err()
-    {
-        crate::gst_mse::detach(&src);
+    if socket.send(Message::Binary(init)).await.is_err() {
         return;
     }
 
@@ -566,7 +580,7 @@ async fn mse_socket(mut socket: axum::extract::ws::WebSocket, src: String) {
                 // A viewer that fell behind by more than the channel holds is resynced by closing:
                 // the player reconnects and gets a fresh init segment.
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    log::warn!("mse: {src} viewer lagged {n} fragments — dropping it to resync");
+                    log::warn!("mse: {ip} viewer lagged {n} fragments — dropping it to resync");
                     break;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -577,6 +591,4 @@ async fn mse_socket(mut socket: axum::extract::ws::WebSocket, src: String) {
             }
         }
     }
-    drop(fragments);
-    crate::gst_mse::detach(&src);
 }

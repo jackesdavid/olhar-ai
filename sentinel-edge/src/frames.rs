@@ -77,7 +77,10 @@ pub struct Sub {
 
 /// Subscribe to a camera's frames. Cheap; a consumer holds one of these for its lifetime.
 pub fn subscribe(ip: &str) -> Sub {
-    Sub { slot: slot_for(ip), last_seq: 0 }
+    Sub {
+        slot: slot_for(ip),
+        last_seq: 0,
+    }
 }
 
 impl Sub {
@@ -86,7 +89,8 @@ impl Sub {
     /// is between retries; the caller should loop (and re-check its stop flag).
     pub fn next(&mut self, timeout: Duration) -> Option<Arc<Frame>> {
         let latest = self.slot.latest.lock().unwrap();
-        let fresh = |f: &Option<Arc<Frame>>| f.as_ref().map(|f| f.seq > self.last_seq).unwrap_or(false);
+        let fresh =
+            |f: &Option<Arc<Frame>>| f.as_ref().map(|f| f.seq > self.last_seq).unwrap_or(false);
         let (latest, _) = self
             .slot
             .ready
@@ -112,7 +116,10 @@ pub fn spawn(state: &Arc<AppState>) {
         loop {
             let desired: Vec<String> = {
                 let devs = state.devices.lock().unwrap();
-                devs.iter().filter(|d| has_stream(d)).map(|d| d.ip.clone()).collect()
+                devs.iter()
+                    .filter(|d| has_stream(d))
+                    .map(|d| d.ip.clone())
+                    .collect()
             };
             let want: HashSet<&String> = desired.iter().collect();
             // Stop sources for cameras that disappeared.
@@ -140,7 +147,10 @@ pub fn spawn(state: &Arc<AppState>) {
 /// True when go2rtc is serving this camera (its RTSP resolved) — the hub reads frames from the
 /// LOCAL go2rtc, never the camera directly, so a resolved stream is the gate.
 fn has_stream(d: &app_core::devices::Device) -> bool {
-    d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false)
+    d.rtsp_url
+        .as_deref()
+        .map(|u| !u.trim().is_empty())
+        .unwrap_or(false)
 }
 
 /// One camera's supervised source loop: run the pipeline until stopped, retrying on error.
@@ -186,12 +196,16 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
     // NO RTSP client buffer that can fall behind live motion (that buffer was why `VideoCapture`
     // lagged). Reuses go2rtc's authenticated decode; never touches the camera.
     let base = app_core::go2rtc::base();
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(3)).build();
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(3))
+        .build();
     let slot = slot_for(ip);
 
     // `MOTION_DEBUG=1` logs the live peak score + measured fps every ~2s (even below the floor /
     // throttle) so detection can be verified in real time against movement.
-    let debug = std::env::var("MOTION_DEBUG").map(|v| matches!(v.trim(), "1" | "true" | "yes")).unwrap_or(false);
+    let debug = std::env::var("MOTION_DEBUG")
+        .map(|v| matches!(v.trim(), "1" | "true" | "yes"))
+        .unwrap_or(false);
     let mut dbg_at = Instant::now();
     let mut dbg_frames = 0u32;
     let mut dbg_max = 0.0f64;
@@ -205,16 +219,33 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
     // (non-`_hd`) stream and gets full-res frames for both motion (downscaled internally) and face
     // crops. SPLIT keeps the box-wide face_capture_stream choice (preview sub, or an explicit `_hd`
     // pull — the latter is what caused dual-stream contention on single-profile cameras).
-    let unified = state.device_by_ip(ip).map(|d| d.is_unified()).unwrap_or(false);
-    let hd = !unified && state.recording.config.face_capture_stream.eq_ignore_ascii_case("hd");
+    let unified = state
+        .device_by_ip(ip)
+        .map(|d| d.is_unified())
+        .unwrap_or(false);
+    let hd = !unified
+        && state
+            .recording
+            .config
+            .face_capture_stream
+            .eq_ignore_ascii_case("hd");
     // Warm, continuous frames from the supervised persistent decoder (#120) — no frame.jpeg
     // cold-start. `grab` is the FALLBACK go2rtc path used only while the decoder has no fresh frame.
-    crate::capture::ensure(ip, hd, &state.recording.config.media_backend);
-    let grab: fn(&ureq::Agent, &str, &str) -> Result<Vec<u8>, String> =
-        if hd { app_core::go2rtc::frame_from_hd } else { app_core::go2rtc::frame_from };
+    crate::capture::ensure(state, ip, hd);
+    let grab: fn(&ureq::Agent, &str, &str) -> Result<Vec<u8>, String> = if hd {
+        app_core::go2rtc::frame_from_hd
+    } else {
+        app_core::go2rtc::frame_from
+    };
     log::info!(
         "frame hub[{ip}]: stream mode = {}",
-        if unified { "unified (main only)" } else if hd { "split → HD (main)" } else { "split → preview (sub)" }
+        if unified {
+            "unified (main only)"
+        } else if hd {
+            "split → HD (main)"
+        } else {
+            "split → preview (sub)"
+        }
     );
     // Resource measurement: go2rtc grab vs edge decode, SPLIT + logged every ~10s → the Logs page,
     // so we can tell which dominates (grab/frame-availability latency vs decode CPU) per preview/HD.
@@ -255,7 +286,8 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
             log::info!(
                 "capture[{ip}]: mode={} {}x{} grab={:.1}ms decode={:.1}ms {} frames ({:.1} fps)",
                 if hd { "HD" } else { "preview" },
-                w, h,
+                w,
+                h,
                 grab_us as f64 / n / 1000.0,
                 dec_us as f64 / n / 1000.0,
                 cap_n,
@@ -290,10 +322,21 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
         // Keep the decoded BGR reachable after publishing (Arc, cheap clone) so face detection can
         // reuse it — the hub decodes once; nothing decodes the JPEG a second time.
         let bgr = Arc::new(bgr);
-        publish(&slot, Frame { seq, bgr: Arc::clone(&bgr), w, h, motion_at });
+        publish(
+            &slot,
+            Frame {
+                seq,
+                bgr: Arc::clone(&bgr),
+                w,
+                h,
+                motion_at,
+            },
+        );
 
         // The emit — and ONLY the emit — is throttled. The per-frame verdict above is not.
-        let throttled = last_emit.map(|t| t.elapsed() < detector.params().min_interval).unwrap_or(false);
+        let throttled = last_emit
+            .map(|t| t.elapsed() < detector.params().min_interval)
+            .unwrap_or(false);
         if verdict.qualifies && !throttled {
             last_emit = Some(Instant::now());
             crate::motion::push_event(state, ip, &jpeg, (w, h), &verdict, detector.params());

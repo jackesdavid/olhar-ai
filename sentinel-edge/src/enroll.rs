@@ -20,7 +20,9 @@ use serde_json::json;
 
 /// Is this box already somebody's? The box token is the whole of its identity.
 pub fn enrolled() -> bool {
-    std::env::var("BOX_TOKEN").map(|t| !t.trim().is_empty()).unwrap_or(false)
+    std::env::var("BOX_TOKEN")
+        .map(|t| !t.trim().is_empty())
+        .unwrap_or(false)
 }
 
 /// The **only** thing an unenrolled box serves. It deliberately does not build an `AppState`, and
@@ -43,11 +45,19 @@ pub struct EnrollReq {
 /// Redeem the code with control, persist what comes back, and restart into it.
 pub async fn enroll(State(control_url): State<String>, Json(req): Json<EnrollReq>) -> Response {
     if enrolled() {
-        return (StatusCode::CONFLICT, Json(json!({ "error": "this box is already enrolled" }))).into_response();
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "this box is already enrolled" })),
+        )
+            .into_response();
     }
     let code = req.code.trim().to_string();
     if code.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "enter the code from the Boxes page" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "enter the code from the Boxes page" })),
+        )
+            .into_response();
     }
 
     let result = tokio::task::spawn_blocking(move || redeem(&control_url, &code)).await;
@@ -76,7 +86,11 @@ pub async fn enroll(State(control_url): State<String>, Json(req): Json<EnrollReq
         Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
         Err(e) => {
             log::error!("enroll task panicked: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "internal error" }))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "internal error" })),
+            )
+                .into_response()
         }
     }
 }
@@ -91,7 +105,9 @@ fn redeem(control_url: &str, code: &str) -> Result<(), String> {
         .send_json(json!({ "code": code }));
 
     let body: serde_json::Value = match resp {
-        Ok(r) => r.into_json().map_err(|e| format!("control sent something unreadable: {e}"))?,
+        Ok(r) => r
+            .into_json()
+            .map_err(|e| format!("control sent something unreadable: {e}"))?,
         // Control answers a bad/expired/spent code with one deliberately uninformative message.
         // Pass it through rather than inventing a more specific one we can't actually know.
         Err(ureq::Error::Status(_, r)) => {
@@ -105,12 +121,21 @@ fn redeem(control_url: &str, code: &str) -> Result<(), String> {
         Err(e) => return Err(format!("couldn't reach {control_url}: {e}")),
     };
 
-    let token = body.get("box_token").and_then(|v| v.as_str()).unwrap_or_default();
+    let token = body
+        .get("box_token")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     if token.is_empty() {
         return Err("control didn't issue a token".to_string());
     }
-    let hostname = body.get("hostname").and_then(|v| v.as_str()).unwrap_or_default();
-    let ts_key = body.get("tailscale_key").and_then(|v| v.as_str()).unwrap_or_default();
+    let hostname = body
+        .get("hostname")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let ts_key = body
+        .get("tailscale_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
 
     // CONTROL_URL is written too: it isn't a secret (it's a public hostname), but the box must
     // remember which control plane it belongs to across restarts.
@@ -121,18 +146,15 @@ fn redeem(control_url: &str, code: &str) -> Result<(), String> {
     if !ts_key.is_empty() {
         updates.push(("TS_AUTHKEY", ts_key));
     }
-    crate::envfile::merge_write(&updates).map_err(|e| format!("couldn't save the box's identity: {e}"))?;
+    crate::envfile::merge_write(&updates)
+        .map_err(|e| format!("couldn't save the box's identity: {e}"))?;
     Ok(())
 }
 
 /// The enrollment page. Served at `/` while the box has no identity — the installer opens it
 /// (`open`/`start http://localhost:8788`) as its last step.
 pub async fn page() -> Response {
-    (
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        PAGE,
-    )
-        .into_response()
+    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], PAGE).into_response()
 }
 
 const PAGE: &str = r##"<!doctype html>

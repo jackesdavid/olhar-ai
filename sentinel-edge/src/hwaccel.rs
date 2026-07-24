@@ -108,10 +108,20 @@ fn device_opens(method: &str) -> bool {
     }
     run_bounded(
         &[
-            "-hide_banner", "-loglevel", "error",
-            "-init_hw_device", method,
-            "-f", "lavfi", "-i", "nullsrc",
-            "-frames:v", "1", "-f", "null", "-",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-init_hw_device",
+            method,
+            "-f",
+            "lavfi",
+            "-i",
+            "nullsrc",
+            "-frames:v",
+            "1",
+            "-f",
+            "null",
+            "-",
         ],
         6,
     )

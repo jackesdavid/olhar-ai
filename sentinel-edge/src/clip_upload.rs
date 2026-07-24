@@ -22,10 +22,10 @@ use std::time::Duration;
 /// One clip waiting to become durable.
 pub struct Job {
     pub clip_id: String,
-    pub path:    PathBuf,
+    pub path: PathBuf,
     /// The presigned PUT control minted for this clip. Expires (control's `UPLOAD_URL_TTL_SECS`,
     /// currently 1 h), which is what bounds our retries.
-    pub url:     String,
+    pub url: String,
     /// Drop the local copy once the clip is durable — this box's `delete_local_after_upload`.
     pub delete_local: bool,
 }
@@ -74,7 +74,11 @@ fn worker(control_url: String, rx: Receiver<Job>) {
         // The bytes are durable but the row still reads `uploading`. If this never lands,
         // control's sweep marks the clip `failed` and R2's lifecycle expires the object.
         if let Err(e) = confirm(&control_url, &job.clip_id) {
-            log::warn!("clip {}: uploaded, but confirm failed: {}", job.clip_id, e.msg);
+            log::warn!(
+                "clip {}: uploaded, but confirm failed: {}",
+                job.clip_id,
+                e.msg
+            );
             continue;
         }
         log::info!("clip {} is durable", job.clip_id);
@@ -91,11 +95,17 @@ fn worker(control_url: String, rx: Receiver<Job>) {
 /// over-report its disk usage forever.
 fn evict(job: &Job) {
     if let Err(e) = std::fs::remove_file(&job.path) {
-        log::warn!("clip {}: uploaded, but could not drop the local copy: {e}", job.clip_id);
+        log::warn!(
+            "clip {}: uploaded, but could not drop the local copy: {e}",
+            job.clip_id
+        );
         return; // leave the sidecar: it still describes a file that is really there
     }
     let _ = std::fs::remove_file(job.path.with_extension("json"));
-    log::info!("clip {}: local copy dropped (it lives in the cloud now)", job.clip_id);
+    log::info!(
+        "clip {}: local copy dropped (it lives in the cloud now)",
+        job.clip_id
+    );
 }
 
 fn upload(job: &Job) -> Result<(), Failure> {
@@ -114,8 +124,8 @@ fn upload(job: &Job) -> Result<(), Failure> {
 }
 
 fn put(url: &str, path: &Path, len: u64) -> Result<(), Failure> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| Failure::permanent(format!("open {path:?}: {e}")))?;
+    let file =
+        std::fs::File::open(path).map_err(|e| Failure::permanent(format!("open {path:?}: {e}")))?;
     // Set `Content-Length` ourselves. Handed an unsized reader, ureq falls back to
     // `Transfer-Encoding: chunked`, which S3/R2 rejects on a presigned PUT. With the header
     // present it streams the file straight through, so a clip never sits in memory.
@@ -154,15 +164,21 @@ fn agent() -> ureq::Agent {
 
 struct Failure {
     retryable: bool,
-    msg:       String,
+    msg: String,
 }
 
 impl Failure {
     fn permanent(msg: String) -> Self {
-        Failure { retryable: false, msg }
+        Failure {
+            retryable: false,
+            msg,
+        }
     }
     fn transient(msg: String) -> Self {
-        Failure { retryable: true, msg }
+        Failure {
+            retryable: true,
+            msg,
+        }
     }
 }
 
@@ -192,7 +208,11 @@ fn status(resp: Result<ureq::Response, ureq::Error>) -> Result<(), Failure> {
     }
 }
 
-fn retry(what: &str, clip_id: &str, mut f: impl FnMut() -> Result<(), Failure>) -> Result<(), Failure> {
+fn retry(
+    what: &str,
+    clip_id: &str,
+    mut f: impl FnMut() -> Result<(), Failure>,
+) -> Result<(), Failure> {
     let mut attempt = 0;
     loop {
         match f() {

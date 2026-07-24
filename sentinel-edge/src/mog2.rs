@@ -233,7 +233,16 @@ mod tests {
     }
 
     /// A flat frame with a filled rectangle of a different colour.
-    fn with_rect(w: usize, h: usize, bg: [u8; 3], fg: [u8; 3], x0: usize, y0: usize, x1: usize, y1: usize) -> Vec<u8> {
+    fn with_rect(
+        w: usize,
+        h: usize,
+        bg: [u8; 3],
+        fg: [u8; 3],
+        x0: usize,
+        y0: usize,
+        x1: usize,
+        y1: usize,
+    ) -> Vec<u8> {
         let mut f = flat(w, h, bg);
         for y in y0..y1 {
             for x in x0..x1 {
@@ -254,7 +263,11 @@ mod tests {
         for _ in 0..30 {
             m.apply(&frame, &mut mask);
         }
-        assert_eq!(mask.iter().filter(|&&v| v > 0).count(), 0, "a settled static scene must be pure background");
+        assert_eq!(
+            mask.iter().filter(|&&v| v > 0).count(),
+            0,
+            "a settled static scene must be pure background"
+        );
     }
 
     /// Something that appears where the model learned background is foreground.
@@ -272,7 +285,11 @@ mod tests {
         m.apply(&moved, &mut mask);
 
         let fg: usize = mask.iter().filter(|&&v| v > 0).count();
-        assert_eq!(fg, 8 * 8, "exactly the rectangle should be foreground, got {fg}px");
+        assert_eq!(
+            fg,
+            8 * 8,
+            "exactly the rectangle should be foreground, got {fg}px"
+        );
         for y in 6..14 {
             for x in 8..16 {
                 assert_eq!(mask[y * w + x], 255);
@@ -297,7 +314,11 @@ mod tests {
         for _ in 0..200 {
             m.apply(&parked, &mut mask);
         }
-        assert_eq!(mask.iter().filter(|&&v| v > 0).count(), 0, "a long-parked object must become background");
+        assert_eq!(
+            mask.iter().filter(|&&v| v > 0).count(),
+            0,
+            "a long-parked object must become background"
+        );
     }
 
     /// A pseudo-random but deterministic scene: a textured, gently-noisy background with a bright
@@ -372,7 +393,8 @@ mod tests {
                 std::slice::from_raw_parts(frame.as_ptr() as *const core::Vec3b, w * h)
             })
             .unwrap();
-            video::BackgroundSubtractorTrait::apply(&mut theirs, &cv_frame, &mut mask_cv, -1.0).unwrap();
+            video::BackgroundSubtractorTrait::apply(&mut theirs, &cv_frame, &mut mask_cv, -1.0)
+                .unwrap();
 
             let disagree = mask_ours
                 .iter()

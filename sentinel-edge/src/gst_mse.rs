@@ -6,12 +6,9 @@
 //! `{"type":"mse","value":"video/mp4; codecs=\"…\""}` (fed straight to `addSourceBuffer`), then the
 //! socket carries nothing but fMP4 bytes.
 //!
-//! **Where the H264 comes from.** For now, the same place [`crate::capture`] and
-//! [`crate::recording`] already take it: go2rtc's local RTSP re-serve on `127.0.0.1:8554`. So the
-//! `src=` query parameter *is* the upstream stream name and no lookup is needed. That is
-//! deliberate and temporary — when go2rtc goes away (touchpoint G5) the edge becomes the fan-out
-//! point itself: one `rtspsrc` per camera, `tee`'d to decode + record + this. Doing it that way
-//! now would mean rewriting two working paths before this one is proven.
+//! **Where the H264 comes from.** [`crate::capture`]'s shared ingest — the edge dials each camera
+//! **once** and `tee`s its H264 to every consumer, so this module owns no connection and no
+//! pipeline. It is handed `mp4mux` output boxes and turns them into what a viewer needs.
 //!
 //! **Why `mp4mux` and not `cmafmux`.** `cmafmux` (gst-plugins-rs) was the obvious pick and it does
 //! produce valid fMP4 — but it closes a fragment only on a **keyframe**, so its cadence is the
@@ -23,51 +20,13 @@
 //! (1.20.3) and would have to be built and shipped for aarch64 and Android, while `mp4mux` is in
 //! gst-plugins-good and present everywhere we deploy. And it wants no DTS, which `cmafmux` did.
 
-use gstreamer as gst;
-use gstreamer::prelude::*;
-use gstreamer_app as gst_app;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 use tokio::sync::broadcast;
 
 /// How much video each fragment holds, in **milliseconds** (`mp4mux`'s unit). The browser cannot
 /// play what the muxer has not closed yet, so this is the latency floor: at 100ms the muxer closes
 /// a fragment per frame at any sane framerate, which is what go2rtc does today.
-const FRAGMENT_MS: u32 = 100;
-
-/// A running per-stream muxer, shared by every viewer of that camera.
-pub struct MseStream {
-    /// `ftyp` + `moov` — every newly-attached viewer needs this before any fragment.
-    pub init: Vec<u8>,
-    /// The MIME the client must pass to `addSourceBuffer`, e.g. `video/mp4; codecs="avc1.640016"`.
-    pub mime: String,
-    /// Live fragments. Viewers that fall behind are dropped from the tail rather than stalling the
-    /// muxer — a late fragment is worthless for live video.
-    tx: broadcast::Sender<Arc<Vec<u8>>>,
-    pipeline: gst::Pipeline,
-}
-
-impl MseStream {
-    pub fn subscribe(&self) -> broadcast::Receiver<Arc<Vec<u8>>> {
-        self.tx.subscribe()
-    }
-
-    /// Viewers currently attached. The registry uses this to tear an idle stream down.
-    pub fn viewers(&self) -> usize {
-        self.tx.receiver_count()
-    }
-}
-
-impl Drop for MseStream {
-    fn drop(&mut self) {
-        let _ = self.pipeline.set_state(gst::State::Null);
-    }
-}
-
-fn registry() -> &'static Mutex<HashMap<String, Arc<MseStream>>> {
-    static R: OnceLock<Mutex<HashMap<String, Arc<MseStream>>>> = OnceLock::new();
-    R.get_or_init(|| Mutex::new(HashMap::new()))
-}
+pub(crate) const FRAGMENT_MS: u32 = 100;
 
 /// Assembles the MSE init segment out of the leading boxes `mp4mux` emits one per buffer.
 ///
@@ -159,116 +118,56 @@ fn codecs_from_init(init: &[u8]) -> Option<String> {
     Some(format!("avc1.{:02x}{:02x}{:02x}", b[1], b[2], b[3]))
 }
 
-/// Get the stream for `name`, starting the pipeline if nobody is watching it yet.
+/// The live fMP4 feed of one camera, fed by the shared ingest pipeline in [`crate::capture`].
 ///
-/// Blocks until the init segment has arrived, because a viewer cannot be served without it — that
-/// is one keyframe away, so bounded at 10s to fail a dead camera fast rather than hang the socket.
-pub fn attach(name: &str) -> Result<Arc<MseStream>, String> {
-    if let Some(existing) = registry().lock().unwrap().get(name) {
-        return Ok(Arc::clone(existing));
-    }
-    let started = start(name)?;
-    let mut reg = registry().lock().unwrap();
-    // Another request may have won the race while we were building; prefer the one already published
-    // so both viewers share a single pipeline.
-    let stream = Arc::clone(reg.entry(name.to_string()).or_insert(started));
-    Ok(stream)
+/// It is **fed**, not owned: the migration's whole point is that a camera is dialled once and its
+/// H264 `tee`'d to every consumer, so the muxer lives on a branch of that one pipeline rather than
+/// opening a second connection of its own.
+pub struct Feed {
+    init: InitSegment,
+    fragment: Fragment,
+    /// Derived from the init segment's `avcC` the moment it completes.
+    mime: Option<String>,
+    tx: broadcast::Sender<Arc<Vec<u8>>>,
 }
 
-/// Drop a stream once its last viewer has gone, so an unwatched camera costs nothing.
-pub fn detach(name: &str) {
-    let mut reg = registry().lock().unwrap();
-    if reg.get(name).is_some_and(|s| s.viewers() == 0) {
-        reg.remove(name);
-        log::info!("mse: {name} has no viewers left — pipeline stopped");
+impl Default for Feed {
+    fn default() -> Self {
+        // `mp4mux` emits a box per buffer (~50/s at 15fps), so this is roughly 10s of slack: enough
+        // to ride out a stalled viewer, short enough that one which fell further behind is better
+        // served by being dropped and resynced than by playing minutes-old video.
+        let (tx, _) = broadcast::channel(512);
+        Feed {
+            init: InitSegment::default(),
+            fragment: Fragment::default(),
+            mime: None,
+            tx,
+        }
     }
 }
 
-fn start(name: &str) -> Result<Arc<MseStream>, String> {
-    gst::init().map_err(|e| format!("gst init: {e}"))?;
-    // go2rtc's local re-serve; the contract's `src=` is already the stream name there.
-    let url = format!("rtsp://127.0.0.1:8554/{name}");
-    // `streamable=true` keeps the moov free of sample tables, which is what makes the first buffer a
-    // usable MSE init segment instead of something only a finished file could carry.
-    let desc = format!(
-        "rtspsrc location=\"{url}\" protocols=tcp latency=100 \
-         ! rtph264depay ! h264parse \
-         ! mp4mux fragment-duration={FRAGMENT_MS} streamable=true \
-         ! appsink name=out sync=false"
-    );
-    let pipeline = gst::parse::launch(&desc)
-        .map_err(|e| format!("gst parse: {e}"))?
-        .downcast::<gst::Pipeline>()
-        .map_err(|_| "not a pipeline".to_string())?;
-
-    let appsink = pipeline
-        .by_name("out")
-        .ok_or("appsink missing")?
-        .downcast::<gst_app::AppSink>()
-        .map_err(|_| "not an appsink".to_string())?;
-
-    // `mp4mux` emits a box per buffer (~50/s at 15fps), so this is roughly 10s of slack: enough to
-    // ride out a stalled viewer, short enough that one which fell further behind is better served by
-    // being dropped and resynced than by playing minutes-old video.
-    let (tx, _) = broadcast::channel::<Arc<Vec<u8>>>(512);
-    // `mp4mux` hands the appsink one **box** per buffer, not one segment: `ftyp`, then `moov`, then
-    // `moof`, `mdat`, … So the init segment is everything up to (not including) the first `moof`.
-    let init_slot: Arc<Mutex<InitSegment>> = Arc::new(Mutex::new(InitSegment::default()));
-    let fragment: Arc<Mutex<Fragment>> = Arc::new(Mutex::new(Fragment::default()));
-    {
-        let (tx, init_slot, fragment) = (tx.clone(), Arc::clone(&init_slot), Arc::clone(&fragment));
-        appsink.set_callbacks(
-            gst_app::AppSinkCallbacks::builder()
-                .new_sample(move |sink| {
-                    let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
-                    let Some(buf) = sample.buffer() else {
-                        return Ok(gst::FlowSuccess::Ok);
-                    };
-                    let Ok(map) = buf.map_readable() else {
-                        return Ok(gst::FlowSuccess::Ok);
-                    };
-                    let bytes = map.as_slice();
-                    let mut slot = init_slot.lock().unwrap();
-                    if slot.take_box(bytes) {
-                        return Ok(gst::FlowSuccess::Ok);
-                    }
-                    drop(slot);
-                    if let Some(whole) = fragment.lock().unwrap().push(bytes) {
-                        let _ = tx.send(Arc::new(whole));
-                    }
-                    Ok(gst::FlowSuccess::Ok)
-                })
-                .build(),
-        );
+impl Feed {
+    /// Absorb one `mp4mux` output buffer: init segment first, then whole fragments to viewers.
+    pub fn on_box(&mut self, bytes: &[u8]) {
+        if self.init.take_box(bytes) {
+            return;
+        }
+        if self.mime.is_none() {
+            if let Some(init) = self.init.finished() {
+                self.mime = codecs_from_init(&init).map(|c| format!("video/mp4; codecs=\"{c}\""));
+            }
+        }
+        if let Some(whole) = self.fragment.push(bytes) {
+            let _ = self.tx.send(Arc::new(whole));
+        }
     }
 
-    pipeline
-        .set_state(gst::State::Playing)
-        .map_err(|e| format!("gst play: {e}"))?;
+    /// What a newly-attached viewer needs: the init segment, the MIME for `addSourceBuffer`, and the
+    /// live fragments from here on. `None` until the first keyframe has closed the init segment.
+    pub fn subscribe(&self) -> Option<(Vec<u8>, String, broadcast::Receiver<Arc<Vec<u8>>>)> {
+        Some((self.init.finished()?, self.mime.clone()?, self.tx.subscribe()))
+    }
 
-    // Wait for the init segment — it is closed by the first `moof`, one keyframe in.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    let init = loop {
-        if let Some(init) = init_slot.lock().unwrap().finished() {
-            break init;
-        }
-        if std::time::Instant::now() >= deadline {
-            let _ = pipeline.set_state(gst::State::Null);
-            return Err(format!("{name}: no init segment within 10s"));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    };
-
-    let codecs =
-        codecs_from_init(&init).ok_or_else(|| format!("{name}: init segment carries no avcC"))?;
-    let mime = format!("video/mp4; codecs=\"{codecs}\"");
-    log::info!("mse: {name} started ({} B init, {mime})", init.len());
-    Ok(Arc::new(MseStream {
-        init,
-        mime,
-        tx,
-        pipeline,
-    }))
 }
 
 #[cfg(test)]
@@ -337,50 +236,3 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "gst-linked"))]
-mod gst_mse_it {
-    //! Integration test for G2 against a live camera served by the local go2rtc RTSP re-serve.
-    //! Exercises the real public API — `attach` → `subscribe` → `detach`. Environment-specific,
-    //! so `#[ignore]`d:
-    //!   GST_IT_CAM=cam_192_168_0_7 cargo test --features gst-linked -- --ignored gst_mse
-    use std::time::{Duration, Instant};
-
-    #[test]
-    #[ignore = "needs a live camera + local go2rtc re-serve"]
-    fn serves_an_init_segment_and_live_fragments() {
-        let name = std::env::var("GST_IT_CAM").expect("set GST_IT_CAM to a go2rtc stream name");
-        let stream = super::attach(&name).expect("pipeline should start");
-
-        // The init segment is what a viewer needs before anything else: ftyp + moov, with an avcC
-        // the MIME was derived from.
-        assert!(
-            stream.init.starts_with(b"\x00\x00\x00\x20ftyp") || stream.init[4..8] == *b"ftyp",
-            "init segment must open with an ftyp box, got {:02x?}",
-            &stream.init[..16.min(stream.init.len())]
-        );
-        assert!(
-            stream.init.windows(4).any(|w| w == b"moov"),
-            "init segment must carry moov"
-        );
-        assert!(
-            stream.mime.starts_with("video/mp4; codecs=\"avc1."),
-            "unexpected mime: {}",
-            stream.mime
-        );
-
-        // Then live fragments, each a self-contained styp/moof+mdat the browser can append.
-        let mut rx = stream.subscribe();
-        let deadline = Instant::now() + Duration::from_secs(15);
-        let mut got = 0;
-        while got < 3 && Instant::now() < deadline {
-            if let Ok(frag) = rx.blocking_recv() {
-                assert!(!frag.is_empty(), "fragment must not be empty");
-                got += 1;
-            }
-        }
-        assert!(got >= 3, "expected 3 live fragments within 15s, got {got}");
-
-        drop(rx);
-        super::detach(&name);
-    }
-}

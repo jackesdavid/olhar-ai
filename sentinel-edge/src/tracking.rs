@@ -119,11 +119,17 @@ impl Cfg {
     /// job's class is unrecognized.
     fn load(control_url: &str) -> Option<Cfg> {
         let remote = fetch_remote(control_url);
-        let env_on = std::env::var("TRACK_ENABLED").map(|v| matches!(v.trim(), "1" | "true" | "yes")).unwrap_or(false);
+        let env_on = std::env::var("TRACK_ENABLED")
+            .map(|v| matches!(v.trim(), "1" | "true" | "yes"))
+            .unwrap_or(false);
         let ms = remote
             .as_ref()
             .and_then(|r| r.detect_ms)
-            .or_else(|| std::env::var("TRACK_DETECT_MS").ok().and_then(|s| s.trim().parse().ok()))
+            .or_else(|| {
+                std::env::var("TRACK_DETECT_MS")
+                    .ok()
+                    .and_then(|s| s.trim().parse().ok())
+            })
             .unwrap_or(400u64)
             .max(100);
 
@@ -156,10 +162,21 @@ impl Cfg {
         // landed. No env-var zone syntax — a fallback job is always whole-frame; draw a zone from
         // the graph editor's OnEvent property panel instead.
         if jobs.is_empty() && env_on {
-            let class_name = std::env::var("TRACK_CLASS").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "person".to_string());
+            let class_name = std::env::var("TRACK_CLASS")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "person".to_string());
             if let Some(class_id) = detector::class_id_for_name(&class_name) {
-                let camera = std::env::var("TRACK_CAMERA").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "*".to_string());
-                let lines = std::env::var("TRACK_LINES").ok().map(|s| parse_lines(&s)).unwrap_or_default();
+                let camera = std::env::var("TRACK_CAMERA")
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "*".to_string());
+                let lines = std::env::var("TRACK_LINES")
+                    .ok()
+                    .map(|s| parse_lines(&s))
+                    .unwrap_or_default();
                 jobs.push(Job {
                     camera,
                     class_name,
@@ -179,7 +196,10 @@ impl Cfg {
         if jobs.is_empty() {
             return None; // no tracking jobs configured, and no TRACK_ENABLED=1 dev fallback
         }
-        Some(Cfg { detect_gap: Duration::from_millis(ms), jobs })
+        Some(Cfg {
+            detect_gap: Duration::from_millis(ms),
+            jobs,
+        })
     }
 }
 
@@ -233,7 +253,10 @@ struct TrackerSpec {
 /// Best-effort like `recording`'s `fetch_config`: `None` on any failure, never fatal.
 fn fetch_remote(control_url: &str) -> Option<RemoteConfig> {
     let url = format!("{control_url}/config/tracking");
-    let mut req = ureq::AgentBuilder::new().timeout(Duration::from_secs(10)).build().get(&url);
+    let mut req = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .get(&url);
     if let Ok(t) = std::env::var("BOX_TOKEN") {
         let t = t.trim();
         if !t.is_empty() {
@@ -259,12 +282,20 @@ fn parse_lines(raw: &str) -> Vec<Line> {
         .filter(|s| !s.is_empty())
         .filter_map(|entry| {
             let (name, coords) = entry.split_once(':')?;
-            let nums: Vec<f32> = coords.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+            let nums: Vec<f32> = coords
+                .split(',')
+                .filter_map(|n| n.trim().parse().ok())
+                .collect();
             let [x1, y1, x2, y2] = nums[..] else {
                 log::warn!("TRACK_LINES: skipping malformed line entry {entry:?}");
                 return None;
             };
-            Some(Line { camera: String::new(), name: name.trim().to_string(), p1: (x1, y1), p2: (x2, y2) })
+            Some(Line {
+                camera: String::new(),
+                name: name.trim().to_string(),
+                p1: (x1, y1),
+                p2: (x2, y2),
+            })
         })
         .collect()
 }
@@ -309,7 +340,11 @@ pub fn spawn(state: &Arc<AppState>) {
                 continue;
             };
             if was_disabled {
-                log::info!("object tracker: manager started ({} job(s), detect every {}ms)", cfg.jobs.len(), cfg.detect_gap.as_millis());
+                log::info!(
+                    "object tracker: manager started ({} job(s), detect every {}ms)",
+                    cfg.jobs.len(),
+                    cfg.detect_gap.as_millis()
+                );
             }
             was_disabled = false;
             let detect_gap = cfg.detect_gap;
@@ -321,10 +356,16 @@ pub fn spawn(state: &Arc<AppState>) {
                 .flat_map(|job| {
                     let job = Arc::new(job);
                     let fp = job.fingerprint();
-                    resolve_job_cameras(&job, &devices).into_iter().map(move |ip| (fp.clone(), ip, Arc::clone(&job))).collect::<Vec<_>>()
+                    resolve_job_cameras(&job, &devices)
+                        .into_iter()
+                        .map(move |ip| (fp.clone(), ip, Arc::clone(&job)))
+                        .collect::<Vec<_>>()
                 })
                 .collect();
-            let want: HashSet<(String, String)> = desired.iter().map(|(fp, ip, _)| (fp.clone(), ip.clone())).collect();
+            let want: HashSet<(String, String)> = desired
+                .iter()
+                .map(|(fp, ip, _)| (fp.clone(), ip.clone()))
+                .collect();
             running.retain(|key, stop| {
                 let keep = want.contains(key);
                 if !keep {
@@ -350,7 +391,11 @@ pub fn spawn(state: &Arc<AppState>) {
 /// with a resolvable stream (mirrors the motion manager's `has_stream` gate).
 fn resolve_job_cameras(job: &Job, devices: &[app_core::devices::Device]) -> Vec<String> {
     if job.camera == "*" {
-        return devices.iter().filter(|d| has_stream(d)).map(|d| d.ip.clone()).collect();
+        return devices
+            .iter()
+            .filter(|d| has_stream(d))
+            .map(|d| d.ip.clone())
+            .collect();
     }
     match app_core::device_actions::resolve_device(devices, &job.camera) {
         Ok(idx) if has_stream(&devices[idx]) => vec![devices[idx].ip.clone()],
@@ -359,14 +404,23 @@ fn resolve_job_cameras(job: &Job, devices: &[app_core::devices::Device]) -> Vec<
 }
 
 fn has_stream(d: &app_core::devices::Device) -> bool {
-    d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false)
+    d.rtsp_url
+        .as_deref()
+        .map(|u| !u.trim().is_empty())
+        .unwrap_or(false)
 }
 
 /// One (job, camera)'s supervised loop: run the tracker until stopped, retrying on error. Stops
 /// either because the job/camera is no longer desired, OR because the job's config changed (see
 /// `spawn`'s fingerprint-keyed reconcile) — either way a fresh worker with current config starts
 /// right back up if the job's still wanted.
-fn watch(state: Arc<AppState>, ip: String, job: Arc<Job>, detect_gap: Duration, stop: Arc<AtomicBool>) {
+fn watch(
+    state: Arc<AppState>,
+    ip: String,
+    job: Arc<Job>,
+    detect_gap: Duration,
+    stop: Arc<AtomicBool>,
+) {
     log::info!("object tracker[{ip}]: starting ({})", job.class_name);
     while !stop.load(Ordering::Relaxed) {
         run_track(&state, &ip, &job, detect_gap, &stop);
@@ -377,7 +431,11 @@ fn watch(state: Arc<AppState>, ip: String, job: Arc<Job>, detect_gap: Duration, 
     }
     // This job is gone (camera/class no longer desired, or its config changed) — drop its stale
     // live-state entry so GET /tracks/:ip doesn't keep reporting long-departed tracks as present.
-    state.live_tracks.lock().unwrap().remove(&(ip.clone(), job.class_name.clone()));
+    state
+        .live_tracks
+        .lock()
+        .unwrap()
+        .remove(&(ip.clone(), job.class_name.clone()));
     log::info!("object tracker[{ip}]: stopped");
 }
 
@@ -436,12 +494,16 @@ fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, s
     // and `TrackerSpec`), OR the box-wide `TRACK_DEBUG` env var is set. Never sent to control —
     // these are diagnostic-only lines the box's own log stream carries (see `TrackEvent`'s
     // `Lost`/`Revived`/`Removed` variants below).
-    let env_debug = std::env::var("TRACK_DEBUG").map(|v| matches!(v.trim(), "1" | "true" | "yes")).unwrap_or(false);
+    let env_debug = std::env::var("TRACK_DEBUG")
+        .map(|v| matches!(v.trim(), "1" | "true" | "yes"))
+        .unwrap_or(false);
     let debug = job.debug || env_debug;
     // The motion gate is the whole point of the hub: YOLOX is by far the most expensive thing on
     // the box, and an empty room used to cost exactly as much as a busy one. `TRACK_MOTION_GATE=0`
     // restores the old always-on behaviour for a scenario we haven't thought of.
-    let gated = std::env::var("TRACK_MOTION_GATE").map(|v| !matches!(v.trim(), "0" | "false" | "no")).unwrap_or(true);
+    let gated = std::env::var("TRACK_MOTION_GATE")
+        .map(|v| !matches!(v.trim(), "0" | "false" | "no"))
+        .unwrap_or(true);
     let started = std::time::Instant::now();
     let mut last_detect: Option<std::time::Instant> = None;
 
@@ -454,7 +516,10 @@ fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, s
         };
 
         // ---- the motion gate (see `should_detect`) ------------------------------------------
-        let motion_active = frame.motion_at.map(|t| t.elapsed() < MOTION_HOLD).unwrap_or(false);
+        let motion_active = frame
+            .motion_at
+            .map(|t| t.elapsed() < MOTION_HOLD)
+            .unwrap_or(false);
         let (tentative, confirmed, lost) = tracker.state_counts();
         let holding_tracks = tentative + confirmed + lost > 0;
         if !should_detect(
@@ -473,15 +538,19 @@ fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, s
 
         // YOLOX on the hub's already-decoded BGR buffer (pure tract, no OpenCV, no second JPEG
         // decode), filtered to this job's tracked class.
-        let dets: Vec<Detection> = match detector::detect_bgr(&frame.bgr, frame.w as u32, frame.h as u32) {
-            Ok(v) => v.into_iter().filter(|d| d.class == job.class_id).collect(),
-            Err(e) => {
-                log::debug!("object tracker[{ip}]: detect failed: {e}");
-                std::thread::sleep(detect_gap);
-                continue;
-            }
-        };
-        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        let dets: Vec<Detection> =
+            match detector::detect_bgr(&frame.bgr, frame.w as u32, frame.h as u32) {
+                Ok(v) => v.into_iter().filter(|d| d.class == job.class_id).collect(),
+                Err(e) => {
+                    log::debug!("object tracker[{ip}]: detect failed: {e}");
+                    std::thread::sleep(detect_gap);
+                    continue;
+                }
+            };
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
         // Lines/zone need the frame's pixel size to scale their normalized coords — the hub already
         // knows it, so this no longer costs a second decode of the frame just to read its header.
         let events = if job.lines.is_empty() && job.zone.is_none() {
@@ -519,7 +588,11 @@ fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, s
                 },
             })
             .collect();
-        state.live_tracks.lock().unwrap().insert((ip.to_string(), job.class_name.clone()), snapshot);
+        state
+            .live_tracks
+            .lock()
+            .unwrap()
+            .insert((ip.to_string(), job.class_name.clone()), snapshot);
         for ev in events {
             // When a zone is configured, `object_entered`/`object_exited` mean entering/leaving
             // THAT polygon (see `TrackEvent::ZoneEntered`/`ZoneExited` below) — the whole-frame
@@ -538,7 +611,12 @@ fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, s
                     direction: None,
                     zone: None,
                 },
-                TrackEvent::Exited { uuid, bbox, dwell_ms, .. } if job.zone.is_none() => TrackEventOut {
+                TrackEvent::Exited {
+                    uuid,
+                    bbox,
+                    dwell_ms,
+                    ..
+                } if job.zone.is_none() => TrackEventOut {
                     kind: "object_exited".into(),
                     camera_ip: ip.to_string(),
                     uuid: uuid.to_string(),
@@ -551,7 +629,12 @@ fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, s
                     zone: None,
                 },
                 TrackEvent::Entered { .. } | TrackEvent::Exited { .. } => continue, // zone job: whole-frame events suppressed
-                TrackEvent::Crossed { uuid, line, direction, .. } => TrackEventOut {
+                TrackEvent::Crossed {
+                    uuid,
+                    line,
+                    direction,
+                    ..
+                } => TrackEventOut {
                     kind: "line_crossed".into(),
                     camera_ip: ip.to_string(),
                     uuid: uuid.to_string(),
@@ -575,7 +658,12 @@ fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, s
                     direction: None,
                     zone: Some(zone),
                 },
-                TrackEvent::ZoneExited { uuid, zone, dwell_ms, .. } => TrackEventOut {
+                TrackEvent::ZoneExited {
+                    uuid,
+                    zone,
+                    dwell_ms,
+                    ..
+                } => TrackEventOut {
                     kind: "object_exited".into(),
                     camera_ip: ip.to_string(),
                     uuid: uuid.to_string(),
@@ -591,17 +679,26 @@ fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, s
                 // domain event — logged only when this job's debug flag (or TRACK_DEBUG) is on.
                 TrackEvent::Lost { uuid, .. } => {
                     if debug {
-                        log::info!("object tracker[{ip}]: track {uuid} lost (unmatched this cycle)");
+                        log::info!(
+                            "object tracker[{ip}]: track {uuid} lost (unmatched this cycle)"
+                        );
                     }
                     continue;
                 }
-                TrackEvent::Revived { uuid, cycles_lost, .. } => {
+                TrackEvent::Revived {
+                    uuid, cycles_lost, ..
+                } => {
                     if debug {
                         log::info!("object tracker[{ip}]: track {uuid} revived (was lost {cycles_lost} cycle(s))");
                     }
                     continue;
                 }
-                TrackEvent::Removed { uuid, cycles_survived, was_confirmed, .. } => {
+                TrackEvent::Removed {
+                    uuid,
+                    cycles_survived,
+                    was_confirmed,
+                    ..
+                } => {
                     if debug {
                         log::info!(
                             "object tracker[{ip}]: track {uuid} removed (unmatched {cycles_survived} cycle(s), was_confirmed={was_confirmed})"
@@ -610,7 +707,11 @@ fn run_track(state: &Arc<AppState>, ip: &str, job: &Job, detect_gap: Duration, s
                     continue;
                 }
             };
-            log::info!("object tracker[{ip}]: {} {} (count={count})", out.kind, out.uuid);
+            log::info!(
+                "object tracker[{ip}]: {} {} (count={count})",
+                out.kind,
+                out.uuid
+            );
             state.push_track_event(&out);
         }
         // Pace to the detection cadence (detection itself costs tens of ms).
@@ -630,13 +731,22 @@ mod tests {
 
     /// Long enough that neither WARMUP nor the idle sweep is what's answering.
     fn settled() -> (Duration, Option<Duration>) {
-        (WARMUP + Duration::from_secs(1), Some(Duration::from_secs(1)))
+        (
+            WARMUP + Duration::from_secs(1),
+            Some(Duration::from_secs(1)),
+        )
     }
 
     #[test]
     fn idle_scene_skips_the_detector() {
         let (since_start, since_detect) = settled();
-        assert!(!should_detect(true, false, false, since_start, since_detect));
+        assert!(!should_detect(
+            true,
+            false,
+            false,
+            since_start,
+            since_detect
+        ));
     }
 
     #[test]
@@ -664,19 +774,37 @@ mod tests {
 
     #[test]
     fn a_fresh_worker_detects_whatever_was_already_in_frame() {
-        assert!(should_detect(true, false, false, Duration::from_secs(1), Some(Duration::from_secs(1))));
+        assert!(should_detect(
+            true,
+            false,
+            false,
+            Duration::from_secs(1),
+            Some(Duration::from_secs(1))
+        ));
     }
 
     #[test]
     fn the_idle_sweep_runs_a_cycle_eventually() {
         let since_start = WARMUP + Duration::from_secs(1);
-        assert!(should_detect(true, false, false, since_start, Some(IDLE_SWEEP)));
+        assert!(should_detect(
+            true,
+            false,
+            false,
+            since_start,
+            Some(IDLE_SWEEP)
+        ));
         assert!(should_detect(true, false, false, since_start, None));
     }
 
     #[test]
     fn ungated_always_detects() {
         let (since_start, since_detect) = settled();
-        assert!(should_detect(false, false, false, since_start, since_detect));
+        assert!(should_detect(
+            false,
+            false,
+            false,
+            since_start,
+            since_detect
+        ));
     }
 }

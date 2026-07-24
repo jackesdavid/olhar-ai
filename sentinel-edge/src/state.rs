@@ -214,9 +214,16 @@ impl AppState {
     pub fn warm_cameras(&self) {
         // The current streamable set (rtsp_url resolved = creds valid + reachable).
         let streamable: std::collections::HashSet<String> = self
-            .devices.lock().unwrap()
+            .devices
+            .lock()
+            .unwrap()
             .iter()
-            .filter(|d| d.rtsp_url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false))
+            .filter(|d| {
+                d.rtsp_url
+                    .as_deref()
+                    .map(|u| !u.trim().is_empty())
+                    .unwrap_or(false)
+            })
             .map(|d| d.ip.clone())
             .collect();
 
@@ -293,9 +300,9 @@ impl AppState {
                 .into_json::<serde_json::Value>()
                 .ok()
                 .map(|v| EdgeCommands {
-                    rescan:  v.get("rescan").and_then(|r| r.as_bool()).unwrap_or(false),
+                    rescan: v.get("rescan").and_then(|r| r.as_bool()).unwrap_or(false),
                     restart: v.get("restart").and_then(|r| r.as_bool()).unwrap_or(false),
-                    update:  v.get("update").and_then(|r| r.as_bool()).unwrap_or(false),
+                    update: v.get("update").and_then(|r| r.as_bool()).unwrap_or(false),
                 })
                 .unwrap_or_default(),
             Err(_) => EdgeCommands::default(), // network hiccup — try again next cycle
@@ -395,9 +402,9 @@ pub struct MotionEvent {
 #[derive(serde::Serialize)]
 pub struct FaceEvent {
     pub camera_ip: String,
-    pub bbox: [i32; 4],   // xyxy
-    pub confidence: f64,  // 0..100
-    pub face_ratio: f64,  // face area ÷ frame area, 0..100
+    pub bbox: [i32; 4],  // xyxy
+    pub confidence: f64, // 0..100
+    pub face_ratio: f64, // face area ÷ frame area, 0..100
     /// YuNet's 5 landmarks, FLAT `[x0,y0,x1,y1,…]` in source pixels (right/left eye, nose,
     /// right/left mouth). Flat so it survives the cloud's generic event-payload decoder → the
     /// `face_detected` `kps` Landmarks port → ArcFace alignment (#122). Empty if unavailable.
@@ -406,6 +413,32 @@ pub struct FaceEvent {
     pub at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame_b64: Option<String>,
+}
+
+impl AppState {
+    /// The camera's **own** RTSP URL for the requested quality — what the edge dials now that it owns
+    /// the ingest instead of proxying go2rtc's re-serve (card #138, G1/G5).
+    ///
+    /// The stored URLs carry go2rtc's `#media=video` fragment, which is its own syntax, not RTSP —
+    /// `rtspsrc` would take it as part of the path and fail. Strip it here, once, rather than in each
+    /// consumer.
+    pub fn camera_rtsp(&self, ip: &str, hd: bool) -> Option<String> {
+        let devices = self.devices.lock().ok()?;
+        let d = devices.iter().find(|d| d.ip == ip)?;
+        // Fall back to main whenever the substream never resolved — a preview from the main stream
+        // beats no preview at all.
+        let url = if hd {
+            d.rtsp_url.clone()
+        } else {
+            d.rtsp_sub_url.clone().or_else(|| d.rtsp_url.clone())
+        }?;
+        Some(strip_go2rtc_fragment(&url))
+    }
+}
+
+/// Drop go2rtc's `#…` fragment from a stored RTSP URL.
+fn strip_go2rtc_fragment(url: &str) -> String {
+    url.split('#').next().unwrap_or(url).trim().to_string()
 }
 
 /// Whether `ffmpeg` is on PATH (go2rtc needs it for JPEG frames). Computed once + cached —
@@ -664,4 +697,27 @@ fn fetch_cameras(control_url: &str, wait: u64) -> Result<Vec<Device>, String> {
         .map_err(|e| format!("{e}"))?
         .into_json::<Vec<Device>>()
         .map_err(|e| format!("parse cameras: {e}"))
+}
+
+#[cfg(test)]
+mod camera_rtsp_tests {
+    use super::strip_go2rtc_fragment;
+
+    /// `#media=video` is go2rtc's syntax, not RTSP. Left on, `rtspsrc` treats it as part of the path
+    /// and the camera 404s — a failure that looks like bad credentials.
+    #[test]
+    fn strips_the_go2rtc_fragment() {
+        assert_eq!(
+            strip_go2rtc_fragment("rtsp://u:p@10.0.0.2:554/stream2#media=video"),
+            "rtsp://u:p@10.0.0.2:554/stream2"
+        );
+    }
+
+    #[test]
+    fn leaves_a_plain_url_alone() {
+        assert_eq!(
+            strip_go2rtc_fragment("rtsp://u:p@10.0.0.2:554/stream1"),
+            "rtsp://u:p@10.0.0.2:554/stream1"
+        );
+    }
 }

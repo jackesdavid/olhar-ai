@@ -112,6 +112,9 @@ mod tests {
     #[test]
     fn keeps_equals_signs_inside_a_value() {
         let got = parse("TS_AUTHKEY=tskey-auth-abc=def=");
-        assert_eq!(got, vec![("TS_AUTHKEY".to_string(), "tskey-auth-abc=def=".to_string())]);
+        assert_eq!(
+            got,
+            vec![("TS_AUTHKEY".to_string(), "tskey-auth-abc=def=".to_string())]
+        );
     }
 }

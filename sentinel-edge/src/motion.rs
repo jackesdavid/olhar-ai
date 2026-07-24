@@ -150,7 +150,8 @@ impl MotionDetector {
         // this denoises identically to the pass this replaced.
         imageproc::morphology::open_mut(&mut self.mask, Norm::L1, 1);
 
-        let score = self.mask.as_raw().iter().filter(|&&v| v > 0).count() as f64 / self.total * 100.0;
+        let score =
+            self.mask.as_raw().iter().filter(|&&v| v > 0).count() as f64 / self.total * 100.0;
 
         // Connected components → keep blobs above min area; track count + largest bbox.
         let mut blobs = 0i64;
@@ -211,7 +212,12 @@ fn bounding_rect(pts: &[Point<i32>]) -> Rect {
         return Rect::default();
     }
     // OpenCV's boundingRect is inclusive of both endpoints → +1 on each axis.
-    Rect { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }
+    Rect {
+        x: x0,
+        y: y0,
+        w: x1 - x0 + 1,
+        h: y1 - y0 + 1,
+    }
 }
 
 /// POST one normalized motion event to control (box-token). `jpeg` is the full-resolution frame

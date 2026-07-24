@@ -19,7 +19,9 @@ use std::path::PathBuf;
 fn base() -> PathBuf {
     // %ProgramData% is C:\ProgramData on a default install; fall back to it literally if the env
     // var is somehow unset (it is set on every supported Windows).
-    let root = std::env::var_os("ProgramData").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+    let root = std::env::var_os("ProgramData")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
     root.join("Sentinel")
 }
 
