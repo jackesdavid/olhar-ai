@@ -18,7 +18,7 @@ it passes on **both**, with the other platforms' HW-decode elements noted per ro
 | 0 | **Linked `gstreamer-rs` runtime** (not `gst-launch` subprocess) | n/a (new) | `gstreamer` + `gstreamer-app` crates, pipeline from Rust, `appsink` frame pull | the edge itself | 0 | ✅ | ⬜ | 🟡 |
 | A1 | **Live decode** (RTSP → raw frames, hot per-camera path) | ffmpeg MJPEG on `pipe:1`, **no hwaccel** (`capture.rs`) | `rtspsrc ! <hwdec> ! appsink` → motion/detector | edge motion + tract detector | 1 | ✅² | ⬜ | 🟡 |
 | HW | **Hardware decode** (currently detected, never applied) | `hwaccel.rs` reports, never uses | `vtdec`(Mac) / `nvv4l2decoder`(Jetson) / `amcviddec`(Android) / `vaapi`·`nvh264dec`(Linux) / `d3d11h264dec`(Win) | A1 pipeline | 1 | ✅¹ | ⬜ | 🟡 |
-| A2 | **Recording mux** (H264 ring → fragmented mp4) | ffmpeg `-c:v copy` (`recording.rs`) | `appsrc` (real per-frame PTS) `! h264parse ! mp4mux` | clip store / playback | 3 | 🟡⁵ | ⬜ | 🟡 |
+| A2 | **Recording mux** (H264 ring → fragmented mp4) | ffmpeg `-c:v copy` (`recording.rs`) | `appsrc` (real per-frame PTS) `! h264parse ! mp4mux` | clip store / playback | 3 | ✅⁵ | ⬜ | 🟡 |
 | A3 | **Clip duration probe** | `ffprobe` (`recording.rs`) | **no probe at all** — duration = captured frame span | recording metadata | 3 | ✅⁶ | ⬜ | 🟡 |
 | A4 | **HW-decode capability probe** | ffmpeg `-hwaccel` list (`hwaccel.rs`) | `gst_registry` element presence (`vtdec`/`nvv4l2decoder`…) | health report | 5 | ⬜ | ⬜ | ⬜ |
 | A5 | **Snapshot fallback** (single-frame, cold) | raw `ffmpeg` (`onvif/client.rs`) | one-shot `rtspsrc ! decodebin ! jpegenc` (feature-gated) | **credential probe only** — no longer a snapshot fallback | 2 | ✅⁴ | ⬜ | 🟡 |
@@ -63,7 +63,7 @@ gate + default-flip open.
 | 0 | Linked `gstreamer-rs` foundation + appsink | ✅ | ⬜ | 🟡 (Mac done, Jetson pending) |
 | 1 | A1 live decode + HW decode + G1 ingest | 🟡 | ⬜ | ⬜ |
 | 2 | B3 + A5 snapshots (`jpegenc`) | ⬜ | ⬜ | ⬜ |
-| 3 | A2 recording mux + A3 duration | 🟡 | ⬜ | 🟡 |
+| 3 | A2 recording mux + A3 duration | ✅ | ⬜ | 🟡 |
 | 4 | G2 MSE contract + G4/G6 serving/tailnet | ⬜ | ⬜ | ⬜ |
 | 5 | G3 WebRTC + retire go2rtc (G5) + ffmpeg (A4/A6) | ⬜ | ⬜ | ⬜ |
 
@@ -111,3 +111,19 @@ GStreamer `discoverer` either. It is also *truer* than both old answers — wall
 for the first IDR and any camera dropout as footage, and re-reading the file only recovers what the
 muxer already knew. `probe_duration` survives as a last resort for a clip whose span was never
 recorded.
+
+## ✅ Verified live on the Mac edge (2026-07-24)
+
+Stages 0-3 are no longer just "built" — they were exercised on the running box with a real camera:
+
+| Check | Result |
+|---|---|
+| Linked backend actually active | **zero media subprocesses** — no `ffmpeg`, no `gst-launch`; only go2rtc remains, as expected at this stage |
+| B3 warm snapshot | HTTP 200, valid 640×360 JPEG, **0.019 s** (the go2rtc `frame.jpeg` path it replaces measured ~490 ms) |
+| **A2 mux + A3 duration** | clip 383,846 B; edge reported **23 s** from the frame span; `ffprobe` on the file read **23.196 s** — the two agree, which is exactly the check that catches a PTS error (a wrong PTS makes them diverge) |
+| Muxer in isolation | 117 real camera access units → EOS → 141 KB mp4 (`experiments/gst-spike` bin `stage3`) |
+
+**A scare worth recording:** the first clips appeared to be created at 0 B and then vanish. Neither is
+a fault — `mp4mux faststart` writes the file at EOS (so 0 B *during* recording is correct), and the
+box has `delete_local_after_upload` on (card #78), so both the `.mp4` and its `.json` are removed once
+the clip is durable in the cloud. The clip lives in the cloud recordings list, not on the box.
