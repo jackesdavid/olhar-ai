@@ -43,3 +43,5 @@ deploy/windows/build/
 # Scratch git worktrees created by the agent tooling — never source.
 .claude/worktrees/
 deploy/olharai/sentinel.env
+experiments/gst-spike/target/
+experiments/gst-spike/Cargo.lock

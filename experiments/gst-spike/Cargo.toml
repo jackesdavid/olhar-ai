@@ -1,0 +1,14 @@
+# Stage 0 spike (card #138) — prove linked gstreamer-rs runs a pipeline from Rust on this Mac,
+# exercising the real Stage-1 path: HW decode (vtdec) → appsink frame pull. Standalone crate so it
+# never touches the edge's build until the approach is proven on Mac + Jetson.
+[package]
+name = "gst-spike"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gstreamer = "0.23"
+gstreamer-app = "0.23"
+anyhow = "1"
+
+[workspace]
