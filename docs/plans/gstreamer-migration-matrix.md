@@ -16,7 +16,7 @@ it passes on **both**, with the other platforms' HW-decode elements noted per ro
 | # | Capability | Today (ffmpeg / go2rtc) | GStreamer replacement | Consumers | Stage | Mac | Jetson | Status |
 |---|---|---|---|---|---|---|---|---|
 | 0 | **Linked `gstreamer-rs` runtime** (not `gst-launch` subprocess) | n/a (new) | `gstreamer` + `gstreamer-app` crates, pipeline from Rust, `appsink` frame pull | the edge itself | 0 | ✅ | ⬜ | 🟡 |
-| A1 | **Live decode** (RTSP → raw frames, hot per-camera path) | ffmpeg MJPEG on `pipe:1`, **no hwaccel** (`capture.rs`) | `rtspsrc ! <hwdec> ! appsink` → motion/detector | edge motion + tract detector | 1 | ⬜ | ⬜ | ⬜ |
+| A1 | **Live decode** (RTSP → raw frames, hot per-camera path) | ffmpeg MJPEG on `pipe:1`, **no hwaccel** (`capture.rs`) | `rtspsrc ! <hwdec> ! appsink` → motion/detector | edge motion + tract detector | 1 | ✅² | ⬜ | 🟡 |
 | HW | **Hardware decode** (currently detected, never applied) | `hwaccel.rs` reports, never uses | `vtdec`(Mac) / `nvv4l2decoder`(Jetson) / `amcviddec`(Android) / `vaapi`·`nvh264dec`(Linux) / `d3d11h264dec`(Win) | A1 pipeline | 1 | ✅¹ | ⬜ | 🟡 |
 | A2 | **Recording mux** (H264 ring → fragmented mp4) | ffmpeg `-c:v copy` (`recording.rs`) | `appsrc ! h264parse ! mp4mux fragment-duration` | clip store / playback | 3 | ⬜ | ⬜ | ⬜ |
 | A3 | **Clip duration probe** | `ffprobe` (`recording.rs`) | GStreamer `discoverer` / pipeline query | recording metadata | 3 | ⬜ | ⬜ | ⬜ |
@@ -24,7 +24,7 @@ it passes on **both**, with the other platforms' HW-decode elements noted per ro
 | A5 | **Snapshot fallback** (single-frame, cold) | raw `ffmpeg` (`onvif/client.rs`) | one-shot `rtspsrc ! <dec> ! jpegenc num-buffers=1` | credential test / cold snapshot | 2 | ⬜ | ⬜ | ⬜ |
 | A6 | **ffmpeg presence check** | `ffmpeg -version` (`state.rs`) | removed (no ffmpeg) | health gating | 5 | ⬜ | ⬜ | ⬜ |
 | B3 | **Snapshot from warm feed** (`/api/frame.jpeg`, "Get current frame" node) | go2rtc → internal ffmpeg | `jpegenc` off the A1 warm pipeline (`tee`) | workflow node, app-core `go2rtc.rs`, gateway | 2 | ⬜ | ⬜ | ⬜ |
-| G1 | **RTSP ingest from cameras** | go2rtc per-camera streams | `rtspsrc` (shared A1 ingest) | all downstream | 1 | ⬜ | ⬜ | ⬜ |
+| G1 | **RTSP ingest from cameras** | go2rtc per-camera streams | `rtspsrc` (shared A1 ingest) | all downstream | 1 | ✅² | ⬜ | 🟡 |
 | G2 | **Live MSE over WebSocket** (`/api/ws`) | go2rtc | `mp4mux fragment-duration` → WS, **contract-identical** | **gateway `proxy.rs` → web player + mobile WebView player** | 4 | ⬜ | ⬜ | ⬜ |
 | G3 | **WebRTC** (`/api/webrtc`) | go2rtc `webrtcbin` (minor use today) | `webrtcbin` | (minor) | 5 | ⬜ | ⬜ | ⬜ |
 | G4 | **Stream list / player assets** (`/api/streams`, `/stream.html`) | go2rtc-served, gateway passthrough | edge-served equivalents or drop if unused | gateway passthrough | 4 | ⬜ | ⬜ | ⬜ |
@@ -36,6 +36,12 @@ via linked gstreamer-rs. The earlier "no valid frames" was a **synthetic-stream 
 default profile negotiation produces a stream VideoToolbox HW rejects; forcing an explicit
 `video/x-h264,profile=main` capsfilter fixes it. Real camera H264 always declares a standard profile in
 its SPS, so `rtspsrc`-fed decode (Stage 1) should not hit this at all. Proven in `experiments/gst-spike/`.
+
+² **A1/G1 Mac ✅ (Stage 1 media path, 2026-07-24):** the real A1 path — `rtspsrc` from the **live camera
+on this Mac's edge** → `vtdec` HW decode → `appsink` — pulls frames into Rust on **both** substreams:
+preview 640×360 and **HD 1280×720**, `vtdec` decoding each **directly, no profile-forcing** (real camera
+SPS carries a standard profile). `experiments/gst-spike/` bin `stage1` (URL via `CAM_RTSP`, no creds in
+git). Still 🟡: not yet wired into the edge's real MOG2/tract path, and the Jetson gate is open.
 
 ## Already pure-Rust (no migration needed — reused, feeds GStreamer)
 
