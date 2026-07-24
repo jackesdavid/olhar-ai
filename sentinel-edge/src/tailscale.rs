@@ -259,13 +259,19 @@ pub fn serve_live(port: u16) {
     let p = port.to_string();
     let mut cmd = ts();
     cmd.args(["serve", "--bg", &p]);
+    // Loud on failure, unlike the rest of this module's best-effort chatter: 443 is where the
+    // gateway looks for live video, so a silent failure here is a black player with nothing in the
+    // log to explain it. That is exactly how this was missed the first time.
     match run(cmd, "serve --bg <live>") {
         Some(o) if o.status.success() => log::info!("tailnet 443 → live media on :{port}"),
-        Some(o) => log::debug!(
-            "tailscale serve --bg {port}: {}",
+        Some(o) => log::warn!(
+            "tailnet 443 NOT re-pointed to :{port} — live video will not reach the gateway: {}",
             String::from_utf8_lossy(&o.stderr).trim()
         ),
-        None => log::debug!("tailscale serve --bg {port} unavailable or hung"),
+        None => log::warn!(
+            "tailnet 443 NOT re-pointed to :{port} — `tailscale serve` unavailable or hung; \
+             live video will not reach the gateway"
+        ),
     }
 }
 
