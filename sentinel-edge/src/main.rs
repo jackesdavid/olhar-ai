@@ -167,10 +167,12 @@ fn main() {
     // No database — the appliance carries no Postgres.
     let state = AppState::boot();
 
-    // go2rtc shells out to ffmpeg for JPEG frames (snapshots + the GetCurrentFrame node).
-    // Surface a missing ffmpeg loudly at boot — it now also rides the cloud log viewer +
-    // the Boxes health badge. `ffmpeg_ok()` caches the check (reported on every heartbeat).
-    if state::ffmpeg_ok() {
+    // ffmpeg matters only while go2rtc does: it is go2rtc that shells out to it for JPEG frames.
+    // On a box where GStreamer owns the media path there is no go2rtc and no ffmpeg, so warning
+    // about a missing binary nobody uses would be noise on the health badge and the log viewer.
+    if !state.own_go2rtc {
+        log::info!("media path is GStreamer — ffmpeg is not required on this box");
+    } else if state::ffmpeg_ok() {
         log::info!("ffmpeg found on PATH");
     } else {
         log::warn!(

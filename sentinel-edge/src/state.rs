@@ -77,7 +77,7 @@ impl AppState {
             devices.len()
         );
 
-        let own_go2rtc = std::env::var("EDGE_OWN_GO2RTC")
+        let own_go2rtc_env = std::env::var("EDGE_OWN_GO2RTC")
             .map(|v| !matches!(v.trim(), "0" | "false" | "no"))
             .unwrap_or(true);
         let go2rtc_config = std::env::var("GO2RTC_CONFIG")
@@ -88,6 +88,16 @@ impl AppState {
             .unwrap_or_else(|_| PathBuf::from("go2rtc"));
 
         let recording = crate::recording::RecordingManager::boot(&control_url);
+        // On a linked-GStreamer box the edge owns the whole media path — it dials the cameras, muxes
+        // the live stream and fills the recording ring itself, so go2rtc has no consumers left and
+        // starting it would only burn a process and a second camera session. Deciding it here rather
+        // than at the spawn covers the config-change respawns too (card #138, G5).
+        let gst_owns_media = crate::media::Backend::resolve(&recording.config.media_backend)
+            == crate::media::Backend::GstreamerLinked;
+        let own_go2rtc = own_go2rtc_env && !gst_owns_media;
+        if gst_owns_media {
+            log::info!("gstreamer owns the media path — go2rtc will not be started");
+        }
         let uploads = crate::clip_upload::spawn(control_url.clone());
 
         Arc::new(AppState {
