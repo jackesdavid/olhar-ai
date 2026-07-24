@@ -16,16 +16,16 @@ it passes on **both**, with the other platforms' HW-decode elements noted per ro
 | # | Capability | Today (ffmpeg / go2rtc) | GStreamer replacement | Consumers | Stage | Mac | Jetson | Status |
 |---|---|---|---|---|---|---|---|---|
 | 0 | **Linked `gstreamer-rs` runtime** (not `gst-launch` subprocess) | n/a (new) | `gstreamer` + `gstreamer-app` crates, pipeline from Rust, `appsink` frame pull | the edge itself | 0 | ✅ | ⬜ | 🟡 |
-| A1 | **Live decode** (RTSP → raw frames, hot per-camera path) | ffmpeg MJPEG on `pipe:1`, **no hwaccel** (`capture.rs`) | `rtspsrc ! <hwdec> ! appsink` → motion/detector | edge motion + tract detector | 1 | ✅² | ⬜ | 🟡 |
-| HW | **Hardware decode** (currently detected, never applied) | `hwaccel.rs` reports, never uses | `vtdec`(Mac) / `nvv4l2decoder`(Jetson) / `amcviddec`(Android) / `vaapi`·`nvh264dec`(Linux) / `d3d11h264dec`(Win) | A1 pipeline | 1 | ✅¹ | ⬜ | 🟡 |
+| A1 | **Live decode** (RTSP → raw frames, hot per-camera path) | ffmpeg MJPEG on `pipe:1`, **no hwaccel** (`capture.rs`) | `rtspsrc ! <hwdec> ! appsink` → motion/detector | edge motion + tract detector | 1 | ✅² | ✅¹¹ | 🟡 |
+| HW | **Hardware decode** (currently detected, never applied) | `hwaccel.rs` reports, never uses | `vtdec`(Mac) / `nvv4l2decoder`(Jetson) / `amcviddec`(Android) / `vaapi`·`nvh264dec`(Linux) / `d3d11h264dec`(Win) | A1 pipeline | 1 | ✅¹ | ✅¹¹ | 🟡 |
 | A2 | **Recording mux** (H264 ring → fragmented mp4) | ffmpeg `-c:v copy` (`recording.rs`) | `appsrc` (real per-frame PTS) `! h264parse ! mp4mux` | clip store / playback | 3 | ✅⁵ | ⬜ | 🟡 |
 | A3 | **Clip duration probe** | `ffprobe` (`recording.rs`) | **no probe at all** — duration = captured frame span | recording metadata | 3 | ✅⁶ | ⬜ | 🟡 |
 | A4 | **HW-decode capability probe** | ffmpeg `-hwaccel` list (`hwaccel.rs`) | `media::hw_decoder()` — registry element presence | health report | 5 | ✅¹⁰ | ⬜ | 🟡 |
 | A5 | **Snapshot fallback** (single-frame, cold) | raw `ffmpeg` (`onvif/client.rs`) | one-shot `rtspsrc ! decodebin ! jpegenc` (feature-gated) | **credential probe only** — no longer a snapshot fallback | 2 | ✅⁴ | ⬜ | 🟡 |
 | A6 | **ffmpeg presence check** | `ffmpeg -version` (`state.rs`) | skipped when GStreamer owns media | health gating | 5 | ✅⁹ | ⬜ | 🟡 |
 | B3 | **Snapshot from warm feed** (`/api/frame.jpeg`, "Get current frame" node) | go2rtc → internal ffmpeg | serve the A1 warm JPEG (`capture::latest_fresh`); cold path only as fallback | workflow node, app-core `go2rtc.rs`, gateway | 2 | ✅³ | ⬜ | 🟡 |
-| G1 | **RTSP ingest from cameras** | go2rtc per-camera streams | `rtspsrc` (shared A1 ingest) | all downstream | 1 | ✅² | ⬜ | 🟡 |
-| G2 | **Live MSE over WebSocket** (`/api/ws`) | go2rtc | `mp4mux fragment-duration` → WS, **contract-identical** | **gateway `proxy.rs` → web player + mobile WebView player** | 4 | ✅⁷ | ⬜⁸ | 🟡 |
+| G1 | **RTSP ingest from cameras** | go2rtc per-camera streams | `rtspsrc` (shared A1 ingest) | all downstream | 1 | ✅² | ✅¹¹ | 🟡 |
+| G2 | **Live MSE over WebSocket** (`/api/ws`) | go2rtc | `mp4mux fragment-duration` → WS, **contract-identical** | **gateway `proxy.rs` → web player + mobile WebView player** | 4 | ✅⁷ | 🟡¹¹ | 🟡 |
 | G3 | **WebRTC** (`/api/webrtc`) | go2rtc `webrtcbin` (minor use today) | `webrtcbin` | (minor) | 5 | ⬜ | ⬜ | ⬜ |
 | G4 | **Stream list / player assets** (`/api/streams`, `/stream.html`) | go2rtc-served, gateway passthrough | edge-served equivalents or drop if unused | gateway passthrough | 4 | ⬜ | ⬜ | ⬜ |
 | G5 | **go2rtc sidecar lifecycle** (spawn/config/health) | edge manages the go2rtc process | **not started at all** on a GStreamer box | edge `state.rs`, `main.rs` | 5 | ✅⁹ | ⬜ | 🟡 |
@@ -208,6 +208,22 @@ accelerator degrades to software rather than failing to start — where `ffmpeg 
 ever answer, never select. The Jetson is why it exists: `nvv4l2decoder` outputs into **NVMM** memory
 that `videoconvert` cannot read (it needs `nvvidconv`), and pairing them wrong produces no error at
 all — the pipeline simply never yields a frame.
+
+¹¹ **Jetson: the ingest runs, decode is NVDEC (2026-07-24).** Rust installed, the edge **builds on
+aarch64 with `gst-linked`** (10m12s), 30 unit tests pass, and the both-branches integration test
+passes against a real camera: ONE connection, `tee`'d to `nvv4l2decoder ! nvvidconv` and to the live
+muxer. Not yet run as the box's actual edge — that is the remaining step, and it needs a window on a
+client machine.
+
+**Two GStreamer-version traps, and they point the same way — the newer runtime is the more forgiving
+one, so what the Mac accepts is not evidence of what ships:**
+- **DTS.** `mp4mux` on 1.20 refuses an unset DTS (`Could not multiplex stream`, `dts:
+  99:99:99.999999999` in `qtmux`'s log). The Mac's 1.28 tolerates it, so the PTS→DTS pad probe had
+  been dropped as unnecessary when we moved off `cmafmux`. Restored.
+- **`avc` vs `byte-stream`.** A `tee` forces ONE output format on the shared `h264parse`, and the
+  branches disagree: the decoder takes byte-stream, `mp4mux` on 1.20 accepts only `avc` and answers a
+  byte-stream query with **EMPTY** caps. The pipeline then dies at `rtspsrc` with `not-negotiated
+  (-4)` — naming neither the element that refused nor why. The mux branch now re-parses to `avc`.
 
 ## ✅ Verified live on the Mac edge (2026-07-24)
 

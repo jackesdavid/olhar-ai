@@ -234,6 +234,12 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
     // ONE connection, `tee`'d: the decode branch feeds motion + detectors, the mux branch feeds the
     // live `/api/ws` viewers. Both leak-on-full — a consumer that stalls must never back the RTSP
     // source up and take the other branch down with it.
+    //
+    // The mux branch re-parses to **avc**: a `tee` forces one output format on the shared
+    // `h264parse`, and the two branches disagree — the decoder takes byte-stream, while `mp4mux` on
+    // the Jetson's GStreamer 1.20 accepts only avc and answers a byte-stream query with EMPTY caps.
+    // The whole pipeline then dies at the source with `not-negotiated`, which names neither the
+    // element that refused nor the reason.
     let mux = crate::gst_mse::FRAGMENT_MS;
     // Picked from this box's registry, not from a platform guess — see `media::decode_branch`.
     let decode = crate::media::decode_branch();
@@ -243,6 +249,7 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
             ! video/x-raw,framerate=6/1 ! jpegenc quality=85 \
             ! appsink name=out sync=false max-buffers=2 drop=true \
          t. ! queue max-size-buffers=64 leaky=downstream \
+            ! h264parse ! video/x-h264,stream-format=avc,alignment=au \
             ! mp4mux fragment-duration={mux} streamable=true \
             ! appsink name=mse sync=false"
     );
