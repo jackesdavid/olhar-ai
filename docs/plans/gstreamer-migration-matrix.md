@@ -23,7 +23,7 @@ it passes on **both**, with the other platforms' HW-decode elements noted per ro
 | A4 | **HW-decode capability probe** | ffmpeg `-hwaccel` list (`hwaccel.rs`) | `gst_registry` element presence (`vtdec`/`nvv4l2decoder`…) | health report | 5 | ⬜ | ⬜ | ⬜ |
 | A5 | **Snapshot fallback** (single-frame, cold) | raw `ffmpeg` (`onvif/client.rs`) | one-shot `rtspsrc ! <dec> ! jpegenc num-buffers=1` | credential test / cold snapshot | 2 | ⬜ | ⬜ | ⬜ |
 | A6 | **ffmpeg presence check** | `ffmpeg -version` (`state.rs`) | removed (no ffmpeg) | health gating | 5 | ⬜ | ⬜ | ⬜ |
-| B3 | **Snapshot from warm feed** (`/api/frame.jpeg`, "Get current frame" node) | go2rtc → internal ffmpeg | `jpegenc` off the A1 warm pipeline (`tee`) | workflow node, app-core `go2rtc.rs`, gateway | 2 | ⬜ | ⬜ | ⬜ |
+| B3 | **Snapshot from warm feed** (`/api/frame.jpeg`, "Get current frame" node) | go2rtc → internal ffmpeg | serve the A1 warm JPEG (`capture::latest_fresh`); cold path only as fallback | workflow node, app-core `go2rtc.rs`, gateway | 2 | 🟡³ | ⬜ | 🟡 |
 | G1 | **RTSP ingest from cameras** | go2rtc per-camera streams | `rtspsrc` (shared A1 ingest) | all downstream | 1 | ✅² | ⬜ | 🟡 |
 | G2 | **Live MSE over WebSocket** (`/api/ws`) | go2rtc | `mp4mux fragment-duration` → WS, **contract-identical** | **gateway `proxy.rs` → web player + mobile WebView player** | 4 | ⬜ | ⬜ | ⬜ |
 | G3 | **WebRTC** (`/api/webrtc`) | go2rtc `webrtcbin` (minor use today) | `webrtcbin` | (minor) | 5 | ⬜ | ⬜ | ⬜ |
@@ -69,3 +69,11 @@ gate + default-flip open.
 
 **Done = every row ✅ on both boxes, and neither ffmpeg nor go2rtc installed.** That is the green light
 for the phone-as-edge (Android) card.
+
+³ **B3 partial (2026-07-24):** the **edge's own `/snapshot/:ip`** now serves the warm decoded JPEG
+first (`capture::latest_fresh`, <2s), falling back to the cold go2rtc→ONVIF/ffmpeg path only when no
+fresh frame exists — killing go2rtc's internal ffmpeg (and its ~490ms cold start) for every consumer
+of that endpoint (e.g. control's line-drawing UI). **Still open:** the workflow **"Get current frame"**
+(`app-core ports.rs` `EdgeFrameSource`) runs in *sentinel-flow* and still calls go2rtc
+`/api/frame.jpeg` directly over the tailnet; pointing it at the edge's snapshot endpoint (the edge
+binds 0.0.0.0:8788, so it is reachable) is the remaining B3 slice.

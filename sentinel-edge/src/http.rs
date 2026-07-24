@@ -30,7 +30,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/storage/stats", get(storage_stats))
         .route("/recording/start", post(recording_start))
         .route("/recording/stop", post(recording_stop))
-        .route("/recording/:clip_id", get(recording_get).delete(recording_delete))
+        .route(
+            "/recording/:clip_id",
+            get(recording_get).delete(recording_delete),
+        )
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -167,7 +170,12 @@ fn probe_device(device: &app_core::devices::Device, user: &str, pass: &str) -> s
     };
 
     let verdict = rtsp_probe::probe(&url, user, pass);
-    log::info!("probe {} → {:?}: {}", device.ip, verdict.status, verdict.detail);
+    log::info!(
+        "probe {} → {:?}: {}",
+        device.ip,
+        verdict.status,
+        verdict.detail
+    );
 
     // The frame is proof for the user's eyes, not part of the verdict — a camera that
     // authenticated but won't hand over a frame is still a credential success.
@@ -185,13 +193,31 @@ fn probe_device(device: &app_core::devices::Device, user: &str, pass: &str) -> s
     json!({ "status": verdict.status, "detail": verdict.detail, "snapshot": snapshot })
 }
 
-/// Capture and return a JPEG snapshot for the camera at `ip` (binary; the FrameSource
-/// port). go2rtc fast-path with ONVIF/ffmpeg fallback — all inside `app-core`. The
-/// blocking capture runs off the async worker.
+/// Capture and return a JPEG snapshot for the camera at `ip` (binary; the FrameSource port).
+///
+/// **Warm-first (card #138, Stage 2).** The supervised per-camera decoder (`capture.rs`) already
+/// holds a continuously-decoded JPEG, so serve THAT when it's fresh: it costs nothing (the frame is
+/// already in memory) and skips the cold path entirely — which is go2rtc's `/api/frame.jpeg`, and
+/// go2rtc spawns **ffmpeg** internally for it (touchpoint B3), measured at ~490 ms per grab.
+/// The cold path (go2rtc → ONVIF/ffmpeg, both in `app-core`) stays as the fallback for a camera
+/// whose decoder isn't running or is mid-restart, so behaviour is unchanged when there's no warm
+/// frame. We deliberately do NOT call `capture::ensure` here — starting a persistent decoder as a
+/// side effect of one snapshot request is the frame hub's decision, not this endpoint's.
 async fn snapshot(State(state): State<Arc<AppState>>, Path(ip): Path<String>) -> impl IntoResponse {
     let Some(device) = state.device_by_ip(&ip) else {
         return (StatusCode::NOT_FOUND, format!("no device with ip {ip}")).into_response();
     };
+    if let Some(jpeg) = crate::capture::latest_fresh(&ip, std::time::Duration::from_secs(2)) {
+        return (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            Body::from(jpeg.to_vec()),
+        )
+            .into_response();
+    }
     match tokio::task::spawn_blocking(move || capture_snapshot_bytes(&device)).await {
         Ok(Ok(bytes)) => (
             StatusCode::OK,
@@ -261,9 +287,9 @@ async fn recording_start(
 
 #[derive(serde::Deserialize)]
 struct StopRecordingReq {
-    camera_ip:  String,
+    camera_ip: String,
     #[serde(default)]
-    clip_id:    Option<String>,
+    clip_id: Option<String>,
 }
 
 async fn recording_stop(
@@ -310,7 +336,12 @@ async fn recording_stop(
                 };
                 crate::clip_upload::enqueue(
                     &uploads,
-                    crate::clip_upload::Job { clip_id, path, url, delete_local },
+                    crate::clip_upload::Job {
+                        clip_id,
+                        path,
+                        url,
+                        delete_local,
+                    },
                 );
             });
             Json(json!({
@@ -374,17 +405,15 @@ async fn recording_get(
 ) -> impl IntoResponse {
     let mgr = state.recording.clone();
     match tokio::task::spawn_blocking(move || mgr.clip_path(&clip_id)).await {
-        Ok(Some(path)) => {
-            match tokio::fs::read(&path).await {
-                Ok(bytes) => (
-                    StatusCode::OK,
-                    [(header::CONTENT_TYPE, "video/mp4")],
-                    Body::from(bytes),
-                )
-                    .into_response(),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("read: {e}")).into_response(),
-            }
-        }
+        Ok(Some(path)) => match tokio::fs::read(&path).await {
+            Ok(bytes) => (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "video/mp4")],
+                Body::from(bytes),
+            )
+                .into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("read: {e}")).into_response(),
+        },
         Ok(None) => (StatusCode::NOT_FOUND, "clip not found").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
     }
@@ -409,12 +438,12 @@ async fn recording_delete(
 #[derive(serde::Deserialize)]
 struct RecordingsListQuery {
     camera_ip: Option<String>,
-    sort:      Option<String>,
-    dir:       Option<String>,
-    limit:     Option<usize>,
-    offset:    Option<usize>,
-    from:      Option<String>,
-    to:        Option<String>,
+    sort: Option<String>,
+    dir: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    from: Option<String>,
+    to: Option<String>,
 }
 
 async fn recordings_list(
@@ -424,12 +453,12 @@ async fn recordings_list(
     use crate::recording::ListParams;
     let params = ListParams {
         camera_ip: q.camera_ip,
-        sort:   q.sort.unwrap_or_else(|| "started_at".into()),
-        dir:    q.dir.unwrap_or_else(|| "desc".into()),
-        limit:  q.limit.unwrap_or(50).min(200),
+        sort: q.sort.unwrap_or_else(|| "started_at".into()),
+        dir: q.dir.unwrap_or_else(|| "desc".into()),
+        limit: q.limit.unwrap_or(50).min(200),
         offset: q.offset.unwrap_or(0),
-        from:   q.from,
-        to:     q.to,
+        from: q.from,
+        to: q.to,
     };
     let mgr = state.recording.clone();
     match tokio::task::spawn_blocking(move || mgr.list_clips(&params)).await {
@@ -447,7 +476,8 @@ async fn storage_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse 
             "clip_count":  s.clip_count,
             "path":        s.path,
             "pct":         s.pct,
-        })).into_response(),
+        }))
+        .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
     }
 }
