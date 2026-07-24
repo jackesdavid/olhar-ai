@@ -907,6 +907,24 @@ async fn run_rtsp_collector(
     }
 }
 
+/// Split `rtsp://user:pass@host/path` into the URL `retina` will accept and the credentials it wants
+/// separately. Anything without a userinfo section comes back untouched.
+fn split_rtsp_credentials(url: &str) -> (String, Option<(String, String)>) {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return (url.to_string(), None);
+    };
+    // Only the userinfo section may hold an `@`; split at the LAST one so a password containing `@`
+    // does not truncate the host.
+    let Some((userinfo, host)) = rest.rsplit_once('@') else {
+        return (url.to_string(), None);
+    };
+    let (user, pass) = userinfo.split_once(':').unwrap_or((userinfo, ""));
+    (
+        format!("{scheme}://{host}"),
+        Some((user.to_string(), pass.to_string())),
+    )
+}
+
 async fn rtsp_stream_once(
     rtsp_url: &str,
     camera_ip: &str,
@@ -921,14 +939,26 @@ async fn rtsp_stream_once(
     // inherits pre-gap footage.
     const GAP_RESET: Duration = Duration::from_secs(2);
     let window = Duration::from_secs(pre_roll_secs.max(1) as u64);
-    let url = rtsp_url
+    // `retina` REFUSES a URL with inline credentials ("URL must not contain credentials") — they
+    // have to be handed over as session options instead. go2rtc's re-serve needed none, so this only
+    // showed up once the ring started dialling the camera directly.
+    let (bare, creds) = split_rtsp_credentials(rtsp_url);
+    let url = bare
         .parse::<url::Url>()
         .map_err(|e| format!("bad URL: {e}"))?;
+    let opts = match creds {
+        Some((username, password)) => {
+            retina::client::SessionOptions::default().creds(Some(retina::client::Credentials {
+                username,
+                password,
+            }))
+        }
+        None => retina::client::SessionOptions::default(),
+    };
 
-    let mut session =
-        retina::client::Session::describe(url, retina::client::SessionOptions::default())
-            .await
-            .map_err(|e| format!("describe: {e}"))?;
+    let mut session = retina::client::Session::describe(url, opts)
+        .await
+        .map_err(|e| format!("describe: {e}"))?;
 
     // Set up the first H264 video track.
     let video_idx = session
@@ -1206,4 +1236,35 @@ fn fetch_config(control_url: &str) -> Option<RecordingConfig> {
         }
     }
     req.call().ok()?.into_json::<RecordingConfig>().ok()
+}
+
+#[cfg(test)]
+mod rtsp_credentials_tests {
+    use super::split_rtsp_credentials;
+
+    /// `retina` rejects a URL with inline credentials outright, so this split is what makes the ring
+    /// able to dial a camera at all.
+    #[test]
+    fn splits_userinfo_out_of_the_url() {
+        let (url, creds) = split_rtsp_credentials("rtsp://bob:s3cret@10.0.0.2:554/stream1");
+        assert_eq!(url, "rtsp://10.0.0.2:554/stream1");
+        assert_eq!(creds, Some(("bob".into(), "s3cret".into())));
+    }
+
+    /// go2rtc's re-serve carries no credentials — that path must stay byte-identical.
+    #[test]
+    fn leaves_a_credential_less_url_untouched() {
+        let (url, creds) = split_rtsp_credentials("rtsp://127.0.0.1:8554/cam_10_0_0_2");
+        assert_eq!(url, "rtsp://127.0.0.1:8554/cam_10_0_0_2");
+        assert_eq!(creds, None);
+    }
+
+    /// A password containing `@` is legal and common; splitting at the first one would truncate the
+    /// host and dial nowhere.
+    #[test]
+    fn splits_at_the_last_at_so_an_at_in_the_password_survives() {
+        let (url, creds) = split_rtsp_credentials("rtsp://bob:p@ss@10.0.0.2:554/s");
+        assert_eq!(url, "rtsp://10.0.0.2:554/s");
+        assert_eq!(creds, Some(("bob".into(), "p@ss".into())));
+    }
 }
