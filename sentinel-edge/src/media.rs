@@ -55,3 +55,55 @@ impl Backend {
         }
     }
 }
+
+/// The decode half of the ingest pipeline, chosen from what this box's GStreamer registry actually
+/// has (card #138, A1/HW + A4).
+///
+/// **Why probe the registry instead of naming a platform.** The same binary ships to a Mac, a
+/// Jetson, a Linux server and eventually Android and Windows, and each has a different hardware
+/// decoder under a different element name. Asking the registry is both the capability probe (A4,
+/// replacing `ffmpeg -hwaccels`) and the selection — one source of truth, and a box missing its
+/// accelerator degrades to software instead of failing to start.
+///
+/// The Jetson's `nvv4l2decoder` outputs into **NVMM** (GPU) memory, which `videoconvert` cannot
+/// read — it needs `nvvidconv` to reach system memory. Pairing the wrong converter is not a
+/// negotiation error you can miss: the pipeline simply never produces a frame.
+#[cfg(feature = "gst-linked")]
+pub fn decode_branch() -> &'static str {
+    use gstreamer as gst;
+    let has = |name: &str| gst::ElementFactory::find(name).is_some();
+    if has("nvv4l2decoder") && has("nvvidconv") {
+        // Jetson / Tegra: NVDEC into NVMM, then the NVIDIA converter back to system memory.
+        "nvv4l2decoder ! nvvidconv"
+    } else if has("amcviddec-omxh264dec") || has("amcviddec-c2avcdecoder") {
+        // Android MediaCodec — `decodebin` picks it, but say so explicitly for the log.
+        "decodebin ! videoconvert"
+    } else {
+        // Mac (VideoToolbox `vtdec`), Linux (VAAPI / NVDEC), Windows (D3D11): `decodebin` already
+        // picks the best registered decoder, verified on this Mac.
+        "decodebin ! videoconvert"
+    }
+}
+
+/// Which hardware decoder this box actually has, for the health report (A4 — the `ffmpeg -hwaccels`
+/// replacement). `"none"` means software decode, which still works, just warmer.
+#[cfg(feature = "gst-linked")]
+pub fn hw_decoder() -> &'static str {
+    use gstreamer as gst;
+    let has = |name: &str| gst::ElementFactory::find(name).is_some();
+    // Ordered most- to least-specific: a box with a dedicated decoder should report it, not the
+    // generic one it also happens to carry.
+    for (element, label) in [
+        ("nvv4l2decoder", "nvdec-tegra"),
+        ("nvh264dec", "nvdec"),
+        ("vtdec_hw", "videotoolbox"),
+        ("vtdec", "videotoolbox"),
+        ("vaapih264dec", "vaapi"),
+        ("d3d11h264dec", "d3d11"),
+    ] {
+        if has(element) {
+            return label;
+        }
+    }
+    "none"
+}

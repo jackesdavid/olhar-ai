@@ -235,9 +235,11 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
     // live `/api/ws` viewers. Both leak-on-full — a consumer that stalls must never back the RTSP
     // source up and take the other branch down with it.
     let mux = crate::gst_mse::FRAGMENT_MS;
+    // Picked from this box's registry, not from a platform guess — see `media::decode_branch`.
+    let decode = crate::media::decode_branch();
     let desc = format!(
         "rtspsrc location=\"{url}\" protocols=tcp latency=200 ! rtph264depay ! h264parse ! tee name=t \
-         t. ! queue max-size-buffers=64 leaky=downstream ! decodebin ! videoconvert ! videorate \
+         t. ! queue max-size-buffers=64 leaky=downstream ! {decode} ! videorate \
             ! video/x-raw,framerate=6/1 ! jpegenc quality=85 \
             ! appsink name=out sync=false max-buffers=2 drop=true \
          t. ! queue max-size-buffers=64 leaky=downstream \
