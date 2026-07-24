@@ -25,7 +25,7 @@ it passes on **both**, with the other platforms' HW-decode elements noted per ro
 | A6 | **ffmpeg presence check** | `ffmpeg -version` (`state.rs`) | removed (no ffmpeg) | health gating | 5 | ⬜ | ⬜ | ⬜ |
 | B3 | **Snapshot from warm feed** (`/api/frame.jpeg`, "Get current frame" node) | go2rtc → internal ffmpeg | serve the A1 warm JPEG (`capture::latest_fresh`); cold path only as fallback | workflow node, app-core `go2rtc.rs`, gateway | 2 | ✅³ | ⬜ | 🟡 |
 | G1 | **RTSP ingest from cameras** | go2rtc per-camera streams | `rtspsrc` (shared A1 ingest) | all downstream | 1 | ✅² | ⬜ | 🟡 |
-| G2 | **Live MSE over WebSocket** (`/api/ws`) | go2rtc | `cmafmux` fMP4 → WS, **contract-identical** | **gateway `proxy.rs` → web player + mobile WebView player** | 4 | 🟡⁷ | ⬜ | 🟡 |
+| G2 | **Live MSE over WebSocket** (`/api/ws`) | go2rtc | `mp4mux fragment-duration` → WS, **contract-identical** | **gateway `proxy.rs` → web player + mobile WebView player** | 4 | ✅⁷ | ⬜⁸ | 🟡 |
 | G3 | **WebRTC** (`/api/webrtc`) | go2rtc `webrtcbin` (minor use today) | `webrtcbin` | (minor) | 5 | ⬜ | ⬜ | ⬜ |
 | G4 | **Stream list / player assets** (`/api/streams`, `/stream.html`) | go2rtc-served, gateway passthrough | edge-served equivalents or drop if unused | gateway passthrough | 4 | ⬜ | ⬜ | ⬜ |
 | G5 | **go2rtc sidecar lifecycle** (spawn/config/health) | edge manages the go2rtc process | removed (no sidecar) | edge `state.rs`, `main.rs` | 5 | ⬜ | ⬜ | ⬜ |
@@ -112,15 +112,37 @@ for the first IDR and any camera dropout as footage, and re-reading the file onl
 muxer already knew. `probe_duration` survives as a last resort for a clip whose span was never
 recorded.
 
-⁷ **G2 built and module-verified on the Mac (2026-07-24).** `sentinel-edge/src/gst_mse.rs` serves the
-`/api/ws` contract itself (`rtspsrc → h264parse → cmafmux → appsink`, fanned out over a broadcast
-channel; one pipeline per stream, started on the first viewer, dropped after the last). Its live test
-(`gst_mse_it`, `--ignored`, needs `GST_IT_CAM`) passes against the real camera: `ftyp+moov` init
-segment, `codecs=avc1.640016`, three live fragments inside 15 s. The PTS→DTS pad probe replaces
-`h264timestamper` so Android/Jetson need one plugin less. **Still open before this is ✅:** install the
-new binary on the Mac edge (needs the operator's sudo) and repoint the **gateway** upstream from
-go2rtc `:1984` to the edge `:8788` — until that flip the browser still plays go2rtc's stream, so
-nothing user-visible has changed yet.
+⁷ **G2 built, installed and measured at parity with go2rtc on the Mac (2026-07-24).**
+`sentinel-edge/src/gst_mse.rs` serves the `/api/ws` contract itself (`rtspsrc → h264parse → mp4mux →
+appsink`, fanned out over a broadcast channel; one pipeline per stream, started on the first viewer,
+dropped after the last).
+
+**Measured against the running go2rtc over the same wall-clock window** (25 s, same camera, both
+sockets open at once — measuring them in sequence is worthless, scene motion swings the byte counts
+by 40 %):
+
+| | edge (GStreamer) | go2rtc |
+|---|---|---|
+| WS messages per fragment | **1.0** | 1.0 |
+| median gap between fragments | **66 ms** | 66 ms |
+| bytes per fragment | **1233** | 1257 |
+| first playable fragment | **0.33 s** | 0.93 s |
+| `codecs=` advertised | `avc1.640016` (true) | `avc1.640029` (over-declared) |
+
+Two things had to be fixed to get there, both worth knowing:
+
+- **`cmafmux` → `mp4mux`.** `cmafmux` closes a fragment only on a keyframe, so its cadence was the
+  camera's GOP whatever `fragment-duration` said: one fragment every **2.0 s**, first frame at 5.6 s.
+  `mp4mux` fragments on a timer and matches go2rtc. It is also the only portable choice — `cmafmux`
+  ships in gst-plugins-rs and is **absent from the JetPack 6 GStreamer** (see the Jetson row).
+- **One WS message per fragment.** `mp4mux` emits a box per buffer, so fragments went out as three
+  messages (`moof`, `mdat` header, payload) — 845 in 20 s against go2rtc's 293, each one an
+  `onmessage` + `appendBuffer` in the player. The `mdat` header declares its total size, so the
+  fragment is emitted the moment its last byte lands: no added latency, unlike waiting for the next
+  `moof`.
+
+**Still open before this is ✅:** repoint the **gateway** upstream from go2rtc `:1984` to the edge
+`:8788`. Until that flip the browser still plays go2rtc's stream, so nothing user-visible has changed.
 
 **How the feasibility was proven first.** The one
 unknown that decided Stage 4 was *"can GStreamer emit fMP4 a browser `MediaSource` accepts, live from
@@ -141,6 +163,15 @@ same instant EOS — always assert on **bytes produced**, not on exit status; (b
 the spike: **`h264timestamper`** between `h264parse` and the capsfilter. That element lives in
 gst-plugins-bad, so for the edge itself prefer setting `DTS = PTS` in a pad probe from Rust — the
 cameras are B-frame-free, and it keeps Android/Jetson free of one more plugin dependency.
+
+⁸ **Jetson surveyed over SSH (2026-07-24) — nothing run there yet.** The box is a **Jetson Orin Nano
+Developer Kit** (not the old Nano): Ubuntu 22.04.5, Jetson Linux R36.5.0 (JetPack 6), **GStreamer
+1.20.3**, aarch64. Present: `rtspsrc`, `rtph264depay`, `h264parse`, **`nvv4l2decoder`**, **`nvvidconv`**,
+`videoconvert`, `jpegenc`, `appsrc`, `appsink`, **`mp4mux`** — so A1/HW, A2 and G2 all have their
+elements. Absent: **`cmafmux`** and `h264timestamper`, which is what forced G2 onto `mp4mux`. The
+`gstreamer-1.0` dev headers are installed (gstreamer-rs will build); there is no `cargo` yet. Expect
+`nvv4l2decoder` to output NVMM memory, so the A1 pipeline needs `nvvidconv` where the Mac uses
+`videoconvert`.
 
 ## ✅ Verified live on the Mac edge (2026-07-24)
 
