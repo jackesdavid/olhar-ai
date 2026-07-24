@@ -125,8 +125,72 @@ impl EdgeFrameSource {
         }
     }
 }
+/// Bases whose edge API (`:8080/snapshot`) we've already found unreachable — so a box without the
+/// tailnet serve (older edge) pays the probe timeout **once per process**, not on every frame grab.
+fn edge_api_dead() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static D: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    D.get_or_init(Default::default)
+}
+
+impl EdgeFrameSource {
+    /// The edge's OWN API base, derived from the go2rtc base. The edge publishes its HTTP (8788) on
+    /// the tailnet as `--https=8080` (`tailscale::serve_edge_api`), while go2rtc owns 443 — so the
+    /// tailnet base `https://host` maps to `https://host:8080`. The localhost fallback base
+    /// (`http://127.0.0.1:1984`, used when no box is registered) maps to the edge's direct
+    /// `http://127.0.0.1:8788`.
+    fn edge_api_base(&self) -> Option<String> {
+        let base = self.base.trim_end_matches('/');
+        if let Some(rest) = base.strip_prefix("https://") {
+            if rest.contains(':') {
+                return None; // an explicit non-default port — not a shape we know how to map
+            }
+            return Some(format!("https://{rest}:8080"));
+        }
+        // Local/dev go2rtc → the edge's own HTTP port.
+        base.replace(":1984", ":8788").into()
+    }
+
+    /// Grab the warm frame from the edge's own `/snapshot/:ip`. Short timeout: this is a fast path,
+    /// and when it isn't available we must fall back quickly rather than stall the workflow node.
+    fn warm_snapshot(&self, ip: &str) -> Result<Vec<u8>, String> {
+        let base = self.edge_api_base().ok_or("no edge api base")?;
+        if edge_api_dead().lock().map(|d| d.contains(&base)).unwrap_or(false) {
+            return Err("edge api known-unreachable".into());
+        }
+        let agent = ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_secs(2))
+            .build();
+        let url = format!("{base}/snapshot/{}", ip);
+        let res = (|| -> Result<Vec<u8>, String> {
+            let resp = agent.get(&url).call().map_err(|e| format!("edge snapshot: {e}"))?;
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut resp.into_reader(), &mut bytes)
+                .map_err(|e| format!("reading edge snapshot: {e}"))?;
+            if bytes.is_empty() {
+                return Err("edge returned an empty frame".into());
+            }
+            Ok(bytes)
+        })();
+        if res.is_err() {
+            if let Ok(mut d) = edge_api_dead().lock() {
+                d.insert(base);
+            }
+        }
+        res
+    }
+}
+
 impl FrameSource for EdgeFrameSource {
+    /// **Warm-first (card #138, Stage 2).** Ask the edge for its continuously-decoded frame before
+    /// falling back to go2rtc's `/api/frame.jpeg` — go2rtc spawns **ffmpeg internally** for that
+    /// (touchpoint B3, ~490 ms per grab), which is exactly what the migration is retiring. The
+    /// fallback keeps every existing box working, including edges too old to serve their API on the
+    /// tailnet; those are remembered as unreachable so they only pay the probe once per process.
     fn snapshot(&self, device: &Device) -> Result<Vec<u8>, String> {
+        if let Ok(bytes) = self.warm_snapshot(&device.ip) {
+            return Ok(bytes);
+        }
         crate::go2rtc::frame_from(&self.agent, &self.base, &device.ip)
     }
     fn current(&self, device: &Device, _max_age_ms: u64) -> Result<(Vec<u8>, u64), String> {
@@ -318,5 +382,40 @@ impl Notifier for RemoteNotifier {
             Some(&key),
         );
         Ok("queued".to_string())
+    }
+}
+
+#[cfg(test)]
+mod edge_api_base_tests {
+    use super::EdgeFrameSource;
+
+    /// The tailnet shape: go2rtc owns 443, the edge API is served on 8080
+    /// (`tailscale serve --https=8080 8788`).
+    #[test]
+    fn tailnet_https_base_maps_to_8080() {
+        let s = EdgeFrameSource::new("https://box-abc.tail1234.ts.net");
+        assert_eq!(s.edge_api_base().as_deref(), Some("https://box-abc.tail1234.ts.net:8080"));
+    }
+
+    /// A trailing slash must not produce a double slash in the derived URL.
+    #[test]
+    fn trailing_slash_is_trimmed() {
+        let s = EdgeFrameSource::new("https://box.ts.net/");
+        assert_eq!(s.edge_api_base().as_deref(), Some("https://box.ts.net:8080"));
+    }
+
+    /// The local/dev fallback base (go2rtc on 1984) maps to the edge's own HTTP port.
+    #[test]
+    fn localhost_go2rtc_maps_to_edge_http() {
+        let s = EdgeFrameSource::new("http://127.0.0.1:1984");
+        assert_eq!(s.edge_api_base().as_deref(), Some("http://127.0.0.1:8788"));
+    }
+
+    /// An https base that already carries an explicit port isn't a shape we can map — better to
+    /// decline (and use the go2rtc path) than to guess and silently hit the wrong service.
+    #[test]
+    fn explicit_https_port_declines() {
+        let s = EdgeFrameSource::new("https://box.ts.net:9443");
+        assert_eq!(s.edge_api_base(), None);
     }
 }

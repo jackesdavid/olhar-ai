@@ -23,7 +23,7 @@ it passes on **both**, with the other platforms' HW-decode elements noted per ro
 | A4 | **HW-decode capability probe** | ffmpeg `-hwaccel` list (`hwaccel.rs`) | `gst_registry` element presence (`vtdec`/`nvv4l2decoder`…) | health report | 5 | ⬜ | ⬜ | ⬜ |
 | A5 | **Snapshot fallback** (single-frame, cold) | raw `ffmpeg` (`onvif/client.rs`) | one-shot `rtspsrc ! <dec> ! jpegenc num-buffers=1` | credential test / cold snapshot | 2 | ⬜ | ⬜ | ⬜ |
 | A6 | **ffmpeg presence check** | `ffmpeg -version` (`state.rs`) | removed (no ffmpeg) | health gating | 5 | ⬜ | ⬜ | ⬜ |
-| B3 | **Snapshot from warm feed** (`/api/frame.jpeg`, "Get current frame" node) | go2rtc → internal ffmpeg | serve the A1 warm JPEG (`capture::latest_fresh`); cold path only as fallback | workflow node, app-core `go2rtc.rs`, gateway | 2 | 🟡³ | ⬜ | 🟡 |
+| B3 | **Snapshot from warm feed** (`/api/frame.jpeg`, "Get current frame" node) | go2rtc → internal ffmpeg | serve the A1 warm JPEG (`capture::latest_fresh`); cold path only as fallback | workflow node, app-core `go2rtc.rs`, gateway | 2 | ✅³ | ⬜ | 🟡 |
 | G1 | **RTSP ingest from cameras** | go2rtc per-camera streams | `rtspsrc` (shared A1 ingest) | all downstream | 1 | ✅² | ⬜ | 🟡 |
 | G2 | **Live MSE over WebSocket** (`/api/ws`) | go2rtc | `mp4mux fragment-duration` → WS, **contract-identical** | **gateway `proxy.rs` → web player + mobile WebView player** | 4 | ⬜ | ⬜ | ⬜ |
 | G3 | **WebRTC** (`/api/webrtc`) | go2rtc `webrtcbin` (minor use today) | `webrtcbin` | (minor) | 5 | ⬜ | ⬜ | ⬜ |
@@ -76,4 +76,9 @@ fresh frame exists — killing go2rtc's internal ffmpeg (and its ~490ms cold sta
 of that endpoint (e.g. control's line-drawing UI). **Still open:** the workflow **"Get current frame"**
 (`app-core ports.rs` `EdgeFrameSource`) runs in *sentinel-flow* and still calls go2rtc
 `/api/frame.jpeg` directly over the tailnet; pointing it at the edge's snapshot endpoint (the edge
-binds 0.0.0.0:8788, so it is reachable) is the remaining B3 slice.
+binds 0.0.0.0:8788, so it is reachable) — **DONE (2026-07-24)**: `EdgeFrameSource` now tries the
+edge's own `/snapshot/:ip` first (derived from the go2rtc base: tailnet `https://host` → `:8080`,
+local `:1984` → `:8788`, per `tailscale serve --https=8080 8788`) and falls back to go2rtc. A box
+whose edge API is unreachable (older edge) is remembered process-wide so it pays the 2s probe once,
+not per grab. 4 unit tests cover the URL derivation. Both B3 consumers — the edge endpoint and the
+cloud workflow node — now prefer the warm frame; go2rtc's internal ffmpeg is only a fallback.
