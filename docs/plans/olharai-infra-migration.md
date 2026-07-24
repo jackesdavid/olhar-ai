@@ -1,130 +1,116 @@
-# OlharAI Infra Migration — new server + full domain cutover to olharai.com
+# OlharAI Infra Migration — greenfield new server + full domain cutover to olharai.com
 
 **Board card:** #142   **Related:** `docs/plans/olharai-rebrand.md` (brand strings + code domain refs
 — that plan does the *code*; this one does the *infrastructure*).
-**Goal:** Move the whole stack off the current **shared** Contabo VPS onto a **new dedicated server**,
-cut the public domain from `thesentinels.online` to `olharai.com`, and **fully retire** the old
-domain — with **no data loss** and **no orphaned edge boxes**.
+**Goal:** Stand up the **entire stack fresh** on a **new dedicated server** under **olharai.com**,
+**greenfield** (empty Postgres + MinIO — no data carried over), reinstall every edge box pointing at
+the new domain, batch-update the external integrations at the end, then **fully retire**
+`thesentinels.online` and tear down the old overlay.
 
 > **Secrets:** the new server's IP, user, and password are held out-of-band (shared in chat, not in
-> this repo). **Rotate that password and switch to SSH-key auth** as the first step — a password
-> that travelled over chat should not be the production credential.
+> this repo). **Rotate that password and switch to SSH-key auth as step one** — a password that
+> travelled over chat must not be the production credential.
 
-## Why this is more than a DNS change
+## Strategy (decided by the operator)
 
-The current VPS (`85.239.248.86`) is **shared with the church app** (`ibbf.life`); the Sentinel stack
-is an *additive overlay* (`deploy/vps/docker-compose.sentinel.yml`, "does not touch the church app").
-Moving to a dedicated box is a clean separation — but it means standing up Traefik + Let's Encrypt +
-the full stack fresh, and **migrating two stateful volumes**, not just repointing DNS.
+**Greenfield, clean break.** New empty Postgres/MinIO. The operator **reinstalls every edge box** at
+the clients from scratch, and updates the external integrations (Stripe, OAuth, …) **at the very end,
+in one batch, after the new server is verified up**. This collapses the two hardest risks of a normal
+migration:
 
-**Stateful data that MUST migrate (loss = irreversible):**
-- **Postgres** `sentinel_pgdata` — every tenant, user, workflow, event, face, push device. The core.
-- **MinIO** `sentinel_minio` — recordings/notification media live in *local* MinIO on the server
-  (`S3_ENDPOINT: http://sentinel-minio:9000`), not only external R2. Skip this and clips 404.
+- **No data migration** — no `pg_dump`, no MinIO mirror. Accepted loss: existing tenants, users,
+  workflows, faces, recordings, events, history. The operator recreates what's needed.
+- **No edge-orphan constraint** — because every edge is reinstalled fresh against the new control
+  host, `control.thesentinels.online` does **not** need to outlive the cutover. It can die entirely.
+- **Fresh `JWT_SECRET`** — greenfield means no sessions or box tokens to preserve, so generate a new
+  one; nothing to reconcile.
 
-**External state (no migration, just re-point):**
-- Cloudflare DNS (no IaC — managed in the dashboard).
-- Google OAuth redirect URIs, Stripe success/cancel URLs — registered externally, updated per
-  `olharai-rebrand.md` Phase 1.
+## Grounding facts (still true)
 
-## The gating constraint — deployed edge boxes
+- Current VPS (`85.239.248.86`) is **shared with the church app** (`ibbf.life`); the Sentinel stack
+  is an additive overlay (`deploy/vps/docker-compose.sentinel.yml`). Teardown removes the
+  `sentinel-*` overlay only — **never touch the church app**.
+- Stack: postgres (pgvector + pg_cron), redis, control, flow, gateway, app, landing, notification,
+  minio (+init), ai-sidecar — ~11 containers, all from GHCR images CI already builds.
+- Traefik + Let's Encrypt front the stack (was external, shared with the church app).
+- A fresh DB **auto-seeds**: `seed.rs` upserts the RBAC permission catalog and the master user
+  (`MASTER_EMAIL`/`MASTER_PASSWORD`); `seed_templates.rs` seeds the global L1–L6 workflow templates
+  owned by the platform tenant. So a greenfield boot already has master login + the template
+  curriculum — tenants are then (re)created by signup/master.
+- Deploy target is hardcoded in places: CI uses `secrets.VPS_HOST` (easy), but
+  `deploy/push-local.sh` and `Taskfile.yml` pin `root@85.239.248.86` + `id_contab_ed25519`, and the
+  new server is a **non-root** user.
 
-Every edge appliance in the field stores `CONTROL_URL=https://control.thesentinels.online` in its
-env file (`sentinel-edge/src/envfile.rs`), **set once at install**. The self-update
-(`main.rs::maybe_self_update`) updates only the *binary* and re-passes the **same** control URL —
-there is **no remote mechanism to change it**. Therefore:
-
-**`control.thesentinels.online` cannot be torn down until every edge is re-pointed.** "Fully retire
-the old domain" splits into two different deadlines:
-- **User-facing surfaces** (`app.`, `landing`, `gateway.` public) → can cut to `olharai.com` fast.
-- **`control.thesentinels.online`** → must **keep resolving to the new server** as a machine
-  endpoint until the last edge is migrated, then retire. See Phase 4.
-
-## Phase 0 — Access + prep (new server, nothing user-facing yet)
+## Phase 0 — New server prep
 - Rotate the password; add an SSH **key** for the deploy user; confirm `sudo`, Docker + Compose
-  plugin, and that ports 80/443 are open and not already bound.
-- Confirm the box's resources vs the current footprint (postgres+pgvector, redis, minio, control,
-  flow, gateway, app, landing, notification, ai-sidecar — ~10 containers).
-- **Non-root note:** current deploy assumes `root@`. Either give the deploy user Docker-group
-  access + a writable deploy dir (mirror `/ibbf/`), or provision as root. Decide the deploy dir
-  path (was `/ibbf/`; pick an OlharAI-neutral one, e.g. `/olharai/`).
+  plugin, ports 80/443 free.
+- Pick the deploy dir (was `/ibbf/`; use an OlharAI-neutral `/olharai/`) and decide root vs non-root
+  deploy user (Docker-group + writable deploy dir if non-root).
+- Put a fresh secrets env on the box: **new** `JWT_SECRET`, `GOOGLE_CLIENT_ID/SECRET`,
+  `MASTER_EMAIL/PASSWORD`, `ANTHROPIC_API_KEY`, `S3_KEY/S3_SECRET`, DB pass.
 
-## Phase 1 — Stand up the new stack (parallel; old stays live)
-- Install Traefik + Let's Encrypt on the new box (or fold Traefik into the compose — it was external
-  before, shared with the church app; now it can be part of this stack).
-- Put the secrets file on the new box (was `/ibbf/sentinel.env`): `JWT_SECRET`, `GOOGLE_*`,
-  `MASTER_*`, `ANTHROPIC_API_KEY`, `S3_KEY/S3_SECRET`, DB pass. **Reuse `JWT_SECRET` verbatim** or
-  every existing session/token is invalidated on cutover — decide (rotating it forces all users +
-  **all box tokens** to re-auth, which compounds the edge problem; lean: reuse).
-- Deploy the stack from GHCR (same images CI already builds) with the new compose.
-- **Migrate data** into the new volumes, old stack still serving:
-  - Postgres: `pg_dump` on old → restore on new (or `docker run` a base-image dump/restore; a
-    volume rsync also works but dump/restore is safer across engine restarts). Validate row counts.
-  - MinIO: `mc mirror` old bucket → new, or rsync the `sentinel_minio` volume.
-- Smoke-test the new stack via a temp hostname / `/etc/hosts` override before any DNS points at it.
+## Phase 1 — Stand up the fresh stack (new domain from the first boot)
+- Traefik + Let's Encrypt on the new box (fold into the compose now that it's a dedicated host).
+- Deploy `sentinel-postgres` **first** (migration 0046 needs pg_cron), then control (runs
+  migrations + seeds master, permissions, templates on an empty DB), then the rest.
+- New compose Traefik `Host()` rules on `olharai.com` (`app.`, `control.`, `gateway.`, root=landing).
+  No dual-domain, no legacy alias — greenfield.
+- Bring the code domain changes from `olharai-rebrand.md` Phase 1 into the images/config:
+  `sentinel-app/src/lib/config.ts`, `crates/app-core/src/billing/payments/stripe.rs`,
+  `OAUTH_REDIRECT_BASE`/`OAUTH_SUCCESS_REDIRECT` in the compose, `sentinel-edge/install.sh` default
+  `--control`.
+- Verify on a temp hostname / `/etc/hosts` before DNS, then point `olharai.com` DNS (Cloudflare) at
+  the new server. Master login works; a fresh tenant shows the template curriculum.
 
-## Phase 2 — Domain cutover to olharai.com (new server)
-- Cloudflare: add `olharai.com` (+ `.com.br` redirect) per `olharai-rebrand.md` Phase 1; A/CNAME for
-  root(landing) / `app.` / `control.` / `gateway.` → **new server IP**.
-- New compose Traefik `Host()` rules on `olharai.com` (dedicated box, so no dual-tenant concern; the
-  church-app coexistence constraint is gone).
-- Land the code domain changes from `olharai-rebrand.md` Phase 1 (`config.ts`, `stripe.rs`,
-  `OAUTH_REDIRECT_BASE`/`OAUTH_SUCCESS_REDIRECT`, `sentinel-edge/install.sh`, app OG URLs).
-- Update Google OAuth redirect URIs + Stripe URLs (external dashboards).
-- **DNS flip = the cutover.** Lower TTLs beforehand; keep the old stack warm until the new one is
-  taking real traffic and verified.
+## Phase 2 — Retarget CI + local deploy to the new server
+- GitHub Actions: update `secrets.VPS_HOST` + the deploy SSH key secret across `deploy.yml`,
+  `release.yml`, `ai-sidecar.yml`.
+- Un-hardcode `root@85.239.248.86` / `id_contab_ed25519` in `deploy/push-local.sh` and the
+  `edge-publish`/`edge-dist` scp targets in `Taskfile.yml` → new host/user/key/path. The edge
+  release path `/ibbf/edge-dist` (served at `control…/edge/*`) moves too, or edge downloads 404.
 
-## Phase 3 — Retarget CI + local deploy
-- GitHub Actions: update `secrets.VPS_HOST` (+ deploy SSH key secret) to the new server, across
-  `deploy.yml`, `release.yml`, `ai-sidecar.yml`.
-- Un-hardcode `root@85.239.248.86` + `id_contab_ed25519` in `deploy/push-local.sh` and `Taskfile.yml`
-  (the `edge-publish`/`edge-dist` scp targets) → new host/user/key/path. **Note the release path
-  `/ibbf/edge-dist`** (served as `control…/edge/*`) moves too, or edge downloads 404.
+## Phase 3 — Reinstall the edges (operator, at the clients)
+- Fresh install on each box with `--control https://control.olharai.com` (new pairing code →
+  new box token, new Tailscale key). No re-point mechanism needed — it's a clean install.
+- After this phase, nothing in the field references the old control host.
 
-## Phase 4 — Edge migration, then retire control.thesentinels.online (the careful part)
-- **Keep `control.thesentinels.online` DNS pointed at the NEW server** (add it to the new Traefik
-  `Host()` rule alongside `control.olharai.com`) so field edges keep working through the move — the
-  `gateway.ibbf.life` legacy-alias pattern already in the compose is the exact precedent.
-- Re-point each edge to `control.olharai.com`. Options (pick per fleet size):
-  1. **Re-install** with `--control https://control.olharai.com` (the install.sh `--update` path,
-     but `--update` re-passes the old URL, so it must be a fresh `--control`, not a bare update).
-  2. **Edit the env file** on each box (`CONTROL_URL=`) + restart — needs box access.
-  3. **Build a real remote re-point** — a control-issued command the edge honours on its config
-     long-poll to rewrite its own `CONTROL_URL`. This is the only *scalable* answer and is likely
-     its **own card** if the fleet is more than a handful. Flagged, not assumed.
-- Only when **zero** edges resolve the old control host (verify via access logs / edge health
-  reports) → drop `control.thesentinels.online`.
+## Phase 4 — Batch the external integrations (one pass, at the end)
+Update every external service that has the old domain in its config, **after** the new stack is
+verified:
+- **Google OAuth**: redirect URIs → `https://control.olharai.com/...` (Google Cloud console).
+- **Stripe**: success/cancel URLs (code default already changed in Phase 1); update any
+  dashboard-side URLs / webhook endpoints pointing at the old domain.
+- **Telegram @BotFather**: if the bot's webhook or display identity references the old domain.
+- **Tuya / any other provider callback** that carries our domain.
+- **Cloudflare**: `.com.br` bulk redirect → `olharai.com` (per olharai-rebrand.md).
+- Audit: `grep -rin thesentinels` for any remaining live config reference.
 
-## Phase 5 — Full retirement of thesentinels.online + old overlay teardown
-- Once user-facing traffic is on `olharai.com` and all edges are migrated: replace the old domain's
-  routers with a 301 → `olharai.com` for a grace window, then remove DNS/records entirely.
-- **Decommission the old overlay, NOT the old server** — the box still runs the church app
-  (`ibbf.life`). Remove only `sentinel-*` containers, images, and the `sentinel_pgdata` /
-  `sentinel_minio` volumes **after** confirming the new server holds the data and has a backup.
+## Phase 5 — Retire thesentinels.online + tear down the old overlay
+- With traffic on `olharai.com`, edges reinstalled, and integrations repointed: 301 the old domain
+  → `olharai.com` for a short grace window, then remove its DNS/records entirely (including
+  `control.thesentinels.online` — safe now, no edge depends on it).
+- **Decommission the old overlay, NOT the old server**: remove only `sentinel-*` containers, images,
+  and the `sentinel_pgdata` / `sentinel_minio` volumes. The church app (`ibbf.life`) keeps running
+  on that box, untouched.
 
 ## Open decisions
-1. **Reuse `JWT_SECRET` or rotate?** Reuse = seamless sessions + box tokens survive; rotate = every
-   user and every edge re-auths (worsens the edge problem). Lean reuse.
-2. **Traefik: external (as today) or folded into the stack?** Dedicated box makes folding it in
-   cleaner and self-contained. Lean fold-in.
-3. **Deploy dir + user**: keep `/ibbf/`-style root layout, or an OlharAI-neutral `/olharai/` with a
-   non-root deploy user? Ties to the non-root access question in Phase 0.
-4. **Edge re-point mechanism** — manual re-install vs. a built remote re-point command. Depends on
-   how many boxes are actually deployed (operator knows the count).
-5. **MinIO vs R2 going forward** — migration is a chance to move clips to Cloudflare R2 (external,
-   no server-side volume to migrate next time) instead of local MinIO. Separate call; out of scope
-   here unless decided now.
+1. **Traefik** — fold into the stack (leaning yes, dedicated box) vs. stand up separately.
+2. **Deploy dir + user** — `/olharai/` + non-root deploy user vs. mirror the old root `/ibbf/` layout.
+3. **MinIO vs R2 going forward** — greenfield is the moment to switch clip storage to external
+   Cloudflare R2 (no server-side volume to ever migrate again) instead of local MinIO. Separate
+   call; decide now or keep MinIO.
+4. **Recreate tenants how** — master recreates them, or clients re-signup. Greenfield seeds master +
+   templates automatically; tenant recreation is a manual/operational step.
 
 ## Out of scope (v1)
 - Brand strings, mark, landing copy — that is `olharai-rebrand.md`, run alongside.
 - Any repo/service/crate rename (stays `sentinel-*`, standing instruction).
-- Moving clip storage to R2 (open decision #5 — separate if pursued).
+- Carrying over ANY data (greenfield — explicit).
 
 ## Verification
-- New server serves app/control/gateway/landing on `olharai.com` with valid TLS.
-- Row counts + a spot-check of clips match between old and new before old is touched.
-- A **real edge box** re-pointed to `control.olharai.com` reports health, streams live, uploads a
-  clip end-to-end.
-- Old domain 301s to `olharai.com`; `control.thesentinels.online` retired only after edge logs show
-  zero hits.
-- Church app on the old server still up throughout (never touched).
+- New server serves app/control/gateway/landing on `olharai.com` with valid TLS; master logs in; a
+  fresh tenant shows the L1–L6 templates.
+- A **real edge box**, freshly installed against `control.olharai.com`, enrolls, reports health,
+  streams live, and uploads a clip end-to-end.
+- `grep -rin thesentinels` finds no remaining **live** config/integration reference.
+- Old domain 301s then is removed; the church app on the old server is up throughout (never touched).
