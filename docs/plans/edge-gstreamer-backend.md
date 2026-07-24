@@ -2,6 +2,60 @@
 
 **Board card:** #138 Edge GStreamer media backend (per-box ffmpeg↔gstreamer switch + measurement)
 
+---
+
+## ⭐ PIVOT — 2026-07-23: the driver is now **phone-as-edge**, not performance
+
+Everything below this section was written under the original framing — *"is GStreamer measurably
+lighter than ffmpeg? prove it with a per-box A/B flag before committing."* The operator has reset the
+driver, and it changes the mandate, the scope, and the core architecture decision. **Read this section
+first; the grounding below is still a valid inventory but its conclusions are superseded here.**
+
+**Why we migrate (the new north-star):** to run the **whole edge inside a cheap Android phone** —
+motion detection + frame-to-cloud + everything the Linux edge does — to cut edge hardware cost (a used
+phone ≪ a mini-PC/SBC, and it has hardware video decode built in). **iOS is out** (no 24/7 background
+camera/CPU); **Android only** (foreground service). See the phone-as-edge follow-on card.
+
+**GStreamer is the unlock, and it's mandatory — not "if the numbers win":**
+- Android has **no clean subprocess model.** ffmpeg (subprocess) and **go2rtc** (a Go subprocess)
+  cannot be orchestrated on Android the way they are on Linux. GStreamer is the **only** media stack
+  that runs natively on both Linux and Android (via the NDK), with **hardware decode** on each
+  (VAAPI/NVDEC/VideoToolbox on desktop, **MediaCodec** on Android).
+- So performance-parity is **enough**. The macOS field finding that GStreamer showed *no* HW-decode
+  win (Phase 3, "closed as no-win") **no longer blocks anything** — we migrate for portability, not
+  speed. Parity ⇒ ship.
+
+**Three things this pivot changes vs. the plan below:**
+
+1. **go2rtc is now IN scope** (the grounding below says *"go2rtc stays out of scope"* — superseded).
+   Everything go2rtc does for us — the live **MSE/WS** feed, **WebRTC**, RTSP restream/serving,
+   `/api/frame.jpeg` snapshots — must be **re-implemented in GStreamer** (`webrtcbin`, `rtspsrc`/
+   `rtspclientsink`, `mp4mux fragment-duration` for MSE, `jpegenc` for snapshots), because go2rtc
+   itself can't run on the phone. This is the **largest new chunk** — go2rtc is a mature product that
+   solved many streaming edge cases; reimplementing its surface in GStreamer is real engineering,
+   flagged honestly, likely its own phase.
+
+2. **The architecture flips from `gst-launch` subprocess → linked `gstreamer-rs` bindings.** The plan
+   below makes "spawn `gst-launch-1.0` subprocesses (not `gstreamer-rs`, to keep the #79 static-musl
+   build)" its **load-bearing design choice**. That is exactly wrong for Android, which has no
+   subprocess model — GStreamer there is a **linked library**. So the migration must use
+   **`gstreamer-rs` linked bindings**, which run on Linux (dynamic link) *and* Android (NDK lib) from
+   one codebase. **Accepted cost:** the edge stops being a "links-nothing" static musl binary (#79) —
+   it links libgstreamer. That is the price of one portable media path, and it is worth it.
+
+3. **The per-box `ffmpeg↔gstreamer` flag becomes a transition tool, not the endgame.** The endgame is
+   **no ffmpeg and no go2rtc at all** — one GStreamer media path, identical on Linux and Android.
+
+**What still holds from below:** the ffmpeg touchpoint inventory (A1–A6, B3) is an accurate map of
+*what* must be reimplemented; the pure-Rust capture core (retina RTSP + depacketizer) stays and feeds
+GStreamer; A1 (live decode) is still the first and heaviest slice.
+
+**Dependency direction:** this card (#138, now "retire go2rtc + ffmpeg → one linked GStreamer path")
+is the **enabler**; the **phone-as-edge (Android)** card depends on it and cannot start until the
+media path is a linked, portable GStreamer.
+
+---
+
 ## Matrix — funcionalidade × ffmpeg × GStreamer (estado real, não o planejado)
 
 | # | Funcionalidade | ffmpeg | GStreamer | Vencedor / observação |
