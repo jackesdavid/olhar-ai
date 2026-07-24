@@ -17,7 +17,7 @@
   import OlharMark from "$lib/components/olhar-mark.svelte";
   import SensorField from "$lib/components/sensor-field.svelte";
 
-  const APP = "https://app.thesentinels.online";
+  const APP = "https://app.olharai.com";
 
   // Sticky nav: warm the border once the page scrolls a touch.
   let hdr = $state<HTMLElement>();
@@ -84,7 +84,7 @@
   <meta property="og:title" content="Olhar AI — cameras that understand and act" />
   <meta property="og:description" content="Detection, tracking, recording, and a 65-block visual automation engine — running on your own edge. Cameras that understand and act." />
   <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://thesentinels.online" />
+  <meta property="og:url" content="https://olharai.com" />
 </svelte:head>
 
 <SensorField />

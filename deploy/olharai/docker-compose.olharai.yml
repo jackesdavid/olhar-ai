@@ -1,0 +1,261 @@
+# OlharAI cloud stack — dedicated server, greenfield (card #142).
+# Self-contained: bundles Traefik + Let's Encrypt (the old ibbf VPS shared an external Traefik;
+# this box is dedicated, so Traefik lives here). Pulls prebuilt images from GHCR (CI builds them).
+#
+# Public hosts (olharai.com only — no thesentinels.online; this is a clean break):
+#   sentinel-control   → control.olharai.com     (API/backend, auth, RBAC, tenant APIs, /config/*)
+#   sentinel-app       → app.olharai.com         (web client SPA)
+#   sentinel-gateway   → gateway.olharai.com     (public live-video bridge, live.view-gated)
+#   sentinel-landing   → olharai.com             (marketing landing)
+#
+# Internal-only (no Traefik): sentinel-flow, sentinel-notification, sentinel-ai, postgres, redis, minio.
+#
+# HA: the stateless sentinel-* app services run 2 replicas each (deploy.replicas). Datastores
+# (postgres/redis/minio) stay single — you replicate the app tier, not the data tier. Scale a
+# service at runtime with `docker compose -f … up -d --scale sentinel-control=N`.
+#
+# Secrets live in ./sentinel.env on the server (NOT committed):
+#   JWT_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, MASTER_EMAIL, MASTER_PASSWORD,
+#   ANTHROPIC_API_KEY, ELEVENLABS_API_KEY, STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET, S3_KEY, S3_SECRET.
+# Placeholders filled on the server before first `up`: __DB_PASS__, __ACME_EMAIL__,
+#   __EDGE_HOST__, __EDGE_TS_IP__ (the fallback edge on the tailnet — same as the old stack).
+services:
+  traefik:
+    # Reverse proxy + automatic Let's Encrypt. Dedicated box, so it's part of this stack now.
+    image: traefik:v3.1
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # Redirect all HTTP → HTTPS at the entrypoint.
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+      - --certificatesresolvers.letsencrypt.acme.email=__ACME_EMAIL__
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_acme:/letsencrypt
+
+  sentinel-postgres:
+    # Postgres 17 + pgvector + pg_cron (deploy/postgres/Dockerfile). Deploy BEFORE control:
+    # migration 0046 hard-requires the scheduler. Single instance (operator: normal for now).
+    image: ghcr.io/jackesdavid/sentinel-postgres:latest
+    container_name: sentinel-postgres
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_cron
+      - -c
+      - cron.database_name=sentinel
+    environment:
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: __DB_PASS__
+      POSTGRES_DB: sentinel
+    volumes:
+      - sentinel_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentinel -d sentinel"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  sentinel-redis:
+    # Shared pub/sub event fabric (no persistence). Cross-pod flow run-progress + edge motion
+    # events. Single instance — a 2nd naive instance would split the pub/sub brain.
+    image: redis:7-alpine
+    container_name: sentinel-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  sentinel-control:
+    # 2 replicas. No container_name (a name is unique; replicas can't share it). No published
+    # host port — Traefik reaches the container port directly and load-balances across replicas.
+    image: ghcr.io/jackesdavid/sentinel-control:latest
+    restart: always
+    env_file:
+      - sentinel.env
+    environment:
+      DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
+      REDIS_URL: redis://sentinel-redis:6379
+      CONTROL_BIND: 0.0.0.0:8790
+      OAUTH_REDIRECT_BASE: https://control.olharai.com
+      OAUTH_SUCCESS_REDIRECT: https://app.olharai.com/login
+      EDGE_DIST_DIR: /edge-dist
+      LATEST_EDGE_VERSION: "0.1.3"
+      AI_SERVICE_URL: http://sentinel-ai:8000/runsync
+      FLOW_URL: http://sentinel-flow:8787
+      AI_RATE_PER_SEC: "0"
+      PAYMENT_PROVIDER: stripe
+      STRIPE_SUCCESS_URL: https://app.olharai.com/billing?paid=1
+      STRIPE_CANCEL_URL: https://app.olharai.com/billing
+      ASAAS_BASE_URL: https://api.asaas.com/v3
+    volumes:
+      - ./edge-dist:/edge-dist:ro
+    depends_on:
+      sentinel-postgres:
+        condition: service_healthy
+      sentinel-ai:
+        condition: service_started
+      sentinel-redis:
+        condition: service_started
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sentinel-control.rule=Host(`control.olharai.com`)"
+      - "traefik.http.routers.sentinel-control.entrypoints=websecure"
+      - "traefik.http.routers.sentinel-control.tls.certresolver=letsencrypt"
+      - "traefik.http.services.sentinel-control.loadbalancer.server.port=8790"
+    deploy:
+      replicas: 2
+
+  sentinel-ai:
+    # CPU face-only vision sidecar (SCRFD + ArcFace), /runsync contract. Internal only.
+    # Heavy compute — left at 1 replica unless the box has headroom (open decision #5).
+    image: ghcr.io/jackesdavid/sentinel-ai:cpu
+    container_name: sentinel-ai
+    restart: always
+    command: ["python", "-u", "handler.py", "--rp_serve_api", "--rp_api_host", "0.0.0.0", "--rp_api_port", "8000"]
+
+  sentinel-ai-dlib:
+    # A/B experiment variant (128-d, NOT pgvector-compatible). Behind the "experiment" profile,
+    # never started by a normal up/deploy.
+    profiles: ["experiment"]
+    image: ghcr.io/jackesdavid/sentinel-ai:dlib
+    container_name: sentinel-ai-dlib
+    restart: unless-stopped
+    command: ["python", "-u", "handler_dlib.py", "--rp_serve_api", "--rp_api_host", "0.0.0.0", "--rp_api_port", "8000"]
+
+  sentinel-app:
+    image: ghcr.io/jackesdavid/sentinel-app:latest
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sentinel-app.rule=Host(`app.olharai.com`)"
+      - "traefik.http.routers.sentinel-app.entrypoints=websecure"
+      - "traefik.http.routers.sentinel-app.tls.certresolver=letsencrypt"
+      - "traefik.http.services.sentinel-app.loadbalancer.server.port=80"
+    deploy:
+      replicas: 2
+
+  sentinel-landing:
+    image: ghcr.io/jackesdavid/sentinel-landing:latest
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sentinel-landing.rule=Host(`olharai.com`)"
+      - "traefik.http.routers.sentinel-landing.entrypoints=websecure"
+      - "traefik.http.routers.sentinel-landing.tls.certresolver=letsencrypt"
+      - "traefik.http.services.sentinel-landing.loadbalancer.server.port=80"
+    deploy:
+      replicas: 2
+
+  sentinel-gateway:
+    image: ghcr.io/jackesdavid/sentinel-gateway:latest
+    restart: always
+    env_file:
+      - sentinel.env   # JWT_SECRET (shared with control — verifies live.view)
+    environment:
+      GATEWAY_BIND: 0.0.0.0:8789
+      EDGE_UPSTREAM: https://__EDGE_HOST__
+      CONTROL_URL: http://sentinel-control:8790
+    extra_hosts:
+      - "__EDGE_HOST__:__EDGE_TS_IP__"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sentinel-gw.rule=Host(`gateway.olharai.com`)"
+      - "traefik.http.routers.sentinel-gw.entrypoints=websecure"
+      - "traefik.http.routers.sentinel-gw.tls.certresolver=letsencrypt"
+      - "traefik.http.services.sentinel-gw.loadbalancer.server.port=8789"
+    deploy:
+      replicas: 2
+
+  sentinel-flow:
+    # Always-on MULTI-TENANT workflow engine + trigger poller. Internal only. Already multi-pod:
+    # no container_name, Docker-assigned hostname → pod_name, Docker DNS round-robins; work_jobs
+    # claims atomically (FOR UPDATE SKIP LOCKED) so concurrent replicas are safe.
+    image: ghcr.io/jackesdavid/sentinel-flow:latest
+    restart: always
+    env_file:
+      - sentinel.env
+    environment:
+      DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
+      REDIS_URL: redis://sentinel-redis:6379
+      FLOW_BIND: 0.0.0.0:8787
+      NOTIFY_QUEUE: "1"
+      S3_ENDPOINT: http://sentinel-minio:9000
+      S3_BUCKET: sentinel-media
+      S3_KEY: ${S3_KEY:-sentinel}
+      S3_SECRET: ${S3_SECRET}
+      AI_SERVICE_URL: http://sentinel-ai:8000/runsync
+      GO2RTC_URL: https://__EDGE_HOST__
+    extra_hosts:
+      - "__EDGE_HOST__:__EDGE_TS_IP__"
+    depends_on:
+      sentinel-postgres:
+        condition: service_healthy
+      sentinel-ai:
+        condition: service_started
+      sentinel-redis:
+        condition: service_started
+    deploy:
+      replicas: 2
+
+  sentinel-notification:
+    # Consumes the durable notification_queue (atomic claim) and sends to recipients (Telegram +
+    # push). Internal only. Safe at N replicas — the queue hands each job to exactly one consumer.
+    image: ghcr.io/jackesdavid/sentinel-notification:latest
+    restart: always
+    env_file:
+      - sentinel.env
+    environment:
+      DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
+      NOTIFY_BIND: 0.0.0.0:8791
+      S3_ENDPOINT: http://sentinel-minio:9000
+      S3_BUCKET: sentinel-media
+      S3_KEY: ${S3_KEY:-sentinel}
+      S3_SECRET: ${S3_SECRET}
+    depends_on:
+      sentinel-postgres:
+        condition: service_healthy
+    deploy:
+      replicas: 2
+
+  sentinel-minio:
+    # S3-compatible object store for notification media. Internal only. Single instance
+    # (2 on one volume corrupts; distributed MinIO needs >=4 nodes). Open decision #3: R2 later.
+    image: minio/minio:latest
+    container_name: sentinel-minio
+    command: server /data
+    restart: always
+    environment:
+      MINIO_ROOT_USER: ${S3_KEY:-sentinel}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET}
+    volumes:
+      - sentinel_minio:/data
+
+  sentinel-minio-init:
+    # One-shot: create the media bucket (idempotent).
+    image: minio/mc:latest
+    depends_on:
+      sentinel-minio:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "until mc alias set m http://sentinel-minio:9000 ${S3_KEY:-sentinel} ${S3_SECRET}; do sleep 1; done; mc mb --ignore-existing m/sentinel-media; echo bucket-ready"
+    restart: "no"
+
+volumes:
+  sentinel_pgdata:
+  sentinel_minio:
+  traefik_acme:

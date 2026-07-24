@@ -40,8 +40,8 @@ impl StripeGateway {
             api_key,
             base,
             webhook_secret: env_nonempty("STRIPE_WEBHOOK_SECRET"),
-            success_url: env_nonempty("STRIPE_SUCCESS_URL").unwrap_or_else(|| "https://app.thesentinels.online/billing?paid=1".into()),
-            cancel_url: env_nonempty("STRIPE_CANCEL_URL").unwrap_or_else(|| "https://app.thesentinels.online/billing".into()),
+            success_url: env_nonempty("STRIPE_SUCCESS_URL").unwrap_or_else(|| "https://app.olharai.com/billing?paid=1".into()),
+            cancel_url: env_nonempty("STRIPE_CANCEL_URL").unwrap_or_else(|| "https://app.olharai.com/billing".into()),
         })
     }
 

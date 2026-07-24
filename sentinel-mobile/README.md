@@ -98,7 +98,7 @@ use breaks push for that app.
 
 ### Pointing at a local backend
 
-Defaults are production (`control.thesentinels.online`). To hit a laptop:
+Defaults are production (`control.olharai.com`). To hit a laptop:
 
 ```bash
 EXPO_PUBLIC_CONTROL_URL=http://192.168.1.50:8790 npx expo start
