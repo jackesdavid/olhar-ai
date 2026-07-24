@@ -54,5 +54,5 @@ gstreamer-app = { version = "0.23", optional = true }
 
 [features]
 opencv-parity = ["dep:opencv"]
-gst-linked = ["dep:gstreamer", "dep:gstreamer-app"]
+gst-linked = ["dep:gstreamer", "dep:gstreamer-app", "app-core/gst-linked"]
 

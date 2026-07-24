@@ -118,6 +118,8 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "chrono-tz",
+ "gstreamer",
+ "gstreamer-app",
  "hex",
  "hmac",
  "image",

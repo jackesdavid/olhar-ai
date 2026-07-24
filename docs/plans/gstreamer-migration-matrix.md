@@ -21,7 +21,7 @@ it passes on **both**, with the other platforms' HW-decode elements noted per ro
 | A2 | **Recording mux** (H264 ring → fragmented mp4) | ffmpeg `-c:v copy` (`recording.rs`) | `appsrc ! h264parse ! mp4mux fragment-duration` | clip store / playback | 3 | ⬜ | ⬜ | ⬜ |
 | A3 | **Clip duration probe** | `ffprobe` (`recording.rs`) | GStreamer `discoverer` / pipeline query | recording metadata | 3 | ⬜ | ⬜ | ⬜ |
 | A4 | **HW-decode capability probe** | ffmpeg `-hwaccel` list (`hwaccel.rs`) | `gst_registry` element presence (`vtdec`/`nvv4l2decoder`…) | health report | 5 | ⬜ | ⬜ | ⬜ |
-| A5 | **Snapshot fallback** (single-frame, cold) | raw `ffmpeg` (`onvif/client.rs`) | one-shot `rtspsrc ! <dec> ! jpegenc num-buffers=1` | credential test / cold snapshot | 2 | ⬜ | ⬜ | ⬜ |
+| A5 | **Snapshot fallback** (single-frame, cold) | raw `ffmpeg` (`onvif/client.rs`) | one-shot `rtspsrc ! decodebin ! jpegenc` (feature-gated) | **credential probe only** — no longer a snapshot fallback | 2 | ✅⁴ | ⬜ | 🟡 |
 | A6 | **ffmpeg presence check** | `ffmpeg -version` (`state.rs`) | removed (no ffmpeg) | health gating | 5 | ⬜ | ⬜ | ⬜ |
 | B3 | **Snapshot from warm feed** (`/api/frame.jpeg`, "Get current frame" node) | go2rtc → internal ffmpeg | serve the A1 warm JPEG (`capture::latest_fresh`); cold path only as fallback | workflow node, app-core `go2rtc.rs`, gateway | 2 | ✅³ | ⬜ | 🟡 |
 | G1 | **RTSP ingest from cameras** | go2rtc per-camera streams | `rtspsrc` (shared A1 ingest) | all downstream | 1 | ✅² | ⬜ | 🟡 |
@@ -82,3 +82,14 @@ local `:1984` → `:8788`, per `tailscale serve --https=8080 8788`) and falls ba
 whose edge API is unreachable (older edge) is remembered process-wide so it pays the 2s probe once,
 not per grab. 4 unit tests cover the URL derivation. Both B3 consumers — the edge endpoint and the
 cloud workflow node — now prefer the warm frame; go2rtc's internal ffmpeg is only a fallback.
+
+⁴ **A5 + the great snapshot collapse (2026-07-24).** The operator's call: *"we should have only one —
+the warm buffer."* `/snapshot/:ip` now has **exactly one** source — the supervised decoder — starting
+it on demand (on the same stream the hub would pick) and waiting out the cold start. The old
+four-way chain (warm → go2rtc `frame.jpeg` → ONVIF `GetSnapshotUri` → one-shot RTSP), **two of whose
+rungs spawned ffmpeg**, is gone; if the decoder can't produce a frame the camera is unusable for
+live/recording/detection anyway, so failing honestly beats a silent slow path. `snapshot_from_rtsp`
+survives for the genuinely different job — the **credential probe** (`/probe/:ip`), validating
+arbitrary creds against a camera that may not be configured — and now runs on GStreamer where the
+runtime exists: app-core gained an optional `gst-linked` feature that the **edge forwards**, so the
+cloud services (control/flow), which have no GStreamer, keep the ffmpeg path untouched.

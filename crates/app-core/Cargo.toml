@@ -52,3 +52,12 @@ log = "0.4"
 # S3-compatible object store (minio) for notification media (snapshot JPEGs, recording mp4s).
 # Blocking API + rustls (pure-Rust, no OpenSSL) — called from the sync enqueue/consumer paths.
 rust-s3 = { version = "0.35", default-features = false, features = ["blocking", "tokio-rustls-tls"] }
+
+# Linked gstreamer-rs for the cold RTSP snapshot (card #138, touchpoint A5). OPTIONAL and OFF by
+# default: app-core is compiled into the CLOUD services (control/flow) too, and they neither have
+# nor want a GStreamer runtime. The edge turns it on by forwarding its own `gst-linked` feature.
+gstreamer = { version = "0.23", optional = true }
+gstreamer-app = { version = "0.23", optional = true }
+
+[features]
+gst-linked = ["dep:gstreamer", "dep:gstreamer-app"]

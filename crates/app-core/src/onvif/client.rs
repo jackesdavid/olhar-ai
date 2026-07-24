@@ -231,6 +231,63 @@ pub fn rtsp_url_with_creds(rtsp: &str, user: &str, pass: &str) -> String {
     }
 }
 
+/// One-shot RTSP → JPEG via **linked GStreamer** (card #138, touchpoint A5) — the ffmpeg
+/// replacement for the cold snapshot. Only compiled where a GStreamer runtime exists (the edge
+/// forwards its `gst-linked` feature); the cloud services keep the ffmpeg path below.
+///
+/// Bounded on purpose: an unreachable or wedged camera must never block the caller, so we give the
+/// whole grab a wall-clock deadline and pull a single sample rather than running a live pipeline.
+#[cfg(feature = "gst-linked")]
+fn snapshot_from_rtsp_gst(url: &str) -> Result<Vec<u8>, String> {
+    use gstreamer as gst;
+    use gstreamer::prelude::*;
+    use gstreamer_app as gst_app;
+
+    gst::init().map_err(|e| format!("gst init: {e}"))?;
+    // `timeout` is in microseconds — abort a stalled RTSP handshake rather than hanging.
+    let desc = format!(
+        "rtspsrc location=\"{url}\" protocols=tcp latency=100 timeout=4000000 \
+         ! decodebin ! videoconvert ! jpegenc quality=90 \
+         ! appsink name=out sync=false max-buffers=1 drop=false"
+    );
+    let pipeline = gst::parse::launch(&desc)
+        .map_err(|e| format!("gst parse: {e}"))?
+        .downcast::<gst::Pipeline>()
+        .map_err(|_| "not a pipeline".to_string())?;
+    let appsink = pipeline
+        .by_name("out")
+        .ok_or("appsink missing")?
+        .downcast::<gst_app::AppSink>()
+        .map_err(|_| "not an appsink".to_string())?;
+
+    pipeline
+        .set_state(gst::State::Playing)
+        .map_err(|e| format!("gst play: {e}"))?;
+
+    // Pull the first decoded frame, giving the connect+decode a hard ceiling.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    let mut out: Result<Vec<u8>, String> = Err("no frame from camera".into());
+    while std::time::Instant::now() < deadline {
+        match appsink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
+            Some(sample) => {
+                if let Some(buf) = sample.buffer() {
+                    if let Ok(map) = buf.map_readable() {
+                        out = Ok(map.to_vec());
+                    }
+                }
+                break;
+            }
+            None => {
+                if appsink.is_eos() {
+                    break;
+                }
+            }
+        }
+    }
+    let _ = pipeline.set_state(gst::State::Null);
+    out
+}
+
 pub fn snapshot_from_rtsp(rtsp: &str, user: &str, pass: &str) -> Result<Vec<u8>, String> {
     if rtsp.trim().is_empty() {
         return Err(
@@ -239,6 +296,15 @@ pub fn snapshot_from_rtsp(rtsp: &str, user: &str, pass: &str) -> Result<Vec<u8>,
         );
     }
     let url = rtsp_url_with_creds(rtsp, user, pass);
+
+    // Prefer GStreamer where it exists (the edge). A failure here falls through to ffmpeg rather
+    // than failing the snapshot — during the migration both must remain viable.
+    #[cfg(feature = "gst-linked")]
+    match snapshot_from_rtsp_gst(&url) {
+        Ok(bytes) if !bytes.is_empty() => return Ok(bytes),
+        Err(e) => log::debug!("gstreamer cold snapshot failed, falling back to ffmpeg: {e}"),
+        _ => {}
+    }
 
     // `-timeout` (µs) makes ffmpeg abort a stalled RTSP socket read on its own; the
     // wall-clock kill below is a belt-and-suspenders guard in case the handshake itself

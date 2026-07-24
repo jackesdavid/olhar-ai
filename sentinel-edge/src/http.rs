@@ -12,7 +12,6 @@ use axum::Router;
 use serde_json::json;
 use tower_http::cors::CorsLayer;
 
-use app_core::device_actions::capture_snapshot_bytes;
 use app_core::go2rtc;
 
 use crate::state::AppState;
@@ -195,49 +194,58 @@ fn probe_device(device: &app_core::devices::Device, user: &str, pass: &str) -> s
 
 /// Capture and return a JPEG snapshot for the camera at `ip` (binary; the FrameSource port).
 ///
-/// **Warm-first (card #138, Stage 2).** The supervised per-camera decoder (`capture.rs`) already
-/// holds a continuously-decoded JPEG, so serve THAT when it's fresh: it costs nothing (the frame is
-/// already in memory) and skips the cold path entirely — which is go2rtc's `/api/frame.jpeg`, and
-/// go2rtc spawns **ffmpeg** internally for it (touchpoint B3), measured at ~490 ms per grab.
-/// The cold path (go2rtc → ONVIF/ffmpeg, both in `app-core`) stays as the fallback for a camera
-/// whose decoder isn't running or is mid-restart, so behaviour is unchanged when there's no warm
-/// frame. We deliberately do NOT call `capture::ensure` here — starting a persistent decoder as a
-/// side effect of one snapshot request is the frame hub's decision, not this endpoint's.
+/// **ONE path: the warm buffer** (card #138, Stage 2). Every snapshot is the frame the supervised
+/// per-camera decoder (`capture.rs`) is already producing — the same frame motion, detection and the
+/// hub see. If the camera has no decoder yet we start one and wait briefly for its first frame,
+/// after which it stays warm and subsequent snapshots are free.
+///
+/// There are deliberately **no fallbacks** here anymore. The old chain (go2rtc `/api/frame.jpeg` →
+/// ONVIF `GetSnapshotUri` → a one-shot RTSP grab) meant four ways to answer one question, two of
+/// them spawning **ffmpeg** — go2rtc does so internally for `frame.jpeg` (~490 ms/grab). Collapsing
+/// to the warm buffer removes that duplication, and if the decoder cannot produce a frame the camera
+/// is unusable for live/recording/detection anyway, so reporting the failure is the honest answer.
+///
+/// The credential probe (`/probe/:ip`) is a genuinely different job — validating arbitrary
+/// credentials against a camera that may not be configured at all — and keeps its own direct grab.
 async fn snapshot(State(state): State<Arc<AppState>>, Path(ip): Path<String>) -> impl IntoResponse {
     let Some(device) = state.device_by_ip(&ip) else {
         return (StatusCode::NOT_FOUND, format!("no device with ip {ip}")).into_response();
     };
-    if let Some(jpeg) = crate::capture::latest_fresh(&ip, std::time::Duration::from_secs(2)) {
-        return (
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, "image/jpeg"),
-                (header::CACHE_CONTROL, "no-store"),
-            ],
-            Body::from(jpeg.to_vec()),
-        )
-            .into_response();
-    }
-    match tokio::task::spawn_blocking(move || capture_snapshot_bytes(&device)).await {
-        Ok(Ok(bytes)) => (
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, "image/jpeg"),
-                (header::CACHE_CONTROL, "no-store"),
-            ],
-            Body::from(bytes),
-        )
-            .into_response(),
-        Ok(Err(e)) => {
-            log::warn!("snapshot {ip} failed: {e}");
-            (StatusCode::BAD_GATEWAY, e).into_response()
+    // Start the decoder on the SAME stream the frame hub would choose, so a snapshot never spins up
+    // a second decoder on the wrong stream (`ensure` is idempotent — first call wins per camera).
+    let hd = !device.is_unified()
+        && state
+            .recording
+            .config
+            .face_capture_stream
+            .eq_ignore_ascii_case("hd");
+    crate::capture::ensure(&ip, hd, &state.recording.config.media_backend);
+
+    // Wait out a cold start (RTSP connect + first decoded frame) before giving up.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    loop {
+        if let Some(jpeg) = crate::capture::latest_fresh(&ip, std::time::Duration::from_secs(3)) {
+            return (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, "image/jpeg"),
+                    (header::CACHE_CONTROL, "no-store"),
+                ],
+                Body::from(jpeg.to_vec()),
+            )
+                .into_response();
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("capture task failed: {e}"),
-        )
-            .into_response(),
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     }
+    log::warn!("snapshot {ip}: decoder produced no frame within 8s");
+    (
+        StatusCode::BAD_GATEWAY,
+        format!("no frame from {ip} — the camera's decoder produced nothing"),
+    )
+        .into_response()
 }
 
 /// The tracker's live "state of the world" for camera `ip` (card: edge tracking) — every
