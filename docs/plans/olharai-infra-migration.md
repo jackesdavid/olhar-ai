@@ -8,8 +8,8 @@ the new domain, batch-update the external integrations at the end, then **fully 
 `thesentinels.online` and tear down the old overlay.
 
 > **Secrets:** the new server's IP, user, and password are held out-of-band (shared in chat, not in
-> this repo). **Rotate that password and switch to SSH-key auth as step one** — a password that
-> travelled over chat must not be the production credential.
+> this repo). The operator will **rotate that password after the migration** (their call). Still
+> worth adding an SSH key early so the migration itself isn't driven over password auth.
 
 ## Strategy (decided by the operator)
 
@@ -62,6 +62,47 @@ migration:
 - Verify on a temp hostname / `/etc/hosts` before DNS, then point `olharai.com` DNS (Cloudflare) at
   the new server. Master login works; a fresh tenant shows the template curriculum.
 
+## Phase 1b — Two replicas per sentinel-* service (baked into the new compose)
+
+The operator wants **≥2 instances of each `sentinel-*` application service** from day one. The
+**datastores stay single** (`sentinel-postgres` explicitly "normal for now", `sentinel-redis`,
+`sentinel-minio`) — you replicate the *stateless app tier* that talks to a shared data tier, not the
+data itself. This is the correct pattern and the codebase already supports it.
+
+**Already proven in-repo:** `sentinel-flow` runs N replicas today (`docker compose ... up -d --scale
+sentinel-flow=N` / `task flow-scale N`): no `container_name`, Docker-assigned hostname → `pod_name`,
+Docker DNS round-robins. The `work_jobs` queue claims with `FOR UPDATE SKIP LOCKED` (atomic), so
+concurrent workers are safe, and Redis pub/sub is the cross-pod event fabric. So the horizontal-scale
+foundations exist; this phase applies flow's pattern to the rest.
+
+**Services to run at 2 replicas** (all stateless — verified: JWT auth, no in-memory session, shared
+Postgres/Redis/MinIO):
+- `sentinel-control`, `sentinel-flow` (already), `sentinel-gateway`, `sentinel-notification`,
+  `sentinel-app`, `sentinel-landing`.
+
+**Compose changes required to make them scalable** (each currently has `container_name`, which
+**blocks** replicas):
+- **Remove `container_name`** from the six services (a name is unique; two replicas can't share it).
+  Flow already omits it — mirror that.
+- **No host-published ports** on the scaled services — Traefik reaches container ports directly via
+  the Docker provider and **load-balances across all replicas automatically** off the existing
+  `Host()` router labels. (Internal-only `sentinel-flow` uses Docker DNS round-robin instead.)
+- Set `deploy.replicas: 2` per service (the compose already uses `deploy.replicas` for flow;
+  `--scale` / `task *-scale N` still overrides at runtime).
+- Anything that referenced a service by its old fixed `container_name` must use the **service name**
+  (Docker DNS) so it round-robins — e.g. control's `FLOW_URL` already points at `sentinel-flow`.
+
+**Datastores stay single** — `sentinel-postgres` (operator: leave normal for now),
+`sentinel-redis` (a 2nd naive instance splits pub/sub brain), `sentinel-minio` (2 on one volume
+corrupts). `sentinel-ai`/`sentinel-ai-dlib` are heavy compute backends — leave at 1 unless the box
+has headroom (stateless `runsync`, so scalable later if wanted).
+
+**Honest scope of "2 pods":** this makes the **app tier** HA — zero-downtime rolling restarts on
+deploy, load spread, one pod crashing doesn't drop the service. It does **not** make the **data tier**
+HA: Postgres/Redis/MinIO are still single points of failure. Full HA (Postgres replication, Redis
+Sentinel, distributed MinIO or R2) is a later, larger step — explicitly deferred by the
+"Postgres normal for now" decision.
+
 ## Phase 2 — Retarget CI + local deploy to the new server
 - GitHub Actions: update `secrets.VPS_HOST` + the deploy SSH key secret across `deploy.yml`,
   `release.yml`, `ai-sidecar.yml`.
@@ -101,6 +142,9 @@ verified:
    call; decide now or keep MinIO.
 4. **Recreate tenants how** — master recreates them, or clients re-signup. Greenfield seeds master +
    templates automatically; tenant recreation is a manual/operational step.
+5. **Replica count** — 2 per sentinel-* service is the floor the operator set; confirm the box has
+   the RAM/CPU for 2× six services + the datastores + the AI sidecar before committing, and whether
+   the AI sidecar also wants ≥2 (heavy; leave at 1 unless there's headroom).
 
 ## Out of scope (v1)
 - Brand strings, mark, landing copy — that is `olharai-rebrand.md`, run alongside.
