@@ -12,12 +12,15 @@
 //! **Recording** (`start` / `stop`)
 //!   `start()` snapshots the mem-ring from the last IDR frame (guarantees a clean
 //!   keyframe — no black frames) and installs the live sink under the SAME ring
-//!   lock, so no frame is dropped or duplicated at the boundary. It spawns
-//!   `ffmpeg -f h264 -i pipe:0 … output.mp4`, writes the pre-roll bytes, then a
-//!   relay thread feeds subsequent live frames to ffmpeg stdin.
+//!   lock, so no frame is dropped or duplicated at the boundary. It starts a muxer
+//!   ([`start_muxer`] — ffmpeg, or the linked GStreamer one on a `gstreamer-linked`
+//!   box, card #138 A2), writes the pre-roll FRAMES, then a relay thread feeds
+//!   subsequent live frames to it. Frames carry their capture time so the GStreamer
+//!   muxer can stamp a real PTS per buffer.
 //!
-//!   `stop()` clears the live sink → channel closes → relay thread drains → ffmpeg
-//!   stdin gets EOF → ffmpeg finalises the MP4. No concat step needed.
+//!   `stop()` clears the live sink → channel closes → relay drains → the sink closes
+//!   (ffmpeg stdin EOF / appsrc EOS) → the muxer writes the trailer. No concat step.
+//!   The clip's duration comes from the captured frame span, not `ffprobe` (A3).
 
 use futures::StreamExt as _;
 use retina::client::PacketItem;
@@ -124,8 +127,9 @@ pub struct RecordingConfig {
     pub delete_local_after_upload: bool,
     /// Which media tool the edge shells out to for camera decode (card #138): `"ffmpeg"` (default)
     /// or `"gstreamer"`. A coexistence flag, NOT a permanent fork — see
-    /// `docs/plans/edge-gstreamer-backend.md`. Only `capture.rs`'s live decode (A1, the heaviest
-    /// operation) honours it so far; recording mux + the snapshot fallback stay on ffmpeg.
+    /// `docs/plans/edge-gstreamer-backend.md`. `"gstreamer-linked"` (linked bindings, the
+    /// successor) additionally drives the recording mux (A2) and the cold snapshot (A5); plain
+    /// `"gstreamer"` is the older subprocess path and still only affects `capture.rs`'s A1 decode.
     /// Falls back to ffmpeg at read time if `gst-launch-1.0` isn't actually on this box's PATH
     /// (`state::gstreamer_ok()`), so a stale/mistaken flag never breaks capture.
     #[serde(default = "default_media_backend")]
@@ -258,6 +262,23 @@ struct Session {
     started_at: String,
     relay_thread: Option<std::thread::JoinHandle<()>>,
     muxer: Muxer,
+    /// First and last frame capture times actually written to this clip (card #138 A3). The clip's
+    /// duration is `last - first` — the real footage span — which needs no `ffprobe` and beats the
+    /// wall-clock fallback (that one counts time the recorder spent waiting for an IDR, and any
+    /// gap where the camera dropped out, as if it were footage).
+    span: Arc<Mutex<Option<(std::time::Instant, std::time::Instant)>>>,
+}
+
+/// Record a frame's capture time into a clip's span (first one opens it, every one extends it).
+fn note_span(
+    span: &Mutex<Option<(std::time::Instant, std::time::Instant)>>,
+    at: std::time::Instant,
+) {
+    let mut g = span.lock().unwrap();
+    match &mut *g {
+        Some((_, last)) => *last = at,
+        None => *g = Some((at, at)),
+    }
 }
 
 /// Spawn the mp4 muxer for a recording (A2): reads raw Annex-B H264 from stdin, remuxes
@@ -562,16 +583,20 @@ impl RecordingManager {
         // --- Step 3: write pre-roll, then hand the sink to the relay thread --
         // Frame-by-frame (not one blob) so each carries its capture time; for ffmpeg the bytes land
         // back-to-back exactly as the old concatenation did.
+        let span: Arc<Mutex<Option<(std::time::Instant, std::time::Instant)>>> =
+            Arc::new(Mutex::new(None));
         for (data, at) in &pre_roll {
             mux_sink
                 .write_frame(data, *at)
                 .map_err(|e| format!("pre-roll write: {e}"))?;
+            note_span(&span, *at);
         }
 
         // With pre-roll present, live frames are contiguous with it (same GOP),
         // so write them immediately. Without pre-roll, wait for the first live
         // IDR so the file starts on a keyframe.
         let wait_for_idr = pre_roll.is_empty();
+        let span_relay = Arc::clone(&span);
         let relay = std::thread::spawn(move || {
             let mut idr_seen = !wait_for_idr;
             for (frame_data, at) in live_rx {
@@ -589,6 +614,7 @@ impl RecordingManager {
                 if mux_sink.write_frame(&frame_data, at).is_err() {
                     break;
                 }
+                note_span(&span_relay, at);
             }
             // EOF (ffmpeg stdin drop) / EOS (appsrc) → the muxer finalises the file.
             mux_sink.finish();
@@ -605,6 +631,7 @@ impl RecordingManager {
                 started_at,
                 relay_thread: Some(relay),
                 muxer,
+                span,
             },
         );
         Ok((clip_id, true))
@@ -644,7 +671,15 @@ impl RecordingManager {
         let started = chrono::DateTime::parse_from_rfc3339(&sess.started_at)
             .map(|t| t.with_timezone(&chrono::Utc))
             .unwrap_or_else(|_| chrono::Utc::now());
-        let duration_secs = probe_duration(&sess.output)
+        // Duration from the FOOTAGE the clip actually contains (card #138 A3): the span between the
+        // first and last frame we wrote. That needs no `ffprobe` subprocess, and it is truer than
+        // both fallbacks — wall-clock counts the wait for the first IDR and any camera dropout as
+        // footage, and re-reading the file only tells us what the muxer already knew.
+        // `ffprobe` remains a last resort for a clip whose span we somehow never recorded.
+        let span = *sess.span.lock().unwrap();
+        let duration_secs = span
+            .map(|(first, last)| last.saturating_duration_since(first).as_secs() as i32)
+            .or_else(|| probe_duration(&sess.output))
             .unwrap_or_else(|| (chrono::Utc::now() - started).num_seconds().max(0) as i32);
         let friendly_name = generate_friendly_name(started.timestamp());
 

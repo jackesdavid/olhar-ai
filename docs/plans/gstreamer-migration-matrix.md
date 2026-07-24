@@ -19,7 +19,7 @@ it passes on **both**, with the other platforms' HW-decode elements noted per ro
 | A1 | **Live decode** (RTSP → raw frames, hot per-camera path) | ffmpeg MJPEG on `pipe:1`, **no hwaccel** (`capture.rs`) | `rtspsrc ! <hwdec> ! appsink` → motion/detector | edge motion + tract detector | 1 | ✅² | ⬜ | 🟡 |
 | HW | **Hardware decode** (currently detected, never applied) | `hwaccel.rs` reports, never uses | `vtdec`(Mac) / `nvv4l2decoder`(Jetson) / `amcviddec`(Android) / `vaapi`·`nvh264dec`(Linux) / `d3d11h264dec`(Win) | A1 pipeline | 1 | ✅¹ | ⬜ | 🟡 |
 | A2 | **Recording mux** (H264 ring → fragmented mp4) | ffmpeg `-c:v copy` (`recording.rs`) | `appsrc` (real per-frame PTS) `! h264parse ! mp4mux` | clip store / playback | 3 | 🟡⁵ | ⬜ | 🟡 |
-| A3 | **Clip duration probe** | `ffprobe` (`recording.rs`) | GStreamer `discoverer` / pipeline query | recording metadata | 3 | ⬜ | ⬜ | ⬜ |
+| A3 | **Clip duration probe** | `ffprobe` (`recording.rs`) | **no probe at all** — duration = captured frame span | recording metadata | 3 | ✅⁶ | ⬜ | 🟡 |
 | A4 | **HW-decode capability probe** | ffmpeg `-hwaccel` list (`hwaccel.rs`) | `gst_registry` element presence (`vtdec`/`nvv4l2decoder`…) | health report | 5 | ⬜ | ⬜ | ⬜ |
 | A5 | **Snapshot fallback** (single-frame, cold) | raw `ffmpeg` (`onvif/client.rs`) | one-shot `rtspsrc ! decodebin ! jpegenc` (feature-gated) | **credential probe only** — no longer a snapshot fallback | 2 | ✅⁴ | ⬜ | 🟡 |
 | A6 | **ffmpeg presence check** | `ffmpeg -version` (`state.rs`) | removed (no ffmpeg) | health gating | 5 | ⬜ | ⬜ | ⬜ |
@@ -104,3 +104,10 @@ shared plumbing, so the ffmpeg path was re-verified (its bytes land back-to-back
 concatenation did). Both build configs clean, tests pass in both. **NOT yet proven:** no clip has
 been recorded and played back — that is the only test that catches a PTS error, because a wrong PTS
 produces a playable-looking file with the wrong duration/speed rather than a loud failure.
+
+⁶ **A3 done — by deleting the question, not porting it (2026-07-24).** A2 made every frame carry its
+capture time, so a clip's duration is simply `last.at - first.at`: no `ffprobe` subprocess, and no
+GStreamer `discoverer` either. It is also *truer* than both old answers — wall-clock counted the wait
+for the first IDR and any camera dropout as footage, and re-reading the file only recovers what the
+muxer already knew. `probe_duration` survives as a last resort for a clip whose span was never
+recorded.
