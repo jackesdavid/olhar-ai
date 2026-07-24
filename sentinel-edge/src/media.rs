@@ -107,3 +107,44 @@ pub fn hw_decoder() -> &'static str {
     }
     "none"
 }
+
+/// Prove this box's GStreamer runtime can build the ingest (card #138) by instantiating every
+/// element the REAL pipeline uses — constructing an element `dlopen`s its plugin, so a missing or
+/// broken plugin fails right here, named. Deliberately uses only production elements: no
+/// `videotestsrc`/`x264enc`, which would drag `libx264` (GPL) into a bundle we redistribute. The
+/// macOS installer runs this in its postinstall to reject an incomplete bundle before trusting a box
+/// to it, instead of discovering the gap the first time a camera connects.
+#[cfg(feature = "gst-linked")]
+pub fn gst_selftest() -> Result<(), String> {
+    use gstreamer as gst;
+    gst::init().map_err(|e| format!("gst init: {e}"))?;
+
+    // Exactly what `capture.rs`'s pipeline instantiates. Keep in step with it.
+    let required = [
+        "rtspsrc", "rtph264depay", "h264parse", "tee", "queue", "capsfilter", "decodebin",
+        "videoconvert", "videorate", "jpegenc", "mp4mux", "appsink", "fakesink",
+    ];
+    for name in required {
+        gst::ElementFactory::make(name)
+            .build()
+            .map_err(|_| format!("cannot create `{name}` — its plugin is missing or failed to load"))?;
+    }
+
+    // The hardware decoder is not fatal — the pipeline falls back to `decodebin` software decode —
+    // but a box that reports one it cannot build would lie on its health badge, so verify it too.
+    let hw = hw_decoder();
+    if hw != "none" {
+        let element = match hw {
+            "nvdec-tegra" => "nvv4l2decoder",
+            "nvdec" => "nvh264dec",
+            "videotoolbox" => "vtdec",
+            "vaapi" => "vaapih264dec",
+            "d3d11" => "d3d11h264dec",
+            _ => "",
+        };
+        if !element.is_empty() && gst::ElementFactory::make(element).build().is_err() {
+            return Err(format!("hardware decoder `{element}` is advertised but will not build"));
+        }
+    }
+    Ok(())
+}

@@ -104,6 +104,24 @@ fn main() {
         return;
     }
 
+    // `sentinel-edge gst-selftest` — build the real ingest pipeline against a synthetic source and
+    // exit 0/1. The macOS installer bundles its own GStreamer runtime (card #138); this is how the
+    // postinstall proves that runtime is complete on THIS machine before trusting the box to it,
+    // instead of discovering a missing plugin the first time a camera connects.
+    #[cfg(feature = "gst-linked")]
+    if std::env::args().any(|a| a == "gst-selftest") {
+        std::process::exit(match media::gst_selftest() {
+            Ok(()) => {
+                println!("gst-selftest: OK");
+                0
+            }
+            Err(e) => {
+                eprintln!("gst-selftest: FAILED — {e}");
+                1
+            }
+        });
+    }
+
     // Capture logs into a shared ring (also teed to stderr) so the box can push them up
     // for the in-UI log viewer — the edge is no longer a black box.
     let logs = logbuf::init();

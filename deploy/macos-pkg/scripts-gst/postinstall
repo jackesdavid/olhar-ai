@@ -1,0 +1,79 @@
+#!/bin/sh
+# postinstall (GStreamer edge, card #138) — make the laid-down payload a running, pairable appliance.
+#
+# The difference from the go2rtc build: this box's media path is the linked GStreamer runtime bundled
+# under $PREFIX/gst, so there is no go2rtc and no ffmpeg to point at — the plist instead tells the
+# edge to use the gstreamer backend and where its private plugin set lives. Idempotent: a fresh
+# install and an upgrade over an enrolled box run the same, and neither costs the customer identity.
+set -e
+
+PREFIX=/opt/sentinel-edge
+ENV_DIR=/etc/sentinel-edge
+PLIST=/Library/LaunchDaemons/io.sentinel.edge.plist
+LABEL=io.sentinel.edge
+CONTROL_URL="${SENTINEL_CONTROL_URL:-https://control.thesentinels.online}"
+
+mkdir -p "$PREFIX/recordings" "$ENV_DIR"
+
+if [ ! -f "$ENV_DIR/edge.env" ]; then
+  printf 'CONTROL_URL=%s\n' "$CONTROL_URL" > "$ENV_DIR/edge.env"
+  chmod 600 "$ENV_DIR/edge.env"
+elif ! grep -q '^CONTROL_URL=' "$ENV_DIR/edge.env"; then
+  printf 'CONTROL_URL=%s\n' "$CONTROL_URL" >> "$ENV_DIR/edge.env"
+fi
+
+chmod +x "$PREFIX/sentinel-edge" 2>/dev/null || true
+
+# Verify the bundled GStreamer runtime is COMPLETE on this machine before trusting the box to it — a
+# missing plugin here is a camera that silently never decodes, and it is far better to shout now,
+# while someone is watching the installer, than at 3am when a clip fails. Best-effort like the
+# daemon start: a warning, not an aborted install, because the payload is already on disk.
+if ! GST_PLUGIN_SYSTEM_PATH_1_0="" GST_PLUGIN_PATH_1_0="$PREFIX/gst/plugins" \
+     GST_REGISTRY_1_0="$PREFIX/gst/registry.bin" GST_REGISTRY_FORK=no \
+     "$PREFIX/sentinel-edge" gst-selftest >/tmp/sentinel-gst-selftest.log 2>&1; then
+  echo "sentinel-edge: gst-selftest FAILED — see /tmp/sentinel-gst-selftest.log; live/recording may not work" >&2
+fi
+
+# The plist carries what the edge.env file cannot know: that the media path is GStreamer, and where
+# its self-contained plugin set + writable registry live. No GO2RTC_* — with the gstreamer backend
+# the edge never starts a sidecar (it owns the ingest itself), so there is nothing to point at.
+cat > "$PLIST" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key><array><string>$PREFIX/sentinel-edge</string></array>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>$PREFIX:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>EDGE_MEDIA_BACKEND</key><string>gstreamer-linked</string>
+    <key>GST_PLUGIN_SYSTEM_PATH_1_0</key><string></string>
+    <key>GST_PLUGIN_PATH_1_0</key><string>$PREFIX/gst/plugins</string>
+    <key>GST_REGISTRY_1_0</key><string>$PREFIX/gst/registry.bin</string>
+    <key>GST_REGISTRY_FORK</key><string>no</string>
+    <key>EDGE_CACHE</key><string>$PREFIX/cameras-cache.json</string>
+    <key>EDGE_ENV_FILE</key><string>$ENV_DIR/edge.env</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict></plist>
+PLISTEOF
+
+start_daemon() {
+  launchctl bootout "system/$LABEL" 2>/dev/null || true
+  launchctl enable "system/$LABEL" 2>/dev/null || true
+  n=0
+  while ! launchctl bootstrap system "$PLIST" 2>/dev/null; do
+    n=$((n + 1))
+    [ "$n" -ge 10 ] && return 1
+    sleep 1
+  done
+  launchctl kickstart -k "system/$LABEL" 2>/dev/null || true
+}
+start_daemon || echo "sentinel-edge: not started now — it will come up on the next boot" >&2
+
+USER_UID=$(stat -f %u /dev/console)
+if [ -n "$USER_UID" ] && [ "$USER_UID" != "0" ]; then
+  ( sleep 2; launchctl asuser "$USER_UID" open "http://localhost:8788" ) &
+fi
+
+exit 0
