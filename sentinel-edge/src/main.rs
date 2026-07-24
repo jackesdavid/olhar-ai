@@ -181,10 +181,10 @@ fn main() {
         );
     }
 
-    // `ensure_up` ran before the media backend was known and left 443 on go2rtc. Re-point it at the
-    // edge when there is no go2rtc — 443 is what the deployed gateway dials for live video, and it
-    // does not fail loudly when nothing answers there, it just shows no picture.
+    // 443 is what the deployed gateway dials for live video. Publish the port BEFORE re-serving, so
+    // the periodic `ensure_up` keeps honouring it instead of resetting it to go2rtc behind our back.
     if !state.own_go2rtc {
+        tailscale::set_live_port(8788);
         tailscale::serve_live(8788);
     }
 

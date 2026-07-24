@@ -20,6 +20,24 @@ use std::time::{Duration, Instant};
 /// Tailscale installs to `C:\Program Files\Tailscale\tailscale.exe` and is **not** on PATH by
 /// default, so the installer (#83) points `TAILSCALE_BIN` at the full path; on Linux/macOS the bare
 /// name resolves.
+/// Which local port the tailnet's `:443` must reach for live video: go2rtc's `1984` until the box
+/// tells us otherwise, the edge's own `8788` once GStreamer owns the media path.
+///
+/// It lives here as process state because [`ensure_up`] runs **before** the recording config is
+/// known **and again periodically** — an override applied once at boot would be silently undone by
+/// the next re-serve, which is exactly what happened: Live worked, then died minutes later with
+/// nothing in the log.
+static LIVE_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(1984);
+
+/// Set once the media backend is known; every later `ensure_up` honours it.
+pub fn set_live_port(port: u16) {
+    LIVE_PORT.store(port, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn live_port() -> u16 {
+    LIVE_PORT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn ts() -> Command {
     let bin = std::env::var("TAILSCALE_BIN")
         .ok()
@@ -142,9 +160,7 @@ pub fn ensure_up() {
     // 8080. 443 is what the deployed gateway dials, so whichever process owns live video has to
     // answer there: go2rtc on a legacy box, the edge itself once GStreamer owns the media path
     // (card #138, G6). Getting this wrong doesn't fail loudly — the gateway simply finds nothing.
-    // Boot ordering forces the default here: this runs before the recording config is known, so 443
-    // starts on go2rtc and `main` re-points it at the edge once it knows GStreamer owns the media.
-    serve_live(1984);
+    serve_live(live_port());
     serve_edge_api();
 
     // Report this box's tailnet host to control (so the gateway can resolve the tenant's live
@@ -226,7 +242,7 @@ pub fn reassert() {
         ensure_up(); // up + wait for the rename + serve + report the host
         return;
     }
-    serve_live(1984);
+    serve_live(live_port());
     serve_edge_api();
     if !host_is_explicit() {
         if let Some(dns) = detect_dns_name() {
