@@ -25,7 +25,7 @@ it passes on **both**, with the other platforms' HW-decode elements noted per ro
 | A6 | **ffmpeg presence check** | `ffmpeg -version` (`state.rs`) | removed (no ffmpeg) | health gating | 5 | ⬜ | ⬜ | ⬜ |
 | B3 | **Snapshot from warm feed** (`/api/frame.jpeg`, "Get current frame" node) | go2rtc → internal ffmpeg | serve the A1 warm JPEG (`capture::latest_fresh`); cold path only as fallback | workflow node, app-core `go2rtc.rs`, gateway | 2 | ✅³ | ⬜ | 🟡 |
 | G1 | **RTSP ingest from cameras** | go2rtc per-camera streams | `rtspsrc` (shared A1 ingest) | all downstream | 1 | ✅² | ⬜ | 🟡 |
-| G2 | **Live MSE over WebSocket** (`/api/ws`) | go2rtc | `mp4mux fragment-duration` → WS, **contract-identical** | **gateway `proxy.rs` → web player + mobile WebView player** | 4 | ⬜ | ⬜ | ⬜ |
+| G2 | **Live MSE over WebSocket** (`/api/ws`) | go2rtc | `cmafmux` fMP4 → WS, **contract-identical** | **gateway `proxy.rs` → web player + mobile WebView player** | 4 | 🟡⁷ | ⬜ | 🟡 |
 | G3 | **WebRTC** (`/api/webrtc`) | go2rtc `webrtcbin` (minor use today) | `webrtcbin` | (minor) | 5 | ⬜ | ⬜ | ⬜ |
 | G4 | **Stream list / player assets** (`/api/streams`, `/stream.html`) | go2rtc-served, gateway passthrough | edge-served equivalents or drop if unused | gateway passthrough | 4 | ⬜ | ⬜ | ⬜ |
 | G5 | **go2rtc sidecar lifecycle** (spawn/config/health) | edge manages the go2rtc process | removed (no sidecar) | edge `state.rs`, `main.rs` | 5 | ⬜ | ⬜ | ⬜ |
@@ -111,6 +111,26 @@ GStreamer `discoverer` either. It is also *truer* than both old answers — wall
 for the first IDR and any camera dropout as footage, and re-reading the file only recovers what the
 muxer already knew. `probe_duration` survives as a last resort for a clip whose span was never
 recorded.
+
+⁷ **G2 feasibility PROVEN on the Mac (2026-07-24) — the server is still to be written.** The one
+unknown that decided Stage 4 was *"can GStreamer emit fMP4 a browser `MediaSource` accepts, live from
+the camera?"*. Answer: **yes**, via `cmafmux` (gst-plugins-rs `isobmff`, ships with the Homebrew
+GStreamer). Proof in `experiments/gst-spike/src/bin/stage4.rs` — 32 live segments off the real camera;
+dumped to a file the byte stream walks **`ftyp+moov` then `styp+moof+mdat`×N, structurally intact end
+to end** (159,886/159,886 bytes) and `ffprobe`s as H264 High/level 2.2 640×360, 9.33 s of a 10 s
+capture. The `codecs=` string to advertise in the `/api/ws` handshake comes straight from the `avcC`
+(`01 64 00 16` → **`avc1.640016`**).
+
+**The gotcha that cost the whole debug session — `cmafmux` requires DTS, `rtph264depay` gives none.**
+Symptom: the pipeline goes **EOS within ~0.1 s having produced zero bytes**, and the *only* bus message
+is `rtspsrc … streaming stopped, reason error (-5)` — which points at the source, not the mux. The real
+message is visible **only** under `GST_DEBUG=fmp4mux:6`: `Require DTS for video streams`. Two further
+traps while chasing it: (a) `gst-launch … ! fakesink` "succeeding" in 0.1 s is *not* success, it is that
+same instant EOS — always assert on **bytes produced**, not on exit status; (b) `cmafmux` only accepts
+`stream-format=avc` (never `byte-stream`), so a capsfilter after `h264parse` is mandatory. Fix used in
+the spike: **`h264timestamper`** between `h264parse` and the capsfilter. That element lives in
+gst-plugins-bad, so for the edge itself prefer setting `DTS = PTS` in a pad probe from Rust — the
+cameras are B-frame-free, and it keeps Android/Jetson free of one more plugin dependency.
 
 ## ✅ Verified live on the Mac edge (2026-07-24)
 
