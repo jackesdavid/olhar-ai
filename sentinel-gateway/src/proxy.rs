@@ -1,5 +1,10 @@
 //! The proxy core: a WebSocket bridge (MSE) and an HTTP passthrough (snapshots,
-//! stream list, go2rtc's player assets). Both target the resolved upstream go2rtc.
+//! stream list, go2rtc's player assets).
+//!
+//! The passthrough still targets the resolved upstream go2rtc. The **MSE bridge prefers the edge's
+//! own GStreamer server** (card #138, G2) and falls back to go2rtc, which is what makes the
+//! migration shippable: the wire contract is identical, so a box serving either one is
+//! indistinguishable to the player.
 use axum::body::Body;
 use axum::extract::ws::{Message as AxMsg, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
@@ -15,8 +20,8 @@ use crate::state::AppState;
 
 // ---- MSE: WebSocket bridge --------------------------------------------------
 
-/// Upgrade the client WS and bridge it to the upstream go2rtc MSE WebSocket
-/// (`{ws_upstream}/api/ws?<query>`), piping both directions until either side closes.
+/// Upgrade the client WS and bridge it to the box's MSE WebSocket (`.../api/ws?<query>`), piping
+/// both directions until either side closes. Tries the edge's own server first, then go2rtc.
 /// Gated by `live.view` — browsers can't set WS headers, so the token rides the query
 /// (`?token=<jwt>`); the upstream never sees it (we forward only go2rtc's own params).
 pub async fn ws_handler(
@@ -30,8 +35,16 @@ pub async fn ws_handler(
         return (StatusCode::UNAUTHORIZED, "live.view required").into_response();
     };
     let base = state.upstream_for(claims.tid.as_deref(), &token).await;
-    let upstream = format!("{}/api/ws?{}", AppState::ws_origin(&base), strip_token(&q));
-    ws.on_upgrade(move |client| bridge_ws(client, upstream))
+    let params = strip_token(&q);
+    // Prefer the edge's own GStreamer MSE server, falling back to the go2rtc it replaces. Every
+    // released edge is built WITHOUT the `gst-linked` feature, so `/api/ws` simply does not exist
+    // there — a hard switch would take Live down on every box but the one being migrated.
+    let mut candidates = Vec::new();
+    if let Some(edge) = state.live_edge_ws(&base) {
+        candidates.push(format!("{edge}/api/ws?{params}"));
+    }
+    candidates.push(format!("{}/api/ws?{}", AppState::ws_origin(&base), params));
+    ws.on_upgrade(move |client| bridge_ws(client, state, candidates))
 }
 
 /// Drop our `token` query param so it's never forwarded to the upstream go2rtc.
@@ -45,18 +58,39 @@ fn strip_token(query: &str) -> String {
 
 /// Connect to the upstream go2rtc WS and pipe frames both ways. Best-effort: any
 /// error (connect timeout, upstream close) ends the bridge and closes the client.
-async fn bridge_ws(client: WebSocket, upstream: String) {
-    let connect = tokio_tungstenite::connect_async(&upstream);
-    let (up_stream, _resp) = match tokio::time::timeout(Duration::from_secs(8), connect).await {
-        Ok(Ok(ok)) => ok,
-        Ok(Err(e)) => {
-            log::warn!("upstream WS connect failed ({upstream}): {e}");
-            return;
+async fn bridge_ws(client: WebSocket, state: Arc<AppState>, candidates: Vec<String>) {
+    let last = candidates.len().saturating_sub(1);
+    let mut connected = None;
+    for (i, url) in candidates.iter().enumerate() {
+        let is_fallback = i == last;
+        // A box that cannot serve the preferred upstream must not pay for the attempt on every
+        // reconnect, so a failure is remembered and skipped until the note expires.
+        if !is_fallback && state.live_edge_is_dead(url) {
+            continue;
         }
-        Err(_) => {
-            log::warn!("upstream WS connect timed out: {upstream}");
-            return;
+        // Not every box even exposes the edge's port on its tailnet, and there the connect does not
+        // fail — it hangs. Give the preferred upstream a short leash so falling back is quick; only
+        // the real fallback, which has nowhere else to go, gets the patient timeout.
+        let budget = if is_fallback {
+            Duration::from_secs(8)
+        } else {
+            Duration::from_secs(2)
+        };
+        let connect = tokio_tungstenite::connect_async(url);
+        match tokio::time::timeout(budget, connect).await {
+            Ok(Ok(ok)) => {
+                connected = Some((url.clone(), ok.0));
+                break;
+            }
+            Ok(Err(e)) => log::warn!("upstream WS connect failed ({url}): {e}"),
+            Err(_) => log::warn!("upstream WS connect timed out: {url}"),
         }
+        if !is_fallback {
+            state.live_edge_mark_dead(url);
+        }
+    }
+    let Some((upstream, up_stream)) = connected else {
+        return;
     };
     log::info!("WS bridge open → {upstream}");
 

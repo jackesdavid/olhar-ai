@@ -20,9 +20,15 @@ pub struct AppState {
     /// tenant_id → (resolved base URL, fetched_at). Short TTL so a box coming online is
     /// picked up quickly without a control round-trip on every frame.
     cache: Mutex<HashMap<String, (String, Instant)>>,
+    /// Upstreams that refused a WS connect, and when. Lets a box that cannot serve the preferred
+    /// upstream be skipped instead of costing a failed connect on every single reconnect.
+    dead: Mutex<HashMap<String, Instant>>,
 }
 
 const CACHE_TTL: Duration = Duration::from_secs(30);
+/// How long a refused upstream stays skipped. Short enough that a box upgraded mid-session starts
+/// being preferred within minutes, without anyone restarting the gateway.
+const DEAD_TTL: Duration = Duration::from_secs(300);
 
 impl AppState {
     pub fn new(upstream: String, control_url: String, jwt_secret: String) -> Self {
@@ -30,7 +36,14 @@ impl AppState {
             .connect_timeout(Duration::from_secs(5))
             .build()
             .expect("build reqwest client");
-        AppState { upstream, control_url, http, jwt_secret, cache: Mutex::new(HashMap::new()) }
+        AppState {
+            upstream,
+            control_url,
+            http,
+            jwt_secret,
+            cache: Mutex::new(HashMap::new()),
+            dead: Mutex::new(HashMap::new()),
+        }
     }
 
     /// The static fallback upstream (health, player UI assets).
@@ -81,6 +94,38 @@ impl AppState {
         }
     }
 
+    /// The WebSocket origin of the **edge's own** MSE server, derived from the go2rtc base the box
+    /// reported — the edge serves its API on `:8080` over the tailnet (`tailscale serve --https=8080
+    /// 8788`) and on `:8788` locally. `None` when the base is a shape we cannot map, in which case
+    /// the caller just uses go2rtc.
+    ///
+    /// Mirrors `app_core::ports`'s derivation for the warm-snapshot path, which resolves the same
+    /// two endpoints on the same box.
+    pub fn live_edge_ws(&self, base: &str) -> Option<String> {
+        let b = base.trim_end_matches('/');
+        if let Some(rest) = b.strip_prefix("https://") {
+            if rest.contains(':') {
+                return None; // an explicit non-default port — not a shape we know how to map
+            }
+            return Some(format!("wss://{rest}:8080"));
+        }
+        let local = b.strip_prefix("http://")?;
+        local.contains(":1984").then(|| format!("ws://{}", local.replace(":1984", ":8788")))
+    }
+
+    /// Has this upstream recently refused us?
+    pub fn live_edge_is_dead(&self, url: &str) -> bool {
+        self.dead
+            .lock()
+            .unwrap()
+            .get(url)
+            .is_some_and(|at| at.elapsed() < DEAD_TTL)
+    }
+
+    pub fn live_edge_mark_dead(&self, url: &str) {
+        self.dead.lock().unwrap().insert(url.to_string(), Instant::now());
+    }
+
     /// Convert an `http(s)://` base to its WebSocket origin (`ws(s)://`).
     pub fn ws_origin(base: &str) -> String {
         if let Some(rest) = base.strip_prefix("https://") {
@@ -90,5 +135,51 @@ impl AppState {
         } else {
             base.to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod live_edge_ws_tests {
+    use super::*;
+
+    fn state() -> AppState {
+        AppState::new("http://127.0.0.1:1984".into(), "http://control".into(), "s".into())
+    }
+
+    /// The tailnet shape: the box reports its MagicDNS host, go2rtc answers on 443 and the edge's
+    /// own API on 8080 (`tailscale serve --https=8080 8788`).
+    #[test]
+    fn maps_a_tailnet_host_to_the_edge_api_port() {
+        assert_eq!(
+            state().live_edge_ws("https://tenant-001.taile123.ts.net"),
+            Some("wss://tenant-001.taile123.ts.net:8080".into())
+        );
+    }
+
+    #[test]
+    fn maps_the_local_go2rtc_port_to_the_local_edge_port() {
+        assert_eq!(
+            state().live_edge_ws("http://127.0.0.1:1984"),
+            Some("ws://127.0.0.1:8788".into())
+        );
+    }
+
+    /// An explicit port we did not put there means someone is pointing the gateway somewhere
+    /// deliberate — guessing a sibling port would send live video to the wrong place.
+    #[test]
+    fn refuses_to_guess_when_the_base_carries_its_own_port() {
+        assert_eq!(state().live_edge_ws("https://box.example.com:9000"), None);
+        assert_eq!(state().live_edge_ws("http://127.0.0.1:9000"), None);
+    }
+
+    /// A refused upstream is skipped, but only until the note expires — a box upgraded mid-session
+    /// must start being preferred again without a gateway restart.
+    #[test]
+    fn a_refused_upstream_is_remembered() {
+        let s = state();
+        assert!(!s.live_edge_is_dead("wss://box/api/ws"));
+        s.live_edge_mark_dead("wss://box/api/ws");
+        assert!(s.live_edge_is_dead("wss://box/api/ws"));
+        assert!(!s.live_edge_is_dead("wss://other/api/ws"));
     }
 }
