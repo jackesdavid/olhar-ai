@@ -45,6 +45,14 @@ sysinfo = { version = "0.30", default-features = false }
 # cameras see, without keeping the native dependency that motivated the port.
 opencv = { version = "0.98", optional = true }
 
+# Linked gstreamer-rs for the A1 media path (card #138 pivot). OPTIONAL + off by default — the
+# default release stays the pure-Rust static build (#79). Enabling `gst-linked` links libgstreamer
+# (the only model that ports to Android), so it is opt-in per build target until it becomes the
+# default and ffmpeg is retired.
+gstreamer = { version = "0.23", optional = true }
+gstreamer-app = { version = "0.23", optional = true }
+
 [features]
 opencv-parity = ["dep:opencv"]
+gst-linked = ["dep:gstreamer", "dep:gstreamer-app"]
 

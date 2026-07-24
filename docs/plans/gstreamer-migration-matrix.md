@@ -41,7 +41,12 @@ its SPS, so `rtspsrc`-fed decode (Stage 1) should not hit this at all. Proven in
 on this Mac's edge** → `vtdec` HW decode → `appsink` — pulls frames into Rust on **both** substreams:
 preview 640×360 and **HD 1280×720**, `vtdec` decoding each **directly, no profile-forcing** (real camera
 SPS carries a standard profile). `experiments/gst-spike/` bin `stage1` (URL via `CAM_RTSP`, no creds in
-git). Still 🟡: not yet wired into the edge's real MOG2/tract path, and the Jetson gate is open.
+git). **INTEGRATED into the edge (2026-07-24):** the linked path now lives in `sentinel-edge` behind
+the `gst-linked` cargo feature (`media.rs` `Backend::GstreamerLinked`, `capture.rs` `run_gst_linked`) —
+the ffmpeg-A1 successor, producing JPEG into `cam.latest` via the SAME public `ensure`/`latest_fresh`
+contract (downstream unchanged). A gated integration test publishes a valid JPEG from the live camera
+through the real public API. Default build unbroken (static, no gstreamer). Still 🟡 overall: Jetson
+gate + default-flip open.
 
 ## Already pure-Rust (no migration needed — reused, feeds GStreamer)
 

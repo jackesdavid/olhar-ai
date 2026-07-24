@@ -33,7 +33,12 @@ fn cams() -> &'static Mutex<HashMap<String, Arc<Cam>>> {
 fn cam_for(ip: &str) -> Arc<Cam> {
     let mut map = cams().lock().unwrap();
     map.entry(ip.to_string())
-        .or_insert_with(|| Arc::new(Cam { latest: Mutex::new(None), started: AtomicBool::new(false) }))
+        .or_insert_with(|| {
+            Arc::new(Cam {
+                latest: Mutex::new(None),
+                started: AtomicBool::new(false),
+            })
+        })
         .clone()
 }
 
@@ -83,8 +88,19 @@ fn ffmpeg_args(ip: &str, hd: bool, use_hwaccel: bool) -> Vec<String> {
     if use_hwaccel {
         args.extend(crate::hwaccel::decode_args().iter().map(|s| s.to_string()));
     }
-    args.extend(["-rtsp_transport".into(), "tcp".into(), "-i".into(), stream_url(ip, hd)]);
-    args.extend(["-an".into(), "-r".into(), "6".into(), "-q:v".into(), "2".into()]);
+    args.extend([
+        "-rtsp_transport".into(),
+        "tcp".into(),
+        "-i".into(),
+        stream_url(ip, hd),
+    ]);
+    args.extend([
+        "-an".into(),
+        "-r".into(),
+        "6".into(),
+        "-q:v".into(),
+        "2".into(),
+    ]);
     if use_hwaccel {
         if let Some(filter) = crate::hwaccel::decode_filter() {
             args.extend(["-vf".into(), filter.to_string()]);
@@ -152,7 +168,77 @@ fn spawn(ip: &str, hd: bool, backend: Backend, use_hwaccel: bool) -> std::io::Re
     match backend {
         Backend::Ffmpeg => spawn_ffmpeg(ip, hd, use_hwaccel),
         Backend::Gstreamer => spawn_gst(ip, hd),
+        // GstreamerLinked never reaches spawn() — supervise() runs it in-process, not as a Child.
+        // Kept for match exhaustiveness; ffmpeg is the safe fallback if it somehow does.
+        Backend::GstreamerLinked => spawn_ffmpeg(ip, hd, use_hwaccel),
     }
+}
+
+/// The linked `gstreamer-rs` A1 path (card #138) — the ffmpeg replacement. Runs the decode pipeline
+/// **in-process** (no subprocess), publishing each JPEG to `cam.latest` via `appsink`, keeping the
+/// exact MJPEG output contract so every downstream consumer (snapshot, detector, hub) is unchanged.
+/// `decodebin` autoplugs the platform HW decoder for a real camera stream (`vtdec` on Mac); on the
+/// Jetson the `nvv4l2decoder → NVMM` memory needs `nvvidconv` in place of `videoconvert` — that
+/// swap is the Jetson gate's job. Blocks until the pipeline errors, then returns so `supervise()`
+/// restarts it under the same backoff policy as the ffmpeg path.
+#[cfg(feature = "gst-linked")]
+fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>) -> Result<(), String> {
+    use gstreamer as gst;
+    use gstreamer::prelude::*;
+    use gstreamer_app as gst_app;
+
+    gst::init().map_err(|e| format!("gst init: {e}"))?; // idempotent
+    let url = stream_url(ip, hd);
+    let desc = format!(
+        "rtspsrc location=\"{url}\" protocols=tcp latency=200 ! decodebin ! videoconvert ! videorate \
+         ! video/x-raw,framerate=6/1 ! jpegenc quality=85 \
+         ! appsink name=out sync=false max-buffers=2 drop=true"
+    );
+    let pipeline = gst::parse::launch(&desc)
+        .map_err(|e| format!("parse: {e}"))?
+        .downcast::<gst::Pipeline>()
+        .map_err(|_| "not a pipeline".to_string())?;
+    let appsink = pipeline
+        .by_name("out")
+        .ok_or("appsink missing")?
+        .downcast::<gst_app::AppSink>()
+        .map_err(|_| "not an appsink".to_string())?;
+
+    let cam_cb = Arc::clone(cam);
+    appsink.set_callbacks(
+        gst_app::AppSinkCallbacks::builder()
+            .new_sample(move |sink| {
+                let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                if let Some(buf) = sample.buffer() {
+                    if let Ok(map) = buf.map_readable() {
+                        // Same contract as read_mjpeg: freshest JPEG becomes `cam.latest`.
+                        *cam_cb.latest.lock().unwrap() =
+                            Some((Arc::new(map.to_vec()), Instant::now()));
+                    }
+                }
+                Ok(gst::FlowSuccess::Ok)
+            })
+            .build(),
+    );
+
+    pipeline
+        .set_state(gst::State::Playing)
+        .map_err(|e| format!("play: {e}"))?;
+    // Block on the bus until EOS/error (a live source only ends on failure), then let supervise restart.
+    let bus = pipeline.bus().ok_or("no bus")?;
+    let mut result = Ok(());
+    for msg in bus.iter_timed(gst::ClockTime::NONE) {
+        match msg.view() {
+            gst::MessageView::Eos(_) => break,
+            gst::MessageView::Error(e) => {
+                result = Err(format!("{}", e.error()));
+                break;
+            }
+            _ => {}
+        }
+    }
+    let _ = pipeline.set_state(gst::State::Null);
+    result
 }
 
 /// Consecutive fast (<30s) failures while GPU decode is on before we give up on it for this
@@ -175,51 +261,69 @@ fn supervise(ip: &str, hd: bool, cam: Arc<Cam>, backend: Backend) {
     let mut hw_fails: u32 = 0;
     loop {
         let ran_from = Instant::now();
-        match spawn(ip, hd, backend, use_hwaccel) {
-            Ok(mut child) => {
-                let stdout = match child.stdout.take() {
-                    Some(s) => s,
-                    None => {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        std::thread::sleep(backoff);
-                        continue;
-                    }
-                };
-                let spawn_at = Instant::now();
-                let child = Arc::new(Mutex::new(child));
-                // Watchdog: kill a wedged ffmpeg (alive but not producing) so the read below unblocks.
-                // Generous warmup (HD streams take a moment); silent (the supervisor logs the policy).
-                let wd = {
-                    let (cam_w, child_w) = (Arc::clone(&cam), Arc::clone(&child));
-                    std::thread::spawn(move || loop {
-                        std::thread::sleep(Duration::from_secs(2));
-                        let mut c = child_w.lock().unwrap();
-                        match c.try_wait() {
-                            Ok(Some(_)) => break, // exited on its own → reader will EOF
-                            Ok(None) => {
-                                let stale = match &*cam_w.latest.lock().unwrap() {
-                                    Some((_, at)) => at.elapsed() > Duration::from_secs(8),
-                                    None => spawn_at.elapsed() > Duration::from_secs(20),
-                                };
-                                if stale {
-                                    let _ = c.kill();
-                                    break;
-                                }
-                            }
-                            Err(_) => break,
-                        }
-                    })
-                };
-                read_mjpeg(stdout, &cam); // blocks until EOF (natural exit or watchdog kill)
-                {
-                    let mut c = child.lock().unwrap();
-                    let _ = c.kill();
-                    let _ = c.wait();
-                }
-                let _ = wd.join();
+
+        // Linked gstreamer-rs path (card #138) runs in-process, not as a Child — handle it before
+        // the subprocess spawn below. It shares this loop's backoff/restart policy verbatim.
+        if backend == Backend::GstreamerLinked {
+            #[cfg(feature = "gst-linked")]
+            if let Err(e) = run_gst_linked(ip, hd, &cam) {
+                log::warn!("capture-decoder[{ip}]: gstreamer-linked: {e}");
             }
-            Err(e) => log::warn!("capture-decoder[{ip}]: {} spawn failed: {e}", backend.label()),
+            #[cfg(not(feature = "gst-linked"))]
+            {
+                log::error!("capture-decoder[{ip}]: gstreamer-linked selected but not compiled in");
+                std::thread::sleep(Duration::from_secs(30));
+            }
+        } else {
+            match spawn(ip, hd, backend, use_hwaccel) {
+                Ok(mut child) => {
+                    let stdout = match child.stdout.take() {
+                        Some(s) => s,
+                        None => {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            std::thread::sleep(backoff);
+                            continue;
+                        }
+                    };
+                    let spawn_at = Instant::now();
+                    let child = Arc::new(Mutex::new(child));
+                    // Watchdog: kill a wedged ffmpeg (alive but not producing) so the read below unblocks.
+                    // Generous warmup (HD streams take a moment); silent (the supervisor logs the policy).
+                    let wd = {
+                        let (cam_w, child_w) = (Arc::clone(&cam), Arc::clone(&child));
+                        std::thread::spawn(move || loop {
+                            std::thread::sleep(Duration::from_secs(2));
+                            let mut c = child_w.lock().unwrap();
+                            match c.try_wait() {
+                                Ok(Some(_)) => break, // exited on its own → reader will EOF
+                                Ok(None) => {
+                                    let stale = match &*cam_w.latest.lock().unwrap() {
+                                        Some((_, at)) => at.elapsed() > Duration::from_secs(8),
+                                        None => spawn_at.elapsed() > Duration::from_secs(20),
+                                    };
+                                    if stale {
+                                        let _ = c.kill();
+                                        break;
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        })
+                    };
+                    read_mjpeg(stdout, &cam); // blocks until EOF (natural exit or watchdog kill)
+                    {
+                        let mut c = child.lock().unwrap();
+                        let _ = c.kill();
+                        let _ = c.wait();
+                    }
+                    let _ = wd.join();
+                }
+                Err(e) => log::warn!(
+                    "capture-decoder[{ip}]: {} spawn failed: {e}",
+                    backend.label()
+                ),
+            }
         }
         // Backoff policy (the fix): reset ONLY after a healthy run — a fast-dying ffmpeg must NOT reset
         // the backoff (that was the tight-loop storm). Repeated fast failures cool down HARD so we
@@ -301,4 +405,46 @@ fn read_mjpeg(mut stdout: std::process::ChildStdout, cam: &Arc<Cam>) {
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
+}
+
+#[cfg(all(test, feature = "gst-linked"))]
+mod gst_linked_it {
+    //! Integration test for the linked gstreamer-rs A1 path (card #138). Exercises the REAL public
+    //! API — `ensure` (backend "gstreamer-linked") → `latest_fresh` — against a live camera served
+    //! by the local go2rtc RTSP re-serve. Environment-specific, so `#[ignore]`d:
+    //!   GST_IT_CAM_IP=192.168.0.7 cargo test --features gst-linked -- --ignored gst_linked
+    //! Requires go2rtc running with `cam_<ip>` on 127.0.0.1:8554 (the edge's normal warm re-serve).
+    use std::time::Duration;
+
+    #[test]
+    #[ignore = "needs a live camera + local go2rtc re-serve"]
+    fn linked_backend_publishes_jpeg_via_public_api() {
+        let ip = std::env::var("GST_IT_CAM_IP").expect("set GST_IT_CAM_IP to a live camera IP");
+        super::ensure(&ip, false, "gstreamer-linked");
+        // Poll up to ~20s for the linked pipeline to connect, decode, and publish a fresh JPEG.
+        let mut got = None;
+        for _ in 0..40 {
+            if let Some(j) = super::latest_fresh(&ip, Duration::from_secs(5)) {
+                got = Some(j);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        let jpeg = got.expect("no JPEG from the linked backend within 20s");
+        assert!(
+            jpeg.len() > 1000,
+            "JPEG suspiciously small: {} bytes",
+            jpeg.len()
+        );
+        assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "not a JPEG (no SOI)");
+        assert_eq!(
+            &jpeg[jpeg.len() - 2..],
+            &[0xFF, 0xD9],
+            "not a JPEG (no EOI)"
+        );
+        println!(
+            "[gst-linked IT] linked A1 path published a {}-byte JPEG via ensure/latest_fresh",
+            jpeg.len()
+        );
+    }
 }
