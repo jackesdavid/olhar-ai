@@ -23,6 +23,8 @@ mod face;
 mod frames;
 mod go2rtc;
 #[cfg(feature = "gst-linked")]
+mod gst_mse;
+#[cfg(feature = "gst-linked")]
 mod gst_mux;
 mod http;
 mod hwaccel;

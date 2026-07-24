@@ -11,7 +11,7 @@ description = "The edge gateway — the ONLY thing that touches cameras. Wraps g
 app-core = { path = "../crates/app-core" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
-axum = "0.7"
+axum = { version = "0.7", features = ["ws"] }
 tower-http = { version = "0.5", features = ["cors"] }
 # Pull the camera config from the control plane (cloud-managed, cached locally).
 ureq = { version = "2", features = ["json"] }

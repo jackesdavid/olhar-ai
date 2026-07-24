@@ -17,7 +17,7 @@ use app_core::go2rtc;
 use crate::state::AppState;
 
 pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health))
         .route("/devices", get(devices))
         .route("/streams", get(streams))
@@ -34,7 +34,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(recording_get).delete(recording_delete),
         )
         .layer(CorsLayer::permissive())
-        .with_state(state)
+        .with_state(state);
+    #[cfg(feature = "gst-linked")]
+    let router = router.route("/api/ws", get(mse_ws));
+    router
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -488,4 +491,92 @@ async fn storage_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")).into_response(),
     }
+}
+
+/// Live fMP4 over WebSocket — go2rtc's `/api/ws` contract, served by the edge itself (card #138, G2).
+///
+/// The wire format is not ours to choose: the web player and the mobile WebView player both speak
+/// go2rtc's, so this matches it exactly — the client announces the codecs it can play, we answer
+/// with the MIME it should hand `addSourceBuffer`, and everything after that is fMP4 bytes.
+#[cfg(feature = "gst-linked")]
+async fn mse_ws(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let src = q.get("src").cloned().unwrap_or_default();
+    // The name is pasted into an RTSP URL, so keep it to the shape the edge itself generates.
+    if src.is_empty() || !src.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        return (StatusCode::BAD_REQUEST, "bad src").into_response();
+    }
+    ws.on_upgrade(move |socket| mse_socket(socket, src))
+}
+
+#[cfg(feature = "gst-linked")]
+async fn mse_socket(mut socket: axum::extract::ws::WebSocket, src: String) {
+    use axum::extract::ws::Message;
+
+    // Starting a pipeline waits for the first keyframe, so it must not block the async runtime.
+    let name = src.clone();
+    let stream = match tokio::task::spawn_blocking(move || crate::gst_mse::attach(&name)).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
+            log::warn!("mse: {src} unavailable: {e}");
+            return;
+        }
+        Err(e) => {
+            log::warn!("mse: {src} attach panicked: {e}");
+            return;
+        }
+    };
+    let mut fragments = stream.subscribe();
+
+    // The client speaks first, announcing what it can decode. We wait for it so the reply cannot
+    // race ahead of the player's `sourceopen`.
+    loop {
+        match socket.recv().await {
+            Some(Ok(Message::Text(_))) => break,
+            Some(Ok(_)) => continue,
+            _ => return,
+        }
+    }
+
+    let hello = json!({ "type": "mse", "value": stream.mime }).to_string();
+    if socket.send(Message::Text(hello)).await.is_err() {
+        crate::gst_mse::detach(&src);
+        return;
+    }
+    // `ftyp` + `moov` first — a fragment before it is undecodable.
+    if socket
+        .send(Message::Binary(stream.init.clone()))
+        .await
+        .is_err()
+    {
+        crate::gst_mse::detach(&src);
+        return;
+    }
+
+    loop {
+        tokio::select! {
+            frag = fragments.recv() => match frag {
+                Ok(bytes) => {
+                    if socket.send(Message::Binary(bytes.to_vec())).await.is_err() {
+                        break;
+                    }
+                }
+                // A viewer that fell behind by more than the channel holds is resynced by closing:
+                // the player reconnects and gets a fresh init segment.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    log::warn!("mse: {src} viewer lagged {n} fragments — dropping it to resync");
+                    break;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            },
+            // Read the socket so a client close is noticed promptly rather than at the next fragment.
+            msg = socket.recv() => {
+                if msg.is_none() { break; }
+            }
+        }
+    }
+    drop(fragments);
+    crate::gst_mse::detach(&src);
 }
