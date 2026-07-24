@@ -17,7 +17,7 @@
   import OlharMark from "$lib/components/olhar-mark.svelte";
   import SensorField from "$lib/components/sensor-field.svelte";
 
-  const APP = "https://app.olharai.com";
+  const APP = "https://app.filma.ai";
 
   // Sticky nav: warm the border once the page scrolls a touch.
   let hdr = $state<HTMLElement>();
@@ -44,7 +44,7 @@
   // AI vision + chat, the 65-node visual workflow engine, event-triggered recording, notifications.
   const features = [
     { icon: Eye, title: "Sees what's there", body: "Person, object, and face detection on every camera — running locally on your edge, not a distant server. It knows a person from a passing car from a delivery van." },
-    { icon: ScanFace, title: "Knows who belongs", body: "Enroll the people who matter once. Olhar AI recognises family, staff, and regulars — and flags the faces it doesn't." },
+    { icon: ScanFace, title: "Knows who belongs", body: "Enroll the people who matter once. Filma AI recognises family, staff, and regulars — and flags the faces it doesn't." },
     { icon: Workflow, title: "Automates anything", body: "A visual builder with 65 blocks — detect, track, decide, record, notify, ask an AI. Wire them together: “if an unknown person is at the back gate after dark, record it and message me.” No code." },
     { icon: Video, title: "Records what counts", body: "Event-triggered clips with pre-roll, so you catch the seconds before it happened — not endless footage of an empty driveway. Kept local or in the cloud, your choice." },
     { icon: BellRing, title: "Tells you, your way", body: "A clear message to your phone or Telegram — with the annotated snapshot — only for the things you asked about. Or ask your cameras a question and the assistant answers." },
@@ -62,14 +62,14 @@
   ];
 
   const steps = [
-    { n: "01", title: "Connect your cameras", body: "Install the Olhar AI edge on a small box on-site. It finds your cameras and brings them online — securely, over a private network. No cloud can see them but you." },
+    { n: "01", title: "Connect your cameras", body: "Install the Filma AI edge on a small box on-site. It finds your cameras and brings them online — securely, over a private network. No cloud can see them but you." },
     { n: "02", title: "Pick what it should do", body: "Start from a template — alert on a person, record on motion, recognise faces — or wire your own in the visual builder. Tell it which cameras and which people matter." },
     { n: "03", title: "Let it watch", body: "The live view when you want it, a clear alert when you need it, a clip when something happens. Add automations as your needs grow — no code, ever." },
   ];
 
   // Screenshot slots. `src` is set once a capture is dropped into landing/static/shots/ — until then
   // the slot renders a captioned placeholder (never a broken image). `file` is the exact path to save
-  // the capture to; the capture list also lives in docs/plans/olharai-landing.md.
+  // the capture to; the capture list also lives in docs/plans/filma-landing.md.
   const shots = [
     { file: "/shots/workflow-editor.png", src: "", title: "The visual builder", body: "Wire detection, logic, recording and notifications into a workflow — 65 blocks, no code. This is where every template above is made." },
     { file: "/shots/live-grid.png",       src: "", title: "Live, all at once", body: "Every camera in one grid, streamed privately from your edge — with a real LIVE badge that only lights when video is actually flowing." },
@@ -79,12 +79,12 @@
 </script>
 
 <svelte:head>
-  <title>Olhar AI — cameras that understand and act</title>
-  <meta name="description" content="Olhar AI turns your cameras into a vision platform — person, object and face detection, live tracking, event-triggered recording, a visual automation engine, and an AI you can ask. Private, on your own edge. For home and business." />
-  <meta property="og:title" content="Olhar AI — cameras that understand and act" />
+  <title>Filma AI — cameras that understand and act</title>
+  <meta name="description" content="Filma AI turns your cameras into a vision platform — person, object and face detection, live tracking, event-triggered recording, a visual automation engine, and an AI you can ask. Private, on your own edge. For home and business." />
+  <meta property="og:title" content="Filma AI — cameras that understand and act" />
   <meta property="og:description" content="Detection, tracking, recording, and a 65-block visual automation engine — running on your own edge. Cameras that understand and act." />
   <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://olharai.com" />
+  <meta property="og:url" content="https://filma.ai" />
 </svelte:head>
 
 <SensorField />
@@ -96,7 +96,7 @@
   <div class="mx-auto flex h-16 w-full max-w-6xl items-center gap-7 px-6">
     <a href="/" class="flex items-center gap-2.5 font-semibold tracking-tight">
       <OlharMark label="" size={26} class="text-primary drop-shadow-[0_0_10px_oklch(1_0_0/0.35)]" />
-      <span>Olhar AI</span>
+      <span>Filma AI</span>
     </a>
     <nav class="ml-3 hidden gap-7 text-sm font-medium text-muted-foreground md:flex">
       <a class="transition-colors hover:text-foreground" href="#features">Features</a>
@@ -131,7 +131,7 @@
     </h1>
 
     <p use:reveal={120} class="mt-6 max-w-xl text-lg text-muted-foreground">
-      Olhar AI gives your cameras eyes and a brain. They detect people, objects, and faces,
+      Filma AI gives your cameras eyes and a brain. They detect people, objects, and faces,
       track what moves, record what matters, and act on what they see — with a visual builder
       you drive, and an AI you can just ask. Private, on your own edge. For home and business.
     </p>
@@ -234,7 +234,7 @@
 
   <!-- ===== the product, in screenshots ===== -->
   <!-- SCREENSHOT SLOTS. These render captioned placeholders until real captures are dropped into
-       landing/static/shots/. See docs/plans/olharai-landing.md for the exact capture list. Each slot
+       landing/static/shots/. See docs/plans/filma-landing.md for the exact capture list. Each slot
        shows a real screenshot once its file exists; keep the aspect ratio so the layout doesn't jump. -->
   <section id="see-it" class="py-24">
     <div use:reveal class="mx-auto mb-14 max-w-2xl text-center">
@@ -335,9 +335,9 @@
 <footer class="border-t border-border">
   <div class="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-4 px-6 py-10">
     <a href="/" class="flex items-center gap-2 font-semibold">
-      <OlharMark label="" size={22} animated={false} class="text-primary" /> Olhar AI
+      <OlharMark label="" size={22} animated={false} class="text-primary" /> Filma AI
     </a>
-    <span class="text-[13px] text-muted-foreground/70">© 2026 Olhar AI · Calm, private security intelligence</span>
+    <span class="text-[13px] text-muted-foreground/70">© 2026 Filma AI · Calm, private security intelligence</span>
     <div class="ml-auto flex gap-6 text-[13px] text-muted-foreground">
       <a class="transition-colors hover:text-foreground" href={APP}>App</a>
       <a class="transition-colors hover:text-foreground" href="#features">Features</a>

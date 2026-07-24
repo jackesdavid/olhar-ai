@@ -1,8 +1,8 @@
-# OlharAI Infra Migration — greenfield new server + full domain cutover to olharai.com
+# Filma AI Infra Migration — greenfield new server + full domain cutover to filma.ai
 
-**Board card:** #142   **Related:** `docs/plans/olharai-rebrand.md` (brand strings + code domain refs
+**Board card:** #142   **Related:** `docs/plans/filma-rebrand.md` (brand strings + code domain refs
 — that plan does the *code*; this one does the *infrastructure*).
-**Goal:** Stand up the **entire stack fresh** on a **new dedicated server** under **olharai.com**,
+**Goal:** Stand up the **entire stack fresh** on a **new dedicated server** under **filma.ai**,
 **greenfield** (empty Postgres + MinIO — no data carried over), reinstall every edge box pointing at
 the new domain, batch-update the external integrations at the end, then **fully retire**
 `thesentinels.online` and tear down the old overlay.
@@ -44,7 +44,7 @@ migration:
 ## Phase 0 — New server prep
 - Rotate the password; add an SSH **key** for the deploy user; confirm `sudo`, Docker + Compose
   plugin, ports 80/443 free.
-- Pick the deploy dir (was `/ibbf/`; use an OlharAI-neutral `/olharai/`) and decide root vs non-root
+- Pick the deploy dir (was `/ibbf/`; use a brand-neutral `/filma/`) and decide root vs non-root
   deploy user (Docker-group + writable deploy dir if non-root).
 - Put a fresh secrets env on the box: **new** `JWT_SECRET`, `GOOGLE_CLIENT_ID/SECRET`,
   `MASTER_EMAIL/PASSWORD`, `ANTHROPIC_API_KEY`, `S3_KEY/S3_SECRET`, DB pass.
@@ -53,13 +53,13 @@ migration:
 - Traefik + Let's Encrypt on the new box (fold into the compose now that it's a dedicated host).
 - Deploy `sentinel-postgres` **first** (migration 0046 needs pg_cron), then control (runs
   migrations + seeds master, permissions, templates on an empty DB), then the rest.
-- New compose Traefik `Host()` rules on `olharai.com` (`app.`, `control.`, `gateway.`, root=landing).
+- New compose Traefik `Host()` rules on `filma.ai` (`app.`, `control.`, `gateway.`, root=landing).
   No dual-domain, no legacy alias — greenfield.
-- Bring the code domain changes from `olharai-rebrand.md` Phase 1 into the images/config:
+- Bring the code domain changes from `filma-rebrand.md` Phase 1 into the images/config:
   `sentinel-app/src/lib/config.ts`, `crates/app-core/src/billing/payments/stripe.rs`,
   `OAUTH_REDIRECT_BASE`/`OAUTH_SUCCESS_REDIRECT` in the compose, `sentinel-edge/install.sh` default
   `--control`.
-- Verify on a temp hostname / `/etc/hosts` before DNS, then point `olharai.com` DNS (Cloudflare) at
+- Verify on a temp hostname / `/etc/hosts` before DNS, then point `filma.ai` DNS (Cloudflare) at
   the new server. Master login works; a fresh tenant shows the template curriculum.
 
 ## Phase 1b — Two replicas per sentinel-* service (baked into the new compose)
@@ -111,24 +111,24 @@ Sentinel, distributed MinIO or R2) is a later, larger step — explicitly deferr
   release path `/ibbf/edge-dist` (served at `control…/edge/*`) moves too, or edge downloads 404.
 
 ## Phase 3 — Reinstall the edges (operator, at the clients)
-- Fresh install on each box with `--control https://control.olharai.com` (new pairing code →
+- Fresh install on each box with `--control https://control.filma.ai` (new pairing code →
   new box token, new Tailscale key). No re-point mechanism needed — it's a clean install.
 - After this phase, nothing in the field references the old control host.
 
 ## Phase 4 — Batch the external integrations (one pass, at the end)
 Update every external service that has the old domain in its config, **after** the new stack is
 verified:
-- **Google OAuth**: redirect URIs → `https://control.olharai.com/...` (Google Cloud console).
+- **Google OAuth**: redirect URIs → `https://control.filma.ai/...` (Google Cloud console).
 - **Stripe**: success/cancel URLs (code default already changed in Phase 1); update any
   dashboard-side URLs / webhook endpoints pointing at the old domain.
 - **Telegram @BotFather**: if the bot's webhook or display identity references the old domain.
 - **Tuya / any other provider callback** that carries our domain.
-- **Cloudflare**: `.com.br` bulk redirect → `olharai.com` (per olharai-rebrand.md).
+- **Cloudflare**: `.com.br` bulk redirect → `filma.ai` (per filma-rebrand.md).
 - Audit: `grep -rin thesentinels` for any remaining live config reference.
 
 ## Phase 5 — Retire thesentinels.online + tear down the old overlay
-- With traffic on `olharai.com`, edges reinstalled, and integrations repointed: 301 the old domain
-  → `olharai.com` for a short grace window, then remove its DNS/records entirely (including
+- With traffic on `filma.ai`, edges reinstalled, and integrations repointed: 301 the old domain
+  → `filma.ai` for a short grace window, then remove its DNS/records entirely (including
   `control.thesentinels.online` — safe now, no edge depends on it).
 - **Decommission the old overlay, NOT the old server**: remove only `sentinel-*` containers, images,
   and the `sentinel_pgdata` / `sentinel_minio` volumes. The church app (`ibbf.life`) keeps running
@@ -136,7 +136,7 @@ verified:
 
 ## Open decisions
 1. **Traefik** — fold into the stack (leaning yes, dedicated box) vs. stand up separately.
-2. **Deploy dir + user** — `/olharai/` + non-root deploy user vs. mirror the old root `/ibbf/` layout.
+2. **Deploy dir + user** — `/filma/` + non-root deploy user vs. mirror the old root `/ibbf/` layout.
 3. **MinIO vs R2 going forward** — greenfield is the moment to switch clip storage to external
    Cloudflare R2 (no server-side volume to ever migrate again) instead of local MinIO. Separate
    call; decide now or keep MinIO.
@@ -147,14 +147,14 @@ verified:
    the AI sidecar also wants ≥2 (heavy; leave at 1 unless there's headroom).
 
 ## Out of scope (v1)
-- Brand strings, mark, landing copy — that is `olharai-rebrand.md`, run alongside.
+- Brand strings, mark, landing copy — that is `filma-rebrand.md`, run alongside.
 - Any repo/service/crate rename (stays `sentinel-*`, standing instruction).
 - Carrying over ANY data (greenfield — explicit).
 
 ## Verification
-- New server serves app/control/gateway/landing on `olharai.com` with valid TLS; master logs in; a
+- New server serves app/control/gateway/landing on `filma.ai` with valid TLS; master logs in; a
   fresh tenant shows the L1–L6 templates.
-- A **real edge box**, freshly installed against `control.olharai.com`, enrolls, reports health,
+- A **real edge box**, freshly installed against `control.filma.ai`, enrolls, reports health,
   streams live, and uploads a clip end-to-end.
 - `grep -rin thesentinels` finds no remaining **live** config/integration reference.
 - Old domain 301s then is removed; the church app on the old server is up throughout (never touched).

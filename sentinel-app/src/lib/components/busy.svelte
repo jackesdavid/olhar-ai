@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The canonical inline "working" indicator: the OlharAI eye, pulsing at a working tempo. Use
+  // The canonical inline "working" indicator: the Filma AI eye, pulsing at a working tempo. Use
   // inside buttons/rows/pills in place of a generic spinner while an action is in-flight.
   // Inherits currentColor, so it takes the surrounding text/button ink automatically.
   //

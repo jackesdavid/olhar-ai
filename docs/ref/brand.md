@@ -1,6 +1,6 @@
-# Brand — Olhar AI identity reference
+# Brand — Filma AI identity reference
 
-The visual identity: the **eclipse-eye mark** + the **OLHAR AI wordmark**. Monochrome ink; branding
+The visual identity: the **eclipse-eye mark** + the **FILMA AI wordmark**. Monochrome ink; branding
 carried by *form*, not colour. The authoritative spec is **`assets/BRAND.md`** — this file is the
 codebase's map onto it. See also the `impeccable` skill and `[[design-system]]`.
 
@@ -37,9 +37,9 @@ no shared lib — intent to unify noted in card #100).
 
 ## The wordmark — Sora 600, UPPERCASE
 
-**"OLHAR AI"** set in **Sora 600, UPPERCASE**, letter-spacing **0.16em** (0.18em at display sizes).
+**"FILMA AI"** set in **Sora 600, UPPERCASE**, letter-spacing **0.16em** (0.18em at display sizes).
 The short submark for tight spaces is **"OAI"** — a sub-mark of the same brand, not a separate one.
-The written product name is **"Olhar AI"** (two words); the wordmark styling is the uppercase lockup.
+The written product name is **"Filma AI"** (two words); the wordmark styling is the uppercase lockup.
 
 Sora is self-hosted via `@fontsource/sora/600.css` (imported once in `src/routes/+layout.svelte`) and
 exposed as **`--font-brand`**. **Scope: the logo only** — it does not change the app's UI body font
@@ -47,7 +47,7 @@ exposed as **`--font-brand`**. **Scope: the logo only** — it does not change t
 
 ## The lockup — `SentinelLogo`
 
-`sentinel-app/src/lib/components/sentinel-logo.svelte` composes the mark + the OLHAR AI wordmark.
+`sentinel-app/src/lib/components/sentinel-logo.svelte` composes the mark + the FILMA AI wordmark.
 Cap-height ratios from BRAND.md: mark ≈ 1.6× cap height, gap ≈ 0.65× cap. The component keeps its
 `SentinelLogo` name (codebase, not user-facing).
 
@@ -66,7 +66,7 @@ never the logo.
 
 ## Assets
 
-- Masters: `assets/olhar-ai-*.svg` (mark, app-icon, OLHAR AI + OAI lockups, animated) + `assets/BRAND.md`.
+- Masters: `assets/olhar-ai-*.svg` (mark, app-icon, FILMA AI + OAI lockups, animated) + `assets/BRAND.md`.
 - Rendered set: `sentinel-app/static/` (favicon `.ico`/`.svg`/16/32, apple-touch, icon-192/512 +
   maskable). Re-cut from the mark by `sentinel-app/scripts/build-icons.mjs` — re-run on any change,
   don't hand-edit.

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The canonical loading indicator: the OlharAI mark, alive. Never a bare spinner — the eye
+  // The canonical loading indicator: the Filma AI mark, alive. Never a bare spinner — the eye
   // breathing and glancing reads as the system looking, which is the whole product.
   import OlharMark from "./olhar-mark.svelte";
   let { label = "", size = 40, class: klass = "" }: { label?: string; size?: number; class?: string } =

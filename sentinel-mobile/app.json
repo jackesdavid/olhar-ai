@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Olhar AI",
+    "name": "Filma AI",
     "slug": "olharai",
     "owner": "olharai",
     "version": "0.1.0",
@@ -11,7 +11,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.olharai.app",
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "Olhar AI connects to the development server and to cameras on your local network."
+        "NSLocalNetworkUsageDescription": "Filma AI connects to the development server and to cameras on your local network."
       }
     },
     "android": {

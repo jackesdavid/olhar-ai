@@ -11,8 +11,8 @@
 # The web app (Settings → Edge boxes) hands the client a ready-made command with the
 # box token + secrets filled in:
 #
-#   curl -fsSL https://control.olharai.com/install.sh | sudo sh -s -- \
-#     --control https://control.olharai.com \
+#   curl -fsSL https://control.filma.ai/install.sh | sudo sh -s -- \
+#     --control https://control.filma.ai \
 #     --box-token sbx_xxxxxxxx \
 #     --authkey tskey-auth-xxxx \
 #     --hostname tenant-001

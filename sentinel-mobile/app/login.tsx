@@ -37,7 +37,7 @@ export default function Login() {
         style={{ flex: 1, justifyContent: "center", padding: space.xl, gap: space.md }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <Title>Olhar AI</Title>
+        <Title>Filma AI</Title>
         <Muted>Sign in to receive alerts on this phone.</Muted>
 
         <Input

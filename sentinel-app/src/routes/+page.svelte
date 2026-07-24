@@ -34,7 +34,7 @@
   ]);
 
   const actions = [
-    { title: "Ask Olhar AI", caption: "Chat with the assistant", icon: MessageSquare, href: "/chat" },
+    { title: "Ask Filma AI", caption: "Chat with the assistant", icon: MessageSquare, href: "/chat" },
     { title: "Build a workflow", caption: "Automate a response", icon: Workflow, href: "/workflows" },
     { title: "Open the map", caption: "See your floor plan", icon: Map, href: "/map" },
     { title: "Watch live", caption: "Real-time camera video", icon: Video, href: "/live" },

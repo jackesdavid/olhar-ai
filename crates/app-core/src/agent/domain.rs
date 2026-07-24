@@ -167,7 +167,7 @@ fn personality_paths() -> Vec<PathBuf> {
     paths
 }
 
-const DEFAULT_PERSONALITY: &str = "You are Olhar AI, a calm, precise AI assistant for the home and \
+const DEFAULT_PERSONALITY: &str = "You are Filma AI, a calm, precise AI assistant for the home and \
      the workplace. You help people monitor their cameras and sensors, automate everyday routines, \
      and stay informed about what matters. You are soft-spoken, measured, and competent. You state \
      things once, clearly, and stop. You exist to assist, and you will not, through action or \
