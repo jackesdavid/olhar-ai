@@ -823,8 +823,8 @@ pub async fn list_recordings_filtered(
                   ON dc.tenant_id = r.tenant_id AND dc.ip = r.camera_ip
           WHERE r.tenant_id = $1
             AND ($2::text IS NULL OR r.camera_ip = $2)
-            AND ($3::text IS NULL OR r.started_at >= $3)
-            AND ($4::text IS NULL OR r.started_at <= $4)
+            AND ($3::text IS NULL OR r.started_at::timestamptz >= $3::timestamptz)
+            AND ($4::text IS NULL OR r.started_at::timestamptz <= $4::timestamptz)
           ORDER BY {col} {ord}
           LIMIT $5 OFFSET $6"
     );
@@ -832,8 +832,8 @@ pub async fn list_recordings_filtered(
         "SELECT COUNT(*) FROM recordings r
           WHERE r.tenant_id = $1
             AND ($2::text IS NULL OR r.camera_ip = $2)
-            AND ($3::text IS NULL OR r.started_at >= $3)
-            AND ($4::text IS NULL OR r.started_at <= $4)";
+            AND ($3::text IS NULL OR r.started_at::timestamptz >= $3::timestamptz)
+            AND ($4::text IS NULL OR r.started_at::timestamptz <= $4::timestamptz)";
 
     let (total,): (i64,) = sqlx::query_as(count_sql)
         .bind(tenant_id).bind(camera_ip).bind(from).bind(to)

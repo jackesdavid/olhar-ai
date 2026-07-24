@@ -401,11 +401,15 @@ pub async fn list_events(pool: &PgPool, tenant_id: Uuid, q: EventQuery) -> sqlx:
     if let Some(cam) = &q.camera {
         qb.push(" AND camera = ").push_bind(cam.clone());
     }
+    // Compare as instants, not strings: `occurred_at` is RFC3339 with an offset, and the window
+    // bounds arrive as UTC instants — a naive string `>=` drops events whose textual offset differs
+    // from the bound's (the same timezone bug that hid recent clips from Playback). The cast happens
+    // in Postgres, so no timestamptz is decoded into Rust.
     if let Some(from) = &q.from {
-        qb.push(" AND occurred_at >= ").push_bind(from.clone());
+        qb.push(" AND occurred_at::timestamptz >= ").push_bind(from.clone()).push("::timestamptz");
     }
     if let Some(to) = &q.to {
-        qb.push(" AND occurred_at <= ").push_bind(to.clone());
+        qb.push(" AND occurred_at::timestamptz <= ").push_bind(to.clone()).push("::timestamptz");
     }
     if let Some(after) = q.after {
         qb.push(" AND id < ").push_bind(after);

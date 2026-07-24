@@ -2,10 +2,8 @@
 // markup stays logic-free and this stays trivially correct — the one source of the time↔pixel
 // mapping every phase (ruler, clips, markers, playhead) reads from.
 //
-// Timestamps are the edge-local RFC3339 the recordings/events queries store; `parseTs` honours
-// the offset in the string. The ruler renders in the *viewer's* locale — for the single-tenant
-// deployment (viewer and edge share a timezone) that lines up; a future tz-robust pass would
-// render straight from the RFC3339 offset.
+// Timestamps are RFC3339 with an offset (the edge writes `chrono::Local`, which on a UTC box is
+// `+00:00`); `parseTs` honours the offset in the string. The ruler renders in the *viewer's* locale.
 
 import type { EventRow, Recording, RecordingCamera } from "$lib/api";
 
@@ -31,10 +29,21 @@ export type TLTrack = {
   clips: TLClip[];
 };
 
-/** Local-day [00:00, 23:59:59] bounds as offset-less RFC3339 prefixes — string-comparable against
- *  the edge-local `started_at` the recordings query filters on (same wall-clock day). */
+/** The viewer's local day as **absolute instants** (`…Z`), so the backend selects the clips/events
+ *  that fall in that day *wherever* the edge's clock sits.
+ *
+ *  The old form returned offset-less prefixes (`2026-07-24T00:00:00`) and the backend string-compared
+ *  them against `started_at`, which is stored in UTC (`chrono::Local` on a UTC box). In a UTC-3
+ *  viewer that dropped every clip recorded after 21:00 local — its UTC date-string is already
+ *  *tomorrow*, so it fell outside "today"'s window — which is exactly the "recent clips missing from
+ *  Playback" bug. `new Date(local-midnight).toISOString()` maps the viewer's local day to the UTC
+ *  instants that bound it, and the backend now compares as `timestamptz`, so offsets are honoured on
+ *  both sides. */
 export function dayBounds(dayISO: string): { from: string; to: string } {
-  return { from: `${dayISO}T00:00:00`, to: `${dayISO}T23:59:59` };
+  return {
+    from: new Date(`${dayISO}T00:00:00`).toISOString(),
+    to: new Date(`${dayISO}T23:59:59.999`).toISOString(),
+  };
 }
 
 /** Browser-local midnight (epoch ms) for a `YYYY-MM-DD` day — the axis origin. */
