@@ -56,6 +56,92 @@ media path is a linked, portable GStreamer.
 
 ---
 
+## 🗺️ COMPLETE MIGRATION MAP + STAGED PLAN (2026-07-23) — map everything, share what we can, migrate 1-by-1 with a Mac **and** Jetson Nano test gate at every stage
+
+This is the operator's mandate: *map everything we use, organise what can be shared and improved, then
+migrate one capability at a time, each stage validated in-loco on the Mac edge box and the Jetson Nano.*
+
+### Why Mac + Jetson as the two gates
+- **Mac** (VideoToolbox HW decode) = the desktop/x86-ish path + the operator's daily test box.
+- **Jetson Nano** (aarch64 + NVDEC) = the **best available proxy for the Android target**: both are
+  ARM64 with a hardware video decoder, both GStreamer-native. Proving each stage on the Jetson
+  de-risks Android before we ever touch a phone. A stage isn't "done" until it passes on **both**.
+
+### The full surface — everything we use ffmpeg + go2rtc for
+
+**ffmpeg (7 touchpoints — inventory verified below in "Grounding"):** A1 live MJPEG decode (hot path),
+A2 recording mux (H264 ring → mp4), A3 clip duration probe, A4 hwaccel capability probe, A5 snapshot
+fallback, A6 presence check, B3 go2rtc-internal ffmpeg for `/api/frame.jpeg`.
+
+**go2rtc (deep — spans edge, app-core, gateway):**
+| Responsibility | Where | Consumers |
+|---|---|---|
+| Sidecar lifecycle (spawn/config/health) | edge `state.rs`, `go2rtc.rs`, `main.rs` | the edge itself |
+| RTSP ingest from cameras | go2rtc config (per-camera streams) | everything downstream |
+| **`/api/ws` — live MSE over WebSocket** | served by go2rtc | **gateway `proxy.rs` → web player + mobile WebView player** |
+| **`/api/frame.jpeg` — snapshot** | served by go2rtc (shells to ffmpeg, B3) | gateway passthrough; app-core `go2rtc.rs` ("Get current frame" node) |
+| `/api/streams`, `/stream.html`, player assets | served by go2rtc | gateway passthrough |
+| WebRTC | go2rtc `webrtcbin` | (minor today — 1 ref) |
+| Tailnet exposure (MagicDNS TLS) | edge `tailscale.rs` | gateway reaches it over the tailnet |
+
+### The load-bearing shared seam — **keep the go2rtc HTTP contract, swap the engine**
+The single most important design fact: **`/api/ws` (MSE) + `/api/frame.jpeg` is a contract**, and its
+consumers are the **gateway** (`proxy.rs`), the **web player** (`sentinel-app` Live tab), and the
+**mobile player** (the WebView MSE player, card #139). If the edge keeps serving that exact HTTP
+surface — but backed by **GStreamer** (`mp4mux fragment-duration` fed over a WS for MSE; `jpegenc` for
+the frame) instead of go2rtc — then **the gateway, the web player and the mobile player change nothing.**
+The whole migration is contained inside the edge. This is what "organise what can be shared" buys us:
+one HTTP seam, three unchanged consumers.
+
+### What is shared / improved by the migration
+- **Pure-Rust capture core stays and is reused** — retina RTSP + the H264 depacketizer (`recording.rs`)
+  already exist; they feed a GStreamer `appsrc` instead of go2rtc. One ingest, many sinks.
+- **One decode, many consumers** — today A1 (live decode), B3 (snapshot), and A2 (recording) each spin
+  their own media process. GStreamer lets a **single decoded pipeline** fan out to motion/detection +
+  snapshot + MSE + recording via `tee`. Fewer processes, less CPU, one warm decoder.
+- **Hardware decode finally APPLIED** — today `hwaccel.rs` detects `vaapi|nvdec|videotoolbox|…` and
+  **never uses it**. GStreamer's decoder elements (`vtdec` Mac, `nvv4l2decoder`/NVDEC Jetson,
+  `amcviddec`/MediaCodec Android) apply it for real — the one genuine *improvement*, not just parity.
+- **`gstreamer-rs` linked, one codebase** — the same Rust pipeline builds on Mac, Jetson, and Android
+  (NDK). (Supersedes the plan-below "spawn gst-launch subprocess" design — see the Pivot section.)
+
+### Staged migration — 1 capability per stage, each gated on Mac **and** Jetson
+
+> Order = highest-value + lowest-risk first, and each stage leaves the box fully working (ffmpeg/go2rtc
+> stay for anything not yet migrated). Every stage: implement → test Mac → test Jetson → measure
+> CPU/mem → commit. No stage advances until both boxes pass.
+
+- **Stage 0 — Foundation: linked `gstreamer-rs` in the edge.** Add the dep, build on Mac, cross-compile
+  for Jetson (L4T aarch64). Prove a trivial `videotestsrc ! … ! fakesink` pipeline runs from Rust on
+  both. **Gate:** the edge binary links libgstreamer and runs a pipeline on Mac + Jetson. (This is the
+  #79 static-build tradeoff, made real and measured here.)
+- **Stage 1 — A1 live decode (RTSP → frames) with HW decode.** The heaviest touchpoint. `rtspsrc !
+  <hwdecode> ! appsink` feeding the pure-Rust motion/detector. HW element per platform (`vtdec` /
+  `nvv4l2decoder`). **Gate:** motion + detection run off GStreamer frames on both boxes; CPU measured
+  vs ffmpeg baseline (parity is enough).
+- **Stage 2 — Snapshot (`/api/frame.jpeg` + "Get current frame" node).** `jpegenc` off the Stage-1 warm
+  pipeline, replacing go2rtc's frame.jpeg (kills B3, the ffmpeg-in-go2rtc path). **Gate:** the workflow
+  "Get current frame" and the gateway snapshot passthrough return a frame on both boxes.
+- **Stage 3 — Recording mux (A2).** H264 ring → fragmented MP4 via `mp4mux`, replacing the ffmpeg
+  muxer; A3 duration via GStreamer too. **Gate:** record + play back a clip on both boxes.
+- **Stage 4 — The live serving contract (`/api/ws` MSE).** The big go2rtc replacement: the edge serves
+  `/api/ws` itself (GStreamer `mp4mux fragment-duration` → WS), **contract-identical** so the gateway +
+  web + mobile players are untouched. **Gate:** live view works end-to-end through the gateway, on both
+  boxes, in the existing web AND mobile players — no client change.
+- **Stage 5 — Retire go2rtc + ffmpeg.** WebRTC path if still needed; then drop both subprocesses, the
+  `install.sh` deps, and the presence checks (A4/A6). **Gate:** full parity on both boxes with **neither
+  ffmpeg nor go2rtc installed** — the portability proof, and the green light for the phone-as-edge card.
+
+### Open decisions (staged plan)
+1. **`/api/ws` MSE re-impl fidelity** — go2rtc's MSE has codec-negotiation edge cases; match its
+   `{type:"mse", value:codecs}` handshake exactly (the web + mobile players already speak it) rather
+   than invent a protocol.
+2. **Jetson cross-build** — cross-compile with the L4T GStreamer, or build on-device? Decide at Stage 0.
+3. **Static build (#79) fate** — linking libgstreamer ends the musl-static release. Dynamic-link +
+   bundle the GStreamer runtime per platform (Mac/Jetson/Android), or a per-target build. Stage 0 call.
+
+---
+
 ## Matrix — funcionalidade × ffmpeg × GStreamer (estado real, não o planejado)
 
 | # | Funcionalidade | ffmpeg | GStreamer | Vencedor / observação |
