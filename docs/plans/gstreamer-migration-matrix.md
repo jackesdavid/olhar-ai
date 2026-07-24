@@ -22,13 +22,13 @@ it passes on **both**, with the other platforms' HW-decode elements noted per ro
 | A3 | **Clip duration probe** | `ffprobe` (`recording.rs`) | **no probe at all** — duration = captured frame span | recording metadata | 3 | ✅⁶ | ⬜ | 🟡 |
 | A4 | **HW-decode capability probe** | ffmpeg `-hwaccel` list (`hwaccel.rs`) | `gst_registry` element presence (`vtdec`/`nvv4l2decoder`…) | health report | 5 | ⬜ | ⬜ | ⬜ |
 | A5 | **Snapshot fallback** (single-frame, cold) | raw `ffmpeg` (`onvif/client.rs`) | one-shot `rtspsrc ! decodebin ! jpegenc` (feature-gated) | **credential probe only** — no longer a snapshot fallback | 2 | ✅⁴ | ⬜ | 🟡 |
-| A6 | **ffmpeg presence check** | `ffmpeg -version` (`state.rs`) | removed (no ffmpeg) | health gating | 5 | ⬜ | ⬜ | ⬜ |
+| A6 | **ffmpeg presence check** | `ffmpeg -version` (`state.rs`) | skipped when GStreamer owns media | health gating | 5 | ✅⁹ | ⬜ | 🟡 |
 | B3 | **Snapshot from warm feed** (`/api/frame.jpeg`, "Get current frame" node) | go2rtc → internal ffmpeg | serve the A1 warm JPEG (`capture::latest_fresh`); cold path only as fallback | workflow node, app-core `go2rtc.rs`, gateway | 2 | ✅³ | ⬜ | 🟡 |
 | G1 | **RTSP ingest from cameras** | go2rtc per-camera streams | `rtspsrc` (shared A1 ingest) | all downstream | 1 | ✅² | ⬜ | 🟡 |
 | G2 | **Live MSE over WebSocket** (`/api/ws`) | go2rtc | `mp4mux fragment-duration` → WS, **contract-identical** | **gateway `proxy.rs` → web player + mobile WebView player** | 4 | ✅⁷ | ⬜⁸ | 🟡 |
 | G3 | **WebRTC** (`/api/webrtc`) | go2rtc `webrtcbin` (minor use today) | `webrtcbin` | (minor) | 5 | ⬜ | ⬜ | ⬜ |
 | G4 | **Stream list / player assets** (`/api/streams`, `/stream.html`) | go2rtc-served, gateway passthrough | edge-served equivalents or drop if unused | gateway passthrough | 4 | ⬜ | ⬜ | ⬜ |
-| G5 | **go2rtc sidecar lifecycle** (spawn/config/health) | edge manages the go2rtc process | removed (no sidecar) | edge `state.rs`, `main.rs` | 5 | ⬜ | ⬜ | ⬜ |
+| G5 | **go2rtc sidecar lifecycle** (spawn/config/health) | edge manages the go2rtc process | **not started at all** on a GStreamer box | edge `state.rs`, `main.rs` | 5 | ✅⁹ | ⬜ | 🟡 |
 | G6 | **Tailnet exposure** (MagicDNS TLS to go2rtc) | edge `tailscale.rs` → go2rtc | serve the GStreamer HTTP over the same tailnet | gateway reaches edge | 4 | ⬜ | ⬜ | ⬜ |
 
 ¹ **HW / Mac ✅ (RESOLVED 2026-07-24):** `vtdec` (VideoToolbox HW decode) delivers all 120/120 frames
@@ -172,6 +172,33 @@ elements. Absent: **`cmafmux`** and `h264timestamper`, which is what forced G2 o
 `gstreamer-1.0` dev headers are installed (gstreamer-rs will build); there is no `cargo` yet. Expect
 `nvv4l2decoder` to output NVMM memory, so the A1 pipeline needs `nvvidconv` where the Mac uses
 `videoconvert`.
+
+⁹ **THE MAC NOW RUNS WITH NO SIDECARS AT ALL (2026-07-24).** `ps` shows **zero** media processes —
+no go2rtc, no ffmpeg — and `/health` reports `owns_go2rtc: false`. Verified on that box, in that state:
+warm snapshot **HTTP 200 in 0.0008 s**, live `/api/ws` serving fMP4 (`avc1.640016`), and a recording
+of **12 s / 258 KB from a fresh ring session**.
+
+What made it possible: the edge dials each camera **itself, once**, and `tee`s the H264 to the decode
+branch (JPEG for motion + detectors) and the mux branch (fMP4 for live). The recording ring dials the
+camera too, which was go2rtc's last consumer. Ownership is decided in `AppState::boot`, so the
+config-change respawns follow the same rule instead of each having to remember it.
+
+**Four traps, each of which failed silently or misleadingly:**
+1. The stored `rtsp_url` carries **no credentials** — they live on the device and go2rtc's config
+   injected them. Dialling the bare URL gets `Unauthorized` and the supervisor retries forever: the
+   snapshot went 502 and Live produced nothing. Now injected via `rtsp_url_with_creds`, same as the
+   sidecar, and covered by tests — the logic that broke had been unreachable from one.
+2. **`retina` refuses inline credentials** (`URL must not contain credentials`); they must be session
+   options. It had never surfaced because go2rtc's re-serve needed no auth at all. Split at the
+   **last** `@` — a password containing `@` is legal, and splitting at the first truncates the host.
+3. The stored URLs carry go2rtc's **`#media=video`** fragment, which is its syntax and not RTSP:
+   `rtspsrc` takes it as part of the path and the camera 404s, which reads as bad credentials.
+4. Both `tee` branches are **`leaky=downstream`** — a stalled consumer must never back the RTSP
+   source up and take the other branch down with it.
+
+**Still open on the Mac:** the gateway's `/api/frame.jpeg` passthrough and the tailnet's `:443` both
+still point at go2rtc `:1984`, which no longer exists on this box (the edge API is on `:8080`). That
+is G4/G6 and it means the *gateway* snapshot path is broken here even though the edge's own is not.
 
 ## ✅ Verified live on the Mac edge (2026-07-24)
 
