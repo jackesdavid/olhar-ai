@@ -22,6 +22,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/devices", get(devices))
         .route("/streams", get(streams))
         .route("/snapshot/:ip", get(snapshot))
+        .route("/api/frame.jpeg", get(frame_jpeg))
         .route("/probe/:ip", post(probe))
         .route("/tracks/:ip", get(tracks))
         .route("/reload", post(reload))
@@ -508,7 +509,7 @@ async fn mse_ws(
     let src = q.get("src").cloned().unwrap_or_default();
     // The contract's stream name is go2rtc's (`cam_<ip with dots as underscores>[_hd]`); the ingest
     // is keyed by camera, so translate here rather than teaching the pipeline go2rtc's naming.
-    let Some((ip, hd)) = stream_name_to_camera(&src) else {
+    let Some((ip, hd)) = go2rtc_src_to_camera(&src) else {
         return (StatusCode::BAD_REQUEST, "bad src").into_response();
     };
     // Idempotent: starts the shared pipeline if this camera has no consumer yet, joins it otherwise.
@@ -516,20 +517,6 @@ async fn mse_ws(
     ws.on_upgrade(move |socket| mse_socket(socket, ip))
 }
 
-/// `cam_192_168_0_7` → `("192.168.0.7", false)`, `cam_192_168_0_7_hd` → `(…, true)`.
-#[cfg(feature = "gst-linked")]
-fn stream_name_to_camera(src: &str) -> Option<(String, bool)> {
-    let rest = src.strip_prefix("cam_")?;
-    let (octets, hd) = match rest.strip_suffix("_hd") {
-        Some(o) => (o, true),
-        None => (rest, false),
-    };
-    // Only a dotted-quad may reach an RTSP dial — anything else is not a camera we know.
-    let ip = octets.replace('_', ".");
-    let ok = ip.split('.').count() == 4
-        && ip.split('.').all(|o| !o.is_empty() && o.bytes().all(|b| b.is_ascii_digit()));
-    ok.then_some((ip, hd))
-}
 
 #[cfg(feature = "gst-linked")]
 async fn mse_socket(mut socket: axum::extract::ws::WebSocket, ip: String) {
@@ -590,5 +577,61 @@ async fn mse_socket(mut socket: axum::extract::ws::WebSocket, ip: String) {
                 if msg.is_none() { break; }
             }
         }
+    }
+}
+
+/// go2rtc's snapshot endpoint, served by the edge (card #138, G4/G6).
+///
+/// Once the tailnet's `:443` points here instead of go2rtc, the **deployed** gateway passes this
+/// path straight through — so answering it is what lets the sidecar go away without touching the
+/// cloud. Same warm frame as `/snapshot/:ip`; only the go2rtc-shaped `?src=cam_<ip>` differs.
+async fn frame_jpeg(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let src = q.get("src").cloned().unwrap_or_default();
+    let Some((ip, _hd)) = go2rtc_src_to_camera(&src) else {
+        return (StatusCode::BAD_REQUEST, "bad src").into_response();
+    };
+    snapshot(State(state), Path(ip)).await.into_response()
+}
+
+/// `cam_192_168_0_7` → `("192.168.0.7", false)`, `cam_192_168_0_7_hd` → `(…, true)`.
+fn go2rtc_src_to_camera(src: &str) -> Option<(String, bool)> {
+    let rest = src.strip_prefix("cam_")?;
+    let (octets, hd) = match rest.strip_suffix("_hd") {
+        Some(o) => (o, true),
+        None => (rest, false),
+    };
+    // Only a dotted-quad may reach a camera lookup — anything else is not a stream we serve.
+    let ip = octets.replace('_', ".");
+    let ok = ip.split('.').count() == 4
+        && ip.split('.').all(|o| !o.is_empty() && o.bytes().all(|b| b.is_ascii_digit()));
+    ok.then_some((ip, hd))
+}
+
+#[cfg(test)]
+mod src_name_tests {
+    use super::go2rtc_src_to_camera;
+
+    /// The stream name is go2rtc's, and it is what the gateway forwards verbatim — translating it
+    /// wrong means the edge looks up a camera that does not exist.
+    #[test]
+    fn maps_the_go2rtc_stream_name_to_a_camera() {
+        assert_eq!(
+            go2rtc_src_to_camera("cam_192_168_0_7"),
+            Some(("192.168.0.7".into(), false))
+        );
+        assert_eq!(
+            go2rtc_src_to_camera("cam_192_168_0_7_hd"),
+            Some(("192.168.0.7".into(), true))
+        );
+    }
+
+    #[test]
+    fn rejects_anything_that_is_not_a_camera_stream() {
+        assert_eq!(go2rtc_src_to_camera("cam_not_an_ip"), None);
+        assert_eq!(go2rtc_src_to_camera("../etc/passwd"), None);
+        assert_eq!(go2rtc_src_to_camera(""), None);
     }
 }

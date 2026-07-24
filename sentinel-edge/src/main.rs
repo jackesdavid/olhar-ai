@@ -181,6 +181,13 @@ fn main() {
         );
     }
 
+    // `ensure_up` ran before the media backend was known and left 443 on go2rtc. Re-point it at the
+    // edge when there is no go2rtc — 443 is what the deployed gateway dials for live video, and it
+    // does not fail loudly when nothing answers there, it just shows no picture.
+    if !state.own_go2rtc {
+        tailscale::serve_live(8788);
+    }
+
     if state.own_go2rtc {
         go2rtc::respawn(&state);
         log::info!("edge owns go2rtc (EDGE_OWN_GO2RTC)");

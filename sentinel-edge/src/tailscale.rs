@@ -138,9 +138,13 @@ pub fn ensure_up() {
     // bug. Blocking until the node reflects the requested hostname closes it.
     let settled = wait_for_hostname(&hostname, Duration::from_secs(20));
 
-    // Expose the localhost-only go2rtc API over the tailnet (TLS via MagicDNS), and the edge API on
-    // 8080 (443 is reserved for go2rtc so the gateway is unaffected).
-    serve_go2rtc();
+    // Expose the live media API over the tailnet (TLS via MagicDNS) on **443**, plus the edge API on
+    // 8080. 443 is what the deployed gateway dials, so whichever process owns live video has to
+    // answer there: go2rtc on a legacy box, the edge itself once GStreamer owns the media path
+    // (card #138, G6). Getting this wrong doesn't fail loudly — the gateway simply finds nothing.
+    // Boot ordering forces the default here: this runs before the recording config is known, so 443
+    // starts on go2rtc and `main` re-points it at the edge once it knows GStreamer owns the media.
+    serve_live(1984);
     serve_edge_api();
 
     // Report this box's tailnet host to control (so the gateway can resolve the tenant's live
@@ -222,7 +226,7 @@ pub fn reassert() {
         ensure_up(); // up + wait for the rename + serve + report the host
         return;
     }
-    serve_go2rtc();
+    serve_live(1984);
     serve_edge_api();
     if !host_is_explicit() {
         if let Some(dns) = detect_dns_name() {
@@ -251,16 +255,17 @@ fn node_running() -> bool {
 /// Expose the localhost-only go2rtc API (`:1984`) over the tailnet (TLS via MagicDNS).
 /// Best-effort + idempotent — safe to re-run periodically; a no-op (logged at debug) when
 /// Tailscale is stopped. Output is captured so a stopped daemon doesn't spam stderr.
-pub fn serve_go2rtc() {
+pub fn serve_live(port: u16) {
+    let p = port.to_string();
     let mut cmd = ts();
-    cmd.args(["serve", "--bg", "1984"]);
-    match run(cmd, "serve --bg 1984") {
-        Some(o) if o.status.success() => log::debug!("tailscale serve --bg 1984 ok"),
+    cmd.args(["serve", "--bg", &p]);
+    match run(cmd, "serve --bg <live>") {
+        Some(o) if o.status.success() => log::info!("tailnet 443 → live media on :{port}"),
         Some(o) => log::debug!(
-            "tailscale serve --bg 1984: {}",
+            "tailscale serve --bg {port}: {}",
             String::from_utf8_lossy(&o.stderr).trim()
         ),
-        None => log::debug!("tailscale serve --bg 1984 unavailable or hung"),
+        None => log::debug!("tailscale serve --bg {port} unavailable or hung"),
     }
 }
 
