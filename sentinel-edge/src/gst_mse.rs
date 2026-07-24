@@ -13,12 +13,15 @@
 //! point itself: one `rtspsrc` per camera, `tee`'d to decode + record + this. Doing it that way
 //! now would mean rewriting two working paths before this one is proven.
 //!
-//! **`cmafmux` requires DTS and RTP depayloading supplies only PTS.** Left unset, the pipeline goes
-//! EOS within ~0.1s having produced *nothing*, and the only message on the bus blames `rtspsrc`
-//! (`streaming stopped, reason error (-5)`) — the real cause (`Require DTS for video streams`) is
-//! visible only under `GST_DEBUG=fmp4mux:6`. `h264timestamper` fixes it but lives in
-//! gst-plugins-bad; a pad probe copying PTS→DTS costs us nothing and keeps one more plugin off the
-//! Android and Jetson builds. Our cameras carry no B-frames, so the two are identical anyway.
+//! **Why `mp4mux` and not `cmafmux`.** `cmafmux` (gst-plugins-rs) was the obvious pick and it does
+//! produce valid fMP4 — but it closes a fragment only on a **keyframe**, so its cadence is the
+//! camera's GOP no matter what `fragment-duration` says. Measured against this camera: one fragment
+//! every **2.0s**, first frame after 5.6s, where go2rtc delivers one every **0.07s** starting at
+//! 0.22s. That is a latency regression a viewer would feel. `mp4mux fragment-duration` fragments on
+//! a timer instead — measured at **17 fragments/s**, matching go2rtc. It also settles the
+//! portability question the Jetson raised: `cmafmux` is **absent** from the JetPack 6 GStreamer
+//! (1.20.3) and would have to be built and shipped for aarch64 and Android, while `mp4mux` is in
+//! gst-plugins-good and present everywhere we deploy. And it wants no DTS, which `cmafmux` did.
 
 use gstreamer as gst;
 use gstreamer::prelude::*;
@@ -27,10 +30,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::broadcast;
 
-/// How much video each fragment holds. Small fragments mean low latency (the browser cannot play
-/// what the muxer has not closed yet) at the cost of a little per-fragment overhead. 500ms matches
-/// what go2rtc gives us today.
-const FRAGMENT_NS: u64 = 500_000_000;
+/// How much video each fragment holds, in **milliseconds** (`mp4mux`'s unit). The browser cannot
+/// play what the muxer has not closed yet, so this is the latency floor: at 100ms the muxer closes
+/// a fragment per frame at any sane framerate, which is what go2rtc does today.
+const FRAGMENT_MS: u32 = 100;
 
 /// A running per-stream muxer, shared by every viewer of that camera.
 pub struct MseStream {
@@ -64,6 +67,36 @@ impl Drop for MseStream {
 fn registry() -> &'static Mutex<HashMap<String, Arc<MseStream>>> {
     static R: OnceLock<Mutex<HashMap<String, Arc<MseStream>>>> = OnceLock::new();
     R.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Assembles the MSE init segment out of the leading boxes `mp4mux` emits one per buffer.
+///
+/// `ftyp` and `moov` arrive as separate buffers, and a viewer needs both before any fragment. The
+/// first `moof` is what ends the init segment and begins the live stream.
+#[derive(Default)]
+struct InitSegment {
+    bytes: Vec<u8>,
+    done: bool,
+}
+
+impl InitSegment {
+    /// Absorb `bytes` if it is still part of the init segment; `false` once the stream has started,
+    /// meaning the caller should forward this buffer to viewers instead.
+    fn take_box(&mut self, bytes: &[u8]) -> bool {
+        if self.done {
+            return false;
+        }
+        if bytes.len() >= 8 && &bytes[4..8] == b"moof" {
+            self.done = true;
+            return false;
+        }
+        self.bytes.extend_from_slice(bytes);
+        true
+    }
+
+    fn finished(&self) -> Option<Vec<u8>> {
+        self.done.then(|| self.bytes.clone())
+    }
 }
 
 /// The `codecs=` string MSE needs, read from the `avcC` box in the init segment:
@@ -103,11 +136,12 @@ fn start(name: &str) -> Result<Arc<MseStream>, String> {
     gst::init().map_err(|e| format!("gst init: {e}"))?;
     // go2rtc's local re-serve; the contract's `src=` is already the stream name there.
     let url = format!("rtsp://127.0.0.1:8554/{name}");
+    // `streamable=true` keeps the moov free of sample tables, which is what makes the first buffer a
+    // usable MSE init segment instead of something only a finished file could carry.
     let desc = format!(
         "rtspsrc location=\"{url}\" protocols=tcp latency=100 \
-         ! rtph264depay ! h264parse name=parse \
-         ! video/x-h264,stream-format=avc,alignment=au \
-         ! cmafmux fragment-duration={FRAGMENT_NS} \
+         ! rtph264depay ! h264parse \
+         ! mp4mux fragment-duration={FRAGMENT_MS} streamable=true \
          ! appsink name=out sync=false"
     );
     let pipeline = gst::parse::launch(&desc)
@@ -115,32 +149,19 @@ fn start(name: &str) -> Result<Arc<MseStream>, String> {
         .downcast::<gst::Pipeline>()
         .map_err(|_| "not a pipeline".to_string())?;
 
-    // PTS → DTS, without which cmafmux silently produces nothing (see the module note).
-    let parse_src = pipeline
-        .by_name("parse")
-        .ok_or("h264parse missing")?
-        .static_pad("src")
-        .ok_or("h264parse has no src pad")?;
-    parse_src.add_probe(gst::PadProbeType::BUFFER, |_, info| {
-        if let Some(gst::PadProbeData::Buffer(buffer)) = &mut info.data {
-            if buffer.dts().is_none() {
-                let pts = buffer.pts();
-                buffer.make_mut().set_dts(pts);
-            }
-        }
-        gst::PadProbeReturn::Ok
-    });
-
     let appsink = pipeline
         .by_name("out")
         .ok_or("appsink missing")?
         .downcast::<gst_app::AppSink>()
         .map_err(|_| "not an appsink".to_string())?;
 
-    // 32 fragments ≈ 16s of slack: enough to ride out a stalled viewer, small enough that a viewer
-    // that fell that far behind is better off being dropped and resynced.
-    let (tx, _) = broadcast::channel::<Arc<Vec<u8>>>(32);
-    let init_slot: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    // `mp4mux` emits a box per buffer (~50/s at 15fps), so this is roughly 10s of slack: enough to
+    // ride out a stalled viewer, short enough that one which fell further behind is better served by
+    // being dropped and resynced than by playing minutes-old video.
+    let (tx, _) = broadcast::channel::<Arc<Vec<u8>>>(512);
+    // `mp4mux` hands the appsink one **box** per buffer, not one segment: `ftyp`, then `moov`, then
+    // `moof`, `mdat`, … So the init segment is everything up to (not including) the first `moof`.
+    let init_slot: Arc<Mutex<InitSegment>> = Arc::new(Mutex::new(InitSegment::default()));
     {
         let (tx, init_slot) = (tx.clone(), Arc::clone(&init_slot));
         appsink.set_callbacks(
@@ -154,14 +175,12 @@ fn start(name: &str) -> Result<Arc<MseStream>, String> {
                         return Ok(gst::FlowSuccess::Ok);
                     };
                     let bytes = map.as_slice();
-                    // The very first buffer is the init segment (`ftyp` + `moov`); everything after
-                    // it is the live byte stream.
                     let mut slot = init_slot.lock().unwrap();
-                    if slot.is_none() {
-                        *slot = Some(bytes.to_vec());
-                    } else {
-                        let _ = tx.send(Arc::new(bytes.to_vec()));
+                    if slot.take_box(bytes) {
+                        return Ok(gst::FlowSuccess::Ok);
                     }
+                    drop(slot);
+                    let _ = tx.send(Arc::new(bytes.to_vec()));
                     Ok(gst::FlowSuccess::Ok)
                 })
                 .build(),
@@ -172,10 +191,10 @@ fn start(name: &str) -> Result<Arc<MseStream>, String> {
         .set_state(gst::State::Playing)
         .map_err(|e| format!("gst play: {e}"))?;
 
-    // Wait for the init segment — it arrives with the first keyframe.
+    // Wait for the init segment — it is closed by the first `moof`, one keyframe in.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let init = loop {
-        if let Some(init) = init_slot.lock().unwrap().clone() {
+        if let Some(init) = init_slot.lock().unwrap().finished() {
             break init;
         }
         if std::time::Instant::now() >= deadline {
@@ -208,6 +227,20 @@ mod tests {
         let mut init = b"\x00\x00\x00\x08ftypfake\x00\x00\x00\x0eavcC".to_vec();
         init.extend_from_slice(&[0x01, 0x64, 0x00, 0x16]); // High profile, level 2.2
         assert_eq!(codecs_from_init(&init).as_deref(), Some("avc1.640016"));
+    }
+
+    /// `mp4mux` splits the init segment across buffers, so the assembler decides whether a viewer
+    /// gets a usable `moov` at all — and it must stop at exactly the right buffer.
+    #[test]
+    fn init_segment_is_every_box_before_the_first_moof() {
+        let mut init = InitSegment::default();
+        assert!(init.take_box(b"\x00\x00\x00\x20ftyp...."));
+        assert!(init.take_box(b"\x00\x00\x03\x46moovbody"));
+        assert_eq!(init.finished(), None, "not closed until a moof arrives");
+        assert!(!init.take_box(b"\x00\x00\x00\x60moofdata"), "moof belongs to the live stream");
+        let got = init.finished().expect("closed by the moof");
+        assert_eq!(got, b"\x00\x00\x00\x20ftyp....\x00\x00\x03\x46moovbody");
+        assert!(!init.take_box(b"\x00\x00\x00\x08mdat"), "later boxes are live too");
     }
 
     #[test]

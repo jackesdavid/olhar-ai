@@ -56,10 +56,11 @@ fn main() -> Result<()> {
     let want: u64 = std::env::var("SEGMENTS").ok().and_then(|s| s.parse().ok()).unwrap_or(6);
 
     // cmafmux emits a CMAF init segment followed by fragments — the exact shape MSE wants.
+    let mux = std::env::var("MUX_DESC").unwrap_or_else(|_| {
+        "h264timestamper ! video/x-h264,stream-format=avc,alignment=au ! cmafmux fragment-duration=1000000000".into()
+    });
     let desc = format!(
-        "rtspsrc location=\"{url}\" protocols=tcp latency=100 ! rtph264depay ! h264parse ! h264timestamper \
-         ! video/x-h264,stream-format=avc,alignment=au \
-         ! cmafmux fragment-duration=1000000000 \
+        "rtspsrc location=\"{url}\" protocols=tcp latency=100 ! rtph264depay ! h264parse ! {mux} \
          ! appsink name=out sync=false"
     );
     println!("[stage4] pipeline: rtspsrc ! rtph264depay ! h264parse ! h264timestamper ! caps(avc/au) ! cmafmux ! appsink");
