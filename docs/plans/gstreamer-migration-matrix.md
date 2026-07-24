@@ -20,7 +20,7 @@ it passes on **both**, with the other platforms' HW-decode elements noted per ro
 | HW | **Hardware decode** (currently detected, never applied) | `hwaccel.rs` reports, never uses | `vtdec`(Mac) / `nvv4l2decoder`(Jetson) / `amcviddec`(Android) / `vaapi`·`nvh264dec`(Linux) / `d3d11h264dec`(Win) | A1 pipeline | 1 | ✅¹ | ⬜ | 🟡 |
 | A2 | **Recording mux** (H264 ring → fragmented mp4) | ffmpeg `-c:v copy` (`recording.rs`) | `appsrc` (real per-frame PTS) `! h264parse ! mp4mux` | clip store / playback | 3 | ✅⁵ | ⬜ | 🟡 |
 | A3 | **Clip duration probe** | `ffprobe` (`recording.rs`) | **no probe at all** — duration = captured frame span | recording metadata | 3 | ✅⁶ | ⬜ | 🟡 |
-| A4 | **HW-decode capability probe** | ffmpeg `-hwaccel` list (`hwaccel.rs`) | `gst_registry` element presence (`vtdec`/`nvv4l2decoder`…) | health report | 5 | ⬜ | ⬜ | ⬜ |
+| A4 | **HW-decode capability probe** | ffmpeg `-hwaccel` list (`hwaccel.rs`) | `media::hw_decoder()` — registry element presence | health report | 5 | ✅¹⁰ | ⬜ | 🟡 |
 | A5 | **Snapshot fallback** (single-frame, cold) | raw `ffmpeg` (`onvif/client.rs`) | one-shot `rtspsrc ! decodebin ! jpegenc` (feature-gated) | **credential probe only** — no longer a snapshot fallback | 2 | ✅⁴ | ⬜ | 🟡 |
 | A6 | **ffmpeg presence check** | `ffmpeg -version` (`state.rs`) | skipped when GStreamer owns media | health gating | 5 | ✅⁹ | ⬜ | 🟡 |
 | B3 | **Snapshot from warm feed** (`/api/frame.jpeg`, "Get current frame" node) | go2rtc → internal ffmpeg | serve the A1 warm JPEG (`capture::latest_fresh`); cold path only as fallback | workflow node, app-core `go2rtc.rs`, gateway | 2 | ✅³ | ⬜ | 🟡 |
@@ -199,6 +199,15 @@ config-change respawns follow the same rule instead of each having to remember i
 **Still open on the Mac:** the gateway's `/api/frame.jpeg` passthrough and the tailnet's `:443` both
 still point at go2rtc `:1984`, which no longer exists on this box (the edge API is on `:8080`). That
 is G4/G6 and it means the *gateway* snapshot path is broken here even though the edge's own is not.
+
+¹⁰ **A4 done as a side effect of making the pipeline portable (2026-07-24).** `media::decode_branch()`
+picks the decode half of the ingest from **what the box's GStreamer registry actually has**, and
+`media::hw_decoder()` reports the same finding for health. Probing the registry is both the
+capability answer and the selection, so there is one source of truth and a box missing its
+accelerator degrades to software rather than failing to start — where `ffmpeg -hwaccels` could only
+ever answer, never select. The Jetson is why it exists: `nvv4l2decoder` outputs into **NVMM** memory
+that `videoconvert` cannot read (it needs `nvvidconv`), and pairing them wrong produces no error at
+all — the pipeline simply never yields a frame.
 
 ## ✅ Verified live on the Mac edge (2026-07-24)
 
