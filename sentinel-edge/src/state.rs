@@ -227,6 +227,15 @@ impl AppState {
             .map(|d| d.ip.clone())
             .collect();
 
+        // Publish where each ring should dial. The recording manager holds no devices and no
+        // credentials, so this is the only place that can answer it — and it must be refreshed here,
+        // where the device set is reconciled, or a camera that moved keeps dialling its old address.
+        let dials: std::collections::HashMap<String, String> = streamable
+            .iter()
+            .filter_map(|ip| self.camera_rtsp(ip, false).map(|u| (ip.clone(), u)))
+            .collect();
+        self.recording.set_dials(dials);
+
         // ALWAYS reconcile — stop rings for cameras that left (IP change, removal, went
         // un-streamable), regardless of warm mode. This is #98: a ring used to outlive its camera
         // and retry a dead address forever, because start-only never subtracted. Runs on every

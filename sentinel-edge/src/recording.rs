@@ -382,6 +382,10 @@ pub struct RecordingManager {
     dir: PathBuf,
     sessions: Mutex<HashMap<String, Session>>,
     ring_sessions: Arc<Mutex<HashMap<String, RingSession>>>,
+    /// camera ip → the RTSP URL to dial for its ring (card #138, G5). Published by
+    /// [`crate::state::AppState`], which is what holds the devices and their credentials; empty for
+    /// a camera we cannot dial ourselves, and then the ring falls back to go2rtc's re-serve.
+    dials: Mutex<HashMap<String, String>>,
 }
 
 impl RecordingManager {
@@ -411,10 +415,17 @@ impl RecordingManager {
             dir,
             sessions: Mutex::new(HashMap::new()),
             ring_sessions: Arc::new(Mutex::new(HashMap::new())),
+            dials: Mutex::new(HashMap::new()),
         })
     }
 
     // ---- ring ---------------------------------------------------------------
+
+    /// Publish the per-camera dial URLs. Called wherever the device set is reconciled, so a camera
+    /// that changes address or has its credentials re-staged is dialled correctly on its next ring.
+    pub fn set_dials(&self, dials: HashMap<String, String>) {
+        *self.dials.lock().unwrap() = dials;
+    }
 
     pub fn start_ring(&self, camera_ip: &str) {
         {
@@ -432,13 +443,14 @@ impl RecordingManager {
         let ip_t = camera_ip.to_string();
         let pre_roll_secs = self.config.pre_roll_secs;
         let mem_ring_t = Arc::clone(&mem_ring);
+        let dial = self.dials.lock().unwrap().get(camera_ip).cloned();
 
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .expect("tokio rt for RTSP ring");
-            rt.block_on(run_rtsp_collector(ip_t, pre_roll_secs, mem_ring_t, stop_rx));
+            rt.block_on(run_rtsp_collector(ip_t, dial, pre_roll_secs, mem_ring_t, stop_rx));
         });
 
         self.ring_sessions
@@ -853,13 +865,17 @@ impl RecordingManager {
 /// ring. Reconnects automatically on error. Exits when the stop signal fires.
 async fn run_rtsp_collector(
     camera_ip: String,
+    dial: Option<String>,
     pre_roll_secs: u32,
     mem_ring: Arc<Mutex<MemRing>>,
     stop_rx: std::sync::mpsc::Receiver<()>,
 ) {
-    let ip_key = camera_ip.replace('.', "_");
-    let stream_name = format!("cam_{ip_key}");
-    let rtsp_url = format!("rtsp://127.0.0.1:8554/{stream_name}");
+    // The camera itself when we can dial it, go2rtc's re-serve only as the fallback for a camera
+    // whose credentials never resolved — the last consumer to leave the sidecar.
+    let rtsp_url = dial.unwrap_or_else(|| {
+        let ip_key = camera_ip.replace('.', "_");
+        format!("rtsp://127.0.0.1:8554/cam_{ip_key}")
+    });
     // Keep ~pre_roll_secs * 30fps + 10% headroom of frames in the ring.
     let max_frames = (pre_roll_secs as usize) * 33;
 
