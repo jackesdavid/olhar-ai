@@ -238,7 +238,7 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
     // Picked from this box's registry, not from a platform guess — see `media::decode_branch`.
     let decode = crate::media::decode_branch();
     let desc = format!(
-        "rtspsrc location=\"{url}\" protocols=tcp latency=200 ! rtph264depay ! h264parse ! tee name=t \
+        "rtspsrc location=\"{url}\" protocols=tcp latency=200 ! rtph264depay ! h264parse name=parse ! tee name=t \
          t. ! queue max-size-buffers=64 leaky=downstream ! {decode} ! videorate \
             ! video/x-raw,framerate=6/1 ! jpegenc quality=85 \
             ! appsink name=out sync=false max-buffers=2 drop=true \
@@ -272,6 +272,22 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
             })
             .build(),
     );
+
+    // PTS → DTS. `mp4mux` on the Jetson's GStreamer 1.20 refuses a stream whose DTS is unset
+    // ("Could not multiplex stream", with `dts: 99:99:99.999999999` in its debug log); the Mac's
+    // 1.28 tolerates it, which is exactly how this got missed. RTP depayloading supplies only PTS,
+    // and our cameras carry no B-frames, so copying one to the other is both correct and enough.
+    if let Some(parse_src) = pipeline.by_name("parse").and_then(|e| e.static_pad("src")) {
+        parse_src.add_probe(gst::PadProbeType::BUFFER, |_, info| {
+            if let Some(gst::PadProbeData::Buffer(buffer)) = &mut info.data {
+                if buffer.dts().is_none() {
+                    let pts = buffer.pts();
+                    buffer.make_mut().set_dts(pts);
+                }
+            }
+            gst::PadProbeReturn::Ok
+        });
+    }
 
     let mse_sink = pipeline
         .by_name("mse")
