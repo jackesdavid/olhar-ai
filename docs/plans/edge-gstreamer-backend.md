@@ -225,6 +225,25 @@ one HTTP seam, three unchanged consumers.
   > (the ring stores individual frames with `is_keyframe`; `live_rx` delivers one complete frame per
   > message), so each buffer gets a well-defined PTS instead of asking `h264parse` to invent one.
   > A2 is back in scope for Stage 3.
+  >
+  > **Implementation design (mapped 2026-07-24, not yet built).** The pieces are known:
+  > - **Real PTS, not an invented fps.** `H264Frame` already carries `at: Instant` (recording.rs:228),
+  >   so pre-roll PTS = `frame.at - first.at`; live frames use arrival time against the same origin.
+  >   Deriving PTS from a nominal framerate instead would yield clips that play at the wrong speed.
+  > - **Pipeline:** `appsrc (caps video/x-h264,stream-format=byte-stream,alignment=au) ! h264parse !
+  >   mp4mux faststart=true ! filesink`, pushing ONE buffer per frame with its PTS set.
+  > - **Touches shared plumbing:** the pre-roll extraction (recording.rs:436-485) currently flattens
+  >   the ring into one `Vec<u8>`, and `live_sink`/`live_rx` is a `Vec<u8>` channel — both must carry
+  >   per-frame timestamps for the above. That is why this is NOT a drop-in behind the feature flag
+  >   the way A1/B3/A5 were: the ffmpeg path shares that plumbing.
+  > - **A3 (duration)** then comes free from the same pipeline (query the muxed duration) or a
+  >   `discoverer` call, replacing `ffprobe`.
+  >
+  > **Why it wasn't shipped in the same session as the unblock:** unlike every other slice migrated so
+  > far, a PTS mistake does not fail loudly — it produces a *playable-looking* clip with the wrong
+  > duration or speed. It is only verifiable by recording and playing one back on a real box, and it
+  > refactors a path with hard-won fixes in it (pre-roll race, IDR gating). It should be built with
+  > that verification in hand.
 - **Phase 3 hwaccel (GStreamer HW-decode element) — retried with a rigorous A/B, CLOSED as no-win.**
   Found the cleaner integration first: swap `videoconvert` → **`nvvidconv`** (Tegra's own converter,
   from `nvidia-l4t-gstreamer`, already installed) — it bridges NVMM ↔ system memory generically, so
