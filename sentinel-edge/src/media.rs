@@ -316,7 +316,11 @@ pub fn record_and_upload(
     box_token: &str,
     control_url: &str,
 ) -> Result<serde_json::Value, String> {
+    let crumb = std::env::temp_dir().join("r2-step.txt");
+    let step = |msg: &str| { let _ = std::fs::write(&crumb, msg); };
+    step("0-start");
     let (bytes, elapsed) = record_camera(url, secs, out)?;
+    step(&format!("1-recorded {bytes}B"));
 
     let epoch = app_core::timeutil::now_rfc3339();
     let clip_id = format!("phone-{}", out.file_stem().and_then(|s| s.to_str()).unwrap_or("clip"));
@@ -336,6 +340,7 @@ pub fn record_and_upload(
         .build();
 
     // 1. Manifest → presigned PUT.
+    step("2-manifest-req");
     let manifest = agent
         .post(&format!("{control_url}/config/recordings/clip-metadata"))
         .set("Authorization", &format!("Bearer {box_token}"))
@@ -350,10 +355,12 @@ pub fn record_and_upload(
         .and_then(|u| u.as_str())
         .ok_or("control returned no upload URL (R2 not configured for this tenant?)")?
         .to_string();
+    step("3-manifest-ok");
 
     // 2. PUT the bytes to R2. Content-Length set ourselves — an unsized reader makes ureq use
     // chunked encoding, which R2 rejects on a presigned PUT.
     let file = std::fs::File::open(out).map_err(|e| format!("open clip: {e}"))?;
+    step("4-put-req");
     agent
         .put(&put_url)
         .set("Content-Type", "video/mp4")
@@ -361,11 +368,13 @@ pub fn record_and_upload(
         .send(file)
         .map_err(|e| format!("R2 PUT: {e}"))?;
 
+    step("5-put-ok");
     // 3. Confirm the clip is durable so control marks it uploaded.
     let _ = agent
         .post(&format!("{control_url}/config/recordings/{clip_id}/uploaded"))
         .set("Authorization", &format!("Bearer {box_token}"))
         .call();
 
+    step("6-done");
     Ok(serde_json::json!({ "clip_id": clip_id, "bytes": bytes, "uploaded": true }))
 }
