@@ -162,7 +162,7 @@ pub fn init_gstreamer() -> Result<(), String> {
     Ok(())
 }
 
-/// The 13 plugins `capture.rs`/`gst_mse.rs` instantiate, registered from their statically-linked
+/// The plugins our pipelines need — the visible elements plus rtspsrc's hidden deps (rtpmanager, udp), registered from their static
 /// `gst_plugin_<name>_register` symbols in the iOS GStreamer framework. Keep this list in step with
 /// the pipeline (and with the Mac `.pkg`'s bundled-plugin list).
 #[cfg(all(feature = "gst-linked", target_os = "ios"))]
@@ -184,6 +184,8 @@ mod ios_static_plugins {
         fn gst_plugin_autodetect_register() -> i32;
         fn gst_plugin_app_register() -> i32;
         fn gst_plugin_applemedia_register() -> i32;
+        fn gst_plugin_rtpmanager_register() -> i32;
+        fn gst_plugin_udp_register() -> i32;
     }
 
     pub fn register_once() {
@@ -202,6 +204,8 @@ mod ios_static_plugins {
             gst_plugin_autodetect_register();
             gst_plugin_app_register();
             gst_plugin_applemedia_register();
+            gst_plugin_rtpmanager_register(); // rtspsrc's RTP session (rtpbin/jitterbuffer)
+            gst_plugin_udp_register();          // udpsrc/udpsink for RTP-over-UDP
         });
     }
 }
