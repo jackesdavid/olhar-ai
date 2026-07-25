@@ -69,13 +69,21 @@ The `stage4`-equivalent: prove the edge **compiles and links** for the phone bef
 linked) exports `start_edge`/`stop_edge`. What remains is app plumbing — the native module that links
 the `.a` and bundles the GStreamer framework — and repeating the link for Android.
 
-## Phase 2 — native module: start/stop the edge from the app
+## Phase 2 — native module: start/stop the edge from the app — LINK ✅ (2026-07-25)
 
-- A React Native native module (Swift/Kotlin) that loads the static lib and calls `start_edge(config)`
-  on a background thread, `stop_edge()` on screen close / background. The edge's Axum server binds
-  localhost on the phone; the app talks to it exactly as the web app talks to an appliance edge.
-- Foreground service (Android) / the honest short-lived window (iOS) — capture must not pretend to
-  outlive what the OS allows.
+- **A local Expo module** (`sentinel-mobile/modules/sentinel-edge`) links `libsentinel_edge.a` and
+  calls the C ABI via Swift `@_silgen_name` (no header/modulemap). `build-ios-lib.sh` builds the
+  release lib (122 MB, no-gst first) into the pod; an **Edge tab** boots it and polls
+  `localhost:8788/health`.
+- **The app builds and links on iOS.** `npx expo prebuild` + `xcodebuild -destination
+  'generic/platform=iOS'` produced `OlharAI.app` (Release-iphoneos) with **`_start_edge` present in
+  the final binary** — the edge is embedded, no undefined symbols. The podspec's
+  `Security/SystemConfiguration/CoreFoundation` + `c++/resolv` covered every std/dep symbol; dead-strip
+  took the 122 MB static lib down to a 45 MB app binary.
+- **Remaining:** install on the **unlocked** device (the DDI won't mount while locked — a device-state
+  step, not a build issue), tap Start on the Edge tab, and confirm `/health` answers — the first
+  on-device runtime proof. Then GStreamer (`GST=1`) + the plugin registration; a foreground service on
+  Android / the honest short-lived window on iOS.
 
 ## Phase 3 — the edge's platform assumptions
 
