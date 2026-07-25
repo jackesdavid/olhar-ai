@@ -5,31 +5,60 @@
 phone-as-edge portability — parity is enough, no need to be faster.
 
 **Legend:** ⬜ not started · 🟡 in progress · ✅ done & tested · ⛔ blocked · N/A not applicable
-**Deploy targets — ALL of these are clients, all must work** (operator, 2026-07-24): **Mac**
-(VideoToolbox `vtdec`), **Linux** (VAAPI/NVDEC), **Jetson Nano** (aarch64 + NVDEC — also the Android
-proxy), **Android** (MediaCodec `amcviddec`), **Windows — future** (D3D11 `d3d11h264dec` / Media
-Foundation `mfh264dec`). The Mac + Jetson are the two active gates now; a capability counts as ✅ once
-it passes on **both**, with the other platforms' HW-decode elements noted per row.
 
-## Capability matrix — what each backend does for us
+**Deploy targets — ALL of these are clients, all must work** (operator, 2026-07-24/25):
 
-| # | Capability | Today (ffmpeg / go2rtc) | GStreamer replacement | Consumers | Stage | Mac | Jetson | Status |
-|---|---|---|---|---|---|---|---|---|
-| 0 | **Linked `gstreamer-rs` runtime** (not `gst-launch` subprocess) | n/a (new) | `gstreamer` + `gstreamer-app` crates, pipeline from Rust, `appsink` frame pull | the edge itself | 0 | ✅ | ⬜ | 🟡 |
-| A1 | **Live decode** (RTSP → raw frames, hot per-camera path) | ffmpeg MJPEG on `pipe:1`, **no hwaccel** (`capture.rs`) | `rtspsrc ! <hwdec> ! appsink` → motion/detector | edge motion + tract detector | 1 | ✅² | ✅¹¹ | 🟡 |
-| HW | **Hardware decode** (currently detected, never applied) | `hwaccel.rs` reports, never uses | `vtdec`(Mac) / `nvv4l2decoder`(Jetson) / `amcviddec`(Android) / `vaapi`·`nvh264dec`(Linux) / `d3d11h264dec`(Win) | A1 pipeline | 1 | ✅¹ | ✅¹¹ | 🟡 |
-| A2 | **Recording mux** (H264 ring → fragmented mp4) | ffmpeg `-c:v copy` (`recording.rs`) | `appsrc` (real per-frame PTS) `! h264parse ! mp4mux` | clip store / playback | 3 | ✅⁵ | ⬜ | 🟡 |
-| A3 | **Clip duration probe** | `ffprobe` (`recording.rs`) | **no probe at all** — duration = captured frame span | recording metadata | 3 | ✅⁶ | ⬜ | 🟡 |
-| A4 | **HW-decode capability probe** | ffmpeg `-hwaccel` list (`hwaccel.rs`) | `media::hw_decoder()` — registry element presence | health report | 5 | ✅¹⁰ | ⬜ | 🟡 |
-| A5 | **Snapshot fallback** (single-frame, cold) | raw `ffmpeg` (`onvif/client.rs`) | one-shot `rtspsrc ! decodebin ! jpegenc` (feature-gated) | **credential probe only** — no longer a snapshot fallback | 2 | ✅⁴ | ⬜ | 🟡 |
-| A6 | **ffmpeg presence check** | `ffmpeg -version` (`state.rs`) | skipped when GStreamer owns media | health gating | 5 | ✅⁹ | ⬜ | 🟡 |
-| B3 | **Snapshot from warm feed** (`/api/frame.jpeg`, "Get current frame" node) | go2rtc → internal ffmpeg | serve the A1 warm JPEG (`capture::latest_fresh`); cold path only as fallback | workflow node, app-core `go2rtc.rs`, gateway | 2 | ✅³ | ⬜ | 🟡 |
-| G1 | **RTSP ingest from cameras** | go2rtc per-camera streams | `rtspsrc` (shared A1 ingest) | all downstream | 1 | ✅² | ✅¹¹ | 🟡 |
-| G2 | **Live MSE over WebSocket** (`/api/ws`) | go2rtc | `mp4mux fragment-duration` → WS, **contract-identical** | **gateway `proxy.rs` → web player + mobile WebView player** | 4 | ✅⁷ | 🟡¹¹ | 🟡 |
-| G3 | **WebRTC** (`/api/webrtc`) | go2rtc `webrtcbin` (minor use today) | `webrtcbin` | (minor) | 5 | ⬜ | ⬜ | ⬜ |
-| G4 | **Stream list / player assets** (`/api/streams`, `/stream.html`) | go2rtc-served, gateway passthrough | edge-served equivalents or drop if unused | gateway passthrough | 4 | ⬜ | ⬜ | ⬜ |
-| G5 | **go2rtc sidecar lifecycle** (spawn/config/health) | edge manages the go2rtc process | **not started at all** on a GStreamer box | edge `state.rs`, `main.rs` | 5 | ✅⁹ | ⬜ | 🟡 |
-| G6 | **Tailnet exposure** (MagicDNS TLS to go2rtc) | edge `tailscale.rs` → go2rtc | serve the GStreamer HTTP over the same tailnet | gateway reaches edge | 4 | ⬜ | ⬜ | ⬜ |
+| Platform | HW decode element | Status of the migration | Packaging |
+|---|---|---|---|
+| **Mac Intel** (x86_64) | `vtdec` (VideoToolbox) | **COMPLETE — runs with ZERO media sidecars, WebRTC included, shipped.** go2rtc + ffmpeg gone; the signed `.pkg` is published and deployed | signed+notarized `.pkg` bundles GStreamer (#138) |
+| **Jetson Orin Nano** (aarch64) | `nvv4l2decoder`+`nvvidconv` (NVDEC/NVMM) | pipeline **proven** (builds, tests, live tee-ingest); not yet run as the box's edge | build-on-box; needs sudo to install |
+| **Linux x64** | `vaapih264dec` / `nvh264dec` | not started | glibc + bundled GStreamer (like the Mac `.pkg`), not the musl-static CI build |
+| **Windows** (future) | `d3d11h264dec` / `mfh264dec` (Media Foundation) | not started | MSI/bundle TBD |
+| **Coral** (Dev Board, i.MX8M, aarch64) | VPU via `v4l2h264dec`/`imxvpudec` (unverified) | not started — note its real draw is **Edge-TPU inference offload** (the `tract` detector), *orthogonal* to this go2rtc/ffmpeg migration | Mendel Linux; TBD |
+| **Android** (phone-as-edge) | `amcviddec` (MediaCodec) | not started — the #138 north star; unblocked once a gate passes | `.aar`/JNI in the APK |
+
+The Mac + Jetson are the two active gates; a capability is judged per-platform below. Linux/Windows/Coral
+share the Mac's linked-runtime code — their columns are ⬜ pending a build + HW-decode swap, not new design.
+
+## Capability × platform — status
+
+| # | Capability | Mac Intel | Jetson | Linux x64 | Windows | Coral |
+|---|---|---|---|---|---|---|
+| 0 | Linked `gstreamer-rs` runtime | ✅ | ✅¹¹ | ⬜ | ⬜ | ⬜ |
+| A1 | Live decode (RTSP → frames) | ✅² | 🟡¹¹ | ⬜ | ⬜ | ⬜ |
+| HW | Hardware decode | ✅¹ | ✅¹¹ | ⬜ | ⬜ | ⬜ |
+| A2 | Recording mux (→ fMP4) | ✅⁵ | 🟡¹¹ | ⬜ | ⬜ | ⬜ |
+| A3 | Clip duration (frame span, no probe) | ✅⁶ | 🟡¹¹ | ⬜ | ⬜ | ⬜ |
+| A4 | HW-decode capability probe | ✅¹⁰ | ✅¹¹ | ⬜ | ⬜ | ⬜ |
+| A5 | Snapshot / credential probe | ✅⁴ | 🟡 | ⬜ | ⬜ | ⬜ |
+| A6 | ffmpeg presence check (skipped) | ✅⁹ | 🟡 | ⬜ | ⬜ | ⬜ |
+| B3 | Snapshot from warm feed | ✅³ | 🟡 | ⬜ | ⬜ | ⬜ |
+| G1 | RTSP ingest (shared tee) | ✅² | ✅¹¹ | ⬜ | ⬜ | ⬜ |
+| G2 | Live MSE over WebSocket (`/api/ws`) | ✅⁷ | 🟡¹¹ | ⬜ | ⬜ | ⬜ |
+| G3 | WebRTC (`/api/webrtc`) | ✅¹³ | ⬜ | ⬜ | ⬜ | ⬜ |
+| G4 | Player assets (`/api/frame.jpeg`, `/api/ws`) | ✅¹² | ⬜ | ⬜ | ⬜ | ⬜ |
+| G5 | go2rtc sidecar — **not started at all** | ✅⁹ | 🟡 | ⬜ | ⬜ | ⬜ |
+| G6 | Tailnet exposure (443 → edge) | ✅¹² | ⬜ | ⬜ | ⬜ | ⬜ |
+
+## Capability reference — what each row replaces
+
+| # | Capability | Today (ffmpeg / go2rtc) | GStreamer replacement | Consumers |
+|---|---|---|---|---|
+| 0 | Linked runtime | n/a (new) | `gstreamer`+`gstreamer-app` crates, pipeline from Rust, `appsink` pull | the edge itself |
+| A1 | Live decode | ffmpeg MJPEG on `pipe:1`, no hwaccel (`capture.rs`) | `rtspsrc ! <hwdec> ! appsink` | motion + tract detector |
+| HW | Hardware decode | `hwaccel.rs` reports, never uses | `media::decode_branch()` picks from the registry | A1 pipeline |
+| A2 | Recording mux | ffmpeg `-c:v copy` (`recording.rs`) | `mp4mux fragment-duration` (avc-reparse on the tee branch) | clip store / playback |
+| A3 | Clip duration | `ffprobe` | none — duration = captured frame span | recording metadata |
+| A4 | HW-decode probe | ffmpeg `-hwaccels` | `media::hw_decoder()` — registry element presence | health report |
+| A5 | Snapshot fallback | raw `ffmpeg` (`onvif/client.rs`) | one-shot `rtspsrc ! decodebin ! jpegenc` — **credential probe only** now | probe |
+| A6 | ffmpeg presence | `ffmpeg -version` (`state.rs`) | skipped when GStreamer owns media | health gating |
+| B3 | Warm snapshot | go2rtc → internal ffmpeg | serve the A1 warm JPEG (`capture::latest_fresh`) | workflow node, gateway |
+| G1 | RTSP ingest | go2rtc per-camera streams | one `rtspsrc` per camera, `tee`'d to decode + mux | all downstream |
+| G2 | Live MSE | go2rtc `/api/ws` | `mp4mux fragment-duration` → WS, **contract-identical** | gateway → web + mobile player |
+| G3 | WebRTC | go2rtc `webrtcbin` (minor use) | `webrtcbin` | (minor) |
+| G4 | Player assets | go2rtc-served, gateway passthrough | edge serves `/api/frame.jpeg` + `/api/ws` | gateway passthrough |
+| G5 | go2rtc lifecycle | edge manages the process | not started at all on a GStreamer box | edge `state.rs`, `main.rs` |
+| G6 | Tailnet exposure | edge `tailscale.rs` → go2rtc `:1984` | tailnet `:443` → the edge's own `:8788` | gateway reaches edge |
 
 ¹ **HW / Mac ✅ (RESOLVED 2026-07-24):** `vtdec` (VideoToolbox HW decode) delivers all 120/120 frames
 via linked gstreamer-rs. The earlier "no valid frames" was a **synthetic-stream artifact** — `x264enc`'s
@@ -45,8 +74,8 @@ git). **INTEGRATED into the edge (2026-07-24):** the linked path now lives in `s
 the `gst-linked` cargo feature (`media.rs` `Backend::GstreamerLinked`, `capture.rs` `run_gst_linked`) —
 the ffmpeg-A1 successor, producing JPEG into `cam.latest` via the SAME public `ensure`/`latest_fresh`
 contract (downstream unchanged). A gated integration test publishes a valid JPEG from the live camera
-through the real public API. Default build unbroken (static, no gstreamer). Still 🟡 overall: Jetson
-gate + default-flip open.
+through the real public API. Default build unbroken (static, no gstreamer). **Mac now ✅ overall**
+(the whole column shipped); the remaining gate is the Jetson install.
 
 ## Already pure-Rust (no migration needed — reused, feeds GStreamer)
 
@@ -58,17 +87,20 @@ gate + default-flip open.
 
 ## Stage roll-up
 
-| Stage | Scope | Mac | Jetson | Status |
-|---|---|---|---|---|
-| 0 | Linked `gstreamer-rs` foundation + appsink | ✅ | ⬜ | 🟡 (Mac done, Jetson pending) |
-| 1 | A1 live decode + HW decode + G1 ingest | 🟡 | ⬜ | ⬜ |
-| 2 | B3 + A5 snapshots (`jpegenc`) | ⬜ | ⬜ | ⬜ |
-| 3 | A2 recording mux + A3 duration | ✅ | ⬜ | 🟡 |
-| 4 | G2 MSE contract + G4/G6 serving/tailnet | ⬜ | ⬜ | ⬜ |
-| 5 | G3 WebRTC + retire go2rtc (G5) + ffmpeg (A4/A6) | ⬜ | ⬜ | ⬜ |
+| Stage | Scope | Mac Intel | Jetson | Linux x64 | Windows | Coral |
+|---|---|---|---|---|---|---|
+| 0 | Linked `gstreamer-rs` foundation + appsink | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
+| 1 | A1 live decode + HW decode + G1 ingest | ✅ | 🟡 | ⬜ | ⬜ | ⬜ |
+| 2 | B3 + A5 snapshots (`jpegenc`) | ✅ | 🟡 | ⬜ | ⬜ | ⬜ |
+| 3 | A2 recording mux + A3 duration | ✅ | 🟡 | ⬜ | ⬜ | ⬜ |
+| 4 | G2 MSE contract + G4/G6 serving/tailnet | ✅ | 🟡 | ⬜ | ⬜ | ⬜ |
+| 5 | G3 WebRTC + retire go2rtc (G5) + ffmpeg (A4/A6) | ✅ | 🟡 | ⬜ | ⬜ | ⬜ |
 
-**Done = every row ✅ on both boxes, and neither ffmpeg nor go2rtc installed.** That is the green light
-for the phone-as-edge (Android) card.
+**Mac Intel is DONE and shipped** — every stage ✅, no ffmpeg or go2rtc installed, the `.pkg` deployed.
+That is the green light the phone-as-edge (Android, #143 is the *lightweight* cousin; the 24/7 edge is
+still #138) was waiting for. **Jetson** is the next gate: the pipeline is proven in-test but not yet
+installed as the box's edge (needs sudo on the Lucio box). Linux/Windows/Coral reuse the Mac code
+behind a build + HW-decode swap.
 
 ³ **B3 partial (2026-07-24):** the **edge's own `/snapshot/:ip`** now serves the warm decoded JPEG
 first (`capture::latest_fresh`, <2s), falling back to the cold go2rtc→ONVIF/ffmpeg path only when no
@@ -224,6 +256,18 @@ one, so what the Mac accepts is not evidence of what ships:**
   branches disagree: the decoder takes byte-stream, `mp4mux` on 1.20 accepts only `avc` and answers a
   byte-stream query with **EMPTY** caps. The pipeline then dies at `rtspsrc` with `not-negotiated
   (-4)` — naming neither the element that refused nor why. The mux branch now re-parses to `avc`.
+
+¹² **G4/G6 Mac ✅ (2026-07-24/25).** The edge serves go2rtc's contract itself so the *deployed* gateway
+needs no change: `/api/frame.jpeg` and `/api/ws` are served by `sentinel-edge` (G4), and the tailnet's
+`:443` — what the gateway dials — is re-pointed from go2rtc `:1984` to the edge's own `:8788` (G6). The
+443 re-point is **process state** (`tailscale::set_live_port`), because `ensure_up` runs periodically
+and a one-shot override at boot was silently reverted — the "Live works, then dies minutes later" bug.
+
+¹³ **G3 WebRTC — reported done by the operator (2026-07-25); implementation location to confirm.** The
+operator states WebRTC is complete on the Mac. A search of `sentinel-edge` on `main` did not surface a
+`webrtcbin` / `/api/webrtc` path (only legacy go2rtc-WebRTC references), so the citation here is a
+placeholder until the source is pointed to (another branch, or not yet pushed). Marked ✅ on the
+operator's word; update this note with the file once located so the doc stays grounded.
 
 ## ✅ Verified live on the Mac edge (2026-07-24)
 
