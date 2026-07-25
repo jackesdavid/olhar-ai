@@ -1,6 +1,6 @@
 # Light Edge — iPhone as an on-demand face-capture edge — Implementation Plan
 
-**Board card:** #142 light edge — iPhone on-demand face capture
+**Board card:** #143 light edge — iPhone on-demand face capture
 **Goal:** turn the phone (front camera) into a *temporary* edge that captures faces only while its
 capture screen is open — foreground-only, so it sidesteps iOS's background-execution limits — and
 feeds them straight into the existing embed → recognize → StoreFace pipeline.
