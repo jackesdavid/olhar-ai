@@ -10,7 +10,7 @@ phone-as-edge portability — parity is enough, no need to be faster.
 
 | Platform | HW decode element | Status of the migration | Packaging |
 |---|---|---|---|
-| **Mac Intel** (x86_64) | `vtdec` (VideoToolbox) | **COMPLETE — runs with ZERO media sidecars, WebRTC included, shipped.** go2rtc + ffmpeg gone; the signed `.pkg` is published and deployed | signed+notarized `.pkg` bundles GStreamer (#138) |
+| **Mac Intel** (x86_64) | `vtdec` (VideoToolbox) | **COMPLETE — runs with ZERO media sidecars, shipped.** go2rtc + ffmpeg gone; the Live tab runs on the MSE path (G2); the signed `.pkg` is published and deployed. WebRTC (G3) is **not needed** — MSE covers live at parity | signed+notarized `.pkg` bundles GStreamer (#138) |
 | **Jetson Orin Nano** (aarch64) | `nvv4l2decoder`+`nvvidconv` (NVDEC/NVMM) | pipeline **proven** (builds, tests, live tee-ingest); not yet run as the box's edge | build-on-box; needs sudo to install |
 | **Linux x64** | `vaapih264dec` / `nvh264dec` | not started | glibc + bundled GStreamer (like the Mac `.pkg`), not the musl-static CI build |
 | **Windows** (future) | `d3d11h264dec` / `mfh264dec` (Media Foundation) | not started | MSI/bundle TBD |
@@ -35,7 +35,7 @@ share the Mac's linked-runtime code — their columns are ⬜ pending a build + 
 | B3 | Snapshot from warm feed | ✅³ | 🟡 | ⬜ | ⬜ | ⬜ |
 | G1 | RTSP ingest (shared tee) | ✅² | ✅¹¹ | ⬜ | ⬜ | ⬜ |
 | G2 | Live MSE over WebSocket (`/api/ws`) | ✅⁷ | 🟡¹¹ | ⬜ | ⬜ | ⬜ |
-| G3 | WebRTC (`/api/webrtc`) | ✅¹³ | ⬜ | ⬜ | ⬜ | ⬜ |
+| G3 | WebRTC (`/api/webrtc`) | N/A¹³ | N/A¹³ | N/A¹³ | N/A¹³ | N/A¹³ |
 | G4 | Player assets (`/api/frame.jpeg`, `/api/ws`) | ✅¹² | ⬜ | ⬜ | ⬜ | ⬜ |
 | G5 | go2rtc sidecar — **not started at all** | ✅⁹ | 🟡 | ⬜ | ⬜ | ⬜ |
 | G6 | Tailnet exposure (443 → edge) | ✅¹² | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -55,7 +55,7 @@ share the Mac's linked-runtime code — their columns are ⬜ pending a build + 
 | B3 | Warm snapshot | go2rtc → internal ffmpeg | serve the A1 warm JPEG (`capture::latest_fresh`) | workflow node, gateway |
 | G1 | RTSP ingest | go2rtc per-camera streams | one `rtspsrc` per camera, `tee`'d to decode + mux | all downstream |
 | G2 | Live MSE | go2rtc `/api/ws` | `mp4mux fragment-duration` → WS, **contract-identical** | gateway → web + mobile player |
-| G3 | WebRTC | go2rtc `webrtcbin` (minor use) | `webrtcbin` | (minor) |
+| G3 | WebRTC | go2rtc `webrtcbin` (minor use) | **N/A** — MSE (G2) covers live at parity | — |
 | G4 | Player assets | go2rtc-served, gateway passthrough | edge serves `/api/frame.jpeg` + `/api/ws` | gateway passthrough |
 | G5 | go2rtc lifecycle | edge manages the process | not started at all on a GStreamer box | edge `state.rs`, `main.rs` |
 | G6 | Tailnet exposure | edge `tailscale.rs` → go2rtc `:1984` | tailnet `:443` → the edge's own `:8788` | gateway reaches edge |
@@ -94,7 +94,7 @@ through the real public API. Default build unbroken (static, no gstreamer). **Ma
 | 2 | B3 + A5 snapshots (`jpegenc`) | ✅ | 🟡 | ⬜ | ⬜ | ⬜ |
 | 3 | A2 recording mux + A3 duration | ✅ | 🟡 | ⬜ | ⬜ | ⬜ |
 | 4 | G2 MSE contract + G4/G6 serving/tailnet | ✅ | 🟡 | ⬜ | ⬜ | ⬜ |
-| 5 | G3 WebRTC + retire go2rtc (G5) + ffmpeg (A4/A6) | ✅ | 🟡 | ⬜ | ⬜ | ⬜ |
+| 5 | retire go2rtc (G5) + ffmpeg (A4/A6) — G3 WebRTC is N/A | ✅ | 🟡 | ⬜ | ⬜ | ⬜ |
 
 **Mac Intel is DONE and shipped** — every stage ✅, no ffmpeg or go2rtc installed, the `.pkg` deployed.
 That is the green light the phone-as-edge (Android, #143 is the *lightweight* cousin; the 24/7 edge is
@@ -263,11 +263,14 @@ needs no change: `/api/frame.jpeg` and `/api/ws` are served by `sentinel-edge` (
 443 re-point is **process state** (`tailscale::set_live_port`), because `ensure_up` runs periodically
 and a one-shot override at boot was silently reverted — the "Live works, then dies minutes later" bug.
 
-¹³ **G3 WebRTC — reported done by the operator (2026-07-25); implementation location to confirm.** The
-operator states WebRTC is complete on the Mac. A search of `sentinel-edge` on `main` did not surface a
-`webrtcbin` / `/api/webrtc` path (only legacy go2rtc-WebRTC references), so the citation here is a
-placeholder until the source is pointed to (another branch, or not yet pushed). Marked ✅ on the
-operator's word; update this note with the file once located so the doc stays grounded.
+¹³ **G3 WebRTC — N/A, superseded by the MSE path (2026-07-25).** Investigated because the Live tab
+works with no go2rtc: it works via **MSE (G2)**, not WebRTC. Evidence — the running edge returns **404
+on `/api/webrtc`**, the web + mobile players use `MediaSource` over `/api/ws` (24 refs) with **zero**
+`RTCPeerConnection`, and there is no `webrtcbin` in any Rust source. go2rtc's WebRTC was "minor use
+today"; MSE already delivers live at parity (measured vs go2rtc: 66 ms median fragment gap, 1 WS
+message/fragment), so reproducing `webrtcbin` buys nothing for the current product. Marked **N/A**
+across platforms rather than a to-do. If a future need appears (sub-second latency, phone-camera
+publish), revisit as its own line.
 
 ## ✅ Verified live on the Mac edge (2026-07-24)
 
