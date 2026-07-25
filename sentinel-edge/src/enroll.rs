@@ -32,6 +32,7 @@ pub fn enrolled() -> bool {
 pub fn router(control_url: String) -> Router {
     Router::new()
         .route("/", get(page))
+        .route("/health", get(health))
         .route("/enroll", post(enroll))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(control_url)
@@ -153,6 +154,17 @@ fn redeem(control_url: &str, code: &str) -> Result<(), String> {
 
 /// The enrollment page. Served at `/` while the box has no identity — the installer opens it
 /// (`open`/`start http://localhost:8788`) as its last step.
+/// Liveness — answers even before the box is enrolled (an embedded edge on a phone boots unenrolled,
+/// and the app's readiness check must still get a 200). Card #144.
+pub async fn health() -> Response {
+    axum::Json(serde_json::json!({
+        "status": "ok",
+        "service": "sentinel-edge",
+        "enrolled": false,
+    }))
+    .into_response()
+}
+
 pub async fn page() -> Response {
     ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], PAGE).into_response()
 }

@@ -131,7 +131,10 @@ pub fn run() {
     // would never see it on macOS. Loading it ourselves makes every platform behave the same.
     envfile::load();
 
-    let bind = std::env::var("EDGE_BIND").unwrap_or_else(|_| "0.0.0.0:8788".to_string());
+    // An appliance binds all interfaces (the gateway/control reach it over the LAN/tailnet); an
+    // embedded edge on a phone only ever serves the app on the same device, and iOS is happiest with
+    // an explicit localhost bind — so default per platform (card #144). `EDGE_BIND` still overrides.
+    let bind = std::env::var("EDGE_BIND").unwrap_or_else(|_| default_bind());
 
     // Stamp the build version + platform in the very first log line — it rides the cloud log
     // viewer, so an operator sees exactly which build a box is running (matches the Boxes badge).
@@ -373,6 +376,18 @@ async fn shutdown_signal() {
         _ = term => {},
     }
     log::info!("shutdown signal received");
+}
+
+/// The default listen address — localhost on iOS (embedded, app-only), all interfaces elsewhere.
+fn default_bind() -> String {
+    #[cfg(target_os = "ios")]
+    {
+        "127.0.0.1:8788".to_string()
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        "0.0.0.0:8788".to_string()
+    }
 }
 
 // ---- C ABI entry points (card #144) — the phone's native module starts/stops the edge here.
