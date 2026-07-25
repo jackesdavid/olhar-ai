@@ -11,10 +11,10 @@ cd "$(dirname "$0")/../../.."   # repo root
 EDGE=sentinel-edge
 OUT="sentinel-mobile/modules/sentinel-edge/ios/libs/libsentinel_edge.a"
 
-FEATURES=()
+FEATURES=""
 EXTRA_ENV=()
 if [ "${GST:-0}" = "1" ]; then
-  FEATURES=(--features gst-linked)
+  FEATURES="--features gst-linked"
   PCDIR="$(mktemp -d)"   # synthetic pkg-config for the monolithic iOS GStreamer framework (#144)
   FW="$HOME/Library/Developer/GStreamer/iPhone.sdk/GStreamer.framework/Versions/Current"
   FWPARENT="$HOME/Library/Developer/GStreamer/iPhone.sdk"
@@ -24,6 +24,6 @@ if [ "${GST:-0}" = "1" ]; then
   export RUSTFLAGS="-L framework=$FWPARENT -l framework=GStreamer"
 fi
 
-( cd "$EDGE" && cargo build --release --target aarch64-apple-ios "${FEATURES[@]}" )
+( cd "$EDGE" && cargo build --release --target aarch64-apple-ios $FEATURES )
 cp "$EDGE/target/aarch64-apple-ios/release/libsentinel_edge.a" "$OUT"
 echo "✓ $OUT ($(du -h "$OUT" | cut -f1))"
