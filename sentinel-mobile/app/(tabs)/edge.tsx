@@ -9,11 +9,14 @@ import { Button, Card, Danger, Heading, Muted, Strong } from "@/styles/ui";
 import { space } from "@/styles/theme";
 
 const HEALTH_URL = "http://127.0.0.1:8788/health";
+const GST_URL = "http://127.0.0.1:8788/gst-selftest";
 
 export default function EdgeTest() {
   const [status, setStatus] = useState("idle");
   const [health, setHealth] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [gst, setGst] = useState<string | null>(null);
+  const [gstBusy, setGstBusy] = useState(false);
 
   async function boot() {
     setError(null);
@@ -36,6 +39,20 @@ export default function EdgeTest() {
     }
   }
 
+  async function testGst() {
+    setGst(null);
+    setGstBusy(true);
+    try {
+      const r = await fetch(GST_URL, { signal: AbortSignal.timeout(15000) });
+      const j = await r.json();
+      setGst(j.ok ? "GStreamer OK — all 13 elements built ✓" : `GStreamer FAILED — ${j.error}`);
+    } catch (e) {
+      setGst(`could not reach the edge: ${(e as Error).message}`);
+    } finally {
+      setGstBusy(false);
+    }
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.body}>
       <Heading>Embedded edge</Heading>
@@ -48,6 +65,13 @@ export default function EdgeTest() {
       </Card>
 
       <Button label="Start embedded edge" onPress={boot} busy={status === "starting" || status === "polling"} />
+
+      <Card>
+        <Strong>GStreamer</Strong>
+        <Muted>Instantiates every pipeline element — proves the iOS static plugin registration.</Muted>
+        {gst ? <Muted>{gst}</Muted> : null}
+      </Card>
+      <Button label="Test GStreamer" onPress={testGst} busy={gstBusy} disabled={status !== "up"} />
     </ScrollView>
   );
 }

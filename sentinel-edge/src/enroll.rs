@@ -33,6 +33,7 @@ pub fn router(control_url: String) -> Router {
     Router::new()
         .route("/", get(page))
         .route("/health", get(health))
+        .route("/gst-selftest", get(gst_selftest_route))
         .route("/enroll", post(enroll))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(control_url)
@@ -163,6 +164,23 @@ pub async fn health() -> Response {
         "enrolled": false,
     }))
     .into_response()
+}
+
+/// Prove the GStreamer runtime can build the ingest — runs `media::gst_selftest` (instantiates every
+/// pipeline element), which on iOS also exercises the static plugin registration (card #144). Serves
+/// even unenrolled; a no-op stub when the build has no GStreamer.
+pub async fn gst_selftest_route() -> Response {
+    #[cfg(feature = "gst-linked")]
+    {
+        match crate::media::gst_selftest() {
+            Ok(()) => axum::Json(serde_json::json!({ "ok": true })).into_response(),
+            Err(e) => axum::Json(serde_json::json!({ "ok": false, "error": e })).into_response(),
+        }
+    }
+    #[cfg(not(feature = "gst-linked"))]
+    {
+        axum::Json(serde_json::json!({ "ok": false, "error": "build without gst-linked" })).into_response()
+    }
 }
 
 pub async fn page() -> Response {

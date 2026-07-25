@@ -24,6 +24,6 @@ if [ "${GST:-0}" = "1" ]; then
   export RUSTFLAGS="-L framework=$FWPARENT -l framework=GStreamer"
 fi
 
-( cd "$EDGE" && cargo build --release --target aarch64-apple-ios $FEATURES )
+( cd "$EDGE" && cargo build --release --lib --target aarch64-apple-ios $FEATURES )
 cp "$EDGE/target/aarch64-apple-ios/release/libsentinel_edge.a" "$OUT"
 echo "✓ $OUT ($(du -h "$OUT" | cut -f1))"
