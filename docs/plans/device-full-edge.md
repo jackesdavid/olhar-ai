@@ -26,9 +26,11 @@ code, same behaviour, everywhere — which is exactly the operator's parity requ
 ## Feasibility findings (2026-07-25)
 
 - **iOS rustup target**: was absent; added `aarch64-apple-ios`.
-- **Pure-Rust cross-compile**: building `sentinel-edge` for `aarch64-apple-ios` **without** the
-  `gst-linked` feature — result recorded in Phase 1 below (this is the cheap, high-signal probe: it
-  proves `retina`/`tract`/`axum`/`image`/`sysinfo` cross-compile before any GStreamer setup).
+- **Pure-Rust cross-compile: ✅ (2026-07-25).** `sentinel-edge` builds for `aarch64-apple-ios`
+  **without** `gst-linked` in 3m04s — one benign `unused var` warning, nothing else. The whole dep
+  graph (`retina` RTSP, `tract` detection, `axum` HTTP, `image`, `sysinfo`, MOG2) cross-compiles to
+  iOS arm64. This is the big de-risk: the Rust side of a phone edge is real; **GStreamer linking is
+  the only remaining unknown.**
 - **GStreamer for iOS**: **not installed** — there is no `GStreamer.framework`, only the Homebrew Mac
   build. iOS needs the official **GStreamer iOS SDK** (~1 GB from gstreamer.freedesktop.org, a
   `.framework` with the same plugins). Its Android twin is the **GStreamer Android SDK** (`.aar`/NDK).
@@ -40,8 +42,8 @@ code, same behaviour, everywhere — which is exactly the operator's parity requ
 
 The `stage4`-equivalent: prove the edge **compiles and links** for the phone before any app work.
 
-1. **Pure-Rust cross-compile** to `aarch64-apple-ios` (no gst) — the dep graph compiles for iOS. *(in
-   progress; findings land here)*.
+1. **Pure-Rust cross-compile** to `aarch64-apple-ios` (no gst) — **✅ done, 3m04s, clean.** The dep
+   graph compiles for iOS arm64.
 2. **GStreamer iOS SDK**: install the `.framework`, point `pkg-config` / the `gstreamer-rs` build at
    it, and cross-compile `sentinel-edge` **with `gst-linked`** for iOS. The known risk mirrors the
    Mac `.pkg`: GStreamer's own dylibs/plugins must be bundled and their load paths rewritten for the
