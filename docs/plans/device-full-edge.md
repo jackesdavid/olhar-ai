@@ -85,10 +85,22 @@ the `.a` and bundles the GStreamer framework — and repeating the link for Andr
   "status":"ok"}`. The real edge (tokio + axum + retina) **boots and serves HTTP inside iOS.** Two
   fixes got it there: the unenrolled branch now serves `/health` (a phone boots without a box token),
   and the listen address defaults to `127.0.0.1` on iOS (the app is on-device; iOS wants localhost).
-- **Next:** GStreamer (`GST=1 build-ios-lib.sh`) so it can decode a camera — the known iOS wrinkle is
-  **static plugin registration** (the monolithic framework links plugins statically; `gst_init` won't
-  auto-discover them, they need explicit registration). Then Phase 3 (paths/box identity on a phone)
-  and Android.
+- **GSTREAMER PROVEN ON DEVICE (2026-07-25).** On the iPhone 11 the Edge tab shows **"GStreamer OK —
+  all 13 elements built ✓"** (via `/gst-selftest`): `rtspsrc`, `mp4mux`, `videoconvert`,
+  `applemedia`/`vtdec` (VideoToolbox HW decode), … all instantiate. **The full media stack runs
+  inside iOS.** The whole #144 feasibility — runtime + GStreamer — is proven on the phone; no
+  technical unknown remains. What it took (reusable, incl. for Android):
+  1. **Static plugin registration** — the iOS framework links plugins statically, so `gst_init`
+     cannot discover them; `media::init_gstreamer()` calls each `gst_plugin_<name>_register` on iOS.
+  2. **Build `--lib` only** — the executable-bin link pulls MoltenVK (GStreamer GL/Vulkan) whose libc++
+     symbol cargo's iOS bin link lacks; the `.a` needs no link and the app supplies libc++.
+  3. **Podspec links the framework, not just the .a** — `-framework GStreamer` + `FRAMEWORK_SEARCH_PATHS`
+     to the SDK, resolved one system-framework layer at a time: VideoToolbox/CoreMedia/CoreVideo/
+     AudioToolbox/AVFoundation/MediaToolbox/… + `iconv` + `AssetsLibrary` (applemedia's `iosassetsrc`
+     references `ALAssetsLibrary`). The iOS framework is a static `ar` archive, so no embedding.
+- **Next:** point the embedded edge at a real LAN RTSP camera (the phone is on the same Wi-Fi, so
+  `rtspsrc` reaches it) — Phase 3 (paths/box identity on a phone) + Phase 4 (register as a box). Then
+  Android (NDK + GStreamer Android SDK, same recipe).
 
 ## Phase 3 — the edge's platform assumptions
 
