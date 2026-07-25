@@ -23,6 +23,7 @@ use crate::{store, AppState};
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/boxes", get(list).post(create))
+        .route("/boxes/self-register", axum::routing::post(self_register))
         .route("/boxes/:id", axum::routing::delete(remove))
         .route("/boxes/:id/restart", axum::routing::post(restart))
         .route("/boxes/:id/update", axum::routing::post(update))
@@ -193,6 +194,50 @@ async fn create(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): 
     };
 
     Ok(Json(CreateResp { id, token, hostname, tailscale_key }))
+}
+
+#[derive(Deserialize)]
+struct SelfRegisterReq {
+    /// Human label for the box list, e.g. the phone's name.
+    name: String,
+}
+
+#[derive(Serialize)]
+struct SelfRegisterResp {
+    box_id: Uuid,
+    /// The identity the phone puts in every `face_push` (`POST /config/face`) as `camera_ip`, and
+    /// that a workflow's `When Event(face_detected)` filters on. Stable for the life of the box.
+    camera_ip: String,
+    /// The box token — shown ONCE. The phone stores it in the keychain and presents it as the box
+    /// bearer on `/config/face`. It is what `box_tenant` authenticates.
+    token: String,
+}
+
+/// Register the phone as a **light-edge box** (card #142). Unlike an appliance — which has no user
+/// session and so must be paired by a code typed into its local page (`#81`, `POST /enroll`) — the
+/// phone IS the authenticated app, so it self-registers in one call. No Tailscale key (the phone
+/// never joins the tailnet) and no `devices` row (that table is full-replaced by the appliance's
+/// camera sync, which would clobber a phone camera — the phone is identified purely by the
+/// `camera_ip` string it stamps on its face events).
+async fn self_register(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(b): Json<SelfRegisterReq>,
+) -> Result<Json<SelfRegisterResp>, ApiErr> {
+    auth::require(&c, "devices.write")?;
+    let tid = tenant_of(&c)?;
+    let name = b.name.trim();
+    if name.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "box name required"));
+    }
+    let token = new_box_token();
+    let box_id =
+        store::create_box_with_platform(&st.pool, tid, name, &hash_token(&token), "ios-lite")
+            .await
+            .map_err(db_err)?;
+    // Derived from the box id so it is stable and unique per phone without a second identifier.
+    let camera_ip = format!("phone-{}", &box_id.to_string()[..8]);
+    Ok(Json(SelfRegisterResp { box_id, camera_ip, token }))
 }
 
 async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<Uuid>) -> Result<StatusCode, ApiErr> {

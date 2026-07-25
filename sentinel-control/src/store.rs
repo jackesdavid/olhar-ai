@@ -161,6 +161,28 @@ pub struct DiscoveredRow {
     pub last_seen: chrono::DateTime<chrono::Utc>,
 }
 
+/// Create a box and stamp its `platform` at creation. A phone light-edge (card #142) never sends the
+/// heartbeat that would set `platform` on an appliance, so it must be recorded here or the box would
+/// show blank/offline-unknown in the UI instead of as an on-demand phone.
+pub async fn create_box_with_platform(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    name: &str,
+    token_hash: &str,
+    platform: &str,
+) -> sqlx::Result<Uuid> {
+    let (id,): (Uuid,) = sqlx::query_as(
+        "INSERT INTO tenant_boxes (tenant_id, name, token_hash, platform) VALUES ($1,$2,$3,$4) RETURNING id",
+    )
+    .bind(tenant_id)
+    .bind(name)
+    .bind(token_hash)
+    .bind(platform)
+    .fetch_one(pool)
+    .await?;
+    Ok(id)
+}
+
 pub async fn create_box(pool: &PgPool, tenant_id: Uuid, name: &str, token_hash: &str) -> sqlx::Result<Uuid> {
     let (id,): (Uuid,) = sqlx::query_as(
         "INSERT INTO tenant_boxes (tenant_id, name, token_hash) VALUES ($1,$2,$3) RETURNING id",

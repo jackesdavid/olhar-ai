@@ -38,10 +38,18 @@ camera identity so a workflow can bind to it.
   the same `new_box_token()` / `rotate_box_token` internals — no pairing-code dance. The token is
   stored in the phone keychain. Reuses `create_pairing`/`rotate_box_token` in
   `sentinel-control/src/store.rs`.
-- **Camera identity.** The phone picks a stable `camera_ip` = `phone-<installId>` and, on
-  self-register (or first push), **upserts a `devices` row** (name e.g. "iPhone — front camera") so
-  the workflow builder and Faces UI can bind to and label it. This is the one small cloud addition;
-  everything downstream treats it as any camera.
+- **Camera identity.** The phone stamps a stable `camera_ip = phone-<box_id[..8]>` (derived from the
+  box id, so unique with no second identifier) on every face event. **DONE (Phase 1):** `POST
+  /boxes/self-register` (UserClaims, `devices.write`) → `store::create_box_with_platform(…,
+  "ios-lite")` → returns `{ box_id, camera_ip, token }`; the phone stores the token in the keychain.
+  No Tailscale key, no pairing code.
+- **Why NO `devices` row (discovered reading the code).** `devices` is **full-replaced** by the
+  appliance's camera sync — `app_core::devices::repo::save` does `DELETE all-for-tenant + re-insert`
+  the edge's list. A phone-camera row injected there would be wiped the next time any appliance in the
+  tenant syncs. So the phone camera is identified **purely by its `camera_ip` string** on the face
+  events; it does not live in `devices`. Making it a first-class, builder-selectable device would need
+  `devices` to carry an origin/box scope so sync only replaces its own box's cameras — that is a
+  separate change, tracked as an open decision below, not v1.
 
 ## Phase 2 — the capture screen (sentinel-mobile)
 
@@ -76,7 +84,11 @@ Foreground-only React Native screen; closing it stops all capture (the iOS-frien
 2. **Native module vs. `react-native-vision-camera`.** The library is faster to ship and already
    wraps Vision; a bespoke native module gives tighter control over the crop/landmark mapping. Start
    with the library; drop to native only if landmark alignment (`#122`) needs it.
-3. **Crop vs. full frame in `frame_b64`.** `face_push` takes a frame and the graph re-crops; sending
+3. **Making the phone camera builder-selectable.** v1 binds workflows by the raw `camera_ip` string
+   (shown to the user after self-register). To have it appear as a picklist device like a real camera,
+   `devices` needs an origin/box_id scope so the appliance sync's full-replace only deletes its own
+   box's cameras — a focused migration + `repo::save` change, deferred out of v1.
+4. **Crop vs. full frame in `frame_b64`.** `face_push` takes a frame and the graph re-crops; sending
    the tight crop is lighter over cellular but the graph's detect-fallback (memory
    `face-pipeline-architecture`) may expect a fuller frame. Decide by testing recognition quality on
    crop-only.
