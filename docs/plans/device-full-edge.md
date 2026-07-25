@@ -65,7 +65,7 @@ The `stage4`-equivalent: prove the edge **compiles and links** for the phone bef
    (static GStreamer, unstripped) — a release+strip build is the shippable size.
 4. Repeat for `aarch64-linux-android` + the GStreamer Android SDK.
 
-**Gate: PASSED, and the edge RUNS on iOS.** `libsentinel_edge.a` (arm64 iOS, GStreamer
+**Gate: PASSED end to end — the phone captures a camera and delivers it to the cloud.** `libsentinel_edge.a` (arm64 iOS, GStreamer
 linked) exports `start_edge`/`stop_edge`. What remains is app plumbing — the native module that links
 the `.a` and bundles the GStreamer framework — and repeating the link for Android.
 
@@ -107,9 +107,19 @@ the `.a` and bundles the GStreamer framework — and repeating the link for Andr
   rtpbin/jitterbuffer) was missing from the iOS static registration, so RTP was never set up. The Mac
   reproduced the pipeline working in seconds, isolating it as a plugin-registration gap, not the
   pipeline. `POST /dev/record` + the Edge tab's Record card drive it.
-- **Next:** upload the clip to **R2** — outbound HTTPS to control for a presigned URL, then PUT (NO
-  tailnet needed). Then live (phone pushes the stream outbound to the gateway), phone box identity,
-  and Android.
+- **CLIP UPLOADED TO R2 FROM THE PHONE (2026-07-25).** The full cycle: iPhone dials the LAN camera →
+  decodes → muxes → `record_and_upload` (reusing the appliance's exact cloud path) pushes the manifest
+  to **control.thesentinels.online** (box token from self-register) → presigned PUT → bytes straight
+  to R2 → confirm. Verified in the **production DB**: `phone-phone-clip-104452, camera_ip=phone,
+  104452 B, upload_state=uploaded`. **No Mac, no appliance, no tailnet — all outbound HTTPS.** Fixes
+  along the way: the R2 button self-registers the phone (it had no box token), and the app passes the
+  real control URL (the embedded edge had no `CONTROL_URL` env, defaulting to dev localhost). The
+  breadcrumb file in the sandbox (`r2-step.txt`, pulled via `devicectl`) pinpointed each failure —
+  the device console does not surface Rust stderr on iOS.
+- **The phone is a complete camera edge: capture → decode → cloud.** #144 feasibility is proven end to
+  end. **Next (productization, no unknowns):** proper box enrollment (persist the token where the edge
+  reads it, pull cameras from control, run the real recording manager + health), live streaming (phone
+  pushes outbound to the gateway), and Android (NDK + GStreamer Android SDK, same recipe).
 
 ## Phase 3 — the edge's platform assumptions
 
