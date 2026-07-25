@@ -1,5 +1,20 @@
 # Full edge on the device (iOS + Android) — Implementation Plan
 
+> **STATUS 2026-07-25 (commit 2a00ab2): REAL ENROLLMENT + RECORDING DONE.** The iPhone is a
+> first-class enrolled box — self-registers, boots the full path (BOX_TOKEN), pulls its tenant's
+> cameras from control, runs the frame hub (MOG2 motion) and the real recording manager. Proven:
+> C100 (192.168.0.7) recorded on-device via GStreamer → clip → manifest → R2 (`upload_state=uploaded`),
+> no /dev shortcuts. Enrolled edge fixes: iOS sandbox paths (cache/env/recordings), skip
+> self-update+tailscale, bind 127.0.0.1, `gstreamer_ok` for gst-linked builds. Support fixes:
+> Devices "Save without testing" (a localhost-only box can't be tailnet-probed, so its creds couldn't
+> be staged); Boxes treats a GStreamer box as healthy without ffmpeg.
+>
+> **NEXT — the one-connection media path (user's hard rule):** a single GStreamer `rtspsrc ! tee` per
+> camera feeding frame-hub(motion/faces)+recording+live+snapshots, so the phone (no go2rtc to fan
+> out) never opens N direct dials to a ~1-session camera. Then: live to the gateway (blocked today —
+> no tailnet on the phone), snapshots on gstreamer-linked, Android (same recipe). Phone is
+> foreground-only (iOS suspends background) — an on-demand edge, not 24/7.
+
 **Board card:** #144 full edge on device — phone runs sentinel-edge (1–2 cameras)
 **Goal:** run the **real `sentinel-edge`** on the phone — RTSP ingest of 1–2 LAN cameras, GStreamer
 decode, motion + detection, recording, box registration — so a phone is a first-class edge. iOS is
