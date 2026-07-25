@@ -51,21 +51,26 @@ camera identity so a workflow can bind to it.
   `devices` to carry an origin/box scope so sync only replaces its own box's cameras — that is a
   separate change, tracked as an open decision below, not v1.
 
-## Phase 2 — the capture screen (sentinel-mobile)
+## Phase 2 — the capture screen (sentinel-mobile) — DONE (needs a device build to validate)
 
-Foreground-only React Native screen; closing it stops all capture (the iOS-friendly boundary).
+Foreground-only screen; closing/stopping ends capture (the iOS-friendly boundary).
 
-- **Camera + detection.** Front camera via `react-native-vision-camera` + its face-detector frame
-  processor (wraps iOS Vision), or a thin native module calling `VNDetectFaceLandmarksRequest`
-  directly. Output per detected face: bbox, 5 landmarks (mapped to the `kps` flat `[x0,y0,…]` order
-  `face_push` expects, source pixels — see `#122`), confidence, and a JPEG crop.
-- **Throttle + quality gate on-device** (mirror the edge's discipline, memory
-  `storeface-pure-sink`): only push a face above a confidence / face-ratio floor, rate-limited, so
-  the pipeline isn't flooded — the *quality decision stays upstream of StoreFace*.
-- **Push.** `POST /config/face` with the box token + `frame_b64` = the crop. Reuse the app's API
-  layer (`sentinel-mobile/src/…`).
-- **UX.** A clear "Capturing…" state, a running count of faces sent, and a stop control. Matches the
-  app/site design tokens (memory `mobile-design-parity`).
+- **`sentinel-mobile/src/lightEdge.ts`** — the pure-TS core (type-checks clean): `restore` /
+  `ensureRegistered` (user JWT → `POST /boxes/self-register`, box token in the keychain via
+  `expo-secure-store`) and `pushFace` (box token → `POST /config/face`). Two credentials on purpose,
+  mirroring an appliance.
+- **`sentinel-mobile/app/(tabs)/capture.tsx`** — the Capture tab. Front camera via **`expo-camera`**;
+  while capturing it snaps a photo every ~1.8 s, downscales to 720 px (`expo-image-manipulator`), and
+  pushes it. Running count + stop control; unmount stops capture.
+- **Camera choice: `expo-camera`, not `react-native-vision-camera` (for v1).** vision-camera + an
+  MLKit face-detector frame processor would give on-device auto-detection, but it drags worklets and a
+  fragile JS-side crop; `expo-camera` is an SDK-native config plugin with a small surface. So **v1
+  sends the full (downscaled) photo and the cloud detects + crops** (`embed_face_crop`'s
+  detect+fallback) — which also settles open-decision #4. On-device auto-detection is a later
+  enhancement (and the path to Android parity via MLKit).
+- **Validation boundary.** TS type-checks; the **native camera cannot be exercised from the host** —
+  it needs `npx expo prebuild` + a device build (the Release-to-iPhone flow from #139). That build is
+  the only way to confirm expo-camera + the push work end to end.
 
 ## Phase 3 — bind a workflow to the phone camera
 
