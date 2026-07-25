@@ -5,7 +5,7 @@ import { useState } from "react";
 import { ScrollView, StyleSheet } from "react-native";
 
 import { hasEmbeddedEdge, startEdge } from "sentinel-edge";
-import { restore as restoreLightEdge } from "@/lightEdge";
+import { ensureRegistered } from "@/lightEdge";
 import { Button, Card, Danger, Heading, Input, Muted, Strong } from "@/styles/ui";
 import { space } from "@/styles/theme";
 
@@ -67,8 +67,10 @@ export default function EdgeTest() {
       // authenticates the clip manifest and mints the R2 upload URL.
       let q = `url=${encodeURIComponent(rtsp)}&secs=8`;
       if (upload) {
-        const edge = await restoreLightEdge();
-        if (!edge) throw new Error("no box token — open the Capture tab once to register this phone");
+        // Self-register this phone as a box if it hasn't yet (#143), so R2 always has a box token —
+        // no need to visit the Capture tab first.
+        setRec("registering this phone…");
+        const edge = await ensureRegistered("iPhone edge");
         q += `&token=${encodeURIComponent(edge.boxToken)}`;
       }
       const r = await fetch(`${RECORD_URL}?${q}`, { method: "POST", signal: AbortSignal.timeout(90000) });
