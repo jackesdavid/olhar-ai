@@ -5,11 +5,12 @@ import { useState } from "react";
 import { ScrollView, StyleSheet } from "react-native";
 
 import { hasEmbeddedEdge, startEdge } from "sentinel-edge";
-import { Button, Card, Danger, Heading, Muted, Strong } from "@/styles/ui";
+import { Button, Card, Danger, Heading, Input, Muted, Strong } from "@/styles/ui";
 import { space } from "@/styles/theme";
 
 const HEALTH_URL = "http://127.0.0.1:8788/health";
 const GST_URL = "http://127.0.0.1:8788/gst-selftest";
+const RECORD_URL = "http://127.0.0.1:8788/dev/record";
 
 export default function EdgeTest() {
   const [status, setStatus] = useState("idle");
@@ -17,6 +18,10 @@ export default function EdgeTest() {
   const [error, setError] = useState<string | null>(null);
   const [gst, setGst] = useState<string | null>(null);
   const [gstBusy, setGstBusy] = useState(false);
+  // RTSP URL kept in state (not committed) so camera credentials never live in source.
+  const [rtsp, setRtsp] = useState("rtsp://user:pass@192.168.0.7:554/stream2");
+  const [rec, setRec] = useState<string | null>(null);
+  const [recBusy, setRecBusy] = useState(false);
 
   async function boot() {
     setError(null);
@@ -53,6 +58,21 @@ export default function EdgeTest() {
     }
   }
 
+  async function recordCamera() {
+    setRec(null);
+    setRecBusy(true);
+    try {
+      const u = `${RECORD_URL}?url=${encodeURIComponent(rtsp)}&secs=8`;
+      const r = await fetch(u, { method: "POST", signal: AbortSignal.timeout(25000) });
+      const j = await r.json();
+      setRec(j.ok ? `Recorded ${fmtBytes(j.bytes)} in ${j.secs}s → ${j.path}` : `Failed — ${j.error}`);
+    } catch (e) {
+      setRec(`could not reach the edge: ${(e as Error).message}`);
+    } finally {
+      setRecBusy(false);
+    }
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.body}>
       <Heading>Embedded edge</Heading>
@@ -72,6 +92,14 @@ export default function EdgeTest() {
         {gst ? <Muted>{gst}</Muted> : null}
       </Card>
       <Button label="Test GStreamer" onPress={testGst} busy={gstBusy} disabled={status !== "up"} />
+
+      <Card>
+        <Strong>Record a camera</Strong>
+        <Muted>Dials the RTSP camera directly and records 8s on the phone. Free the camera first (stop the Mac edge).</Muted>
+        <Input value={rtsp} onChangeText={setRtsp} autoCapitalize="none" autoCorrect={false} placeholder="rtsp://…" />
+        {rec ? <Muted>{rec}</Muted> : null}
+      </Card>
+      <Button label="Record camera (8s)" onPress={recordCamera} busy={recBusy} disabled={status !== "up"} />
     </ScrollView>
   );
 }
@@ -88,6 +116,11 @@ async function pollHealth(): Promise<string> {
     await new Promise((res) => setTimeout(res, 500));
   }
   throw new Error("edge HTTP server did not answer within 10s");
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function label(status: string): string {

@@ -205,3 +205,58 @@ mod ios_static_plugins {
         });
     }
 }
+
+/// Dev-only: dial an RTSP camera directly and record `secs` seconds to `out` as MP4 (card #144).
+/// Proves the embedded phone edge can ingest + decode + mux a REAL camera on-device, without any
+/// enrollment/box plumbing. `rtspsrc ! rtph264depay ! h264parse ! mp4mux ! filesink`, then a clean
+/// EOS so mp4mux writes its moov. Returns (bytes, elapsed_secs).
+#[cfg(feature = "gst-linked")]
+pub fn record_camera(url: &str, secs: u64, out: &std::path::Path) -> Result<(u64, u64), String> {
+    use gstreamer::prelude::*;
+    init_gstreamer()?;
+    let path = out.to_string_lossy();
+    let desc = format!(
+        "rtspsrc location=\"{url}\" protocols=tcp latency=200 \
+         ! rtph264depay ! h264parse ! mp4mux faststart=true ! filesink location=\"{path}\""
+    );
+    let pipeline = gstreamer::parse::launch(&desc)
+        .map_err(|e| format!("parse: {e}"))?
+        .downcast::<gstreamer::Pipeline>()
+        .map_err(|_| "not a pipeline".to_string())?;
+    let start = std::time::Instant::now();
+    pipeline
+        .set_state(gstreamer::State::Playing)
+        .map_err(|e| format!("play: {e}"))?;
+
+    let bus = pipeline.bus().ok_or("no bus")?;
+    // Fail fast on an early error (bad creds, unreachable) instead of waiting out the full window.
+    let deadline = std::time::Duration::from_secs(secs);
+    while start.elapsed() < deadline {
+        if let Some(msg) = bus.timed_pop(gstreamer::ClockTime::from_mseconds(200)) {
+            if let gstreamer::MessageView::Error(e) = msg.view() {
+                let _ = pipeline.set_state(gstreamer::State::Null);
+                return Err(format!("pipeline error: {} ({:?})", e.error(), e.debug()));
+            }
+        }
+    }
+
+    // Clean stop: EOS lets mp4mux finalise the file (write the moov), else the clip is unplayable.
+    pipeline.send_event(gstreamer::event::Eos::new());
+    for msg in bus.iter_timed(gstreamer::ClockTime::from_seconds(10)) {
+        match msg.view() {
+            gstreamer::MessageView::Eos(_) => break,
+            gstreamer::MessageView::Error(e) => {
+                log::warn!("record finalise error: {} ({:?})", e.error(), e.debug());
+                break;
+            }
+            _ => {}
+        }
+    }
+    let _ = pipeline.set_state(gstreamer::State::Null);
+
+    let bytes = std::fs::metadata(out).map(|m| m.len()).unwrap_or(0);
+    if bytes < 1000 {
+        return Err(format!("recorded only {bytes} B — camera unreachable or no video"));
+    }
+    Ok((bytes, start.elapsed().as_secs()))
+}

@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -34,6 +34,7 @@ pub fn router(control_url: String) -> Router {
         .route("/", get(page))
         .route("/health", get(health))
         .route("/gst-selftest", get(gst_selftest_route))
+        .route("/dev/record", post(dev_record))
         .route("/enroll", post(enroll))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(control_url)
@@ -179,6 +180,42 @@ pub async fn gst_selftest_route() -> Response {
     }
     #[cfg(not(feature = "gst-linked"))]
     {
+        axum::Json(serde_json::json!({ "ok": false, "error": "build without gst-linked" })).into_response()
+    }
+}
+
+/// Dev: record a real RTSP camera to the app sandbox for N seconds (card #144). Proves the embedded
+/// edge ingests + decodes + muxes an actual camera on the phone. Query: `url` (rtsp://…), `secs`.
+#[derive(serde::Deserialize)]
+pub struct RecordQuery {
+    url: String,
+    #[serde(default = "default_secs")]
+    secs: u64,
+}
+fn default_secs() -> u64 { 8 }
+
+pub async fn dev_record(Query(q): Query<RecordQuery>) -> Response {
+    #[cfg(feature = "gst-linked")]
+    {
+        // A writable path on any platform — on iOS this is the app's tmp dir.
+        let out = std::env::temp_dir().join("phone-clip.mp4");
+        let out2 = out.clone();
+        let url = q.url.clone();
+        let secs = q.secs.clamp(2, 30);
+        let res = tokio::task::spawn_blocking(move || crate::media::record_camera(&url, secs, &out2))
+            .await
+            .map_err(|e| format!("task: {e}"))
+            .and_then(|r| r);
+        match res {
+            Ok((bytes, elapsed)) => axum::Json(serde_json::json!({
+                "ok": true, "path": out.to_string_lossy(), "bytes": bytes, "secs": elapsed
+            })).into_response(),
+            Err(e) => axum::Json(serde_json::json!({ "ok": false, "error": e })).into_response(),
+        }
+    }
+    #[cfg(not(feature = "gst-linked"))]
+    {
+        let _ = q;
         axum::Json(serde_json::json!({ "ok": false, "error": "build without gst-linked" })).into_response()
     }
 }
