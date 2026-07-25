@@ -6,6 +6,14 @@
 // Note `localhost` does NOT work from a physical device — use the LAN IP.
 const trim = (u: string) => u.replace(/\/+$/, "");
 
-export const CONTROL_BASE = trim(process.env.EXPO_PUBLIC_CONTROL_URL || "https://control.olharai.com");
+// Defaults point at the LIVE domain (`thesentinels.online`). `olharai.com` was set here by the
+// abandoned rebrand cutover but `control.olharai.com` does not resolve — a production build pointed
+// at it reaches nothing, which is the mobile twin of the web `config.ts` login bug. When the DNS
+// actually cuts over to olharai.com, bump these two defaults (or set the EXPO_PUBLIC_* overrides).
+export const CONTROL_BASE = trim(
+  process.env.EXPO_PUBLIC_CONTROL_URL || "https://control.thesentinels.online",
+);
 
-export const GATEWAY_BASE = trim(process.env.EXPO_PUBLIC_GATEWAY_URL || "https://gateway.olharai.com");
+export const GATEWAY_BASE = trim(
+  process.env.EXPO_PUBLIC_GATEWAY_URL || "https://gateway.thesentinels.online",
+);
