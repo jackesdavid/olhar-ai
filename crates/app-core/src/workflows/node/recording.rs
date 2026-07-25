@@ -21,17 +21,11 @@ pub(super) fn run_start_recording(_config: &Value, inputs: &PortValues, sys: &To
         .get("pre_roll_secs")
         .and_then(PortValue::as_num)
         .map(|n| n as u64);
-    let base = resolve_edge_api_base(sys)?;
     let mut body = serde_json::json!({ "camera_ip": camera_ip });
     if let Some(pr) = pre_roll {
         body["pre_roll_secs"] = serde_json::Value::Number(pr.into());
     }
-    let resp = edge_agent()
-        .post(&format!("{base}/recording/start"))
-        .set("Content-Type", "application/json")
-        .send_string(&body.to_string())
-        .map_err(|e| format!("edge start_recording: {e}"))?;
-    let json = resp.into_json::<serde_json::Value>().ok().unwrap_or_default();
+    let json = edge_call(sys, "start_recording", "/recording/start", body)?;
     let clip_id: String = json
         .get("clip_id").and_then(|s| s.as_str()).map(str::to_string)
         .unwrap_or_else(|| format!("{camera_ip}-{}", chrono::Utc::now().timestamp()));
@@ -53,14 +47,55 @@ pub(super) fn run_stop_recording(inputs: &PortValues, sys: &ToolContext) -> Resu
         .and_then(PortValue::as_text)
         .unwrap_or("")
         .to_string();
-    let base = resolve_edge_api_base(sys)?;
     let body = serde_json::json!({ "camera_ip": camera_ip, "clip_id": clip_id });
-    edge_agent()
-        .post(&format!("{base}/recording/stop"))
-        .set("Content-Type", "application/json")
-        .send_string(&body.to_string())
-        .map_err(|e| format!("edge stop_recording: {e}"))?;
+    edge_call(sys, "stop_recording", "/recording/stop", body)?;
     Ok(PortValues::new())
+}
+
+/// The tenant's box that is reachable over the SSE command stream right now (fresh `sse_last_seen`),
+/// if any. Its presence is what routes a command over SSE instead of the legacy inbound POST.
+fn sse_box(sys: &ToolContext) -> Option<uuid::Uuid> {
+    let pool = sys.db.pool();
+    let tid = sys.tenant_id;
+    sys.db
+        .block(async move {
+            sqlx::query_scalar::<_, uuid::Uuid>(
+                "SELECT id FROM tenant_boxes
+                 WHERE tenant_id = $1 AND sse_last_seen IS NOT NULL
+                   AND sse_last_seen::timestamptz > now() - make_interval(secs => 30)
+                 ORDER BY sse_last_seen DESC LIMIT 1",
+            )
+            .bind(tid)
+            .fetch_optional(&pool)
+            .await
+        })
+        .ok()
+        .flatten()
+}
+
+/// Deliver an edge recording command by the right transport, and return the edge's JSON reply.
+///
+/// **Card #144 — versioned + backward compatible.** If the tenant has a live SSE command stream, the
+/// command rides *down* it (works for an outbound-only box the cloud can't reach inbound — a phone,
+/// and eventually every edge once the tailnet is retired). Otherwise it takes the historical
+/// **tailnet POST** to `magicdns_host:8080`, unchanged — so existing appliance boxes behave exactly
+/// as before. `cmd` is the SSE command name; `path` is the equivalent local HTTP endpoint.
+fn edge_call(sys: &ToolContext, cmd: &str, path: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
+    if let Some(box_id) = sse_box(sys) {
+        // 20s TTL so a command outlives the await window a touch (redelivery/late run); the await
+        // itself stays under the node's 15s watchdog.
+        let id = crate::edge_commands::enqueue_blocking(&sys.db, sys.tenant_id, box_id, cmd, body, 20)
+            .ok_or("edge command enqueue failed")?;
+        crate::edge_commands::await_result_blocking(&sys.db, id, 12)
+    } else {
+        let base = resolve_edge_api_base(sys)?;
+        let resp = edge_agent()
+            .post(&format!("{base}{path}"))
+            .set("Content-Type", "application/json")
+            .send_string(&body.to_string())
+            .map_err(|e| format!("edge {cmd}: {e}"))?;
+        Ok(resp.into_json::<serde_json::Value>().ok().unwrap_or_default())
+    }
 }
 
 /// Cap on a fetched clip — Telegram rejects >50 MB for bot uploads anyway, and it bounds memory.

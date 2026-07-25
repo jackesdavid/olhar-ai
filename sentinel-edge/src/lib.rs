@@ -17,6 +17,7 @@
 //! `GO2RTC_BIN` + `GO2RTC_CONFIG`); otherwise it uses whatever go2rtc is on :1984.
 mod capture;
 mod clip_upload;
+mod command_stream;
 mod enroll;
 mod envfile;
 mod face;
@@ -339,6 +340,16 @@ pub fn run() {
                 }
             }
         });
+    }
+
+    // Cloud→edge command stream (card #144): hold one outbound SSE to control so the cloud can
+    // command this box (record, …) WITHOUT reaching it inbound — the tailnet replacement. Commands
+    // dispatch to the edge's own local HTTP API, so the cloud path reuses the exact local flow.
+    {
+        let control_url = state.control_url.clone();
+        let port = bind.rsplit(':').next().unwrap_or("8788").to_string();
+        let local_api = format!("http://127.0.0.1:{port}");
+        std::thread::spawn(move || command_stream::run(control_url, local_api));
     }
 
     let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");

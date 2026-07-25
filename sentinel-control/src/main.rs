@@ -20,6 +20,7 @@ mod auth;
 mod billing_gate;
 mod clip_purge;
 mod domain;
+mod edge_stream;
 mod handlers;
 mod http;
 mod oauth;
@@ -71,6 +72,9 @@ pub struct AppState {
     /// falls back to proxying one flow pod's `/events` (single-pod behavior).
     pub redis_url: Option<String>,
     pub redis: Option<redis::aio::ConnectionManager>,
+    /// Live cloud→edge SSE command streams this pod holds (`box_id → connection`). The durable
+    /// queue is `app_core::edge_commands`; this is the connection half. Card #144.
+    pub edge_streams: edge_stream::EdgeStreams,
 }
 
 impl AppState {
@@ -220,6 +224,11 @@ fn main() {
         // Drain the clip-delete work queue: edge + cloud + row, per customer deletion request.
         clip_purge::spawn(pool.clone());
 
+        // Cloud→edge command delivery (card #144): the per-pod registry of live edge SSE streams,
+        // plus the LISTEN/poll task that pushes queued commands to the boxes this pod holds.
+        let edge_streams = edge_stream::new_registry();
+        edge_stream::spawn_delivery(pool.clone(), edge_streams.clone());
+
         // Shared event fabric (optional). When set, the workflow SSE relay subscribes to
         // Redis (every flow pod's events) and the edge-motion endpoint publishes here.
         let redis_url = std::env::var("REDIS_URL").ok().filter(|s| !s.trim().is_empty());
@@ -236,7 +245,7 @@ fn main() {
 
         let state = AppState {
             db, pool, jwt_secret, google, oauth_states, tailscale, http, pending_creds, notifiers,
-            pending_rescan, log_bus, log_queue, event_queue, redis_url, redis,
+            pending_rescan, log_bus, log_queue, event_queue, redis_url, redis, edge_streams,
         };
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {

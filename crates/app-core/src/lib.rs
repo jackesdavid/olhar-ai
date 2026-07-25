@@ -15,6 +15,7 @@ pub mod db;
 pub mod device_actions;
 pub mod devices;
 pub mod dictionaries;
+pub mod edge_commands;
 pub mod edge_metrics;
 pub mod event_queue;
 pub mod events;

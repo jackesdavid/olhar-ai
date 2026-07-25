@@ -31,6 +31,10 @@ pub fn router(state: AppState) -> Router {
         .route("/enroll", post(enroll))
         .route("/config/cameras", get(cameras))
         .route("/config/commands", get(commands))
+        // Cloud→edge command transport (card #144): the edge holds this SSE stream and commands
+        // ride down it; it POSTs each command's result back. Replaces the tailnet for commanding.
+        .route("/config/edge/stream", get(crate::edge_stream::edge_stream))
+        .route("/config/edge/command-result", post(crate::edge_stream::command_result))
         .route("/config/discovered", post(discovered_push))
         .route("/config/device-moved", post(device_moved))
         .route("/config/streaming", post(streaming_push))
@@ -358,7 +362,7 @@ async fn cameras(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Ra
 }
 
 /// Like [`box_tenant`] but also resolves the box id (for log tagging).
-async fn box_identity(st: &AppState, headers: &HeaderMap) -> Result<Option<(uuid::Uuid, uuid::Uuid)>, Response> {
+pub(crate) async fn box_identity(st: &AppState, headers: &HeaderMap) -> Result<Option<(uuid::Uuid, uuid::Uuid)>, Response> {
     let token = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
