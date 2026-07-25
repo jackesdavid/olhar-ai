@@ -65,7 +65,7 @@ The `stage4`-equivalent: prove the edge **compiles and links** for the phone bef
    (static GStreamer, unstripped) — a release+strip build is the shippable size.
 4. Repeat for `aarch64-linux-android` + the GStreamer Android SDK.
 
-**Gate: PASSED for iOS, and the library boundary exists.** `libsentinel_edge.a` (arm64 iOS, GStreamer
+**Gate: PASSED, and the edge RUNS on iOS.** `libsentinel_edge.a` (arm64 iOS, GStreamer
 linked) exports `start_edge`/`stop_edge`. What remains is app plumbing — the native module that links
 the `.a` and bundles the GStreamer framework — and repeating the link for Android.
 
@@ -80,10 +80,15 @@ the `.a` and bundles the GStreamer framework — and repeating the link for Andr
   the final binary** — the edge is embedded, no undefined symbols. The podspec's
   `Security/SystemConfiguration/CoreFoundation` + `c++/resolv` covered every std/dep symbol; dead-strip
   took the 122 MB static lib down to a 45 MB app binary.
-- **Remaining:** install on the **unlocked** device (the DDI won't mount while locked — a device-state
-  step, not a build issue), tap Start on the Edge tab, and confirm `/health` answers — the first
-  on-device runtime proof. Then GStreamer (`GST=1`) + the plugin registration; a foreground service on
-  Android / the honest short-lived window on iOS.
+- **RUNTIME PROVEN ON DEVICE (2026-07-25).** Installed on an iPhone 11, tapped Start → the Edge tab
+  shows **"Edge is up — /health answered ✓"** with `{"enrolled":false,"service":"sentinel-edge",
+  "status":"ok"}`. The real edge (tokio + axum + retina) **boots and serves HTTP inside iOS.** Two
+  fixes got it there: the unenrolled branch now serves `/health` (a phone boots without a box token),
+  and the listen address defaults to `127.0.0.1` on iOS (the app is on-device; iOS wants localhost).
+- **Next:** GStreamer (`GST=1 build-ios-lib.sh`) so it can decode a camera — the known iOS wrinkle is
+  **static plugin registration** (the monolithic framework links plugins statically; `gst_init` won't
+  auto-discover them, they need explicit registration). Then Phase 3 (paths/box identity on a phone)
+  and Android.
 
 ## Phase 3 — the edge's platform assumptions
 
