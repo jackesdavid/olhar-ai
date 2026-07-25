@@ -72,9 +72,11 @@ Foreground-only React Native screen; closing it stops all capture (the iOS-frien
 - The user enables a graph bound to the phone's `camera_ip`: `When Event(face_detected)` → (embed) →
   `RecognizeFace` → `StoreFace`, or a **seeded template** (memory `global-workflow-templates`,
   `seed_templates.rs`) named e.g. "Phone face enrollment". It runs only while the phone pushes.
-- Confirm the `When Event` camera filter matches the phone's `camera_ip` (arbitrary string is fine —
-  the event carries `camera`); the phone camera showing as a device (Phase 1 upsert) is what makes it
-  selectable in the builder.
+- The `When Event` camera filter matches the phone's `camera_ip` (arbitrary string is fine — the
+  event carries `camera`). Since there is no `devices` row in v1 (see Phase 1), the user binds by
+  typing/pasting the `camera_ip` the app shows them after self-register, or the template listens to
+  `face_detected` from any camera and the phone is the only producer while capturing. Builder
+  picklist selection is open-decision #3.
 
 ## Open decisions
 
