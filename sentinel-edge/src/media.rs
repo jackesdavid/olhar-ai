@@ -214,22 +214,62 @@ mod ios_static_plugins {
 pub fn record_camera(url: &str, secs: u64, out: &std::path::Path) -> Result<(u64, u64), String> {
     use gstreamer::prelude::*;
     init_gstreamer()?;
-    let path = out.to_string_lossy();
-    let desc = format!(
-        "rtspsrc location=\"{url}\" protocols=tcp latency=200 \
-         ! rtph264depay ! h264parse ! mp4mux faststart=true ! filesink location=\"{path}\""
-    );
-    let pipeline = gstreamer::parse::launch(&desc)
-        .map_err(|e| format!("parse: {e}"))?
-        .downcast::<gstreamer::Pipeline>()
-        .map_err(|_| "not a pipeline".to_string())?;
+
+    let make = |factory: &str| {
+        gstreamer::ElementFactory::make(factory)
+            .build()
+            .map_err(|_| format!("cannot create `{factory}`"))
+    };
+    let pipeline = gstreamer::Pipeline::new();
+    let src = gstreamer::ElementFactory::make("rtspsrc")
+        .property("location", url)
+        .property("latency", 200u32)
+        .property_from_str("protocols", "tcp")
+        .build()
+        .map_err(|_| "cannot create `rtspsrc`".to_string())?;
+    let depay = make("rtph264depay")?;
+    let parse = make("h264parse")?;
+    let mux = gstreamer::ElementFactory::make("mp4mux")
+        .property("faststart", true)
+        .build()
+        .map_err(|_| "cannot create `mp4mux`".to_string())?;
+    let sink = gstreamer::ElementFactory::make("filesink")
+        .property("location", out.to_string_lossy().as_ref())
+        .build()
+        .map_err(|_| "cannot create `filesink`".to_string())?;
+
+    pipeline
+        .add_many([&src, &depay, &parse, &mux, &sink])
+        .map_err(|e| format!("add: {e}"))?;
+    gstreamer::Element::link_many([&depay, &parse, &mux, &sink])
+        .map_err(|e| format!("link: {e}"))?;
+
+    // rtspsrc exposes a pad per stream only after it reads the SDP (video + maybe audio), so link
+    // the depay dynamically — the canonical, camera-agnostic way (a static parse link mis-negotiates
+    // caps, which is the `not-negotiated`/`No RTP format` error). Link the FIRST video RTP pad only.
+    let depay_weak = depay.downgrade();
+    src.connect_pad_added(move |_src, pad| {
+        let Some(depay) = depay_weak.upgrade() else { return };
+        let Some(sink_pad) = depay.static_pad("sink") else { return };
+        if sink_pad.is_linked() {
+            return;
+        }
+        let is_video = pad
+            .current_caps()
+            .and_then(|c| c.structure(0).and_then(|st| st.get::<String>("media").ok()))
+            .map(|m| m == "video")
+            .unwrap_or(true);
+        if is_video {
+            let _ = pad.link(&sink_pad);
+        }
+    });
+
     let start = std::time::Instant::now();
     pipeline
         .set_state(gstreamer::State::Playing)
         .map_err(|e| format!("play: {e}"))?;
 
     let bus = pipeline.bus().ok_or("no bus")?;
-    // Fail fast on an early error (bad creds, unreachable) instead of waiting out the full window.
     let deadline = std::time::Duration::from_secs(secs);
     while start.elapsed() < deadline {
         if let Some(msg) = bus.timed_pop(gstreamer::ClockTime::from_mseconds(200)) {
@@ -240,7 +280,6 @@ pub fn record_camera(url: &str, secs: u64, out: &std::path::Path) -> Result<(u64
         }
     }
 
-    // Clean stop: EOS lets mp4mux finalise the file (write the moov), else the clip is unplayable.
     pipeline.send_event(gstreamer::event::Eos::new());
     for msg in bus.iter_timed(gstreamer::ClockTime::from_seconds(10)) {
         match msg.view() {
