@@ -5,6 +5,7 @@ import { useState } from "react";
 import { ScrollView, StyleSheet } from "react-native";
 
 import { hasEmbeddedEdge, startEdge } from "sentinel-edge";
+import { restore as restoreLightEdge } from "@/lightEdge";
 import { Button, Card, Danger, Heading, Input, Muted, Strong } from "@/styles/ui";
 import { space } from "@/styles/theme";
 
@@ -58,14 +59,23 @@ export default function EdgeTest() {
     }
   }
 
-  async function recordCamera() {
+  async function recordCamera(upload: boolean) {
     setRec(null);
     setRecBusy(true);
     try {
-      const u = `${RECORD_URL}?url=${encodeURIComponent(rtsp)}&secs=8`;
-      const r = await fetch(u, { method: "POST", signal: AbortSignal.timeout(25000) });
+      // For the cloud path, pass the box token this phone got from self-register (#143) so control
+      // authenticates the clip manifest and mints the R2 upload URL.
+      let q = `url=${encodeURIComponent(rtsp)}&secs=8`;
+      if (upload) {
+        const edge = await restoreLightEdge();
+        if (!edge) throw new Error("no box token — open the Capture tab once to register this phone");
+        q += `&token=${encodeURIComponent(edge.boxToken)}`;
+      }
+      const r = await fetch(`${RECORD_URL}?${q}`, { method: "POST", signal: AbortSignal.timeout(90000) });
       const j = await r.json();
-      setRec(j.ok ? `Recorded ${fmtBytes(j.bytes)} in ${j.secs}s → ${j.path}` : `Failed — ${j.error}`);
+      if (!j.ok) setRec(`Failed — ${j.error}`);
+      else if (j.uploaded) setRec(`Recorded ${fmtBytes(j.bytes)} and uploaded to R2 ✓ (clip ${j.clip_id})`);
+      else setRec(`Recorded ${fmtBytes(j.bytes)} in ${j.secs}s → ${j.path}`);
     } catch (e) {
       setRec(`could not reach the edge: ${(e as Error).message}`);
     } finally {
@@ -74,16 +84,30 @@ export default function EdgeTest() {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.body}>
+    <ScrollView
+      contentContainerStyle={styles.body}
+      // The RTSP field sits mid-screen; without these the keyboard covers it while typing creds.
+      automaticallyAdjustKeyboardInsets
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="interactive"
+    >
       <Heading>Embedded edge</Heading>
-      <Muted>Boots the real sentinel-edge inside the app and checks its HTTP server (localhost:8788).</Muted>
+
+      {/* Record card first — it's the active test and its input must stay above the keyboard. */}
+      <Card>
+        <Strong>Record a camera</Strong>
+        <Muted>Dials the RTSP camera directly and records 8s on the phone. Free the camera first (stop the Mac edge).</Muted>
+        <Input value={rtsp} onChangeText={setRtsp} autoCapitalize="none" autoCorrect={false} placeholder="rtsp://…" />
+        {rec ? <Muted>{rec}</Muted> : null}
+      </Card>
+      <Button label="Record locally (8s)" onPress={() => recordCamera(false)} busy={recBusy} disabled={status !== "up"} />
+      <Button label="Record + upload to R2" onPress={() => recordCamera(true)} busy={recBusy} disabled={status !== "up"} />
 
       <Card>
         <Strong>{label(status)}</Strong>
         {health ? <Muted>{health}</Muted> : null}
         {error ? <Danger>{error}</Danger> : null}
       </Card>
-
       <Button label="Start embedded edge" onPress={boot} busy={status === "starting" || status === "polling"} />
 
       <Card>
@@ -92,14 +116,6 @@ export default function EdgeTest() {
         {gst ? <Muted>{gst}</Muted> : null}
       </Card>
       <Button label="Test GStreamer" onPress={testGst} busy={gstBusy} disabled={status !== "up"} />
-
-      <Card>
-        <Strong>Record a camera</Strong>
-        <Muted>Dials the RTSP camera directly and records 8s on the phone. Free the camera first (stop the Mac edge).</Muted>
-        <Input value={rtsp} onChangeText={setRtsp} autoCapitalize="none" autoCorrect={false} placeholder="rtsp://…" />
-        {rec ? <Muted>{rec}</Muted> : null}
-      </Card>
-      <Button label="Record camera (8s)" onPress={recordCamera} busy={recBusy} disabled={status !== "up"} />
     </ScrollView>
   );
 }

@@ -191,10 +191,14 @@ pub struct RecordQuery {
     url: String,
     #[serde(default = "default_secs")]
     secs: u64,
+    /// When present, the clip is uploaded to R2 via control (card #144); the box token authenticates
+    /// the manifest push. Absent → record locally only.
+    #[serde(default)]
+    token: Option<String>,
 }
 fn default_secs() -> u64 { 8 }
 
-pub async fn dev_record(Query(q): Query<RecordQuery>) -> Response {
+pub async fn dev_record(State(control_url): State<String>, Query(q): Query<RecordQuery>) -> Response {
     #[cfg(feature = "gst-linked")]
     {
         // A writable path on any platform — on iOS this is the app's tmp dir.
@@ -202,14 +206,21 @@ pub async fn dev_record(Query(q): Query<RecordQuery>) -> Response {
         let out2 = out.clone();
         let url = q.url.clone();
         let secs = q.secs.clamp(2, 30);
-        let res = tokio::task::spawn_blocking(move || crate::media::record_camera(&url, secs, &out2))
-            .await
-            .map_err(|e| format!("task: {e}"))
-            .and_then(|r| r);
+        let token = q.token.clone();
+        let res = tokio::task::spawn_blocking(move || match token {
+            Some(t) if !t.trim().is_empty() =>
+                crate::media::record_and_upload(&url, secs, &out2, t.trim(), &control_url),
+            _ => crate::media::record_camera(&url, secs, &out2)
+                .map(|(bytes, secs)| serde_json::json!({ "bytes": bytes, "secs": secs, "uploaded": false })),
+        })
+        .await
+        .map_err(|e| format!("task: {e}"))
+        .and_then(|r| r);
         match res {
-            Ok((bytes, elapsed)) => axum::Json(serde_json::json!({
-                "ok": true, "path": out.to_string_lossy(), "bytes": bytes, "secs": elapsed
-            })).into_response(),
+            Ok(mut v) => {
+                if let Some(o) = v.as_object_mut() { o.insert("ok".into(), true.into()); o.insert("path".into(), out.to_string_lossy().into()); }
+                axum::Json(v).into_response()
+            }
             Err(e) => axum::Json(serde_json::json!({ "ok": false, "error": e })).into_response(),
         }
     }
