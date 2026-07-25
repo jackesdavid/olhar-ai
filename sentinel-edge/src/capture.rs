@@ -227,7 +227,7 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
     use gstreamer::prelude::*;
     use gstreamer_app as gst_app;
 
-    gst::init().map_err(|e| format!("gst init: {e}"))?; // idempotent
+    crate::media::init_gstreamer()?; // init + iOS static plugin registration
     // The camera's own URL when we have it; go2rtc's re-serve only as a fallback for a device whose
     // RTSP never resolved. Owning the dial is what lets the sidecar go away.
     let url = url.map(str::to_string).unwrap_or_else(|| stream_url(ip, hd));

@@ -117,7 +117,7 @@ pub fn hw_decoder() -> &'static str {
 #[cfg(feature = "gst-linked")]
 pub fn gst_selftest() -> Result<(), String> {
     use gstreamer as gst;
-    gst::init().map_err(|e| format!("gst init: {e}"))?;
+    init_gstreamer()?;
 
     // Exactly what `capture.rs`'s pipeline instantiates. Keep in step with it.
     let required = [
@@ -147,4 +147,61 @@ pub fn gst_selftest() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Initialise GStreamer, registering the statically-linked plugins on platforms where `gst_init`
+/// cannot discover them itself (card #144). On the Mac/Linux/Jetson the plugins are separate dylibs
+/// that `gst_init` scans and loads; **on iOS they are statically linked into one framework**, so
+/// each plugin our pipelines use must be registered by hand — otherwise `gst_init` succeeds but
+/// `rtspsrc`, `mp4mux`, … simply do not exist. Idempotent; call this instead of `gst::init()`.
+#[cfg(feature = "gst-linked")]
+pub fn init_gstreamer() -> Result<(), String> {
+    gstreamer::init().map_err(|e| format!("gst init: {e}"))?;
+    #[cfg(target_os = "ios")]
+    ios_static_plugins::register_once();
+    Ok(())
+}
+
+/// The 13 plugins `capture.rs`/`gst_mse.rs` instantiate, registered from their statically-linked
+/// `gst_plugin_<name>_register` symbols in the iOS GStreamer framework. Keep this list in step with
+/// the pipeline (and with the Mac `.pkg`'s bundled-plugin list).
+#[cfg(all(feature = "gst-linked", target_os = "ios"))]
+mod ios_static_plugins {
+    use std::sync::Once;
+
+    // gboolean gst_plugin_<name>_register(void) — present in GStreamer.framework (verified with nm).
+    extern "C" {
+        fn gst_plugin_coreelements_register() -> i32;
+        fn gst_plugin_rtsp_register() -> i32;
+        fn gst_plugin_rtp_register() -> i32;
+        fn gst_plugin_isomp4_register() -> i32;
+        fn gst_plugin_jpeg_register() -> i32;
+        fn gst_plugin_playback_register() -> i32;
+        fn gst_plugin_videoconvertscale_register() -> i32;
+        fn gst_plugin_videoparsersbad_register() -> i32;
+        fn gst_plugin_videorate_register() -> i32;
+        fn gst_plugin_typefindfunctions_register() -> i32;
+        fn gst_plugin_autodetect_register() -> i32;
+        fn gst_plugin_app_register() -> i32;
+        fn gst_plugin_applemedia_register() -> i32;
+    }
+
+    pub fn register_once() {
+        static REGISTERED: Once = Once::new();
+        REGISTERED.call_once(|| unsafe {
+            gst_plugin_coreelements_register();
+            gst_plugin_rtsp_register();
+            gst_plugin_rtp_register();
+            gst_plugin_isomp4_register();
+            gst_plugin_jpeg_register();
+            gst_plugin_playback_register();
+            gst_plugin_videoconvertscale_register();
+            gst_plugin_videoparsersbad_register();
+            gst_plugin_videorate_register();
+            gst_plugin_typefindfunctions_register();
+            gst_plugin_autodetect_register();
+            gst_plugin_app_register();
+            gst_plugin_applemedia_register();
+        });
+    }
 }

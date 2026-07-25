@@ -30,7 +30,7 @@ pub struct GstSink {
 
 /// Build and start `appsrc ! h264parse ! mp4mux ! filesink` for `output`.
 pub fn start(output: &std::path::Path) -> Result<(GstMuxer, GstSink), String> {
-    gst::init().map_err(|e| format!("gst init: {e}"))?;
+    crate::media::init_gstreamer()?;
     let path = output.to_string_lossy();
     // `format=time` is what lets our per-buffer PTS be honoured; faststart puts the moov up front so
     // the clip is seekable/streamable, matching the ffmpeg `+faststart` behaviour it replaces.
