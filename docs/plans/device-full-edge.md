@@ -98,9 +98,18 @@ the `.a` and bundles the GStreamer framework — and repeating the link for Andr
      to the SDK, resolved one system-framework layer at a time: VideoToolbox/CoreMedia/CoreVideo/
      AudioToolbox/AVFoundation/MediaToolbox/… + `iconv` + `AssetsLibrary` (applemedia's `iosassetsrc`
      references `ALAssetsLibrary`). The iOS framework is a static `ar` archive, so no embedding.
-- **Next:** point the embedded edge at a real LAN RTSP camera (the phone is on the same Wi-Fi, so
-  `rtspsrc` reaches it) — Phase 3 (paths/box identity on a phone) + Phase 4 (register as a box). Then
-  Android (NDK + GStreamer Android SDK, same recipe).
+- **REAL CAMERA RECORDED ON THE PHONE (2026-07-25).** With the Mac edge stopped (to free the
+  camera's single RTSP session), the iPhone dialled `rtsp://…@192.168.0.7:554/stream2` **directly**,
+  decoded it, and muxed an MP4 into its sandbox — "Recorded 114 KB in 8s → …/tmp/phone-clip.mp4".
+  **The phone ingests + decodes + records a real LAN camera on-device.** Two fixes beyond the boot:
+  `rtspsrc`'s dynamic pad is linked programmatically on `pad-added` (a static parse link
+  mis-negotiates), and — the decisive one — the **`rtpmanager`** plugin (rtspsrc's RTP session:
+  rtpbin/jitterbuffer) was missing from the iOS static registration, so RTP was never set up. The Mac
+  reproduced the pipeline working in seconds, isolating it as a plugin-registration gap, not the
+  pipeline. `POST /dev/record` + the Edge tab's Record card drive it.
+- **Next:** upload the clip to **R2** — outbound HTTPS to control for a presigned URL, then PUT (NO
+  tailnet needed). Then live (phone pushes the stream outbound to the gateway), phone box identity,
+  and Android.
 
 ## Phase 3 — the edge's platform assumptions
 
