@@ -31,10 +31,19 @@ code, same behaviour, everywhere — which is exactly the operator's parity requ
   graph (`retina` RTSP, `tract` detection, `axum` HTTP, `image`, `sysinfo`, MOG2) cross-compiles to
   iOS arm64. This is the big de-risk: the Rust side of a phone edge is real; **GStreamer linking is
   the only remaining unknown.**
-- **GStreamer for iOS**: **not installed** — there is no `GStreamer.framework`, only the Homebrew Mac
-  build. iOS needs the official **GStreamer iOS SDK** (~1 GB from gstreamer.freedesktop.org, a
-  `.framework` with the same plugins). Its Android twin is the **GStreamer Android SDK** (`.aar`/NDK).
-  These are the load-bearing external dependency and the big download — pull deliberately.
+- **GStreamer iOS link: ✅ (2026-07-25).** Installed the **GStreamer iOS SDK 1.28.5** (`.pkg`, 484 MB,
+  matches the Mac's 1.28.5) → `~/Library/Developer/GStreamer/iPhone.sdk/GStreamer.framework` (universal:
+  arm64 = platform 2 = **iOS device**, x86_64 = simulator). The edge **cross-compiles AND links with
+  `gst-linked` for `aarch64-apple-ios`** — a 113 MB arm64 iOS binary, GStreamer statically pulled in.
+  **The whole media stack builds for the phone.** How it was made to link (reusable):
+  1. The iOS SDK is a **monolithic framework, no `.pc` files** (built for Xcode, not pkg-config).
+     Synthesised 8 `.pc` files (`glib/gobject/gio/gmodule/gstreamer/-base/-app`) with
+     `Cflags: -I<framework>/Headers`, pointed at via `PKG_CONFIG_PATH` + `PKG_CONFIG_ALLOW_CROSS=1`.
+  2. **`system-deps` does not forward `-framework` from a `.pc`** — the compile found headers but the
+     final link had undefined `_gst_*` symbols. Forcing the framework link
+     (`RUSTFLAGS="-L framework=<iPhone.sdk> -l framework=GStreamer"`, i.e. a
+     `cargo:rustc-link-lib=framework=GStreamer` in a build script) resolved every symbol.
+  The Android twin is the **GStreamer Android SDK** (`.aar`/NDK) — same pattern expected.
 - **Edge deps**: `retina` (RTSP, pure Rust), `tract` (ML, pure Rust), `opencv` (test-only, optional),
   `gstreamer` (optional, the linked path). No OpenSSL (rustls). Encouraging for cross-compile.
 
@@ -44,16 +53,15 @@ The `stage4`-equivalent: prove the edge **compiles and links** for the phone bef
 
 1. **Pure-Rust cross-compile** to `aarch64-apple-ios` (no gst) — **✅ done, 3m04s, clean.** The dep
    graph compiles for iOS arm64.
-2. **GStreamer iOS SDK**: install the `.framework`, point `pkg-config` / the `gstreamer-rs` build at
-   it, and cross-compile `sentinel-edge` **with `gst-linked`** for iOS. The known risk mirrors the
-   Mac `.pkg`: GStreamer's own dylibs/plugins must be bundled and their load paths rewritten for the
-   app sandbox.
+2. **GStreamer iOS link — ✅ done** (see feasibility above). `sentinel-edge` + `gst-linked` links for
+   `aarch64-apple-ios`. The synthetic `.pc` + `-l framework=GStreamer` recipe is captured there; the
+   proper home for the link flag is a small `build.rs` in `sentinel-edge` gated on the iOS target.
 3. **`crate-type = ["staticlib"]`** (a lib target beside the bin) so the app can link it; a C ABI
-   `start_edge()/stop_edge()` entry point.
+   `start_edge()/stop_edge()` entry point. *(next)*
 4. Repeat for `aarch64-linux-android` + the GStreamer Android SDK.
 
-**Gate:** if the edge links with GStreamer on iOS arm64, the rest is integration; if it cannot, that
-finding reshapes the whole card (fall back to a slimmer phone-specific ingest).
+**Gate: PASSED for iOS.** The edge links with GStreamer on iOS arm64 — the rest is integration. Only
+the Android link and the app plumbing remain unproven.
 
 ## Phase 2 — native module: start/stop the edge from the app
 
