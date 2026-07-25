@@ -56,12 +56,18 @@ The `stage4`-equivalent: prove the edge **compiles and links** for the phone bef
 2. **GStreamer iOS link — ✅ done** (see feasibility above). `sentinel-edge` + `gst-linked` links for
    `aarch64-apple-ios`. The synthetic `.pc` + `-l framework=GStreamer` recipe is captured there; the
    proper home for the link flag is a small `build.rs` in `sentinel-edge` gated on the iOS target.
-3. **`crate-type = ["staticlib"]`** (a lib target beside the bin) so the app can link it; a C ABI
-   `start_edge()/stop_edge()` entry point. *(next)*
+3. **`crate-type = ["staticlib"]` + C ABI — ✅ done (2026-07-25).** The edge is now a lib + a thin
+   bin: `main.rs` is a 4-line delegator, everything moved to `lib.rs` (the crate root), and
+   `Cargo.toml` declares `crate-type = ["staticlib", "rlib"]`. Added `#[no_mangle] start_edge()`
+   (boots `run()` on a background thread, idempotent) and `stop_edge()`. Verified: the Mac bin still
+   builds; `libsentinel_edge.a` builds for `aarch64-apple-ios` with `gst-linked`, and `nm` shows
+   `_start_edge` / `_stop_edge` as exported text in the arm64 slice. The `.a` is 939 MB in **debug**
+   (static GStreamer, unstripped) — a release+strip build is the shippable size.
 4. Repeat for `aarch64-linux-android` + the GStreamer Android SDK.
 
-**Gate: PASSED for iOS.** The edge links with GStreamer on iOS arm64 — the rest is integration. Only
-the Android link and the app plumbing remain unproven.
+**Gate: PASSED for iOS, and the library boundary exists.** `libsentinel_edge.a` (arm64 iOS, GStreamer
+linked) exports `start_edge`/`stop_edge`. What remains is app plumbing — the native module that links
+the `.a` and bundles the GStreamer framework — and repeating the link for Android.
 
 ## Phase 2 — native module: start/stop the edge from the app
 
