@@ -150,14 +150,19 @@
   function hwLabel(m: string): string {
     return { vaapi: "VAAPI", qsv: "QuickSync", cuda: "CUDA", videotoolbox: "VideoToolbox", v4l2m2m: "V4L2" }[m] ?? m;
   }
-  // Boxes whose Live path can't work: tailnet offline or not serving, or ffmpeg missing.
+  // The box has no working frame-grab backend at all — ffmpeg absent AND GStreamer absent. A
+  // GStreamer box (e.g. the iOS edge, #144) needs no ffmpeg, so its absence is not a defect.
+  function mediaMissing(b: Box): boolean {
+    return b.ffmpeg_ok === false && !b.gstreamer_ok;
+  }
+  // Boxes whose Live path can't work: tailnet offline or not serving, or no media backend.
   const unhealthy = $derived(
-    list.filter((b) => b.tailscale_state === "offline" || b.tailscale_state === "up" || b.ffmpeg_ok === false),
+    list.filter((b) => b.tailscale_state === "offline" || b.tailscale_state === "up" || mediaMissing(b)),
   );
   function healthHint(b: Box): string {
     if (b.tailscale_state === "offline") return `${b.name}: offline on the tailnet — Live can't reach it (check Tailscale on the box).`;
     if (b.tailscale_state === "up") return `${b.name}: on the tailnet but not serving go2rtc yet — try Restart.`;
-    if (b.ffmpeg_ok === false) return `${b.name}: ffmpeg missing — snapshots / GetCurrentFrame will fail (install ffmpeg).`;
+    if (mediaMissing(b)) return `${b.name}: no media backend — snapshots / GetCurrentFrame will fail (install ffmpeg or GStreamer).`;
     return "";
   }
 
@@ -351,9 +356,9 @@
                     <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium {tsClass(b.tailscale_state)}" title="Tailscale state — go2rtc must be 'serving' over the tailnet for Live to work">
                       {tsLabel(b.tailscale_state)}
                     </span>
-                    {#if b.ffmpeg_ok === false}
-                      <span class="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive" title="ffmpeg missing — snapshots / GetCurrentFrame will fail">
-                        no ffmpeg
+                    {#if mediaMissing(b)}
+                      <span class="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive" title="no media backend — snapshots / GetCurrentFrame will fail">
+                        no media backend
                       </span>
                     {/if}
                   </span>

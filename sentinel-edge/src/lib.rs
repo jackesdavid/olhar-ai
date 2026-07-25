@@ -47,6 +47,7 @@ use state::AppState;
 /// the binary, and restarts it, so the service manager relaunches us on the new build.
 /// This means the UI Restart button doubles as an update trigger: restart → startup →
 /// version check → auto-update. No more bootstrapping problem between releases.
+#[cfg(not(target_os = "ios"))] // the embedded iOS edge is updated with the app, not self-updated
 fn maybe_self_update(control_url: &str) {
     let current = env!("CARGO_PKG_VERSION");
     let url = format!("{control_url}/edge-latest");
@@ -178,10 +179,15 @@ pub fn run() {
     // Auto-update: if control reports a newer version, run install.sh --update and let
     // the service manager relaunch us with the new binary. This means any restart
     // (UI button, crash, deploy) automatically picks up the latest edge release.
+    // Appliance-only: iOS can't run install.sh, and the phone updates via the App Store, not this.
+    #[cfg(not(target_os = "ios"))]
     maybe_self_update(&AppState::control_url());
 
     // Join the tailnet + expose go2rtc over it (opt-in via TS_AUTHKEY) FIRST, so the
     // detected EDGE_PUBLIC_HOST is reported to control on the very first camera pull.
+    // The phone reaches control outbound over HTTPS and its cameras over the LAN — no tailnet, and no
+    // `tailscale` binary to drive (card #144). The appliance still joins the tailnet here.
+    #[cfg(not(target_os = "ios"))]
     tailscale::ensure_up();
 
     // Config-light boot: pull the camera list from the control plane (cache fallback).
@@ -398,12 +404,36 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static EDGE_RUNNING: AtomicBool = AtomicBool::new(false);
 
-/// Boot the edge on a background thread. Idempotent — a second call while running is a no-op.
+/// Boot the edge on a background thread with the phone's identity. `box_token` (from self-register,
+/// #143) makes the edge **enrolled** so `run()` takes the full path — pull cameras, record, report
+/// health — instead of the pairing stub; `control_url` is the cloud it talks to (the embedded edge
+/// has no env). Both may be empty/null to boot unenrolled (the earlier demo mode). Idempotent.
+///
+/// # Safety
+/// `box_token` and `control_url` must be null or valid NUL-terminated UTF-8 C strings.
 #[no_mangle]
-pub extern "C" fn start_edge() {
+pub unsafe extern "C" fn start_edge(
+    box_token: *const std::os::raw::c_char,
+    control_url: *const std::os::raw::c_char,
+) {
     if EDGE_RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
+    let cstr = |p: *const std::os::raw::c_char| -> Option<String> {
+        if p.is_null() {
+            return None;
+        }
+        std::ffi::CStr::from_ptr(p).to_str().ok().map(str::to_string).filter(|s| !s.trim().is_empty())
+    };
+    if let Some(t) = cstr(box_token) {
+        std::env::set_var("BOX_TOKEN", t.trim());
+    }
+    if let Some(u) = cstr(control_url) {
+        std::env::set_var("CONTROL_URL", u.trim_end_matches('/'));
+    }
+    // The phone always runs the linked-GStreamer media path (no go2rtc/ffmpeg to spawn on iOS).
+    std::env::set_var("EDGE_MEDIA_BACKEND", "gstreamer-linked");
+
     std::thread::spawn(|| {
         run();
         EDGE_RUNNING.store(false, Ordering::SeqCst);

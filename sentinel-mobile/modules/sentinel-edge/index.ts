@@ -7,10 +7,11 @@ const Native = requireOptionalNativeModule("SentinelEdge");
 /** Is the embedded edge available (a device build that linked libsentinel_edge.a)? */
 export const hasEmbeddedEdge = Native != null;
 
-/** Boot the embedded edge — it binds its HTTP server on localhost:8788, like an appliance. */
-export async function startEdge(): Promise<void> {
+/** Boot the embedded edge ENROLLED with this phone's box token + control URL (#143/#144), so it runs
+ *  the full edge — pulls its cameras, records, reports health — and binds localhost:8788. */
+export async function startEdge(boxToken: string, controlUrl: string): Promise<void> {
   if (!Native) throw new Error("embedded edge not available in this build");
-  await Native.startEdge();
+  await Native.startEdge(boxToken, controlUrl);
 }
 
 /** Request the embedded edge to stop. */
