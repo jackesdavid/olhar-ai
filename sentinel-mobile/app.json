@@ -22,7 +22,13 @@
       "expo-secure-store",
       "expo-notifications",
       "expo-status-bar",
-      "expo-video"
+      "expo-video",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Olhar AI uses the camera to capture faces while you are on the capture screen."
+        }
+      ]
     ],
     "extra": {
       "router": {},
