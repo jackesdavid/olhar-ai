@@ -195,6 +195,10 @@ pub struct RecordQuery {
     /// the manifest push. Absent → record locally only.
     #[serde(default)]
     token: Option<String>,
+    /// The control URL to reach. The embedded phone edge has no CONTROL_URL env, so it defaults to
+    /// the dev localhost — the app passes its real one here.
+    #[serde(default)]
+    control: Option<String>,
 }
 fn default_secs() -> u64 { 8 }
 
@@ -207,9 +211,10 @@ pub async fn dev_record(State(control_url): State<String>, Query(q): Query<Recor
         let url = q.url.clone();
         let secs = q.secs.clamp(2, 30);
         let token = q.token.clone();
+        let control = q.control.clone().filter(|c| !c.trim().is_empty()).unwrap_or(control_url);
         let res = tokio::task::spawn_blocking(move || match token {
             Some(t) if !t.trim().is_empty() =>
-                crate::media::record_and_upload(&url, secs, &out2, t.trim(), &control_url),
+                crate::media::record_and_upload(&url, secs, &out2, t.trim(), control.trim_end_matches('/')),
             _ => crate::media::record_camera(&url, secs, &out2)
                 .map(|(bytes, secs)| serde_json::json!({ "bytes": bytes, "secs": secs, "uploaded": false })),
         })

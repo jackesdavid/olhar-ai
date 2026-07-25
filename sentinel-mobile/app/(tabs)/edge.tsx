@@ -6,6 +6,7 @@ import { ScrollView, StyleSheet } from "react-native";
 
 import { hasEmbeddedEdge, startEdge } from "sentinel-edge";
 import { ensureRegistered } from "@/lightEdge";
+import { CONTROL_BASE } from "@/config";
 import { Button, Card, Danger, Heading, Input, Muted, Strong } from "@/styles/ui";
 import { space } from "@/styles/theme";
 
@@ -71,7 +72,7 @@ export default function EdgeTest() {
         // no need to visit the Capture tab first.
         setRec("registering this phone…");
         const edge = await ensureRegistered("iPhone edge");
-        q += `&token=${encodeURIComponent(edge.boxToken)}`;
+        q += `&token=${encodeURIComponent(edge.boxToken)}&control=${encodeURIComponent(CONTROL_BASE)}`;
       }
       const r = await fetch(`${RECORD_URL}?${q}`, { method: "POST", signal: AbortSignal.timeout(90000) });
       const j = await r.json();
