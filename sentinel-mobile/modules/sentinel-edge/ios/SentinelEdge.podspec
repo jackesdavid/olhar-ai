@@ -19,8 +19,13 @@ Pod::Spec.new do |s|
 
   # System libraries the Rust std + deps reference on iOS. If a device link fails with an undefined
   # symbol, the missing framework/lib is named there — add it here.
-  s.frameworks = 'Security', 'SystemConfiguration', 'CoreFoundation', 'GStreamer'
-  s.libraries  = 'c++', 'resolv'
+  # GStreamer + the system frameworks its plugins reference. VideoToolbox/CoreMedia/CoreVideo/
+  # AudioToolbox/AVFoundation are what the applemedia plugin (HW decode/encode) needs; the rest is the
+  # GStreamer-iOS standard set. Added as a block to avoid iterating one missing symbol at a time.
+  s.frameworks = 'Security', 'SystemConfiguration', 'CoreFoundation', 'GStreamer',
+                 'VideoToolbox', 'CoreMedia', 'CoreVideo', 'AudioToolbox', 'AVFoundation',
+                 'CoreGraphics', 'QuartzCore', 'OpenGLES', 'MediaToolbox', 'CoreAudio', 'AssetsLibrary'
+  s.libraries  = 'c++', 'resolv', 'iconv'
 
   # The GStreamer iOS framework is a STATIC ar archive (linked into the app binary, not embedded),
   # so the app just needs -framework GStreamer + where to find it. It lives in the SDK, not a standard
