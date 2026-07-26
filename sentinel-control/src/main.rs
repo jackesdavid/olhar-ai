@@ -112,7 +112,8 @@ impl AppState {
 }
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Structured logging → Datadog (card #146): every log ships with service:control + span context.
+    app_core::datadog::init_tracing("control");
 
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://sentinel:sentinel@localhost/sentinel".to_string());

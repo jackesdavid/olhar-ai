@@ -3,7 +3,9 @@
 **Board card:** #146 structured logs (tracing → Datadog; tenant_id + edge_id/name; searchable fields)
 **Goal:** Every log is **structured JSON** with each datum its own searchable field, and carries
 **tenant_id** and — for edge logs — **edge_id + edge_name**, injected in ONE central place, not
-per call site. So `capture[192.168.10.101]: mode=preview 640x480 grab=0.0ms decode=8.5ms 40 frames
+per call site. **Every service ships to Datadog** — control, flow, **gateway**, edge — plus **app
+(frontend) errors** — not just the edge relay + `platform_logs` (which is all #145 moved). (The
+in-app logs view is already removed — #145.) So `capture[192.168.10.101]: mode=preview 640x480 grab=0.0ms decode=8.5ms 40 frames
 (4.0 fps)` becomes `{camera_ip, mode, width, height, grab_ms, decode_ms, frames, fps, tenant, edge_id,
 edge_name, …}` in Datadog, filterable on any of them.
 
@@ -66,6 +68,17 @@ get converted to structured fields incrementally.
    attributes (searchable via `@camera_ip:`).
 3. **Volume** — structured events are bigger than lines; confirm the Datadog free-tier ingestion cap
    with level-filtering (ship `info`+ from the edge; `debug` only when a box is being debugged).
+
+## Phase 6 — every service + app errors → Datadog
+- The tracing subscriber captures ALL events (via `tracing-log`), so once installed in **control,
+  flow, edge** their entire log output (info + **errors**) ships to Datadog with `service:<name>` —
+  not just the `platform_logs` subset. Replaces `env_logger::init()` in each.
+- **Gateway** is standalone + has no `app-core`/DB by design. Give it a **minimal copy** of the
+  Datadog tracing layer (it already has `reqwest` + `tokio`) so `service:gateway` logs ship too —
+  don't pull `app-core` into it.
+- **App (frontend) errors:** a global `window.onerror`/unhandledrejection handler POSTs to a control
+  endpoint (`POST /logs/client`, session-authed) that ships to Datadog as `service:app` — the DD key
+  stays server-side (no Browser-Logs SDK key in the bundle).
 
 ## Out of scope (v1)
 - Converting **every** `log::*` call site to structured fields at once — the `tracing-log` bridge

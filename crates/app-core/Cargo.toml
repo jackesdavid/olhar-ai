@@ -49,6 +49,12 @@ sqlx = { version = "0.8", default-features = false, features = [
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 log = "0.4"
+# Structured logging (card #146): tracing events carry typed fields + span context (tenant, edge),
+# which the Datadog layer ships as searchable JSON. tracing-log bridges existing `log::*` calls so
+# nothing breaks during the migration. All pure-Rust — no edge bloat.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-log = "0.2"
 # S3-compatible object store (minio) for notification media (snapshot JPEGs, recording mp4s).
 # Blocking API + rustls (pure-Rust, no OpenSSL) — called from the sync enqueue/consumer paths.
 rust-s3 = { version = "0.35", default-features = false, features = ["blocking", "tokio-rustls-tls"] }
