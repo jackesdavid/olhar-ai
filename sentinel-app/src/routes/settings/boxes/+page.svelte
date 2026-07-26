@@ -10,7 +10,6 @@
   import EmptyState from "$lib/components/empty-state.svelte";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
   import ArrowUpCircle from "@lucide/svelte/icons/arrow-up-circle";
-  import ScrollText from "@lucide/svelte/icons/scroll-text";
   import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
 
   import * as Card from "$lib/components/ui/card";
@@ -340,9 +339,6 @@
                   {/if}
                 </td>
                 <td class="px-3 py-2 text-right">
-                  <Button variant="ghost" size="icon" title="View logs" onclick={() => goto(`/logs?box=${b.id}`)}>
-                    <ScrollText class="size-4" />
-                  </Button>
                   <Button variant="ghost" size="icon" title="Restart the box" disabled={restartingId === b.id} onclick={() => restartBox(b)}>
                     {#if restartingId === b.id}<Busy />{:else}<RotateCcw class="size-4" />{/if}
                   </Button>

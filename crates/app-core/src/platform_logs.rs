@@ -29,11 +29,39 @@ pub struct PlatformLog {
     pub payload:     Option<Value>,
 }
 
+/// A platform log as a Datadog log record (card #145) — the SQL filter columns become `ddtags` so
+/// Datadog's facets replace the `WHERE module=/entity_id=/level=` queries the in-DB viewer used.
+fn to_dd_record(l: &PlatformLog) -> Value {
+    let mut tags = format!("tenant:{},module:{}", l.tenant_id, l.module);
+    if let Some(et) = l.entity_type {
+        tags.push_str(&format!(",entity_type:{et}"));
+    }
+    if let Some(eid) = &l.entity_id {
+        tags.push_str(&format!(",entity_id:{eid}"));
+    }
+    serde_json::json!({
+        "ddsource": "sentinel",
+        "service": l.module,          // workflow | edge | presence | device — facet by service
+        "ddtags": tags,
+        "level": l.level,
+        "message": l.message,
+        "trace_id": l.trace_id.map(|t| t.to_string()),
+        "entity_id": l.entity_id,
+        "entity_type": l.entity_type,
+        "payload": l.payload,
+    })
+}
+
 // ---- sync path (sentinel-flow engine threads) --------------------------------
 
 /// Insert a single log entry on the calling (blocking) thread. Errors are logged
 /// and swallowed — log writes must never crash the caller.
 pub fn insert_log_sync(db: &Db, log: PlatformLog) {
+    // Card #145: ship to Datadog when configured, off Postgres.
+    if crate::datadog::configured() {
+        crate::datadog::ship_blocking(std::slice::from_ref(&to_dd_record(&log)));
+        return;
+    }
     let pool = db.pool();
     let now = crate::timeutil::now_rfc3339();
     let res: Result<(), sqlx::Error> = db.block(async move {
@@ -63,6 +91,12 @@ pub fn insert_log_sync(db: &Db, log: PlatformLog) {
 /// Batch-insert log entries on the calling (blocking) thread. No-op on empty slice.
 pub fn insert_logs_sync(db: &Db, logs: Vec<PlatformLog>) {
     if logs.is_empty() {
+        return;
+    }
+    // Card #145: ship to Datadog when configured, off Postgres.
+    if crate::datadog::configured() {
+        let records: Vec<Value> = logs.iter().map(to_dd_record).collect();
+        crate::datadog::ship_blocking(&records);
         return;
     }
     let pool = db.pool();
@@ -145,6 +179,13 @@ async fn flush(batch: &mut Vec<PlatformLog>, pool: &PgPool) {
         return;
     }
     let to_insert: Vec<PlatformLog> = batch.drain(..).collect();
+    // Card #145: ship to Datadog when configured, off Postgres. ureq is blocking, so hand the batch
+    // to a blocking thread rather than stalling the drain task's runtime worker.
+    if crate::datadog::configured() {
+        let records: Vec<Value> = to_insert.iter().map(to_dd_record).collect();
+        tokio::task::spawn_blocking(move || crate::datadog::ship_blocking(&records));
+        return;
+    }
     let now = crate::timeutil::now_rfc3339();
     let mut qb = sqlx::QueryBuilder::new(
         "INSERT INTO platform_logs \

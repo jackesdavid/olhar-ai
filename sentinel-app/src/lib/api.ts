@@ -134,11 +134,7 @@ export const boxes = {
   /** Pairing progress for the install view (card #85): `claimed` = the code was redeemed, `online`
    *  = the box has checked in since. Lets the UI show "code accepted, starting up…" before online. */
   pairingStatus: (id: string) => api.get<{ claimed: boolean; online: boolean }>(`/boxes/${id}/pairing-status`),
-  /** Recent persisted log tail for a box (oldest-first). */
-  logs: (id: string, limit = 500) => api.get<BoxLog[]>(`/boxes/${id}/logs?limit=${limit}`),
-  /** EventSource URL for a box's live log tail (token in query — EventSource can't set headers). */
-  logsStreamUrl: (id: string) =>
-    `${API_BASE}/boxes/${encodeURIComponent(id)}/logs/stream?token=${encodeURIComponent(auth.token ?? "")}`,
+  // Box logs are shipped to Datadog now (card #145) — no in-app logs view.
   // Partial, not RecordingConfig: the edge fills in any missing key with its own default
   // (serde `#[serde(default)]` per field), so a caller that only wants to change ONE knob (e.g.
   // media_backend, card #138) can spread the box's existing `recording_config` and override just

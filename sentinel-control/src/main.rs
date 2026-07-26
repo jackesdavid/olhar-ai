@@ -57,9 +57,6 @@ pub struct AppState {
     pub pending_rescan: Arc<Mutex<std::collections::HashSet<uuid::Uuid>>>,
     // pending_restart / pending_update are now persisted in tenant_boxes (migration 0031)
     // so they survive control restarts. See store::set_box_command / take_box_commands.
-    /// Live edge-log fan-out: the edge pushes lines to /config/logs, control persists +
-    /// re-broadcasts here; the per-box log SSE relay subscribes and filters by tenant+box.
-    pub log_bus: tokio::sync::broadcast::Sender<String>,
     /// Unified platform audit log queue (async, fire-and-forget). All modules push here;
     /// the drain task batch-inserts into platform_logs every 500 ms.
     pub log_queue: app_core::platform_logs::LogQueue,
@@ -217,7 +214,6 @@ fn main() {
         let pending_creds = Arc::new(Mutex::new(HashMap::new()));
         let notifiers = Arc::new(Mutex::new(HashMap::new()));
         let pending_rescan = Arc::new(Mutex::new(std::collections::HashSet::new()));
-        let (log_bus, _) = tokio::sync::broadcast::channel::<String>(1024);
         let log_queue = app_core::platform_logs::LogQueue::spawn(pool.clone());
         let event_queue = app_core::events::EventQueue::spawn(pool.clone());
 
@@ -245,7 +241,7 @@ fn main() {
 
         let state = AppState {
             db, pool, jwt_secret, google, oauth_states, tailscale, http, pending_creds, notifiers,
-            pending_rescan, log_bus, log_queue, event_queue, redis_url, redis, edge_streams,
+            pending_rescan, log_queue, event_queue, redis_url, redis, edge_streams,
         };
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {

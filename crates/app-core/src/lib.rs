@@ -12,6 +12,7 @@ pub mod billing;
 pub mod clip_store;
 pub mod config;
 pub mod db;
+pub mod datadog;
 pub mod device_actions;
 pub mod devices;
 pub mod dictionaries;

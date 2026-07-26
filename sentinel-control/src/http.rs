@@ -631,7 +631,6 @@ async fn track_event_push(State(st): State<AppState>, headers: HeaderMap, body: 
 }
 
 /// Newest box-log rows kept per box (bounded retention; the edge keeps its own ring + stdout).
-const BOX_LOG_KEEP: i64 = 5000;
 
 /// The edge pushes a batch of its recent log lines here (box token). Control persists a
 /// bounded tail and re-broadcasts each line for any live per-box log viewer.
@@ -645,11 +644,10 @@ async fn box_logs_push(State(st): State<AppState>, headers: HeaderMap, body: Opt
     if lines.is_empty() {
         return StatusCode::NO_CONTENT.into_response();
     }
-    // Live fan-out (tagged with tenant+box so the per-box SSE relay can filter).
-    // Also push to the unified platform_logs queue (fire-and-forget; edge logs are module=edge).
+    // Card #145: the edge keeps relaying its lines here, but they go to the unified log queue only —
+    // which ships to Datadog when configured (else Postgres). No more `box_logs` table + no
+    // `log_bus` broadcast (the in-app logs view is gone; operators read logs in Datadog).
     for l in &lines {
-        let msg = json!({ "tenant": tenant, "box": box_id, "ts": l.ts, "level": l.level, "target": l.target, "message": l.message });
-        let _ = st.log_bus.send(msg.to_string());
         st.log_queue.push(app_core::platform_logs::PlatformLog {
             tenant_id: tenant,
             module: "edge",
@@ -665,9 +663,6 @@ async fn box_logs_push(State(st): State<AppState>, headers: HeaderMap, body: Opt
             message: l.message.clone(),
             payload: Some(json!({ "target": l.target, "ts": l.ts })),
         });
-    }
-    if let Err(e) = store::insert_box_logs(&st.pool, tenant, box_id, &lines, BOX_LOG_KEEP).await {
-        log::error!("insert_box_logs failed: {e}");
     }
     StatusCode::NO_CONTENT.into_response()
 }
