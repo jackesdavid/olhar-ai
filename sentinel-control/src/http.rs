@@ -54,8 +54,31 @@ pub fn router(state: AppState) -> Router {
             crate::billing_gate::soft_lock,
         )))
         .nest_service("/edge", ServeDir::new(edge_dist))
+        // Card #146: wrap every request in a tenant span so all logs during it ship to Datadog
+        // tagged tenant:<id> — the central place, set once, not per handler.
+        .layer(axum::middleware::from_fn_with_state(state.clone(), tenant_span))
         .layer(CorsLayer::permissive())
         .with_state(state)
+}
+
+/// Open a tracing span carrying the request's tenant (card #146). Best-effort: an absent/invalid
+/// token just yields no tenant tag. Every log emitted during the request inherits `tenant:<id>`.
+async fn tenant_span(
+    State(st): State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    use tracing::Instrument;
+    let tenant = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .and_then(|tok| crate::auth::verify(&st.jwt_secret, tok.trim()).ok())
+        .and_then(|c| c.tenant())
+        .map(|t| t.to_string())
+        .unwrap_or_default();
+    next.run(req).instrument(tracing::info_span!("http", tenant = %tenant)).await
 }
 
 /// Serve the edge appliance installer so a tenant admin's one-liner works.

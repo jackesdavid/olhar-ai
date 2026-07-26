@@ -3107,6 +3107,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tower-http 0.5.2",
+ "tracing",
  "urlencoding",
  "uuid",
 ]

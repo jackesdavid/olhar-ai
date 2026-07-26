@@ -181,11 +181,14 @@ mod tracing_layer {
 
             let meta = event.metadata();
             let mut tags = format!("service:{}", self.service);
-            if let Some(t) = merged.get("tenant").and_then(|v| v.as_str()) {
+            if let Some(t) = merged.get("tenant").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
                 tags.push_str(&format!(",tenant:{t}"));
             }
-            if let Some(e) = merged.get("edge_id").and_then(|v| v.as_str()) {
+            if let Some(e) = merged.get("edge_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
                 tags.push_str(&format!(",edge_id:{e}"));
+            }
+            if let Some(n) = merged.get("edge_name").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                tags.push_str(&format!(",edge_name:{n}"));
             }
 
             let mut record = Map::new();
