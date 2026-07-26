@@ -239,3 +239,38 @@ Stages 0-3 are no longer just "built" — they were exercised on the running box
 a fault — `mp4mux faststart` writes the file at EOS (so 0 B *during* recording is correct), and the
 box has `delete_local_after_upload` on (card #78), so both the `.mp4` and its `.json` are removed once
 the clip is durable in the cloud. The clip lives in the cloud recordings list, not on the box.
+
+## Removal endgame — ordered, with the real blocker (2026-07-25)
+
+**Decision (operator):** GStreamer is first-class; go2rtc + ffmpeg are removed; the UI shows no
+backend choice. WebRTC dropped (not needed).
+
+**Done (2026-07-25):**
+- **UI is GStreamer-only** — the per-box ffmpeg↔gstreamer toggle + helpers removed (Boxes page).
+- **GStreamer is the runtime default** — `recording.rs default_media_backend()` returns
+  `gstreamer-linked` on any build that links it (`gst-linked` feature); a build without it (Linux
+  musl release) still falls back to `ffmpeg` so it keeps a media path. No env/config needed.
+
+**The blocker for finishing the removal — Linux is a static `musl` binary.** `release.yml` builds the
+Linux edge as static musl via `cross` ("runs on any box, no glibc"). **GStreamer cannot be statically
+linked into musl** — it is glib + dynamically-loaded `.so` plugins. So "GStreamer on Linux/Jetson" is
+not a feature flag; it is a **distribution-model change: static-musl → glibc + system GStreamer
+(apt)**, which must be built and validated on **real Linux + Jetson boxes**. macOS is easy (native
+build + `brew install gstreamer` + dynamic link).
+
+**Ordered remaining work (nothing removed until GStreamer is proven present on that target):**
+1. **macOS release** — `release.yml` macOS jobs: `brew install gstreamer gst-plugins-{base,good,bad}`
+   + build `--features gst-linked`. (Edge now *links* GStreamer on Mac; still nothing removed.)
+2. **macOS install/pkg** — `install.sh` (Darwin branch) + the signed `.pkg` `build.sh`: install/bundle
+   GStreamer instead of downloading go2rtc + ffmpeg; default backend `gstreamer-linked`.
+3. **Gateway live** — always target the edge's own `gst_mse` `/api/ws`; drop the go2rtc fallback.
+4. **Linux/Jetson build-model change** — release Linux as **glibc** (not musl); `install.sh` Linux
+   branch installs `gstreamer1.0-plugins-{base,good,bad}` + `gstreamer1.0-vaapi`/Jetson NVDEC via apt.
+   **Requires a real Linux + Jetson box to build + validate.**
+5. **Delete** — once every target links GStreamer: remove the go2rtc lifecycle (`go2rtc.rs`,
+   `own_go2rtc`, `EDGE_OWN_GO2RTC`), all ffmpeg call-sites, the A4/A6 presence checks, and the
+   go2rtc/ffmpeg download/install in `install.sh`. Retire `tenant_boxes.ffmpeg_ok`.
+
+**Gate for "done":** every matrix row ✅ on **both Mac and Jetson**, with **neither ffmpeg nor go2rtc
+installed** — the phone-as-edge (Android) green light. Jetson validation is the last gate and needs
+the box.
