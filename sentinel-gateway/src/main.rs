@@ -51,8 +51,12 @@ async fn main() {
     // Join the tailnet if configured (so MagicDNS upstreams resolve over the VPN).
     tailscale::ensure_up();
 
-    let state = Arc::new(AppState::new(upstream.clone(), control_url.clone(), jwt_secret));
-    log::info!("sentinel-gateway upstream = {upstream} (fallback), control = {control_url}");
+    // This gateway's public WS base — the address an edge dials back for live-over-outbound
+    // (card #144). Unset → outbound live is off and live uses the tailnet path.
+    let public_ws_url = std::env::var("GATEWAY_PUBLIC_WS").unwrap_or_default();
+
+    let state = Arc::new(AppState::new(upstream.clone(), control_url.clone(), jwt_secret, public_ws_url.clone()));
+    log::info!("sentinel-gateway upstream = {upstream} (fallback), control = {control_url}, public_ws = {}", if public_ws_url.is_empty() { "(unset — outbound live off)" } else { &public_ws_url });
 
     let app = http::router(state);
     let listener = match tokio::net::TcpListener::bind(&bind).await {

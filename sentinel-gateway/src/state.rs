@@ -6,6 +6,21 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use axum::extract::ws::WebSocket;
+use futures::channel::oneshot;
+
+/// A browser bridge waiting for the edge to dial in (live-over-outbound, card #144). The
+/// `/edge/live/:session` handler hands the edge's upgraded socket through this once it connects.
+pub type EdgeSession = oneshot::Sender<WebSocket>;
+
+/// How control says to reach the edge for a live request.
+pub enum LiveStart {
+    /// The edge was told to dial the gateway back — await it on the rendezvous (no tailnet).
+    Sse,
+    /// No SSE box; the gateway dials this tailnet host itself, as before (`None` → static fallback).
+    Tailnet(Option<String>),
+}
+
 /// Shared across handlers (always behind an `Arc`).
 pub struct AppState {
     /// The fallback edge go2rtc base URL (`EDGE_UPSTREAM`), e.g.
@@ -13,6 +28,10 @@ pub struct AppState {
     pub upstream: String,
     /// Control plane base (`CONTROL_URL`) for the per-tenant box-host lookup.
     pub control_url: String,
+    /// This gateway's public WebSocket base (`GATEWAY_PUBLIC_WS`, e.g. `wss://gateway.example.com`)
+    /// — the address an edge dials back for live-over-outbound. Empty → outbound live disabled
+    /// (the gateway can't tell the edge where to reach it), so live falls back to the tailnet path.
+    pub public_ws_url: String,
     /// Shared HTTP client for snapshot/asset passthrough + the control lookup.
     pub http: reqwest::Client,
     /// Shared with sentinel-control — verifies the `live.view` JWT on live endpoints.
@@ -23,6 +42,8 @@ pub struct AppState {
     /// Upstreams that refused a WS connect, and when. Lets a box that cannot serve the preferred
     /// upstream be skipped instead of costing a failed connect on every single reconnect.
     dead: Mutex<HashMap<String, Instant>>,
+    /// Pending live-over-outbound rendezvous: session id → the browser bridge awaiting the edge.
+    pub edge_sessions: Mutex<HashMap<String, EdgeSession>>,
 }
 
 const CACHE_TTL: Duration = Duration::from_secs(30);
@@ -31,7 +52,7 @@ const CACHE_TTL: Duration = Duration::from_secs(30);
 const DEAD_TTL: Duration = Duration::from_secs(300);
 
 impl AppState {
-    pub fn new(upstream: String, control_url: String, jwt_secret: String) -> Self {
+    pub fn new(upstream: String, control_url: String, jwt_secret: String, public_ws_url: String) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .build()
@@ -39,10 +60,38 @@ impl AppState {
         AppState {
             upstream,
             control_url,
+            public_ws_url,
             http,
             jwt_secret,
             cache: Mutex::new(HashMap::new()),
             dead: Mutex::new(HashMap::new()),
+            edge_sessions: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Ask control to set up a live stream (card #144). Returns `LiveStart::Sse` when control told
+    /// the tenant's edge to dial `callback` back (outbound; no tailnet), or `LiveStart::Tailnet`
+    /// with the host the gateway should dial itself. Any failure degrades to the tailnet path.
+    pub async fn live_start(&self, token: &str, src: &str, callback: &str) -> LiveStart {
+        let url = format!("{}/internal/live-start", self.control_url);
+        let body = serde_json::json!({ "src": src, "callback": callback });
+        let resp = match self.http.post(&url).bearer_auth(token).json(&body).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                log::warn!("live-start lookup failed ({url}): {e}");
+                return LiveStart::Tailnet(None);
+            }
+        };
+        let v: serde_json::Value = match resp.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("live-start decode failed: {e}");
+                return LiveStart::Tailnet(None);
+            }
+        };
+        match v.get("mode").and_then(|m| m.as_str()) {
+            Some("sse") => LiveStart::Sse,
+            _ => LiveStart::Tailnet(v.get("host").and_then(|h| h.as_str()).map(str::to_string)),
         }
     }
 

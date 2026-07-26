@@ -597,7 +597,7 @@ async fn frame_jpeg(
 }
 
 /// `cam_192_168_0_7` → `("192.168.0.7", false)`, `cam_192_168_0_7_hd` → `(…, true)`.
-fn go2rtc_src_to_camera(src: &str) -> Option<(String, bool)> {
+pub(crate) fn go2rtc_src_to_camera(src: &str) -> Option<(String, bool)> {
     let rest = src.strip_prefix("cam_")?;
     let (octets, hd) = match rest.strip_suffix("_hd") {
         Some(o) => (o, true),

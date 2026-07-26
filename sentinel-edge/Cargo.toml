@@ -24,6 +24,10 @@ app-core = { path = "../crates/app-core" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 axum = { version = "0.7", features = ["ws"] }
+# Outbound WebSocket client — the edge dials the gateway to push live video up its own connection
+# (card #144, live-over-outbound), so live works with no tailnet. Optional: only the gst-linked live
+# path uses it, so the lean musl release build doesn't pull it. rustls (pure-Rust, musl-friendly).
+tokio-tungstenite = { version = "0.24", optional = true, features = ["rustls-tls-webpki-roots"] }
 tower-http = { version = "0.5", features = ["cors"] }
 # Pull the camera config from the control plane (cloud-managed, cached locally).
 ureq = { version = "2", features = ["json"] }
@@ -66,5 +70,5 @@ gstreamer-app = { version = "0.23", optional = true }
 
 [features]
 opencv-parity = ["dep:opencv"]
-gst-linked = ["dep:gstreamer", "dep:gstreamer-app", "app-core/gst-linked"]
+gst-linked = ["dep:gstreamer", "dep:gstreamer-app", "dep:tokio-tungstenite", "app-core/gst-linked"]
 

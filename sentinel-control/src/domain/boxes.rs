@@ -9,7 +9,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::Json;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -30,6 +30,7 @@ pub fn router() -> Router<AppState> {
         .route("/boxes/:id/logs", get(box_logs))
         .route("/boxes/:id/logs/stream", get(box_logs_stream))
         .route("/internal/box-upstream", get(box_upstream))
+        .route("/internal/live-start", post(live_start))
         .route("/boxes/:id/recording-config", axum::routing::patch(patch_recording_config))
         .route("/boxes/:id/tracking-config", axum::routing::patch(patch_tracking_config))
         .route("/boxes/:id/storage-stats", get(storage_stats))
@@ -285,6 +286,39 @@ struct UpstreamResp {
 async fn box_upstream(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<UpstreamResp>, ApiErr> {
     let tid = tenant_of(&c)?;
     Ok(Json(UpstreamResp { host: store::box_host_for_tenant(&st.pool, tid).await.map_err(db_err)? }))
+}
+
+#[derive(Deserialize)]
+struct LiveStartReq {
+    /// The go2rtc stream name the browser asked for (`cam_<ip>[_hd]`).
+    src: String,
+    /// The gateway WebSocket the edge should dial to push the stream up (`wss://…/edge/live/<id>`).
+    callback: String,
+}
+
+#[derive(Serialize)]
+struct LiveStartResp {
+    /// `"sse"` — the edge was told to dial the gateway (outbound; no tailnet needed).
+    /// `"tailnet"` — no SSE box; the gateway should dial `host` itself, as before.
+    mode: String,
+    host: Option<String>,
+}
+
+/// The gateway calls this (forwarding the user's JWT) to set up a live stream. If the tenant has a
+/// box on the SSE command stream, we tell that box to dial the gateway back (`start_live`) — live
+/// over the edge's OUTBOUND connection, card #144, so it works with no tailnet. Otherwise we return
+/// the tailnet host and the gateway dials the edge itself, exactly as before.
+async fn live_start(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): Json<LiveStartReq>) -> Result<Json<LiveStartResp>, ApiErr> {
+    let tid = tenant_of(&c)?;
+    if let Some(box_id) = app_core::edge_commands::live_box_for_tenant(&st.pool, tid, 30).await {
+        let args = serde_json::json!({ "src": b.src, "url": b.callback });
+        app_core::edge_commands::enqueue(&st.pool, tid, box_id, "start_live", args, 20)
+            .await
+            .map_err(|e| { log::error!("live_start enqueue: {e}"); err(StatusCode::INTERNAL_SERVER_ERROR, "enqueue failed") })?;
+        return Ok(Json(LiveStartResp { mode: "sse".into(), host: None }));
+    }
+    let host = store::box_host_for_tenant(&st.pool, tid).await.map_err(db_err)?;
+    Ok(Json(LiveStartResp { mode: "tailnet".into(), host }))
 }
 
 // ---- per-box logs -----------------------------------------------------------

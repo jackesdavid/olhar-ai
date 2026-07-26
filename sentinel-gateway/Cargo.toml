@@ -13,7 +13,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 # MagicDNS TLS cert validates (it chains to a public root); no OpenSSL.
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 # HTTP passthrough (snapshots, stream list, player assets) with streaming bodies.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 futures = "0.3"
 tower-http = { version = "0.5", features = ["cors"] }
 
@@ -22,5 +22,7 @@ serde_json = "1"
 # Verify the control plane's JWT on the live endpoints (live.view gate). Shares
 # JWT_SECRET with sentinel-control; no DB, no app-core — just decode + check perms.
 jsonwebtoken = "9"
+# Unguessable one-time session ids for the live-over-outbound rendezvous (card #144).
+uuid = { version = "1", features = ["v4"] }
 log = "0.4"
 env_logger = "0.11"

@@ -29,6 +29,8 @@ mod gst_mse;
 mod gst_mux;
 mod http;
 mod hwaccel;
+#[cfg(feature = "gst-linked")]
+mod live_push;
 mod logbuf;
 mod media;
 mod metrics;
@@ -349,7 +351,8 @@ pub fn run() {
         let control_url = state.control_url.clone();
         let port = bind.rsplit(':').next().unwrap_or("8788").to_string();
         let local_api = format!("http://127.0.0.1:{port}");
-        std::thread::spawn(move || command_stream::run(control_url, local_api));
+        let cmd_state = std::sync::Arc::clone(&state);
+        std::thread::spawn(move || command_stream::run(control_url, local_api, cmd_state));
     }
 
     let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");

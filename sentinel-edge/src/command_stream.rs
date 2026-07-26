@@ -10,7 +10,15 @@
 //! matching the edge's thread model; reconnects with backoff.
 
 use std::io::{BufRead, BufReader};
+use std::sync::Arc;
 use std::time::Duration;
+
+use crate::state::AppState;
+
+/// The edge's shared state, stashed so the `start_live` handler can start a camera pipeline. Set
+/// once at boot; only the gst-linked live path reads it.
+#[cfg(feature = "gst-linked")]
+static STATE: std::sync::OnceLock<Arc<AppState>> = std::sync::OnceLock::new();
 
 const RECONNECT_MIN_SECS: u64 = 2;
 const RECONNECT_MAX_SECS: u64 = 30;
@@ -21,7 +29,11 @@ const READ_TIMEOUT_SECS: u64 = 60;
 /// Hold the command stream open forever, reconnecting with backoff. Spawned from `run()` once the
 /// edge is enrolled (it needs a box token to authenticate). `local_api` is this edge's own HTTP
 /// base (e.g. `http://127.0.0.1:8788`) — commands are dispatched to it.
-pub fn run(control_url: String, local_api: String) {
+pub fn run(control_url: String, local_api: String, state: Arc<AppState>) {
+    #[cfg(feature = "gst-linked")]
+    let _ = STATE.set(state);
+    #[cfg(not(feature = "gst-linked"))]
+    let _ = &state; // only the gst-linked live-push path needs it
     let mut backoff = RECONNECT_MIN_SECS;
     loop {
         match pump(&control_url, &local_api) {
@@ -123,8 +135,47 @@ fn dispatch(local_api: &str, cmd: &str, args: &serde_json::Value) -> (bool, Opti
         "start_recording" => named_post(local_api, "/recording/start", args),
         "stop_recording" => named_post(local_api, "/recording/stop", args),
         "http_request" => http_request(local_api, args),
+        "start_live" => start_live(args),
         other => (false, None, Some(format!("unknown command: {other}"))),
     }
+}
+
+/// Live-over-outbound (card #144): dial the gateway and push the camera's fMP4 up. `args` = `{src,
+/// url}` — `src` is the go2rtc stream name the browser asked for, `url` the gateway WS to dial. The
+/// stream runs on its own thread+runtime until the gateway closes; this returns an immediate ack.
+#[cfg(feature = "gst-linked")]
+fn start_live(args: &serde_json::Value) -> (bool, Option<serde_json::Value>, Option<String>) {
+    let Some(url) = args.get("url").and_then(|u| u.as_str()) else {
+        return (false, None, Some("start_live: missing 'url'".into()));
+    };
+    let Some(src) = args.get("src").and_then(|s| s.as_str()) else {
+        return (false, None, Some("start_live: missing 'src'".into()));
+    };
+    let Some((ip, hd)) = crate::http::go2rtc_src_to_camera(src) else {
+        return (false, None, Some(format!("start_live: bad src '{src}'")));
+    };
+    let Some(state) = STATE.get().cloned() else {
+        return (false, None, Some("start_live: edge state not ready".into()));
+    };
+    let (url, ip) = (url.to_string(), ip);
+    // Its own current-thread runtime: one live session per outbound socket, isolated from the
+    // command stream and torn down with the thread when the gateway closes.
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(rt) => rt,
+            Err(e) => {
+                log::warn!("live-push: runtime build failed: {e}");
+                return;
+            }
+        };
+        rt.block_on(crate::live_push::run(url, ip, hd, state));
+    });
+    (true, Some(serde_json::json!({ "started": true })), None)
+}
+
+#[cfg(not(feature = "gst-linked"))]
+fn start_live(_args: &serde_json::Value) -> (bool, Option<serde_json::Value>, Option<String>) {
+    (false, None, Some("live requires the GStreamer backend (gst-linked)".into()))
 }
 
 /// A named POST whose JSON reply is the command result (the recording commands).
