@@ -39,21 +39,26 @@ the level/target/message — so Datadog's facets replace the SQL `WHERE` filters
   INSERT (or fan to both behind a flag for one release, then drop the INSERT).
 - The platform-log **viewer** (if any UI reads `platform_logs`) either queries Datadog or is dropped.
 
-## Phase 3 — box_logs → Datadog
-- `box_logs_push` (control `http.rs`): keep the **`log_bus` broadcast** (the Boxes page's live SSE
-  tail is in-memory, not the table) but ship each line to Datadog instead of `INSERT INTO box_logs`.
-- The Boxes **log history** view (`GET /boxes/:id/logs`, reads `box_logs`) → query Datadog's Logs
-  API by `box:<id>`, or keep a small rolling in-memory/Redis tail for "recent" and link out to
-  Datadog for older. (Open decision below.)
+## Phase 3 — box_logs → Datadog + remove the in-app logs view
+- `box_logs_push` (`/config/logs`, control `http.rs`): **keep the endpoint** (the edge keeps POSTing
+  its lines — it holds no Datadog key), but change the sink to the Datadog shipper instead of
+  `st.log_bus.send(...)` + `insert_box_logs(...)`.
+- **Remove the in-app logs view entirely** — logs live in Datadog now, and home customers never need
+  a log screen (it's an operator/debug concern). Delete:
+  - Frontend: `sentinel-app/src/routes/logs/+page.svelte`, and the per-box **"View logs"** button +
+    `ScrollText` import in `settings/boxes/+page.svelte`.
+  - Control: `GET /boxes/:id/logs` (`box_logs`, history) and `GET /boxes/:id/logs/stream`
+    (`box_logs_stream`, the `log_bus` SSE relay) routes + handlers; the `log_bus`
+    (`broadcast::Sender`) in `AppState`; `store::list_box_logs` / `insert_box_logs`.
+- Operators read logs in **Datadog** (facets: `box:<id>`, `tenant:<id>`, `service:edge`).
 
 ## Phase 4 — retire the tables
 - Once Datadog is the store and nothing reads the tables: drop `platform_logs` + `box_logs`
   (migration), and remove their nightly retention sweeps. Reclaims the write + vacuum load.
 
 ## Open decisions
-1. **Boxes log-history view** — query the Datadog Logs API from control (needs a Datadog *app* key +
-   a proxy endpoint so the browser never sees the key), OR keep a short rolling tail (Redis/last-N
-   in memory) and link out to Datadog for depth. Free tier = **1-day retention**, so "history" is ≤1 day.
+1. ~~Boxes log-history view~~ — **RESOLVED (operator call): remove the in-app logs view entirely;
+   Datadog is the only log viewer.** No in-app history/stream, so no Datadog app-key proxy to build.
 2. **Dual-write window** — fan platform/box logs to *both* Postgres and Datadog for one release to
    de-risk, or hard-switch. (Lean hard-switch behind the `DD_API_KEY`-set gate.)
 3. **Free-tier volume** — Datadog free logs cap; confirm the edge relay + platform trace fit, or
