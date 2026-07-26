@@ -26,3 +26,8 @@ jsonwebtoken = "9"
 uuid = { version = "1", features = ["v4"] }
 log = "0.4"
 env_logger = "0.11"
+# Structured logging → Datadog (card #146). The gateway is standalone (no app-core by design), so it
+# carries a minimal copy of the tracing layer + shipper (reqwest, already a dep). `service:gateway`.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-log = "0.2"

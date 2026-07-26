@@ -14,6 +14,7 @@
 //!
 //! Optional env: `TS_AUTHKEY`/`TS_HOSTNAME`/`TS_TAGS` to join the tailnet at startup.
 mod auth;
+mod datadog;
 mod http;
 mod proxy;
 mod state;
@@ -25,7 +26,9 @@ use state::AppState;
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Card #146: structured logs → Datadog (`service:gateway`) + `log::*` bridge, replacing
+    // env_logger. Must run inside the tokio runtime — the Datadog drain task is spawned lazily.
+    datadog::init_tracing();
 
     let bind = std::env::var("GATEWAY_BIND").unwrap_or_else(|_| "0.0.0.0:8789".to_string());
     let upstream = std::env::var("EDGE_UPSTREAM")

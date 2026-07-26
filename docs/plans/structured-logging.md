@@ -72,7 +72,17 @@ get converted to structured fields incrementally.
   `service:edge`. `to_dd_record` spreads the payload to searchable top-level attributes. Edge bumped
   to 0.5.54 (ships on the next edge release). Other `log::*` edge sites stay bridged (plaintext),
   convert opportunistically.
-- **Remaining:** gateway → Datadog (minimal layer copy); app frontend errors → Datadog (Phase 6).
+- **Gateway → Datadog:** done — `sentinel-gateway/src/datadog.rs` is a self-contained copy of the
+  tracing→Datadog layer (reqwest shipper, `service:gateway`); `main.rs` calls `datadog::init_tracing()`
+  in place of `env_logger`. No app-core pulled in.
+- **App frontend errors → Datadog:** done — `sentinel-app/src/lib/errors.ts` (rate-limited, deduped,
+  fire-and-forget) + `hooks.client.ts` attach `window.onerror`/unhandledrejection + SvelteKit's
+  `handleError`; they POST session-authed to `POST /logs/client` (`domain/platform_logs.rs`), which
+  ships to Datadog as `service:app`, tenant-tagged, error fields spread to searchable attributes. The
+  DD key stays server-side (no Browser-Logs SDK key in the bundle).
+- **#146 complete.** All services (control, flow, gateway, edge) + app errors ship structured logs to
+  Datadog with tenant / edge identity. Remaining is #145 Phase 4 (drop the now-idle `platform_logs` /
+  `box_logs` tables once Datadog is confirmed carrying the load ~a day).
 
 ## Open decisions
 1. **edge_name source** — RESOLVED: control resolves it from `tenant_boxes.name` at relay time (one
