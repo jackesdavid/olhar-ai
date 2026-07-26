@@ -26,7 +26,6 @@ it passes on **both**, with the other platforms' HW-decode elements noted per ro
 | B3 | **Snapshot from warm feed** (`/api/frame.jpeg`, "Get current frame" node) | go2rtc → internal ffmpeg | serve the A1 warm JPEG (`capture::latest_fresh`); cold path only as fallback | workflow node, app-core `go2rtc.rs`, gateway | 2 | ✅³ | ⬜ | 🟡 |
 | G1 | **RTSP ingest from cameras** | go2rtc per-camera streams | `rtspsrc` (shared A1 ingest) | all downstream | 1 | ✅² | ✅¹¹ | 🟡 |
 | G2 | **Live MSE over WebSocket** (`/api/ws`) | go2rtc | `mp4mux fragment-duration` → WS, **contract-identical** | **gateway `proxy.rs` → web player + mobile WebView player** | 4 | ✅⁷ | 🟡¹¹ | 🟡 |
-| G3 | **WebRTC** (`/api/webrtc`) | go2rtc `webrtcbin` (minor use today) | `webrtcbin` | (minor) | 5 | ⬜ | ⬜ | ⬜ |
 | G4 | **Stream list / player assets** (`/api/streams`, `/stream.html`) | go2rtc-served, gateway passthrough | edge-served equivalents or drop if unused | gateway passthrough | 4 | ⬜ | ⬜ | ⬜ |
 | G5 | **go2rtc sidecar lifecycle** (spawn/config/health) | edge manages the go2rtc process | **not started at all** on a GStreamer box | edge `state.rs`, `main.rs` | 5 | ✅⁹ | ⬜ | 🟡 |
 | G6 | **Tailnet exposure** (MagicDNS TLS to go2rtc) | edge `tailscale.rs` → go2rtc | serve the GStreamer HTTP over the same tailnet | gateway reaches edge | 4 | ⬜ | ⬜ | ⬜ |
@@ -65,7 +64,7 @@ gate + default-flip open.
 | 2 | B3 + A5 snapshots (`jpegenc`) | ⬜ | ⬜ | ⬜ |
 | 3 | A2 recording mux + A3 duration | ✅ | ⬜ | 🟡 |
 | 4 | G2 MSE contract + G4/G6 serving/tailnet | ⬜ | ⬜ | ⬜ |
-| 5 | G3 WebRTC + retire go2rtc (G5) + ffmpeg (A4/A6) | ⬜ | ⬜ | ⬜ |
+| 5 | retire go2rtc (G5) + ffmpeg (A4/A6) | ⬜ | ⬜ | ⬜ |
 
 **Done = every row ✅ on both boxes, and neither ffmpeg nor go2rtc installed.** That is the green light
 for the phone-as-edge (Android) card.
