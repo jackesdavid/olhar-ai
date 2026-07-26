@@ -136,7 +136,51 @@ fn dispatch(local_api: &str, cmd: &str, args: &serde_json::Value) -> (bool, Opti
         "stop_recording" => named_post(local_api, "/recording/stop", args),
         "http_request" => http_request(local_api, args),
         "start_live" => start_live(args),
+        "uninstall" => uninstall(),
         other => (false, None, Some(format!("unknown command: {other}"))),
+    }
+}
+
+/// Complete self-removal (card #144): the operator removed this box in the UI, so the edge stops its
+/// own service and deletes itself from the host. We ack FIRST (so the cloud confirms the host is
+/// being torn down), then a **detached** uninstaller — in its own session so stopping the service
+/// doesn't kill it mid-delete — waits a beat and tears everything down: the service definition, the
+/// binary + config + data, and the package receipt. On an on-device edge (iOS) there is nothing to
+/// uninstall — the app owns the process — so it's a no-op ack.
+fn uninstall() -> (bool, Option<serde_json::Value>, Option<String>) {
+    log::warn!("uninstall command received — this box will stop and remove itself from the host");
+
+    #[cfg(target_os = "macos")]
+    let script = "sleep 1
+launchctl bootout system/io.sentinel.edge 2>/dev/null || true
+rm -f /Library/LaunchDaemons/io.sentinel.edge.plist
+rm -rf /opt/sentinel-edge /etc/sentinel-edge
+pkgutil --forget io.sentinel.edge 2>/dev/null || true";
+
+    #[cfg(target_os = "linux")]
+    let script = "sleep 1
+systemctl stop sentinel-edge 2>/dev/null || true
+systemctl disable sentinel-edge 2>/dev/null || true
+rm -f /etc/systemd/system/sentinel-edge.service
+systemctl daemon-reload 2>/dev/null || true
+rm -rf /opt/sentinel-edge /etc/sentinel-edge";
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let script = "";
+
+    if script.is_empty() {
+        return (true, Some(serde_json::json!({ "uninstalled": false, "reason": "on-device edge — nothing to uninstall" })), None);
+    }
+
+    // `setsid` puts the uninstaller in a new session so `bootout`/`stop` killing THIS process's group
+    // doesn't take the uninstaller with it. Detached from our stdio so it survives our death.
+    let spawned = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("setsid sh -c '{script}' </dev/null >/dev/null 2>&1 &"))
+        .spawn();
+    match spawned {
+        Ok(_) => (true, Some(serde_json::json!({ "uninstalling": true })), None),
+        Err(e) => (false, None, Some(format!("could not launch uninstaller: {e}"))),
     }
 }
 

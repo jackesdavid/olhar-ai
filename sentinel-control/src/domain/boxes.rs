@@ -244,6 +244,26 @@ async fn self_register(
 async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<Uuid>) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "devices.write")?;
     let tid = tenant_of(&c)?;
+
+    // Card #144: removing a box from the account should also tear it down on the HOST. If this box is
+    // on the SSE command stream, tell it to uninstall itself (stop the service + delete its files)
+    // and wait briefly for the ack — BEFORE we revoke it, while the stream is still authenticated.
+    // Best-effort + bounded: an offline host just isn't torn down remotely (uninstall it by hand);
+    // it must never block removing the box from the account. Only enqueue when a live session exists,
+    // so removing an offline box stays instant.
+    let live: bool = sqlx::query_scalar::<_, Option<bool>>(
+        "SELECT sse_last_seen IS NOT NULL
+                AND sse_last_seen::timestamptz > now() - make_interval(secs => 30)
+         FROM tenant_boxes WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tid).bind(id)
+    .fetch_optional(&st.pool).await.ok().flatten().flatten().unwrap_or(false);
+    if live {
+        if let Ok(cmd_id) = app_core::edge_commands::enqueue(&st.pool, tid, id, "uninstall", serde_json::json!({}), 20).await {
+            let _ = app_core::edge_commands::await_result(&st.pool, cmd_id, 6).await;
+        }
+    }
+
     if store::delete_box(&st.pool, tid, id).await.map_err(db_err)? {
         Ok(StatusCode::NO_CONTENT)
     } else {
