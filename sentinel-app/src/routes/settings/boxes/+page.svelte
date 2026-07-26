@@ -34,7 +34,6 @@
 
   // Add form
   let name = $state("");
-  let authkey = $state("");
   let creating = $state(false);
 
   // Delete confirm
@@ -67,15 +66,13 @@
     return () => updatePollStop?.();
   });
 
-  function buildCommand(token: string, hostname: string, tsKey: string | null): string {
-    // Prefer the auto-minted key (transparent enrollment); else a manual override; else a placeholder.
-    const key = tsKey || authkey.trim() || "<YOUR_TAILSCALE_AUTHKEY>";
+  function buildCommand(token: string): string {
+    // The edge is outbound-only now (#144) — no tailnet, so no auth key. It needs only where the
+    // cloud is and its own identity.
     return [
       `curl -fsSL ${API_BASE}/install.sh | sudo sh -s -- \\`,
       `  --control ${API_BASE} \\`,
-      `  --box-token ${token} \\`,
-      `  --authkey ${key} \\`,
-      `  --hostname ${hostname}`,
+      `  --box-token ${token}`,
     ].join("\n");
   }
 
@@ -92,12 +89,11 @@
         id: box.id,
         name: boxName,
         token: box.token,
-        command: buildCommand(box.token, box.hostname, box.tailscale_key),
-        auto: !!box.tailscale_key,
-        needsKey: !box.tailscale_key && !authkey.trim(),
+        command: buildCommand(box.token),
+        auto: true,
+        needsKey: false,
       };
       name = "";
-      authkey = "";
       await load();
       goto("/settings/boxes/install");
     } catch (e) {
@@ -136,33 +132,21 @@
     return fmtTs(b.last_seen);
   }
 
-  // ---- health (Tailscale + ffmpeg, reported on the heartbeat) --------------
-  function tsLabel(s: string | null): string {
-    return { serving: "serving", up: "up · not serving", offline: "offline", disabled: "no tailnet" }[s ?? ""] ?? "unknown";
-  }
-  function tsClass(s: string | null): string {
-    if (s === "serving") return "border-primary/30 bg-primary/10 text-primary";
-    if (s === "up") return "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400";
-    if (s === "offline") return "border-destructive/30 bg-destructive/10 text-destructive";
-    return "border-border bg-muted text-muted-foreground"; // disabled / unknown
-  }
+  // ---- health (reported on the heartbeat) ----------------------------------
   // Friendly name for a reported GPU-decode method (#120).
   function hwLabel(m: string): string {
     return { vaapi: "VAAPI", qsv: "QuickSync", cuda: "CUDA", videotoolbox: "VideoToolbox", v4l2m2m: "V4L2" }[m] ?? m;
   }
-  // The box has no working frame-grab backend at all — ffmpeg absent AND GStreamer absent. A
-  // GStreamer box (e.g. the iOS edge, #144) needs no ffmpeg, so its absence is not a defect.
+  // The box has no working media backend at all — GStreamer absent (and, on a legacy box, ffmpeg too).
+  // The edge links GStreamer now (#138); a box reporting it healthy needs nothing else.
   function mediaMissing(b: Box): boolean {
-    return b.ffmpeg_ok === false && !b.gstreamer_ok;
+    return !b.gstreamer_ok && b.ffmpeg_ok === false;
   }
-  // Boxes whose Live path can't work: tailnet offline or not serving, or no media backend.
-  const unhealthy = $derived(
-    list.filter((b) => b.tailscale_state === "offline" || b.tailscale_state === "up" || mediaMissing(b)),
-  );
+  // Boxes whose media path can't work. The edge reaches the cloud outbound-only now (#144 — SSE
+  // commands + live over its own outbound connection), so there is no tailnet to be "offline" on.
+  const unhealthy = $derived(list.filter((b) => mediaMissing(b)));
   function healthHint(b: Box): string {
-    if (b.tailscale_state === "offline") return `${b.name}: offline on the tailnet — Live can't reach it (check Tailscale on the box).`;
-    if (b.tailscale_state === "up") return `${b.name}: on the tailnet but not serving go2rtc yet — try Restart.`;
-    if (mediaMissing(b)) return `${b.name}: no media backend — snapshots / GetCurrentFrame will fail (install ffmpeg or GStreamer).`;
+    if (mediaMissing(b)) return `${b.name}: no media backend — live / snapshots will fail (reinstall to get GStreamer).`;
     return "";
   }
 
@@ -277,7 +261,6 @@
             <tr class="border-b border-border">
               <th class="py-2 pr-4 text-left font-medium">Name</th>
               <th class="px-3 py-2 text-left font-medium">Version</th>
-              <th class="px-3 py-2 text-left font-medium">Tailnet host</th>
               <th class="px-3 py-2 text-left font-medium">Health</th>
               <th class="px-3 py-2 text-left font-medium">Resources</th>
               <th class="px-3 py-2 text-left font-medium">Last seen</th>
@@ -309,9 +292,6 @@
                     <span class="text-xs text-muted-foreground">—</span>
                   {/if}
                 </td>
-                <td class="px-3 py-2 font-mono text-xs text-muted-foreground">
-                  {b.magicdns_host ?? "—"}
-                </td>
                 <td class="px-3 py-2">
                   <span class="flex flex-wrap items-center gap-1">
                     {#if b.platform}
@@ -328,9 +308,6 @@
                         CPU decode
                       </span>
                     {/if}
-                    <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium {tsClass(b.tailscale_state)}" title="Tailscale state — go2rtc must be 'serving' over the tailnet for Live to work">
-                      {tsLabel(b.tailscale_state)}
-                    </span>
                     {#if mediaMissing(b)}
                       <span class="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive" title="no media backend — snapshots / GetCurrentFrame will fail">
                         no media backend
@@ -366,7 +343,7 @@
                   <Button variant="ghost" size="icon" title="View logs" onclick={() => goto(`/logs?box=${b.id}`)}>
                     <ScrollText class="size-4" />
                   </Button>
-                  <Button variant="ghost" size="icon" title="Restart (reconnect tailnet + re-serve)" disabled={restartingId === b.id} onclick={() => restartBox(b)}>
+                  <Button variant="ghost" size="icon" title="Restart the box" disabled={restartingId === b.id} onclick={() => restartBox(b)}>
                     {#if restartingId === b.id}<Busy />{:else}<RotateCcw class="size-4" />{/if}
                   </Button>
                   <Button variant="ghost" size="icon" title="Remove" onclick={() => (deleteTarget = b)}>
@@ -397,15 +374,9 @@
       </Card.Header>
       <Card.Content>
         <form class="space-y-4" onsubmit={create}>
-          <div class="grid gap-4 sm:grid-cols-2">
-            <div class="space-y-1.5">
-              <Label for="box-name">Box name</Label>
-              <Input id="box-name" bind:value={name} placeholder="Front office" />
-            </div>
-            <div class="space-y-1.5">
-              <Label for="box-key">Tailscale auth key <span class="text-muted-foreground">(only if auto-enrollment is off)</span></Label>
-              <Input id="box-key" bind:value={authkey} placeholder="usually leave blank" />
-            </div>
+          <div class="space-y-1.5">
+            <Label for="box-name">Box name</Label>
+            <Input id="box-name" bind:value={name} placeholder="Front office" />
           </div>
           <Button type="submit" disabled={!name.trim() || creating}>
             {#if creating}<Busy />{:else}<Plus class="size-4" />{/if}

@@ -311,16 +311,9 @@
               </div>
             </div>
 
-            {#if install.auto}
-              <p class="flex items-center gap-2 text-xs text-primary">
-                <Check class="size-3.5 shrink-0" /> Private networking is set up automatically — just run the command.
-              </p>
-            {:else if install.needsKey}
-              <p class="text-xs text-muted-foreground">
-                Automatic enrollment isn't configured, so the command has a <code>&lt;YOUR_TAILSCALE_AUTHKEY&gt;</code>
-                placeholder — replace it with a key from your tailnet before running, or the box won't join the private network.
-              </p>
-            {/if}
+            <p class="flex items-center gap-2 text-xs text-primary">
+              <Check class="size-3.5 shrink-0" /> Nothing else to configure — the box connects to the cloud on its own, outbound only.
+            </p>
           </Card.Content>
         </Card.Root>
       {/if}
