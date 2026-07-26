@@ -29,8 +29,12 @@ mkdir -p "$LIBDIR" "$PLUGDIR"
 #   jpeg           jpegenc                       videorate      videorate
 #   playback       decodebin                     typefindfunctions  typefind (decodebin needs it)
 #   autodetect     decodebin's sink selection
+#   rtpmanager     rtspsrc's RTP session (rtpbin) — WITHOUT it rtspsrc delivers caps-less buffers
+#                  and h264parse errors "No RTP format" (proven on the iOS live path, card #144)
+#   udp            rtspsrc's UDP transport (udpsrc/udpsink) — the RTP/RTCP sockets
 PLUGINS=(app applemedia coreelements isomp4 jpeg playback rtp rtsp \
-         videoconvertscale videoparsersbad videorate typefindfunctions autodetect)
+         videoconvertscale videoparsersbad videorate typefindfunctions autodetect \
+         rtpmanager udp)
 
 echo "▸ copying ${#PLUGINS[@]} plugins"
 for p in "${PLUGINS[@]}"; do
