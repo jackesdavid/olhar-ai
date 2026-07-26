@@ -180,82 +180,19 @@ if ! tailscale version >/dev/null 2>&1; then
   fi
 fi
 
-# macOS: register + start the tailscaled system daemon (launchd) so `tailscale up` works
-# headlessly. (Linux's installer already sets up tailscaled.)
-ensure_tailscaled_macos
+# No tailnet (card #144). The edge is outbound-only: it reaches control over HTTPS, holds one
+# outbound SSE command stream, and pushes live video out to the gateway. Nothing needs to reach INTO
+# the box, so there is no Tailscale to install or join — one fewer dependency and zero inbound surface.
 
-# Join the tailnet now (best-effort) so the box is reachable the moment install finishes;
-# the edge service also re-asserts this on boot. Needs a key (auto-minted or --authkey).
-if [ -n "$AUTHKEY" ]; then
-  echo "▸ Joining the tailnet (hostname=$HOSTNAME_)…"
-  # --reset: the appliance owns its tailscale identity. Without it, a box that already had
-  # tailscale set up (e.g. Bazzite's `ujust` sets --operator=<user>) makes `up` refuse with
-  # "changing settings requires mentioning all non-default flags". --reset overrides that.
-  # shellcheck disable=SC2086
-  tailscale up --reset --authkey="$AUTHKEY" --hostname="$HOSTNAME_" ${TAGS:+--advertise-tags="$TAGS"} \
-    || echo "  'tailscale up' failed — check the auth key; the edge service will retry on boot." >&2
-fi
-
-# ---- 1b. runtime dep: ffmpeg ------------------------------------------------
-# ffmpeg is the ONLY runtime dependency: go2rtc shells out to it for JPEG frames (Live snapshot +
-# GetCurrentFrame node) — without it those fail (`exec: "ffmpeg": not found`) while MSE/WebRTC still
-# plays.
-#
-# The edge itself needs nothing. It used to link OpenCV for the MOG2 motion watcher, which meant
-# installing it here, matching its soname to the build host's, layering it via rpm-ostree on an
-# immutable OS — and REBOOTING before the box could start. Motion is pure Rust now (card #79), so
-# all of that is gone.
-if [ "$IMMUTABLE" = 1 ]; then
-  # Immutable Fedora (Bazzite / Silverblue / Kinoite): the base OS is read-only — layer ffmpeg with
-  # rpm-ostree. Unlike the OpenCV libs the edge used to link, ffmpeg is spawned as a child process
-  # by go2rtc, so it does not have to be active before the edge can run: no reboot gate.
-  if ! command -v ffmpeg >/dev/null 2>&1; then
-    echo "▸ Layering ffmpeg via rpm-ostree…"
-    rpm-ostree install --idempotent --allow-inactive ffmpeg-free \
-      || echo "  ⚠ rpm-ostree install failed — layer it manually: sudo rpm-ostree install ffmpeg-free" >&2
-    command -v ffmpeg >/dev/null 2>&1 || REBOOT_REQUIRED=1
-  fi
-else
-  # Mutable OS (Debian/Ubuntu/Alpine/regular Fedora, macOS) — install in place, effective now.
-  if ! command -v ffmpeg >/dev/null 2>&1; then
-    echo "▸ Installing ffmpeg…"
-    if [ "$os" = "Linux" ]; then
-      if command -v apt-get >/dev/null 2>&1; then
-        apt-get update -qq && apt-get install -y ffmpeg
-      elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y ffmpeg
-      elif command -v yum >/dev/null 2>&1; then
-        yum install -y ffmpeg
-      elif command -v apk >/dev/null 2>&1; then
-        apk add --no-cache ffmpeg
-      else
-        echo "  No supported package manager found — install ffmpeg manually, then re-run." >&2
-      fi
-    else
-      # macOS: Homebrew refuses to run as root, so install as the invoking user.
-      if [ -n "${SUDO_USER:-}" ] && command -v sudo >/dev/null 2>&1 && sudo -u "$SUDO_USER" command -v brew >/dev/null 2>&1; then
-        sudo -u "$SUDO_USER" brew install ffmpeg || true
-      elif command -v brew >/dev/null 2>&1; then
-        brew install ffmpeg || true
-      else
-        echo "  Install ffmpeg first:  brew install ffmpeg  — then re-run." >&2
-      fi
-    fi
-  fi
-fi
-if command -v ffmpeg >/dev/null 2>&1; then
-  echo "✓ ffmpeg present ($(command -v ffmpeg))"
-else
-  echo "⚠ ffmpeg NOT found — live snapshots / GetCurrentFrame will fail until it is installed." >&2
-fi
-
-# ---- 1c. runtime dep: gstreamer (opt-in, card #138) -------------------------
-# Only installed when explicitly requested (--media-backend gstreamer /
-# SENTINEL_MEDIA_BACKEND=gstreamer) — ffmpeg stays the default runtime dependency above
-# regardless. This is the coexistence/measurement phase (docs/plans/edge-gstreamer-backend.md):
-# gst-launch-1.0 is a subprocess tool the edge shells out to, same shape as ffmpeg, no linking.
-if [ "$MEDIA_BACKEND" = "gstreamer" ] && ! command -v gst-launch-1.0 >/dev/null 2>&1; then
-  echo "▸ Installing GStreamer (media_backend=gstreamer)…"
+# ---- runtime dep: GStreamer -------------------------------------------------
+# The edge LINKS GStreamer now (card #138) — it is the SOLE media backend; go2rtc and ffmpeg are
+# retired. Install the GStreamer runtime + plugins so the linked pipeline finds its elements (decode
+# incl. HW where available, mux, appsink). The edge is outbound-only (card #144: SSE commands + live
+# over its own outbound connection) — no tailnet, no go2rtc, no ffmpeg. On an immutable OS the
+# plugins layer via rpm-ostree; the plugin list was proven on the Jetson test box (`-libav` is
+# load-bearing — some boxes ship no software H264/H265 decoder without it).
+if ! command -v gst-inspect-1.0 >/dev/null 2>&1; then
+  echo "▸ Installing GStreamer runtime…"
   if [ "$os" = "Linux" ]; then
     if [ "$IMMUTABLE" = 1 ]; then
       rpm-ostree install --idempotent --allow-inactive \
@@ -290,12 +227,10 @@ if [ "$MEDIA_BACKEND" = "gstreamer" ] && ! command -v gst-launch-1.0 >/dev/null 
     fi
   fi
 fi
-if [ "$MEDIA_BACKEND" = "gstreamer" ]; then
-  if command -v gst-launch-1.0 >/dev/null 2>&1; then
-    echo "✓ gstreamer present ($(command -v gst-launch-1.0))"
-  else
-    echo "⚠ gstreamer NOT found — the edge falls back to ffmpeg for every operation until it is installed." >&2
-  fi
+if command -v gst-inspect-1.0 >/dev/null 2>&1; then
+  echo "✓ GStreamer present ($(command -v gst-inspect-1.0))"
+else
+  echo "⚠ GStreamer NOT found — the edge has no media backend until it is installed." >&2
 fi
 
 # ---- 2. binaries ------------------------------------------------------------
@@ -308,18 +243,8 @@ if ver="$("$PREFIX/sentinel-edge" --version 2>/dev/null)"; then
   echo "✓ Installed $ver"
 fi
 
-echo "▸ Downloading go2rtc…"
-case "$GO2RTC_ASSET" in
-  *.zip)
-    tmp="$(mktemp -d)"
-    curl -fSL "$GO2RTC_BASE/$GO2RTC_ASSET" -o "$tmp/go2rtc.zip"
-    unzip -o "$tmp/go2rtc.zip" -d "$tmp" >/dev/null
-    mv "$(find "$tmp" -type f ! -name '*.zip' | head -1)" "$PREFIX/go2rtc"
-    rm -rf "$tmp" ;;
-  *)
-    curl -fSL "$GO2RTC_BASE/$GO2RTC_ASSET" -o "$PREFIX/go2rtc" ;;
-esac
-chmod +x "$PREFIX/go2rtc"
+# go2rtc is retired (card #138) — GStreamer, linked into the edge, is the sole media path. Nothing
+# to download; the GStreamer runtime installed above provides the elements the edge uses in-process.
 
 # ---- 3. config --------------------------------------------------------------
 # Bake a PATH so the service (and the go2rtc child it spawns) can find ffmpeg + tailscale
@@ -334,18 +259,13 @@ cat > "$ENV_DIR/edge.env" <<EOF
 EDGE_BIND=127.0.0.1:8788
 CONTROL_URL=$CONTROL_URL
 BOX_TOKEN=$BOX_TOKEN
-EDGE_PUBLIC_HOST=$PUBLIC_HOST
-EDGE_OWN_GO2RTC=1
-GO2RTC_BIN=$PREFIX/go2rtc
-GO2RTC_CONFIG=$PREFIX/go2rtc.yaml
 EDGE_CACHE=$PREFIX/cameras-cache.json
-TS_AUTHKEY=$AUTHKEY
-TS_HOSTNAME=$HOSTNAME_
-TS_TAGS=$TAGS
-EDGE_MEDIA_BACKEND=$MEDIA_BACKEND
 PATH=$EDGE_PATH
 EOF
-chmod 600 "$ENV_DIR/edge.env"   # contains the auth key + box token
+chmod 600 "$ENV_DIR/edge.env"   # contains the box token
+
+# No go2rtc (EDGE_OWN_GO2RTC / GO2RTC_*), no tailnet (TS_*), no media-backend flag — the gst-linked
+# edge defaults to GStreamer and reaches the cloud outbound-only (card #144).
 
 # ---- 4. service (the edge self-enrolls Tailscale + serve on startup) --------
 if [ "$os" = "Linux" ]; then

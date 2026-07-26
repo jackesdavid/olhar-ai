@@ -22,25 +22,34 @@ jobs:
   build:
     name: build ${{ matrix.asset }}
     runs-on: ${{ matrix.os }}
+    # The edge now LINKS GStreamer (card #138 — the sole media backend; go2rtc + ffmpeg retired) and
+    # is outbound-only (card #144 — SSE commands + live over the outbound connection; no tailnet). So
+    # every target is a NATIVE build with GStreamer dev present — no more static-musl `cross` build
+    # (GStreamer is glib + dynamic plugins and cannot statically link into musl). Linux is glibc; the
+    # matching GStreamer runtime is installed on the box by install.sh / install.ps1.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            cross: true
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            setup: linux
             asset: sentinel-edge-linux-x86_64
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            cross: true
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm      # native arm64 runner — no cross-compile of GStreamer
+            setup: linux
             asset: sentinel-edge-linux-aarch64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            setup: windows
+            asset: sentinel-edge-windows-x86_64.exe
           - target: aarch64-apple-darwin
-            os: macos-latest
-            cross: false
+            os: macos-latest          # arm64 runner
+            setup: macos
             asset: sentinel-edge-macos-arm64
           - target: x86_64-apple-darwin
-            os: macos-latest
-            cross: false
+            os: macos-13              # native intel runner (macos-latest is arm64)
+            setup: macos
             asset: sentinel-edge-macos-x86_64
     steps:
       - uses: actions/checkout@v4
@@ -52,25 +61,49 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          workspaces: sentinel-edge
 
-      - name: Install cross
-        if: matrix.cross
-        run: cargo install cross --git https://github.com/cross-rs/cross --locked
+      # ---- GStreamer dev libs, per platform (the edge links them; the box gets the runtime) ----
+      - name: GStreamer dev (Linux)
+        if: matrix.setup == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+      - name: GStreamer dev (macOS)
+        if: matrix.setup == 'macos'
+        run: brew install gstreamer pkg-config
+      - name: GStreamer dev (Windows — MSVC runtime + devel)
+        if: matrix.setup == 'windows'
+        shell: pwsh
+        run: |
+          $ver  = "1.24.10"
+          $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc"
+          curl.exe -sSL -o rt.msi  "$base/gstreamer-1.0-msvc-x86_64-$ver.msi"
+          curl.exe -sSL -o dev.msi "$base/gstreamer-1.0-devel-msvc-x86_64-$ver.msi"
+          Start-Process msiexec.exe -ArgumentList "/i rt.msi  /qn ADDLOCAL=ALL" -Wait
+          Start-Process msiexec.exe -ArgumentList "/i dev.msi /qn ADDLOCAL=ALL" -Wait
+          $root = "C:\gstreamer\1.0\msvc_x86_64"
+          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root"      | Out-File -Append -Encoding ascii $env:GITHUB_ENV
+          "PKG_CONFIG_PATH=$root\lib\pkgconfig"        | Out-File -Append -Encoding ascii $env:GITHUB_ENV
+          "$root\bin"                                  | Out-File -Append -Encoding ascii $env:GITHUB_PATH
 
-      # sentinel-edge is a STANDALONE crate (not in the root workspace), so build it via its own
-      # manifest — a bare `-p sentinel-edge` at the repo root can't see it.
-      - name: Build (cross / linux-musl)
-        if: matrix.cross
-        run: cross build --release --locked --manifest-path sentinel-edge/Cargo.toml --target ${{ matrix.target }}
+      # sentinel-edge is a STANDALONE crate (not in the root workspace), so build via its own manifest.
+      - name: Build (gst-linked)
+        run: cargo build --release --locked --features gst-linked --manifest-path sentinel-edge/Cargo.toml --target ${{ matrix.target }}
 
-      - name: Build (native / macOS)
-        if: ${{ !matrix.cross }}
-        run: cargo build --release --locked --manifest-path sentinel-edge/Cargo.toml --target ${{ matrix.target }}
-
-      - name: Stage asset
+      - name: Stage asset (unix)
+        if: matrix.setup != 'windows'
         run: |
           mkdir -p dist
           cp "sentinel-edge/target/${{ matrix.target }}/release/sentinel-edge" "dist/${{ matrix.asset }}"
+      - name: Stage asset (windows)
+        if: matrix.setup == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "sentinel-edge/target/${{ matrix.target }}/release/sentinel-edge.exe" "dist/${{ matrix.asset }}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -146,8 +179,13 @@ jobs:
 
       # Ship the installer alongside the binaries so the client can:
       #   curl -fsSL .../releases/latest/download/install.sh | sudo sh -s -- ...
-      - name: Add installer
-        run: cp sentinel-edge/install.sh dist/install.sh
+      - name: Add installers
+        run: |
+          cp sentinel-edge/install.sh dist/install.sh
+          # Windows bundle: the installer + its uninstaller + the WinSW service shim, alongside the
+          # sentinel-edge-windows-x86_64.exe binary the build job produced.
+          cp deploy/windows/install.ps1 dist/install.ps1
+          cp deploy/windows/uninstall.ps1 dist/uninstall.ps1 || true
 
       - uses: softprops/action-gh-release@v2
         with:
