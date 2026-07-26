@@ -326,6 +326,11 @@ pub struct LogLineIn {
     #[serde(default)]
     pub target: String,
     pub message: String,
+    /// Structured fields of the event (card #146) — e.g. `{camera_ip, mode, fps}`. Empty for
+    /// plaintext (`log::*`) lines. Control merges these into the Datadog record's searchable
+    /// attributes and stamps the box identity (`edge_id`/`edge_name`/`tenant`) alongside.
+    #[serde(default)]
+    pub fields: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Confirm a box id belongs to a tenant (guards the per-box log routes).

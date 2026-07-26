@@ -1,6 +1,6 @@
 [package]
 name = "sentinel-edge"
-version = "0.5.53"
+version = "0.5.54"
 edition = "2021"
 description = "The edge gateway — the ONLY thing that touches cameras. Wraps go2rtc (sentinel-rtc) + ONVIF and serves on-demand JPEG snapshots over REST so out-of-process services (sentinel-flow, the UI) reach the LAN-bound cameras without speaking RTSP/ONVIF themselves. Cameras are LAN-bound, so this tier is mandatory however cloud the rest becomes."
 
@@ -38,6 +38,13 @@ chrono = "0.4"
 base64 = "0.22"
 log = "0.4"
 env_logger = "0.11"
+# Structured logging (card #146): the capture/telemetry sites emit typed fields (`camera_ip`, `mode`,
+# `fps`, …) as tracing events; the ring layer (logbuf.rs) captures them as JSON so control relays
+# searchable fields to Datadog. `tracing-log` bridges the many existing `log::*` sites unchanged.
+# All pure-Rust — no soname coupling, cross-compiles to musl/Windows/ARM like the rest of the edge.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-log = "0.2"
 # Continuous motion detection — MOG2 (src/mog2.rs), morphology + blobs (imageproc), decode +
 # resize (image). All pure Rust: the edge has NO native dependency, so it cross-compiles to
 # Windows/ARM/musl with plain cargo and its binary isn't soname-coupled to the build host.

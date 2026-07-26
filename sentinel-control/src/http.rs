@@ -667,15 +667,27 @@ async fn box_logs_push(State(st): State<AppState>, headers: HeaderMap, body: Opt
     if lines.is_empty() {
         return StatusCode::NO_CONTENT.into_response();
     }
-    // Card #145: the edge keeps relaying its lines here, but they go to the unified log queue only —
-    // which ships to Datadog when configured (else Postgres). No more `box_logs` table + no
-    // `log_bus` broadcast (the in-app logs view is gone; operators read logs in Datadog).
+    // Card #146: the box holds its token, not its name — control resolves `edge_name` here (once per
+    // batch) so every edge log in Datadog can be faceted by a human name, not just the box id.
+    let edge_id = box_id.to_string();
+    let edge_name = store::box_name(&st.pool, box_id).await.ok().flatten().filter(|s| !s.trim().is_empty());
+    // Card #145/#146: the edge keeps relaying its lines here; they go to the unified log queue, which
+    // ships to Datadog when configured (else Postgres). Structured fields (`camera_ip`, `fps`, …) plus
+    // the stamped identity ride in `payload` and are spread to searchable attributes / facets by the
+    // Datadog record builder. No more `box_logs` table or `log_bus` broadcast (in-app view is gone).
     for l in &lines {
+        let mut payload = l.fields.clone();
+        payload.insert("target".into(), json!(l.target));
+        payload.insert("ts".into(), json!(l.ts));
+        payload.insert("edge_id".into(), json!(edge_id));
+        if let Some(name) = &edge_name {
+            payload.insert("edge_name".into(), json!(name));
+        }
         st.log_queue.push(app_core::platform_logs::PlatformLog {
             tenant_id: tenant,
             module: "edge",
             trace_id: None,
-            entity_id: Some(box_id.to_string()),
+            entity_id: Some(edge_id.clone()),
             entity_type: Some("edge_box"),
             level: match l.level.to_lowercase().as_str() {
                 "error" => "error",
@@ -684,7 +696,7 @@ async fn box_logs_push(State(st): State<AppState>, headers: HeaderMap, body: Opt
                 _       => "info",
             },
             message: l.message.clone(),
-            payload: Some(json!({ "target": l.target, "ts": l.ts })),
+            payload: Some(serde_json::Value::Object(payload)),
         });
     }
     StatusCode::NO_CONTENT.into_response()

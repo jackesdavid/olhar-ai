@@ -59,10 +59,24 @@ get converted to structured fields incrementally.
   `tracing::info!(camera_ip=%ip, mode, width=w, height=h, grab_ms=grab, decode_ms=decode, frames, fps, "capture")`.
   The rest stay bridged (plaintext `message`) and convert opportunistically — no big-bang rewrite.
 
+## Status
+- **Phases 1–3 (control/flow):** done — `app_core::datadog::init_tracing` (registry + Datadog layer +
+  `log::*` bridge) in control/flow; control's per-request `tenant` span (`http.rs`) and flow's
+  per-run `tenant`/`graph`/`run` span (`engine.rs spawn_graph_run`) are the central "root place".
+  Verified in Datadog (`service:control`, `service:flow`).
+- **Edge structured (Phases 1–5, edge side):** done — the edge `RingLogger` is now a `tracing` layer
+  (`logbuf.rs`) that captures each event's fields as JSON; `frames.rs` capture is
+  `tracing::info!(camera_ip=%ip, mode, width, height, grab_ms, decode_ms, frames, fps, "capture")`;
+  the relay carries `fields` (`store::LogLineIn`); control's `box_logs_push` stamps
+  `edge_id`/`edge_name` (resolved from `tenant_boxes.name`) + `tenant` and ships to Datadog as
+  `service:edge`. `to_dd_record` spreads the payload to searchable top-level attributes. Edge bumped
+  to 0.5.54 (ships on the next edge release). Other `log::*` edge sites stay bridged (plaintext),
+  convert opportunistically.
+- **Remaining:** gateway → Datadog (minimal layer copy); app frontend errors → Datadog (Phase 6).
+
 ## Open decisions
-1. **edge_name source** — control resolves it from `tenant_boxes.name` at relay time (one lookup,
-   cached), OR the config poll returns the name and the edge stamps its own span. (Lean: control
-   resolves — keeps the box dumb, name changes take effect immediately.)
+1. **edge_name source** — RESOLVED: control resolves it from `tenant_boxes.name` at relay time (one
+   lookup per push batch) — keeps the box dumb, name changes take effect immediately.
 2. **Datadog reserved attributes** — map to DD's conventions (`host`, `service`, `status`,
    `ddtags`) so facets + the log pipeline work out of the box; `camera_ip` etc. become custom
    attributes (searchable via `@camera_ip:`).

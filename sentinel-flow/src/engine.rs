@@ -118,6 +118,10 @@ pub fn spawn_graph_run(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid, sour
     // could otherwise spawn past the ceiling while the threads were still starting up.
     mark_run_started(&state, tenant, graph_id, run_id, source.as_str());
     std::thread::spawn(move || {
+        // Card #146: the central "root place" for tenant context. Flow is multi-tenant in one pod,
+        // so every log emitted during this run (engine + bridged `log::*` node sites) inherits
+        // `tenant`/`graph`/`run` from this span — no log call passes tenant_id by hand.
+        let _span = tracing::info_span!("run", tenant = %tenant, graph = %graph_id, run = %run_id).entered();
         workflows::repo::insert_run(
             &state.db,
             tenant,
