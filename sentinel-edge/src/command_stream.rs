@@ -112,28 +112,69 @@ fn handle(control_url: &str, local_api: &str, tok: &str, data: &str) {
 
 /// Dispatch a command to the edge's own local HTTP API — the same endpoints the app drives, so the
 /// cloud path and the local path are one and the same.
+///
+/// The named recording commands are kept for the already-live recording node. Everything else uses
+/// the **generic `http_request`** proxy (card #144): the cloud sends `{method, path, body}`, the edge
+/// performs that call against `127.0.0.1:<port>` and returns `{status, content_type, body_b64}` — so
+/// ANY discrete cloud→edge HTTP (probe, snapshot, tracks, get-frame, clip-delete…) rides the SSE
+/// channel without a per-endpoint command. `body_b64` carries binary (a JPEG, JSON, anything) intact.
 fn dispatch(local_api: &str, cmd: &str, args: &serde_json::Value) -> (bool, Option<serde_json::Value>, Option<String>) {
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(120)).build();
-    let post = |path: &str| -> Result<serde_json::Value, String> {
-        match agent.post(&format!("{local_api}{path}")).send_json(args.clone()) {
-            Ok(resp) => resp.into_json::<serde_json::Value>().map_err(|e| format!("decode: {e}")),
-            Err(ureq::Error::Status(code, resp)) => {
-                Err(resp.into_string().unwrap_or_else(|_| format!("HTTP {code}")))
-            }
-            Err(e) => Err(format!("{e}")),
-        }
-    };
-    let out = match cmd {
-        "start_recording" => post("/recording/start"),
-        "stop_recording" => post("/recording/stop"),
-        "snapshot" => {
-            // GET /snapshot/<ip> returns JPEG bytes; not wired through this JSON path yet.
-            Err("snapshot over the command stream is not implemented yet".into())
-        }
-        other => Err(format!("unknown command: {other}")),
-    };
-    match out {
-        Ok(r) => (true, Some(r), None),
-        Err(e) => (false, None, Some(e)),
+    match cmd {
+        "start_recording" => named_post(local_api, "/recording/start", args),
+        "stop_recording" => named_post(local_api, "/recording/stop", args),
+        "http_request" => http_request(local_api, args),
+        other => (false, None, Some(format!("unknown command: {other}"))),
     }
+}
+
+/// A named POST whose JSON reply is the command result (the recording commands).
+fn named_post(local_api: &str, path: &str, args: &serde_json::Value) -> (bool, Option<serde_json::Value>, Option<String>) {
+    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(120)).build();
+    match agent.post(&format!("{local_api}{path}")).send_json(args.clone()) {
+        Ok(resp) => match resp.into_json::<serde_json::Value>() {
+            Ok(v) => (true, Some(v), None),
+            Err(e) => (false, None, Some(format!("decode: {e}"))),
+        },
+        Err(ureq::Error::Status(code, resp)) => {
+            (false, None, Some(resp.into_string().unwrap_or_else(|_| format!("HTTP {code}"))))
+        }
+        Err(e) => (false, None, Some(format!("{e}"))),
+    }
+}
+
+/// The generic local-HTTP proxy. Reconstructs the edge's response as `{status, content_type,
+/// body_b64}` so the cloud caller can rebuild it verbatim (bytes and status preserved).
+fn http_request(local_api: &str, args: &serde_json::Value) -> (bool, Option<serde_json::Value>, Option<String>) {
+    use std::io::Read;
+    use base64::Engine;
+
+    let method = args.get("method").and_then(|m| m.as_str()).unwrap_or("GET").to_uppercase();
+    let Some(path) = args.get("path").and_then(|p| p.as_str()) else {
+        return (false, None, Some("http_request: missing 'path'".into()));
+    };
+    let url = format!("{local_api}{path}");
+    // 120s: a snapshot may cold-start its decoder; a clip fetch can be large.
+    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(120)).build();
+    let req = agent.request(&method, &url);
+    // `body` is an arbitrary JSON value (POST/PUT payload); GET/DELETE usually omit it.
+    let sent = match args.get("body") {
+        Some(b) if !b.is_null() => req.send_json(b.clone()),
+        _ => req.call(),
+    };
+    // Both a 2xx and a 4xx/5xx are a *delivered* result — the cloud handler decides what a non-2xx
+    // means (a probe's `auth_failed` is a 200 with a verdict; a real edge error is a 5xx body). Only
+    // a transport failure (couldn't reach our own localhost) is a command error.
+    let resp = match sent {
+        Ok(r) => r,
+        Err(ureq::Error::Status(_, r)) => r,
+        Err(e) => return (false, None, Some(format!("local http: {e}"))),
+    };
+    let status = resp.status();
+    let content_type = resp.content_type().to_string();
+    let mut bytes = Vec::new();
+    if let Err(e) = resp.into_reader().take(64 * 1024 * 1024).read_to_end(&mut bytes) {
+        return (false, None, Some(format!("read body: {e}")));
+    }
+    let body_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    (true, Some(serde_json::json!({ "status": status, "content_type": content_type, "body_b64": body_b64 })), None)
 }

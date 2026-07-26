@@ -96,47 +96,55 @@ async fn set_credentials(UserClaims(c): UserClaims, State(st): State<AppState>, 
 /// `locked`, `not_found`, `unreachable`, `timeout`, `error`) so the UI can name the real cause
 /// instead of blaming the password for a locked or unreachable camera.
 async fn probe(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip): Path<String>, Json(b): Json<CredsReq>) -> Result<Response, ApiErr> {
-    use crate::domain::recordings::{edge_api_base, normalize_host};
     // Read-only for our data (nothing is persisted), but it does drive a camera login, so it
     // sits behind the same permission as setting credentials.
     auth::require(&c, "devices.write")?;
     let tid = tenant_of(&c)?;
+    let path = format!("/probe/{}", urlencoding::encode(&ip));
+    let creds = serde_json::json!({ "username": b.username, "password": b.password });
 
-    let edge_host = store::box_host_for_tenant(&st.pool, tid)
-        .await
-        .map_err(|e| {
-            log::error!("box host lookup: {e}");
-            err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
-        })?
-        .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "no edge box connected for this tenant"))?;
+    // Prefer the SSE command channel (card #144) — it works for an outbound-only box with no
+    // tailnet, which is exactly why the Devices "Test" used to fail on those. Fall back to the
+    // legacy tailnet POST for a box that isn't on SSE.
+    let (status, body): (u16, Vec<u8>) = if let Some(res) =
+        app_core::edge_commands::edge_http_via_sse(&st.pool, tid, "POST", &path, Some(creds.clone()), 35).await
+    {
+        res.map_err(|e| err(StatusCode::BAD_GATEWAY, format!("edge probe over SSE: {e}")))?
+    } else {
+        use crate::domain::recordings::{edge_api_base, normalize_host};
+        let edge_host = store::box_host_for_tenant(&st.pool, tid)
+            .await
+            .map_err(|e| {
+                log::error!("box host lookup: {e}");
+                err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+            })?
+            .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "no edge box connected for this tenant"))?;
+        let base = edge_api_base(&normalize_host(&edge_host));
+        let url = format!("{base}{path}");
+        // The probe opens a real socket to the camera, so allow for a slow handshake — but bound it.
+        let resp = st
+            .http
+            .post(&url)
+            .json(&creds)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| {
+                log::error!("edge probe {url}: {e}");
+                err(StatusCode::BAD_GATEWAY, format!("edge unreachable: {e}"))
+            })?;
+        let status = resp.status().as_u16();
+        let body = resp
+            .bytes()
+            .await
+            .map_err(|e| err(StatusCode::BAD_GATEWAY, format!("edge response read: {e}")))?
+            .to_vec();
+        (status, body)
+    };
 
-    let base = edge_api_base(&normalize_host(&edge_host));
-    let url = format!("{base}/probe/{}", urlencoding::encode(&ip));
-
-    // The probe opens a real socket to the camera, so allow for a slow handshake — but bound
-    // it, or a wedged camera would hold the request open indefinitely.
-    let resp = st
-        .http
-        .post(&url)
-        .json(&serde_json::json!({ "username": b.username, "password": b.password }))
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await
-        .map_err(|e| {
-            log::error!("edge probe {url}: {e}");
-            err(StatusCode::BAD_GATEWAY, format!("edge unreachable: {e}"))
-        })?;
-
-    if !resp.status().is_success() {
-        return Err(err(
-            StatusCode::BAD_GATEWAY,
-            format!("edge returned {}", resp.status()),
-        ));
+    if !(200..300).contains(&status) {
+        return Err(err(StatusCode::BAD_GATEWAY, format!("edge returned {status}")));
     }
-    let body = resp
-        .bytes()
-        .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, format!("edge response read: {e}")))?;
     Ok(([(header::CONTENT_TYPE, "application/json")], Body::from(body)).into_response())
 }
 
@@ -207,6 +215,23 @@ async fn snapshot(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip
     auth::require(&c, "devices.read")?;
     let tid = tenant_of(&c)?;
 
+    // SSE command channel first (card #144 — outbound-only boxes); tailnet fallback below.
+    let path = format!("/snapshot/{}", urlencoding::encode(&ip));
+    if let Some(res) = app_core::edge_commands::edge_http_via_sse(&st.pool, tid, "GET", &path, None, 20).await {
+        let (status, body) = res.map_err(|e| err(StatusCode::BAD_GATEWAY, format!("edge snapshot over SSE: {e}")))?;
+        if status == 404 {
+            return Err(err(StatusCode::NOT_FOUND, "no frame available"));
+        }
+        if !(200..300).contains(&status) {
+            return Err(err(StatusCode::BAD_GATEWAY, format!("edge returned {status}")));
+        }
+        return Ok((
+            [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-store")],
+            Body::from(body),
+        )
+            .into_response());
+    }
+
     let edge_host = store::box_host_for_tenant(&st.pool, tid)
         .await
         .map_err(|e| {
@@ -248,6 +273,16 @@ async fn tracks(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip):
     use crate::domain::recordings::{edge_api_base, normalize_host};
     auth::require(&c, "devices.read")?;
     let tid = tenant_of(&c)?;
+
+    // SSE command channel first (card #144); tailnet fallback below.
+    let path = format!("/tracks/{}", urlencoding::encode(&ip));
+    if let Some(res) = app_core::edge_commands::edge_http_via_sse(&st.pool, tid, "GET", &path, None, 15).await {
+        let (status, body) = res.map_err(|e| err(StatusCode::BAD_GATEWAY, format!("edge tracks over SSE: {e}")))?;
+        if !(200..300).contains(&status) {
+            return Err(err(StatusCode::BAD_GATEWAY, format!("edge returned {status}")));
+        }
+        return Ok(([(header::CONTENT_TYPE, "application/json")], Body::from(body)).into_response());
+    }
 
     let edge_host = store::box_host_for_tenant(&st.pool, tid)
         .await

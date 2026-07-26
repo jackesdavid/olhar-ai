@@ -193,6 +193,109 @@ pub fn has_live_session_blocking(db: &Db, box_id: Uuid, max_age_secs: i64) -> bo
     .unwrap_or(false)
 }
 
+// ---- generic HTTP-over-SSE proxy (card #144) -------------------------------
+// Every discrete cloud→edge HTTP call (probe, snapshot, tracks, get-frame, clip-delete…) can ride
+// the SSE channel via one `http_request` command: the edge performs the call against its own local
+// API and returns `{status, content_type, body_b64}`. These helpers hide that behind a
+// tailnet-or-SSE choice — they return `None` when the box has no live SSE session, so the caller
+// falls back to its existing tailnet path unchanged.
+
+/// Decode an `http_request` command result (`{status, body_b64}`) into `(status, body_bytes)`.
+pub fn decode_http_result(v: &serde_json::Value) -> Result<(u16, Vec<u8>), String> {
+    use base64::Engine;
+    let status = v.get("status").and_then(|s| s.as_u64()).unwrap_or(0) as u16;
+    let b64 = v.get("body_b64").and_then(|b| b.as_str()).unwrap_or("");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| format!("bad body_b64: {e}"))?;
+    Ok((status, bytes))
+}
+
+/// The tenant's box reachable over SSE right now (fresh `sse_last_seen`), async. Mirrors the
+/// recording node's `sse_box` for control-side (async) callers.
+pub async fn live_box_for_tenant(pool: &PgPool, tenant_id: Uuid, max_age_secs: i64) -> Option<Uuid> {
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM tenant_boxes
+         WHERE tenant_id = $1 AND sse_last_seen IS NOT NULL
+           AND sse_last_seen::timestamptz > now() - make_interval(secs => $2::double precision)
+         ORDER BY sse_last_seen DESC LIMIT 1",
+    )
+    .bind(tenant_id).bind(max_age_secs as f64)
+    .fetch_optional(pool).await.ok().flatten()
+}
+
+/// Await a command's terminal result, async (for control). Polls the row until `done`/`failed` or
+/// `timeout`. Returns the `result` JSON or the `error` string.
+pub async fn await_result(pool: &PgPool, id: Uuid, timeout_secs: u64) -> Result<serde_json::Value, String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    loop {
+        let row: Option<(String, Option<serde_json::Value>, Option<String>)> =
+            sqlx::query_as("SELECT status, result, error FROM edge_commands WHERE id = $1")
+                .bind(id).fetch_optional(pool).await
+                .map_err(|e| format!("await result: {e}"))?;
+        match row {
+            Some((s, result, _)) if s == "done" => return Ok(result.unwrap_or(serde_json::Value::Null)),
+            Some((s, _, error)) if s == "failed" => return Err(error.unwrap_or_else(|| "edge command failed".into())),
+            _ => {}
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("edge command timed out (box not reachable over SSE)".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    }
+}
+
+/// Proxy a local edge HTTP call over SSE, async (control). `None` → no live SSE session (caller
+/// should use its tailnet path); `Some(Ok((status, body)))` → the edge's response; `Some(Err)` →
+/// delivered but the round-trip failed (timeout/transport).
+pub async fn edge_http_via_sse(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    method: &str,
+    path: &str,
+    body: Option<serde_json::Value>,
+    timeout_secs: u64,
+) -> Option<Result<(u16, Vec<u8>), String>> {
+    let box_id = live_box_for_tenant(pool, tenant_id, 30).await?;
+    let args = serde_json::json!({ "method": method, "path": path, "body": body });
+    Some(async {
+        let id = enqueue(pool, tenant_id, box_id, "http_request", args, 25).await
+            .map_err(|e| format!("enqueue: {e}"))?;
+        let result = await_result(pool, id, timeout_secs).await?;
+        decode_http_result(&result)
+    }.await)
+}
+
+/// Proxy a local edge HTTP call over SSE, blocking (flow). Same contract as [`edge_http_via_sse`].
+pub fn edge_http_via_sse_blocking(
+    db: &Db,
+    tenant_id: Uuid,
+    method: &str,
+    path: &str,
+    body: Option<serde_json::Value>,
+    timeout_secs: u64,
+) -> Option<Result<(u16, Vec<u8>), String>> {
+    // A fresh SSE-reachable box is the signal to use SSE; None → caller uses its tailnet path.
+    let box_id = tenant_id_box(db, tenant_id)?;
+    let id = enqueue_blocking(db, tenant_id, box_id, "http_request",
+        serde_json::json!({ "method": method, "path": path, "body": body }), 25)?;
+    Some(await_result_blocking(db, id, timeout_secs).and_then(|v| decode_http_result(&v)))
+}
+
+/// The tenant's SSE-reachable box id, blocking (flow helper).
+fn tenant_id_box(db: &Db, tenant_id: Uuid) -> Option<Uuid> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM tenant_boxes
+             WHERE tenant_id = $1 AND sse_last_seen IS NOT NULL
+               AND sse_last_seen::timestamptz > now() - make_interval(secs => 30)
+             ORDER BY sse_last_seen DESC LIMIT 1",
+        )
+        .bind(tenant_id).fetch_optional(&pool).await
+    }).ok().flatten()
+}
+
 /// Await a command's terminal result, blocking. Polls the row until `done`/`failed` or `timeout`.
 /// Returns the `result` JSON on success, or the `error` (or "timeout") string. Polling is fine here:
 /// this runs on a flow std thread and the wait is bounded and short; the NOTIFY latency win is on
