@@ -799,12 +799,20 @@ async fn events_stream(
                 return;
             }
             let mut on_msg = pubsub.on_message();
-            while let Some(msg) = on_msg.next().await {
-                let Ok(payload) = msg.get_payload::<String>() else {
-                    continue;
-                };
-                if tx.send(Ok(Event::default().data(payload))).await.is_err() {
-                    return; // browser disconnected
+            loop {
+                tokio::select! {
+                    // Browser gone (SSE stream dropped → receiver closed). MUST be checked even when
+                    // the tenant's channel is idle: otherwise `on_msg.next()` blocks forever and this
+                    // Redis pubsub CONNECTION LEAKS — one per page-open/reconnect, which exhausts the
+                    // process FD limit (`accept: Too many open files`, os error 24).
+                    _ = tx.closed() => return,
+                    msg = on_msg.next() => {
+                        let Some(msg) = msg else { return }; // pubsub stream ended
+                        let Ok(payload) = msg.get_payload::<String>() else { continue };
+                        if tx.send(Ok(Event::default().data(payload))).await.is_err() {
+                            return; // browser disconnected mid-send
+                        }
+                    }
                 }
             }
         });
