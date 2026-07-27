@@ -462,8 +462,9 @@ tasks:
           GST_REGISTRY_1_0="$reg" GST_REGISTRY_FORK=no \
           "$PL/sentinel-edge" gst-selftest
         echo "✓ macOS bundle passes gst-selftest — RTSP/live capable"
-      # ---- Linux: gst-linked, both arches (install.sh pulls sentinel-edge-linux-<uname -m>) ----
-      - task: edge-linux-build
+      # ---- Linux: gst-linked, aarch64 only for now (Jetson-native). The x86_64 Fedora container
+      #      build is temporarily skipped — the current fleet is macOS + Jetson arm64. Re-add
+      #      `- task: edge-linux-build` here when an x86_64 Linux appliance is back in scope. ----
       - task: edge-linux-build-arm64
       # ---- publish every artifact under the canonical names the app + install.sh serve ----
       - |
@@ -475,7 +476,7 @@ tasks:
         # The GStreamer bundle IS the macOS edge now — publish it under the canonical pkg name the
         # installers endpoint serves (Sentinel-Edge-<ver>.pkg), retiring the old go2rtc/ffmpeg pkg.
         $SCP "deploy/macos-pkg/build/Sentinel-Edge-${VER}-gst-x86_64.pkg" "$DIST/Sentinel-Edge-${VER}.pkg"
-        $SCP sentinel-edge/dist/sentinel-edge-linux-x86_64  "$DIST/sentinel-edge-linux-x86_64"
+        # Linux x86_64 skipped for now — only macOS + Jetson aarch64 this build.
         $SCP sentinel-edge/dist/sentinel-edge-linux-aarch64 "$DIST/sentinel-edge-linux-aarch64"
         echo "✓ macOS .pkg + Linux x86_64/aarch64 uploaded"
       # ---- bump LATEST_EDGE_VERSION (cloud-deploy reads the edge Cargo.toml → control env) ----
