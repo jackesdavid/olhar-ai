@@ -35,6 +35,7 @@ pub fn router() -> Router<AppState> {
         .route("/workflows/runs/frame", get(run_frame))
         .route("/workflows/runs/node-state", get(node_state))
         .route("/workflows/runs/:run_id/logs", get(run_logs))
+        .route("/workflows/:id/console-logs", get(console_logs))
         .route("/workflows/events", get(events_stream))
         .route(
             "/workflows/event-registry",
@@ -478,6 +479,25 @@ async fn run_logs(
     auth::require(&c, "workflows.read")?;
     let tid = tenant_of(&c)?;
     let url = format!("{}/runs/{}/logs?tenant={}", flow_base(), run_id, tid);
+    Ok(Json(flow_get_json(&url).await))
+}
+
+#[derive(serde::Deserialize)]
+struct ConsoleLogsQuery {
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+/// Recent node-execution lines across a graph's runs — the editor console seed. Proxies
+/// sentinel-flow (live `workflow_run_logs`), NOT the frozen `platform_logs` mirror.
+async fn console_logs(
+    UserClaims(c): UserClaims,
+    Path(id): Path<Uuid>,
+    Query(q): Query<ConsoleLogsQuery>,
+) -> Result<Json<Value>, ApiErr> {
+    auth::require(&c, "workflows.read")?;
+    let tid = tenant_of(&c)?;
+    let url = format!("{}/graphs/{}/logs?tenant={}&limit={}", flow_base(), id, tid, q.limit.unwrap_or(50));
     Ok(Json(flow_get_json(&url).await))
 }
 

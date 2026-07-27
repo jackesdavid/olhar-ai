@@ -4,7 +4,7 @@
   import { page } from "$app/stores";
   import { goto, beforeNavigate } from "$app/navigation";
   import { data, onEvent } from "$lib/data";
-  import { platformLogs, type PlatformLog } from "$lib/api";
+  import { wfLogs, type RunLogLine, type ConsoleLogLine } from "$lib/api";
   import { fmtTs } from "$lib/utils";
   import {
     CATEGORY_ORDER as PRESENCE_CATEGORIES,
@@ -393,26 +393,20 @@
     return log.ok ? "text-primary" : "text-destructive";
   }
 
-  function platformLogToLine(l: PlatformLog): LogLine {
-    const label = (l.payload?.label as string | undefined) ?? (l.payload?.graph_name as string | undefined);
+  function consoleLogToLine(l: ConsoleLogLine): LogLine {
     return {
-      time: fmtTs(l.created_at),
-      name: label ?? "workflow",
-      ok: l.level !== "error",
+      time: fmtTs(l.at),
+      name: l.label ?? "workflow",
+      ok: true, // run-log lines carry no level; execution results, not errors
       summary: l.message,
-      debug: l.level === "debug",
+      debug: l.kind !== "log",
     };
   }
 
   async function loadConsoleLogs(graphId: string) {
     try {
-      const r = await platformLogs.list({
-        module: "workflow",
-        entity_type: "workflow_graph",
-        entity_id: String(graphId),
-        limit: 50,
-      });
-      logs = r.items.map(platformLogToLine);
+      const lines = await wfLogs.console(String(graphId), 50);
+      logs = lines.map(consoleLogToLine);
     } catch { /* best-effort — console works without history */ }
   }
   function screenMsgClass(level: string): string {
@@ -641,7 +635,7 @@
   let runsOpen = $state(false);
   let runsGraph = $state<Graph | null>(null);
   let runsList = $state<RunRecord[]>([]);
-  let runsLogs = $state<Record<string, PlatformLog[]>>({});
+  let runsLogs = $state<Record<string, RunLogLine[]>>({});
   let runsExpanded = $state<string | null>(null);
 
 
@@ -2548,8 +2542,10 @@
     runsExpanded = runId;
     if (!runsLogs[runId]) {
       try {
-        const r = await platformLogs.list({ trace_id: runId, module: "workflow", limit: 100 });
-        runsLogs = { ...runsLogs, [runId]: r.items };
+        // Node logs come from the live workflow_run_logs (via /workflows/runs/:id/logs), not the
+        // frozen platform_logs mirror. Drop the "node" kind (UI-only live-highlight pings).
+        const lines = (await wfLogs.run(runId)).filter((l) => l.kind !== "node");
+        runsLogs = { ...runsLogs, [runId]: lines };
       } catch (err) {
         toast.error("Couldn't load run logs", { description: String(err) });
       }
@@ -5046,12 +5042,10 @@
                             <p class="text-[10px] text-muted-foreground/60">No detailed signals recorded.</p>
                           {:else}
                             <div class="space-y-0.5 font-mono text-[10px] leading-relaxed">
-                              {#each runsLogs[r.id] as line (line.id)}
+                              {#each runsLogs[r.id] as line, i (i)}
                                 <div class="flex gap-1.5">
-                                  <span class="w-8 shrink-0 uppercase {line.level === 'error' ? 'text-destructive' : line.level === 'warn' ? 'text-amber-400' : 'text-muted-foreground/60'}">{line.level}</span>
-                                  <span class="min-w-0 break-words {line.level === 'error' ? 'text-destructive' : 'text-muted-foreground'}">
-                                    {(line.payload?.label as string | undefined) ? `${line.payload?.label}: ` : ""}{line.message}
-                                  </span>
+                                  <span class="w-20 shrink-0 truncate text-muted-foreground/60">{line.label ?? ""}</span>
+                                  <span class="min-w-0 break-words text-muted-foreground">{line.message}</span>
                                 </div>
                               {/each}
                             </div>
@@ -5303,12 +5297,10 @@
                   <p class="text-[11px] text-muted-foreground/60">No detailed signals recorded.</p>
                 {:else}
                   <div class="space-y-0.5 font-mono text-[10px] leading-relaxed">
-                    {#each runsLogs[r.id] as line (line.id)}
+                    {#each runsLogs[r.id] as line, i (i)}
                       <div class="flex gap-2">
-                        <span class="w-10 shrink-0 uppercase {line.level === 'error' ? 'text-destructive' : line.level === 'warn' ? 'text-amber-400' : 'text-muted-foreground/60'}">{line.level}</span>
-                        <span class="{line.level === 'error' ? 'text-destructive' : 'text-muted-foreground'}">
-                          {(line.payload?.label as string | undefined) ? `${line.payload?.label}: ` : ""}{line.message}
-                        </span>
+                        <span class="w-24 shrink-0 truncate text-muted-foreground/60">{line.label ?? ""}</span>
+                        <span class="text-muted-foreground">{line.message}</span>
                       </div>
                     {/each}
                   </div>

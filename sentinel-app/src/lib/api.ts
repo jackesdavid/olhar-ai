@@ -216,6 +216,33 @@ export const platformLogs = {
   },
 };
 
+// ---- Workflow node logs (live, from workflow_run_logs — NOT the frozen platform_logs mirror) ----
+
+/** One persisted execution line of a workflow run (per-node signal). */
+export type RunLogLine = {
+  node_id: number | null;
+  label: string | null;
+  kind: string; // "node" (UI ping) | "log" (execution result) | "event" | "dispatch" | "trigger" | "skip"
+  node_kind: string | null;
+  message: string;
+};
+
+/** One recent console line for a graph (execution result + the run's start time). */
+export type ConsoleLogLine = {
+  label: string | null;
+  kind: string;
+  message: string;
+  at: string; // RFC3339 (the run's start time)
+};
+
+export const wfLogs = {
+  /** Node logs for one run, oldest-first. */
+  run: (runId: string) => api.get<RunLogLine[]>(`/workflows/runs/${runId}/logs`),
+  /** Recent node logs across a graph's runs, newest-first — the editor console seed. */
+  console: (graphId: string, limit = 50) =>
+    api.get<ConsoleLogLine[]>(`/workflows/${graphId}/console-logs?limit=${limit}`),
+};
+
 // ---- Recordings -------------------------------------------------------------
 
 /** Where a clip lives. `pending` = edge only, `uploading` = in transit, `uploaded` = durable
