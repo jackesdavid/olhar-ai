@@ -66,8 +66,8 @@ fn main() {
     // Now build the tokio runtime for the HTTP control plane.
     let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");
     rt.block_on(async move {
-        // Bridge this pod's live run-progress events onto the Redis fabric (multi-pod SSE relay).
-        // Inbound trigger events now arrive via the durable event_queue consumer (spawned above).
+        // Bridge this pod's live run-progress events onto the Postgres NOTIFY fabric (card #147,
+        // multi-pod SSE relay). Inbound triggers arrive via the durable event_queue consumer above.
         bus::spawn_republisher(state.clone());
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {

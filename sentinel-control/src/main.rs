@@ -63,12 +63,6 @@ pub struct AppState {
     /// Agnostic product-event stream queue (async, fire-and-forget) — card #66. Subsystems push
     /// occurrences here; the drain batch-inserts into `events`. The debug trace is `log_queue`.
     pub event_queue: app_core::events::EventQueue,
-    /// Shared event fabric. `redis_url` opens per-client pub/sub connections for the SSE
-    /// relay (subscribe `events:<tenant>`); `redis` is a multiplexed handle for publishing
-    /// injected events (edge motion). Both `None` when `REDIS_URL` is unset → the relay
-    /// falls back to proxying one flow pod's `/events` (single-pod behavior).
-    pub redis_url: Option<String>,
-    pub redis: Option<redis::aio::ConnectionManager>,
     /// Live cloud→edge SSE command streams this pod holds (`box_id → connection`). The durable
     /// queue is `app_core::edge_commands`; this is the connection half. Card #144.
     pub edge_streams: edge_stream::EdgeStreams,
@@ -226,23 +220,12 @@ fn main() {
         let edge_streams = edge_stream::new_registry();
         edge_stream::spawn_delivery(pool.clone(), edge_streams.clone());
 
-        // Shared event fabric (optional). When set, the workflow SSE relay subscribes to
-        // Redis (every flow pod's events) and the edge-motion endpoint publishes here.
-        let redis_url = std::env::var("REDIS_URL").ok().filter(|s| !s.trim().is_empty());
-        let redis = match &redis_url {
-            Some(u) => match redis::Client::open(u.clone()) {
-                Ok(c) => match c.get_connection_manager().await {
-                    Ok(m) => { log::info!("Redis event fabric: connected ({u})"); Some(m) }
-                    Err(e) => { log::warn!("Redis connect failed ({e}); SSE falls back to flow /events"); None }
-                },
-                Err(e) => { log::warn!("bad REDIS_URL ({e}); SSE falls back to flow /events"); None }
-            },
-            None => { log::info!("REDIS_URL unset — SSE relays via flow /events (single-pod)"); None }
-        };
+        // The workflow live-events fabric is Postgres LISTEN/NOTIFY now (card #147): flow pods
+        // `pg_notify('workflow_events', …)` and control's SSE relay LISTENs. No Redis broker.
 
         let state = AppState {
             db, pool, jwt_secret, google, oauth_states, tailscale, http, pending_creds, notifiers,
-            pending_rescan, log_queue, event_queue, redis_url, redis, edge_streams,
+            pending_rescan, log_queue, event_queue, edge_streams,
         };
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {

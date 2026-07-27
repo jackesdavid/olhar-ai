@@ -12,7 +12,6 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post, put};
 use axum::Router;
-use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -777,99 +776,46 @@ async fn events_stream(
 
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
 
-    if let Some(url) = st.redis_url.clone() {
-        let chan = format!("events:{tid}");
-        tokio::spawn(async move {
-            let client = match redis::Client::open(url) {
-                Ok(c) => c,
-                Err(e) => {
-                    log::warn!("events relay: bad redis url: {e}");
-                    return;
-                }
-            };
-            let mut pubsub = match client.get_async_pubsub().await {
-                Ok(p) => p,
-                Err(e) => {
-                    log::warn!("events relay: redis pubsub connect failed: {e}");
-                    return;
-                }
-            };
-            if let Err(e) = pubsub.subscribe(&chan).await {
-                log::warn!("events relay: subscribe {chan} failed: {e}");
+    // Postgres LISTEN/NOTIFY event fabric (replaces Redis, card #147). Every flow pod issues
+    // `pg_notify('workflow_events', <event-json>)`; we LISTEN and relay the events for THIS tenant.
+    // Because every pod hits the same Postgres, this fans out across all flow replicas AND all
+    // control replicas with no message broker — so there's no Redis and no flow-`/events` fallback.
+    let pool = st.pool.clone();
+    tokio::spawn(async move {
+        let mut listener = match sqlx::postgres::PgListener::connect_with(&pool).await {
+            Ok(l) => l,
+            Err(e) => {
+                log::warn!("events relay: pg listener connect failed: {e}");
                 return;
             }
-            let mut on_msg = pubsub.on_message();
-            loop {
-                tokio::select! {
-                    // Browser gone (SSE stream dropped → receiver closed). MUST be checked even when
-                    // the tenant's channel is idle: otherwise `on_msg.next()` blocks forever and this
-                    // Redis pubsub CONNECTION LEAKS — one per page-open/reconnect, which exhausts the
-                    // process FD limit (`accept: Too many open files`, os error 24).
-                    _ = tx.closed() => return,
-                    msg = on_msg.next() => {
-                        let Some(msg) = msg else { return }; // pubsub stream ended
-                        let Ok(payload) = msg.get_payload::<String>() else { continue };
-                        if tx.send(Ok(Event::default().data(payload))).await.is_err() {
-                            return; // browser disconnected mid-send
-                        }
+        };
+        if let Err(e) = listener.listen("workflow_events").await {
+            log::warn!("events relay: LISTEN workflow_events failed: {e}");
+            return;
+        }
+        loop {
+            tokio::select! {
+                // Browser gone (SSE stream dropped → receiver closed). Checked even when idle, so
+                // the dedicated LISTEN connection is dropped immediately — no per-client leak.
+                _ = tx.closed() => return,
+                notif = listener.recv() => {
+                    let Ok(notif) = notif else { return }; // listener connection ended
+                    let payload = notif.payload();
+                    // Only this tenant's events — the NOTIFY payload (event JSON) carries `tenant`.
+                    let ours = serde_json::from_str::<serde_json::Value>(payload)
+                        .ok()
+                        .and_then(|v| v.get("tenant").and_then(|t| t.as_str()).map(|s| s == tid))
+                        .unwrap_or(false);
+                    if ours && tx.send(Ok(Event::default().data(payload.to_string()))).await.is_err() {
+                        return; // browser disconnected mid-send
                     }
                 }
             }
-        });
-    } else {
-        // Single-pod fallback: proxy sentinel-flow's internal /events and filter by tenant.
-        let flow_events_url = format!("{}/events", flow_base());
-        tokio::spawn(async move {
-            relay_flow_events(flow_events_url, tid, tx).await;
-        });
-    }
+        }
+    });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
-}
-
-/// HTTP-proxy sentinel-flow's internal SSE `/events` to a browser client, forwarding
-/// only events whose `tenant` field matches `tid`. Used as the single-pod fallback when
-/// `REDIS_URL` is not configured.
-async fn relay_flow_events(
-    url: String,
-    tenant: String,
-    tx: tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
-) {
-    let resp = match reqwest::Client::new().get(&url).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            log::warn!("events proxy: flow /events unreachable ({url}): {e}");
-            return;
-        }
-    };
-    let mut stream = resp.bytes_stream();
-    let mut buf = String::new();
-    while let Some(item) = stream.next().await {
-        let Ok(bytes) = item else { return };
-        let Ok(text) = std::str::from_utf8(&bytes) else {
-            continue;
-        };
-        buf.push_str(text);
-        // Drain all complete lines from the buffer, forward matching tenant's data events.
-        while let Some(nl) = buf.find('\n') {
-            let line = buf[..nl].trim_end_matches('\r').to_string();
-            buf.drain(..=nl);
-            if let Some(data) = line.strip_prefix("data: ") {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
-                    if v.get("tenant").and_then(|t| t.as_str()) == Some(tenant.as_str()) {
-                        if tx
-                            .send(Ok(Event::default().data(data.to_string())))
-                            .await
-                            .is_err()
-                        {
-                            return; // browser disconnected
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 // ---- graph lifecycle --------------------------------------------------------

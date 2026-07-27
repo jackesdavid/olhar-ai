@@ -34,6 +34,5 @@ env_logger = "0.11"
 # stamps `tenant`/`graph` centrally — every log emitted during a run inherits them (no log site
 # passes tenant_id). `init_tracing` (app-core) ships them to Datadog with `service:flow`.
 tracing = "0.1"
-# Shared event fabric (pub/sub): republish run-progress events to Redis (multi-pod SSE
-# relay) + subscribe for externally-injected events (edge motion). Pure-Rust, no native dep.
-redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager"] }
+# Event fabric is Postgres NOTIFY now (card #147) — flow pods pg_notify('workflow_events', …), the
+# control SSE relay LISTENs. Inbound triggers already ride the durable Postgres event_queue. No Redis.
