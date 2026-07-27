@@ -295,17 +295,31 @@ tasks:
       - 'echo "✓ sentinel-edge/dist/sentinel-edge-linux-x86_64 ($(file sentinel-edge/dist/sentinel-edge-linux-x86_64 | cut -d: -f2-))"'
 
   edge-linux-build-arm64:
-    desc: "Cross-build the edge for Linux (aarch64) in a Fedora container (buildx/qemu) → sentinel-edge/dist/sentinel-edge-linux-aarch64. gst-linked, matches install.sh's `sentinel-edge-linux-aarch64` asset name. Needs OrbStack/Docker with arm64 emulation."
+    desc: >-
+      Build the edge for Linux aarch64 NATIVELY on the Jetson (NVIDIA Orin, Ubuntu 22.04) over SSH —
+      fast, on real ARM64 hardware, no qemu emulation. Rsyncs the sources, `cargo build --release
+      --features gst-linked` on the box, scp's the binary back to
+      sentinel-edge/dist/sentinel-edge-linux-aarch64 (the name install.sh serves). Key
+      id_olharai_ed25519 → jackes@128.201.138.25:52288 (override JET/JPORT/JKEY to point elsewhere).
+      Self-heals a missing Rust toolchain. GStreamer -dev must be present on the box (it is).
     vars:
-      FEDORA: '{{.FEDORA | default "42"}}'
+      JET: '{{.JET | default "jackes@128.201.138.25"}}'
+      JPORT: '{{.JPORT | default "52288"}}'
+      JKEY: '{{.JKEY | default "~/.ssh/id_olharai_ed25519"}}'
     cmds:
-      - mkdir -p sentinel-edge/dist
-      - docker build --platform linux/arm64 -f deploy/edge-linux/Dockerfile
-          --build-arg FEDORA={{.FEDORA}} --target artifact
-          -o type=local,dest=sentinel-edge/dist/tmp-arm64 .
-      - mv sentinel-edge/dist/tmp-arm64/out/sentinel-edge sentinel-edge/dist/sentinel-edge-linux-aarch64
-      - rm -rf sentinel-edge/dist/tmp-arm64
-      - 'echo "✓ sentinel-edge/dist/sentinel-edge-linux-aarch64 ($(file sentinel-edge/dist/sentinel-edge-linux-aarch64 | cut -d: -f2-))"'
+      - |
+        set -e
+        K="{{.JKEY}}"; K="${K/#\~/$HOME}"; JET="{{.JET}}"; P="{{.JPORT}}"
+        SSH="ssh -i $K -p $P -o IdentitiesOnly=yes -o BatchMode=yes"
+        echo "▸ arm64 on the Jetson ($JET) — native, no qemu…"
+        $SSH "$JET" 'mkdir -p ~/sentinel-build/sentinel-edge ~/sentinel-build/crates && \
+          (command -v ~/.cargo/bin/cargo >/dev/null || (curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal >/dev/null))'
+        rsync -az --delete -e "$SSH" --exclude target/ --exclude dist/ sentinel-edge/ "$JET:sentinel-build/sentinel-edge/"
+        rsync -az --delete -e "$SSH" --exclude target/ crates/ "$JET:sentinel-build/crates/"
+        $SSH "$JET" 'cd ~/sentinel-build/sentinel-edge && ~/.cargo/bin/cargo build --release --features gst-linked'
+        mkdir -p sentinel-edge/dist
+        scp -i "$K" -P "$P" -o IdentitiesOnly=yes "$JET:sentinel-build/sentinel-edge/target/release/sentinel-edge" sentinel-edge/dist/sentinel-edge-linux-aarch64
+        echo "✓ sentinel-edge/dist/sentinel-edge-linux-aarch64 (Jetson-native: $(file sentinel-edge/dist/sentinel-edge-linux-aarch64 | cut -d: -f2-))"
 
   edge-windows-build:
     desc: "Cross-build the edge for Windows (x86_64-pc-windows-gnu) from macOS/Linux. Needs mingw-w64 (brew install mingw-w64) + `rustup target add x86_64-pc-windows-gnu`. Pure Rust since #79, so it just works — no native deps, no MSVC SDK. Output: sentinel-edge/target/x86_64-pc-windows-gnu/release/sentinel-edge.exe"
