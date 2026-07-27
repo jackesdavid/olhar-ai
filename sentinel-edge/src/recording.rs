@@ -919,8 +919,10 @@ async fn run_rtsp_collector(
 }
 
 /// Split `rtsp://user:pass@host/path` into the URL `retina` will accept and the credentials it wants
-/// separately. Anything without a userinfo section comes back untouched.
-fn split_rtsp_credentials(url: &str) -> (String, Option<(String, String)>) {
+/// separately. Anything without a userinfo section comes back untouched. Reused by the Tegra capture
+/// path (`capture::retina_feed`), which dials the camera with retina for the same reason recording
+/// does — GStreamer's `rtspsrc` can't.
+pub(crate) fn split_rtsp_credentials(url: &str) -> (String, Option<(String, String)>) {
     let Some((scheme, rest)) = url.split_once("://") else {
         return (url.to_string(), None);
     };

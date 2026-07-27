@@ -68,13 +68,29 @@ impl Backend {
 /// The Jetson's `nvv4l2decoder` outputs into **NVMM** (GPU) memory, which `videoconvert` cannot
 /// read — it needs `nvvidconv` to reach system memory. Pairing the wrong converter is not a
 /// negotiation error you can miss: the pipeline simply never produces a frame.
+/// Is this a Jetson/Tegra box? Probed from the registry (the NVDEC plugins), matching
+/// [`decode_branch`]. Used to pick the RTSP ingest: Tegra's GStreamer 1.20 `rtspsrc` can't complete
+/// some cameras' Digest handshake, so on Tegra the edge pulls with `retina` and feeds `appsrc`
+/// instead; every other platform keeps `rtspsrc`.
+#[cfg(feature = "gst-linked")]
+pub fn is_tegra() -> bool {
+    use gstreamer as gst;
+    gst::ElementFactory::find("nvv4l2decoder").is_some()
+        && gst::ElementFactory::find("nvvidconv").is_some()
+}
+
 #[cfg(feature = "gst-linked")]
 pub fn decode_branch() -> &'static str {
     use gstreamer as gst;
     let has = |name: &str| gst::ElementFactory::find(name).is_some();
     if has("nvv4l2decoder") && has("nvvidconv") {
-        // Jetson / Tegra: NVDEC into NVMM, then the NVIDIA converter back to system memory.
-        "nvv4l2decoder ! nvvidconv"
+        // Jetson / Tegra: NVDEC into NVMM, then the NVIDIA converter back to SYSTEM memory. The
+        // explicit `video/x-raw` caps after nvvidconv are REQUIRED: without them nvvidconv keeps its
+        // output in NVMM (`memory:NVMM`), the downstream system-memory elements (videorate/jpegenc)
+        // never negotiate, and the pipeline sits in PLAYING producing ZERO frames. With no error
+        // posted, the source's read eventually fails and it surfaces as "Could not read from
+        // resource" — a previously-working camera going dark after the go2rtc→direct-dial switch.
+        "nvv4l2decoder ! nvvidconv ! video/x-raw,format=I420"
     } else if has("amcviddec-omxh264dec") || has("amcviddec-c2avcdecoder") {
         // Android MediaCodec — `decodebin` picks it, but say so explicitly for the log.
         "decodebin ! videoconvert"

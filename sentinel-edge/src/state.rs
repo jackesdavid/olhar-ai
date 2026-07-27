@@ -477,12 +477,35 @@ fn pick_camera_rtsp(d: &app_core::devices::Device, hd: bool) -> Option<String> {
             .map(|s| app_core::onvif::client::rtsp_url_with_creds(s, user, pass))
             .unwrap_or(main)
     };
-    Some(strip_go2rtc_fragment(&url))
+    Some(strip_go2rtc_fragment(&clean_onvif_params(&url)))
 }
 
 /// Drop go2rtc's `#…` fragment from a stored RTSP URL.
 fn strip_go2rtc_fragment(url: &str) -> String {
     url.split('#').next().unwrap_or(url).trim().to_string()
+}
+
+/// Strip the ONVIF stream-setup hint params (`unicast`, `proto`) that ONVIF `GetStreamUri` appends
+/// (`…?channel=1&subtype=0&unicast=true&proto=Onvif`). GStreamer's `rtspsrc` chokes on them — it
+/// completes OPTIONS/auth then stalls at SETUP and loops — whereas the plain native path
+/// (`…?channel=1&subtype=0`) that VLC/go2rtc use streams fine. Keep every other query param; only
+/// the known ONVIF hints are removed. Query-less URLs pass through untouched.
+fn clean_onvif_params(url: &str) -> String {
+    let Some((base, query)) = url.split_once('?') else {
+        return url.to_string();
+    };
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|kv| {
+            let key = kv.split('=').next().unwrap_or("").trim();
+            !key.eq_ignore_ascii_case("unicast") && !key.eq_ignore_ascii_case("proto")
+        })
+        .collect();
+    if kept.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}?{}", kept.join("&"))
+    }
 }
 
 /// Whether `ffmpeg` is on PATH (go2rtc needs it for JPEG frames). Computed once + cached —

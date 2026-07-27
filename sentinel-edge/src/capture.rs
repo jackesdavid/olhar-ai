@@ -231,9 +231,22 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
     // The camera's own URL when we have it; go2rtc's re-serve only as a fallback for a device whose
     // RTSP never resolved. Owning the dial is what lets the sidecar go away.
     let url = url.map(str::to_string).unwrap_or_else(|| stream_url(ip, hd));
+
+    // The RTSP INGEST is platform-specific; everything from `h264parse` on is identical.
+    //
+    // On **Jetson/Tegra**, GStreamer 1.20's `rtspsrc` cannot complete some cameras' RTSP Digest-auth
+    // handshake — it finishes OPTIONS + auth then stalls at SETUP and loops forever, holding a dead
+    // session. Verified against a live Dahua: EVERY `rtspsrc` transport/URL/auth combination = 0
+    // bytes, while `retina` (and VLC/ffmpeg) streamed it fine. The upstream fix, `rtspsrc2`, needs
+    // GStreamer ≥1.22, which L4T can't provide without risking the NVIDIA NVDEC plugins. So on Tegra
+    // we pull with **retina** — the pure-Rust RTSP client the recording ring already uses — and feed
+    // the H264 into the SAME graph via `appsrc` (proven end-to-end on the Orin Nano: NVDEC decode +
+    // mp4mux both work). Every OTHER platform keeps `rtspsrc` untouched.
+    let use_retina = crate::media::is_tegra();
+
     // ONE connection, `tee`'d: the decode branch feeds motion + detectors, the mux branch feeds the
-    // live `/api/ws` viewers. Both leak-on-full — a consumer that stalls must never back the RTSP
-    // source up and take the other branch down with it.
+    // live `/api/ws` viewers. Both leak-on-full — a consumer that stalls must never back the source
+    // up and take the other branch down with it.
     //
     // The mux branch re-parses to **avc**: a `tee` forces one output format on the shared
     // `h264parse`, and the two branches disagree — the decoder takes byte-stream, while `mp4mux` on
@@ -243,8 +256,15 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
     let mux = crate::gst_mse::FRAGMENT_MS;
     // Picked from this box's registry, not from a platform guess — see `media::decode_branch`.
     let decode = crate::media::decode_branch();
+    let source = if use_retina {
+        // Fed by the retina thread below. `do-timestamp` stamps each pushed access unit so `mp4mux`
+        // gets the PTS it needs (retina gives us bare access units, no container timing).
+        "appsrc name=src is-live=true do-timestamp=true format=time".to_string()
+    } else {
+        format!("rtspsrc location=\"{url}\" protocols=tcp latency=200 ! rtph264depay")
+    };
     let desc = format!(
-        "rtspsrc location=\"{url}\" protocols=tcp latency=200 ! rtph264depay ! h264parse name=parse ! tee name=t \
+        "{source} ! h264parse name=parse ! tee name=t \
          t. ! queue max-size-buffers=64 leaky=downstream ! {decode} ! videorate \
             ! video/x-raw,framerate=6/1 ! jpegenc quality=85 \
             ! appsink name=out sync=false max-buffers=2 drop=true \
@@ -316,24 +336,144 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
             .build(),
     );
 
+    // Tegra: spawn the retina feeder that dials the camera and pushes H264 access units into
+    // `appsrc`. It runs a small current-thread tokio runtime (like the recording ring). On any retina
+    // error / stop it ends the appsrc stream so the bus loop below unblocks and `supervise` restarts.
+    let feeder_stop = Arc::new(AtomicBool::new(false));
+    let feeder = if use_retina {
+        let appsrc = pipeline
+            .by_name("src")
+            .ok_or("appsrc missing")?
+            .downcast::<gst_app::AppSrc>()
+            .map_err(|_| "src is not an appsrc".to_string())?;
+        let url_c = url.clone();
+        let ip_c = ip.to_string();
+        let stop_c = Arc::clone(&feeder_stop);
+        Some(std::thread::spawn(move || {
+            match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                Ok(rt) => {
+                    if let Err(e) = rt.block_on(retina_feed(&url_c, &appsrc, &stop_c)) {
+                        log::warn!("capture-decoder[{ip_c}]: retina ingest: {e}");
+                    }
+                }
+                Err(e) => log::error!("capture-decoder[{ip_c}]: retina runtime: {e}"),
+            }
+            let _ = appsrc.end_of_stream(); // unblock the bus loop → supervise restarts
+        }))
+    } else {
+        None
+    };
+
     pipeline
         .set_state(gst::State::Playing)
         .map_err(|e| format!("play: {e}"))?;
-    // Block on the bus until EOS/error (a live source only ends on failure), then let supervise restart.
+    // Wait on the bus for EOS/error, WITH a frame-freshness watchdog. A live source normally only
+    // ends on failure — but a pipeline can also wedge in PLAYING and post nothing (a decoder that
+    // never negotiates, or a source that connects but stops sending). `iter_timed(NONE)` would block
+    // forever; poll on a short timeout and bail if no JPEG has landed within the grace window, so
+    // `supervise` tears down (which also stops the feeder) and restarts under its backoff policy.
     let bus = pipeline.bus().ok_or("no bus")?;
+    let started = Instant::now();
     let mut result = Ok(());
-    for msg in bus.iter_timed(gst::ClockTime::NONE) {
-        match msg.view() {
-            gst::MessageView::Eos(_) => break,
-            gst::MessageView::Error(e) => {
-                result = Err(format!("{}", e.error()));
-                break;
-            }
-            _ => {}
+    loop {
+        let stalled = match &*cam.latest.lock().unwrap() {
+            Some((_, at)) => at.elapsed() > Duration::from_secs(12),
+            None => started.elapsed() > Duration::from_secs(20),
+        };
+        if stalled {
+            result = Err("no frames within watchdog window — restarting".to_string());
+            break;
+        }
+        match bus.timed_pop(gst::ClockTime::from_seconds(2)) {
+            Some(msg) => match msg.view() {
+                gst::MessageView::Eos(_) => break,
+                gst::MessageView::Error(e) => {
+                    result = Err(format!("{}", e.error()));
+                    break;
+                }
+                _ => {}
+            },
+            None => {} // 2s tick with no message → re-check the watchdog
         }
     }
+    feeder_stop.store(true, Ordering::Relaxed);
     let _ = pipeline.set_state(gst::State::Null);
+    if let Some(h) = feeder {
+        let _ = h.join();
+    }
     result
+}
+
+/// The Tegra RTSP ingest: pull H264 access units with `retina` and push them into `appsrc`. Mirrors
+/// the PoC verified on the Orin Nano. `retina` handles the Digest handshake GStreamer's `rtspsrc`
+/// can't; its `demuxed()` gives us codec-framed access units, and the SDP's `codec_data` goes into
+/// the appsrc caps so `h264parse` negotiates avc without waiting for inline parameter sets.
+#[cfg(feature = "gst-linked")]
+async fn retina_feed(
+    url: &str,
+    appsrc: &gstreamer_app::AppSrc,
+    stop: &AtomicBool,
+) -> Result<(), String> {
+    use futures::StreamExt;
+    use gstreamer as gst;
+
+    let (bare, creds) = crate::recording::split_rtsp_credentials(url);
+    let parsed = bare.parse::<url::Url>().map_err(|e| format!("bad url: {e}"))?;
+    let opts = match creds {
+        Some((username, password)) => retina::client::SessionOptions::default()
+            .creds(Some(retina::client::Credentials { username, password })),
+        None => retina::client::SessionOptions::default(),
+    };
+    let mut session = retina::client::Session::describe(parsed, opts)
+        .await
+        .map_err(|e| format!("describe: {e}"))?;
+    let vid = session
+        .streams()
+        .iter()
+        .position(|s| s.media() == "video" && s.encoding_name().eq_ignore_ascii_case("h264"))
+        .ok_or_else(|| "no h264 video stream".to_string())?;
+    // codec_data (AVCDecoderConfigurationRecord) from the SDP → avc caps for the appsrc.
+    let extra: Vec<u8> = match session.streams()[vid].parameters() {
+        Some(retina::codec::ParametersRef::Video(v)) => v.extra_data().to_vec(),
+        _ => Vec::new(),
+    };
+    let mut caps = gst::Caps::builder("video/x-h264")
+        .field("stream-format", "avc")
+        .field("alignment", "au");
+    if !extra.is_empty() {
+        caps = caps.field("codec_data", gst::Buffer::from_slice(extra));
+    }
+    appsrc.set_caps(Some(&caps.build()));
+
+    session
+        .setup(vid, retina::client::SetupOptions::default())
+        .await
+        .map_err(|e| format!("setup: {e}"))?;
+    let playing = session
+        .play(retina::client::PlayOptions::default())
+        .await
+        .map_err(|e| format!("play: {e}"))?;
+    let mut demuxed = playing.demuxed().map_err(|e| format!("demuxed: {e}"))?;
+
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        // A 5s read timeout doubles as a liveness check: a camera that stops sending unblocks us so
+        // the feeder ends and the pipeline restarts (the watchdog would also catch it downstream).
+        match tokio::time::timeout(Duration::from_secs(5), demuxed.next()).await {
+            Ok(Some(Ok(retina::codec::CodecItem::VideoFrame(f)))) => {
+                let buf = gst::Buffer::from_mut_slice(f.into_data());
+                if appsrc.push_buffer(buf).is_err() {
+                    return Ok(()); // pipeline gone; not an error worth logging
+                }
+            }
+            Ok(Some(Ok(_))) => {} // RTCP / parameter updates
+            Ok(Some(Err(e))) => return Err(format!("packet: {e}")),
+            Ok(None) => return Err("stream ended".to_string()),
+            Err(_) => return Err("frame read timeout".to_string()),
+        }
+    }
 }
 
 /// Consecutive fast (<30s) failures while GPU decode is on before we give up on it for this
