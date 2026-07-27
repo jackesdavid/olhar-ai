@@ -87,4 +87,9 @@ fi
 
 echo ""
 echo "✓ $OUT ($(du -h "$OUT" | cut -f1))"
-[ "$SIGN" = 0 ] && echo "  ⚠ UNSIGNED — right-click → Open on your own Mac; ship with --sign."
+# `if`, not `[ … ] && echo` — the latter returns exit 1 in the signed case (its last command), which
+# under `set -e` / a Taskfile step reads as a FAILED build even though the pkg is done. This aborted
+# `task edge-release` right after a successful notarization.
+if [ "$SIGN" = 0 ]; then
+  echo "  ⚠ UNSIGNED — right-click → Open on your own Mac; ship with --sign."
+fi
