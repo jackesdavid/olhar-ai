@@ -59,9 +59,17 @@ async fn graphs(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 /// Reload the graph set from Postgres (the UI edits land there out-of-band).
 async fn reload_graphs(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     state.reload_graphs();
-    let n = state.store.lock().unwrap().len();
-    log::info!("graphs reloaded on request — {n} graph(s)");
-    (StatusCode::OK, Json(json!({ "reloaded": n })))
+    let (n, enabled) = {
+        let s = state.store.lock().unwrap();
+        (s.len(), s.iter().filter(|(_, g)| g.enabled).count())
+    };
+    // Log the pod + enabled count so a store divergence across replicas (the cause of "some events
+    // ran, some didn't") is visible in Datadog: compare `enabled` across pods for the same reload.
+    log::info!(
+        "graphs reloaded on request — {n} graph(s), {enabled} enabled (pod {})",
+        state.pod_name
+    );
+    (StatusCode::OK, Json(json!({ "reloaded": n, "enabled": enabled, "pod": state.pod_name })))
 }
 
 #[derive(Deserialize)]

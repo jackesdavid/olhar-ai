@@ -329,7 +329,9 @@ fn execute_run(
     let emit_state = Arc::clone(state);
     let emit_name = graph.name.clone();
     let mut emit = |ev: &str, payload: &PortValues| {
-        fire_event(
+        // Graph-emitted event; the listener count is only actionable for durable inbound events
+        // (see the consumer), so discard it here.
+        let _ = fire_event(
             &emit_state,
             tenant,
             EventSource::Graph {
@@ -339,7 +341,7 @@ fn execute_run(
             ev.to_string(),
             Some(run_id),
             payload.clone(),
-        )
+        );
     };
 
     let result = match entry {
@@ -417,6 +419,11 @@ fn execute_run(
 /// fire is dropped for that graph (coalesced) and logged as a skip. The emitter logs the
 /// dispatch; each listener logs that it was triggered (by which graph) or skipped.
 /// `emitting_run_id` is the emitter's run, so the dispatch line attaches to its history.
+///
+/// Returns the number of enabled listener graphs the event matched on THIS pod. A durable inbound
+/// event (from the `event_consumer`) that returns 0 is a red flag — the graph likely exists but this
+/// pod's in-memory store is stale (a graph edit/reload only reached another replica), so the event is
+/// silently consumed with no run. The consumer logs that case to Datadog.
 pub fn fire_event(
     state: &Arc<AppState>,
     tenant: Uuid,
@@ -424,7 +431,7 @@ pub fn fire_event(
     event: String,
     emitting_run_id: Option<Uuid>,
     payload: PortValues,
-) {
+) -> usize {
     // The firing event's own camera (if it has one — most system events don't), + this tenant's
     // devices, so `on_event_node` can gate delivery to only the `OnEvent` nodes actually scoped
     // to that camera (a plain config literal, or wired from `GetCameraByName`) instead of firing
@@ -482,6 +489,8 @@ pub fn fire_event(
             }],
         );
     }
+
+    let listener_count = listeners.len();
 
     for (listener_id, listener_name, entry) in listeners {
         // Global backstop: don't let an event storm exceed the pod's run ceiling.
@@ -557,6 +566,7 @@ pub fn fire_event(
             payload.clone(),
         );
     }
+    listener_count
 }
 
 /// Emit a tenant event from system code (login, user-create, chat, alerts…). The seam for

@@ -46,14 +46,27 @@ fn process(state: &Arc<AppState>, job: work_queue::Job) {
     let source = job.payload.get("source").and_then(|v| v.as_str()).unwrap_or("system").to_string();
     let payload = payload_to_portvalues(job.payload.get("fields"));
     // Fire as a System event → fans out to this tenant's OnEvent(event) handler graphs.
-    crate::engine::fire_event(
+    let matched = crate::engine::fire_event(
         state,
         job.tenant_id,
-        EventSource::System { label: source },
-        event,
+        EventSource::System { label: source.clone() },
+        event.clone(),
         None,
         payload,
     );
+    // Zero listeners for a durable inbound event is a silent drop: the job is marked done but no
+    // graph ran. Usually a STALE GRAPH STORE on this pod — a graph edit/reload only reached another
+    // flow replica, so this pod still has the old (disabled/absent) copy. Surface it to Datadog
+    // (service:flow) with the pod name so cross-pod divergence is queryable/alertable.
+    if matched == 0 {
+        let loaded = state.store.lock().unwrap().iter().filter(|(t, _)| *t == job.tenant_id).count();
+        log::warn!(
+            "inbound event '{event}' (source '{source}', tenant {tenant}) matched 0 graphs on pod {pod} — possible stale graph store (this pod holds {loaded} graph(s) for the tenant); job {job} consumed with no run",
+            tenant = job.tenant_id,
+            pod = state.pod_name,
+            job = job.id,
+        );
+    }
     work_queue::mark_done_blocking(&state.db, job.id);
 }
 
