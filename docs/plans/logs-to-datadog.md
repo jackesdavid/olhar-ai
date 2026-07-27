@@ -52,9 +52,15 @@ the level/target/message — so Datadog's facets replace the SQL `WHERE` filters
     (`broadcast::Sender`) in `AppState`; `store::list_box_logs` / `insert_box_logs`.
 - Operators read logs in **Datadog** (facets: `box:<id>`, `tenant:<id>`, `service:edge`).
 
-## Phase 4 — retire the tables
-- Once Datadog is the store and nothing reads the tables: drop `platform_logs` + `box_logs`
-  (migration), and remove their nightly retention sweeps. Reclaims the write + vacuum load.
+## Phase 4 — retire the tables — DONE (partial, operator call)
+- `box_logs` **dropped** (migration `0072_drop_box_logs.sql`). It was a pure append-only firehose with
+  no reader/writer left since Phase 3 (no pg_cron sweep — pruned on ingest, and that code is gone), so
+  the drop reclaims its write + vacuum load with nothing to break. Validated against the live DB
+  (10,058 stale rows) before deploy.
+- `platform_logs` **kept** (operator decision): the workflow editor's per-run log panel still reads it
+  (`GET /platform-logs`, filtered by `trace_id`). Note it's frozen in prod since Phase 2 (flow ships to
+  Datadog, not PG), so that panel shows only pre-#145 rows — retiring it (remove the panel, or proxy
+  the query to the Datadog Logs API) is a separate future decision, tracked outside this card.
 
 ## Open decisions
 1. ~~Boxes log-history view~~ — **RESOLVED (operator call): remove the in-app logs view entirely;
