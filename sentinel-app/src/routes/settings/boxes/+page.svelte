@@ -11,6 +11,7 @@
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
   import ArrowUpCircle from "@lucide/svelte/icons/arrow-up-circle";
   import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
+  import Copy from "@lucide/svelte/icons/copy";
 
   import * as Card from "$lib/components/ui/card";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -269,7 +270,16 @@
           <tbody>
             {#each list as b (b.id)}
               <tr class="border-b border-border/50 last:border-0">
-                <td class="py-2 pr-4 font-medium">{b.name}</td>
+                <td class="py-2 pr-4 font-medium">
+                  <div>{b.name}</div>
+                  <button
+                    class="interactive mt-0.5 inline-flex items-center gap-1 font-mono text-[10px] font-normal text-muted-foreground hover:text-foreground"
+                    title="Copy edge ID — filter this box's logs in Datadog with edge_id:{b.id}"
+                    onclick={() => copy(b.id)}
+                  >
+                    <Copy class="size-3" />{b.id.slice(0, 8)}…
+                  </button>
+                </td>
                 <td class="px-3 py-2">
                   {#if b.version}
                     <span class="font-mono text-xs tabular-nums text-muted-foreground">v{b.version}</span>
