@@ -294,6 +294,19 @@ tasks:
       - rm -rf sentinel-edge/dist/tmp
       - 'echo "✓ sentinel-edge/dist/sentinel-edge-linux-x86_64 ($(file sentinel-edge/dist/sentinel-edge-linux-x86_64 | cut -d: -f2-))"'
 
+  edge-linux-build-arm64:
+    desc: "Cross-build the edge for Linux (aarch64) in a Fedora container (buildx/qemu) → sentinel-edge/dist/sentinel-edge-linux-aarch64. gst-linked, matches install.sh's `sentinel-edge-linux-aarch64` asset name. Needs OrbStack/Docker with arm64 emulation."
+    vars:
+      FEDORA: '{{.FEDORA | default "42"}}'
+    cmds:
+      - mkdir -p sentinel-edge/dist
+      - docker build --platform linux/arm64 -f deploy/edge-linux/Dockerfile
+          --build-arg FEDORA={{.FEDORA}} --target artifact
+          -o type=local,dest=sentinel-edge/dist/tmp-arm64 .
+      - mv sentinel-edge/dist/tmp-arm64/out/sentinel-edge sentinel-edge/dist/sentinel-edge-linux-aarch64
+      - rm -rf sentinel-edge/dist/tmp-arm64
+      - 'echo "✓ sentinel-edge/dist/sentinel-edge-linux-aarch64 ($(file sentinel-edge/dist/sentinel-edge-linux-aarch64 | cut -d: -f2-))"'
+
   edge-windows-build:
     desc: "Cross-build the edge for Windows (x86_64-pc-windows-gnu) from macOS/Linux. Needs mingw-w64 (brew install mingw-w64) + `rustup target add x86_64-pc-windows-gnu`. Pure Rust since #79, so it just works — no native deps, no MSVC SDK. Output: sentinel-edge/target/x86_64-pc-windows-gnu/release/sentinel-edge.exe"
     dir: sentinel-edge
@@ -403,6 +416,69 @@ tasks:
           echo "  Run: task cloud-deploy -- sentinel-control"
           exit 1
         fi
+
+  edge-release:
+    desc: >-
+      THE edge release — ONE command. Bumps the version, builds + VERIFIES every locally-buildable
+      platform (macOS GStreamer .pkg signed+notarized, Linux x86_64 + aarch64, all gst-linked),
+      publishes to the site (/ibbf/edge-dist), bumps LATEST_EDGE_VERSION, and gates on the real
+      install journey (gst-selftest — a bundle that can't do RTSP/live NEVER ships). Windows builds
+      in CI (release.yml — it needs a Windows/MSVC runner). Never hand-run the per-platform
+      build/sign/scp steps; run this. Signing certs default to the Jackes Lemos Developer ID +
+      `sentinel-notary`; override MACOS_APP_CERT/MACOS_PKG_CERT/NOTARY_PROFILE in .env if they change.
+    cmds:
+      # One version bump for the whole fleet, so every platform's binary reports the same new version.
+      - task: edge-bump-version
+      # ---- macOS: the GStreamer bundle — the SOLE backend — signed + notarized (Intel x86_64) ----
+      - |
+        set -e
+        export MACOS_APP_CERT="${MACOS_APP_CERT:-Developer ID Application: Jackes Lemos (3A4H2Y6ZVM)}"
+        export MACOS_PKG_CERT="${MACOS_PKG_CERT:-Developer ID Installer: Jackes Lemos (3A4H2Y6ZVM)}"
+        export NOTARY_PROFILE="${NOTARY_PROFILE:-sentinel-notary}"
+        ./deploy/macos-pkg/build-gst.sh --sign
+      # ---- USER-JOURNEY GATE: run the SAME gst-selftest the postinstall runs, on the freshly built
+      #      bundle. rtspsrc + rtpbin/rtpjitterbuffer/udpsrc/udpsink must build, or we ABORT before
+      #      publishing — this is what stops us ever shipping a broken (no-RTSP/live) bundle again. ----
+      - |
+        set -e
+        PL="deploy/macos-pkg/build/payload-gst/opt/sentinel-edge"
+        echo "▸ user-journey gate: gst-selftest on the built macOS bundle…"
+        reg="$(mktemp)"
+        GST_PLUGIN_SYSTEM_PATH_1_0="" GST_PLUGIN_PATH_1_0="$PWD/$PL/gst/plugins" \
+          GST_REGISTRY_1_0="$reg" GST_REGISTRY_FORK=no \
+          "$PL/sentinel-edge" gst-selftest
+        echo "✓ macOS bundle passes gst-selftest — RTSP/live capable"
+      # ---- Linux: gst-linked, both arches (install.sh pulls sentinel-edge-linux-<uname -m>) ----
+      - task: edge-linux-build
+      - task: edge-linux-build-arm64
+      # ---- publish every artifact under the canonical names the app + install.sh serve ----
+      - |
+        set -e
+        VER="$(grep -m1 '^version' sentinel-edge/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+        SCP="scp -i $HOME/.ssh/id_contab_ed25519 -o IdentitiesOnly=yes"
+        DIST=root@85.239.248.86:/ibbf/edge-dist
+        echo "▸ publishing edge v$VER → /ibbf/edge-dist …"
+        # The GStreamer bundle IS the macOS edge now — publish it under the canonical pkg name the
+        # installers endpoint serves (Sentinel-Edge-<ver>.pkg), retiring the old go2rtc/ffmpeg pkg.
+        $SCP "deploy/macos-pkg/build/Sentinel-Edge-${VER}-gst-x86_64.pkg" "$DIST/Sentinel-Edge-${VER}.pkg"
+        $SCP sentinel-edge/dist/sentinel-edge-linux-x86_64  "$DIST/sentinel-edge-linux-x86_64"
+        $SCP sentinel-edge/dist/sentinel-edge-linux-aarch64 "$DIST/sentinel-edge-linux-aarch64"
+        echo "✓ macOS .pkg + Linux x86_64/aarch64 uploaded"
+      # ---- bump LATEST_EDGE_VERSION (cloud-deploy reads the edge Cargo.toml → control env) ----
+      - task: cloud-deploy
+        vars: { CLI_ARGS: sentinel-control }
+      # ---- verify: live LATEST_EDGE_VERSION matches Cargo.toml AND the site serves the new pkg ----
+      - |
+        set -e
+        VER="$(grep -m1 '^version' sentinel-edge/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+        SSH="ssh -i $HOME/.ssh/id_contab_ed25519 -o IdentitiesOnly=yes root@85.239.248.86"
+        LIVE="$($SSH 'docker exec sentinel-control env' | grep '^LATEST_EDGE_VERSION=' | cut -d= -f2 | tr -d '\r')"
+        [ "$VER" = "$LIVE" ] || { echo "✗ LATEST_EDGE_VERSION=$LIVE != Cargo.toml=$VER — run: task cloud-deploy -- sentinel-control"; exit 1; }
+        echo "✓ LATEST_EDGE_VERSION=$LIVE matches Cargo.toml"
+        $SSH "test -f /ibbf/edge-dist/Sentinel-Edge-${VER}.pkg" && echo "✓ site serves Sentinel-Edge-${VER}.pkg"
+        echo ""
+        echo "✓ edge v$VER released — macOS (GStreamer, signed+notarized) + Linux x86_64/aarch64, gst-selftest-gated."
+        echo "  ⚠ Windows (SentinelEdge-Windows-${VER}.zip): gst-linked needs a Windows/MSVC runner → build in CI (release.yml)."
 
   flow-scale:
     desc: "Scale sentinel-flow to N replicas on the VPS (task flow-scale -- 2). Docker DNS round-robins across them automatically — no redeploy needed."
