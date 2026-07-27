@@ -122,8 +122,9 @@ fn main() {
 
     let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");
     rt.block_on(async move {
-        // This service's own async pool (auth/tenancy queries run here).
-        let pool = match PgPoolOptions::new().max_connections(5).connect(&database_url).await {
+        // This service's own async pool (auth/tenancy + every domain query runs here). 5 was far too
+        // small for the whole API backend under real concurrency (SSE + edge polling + the UI).
+        let pool = match PgPoolOptions::new().max_connections(20).connect(&database_url).await {
             Ok(p) => p,
             Err(e) => {
                 log::error!("connect auth pool: {e}");

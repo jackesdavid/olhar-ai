@@ -780,9 +780,13 @@ async fn events_stream(
     // `pg_notify('workflow_events', <event-json>)`; we LISTEN and relay the events for THIS tenant.
     // Because every pod hits the same Postgres, this fans out across all flow replicas AND all
     // control replicas with no message broker — so there's no Redis and no flow-`/events` fallback.
-    let pool = st.pool.clone();
+    // A DEDICATED LISTEN connection, NOT one from `st.pool`: `connect_with(&pool)` would hold a
+    // pooled connection for the whole SSE lifetime, and a few open workflows pages would starve the
+    // small (5-conn) pool → every other query times out → the UI goes dark. `connect(url)` opens a
+    // standalone connection (like the old Redis pubsub conn did), dropped when this task ends.
+    let db_url = std::env::var("DATABASE_URL").unwrap_or_default();
     tokio::spawn(async move {
-        let mut listener = match sqlx::postgres::PgListener::connect_with(&pool).await {
+        let mut listener = match sqlx::postgres::PgListener::connect(&db_url).await {
             Ok(l) => l,
             Err(e) => {
                 log::warn!("events relay: pg listener connect failed: {e}");
