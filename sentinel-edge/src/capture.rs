@@ -244,18 +244,36 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
     // mp4mux both work). Every OTHER platform keeps `rtspsrc` untouched.
     let use_retina = crate::media::is_tegra();
 
+    // On the retina path we PROBE the camera's codec from its SDP and build a matching pipeline —
+    // H264 or H265. Cameras vary (a Dahua that was H265 vs one switched to H264), and only the parser
+    // + caps differ; `nvv4l2decoder` decodes both. Detected + logged per camera here; storing the
+    // result and exposing a per-camera override in the UI is a near-future card. The `rtspsrc` path
+    // (other platforms) stays H264 via `rtph264depay`, unchanged.
+    let codec = if use_retina {
+        match probe_codec(&url) {
+            Ok(c) => {
+                log::info!("capture-decoder[{ip}]: codec probe → {}", c.label());
+                c
+            }
+            Err(e) => return Err(format!("codec probe: {e}")),
+        }
+    } else {
+        VideoCodec::H264
+    };
+
     // ONE connection, `tee`'d: the decode branch feeds motion + detectors, the mux branch feeds the
     // live `/api/ws` viewers. Both leak-on-full — a consumer that stalls must never back the source
     // up and take the other branch down with it.
     //
-    // The mux branch re-parses to **avc**: a `tee` forces one output format on the shared
-    // `h264parse`, and the two branches disagree — the decoder takes byte-stream, while `mp4mux` on
-    // the Jetson's GStreamer 1.20 accepts only avc and answers a byte-stream query with EMPTY caps.
-    // The whole pipeline then dies at the source with `not-negotiated`, which names neither the
-    // element that refused nor the reason.
+    // The mux branch re-parses to a muxer-friendly stream-format: a `tee` forces one output format on
+    // the shared parser, and the two branches disagree — the decoder takes byte-stream, while `mp4mux`
+    // on GStreamer 1.20 wants avc/hvc1 and answers a byte-stream query with EMPTY caps. The pipeline
+    // then dies at the source with `not-negotiated`, naming neither the element nor the reason.
     let mux = crate::gst_mse::FRAGMENT_MS;
     // Picked from this box's registry, not from a platform guess — see `media::decode_branch`.
     let decode = crate::media::decode_branch();
+    let parse = codec.parse_element(); // h264parse / h265parse
+    let mux_caps = codec.mux_caps(); // avc / hvc1
     let source = if use_retina {
         // Fed by the retina thread below. `do-timestamp` stamps each pushed access unit so `mp4mux`
         // gets the PTS it needs (retina gives us bare access units, no container timing).
@@ -264,12 +282,12 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
         format!("rtspsrc location=\"{url}\" protocols=tcp latency=200 ! rtph264depay")
     };
     let desc = format!(
-        "{source} ! h264parse name=parse ! tee name=t \
+        "{source} ! {parse} name=parse ! tee name=t \
          t. ! queue max-size-buffers=64 leaky=downstream ! {decode} ! videorate \
             ! video/x-raw,framerate=6/1 ! jpegenc quality=85 \
             ! appsink name=out sync=false max-buffers=2 drop=true \
          t. ! queue max-size-buffers=64 leaky=downstream \
-            ! h264parse ! video/x-h264,stream-format=avc,alignment=au \
+            ! {parse} ! {mux_caps} \
             ! mp4mux fragment-duration={mux} streamable=true \
             ! appsink name=mse sync=false"
     );
@@ -352,7 +370,7 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
         Some(std::thread::spawn(move || {
             match tokio::runtime::Builder::new_current_thread().enable_all().build() {
                 Ok(rt) => {
-                    if let Err(e) = rt.block_on(retina_feed(&url_c, &appsrc, &stop_c)) {
+                    if let Err(e) = rt.block_on(retina_feed(&url_c, &appsrc, &stop_c, codec)) {
                         log::warn!("capture-decoder[{ip_c}]: retina ingest: {e}");
                     }
                 }
@@ -404,15 +422,99 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
     result
 }
 
-/// The Tegra RTSP ingest: pull H264 access units with `retina` and push them into `appsrc`. Mirrors
-/// the PoC verified on the Orin Nano. `retina` handles the Digest handshake GStreamer's `rtspsrc`
-/// can't; its `demuxed()` gives us codec-framed access units, and the SDP's `codec_data` goes into
-/// the appsrc caps so `h264parse` negotiates avc without waiting for inline parameter sets.
+/// The video codec a camera streams. Only the parser + caps differ in the graph — `nvv4l2decoder`
+/// and `mp4mux` handle both. Detected from the SDP ([`probe_codec`]).
+#[cfg(feature = "gst-linked")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VideoCodec {
+    H264,
+    H265,
+}
+
+#[cfg(feature = "gst-linked")]
+impl VideoCodec {
+    fn from_encoding(enc: &str) -> Option<Self> {
+        match enc.to_ascii_lowercase().as_str() {
+            "h264" => Some(Self::H264),
+            "h265" | "hevc" => Some(Self::H265),
+            _ => None,
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::H264 => "H264",
+            Self::H265 => "H265",
+        }
+    }
+    /// The parser element — shared by the decode and mux branches.
+    fn parse_element(self) -> &'static str {
+        match self {
+            Self::H264 => "h264parse",
+            Self::H265 => "h265parse",
+        }
+    }
+    /// The mux-branch caps `mp4mux` accepts (avc for H264, hvc1 for H265).
+    fn mux_caps(self) -> &'static str {
+        match self {
+            Self::H264 => "video/x-h264,stream-format=avc,alignment=au",
+            Self::H265 => "video/x-h265,stream-format=hvc1,alignment=au",
+        }
+    }
+    fn caps_media(self) -> &'static str {
+        match self {
+            Self::H264 => "video/x-h264",
+            Self::H265 => "video/x-h265",
+        }
+    }
+    /// The appsrc `stream-format` for retina's codec-framed access units.
+    fn stream_format(self) -> &'static str {
+        match self {
+            Self::H264 => "avc",
+            Self::H265 => "hvc1",
+        }
+    }
+}
+
+/// Probe a camera's video codec from its RTSP SDP (a `retina` DESCRIBE, no PLAY) so the pipeline can
+/// be built to match. Cheap; runs once per capture (re)start — a future card caches this per camera
+/// and lets the UI override it.
+#[cfg(feature = "gst-linked")]
+fn probe_codec(url: &str) -> Result<VideoCodec, String> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio rt: {e}"))?;
+    rt.block_on(async {
+        let (bare, creds) = crate::recording::split_rtsp_credentials(url);
+        let parsed = bare.parse::<url::Url>().map_err(|e| format!("bad url: {e}"))?;
+        let opts = match creds {
+            Some((username, password)) => retina::client::SessionOptions::default()
+                .creds(Some(retina::client::Credentials { username, password })),
+            None => retina::client::SessionOptions::default(),
+        };
+        let session = retina::client::Session::describe(parsed, opts)
+            .await
+            .map_err(|e| format!("describe: {e}"))?;
+        session
+            .streams()
+            .iter()
+            .filter(|s| s.media() == "video")
+            .find_map(|s| VideoCodec::from_encoding(s.encoding_name()))
+            .ok_or_else(|| "no H264/H265 video stream in SDP".to_string())
+    })
+}
+
+/// The Tegra RTSP ingest: pull codec-framed access units with `retina` and push them into `appsrc`.
+/// Mirrors the PoC verified on the Orin Nano. `retina` handles the Digest handshake GStreamer's
+/// `rtspsrc` can't; its `demuxed()` gives us access units, and the SDP's `codec_data` goes into the
+/// appsrc caps so the parser negotiates avc/hvc1 without waiting for inline parameter sets. `codec`
+/// (from [`probe_codec`]) selects H264 vs H265.
 #[cfg(feature = "gst-linked")]
 async fn retina_feed(
     url: &str,
     appsrc: &gstreamer_app::AppSrc,
     stop: &AtomicBool,
+    codec: VideoCodec,
 ) -> Result<(), String> {
     use futures::StreamExt;
     use gstreamer as gst;
@@ -430,15 +532,17 @@ async fn retina_feed(
     let vid = session
         .streams()
         .iter()
-        .position(|s| s.media() == "video" && s.encoding_name().eq_ignore_ascii_case("h264"))
-        .ok_or_else(|| "no h264 video stream".to_string())?;
-    // codec_data (AVCDecoderConfigurationRecord) from the SDP → avc caps for the appsrc.
+        .position(|s| {
+            s.media() == "video" && VideoCodec::from_encoding(s.encoding_name()) == Some(codec)
+        })
+        .ok_or_else(|| format!("no {} video stream", codec.label()))?;
+    // codec_data (AVCDecoderConfigurationRecord / HEVCDecoderConfigurationRecord) → caps for the appsrc.
     let extra: Vec<u8> = match session.streams()[vid].parameters() {
         Some(retina::codec::ParametersRef::Video(v)) => v.extra_data().to_vec(),
         _ => Vec::new(),
     };
-    let mut caps = gst::Caps::builder("video/x-h264")
-        .field("stream-format", "avc")
+    let mut caps = gst::Caps::builder(codec.caps_media())
+        .field("stream-format", codec.stream_format())
         .field("alignment", "au");
     if !extra.is_empty() {
         caps = caps.field("codec_data", gst::Buffer::from_slice(extra));
