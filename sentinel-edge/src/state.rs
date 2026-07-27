@@ -558,13 +558,11 @@ fn linux_distro() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Stamp the box's health (Tailscale state + ffmpeg presence + platform) onto a request so
-/// control can surface it on the Boxes page. Used on the ~25s config poll (not the pushes).
+/// Stamp the box's health (GStreamer presence + hwaccel + platform) onto a request so control can
+/// surface it on the Boxes page. Used on the ~25s config poll (not the pushes). No more Tailscale or
+/// ffmpeg probes — those binaries are retired, and running them every poll was wasted work + noise.
 fn with_health(req: ureq::Request) -> ureq::Request {
-    req.set("X-Edge-Tailscale", crate::tailscale::tailscale_state())
-        .set("X-Edge-Ffmpeg", if ffmpeg_ok() { "1" } else { "0" })
-        .set("X-Edge-Gstreamer", if gstreamer_ok() { "1" } else { "0" })
-        .set("X-Edge-Hwaccel", crate::hwaccel::detect())
+    req.set("X-Edge-Gstreamer", if gstreamer_ok() { "1" } else { "0" })
         .set("X-Edge-Platform", platform())
         // Resource usage (CPU/mem/disk/GPU) as compact ASCII JSON — sampled off-thread.
         .set("X-Edge-Metrics", &crate::metrics::header_value())

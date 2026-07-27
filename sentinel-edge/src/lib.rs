@@ -1,20 +1,13 @@
-//! `sentinel-edge` — the edge gateway.
+//! `sentinel-edge` — the edge gateway. The **only** thing that touches cameras.
 //!
-//! Phase 2 of the cloud decomposition: the **only** thing that touches cameras. It
-//! wraps go2rtc (`sentinel-rtc`) + ONVIF and serves on-demand JPEG snapshots over
-//! REST, so out-of-process services reach the LAN-bound cameras without speaking
-//! RTSP/ONVIF themselves. `sentinel-flow`'s `FrameSource` becomes a client of this
-//! (`EDGE_URL`), fetching binary frames instead of base64'ing them onto SSE.
-//!
-//! Cameras are LAN-bound (ONVIF 192.168.x.x; go2rtc binds 1984/8554/8555), so an
-//! edge tier is mandatory however cloud the rest becomes.
+//! It ingests each camera's RTSP over the LAN and decodes it **in-process with linked GStreamer**
+//! (card #138) — no go2rtc sidecar, no ffmpeg, no tailnet. Live video is pushed up the edge's own
+//! OUTBOUND connection to the gateway (card #144), and cloud→edge commands ride an outbound SSE
+//! stream, so the edge needs no inbound reachability. It reaches control outbound over HTTPS and its
+//! cameras over the LAN directly.
 //!
 //! Run:
-//!   DATABASE_URL=postgres://sentinel:sentinel@localhost/sentinel \
-//!   EDGE_BIND=0.0.0.0:8788 cargo run -p sentinel-edge   # or: task edge
-//!
-//! Optional env: `EDGE_OWN_GO2RTC=1` to spawn/own the go2rtc sidecar (set
-//! `GO2RTC_BIN` + `GO2RTC_CONFIG`); otherwise it uses whatever go2rtc is on :1984.
+//!   EDGE_BIND=0.0.0.0:8788 cargo run -p sentinel-edge --features gst-linked   # or: task edge
 mod capture;
 mod clip_upload;
 mod command_stream;
@@ -40,7 +33,6 @@ mod paths;
 mod proc;
 mod recording;
 mod state;
-mod tailscale;
 mod tracking;
 
 use state::AppState;
@@ -186,43 +178,20 @@ pub fn run() {
     #[cfg(not(target_os = "ios"))]
     maybe_self_update(&AppState::control_url());
 
-    // Join the tailnet + expose go2rtc over it (opt-in via TS_AUTHKEY) FIRST, so the
-    // detected EDGE_PUBLIC_HOST is reported to control on the very first camera pull.
-    // The phone reaches control outbound over HTTPS and its cameras over the LAN — no tailnet, and no
-    // `tailscale` binary to drive (card #144). The appliance still joins the tailnet here.
-    #[cfg(not(target_os = "ios"))]
-    tailscale::ensure_up();
-
     // Config-light boot: pull the camera list from the control plane (cache fallback).
     // No database — the appliance carries no Postgres.
     let state = AppState::boot();
 
-    // ffmpeg matters only while go2rtc does: it is go2rtc that shells out to it for JPEG frames.
-    // On a box where GStreamer owns the media path there is no go2rtc and no ffmpeg, so warning
-    // about a missing binary nobody uses would be noise on the health badge and the log viewer.
-    if !state.own_go2rtc {
-        log::info!("media path is GStreamer — ffmpeg is not required on this box");
-    } else if state::ffmpeg_ok() {
-        log::info!("ffmpeg found on PATH");
-    } else {
-        log::warn!(
-            "ffmpeg NOT found on PATH — go2rtc JPEG frames (snapshots / GetCurrentFrame) will fail. \
-             Install it (Linux: apt install ffmpeg · macOS: brew install ffmpeg)."
-        );
-    }
-
-    // 443 is what the deployed gateway dials for live video. Publish the port BEFORE re-serving, so
-    // the periodic `ensure_up` keeps honouring it instead of resetting it to go2rtc behind our back.
-    if !state.own_go2rtc {
-        tailscale::set_live_port(8788);
-        tailscale::serve_live(8788);
-    }
-
+    // Media path: the in-process linked GStreamer decoder + outbound live dial (cards #138 + #144).
+    // No tailnet, no go2rtc sidecar, no ffmpeg — the edge reaches control outbound over HTTPS and its
+    // cameras over the LAN directly. The `tailscale`/`go2rtc`/`ffmpeg` binaries are retired here.
+    // The legacy EDGE_OWN_GO2RTC opt-in is never set on a GStreamer box; kept only for a bare-binary
+    // dev box that hasn't linked GStreamer yet.
     if state.own_go2rtc {
         go2rtc::respawn(&state);
-        log::info!("edge owns go2rtc (EDGE_OWN_GO2RTC)");
+        log::info!("edge owns go2rtc (legacy EDGE_OWN_GO2RTC path)");
     } else {
-        log::info!("edge using external go2rtc on :1984 (+ ONVIF fallback)");
+        log::info!("media: in-process GStreamer — no go2rtc, no ffmpeg, no tailnet");
     }
     // Report the initially-resolved stream set so the Devices dot is correct from boot.
     state.push_streaming();
@@ -250,10 +219,6 @@ pub fn run() {
         let disco = std::sync::Arc::clone(&state);
         std::thread::spawn(move || loop {
             disco.rediscover();
-            // Re-assert the tailnet exposure AND correct a drifted reported host, so a box that came
-            // up before its node settled heals itself here — no restart, no terminal (the live-video
-            // self-heal).
-            tailscale::reassert();
             // Start ring buffers for any newly discovered cameras (idempotent per IP).
             disco.warm_cameras();
             std::thread::sleep(std::time::Duration::from_secs(300));
@@ -263,7 +228,7 @@ pub fn run() {
     // Config long-poll: block on control until the web changes a camera (or 25s), then
     // apply immediately — so cloud edits (e.g. setting credentials) take effect in ~1s.
     // After each cycle, drain pending cloud commands: rescan (re-run discovery now) and
-    // restart (exit so the service manager relaunches us → re-runs tailscale up + serve).
+    // restart (exit so the service manager relaunches us on a fresh process).
     {
         let sync = std::sync::Arc::clone(&state);
         std::thread::spawn(move || loop {
