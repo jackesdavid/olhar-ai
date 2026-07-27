@@ -70,15 +70,23 @@ fn main() {
     {
         let reload_state = state.clone();
         state.db.listen("graphs_reload", move |_payload| {
-            reload_state.reload_graphs();
-            let (n, enabled) = {
-                let s = reload_state.store.lock().unwrap();
-                (s.len(), s.iter().filter(|(_, g)| g.enabled).count())
-            };
-            log::info!(
-                "graphs reloaded via NOTIFY — {n} graph(s), {enabled} enabled (pod {})",
-                reload_state.pod_name
-            );
+            // Run the reload on a DEDICATED std thread, never on the caller: this callback runs on
+            // the Db's own tokio runtime, and `reload_graphs` → `Db::block` blocks the calling
+            // thread on a channel (it's built to be called from a std thread, like the engine
+            // poller). Blocking a runtime worker here would stall the listener so it never receives
+            // the next notification. Notifies are rare (one per graph edit), so a thread each is fine.
+            let s = reload_state.clone();
+            std::thread::spawn(move || {
+                s.reload_graphs();
+                let (n, enabled) = {
+                    let store = s.store.lock().unwrap();
+                    (store.len(), store.iter().filter(|(_, g)| g.enabled).count())
+                };
+                log::info!(
+                    "graphs reloaded via NOTIFY — {n} graph(s), {enabled} enabled (pod {})",
+                    s.pod_name
+                );
+            });
         });
     }
 
