@@ -244,21 +244,12 @@ async fn enroll(State(st): State<AppState>, headers: HeaderMap, Json(body): Json
 
     let name = crate::store::box_name(&st.pool, box_id).await.ok().flatten().unwrap_or_default();
     let hostname = format!("sentinel-{}", &box_id.to_string()[..8]);
-    let tailscale_key = match &st.tailscale {
-        Some(ts) => ts
-            .mint_auth_key(&st.http, &format!("sentinel-edge {name}"))
-            .await
-            .map_err(|e| log::warn!("enroll: tailscale key mint failed for box {box_id}: {e}"))
-            .ok(),
-        None => None,
-    };
-
+    // No tailnet (card #144) — enrollment issues only the box token; the edge is outbound-only.
     log::info!("box {box_id} ({name}) enrolled by pairing code");
     Json(json!({
-        "box_id":        box_id,
-        "box_token":     token,
-        "hostname":      hostname,
-        "tailscale_key": tailscale_key,
+        "box_id":    box_id,
+        "box_token": token,
+        "hostname":  hostname,
     }))
     .into_response()
 }

@@ -97,7 +97,7 @@ export type Box = {
   metrics_at: string | null;
 };
 
-export type NewBox = { id: string; token: string; hostname: string; tailscale_key: string | null };
+export type NewBox = { id: string; token: string; hostname: string };
 
 export type InstallerOS = "macos" | "windows" | "linux";
 export type Installer = {

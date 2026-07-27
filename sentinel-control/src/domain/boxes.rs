@@ -158,12 +158,8 @@ struct CreateResp {
     id: Uuid,
     /// The plaintext box token — shown ONCE; the installer needs it as BOX_TOKEN.
     token: String,
-    /// A unique tailnet hostname for this box (`--hostname`).
+    /// A stable hostname for this box.
     hostname: String,
-    /// A freshly-minted, transparent Tailscale auth key (`--authkey`) when the
-    /// enrollment broker is configured — so the tenant never logs into Tailscale.
-    /// Null when not configured (the UI then asks for a key).
-    tailscale_key: Option<String>,
 }
 
 async fn create(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): Json<CreateReq>) -> Result<Json<CreateResp>, ApiErr> {
@@ -176,21 +172,8 @@ async fn create(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): 
     let token = new_box_token();
     let id = store::create_box(&st.pool, tid, name, &hash_token(&token)).await.map_err(db_err)?;
     let hostname = format!("sentinel-{}", &id.to_string()[..8]);
-
-    // Transparent enrollment: mint a Tailscale auth key for this box (best-effort —
-    // if the broker isn't configured or the API fails, fall back to a manual key).
-    let tailscale_key = match &st.tailscale {
-        Some(ts) => match ts.mint_auth_key(&st.http, &format!("sentinel-edge {name}")).await {
-            Ok(k) => Some(k),
-            Err(e) => {
-                log::warn!("tailscale key mint failed for box {id}: {e}");
-                None
-            }
-        },
-        None => None,
-    };
-
-    Ok(Json(CreateResp { id, token, hostname, tailscale_key }))
+    // No tailnet (card #144) — the edge is outbound-only, so there's no auth key to mint.
+    Ok(Json(CreateResp { id, token, hostname }))
 }
 
 #[derive(Deserialize)]
