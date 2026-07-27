@@ -21,5 +21,5 @@ pub mod repo;
 
 pub use domain::{load_targets, NotificationConfig, NotificationStore, NotificationTarget};
 pub use handler::{
-    delete_target, dispatch, rename_target, set_enabled_by_id, spawn_pairing,
+    delete_target, dispatch, rename_target, set_enabled_by_id, spawn_pairing_bot,
 };

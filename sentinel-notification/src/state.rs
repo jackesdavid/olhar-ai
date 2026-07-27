@@ -1,16 +1,18 @@
 //! Shared service state — the Postgres handle (queue + config live there) plus the
-//! per-tenant Telegram pairing-poller registry (this service owns pairing now).
+//! Telegram pairing-poller registry (this service owns pairing now).
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use app_core::db::Db;
-use uuid::Uuid;
 
-/// tenant → (its bot token, its pairing code, stop flag) for the running pairing pollers.
-/// The code is part of the identity because the poller captures it by value at spawn time —
-/// a rotated code must restart the poller, or it keeps matching the stale one.
-pub type PairingStops = Arc<Mutex<HashMap<Uuid, (String, String, Arc<AtomicBool>)>>>;
+/// bot token → (tenant/code-set signature, stop flag) for the running pairing pollers.
+/// Keyed by TOKEN, not tenant: Telegram permits only one `getUpdates` long-poll per token, so
+/// tenants that share a token (e.g. both on the operator's global bot) MUST share ONE poller — a
+/// second poller on the same token gets HTTP 409 and the two race, splitting/dropping messages.
+/// The signature is the sorted `(tenant, pairing_code)` set; a change (new tenant, rotated code)
+/// restarts the poller so it picks up the new routing/codes.
+pub type PairingStops = Arc<Mutex<HashMap<String, (String, Arc<AtomicBool>)>>>;
 
 pub struct AppState {
     pub db: Db,

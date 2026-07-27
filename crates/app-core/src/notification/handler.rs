@@ -85,25 +85,36 @@ pub fn dispatch(
     Ok(format!("Sent {what} to '{label}'."))
 }
 
-/// Spawn the inbound pairing poller on a background thread. Long-polls
-/// getUpdates; when a message carries the pairing code from an unknown chat,
-/// registers it as a trusted target, persists it to `path`, and replies to
-/// confirm. Wrong codes / unpaired chats are ignored. Never panics; on any error
-/// it backs off and retries.
-pub fn spawn_pairing<F>(
-    store: NotificationStore,
+/// Spawn ONE inbound pairing poller for a bot token that is shared by one or more tenants.
+///
+/// Telegram permits only a single `getUpdates` long-poll per bot token — a second concurrent poller
+/// on the same token gets HTTP 409 and the two race, splitting/dropping incoming messages (the
+/// "only some Telegram messages reach the workflow" bug). So when several tenants resolve to the
+/// same token (e.g. both fall back to the operator's global bot), they must share ONE poller. This
+/// poller holds a beacon store per tenant and routes each update:
+///   * a **pairing code** registers the chat to the tenant whose code matched;
+///   * a **regular message** fans out to `enqueue_telegram_message` for every tenant — a no-op for
+///     any tenant that hasn't paired that chat, so the message only reaches the owning tenant's
+///     graphs (the security boundary is preserved per-tenant).
+///
+/// `cfg.pairing_code` is unused here — each tenant's code is passed in `tenants`. Never panics; on
+/// any error it backs off and retries.
+pub fn spawn_pairing_bot(
     cfg: NotificationConfig,
-    db: Option<Db>,
-    tenant_id: uuid::Uuid,
+    db: Db,
+    tenants: Vec<(uuid::Uuid, String)>, // (tenant_id, pairing_code) sharing this token
     stop: Arc<AtomicBool>,
-    on_change: F,
-) where
-    F: Fn() + Send + 'static,
-{
-    if !cfg.can_pair() {
-        return; // no pairing code → accept no pairings
+) {
+    if tenants.is_empty() {
+        return;
     }
     thread::spawn(move || {
+        // One in-memory beacon store per tenant sharing this bot, seeded from Postgres. Kept live by
+        // `register_target` as chats pair, so subsequent regular messages route to the right tenant.
+        let stores: std::collections::HashMap<uuid::Uuid, NotificationStore> = tenants
+            .iter()
+            .map(|(t, _)| (*t, Arc::new(std::sync::Mutex::new(super::repo::load_beacons(&db, *t)))))
+            .collect();
         let mut offset: i64 = 0; // 0 = take the current backlog once
         let mut err_streak: u32 = 0;
         loop {
@@ -116,27 +127,35 @@ pub fn spawn_pairing<F>(
                     err_streak = 0;
                     for u in &updates {
                         offset = offset.max(u.update_id + 1); // ack
-                        if parse_pairing_code(&u.text, &cfg.pairing_code) {
-                            if register_target(&store, db.as_ref(), tenant_id, u) {
-                                on_change(); // notify the UI layer to refresh the beacon list
-                                let _ = client::send_message(
-                                    &cfg,
-                                    u.chat_id,
-                                    &format!(
-                                        "\u{2705} Paired as {}. You'll receive alerts here.",
-                                        u.sender_label
-                                    ),
-                                );
+                        // 1. Pairing: the tenant whose code matches this message claims the chat.
+                        let paired_tenant = tenants
+                            .iter()
+                            .find(|(_, code)| parse_pairing_code(&u.text, code))
+                            .map(|(t, _)| *t);
+                        if let Some(tenant_id) = paired_tenant {
+                            if let Some(store) = stores.get(&tenant_id) {
+                                if register_target(store, Some(&db), tenant_id, u) {
+                                    let _ = client::send_message(
+                                        &cfg,
+                                        u.chat_id,
+                                        &format!(
+                                            "\u{2705} Paired as {}. You'll receive alerts here.",
+                                            u.sender_label
+                                        ),
+                                    );
+                                }
                             }
                             continue;
                         }
-                        // Not a pairing code → a regular message. If it's from a chat this tenant
-                        // has already paired, fire it onto the durable event_queue as a
-                        // `telegram_message` trigger (card #15). Flow's event_consumer claims it and
-                        // runs the tenant's `On event("telegram_message")` bot-brain graphs. Messages
-                        // from unpaired chats are ignored (tenant-scoped: one poller per tenant).
-                        if let Some(db) = db.as_ref() {
-                            enqueue_telegram_message(&store, db, tenant_id, u);
+                        // 2. Regular message → fire it onto the durable event_queue as a
+                        // `telegram_message` trigger (card #15) for whichever tenant paired the chat.
+                        // Flow's event_consumer claims it and runs that tenant's
+                        // `On event("telegram_message")` graphs. `enqueue_telegram_message` no-ops for
+                        // tenants that haven't paired this chat, so a message never crosses tenants.
+                        for (tenant_id, _) in &tenants {
+                            if let Some(store) = stores.get(tenant_id) {
+                                enqueue_telegram_message(store, &db, *tenant_id, u);
+                            }
                         }
                     }
                 }
@@ -145,7 +164,8 @@ pub fn spawn_pairing<F>(
                     // bad token) used to be totally silent. Surface it, but throttle: first
                     // occurrence, then every ~12th retry (~once/minute at the 5s backoff).
                     if err_streak == 0 || err_streak % 12 == 0 {
-                        log::warn!("pairing getUpdates failing for tenant {tenant_id}: {e}");
+                        let tenants_dbg: Vec<uuid::Uuid> = tenants.iter().map(|(t, _)| *t).collect();
+                        log::warn!("pairing getUpdates failing for bot (tenants {tenants_dbg:?}): {e}");
                     }
                     err_streak = err_streak.saturating_add(1);
                     if stop.load(Ordering::Relaxed) {
