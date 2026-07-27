@@ -24,6 +24,9 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 pub struct Db {
     pool: PgPool,
     rt: Arc<tokio::runtime::Runtime>,
+    /// The connection string — kept so [`Db::listen`] can open a DEDICATED `LISTEN` connection
+    /// (never borrowed from `pool`, which would starve it) exactly like control's SSE relay.
+    url: String,
 }
 
 impl Db {
@@ -47,7 +50,7 @@ impl Db {
             Ok::<_, sqlx::Error>(pool)
         })?;
 
-        Ok(Db { pool, rt: Arc::new(rt) })
+        Ok(Db { pool, rt: Arc::new(rt), url: database_url.to_string() })
     }
 
     /// A `Db` whose pool connects lazily (on first query) and runs no migrations.
@@ -72,7 +75,7 @@ impl Db {
                 .connect_lazy(database_url)
                 .expect("lazy pool")
         };
-        Db { pool, rt: Arc::new(rt) }
+        Db { pool, rt: Arc::new(rt), url: database_url.to_string() }
     }
 
     /// The connection pool (cheap clone). Feature repos use this to run their own
@@ -115,6 +118,50 @@ impl Db {
                 .bind(&payload)
                 .execute(&pool)
                 .await
+        });
+    }
+
+    /// Subscribe to a Postgres `LISTEN <channel>` on the owned runtime; `on_notify(payload)` runs for
+    /// every notification. The counterpart to [`Db::notify`] — together they fan a signal out to
+    /// EVERY replica of a service (e.g. all `sentinel-flow` pods reload their graph store when
+    /// control emits `graphs_reload`), with no message broker.
+    ///
+    /// Uses a DEDICATED connection opened from the stored `url` (never `connect_with(&pool)`, which
+    /// pins a pool connection for the process lifetime and starves capacity — the FD-leak trap #147
+    /// hit). Reconnects with a fixed backoff if the LISTEN connection drops, so a Postgres restart or
+    /// network blip is self-healing. Best-effort + fire-and-forget: returns immediately.
+    pub fn listen<F>(&self, channel: &'static str, mut on_notify: F)
+    where
+        F: FnMut(String) + Send + 'static,
+    {
+        let url = self.url.clone();
+        self.rt.spawn(async move {
+            loop {
+                let mut listener = match sqlx::postgres::PgListener::connect(&url).await {
+                    Ok(l) => l,
+                    Err(e) => {
+                        log::warn!("db listen({channel}): connect failed: {e}; retry in 3s");
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        continue;
+                    }
+                };
+                if let Err(e) = listener.listen(channel).await {
+                    log::warn!("db listen({channel}): LISTEN failed: {e}; retry in 3s");
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    continue;
+                }
+                log::info!("db listen({channel}): subscribed");
+                // Inner loop: drain notifications until the connection errors, then reconnect.
+                loop {
+                    match listener.recv().await {
+                        Ok(note) => on_notify(note.payload().to_string()),
+                        Err(e) => {
+                            log::warn!("db listen({channel}): recv error: {e}; reconnecting");
+                            break;
+                        }
+                    }
+                }
+            }
         });
     }
 }

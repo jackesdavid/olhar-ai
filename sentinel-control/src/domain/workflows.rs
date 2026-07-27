@@ -99,7 +99,15 @@ fn flow_base() -> String {
 }
 
 /// Poke the engine to re-read graphs after an edit (best-effort, fire-and-forget).
-async fn poke_reload() {
+///
+/// TWO channels, because `FLOW_URL` is the load-balanced `sentinel-flow` service DNS: an HTTP POST
+/// reaches only ONE replica. The `graphs_reload` NOTIFY reaches EVERY flow pod (each `LISTEN`s it),
+/// so all replicas converge — without it, the pod that didn't get the POST keeps a stale store and
+/// silently drops events for graphs it thinks are absent/disabled. The POST stays as a low-latency
+/// nudge for whichever replica answers (and for single-pod/dev where NOTIFY and POST hit the same one).
+async fn poke_reload(db: &app_core::db::Db) {
+    let d = db.clone();
+    let _ = tokio::task::spawn_blocking(move || d.notify("graphs_reload", "")).await;
     let _ = reqwest::Client::new()
         .post(format!("{}/graphs/reload", flow_base()))
         .send()
@@ -124,7 +132,7 @@ where
     })
     .await?
     .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
-    poke_reload().await;
+    poke_reload(&st.db).await;
     sync_tracking_config(st, tid, &graphs).await;
     Ok(out)
 }

@@ -63,6 +63,25 @@ fn main() {
     schedule_consumer::spawn(state.clone());
     // Telegram pairing moved to sentinel-notification (card #57) — flow no longer polls.
 
+    // Multi-pod graph-store sync: control emits `pg_notify('graphs_reload')` on every workflow
+    // mutation; EVERY flow pod LISTENs and reloads. Fixes the round-robin gap where control's HTTP
+    // poke reached only one replica behind the `sentinel-flow` service DNS, so the other pod ran a
+    // stale store and silently dropped events it "had no graph" for. Runs on the Db's own runtime.
+    {
+        let reload_state = state.clone();
+        state.db.listen("graphs_reload", move |_payload| {
+            reload_state.reload_graphs();
+            let (n, enabled) = {
+                let s = reload_state.store.lock().unwrap();
+                (s.len(), s.iter().filter(|(_, g)| g.enabled).count())
+            };
+            log::info!(
+                "graphs reloaded via NOTIFY — {n} graph(s), {enabled} enabled (pod {})",
+                reload_state.pod_name
+            );
+        });
+    }
+
     // Now build the tokio runtime for the HTTP control plane.
     let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");
     rt.block_on(async move {
