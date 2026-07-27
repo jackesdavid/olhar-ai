@@ -119,10 +119,17 @@ pub fn gst_selftest() -> Result<(), String> {
     use gstreamer as gst;
     init_gstreamer()?;
 
-    // Exactly what `capture.rs`'s pipeline instantiates. Keep in step with it.
+    // Exactly what `capture.rs`'s pipeline instantiates, PLUS the elements `rtspsrc` builds
+    // INTERNALLY at connect time — `rtpbin`/`rtpjitterbuffer` (from the `rtpmanager` plugin) and
+    // `udpsrc`/`udpsink` (from `udp`, for RTCP). `rtspsrc` itself building is NOT enough: if those
+    // hidden deps aren't registered, `rtspsrc` still builds but dies at SETUP with the maddeningly
+    // generic "Could not open resource for reading and writing" — which is exactly how a macOS
+    // bundle whose plugins couldn't be scanned (missing LC_RPATH) silently broke all live/RTSP while
+    // this selftest reported OK. Checking them here turns that into a loud postinstall failure.
     let required = [
         "rtspsrc", "rtph264depay", "h264parse", "tee", "queue", "capsfilter", "decodebin",
         "videoconvert", "videorate", "jpegenc", "mp4mux", "appsink", "fakesink",
+        "rtpbin", "rtpjitterbuffer", "udpsrc", "udpsink",
     ];
     for name in required {
         gst::ElementFactory::make(name)

@@ -82,17 +82,28 @@ rewrite() {
 for f in "$LIBDIR"/*.dylib; do
   install_name_tool -id "@rpath/$(basename "$f")" "$f" 2>/dev/null || true
   rewrite "$f"
+  # Support libs sit beside each other in gst/lib and reference siblings via @rpath. Give each its
+  # OWN @loader_path rpath so it resolves those siblings no matter which process loaded it — the
+  # binary's rpath does NOT apply when `gst-plugin-scanner` (a separate helper) dlopen's them.
+  install_name_tool -add_rpath "@loader_path" "$f" 2>/dev/null || true
 done
 for f in "$PLUGDIR"/*.dylib; do
   install_name_tool -id "@rpath/$(basename "$f")" "$f" 2>/dev/null || true
   rewrite "$f"
+  # CRITICAL: plugins live in gst/plugins and depend on the core libs one dir up in gst/lib, via
+  # @rpath. The binary's @executable_path rpath resolves those ONLY when the edge dlopen's a plugin
+  # in-process — but GStreamer builds its registry in a forked `gst-plugin-scanner`, which is NOT the
+  # edge binary and has no such rpath, so every plugin failed to load ("no LC_RPATH's found") and
+  # `rtspsrc` never registered → live/RTSP silently broke on the bundled runtime. A plugin's own
+  # @loader_path/../lib rpath makes it self-locating for ANY loader (edge, scanner, gst-launch).
+  install_name_tool -add_rpath "@loader_path/../lib" "$f" 2>/dev/null || true
 done
 rewrite "$BIN"
 
-# The binary is what resolves @rpath for itself AND for every plugin it dlopen's, so its rpath is the
-# one that matters. Point it at the bundled lib dir; drop any inherited Homebrew rpath. `|| true` on
-# the grep because a cargo build usually has NO rpath to delete (it linked absolute paths), and under
-# `pipefail` an empty grep would otherwise abort the whole script right before the add_rpath.
+# The binary also carries its own rpath so it finds libgstreamer at launch. Point it at the bundled
+# lib dir; drop any inherited Homebrew rpath. `|| true` on the grep because a cargo build usually has
+# NO rpath to delete (it linked absolute paths), and under `pipefail` an empty grep would otherwise
+# abort the whole script right before the add_rpath.
 for rp in $(otool -l "$BIN" | awk '/LC_RPATH/{r=1} r&&/path /{print $2; r=0}' \
             | grep -E '^(/usr/local|/opt/homebrew)/' || true); do
   install_name_tool -delete_rpath "$rp" "$BIN" 2>/dev/null || true
