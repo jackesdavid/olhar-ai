@@ -1,8 +1,20 @@
 [package]
 name = "sentinel-edge"
-version = "0.5.53"
+version = "0.5.59"
 edition = "2021"
 description = "The edge gateway — the ONLY thing that touches cameras. Wraps go2rtc (sentinel-rtc) + ONVIF and serves on-demand JPEG snapshots over REST so out-of-process services (sentinel-flow, the UI) reach the LAN-bound cameras without speaking RTSP/ONVIF themselves. Cameras are LAN-bound, so this tier is mandatory however cloud the rest becomes."
+
+# The edge is a lib + a thin bin: the appliance runs the bin, while iOS/Android link the
+# `staticlib` and drive it through the C ABI (`start_edge`/`stop_edge`) — card #144. `rlib` lets the
+# bin reuse the lib.
+[lib]
+name = "sentinel_edge"
+crate-type = ["staticlib", "rlib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "sentinel-edge"
+path = "src/main.rs"
 
 # Standalone crate (NOT in the app/ workspace) so it ships/runs independently at the
 # edge. Links the same UI-agnostic `app-core` (device repo, go2rtc helpers, ONVIF +
@@ -12,6 +24,10 @@ app-core = { path = "../crates/app-core" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 axum = { version = "0.7", features = ["ws"] }
+# Outbound WebSocket client — the edge dials the gateway to push live video up its own connection
+# (card #144, live-over-outbound), so live works with no tailnet. Optional: only the gst-linked live
+# path uses it, so the lean musl release build doesn't pull it. rustls (pure-Rust, musl-friendly).
+tokio-tungstenite = { version = "0.24", optional = true, features = ["rustls-tls-webpki-roots"] }
 tower-http = { version = "0.5", features = ["cors"] }
 # Pull the camera config from the control plane (cloud-managed, cached locally).
 ureq = { version = "2", features = ["json"] }
@@ -22,6 +38,13 @@ chrono = "0.4"
 base64 = "0.22"
 log = "0.4"
 env_logger = "0.11"
+# Structured logging (card #146): the capture/telemetry sites emit typed fields (`camera_ip`, `mode`,
+# `fps`, …) as tracing events; the ring layer (logbuf.rs) captures them as JSON so control relays
+# searchable fields to Datadog. `tracing-log` bridges the many existing `log::*` sites unchanged.
+# All pure-Rust — no soname coupling, cross-compiles to musl/Windows/ARM like the rest of the edge.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-log = "0.2"
 # Continuous motion detection — MOG2 (src/mog2.rs), morphology + blobs (imageproc), decode +
 # resize (image). All pure Rust: the edge has NO native dependency, so it cross-compiles to
 # Windows/ARM/musl with plain cargo and its binary isn't soname-coupled to the build host.
@@ -54,5 +77,5 @@ gstreamer-app = { version = "0.23", optional = true }
 
 [features]
 opencv-parity = ["dep:opencv"]
-gst-linked = ["dep:gstreamer", "dep:gstreamer-app", "app-core/gst-linked"]
+gst-linked = ["dep:gstreamer", "dep:gstreamer-app", "dep:tokio-tungstenite", "app-core/gst-linked"]
 

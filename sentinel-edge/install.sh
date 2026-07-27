@@ -2,9 +2,9 @@
 # sentinel-edge — one-command appliance installer.
 #
 # A client runs this ONCE on their on-prem box. It:
-#   1. installs Tailscale (if missing),
+#   1. installs the GStreamer runtime,
 #   2. downloads the sentinel-edge + go2rtc binaries,
-#   3. writes the config, joins the tailnet, and serves go2rtc over it,
+#   3. writes the config,
 #   4. installs a service (systemd / launchd) so it runs 24/7 and on boot,
 #   5. starts it.
 #
@@ -14,17 +14,14 @@
 #   curl -fsSL https://control.olharai.com/install.sh | sudo sh -s -- \
 #     --control https://control.olharai.com \
 #     --box-token sbx_xxxxxxxx \
-#     --authkey tskey-auth-xxxx \
 #     --hostname tenant-001
 #
-# The box token binds this appliance to its tenant: control returns only that tenant's
-# cameras. The Tailscale auth key joins the tailnet so the gateway can reach go2rtc.
+# The box token binds this appliance to its tenant: control returns only that tenant's cameras.
+# No tailnet (card #144) — the edge is outbound-only.
 set -eu
 
 # ---- config (flags > env > default) ----------------------------------------
-AUTHKEY="${SENTINEL_TS_AUTHKEY:-}"
 HOSTNAME_="${SENTINEL_HOSTNAME:-sentinel-edge}"
-TAGS="${SENTINEL_TS_TAGS:-}"
 CONTROL_URL="${SENTINEL_CONTROL_URL:-}"
 BOX_TOKEN="${SENTINEL_BOX_TOKEN:-}"
 PUBLIC_HOST="${SENTINEL_PUBLIC_HOST:-}"
@@ -37,13 +34,11 @@ ENV_DIR="${SENTINEL_ENV_DIR:-/etc/sentinel-edge}"
 # card #138: "ffmpeg" (default) or "gstreamer" — opt-in only, a coexistence/measurement flag, not
 # a permanent switch. See docs/plans/edge-gstreamer-backend.md.
 MEDIA_BACKEND="${SENTINEL_MEDIA_BACKEND:-ffmpeg}"
-UPDATE=0   # --update: only swap the binary + restart (keep env, Tailscale, service)
+UPDATE=0   # --update: refresh the payload + restart, keeping env / service / enrollment
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --authkey) AUTHKEY="$2"; shift 2 ;;
     --hostname) HOSTNAME_="$2"; shift 2 ;;
-    --tags) TAGS="$2"; shift 2 ;;
     --control) CONTROL_URL="$2"; shift 2 ;;
     --box-token) BOX_TOKEN="$2"; shift 2 ;;
     --public-host) PUBLIC_HOST="$2"; shift 2 ;;
@@ -109,44 +104,32 @@ else
   echo "▸ sentinel-edge version: (could not reach $CONTROL_URL/edge-latest)"
 fi
 
-# macOS: ensure the open-source tailscaled is registered as a launchd system daemon AND
-# actually running, so `tailscale up` can reach it headlessly. Idempotent — safe to re-run.
-# (Linux's installer wires up tailscaled itself.) A binary-only `--update` can leave a box
-# without it (that's how a box ends up "offline on the tailnet"), so BOTH paths call this.
-ensure_tailscaled_macos() {
-  [ "$os" = "Darwin" ] || return 0
-  TAILSCALED="$(command -v tailscaled || echo /usr/local/bin/tailscaled)"
-  echo "▸ Ensuring tailscaled system daemon…"
-  "$TAILSCALED" install-system-daemon 2>&1 \
-    || echo "  ⚠ 'tailscaled install-system-daemon' failed — the box will be off the tailnet (Live won't work)." >&2
-  # Wait for the daemon to come up so a 'tailscale up' right after can reach it.
-  i=0
-  while [ "$i" -lt 10 ] && ! pgrep -x tailscaled >/dev/null 2>&1; do sleep 1; i=$((i+1)); done
-  if pgrep -x tailscaled >/dev/null 2>&1; then
-    echo "✓ tailscaled running"
-  else
-    echo "  ⚠ tailscaled not running after install — Live will be offline until it is. Re-run: sudo $TAILSCALED install-system-daemon" >&2
-  fi
-}
-
-# ---- update mode: swap the binary + restart; keep env / Tailscale / service ---
+# ---- update mode: keep env / service / enrollment; swap the payload ----------
+# Per-platform, because the payload shape differs:
+#  • Linux  — a bare gst-linked binary: swap it + restart.
+#  • macOS  — a SIGNED .pkg bundle (binary + its OWN bundled GStreamer runtime). A binary-only
+#             swap would mismatch the bundle (and the stale raw macOS binary isn't even published),
+#             so re-run the NOTARIZED installer: it replaces binary + gst runtime, reruns the
+#             postinstall, and keeps enrollment (/etc/sentinel-edge is preserved). This is what
+#             makes the in-app "Update" button work on macOS.
 if [ "$UPDATE" = "1" ]; then
   [ -x "$PREFIX/sentinel-edge" ] || { echo "Not installed at $PREFIX — run the full installer first." >&2; exit 1; }
-  echo "▸ Updating sentinel-edge ($os-$arch) from ${RELEASE_BASE}…"
-  curl -fSL "$RELEASE_BASE/$EDGE_ASSET" -o "$PREFIX/sentinel-edge.new"
-  chmod +x "$PREFIX/sentinel-edge.new"
-  mv "$PREFIX/sentinel-edge.new" "$PREFIX/sentinel-edge"
   if [ "$os" = "Linux" ]; then
+    echo "▸ Updating sentinel-edge ($os-$arch) from ${RELEASE_BASE}…"
+    curl -fSL "$RELEASE_BASE/$EDGE_ASSET" -o "$PREFIX/sentinel-edge.new"
+    chmod +x "$PREFIX/sentinel-edge.new"
+    mv "$PREFIX/sentinel-edge.new" "$PREFIX/sentinel-edge"
     systemctl restart sentinel-edge
     echo "✓ Updated. Status: systemctl status sentinel-edge"
   else
-    # A binary-only update can have lost the tailscaled daemon — re-assert it before the
-    # restart so the box rejoins the tailnet (the edge's ensure_up runs `tailscale up`).
-    ensure_tailscaled_macos
-    launchctl kickstart -k system/io.sentinel.edge 2>/dev/null \
-      || { launchctl bootout system /Library/LaunchDaemons/io.sentinel.edge.plist 2>/dev/null; \
-           launchctl bootstrap system /Library/LaunchDaemons/io.sentinel.edge.plist; }
-    echo "✓ Updated."
+    ver="$(curl -fsSL "$CONTROL_URL/edge-latest" | sed -n 's/.*"version"[^"]*"\([^"]*\)".*/\1/p')"
+    [ -n "$ver" ] || { echo "could not resolve latest edge version from $CONTROL_URL/edge-latest" >&2; exit 1; }
+    pkg="$(mktemp -d)/Sentinel-Edge-${ver}.pkg"
+    echo "▸ Updating sentinel-edge (macOS) → v${ver} via signed .pkg reinstall…"
+    curl -fSL "$RELEASE_BASE/Sentinel-Edge-${ver}.pkg" -o "$pkg"
+    installer -pkg "$pkg" -target /   # replaces binary + gst runtime, reruns postinstall (keeps identity)
+    rm -f "$pkg"
+    echo "✓ Updated to v${ver}."
   fi
   exit 0
 fi
@@ -154,108 +137,20 @@ fi
 echo "▸ Installing sentinel-edge ($os-$arch) → $PREFIX"
 mkdir -p "$PREFIX" "$PREFIX/recordings" "$ENV_DIR"
 
-# ---- 1. Tailscale -----------------------------------------------------------
-# A working `tailscale version` is the real test (a leftover GUI-app shim resolves on PATH
-# but is broken once the app is gone).
-if ! tailscale version >/dev/null 2>&1; then
-  echo "▸ Installing Tailscale…"
-  if [ "$os" = "Linux" ]; then
-    curl -fsSL https://tailscale.com/install.sh | sh
-  else
-    # macOS: headless install — the open-source tailscaled (NOT the GUI app), so the edge
-    # joins the tailnet from the CLI exactly like a Linux appliance. Homebrew refuses root,
-    # so install as the invoking user; drop any stale GUI-app shim first.
-    rm -f /usr/local/bin/tailscale 2>/dev/null || true
-    # Non-interactive: skip the slow formula auto-update + the tap-trust prompt (either can
-    # hang/abort a headless install on a box with extra taps).
-    BREW_ENV="HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_REQUIRE_TAP_TRUST=1 HOMEBREW_NO_ENV_HINTS=1"
-    if [ -n "${SUDO_USER:-}" ] && sudo -u "$SUDO_USER" command -v brew >/dev/null 2>&1; then
-      sudo -u "$SUDO_USER" env $BREW_ENV brew install tailscale && sudo -u "$SUDO_USER" env $BREW_ENV brew link --overwrite tailscale
-    elif command -v brew >/dev/null 2>&1; then
-      env $BREW_ENV brew install tailscale && env $BREW_ENV brew link --overwrite tailscale
-    else
-      echo "  Homebrew not found — install it (https://brew.sh), or Tailscale, then re-run." >&2
-      exit 1
-    fi
-  fi
-fi
+# ---- 1. No tailnet (card #144) ----------------------------------------------
+# The edge is outbound-only: it reaches control over HTTPS, holds one outbound SSE command stream,
+# and pushes live video out to the gateway. Nothing needs to reach INTO the box, so there is no
+# Tailscale to install or join — one fewer dependency and zero inbound surface.
 
-# macOS: register + start the tailscaled system daemon (launchd) so `tailscale up` works
-# headlessly. (Linux's installer already sets up tailscaled.)
-ensure_tailscaled_macos
-
-# Join the tailnet now (best-effort) so the box is reachable the moment install finishes;
-# the edge service also re-asserts this on boot. Needs a key (auto-minted or --authkey).
-if [ -n "$AUTHKEY" ]; then
-  echo "▸ Joining the tailnet (hostname=$HOSTNAME_)…"
-  # --reset: the appliance owns its tailscale identity. Without it, a box that already had
-  # tailscale set up (e.g. Bazzite's `ujust` sets --operator=<user>) makes `up` refuse with
-  # "changing settings requires mentioning all non-default flags". --reset overrides that.
-  # shellcheck disable=SC2086
-  tailscale up --reset --authkey="$AUTHKEY" --hostname="$HOSTNAME_" ${TAGS:+--advertise-tags="$TAGS"} \
-    || echo "  'tailscale up' failed — check the auth key; the edge service will retry on boot." >&2
-fi
-
-# ---- 1b. runtime dep: ffmpeg ------------------------------------------------
-# ffmpeg is the ONLY runtime dependency: go2rtc shells out to it for JPEG frames (Live snapshot +
-# GetCurrentFrame node) — without it those fail (`exec: "ffmpeg": not found`) while MSE/WebRTC still
-# plays.
-#
-# The edge itself needs nothing. It used to link OpenCV for the MOG2 motion watcher, which meant
-# installing it here, matching its soname to the build host's, layering it via rpm-ostree on an
-# immutable OS — and REBOOTING before the box could start. Motion is pure Rust now (card #79), so
-# all of that is gone.
-if [ "$IMMUTABLE" = 1 ]; then
-  # Immutable Fedora (Bazzite / Silverblue / Kinoite): the base OS is read-only — layer ffmpeg with
-  # rpm-ostree. Unlike the OpenCV libs the edge used to link, ffmpeg is spawned as a child process
-  # by go2rtc, so it does not have to be active before the edge can run: no reboot gate.
-  if ! command -v ffmpeg >/dev/null 2>&1; then
-    echo "▸ Layering ffmpeg via rpm-ostree…"
-    rpm-ostree install --idempotent --allow-inactive ffmpeg-free \
-      || echo "  ⚠ rpm-ostree install failed — layer it manually: sudo rpm-ostree install ffmpeg-free" >&2
-    command -v ffmpeg >/dev/null 2>&1 || REBOOT_REQUIRED=1
-  fi
-else
-  # Mutable OS (Debian/Ubuntu/Alpine/regular Fedora, macOS) — install in place, effective now.
-  if ! command -v ffmpeg >/dev/null 2>&1; then
-    echo "▸ Installing ffmpeg…"
-    if [ "$os" = "Linux" ]; then
-      if command -v apt-get >/dev/null 2>&1; then
-        apt-get update -qq && apt-get install -y ffmpeg
-      elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y ffmpeg
-      elif command -v yum >/dev/null 2>&1; then
-        yum install -y ffmpeg
-      elif command -v apk >/dev/null 2>&1; then
-        apk add --no-cache ffmpeg
-      else
-        echo "  No supported package manager found — install ffmpeg manually, then re-run." >&2
-      fi
-    else
-      # macOS: Homebrew refuses to run as root, so install as the invoking user.
-      if [ -n "${SUDO_USER:-}" ] && command -v sudo >/dev/null 2>&1 && sudo -u "$SUDO_USER" command -v brew >/dev/null 2>&1; then
-        sudo -u "$SUDO_USER" brew install ffmpeg || true
-      elif command -v brew >/dev/null 2>&1; then
-        brew install ffmpeg || true
-      else
-        echo "  Install ffmpeg first:  brew install ffmpeg  — then re-run." >&2
-      fi
-    fi
-  fi
-fi
-if command -v ffmpeg >/dev/null 2>&1; then
-  echo "✓ ffmpeg present ($(command -v ffmpeg))"
-else
-  echo "⚠ ffmpeg NOT found — live snapshots / GetCurrentFrame will fail until it is installed." >&2
-fi
-
-# ---- 1c. runtime dep: gstreamer (opt-in, card #138) -------------------------
-# Only installed when explicitly requested (--media-backend gstreamer /
-# SENTINEL_MEDIA_BACKEND=gstreamer) — ffmpeg stays the default runtime dependency above
-# regardless. This is the coexistence/measurement phase (docs/plans/edge-gstreamer-backend.md):
-# gst-launch-1.0 is a subprocess tool the edge shells out to, same shape as ffmpeg, no linking.
-if [ "$MEDIA_BACKEND" = "gstreamer" ] && ! command -v gst-launch-1.0 >/dev/null 2>&1; then
-  echo "▸ Installing GStreamer (media_backend=gstreamer)…"
+# ---- runtime dep: GStreamer -------------------------------------------------
+# The edge LINKS GStreamer now (card #138) — it is the SOLE media backend; go2rtc and ffmpeg are
+# retired. Install the GStreamer runtime + plugins so the linked pipeline finds its elements (decode
+# incl. HW where available, mux, appsink). The edge is outbound-only (card #144: SSE commands + live
+# over its own outbound connection) — no tailnet, no go2rtc, no ffmpeg. On an immutable OS the
+# plugins layer via rpm-ostree; the plugin list was proven on the Jetson test box (`-libav` is
+# load-bearing — some boxes ship no software H264/H265 decoder without it).
+if ! command -v gst-inspect-1.0 >/dev/null 2>&1; then
+  echo "▸ Installing GStreamer runtime…"
   if [ "$os" = "Linux" ]; then
     if [ "$IMMUTABLE" = 1 ]; then
       rpm-ostree install --idempotent --allow-inactive \
@@ -290,12 +185,10 @@ if [ "$MEDIA_BACKEND" = "gstreamer" ] && ! command -v gst-launch-1.0 >/dev/null 
     fi
   fi
 fi
-if [ "$MEDIA_BACKEND" = "gstreamer" ]; then
-  if command -v gst-launch-1.0 >/dev/null 2>&1; then
-    echo "✓ gstreamer present ($(command -v gst-launch-1.0))"
-  else
-    echo "⚠ gstreamer NOT found — the edge falls back to ffmpeg for every operation until it is installed." >&2
-  fi
+if command -v gst-inspect-1.0 >/dev/null 2>&1; then
+  echo "✓ GStreamer present ($(command -v gst-inspect-1.0))"
+else
+  echo "⚠ GStreamer NOT found — the edge has no media backend until it is installed." >&2
 fi
 
 # ---- 2. binaries ------------------------------------------------------------
@@ -308,21 +201,11 @@ if ver="$("$PREFIX/sentinel-edge" --version 2>/dev/null)"; then
   echo "✓ Installed $ver"
 fi
 
-echo "▸ Downloading go2rtc…"
-case "$GO2RTC_ASSET" in
-  *.zip)
-    tmp="$(mktemp -d)"
-    curl -fSL "$GO2RTC_BASE/$GO2RTC_ASSET" -o "$tmp/go2rtc.zip"
-    unzip -o "$tmp/go2rtc.zip" -d "$tmp" >/dev/null
-    mv "$(find "$tmp" -type f ! -name '*.zip' | head -1)" "$PREFIX/go2rtc"
-    rm -rf "$tmp" ;;
-  *)
-    curl -fSL "$GO2RTC_BASE/$GO2RTC_ASSET" -o "$PREFIX/go2rtc" ;;
-esac
-chmod +x "$PREFIX/go2rtc"
+# go2rtc is retired (card #138) — GStreamer, linked into the edge, is the sole media path. Nothing
+# to download; the GStreamer runtime installed above provides the elements the edge uses in-process.
 
 # ---- 3. config --------------------------------------------------------------
-# Bake a PATH so the service (and the go2rtc child it spawns) can find ffmpeg + tailscale
+# Bake a PATH so the service can find its runtime deps
 # even under a minimal systemd/launchd PATH (Homebrew dirs are NOT on a daemon's default).
 EDGE_PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 FFMPEG_BIN="$(command -v ffmpeg 2>/dev/null || true)"
@@ -334,26 +217,21 @@ cat > "$ENV_DIR/edge.env" <<EOF
 EDGE_BIND=127.0.0.1:8788
 CONTROL_URL=$CONTROL_URL
 BOX_TOKEN=$BOX_TOKEN
-EDGE_PUBLIC_HOST=$PUBLIC_HOST
-EDGE_OWN_GO2RTC=1
-GO2RTC_BIN=$PREFIX/go2rtc
-GO2RTC_CONFIG=$PREFIX/go2rtc.yaml
 EDGE_CACHE=$PREFIX/cameras-cache.json
-TS_AUTHKEY=$AUTHKEY
-TS_HOSTNAME=$HOSTNAME_
-TS_TAGS=$TAGS
-EDGE_MEDIA_BACKEND=$MEDIA_BACKEND
 PATH=$EDGE_PATH
 EOF
-chmod 600 "$ENV_DIR/edge.env"   # contains the auth key + box token
+chmod 600 "$ENV_DIR/edge.env"   # contains the box token
 
-# ---- 4. service (the edge self-enrolls Tailscale + serve on startup) --------
+# No go2rtc (EDGE_OWN_GO2RTC / GO2RTC_*), no tailnet (TS_*), no media-backend flag — the gst-linked
+# edge defaults to GStreamer and reaches the cloud outbound-only (card #144).
+
+# ---- 4. service ------------------------------------------------------------
 if [ "$os" = "Linux" ]; then
   echo "▸ Installing systemd service…"
   cat > /etc/systemd/system/sentinel-edge.service <<EOF
 [Unit]
-Description=Sentinel edge gateway (cameras + go2rtc + tailnet)
-After=network-online.target tailscaled.service
+Description=Sentinel edge gateway (cameras · in-process GStreamer · outbound-only)
+After=network-online.target
 Wants=network-online.target
 
 [Service]

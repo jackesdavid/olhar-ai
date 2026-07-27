@@ -19,6 +19,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/health", get(health))
         .route("/player", get(player))
         .route("/api/ws", get(proxy::ws_handler))
+        // Live-over-outbound (card #144): the edge dials THIS to push a stream up its own connection.
+        .route("/edge/live/:session", get(proxy::edge_live))
         .fallback(proxy::passthrough) // /api/frame.jpeg, /api/streams, /stream.html, assets…
         .layer(CorsLayer::permissive())
         .with_state(state)

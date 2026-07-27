@@ -7,33 +7,40 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as ImageManipulator from "expo-image-manipulator";
+import { useFocusEffect, useRouter } from "expo-router";
 
+import { DEFAULT_SETTINGS, loadSettings, type CaptureSettings } from "@/captureSettings";
 import { ensureRegistered, pushFace, type LightEdge } from "@/lightEdge";
 import { Danger, Heading, Muted, Screen, Strong } from "@/styles/ui";
 import { radius, space, useTheme } from "@/styles/theme";
-
-/** How often a photo is snapped while capturing. Slow enough not to flood the pipeline or the
- *  network, fast enough to catch a face that steps in front of the phone. */
-const SNAP_INTERVAL_MS = 1800;
-/** Downscale before upload: a full-res iPhone photo is multi-MB of base64 over cellular; the cloud
- *  face detector needs nothing near that resolution. */
-const MAX_WIDTH = 720;
 
 type Status = "idle" | "registering" | "ready" | "capturing";
 
 export default function Capture() {
   const t = useTheme();
+  const router = useRouter();
   const [permission, requestPermission] = useCameraPermissions();
   const [status, setStatus] = useState<Status>("idle");
   const [edge, setEdge] = useState<LightEdge | null>(null);
   const [sent, setSent] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [settings, setSettings] = useState<CaptureSettings>(DEFAULT_SETTINGS);
 
   const camera = useRef<CameraView>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
-  // The latest edge, read from inside the interval closure without re-arming it.
+  // The latest edge + settings, read from inside the interval closure without re-arming it.
   const edgeRef = useRef<LightEdge | null>(null);
   edgeRef.current = edge;
+  const settingsRef = useRef<CaptureSettings>(settings);
+  settingsRef.current = settings;
+
+  // Reload settings whenever the screen regains focus, so a change on the settings screen applies on
+  // return without a restart. `useFocusEffect` re-runs on every focus.
+  useFocusEffect(
+    useCallback(() => {
+      loadSettings().then(setSettings);
+    }, []),
+  );
 
   // Register this phone as a light-edge box once (idempotent client-side).
   useEffect(() => {
@@ -68,14 +75,15 @@ export default function Capture() {
 
   async function snapAndPush() {
     const e = edgeRef.current;
+    const cfg = settingsRef.current;
     if (!e || !camera.current) return;
     try {
-      const shot = await camera.current.takePictureAsync({ base64: false, quality: 0.6, skipProcessing: true });
+      const shot = await camera.current.takePictureAsync({ base64: false, quality: cfg.quality, skipProcessing: true });
       if (!shot?.uri) return;
       // Resize + re-encode to a modest JPEG; `base64` here is the resized image, not the full frame.
-      const small = await ImageManipulator.manipulateAsync(shot.uri, [{ resize: { width: MAX_WIDTH } }], {
+      const small = await ImageManipulator.manipulateAsync(shot.uri, [{ resize: { width: cfg.maxWidth } }], {
         base64: true,
-        compress: 0.6,
+        compress: cfg.quality,
         format: ImageManipulator.SaveFormat.JPEG,
       });
       if (!small.base64) return;
@@ -101,7 +109,14 @@ export default function Capture() {
     setSent(0);
     setStatus("capturing");
     void snapAndPush();
-    timer.current = setInterval(() => void snapAndPush(), SNAP_INTERVAL_MS);
+    timer.current = setInterval(() => void snapAndPush(), settingsRef.current.intervalMs);
+  }
+
+  /** One snap in manual mode — no session, just fire and count. */
+  function snapOnce() {
+    if (status !== "ready") return;
+    setError(null);
+    void snapAndPush();
   }
 
   if (!permission) return renderCentered(<ActivityIndicator color={t.foreground} />);
@@ -120,13 +135,19 @@ export default function Capture() {
   }
 
   const capturing = status === "capturing";
+  const action = primaryAction(settings.mode, capturing, { start, stop, snapOnce });
   return (
     <Screen>
-      <Heading>Face capture</Heading>
-      <Muted>Point the front camera at a face. The phone acts as a temporary edge while this screen is open.</Muted>
+      <View style={styles.headerRow}>
+        <Heading>Face capture</Heading>
+        <Pressable onPress={() => router.push("/capture-settings")} hitSlop={12}>
+          <Muted>Settings</Muted>
+        </Pressable>
+      </View>
+      <Muted>Point the camera at a face. The phone acts as a temporary edge while this screen is open.</Muted>
 
       <View style={[styles.preview, { borderColor: t.border, borderRadius: radius.lg }]}>
-        <CameraView ref={camera} style={StyleSheet.absoluteFill} facing="front" />
+        <CameraView ref={camera} style={StyleSheet.absoluteFill} facing={settings.facing} />
         {capturing ? <View style={[styles.badge, { backgroundColor: t.foreground }]} /> : null}
       </View>
 
@@ -134,17 +155,29 @@ export default function Capture() {
       {error ? <Danger>{error}</Danger> : null}
 
       <Pressable
-        onPress={capturing ? stop : start}
+        onPress={action.onPress}
         disabled={status === "registering"}
         style={[
           styles.button,
-          { backgroundColor: capturing ? t.destructive : t.foreground, borderRadius: radius.md, opacity: status === "registering" ? 0.5 : 1 },
+          { backgroundColor: action.danger ? t.destructive : t.foreground, borderRadius: radius.md, opacity: status === "registering" ? 0.5 : 1 },
         ]}
       >
-        <Text style={{ color: t.background, fontWeight: "600" }}>{capturing ? "Stop capturing" : "Start capturing"}</Text>
+        <Text style={{ color: t.background, fontWeight: "600" }}>{action.label}</Text>
       </Pressable>
     </Screen>
   );
+}
+
+/** The primary button's label + handler for the current mode/state — a named helper so the markup
+ *  stays branch-free (house style). Continuous toggles a session; manual fires one snap. */
+function primaryAction(
+  mode: CaptureSettings["mode"],
+  capturing: boolean,
+  h: { start: () => void; stop: () => void; snapOnce: () => void },
+): { label: string; onPress: () => void; danger: boolean } {
+  if (mode === "manual") return { label: "Snap a face", onPress: h.snapOnce, danger: false };
+  if (capturing) return { label: "Stop capturing", onPress: h.stop, danger: true };
+  return { label: "Start capturing", onPress: h.start, danger: false };
 }
 
 /** The status line — a named helper so the markup carries no branching logic (house style). */
@@ -160,6 +193,7 @@ function renderCentered(node: React.ReactNode) {
 }
 
 const styles = StyleSheet.create({
+  headerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.md, padding: space.lg },
   preview: { aspectRatio: 3 / 4, overflow: "hidden", borderWidth: StyleSheet.hairlineWidth, marginVertical: space.md },
   badge: { position: "absolute", top: space.sm, right: space.sm, width: 12, height: 12, borderRadius: 6 },

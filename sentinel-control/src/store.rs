@@ -326,74 +326,11 @@ pub struct LogLineIn {
     #[serde(default)]
     pub target: String,
     pub message: String,
-}
-
-/// A persisted box log line, as returned to the UI.
-#[derive(serde::Serialize, sqlx::FromRow)]
-pub struct BoxLogRow {
-    pub ts: String,
-    pub level: String,
-    pub target: String,
-    pub message: String,
-}
-
-/// Persist a batch of log lines for a box, then prune to the newest `keep` rows for it.
-pub async fn insert_box_logs(
-    pool: &PgPool,
-    tenant_id: Uuid,
-    box_id: Uuid,
-    lines: &[LogLineIn],
-    keep: i64,
-) -> sqlx::Result<()> {
-    if lines.is_empty() {
-        return Ok(());
-    }
-    let mut tx = pool.begin().await?;
-    for l in lines {
-        sqlx::query(
-            "INSERT INTO box_logs (tenant_id, box_id, ts, level, target, message)
-             VALUES ($1,$2,$3,$4,$5,$6)",
-        )
-        .bind(tenant_id)
-        .bind(box_id)
-        .bind(&l.ts)
-        .bind(&l.level)
-        .bind(&l.target)
-        .bind(&l.message)
-        .execute(&mut *tx)
-        .await?;
-    }
-    // Keep only the newest `keep` rows for this box (bounded retention).
-    sqlx::query(
-        "DELETE FROM box_logs WHERE box_id = $1 AND id <= (
-            SELECT id FROM box_logs WHERE box_id = $1 ORDER BY id DESC OFFSET $2 LIMIT 1
-         )",
-    )
-    .bind(box_id)
-    .bind(keep)
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await
-}
-
-/// The newest `limit` log lines for a box, returned oldest-first (ready to append).
-pub async fn list_box_logs(
-    pool: &PgPool,
-    tenant_id: Uuid,
-    box_id: Uuid,
-    limit: i64,
-) -> sqlx::Result<Vec<BoxLogRow>> {
-    let mut rows: Vec<BoxLogRow> = sqlx::query_as::<_, BoxLogRow>(
-        "SELECT ts, level, target, message FROM box_logs
-          WHERE tenant_id = $1 AND box_id = $2 ORDER BY id DESC LIMIT $3",
-    )
-    .bind(tenant_id)
-    .bind(box_id)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
-    rows.reverse();
-    Ok(rows)
+    /// Structured fields of the event (card #146) — e.g. `{camera_ip, mode, fps}`. Empty for
+    /// plaintext (`log::*`) lines. Control merges these into the Datadog record's searchable
+    /// attributes and stamps the box identity (`edge_id`/`edge_name`/`tenant`) alongside.
+    #[serde(default)]
+    pub fields: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Confirm a box id belongs to a tenant (guards the per-box log routes).

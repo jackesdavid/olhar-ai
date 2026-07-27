@@ -173,7 +173,18 @@ fn default_recordings_path() -> String {
         .into_owned()
 }
 fn default_media_backend() -> String {
-    "ffmpeg".to_string()
+    // Card #138: GStreamer is the first-class backend now. A build that LINKS it (the `gst-linked`
+    // feature — macOS/iOS today, every appliance once the Linux static-musl → glibc move lands)
+    // defaults to it with no config or env needed; a build without it (the Linux musl release, for
+    // now) falls back to ffmpeg so it still has a media path.
+    #[cfg(feature = "gst-linked")]
+    {
+        "gstreamer-linked".to_string()
+    }
+    #[cfg(not(feature = "gst-linked"))]
+    {
+        "ffmpeg".to_string()
+    }
 }
 
 // ---- storage stats ----------------------------------------------------------

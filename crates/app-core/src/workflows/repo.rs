@@ -949,6 +949,46 @@ pub fn list_run_logs(db: &Db, tenant_id: Uuid, run_id: Uuid) -> Vec<RunLogLine> 
     })
 }
 
+/// One recent execution line for a graph's editor console. Sourced from the LIVE `workflow_run_logs`
+/// (card #145: workflow node logs stay in-app — they are product data, not the debug firehose that
+/// moved to Datadog — so the editor console + per-run panel read this table, NOT the frozen
+/// `platform_logs` mirror). `at` is the run's start time (run-logs have no per-line timestamp; all
+/// lines of a run share the run time).
+#[derive(serde::Serialize)]
+pub struct ConsoleLogLine {
+    pub label:   Option<String>,
+    pub kind:    String,
+    pub message: String,
+    pub at:      String,
+}
+
+/// Recent execution lines across a graph's runs, newest first (bounded, `node`-kind UI pings
+/// excluded). Powers the workflow editor's console seed.
+pub fn list_graph_run_logs(db: &Db, tenant_id: Uuid, graph_id: Uuid, limit: i64) -> Vec<ConsoleLogLine> {
+    let pool = db.pool();
+    let limit = limit.clamp(1, 200);
+    db.block(async move {
+        sqlx::query_as::<_, (Option<String>, String, String, String)>(
+            "SELECT l.label, l.kind, l.message, r.started_at
+             FROM workflow_run_logs l JOIN workflow_runs r ON r.id = l.run_id
+             WHERE r.tenant_id = $1 AND r.graph_id = $2 AND l.kind <> 'node'
+             ORDER BY l.id DESC LIMIT $3",
+        )
+        .bind(tenant_id)
+        .bind(graph_id)
+        .bind(limit)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            log::error!("workflows::repo::list_graph_run_logs query failed: {e}");
+            Vec::new()
+        })
+        .into_iter()
+        .map(|(label, kind, message, at)| ConsoleLogLine { label, kind, message, at })
+        .collect()
+    })
+}
+
 /// On boot, reconcile this pod's runs left `running` by a crash (runs die with the
 /// process). Scoped to `pod_name` so a sibling pod's live runs aren't clobbered.
 pub fn mark_orphaned_runs(db: &Db, pod_name: &str) {

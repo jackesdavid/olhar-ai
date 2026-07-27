@@ -20,6 +20,7 @@ mod auth;
 mod billing_gate;
 mod clip_purge;
 mod domain;
+mod edge_stream;
 mod handlers;
 mod http;
 mod oauth;
@@ -27,7 +28,6 @@ mod rbac;
 mod seed;
 mod seed_templates;
 mod store;
-mod tailscale;
 
 /// Shared state. `db` (app-core) owns migrations + the domain repos; `pool` is this
 /// service's own async pool for auth/tenancy queries (runs on this runtime).
@@ -40,9 +40,7 @@ pub struct AppState {
     pub google: Option<oauth::GoogleOauth>,
     /// In-flight OAuth CSRF states (state → issued-at), pruned on use.
     pub oauth_states: Arc<Mutex<HashMap<String, Instant>>>,
-    /// Tailscale enrollment broker (None → tenants supply their own auth key).
-    pub tailscale: Option<tailscale::TailscaleConfig>,
-    /// Shared HTTP client (Tailscale key minting, etc.).
+    /// Shared HTTP client (edge/flow proxying, external APIs).
     pub http: reqwest::Client,
     /// Camera credentials in transit: the web sets them, the edge collects them on its
     /// next config pull, then they're discarded. Keyed by (tenant_id, camera ip) →
@@ -56,21 +54,15 @@ pub struct AppState {
     pub pending_rescan: Arc<Mutex<std::collections::HashSet<uuid::Uuid>>>,
     // pending_restart / pending_update are now persisted in tenant_boxes (migration 0031)
     // so they survive control restarts. See store::set_box_command / take_box_commands.
-    /// Live edge-log fan-out: the edge pushes lines to /config/logs, control persists +
-    /// re-broadcasts here; the per-box log SSE relay subscribes and filters by tenant+box.
-    pub log_bus: tokio::sync::broadcast::Sender<String>,
     /// Unified platform audit log queue (async, fire-and-forget). All modules push here;
     /// the drain task batch-inserts into platform_logs every 500 ms.
     pub log_queue: app_core::platform_logs::LogQueue,
     /// Agnostic product-event stream queue (async, fire-and-forget) — card #66. Subsystems push
     /// occurrences here; the drain batch-inserts into `events`. The debug trace is `log_queue`.
     pub event_queue: app_core::events::EventQueue,
-    /// Shared event fabric. `redis_url` opens per-client pub/sub connections for the SSE
-    /// relay (subscribe `events:<tenant>`); `redis` is a multiplexed handle for publishing
-    /// injected events (edge motion). Both `None` when `REDIS_URL` is unset → the relay
-    /// falls back to proxying one flow pod's `/events` (single-pod behavior).
-    pub redis_url: Option<String>,
-    pub redis: Option<redis::aio::ConnectionManager>,
+    /// Live cloud→edge SSE command streams this pod holds (`box_id → connection`). The durable
+    /// queue is `app_core::edge_commands`; this is the connection half. Card #144.
+    pub edge_streams: edge_stream::EdgeStreams,
 }
 
 impl AppState {
@@ -111,7 +103,8 @@ impl AppState {
 }
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Structured logging → Datadog (card #146): every log ships with service:control + span context.
+    app_core::datadog::init_tracing("control");
 
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://sentinel:sentinel@localhost/sentinel".to_string());
@@ -126,8 +119,9 @@ fn main() {
 
     let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");
     rt.block_on(async move {
-        // This service's own async pool (auth/tenancy queries run here).
-        let pool = match PgPoolOptions::new().max_connections(5).connect(&database_url).await {
+        // This service's own async pool (auth/tenancy + every domain query runs here). 5 was far too
+        // small for the whole API backend under real concurrency (SSE + edge polling + the UI).
+        let pool = match PgPoolOptions::new().max_connections(20).connect(&database_url).await {
             Ok(p) => p,
             Err(e) => {
                 log::error!("connect auth pool: {e}");
@@ -145,15 +139,10 @@ fn main() {
         log::info!("Google login: {}", if google.is_some() { "enabled" } else { "disabled (set GOOGLE_CLIENT_ID/SECRET)" });
         let oauth_states = Arc::new(Mutex::new(HashMap::new()));
 
-        let tailscale = tailscale::TailscaleConfig::from_env();
-        log::info!(
-            "Tailscale edge enrollment: {}",
-            if tailscale.is_some() { "enabled (auto-mint auth keys)" } else { "disabled (tenants supply their own key)" }
-        );
         let http = reqwest::Client::new();
 
         // Face recognition (enroll + recognize) needs the AI sidecar. Log its config at
-        // boot — like Google/Tailscale above — so a missing AI_SERVICE_URL is obvious
+        // boot — like Google above — so a missing AI_SERVICE_URL is obvious
         // instead of only surfacing as a per-request "not configured" error.
         match app_core::agent::ai_service::AiServiceConfig::from_env() {
             Some(cfg) => log::info!("AI recognition: enabled (sidecar {})", cfg.url),
@@ -213,30 +202,23 @@ fn main() {
         let pending_creds = Arc::new(Mutex::new(HashMap::new()));
         let notifiers = Arc::new(Mutex::new(HashMap::new()));
         let pending_rescan = Arc::new(Mutex::new(std::collections::HashSet::new()));
-        let (log_bus, _) = tokio::sync::broadcast::channel::<String>(1024);
         let log_queue = app_core::platform_logs::LogQueue::spawn(pool.clone());
         let event_queue = app_core::events::EventQueue::spawn(pool.clone());
 
         // Drain the clip-delete work queue: edge + cloud + row, per customer deletion request.
         clip_purge::spawn(pool.clone());
 
-        // Shared event fabric (optional). When set, the workflow SSE relay subscribes to
-        // Redis (every flow pod's events) and the edge-motion endpoint publishes here.
-        let redis_url = std::env::var("REDIS_URL").ok().filter(|s| !s.trim().is_empty());
-        let redis = match &redis_url {
-            Some(u) => match redis::Client::open(u.clone()) {
-                Ok(c) => match c.get_connection_manager().await {
-                    Ok(m) => { log::info!("Redis event fabric: connected ({u})"); Some(m) }
-                    Err(e) => { log::warn!("Redis connect failed ({e}); SSE falls back to flow /events"); None }
-                },
-                Err(e) => { log::warn!("bad REDIS_URL ({e}); SSE falls back to flow /events"); None }
-            },
-            None => { log::info!("REDIS_URL unset — SSE relays via flow /events (single-pod)"); None }
-        };
+        // Cloud→edge command delivery (card #144): the per-pod registry of live edge SSE streams,
+        // plus the LISTEN/poll task that pushes queued commands to the boxes this pod holds.
+        let edge_streams = edge_stream::new_registry();
+        edge_stream::spawn_delivery(pool.clone(), edge_streams.clone());
+
+        // The workflow live-events fabric is Postgres LISTEN/NOTIFY now (card #147): flow pods
+        // `pg_notify('workflow_events', …)` and control's SSE relay LISTENs. No Redis broker.
 
         let state = AppState {
-            db, pool, jwt_secret, google, oauth_states, tailscale, http, pending_creds, notifiers,
-            pending_rescan, log_bus, log_queue, event_queue, redis_url, redis,
+            db, pool, jwt_secret, google, oauth_states, http, pending_creds, notifiers,
+            pending_rescan, log_queue, event_queue, edge_streams,
         };
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {

@@ -29,11 +29,64 @@ pub struct PlatformLog {
     pub payload:     Option<Value>,
 }
 
+/// A platform log as a Datadog log record (card #145/#146) — the SQL filter columns become `ddtags`
+/// so Datadog's facets replace the `WHERE module=/entity_id=/level=` queries the in-DB viewer used,
+/// and the structured `payload` (card #146) is **spread to top-level attributes** so every datum
+/// (`camera_ip`, `mode`, `fps`, `graph_name`, …) is directly searchable (`@camera_ip:…`) instead of
+/// buried under `@payload.*`. The edge relay stamps `edge_id`/`edge_name`/`tenant` into the payload
+/// (control resolves the name from the box token) — those get promoted into `ddtags` as facets.
+fn to_dd_record(l: &PlatformLog) -> Value {
+    let mut tags = format!("tenant:{},module:{}", l.tenant_id, l.module);
+    if let Some(et) = l.entity_type {
+        tags.push_str(&format!(",entity_type:{et}"));
+    }
+    if let Some(eid) = &l.entity_id {
+        tags.push_str(&format!(",entity_id:{eid}"));
+    }
+    // Promote the edge identity (stamped into the payload by control's relay) to facets.
+    if let Some(obj) = l.payload.as_ref().and_then(Value::as_object) {
+        for key in ["edge_id", "edge_name"] {
+            if let Some(v) = obj.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                tags.push_str(&format!(",{key}:{v}"));
+            }
+        }
+    }
+
+    let mut record = serde_json::Map::new();
+    record.insert("ddsource".into(), Value::from("sentinel"));
+    record.insert("service".into(), Value::from(l.module)); // facet by service
+    record.insert("ddtags".into(), Value::from(tags));
+    record.insert("status".into(), Value::from(l.level)); // DD 'status' = level
+    record.insert("level".into(), Value::from(l.level));
+    record.insert("message".into(), Value::from(l.message.clone()));
+    if let Some(t) = l.trace_id {
+        record.insert("trace_id".into(), Value::from(t.to_string()));
+    }
+    if let Some(eid) = &l.entity_id {
+        record.insert("entity_id".into(), Value::from(eid.clone()));
+    }
+    if let Some(et) = l.entity_type {
+        record.insert("entity_type".into(), Value::from(et));
+    }
+    // Spread the structured payload as searchable top-level keys (don't clobber the reserved ones).
+    if let Some(obj) = l.payload.as_ref().and_then(Value::as_object) {
+        for (k, v) in obj {
+            record.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+    Value::Object(record)
+}
+
 // ---- sync path (sentinel-flow engine threads) --------------------------------
 
 /// Insert a single log entry on the calling (blocking) thread. Errors are logged
 /// and swallowed — log writes must never crash the caller.
 pub fn insert_log_sync(db: &Db, log: PlatformLog) {
+    // Card #145: ship to Datadog when configured, off Postgres.
+    if crate::datadog::configured() {
+        crate::datadog::ship_blocking(std::slice::from_ref(&to_dd_record(&log)));
+        return;
+    }
     let pool = db.pool();
     let now = crate::timeutil::now_rfc3339();
     let res: Result<(), sqlx::Error> = db.block(async move {
@@ -63,6 +116,12 @@ pub fn insert_log_sync(db: &Db, log: PlatformLog) {
 /// Batch-insert log entries on the calling (blocking) thread. No-op on empty slice.
 pub fn insert_logs_sync(db: &Db, logs: Vec<PlatformLog>) {
     if logs.is_empty() {
+        return;
+    }
+    // Card #145: ship to Datadog when configured, off Postgres.
+    if crate::datadog::configured() {
+        let records: Vec<Value> = logs.iter().map(to_dd_record).collect();
+        crate::datadog::ship_blocking(&records);
         return;
     }
     let pool = db.pool();
@@ -145,6 +204,13 @@ async fn flush(batch: &mut Vec<PlatformLog>, pool: &PgPool) {
         return;
     }
     let to_insert: Vec<PlatformLog> = batch.drain(..).collect();
+    // Card #145: ship to Datadog when configured, off Postgres. ureq is blocking, so hand the batch
+    // to a blocking thread rather than stalling the drain task's runtime worker.
+    if crate::datadog::configured() {
+        let records: Vec<Value> = to_insert.iter().map(to_dd_record).collect();
+        tokio::task::spawn_blocking(move || crate::datadog::ship_blocking(&records));
+        return;
+    }
     let now = crate::timeutil::now_rfc3339();
     let mut qb = sqlx::QueryBuilder::new(
         "INSERT INTO platform_logs \

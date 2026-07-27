@@ -2,14 +2,12 @@
 //! box token to put in the edge installer. The edge presents that token to
 //! `/config/cameras` (see `http.rs`) and control returns only that box's tenant's
 //! cameras. `/internal/box-upstream` lets the gateway resolve a tenant's live host.
-use std::convert::Infallible;
 use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::Json;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -27,9 +25,8 @@ pub fn router() -> Router<AppState> {
         .route("/boxes/:id", axum::routing::delete(remove))
         .route("/boxes/:id/restart", axum::routing::post(restart))
         .route("/boxes/:id/update", axum::routing::post(update))
-        .route("/boxes/:id/logs", get(box_logs))
-        .route("/boxes/:id/logs/stream", get(box_logs_stream))
         .route("/internal/box-upstream", get(box_upstream))
+        .route("/internal/live-start", post(live_start))
         .route("/boxes/:id/recording-config", axum::routing::patch(patch_recording_config))
         .route("/boxes/:id/tracking-config", axum::routing::patch(patch_tracking_config))
         .route("/boxes/:id/storage-stats", get(storage_stats))
@@ -161,12 +158,8 @@ struct CreateResp {
     id: Uuid,
     /// The plaintext box token — shown ONCE; the installer needs it as BOX_TOKEN.
     token: String,
-    /// A unique tailnet hostname for this box (`--hostname`).
+    /// A stable hostname for this box.
     hostname: String,
-    /// A freshly-minted, transparent Tailscale auth key (`--authkey`) when the
-    /// enrollment broker is configured — so the tenant never logs into Tailscale.
-    /// Null when not configured (the UI then asks for a key).
-    tailscale_key: Option<String>,
 }
 
 async fn create(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): Json<CreateReq>) -> Result<Json<CreateResp>, ApiErr> {
@@ -179,21 +172,8 @@ async fn create(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): 
     let token = new_box_token();
     let id = store::create_box(&st.pool, tid, name, &hash_token(&token)).await.map_err(db_err)?;
     let hostname = format!("sentinel-{}", &id.to_string()[..8]);
-
-    // Transparent enrollment: mint a Tailscale auth key for this box (best-effort —
-    // if the broker isn't configured or the API fails, fall back to a manual key).
-    let tailscale_key = match &st.tailscale {
-        Some(ts) => match ts.mint_auth_key(&st.http, &format!("sentinel-edge {name}")).await {
-            Ok(k) => Some(k),
-            Err(e) => {
-                log::warn!("tailscale key mint failed for box {id}: {e}");
-                None
-            }
-        },
-        None => None,
-    };
-
-    Ok(Json(CreateResp { id, token, hostname, tailscale_key }))
+    // No tailnet (card #144) — the edge is outbound-only, so there's no auth key to mint.
+    Ok(Json(CreateResp { id, token, hostname }))
 }
 
 #[derive(Deserialize)]
@@ -243,6 +223,26 @@ async fn self_register(
 async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<Uuid>) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "devices.write")?;
     let tid = tenant_of(&c)?;
+
+    // Card #144: removing a box from the account should also tear it down on the HOST. If this box is
+    // on the SSE command stream, tell it to uninstall itself (stop the service + delete its files)
+    // and wait briefly for the ack — BEFORE we revoke it, while the stream is still authenticated.
+    // Best-effort + bounded: an offline host just isn't torn down remotely (uninstall it by hand);
+    // it must never block removing the box from the account. Only enqueue when a live session exists,
+    // so removing an offline box stays instant.
+    let live: bool = sqlx::query_scalar::<_, Option<bool>>(
+        "SELECT sse_last_seen IS NOT NULL
+                AND sse_last_seen::timestamptz > now() - make_interval(secs => 30)
+         FROM tenant_boxes WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tid).bind(id)
+    .fetch_optional(&st.pool).await.ok().flatten().flatten().unwrap_or(false);
+    if live {
+        if let Ok(cmd_id) = app_core::edge_commands::enqueue(&st.pool, tid, id, "uninstall", serde_json::json!({}), 20).await {
+            let _ = app_core::edge_commands::await_result(&st.pool, cmd_id, 6).await;
+        }
+    }
+
     if store::delete_box(&st.pool, tid, id).await.map_err(db_err)? {
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -287,76 +287,37 @@ async fn box_upstream(UserClaims(c): UserClaims, State(st): State<AppState>) -> 
     Ok(Json(UpstreamResp { host: store::box_host_for_tenant(&st.pool, tid).await.map_err(db_err)? }))
 }
 
-// ---- per-box logs -----------------------------------------------------------
-
 #[derive(Deserialize)]
-struct LogsQuery {
-    limit: Option<i64>,
+struct LiveStartReq {
+    /// The go2rtc stream name the browser asked for (`cam_<ip>[_hd]`).
+    src: String,
+    /// The gateway WebSocket the edge should dial to push the stream up (`wss://…/edge/live/<id>`).
+    callback: String,
 }
 
-/// The recent persisted log tail for a box (oldest-first), so the viewer has history on open.
-async fn box_logs(
-    UserClaims(c): UserClaims,
-    State(st): State<AppState>,
-    Path(id): Path<Uuid>,
-    Query(q): Query<LogsQuery>,
-) -> Result<Json<Vec<store::BoxLogRow>>, ApiErr> {
-    auth::require(&c, "devices.read")?;
+#[derive(Serialize)]
+struct LiveStartResp {
+    /// `"sse"` — the edge was told to dial the gateway (outbound; no tailnet needed).
+    /// `"tailnet"` — no SSE box; the gateway should dial `host` itself, as before.
+    mode: String,
+    host: Option<String>,
+}
+
+/// The gateway calls this (forwarding the user's JWT) to set up a live stream. If the tenant has a
+/// box on the SSE command stream, we tell that box to dial the gateway back (`start_live`) — live
+/// over the edge's OUTBOUND connection, card #144, so it works with no tailnet. Otherwise we return
+/// the tailnet host and the gateway dials the edge itself, exactly as before.
+async fn live_start(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): Json<LiveStartReq>) -> Result<Json<LiveStartResp>, ApiErr> {
     let tid = tenant_of(&c)?;
-    if !store::box_belongs_to(&st.pool, tid, id).await.map_err(db_err)? {
-        return Err(err(StatusCode::NOT_FOUND, "box not found"));
+    if let Some(box_id) = app_core::edge_commands::live_box_for_tenant(&st.pool, tid, 30).await {
+        let args = serde_json::json!({ "src": b.src, "url": b.callback });
+        app_core::edge_commands::enqueue(&st.pool, tid, box_id, "start_live", args, 20)
+            .await
+            .map_err(|e| { log::error!("live_start enqueue: {e}"); err(StatusCode::INTERNAL_SERVER_ERROR, "enqueue failed") })?;
+        return Ok(Json(LiveStartResp { mode: "sse".into(), host: None }));
     }
-    let limit = q.limit.unwrap_or(500).clamp(1, 5000);
-    Ok(Json(store::list_box_logs(&st.pool, tid, id, limit).await.map_err(db_err)?))
-}
-
-#[derive(Deserialize)]
-struct TokenQuery {
-    token: String,
-}
-
-/// Live SSE tail of a box's logs, scoped to the caller's tenant + this box. JWT rides the
-/// `token` query param (EventSource can't set headers). Subscribes to the control-wide
-/// `log_bus` (fed by the edge's /config/logs pushes) and forwards only matching lines.
-async fn box_logs_stream(
-    State(st): State<AppState>,
-    Path(id): Path<Uuid>,
-    Query(q): Query<TokenQuery>,
-) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, ApiErr> {
-    let claims = auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
-    auth::require(&claims, "devices.read")?;
-    let tid = tenant_of(&claims)?;
-    if !store::box_belongs_to(&st.pool, tid, id).await.map_err(db_err)? {
-        return Err(err(StatusCode::NOT_FOUND, "box not found"));
-    }
-    let tid_s = tid.to_string();
-    let box_s = id.to_string();
-
-    let mut rx = st.log_bus.subscribe();
-    let (tx, out) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(line) => {
-                    let matches = serde_json::from_str::<Value>(&line)
-                        .ok()
-                        .map(|v| {
-                            v.get("tenant").and_then(|t| t.as_str()) == Some(tid_s.as_str())
-                                && v.get("box").and_then(|b| b.as_str()) == Some(box_s.as_str())
-                        })
-                        .unwrap_or(false);
-                    if matches && tx.send(Ok(Event::default().data(line))).await.is_err() {
-                        return; // browser disconnected
-                    }
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue, // dropped some — keep going
-                Err(_) => return,                                                      // sender gone
-            }
-        }
-    });
-
-    let stream = tokio_stream::wrappers::ReceiverStream::new(out);
-    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+    let host = store::box_host_for_tenant(&st.pool, tid).await.map_err(db_err)?;
+    Ok(Json(LiveStartResp { mode: "tailnet".into(), host }))
 }
 
 /// Update the ring-buffer + recording config for a box (tenant admin only).

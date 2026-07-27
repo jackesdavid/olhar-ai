@@ -12,7 +12,6 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post, put};
 use axum::Router;
-use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -35,6 +34,7 @@ pub fn router() -> Router<AppState> {
         .route("/workflows/runs/frame", get(run_frame))
         .route("/workflows/runs/node-state", get(node_state))
         .route("/workflows/runs/:run_id/logs", get(run_logs))
+        .route("/workflows/:id/console-logs", get(console_logs))
         .route("/workflows/events", get(events_stream))
         .route(
             "/workflows/event-registry",
@@ -481,6 +481,25 @@ async fn run_logs(
     Ok(Json(flow_get_json(&url).await))
 }
 
+#[derive(serde::Deserialize)]
+struct ConsoleLogsQuery {
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+/// Recent node-execution lines across a graph's runs — the editor console seed. Proxies
+/// sentinel-flow (live `workflow_run_logs`), NOT the frozen `platform_logs` mirror.
+async fn console_logs(
+    UserClaims(c): UserClaims,
+    Path(id): Path<Uuid>,
+    Query(q): Query<ConsoleLogsQuery>,
+) -> Result<Json<Value>, ApiErr> {
+    auth::require(&c, "workflows.read")?;
+    let tid = tenant_of(&c)?;
+    let url = format!("{}/graphs/{}/logs?tenant={}&limit={}", flow_base(), id, tid, q.limit.unwrap_or(50));
+    Ok(Json(flow_get_json(&url).await))
+}
+
 /// GET a sentinel-flow URL and parse its JSON body, defaulting to `[]` on any failure
 /// (history/logs are best-effort views).
 async fn flow_get_json(url: &str) -> Value {
@@ -757,91 +776,50 @@ async fn events_stream(
 
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
 
-    if let Some(url) = st.redis_url.clone() {
-        let chan = format!("events:{tid}");
-        tokio::spawn(async move {
-            let client = match redis::Client::open(url) {
-                Ok(c) => c,
-                Err(e) => {
-                    log::warn!("events relay: bad redis url: {e}");
-                    return;
-                }
-            };
-            let mut pubsub = match client.get_async_pubsub().await {
-                Ok(p) => p,
-                Err(e) => {
-                    log::warn!("events relay: redis pubsub connect failed: {e}");
-                    return;
-                }
-            };
-            if let Err(e) = pubsub.subscribe(&chan).await {
-                log::warn!("events relay: subscribe {chan} failed: {e}");
+    // Postgres LISTEN/NOTIFY event fabric (replaces Redis, card #147). Every flow pod issues
+    // `pg_notify('workflow_events', <event-json>)`; we LISTEN and relay the events for THIS tenant.
+    // Because every pod hits the same Postgres, this fans out across all flow replicas AND all
+    // control replicas with no message broker — so there's no Redis and no flow-`/events` fallback.
+    // A DEDICATED LISTEN connection, NOT one from `st.pool`: `connect_with(&pool)` would hold a
+    // pooled connection for the whole SSE lifetime, and a few open workflows pages would starve the
+    // small (5-conn) pool → every other query times out → the UI goes dark. `connect(url)` opens a
+    // standalone connection (like the old Redis pubsub conn did), dropped when this task ends.
+    let db_url = std::env::var("DATABASE_URL").unwrap_or_default();
+    tokio::spawn(async move {
+        let mut listener = match sqlx::postgres::PgListener::connect(&db_url).await {
+            Ok(l) => l,
+            Err(e) => {
+                log::warn!("events relay: pg listener connect failed: {e}");
                 return;
             }
-            let mut on_msg = pubsub.on_message();
-            while let Some(msg) = on_msg.next().await {
-                let Ok(payload) = msg.get_payload::<String>() else {
-                    continue;
-                };
-                if tx.send(Ok(Event::default().data(payload))).await.is_err() {
-                    return; // browser disconnected
-                }
-            }
-        });
-    } else {
-        // Single-pod fallback: proxy sentinel-flow's internal /events and filter by tenant.
-        let flow_events_url = format!("{}/events", flow_base());
-        tokio::spawn(async move {
-            relay_flow_events(flow_events_url, tid, tx).await;
-        });
-    }
-
-    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
-}
-
-/// HTTP-proxy sentinel-flow's internal SSE `/events` to a browser client, forwarding
-/// only events whose `tenant` field matches `tid`. Used as the single-pod fallback when
-/// `REDIS_URL` is not configured.
-async fn relay_flow_events(
-    url: String,
-    tenant: String,
-    tx: tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
-) {
-    let resp = match reqwest::Client::new().get(&url).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            log::warn!("events proxy: flow /events unreachable ({url}): {e}");
+        };
+        if let Err(e) = listener.listen("workflow_events").await {
+            log::warn!("events relay: LISTEN workflow_events failed: {e}");
             return;
         }
-    };
-    let mut stream = resp.bytes_stream();
-    let mut buf = String::new();
-    while let Some(item) = stream.next().await {
-        let Ok(bytes) = item else { return };
-        let Ok(text) = std::str::from_utf8(&bytes) else {
-            continue;
-        };
-        buf.push_str(text);
-        // Drain all complete lines from the buffer, forward matching tenant's data events.
-        while let Some(nl) = buf.find('\n') {
-            let line = buf[..nl].trim_end_matches('\r').to_string();
-            buf.drain(..=nl);
-            if let Some(data) = line.strip_prefix("data: ") {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
-                    if v.get("tenant").and_then(|t| t.as_str()) == Some(tenant.as_str()) {
-                        if tx
-                            .send(Ok(Event::default().data(data.to_string())))
-                            .await
-                            .is_err()
-                        {
-                            return; // browser disconnected
-                        }
+        loop {
+            tokio::select! {
+                // Browser gone (SSE stream dropped → receiver closed). Checked even when idle, so
+                // the dedicated LISTEN connection is dropped immediately — no per-client leak.
+                _ = tx.closed() => return,
+                notif = listener.recv() => {
+                    let Ok(notif) = notif else { return }; // listener connection ended
+                    let payload = notif.payload();
+                    // Only this tenant's events — the NOTIFY payload (event JSON) carries `tenant`.
+                    let ours = serde_json::from_str::<serde_json::Value>(payload)
+                        .ok()
+                        .and_then(|v| v.get("tenant").and_then(|t| t.as_str()).map(|s| s == tid))
+                        .unwrap_or(false);
+                    if ours && tx.send(Ok(Event::default().data(payload.to_string()))).await.is_err() {
+                        return; // browser disconnected mid-send
                     }
                 }
             }
         }
-    }
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
 
 // ---- graph lifecycle --------------------------------------------------------

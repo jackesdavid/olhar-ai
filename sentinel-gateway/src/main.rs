@@ -14,6 +14,7 @@
 //!
 //! Optional env: `TS_AUTHKEY`/`TS_HOSTNAME`/`TS_TAGS` to join the tailnet at startup.
 mod auth;
+mod datadog;
 mod http;
 mod proxy;
 mod state;
@@ -25,7 +26,9 @@ use state::AppState;
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Card #146: structured logs → Datadog (`service:gateway`) + `log::*` bridge, replacing
+    // env_logger. Must run inside the tokio runtime — the Datadog drain task is spawned lazily.
+    datadog::init_tracing();
 
     let bind = std::env::var("GATEWAY_BIND").unwrap_or_else(|_| "0.0.0.0:8789".to_string());
     let upstream = std::env::var("EDGE_UPSTREAM")
@@ -51,8 +54,12 @@ async fn main() {
     // Join the tailnet if configured (so MagicDNS upstreams resolve over the VPN).
     tailscale::ensure_up();
 
-    let state = Arc::new(AppState::new(upstream.clone(), control_url.clone(), jwt_secret));
-    log::info!("sentinel-gateway upstream = {upstream} (fallback), control = {control_url}");
+    // This gateway's public WS base — the address an edge dials back for live-over-outbound
+    // (card #144). Unset → outbound live is off and live uses the tailnet path.
+    let public_ws_url = std::env::var("GATEWAY_PUBLIC_WS").unwrap_or_default();
+
+    let state = Arc::new(AppState::new(upstream.clone(), control_url.clone(), jwt_secret, public_ws_url.clone()));
+    log::info!("sentinel-gateway upstream = {upstream} (fallback), control = {control_url}, public_ws = {}", if public_ws_url.is_empty() { "(unset — outbound live off)" } else { &public_ws_url });
 
     let app = http::router(state);
     let listener = match tokio::net::TcpListener::bind(&bind).await {

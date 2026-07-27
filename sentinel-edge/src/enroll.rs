@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -32,6 +32,9 @@ pub fn enrolled() -> bool {
 pub fn router(control_url: String) -> Router {
     Router::new()
         .route("/", get(page))
+        .route("/health", get(health))
+        .route("/gst-selftest", get(gst_selftest_route))
+        .route("/dev/record", post(dev_record))
         .route("/enroll", post(enroll))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(control_url)
@@ -153,6 +156,86 @@ fn redeem(control_url: &str, code: &str) -> Result<(), String> {
 
 /// The enrollment page. Served at `/` while the box has no identity — the installer opens it
 /// (`open`/`start http://localhost:8788`) as its last step.
+/// Liveness — answers even before the box is enrolled (an embedded edge on a phone boots unenrolled,
+/// and the app's readiness check must still get a 200). Card #144.
+pub async fn health() -> Response {
+    axum::Json(serde_json::json!({
+        "status": "ok",
+        "service": "sentinel-edge",
+        "enrolled": false,
+    }))
+    .into_response()
+}
+
+/// Prove the GStreamer runtime can build the ingest — runs `media::gst_selftest` (instantiates every
+/// pipeline element), which on iOS also exercises the static plugin registration (card #144). Serves
+/// even unenrolled; a no-op stub when the build has no GStreamer.
+pub async fn gst_selftest_route() -> Response {
+    #[cfg(feature = "gst-linked")]
+    {
+        match crate::media::gst_selftest() {
+            Ok(()) => axum::Json(serde_json::json!({ "ok": true })).into_response(),
+            Err(e) => axum::Json(serde_json::json!({ "ok": false, "error": e })).into_response(),
+        }
+    }
+    #[cfg(not(feature = "gst-linked"))]
+    {
+        axum::Json(serde_json::json!({ "ok": false, "error": "build without gst-linked" })).into_response()
+    }
+}
+
+/// Dev: record a real RTSP camera to the app sandbox for N seconds (card #144). Proves the embedded
+/// edge ingests + decodes + muxes an actual camera on the phone. Query: `url` (rtsp://…), `secs`.
+#[derive(serde::Deserialize)]
+pub struct RecordQuery {
+    url: String,
+    #[serde(default = "default_secs")]
+    secs: u64,
+    /// When present, the clip is uploaded to R2 via control (card #144); the box token authenticates
+    /// the manifest push. Absent → record locally only.
+    #[serde(default)]
+    token: Option<String>,
+    /// The control URL to reach. The embedded phone edge has no CONTROL_URL env, so it defaults to
+    /// the dev localhost — the app passes its real one here.
+    #[serde(default)]
+    control: Option<String>,
+}
+fn default_secs() -> u64 { 8 }
+
+pub async fn dev_record(State(control_url): State<String>, Query(q): Query<RecordQuery>) -> Response {
+    #[cfg(feature = "gst-linked")]
+    {
+        // A writable path on any platform — on iOS this is the app's tmp dir.
+        let out = std::env::temp_dir().join("phone-clip.mp4");
+        let out2 = out.clone();
+        let url = q.url.clone();
+        let secs = q.secs.clamp(2, 30);
+        let token = q.token.clone();
+        let control = q.control.clone().filter(|c| !c.trim().is_empty()).unwrap_or(control_url);
+        let res = tokio::task::spawn_blocking(move || match token {
+            Some(t) if !t.trim().is_empty() =>
+                crate::media::record_and_upload(&url, secs, &out2, t.trim(), control.trim_end_matches('/')),
+            _ => crate::media::record_camera(&url, secs, &out2)
+                .map(|(bytes, secs)| serde_json::json!({ "bytes": bytes, "secs": secs, "uploaded": false })),
+        })
+        .await
+        .map_err(|e| format!("task: {e}"))
+        .and_then(|r| r);
+        match res {
+            Ok(mut v) => {
+                if let Some(o) = v.as_object_mut() { o.insert("ok".into(), true.into()); o.insert("path".into(), out.to_string_lossy().into()); }
+                axum::Json(v).into_response()
+            }
+            Err(e) => axum::Json(serde_json::json!({ "ok": false, "error": e })).into_response(),
+        }
+    }
+    #[cfg(not(feature = "gst-linked"))]
+    {
+        let _ = q;
+        axum::Json(serde_json::json!({ "ok": false, "error": "build without gst-linked" })).into_response()
+    }
+}
+
 pub async fn page() -> Response {
     ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], PAGE).into_response()
 }

@@ -28,9 +28,10 @@ camera/CPU); **Android only** (foreground service). See the phone-as-edge follow
 **Three things this pivot changes vs. the plan below:**
 
 1. **go2rtc is now IN scope** (the grounding below says *"go2rtc stays out of scope"* — superseded).
-   Everything go2rtc does for us — the live **MSE/WS** feed, **WebRTC**, RTSP restream/serving,
-   `/api/frame.jpeg` snapshots — must be **re-implemented in GStreamer** (`webrtcbin`, `rtspsrc`/
+   Everything go2rtc does for us — the live **MSE/WS** feed, RTSP restream/serving,
+   `/api/frame.jpeg` snapshots — must be **re-implemented in GStreamer** (`rtspsrc`/
    `rtspclientsink`, `mp4mux fragment-duration` for MSE, `jpegenc` for snapshots), because go2rtc
+   (**WebRTC is dropped — no longer needed**, 2026-07-25)
    itself can't run on the phone. This is the **largest new chunk** — go2rtc is a mature product that
    solved many streaming edge cases; reimplementing its surface in GStreamer is real engineering,
    flagged honestly, likely its own phase.
@@ -81,7 +82,6 @@ fallback, A6 presence check, B3 go2rtc-internal ffmpeg for `/api/frame.jpeg`.
 | **`/api/ws` — live MSE over WebSocket** | served by go2rtc | **gateway `proxy.rs` → web player + mobile WebView player** |
 | **`/api/frame.jpeg` — snapshot** | served by go2rtc (shells to ffmpeg, B3) | gateway passthrough; app-core `go2rtc.rs` ("Get current frame" node) |
 | `/api/streams`, `/stream.html`, player assets | served by go2rtc | gateway passthrough |
-| WebRTC | go2rtc `webrtcbin` | (minor today — 1 ref) |
 | Tailnet exposure (MagicDNS TLS) | edge `tailscale.rs` | gateway reaches it over the tailnet |
 
 ### The load-bearing shared seam — **keep the go2rtc HTTP contract, swap the engine**
@@ -128,7 +128,7 @@ one HTTP seam, three unchanged consumers.
   `/api/ws` itself (GStreamer `mp4mux fragment-duration` → WS), **contract-identical** so the gateway +
   web + mobile players are untouched. **Gate:** live view works end-to-end through the gateway, on both
   boxes, in the existing web AND mobile players — no client change.
-- **Stage 5 — Retire go2rtc + ffmpeg.** WebRTC path if still needed; then drop both subprocesses, the
+- **Stage 5 — Retire go2rtc + ffmpeg.** Drop both subprocesses, the
   `install.sh` deps, and the presence checks (A4/A6). **Gate:** full parity on both boxes with **neither
   ffmpeg nor go2rtc installed** — the portability proof, and the green light for the phone-as-edge card.
 

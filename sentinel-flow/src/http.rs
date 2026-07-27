@@ -32,6 +32,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/runs/frame", get(run_frame))
         .route("/runs/node-state", get(node_state))
         .route("/runs/:run_id/logs", get(run_logs))
+        .route("/graphs/:graph_id/logs", get(graph_logs))
         .route("/events", get(events_sse))
         .layer(CorsLayer::permissive())
         .with_state(state)
@@ -227,6 +228,18 @@ async fn run_logs(
     Query(q): Query<TenantQuery>,
 ) -> impl IntoResponse {
     let logs = app_core::workflows::repo::list_run_logs(&state.db, q.tenant, run_id);
+    Json(logs)
+}
+
+/// Recent execution lines across a graph's runs (`?tenant=<uuid>&limit=N`) — the editor console
+/// seed. Sourced from the live `workflow_run_logs`, newest first. Reuses `HistoryQuery` for
+/// tenant+limit (its `graph` field is unused here — the graph id comes from the path).
+async fn graph_logs(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(graph_id): axum::extract::Path<Uuid>,
+    Query(q): Query<HistoryQuery>,
+) -> impl IntoResponse {
+    let logs = app_core::workflows::repo::list_graph_run_logs(&state.db, q.tenant, graph_id, q.limit.unwrap_or(50));
     Json(logs)
 }
 

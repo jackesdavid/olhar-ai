@@ -24,8 +24,22 @@ Write-Host "Sentinel Edge -> $Base"
 # %ProgramData% is the right home for a machine-wide service's state: writable by the SYSTEM
 # account the service runs as, not casually writable by a standard user.
 New-Item -ItemType Directory -Force -Path $Base, "$Base\recordings" | Out-Null
-foreach ($f in "sentinel-edge.exe","go2rtc.exe","ffmpeg.exe","ffprobe.exe","WinSW.exe") {
+foreach ($f in "sentinel-edge.exe","WinSW.exe") {
     Copy-Item -Force (Join-Path $Here $f) (Join-Path $Base $f)
+}
+
+# --- 1b. GStreamer runtime (card #138) --------------------------------------
+# The edge LINKS GStreamer — it's the sole media backend now (go2rtc + ffmpeg retired). Install the
+# official MSVC runtime so the linked pipeline finds its elements (D3D11/MediaFoundation decode, mux,
+# appsink). Idempotent: skip if already present.
+$GstRoot = "C:\gstreamer\1.0\msvc_x86_64"
+if (-not (Test-Path (Join-Path $GstRoot "bin\gst-inspect-1.0.exe"))) {
+    $ver = "1.24.10"
+    $msi = Join-Path $env:TEMP "gstreamer-runtime.msi"
+    $url = "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc/gstreamer-1.0-msvc-x86_64-$ver.msi"
+    Write-Host "Installing GStreamer runtime $ver…"
+    curl.exe -sSL -o $msi $url
+    Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn ADDLOCAL=ALL" -Wait
 }
 
 # CONTROL_URL is not a secret (a public hostname), so it ships in the generic bundle. The box's
@@ -41,27 +55,26 @@ if (-not (Test-Path $EnvFile)) {
 # "failed to start". WinSW wraps it as a proper service: auto-start, and restart-on-failure — which
 # is also how the box comes back after enrollment (the edge exits non-zero on Windows precisely so
 # WinSW relaunches it; see enroll.rs) and after the Boxes-page Restart button.
-$Path = "$Base;$env:Path"   # so go2rtc finds ffmpeg.exe / ffprobe.exe, and the edge finds go2rtc.exe
+$Path = "$Base;$GstRoot\bin;$env:Path"   # so the edge's linked GStreamer finds its plugin DLLs
 $winswXml = @"
 <service>
   <id>$ServiceId</id>
   <name>Sentinel Edge</name>
-  <description>Sentinel camera appliance — ONVIF discovery, go2rtc, motion, tracking, recording.</description>
+  <description>Sentinel camera appliance — ONVIF discovery, GStreamer media, motion, tracking, recording.</description>
   <executable>$Base\sentinel-edge.exe</executable>
   <workingdirectory>$Base</workingdirectory>
   <onfailure action="restart" delay="3 sec"/>
   <resetfailure>1 hour</resetfailure>
   <log mode="roll-by-size"><sizeThreshold>10240</sizeThreshold><keepFiles>3</keepFiles></log>
   <env name="PATH" value="$Path"/>
-  <env name="EDGE_OWN_GO2RTC" value="1"/>
-  <env name="GO2RTC_BIN" value="$Base\go2rtc.exe"/>
-  <env name="GO2RTC_CONFIG" value="$Base\go2rtc.yaml"/>
+  <env name="GST_PLUGIN_PATH" value="$GstRoot\lib\gstreamer-1.0"/>
   <env name="EDGE_CACHE" value="$Base\cameras-cache.json"/>
   <env name="EDGE_ENV_FILE" value="$Base\edge.env"/>
   <env name="EDGE_RECORDING_DIR" value="$Base\recordings"/>
-  <env name="TAILSCALE_BIN" value="$env:ProgramFiles\Tailscale\tailscale.exe"/>
 </service>
 "@
+# No go2rtc/ffmpeg env and no tailnet: the gst-linked edge defaults to GStreamer and reaches the
+# cloud outbound-only (SSE commands + live over its own outbound connection, card #144).
 $winswXml | Out-File -Encoding utf8 (Join-Path $Base "$ServiceId.xml")
 
 # Reinstall cleanly: stop + uninstall any prior instance first, or `install` fails on a service

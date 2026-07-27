@@ -283,15 +283,18 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
         cap_n += 1;
         if cap_at.elapsed() >= Duration::from_secs(10) {
             let n = cap_n.max(1) as f64;
-            log::info!(
-                "capture[{ip}]: mode={} {}x{} grab={:.1}ms decode={:.1}ms {} frames ({:.1} fps)",
-                if hd { "HD" } else { "preview" },
-                w,
-                h,
-                grab_us as f64 / n / 1000.0,
-                dec_us as f64 / n / 1000.0,
-                cap_n,
-                cap_n as f64 / cap_at.elapsed().as_secs_f64(),
+            // Card #146: structured — each datum is its own searchable field in Datadog
+            // (`@camera_ip:`, `@fps:>0`, …), not buried in a plaintext blob.
+            tracing::info!(
+                camera_ip = %ip,
+                mode = if hd { "HD" } else { "preview" },
+                width = w,
+                height = h,
+                grab_ms = grab_us as f64 / n / 1000.0,
+                decode_ms = dec_us as f64 / n / 1000.0,
+                frames = cap_n,
+                fps = cap_n as f64 / cap_at.elapsed().as_secs_f64(),
+                "capture"
             );
             cap_at = Instant::now();
             grab_us = 0;

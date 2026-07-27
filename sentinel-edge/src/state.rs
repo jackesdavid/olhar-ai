@@ -65,9 +65,12 @@ impl AppState {
             .map(|s| s.trim().trim_end_matches('/').to_string())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "http://127.0.0.1:8790".to_string());
+        // The camera cache is the edge's durable, only home for camera credentials (control hands
+        // them over once). It MUST land somewhere writable: a bare relative path lands in the CWD,
+        // which iOS forbids (sandbox) — so default it under the platform base there (#144).
         let cache_path = std::env::var("EDGE_CACHE")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("cameras-cache.json"));
+            .unwrap_or_else(|_| crate::paths::cache_file());
 
         let mut devices = load_cameras(&control_url, &cache_path, 0);
         resolve_rtsp(&mut devices);
@@ -502,14 +505,25 @@ pub fn ffmpeg_ok() -> bool {
 /// `install.sh` yet (coexistence phase) — an operator installs it manually to test
 /// (`brew install gstreamer gst-plugins-{base,good,bad,ugly} gst-libav` on macOS).
 pub fn gstreamer_ok() -> bool {
-    static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *OK.get_or_init(|| {
-        crate::proc::command("gst-launch-1.0")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    })
+    // A `gst-linked` build (the iOS edge, #144) compiles GStreamer in-process — there is no
+    // `gst-launch-1.0` CLI to probe, but the whole media path is present and owns frame-grab. Report
+    // it available so control doesn't mistake it for a box with no media backend.
+    #[cfg(feature = "gst-linked")]
+    {
+        true
+    }
+    // Otherwise (appliance builds) GStreamer is the system package; its presence is the CLI on PATH.
+    #[cfg(not(feature = "gst-linked"))]
+    {
+        static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *OK.get_or_init(|| {
+            crate::proc::command("gst-launch-1.0")
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        })
+    }
 }
 
 /// A friendly platform string (`OS (arch)`, e.g. `macOS (aarch64)` / `Bazzite (x86_64)`)
@@ -544,13 +558,11 @@ fn linux_distro() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Stamp the box's health (Tailscale state + ffmpeg presence + platform) onto a request so
-/// control can surface it on the Boxes page. Used on the ~25s config poll (not the pushes).
+/// Stamp the box's health (GStreamer presence + hwaccel + platform) onto a request so control can
+/// surface it on the Boxes page. Used on the ~25s config poll (not the pushes). No more Tailscale or
+/// ffmpeg probes — those binaries are retired, and running them every poll was wasted work + noise.
 fn with_health(req: ureq::Request) -> ureq::Request {
-    req.set("X-Edge-Tailscale", crate::tailscale::tailscale_state())
-        .set("X-Edge-Ffmpeg", if ffmpeg_ok() { "1" } else { "0" })
-        .set("X-Edge-Gstreamer", if gstreamer_ok() { "1" } else { "0" })
-        .set("X-Edge-Hwaccel", crate::hwaccel::detect())
+    req.set("X-Edge-Gstreamer", if gstreamer_ok() { "1" } else { "0" })
         .set("X-Edge-Platform", platform())
         // Resource usage (CPU/mem/disk/GPU) as compact ASCII JSON — sampled off-thread.
         .set("X-Edge-Metrics", &crate::metrics::header_value())
@@ -649,6 +661,11 @@ fn load_cameras(control_url: &str, cache_path: &PathBuf, wait: u64) -> Vec<Devic
 /// Persist the current camera list (with edge-local creds + resolved RTSP) to disk so a
 /// restart / offline boot keeps serving, and idle long-poll reconnects don't re-resolve.
 fn write_cache(cache_path: &PathBuf, devices: &[Device]) {
+    // Ensure the parent exists — on iOS the cache lives under a sandbox subdir that nothing else
+    // creates (on the appliance the path is relative, so the parent is `.` and this is a no-op).
+    if let Some(parent) = cache_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        let _ = std::fs::create_dir_all(parent);
+    }
     if let Ok(json) = serde_json::to_vec_pretty(devices) {
         if let Err(e) = std::fs::write(cache_path, json) {
             log::warn!("could not write camera cache {cache_path:?}: {e}");

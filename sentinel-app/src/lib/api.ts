@@ -97,7 +97,7 @@ export type Box = {
   metrics_at: string | null;
 };
 
-export type NewBox = { id: string; token: string; hostname: string; tailscale_key: string | null };
+export type NewBox = { id: string; token: string; hostname: string };
 
 export type InstallerOS = "macos" | "windows" | "linux";
 export type Installer = {
@@ -134,11 +134,7 @@ export const boxes = {
   /** Pairing progress for the install view (card #85): `claimed` = the code was redeemed, `online`
    *  = the box has checked in since. Lets the UI show "code accepted, starting up…" before online. */
   pairingStatus: (id: string) => api.get<{ claimed: boolean; online: boolean }>(`/boxes/${id}/pairing-status`),
-  /** Recent persisted log tail for a box (oldest-first). */
-  logs: (id: string, limit = 500) => api.get<BoxLog[]>(`/boxes/${id}/logs?limit=${limit}`),
-  /** EventSource URL for a box's live log tail (token in query — EventSource can't set headers). */
-  logsStreamUrl: (id: string) =>
-    `${API_BASE}/boxes/${encodeURIComponent(id)}/logs/stream?token=${encodeURIComponent(auth.token ?? "")}`,
+  // Box logs are shipped to Datadog now (card #145) — no in-app logs view.
   // Partial, not RecordingConfig: the edge fills in any missing key with its own default
   // (serde `#[serde(default)]` per field), so a caller that only wants to change ONE knob (e.g.
   // media_backend, card #138) can spread the box's existing `recording_config` and override just
@@ -218,6 +214,33 @@ export const platformLogs = {
     const qs = p.toString();
     return api.get<PlatformLogsPage>(`/platform-logs${qs ? `?${qs}` : ""}`);
   },
+};
+
+// ---- Workflow node logs (live, from workflow_run_logs — NOT the frozen platform_logs mirror) ----
+
+/** One persisted execution line of a workflow run (per-node signal). */
+export type RunLogLine = {
+  node_id: number | null;
+  label: string | null;
+  kind: string; // "node" (UI ping) | "log" (execution result) | "event" | "dispatch" | "trigger" | "skip"
+  node_kind: string | null;
+  message: string;
+};
+
+/** One recent console line for a graph (execution result + the run's start time). */
+export type ConsoleLogLine = {
+  label: string | null;
+  kind: string;
+  message: string;
+  at: string; // RFC3339 (the run's start time)
+};
+
+export const wfLogs = {
+  /** Node logs for one run, oldest-first. */
+  run: (runId: string) => api.get<RunLogLine[]>(`/workflows/runs/${runId}/logs`),
+  /** Recent node logs across a graph's runs, newest-first — the editor console seed. */
+  console: (graphId: string, limit = 50) =>
+    api.get<ConsoleLogLine[]>(`/workflows/${graphId}/console-logs?limit=${limit}`),
 };
 
 // ---- Recordings -------------------------------------------------------------

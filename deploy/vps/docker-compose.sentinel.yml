@@ -39,23 +39,17 @@ services:
       timeout: 5s
       retries: 5
 
-  sentinel-redis:
-    # Shared event fabric (pub/sub only — no persistence). Carries flow run-progress events
-    # (multi-pod SSE relay) + edge-originated motion events. Internal only; no published port.
-    image: redis:7-alpine
-    container_name: sentinel-redis
-    restart: unless-stopped
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   sentinel-control:
     image: ghcr.io/jackesdavid/sentinel-control:latest
     container_name: sentinel-control
     restart: always
+    # Docker defaults nofile to 1024 soft — far too low for a service holding browser SSE + edge SSE
+    # streams, the DB pool, Redis, and reqwest pools. A connection leak (or just legitimate load)
+    # hits `accept: Too many open files` (os error 24) and refuses ALL new connections. Raise it.
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 524288
     env_file:
       # JWT_SECRET, GOOGLE_*, MASTER_*; ANTHROPIC_API_KEY (assistant chat — shared with flow);
       # ELEVENLABS_API_KEY (+ optional ELEVENLABS_VOICE_ID/MODEL_ID) for assistant TTS/STT.
@@ -64,7 +58,6 @@ services:
       - sentinel.env
     environment:
       DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
-      REDIS_URL: redis://sentinel-redis:6379
       CONTROL_BIND: 0.0.0.0:8790
       OAUTH_REDIRECT_BASE: https://control.thesentinels.online
       OAUTH_SUCCESS_REDIRECT: https://app.thesentinels.online/login
@@ -88,8 +81,6 @@ services:
       sentinel-postgres:
         condition: service_healthy
       sentinel-ai:
-        condition: service_started
-      sentinel-redis:
         condition: service_started
     labels:
       - "traefik.enable=true"
@@ -145,6 +136,11 @@ services:
     image: ghcr.io/jackesdavid/sentinel-gateway:latest
     container_name: sentinel-gateway
     restart: always
+    # Holds live WS streams (browser ⇄ edge) — same FD exposure as control; lift off the 1024 default.
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 524288
     env_file:
       - sentinel.env   # JWT_SECRET (shared with control — verifies live.view)
     environment:
@@ -180,7 +176,6 @@ services:
       - sentinel.env   # TELEGRAM_* fallback, etc.
     environment:
       DATABASE_URL: postgres://sentinel:__DB_PASS__@sentinel-postgres:5432/sentinel
-      REDIS_URL: redis://sentinel-redis:6379
       FLOW_BIND: 0.0.0.0:8787
       # Notify nodes enqueue into the durable notification_queue instead of sending in-process.
       NOTIFY_QUEUE: "1"
@@ -202,10 +197,10 @@ services:
         condition: service_healthy
       sentinel-ai:
         condition: service_started
-      sentinel-redis:
-        condition: service_started
     deploy:
-      replicas: 1   # increase with `task flow-scale N` — no redeploy needed
+      replicas: 2   # multi-pod: each polls the event_queue (atomic claim) + notifies the same
+                    # Postgres fabric, so run-progress fans out to control's LISTEN relay. `task
+                    # flow-scale N` changes this live without a redeploy.
 
   sentinel-notification:
     # Consumes the durable notification_queue and sends to recipients (Telegram). Internal

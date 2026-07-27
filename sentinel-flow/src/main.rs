@@ -36,7 +36,8 @@ pub fn now_epoch_ms() -> u64 {
 }
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Structured logging → Datadog (card #146): every log ships with service:flow + span context.
+    app_core::datadog::init_tracing("flow");
 
     let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
         "postgres://sentinel:sentinel@localhost/sentinel".to_string()
@@ -65,8 +66,8 @@ fn main() {
     // Now build the tokio runtime for the HTTP control plane.
     let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");
     rt.block_on(async move {
-        // Bridge this pod's live run-progress events onto the Redis fabric (multi-pod SSE relay).
-        // Inbound trigger events now arrive via the durable event_queue consumer (spawned above).
+        // Bridge this pod's live run-progress events onto the Postgres NOTIFY fabric (card #147,
+        // multi-pod SSE relay). Inbound triggers arrive via the durable event_queue consumer above.
         bus::spawn_republisher(state.clone());
         let app = http::router(state);
         let listener = match tokio::net::TcpListener::bind(&bind).await {

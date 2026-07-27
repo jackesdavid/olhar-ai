@@ -349,6 +349,15 @@
     return advice[v.status] ?? advice.error;
   }
 
+  // Offer "Save without testing" ONLY when the test couldn't reach any edge at all (verdict is null —
+  // the probe infra failed, e.g. no box online over the tailnet, or the only edge is on-device and
+  // localhost-bound). NOT when the camera itself answered and rejected the creds (auth_failed/locked)
+  // — bypassing those would hand a bad password to the edge and risk the very auth-lockout the
+  // test-first flow exists to avoid. A localhost box (on-device edge) has no go2rtc, so that risk
+  // doesn't apply to it; it just collects the creds on its next direct poll.
+  function canSaveUntested(): boolean {
+    return testState === "failed" && !verdict;
+  }
   // Retrying a rejection or a lockout is exactly what causes a lockout, so don't invite it.
   function canRetry(v: ProbeResult | null): boolean {
     if (!v) return true;
@@ -640,12 +649,24 @@
             <Button onclick={saveAndTest} disabled={savingDetail}>
               {testButtonLabel()}
             </Button>
+            {#if canSaveUntested()}
+              <Button variant="outline" onclick={saveDetail} disabled={savingDetail} title="Send these credentials to the box without a live camera test — for a box that can't be probed (e.g. an on-device edge with no tailnet).">
+                {savingDetail ? "Saving…" : "Save without testing"}
+              </Button>
+            {/if}
           {:else}
             <Button onclick={saveDetail} disabled={savingDetail}>
               {savingDetail ? "Saving…" : "Save"}
             </Button>
           {/if}
         </div>
+        {#if canSaveUntested()}
+          <p class="text-xs text-muted-foreground">
+            Couldn't reach a box to test these credentials — no edge is online over the tailnet. If you're
+            provisioning an on-device edge (it polls directly, not over the tailnet), you can save the
+            credentials without testing and it'll collect them on its next poll.
+          </p>
+        {/if}
       </div>
     {/if}
   </Dialog.Content>

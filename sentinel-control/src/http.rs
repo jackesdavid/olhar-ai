@@ -31,6 +31,10 @@ pub fn router(state: AppState) -> Router {
         .route("/enroll", post(enroll))
         .route("/config/cameras", get(cameras))
         .route("/config/commands", get(commands))
+        // Cloud→edge command transport (card #144): the edge holds this SSE stream and commands
+        // ride down it; it POSTs each command's result back. Replaces the tailnet for commanding.
+        .route("/config/edge/stream", get(crate::edge_stream::edge_stream))
+        .route("/config/edge/command-result", post(crate::edge_stream::command_result))
         .route("/config/discovered", post(discovered_push))
         .route("/config/device-moved", post(device_moved))
         .route("/config/streaming", post(streaming_push))
@@ -50,8 +54,31 @@ pub fn router(state: AppState) -> Router {
             crate::billing_gate::soft_lock,
         )))
         .nest_service("/edge", ServeDir::new(edge_dist))
+        // Card #146: wrap every request in a tenant span so all logs during it ship to Datadog
+        // tagged tenant:<id> — the central place, set once, not per handler.
+        .layer(axum::middleware::from_fn_with_state(state.clone(), tenant_span))
         .layer(CorsLayer::permissive())
         .with_state(state)
+}
+
+/// Open a tracing span carrying the request's tenant (card #146). Best-effort: an absent/invalid
+/// token just yields no tenant tag. Every log emitted during the request inherits `tenant:<id>`.
+async fn tenant_span(
+    State(st): State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    use tracing::Instrument;
+    let tenant = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .and_then(|tok| crate::auth::verify(&st.jwt_secret, tok.trim()).ok())
+        .and_then(|c| c.tenant())
+        .map(|t| t.to_string())
+        .unwrap_or_default();
+    next.run(req).instrument(tracing::info_span!("http", tenant = %tenant)).await
 }
 
 /// Serve the edge appliance installer so a tenant admin's one-liner works.
@@ -217,21 +244,12 @@ async fn enroll(State(st): State<AppState>, headers: HeaderMap, Json(body): Json
 
     let name = crate::store::box_name(&st.pool, box_id).await.ok().flatten().unwrap_or_default();
     let hostname = format!("sentinel-{}", &box_id.to_string()[..8]);
-    let tailscale_key = match &st.tailscale {
-        Some(ts) => ts
-            .mint_auth_key(&st.http, &format!("sentinel-edge {name}"))
-            .await
-            .map_err(|e| log::warn!("enroll: tailscale key mint failed for box {box_id}: {e}"))
-            .ok(),
-        None => None,
-    };
-
+    // No tailnet (card #144) — enrollment issues only the box token; the edge is outbound-only.
     log::info!("box {box_id} ({name}) enrolled by pairing code");
     Json(json!({
-        "box_id":        box_id,
-        "box_token":     token,
-        "hostname":      hostname,
-        "tailscale_key": tailscale_key,
+        "box_id":    box_id,
+        "box_token": token,
+        "hostname":  hostname,
     }))
     .into_response()
 }
@@ -358,7 +376,7 @@ async fn cameras(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Ra
 }
 
 /// Like [`box_tenant`] but also resolves the box id (for log tagging).
-async fn box_identity(st: &AppState, headers: &HeaderMap) -> Result<Option<(uuid::Uuid, uuid::Uuid)>, Response> {
+pub(crate) async fn box_identity(st: &AppState, headers: &HeaderMap) -> Result<Option<(uuid::Uuid, uuid::Uuid)>, Response> {
     let token = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -627,7 +645,6 @@ async fn track_event_push(State(st): State<AppState>, headers: HeaderMap, body: 
 }
 
 /// Newest box-log rows kept per box (bounded retention; the edge keeps its own ring + stdout).
-const BOX_LOG_KEEP: i64 = 5000;
 
 /// The edge pushes a batch of its recent log lines here (box token). Control persists a
 /// bounded tail and re-broadcasts each line for any live per-box log viewer.
@@ -641,16 +658,27 @@ async fn box_logs_push(State(st): State<AppState>, headers: HeaderMap, body: Opt
     if lines.is_empty() {
         return StatusCode::NO_CONTENT.into_response();
     }
-    // Live fan-out (tagged with tenant+box so the per-box SSE relay can filter).
-    // Also push to the unified platform_logs queue (fire-and-forget; edge logs are module=edge).
+    // Card #146: the box holds its token, not its name — control resolves `edge_name` here (once per
+    // batch) so every edge log in Datadog can be faceted by a human name, not just the box id.
+    let edge_id = box_id.to_string();
+    let edge_name = store::box_name(&st.pool, box_id).await.ok().flatten().filter(|s| !s.trim().is_empty());
+    // Card #145/#146: the edge keeps relaying its lines here; they go to the unified log queue, which
+    // ships to Datadog when configured (else Postgres). Structured fields (`camera_ip`, `fps`, …) plus
+    // the stamped identity ride in `payload` and are spread to searchable attributes / facets by the
+    // Datadog record builder. No more `box_logs` table or `log_bus` broadcast (in-app view is gone).
     for l in &lines {
-        let msg = json!({ "tenant": tenant, "box": box_id, "ts": l.ts, "level": l.level, "target": l.target, "message": l.message });
-        let _ = st.log_bus.send(msg.to_string());
+        let mut payload = l.fields.clone();
+        payload.insert("target".into(), json!(l.target));
+        payload.insert("ts".into(), json!(l.ts));
+        payload.insert("edge_id".into(), json!(edge_id));
+        if let Some(name) = &edge_name {
+            payload.insert("edge_name".into(), json!(name));
+        }
         st.log_queue.push(app_core::platform_logs::PlatformLog {
             tenant_id: tenant,
             module: "edge",
             trace_id: None,
-            entity_id: Some(box_id.to_string()),
+            entity_id: Some(edge_id.clone()),
             entity_type: Some("edge_box"),
             level: match l.level.to_lowercase().as_str() {
                 "error" => "error",
@@ -659,11 +687,8 @@ async fn box_logs_push(State(st): State<AppState>, headers: HeaderMap, body: Opt
                 _       => "info",
             },
             message: l.message.clone(),
-            payload: Some(json!({ "target": l.target, "ts": l.ts })),
+            payload: Some(serde_json::Value::Object(payload)),
         });
-    }
-    if let Err(e) = store::insert_box_logs(&st.pool, tenant, box_id, &lines, BOX_LOG_KEEP).await {
-        log::error!("insert_box_logs failed: {e}");
     }
     StatusCode::NO_CONTENT.into_response()
 }

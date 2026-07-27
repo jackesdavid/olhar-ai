@@ -118,12 +118,24 @@ pub(super) fn run_get_tracked_objects(inputs: &PortValues, sys: &ToolContext) ->
         .and_then(PortValue::as_camera)
         .map(|c| c.ip.clone())
         .ok_or("missing required input 'camera'")?;
-    let base = resolve_edge_api_base(sys)?;
-    let resp = edge_agent()
-        .get(&format!("{base}/tracks/{camera_ip}"))
-        .call()
-        .map_err(|e| format!("edge get_tracked_objects: {e}"))?;
-    let items: Vec<Value> = resp.into_json().unwrap_or_default();
+    // SSE command channel first (card #144 — works for a box with no tailnet); tailnet fallback.
+    let tracks_path = format!("/tracks/{camera_ip}");
+    let items: Vec<Value> = if let Some(res) =
+        crate::edge_commands::edge_http_via_sse_blocking(&sys.db, sys.tenant_id, "GET", &tracks_path, None, 15)
+    {
+        let (status, body) = res?;
+        if !(200..300).contains(&status) {
+            return Err(format!("edge tracks returned {status}"));
+        }
+        serde_json::from_slice(&body).unwrap_or_default()
+    } else {
+        let base = resolve_edge_api_base(sys)?;
+        let resp = edge_agent()
+            .get(&format!("{base}{tracks_path}"))
+            .call()
+            .map_err(|e| format!("edge get_tracked_objects: {e}"))?;
+        resp.into_json().unwrap_or_default()
+    };
     let objects: Vec<PortValue> = items
         .into_iter()
         .filter_map(|v| {

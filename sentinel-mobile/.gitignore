@@ -4,6 +4,7 @@ dist/
 web-build/
 *.log
 .DS_Store
-ios/
+/ios/
 android/
 expo-env.d.ts
+modules/sentinel-edge/ios/libs/*.a

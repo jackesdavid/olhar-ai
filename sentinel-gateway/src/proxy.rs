@@ -34,17 +34,106 @@ pub async fn ws_handler(
     let Some((token, claims)) = crate::auth::authorize_live(&state.jwt_secret, &headers, Some(&q)) else {
         return (StatusCode::UNAUTHORIZED, "live.view required").into_response();
     };
-    let base = state.upstream_for(claims.tid.as_deref(), &token).await;
     let params = strip_token(&q);
-    // Prefer the edge's own GStreamer MSE server, falling back to the go2rtc it replaces. Every
-    // released edge is built WITHOUT the `gst-linked` feature, so `/api/ws` simply does not exist
-    // there — a hard switch would take Live down on every box but the one being migrated.
+    let src = param(&q, "src");
+
+    // Live-over-outbound first (card #144): if the gateway has a public WS address, ask control to
+    // set up the stream. When the tenant's edge is on the SSE command channel, control tells it to
+    // dial us back — no tailnet needed. Otherwise (or if anything fails) we fall through to the
+    // tailnet path below, unchanged.
+    if !state.public_ws_url.is_empty() {
+        let session = uuid::Uuid::new_v4().to_string();
+        let callback = format!("{}/edge/live/{session}", state.public_ws_url.trim_end_matches('/'));
+        if let crate::state::LiveStart::Sse = state.live_start(&token, &src, &callback).await {
+            let (tx, rx) = futures::channel::oneshot::channel();
+            state.edge_sessions.lock().unwrap().insert(session.clone(), tx);
+            return ws.on_upgrade(move |client| bridge_outbound(client, state, session, rx));
+        }
+    }
+
+    // Tailnet path (existing): the gateway dials the edge's MSE server (its own GStreamer one first,
+    // then the go2rtc it replaces).
+    let base = state.upstream_for(claims.tid.as_deref(), &token).await;
     let mut candidates = Vec::new();
     if let Some(edge) = state.live_edge_ws(&base) {
         candidates.push(format!("{edge}/api/ws?{params}"));
     }
     candidates.push(format!("{}/api/ws?{}", AppState::ws_origin(&base), params));
     ws.on_upgrade(move |client| bridge_ws(client, state, candidates))
+}
+
+/// One query param's value (empty if absent).
+fn param(query: &str, key: &str) -> String {
+    let pfx = format!("{key}=");
+    query
+        .split('&')
+        .find_map(|p| p.strip_prefix(&pfx))
+        .map(|v| v.to_string())
+        .unwrap_or_default()
+}
+
+/// The edge dials this to deliver a live-over-outbound stream. It hands its upgraded socket to the
+/// waiting browser bridge via the session rendezvous. An unknown/expired session (or a duplicate)
+/// finds no waiter and the socket is simply dropped (closed).
+pub async fn edge_live(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(session): axum::extract::Path<String>,
+) -> Response {
+    let Some(tx) = state.edge_sessions.lock().unwrap().remove(&session) else {
+        return (StatusCode::NOT_FOUND, "no such live session").into_response();
+    };
+    ws.on_upgrade(move |edge| async move {
+        // Hand the edge socket to the browser bridge. If it already gave up (timed out), drop it.
+        if tx.send(edge).is_err() {
+            log::warn!("edge-live: session {session} had no waiter");
+        }
+    })
+}
+
+/// The browser side of live-over-outbound: wait for the edge to dial in (bounded), then bridge the
+/// two sockets. On timeout, clean up the rendezvous and close the browser.
+async fn bridge_outbound(
+    client: WebSocket,
+    state: Arc<AppState>,
+    session: String,
+    rx: futures::channel::oneshot::Receiver<WebSocket>,
+) {
+    let edge = match tokio::time::timeout(Duration::from_secs(10), rx).await {
+        Ok(Ok(edge)) => edge,
+        _ => {
+            state.edge_sessions.lock().unwrap().remove(&session);
+            log::warn!("edge-live: session {session} — edge did not dial in within 10s");
+            return;
+        }
+    };
+    log::info!("WS bridge open (outbound) → edge session {session}");
+    bridge_two_ws(client, edge).await;
+    log::info!("WS bridge closed (outbound) → edge session {session}");
+}
+
+/// Pipe two axum WebSockets both ways until either closes — the browser↔edge bridge for the
+/// outbound path (both sides are inbound-to-the-gateway sockets, unlike [`bridge_ws`]).
+async fn bridge_two_ws(a: WebSocket, b: WebSocket) {
+    let (mut a_tx, mut a_rx) = a.split();
+    let (mut b_tx, mut b_rx) = b.split();
+    let a2b = async {
+        while let Some(Ok(msg)) = a_rx.next().await {
+            if matches!(msg, AxMsg::Close(_)) || b_tx.send(msg).await.is_err() {
+                break;
+            }
+        }
+        let _ = b_tx.close().await;
+    };
+    let b2a = async {
+        while let Some(Ok(msg)) = b_rx.next().await {
+            if matches!(msg, AxMsg::Close(_)) || a_tx.send(msg).await.is_err() {
+                break;
+            }
+        }
+        let _ = a_tx.close().await;
+    };
+    tokio::select! { _ = a2b => {}, _ = b2a => {} }
 }
 
 /// Drop our `token` query param so it's never forwarded to the upstream go2rtc.

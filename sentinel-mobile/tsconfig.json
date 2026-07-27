@@ -5,6 +5,9 @@
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "sentinel-edge": [
+        "./modules/sentinel-edge/index.ts"
       ]
     }
   },

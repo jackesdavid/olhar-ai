@@ -96,4 +96,25 @@ impl Db {
         });
         rx.recv().expect("db runtime task dropped before completing")
     }
+
+    /// Fire a Postgres `NOTIFY <channel>, <payload>` (best-effort, blocking). The workflow
+    /// live-event fabric (card #147, replacing Redis): every flow pod notifies `workflow_events`,
+    /// control's SSE relay LISTENs — fans out across all pods with no broker. Payload must stay
+    /// under Postgres's ~8000-byte NOTIFY limit; oversized ones are dropped (telemetry is lossy).
+    /// Blocks the caller on the owned runtime, so call from a std thread or `spawn_blocking`.
+    pub fn notify(&self, channel: &str, payload: &str) {
+        if payload.len() >= 7900 {
+            return;
+        }
+        let pool = self.pool();
+        let channel = channel.to_string();
+        let payload = payload.to_string();
+        let _ = self.block(async move {
+            sqlx::query("SELECT pg_notify($1, $2)")
+                .bind(&channel)
+                .bind(&payload)
+                .execute(&pool)
+                .await
+        });
+    }
 }
