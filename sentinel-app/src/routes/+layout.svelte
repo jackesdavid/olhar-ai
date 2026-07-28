@@ -7,6 +7,7 @@
   import { goto } from "$app/navigation";
   import { data, onEvent } from "$lib/data";
   import { COMMIT } from "$lib/config";
+  import { initLang } from "$lib/i18n";
   import type { Alert } from "$lib/types";
   import { navItems } from "$lib/nav";
   import { Toaster } from "$lib/components/ui/sonner";
@@ -123,6 +124,7 @@
   }
 
   onMount(() => {
+    initLang();
     loadTheme();
     if (localStorage.getItem("sentinel.navCollapsed") === "true")
       navCollapsed = true;

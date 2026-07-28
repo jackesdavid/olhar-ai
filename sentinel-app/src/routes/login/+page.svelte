@@ -13,6 +13,9 @@
   import SentinelLogo from "$lib/components/sentinel-logo.svelte";
 
   import { login, signup, loadMe, setToken, googleLoginUrl } from "$lib/auth.svelte";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()]);
 
   let mode = $state<"signin" | "signup">("signin");
   let email = $state("");
@@ -30,7 +33,7 @@
       if (await loadMe()) {
         await goto("/");
       } else {
-        toast.error("That sign-in did not complete. Please try again.");
+        toast.error(t.login.oauthFailed);
         setToken(null);
       }
     }
@@ -48,7 +51,7 @@
       }
       await goto("/");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Something went wrong.");
+      toast.error(err instanceof Error ? err.message : t.login.genericError);
     } finally {
       busy = false;
     }
@@ -66,7 +69,7 @@
     <Card.Header class="items-center text-center">
       <SentinelLogo stacked size={52} />
       <Card.Description class="mt-2">
-        {mode === "signin" ? "Sign in to your workspace" : "Create a new workspace"}
+        {mode === "signin" ? t.login.signinDesc : t.login.signupDesc}
       </Card.Description>
     </Card.Header>
 
@@ -74,42 +77,42 @@
       <form class="space-y-4" onsubmit={submit}>
         {#if mode === "signup"}
           <div class="space-y-1.5">
-            <Label for="tenant">Workspace name</Label>
-            <Input id="tenant" bind:value={tenantName} placeholder="Acme Security" autocomplete="organization" />
+            <Label for="tenant">{t.login.workspaceName}</Label>
+            <Input id="tenant" bind:value={tenantName} placeholder={t.login.workspacePlaceholder} autocomplete="organization" />
           </div>
         {/if}
         <div class="space-y-1.5">
-          <Label for="email">Email</Label>
+          <Label for="email">{t.login.email}</Label>
           <Input id="email" type="email" bind:value={email} placeholder="you@example.com" autocomplete="email" />
         </div>
         <div class="space-y-1.5">
-          <Label for="password">Password</Label>
+          <Label for="password">{t.login.password}</Label>
           <Input
             id="password"
             type="password"
             bind:value={password}
-            placeholder={mode === "signup" ? "At least 8 characters" : "••••••••"}
+            placeholder={mode === "signup" ? t.login.passwordSignupPlaceholder : "••••••••"}
             autocomplete={mode === "signin" ? "current-password" : "new-password"}
           />
         </div>
         <Button type="submit" class="w-full" disabled={!canSubmit || busy}>
           {#if busy}<Busy />{/if}
-          {mode === "signin" ? "Sign in" : "Create workspace"}
+          {mode === "signin" ? t.login.signin : t.login.createWorkspace}
         </Button>
       </form>
 
       <div class="flex items-center gap-3">
         <Separator class="flex-1" />
-        <span class="text-xs text-muted-foreground">or</span>
+        <span class="text-xs text-muted-foreground">{t.login.or}</span>
         <Separator class="flex-1" />
       </div>
 
       <div class="space-y-2">
         <Button variant="outline" class="w-full" onclick={() => (window.location.href = googleLoginUrl())}>
-          Continue with Google
+          {t.login.continueGoogle}
         </Button>
-        <Button variant="outline" class="w-full" disabled title="Coming soon">
-          Continue with Apple
+        <Button variant="outline" class="w-full" disabled title={t.login.comingSoon}>
+          {t.login.continueApple}
         </Button>
       </div>
     </Card.Content>
@@ -117,11 +120,11 @@
     <Card.Footer class="justify-center">
       {#if mode === "signin"}
         <button class="text-sm text-muted-foreground hover:text-foreground" onclick={() => (mode = "signup")}>
-          Don't have a workspace? <span class="text-primary">Create one</span>
+          {t.login.noWorkspace} <span class="text-primary">{t.login.createOne}</span>
         </button>
       {:else}
         <button class="text-sm text-muted-foreground hover:text-foreground" onclick={() => (mode = "signin")}>
-          Already have an account? <span class="text-primary">Sign in</span>
+          {t.login.haveAccount} <span class="text-primary">{t.login.signInLink}</span>
         </button>
       {/if}
     </Card.Footer>

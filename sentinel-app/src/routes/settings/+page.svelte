@@ -16,6 +16,10 @@
   import { DEFAULT_SETTINGS, type Settings, type Transport } from "$lib/types";
   import { billing, boxes, type StorageStats, type Box } from "$lib/api";
   import { Input } from "$lib/components/ui/input";
+  import { dict, lang, setLang, type Lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()]);
+  const langs: Lang[] = ["en", "pt"];
 
   let settings = $state<Settings>({ ...DEFAULT_SETTINGS });
   let loading = $state(true);
@@ -235,6 +239,26 @@
   </div>
 
   {#if tab === "general"}
+  <Card.Root>
+    <Card.Header>
+      <Card.Title>{t.common.language}</Card.Title>
+    </Card.Header>
+    <Card.Content>
+      <div class="inline-flex items-center rounded-lg border p-0.5 text-sm font-semibold">
+        {#each langs as l (l)}
+          <button
+            type="button"
+            onclick={() => setLang(l)}
+            class="rounded-md px-3 py-1.5 uppercase tracking-wide transition-colors"
+            class:bg-primary={lang() === l}
+            class:text-primary-foreground={lang() === l}
+            class:text-muted-foreground={lang() !== l}
+            class:hover:text-foreground={lang() !== l}
+          >{l}</button>
+        {/each}
+      </div>
+    </Card.Content>
+  </Card.Root>
   <Card.Root>
     <Card.Header>
       <Card.Title>Audio</Card.Title>

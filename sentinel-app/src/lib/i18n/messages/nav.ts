@@ -1,0 +1,36 @@
+// Sidebar / navigation labels. Keys match the route slugs so nav.ts (the NavItem list) can
+// resolve them by key at render time.
+export const nav = {
+  en: {
+    dashboard: "Dashboard",
+    live: "Live",
+    events: "Events",
+    recipients: "Recipients",
+    people: "People",
+    faces: "Faces",
+    map: "Map",
+    chat: "Chat",
+    workflows: "Workflows",
+    recordings: "Recordings",
+    playback: "Playback",
+    logs: "Logs",
+    devices: "Devices",
+    settings: "Settings",
+  },
+  pt: {
+    dashboard: "Painel",
+    live: "Ao vivo",
+    events: "Eventos",
+    recipients: "Destinatários",
+    people: "Pessoas",
+    faces: "Rostos",
+    map: "Mapa",
+    chat: "Chat",
+    workflows: "Fluxos",
+    recordings: "Gravações",
+    playback: "Reprodução",
+    logs: "Logs",
+    devices: "Dispositivos",
+    settings: "Configurações",
+  },
+};
