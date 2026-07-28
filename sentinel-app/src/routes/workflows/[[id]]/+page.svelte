@@ -102,6 +102,10 @@
 
   /** Shared run-status / relative-time wording, also used by the workflows list. */
   const wfl = $derived(i18nDict[i18nLang()].workflowsList);
+  /** The editor's own chrome (node vocabulary still comes from the backend catalog). */
+  const t = $derived(i18nDict[i18nLang()].workflowEditor);
+  /** Alias for spots where an `{#each … as t}` shadows `t`. */
+  const editorMsgs = $derived(t);
 
   import ContextSearch from "../components/ContextSearch.svelte";
   import WorkflowsList from "../components/WorkflowsList.svelte";
@@ -321,7 +325,7 @@
       });
       dirty = false;
     } catch (e) {
-      toast.error("Couldn't save workflow", { description: String(e) });
+      toast.error(t.saveFailed, { description: String(e) });
     } finally {
       saving = false;
     }
@@ -536,12 +540,14 @@
     runsLoadedFor = graph.id;
     loadRuns(graph);
   });
-  const RAIL_TABS: { id: RailTab; label: string; icon: typeof Settings2 }[] = [
-    { id: "details", label: "Details", icon: Settings2 },
-    { id: "properties", label: "Properties", icon: SlidersHorizontal },
-    { id: "variables", label: "Variables", icon: Variable },
-    { id: "runs", label: "Runs", icon: History },
-  ];
+  // $derived, not a plain const: the labels are language-dependent, so a const would freeze
+  // them at whatever language was active on first render.
+  const RAIL_TABS: { id: RailTab; label: string; icon: typeof Settings2 }[] = $derived([
+    { id: "details", label: t.tabDetails, icon: Settings2 },
+    { id: "properties", label: t.tabProperties, icon: SlidersHorizontal },
+    { id: "variables", label: t.tabVariables, icon: Variable },
+    { id: "runs", label: t.tabRuns, icon: History },
+  ]);
   // The selected tab sits on --active (elev-7); hover on an unselected one is --hover
   // (elev-6). They must not be the same stop, or a hovered tab reads as the selected tab.
   function tabClass(t: RailTab): string {
@@ -977,12 +983,12 @@
   }
   function listRunTitle(g: Graph, unfilled: boolean): string {
     const st = runStatus(g);
-    if (st === "running") return "Running…";
-    if (st === "idle") return "Active — stop it to run manually";
-    if (triggerKind(g.trigger) !== "manual") return "Runs on a schedule — use the editor to run manually";
-    if (unfilled) return "A node has a required input not filled";
-    if (canRun(g)) return "Run now";
-    return "Nothing to run — connect nodes or enable orphans";
+    if (st === "running") return t.runningEllipsis;
+    if (st === "idle") return t.activeStopFirst;
+    if (triggerKind(g.trigger) !== "manual") return t.scheduleUseEditor;
+    if (unfilled) return t.unfilledInput;
+    if (canRun(g)) return t.runNow;
+    return t.nothingToRun;
   }
   // The emerald/amber/none marching-ants border on a list row.
   // The run state lives in the first-column dot now (it used to march a border around the row):
@@ -999,11 +1005,11 @@
   }
   function editorRunTitle(): string {
     if (!graph) return "";
-    if (isRunning) return "Already running";
-    if (graph.enabled) return "Graph is active — stop it to run manually";
-    if (graphHasUnfilled(graph)) return "A node has a required input not filled";
-    if (canRun(graph)) return "Run now";
-    return "Nothing to run — connect nodes or enable orphans";
+    if (isRunning) return t.alreadyRunning;
+    if (graph.enabled) return t.graphActive;
+    if (graphHasUnfilled(graph)) return t.unfilledInput;
+    if (canRun(graph)) return t.runNow;
+    return t.nothingToRun;
   }
   // A node's border colour: emerald when running/selected, red when incomplete.
   function nodeBorderClass(n: Node): string {
@@ -1539,7 +1545,7 @@
       await reload();
       openGraph(id);
     } catch (err) {
-      toast.error("Couldn't duplicate workflow", { description: String(err) });
+      toast.error(t.duplicateFailed, { description: String(err) });
     }
   }
 
@@ -1563,21 +1569,21 @@
     try {
       templates = await data.listTemplates<TemplateSummary>();
     } catch (err) {
-      toast.error("Couldn't load templates", { description: String(err) });
+      toast.error(t.templatesLoadFailed, { description: String(err) });
     } finally {
       templatesLoading = false;
     }
   }
   // Clone a template into this tenant, then open the new (disabled) workflow to fill its inputs.
-  async function cloneTemplate(t: TemplateSummary) {
-    usingTemplateId = t.id;
+  async function cloneTemplate(tpl: TemplateSummary) {
+    usingTemplateId = tpl.id;
     try {
-      const id = await data.useTemplate(t.id);
-      toast.info(`Created “${t.name}” — fill in its inputs and turn it on.`);
+      const id = await data.useTemplate(tpl.id);
+      toast.info(t.templateCreated(tpl.name));
       goto(`/workflows/${id}`);
     } catch (err) {
       usingTemplateId = null;
-      toast.error("Couldn't use template", { description: String(err) });
+      toast.error(t.templateUseFailed, { description: String(err) });
     }
   }
 
@@ -1590,7 +1596,7 @@
       await data.setGraphGlobal(g.id, next);
     } catch (err) {
       g.global = !next;
-      toast.error("Couldn't publish template", { description: String(err) });
+      toast.error(t.publishFailed, { description: String(err) });
     }
   }
 
@@ -1602,7 +1608,7 @@
       await data.setGraphTemplate(g.id, next);
     } catch (err) {
       g.template = !next;
-      toast.error("Couldn't update template", { description: String(err) });
+      toast.error(t.templateUpdateFailed, { description: String(err) });
     }
   }
 
@@ -1697,7 +1703,7 @@
         }
         void loadTemplates();
       } catch (err) {
-        toast.error("Failed to load workflows", { description: String(err) });
+        toast.error(t.listLoadFailed, { description: String(err) });
       } finally {
         loading = false;
       }
@@ -1850,11 +1856,11 @@
   // ---- graph CRUD ----------------------------------------------------------
   async function createWorkflow() {
     try {
-      const id = await data.createGraph("Untitled");
+      const id = await data.createGraph(t.untitled);
       await reload();
       openGraph(id); // opens the editor — rename it inline in Configuration
     } catch (err) {
-      toast.error("Couldn't create workflow", { description: String(err) });
+      toast.error(t.createFailed, { description: String(err) });
     }
   }
   // Metadata (name/description/group/enabled/…) has its OWN controls + persists immediately. Update
@@ -1869,7 +1875,7 @@
     try {
       await data.renameGraph(graph.id, n);
     } catch (err) {
-      toast.error("Rename failed", { description: String(err) });
+      toast.error(t.renameFailed, { description: String(err) });
     }
   }
   async function saveDescription(v: string) {
@@ -1879,7 +1885,7 @@
     try {
       await data.setGraphDescription(graph.id, v);
     } catch (err) {
-      toast.error("Couldn't save description", { description: String(err) });
+      toast.error(t.descriptionSaveFailed, { description: String(err) });
     }
   }
   async function saveGroup(v: string) {
@@ -1891,7 +1897,7 @@
     try {
       await data.setGraphGroup(graph.id, val);
     } catch (err) {
-      toast.error("Couldn't save group", { description: String(err) });
+      toast.error(t.groupSaveFailed, { description: String(err) });
     }
   }
   function openDelete(g: Graph) {
@@ -1908,7 +1914,7 @@
       await reload();
       if (wasOpen) backToList();
     } catch (err) {
-      toast.error("Failed to delete", { description: String(err) });
+      toast.error(t.deleteFailed, { description: String(err) });
     }
   }
   async function toggleEnabled(g: Graph, enabled: boolean) {
@@ -1917,7 +1923,7 @@
       await data.setGraphEnabled(g.id, enabled);
     } catch (err) {
       g.enabled = !enabled; // roll back on failure
-      toast.error("Couldn't update", { description: String(err) });
+      toast.error(t.updateFailed, { description: String(err) });
     }
   }
   async function toggleRunOrphans(g: Graph, run_orphans: boolean) {
@@ -1927,7 +1933,7 @@
       await data.setGraphRunOrphans(g.id, run_orphans);
     } catch (err) {
       g.run_orphans = !run_orphans; // roll back on failure
-      toast.error("Couldn't update", { description: String(err) });
+      toast.error(t.updateFailed, { description: String(err) });
     }
   }
   async function toggleDebug(g: Graph, debug: boolean) {
@@ -1937,26 +1943,20 @@
       await data.setGraphDebug(g.id, debug);
     } catch (err) {
       g.debug = !debug; // roll back on failure
-      toast.error("Couldn't update", { description: String(err) });
+      toast.error(t.updateFailed, { description: String(err) });
     }
   }
   // Tooltips for the top-of-canvas state toggles (Enabled / Debug / Orphans).
   function enabledTitle(): string {
-    return graph?.enabled
-      ? "Armed — the workflow's trigger is live. Click to disarm."
-      : "Disarmed — click to arm this workflow's trigger.";
+    return graph?.enabled ? t.armed : t.disarmed;
   }
   function debugTitle(): string {
-    if (editLocked) return "Debug — locked while the workflow is armed or running.";
-    return graph?.debug
-      ? "Debug on — logging each node's result to the console. Click to stop."
-      : "Debug off — log each node's result to the console during a run.";
+    if (editLocked) return t.debugLocked;
+    return graph?.debug ? t.debugOn : t.debugOff;
   }
   function orphansTitle(): string {
-    if (editLocked) return "Run orphans — locked while the workflow is armed or running.";
-    return graph?.run_orphans
-      ? "Run orphans on — unconnected nodes run. Click to skip them."
-      : "Run orphans off — nodes with no connections are skipped during a run.";
+    if (editLocked) return t.orphansLocked;
+    return graph?.run_orphans ? t.orphansOn : t.orphansOff;
   }
 
   // A manual run with the given input values (empty = use defaults).
@@ -1967,7 +1967,7 @@
       toast.info(msg);
     } catch (err) {
       running = false;
-      toast.error("Run", { description: String(err) });
+      toast.error(t.runLabel, { description: String(err) });
     }
   }
 
@@ -2057,7 +2057,7 @@
     try {
       await data.setGraphTrigger(g.id, kind, everySecs);
     } catch (err) {
-      toast.error("Couldn't set trigger", { description: String(err) });
+      toast.error(t.triggerFailed, { description: String(err) });
     }
   }
   // Switch trigger kind from the dropdown — schedule seeds/keeps its own config.
@@ -2071,7 +2071,7 @@
     try {
       await data.setGraphTrigger(g.id, "schedule", undefined, sched);
     } catch (err) {
-      toast.error("Couldn't set schedule", { description: String(err) });
+      toast.error(t.scheduleFailed, { description: String(err) });
     }
   }
   // Merge one field change into the current schedule + persist.
@@ -2102,7 +2102,7 @@
     try {
       await data.setGraphConcurrency(g.id, kind, max);
     } catch (err) {
-      toast.error("Couldn't set concurrency", { description: String(err) });
+      toast.error(t.concurrencyFailed, { description: String(err) });
     }
   }
   async function applyInstanceScope(g: Graph, kind: string) {
@@ -2111,7 +2111,7 @@
     try {
       await data.setGraphInstanceScope(g.id, kind);
     } catch (err) {
-      toast.error("Couldn't set instance scope", { description: String(err) });
+      toast.error(t.scopeFailed, { description: String(err) });
     }
   }
 
@@ -2415,9 +2415,9 @@
         await saveNodeConfig(selectedNode, { ...selectedNode.config, event: ev, payload: fields });
       }
       payloadEditorFor = null; // let the effect re-seed the editor from the saved schema
-      toast.success(`Event “${ev}” saved`);
+      toast.success(t.eventSaved(ev));
     } catch (err) {
-      toast.error("Couldn't save event", { description: String(err) });
+      toast.error(t.eventSaveFailed, { description: String(err) });
     }
   }
 
@@ -2453,7 +2453,7 @@
         if (nn) nn.config = u.config;
       }
       markDirty();
-      toast.info(`Updated ${updates.length} event node(s) to the latest payload`);
+      toast.info(t.eventNodesUpdated(updates.length));
     } catch (err) {
       console.error("reconcile event nodes failed", err);
     }
@@ -2529,7 +2529,7 @@
     try {
       runsList = await data.runHistory<RunRecord[]>(g.id, 50);
     } catch (err) {
-      toast.error("Couldn't load run history", { description: String(err) });
+      toast.error(t.runHistoryFailed, { description: String(err) });
     } finally {
       runsLoading = false;
     }
@@ -2551,7 +2551,7 @@
         const lines = (await wfLogs.run(runId)).filter((l) => l.kind !== "node");
         runsLogs = { ...runsLogs, [runId]: lines };
       } catch (err) {
-        toast.error("Couldn't load run logs", { description: String(err) });
+        toast.error(t.runLogsFailed, { description: String(err) });
       }
     }
   }
@@ -2561,7 +2561,7 @@
     return "text-amber-500"; // running
   }
   function comingSoon(what: string) {
-    toast.info(`${what} — coming soon`);
+    toast.info(t.comingSoon(what));
   }
   async function removeNode(n: Node) {
     if (!graph || editLocked) return;
@@ -2671,7 +2671,7 @@
       return;
     }
     if (!pending) {
-      toast.info("Pick an output port first, then this input.");
+      toast.info(t.pickOutputFirst);
       return;
     }
     const from = pending;
@@ -2680,7 +2680,7 @@
     );
     if (duplicate) {
       pending = null;
-      toast.info("Those pins are already wired.");
+      toast.info(t.alreadyWired);
       return;
     }
     const newEdge: Edge = { from: from.node, from_port: from.port, to: node.id, to_port: port };
@@ -3705,7 +3705,7 @@
                       }}
                       role="presentation"
                     >
-                      <title>Open larger</title>
+                      <title>{t.openLarger}</title>
                       <rect width="18" height="18" rx="4" class="fill-background stroke-border" stroke-width="1" />
                       <g
                         transform="translate(3 3) scale(0.5)"
@@ -3841,20 +3841,20 @@
           <!-- left edge: touch tool palette (Move / Pan / Link / Break) -->
           <div class="absolute left-3 top-1/2 flex -translate-y-1/2 flex-col gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur">
             {#each [
-              { mode: "move", Icon: MousePointer2, label: "Move / select (V)", lock: true },
-              { mode: "pan", Icon: Hand, label: "Pan (H)", lock: false },
-              { mode: "link", Icon: Link2, label: "Link ports (L)", lock: true },
-              { mode: "break", Icon: Scissors, label: "Break link (B)", lock: true },
-            ] as t (t.mode)}
+              { mode: "move", Icon: MousePointer2, label: t.toolMove, lock: true },
+              { mode: "pan", Icon: Hand, label: t.toolPan, lock: false },
+              { mode: "link", Icon: Link2, label: t.toolLink, lock: true },
+              { mode: "break", Icon: Scissors, label: t.toolBreak, lock: true },
+            ] as tb (tb.mode)}
               <Button
                 variant="ghost"
                 size="icon"
-                class="size-8 {editorMode === t.mode ? 'bg-primary/15 text-primary' : ''}"
-                title={t.label}
-                disabled={t.lock && editLocked}
-                onclick={() => { editorMode = t.mode as typeof editorMode; pending = null; }}
+                class="size-8 {editorMode === tb.mode ? 'bg-primary/15 text-primary' : ''}"
+                title={tb.label}
+                disabled={tb.lock && editLocked}
+                onclick={() => { editorMode = tb.mode as typeof editorMode; pending = null; }}
               >
-                <t.Icon class="size-4" />
+                <tb.Icon class="size-4" />
               </Button>
             {/each}
           </div>
@@ -3902,10 +3902,10 @@
               >
                 {#if running}<Busy />{:else}<Play class="size-4" />{/if}
               </Button>
-              <Button variant="ghost" size="icon" class="size-8" title="Pause (coming soon)" disabled={!isRunning} onclick={() => comingSoon("Pause")}>
+              <Button variant="ghost" size="icon" class="size-8" title={t.pauseSoon} disabled={!isRunning} onclick={() => comingSoon(t.pause)}>
                 <Pause class="size-4" />
               </Button>
-              <Button variant="ghost" size="icon" class="size-8" title="Stop (coming soon)" disabled={!isRunning} onclick={() => comingSoon("Stop")}>
+              <Button variant="ghost" size="icon" class="size-8" title={t.stopSoon} disabled={!isRunning} onclick={() => comingSoon(t.stop)}>
                 <Square class="size-4" />
               </Button>
             </div>
@@ -3948,10 +3948,10 @@
           <div
             class="absolute right-3 top-3 flex items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur"
           >
-            <Button variant="ghost" size="icon" class="size-8" title="Zoom out" onclick={() => zoomBy(1 / 1.2)}><ZoomOut class="size-4" /></Button>
+            <Button variant="ghost" size="icon" class="size-8" title={t.zoomOut} onclick={() => zoomBy(1 / 1.2)}><ZoomOut class="size-4" /></Button>
             <span class="w-10 text-center text-[11px] tabular-nums text-muted-foreground">{Math.round(zoom * 100)}%</span>
-            <Button variant="ghost" size="icon" class="size-8" title="Zoom in" onclick={() => zoomBy(1.2)}><ZoomIn class="size-4" /></Button>
-            <Button variant="ghost" size="icon" class="size-8" title="Fit to view" onclick={fitView}><Maximize class="size-4" /></Button>
+            <Button variant="ghost" size="icon" class="size-8" title={t.zoomIn} onclick={() => zoomBy(1.2)}><ZoomIn class="size-4" /></Button>
+            <Button variant="ghost" size="icon" class="size-8" title={t.fitToView} onclick={fitView}><Maximize class="size-4" /></Button>
           </div>
 
           <!-- bottom-center: wiring hint · selection actions (touch-reachable) · idle hint -->
@@ -3966,16 +3966,16 @@
                    so surface them as buttons for touch (tablet has no ⌘C/⌘V/Delete). -->
               <div class="flex items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur">
                 <span class="px-1.5 text-[11px] text-muted-foreground">{selectedIds.size} selected</span>
-                <Button variant="ghost" size="icon" class="size-8" title="Duplicate (⌘D)" onclick={() => { copySelection(); pasteClipboard(); }}>
+                <Button variant="ghost" size="icon" class="size-8" title={t.duplicateShortcut} onclick={() => { copySelection(); pasteClipboard(); }}>
                   <CopyPlus class="size-4" />
                 </Button>
-                <Button variant="ghost" size="icon" class="size-8" title="Copy (⌘C)" onclick={copySelection}>
+                <Button variant="ghost" size="icon" class="size-8" title={t.copyShortcut} onclick={copySelection}>
                   <Copy class="size-4" />
                 </Button>
-                <Button variant="ghost" size="icon" class="size-8" title="Paste (⌘V)" disabled={!clipboard.nodes.length} onclick={pasteClipboard}>
+                <Button variant="ghost" size="icon" class="size-8" title={t.pasteShortcut} disabled={!clipboard.nodes.length} onclick={pasteClipboard}>
                   <ClipboardPaste class="size-4" />
                 </Button>
-                <Button variant="ghost" size="icon" class="size-8 text-muted-foreground hover:text-destructive" title="Delete selection" onclick={deleteSelection}>
+                <Button variant="ghost" size="icon" class="size-8 text-muted-foreground hover:text-destructive" title={t.deleteSelection} onclick={deleteSelection}>
                   <Trash2 class="size-4" />
                 </Button>
               </div>
@@ -3992,21 +3992,21 @@
           <div class="flex w-9 shrink-0 flex-col items-center gap-1 rounded-xl border border-border bg-card p-1">
             <button
               class="interactive group flex w-full items-center justify-center rounded-lg py-1.5 text-muted-foreground hover:bg-hover hover:text-foreground"
-              title="Show panel"
-              aria-label="Show panel"
+              title={t.showPanel}
+              aria-label={t.showPanel}
               onclick={togglePanel}
             >
               <PanelRightOpen class="size-4" />
             </button>
             <div class="my-0.5 h-px w-5 bg-border"></div>
-            {#each RAIL_TABS as t (t.id)}
+            {#each RAIL_TABS as tab (tab.id)}
               <button
                 class="interactive flex w-full items-center justify-center rounded-lg py-1.5 text-muted-foreground hover:bg-hover hover:text-foreground"
-                title={t.label}
-                aria-label={t.label}
-                onclick={() => selectTab(t.id)}
+                title={tab.label}
+                aria-label={tab.label}
+                onclick={() => selectTab(tab.id)}
               >
-                <t.icon class="size-4" />
+                <tab.icon class="size-4" />
               </button>
             {/each}
           </div>
@@ -4020,7 +4020,7 @@
           onpointercancel={endResize}
           role="separator"
           aria-orientation="vertical"
-          aria-label="Resize panel"
+          aria-label={t.resizePanel}
         >
           <div
             class="h-10 w-1 rounded-full transition-colors {resizing
@@ -4034,23 +4034,23 @@
           <!-- tab strip: icon + label. Labels truncate as the panel narrows; each tab body
                also carries its own header. -->
           <div class="flex shrink-0 items-center gap-0.5 rounded-xl border border-border bg-card p-1">
-            {#each RAIL_TABS as t (t.id)}
+            {#each RAIL_TABS as tab (tab.id)}
               <button
-                class={tabClass(t.id)}
-                aria-pressed={panelTab === t.id}
-                title={t.label}
-                aria-label={t.label}
-                onclick={() => selectTab(t.id)}
+                class={tabClass(tab.id)}
+                aria-pressed={panelTab === tab.id}
+                title={tab.label}
+                aria-label={tab.label}
+                onclick={() => selectTab(tab.id)}
               >
-                <t.icon class="size-4 shrink-0" />
-                <span class="truncate text-xs font-medium">{t.label}</span>
+                <tab.icon class="size-4 shrink-0" />
+                <span class="truncate text-xs font-medium">{tab.label}</span>
               </button>
             {/each}
             <div class="mx-0.5 h-5 w-px shrink-0 bg-border"></div>
             <button
               class="interactive flex shrink-0 items-center justify-center rounded-lg px-1.5 py-1.5 text-muted-foreground hover:bg-hover hover:text-foreground"
-              title="Hide panel"
-              aria-label="Hide panel"
+              title={t.hidePanel}
+              aria-label={t.hidePanel}
               onclick={togglePanel}
             >
               <PanelRightClose class="size-4" />
@@ -4068,7 +4068,7 @@
           <div class="space-y-3 rounded-xl border border-border bg-card p-3">
             <div class="flex items-center justify-between gap-2">
               <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Configuration</span>
-              <Button variant="ghost" size="icon" class="size-7" title="Delete workflow" onclick={() => openDelete(graph)}>
+              <Button variant="ghost" size="icon" class="size-7" title={t.deleteWorkflow} onclick={() => openDelete(graph)}>
                 <Trash2 class="size-3.5" />
               </Button>
             </div>
@@ -4086,7 +4086,7 @@
                 rows={2}
                 class="min-h-14 resize-y text-sm"
                 disabled={editLocked}
-                placeholder="What does this workflow do?"
+                placeholder={t.describePlaceholder}
                 value={graph.description ?? ""}
                 onchange={(e) => saveDescription(e.currentTarget.value)}
               />
@@ -4100,7 +4100,7 @@
                   class="h-8"
                   list="wf-groups"
                   disabled={editLocked}
-                  placeholder="Ungrouped"
+                  placeholder={t.ungrouped}
                   value={graph.group ?? ""}
                   onchange={(e) => saveGroup(e.currentTarget.value)}
                 />
@@ -4177,16 +4177,16 @@
                         </div>
                       {/if}
                       <div class="space-y-1">
-                        <span class="text-[11px] text-muted-foreground">Times</span>
-                        {#each s.times as t, i (i)}
+                        <span class="text-[11px] text-muted-foreground">{t.times}</span>
+                        {#each s.times as tm, i (i)}
                           <div class="flex items-center gap-1">
-                            <Input type="time" disabled={editLocked} value={t} class="h-8" onchange={(e) => setScheduleTime(graph, i, e.currentTarget.value)} />
+                            <Input type="time" disabled={editLocked} value={tm} class="h-8" onchange={(e) => setScheduleTime(graph, i, e.currentTarget.value)} />
                             {#if s.times.length > 1}
-                              <button type="button" disabled={editLocked} class="interactive px-1 text-xs text-muted-foreground hover:text-destructive" onclick={() => removeScheduleTime(graph, i)} aria-label="Remove time">✕</button>
+                              <button type="button" disabled={editLocked} class="interactive px-1 text-xs text-muted-foreground hover:text-destructive" onclick={() => removeScheduleTime(graph, i)} aria-label={editorMsgs.removeTime}>✕</button>
                             {/if}
                           </div>
                         {/each}
-                        <button type="button" disabled={editLocked} class="interactive text-[11px] text-muted-foreground hover:text-foreground" onclick={() => addScheduleTime(graph)}>+ Add time</button>
+                        <button type="button" disabled={editLocked} class="interactive text-[11px] text-muted-foreground hover:text-foreground" onclick={() => addScheduleTime(graph)}>{t.addTime}</button>
                       </div>
                     {/if}
 
@@ -4268,7 +4268,7 @@
                   <span class="truncate">{nk?.label ?? selectedNode.kind}</span>
                   <span class="shrink-0 text-muted-foreground">#{selectedNode.id}</span>
                 </span>
-                <Button variant="ghost" size="icon" class="size-7 shrink-0" title="Delete node" disabled={editLocked} onclick={() => removeNode(selectedNode)}>
+                <Button variant="ghost" size="icon" class="size-7 shrink-0" title={t.deleteNode} disabled={editLocked} onclick={() => removeNode(selectedNode)}>
                   <Trash2 class="size-3.5" />
                 </Button>
               </div>
@@ -4278,7 +4278,7 @@
                 <div class="space-y-1.5">
                   <div class="flex items-center justify-between">
                     <Label class="text-xs text-muted-foreground">Columns</Label>
-                    <Button variant="ghost" size="icon" class="size-6" title="Add column" disabled={editLocked} onclick={() => addSchemaColumn(selectedNode)}>
+                    <Button variant="ghost" size="icon" class="size-6" title={t.addColumn} disabled={editLocked} onclick={() => addSchemaColumn(selectedNode)}>
                       <Plus class="size-3.5" />
                     </Button>
                   </div>
@@ -4299,7 +4299,7 @@
                       >
                         {#each CELL_TYPE_OPTS as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
                       </select>
-                      <Button variant="ghost" size="icon" class="size-6 shrink-0 text-muted-foreground hover:text-destructive" title="Remove column" disabled={editLocked} onclick={() => removeSchemaColumn(selectedNode, i)}>
+                      <Button variant="ghost" size="icon" class="size-6 shrink-0 text-muted-foreground hover:text-destructive" title={t.removeColumn} disabled={editLocked} onclick={() => removeSchemaColumn(selectedNode, i)}>
                         <Trash2 class="size-3" />
                       </Button>
                     </div>
@@ -4329,7 +4329,7 @@
                             <button
                               class="interactive inline-flex items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-destructive disabled:pointer-events-none disabled:opacity-50"
                               disabled={editLocked}
-                              title="Remove the link and edit this value manually"
+                              title={t.unlinkValue}
                               onclick={() => unlinkPort(selectedNode.id, key)}
                             >
                               <Unplug class="size-2.5" /> Unlink
@@ -4765,7 +4765,7 @@
                           rows={4}
                           class="min-h-20 resize-y"
                           disabled={editLocked}
-                          placeholder="Ask a yes/no question about the inputs…"
+                          placeholder={t.askPlaceholder}
                           value={String(selectedNode.config[key] ?? "")}
                           oninput={(e) => liveSaveConfig(selectedNode, key, e.currentTarget.value)}
                         />
@@ -4817,7 +4817,7 @@
                     <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">
                       <Label class="pt-2 text-xs text-muted-foreground">Category</Label>
                       <div>
-                        <Input class="h-8" list="wf-event-cats" disabled={editLocked} placeholder="General" bind:value={newEventCategory} />
+                        <Input class="h-8" list="wf-event-cats" disabled={editLocked} placeholder={t.generalCategory} bind:value={newEventCategory} />
                         <datalist id="wf-event-cats">{#each eventCategories as c (c.name)}<option value={c.name}></option>{/each}</datalist>
                       </div>
                     </div>
@@ -4830,10 +4830,10 @@
                             <Select.Root type="single" disabled={editLocked} value={f.type} onValueChange={(v) => setEventFieldType(i, (v ?? "text") as PortType)}>
                               <Select.Trigger class="h-8 w-24 shrink-0">{payloadTypeLabel(f.type)}</Select.Trigger>
                               <Select.Content>
-                                {#each PAYLOAD_TYPES as t (t.value)}<Select.Item value={t.value} label={t.label}>{t.label}</Select.Item>{/each}
+                                {#each PAYLOAD_TYPES as pt (pt.value)}<Select.Item value={pt.value} label={pt.label}>{pt.label}</Select.Item>{/each}
                               </Select.Content>
                             </Select.Root>
-                            <Button size="icon" variant="ghost" class="h-8 w-8 shrink-0" disabled={editLocked} onclick={() => removeEventField(i)} title="Remove field">×</Button>
+                            <Button size="icon" variant="ghost" class="h-8 w-8 shrink-0" disabled={editLocked} onclick={() => removeEventField(i)} title={t.removeField}>×</Button>
                           </div>
                         {/each}
                         <Button size="sm" variant="outline" class="h-8 w-full" disabled={editLocked} onclick={addEventField}>+ Payload field</Button>
@@ -4877,7 +4877,7 @@
                             const updated = swArms.filter((_, j) => j !== i);
                             saveNodeConfig(selectedNode, { ...selectedNode.config, arms: updated });
                           }}
-                          title="Remove arm"
+                          title={t.removeArm}
                         >×</Button>
                       </div>
                     {/each}
@@ -4938,7 +4938,7 @@
                             const updated = cwArms.filter((_, j) => j !== i);
                             saveNodeConfig(selectedNode, { ...selectedNode.config, arms: updated });
                           }}
-                          title="Remove arm"
+                          title={t.removeArm}
                         >×</Button>
                       </div>
                     {/each}
@@ -4963,7 +4963,7 @@
                 <div class="flex items-center justify-between gap-2 border-t border-border pt-2.5">
                   <Label
                     class="flex items-center gap-1.5 text-xs text-muted-foreground"
-                    title="On: cache this node's output for the run and reuse it. Off: recompute every time the node runs — required for loop bodies and live sources (e.g. Get current frame)."
+                    title={t.memoizeHelp}
                   >
                     Memoize output
                   </Label>
@@ -5008,13 +5008,13 @@
               <div class="flex items-center justify-between gap-2">
                 <span class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Recent runs</span>
                 <div class="flex items-center gap-0.5">
-                  <Button variant="ghost" size="icon" class="size-6" title="Refresh" onclick={() => loadRuns()}>
+                  <Button variant="ghost" size="icon" class="size-6" title={t.refresh} onclick={() => loadRuns()}>
                     <RefreshCw class="size-3.5 {runsLoading ? 'animate-spin' : ''}" />
                   </Button>
                   <a
                     href="/logs?module=workflow&entity_type=workflow_graph&entity_id={graph.id}"
                     class="rounded-md px-1.5 py-0.5 text-[10px] text-primary hover:underline"
-                  >All logs →</a>
+                  >{t.allLogs}</a>
                 </div>
               </div>
 
@@ -5078,7 +5078,7 @@
           onpointercancel={endConsoleResize}
           role="separator"
           aria-orientation="horizontal"
-          aria-label="Resize console"
+          aria-label={t.resizeConsole}
         >
           <div
             class="h-1 w-10 rounded-full transition-colors {resizingConsole
@@ -5137,7 +5137,7 @@
     <!-- editor view but the graph vanished (deleted elsewhere) -->
   {:else}
     <div class="flex h-full items-center justify-center">
-      <EmptyState title="Workflow not found" description="It may have been deleted.">
+      <EmptyState title={t.notFoundTitle} description={t.notFoundDescription}>
         <Button onclick={backToList}><ArrowLeft class="size-4" /> Back to workflows</Button>
       </EmptyState>
     </div>
@@ -5148,8 +5148,8 @@
 <Dialog.Root bind:open={runPromptOpen}>
   <Dialog.Content class="sm:max-w-md">
     <Dialog.Header>
-      <Dialog.Title>Run {runPromptGraph?.name ?? "workflow"}</Dialog.Title>
-      <Dialog.Description>Fill in the inputs for this run. They're pre-filled with the defaults.</Dialog.Description>
+      <Dialog.Title>{t.runNamed(runPromptGraph?.name ?? t.workflowFallback)}</Dialog.Title>
+      <Dialog.Description>{t.runPromptDescription}</Dialog.Description>
     </Dialog.Header>
     <div class="space-y-3 py-1">
       {#each runParams as v (v.name)}
@@ -5177,8 +5177,8 @@
       {/each}
     </div>
     <Dialog.Footer>
-      <Button variant="outline" onclick={() => (runPromptOpen = false)}>Cancel</Button>
-      <Button onclick={confirmRun} disabled={running}>Run</Button>
+      <Button variant="outline" onclick={() => (runPromptOpen = false)}>{t.cancel}</Button>
+      <Button onclick={confirmRun} disabled={running}>{t.run}</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
@@ -5196,15 +5196,15 @@
 <Dialog.Root bind:open={deleteOpen}>
   <Dialog.Content class="sm:max-w-md">
     <Dialog.Header>
-      <Dialog.Title>Delete workflow?</Dialog.Title>
+      <Dialog.Title>{t.deleteTitle}</Dialog.Title>
       <Dialog.Description>
         Remove <span class="font-medium text-foreground">{deleteTarget?.name}</span> and its nodes
         and wiring. This can't be undone.
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
-      <Button variant="outline" onclick={() => (deleteOpen = false)}>Cancel</Button>
-      <Button variant="destructive" onclick={confirmDelete}>Delete</Button>
+      <Button variant="outline" onclick={() => (deleteOpen = false)}>{t.cancel}</Button>
+      <Button variant="destructive" onclick={confirmDelete}>{t.delete}</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
@@ -5238,7 +5238,7 @@
 
 <!-- Drop chooser: after dragging a variable onto the canvas, pick Get or Set at the drop point. -->
 {#if varDrop}
-  <button class="fixed inset-0 z-[59]" aria-label="Cancel" onclick={() => (varDrop = null)}></button>
+  <button class="fixed inset-0 z-[59]" aria-label={t.cancel} onclick={() => (varDrop = null)}></button>
   <div
     class="fixed z-[60] flex flex-col overflow-hidden rounded-xl border border-border bg-popover/95 shadow-xl backdrop-blur-sm duration-150 animate-in fade-in zoom-in-95"
     style:left="{Math.min(varDrop.screen.x, (typeof window !== 'undefined' ? window.innerWidth : 9999) - 180)}px"
@@ -5266,10 +5266,10 @@
             href="/logs?module=workflow&entity_type=workflow_graph&entity_id={runsGraph.id}"
             class="ml-auto text-[11px] text-primary hover:underline"
             onclick={() => (runsOpen = false)}
-          >View all in Logs →</a>
+          >{t.viewAllInLogs}</a>
         {/if}
       </Dialog.Title>
-      <Dialog.Description>Manual, scheduled, and event-triggered runs, newest first.</Dialog.Description>
+      <Dialog.Description>{t.runsDescription}</Dialog.Description>
     </Dialog.Header>
     <div class="max-h-[60vh] space-y-1.5 overflow-y-auto">
       {#if runsList.length === 0}
