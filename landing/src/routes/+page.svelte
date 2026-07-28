@@ -4,7 +4,6 @@
   import Video from "@lucide/svelte/icons/video";
   import BellRing from "@lucide/svelte/icons/bell-ring";
   import Workflow from "@lucide/svelte/icons/workflow";
-  import Cpu from "@lucide/svelte/icons/cpu";
   import MapPinned from "@lucide/svelte/icons/map-pinned";
   import ShieldCheck from "@lucide/svelte/icons/shield-check";
   import ArrowRight from "@lucide/svelte/icons/arrow-right";
@@ -16,12 +15,31 @@
 
   import OlharMark from "$lib/components/olhar-mark.svelte";
   import SensorField from "$lib/components/sensor-field.svelte";
+  import { lang, setLang, initLang, dict, type Lang } from "$lib/i18n.svelte";
 
   const APP = "https://app.olharai.com";
+
+  // All copy, in the current language — re-derives (and re-renders the page) on toggle.
+  const t = $derived(dict[lang()]);
+
+  // Icons / numbers / asset paths are language-agnostic; the parallel text arrays live in the
+  // dictionary and are zipped by index in each section below.
+  const featureIcons = [Eye, ScanFace, Workflow, Video, BellRing, MapPinned];
+  const useCaseIcons = [BellRing, Video, MessageSquare, Eye, ScanFace, Workflow];
+  const privacyIcons = [Lock, ShieldCheck, Eye, KeyRound];
+  const stepNums = ["01", "02", "03"];
+  const shotFiles = [
+    "/shots/workflow-editor.png",
+    "/shots/live-grid.png",
+    "/shots/map-presence.png",
+    "/shots/tracking-overlay.png",
+  ];
+  const langs: Lang[] = ["en", "pt"];
 
   // Sticky nav: warm the border once the page scrolls a touch.
   let hdr = $state<HTMLElement>();
   onMount(() => {
+    initLang();
     const onScroll = () => hdr?.setAttribute("data-s", String(scrollY > 8));
     onScroll();
     addEventListener("scroll", onScroll, { passive: true });
@@ -39,50 +57,13 @@
     io.observe(node);
     return { destroy: () => io.disconnect() };
   }
-
-  // Capabilities, grounded in what actually ships — person/object/face detection, live tracking, the
-  // AI vision + chat, the 65-node visual workflow engine, event-triggered recording, notifications.
-  const features = [
-    { icon: Eye, title: "Sees what's there", body: "Person, object, and face detection on every camera — running locally on your edge, not a distant server. It knows a person from a passing car from a delivery van." },
-    { icon: ScanFace, title: "Knows who belongs", body: "Enroll the people who matter once. Olhar AI recognises family, staff, and regulars — and flags the faces it doesn't." },
-    { icon: Workflow, title: "Automates anything", body: "A visual builder with 65 blocks — detect, track, decide, record, notify, ask an AI. Wire them together: “if an unknown person is at the back gate after dark, record it and message me.” No code." },
-    { icon: Video, title: "Records what counts", body: "Event-triggered clips with pre-roll, so you catch the seconds before it happened — not endless footage of an empty driveway. Kept local or in the cloud, your choice." },
-    { icon: BellRing, title: "Tells you, your way", body: "A clear message to your phone or Telegram — with the annotated snapshot — only for the things you asked about. Or ask your cameras a question and the assistant answers." },
-    { icon: MapPinned, title: "Every space, one place", body: "Track who's where on a live floor plan. Map cameras to rooms and sites, and run a home, a shop, and an office from one calm dashboard." },
-  ];
-
-  // Real workflows from the product, shown as the templates a new user starts from.
-  const useCases = [
-    { icon: BellRing, tag: "Alerting", title: "Alert me when someone's at the gate", body: "A person is detected, a box is drawn around them, and a Telegram message lands with the snapshot. Quiet until it matters." },
-    { icon: Video, tag: "Recording", title: "Record only when it matters", body: "Motion or a detected person opens a clip — with the seconds before it started — and it closes on its own when the scene goes quiet." },
-    { icon: MessageSquare, tag: "AI assistant", title: "Ask your cameras anything", body: "Message the assistant on Telegram — “what's happening in the shop?” — and it looks at the live frame and tells you, in plain words." },
-    { icon: Eye, tag: "Tracking", title: "Track everything, live", body: "Follow people and objects across a camera in real time, boxes and labels drawn on the feed, positions plotted on your floor plan." },
-    { icon: ScanFace, tag: "Access", title: "Know who belongs", body: "Recognise the faces you enrolled, and raise a flag on the ones you didn't — at the front door, the stockroom, the school gate." },
-    { icon: Workflow, tag: "Custom", title: "Or build your own", body: "Every one above is a workflow you can open, change, and extend. 65 blocks, your logic, your cameras — start from a template or a blank canvas." },
-  ];
-
-  const steps = [
-    { n: "01", title: "Connect your cameras", body: "Install the Olhar AI edge on a small box on-site. It finds your cameras and brings them online — securely, over a private network. No cloud can see them but you." },
-    { n: "02", title: "Pick what it should do", body: "Start from a template — alert on a person, record on motion, recognise faces — or wire your own in the visual builder. Tell it which cameras and which people matter." },
-    { n: "03", title: "Let it watch", body: "The live view when you want it, a clear alert when you need it, a clip when something happens. Add automations as your needs grow — no code, ever." },
-  ];
-
-  // Screenshot slots. `src` is set once a capture is dropped into landing/static/shots/ — until then
-  // the slot renders a captioned placeholder (never a broken image). `file` is the exact path to save
-  // the capture to; the capture list also lives in docs/plans/olharai-landing.md.
-  const shots = [
-    { file: "/shots/workflow-editor.png", src: "", title: "The visual builder", body: "Wire detection, logic, recording and notifications into a workflow — 65 blocks, no code. This is where every template above is made." },
-    { file: "/shots/live-grid.png",       src: "", title: "Live, all at once", body: "Every camera in one grid, streamed privately from your edge — with a real LIVE badge that only lights when video is actually flowing." },
-    { file: "/shots/map-presence.png",    src: "", title: "Who's where, on a floor plan", body: "A top-down blueprint of your space with people and detections plotted live as they move between rooms." },
-    { file: "/shots/tracking-overlay.png",src: "", title: "Detection & tracking, drawn on the feed", body: "Boxes and labels on the people and objects it sees, tracked frame to frame — the raw material your automations act on." },
-  ];
 </script>
 
 <svelte:head>
-  <title>Olhar AI — cameras that understand and act</title>
-  <meta name="description" content="Olhar AI turns your cameras into a vision platform — person, object and face detection, live tracking, event-triggered recording, a visual automation engine, and an AI you can ask. Private, on your own edge. For home and business." />
-  <meta property="og:title" content="Olhar AI — cameras that understand and act" />
-  <meta property="og:description" content="Detection, tracking, recording, and a 65-block visual automation engine — running on your own edge. Cameras that understand and act." />
+  <title>{t.meta.title}</title>
+  <meta name="description" content={t.meta.description} />
+  <meta property="og:title" content={t.meta.title} />
+  <meta property="og:description" content={t.meta.description} />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://olharai.com" />
 </svelte:head>
@@ -99,14 +80,29 @@
       <span>Olhar AI</span>
     </a>
     <nav class="ml-3 hidden gap-7 text-sm font-medium text-muted-foreground md:flex">
-      <a class="transition-colors hover:text-foreground" href="#features">Features</a>
-      <a class="transition-colors hover:text-foreground" href="#use-cases">Use cases</a>
-      <a class="transition-colors hover:text-foreground" href="#how">How it works</a>
-      <a class="transition-colors hover:text-foreground" href="#privacy">Privacy</a>
+      <a class="transition-colors hover:text-foreground" href="#features">{t.nav.features}</a>
+      <a class="transition-colors hover:text-foreground" href="#use-cases">{t.nav.useCases}</a>
+      <a class="transition-colors hover:text-foreground" href="#how">{t.nav.how}</a>
+      <a class="transition-colors hover:text-foreground" href="#privacy">{t.nav.privacy}</a>
     </nav>
     <div class="ml-auto flex items-center gap-3">
-      <a class="hidden text-sm font-medium text-muted-foreground transition-colors hover:text-foreground sm:block" href={APP}>Sign in</a>
-      <a class="press inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-[0_8px_30px_-8px_oklch(1_0_0/0.35)] transition-transform hover:-translate-y-0.5" href={APP}>Get started</a>
+      <!-- language toggle -->
+      <div class="flex items-center rounded-lg border border-border p-0.5 text-[11px] font-bold">
+        {#each langs as l (l)}
+          <button
+            type="button"
+            onclick={() => setLang(l)}
+            aria-pressed={lang() === l}
+            class="rounded-md px-2 py-1 uppercase tracking-wide transition-colors"
+            class:bg-primary={lang() === l}
+            class:text-primary-foreground={lang() === l}
+            class:text-muted-foreground={lang() !== l}
+            class:hover:text-foreground={lang() !== l}
+          >{l}</button>
+        {/each}
+      </div>
+      <a class="hidden text-sm font-medium text-muted-foreground transition-colors hover:text-foreground sm:block" href={APP}>{t.header.signIn}</a>
+      <a class="press inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-[0_8px_30px_-8px_oklch(1_0_0/0.35)] transition-transform hover:-translate-y-0.5" href={APP}>{t.header.getStarted}</a>
     </div>
   </div>
 </header>
@@ -123,30 +119,28 @@
 
     <span use:reveal class="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3.5 py-1.5 text-xs font-semibold text-primary">
       <span class="status-live size-1.5 rounded-full bg-primary"></span>
-      Cameras that understand
+      {t.hero.badge}
     </span>
 
     <h1 use:reveal={60} class="mt-6 max-w-3xl text-5xl font-extrabold leading-[1.04] tracking-tight md:text-7xl">
-      Cameras that understand,<br /><span class="text-grad">and act.</span>
+      {t.hero.title1}<br /><span class="text-grad">{t.hero.titleAccent}</span>
     </h1>
 
     <p use:reveal={120} class="mt-6 max-w-xl text-lg text-muted-foreground">
-      Olhar AI gives your cameras eyes and a brain. They detect people, objects, and faces,
-      track what moves, record what matters, and act on what they see — with a visual builder
-      you drive, and an AI you can just ask. Private, on your own edge. For home and business.
+      {t.hero.subtitle}
     </p>
 
     <div use:reveal={180} class="mt-9 flex flex-wrap items-center justify-center gap-3.5">
       <a class="press inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3.5 text-[15px] font-semibold text-primary-foreground shadow-[0_10px_36px_-10px_oklch(1_0_0/0.25)] transition-transform hover:-translate-y-0.5" href={APP}>
-        Start free <ArrowRight class="size-4" />
+        {t.hero.ctaStart} <ArrowRight class="size-4" />
       </a>
       <a class="press inline-flex items-center gap-2 rounded-xl border border-border bg-card/40 px-6 py-3.5 text-[15px] font-semibold backdrop-blur transition-colors hover:border-primary/40" href="#how">
-        See how it works
+        {t.hero.ctaHow}
       </a>
     </div>
 
     <p use:reveal={240} class="mt-5 flex items-center gap-2 text-[13px] text-muted-foreground/80">
-      <Check class="size-4 text-primary" /> Private by design · runs on your own edge · no card to start
+      <Check class="size-4 text-primary" /> {t.hero.trust}
     </p>
 
     <!-- ===== product preview: a live feed mock ===== -->
@@ -156,9 +150,9 @@
           <span class="size-2.5 rounded-full bg-muted-foreground/30"></span>
           <span class="size-2.5 rounded-full bg-muted-foreground/30"></span>
           <span class="size-2.5 rounded-full bg-muted-foreground/30"></span>
-          <span class="ml-2 font-mono text-xs text-muted-foreground">front_entrance · live</span>
+          <span class="ml-2 font-mono text-xs text-muted-foreground">{t.hero.previewCam}</span>
           <span class="ml-auto flex items-center gap-1.5 text-[11px] font-semibold text-primary">
-            <span class="status-live size-1.5 rounded-full bg-primary"></span> LIVE
+            <span class="status-live size-1.5 rounded-full bg-primary"></span> {t.hero.live}
           </span>
         </div>
         <div class="feed relative aspect-[16/9] overflow-hidden rounded-xl border border-border">
@@ -170,7 +164,7 @@
           <span class="absolute bottom-3 right-3 size-4 border-b-2 border-r-2 border-primary/50"></span>
           <!-- detection -->
           <div class="absolute left-[26%] top-[22%] h-[58%] w-[30%] rounded-lg border-[1.5px] border-primary shadow-[0_0_28px_-4px_oklch(1_0_0/0.35)]">
-            <span class="absolute -top-3 left-0 -translate-y-full rounded-md bg-primary px-2 py-1 text-[11px] font-bold text-primary-foreground whitespace-nowrap">Recognised · Maya</span>
+            <span class="absolute -top-3 left-0 -translate-y-full rounded-md bg-primary px-2 py-1 text-[11px] font-bold text-primary-foreground whitespace-nowrap">{t.hero.recognised}</span>
             <span class="absolute -bottom-3 right-0 translate-y-full font-mono text-[10.5px] text-primary tabular-nums">99.2%</span>
             <span class="ping-ring absolute left-1/2 top-1/2 size-10 -translate-x-1/2 -translate-y-1/2 rounded-full border border-primary/50"></span>
           </div>
@@ -180,9 +174,13 @@
 
     <!-- spaces strip -->
     <div use:reveal={120} class="mt-14">
-      <p class="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">One calm assistant for every space</p>
-      <div class="mt-4 flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-sm font-medium text-muted-foreground/80">
-        <span>🏠 Homes</span><span>🏢 Offices</span><span>🏪 Retail</span><span>🏫 Schools</span><span>🏭 Sites</span>
+      <p class="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">{t.hero.spacesLabel}</p>
+      <div class="mt-4 flex flex-wrap items-center justify-center gap-x-7 gap-y-3 text-sm font-medium text-muted-foreground/80">
+        {#each t.hero.spaces as space (space)}
+          <span class="inline-flex items-center gap-2">
+            <span class="size-1 rounded-full bg-muted-foreground/40"></span>{space}
+          </span>
+        {/each}
       </div>
     </div>
   </section>
@@ -190,13 +188,13 @@
   <!-- ===== features ===== -->
   <section id="features" class="py-24">
     <div use:reveal class="mx-auto mb-14 max-w-2xl text-center">
-      <span class="text-sm font-bold tracking-wide text-primary">A platform, not just a camera app</span>
-      <h2 class="mt-3 text-3xl font-extrabold tracking-tight md:text-[2.6rem]">Cameras that do the watching — and the thinking</h2>
-      <p class="mt-4 text-lg text-muted-foreground">From a live grid to detection, tracking, recording, and automation — it's one system, and it's yours.</p>
+      <span class="text-xs font-semibold uppercase tracking-[0.14em] text-primary">{t.features.eyebrow}</span>
+      <h2 class="mt-3 text-3xl font-extrabold tracking-tight md:text-[2.6rem]">{t.features.title}</h2>
+      <p class="mt-4 text-lg text-muted-foreground">{t.features.subtitle}</p>
     </div>
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {#each features as f, i (f.title)}
-        {@const Icon = f.icon}
+      {#each t.features.items as f, i (i)}
+        {@const Icon = featureIcons[i]}
         <div use:reveal={(i % 3) * 80} class="interactive rounded-2xl border border-border bg-card/40 p-6 backdrop-blur-sm">
           <div class="mb-4 grid size-11 place-items-center rounded-xl bg-primary/10 text-primary ring-1 ring-inset ring-primary/20">
             <Icon class="size-5" />
@@ -211,13 +209,13 @@
   <!-- ===== use cases (real workflows → templates) ===== -->
   <section id="use-cases" class="py-24">
     <div use:reveal class="mx-auto mb-14 max-w-2xl text-center">
-      <span class="text-sm font-bold tracking-wide text-primary">Start from a template</span>
-      <h2 class="mt-3 text-3xl font-extrabold tracking-tight md:text-[2.6rem]">What people build with it</h2>
-      <p class="mt-4 text-lg text-muted-foreground">Every one is a ready-made workflow you can open and change — or the starting point for your own.</p>
+      <span class="text-xs font-semibold uppercase tracking-[0.14em] text-primary">{t.useCases.eyebrow}</span>
+      <h2 class="mt-3 text-3xl font-extrabold tracking-tight md:text-[2.6rem]">{t.useCases.title}</h2>
+      <p class="mt-4 text-lg text-muted-foreground">{t.useCases.subtitle}</p>
     </div>
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {#each useCases as u, i (u.title)}
-        {@const Icon = u.icon}
+      {#each t.useCases.items as u, i (i)}
+        {@const Icon = useCaseIcons[i]}
         <div use:reveal={(i % 3) * 80} class="interactive group relative overflow-hidden rounded-2xl border border-border bg-card/40 p-6 backdrop-blur-sm">
           <div class="mb-4 flex items-center gap-3">
             <div class="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary ring-1 ring-inset ring-primary/20">
@@ -238,26 +236,23 @@
        shows a real screenshot once its file exists; keep the aspect ratio so the layout doesn't jump. -->
   <section id="see-it" class="py-24">
     <div use:reveal class="mx-auto mb-14 max-w-2xl text-center">
-      <span class="text-sm font-bold tracking-wide text-primary">See it working</span>
-      <h2 class="mt-3 text-3xl font-extrabold tracking-tight md:text-[2.6rem]">One calm surface for everything your cameras see</h2>
+      <span class="text-xs font-semibold uppercase tracking-[0.14em] text-primary">{t.shots.eyebrow}</span>
+      <h2 class="mt-3 text-3xl font-extrabold tracking-tight md:text-[2.6rem]">{t.shots.title}</h2>
     </div>
     <div class="grid gap-4 md:grid-cols-2">
-      {#each shots as sh, i (sh.title)}
+      {#each t.shots.items as sh, i (i)}
+        {@const file = shotFiles[i]}
         <figure use:reveal={(i % 2) * 90} class="overflow-hidden rounded-2xl border border-border bg-card/40 backdrop-blur-sm">
           <div class="relative aspect-[16/10] overflow-hidden border-b border-border bg-gradient-to-br from-card to-background">
-            {#if sh.src}
-              <img src={sh.src} alt={sh.title} class="size-full object-cover" loading="lazy" />
-            {:else}
-              <!-- placeholder until the capture lands -->
-              <div class="absolute inset-0 grid place-items-center text-center">
-                <div class="space-y-2 px-6">
-                  <OlharMark label="" size={40} class="mx-auto text-primary/40" />
-                  <p class="font-mono text-xs text-muted-foreground/60">{sh.file}</p>
-                </div>
+            <!-- placeholder until the capture lands -->
+            <div class="absolute inset-0 grid place-items-center text-center">
+              <div class="space-y-2 px-6">
+                <OlharMark label="" size={40} class="mx-auto text-primary/40" />
+                <p class="font-mono text-xs text-muted-foreground/60">{file}</p>
               </div>
-              <span class="absolute left-3 top-3 size-4 border-l-2 border-t-2 border-primary/30"></span>
-              <span class="absolute bottom-3 right-3 size-4 border-b-2 border-r-2 border-primary/30"></span>
-            {/if}
+            </div>
+            <span class="absolute left-3 top-3 size-4 border-l-2 border-t-2 border-primary/30"></span>
+            <span class="absolute bottom-3 right-3 size-4 border-b-2 border-r-2 border-primary/30"></span>
           </div>
           <figcaption class="p-5">
             <h3 class="text-[15px] font-bold tracking-tight">{sh.title}</h3>
@@ -271,14 +266,14 @@
   <!-- ===== how it works ===== -->
   <section id="how" class="py-24">
     <div use:reveal class="mx-auto mb-14 max-w-2xl text-center">
-      <span class="text-sm font-bold tracking-wide text-primary">Up and running in minutes</span>
-      <h2 class="mt-3 text-3xl font-extrabold tracking-tight md:text-[2.6rem]">Three steps to cameras that act</h2>
+      <span class="text-xs font-semibold uppercase tracking-[0.14em] text-primary">{t.how.eyebrow}</span>
+      <h2 class="mt-3 text-3xl font-extrabold tracking-tight md:text-[2.6rem]">{t.how.title}</h2>
     </div>
     <div class="grid gap-4 md:grid-cols-3">
-      {#each steps as s, i (s.n)}
+      {#each t.how.steps as s, i (i)}
         <div use:reveal={i * 90} class="relative rounded-2xl border border-border bg-card/40 p-7 backdrop-blur-sm">
           <div class="flex items-center gap-3">
-            <span class="font-mono text-sm font-semibold text-primary tabular-nums">{s.n}</span>
+            <span class="font-mono text-sm font-semibold text-primary tabular-nums">{stepNums[i]}</span>
             <span class="h-px flex-1 bg-gradient-to-r from-primary/50 to-transparent"></span>
           </div>
           <h3 class="mt-4 text-[17px] font-bold tracking-tight">{s.title}</h3>
@@ -295,17 +290,16 @@
       <div class="mb-5 grid place-items-center">
         <OlharMark label="" size={48} class="text-primary drop-shadow-[0_0_18px_oklch(1_0_0/0.35)]" />
       </div>
-      <span class="text-sm font-bold tracking-wide text-primary">Private by design</span>
-      <h2 class="mx-auto mt-3 max-w-xl text-3xl font-extrabold tracking-tight md:text-[2.4rem]">Your footage is yours. Full stop.</h2>
+      <span class="text-xs font-semibold uppercase tracking-[0.14em] text-primary">{t.privacy.eyebrow}</span>
+      <h2 class="mx-auto mt-3 max-w-xl text-3xl font-extrabold tracking-tight md:text-[2.4rem]">{t.privacy.title}</h2>
       <p class="mx-auto mt-4 max-w-lg text-[17px] text-muted-foreground">
-        Cameras and recordings stay on your own edge. Live video travels over an encrypted
-        private link — never a public stream. Even we can't watch your feeds.
+        {t.privacy.body}
       </p>
       <div class="mt-7 flex flex-wrap justify-center gap-3">
-        {#each [{ i: Lock, t: "On-prem video" }, { i: ShieldCheck, t: "Encrypted private link" }, { i: Eye, t: "Tenant-private feeds" }, { i: KeyRound, t: "Role-based access" }] as p (p.t)}
-          {@const Icon = p.i}
+        {#each t.privacy.chips as chip, i (i)}
+          {@const Icon = privacyIcons[i]}
           <span class="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3.5 py-2 text-[13px] font-semibold text-primary">
-            <Icon class="size-3.5" /> {p.t}
+            <Icon class="size-3.5" /> {chip}
           </span>
         {/each}
       </div>
@@ -319,13 +313,13 @@
         <span class="ping-ring absolute size-20 rounded-full border border-primary/30"></span>
         <OlharMark label="" size={52} class="relative text-primary" />
       </div>
-      <h2 class="mx-auto max-w-xl text-4xl font-extrabold tracking-tight md:text-5xl">Bring calm to your cameras today</h2>
-      <p class="mx-auto mt-4 max-w-md text-lg text-muted-foreground">Create your workspace in a minute. Add a camera, meet your new assistant.</p>
+      <h2 class="mx-auto max-w-xl text-4xl font-extrabold tracking-tight md:text-5xl">{t.cta.title}</h2>
+      <p class="mx-auto mt-4 max-w-md text-lg text-muted-foreground">{t.cta.subtitle}</p>
       <div class="mt-8 flex flex-wrap items-center justify-center gap-3.5">
         <a class="press inline-flex items-center gap-2 rounded-xl bg-primary px-7 py-4 text-base font-semibold text-primary-foreground shadow-[0_10px_36px_-10px_oklch(1_0_0/0.25)] transition-transform hover:-translate-y-0.5" href={APP}>
-          Get started free <ArrowRight class="size-4" />
+          {t.cta.start} <ArrowRight class="size-4" />
         </a>
-        <a class="press inline-flex items-center rounded-xl border border-border bg-card/40 px-7 py-4 text-base font-semibold backdrop-blur transition-colors hover:border-primary/40" href={APP}>Sign in</a>
+        <a class="press inline-flex items-center rounded-xl border border-border bg-card/40 px-7 py-4 text-base font-semibold backdrop-blur transition-colors hover:border-primary/40" href={APP}>{t.cta.signIn}</a>
       </div>
     </div>
   </section>
@@ -337,11 +331,11 @@
     <a href="/" class="flex items-center gap-2 font-semibold">
       <OlharMark label="" size={22} animated={false} class="text-primary" /> Olhar AI
     </a>
-    <span class="text-[13px] text-muted-foreground/70">© 2026 Olhar AI · Calm, private security intelligence</span>
+    <span class="text-[13px] text-muted-foreground/70">{t.footer.copyright}</span>
     <div class="ml-auto flex gap-6 text-[13px] text-muted-foreground">
-      <a class="transition-colors hover:text-foreground" href={APP}>App</a>
-      <a class="transition-colors hover:text-foreground" href="#features">Features</a>
-      <a class="transition-colors hover:text-foreground" href="#privacy">Privacy</a>
+      <a class="transition-colors hover:text-foreground" href={APP}>{t.footer.app}</a>
+      <a class="transition-colors hover:text-foreground" href="#features">{t.footer.features}</a>
+      <a class="transition-colors hover:text-foreground" href="#privacy">{t.footer.privacy}</a>
     </div>
   </div>
 </footer>
