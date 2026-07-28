@@ -24,48 +24,51 @@
     onUse: (t: TemplateSummary) => void;
     onBack: () => void;
   } = $props();
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].workflowEditor);
 </script>
 
 {#if loading}
   <div class="min-h-0 flex-1 overflow-y-auto rounded-xl border border-border">
-    <div class="p-12 text-center text-sm text-muted-foreground">Loading templates…</div>
+    <div class="p-12 text-center text-sm text-muted-foreground">{t.loadingTemplates}</div>
   </div>
 {:else if templates.length === 0}
   <div class="min-h-0 flex-1 overflow-y-auto rounded-xl border border-border">
     <div class="p-6">
       <EmptyState
-        title="No templates yet"
+        title={t.noTemplatesTitle}
         description="Save a workflow as a template (the bookmark on its row) and it'll appear here to reuse."
       >
-        <Button variant="outline" onclick={onBack}>Back to my workflows</Button>
+        <Button variant="outline" onclick={onBack}>{t.backToMine}</Button>
       </EmptyState>
     </div>
   </div>
 {:else}
   <div class="min-h-0 flex-1 overflow-y-auto rounded-xl border border-border">
     <div class="divide-y divide-border/60">
-      {#each templates as t (t.id)}
+      {#each templates as tpl (tpl.id)}
         <div class="group flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-primary/5">
           <div class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
             <LayoutTemplate class="size-4" />
           </div>
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2">
-              <span class="truncate text-sm font-medium">{t.name}</span>
-              {#if t.global}
+              <span class="truncate text-sm font-medium">{tpl.name}</span>
+              {#if tpl.global}
                 <Badge variant="outline" class="shrink-0 border-primary/25 bg-primary/10 text-primary">
                   <Globe class="mr-1 size-3" /> Global
                 </Badge>
               {/if}
             </div>
-            {#if t.description}<p class="truncate text-xs text-muted-foreground">{t.description}</p>{/if}
-            {#if t.inputs.length}
-              <p class="mt-0.5 truncate text-[11px] text-muted-foreground/70">Asks for {t.inputs.map((v) => v.name).join(", ")}</p>
+            {#if tpl.description}<p class="truncate text-xs text-muted-foreground">{tpl.description}</p>{/if}
+            {#if tpl.inputs.length}
+              <p class="mt-0.5 truncate text-[11px] text-muted-foreground/70">Asks for {tpl.inputs.map((v) => v.name).join(", ")}</p>
             {/if}
           </div>
-          <Button size="sm" class="press shrink-0" disabled={usingId === t.id} onclick={() => onUse(t)}>
-            {usingId === t.id ? "Creating…" : "Use template"}
-            {#if usingId !== t.id}<ArrowRight class="size-3.5" />{/if}
+          <Button size="sm" class="press shrink-0" disabled={usingId === tpl.id} onclick={() => onUse(tpl)}>
+            {usingId === tpl.id ? t.creating : t.useTemplate}
+            {#if usingId !== tpl.id}<ArrowRight class="size-3.5" />{/if}
           </Button>
         </div>
       {/each}

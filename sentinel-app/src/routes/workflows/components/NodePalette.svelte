@@ -86,13 +86,16 @@
   function portDots(outputs: CatPort[]) {
     return outputs.slice(0, 4).filter((p) => p.type !== "exec");
   }
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].workflowEditor);
 </script>
 
 {#if open}
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
     <button
       class="absolute inset-0 bg-overlay backdrop-blur-sm duration-200 animate-in fade-in"
-      aria-label="Close"
+      aria-label={t.close}
       onclick={close}
     ></button>
     <div
@@ -101,7 +104,7 @@
       <div class="mb-3 flex items-center justify-between">
         <h3 class="flex items-center gap-2 text-sm font-semibold">
           <span class="size-1.5 rounded-full bg-primary"></span>
-          Add a node
+          {t.addNode}
         </h3>
         <Button variant="ghost" size="icon" class="size-7" onclick={close}>
           <X class="size-4" />
@@ -111,7 +114,7 @@
       <div class="relative mb-3">
         <Search class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <!-- svelte-ignore a11y_autofocus -->
-        <Input autofocus bind:value={search} placeholder="Search nodes…" class="h-9 pl-8" />
+        <Input autofocus bind:value={search} placeholder={t.searchNodes} class="h-9 pl-8" />
       </div>
 
       <div class="-mr-2 flex-1 space-y-4 overflow-y-auto pr-2">
@@ -150,7 +153,7 @@
         {:else}
           <div class="flex flex-col items-center gap-2 py-10 text-center">
             <Search class="size-6 text-muted-foreground/50" />
-            <p class="text-sm text-muted-foreground">No nodes match "{search}"</p>
+            <p class="text-sm text-muted-foreground">{t.noNodesMatch(search)}</p>
           </div>
         {/each}
       </div>

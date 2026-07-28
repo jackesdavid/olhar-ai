@@ -79,13 +79,16 @@
   const panelTop = $derived(
     typeof window !== "undefined" ? Math.min(pos.y, window.innerHeight - 380) : pos.y,
   );
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].workflowEditor);
 </script>
 
 {#if open}
   <!-- Backdrop to close when clicking outside -->
   <button
     class="fixed inset-0 z-[59]"
-    aria-label="Close"
+    aria-label={t.close}
     onclick={close}
   ></button>
 
@@ -102,9 +105,9 @@
           class="size-2 shrink-0 rounded-full"
           style:background-color={portColor[portType as PortType] ?? portColor.any}
         ></span>
-        <span class="flex-1 truncate text-xs font-medium text-muted-foreground">Connect to…</span>
+        <span class="flex-1 truncate text-xs font-medium text-muted-foreground">{t.connectTo}</span>
       {:else}
-        <span class="flex-1 truncate text-xs font-medium text-muted-foreground">Add node</span>
+        <span class="flex-1 truncate text-xs font-medium text-muted-foreground">{t.addNodeShort}</span>
       {/if}
       <button class="text-muted-foreground hover:text-foreground" onclick={close}>
         <X class="size-3.5" />
@@ -112,7 +115,7 @@
     </div>
 
     <div class="px-2 py-1.5">
-      <Input bind:ref={searchInputEl} bind:value={search} placeholder="Search…" class="h-7 text-xs" />
+      <Input bind:ref={searchInputEl} bind:value={search} placeholder={t.search} class="h-7 text-xs" />
     </div>
 
     <div class="flex-1 overflow-y-auto px-2 pb-2">
@@ -135,7 +138,7 @@
           </span>
         </button>
       {:else}
-        <p class="py-4 text-center text-xs text-muted-foreground">No matches</p>
+        <p class="py-4 text-center text-xs text-muted-foreground">{t.noMatches}</p>
       {/each}
     </div>
   </div>

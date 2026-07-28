@@ -71,32 +71,35 @@
     onchange([]);
   }
 
-  const shapeLabel = $derived(
-    points.length === 0
-      ? "nothing drawn yet"
-      : points.length === 1
-        ? "1 point — need at least 2"
-        : points.length === 2
-          ? "a line"
-          : `a zone (${points.length} points)`,
-  );
+  const shapeLabel = $derived(describeShape(points.length));
+
+  /** House style: no nested ternaries — name the shape the current points make. */
+  function describeShape(n: number): string {
+    if (n === 0) return t.shapeNone;
+    if (n === 1) return t.shapeOnePoint;
+    if (n === 2) return t.shapeLine;
+    return t.shapeZone(n);
+  }
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].workflowEditor);
 </script>
 
 <div class="space-y-2">
   {#if !cameraIp}
-    <p class="text-xs text-muted-foreground">Pick a camera above first.</p>
+    <p class="text-xs text-muted-foreground">{t.pickCameraFirst}</p>
   {:else if loading}
-    <p class="text-xs text-muted-foreground">Loading snapshot…</p>
+    <p class="text-xs text-muted-foreground">{t.loadingSnapshot}</p>
   {:else if error}
     <p class="text-xs text-destructive">{error}</p>
-    <Button variant="outline" size="sm" onclick={loadSnapshot}>Retry</Button>
+    <Button variant="outline" size="sm" onclick={loadSnapshot}>{t.retry}</Button>
   {:else if imgSrc}
     <div class="relative overflow-hidden rounded-md border border-border bg-video-well" style="aspect-ratio: 16/9">
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
       <img
         bind:this={imgEl}
         src={imgSrc}
-        alt="Camera snapshot — click to add a point"
+        alt={t.snapshotAlt}
         class="h-full w-full object-contain select-none {disabled ? '' : 'cursor-crosshair'}"
         draggable="false"
         onclick={addPoint}
@@ -127,11 +130,11 @@
       </svg>
     </div>
     <div class="flex items-center justify-between gap-2">
-      <p class="text-[10px] text-muted-foreground">Click to add a point. Currently: {shapeLabel}.</p>
+      <p class="text-[10px] text-muted-foreground">{t.clickToAdd(shapeLabel)}</p>
       <div class="flex gap-1">
-        <Button variant="outline" size="sm" disabled={disabled || points.length === 0} onclick={undoLast}>Undo</Button>
-        <Button variant="outline" size="sm" disabled={disabled || points.length === 0} onclick={clearAll}>Clear</Button>
-        <Button variant="outline" size="sm" onclick={loadSnapshot}>Refresh</Button>
+        <Button variant="outline" size="sm" disabled={disabled || points.length === 0} onclick={undoLast}>{t.undo}</Button>
+        <Button variant="outline" size="sm" disabled={disabled || points.length === 0} onclick={clearAll}>{t.clear}</Button>
+        <Button variant="outline" size="sm" onclick={loadSnapshot}>{t.refresh}</Button>
       </div>
     </div>
   {/if}

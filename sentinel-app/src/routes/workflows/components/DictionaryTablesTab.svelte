@@ -41,7 +41,7 @@
       cameras = devs.map((d) => ({ value: d.id || d.ip || d.name, label: d.name }));
       recipients = beacons.map((b) => ({ value: b.label, label: b.label }));
     } catch (err) {
-      toast.error("Couldn't load dictionary tables", { description: String(err) });
+      toast.error(t.tablesLoadFailed, { description: String(err) });
     } finally {
       loading = false;
     }
@@ -74,12 +74,12 @@
     try {
       if (editing.id) await data.updateDictionary(editing.id, body);
       else await data.createDictionary(body);
-      toast.success(`Saved “${body.name}”`);
+      toast.success(t.tableSaved(body.name));
       editing = null;
       await load();
       onChanged?.();
     } catch (err) {
-      toast.error("Couldn't save", { description: String(err) });
+      toast.error(t.tableSaveFailed, { description: String(err) });
     } finally {
       saving = false;
     }
@@ -88,11 +88,20 @@
     try {
       await data.deleteDictionary(d.id);
       dicts = dicts.filter((x) => x.id !== d.id);
-      toast.success(`Deleted “${d.name}”`);
+      toast.success(t.tableDeleted(d.name));
       onChanged?.();
     } catch (err) {
-      toast.error("Couldn't delete", { description: String(err) });
+      toast.error(t.tableDeleteFailed, { description: String(err) });
     }
+  }
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].workflowEditor);
+
+  /** House style: resolve the save button copy in a helper, not a nested ternary in markup. */
+  function saveLabel(): string {
+    if (saving) return t.saving;
+    return editing?.id ? t.saveTable : t.createTable;
   }
 </script>
 
@@ -100,15 +109,15 @@
   <div class="min-h-0 flex-1 space-y-4 overflow-y-auto">
     <div class="flex items-center justify-between gap-3">
       <Button variant="outline" size="sm" onclick={cancelEdit}>
-        <ArrowLeft class="size-4" /> Tables
+        <ArrowLeft class="size-4" /> {t.tables}
       </Button>
       <Button class="press" size="sm" disabled={saveDisabled()} onclick={save}>
-        {saving ? "Saving…" : editing.id ? "Save table" : "Create table"}
+        {saveLabel()}
       </Button>
     </div>
     <div class="max-w-sm space-y-1.5">
-      <label for="dict-tab-name" class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Name</label>
-      <Input id="dict-tab-name" placeholder="e.g. Store hours" bind:value={editing.name} />
+      <label for="dict-tab-name" class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t.name}</label>
+      <Input id="dict-tab-name" placeholder={t.namePlaceholder} bind:value={editing.name} />
     </div>
     <TableEditor columns={editing.columns} rows={editing.rows} {cameras} {recipients} onchange={onTableChange} />
   </div>
@@ -116,18 +125,18 @@
   <div class="min-h-0 flex-1 space-y-2 overflow-y-auto">
     <div class="flex justify-end">
       <Button class="press" size="sm" onclick={startNew}>
-        <Plus class="size-4" /> New table
+        <Plus class="size-4" /> {t.newTable}
       </Button>
     </div>
     {#if loading}
-      <div class="rounded-xl border border-border p-12 text-center"><Loader label="Loading dictionary tables…" /></div>
+      <div class="rounded-xl border border-border p-12 text-center"><Loader label={t.loadingTables} /></div>
     {:else if dicts.length === 0}
       <div class="rounded-xl border border-border p-6">
         <EmptyState
-          title="No dictionary tables yet"
-          description="Create a typed table of values you can reference from workflow variables and mutate through graphs."
+          title={t.noTablesTitle}
+          description={t.noTablesDescription}
         >
-          <Button class="press" onclick={startNew}><Plus class="size-4" /> New dictionary table</Button>
+          <Button class="press" onclick={startNew}><Plus class="size-4" /> {t.newDictionaryTable}</Button>
         </EmptyState>
       </div>
     {:else}
@@ -141,15 +150,15 @@
               <button class="min-w-0 flex-1 text-left" onclick={() => startEdit(d)}>
                 <span class="block truncate text-sm font-medium">{d.name}</span>
                 <span class="mt-0.5 flex items-center gap-3 text-xs text-muted-foreground">
-                  <span class="inline-flex items-center gap-1"><Columns3 class="size-3.5" /> {d.columns.length} cols</span>
-                  <span class="inline-flex items-center gap-1"><Rows3 class="size-3.5" /> {d.rows.length} rows</span>
+                  <span class="inline-flex items-center gap-1"><Columns3 class="size-3.5" /> {t.colsCount(d.columns.length)}</span>
+                  <span class="inline-flex items-center gap-1"><Rows3 class="size-3.5" /> {t.rowsCount(d.rows.length)}</span>
                 </span>
               </button>
               <Button
                 variant="ghost"
                 size="icon"
                 class="size-8 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100 [@media(hover:none)]:opacity-100"
-                title="Delete dictionary table"
+                title={t.deleteTable}
                 onclick={(e) => { e.stopPropagation(); remove(d); }}
               >
                 <Trash2 class="size-4" />

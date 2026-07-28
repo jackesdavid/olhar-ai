@@ -51,12 +51,15 @@
   // Which types accept an author-typed default (matches the engine seeding). `table` is handled
   // separately (a reference to a named dictionary, not an author-typed literal).
   const DEFAULTABLE = new Set(["text", "num", "bool", "camera", "recipient"]);
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].workflowEditor);
 </script>
 
 <div class="flex flex-col gap-1.5 rounded-xl border border-border bg-card p-2.5">
   <div class="flex items-center justify-between gap-2">
-    <span class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Variables</span>
-    <Button variant="ghost" size="icon" class="size-6" title="Add variable" disabled={disabled} onclick={onAdd}>
+    <span class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t.variables}</span>
+    <Button variant="ghost" size="icon" class="size-6" title={t.addVariable} disabled={disabled} onclick={onAdd}>
       <Plus class="size-3.5" />
     </Button>
   </div>
@@ -84,7 +87,7 @@
             class="shrink-0 cursor-grab"
             class:cursor-not-allowed={disabled}
             draggable={!disabled}
-            title="Drag onto the canvas → Get / Set"
+            title={t.dragToCanvas}
             style:color={typeColor(v.type)}
             ondragstart={(e) => e.dataTransfer?.setData("application/x-sentinel-variable", JSON.stringify({ name: v.name, type: v.type }))}
           >
@@ -102,20 +105,20 @@
             disabled={disabled}
             onchange={(e) => onEdit(i, { type: e.currentTarget.value })}
           >
-            {#each types as t (t.value)}<option value={t.value}>{t.label}</option>{/each}
+            {#each types as ty (ty.value)}<option value={ty.value}>{ty.label}</option>{/each}
           </select>
           <!-- promote to input: the UE "expose as input" flag -->
           <Button
             variant="ghost"
             size="icon"
             class="size-5 shrink-0 {v.param ? 'text-primary' : 'text-muted-foreground/50 hover:text-foreground'}"
-            title={v.param ? "This is an input — click to make it internal" : "Promote to an input (fill it in setup)"}
+            title={v.param ? t.isInput : t.promoteToInput}
             disabled={disabled}
             onclick={() => onEdit(i, { param: !v.param })}
           >
             <Star class="size-3" fill={v.param ? "currentColor" : "none"} />
           </Button>
-          <Button variant="ghost" size="icon" class="size-5 shrink-0 text-muted-foreground hover:text-destructive" title="Delete variable" disabled={disabled} onclick={() => onRemove(i)}>
+          <Button variant="ghost" size="icon" class="size-5 shrink-0 text-muted-foreground hover:text-destructive" title={t.deleteVariable} disabled={disabled} onclick={() => onRemove(i)}>
             <Trash2 class="size-3" />
           </Button>
         </div>
@@ -123,12 +126,12 @@
         <!-- row 2: default value on its own full-width line (blank = no default → the Get's type-zero) -->
         {#if v.type === "table" || DEFAULTABLE.has(v.type)}
           <div class="flex items-center gap-1.5 pl-5">
-            <span class="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">Default</span>
+            <span class="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">{t.default}</span>
             {#if v.type === "table"}
               <!-- a Dictionary variable references a named dictionary by id; edit/create it live -->
               <select
                 class="h-6 min-w-0 flex-1 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"
-                title="Referenced dictionary"
+                title={t.referencedDictionary}
                 value={v.default ?? ""}
                 disabled={disabled}
                 onchange={(e) => onEdit(i, { default: e.currentTarget.value || null })}
@@ -141,7 +144,7 @@
                   variant="ghost"
                   size="icon"
                   class="size-5 shrink-0 text-muted-foreground hover:text-foreground"
-                  title="Edit this dictionary"
+                  title={t.editDictionary}
                   disabled={disabled}
                   onclick={() => onEditDictionary?.(i, v.default as string)}
                 >
@@ -152,7 +155,7 @@
                   variant="ghost"
                   size="icon"
                   class="size-5 shrink-0 text-muted-foreground hover:text-foreground"
-                  title="Create a new dictionary"
+                  title={t.createDictionary}
                   disabled={disabled}
                   onclick={() => onNewDictionary?.(i)}
                 >
@@ -162,7 +165,7 @@
             {:else if v.type === "bool"}
               <select
                 class="h-6 min-w-0 flex-1 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"
-                title="Default value"
+                title={t.defaultValue}
                 value={v.default ?? ""}
                 disabled={disabled}
                 onchange={(e) => onEdit(i, { default: e.currentTarget.value || null })}
@@ -172,7 +175,7 @@
             {:else if v.type === "camera"}
               <select
                 class="h-6 min-w-0 flex-1 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"
-                title="Default camera"
+                title={t.defaultCamera}
                 value={v.default ?? (cameras[0]?.value ?? "")}
                 disabled={disabled}
                 onchange={(e) => onEdit(i, { default: e.currentTarget.value || null })}
@@ -183,7 +186,7 @@
             {:else if v.type === "recipient"}
               <select
                 class="h-6 min-w-0 flex-1 rounded border border-input bg-background px-1 text-[11px] disabled:opacity-50"
-                title="Default recipient"
+                title={t.defaultRecipient}
                 value={v.default ?? (recipients[0]?.value ?? "")}
                 disabled={disabled}
                 onchange={(e) => onEdit(i, { default: e.currentTarget.value || null })}

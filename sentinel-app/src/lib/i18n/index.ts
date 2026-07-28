@@ -34,6 +34,7 @@ import { playback } from "./messages/playback";
 import { workflowPages } from "./messages/workflowPages";
 import { admin } from "./messages/admin";
 import { workflowsList } from "./messages/workflowsList";
+import { workflowEditor } from "./messages/workflowEditor";
 
 export { lang, setLang, initLang, locale, type Lang } from "./runtime.svelte";
 
@@ -76,6 +77,7 @@ const modules = {
   workflowPages: domain(workflowPages),
   admin: domain(admin),
   workflowsList: domain(workflowsList),
+  workflowEditor: domain(workflowEditor),
 };
 
 /** One language's messages — every module, narrowed to that language. */
