@@ -115,7 +115,7 @@
       for (const e of edges) {
         const fa = (nodes[e.a].f + nodes[e.b].f) / 2;
         // resting wires stay very dim so they never muddy the text; a passing signal lights its edge.
-        const a = 0.01 + Math.pow(fa, 1.9) * 0.04 + e.lit * (0.24 + fa * 0.45);
+        const a = 0.008 + Math.pow(fa, 2.0) * 0.032 + e.lit * (0.2 + fa * 0.4);
         ctx.strokeStyle = `rgba(${INK},${a.toFixed(3)})`;
         ctx.lineWidth = 0.6 + e.lit * 0.9;
         ctx.beginPath();
@@ -130,22 +130,22 @@
         const from = nodes[sig.from], to = nodes[other(e, sig.from)];
         const x = from.x + (to.x - from.x) * sig.t;
         const y = from.y + (to.y - from.y) * sig.t;
-        const g = ctx.createRadialGradient(x, y, 0, x, y, 10);
-        g.addColorStop(0, `rgba(${INK},0.85)`);
+        const g = ctx.createRadialGradient(x, y, 0, x, y, 8);
+        g.addColorStop(0, `rgba(${INK},0.5)`);
         g.addColorStop(1, `rgba(${INK},0)`);
         ctx.fillStyle = g;
         ctx.beginPath();
-        ctx.arc(x, y, 10, 0, Math.PI * 2);
+        ctx.arc(x, y, 8, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = `rgba(${INK},1)`;
+        ctx.fillStyle = `rgba(${INK},0.78)`;
         ctx.beginPath();
-        ctx.arc(x, y, 1.7, 0, Math.PI * 2);
+        ctx.arc(x, y, 1.4, 0, Math.PI * 2);
         ctx.fill();
       }
       // nodes
       for (const n of nodes) {
-        const a = Math.min(1, 0.035 + Math.pow(n.f, 1.9) * 0.34 + n.act * 0.5);
-        const r = 0.6 + Math.pow(n.f, 1.5) * 1.5 + n.act * 1.9;
+        const a = Math.min(1, 0.028 + Math.pow(n.f, 2.0) * 0.3 + n.act * 0.38);
+        const r = 0.55 + Math.pow(n.f, 1.6) * 1.35 + n.act * 1.4;
         ctx.fillStyle = `rgba(${INK},${a.toFixed(3)})`;
         ctx.beginPath();
         ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
