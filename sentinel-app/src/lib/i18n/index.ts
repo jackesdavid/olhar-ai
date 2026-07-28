@@ -24,6 +24,9 @@ import { integrations } from "./messages/integrations";
 import { billing } from "./messages/billing";
 import { boxes } from "./messages/boxes";
 import { boxInstall } from "./messages/boxInstall";
+import { peopleDirectory } from "./messages/peopleDirectory";
+import { personDetail } from "./messages/personDetail";
+import { enroll } from "./messages/enroll";
 
 export { lang, setLang, initLang, locale, type Lang } from "./runtime.svelte";
 
@@ -56,6 +59,9 @@ const modules = {
   billing: domain(billing),
   boxes: domain(boxes),
   boxInstall: domain(boxInstall),
+  peopleDirectory: domain(peopleDirectory),
+  personDetail: domain(personDetail),
+  enroll: domain(enroll),
 };
 
 /** One language's messages — every module, narrowed to that language. */

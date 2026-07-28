@@ -19,7 +19,10 @@
   import Loader from "$lib/components/loader.svelte";
   import PointCloudAvatar from "$lib/components/point-cloud-avatar.svelte";
 
+  import { dict, lang } from "$lib/i18n";
   import type { Device, PersonEmbedding, RecognizeDetail } from "$lib/types";
+
+  const t = $derived(dict[lang()].peopleDirectory);
 
   let cameras = $state<Device[]>([]);
   let selectedIp = $state("");
@@ -31,7 +34,7 @@
   let fileEl = $state<HTMLInputElement | null>(null);
 
   function cameraName(ip: string): string {
-    return cameras.find((c) => c.ip === ip)?.name ?? "Select a camera";
+    return cameras.find((c) => c.ip === ip)?.name ?? t.selectCamera;
   }
 
   async function load() {
@@ -41,7 +44,7 @@
       if (!selectedIp && cameras.length > 0) selectedIp = cameras[0].ip;
     } catch (err) {
       console.error("Failed to load cameras", err);
-      toast.error("Failed to load cameras", { description: String(err) });
+      toast.error(t.camerasFailed, { description: String(err) });
     } finally {
       loading = false;
     }
@@ -64,7 +67,7 @@
       }
     } catch (err) {
       console.error("Recognition failed", err);
-      toast.error("Recognition failed", { description: String(err) });
+      toast.error(t.recognitionFailed, { description: String(err) });
     } finally {
       running = false;
     }
@@ -72,14 +75,14 @@
 
   async function runFromCamera() {
     if (!selectedIp) {
-      toast.error("Pick a camera first.");
+      toast.error(t.pickCamera);
       return;
     }
     let dataUrl: string;
     try {
       dataUrl = await data.captureSnapshot(selectedIp);
     } catch (err) {
-      toast.error("Capture failed", { description: String(err) });
+      toast.error(t.captureFailed, { description: String(err) });
       return;
     }
     await run(dataUrl);
@@ -99,30 +102,28 @@
 <div class="mx-auto max-w-4xl space-y-6">
   <!-- top bar -->
   <div class="flex items-center gap-3">
-    <Button variant="ghost" size="icon" title="Back to People" onclick={() => goto("/people")}>
+    <Button variant="ghost" size="icon" title={t.backToPeople} onclick={() => goto("/people")}>
       <ArrowLeft class="size-4" />
     </Button>
     <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Recognition</h1>
-      <p class="text-sm text-muted-foreground">
-        Probe a frame or photo against the enrolled people. Nothing is stored — this only reads.
-      </p>
+      <h1 class="text-2xl font-semibold tracking-tight">{t.recognitionTitle}</h1>
+      <p class="text-sm text-muted-foreground">{t.recognitionDescription}</p>
     </div>
   </div>
 
   {#if loading}
-    <Loader label="Loading…" />
+    <Loader label={t.loading} />
   {:else}
     <!-- Source -->
     <Card.Root>
       <Card.Header>
-        <Card.Title class="flex items-center gap-2"><ScanSearch class="size-4 text-muted-foreground" /> Probe</Card.Title>
-        <Card.Description>Capture from a saved camera or upload a photo to recognise.</Card.Description>
+        <Card.Title class="flex items-center gap-2"><ScanSearch class="size-4 text-muted-foreground" /> {t.probe}</Card.Title>
+        <Card.Description>{t.probeDescription}</Card.Description>
       </Card.Header>
       <Card.Content class="flex flex-wrap items-end gap-3">
         {#if cameras.length > 0}
           <div class="space-y-2">
-            <Label>Camera</Label>
+            <Label>{t.camera}</Label>
             <Select.Root type="single" value={selectedIp} onValueChange={(v) => (selectedIp = v ?? "")}>
               <Select.Trigger class="w-56">{cameraName(selectedIp)}</Select.Trigger>
               <Select.Content>
@@ -133,11 +134,11 @@
             </Select.Root>
           </div>
           <Button onclick={runFromCamera} disabled={running}>
-            {#if running}<Busy /> Working…{:else}<Camera class="size-4" /> Recognise from camera{/if}
+            {#if running}<Busy /> {t.working}{:else}<Camera class="size-4" /> {t.recogniseFromCamera}{/if}
           </Button>
         {/if}
         <Button variant="outline" onclick={() => fileEl?.click()} disabled={running}>
-          <Upload class="size-4" /> Recognise a photo
+          <Upload class="size-4" /> {t.recognisePhoto}
         </Button>
         <input bind:this={fileEl} type="file" accept="image/*" class="hidden" onchange={onPickFile} />
       </Card.Content>
@@ -147,16 +148,16 @@
     {#if detail}
       <Card.Root>
         <Card.Header>
-          <Card.Title>Result</Card.Title>
-          <Card.Description>The probe (target) compared with the person the system recognised.</Card.Description>
+          <Card.Title>{t.resultTitle}</Card.Title>
+          <Card.Description>{t.resultDescription}</Card.Description>
         </Card.Header>
         <Card.Content>
           <div class="flex flex-wrap items-center justify-center gap-6">
             <!-- target -->
             <div class="flex flex-col items-center gap-2">
               <PointCloudAvatar embedding={detail.query} size={240} dots={300} />
-              <span class="text-sm font-medium">Target</span>
-              <span class="text-xs text-muted-foreground">the probe image</span>
+              <span class="text-sm font-medium">{t.target}</span>
+              <span class="text-xs text-muted-foreground">{t.targetHint}</span>
             </div>
 
             <ArrowRight class="size-6 shrink-0 text-muted-foreground" />
@@ -166,12 +167,12 @@
               {#if detail.match && matchFaces.length > 0}
                 <PointCloudAvatar embedding={matchFaces[0].embedding} size={240} dots={300} />
                 <span class="text-sm font-medium">{detail.match.name}</span>
-                <Badge variant="outline" class="border-primary/40 text-primary">{detail.match.confidence}% match</Badge>
+                <Badge variant="outline" class="border-primary/40 text-primary">{t.matchPercent(detail.match.confidence)}</Badge>
               {:else}
                 <div class="grid size-[240px] place-items-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">
-                  No match
+                  {t.noMatch}
                 </div>
-                <span class="text-sm font-medium text-muted-foreground">No one recognised</span>
+                <span class="text-sm font-medium text-muted-foreground">{t.noOneRecognised}</span>
               {/if}
             </div>
           </div>

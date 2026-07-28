@@ -18,7 +18,10 @@
   import EmptyState from "$lib/components/empty-state.svelte";
   import StatusDot from "$lib/components/status-dot.svelte";
 
+  import { dict, lang } from "$lib/i18n";
   import type { Person } from "$lib/types";
+
+  const t = $derived(dict[lang()].peopleDirectory);
 
   let people = $state<Person[]>([]);
   let enrolledIds = $state<Set<string>>(new Set());
@@ -56,7 +59,7 @@
       enrolledIds = new Set(enrolled);
     } catch (err) {
       console.error("Failed to load people", err);
-      toast.error("Failed to load people", { description: String(err) });
+      toast.error(t.loadFailed, { description: String(err) });
     } finally {
       loading = false;
     }
@@ -68,18 +71,16 @@
 <div class="space-y-6">
   <div class="flex items-start justify-between gap-4">
     <div class="flex min-w-0 items-center gap-3">
-      <Button variant="ghost" size="icon" title="Back to People" onclick={() => goto("/people")}>
+      <Button variant="ghost" size="icon" title={t.backToPeople} onclick={() => goto("/people")}>
         <ArrowLeft class="size-4" />
       </Button>
       <div>
-        <h1 class="text-2xl font-semibold tracking-tight">Directory</h1>
-        <p class="text-sm text-muted-foreground">
-          The people Sentinel manages — guardian hierarchy, notification recipient, and permissions.
-        </p>
+        <h1 class="text-2xl font-semibold tracking-tight">{t.title}</h1>
+        <p class="text-sm text-muted-foreground">{t.description}</p>
       </div>
     </div>
     <Button onclick={() => goto("/people/new")}>
-      <Plus class="size-4" /> Add person
+      <Plus class="size-4" /> {t.addPerson}
     </Button>
   </div>
 
@@ -87,36 +88,36 @@
     <Card.Header>
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <Card.Title>People</Card.Title>
-          <Card.Description>Select a person to open their full record.</Card.Description>
+          <Card.Title>{t.peopleTitle}</Card.Title>
+          <Card.Description>{t.peopleDescription}</Card.Description>
         </div>
         {#if !loading && people.length > 0}
           <div class="relative w-full sm:w-64">
             <Search class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input class="pl-8" placeholder="Search by name…" bind:value={query} />
+            <Input class="pl-8" placeholder={t.searchPlaceholder} bind:value={query} />
           </div>
         {/if}
       </div>
     </Card.Header>
     <Card.Content>
       {#if loading}
-        <Loader label="Loading people…" />
+        <Loader label={t.loadingPeople} />
       {:else if people.length === 0}
         <EmptyState
-          title="No people yet"
-          description="Add a person to start building the hierarchy. Face enrollment comes next."
+          title={t.emptyTitle}
+          description={t.emptyDescription}
         />
       {:else if filtered.length === 0}
-        <EmptyState title="No matches" description={`No one matches “${query}”.`} />
+        <EmptyState title={t.noMatchesTitle} description={t.noMatchesDescription(query)} />
       {:else}
         <Table.Root>
           <Table.Header>
             <Table.Row>
-              <Table.Head>Name</Table.Head>
-              <Table.Head>Guardian</Table.Head>
-              <Table.Head>Recipient</Table.Head>
-              <Table.Head>Permissions</Table.Head>
-              <Table.Head class="w-24">Enrolled</Table.Head>
+              <Table.Head>{t.colName}</Table.Head>
+              <Table.Head>{t.colGuardian}</Table.Head>
+              <Table.Head>{t.colRecipient}</Table.Head>
+              <Table.Head>{t.colPermissions}</Table.Head>
+              <Table.Head class="w-24">{t.colEnrolled}</Table.Head>
               <Table.Head class="w-10"></Table.Head>
             </Table.Row>
           </Table.Header>
@@ -143,7 +144,7 @@
                 <Table.Cell>
                   <span class="flex items-center gap-2 text-xs text-muted-foreground">
                     <StatusDot state={enrolledIds.has(p.id) ? "online" : "offline"} />
-                    {enrolledIds.has(p.id) ? "Yes" : "No"}
+                    {enrolledIds.has(p.id) ? t.yes : t.no}
                   </span>
                 </Table.Cell>
                 <Table.Cell class="text-right text-muted-foreground">

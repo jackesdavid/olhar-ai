@@ -23,7 +23,10 @@
   import EmptyState from "$lib/components/empty-state.svelte";
   import PointCloudAvatar from "$lib/components/point-cloud-avatar.svelte";
 
+  import { dict, lang } from "$lib/i18n";
   import type { Person, PersonEmbedding, Device } from "$lib/types";
+
+  const t = $derived(dict[lang()].enroll);
 
   const id = $derived($page.params.id ?? "");
 
@@ -39,7 +42,7 @@
 
   const approvedCount = $derived(embeddings.filter((e) => e.approved).length);
   function cameraName(ip: string): string {
-    return cameras.find((c) => c.ip === ip)?.name ?? "Select a camera";
+    return cameras.find((c) => c.ip === ip)?.name ?? t.selectCamera;
   }
 
   async function loadEmbeddings() {
@@ -59,7 +62,7 @@
       await loadEmbeddings();
     } catch (err) {
       console.error("Failed to load enrollment", err);
-      toast.error("Failed to load", { description: String(err) });
+      toast.error(t.loadFailed, { description: String(err) });
     } finally {
       loading = false;
     }
@@ -73,11 +76,11 @@
     busy = true;
     try {
       await data.enrollFace(id, image, source, approveOnCapture);
-      toast.success("Face enrolled.");
+      toast.success(t.enrolled);
       await loadEmbeddings();
     } catch (err) {
       console.error("Enroll failed", err);
-      toast.error("Enroll failed", { description: String(err) });
+      toast.error(t.enrollFailed, { description: String(err) });
     } finally {
       busy = false;
     }
@@ -85,7 +88,7 @@
 
   async function captureFromCamera() {
     if (!selectedIp) {
-      toast.error("Pick a camera first.");
+      toast.error(t.pickCamera);
       return;
     }
     busy = true;
@@ -94,7 +97,7 @@
       await enroll(dataUrl, "camera");
     } catch (err) {
       console.error("Capture failed", err);
-      toast.error("Capture failed", { description: String(err) });
+      toast.error(t.captureFailed, { description: String(err) });
       busy = false;
     }
   }
@@ -114,7 +117,7 @@
       await data.approveEmbedding(emb.id);
       await loadEmbeddings();
     } catch (err) {
-      toast.error("Approve failed", { description: String(err) });
+      toast.error(t.approveFailed, { description: String(err) });
     }
   }
   async function remove(emb: PersonEmbedding) {
@@ -122,7 +125,7 @@
       await data.deleteEmbedding(emb.id);
       await loadEmbeddings();
     } catch (err) {
-      toast.error("Remove failed", { description: String(err) });
+      toast.error(t.removeFailed, { description: String(err) });
     }
   }
 </script>
@@ -130,38 +133,35 @@
 <div class="mx-auto max-w-4xl space-y-6">
   <!-- top bar -->
   <div class="flex items-center gap-3">
-    <Button variant="ghost" size="icon" title="Back to record" onclick={() => goto(`/people/${id}`)}>
+    <Button variant="ghost" size="icon" title={t.backToRecord} onclick={() => goto(`/people/${id}`)}>
       <ArrowLeft class="size-4" />
     </Button>
     <div class="min-w-0">
       <h1 class="truncate text-2xl font-semibold tracking-tight">
-        Enroll — {person?.name ?? "Person"}
+        {t.titleFor(person?.name ?? t.person)}
       </h1>
-      <p class="text-sm text-muted-foreground">
-        Capture several angles for stronger recognition. We store only the face embedding — never the
-        photo.
-      </p>
+      <p class="text-sm text-muted-foreground">{t.subtitle}</p>
     </div>
   </div>
 
   {#if loading}
-    <Loader label="Loading…" />
+    <Loader label={t.loading} />
   {:else}
     <!-- Capture controls -->
     <Card.Root>
       <Card.Header>
-        <Card.Title class="flex items-center gap-2"><Camera class="size-4 text-muted-foreground" /> Capture</Card.Title>
-        <Card.Description>Grab a frame from a saved camera, or upload a photo as a fallback.</Card.Description>
+        <Card.Title class="flex items-center gap-2"><Camera class="size-4 text-muted-foreground" /> {t.capture}</Card.Title>
+        <Card.Description>{t.captureDescription}</Card.Description>
       </Card.Header>
       <Card.Content class="space-y-4">
         {#if cameras.length === 0}
           <p class="rounded-md border border-dashed border-border px-3 py-2 text-sm text-muted-foreground">
-            No cameras — add one in Devices, or upload a photo below.
+            {t.noCameras}
           </p>
         {:else}
           <div class="flex flex-wrap items-end gap-3">
             <div class="space-y-2">
-              <Label>Camera</Label>
+              <Label>{t.camera}</Label>
               <Select.Root type="single" value={selectedIp} onValueChange={(v) => (selectedIp = v ?? "")}>
                 <Select.Trigger class="w-56">{cameraName(selectedIp)}</Select.Trigger>
                 <Select.Content>
@@ -173,9 +173,9 @@
             </div>
             <Button onclick={captureFromCamera} disabled={busy}>
               {#if busy}
-                <Busy /> Working…
+                <Busy /> {t.working}
               {:else}
-                <Camera class="size-4" /> Capture from camera
+                <Camera class="size-4" /> {t.captureFromCamera}
               {/if}
             </Button>
           </div>
@@ -185,11 +185,11 @@
           <label class="flex items-center gap-2 text-sm">
             <Switch checked={approveOnCapture} onCheckedChange={(v) => (approveOnCapture = v)} />
             <span class="flex items-center gap-1.5">
-              <ShieldCheck class="size-3.5 text-muted-foreground" /> Approve on capture (consent given)
+              <ShieldCheck class="size-3.5 text-muted-foreground" /> {t.approveOnCapture}
             </span>
           </label>
           <Button variant="outline" onclick={() => fileEl?.click()} disabled={busy}>
-            <Upload class="size-4" /> Upload photo
+            <Upload class="size-4" /> {t.uploadPhoto}
           </Button>
           <input bind:this={fileEl} type="file" accept="image/*" class="hidden" onchange={onPickFile} />
         </div>
@@ -200,16 +200,14 @@
     <Card.Root>
       <Card.Header>
         <Card.Title class="flex items-center justify-between gap-2">
-          <span>Enrolled faces</span>
-          <Badge variant="outline">{approvedCount} approved / {embeddings.length} total</Badge>
+          <span>{t.enrolledFaces}</span>
+          <Badge variant="outline">{t.countBadge(approvedCount, embeddings.length)}</Badge>
         </Card.Title>
-        <Card.Description>
-          Each sample is shown as a point-cloud fingerprint derived from its embedding — no photo is kept.
-        </Card.Description>
+        <Card.Description>{t.samplesDescription}</Card.Description>
       </Card.Header>
       <Card.Content>
         {#if embeddings.length === 0}
-          <EmptyState title="No faces enrolled" description="Capture from a camera or upload a photo above." />
+          <EmptyState title={t.emptyTitle} description={t.emptyDescription} />
         {:else}
           <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
             {#each embeddings as emb (emb.id)}
@@ -218,15 +216,15 @@
                 <div class="flex items-center justify-between gap-2">
                   <Badge variant="outline" class="text-[10px] capitalize">{emb.source || "?"}</Badge>
                   {#if emb.approved}
-                    <span class="flex items-center gap-1 text-[11px] text-primary"><Check class="size-3" /> Approved</span>
+                    <span class="flex items-center gap-1 text-[11px] text-primary"><Check class="size-3" /> {t.approved}</span>
                   {:else}
-                    <span class="text-[11px] text-amber-500">Pending</span>
+                    <span class="text-[11px] text-amber-500">{t.pending}</span>
                   {/if}
                 </div>
                 <div class="flex items-center gap-1">
                   {#if !emb.approved}
                     <Button variant="ghost" size="sm" class="h-7 flex-1 text-xs" onclick={() => approve(emb)}>
-                      <Check class="size-3.5" /> Approve
+                      <Check class="size-3.5" /> {t.approve}
                     </Button>
                   {/if}
                   <Button variant="ghost" size="sm" class="h-7 text-xs text-muted-foreground hover:text-destructive" onclick={() => remove(emb)}>
