@@ -15,6 +15,7 @@ import { live } from "./messages/live";
 import { events } from "./messages/events";
 import { people } from "./messages/people";
 import { beacons } from "./messages/beacons";
+import { settings } from "./messages/settings";
 
 export { lang, setLang, initLang, type Lang } from "./runtime.svelte";
 
@@ -38,6 +39,7 @@ const modules = {
   events: domain(events),
   people: domain(people),
   beacons: domain(beacons),
+  settings: domain(settings),
 };
 
 /** One language's messages — every module, narrowed to that language. */

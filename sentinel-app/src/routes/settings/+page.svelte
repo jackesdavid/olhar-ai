@@ -18,7 +18,8 @@
   import { Input } from "$lib/components/ui/input";
   import { dict, lang, setLang, type Lang } from "$lib/i18n";
 
-  const t = $derived(dict[lang()]);
+  const t = $derived(dict[lang()].settings);
+  const c = $derived(dict[lang()].common);
   const langs: Lang[] = ["en", "pt"];
 
   let settings = $state<Settings>({ ...DEFAULT_SETTINGS });
@@ -38,30 +39,31 @@
   let cloudRecording = $state(false);
 
   // Settings split into tabs — the page grew past one scroll of Cards.
-  const TABS = [
-    { id: "general", label: "General" },
-    { id: "cameras", label: "Cameras" },
-    { id: "motion", label: "Detection" },
-  ] as const;
-  let tab = $state<(typeof TABS)[number]["id"]>("general");
+  const TAB_IDS = ["general", "cameras", "motion"] as const;
+  const TABS = $derived([
+    { id: "general", label: t.tabGeneral },
+    { id: "cameras", label: t.tabCameras },
+    { id: "motion", label: t.tabMotion },
+  ] as const);
+  let tab = $state<(typeof TAB_IDS)[number]>("general");
 
-  const transportOptions: { value: Transport; label: string }[] = [
+  const transportOptions: { value: Transport; label: string }[] = $derived([
     { value: "tcp", label: "TCP" },
     { value: "udp", label: "UDP" },
-    { value: "auto", label: "Auto" },
-  ];
+    { value: "auto", label: t.transportAuto },
+  ]);
 
   const transportLabel = $derived(
-    transportOptions.find((o) => o.value === settings.transport)?.label ?? "Auto"
+    transportOptions.find((o) => o.value === settings.transport)?.label ?? t.transportAuto
   );
 
   // bits-ui sliders use an array value; bridge them to the scalar fields.
-  const gainFields = [
-    { key: "master", label: "Master" },
-    { key: "voice", label: "Voice" },
-    { key: "ui", label: "UI" },
-    { key: "ambient", label: "Ambient" },
-  ] as const;
+  const gainFields = $derived([
+    { key: "master", label: t.gainMaster },
+    { key: "voice", label: t.gainVoice },
+    { key: "ui", label: t.gainUi },
+    { key: "ambient", label: t.gainAmbient },
+  ] as const);
 
   onMount(async () => {
     try {
@@ -103,7 +105,7 @@
       }
     } catch (err) {
       console.error("Failed to load settings", err);
-      toast.error("Failed to load settings", { description: String(err) });
+      toast.error(t.loadFailed, { description: String(err) });
     } finally {
       loading = false;
     }
@@ -147,10 +149,10 @@
           })
         )
       );
-      toast.success("Settings saved");
+      toast.success(t.saved);
     } catch (err) {
       console.error("Failed to save settings", err);
-      toast.error("Failed to save settings", { description: String(err) });
+      toast.error(t.saveFailed, { description: String(err) });
     } finally {
       saving = false;
     }
@@ -184,56 +186,49 @@
 
   /** With eviction on, the box's disk is a spool for clips in transit — not an archive. */
   function storageLimitLabel(): string {
-    if (settings.delete_local_after_upload) return "Local spool size";
-    return "Max recording storage";
+    return settings.delete_local_after_upload ? t.spoolSize : t.maxStorage;
   }
 
   function storageLimitHint(): string {
-    if (settings.delete_local_after_upload) {
-      return "Headroom for clips waiting to reach the cloud (e.g. while the internet is down). Clips already in the cloud take no space here.";
-    }
-    return "Old clips are auto-deleted (oldest first) when total recording size exceeds this limit.";
+    return settings.delete_local_after_upload ? t.spoolHint : t.maxStorageHint;
   }
 
   function localRetentionHint(): string {
-    if (!cloudRecording) {
-      return "Your plan doesn't include cloud recording, so clips only ever exist on the appliance — there's nothing to fall back to.";
-    }
-    return "The appliance keeps a clip only until the cloud confirms it's safe, then frees the space. Clips still play and download from the cloud.";
+    return cloudRecording ? t.deleteLocalHint : t.deleteLocalNoPlan;
   }
 
   function sensitivityLabel(varThreshold: number): string {
-    if (varThreshold <= 8) return "very high";
-    if (varThreshold <= 16) return "high";
-    if (varThreshold <= 32) return "medium";
-    if (varThreshold <= 64) return "low";
-    return "very low";
+    if (varThreshold <= 8) return t.sensVeryHigh;
+    if (varThreshold <= 16) return t.sensHigh;
+    if (varThreshold <= 32) return t.sensMedium;
+    if (varThreshold <= 64) return t.sensLow;
+    return t.sensVeryLow;
   }
 </script>
 
 <div class="space-y-6">
   <PageHeader
-    title="Settings"
-    description="Audio, voice, and connection preferences."
+    title={t.title}
+    description={t.description}
     icon={SettingsIcon}
   >
     {#snippet actions()}
       <Button onclick={save} disabled={loading || saving}>
-        {saving ? "Saving…" : "Save"}
+        {saving ? t.saving : c.save}
       </Button>
     {/snippet}
   </PageHeader>
 
   <div class="flex gap-1 border-b">
-    {#each TABS as t (t.id)}
+    {#each TABS as tb (tb.id)}
       <button
         type="button"
-        class="-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors {tab === t.id
+        class="-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors {tab === tb.id
           ? 'border-primary text-foreground'
           : 'border-transparent text-muted-foreground hover:text-foreground'}"
-        onclick={() => (tab = t.id)}
+        onclick={() => (tab = tb.id)}
       >
-        {t.label}
+        {tb.label}
       </button>
     {/each}
   </div>
@@ -241,7 +236,7 @@
   {#if tab === "general"}
   <Card.Root>
     <Card.Header>
-      <Card.Title>{t.common.language}</Card.Title>
+      <Card.Title>{c.language}</Card.Title>
     </Card.Header>
     <Card.Content>
       <div class="inline-flex items-center rounded-lg border p-0.5 text-sm font-semibold">
@@ -261,8 +256,8 @@
   </Card.Root>
   <Card.Root>
     <Card.Header>
-      <Card.Title>Audio</Card.Title>
-      <Card.Description>Output gains, from muted to full.</Card.Description>
+      <Card.Title>{t.audio}</Card.Title>
+      <Card.Description>{t.audioDescription}</Card.Description>
     </Card.Header>
     <Card.Content class="space-y-6">
       {#each gainFields as field (field.key)}
@@ -288,16 +283,14 @@
 
   <Card.Root>
     <Card.Header>
-      <Card.Title>Voice & Interaction</Card.Title>
-      <Card.Description>Speech synthesis and input behavior.</Card.Description>
+      <Card.Title>{t.voiceTitle}</Card.Title>
+      <Card.Description>{t.voiceDescription}</Card.Description>
     </Card.Header>
     <Card.Content class="space-y-6">
       <div class="flex items-center justify-between">
         <div class="space-y-0.5">
-          <Label for="voice-enabled">Voice enabled</Label>
-          <p class="text-xs text-muted-foreground">
-            Allow the console to speak responses aloud.
-          </p>
+          <Label for="voice-enabled">{t.voiceEnabled}</Label>
+          <p class="text-xs text-muted-foreground">{t.voiceEnabledHint}</p>
         </div>
         <Switch
           id="voice-enabled"
@@ -310,7 +303,7 @@
 
       <div class="space-y-2">
         <div class="flex items-center justify-between">
-          <Label>Typing speed</Label>
+          <Label>{t.typingSpeed}</Label>
           <span class="text-sm tabular-nums text-muted-foreground">
             {settings.typing_speed}
           </span>
@@ -323,19 +316,15 @@
           bind:value={settings.typing_speed}
           disabled={loading}
         />
-        <p class="text-xs text-muted-foreground">
-          How fast streamed text is revealed (1–8).
-        </p>
+        <p class="text-xs text-muted-foreground">{t.typingSpeedHint}</p>
       </div>
 
       <Separator />
 
       <div class="flex items-center justify-between">
         <div class="space-y-0.5">
-          <Label for="stt-autosend">Auto-send transcripts</Label>
-          <p class="text-xs text-muted-foreground">
-            Submit speech-to-text input automatically when you stop speaking.
-          </p>
+          <Label for="stt-autosend">{t.autoSend}</Label>
+          <p class="text-xs text-muted-foreground">{t.autoSendHint}</p>
         </div>
         <Switch
           id="stt-autosend"
@@ -348,12 +337,12 @@
 
   <Card.Root>
     <Card.Header>
-      <Card.Title>Connection</Card.Title>
-      <Card.Description>Network transport for the backend link.</Card.Description>
+      <Card.Title>{t.connection}</Card.Title>
+      <Card.Description>{t.connectionDescription}</Card.Description>
     </Card.Header>
     <Card.Content>
       <div class="space-y-2">
-        <Label>Transport</Label>
+        <Label>{t.transport}</Label>
         <Select.Root type="single" bind:value={settings.transport} disabled={loading}>
           <Select.Trigger class="w-60">
             {transportLabel}
@@ -374,17 +363,14 @@
   {#if tab === "cameras"}
   <Card.Root>
     <Card.Header>
-      <Card.Title>Cameras</Card.Title>
-      <Card.Description>Live feed and recording behaviour.</Card.Description>
+      <Card.Title>{t.camerasTitle}</Card.Title>
+      <Card.Description>{t.camerasDescription}</Card.Description>
     </Card.Header>
     <Card.Content class="space-y-6">
       <div class="flex items-center justify-between">
         <div class="space-y-0.5">
-          <Label for="cameras-always-warm">Keep camera feeds always on</Label>
-          <p class="text-xs text-muted-foreground">
-            Maintains a rolling pre-roll buffer per camera so recordings start with
-            footage from before the trigger. Uses more bandwidth when nothing is watching.
-          </p>
+          <Label for="cameras-always-warm">{t.alwaysWarm}</Label>
+          <p class="text-xs text-muted-foreground">{t.alwaysWarmHint}</p>
         </div>
         <Switch
           id="cameras-always-warm"
@@ -397,16 +383,15 @@
 
       <div class="flex items-center justify-between">
         <div class="space-y-0.5">
-          <Label for="hd-face-capture">HD face capture</Label>
+          <Label for="hd-face-capture">{t.hdFaceCapture}</Label>
           <p class="text-xs text-muted-foreground">
-            Capture faces from the camera's main (HD) stream instead of the low-res preview — much
-            larger, sharper faces. Heavier to decode; best on a box with GPU video decode.
+            {t.hdFaceCaptureHint}
             {#if gpuBox}
-              <span class="text-foreground">This box supports GPU decode ({hwLabel(gpuBox.hwaccel ?? "")}).</span>
+              <span class="text-foreground">{t.gpuDecodeYes(hwLabel(gpuBox.hwaccel ?? ""))}</span>
             {:else}
-              <span>No GPU-decode-capable box detected — HD would run on CPU (heavier).</span>
+              <span>{t.gpuDecodeNo}</span>
             {/if}
-            Takes effect after the box reloads its config (Restart).
+            {t.takesEffectRestart}
           </p>
         </div>
         <Switch
@@ -421,7 +406,7 @@
 
       <div class="space-y-2">
         <div class="flex items-center justify-between">
-          <Label>Max pre-roll</Label>
+          <Label>{t.maxPreRoll}</Label>
           <span class="text-sm tabular-nums text-muted-foreground">
             {settings.pre_roll_secs}s
           </span>
@@ -434,10 +419,7 @@
           bind:value={settings.pre_roll_secs}
           disabled={loading || !settings.cameras_always_warm}
         />
-        <p class="text-xs text-muted-foreground">
-          How many seconds of footage the ring buffer keeps before a recording trigger
-          (0–60 s). The recording node can request up to this amount.
-        </p>
+        <p class="text-xs text-muted-foreground">{t.maxPreRollHint}</p>
       </div>
 
       <Separator />
@@ -445,7 +427,7 @@
       <div class="space-y-2">
         <div class="flex items-center justify-between gap-4">
           <div class="space-y-0.5">
-            <Label for="delete-local-after-upload">Delete local copy once saved to the cloud</Label>
+            <Label for="delete-local-after-upload">{t.deleteLocal}</Label>
             <p class="text-xs text-muted-foreground">{localRetentionHint()}</p>
           </div>
           <Switch
@@ -476,29 +458,27 @@
         />
         <p class="text-xs text-muted-foreground">
           {storageLimitHint()}
-          A workflow event <strong>edge:full-disk</strong> fires when usage reaches 90%.
+          {t.fullDiskBefore}<strong>edge:full-disk</strong>{t.fullDiskAfter}
         </p>
       </div>
 
       <Separator />
 
       <div class="space-y-2">
-        <Label>Recordings folder</Label>
+        <Label>{t.recordingsFolder}</Label>
         <Input
           class="font-mono text-sm"
           placeholder="/opt/sentinel-edge/recordings"
           bind:value={settings.recordings_path}
           disabled={loading}
         />
-        <p class="text-xs text-muted-foreground">
-          Directory on the edge appliance where .mp4 clips are stored. Takes effect after the edge restarts.
-        </p>
+        <p class="text-xs text-muted-foreground">{t.recordingsFolderHint}</p>
       </div>
 
       {#if storageStats.length > 0}
         <Separator />
         <div class="space-y-3">
-          <Label class="text-xs text-muted-foreground">Current storage usage</Label>
+          <Label class="text-xs text-muted-foreground">{t.currentUsage}</Label>
           {#each storageStats as s (s.boxId)}
             {@const color = s.pct >= 90 ? "bg-destructive" : s.pct >= 75 ? "bg-amber-500" : "bg-primary"}
             <div class="space-y-1.5">
@@ -511,7 +491,7 @@
               <div class="h-2 w-full overflow-hidden rounded-full bg-muted">
                 <div class="h-full rounded-full transition-all {color}" style="width: {s.pct}%"></div>
               </div>
-              <p class="text-xs text-muted-foreground">{s.clip_count} clip{s.clip_count !== 1 ? "s" : ""} · {s.pct}% used</p>
+              <p class="text-xs text-muted-foreground">{t.clipsUsed(s.clip_count, s.pct)}</p>
             </div>
           {/each}
         </div>
@@ -523,99 +503,89 @@
   {#if tab === "motion"}
   <Card.Root>
     <Card.Header>
-      <Card.Title>Motion detection</Card.Title>
-      <Card.Description>
-        MOG2 background-subtraction tuning, per box. Takes effect after the edge restarts.
-      </Card.Description>
+      <Card.Title>{t.motionTitle}</Card.Title>
+      <Card.Description>{t.motionDescription}</Card.Description>
     </Card.Header>
     <Card.Content class="space-y-6">
       <div class="space-y-2">
         <div class="flex items-center justify-between">
-          <Label>Sensitivity</Label>
+          <Label>{t.sensitivity}</Label>
           <span class="text-sm tabular-nums text-muted-foreground">
             {sensitivityLabel(settings.motion_var_threshold)} ({settings.motion_var_threshold})
           </span>
         </div>
         <Slider type="single" min={4} max={128} step={4}
           bind:value={settings.motion_var_threshold} disabled={loading} />
-        <p class="text-xs text-muted-foreground">
-          MOG2 varThreshold — how much pixel change triggers motion. Lower = more sensitive.
-        </p>
+        <p class="text-xs text-muted-foreground">{t.sensitivityHint}</p>
       </div>
 
       <Separator />
 
       <div class="space-y-2">
         <div class="flex items-center justify-between">
-          <Label>Frames per second</Label>
+          <Label>{t.fps}</Label>
           <span class="text-sm tabular-nums text-muted-foreground">{settings.motion_fps} fps</span>
         </div>
         <Slider type="single" min={1} max={15} step={1}
           bind:value={settings.motion_fps} disabled={loading} />
-        <p class="text-xs text-muted-foreground">
-          How many frames/second feed the detector. Higher = more responsive, but more decode load.
-        </p>
+        <p class="text-xs text-muted-foreground">{t.fpsHint}</p>
       </div>
 
       <Separator />
 
       <div class="space-y-2">
         <div class="flex items-center justify-between">
-          <Label>Motion floor</Label>
+          <Label>{t.motionFloor}</Label>
           <span class="text-sm tabular-nums text-muted-foreground">{settings.motion_floor_pct}%</span>
         </div>
         <Slider type="single" min={0.1} max={5} step={0.1}
           bind:value={settings.motion_floor_pct} disabled={loading} />
-        <p class="text-xs text-muted-foreground">
-          Minimum share of the frame that must change to count as motion. Lower = catches subtler movement.
-        </p>
+        <p class="text-xs text-muted-foreground">{t.motionFloorHint}</p>
       </div>
 
       <Separator />
 
       <div class="space-y-2">
         <div class="flex items-center justify-between">
-          <Label>Event debounce</Label>
+          <Label>{t.debounce}</Label>
           <span class="text-sm tabular-nums text-muted-foreground">{settings.motion_min_interval_secs}s</span>
         </div>
         <Slider type="single" min={0} max={30} step={1}
           bind:value={settings.motion_min_interval_secs} disabled={loading} />
-        <p class="text-xs text-muted-foreground">Minimum seconds between motion events for a camera.</p>
+        <p class="text-xs text-muted-foreground">{t.debounceHint}</p>
       </div>
 
       <Separator />
 
       <div class="space-y-2">
         <div class="flex items-center justify-between">
-          <Label>Background history</Label>
+          <Label>{t.history}</Label>
           <span class="text-sm tabular-nums text-muted-foreground">
-            {settings.motion_history} frames (~{Math.round(settings.motion_history / Math.max(1, settings.motion_fps))}s)
+            {t.historyFrames(settings.motion_history, Math.round(settings.motion_history / Math.max(1, settings.motion_fps)))}
           </span>
         </div>
         <Slider type="single" min={30} max={1000} step={10}
           bind:value={settings.motion_history} disabled={loading} />
-        <p class="text-xs text-muted-foreground">
-          How many frames the background model adapts over. Longer = slower to absorb new static objects.
-        </p>
+        <p class="text-xs text-muted-foreground">{t.historyHint}</p>
       </div>
 
       <Separator />
 
       <div class="grid grid-cols-3 gap-4">
         <div class="space-y-2">
-          <Label>Min blob area</Label>
+          <Label>{t.minBlobArea}</Label>
           <Input type="number" min={0} bind:value={settings.motion_min_area} disabled={loading} />
-          <p class="text-xs text-muted-foreground">Processing px</p>
+          <p class="text-xs text-muted-foreground">{t.minBlobAreaHint}</p>
         </div>
         <div class="space-y-2">
-          <Label>Proc width</Label>
+          <Label>{t.procWidth}</Label>
           <Input type="number" min={1} bind:value={settings.motion_proc_w} disabled={loading} />
-          <p class="text-xs text-muted-foreground">Downscale W</p>
+          <p class="text-xs text-muted-foreground">{t.procWidthHint}</p>
         </div>
         <div class="space-y-2">
-          <Label>Proc height</Label>
+          <Label>{t.procHeight}</Label>
           <Input type="number" min={1} bind:value={settings.motion_proc_h} disabled={loading} />
-          <p class="text-xs text-muted-foreground">Downscale H</p>
+          <p class="text-xs text-muted-foreground">{t.procHeightHint}</p>
         </div>
       </div>
     </Card.Content>
