@@ -12,6 +12,9 @@
   import EmptyState from "$lib/components/empty-state.svelte";
   import StatusDot from "$lib/components/status-dot.svelte";
   import { timeAgo, lastRunGlyph, lastRunClass, triggerSourceLabel } from "$lib/workflows/format";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].workflowsList);
   import TemplateGallery from "./TemplateGallery.svelte";
   import DictionaryTablesTab from "./DictionaryTablesTab.svelte";
   import Plus from "@lucide/svelte/icons/plus";
@@ -214,11 +217,11 @@
       {#if st === "running"}
         <span class="inline-flex items-center gap-1 font-medium text-primary">
           <Busy size={11} />
-          {#if activity[g.id]?.trigger}{triggerSourceLabel(activity[g.id]?.trigger)}{:else}Running{/if}
+          {#if activity[g.id]?.trigger}{triggerSourceLabel(activity[g.id]?.trigger, t)}{:else}{t.running}{/if}
         </span>
       {:else if g.last_run}
         <span class="flex items-center gap-1 {lastRunClass(g.last_run.status)}">
-          {lastRunGlyph(g.last_run.status)} {timeAgo(g.last_run.at)}
+          {lastRunGlyph(g.last_run.status)} {timeAgo(g.last_run.at, t)}
         </span>
       {:else}
         <span class="text-muted-foreground/50">—</span>
@@ -242,7 +245,7 @@
         variant="ghost"
         size="icon"
         class="size-7 {g.template ? 'text-primary' : ''}"
-        title={g.template ? 'A template — click to make it a normal workflow' : 'Save as a template'}
+        title={g.template ? t.unmakeTemplate : t.makeTemplate}
         onclick={() => toggleTemplate(g)}
       >
         <Bookmark class="size-3.5" fill={g.template ? "currentColor" : "none"} />
@@ -252,22 +255,22 @@
           variant="ghost"
           size="icon"
           class="size-7 {g.global ? 'text-primary' : ''}"
-          title={g.global ? 'Published globally — click to unpublish' : 'Publish to every tenant (global template)'}
+          title={g.global ? t.unpublishGlobal : t.publishGlobal}
           onclick={() => toggleGlobal(g)}
         >
           <Globe class="size-3.5" />
         </Button>
       {/if}
-      <Button variant="ghost" size="icon" class="size-7" title="Duplicate" onclick={() => duplicateWorkflow(g)}>
+      <Button variant="ghost" size="icon" class="size-7" title={t.duplicate} onclick={() => duplicateWorkflow(g)}>
         <Copy class="size-3.5" />
       </Button>
-      <Button variant="ghost" size="icon" class="size-7" title="Live instances — saved run contexts" onclick={() => goto(`/workflows/instances?graph=${g.id}&name=${encodeURIComponent(g.name)}`)}>
+      <Button variant="ghost" size="icon" class="size-7" title={t.liveInstances} onclick={() => goto(`/workflows/instances?graph=${g.id}&name=${encodeURIComponent(g.name)}`)}>
         <Layers class="size-3.5" />
       </Button>
-      <Button variant="ghost" size="icon" class="size-7" title="Recent runs" onclick={() => openRuns(g)}>
+      <Button variant="ghost" size="icon" class="size-7" title={t.recentRuns} onclick={() => openRuns(g)}>
         <History class="size-3.5" />
       </Button>
-      <Button variant="ghost" size="icon" class="size-7" title="Delete" onclick={() => openDelete(g)}>
+      <Button variant="ghost" size="icon" class="size-7" title={t.delete} onclick={() => openDelete(g)}>
         <Trash2 class="size-3.5" />
       </Button>
     </div>
@@ -278,26 +281,26 @@
   <!-- header -->
   <div class="flex shrink-0 items-center justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Workflows</h1>
-      <p class="text-sm text-muted-foreground">Graph automations that run on a trigger or on demand.</p>
+      <h1 class="text-2xl font-semibold tracking-tight">{t.title}</h1>
+      <p class="text-sm text-muted-foreground">{t.description}</p>
     </div>
     <div class="flex items-center gap-2">
-      <Button onclick={createWorkflow}><Plus class="size-4" /> New workflow</Button>
+      <Button onclick={createWorkflow}><Plus class="size-4" /> {t.newWorkflow}</Button>
     </div>
   </div>
 
   <!-- tabs: my workflows | templates | dictionary tables — all inline (#136, #137) -->
   <div class="flex shrink-0 items-center gap-1 border-b border-border">
     <button type="button" class={listTabClass("mine")} onclick={() => (listTab = "mine")}>
-      <Workflow class="size-4" /> My workflows
+      <Workflow class="size-4" /> {t.tabMine}
       {#if graphs.length}<span class="rounded-full bg-muted px-1.5 text-xs text-muted-foreground">{graphs.length}</span>{/if}
     </button>
     <button type="button" class={listTabClass("templates")} onclick={showTemplatesTab}>
-      <LayoutTemplate class="size-4" /> Templates
+      <LayoutTemplate class="size-4" /> {t.tabTemplates}
       {#if templates.length}<span class="rounded-full bg-muted px-1.5 text-xs text-muted-foreground">{templates.length}</span>{/if}
     </button>
     <button type="button" class={listTabClass("dictionaries")} onclick={() => (listTab = "dictionaries")}>
-      <Table2 class="size-4" /> Dictionary Tables
+      <Table2 class="size-4" /> {t.tabDictionaries}
     </button>
   </div>
 
@@ -311,7 +314,7 @@
       <Input
         value={wfSearch}
         oninput={(e) => onSearchInput(e.currentTarget.value)}
-        placeholder="Search workflows…"
+        placeholder={t.searchPlaceholder}
         class="h-9 w-64 pl-8"
       />
     </div>
@@ -320,12 +323,12 @@
       onchange={(e) => setGroupFilter(e.currentTarget.value)}
       class="h-9 rounded-lg border border-border bg-card px-2.5 text-sm text-foreground outline-none"
     >
-      <option value="">All groups</option>
+      <option value="">{t.allGroups}</option>
       {#each allGroups as grp (grp)}<option value={grp}>{grp}</option>{/each}
     </select>
     {#if wfSearch.trim() || wfGroupFilter}
       <Button variant="ghost" size="sm" class="h-9" onclick={clearListFilters}>
-        <X class="size-4" /> Clear
+        <X class="size-4" /> {t.clear}
       </Button>
     {/if}
   </div>
@@ -335,18 +338,18 @@
     {#if graphs.length === 0}
       {#if wfSearch.trim() || wfGroupFilter}
         <div class="flex flex-col items-center gap-3 p-12 text-center text-sm text-muted-foreground">
-          No workflows match your filters.
-          <Button variant="outline" size="sm" onclick={clearListFilters}>Clear filters</Button>
+          {t.noMatches}
+          <Button variant="outline" size="sm" onclick={clearListFilters}>{t.clearFilters}</Button>
         </div>
       {:else}
         <div class="p-6">
           <EmptyState
-            title="No workflows yet"
-            description="Start from a ready-made template, or build one from scratch to chain cameras, alerts, vision, and recipients."
+            title={t.emptyTitle}
+            description={t.emptyDescription}
           >
             <div class="flex flex-wrap items-center justify-center gap-2">
-              <Button onclick={showTemplatesTab}><LayoutTemplate class="size-4" /> Browse templates</Button>
-              <Button variant="outline" onclick={createWorkflow}><Plus class="size-4" /> New workflow</Button>
+              <Button onclick={showTemplatesTab}><LayoutTemplate class="size-4" /> {t.browseTemplates}</Button>
+              <Button variant="outline" onclick={createWorkflow}><Plus class="size-4" /> {t.newWorkflow}</Button>
             </div>
           </EmptyState>
         </div>

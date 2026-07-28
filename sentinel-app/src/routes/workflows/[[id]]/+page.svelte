@@ -98,6 +98,10 @@
   import type { PortType } from "$lib/workflows/portColors";
   import { titleFontSize as dTitleFontSize, titleWidth, titleHeight, wrapText, mdLines } from "$lib/workflows/display";
   import { triggerSourceLabel } from "$lib/workflows/format";
+  import { dict as i18nDict, lang as i18nLang } from "$lib/i18n";
+
+  /** Shared run-status / relative-time wording, also used by the workflows list. */
+  const wfl = $derived(i18nDict[i18nLang()].workflowsList);
 
   import ContextSearch from "../components/ContextSearch.svelte";
   import WorkflowsList from "../components/WorkflowsList.svelte";
@@ -5032,7 +5036,7 @@
                         <span class="inline-flex shrink-0 items-center rounded-full border px-1.5 py-0 text-[9px] font-medium capitalize {runStatusClass(r.status)}">
                           {r.status}
                         </span>
-                        <span class="truncate text-[11px] font-medium">{triggerSourceLabel(r.trigger_source)}</span>
+                        <span class="truncate text-[11px] font-medium">{triggerSourceLabel(r.trigger_source, wfl)}</span>
                         <span class="ml-auto shrink-0 text-[10px] text-muted-foreground">{fmtTs(r.started_at)}</span>
                       </button>
                       {#if runsExpanded === r.id}
@@ -5281,7 +5285,7 @@
               <span class="inline-flex w-16 shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-medium capitalize {runStatusClass(r.status)}">
                 {r.status}
               </span>
-              <span class="text-xs font-medium">{triggerSourceLabel(r.trigger_source)}</span>
+              <span class="text-xs font-medium">{triggerSourceLabel(r.trigger_source, wfl)}</span>
               {#if r.trigger_source === "event" && r.event_name}
                 <span class="truncate text-[11px] text-muted-foreground">
                   '{r.event_name}'{#if r.source_graph_name} ← {r.source_graph_name}{/if}
