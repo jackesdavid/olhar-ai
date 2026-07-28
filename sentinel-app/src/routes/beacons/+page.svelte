@@ -32,7 +32,11 @@
   import Loader from "$lib/components/loader.svelte";
   import StatusDot from "$lib/components/status-dot.svelte";
 
+  import { dict, lang } from "$lib/i18n";
   import type { NotificationTarget, TelegramConfigState } from "$lib/types";
+
+  const t = $derived(dict[lang()].beacons);
+  const c = $derived(dict[lang()].common);
 
   let beacons = $state<NotificationTarget[]>([]);
   let config = $state<TelegramConfigState | null>(null);
@@ -105,11 +109,7 @@
     const link = currentLink();
     if (!link) return;
     try {
-      await navigator.share({
-        title: "Connect Telegram to Sentinel",
-        text: "Tap to connect your Telegram to receive alerts:",
-        url: link,
-      });
+      await navigator.share({ title: t.shareTitle, text: t.shareText, url: link });
     } catch {
       // User dismissed the share sheet — not an error worth a toast.
     }
@@ -145,7 +145,7 @@
     // the list grows), the user *sees* it worked — the whole point of the enrollment flow.
     if (!loading && beacons.length > before) {
       const added = beacons.length - before;
-      toast.success(added === 1 ? "A new recipient just paired." : `${added} new recipients just paired.`);
+      toast.success(added === 1 ? t.onePaired : t.manyPaired(added));
     }
   }
 
@@ -160,7 +160,7 @@
       await Promise.all([loadBeacons(), loadConfig()]);
     } catch (err) {
       console.error("Failed to load beacons", err);
-      toast.error("Failed to load beacons", { description: String(err) });
+      toast.error(t.loadFailed, { description: String(err) });
     } finally {
       loading = false;
     }
@@ -192,11 +192,11 @@
     savingCode = true;
     try {
       await data.setPairingCode(pairingCode);
-      toast.success("Pairing code saved.");
+      toast.success(t.codeSaved);
       await loadConfig();
     } catch (err) {
       console.error("Failed to save pairing code", err);
-      toast.error("Failed to save", { description: String(err) });
+      toast.error(t.saveFailed, { description: String(err) });
     } finally {
       savingCode = false;
     }
@@ -206,10 +206,10 @@
     testingId = b.chat_id;
     try {
       await data.testBeacon(b.chat_id);
-      toast.success(`Test sent to '${b.label}'.`);
+      toast.success(t.testSent(b.label));
     } catch (err) {
       console.error("Test send failed", err);
-      toast.error("Test failed", { description: String(err) });
+      toast.error(t.testFailed, { description: String(err) });
     } finally {
       testingId = null;
     }
@@ -222,7 +222,7 @@
       await loadBeacons();
     } catch (err) {
       console.error("Failed to toggle beacon", err);
-      toast.error("Failed to update beacon", { description: String(err) });
+      toast.error(t.toggleFailed, { description: String(err) });
       await loadBeacons();
     } finally {
       togglingId = null;
@@ -238,19 +238,19 @@
   async function doRename() {
     if (!renameTarget) return;
     if (renameValue.trim().length === 0) {
-      toast.error("Name can't be empty.");
+      toast.error(t.nameEmpty);
       return;
     }
     renaming = true;
     try {
       await data.renameBeacon(renameTarget.chat_id, renameValue.trim());
-      toast.success("Recipient renamed.");
+      toast.success(t.renamed);
       renameOpen = false;
       renameTarget = null;
       await loadBeacons();
     } catch (err) {
       console.error("Rename failed", err);
-      toast.error("Rename failed", { description: String(err) });
+      toast.error(t.renameFailed, { description: String(err) });
     } finally {
       renaming = false;
     }
@@ -266,13 +266,13 @@
     deleting = true;
     try {
       await data.deleteBeacon(deleteTarget.chat_id);
-      toast.success("Recipient removed.");
+      toast.success(t.removed);
       deleteOpen = false;
       deleteTarget = null;
       await loadBeacons();
     } catch (err) {
       console.error("Delete failed", err);
-      toast.error("Delete failed", { description: String(err) });
+      toast.error(t.deleteFailed, { description: String(err) });
     } finally {
       deleting = false;
     }
@@ -285,8 +285,8 @@
 
 <div class="space-y-6">
   <PageHeader
-    title="Recipients"
-    description="Trusted Telegram contacts that receive Sentinel's alerts."
+    title={t.title}
+    description={t.description}
     icon={Radio}
   />
 
@@ -294,56 +294,48 @@
   <Card.Root>
     <Card.Header>
       <Card.Title class="flex items-center gap-2">
-        Telegram
+        {t.telegram}
         {#if config?.provider_configured}
           <Badge variant="outline" class="border-primary/30 bg-primary/10 text-primary">
-            Provider active
+            {t.providerActive}
           </Badge>
         {:else}
           <Badge variant="outline" class="border-amber-500/30 bg-amber-500/15 text-amber-400">
-            Provider not configured
+            {t.providerNotConfigured}
           </Badge>
         {/if}
       </Card.Title>
       <Card.Description>
-        {#if config?.provider_configured}
-          Set a pairing code — share the enrollment link with anyone who should receive alerts.
-        {:else}
-          The Telegram bot is not configured yet. Ask your account administrator to set it up in
-          Notification Providers.
-        {/if}
+        {config?.provider_configured ? t.configuredHint : t.notConfiguredHint}
       </Card.Description>
     </Card.Header>
     {#if config?.provider_configured}
       <Card.Content class="space-y-4">
         <div class="space-y-2">
-          <Label for="pairing-code">Pairing code</Label>
+          <Label for="pairing-code">{t.pairingCode}</Label>
           <div class="flex flex-wrap gap-2">
             <Input
               id="pairing-code"
               bind:value={pairingCode}
-              placeholder="auto-generated"
+              placeholder={t.autoGenerated}
               autocomplete="off"
               class="max-w-xs font-mono"
             />
             <Button onclick={saveCode} disabled={savingCode} size="sm">
               {#if savingCode}
                 <Busy />
-                Saving…
+                {t.saving}
               {:else}
                 <Save class="size-4" />
-                Save
+                {c.save}
               {/if}
             </Button>
-            <Button variant="outline" size="sm" onclick={rotateCode} disabled={savingCode} title="Generate a new code (revokes the old link)">
+            <Button variant="outline" size="sm" onclick={rotateCode} disabled={savingCode} title={t.newCodeTitle}>
               <RefreshCw class="size-3.5" />
-              New code
+              {t.newCode}
             </Button>
           </div>
-          <p class="text-xs text-muted-foreground">
-            A code is generated for you — share the link below, not the code. Rotating it revokes the
-            old link.
-          </p>
+          <p class="text-xs text-muted-foreground">{t.codeHint}</p>
         </div>
 
         {#if config.bot_username && config.pairing_code}
@@ -357,11 +349,11 @@
               {/if}
               <div class="min-w-0 flex-1 space-y-3">
                 <div>
-                  <p class="font-medium text-foreground">Add a recipient in 3 steps</p>
+                  <p class="font-medium text-foreground">{t.threeSteps}</p>
                   <ol class="mt-1 list-decimal space-y-0.5 pl-5 text-xs text-muted-foreground">
-                    <li>Send them the link (or have them scan the code).</li>
-                    <li>They tap <strong>Start</strong> in Telegram.</li>
-                    <li>They appear in the list below — you'll see it here.</li>
+                    <li>{t.step1}</li>
+                    <li>{t.step2Before}<strong>{t.step2Bold}</strong>{t.step2After}</li>
+                    <li>{t.step3}</li>
                   </ol>
                 </div>
                 <div class="flex items-center gap-2">
@@ -374,16 +366,16 @@
                   <Button variant="outline" size="sm" class="h-7 gap-1 text-xs" onclick={copyEnrollmentLink}>
                     {#if copied}
                       <Check class="size-3 text-primary" />
-                      Copied
+                      {t.copied}
                     {:else}
                       <Copy class="size-3" />
-                      Copy link
+                      {t.copyLink}
                     {/if}
                   </Button>
                   {#if canShare()}
                     <Button variant="outline" size="sm" class="h-7 gap-1 text-xs" onclick={shareEnrollmentLink}>
                       <Share2 class="size-3" />
-                      Share
+                      {t.share}
                     </Button>
                   {/if}
                   <a
@@ -393,14 +385,11 @@
                     class={buttonVariants({ variant: "outline", size: "sm" }) + " h-7 gap-1 text-xs"}
                   >
                     <ExternalLink class="size-3" />
-                    Open
+                    {t.open}
                   </a>
                 </div>
                 <div class="rounded-md border border-dashed border-border/70 bg-background/40 p-2.5">
-                  <p class="text-xs text-muted-foreground">
-                    Bot doesn't respond after opening? If they've messaged it before, Telegram won't
-                    resend the code — paste this to the bot instead:
-                  </p>
+                  <p class="text-xs text-muted-foreground">{t.noResponseHint}</p>
                   <div class="mt-1.5 flex items-center gap-2">
                     <code class="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 font-mono text-xs text-foreground">
                       {startCommand()}
@@ -408,10 +397,10 @@
                     <Button variant="outline" size="sm" class="h-7 gap-1 text-xs" onclick={copyStartCommand}>
                       {#if copiedCmd}
                         <Check class="size-3 text-primary" />
-                        Copied
+                        {t.copied}
                       {:else}
                         <Copy class="size-3" />
-                        Copy
+                        {t.copy}
                       {/if}
                     </Button>
                   </div>
@@ -427,27 +416,25 @@
   <!-- Paired beacons -->
   <Card.Root>
     <Card.Header>
-      <Card.Title>Paired recipients</Card.Title>
-      <Card.Description>Contacts that paired via the bot.</Card.Description>
+      <Card.Title>{t.pairedTitle}</Card.Title>
+      <Card.Description>{t.pairedDescription}</Card.Description>
     </Card.Header>
     <Card.Content>
       {#if loading}
-        <Loader label="Loading recipients…" />
+        <Loader label={t.loadingRecipients} />
       {:else if beacons.length === 0}
-        <EmptyState title="No recipients paired">
+        <EmptyState title={t.emptyTitle}>
           {#if hasEnrollmentLink()}
             <div class="flex flex-col items-center gap-3">
-              <p class="max-w-sm text-xs text-muted-foreground">
-                Share the enrollment link — tapping it opens Telegram and pairs the device in one step.
-              </p>
+              <p class="max-w-sm text-xs text-muted-foreground">{t.emptyShareHint}</p>
               <div class="flex items-center gap-2">
                 <Button variant="outline" size="sm" class="gap-1.5" onclick={copyEnrollmentLink}>
                   {#if copied}
                     <Check class="size-4 text-primary" />
-                    Link copied
+                    {t.linkCopied}
                   {:else}
                     <Copy class="size-4" />
-                    Copy enrollment link
+                    {t.copyEnrollmentLink}
                   {/if}
                 </Button>
                 <a
@@ -457,28 +444,24 @@
                   class={buttonVariants({ variant: "outline", size: "sm" }) + " gap-1.5"}
                 >
                   <ExternalLink class="size-4" />
-                  Pair this device
+                  {t.pairThisDevice}
                 </a>
               </div>
             </div>
           {:else if config?.provider_configured}
-            <p class="max-w-sm text-xs text-muted-foreground">
-              Set a pairing code above, then share the enrollment link.
-            </p>
+            <p class="max-w-sm text-xs text-muted-foreground">{t.emptySetCodeHint}</p>
           {:else}
-            <p class="max-w-sm text-xs text-muted-foreground">
-              The Telegram provider needs to be configured before pairing is available.
-            </p>
+            <p class="max-w-sm text-xs text-muted-foreground">{t.emptyNoProviderHint}</p>
           {/if}
         </EmptyState>
       {:else}
         <Table.Root>
           <Table.Header>
             <Table.Row>
-              <Table.Head>Label</Table.Head>
-              <Table.Head>Chat ID</Table.Head>
-              <Table.Head class="w-28">Enabled</Table.Head>
-              <Table.Head class="text-right">Actions</Table.Head>
+              <Table.Head>{t.colLabel}</Table.Head>
+              <Table.Head>{t.colChatId}</Table.Head>
+              <Table.Head class="w-28">{t.colEnabled}</Table.Head>
+              <Table.Head class="text-right">{t.colActions}</Table.Head>
             </Table.Row>
           </Table.Header>
           <Table.Body>
@@ -510,7 +493,7 @@
                     <Button
                       variant="ghost"
                       size="sm"
-                      title="Send test message"
+                      title={t.sendTest}
                       disabled={testingId === b.chat_id}
                       onclick={() => testSend(b)}
                     >
@@ -520,10 +503,10 @@
                         <Send class="size-4" />
                       {/if}
                     </Button>
-                    <Button variant="ghost" size="sm" title="Rename" onclick={() => openRename(b)}>
+                    <Button variant="ghost" size="sm" title={t.rename} onclick={() => openRename(b)}>
                       <Pencil class="size-4" />
                     </Button>
-                    <Button variant="ghost" size="sm" title="Delete" onclick={() => confirmDelete(b)}>
+                    <Button variant="ghost" size="sm" title={t.delete} onclick={() => confirmDelete(b)}>
                       <Trash2 class="size-4" />
                     </Button>
                   </div>
@@ -541,19 +524,19 @@
 <Dialog.Root bind:open={renameOpen}>
   <Dialog.Content class="sm:max-w-md">
     <Dialog.Header>
-      <Dialog.Title>Rename recipient</Dialog.Title>
-      <Dialog.Description>Give this device a recognizable name.</Dialog.Description>
+      <Dialog.Title>{t.renameTitle}</Dialog.Title>
+      <Dialog.Description>{t.renameDescription}</Dialog.Description>
     </Dialog.Header>
     <div class="space-y-2">
-      <Label for="rename-label">Label</Label>
-      <Input id="rename-label" bind:value={renameValue} placeholder="My phone" />
+      <Label for="rename-label">{t.colLabel}</Label>
+      <Input id="rename-label" bind:value={renameValue} placeholder={t.renamePlaceholder} />
     </div>
     <Dialog.Footer>
       <Button variant="outline" onclick={() => (renameOpen = false)} disabled={renaming}>
-        Cancel
+        {c.cancel}
       </Button>
       <Button onclick={doRename} disabled={renaming}>
-        {renaming ? "Saving…" : "Save"}
+        {renaming ? t.saving : c.save}
       </Button>
     </Dialog.Footer>
   </Dialog.Content>
@@ -563,19 +546,17 @@
 <Dialog.Root bind:open={deleteOpen}>
   <Dialog.Content class="sm:max-w-md">
     <Dialog.Header>
-      <Dialog.Title>Remove recipient?</Dialog.Title>
+      <Dialog.Title>{t.removeTitle}</Dialog.Title>
       <Dialog.Description>
-        Remove
-        <span class="font-medium text-foreground">{deleteTarget?.label}</span>. It will stop
-        receiving alerts until it pairs again.
+        {t.removeBefore}<span class="font-medium text-foreground">{deleteTarget?.label}</span>{t.removeAfter}
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
       <Button variant="outline" onclick={() => (deleteOpen = false)} disabled={deleting}>
-        Cancel
+        {c.cancel}
       </Button>
       <Button variant="destructive" onclick={doDelete} disabled={deleting}>
-        {deleting ? "Removing…" : "Remove"}
+        {deleting ? t.removing : t.remove}
       </Button>
     </Dialog.Footer>
   </Dialog.Content>
