@@ -91,6 +91,9 @@
       saving = false;
     }
   }
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].workflowEditor);
 </script>
 
 <Dialog.Root bind:open>
@@ -99,23 +102,23 @@
       <Dialog.Title class="flex items-center gap-2">
         <Table2 class="size-4" /> {dictId ? "Edit dictionary table" : "New dictionary table"}
       </Dialog.Title>
-      <Dialog.Description>Define the columns, then add rows of typed values.</Dialog.Description>
+      <Dialog.Description>{t.defineColumns}</Dialog.Description>
     </Dialog.Header>
 
     <div class="space-y-4">
       <div class="max-w-sm space-y-1.5">
-        <label for="dict-modal-name" class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Name</label>
+        <label for="dict-modal-name" class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t.name}</label>
         <Input id="dict-modal-name" placeholder="e.g. Store hours" bind:value={name} />
       </div>
       {#if loading}
-        <p class="text-sm text-muted-foreground">Loading…</p>
+        <p class="text-sm text-muted-foreground">{t.loading}</p>
       {:else}
         <TableEditor {columns} {rows} {cameras} {recipients} onchange={onTableChange} />
       {/if}
     </div>
 
     <Dialog.Footer>
-      <Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
+      <Button variant="ghost" onclick={() => (open = false)}>{t.cancel}</Button>
       <Button class="press" disabled={saveDisabled()} onclick={save}>
         {saving ? "Saving…" : "Save dictionary"}
       </Button>

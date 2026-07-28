@@ -5,7 +5,7 @@
     value = $bindable(""),
     options,
     disabled = false,
-    placeholder = "Select…",
+    placeholder,
     onchange,
   }: {
     value?: string;
@@ -54,6 +54,9 @@
     document.addEventListener("mousedown", onOutside, true);
     return () => document.removeEventListener("mousedown", onOutside, true);
   });
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].workflowEditor);
 </script>
 
 <div bind:this={containerEl} class="relative">
@@ -63,7 +66,7 @@
     onclick={toggle}
     class="flex h-8 w-full items-center justify-between rounded-md border border-input bg-background px-3 text-sm capitalize shadow-sm ring-offset-background transition-colors hover:bg-accent focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
   >
-    <span class="truncate">{value || placeholder}</span>
+    <span class="truncate">{value || placeholder || t.selectPlaceholder}</span>
     <ChevronDown class="ml-1 size-3.5 shrink-0 opacity-50" />
   </button>
 
@@ -77,7 +80,7 @@
           bind:this={searchEl}
           bind:value={search}
           type="text"
-          placeholder="Search…"
+          placeholder={t.search}
           class="h-6 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
         />
       </div>

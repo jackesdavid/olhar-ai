@@ -105,6 +105,9 @@
     data[ri][ci] = cell;
     emit();
   }
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].workflowEditor);
 </script>
 
 <div class="space-y-3">
@@ -149,7 +152,7 @@
                       variant="ghost"
                       size="icon"
                       class="size-6 shrink-0 text-muted-foreground hover:text-destructive"
-                      title="Remove column"
+                      title={t.removeColumn}
                       {disabled}
                       onclick={() => removeColumn(ci)}
                     >
@@ -164,7 +167,7 @@
                 variant="ghost"
                 size="icon"
                 class="size-7 text-muted-foreground"
-                title="Add column"
+                title={t.addColumn}
                 {disabled}
                 onclick={addColumn}
               >
@@ -229,7 +232,7 @@
                   variant="ghost"
                   size="icon"
                   class="size-7 text-muted-foreground hover:text-destructive"
-                  title="Remove row"
+                  title={t.removeRow}
                   {disabled}
                   onclick={() => removeRow(ri)}
                 >
