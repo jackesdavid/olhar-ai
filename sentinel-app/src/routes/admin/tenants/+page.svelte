@@ -19,6 +19,9 @@
 
   import { admin, type Tenant } from "$lib/api";
   import { auth, assumeTenant } from "$lib/auth.svelte";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].admin);
 
   let loading = $state(true);
   let tenants = $state<Tenant[]>([]);
@@ -37,7 +40,7 @@
     try {
       tenants = await admin.tenants();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load tenants");
+      toast.error(e instanceof Error ? e.message : t.tenantsLoadFailed);
     } finally {
       loading = false;
     }
@@ -47,14 +50,14 @@
     else loading = false;
   });
 
-  async function navigateAs(t: Tenant) {
-    assuming = t.id;
+  async function navigateAs(tn: Tenant) {
+    assuming = tn.id;
     try {
-      await assumeTenant(t.id);
-      toast.success(`Now acting as ${t.name}`);
+      await assumeTenant(tn.id);
+      toast.success(t.nowActingAs(tn.name));
       await goto("/");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not navigate as tenant");
+      toast.error(e instanceof Error ? e.message : t.navigateFailed);
     } finally {
       assuming = null;
     }
@@ -71,9 +74,9 @@
       tEmail = "";
       tPassword = "";
       await load();
-      toast.success("Tenant created");
+      toast.success(t.tenantCreated);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to create tenant");
+      toast.error(e instanceof Error ? e.message : t.tenantCreateFailed);
     } finally {
       creating = false;
     }
@@ -84,20 +87,20 @@
 
 <div class="space-y-6">
   <PageHeader
-    title="Tenants"
-    description="Every workspace on this Sentinel instance."
+    title={t.tenantsTitle}
+    description={t.tenantsDescription}
     icon={Building2}
   >
     {#snippet actions()}
       {#if isMaster}
-        <Button onclick={() => (createOpen = true)}><Plus class="size-4" /> New tenant</Button>
+        <Button onclick={() => (createOpen = true)}><Plus class="size-4" /> {t.newTenant}</Button>
       {/if}
     {/snippet}
   </PageHeader>
 
   {#if !isMaster}
     <Card.Root><Card.Content class="py-10 text-center text-sm text-muted-foreground">
-      This console is for the SaaS administrator only.
+      {t.consoleOnly}
     </Card.Content></Card.Root>
   {:else if loading}
     <Loader />
@@ -107,22 +110,22 @@
         <table class="w-full border-collapse text-sm">
           <thead>
             <tr class="border-b border-border">
-              <th class="py-2 pr-4 text-left font-medium">Name</th>
-              <th class="px-3 py-2 text-left font-medium">Slug</th>
-              <th class="px-3 py-2 text-left font-medium">Status</th>
+              <th class="py-2 pr-4 text-left font-medium">{t.colName}</th>
+              <th class="px-3 py-2 text-left font-medium">{t.colSlug}</th>
+              <th class="px-3 py-2 text-left font-medium">{t.colStatus}</th>
               <th class="px-3 py-2 text-right font-medium"></th>
             </tr>
           </thead>
           <tbody>
-            {#each tenants as t (t.id)}
+            {#each tenants as tn (tn.id)}
               <tr class="border-b border-border/50 last:border-0">
-                <td class="py-2 pr-4 font-medium">{t.name}</td>
-                <td class="px-3 py-2 font-mono text-xs text-muted-foreground">{t.slug}</td>
-                <td class="px-3 py-2"><Badge variant="secondary" class="text-[10px]">{t.status}</Badge></td>
+                <td class="py-2 pr-4 font-medium">{tn.name}</td>
+                <td class="px-3 py-2 font-mono text-xs text-muted-foreground">{tn.slug}</td>
+                <td class="px-3 py-2"><Badge variant="secondary" class="text-[10px]">{tn.status}</Badge></td>
                 <td class="px-3 py-2 text-right">
-                  <Button variant="outline" size="sm" disabled={assuming === t.id} onclick={() => navigateAs(t)}>
-                    {#if assuming === t.id}<Busy size={14} />{:else}<LogIn class="size-3.5" />{/if}
-                    Navigate as tenant
+                  <Button variant="outline" size="sm" disabled={assuming === tn.id} onclick={() => navigateAs(tn)}>
+                    {#if assuming === tn.id}<Busy size={14} />{:else}<LogIn class="size-3.5" />{/if}
+                    {t.navigateAsTenant}
                   </Button>
                 </td>
               </tr>
@@ -130,8 +133,8 @@
             {#if tenants.length === 0}
               <tr><td colspan={4}>
                 <EmptyState
-                  title="No tenants yet"
-                  description="Create the first tenant to onboard a customer workspace."
+                  title={t.tenantsEmptyTitle}
+                  description={t.tenantsEmptyDescription}
                 />
               </td></tr>
             {/if}
@@ -139,36 +142,33 @@
         </table>
       </Card.Content>
     </Card.Root>
-    <p class="text-xs text-muted-foreground">
-      Navigating as a tenant lets you manage its users, roles, and data — but live camera feeds stay private and are
-      never accessible, even to you.
-    </p>
+    <p class="text-xs text-muted-foreground">{t.navigateNote}</p>
   {/if}
 </div>
 
 <Dialog.Root bind:open={createOpen}>
   <Dialog.Content>
     <Dialog.Header>
-      <Dialog.Title>New tenant</Dialog.Title>
-      <Dialog.Description>Creates a workspace and its first admin user.</Dialog.Description>
+      <Dialog.Title>{t.newTenant}</Dialog.Title>
+      <Dialog.Description>{t.newTenantDescription}</Dialog.Description>
     </Dialog.Header>
     <form class="space-y-4" onsubmit={createTenant}>
       <div class="space-y-1.5">
-        <Label for="t-name">Workspace name</Label>
-        <Input id="t-name" bind:value={tName} placeholder="Acme Security" />
+        <Label for="t-name">{t.workspaceName}</Label>
+        <Input id="t-name" bind:value={tName} placeholder={t.workspaceNamePlaceholder} />
       </div>
       <div class="space-y-1.5">
-        <Label for="t-email">Admin email</Label>
-        <Input id="t-email" type="email" bind:value={tEmail} placeholder="admin@acme.com" />
+        <Label for="t-email">{t.adminEmail}</Label>
+        <Input id="t-email" type="email" bind:value={tEmail} placeholder={t.adminEmailPlaceholder} />
       </div>
       <div class="space-y-1.5">
-        <Label for="t-pw">Admin password</Label>
-        <Input id="t-pw" type="password" bind:value={tPassword} placeholder="At least 8 characters" autocomplete="new-password" />
+        <Label for="t-pw">{t.adminPassword}</Label>
+        <Input id="t-pw" type="password" bind:value={tPassword} placeholder={t.adminPasswordPlaceholder} autocomplete="new-password" />
       </div>
       <Dialog.Footer>
         <Button type="submit" disabled={!canCreate || creating}>
           {#if creating}<Busy />{/if}
-          Create tenant
+          {t.createTenant}
         </Button>
       </Dialog.Footer>
     </form>

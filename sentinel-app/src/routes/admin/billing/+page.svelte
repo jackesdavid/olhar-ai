@@ -18,6 +18,9 @@
 
   import { adminBilling, type TenantBilling, type PlanTier, type PlanWithPrices } from "$lib/api";
   import { auth } from "$lib/auth.svelte";
+  import { dict, lang, locale } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].admin);
 
   /** Currencies we sell in: Brazil and the American market. */
   const CURRENCIES = ["BRL", "USD"] as const;
@@ -44,8 +47,7 @@
 
   /** Format an amount in its own currency (BRL uses pt-BR, everything else en-US). */
   function money(n: number | null | undefined, currency: string): string {
-    const locale = currency === "BRL" ? "pt-BR" : "en-US";
-    return new Intl.NumberFormat(locale, { style: "currency", currency }).format(n ?? 0);
+    return new Intl.NumberFormat(locale(), { style: "currency", currency }).format(n ?? 0);
   }
 
   function priceOf(p: PlanWithPrices, currency: string): number {
@@ -64,14 +66,14 @@
   }
 
   function statusLabel(status: string | null): string {
-    return status ?? "no plan";
+    return status ?? t.noPlan;
   }
 
   function trialInfo(row: TenantBilling): string {
     if (row.status !== "trialing" || !row.ended_at) return "";
     const days = Math.ceil((new Date(row.ended_at).getTime() - Date.now()) / 86_400_000);
-    if (days < 0) return "trial ended";
-    return `${days}d left`;
+    if (days < 0) return t.trialEnded;
+    return t.daysLeft(days);
   }
 
   /** MRR per currency — never blend BRL and USD into one number. */
@@ -91,7 +93,7 @@
     try {
       [rows, plans] = await Promise.all([adminBilling.overview(), adminBilling.plans()]);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load billing");
+      toast.error(e instanceof Error ? e.message : t.billingLoadFailed);
     } finally {
       loading = false;
     }
@@ -105,10 +107,10 @@
     busyTenant = row.tenant_id;
     try {
       await adminBilling.grantTrial(row.tenant_id);
-      toast.success(`Trial granted to ${row.tenant_name}`);
+      toast.success(t.trialGranted(row.tenant_name));
       await load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to grant trial");
+      toast.error(e instanceof Error ? e.message : t.trialFailed);
     } finally {
       busyTenant = null;
     }
@@ -118,9 +120,9 @@
     busyTenant = row.tenant_id;
     try {
       const inv = await adminBilling.close(row.tenant_id, period);
-      toast.success(`Closed ${period} for ${row.tenant_name}: ${money(inv.total, inv.currency)}`);
+      toast.success(t.periodClosed(period, row.tenant_name, money(inv.total, inv.currency)));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to close period");
+      toast.error(e instanceof Error ? e.message : t.closeFailed);
     } finally {
       busyTenant = null;
     }
@@ -131,10 +133,10 @@
     busyTenant = row.tenant_id;
     try {
       await adminBilling.setPlan(row.tenant_id, planId);
-      toast.success(`${row.tenant_name} → ${planId}`);
+      toast.success(t.planAssigned(row.tenant_name, planId));
       await load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to set plan");
+      toast.error(e instanceof Error ? e.message : t.setPlanFailed);
     } finally {
       busyTenant = null;
     }
@@ -171,7 +173,7 @@
     e.preventDefault();
     if (!editPlan || savingPlan) return;
     if (!editPlan.id.trim() || !editPlan.name.trim()) {
-      toast.error("Plan id and name are required");
+      toast.error(t.planIdRequired);
       return;
     }
     savingPlan = true;
@@ -183,9 +185,9 @@
       }
       editPlan = null;
       await load();
-      toast.success("Plan saved");
+      toast.success(t.planSaved);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save plan");
+      toast.error(err instanceof Error ? err.message : t.planSaveFailed);
     } finally {
       savingPlan = false;
     }
@@ -193,12 +195,12 @@
 </script>
 
 <div class="space-y-6">
-  <PageHeader title="Billing" description="Plans, subscriptions, and invoices across every tenant." icon={Wallet}>
+  <PageHeader title={t.billingTitle} description={t.billingDescription} icon={Wallet}>
     {#snippet actions()}
       {#if isMaster}
         <div class="flex items-center gap-2">
           <Input class="w-32" bind:value={period} placeholder="YYYY-MM" />
-          <Button variant="outline" onclick={openNewPlan}><Plus class="size-4" /> New plan</Button>
+          <Button variant="outline" onclick={openNewPlan}><Plus class="size-4" /> {t.newPlan}</Button>
         </div>
       {/if}
     {/snippet}
@@ -206,22 +208,22 @@
 
   {#if !isMaster}
     <Card.Root><Card.Content class="py-10 text-center text-sm text-muted-foreground">
-      This console is for the SaaS administrator only.
+      {t.consoleOnly}
     </Card.Content></Card.Root>
   {:else if loading}
     <Loader />
   {:else}
     <div class="grid gap-4 sm:grid-cols-3">
       <Card.Root><Card.Content class="pt-6">
-        <p class="text-xs text-muted-foreground">Tenants</p>
+        <p class="text-xs text-muted-foreground">{t.statTenants}</p>
         <p class="text-2xl font-semibold">{rows.length}</p>
       </Card.Content></Card.Root>
       <Card.Root><Card.Content class="pt-6">
-        <p class="text-xs text-muted-foreground">Active subscriptions</p>
+        <p class="text-xs text-muted-foreground">{t.statActiveSubs}</p>
         <p class="text-2xl font-semibold">{activeCount}</p>
       </Card.Content></Card.Root>
       <Card.Root><Card.Content class="pt-6">
-        <p class="text-xs text-muted-foreground">MRR (active base fees)</p>
+        <p class="text-xs text-muted-foreground">{t.statMrr}</p>
         {#if mrrByCurrency.length === 0}
           <p class="text-2xl font-semibold">—</p>
         {:else}
@@ -233,16 +235,16 @@
     </div>
 
     <Card.Root>
-      <Card.Header><Card.Title>Tenants</Card.Title></Card.Header>
+      <Card.Header><Card.Title>{t.statTenants}</Card.Title></Card.Header>
       <Card.Content class="overflow-x-auto">
         <table class="w-full border-collapse text-sm">
           <thead>
             <tr class="border-b border-border">
-              <th class="py-2 pr-4 text-left font-medium">Tenant</th>
-              <th class="px-3 py-2 text-left font-medium">Plan</th>
-              <th class="px-3 py-2 text-left font-medium">Status</th>
-              <th class="px-3 py-2 text-right font-medium">Base fee</th>
-              <th class="px-3 py-2 text-right font-medium">Actions</th>
+              <th class="py-2 pr-4 text-left font-medium">{t.colTenant}</th>
+              <th class="px-3 py-2 text-left font-medium">{t.colPlan}</th>
+              <th class="px-3 py-2 text-left font-medium">{t.colStatus}</th>
+              <th class="px-3 py-2 text-right font-medium">{t.colBaseFee}</th>
+              <th class="px-3 py-2 text-right font-medium">{t.colActions}</th>
             </tr>
           </thead>
           <tbody>
@@ -261,16 +263,16 @@
                 <td class="px-3 py-2">
                   <div class="flex justify-end gap-1.5">
                     <Button variant="outline" size="sm" disabled={busyTenant === r.tenant_id} onclick={() => (planPickerFor = r)}>
-                      {#if busyTenant === r.tenant_id}<Busy size={14} />{/if} Change plan
+                      {#if busyTenant === r.tenant_id}<Busy size={14} />{/if} {t.changePlan}
                     </Button>
-                    <Button variant="ghost" size="sm" disabled={busyTenant === r.tenant_id} onclick={() => grantTrial(r)}>Trial</Button>
-                    <Button variant="ghost" size="sm" disabled={busyTenant === r.tenant_id} onclick={() => closePeriod(r)}>Close {period}</Button>
+                    <Button variant="ghost" size="sm" disabled={busyTenant === r.tenant_id} onclick={() => grantTrial(r)}>{t.trial}</Button>
+                    <Button variant="ghost" size="sm" disabled={busyTenant === r.tenant_id} onclick={() => closePeriod(r)}>{t.closePeriod(period)}</Button>
                   </div>
                 </td>
               </tr>
             {/each}
             {#if rows.length === 0}
-              <tr><td colspan={5}><EmptyState title="No tenants" description="Create a tenant to start billing." /></td></tr>
+              <tr><td colspan={5}><EmptyState title={t.noTenantsTitle} description={t.noTenantsDescription} /></td></tr>
             {/if}
           </tbody>
         </table>
@@ -278,19 +280,19 @@
     </Card.Root>
 
     <Card.Root>
-      <Card.Header><Card.Title>Plan catalog</Card.Title></Card.Header>
+      <Card.Header><Card.Title>{t.planCatalog}</Card.Title></Card.Header>
       <Card.Content class="overflow-x-auto">
         <table class="w-full border-collapse text-sm">
           <thead>
             <tr class="border-b border-border">
-              <th class="py-2 pr-4 text-left font-medium">Plan</th>
+              <th class="py-2 pr-4 text-left font-medium">{t.colPlan}</th>
               {#each CURRENCIES as c (c)}
                 <th class="px-3 py-2 text-right font-medium">{c}</th>
               {/each}
-              <th class="px-3 py-2 text-right font-medium">Cameras</th>
-              <th class="px-3 py-2 text-right font-medium">Trial</th>
-              <th class="px-3 py-2 text-right font-medium">Retention</th>
-              <th class="px-3 py-2 text-left font-medium">Active</th>
+              <th class="px-3 py-2 text-right font-medium">{t.colCameras}</th>
+              <th class="px-3 py-2 text-right font-medium">{t.colTrial}</th>
+              <th class="px-3 py-2 text-right font-medium">{t.colRetention}</th>
+              <th class="px-3 py-2 text-left font-medium">{t.colActive}</th>
               <th class="px-3 py-2 text-right font-medium"></th>
             </tr>
           </thead>
@@ -304,9 +306,9 @@
                 <td class="px-3 py-2 text-right tabular-nums">{p.camera_cap}</td>
                 <td class="px-3 py-2 text-right tabular-nums">{p.trial_days ? `${p.trial_days}d` : "—"}</td>
                 <td class="px-3 py-2 text-right tabular-nums">{p.retention_days ? `${p.retention_days}d` : "—"}</td>
-                <td class="px-3 py-2"><Badge variant={p.active ? "default" : "outline"} class="text-[10px]">{p.active ? "yes" : "no"}</Badge></td>
+                <td class="px-3 py-2"><Badge variant={p.active ? "default" : "outline"} class="text-[10px]">{p.active ? t.yes : t.no}</Badge></td>
                 <td class="px-3 py-2 text-right">
-                  <Button variant="ghost" size="sm" onclick={() => openEditPlan(p)}><Pencil class="size-3.5" /> Edit</Button>
+                  <Button variant="ghost" size="sm" onclick={() => openEditPlan(p)}><Pencil class="size-3.5" /> {t.edit}</Button>
                 </td>
               </tr>
             {/each}
@@ -321,8 +323,8 @@
 <Dialog.Root open={planPickerFor !== null} onOpenChange={(o) => { if (!o) planPickerFor = null; }}>
   <Dialog.Content>
     <Dialog.Header>
-      <Dialog.Title>Change plan{planPickerFor ? ` — ${planPickerFor.tenant_name}` : ""}</Dialog.Title>
-      <Dialog.Description>Assign a plan directly (master override, no payment).</Dialog.Description>
+      <Dialog.Title>{planPickerFor ? t.changePlanNamed(planPickerFor.tenant_name) : t.changePlan}</Dialog.Title>
+      <Dialog.Description>{t.changePlanDescription}</Dialog.Description>
     </Dialog.Header>
     <div class="space-y-2">
       {#each plans as p (p.id)}
@@ -334,7 +336,7 @@
         >
           <span>{p.name}</span>
           <span class="text-muted-foreground">
-            {planPickerFor ? money(priceOf(p, planPickerFor.currency), planPickerFor.currency) : ""} · {p.camera_cap} cam
+            {planPickerFor ? money(priceOf(p, planPickerFor.currency), planPickerFor.currency) : ""} · {t.camAbbrev(p.camera_cap)}
           </span>
         </Button>
       {/each}
@@ -346,56 +348,56 @@
 <Dialog.Root open={editPlan !== null} onOpenChange={(o) => { if (!o) editPlan = null; }}>
   <Dialog.Content>
     <Dialog.Header>
-      <Dialog.Title>{editPlan && planExists(editPlan.id) ? "Edit plan" : "New plan"}</Dialog.Title>
-      <Dialog.Description>Prices are set per currency. Trial days blank = paid plan.</Dialog.Description>
+      <Dialog.Title>{editPlan && planExists(editPlan.id) ? t.editPlan : t.newPlan}</Dialog.Title>
+      <Dialog.Description>{t.planDialogDescription}</Dialog.Description>
     </Dialog.Header>
     {#if editPlan}
       <form class="space-y-3" onsubmit={savePlan}>
         <div class="grid grid-cols-2 gap-3">
           <div class="space-y-1.5">
-            <Label for="p-id">Id (slug)</Label>
+            <Label for="p-id">{t.idSlug}</Label>
             <Input id="p-id" bind:value={editPlan.id} placeholder="home" disabled={planExists(editPlan.id)} />
           </div>
           <div class="space-y-1.5">
-            <Label for="p-name">Name</Label>
+            <Label for="p-name">{t.planName}</Label>
             <Input id="p-name" bind:value={editPlan.name} placeholder="Home" />
           </div>
           {#each CURRENCIES as c (c)}
             <div class="space-y-1.5">
-              <Label for={`p-price-${c}`}>Price ({c})</Label>
+              <Label for={`p-price-${c}`}>{t.priceIn(c)}</Label>
               <Input id={`p-price-${c}`} type="number" step="0.01" bind:value={editPrices[c]} />
             </div>
           {/each}
           {#each CURRENCIES as c (c)}
             <div class="space-y-1.5">
-              <Label for={`p-over-${c}`}>Storage overage / GB-mo ({c})</Label>
+              <Label for={`p-over-${c}`}>{t.overageIn(c)}</Label>
               <Input id={`p-over-${c}`} type="number" step="0.01" bind:value={editOverage[c]} />
             </div>
           {/each}
           <div class="space-y-1.5">
-            <Label for="p-ret">Cloud retention (days)</Label>
+            <Label for="p-ret">{t.cloudRetentionDays}</Label>
             <Input id="p-ret" type="number" bind:value={editPlan.retention_days} />
           </div>
           <div class="space-y-1.5">
-            <Label for="p-quota">Included storage (GB)</Label>
+            <Label for="p-quota">{t.includedStorageGb}</Label>
             <Input id="p-quota" type="number" bind:value={editPlan.included_storage_gb} />
           </div>
           <div class="space-y-1.5">
-            <Label for="p-cap">Camera cap</Label>
+            <Label for="p-cap">{t.cameraCap}</Label>
             <Input id="p-cap" type="number" bind:value={editPlan.camera_cap} />
           </div>
           <div class="space-y-1.5">
-            <Label for="p-trial">Trial days (blank = none)</Label>
+            <Label for="p-trial">{t.trialDays}</Label>
             <Input id="p-trial" type="number" bind:value={editPlan.trial_days} />
           </div>
           <div class="flex items-end gap-2">
             <input id="p-active" type="checkbox" bind:checked={editPlan.active} class="size-4" />
-            <Label for="p-active">Active</Label>
+            <Label for="p-active">{t.active}</Label>
           </div>
         </div>
         <Dialog.Footer>
           <Button type="submit" disabled={savingPlan}>
-            {#if savingPlan}<Busy />{/if} Save plan
+            {#if savingPlan}<Busy />{/if} {t.savePlan}
           </Button>
         </Dialog.Footer>
       </form>

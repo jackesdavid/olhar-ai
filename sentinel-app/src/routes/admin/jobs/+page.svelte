@@ -18,6 +18,9 @@
   import { adminJobs, admin, type CategoryStat, type MonitorJob, type Tenant, type JobSeries } from "$lib/api";
   import { auth } from "$lib/auth.svelte";
   import { fmtTs } from "$lib/utils";
+  import { dict, lang, locale } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].admin);
 
   const isMaster = auth.me?.is_master ?? false;
   const PAGE_SIZE = 50;
@@ -34,30 +37,30 @@
   let page = $state(0);
 
   // Time window — the panel counts only within it (recent past + live, not all history).
-  const WINDOW_OPTIONS = [
-    { value: "60", label: "Last minute" },
-    { value: "3600", label: "Last hour" },
-    { value: "86400", label: "Last day" },
-    { value: "259200", label: "Last 3 days" },
-    { value: "604800", label: "Last week" },
-  ];
+  const WINDOW_OPTIONS = $derived([
+    { value: "60", label: t.windowMinute },
+    { value: "3600", label: t.windowHour },
+    { value: "86400", label: t.windowDay },
+    { value: "259200", label: t.window3Days },
+    { value: "604800", label: t.windowWeek },
+  ]);
   let windowSecs = $state(86400); // default: last day
   function windowLabel(secs: number): string {
-    return WINDOW_OPTIONS.find((o) => o.value === String(secs))?.label ?? "Last day";
+    return WINDOW_OPTIONS.find((o) => o.value === String(secs))?.label ?? t.windowDay;
   }
 
   // Auto-refresh: 0 = off. A silent reload each tick (no top-level spinner) so the panel updates
   // in place without flicker.
-  const REFRESH_OPTIONS = [
-    { value: "0", label: "Off" },
+  const REFRESH_OPTIONS = $derived([
+    { value: "0", label: t.off },
     { value: "5", label: "5s" },
     { value: "10", label: "10s" },
     { value: "20", label: "20s" },
-    { value: "60", label: "1 min" },
-  ];
+    { value: "60", label: t.oneMinute },
+  ]);
   let autoSecs = $state(0);
   function autoLabel(secs: number): string {
-    return REFRESH_OPTIONS.find((o) => o.value === String(secs))?.label ?? "Off";
+    return REFRESH_OPTIONS.find((o) => o.value === String(secs))?.label ?? t.off;
   }
 
   const pageCount = $derived(Math.max(1, Math.ceil(total / PAGE_SIZE)));
@@ -79,9 +82,9 @@
     return tenants.find((t) => t.id === id)?.name ?? id.slice(0, 8);
   }
   function prettyCategory(c: string): string {
-    if (c === "clip_delete") return "Clip delete";
-    if (c === "workflow_event") return "Workflow events";
-    if (c === "notification") return "Notifications";
+    if (c === "clip_delete") return t.catClipDelete;
+    if (c === "workflow_event") return t.catWorkflowEvent;
+    if (c === "notification") return t.catNotification;
     return c;
   }
   function statusClass(status: string): string {
@@ -124,13 +127,13 @@
   }
   function barTitle(b: { t: number; c: number }): string {
     const d = new Date(b.t * 1000);
-    return `${d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })} · ${b.c}`;
+    return `${d.toLocaleString(locale(), { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })} · ${b.c}`;
   }
-  function axisLabel(t: number): string {
+  function axisLabel(ts: number): string {
     // Show seconds on the short (sub-5-min) view, where minute-only labels would all read the same.
     const opts: Intl.DateTimeFormatOptions =
       windowSecs <= 300 ? { minute: "2-digit", second: "2-digit" } : { hour: "2-digit", minute: "2-digit" };
-    return new Date(t * 1000).toLocaleTimeString([], opts);
+    return new Date(ts * 1000).toLocaleTimeString(locale(), opts);
   }
   async function loadList() {
     const res = await adminJobs.list({
@@ -148,7 +151,7 @@
     try {
       await Promise.all([loadStats(), loadList(), loadSeries()]);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load jobs");
+      toast.error(e instanceof Error ? e.message : t.jobsLoadFailed);
     } finally {
       loading = false;
     }
@@ -164,8 +167,8 @@
   // Reinstalls the interval whenever the cadence changes; cleared on change/unmount.
   $effect(() => {
     if (autoSecs <= 0) return;
-    const t = setInterval(silentRefresh, autoSecs * 1000);
-    return () => clearInterval(t);
+    const iv = setInterval(silentRefresh, autoSecs * 1000);
+    return () => clearInterval(iv);
   });
 
   function onTenantChange(v: string) {
@@ -197,15 +200,15 @@
 
 <div class="flex flex-col gap-6 p-6">
   <PageHeader
-    title="System load"
-    description="Every async job across the platform — clip deletion, workflow events, notification sends — in one queue."
+    title={t.jobsTitle}
+    description={t.jobsDescription}
     icon={Activity}
   >
     {#snippet actions()}
       {#if isMaster}
         <div class="flex items-center gap-2">
           <Select.Root type="single" value={String(windowSecs)} onValueChange={onWindowChange}>
-            <Select.Trigger class="h-8 w-32 text-sm" title="Time window">
+            <Select.Trigger class="h-8 w-32 text-sm" title={t.timeWindow}>
               {windowLabel(windowSecs)}
             </Select.Trigger>
             <Select.Content>
@@ -216,18 +219,18 @@
           </Select.Root>
           <Select.Root type="single" value={tenantFilter || "_all"} onValueChange={onTenantChange}>
             <Select.Trigger class="h-8 w-48 text-sm">
-              {tenantFilter ? tenantName(tenantFilter) : "All tenants"}
+              {tenantFilter ? tenantName(tenantFilter) : t.allTenants}
             </Select.Trigger>
             <Select.Content>
-              <Select.Item value="_all" label="All tenants">All tenants</Select.Item>
-              {#each tenants as t (t.id)}
-                <Select.Item value={t.id} label={t.name}>{t.name}</Select.Item>
+              <Select.Item value="_all" label={t.allTenants}>{t.allTenants}</Select.Item>
+              {#each tenants as tn (tn.id)}
+                <Select.Item value={tn.id} label={tn.name}>{tn.name}</Select.Item>
               {/each}
             </Select.Content>
           </Select.Root>
           <Select.Root type="single" value={String(autoSecs)} onValueChange={(v) => (autoSecs = Number(v))}>
-            <Select.Trigger class="h-8 w-32 text-sm" title="Auto-refresh">
-              Auto: {autoLabel(autoSecs)}
+            <Select.Trigger class="h-8 w-32 text-sm" title={t.autoRefresh}>
+              {t.autoPrefix(autoLabel(autoSecs))}
             </Select.Trigger>
             <Select.Content>
               {#each REFRESH_OPTIONS as opt (opt.value)}
@@ -237,7 +240,7 @@
           </Select.Root>
           <Button variant="outline" size="sm" onclick={refresh} disabled={loading}>
             {#if loading}<Busy class="mr-2" />{:else}<RefreshCw class="mr-2 h-4 w-4" />{/if}
-            Refresh
+            {t.refresh}
           </Button>
         </div>
       {/if}
@@ -246,7 +249,7 @@
 
   {#if !isMaster}
     <Card.Root><Card.Content class="py-10 text-center text-sm text-muted-foreground">
-      This console is for the SaaS administrator only.
+      {t.consoleOnly}
     </Card.Content></Card.Root>
   {:else if loading}
     <Loader />
@@ -254,15 +257,15 @@
     <!-- headline numbers -->
     <div class="grid gap-4 sm:grid-cols-3">
       <Card.Root><Card.Content class="pt-6">
-        <p class="text-xs text-muted-foreground">Open now (pending + running)</p>
+        <p class="text-xs text-muted-foreground">{t.openNow}</p>
         <p class="text-2xl font-semibold tabular-nums">{openNow}</p>
       </Card.Content></Card.Root>
       <Card.Root><Card.Content class="pt-6">
-        <p class="text-xs text-muted-foreground">Failed</p>
+        <p class="text-xs text-muted-foreground">{t.failed}</p>
         <p class="text-2xl font-semibold tabular-nums">{failedTotal}</p>
       </Card.Content></Card.Root>
       <Card.Root><Card.Content class="pt-6">
-        <p class="text-xs text-muted-foreground">Categories</p>
+        <p class="text-xs text-muted-foreground">{t.categories}</p>
         <p class="text-2xl font-semibold tabular-nums">{categories.length}</p>
       </Card.Content></Card.Root>
     </div>
@@ -271,11 +274,11 @@
     <Card.Root class="animate-in fade-in duration-300">
       <Card.Content class="pt-6">
         <div class="flex items-baseline justify-between">
-          <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Jobs over time</p>
+          <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t.jobsOverTime}</p>
           <span class="text-xs text-muted-foreground tabular-nums">{windowLabel(windowSecs)} · peak {maxBar}</span>
         </div>
         {#if chartEmpty}
-          <p class="mt-6 text-sm text-muted-foreground">No jobs in this window.</p>
+          <p class="mt-6 text-sm text-muted-foreground">{t.noJobsInWindow}</p>
         {:else}
           <div class="mt-6 flex h-36 items-end gap-[3px] border-b border-border">
             {#each chartBars as b (b.t)}
@@ -317,13 +320,13 @@
 
     <!-- recent jobs -->
     <div class="flex items-center gap-2">
-      <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recent jobs</span>
+      <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t.recentJobs}</span>
       <Select.Root type="single" value={categoryFilter || "_all"} onValueChange={onCategoryChange}>
         <Select.Trigger class="h-8 w-44 text-sm">
-          {categoryFilter ? prettyCategory(categoryFilter) : "All categories"}
+          {categoryFilter ? prettyCategory(categoryFilter) : t.allCategories}
         </Select.Trigger>
         <Select.Content>
-          <Select.Item value="_all" label="All categories">All categories</Select.Item>
+          <Select.Item value="_all" label={t.allCategories}>{t.allCategories}</Select.Item>
           {#each categories as cat (cat)}
             <Select.Item value={cat} label={prettyCategory(cat)}>{prettyCategory(cat)}</Select.Item>
           {/each}
@@ -332,19 +335,19 @@
     </div>
 
     {#if items.length === 0}
-      <EmptyState title="No jobs" description="Nothing matches the current filter." />
+      <EmptyState title={t.noJobsTitle} description={t.noJobsDescription} />
     {:else}
       <div class="rounded-lg border border-border overflow-hidden">
         <Table.Root>
           <Table.Header>
             <Table.Row>
-              <Table.Head>Category</Table.Head>
-              <Table.Head>Kind</Table.Head>
-              <Table.Head>Status</Table.Head>
-              {#if !tenantFilter}<Table.Head>Tenant</Table.Head>{/if}
-              <Table.Head class="text-right">Attempts</Table.Head>
-              <Table.Head>Created</Table.Head>
-              <Table.Head>Error</Table.Head>
+              <Table.Head>{t.colCategory}</Table.Head>
+              <Table.Head>{t.colKind}</Table.Head>
+              <Table.Head>{t.colStatus}</Table.Head>
+              {#if !tenantFilter}<Table.Head>{t.colTenant}</Table.Head>{/if}
+              <Table.Head class="text-right">{t.colAttempts}</Table.Head>
+              <Table.Head>{t.colCreated}</Table.Head>
+              <Table.Head>{t.colError}</Table.Head>
             </Table.Row>
           </Table.Header>
           <Table.Body>
@@ -365,10 +368,10 @@
 
       {#if pageCount > 1}
         <div class="flex items-center justify-between text-sm text-muted-foreground">
-          <span>Page {page + 1} of {pageCount} ({total} jobs)</span>
+          <span>{t.pageOf(page + 1, pageCount, total)}</span>
           <div class="flex gap-2">
-            <Button variant="outline" size="sm" onclick={prevPage} disabled={page === 0}>Prev</Button>
-            <Button variant="outline" size="sm" onclick={nextPage} disabled={page >= pageCount - 1}>Next</Button>
+            <Button variant="outline" size="sm" onclick={prevPage} disabled={page === 0}>{t.prev}</Button>
+            <Button variant="outline" size="sm" onclick={nextPage} disabled={page >= pageCount - 1}>{t.next}</Button>
           </div>
         </div>
       {/if}

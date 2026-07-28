@@ -16,6 +16,10 @@
 
   import { adminBilling, type TenantStorage } from "$lib/api";
   import { auth } from "$lib/auth.svelte";
+  import { dict, lang, locale } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].admin);
+  const c = $derived(dict[lang()].common);
 
   const isMaster = auth.me?.is_master ?? false;
 
@@ -36,11 +40,10 @@
     return `${gb.toFixed(gb < 10 ? 2 : 1)} GB`;
   }
   function money(n: number, currency: string): string {
-    const locale = currency === "BRL" ? "pt-BR" : "en-US";
-    return new Intl.NumberFormat(locale, { style: "currency", currency }).format(n);
+    return new Intl.NumberFormat(locale(), { style: "currency", currency }).format(n);
   }
   function planLabel(r: TenantStorage): string {
-    return r.plan_name ?? "No plan";
+    return r.plan_name ?? t.noPlan;
   }
   /** Percent of quota the stored stock uses; 0 when the plan has no cloud quota. */
   function usedPct(r: TenantStorage): number {
@@ -63,7 +66,7 @@
     try {
       rows = await adminBilling.storage();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load storage");
+      toast.error(e instanceof Error ? e.message : t.storageLoadFailed);
     } finally {
       loading = false;
     }
@@ -81,15 +84,15 @@
 
   async function confirmPurge() {
     if (!purgeTarget) return;
-    const t = purgeTarget;
-    purging = t.tenant_id;
+    const target = purgeTarget;
+    purging = target.tenant_id;
     purgeTarget = null;
     try {
-      const res = await adminBilling.purgeStorage(t.tenant_id);
-      toast.success(`Purged ${res.objects_removed} object(s) from ${t.tenant_name}.`);
+      const res = await adminBilling.purgeStorage(target.tenant_id);
+      toast.success(t.purged(res.objects_removed, target.tenant_name));
       await load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Purge failed");
+      toast.error(e instanceof Error ? e.message : t.purgeFailed);
     } finally {
       purging = null;
     }
@@ -104,45 +107,44 @@
 <Dialog.Root open={purgeTarget !== null} onOpenChange={(o: boolean) => { if (!o) purgeTarget = null; }}>
   <Dialog.Content>
     <Dialog.Header>
-      <Dialog.Title>Purge {purgeTarget?.tenant_name}'s cloud footage?</Dialog.Title>
+      <Dialog.Title>{t.purgeConfirmTitle(purgeTarget?.tenant_name ?? "")}</Dialog.Title>
       <Dialog.Description>
-        {purgeTarget ? `${purgeTarget.clip_count} clip(s), ${fmtGB(purgeTarget.stored_bytes)} in the bucket` : ""}
-        will be permanently deleted from cloud storage. Local copies on the edge box are not
-        touched. This is audited and cannot be undone.
+        {purgeTarget ? t.purgeConfirmCount(purgeTarget.clip_count, fmtGB(purgeTarget.stored_bytes)) : ""}
+        {t.purgeConfirmRest}
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
-      <Button variant="outline" onclick={() => (purgeTarget = null)}>Cancel</Button>
-      <Button variant="destructive" onclick={confirmPurge}>Purge</Button>
+      <Button variant="outline" onclick={() => (purgeTarget = null)}>{c.cancel}</Button>
+      <Button variant="destructive" onclick={confirmPurge}>{t.purge}</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
 
 <div class="flex flex-col gap-6 p-6">
   <PageHeader
-    title="Storage"
-    description="Cloud footage stored per tenant — heaviest first, so a runaway recorder is at the top."
+    title={t.storageTitle}
+    description={t.storageDescription}
     icon={HardDrive}
   />
 
   {#if !isMaster}
     <Card.Root><Card.Content class="py-10 text-center text-sm text-muted-foreground">
-      This console is for the SaaS administrator only.
+      {t.consoleOnly}
     </Card.Content></Card.Root>
   {:else if loading}
     <Loader />
   {:else}
     <div class="grid gap-4 sm:grid-cols-3">
       <Card.Root><Card.Content class="pt-6">
-        <p class="text-xs text-muted-foreground">Stored across all tenants</p>
+        <p class="text-xs text-muted-foreground">{t.storedAcrossTenants}</p>
         <p class="text-2xl font-semibold tabular-nums">{fmtGB(totalStoredBytes)}</p>
       </Card.Content></Card.Root>
       <Card.Root><Card.Content class="pt-6">
-        <p class="text-xs text-muted-foreground">Cloud clips</p>
+        <p class="text-xs text-muted-foreground">{t.cloudClips}</p>
         <p class="text-2xl font-semibold tabular-nums">{totalClips}</p>
       </Card.Content></Card.Root>
       <Card.Root><Card.Content class="pt-6">
-        <p class="text-xs text-muted-foreground">Tenants over quota</p>
+        <p class="text-xs text-muted-foreground">{t.tenantsOverQuota}</p>
         <p class="text-2xl font-semibold tabular-nums">{overageCount}</p>
       </Card.Content></Card.Root>
     </div>
@@ -151,12 +153,12 @@
       <Table.Root>
         <Table.Header>
           <Table.Row>
-            <Table.Head>Tenant</Table.Head>
-            <Table.Head>Plan</Table.Head>
-            <Table.Head class="text-right">Stored now</Table.Head>
-            <Table.Head class="w-40">Quota used</Table.Head>
-            <Table.Head class="text-right">GB-month</Table.Head>
-            <Table.Head class="text-right">Projected overage</Table.Head>
+            <Table.Head>{t.colTenant}</Table.Head>
+            <Table.Head>{t.colPlan}</Table.Head>
+            <Table.Head class="text-right">{t.colStoredNow}</Table.Head>
+            <Table.Head class="w-40">{t.colQuotaUsed}</Table.Head>
+            <Table.Head class="text-right">{t.colGbMonth}</Table.Head>
+            <Table.Head class="text-right">{t.colProjectedOverage}</Table.Head>
             <Table.Head class="w-12"></Table.Head>
           </Table.Row>
         </Table.Header>
@@ -175,7 +177,7 @@
                     <span class="w-24 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{quotaLabel(r)}</span>
                   </div>
                 {:else}
-                  <span class="text-xs text-muted-foreground">no cloud plan</span>
+                  <span class="text-xs text-muted-foreground">{t.noCloudPlan}</span>
                 {/if}
               </Table.Cell>
               <Table.Cell class="text-right tabular-nums">{r.gb_month.toFixed(2)}</Table.Cell>
@@ -193,7 +195,7 @@
                   <Button
                     variant="ghost"
                     size="icon"
-                    title="Purge cloud footage"
+                    title={t.purgeTitle}
                     disabled={purging === r.tenant_id}
                     onclick={() => (purgeTarget = r)}
                   >

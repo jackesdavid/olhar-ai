@@ -32,6 +32,7 @@ import { map } from "./messages/map";
 import { faces } from "./messages/faces";
 import { playback } from "./messages/playback";
 import { workflowPages } from "./messages/workflowPages";
+import { admin } from "./messages/admin";
 
 export { lang, setLang, initLang, locale, type Lang } from "./runtime.svelte";
 
@@ -72,6 +73,7 @@ const modules = {
   faces: domain(faces),
   playback: domain(playback),
   workflowPages: domain(workflowPages),
+  admin: domain(admin),
 };
 
 /** One language's messages — every module, narrowed to that language. */
