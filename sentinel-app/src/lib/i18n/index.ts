@@ -18,6 +18,9 @@ import { beacons } from "./messages/beacons";
 import { settings } from "./messages/settings";
 import { devices } from "./messages/devices";
 import { recordings } from "./messages/recordings";
+import { users } from "./messages/users";
+import { roles } from "./messages/roles";
+import { integrations } from "./messages/integrations";
 
 export { lang, setLang, initLang, locale, type Lang } from "./runtime.svelte";
 
@@ -44,6 +47,9 @@ const modules = {
   settings: domain(settings),
   devices: domain(devices),
   recordings: domain(recordings),
+  users: domain(users),
+  roles: domain(roles),
+  integrations: domain(integrations),
 };
 
 /** One language's messages — every module, narrowed to that language. */

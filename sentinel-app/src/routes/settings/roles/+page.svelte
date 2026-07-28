@@ -17,6 +17,10 @@
 
   import { rbac, type Permission, type Role } from "$lib/api";
   import { hasPerm } from "$lib/auth.svelte";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].roles);
+  const c = $derived(dict[lang()].common);
 
   /** Removing this from a role can lock the caller out of this very screen. */
   const SELF_LOCKOUT_KEY = "roles.manage";
@@ -47,7 +51,7 @@
       );
       matrix = Object.fromEntries(entries);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load roles");
+      toast.error(e instanceof Error ? e.message : t.loadFailed);
     } finally {
       loading = false;
     }
@@ -117,7 +121,7 @@
     try {
       await rbac.setRolePerms(role.id, [...set]);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to save");
+      toast.error(e instanceof Error ? e.message : t.saveFailed);
       await load(); // re-sync from the server
     } finally {
       saving = null;
@@ -143,9 +147,9 @@
       newRole = "";
       createOpen = false;
       await load();
-      toast.success(`Role "${name}" created`);
+      toast.success(t.created(name));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to create role");
+      toast.error(e instanceof Error ? e.message : t.createFailed);
     } finally {
       creating = false;
     }
@@ -154,13 +158,13 @@
 
 <div class="space-y-6">
   <PageHeader
-    title="Roles & permissions"
-    description="Access is granted by action, never by role name. Changes save as you toggle."
+    title={t.title}
+    description={t.description}
     icon={ShieldCheck}
   >
     {#snippet actions()}
       {#if allowed}
-        <Button onclick={() => (createOpen = true)}><Plus class="size-4" /> New role</Button>
+        <Button onclick={() => (createOpen = true)}><Plus class="size-4" /> {t.newRole}</Button>
       {/if}
     {/snippet}
   </PageHeader>
@@ -169,8 +173,8 @@
     <Card.Root>
       <Card.Content class="py-4">
         <EmptyState
-          title="You can't manage roles"
-          description="Ask an administrator for the roles.manage action to edit the permission matrix."
+          title={t.noPermissionTitle}
+          description={t.noPermissionDescription}
         />
       </Card.Content>
     </Card.Root>
@@ -179,8 +183,8 @@
   {:else if roles.length === 0}
     <Card.Root>
       <Card.Content class="py-4">
-        <EmptyState title="No roles yet" description="Create a role, then grant it the actions it needs.">
-          <Button onclick={() => (createOpen = true)}><Plus class="size-4" /> New role</Button>
+        <EmptyState title={t.emptyTitle} description={t.emptyDescription}>
+          <Button onclick={() => (createOpen = true)}><Plus class="size-4" /> {t.newRole}</Button>
         </EmptyState>
       </Card.Content>
     </Card.Root>
@@ -191,7 +195,7 @@
           <thead>
             <tr class="border-b border-border">
               <th class="sticky left-0 z-10 bg-card py-2 pr-6 text-left align-bottom">
-                <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Action</span>
+                <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t.action}</span>
               </th>
               {#each roles as role (role.id)}
                 <th class="px-4 py-2 text-center align-bottom font-medium">
@@ -199,7 +203,7 @@
                     <div class="inline-flex items-center gap-1.5">
                       <span>{role.name}</span>
                       {#if role.is_system}
-                        <Badge variant="secondary" class="text-[10px]">system</Badge>
+                        <Badge variant="secondary" class="text-[10px]">{t.system}</Badge>
                       {/if}
                       {#if saving === role.id}<Busy size={12} class="text-muted-foreground" />{/if}
                     </div>
@@ -250,8 +254,7 @@
     </Card.Root>
 
     <p class="text-xs text-muted-foreground">
-      A filled dot grants the action to that role. System roles come with sensible defaults —
-      <span class="font-medium text-foreground">Admin</span> always receives every action, including new ones.
+      {t.footnoteBefore}<span class="font-medium text-foreground">{t.admin}</span>{t.footnoteAfter}
     </p>
   {/if}
 </div>
@@ -260,18 +263,18 @@
 <Dialog.Root bind:open={createOpen}>
   <Dialog.Content>
     <Dialog.Header>
-      <Dialog.Title>New role</Dialog.Title>
-      <Dialog.Description>Create a custom role, then grant it actions in the matrix.</Dialog.Description>
+      <Dialog.Title>{t.newRole}</Dialog.Title>
+      <Dialog.Description>{t.createDescription}</Dialog.Description>
     </Dialog.Header>
     <form class="space-y-4" onsubmit={createRole}>
       <div class="space-y-1.5">
-        <Label for="role-name">Role name</Label>
-        <Input id="role-name" bind:value={newRole} placeholder="e.g. Operator" />
+        <Label for="role-name">{t.roleName}</Label>
+        <Input id="role-name" bind:value={newRole} placeholder={t.roleNamePlaceholder} />
       </div>
       <Dialog.Footer>
         <Button type="submit" disabled={!canCreate || creating}>
           {#if creating}<Busy />{/if}
-          Create role
+          {t.createRole}
         </Button>
       </Dialog.Footer>
     </form>
@@ -282,17 +285,16 @@
 <Dialog.Root open={confirming !== null} onOpenChange={(o) => { if (!o) confirming = null; }}>
   <Dialog.Content>
     <Dialog.Header>
-      <Dialog.Title>Remove “{SELF_LOCKOUT_KEY}”?</Dialog.Title>
+      <Dialog.Title>{t.lockoutTitle(SELF_LOCKOUT_KEY)}</Dialog.Title>
       <Dialog.Description>
         {#if confirming}
-          If you hold the <span class="font-medium text-foreground">{confirming.role.name}</span> role, you will lose
-          access to this screen and won't be able to grant it back yourself.
+          {t.lockoutBefore}<span class="font-medium text-foreground">{confirming.role.name}</span>{t.lockoutAfter}
         {/if}
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
-      <Button variant="outline" onclick={() => (confirming = null)}>Cancel</Button>
-      <Button variant="destructive" onclick={confirmToggle}>Remove anyway</Button>
+      <Button variant="outline" onclick={() => (confirming = null)}>{c.cancel}</Button>
+      <Button variant="destructive" onclick={confirmToggle}>{t.removeAnyway}</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

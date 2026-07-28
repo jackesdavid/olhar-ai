@@ -16,6 +16,9 @@
 
   import { rbac, type Role, type TenantUser } from "$lib/api";
   import { hasPerm } from "$lib/auth.svelte";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].users);
 
   let loading = $state(true);
   let users = $state<TenantUser[]>([]);
@@ -34,7 +37,7 @@
     try {
       [users, roles] = await Promise.all([rbac.users(), rbac.roles()]);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load users");
+      toast.error(e instanceof Error ? e.message : t.loadFailed);
     } finally {
       loading = false;
     }
@@ -58,7 +61,7 @@
     try {
       await rbac.setUserRoles(user.id, user.role_ids);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to update roles");
+      toast.error(e instanceof Error ? e.message : t.rolesFailed);
       await load();
     } finally {
       savingUser = null;
@@ -82,9 +85,9 @@
       invitePassword = "";
       inviteRoles = new Set();
       await load();
-      toast.success("User invited");
+      toast.success(t.invited);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to invite user");
+      toast.error(e instanceof Error ? e.message : t.inviteFailed);
     } finally {
       inviting = false;
     }
@@ -97,25 +100,25 @@
 
 <div class="space-y-6">
   <PageHeader
-    title="Users"
-    description="Invite people into this workspace and assign their roles."
+    title={t.title}
+    description={t.description}
     icon={UsersRound}
   />
 
   {#if !allowed}
     <Card.Root><Card.Content class="py-10 text-center text-sm text-muted-foreground">
-      You don't have permission to manage users.
+      {t.noPermission}
     </Card.Content></Card.Root>
   {:else if loading}
     <Loader />
   {:else}
     <Card.Root>
-      <Card.Header><Card.Title>Members</Card.Title></Card.Header>
+      <Card.Header><Card.Title>{t.members}</Card.Title></Card.Header>
       <Card.Content class="overflow-x-auto">
         <table class="w-full border-collapse text-sm">
           <thead>
             <tr class="border-b border-border">
-              <th class="py-2 pr-4 text-left font-medium">Email</th>
+              <th class="py-2 pr-4 text-left font-medium">{t.email}</th>
               {#each roles as role (role.id)}
                 <th class="px-3 py-2 text-center font-medium">{role.name}</th>
               {/each}
@@ -127,7 +130,7 @@
                 <td class="py-2 pr-4">
                   <div class="flex items-center gap-2">
                     <span>{user.email}</span>
-                    {#if user.is_master}<Badge variant="secondary" class="text-[10px]">master</Badge>{/if}
+                    {#if user.is_master}<Badge variant="secondary" class="text-[10px]">{t.master}</Badge>{/if}
                     {#if savingUser === user.id}<Busy size={12} class="text-muted-foreground" />{/if}
                   </div>
                 </td>
@@ -147,8 +150,8 @@
             {#if users.length === 0}
               <tr><td colspan={roles.length + 1}>
                 <EmptyState
-                  title="No users yet"
-                  description="Invite teammates below — they sign in with their email and the roles you assign."
+                  title={t.emptyTitle}
+                  description={t.emptyDescription}
                 />
               </td></tr>
             {/if}
@@ -159,23 +162,23 @@
 
     <Card.Root>
       <Card.Header>
-        <Card.Title>Invite a user</Card.Title>
-        <Card.Description>They sign in with this email and password.</Card.Description>
+        <Card.Title>{t.inviteTitle}</Card.Title>
+        <Card.Description>{t.inviteDescription}</Card.Description>
       </Card.Header>
       <Card.Content>
         <form class="space-y-4" onsubmit={invite}>
           <div class="grid gap-4 sm:grid-cols-2">
             <div class="space-y-1.5">
-              <Label for="inv-email">Email</Label>
-              <Input id="inv-email" type="email" bind:value={inviteEmail} placeholder="teammate@example.com" />
+              <Label for="inv-email">{t.email}</Label>
+              <Input id="inv-email" type="email" bind:value={inviteEmail} placeholder={t.emailPlaceholder} />
             </div>
             <div class="space-y-1.5">
-              <Label for="inv-pw">Temporary password</Label>
-              <Input id="inv-pw" type="password" bind:value={invitePassword} placeholder="At least 8 characters" autocomplete="new-password" />
+              <Label for="inv-pw">{t.tempPassword}</Label>
+              <Input id="inv-pw" type="password" bind:value={invitePassword} placeholder={t.tempPasswordPlaceholder} autocomplete="new-password" />
             </div>
           </div>
           <div class="space-y-1.5">
-            <Label>Roles</Label>
+            <Label>{t.roles}</Label>
             <div class="flex flex-wrap gap-2">
               {#each roles as role (role.id)}
                 <label class="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-sm">
@@ -187,7 +190,7 @@
           </div>
           <Button type="submit" disabled={!canInvite || inviting}>
             {#if inviting}<Busy />{:else}<UserPlus class="size-4" />{/if}
-            Invite
+            {t.invite}
           </Button>
         </form>
       </Card.Content>

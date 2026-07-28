@@ -14,7 +14,10 @@
   import { Badge } from "$lib/components/ui/badge";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
+  import { dict, lang } from "$lib/i18n";
   import type { TuyaDevice } from "$lib/types";
+
+  const t = $derived(dict[lang()].integrations);
 
   type Source = "tenant" | "operator" | "none";
   let source = $state<Source | null>(null);
@@ -26,18 +29,18 @@
   let savingLabels = $state<string | null>(null);
 
   // Connect-your-account form.
-  const DATA_CENTERS = [
-    { label: "Western America (US) — most Brazil/Americas accounts", url: "https://openapi.tuyaus.com" },
-    { label: "Central Europe (EU)", url: "https://openapi.tuyaeu.com" },
-    { label: "China", url: "https://openapi.tuyacn.com" },
-    { label: "India", url: "https://openapi.tuyain.com" },
-  ];
+  const DATA_CENTERS = $derived([
+    { label: t.dcUs, url: "https://openapi.tuyaus.com" },
+    { label: t.dcEu, url: "https://openapi.tuyaeu.com" },
+    { label: t.dcCn, url: "https://openapi.tuyacn.com" },
+    { label: t.dcIn, url: "https://openapi.tuyain.com" },
+  ]);
   let accessId = $state("");
   let accessKey = $state("");
-  let endpoint = $state(DATA_CENTERS[0].url);
+  let endpoint = $state("https://openapi.tuyaus.com");
   let connecting = $state(false);
   let showGuide = $state(true);
-  const dcLabel = $derived(DATA_CENTERS.find((d) => d.url === endpoint)?.label ?? "Data center");
+  const dcLabel = $derived(DATA_CENTERS.find((d) => d.url === endpoint)?.label ?? t.dataCenter);
 
   onMount(reload);
 
@@ -77,7 +80,7 @@
       devices = prov.configured ? await data.listTuyaDevices().catch(() => []) : [];
     } catch (err) {
       console.error("Failed to load Tuya integration", err);
-      toast.error("Couldn't load Tuya", { description: String(err) });
+      toast.error(t.loadFailed, { description: String(err) });
     } finally {
       loading = false;
     }
@@ -85,19 +88,19 @@
 
   async function connect() {
     if (!accessId.trim() || !accessKey.trim()) {
-      toast.error("Enter your Access ID and Access Secret");
+      toast.error(t.enterCreds);
       return;
     }
     connecting = true;
     try {
       await data.setTuyaConfig(accessId.trim(), accessKey.trim(), endpoint);
-      toast.success("Tuya connected");
+      toast.success(t.connectedToast);
       accessKey = ""; // don't keep the secret around in the field
       await reload();
       await sync();
     } catch (err) {
       console.error("Tuya connect failed", err);
-      toast.error("Couldn't connect Tuya", { description: String(err) });
+      toast.error(t.connectFailed, { description: String(err) });
     } finally {
       connecting = false;
     }
@@ -106,11 +109,11 @@
   async function disconnect() {
     try {
       await data.deleteTuyaConfig();
-      toast.success("Tuya disconnected");
+      toast.success(t.disconnected);
       devices = [];
       await reload();
     } catch (err) {
-      toast.error("Couldn't disconnect", { description: String(err) });
+      toast.error(t.disconnectFailed, { description: String(err) });
     }
   }
 
@@ -118,11 +121,11 @@
     syncing = true;
     try {
       const { synced } = await data.syncTuyaDevices();
-      toast.success(`Synced ${synced} Tuya device${synced === 1 ? "" : "s"}`);
+      toast.success(t.synced(synced));
       await reload();
     } catch (err) {
       console.error("Tuya sync failed", err);
-      toast.error("Tuya sync failed", { description: String(err) });
+      toast.error(t.syncFailed, { description: String(err) });
     } finally {
       syncing = false;
     }
@@ -132,10 +135,10 @@
     savingLabels = d.device_id;
     try {
       await data.setTuyaFunctionLabels(d.device_id, edits[d.device_id] ?? {});
-      toast.success("Names saved");
+      toast.success(t.namesSaved);
       await reload();
     } catch (err) {
-      toast.error("Couldn't save names", { description: String(err) });
+      toast.error(t.namesFailed, { description: String(err) });
     } finally {
       savingLabels = null;
     }
@@ -144,8 +147,8 @@
 
 <div class="space-y-6">
   <PageHeader
-    title="Integrations"
-    description="Third-party services Sentinel can act on from workflows."
+    title={t.title}
+    description={t.description}
     icon={Plug}
   />
 
@@ -154,32 +157,32 @@
       <div class="flex items-start justify-between gap-4">
         <div class="space-y-1">
           <Card.Title class="flex items-center gap-2">
-            Tuya
+            {t.tuya}
             {#if source === "tenant"}
-              <Badge variant="secondary">Connected</Badge>
+              <Badge variant="secondary">{t.connected}</Badge>
             {:else if source === "operator"}
-              <Badge variant="secondary">Connected (managed)</Badge>
+              <Badge variant="secondary">{t.connectedManaged}</Badge>
             {:else if source === "none"}
-              <Badge variant="outline">Not connected</Badge>
+              <Badge variant="outline">{t.notConnected}</Badge>
             {/if}
           </Card.Title>
           <Card.Description>
-            Control smart-home devices (switches, plugs, lights) from your Tuya / Smart Life account.
-            Name each control so it reads clearly in a workflow, then use the
-            <strong>Control Tuya Device</strong> and <strong>Read Tuya Status</strong> nodes.
+            {t.tuyaDescriptionBefore}<strong>{t.controlNode}</strong>{t.tuyaDescriptionMiddle}<strong
+              >{t.readNode}</strong
+            >{t.tuyaDescriptionAfter}
           </Card.Description>
         </div>
         {#if source && source !== "none"}
           <Button variant="outline" onclick={sync} disabled={syncing || loading}>
             <RefreshCw class="mr-2 size-4 {syncing ? 'animate-spin' : ''}" />
-            {syncing ? "Syncing…" : "Refresh devices"}
+            {syncing ? t.syncing : t.refreshDevices}
           </Button>
         {/if}
       </div>
     </Card.Header>
     <Card.Content class="space-y-4">
       {#if loading || source === null}
-        <p class="text-sm text-muted-foreground">Loading…</p>
+        <p class="text-sm text-muted-foreground">{t.loading}</p>
 
       <!-- ===== Connect flow (not connected) ===== -->
       {:else if source === "none"}
@@ -191,25 +194,30 @@
             onclick={() => (showGuide = !showGuide)}
           >
             <ChevronRight class="size-4 text-muted-foreground transition-transform {showGuide ? 'rotate-90' : ''}" />
-            How to connect your Tuya account (one-time, ~5 min)
+            {t.guideToggle}
           </button>
           {#if showGuide}
             <ol class="list-decimal space-y-2 border-t border-border px-6 py-3 text-sm text-muted-foreground">
               <li>
-                Create a free developer account at
-                <a href="https://platform.tuya.com" target="_blank" rel="noopener" class="inline-flex items-center gap-0.5 font-medium text-foreground underline">platform.tuya.com <ExternalLink class="size-3" /></a>.
+                {t.step1Before}<a
+                  href="https://platform.tuya.com"
+                  target="_blank"
+                  rel="noopener"
+                  class="inline-flex items-center gap-0.5 font-medium text-foreground underline"
+                  >platform.tuya.com <ExternalLink class="size-3" /></a
+                >{t.step1After}
               </li>
-              <li><strong>Cloud → Development → Create Cloud Project.</strong> Development method: <strong>Smart Home</strong>. Pick the <strong>Data Center</strong> for your region (Brazil = Western America).</li>
-              <li>Subscribe the APIs (free trial): <strong>IoT Core</strong>, <strong>Authorization</strong>, and <strong>Smart Home Basic Service</strong> (Service API → Go to Authorize).</li>
-              <li><strong>Devices → Link App Account → Add App Account</strong> → scan the QR with your <strong>Smart Life</strong> app (Me → scan) and confirm. Your devices are now visible to the project.</li>
-              <li>Open the project's <strong>Overview</strong> tab → copy the <strong>Access ID</strong> and <strong>Access Secret</strong> → paste them below.</li>
+              <li>{t.step2}</li>
+              <li>{t.step3}</li>
+              <li>{t.step4}</li>
+              <li>{t.step5}</li>
             </ol>
           {/if}
         </div>
 
         <div class="space-y-3">
           <div class="space-y-1.5">
-            <Label for="tuya-dc">Data center</Label>
+            <Label for="tuya-dc">{t.dataCenter}</Label>
             <Select.Root type="single" bind:value={endpoint}>
               <Select.Trigger id="tuya-dc" class="w-full">{dcLabel}</Select.Trigger>
               <Select.Content>
@@ -218,34 +226,31 @@
             </Select.Root>
           </div>
           <div class="space-y-1.5">
-            <Label for="tuya-id">Access ID</Label>
-            <Input id="tuya-id" placeholder="e.g. q4eusms3gyr7rsupqkjx" autocomplete="off" bind:value={accessId} />
+            <Label for="tuya-id">{t.accessId}</Label>
+            <Input id="tuya-id" placeholder={t.accessIdPlaceholder} autocomplete="off" bind:value={accessId} />
           </div>
           <div class="space-y-1.5">
-            <Label for="tuya-key">Access Secret</Label>
-            <Input id="tuya-key" type="password" placeholder="from your project's Overview tab" autocomplete="off" bind:value={accessKey} />
+            <Label for="tuya-key">{t.accessSecret}</Label>
+            <Input id="tuya-key" type="password" placeholder={t.accessSecretPlaceholder} autocomplete="off" bind:value={accessKey} />
           </div>
-          <Button onclick={connect} disabled={connecting}>{connecting ? "Connecting…" : "Connect Tuya"}</Button>
-          <p class="text-xs text-muted-foreground">
-            Tuya's free <strong>Smart Home Basic Service</strong> can expire after a trial period — if devices stop
-            responding later, renew it in your Tuya console.
-          </p>
+          <Button onclick={connect} disabled={connecting}>{connecting ? t.connecting : t.connectTuya}</Button>
+          <p class="text-xs text-muted-foreground">{t.trialWarning}</p>
         </div>
 
       <!-- ===== Connected: device list + label editor ===== -->
       {:else}
         <div class="flex items-center justify-between text-xs text-muted-foreground">
           <span>
-            {#if source === "tenant"}Connected via your Tuya account.{:else}Connected via managed credentials.{/if}
+            {source === "tenant" ? t.viaYourAccount : t.viaManaged}
           </span>
           {#if source === "tenant"}
-            <button type="button" class="interactive underline hover:text-foreground" onclick={disconnect}>Disconnect</button>
+            <button type="button" class="interactive underline hover:text-foreground" onclick={disconnect}>{t.disconnect}</button>
           {/if}
         </div>
 
         {#if devices.length === 0}
           <p class="rounded border border-dashed border-border px-3 py-2 text-sm text-muted-foreground">
-            No devices yet. Make sure your account is linked in the Tuya console, then press <em>Refresh devices</em>.
+            {t.noDevices}
           </p>
         {:else}
           <ul class="divide-y divide-border">
@@ -262,19 +267,19 @@
                     <div class="min-w-0">
                       <p class="truncate text-sm font-medium">{d.name}</p>
                       <p class="truncate text-xs text-muted-foreground">
-                        {d.category ?? "device"} · {fns.length} control{fns.length === 1 ? "" : "s"}
+                        {d.category ?? t.deviceKind} · {t.controlCount(fns.length)}
                       </p>
                     </div>
                   </div>
                   <Badge variant={d.online ? "secondary" : "outline"} class="shrink-0">
-                    {d.online ? "Online" : "Offline"}
+                    {d.online ? t.online : t.offline}
                   </Badge>
                 </button>
 
                 {#if expanded[d.device_id]}
                   <div class="mt-3 space-y-2 pl-6">
                     {#if fns.length === 0}
-                      <p class="text-xs text-muted-foreground">No controls reported — try Refresh devices.</p>
+                      <p class="text-xs text-muted-foreground">{t.noControls}</p>
                     {:else}
                       {#each fns as f (f.code)}
                         <div class="flex items-center gap-3">
@@ -284,7 +289,7 @@
                           </div>
                           <Input
                             class="h-8"
-                            placeholder="Friendly name (e.g. Luz da entrada)"
+                            placeholder={t.friendlyNamePlaceholder}
                             value={edits[d.device_id]?.[f.code] ?? ""}
                             oninput={(e) => editLabel(d.device_id, f.code, e.currentTarget.value)}
                           />
@@ -292,7 +297,7 @@
                       {/each}
                       <div class="flex justify-end pt-1">
                         <Button size="sm" onclick={() => saveLabels(d)} disabled={savingLabels === d.device_id}>
-                          {savingLabels === d.device_id ? "Saving…" : "Save names"}
+                          {savingLabels === d.device_id ? t.savingNames : t.saveNames}
                         </Button>
                       </div>
                     {/if}
