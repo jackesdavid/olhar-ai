@@ -29,12 +29,6 @@
   const useCaseIcons = [BellRing, Video, MessageSquare, Eye, ScanFace, Workflow];
   const privacyIcons = [Lock, ShieldCheck, Eye, KeyRound];
   const stepNums = ["01", "02", "03"];
-  const shotFiles = [
-    "/shots/workflow-editor.png",
-    "/shots/live-grid.png",
-    "/shots/map-presence.png",
-    "/shots/tracking-overlay.png",
-  ];
   const langs: Lang[] = ["en", "pt"];
 
   // Sticky nav: warm the border once the page scrolls a touch.
@@ -224,18 +218,18 @@
     </div>
     <div class="grid gap-4 md:grid-cols-2">
       {#each t.shots.items as sh, i (i)}
-        {@const file = shotFiles[i]}
-        <figure use:reveal={(i % 2) * 90} class="overflow-hidden rounded-2xl border border-border bg-card/40 backdrop-blur-sm">
-          <div class="relative aspect-[16/10] overflow-hidden border-b border-border bg-gradient-to-br from-card to-background">
-            <!-- placeholder until the capture lands -->
-            <div class="absolute inset-0 grid place-items-center text-center">
-              <div class="space-y-2 px-6">
-                <OlharMark label="" size={40} class="mx-auto text-primary/40" />
-                <p class="font-mono text-xs text-muted-foreground/60">{file}</p>
-              </div>
+        <figure use:reveal={(i % 2) * 90} class="interactive overflow-hidden rounded-2xl border border-border bg-card/40 backdrop-blur-sm">
+          <!-- a framed sensor viewport awaiting its feed (a real capture drops into /shots/) -->
+          <div class="relative aspect-[16/10] overflow-hidden border-b border-border"
+            style="background:radial-gradient(oklch(1 0 0/0.03) 1px, transparent 1.4px) 0 0 / 20px 20px, radial-gradient(120% 80% at 50% 0%, var(--elev-1), var(--elev-0));">
+            <div class="absolute inset-0 grid place-items-center">
+              <OlharMark label="" size={44} class="text-primary/30" />
             </div>
-            <span class="absolute left-3 top-3 size-4 border-l-2 border-t-2 border-primary/30"></span>
-            <span class="absolute bottom-3 right-3 size-4 border-b-2 border-r-2 border-primary/30"></span>
+            <span class="absolute left-3 top-3 inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/60">
+              <span class="status-live size-1.5 rounded-full bg-primary/70"></span> preview
+            </span>
+            <span class="absolute right-3 top-3 size-4 border-r-2 border-t-2 border-primary/25"></span>
+            <span class="absolute bottom-3 left-3 size-4 border-b-2 border-l-2 border-primary/25"></span>
           </div>
           <figcaption class="p-5">
             <h3 class="text-[15px] font-bold tracking-tight">{sh.title}</h3>
