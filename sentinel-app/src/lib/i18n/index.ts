@@ -21,6 +21,9 @@ import { recordings } from "./messages/recordings";
 import { users } from "./messages/users";
 import { roles } from "./messages/roles";
 import { integrations } from "./messages/integrations";
+import { billing } from "./messages/billing";
+import { boxes } from "./messages/boxes";
+import { boxInstall } from "./messages/boxInstall";
 
 export { lang, setLang, initLang, locale, type Lang } from "./runtime.svelte";
 
@@ -50,6 +53,9 @@ const modules = {
   users: domain(users),
   roles: domain(roles),
   integrations: domain(integrations),
+  billing: domain(billing),
+  boxes: domain(boxes),
+  boxInstall: domain(boxInstall),
 };
 
 /** One language's messages — every module, narrowed to that language. */

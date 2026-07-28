@@ -15,6 +15,9 @@
   import { Badge } from "$lib/components/ui/badge";
 
   import { billing, type PricedPlan, type BillingSubscription, type Invoice, type SubscribeBody, type TenantStorage } from "$lib/api";
+  import { dict, lang, locale } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].billing);
 
   let loading = $state(true);
   let plans = $state<PricedPlan[]>([]);
@@ -31,10 +34,9 @@
   let cpf = $state("");
   let subscribing = $state(false);
 
-  /** Format an amount in its own currency (BRL uses pt-BR, everything else en-US). */
+  /** Format an amount in its own currency, in the language the user picked. */
   function money(n: number | null | undefined, currency: string): string {
-    const locale = currency === "BRL" ? "pt-BR" : "en-US";
-    return new Intl.NumberFormat(locale, { style: "currency", currency }).format(n ?? 0);
+    return new Intl.NumberFormat(locale(), { style: "currency", currency }).format(n ?? 0);
   }
 
   const currentPlan = $derived(plans.find((p) => p.id === sub?.plan_id) ?? null);
@@ -78,8 +80,17 @@
   function trialNote(): string {
     if (sub?.status !== "trialing" || !sub.ended_at) return "";
     const days = Math.ceil((new Date(sub.ended_at).getTime() - Date.now()) / 86_400_000);
-    if (days < 0) return "Your trial has ended — pick a plan to continue.";
-    return `Trial — ${days} day${days === 1 ? "" : "s"} left. Pick a plan to keep Sentinel after it ends.`;
+    return days < 0 ? t.trialEnded : t.trialLeft(days);
+  }
+
+  /** The gateway's status slug, in the reader's language. */
+  function statusLabel(status: string | undefined): string {
+    if (status === "active") return t.statusActive;
+    if (status === "trialing") return t.statusTrialing;
+    if (status === "past_due") return t.statusPastDue;
+    if (status === "canceled") return t.statusCanceled;
+    if (status === "expired") return t.statusExpired;
+    return status ?? "";
   }
 
   async function load() {
@@ -93,7 +104,7 @@
         billing.storage(),
       ]);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load billing");
+      toast.error(e instanceof Error ? e.message : t.loadFailed);
     } finally {
       loading = false;
     }
@@ -109,9 +120,9 @@
 
   /** House style: no markup logic. Pix never reaches here today — see StripeGateway::payment_methods. */
   function methodLabel(bt: SubscribeBody["billing_type"]): string {
-    if (bt === "CREDIT_CARD") return "Card";
-    if (bt === "BOLETO") return "Boleto";
-    return "Pix";
+    if (bt === "CREDIT_CARD") return t.methodCard;
+    if (bt === "BOLETO") return t.methodBoleto;
+    return t.methodPix;
   }
 
   const canSubscribe = $derived(!!picked && methods.length > 0 && name.trim() && email.trim().includes("@"));
@@ -132,12 +143,12 @@
       await load();
       if (res.payment_url) {
         window.open(res.payment_url, "_blank", "noopener");
-        toast.success("Opening your payment page — your plan activates once payment clears.");
+        toast.success(t.openingPayment);
       } else {
-        toast.success("Subscribed — your charge is on its way.");
+        toast.success(t.subscribed);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to subscribe");
+      toast.error(err instanceof Error ? err.message : t.subscribeFailed);
     } finally {
       subscribing = false;
     }
@@ -149,7 +160,7 @@
 </script>
 
 <div class="space-y-6">
-  <PageHeader title="Billing" description="Your plan, payment, and invoices." icon={Wallet} />
+  <PageHeader title={t.title} description={t.description} icon={Wallet} />
 
   {#if loading}
     <Loader />
@@ -161,28 +172,28 @@
     {/if}
 
     <Card.Root>
-      <Card.Header><Card.Title>Current plan</Card.Title></Card.Header>
+      <Card.Header><Card.Title>{t.currentPlanTitle}</Card.Title></Card.Header>
       <Card.Content class="flex items-center justify-between">
         <div>
-          <p class="text-lg font-semibold">{currentPlan?.name ?? "No plan"}</p>
+          <p class="text-lg font-semibold">{currentPlan?.name ?? t.noPlan}</p>
           <p class="text-sm text-muted-foreground">
-            {currentPlan ? `${money(currentPlan.amount, currentPlan.currency)}/mo · up to ${currentPlan.camera_cap} cameras` : "Choose a plan below."}
+            {currentPlan ? t.planSummary(money(currentPlan.amount, currentPlan.currency), currentPlan.camera_cap) : t.chooseBelow}
           </p>
         </div>
-        {#if sub}<Badge variant={statusVariant(sub.status)}>{sub.status}</Badge>{/if}
+        {#if sub}<Badge variant={statusVariant(sub.status)}>{statusLabel(sub.status)}</Badge>{/if}
       </Card.Content>
     </Card.Root>
 
     <Card.Root>
-      <Card.Header><Card.Title>Storage this period</Card.Title></Card.Header>
+      <Card.Header><Card.Title>{t.storageTitle}</Card.Title></Card.Header>
       <Card.Content>
         {#if hasCloud(storage) && storage}
           <div class="flex items-baseline justify-between">
             <div>
               <span class="text-2xl font-semibold tabular-nums">{fmtGB(storage.stored_bytes)}</span>
-              <span class="text-sm text-muted-foreground"> stored of {storage.included_storage_gb} GB</span>
+              <span class="text-sm text-muted-foreground">{t.storedOf(storage.included_storage_gb)}</span>
             </div>
-            <span class="text-xs text-muted-foreground">{storage.retention_days}-day cloud retention</span>
+            <span class="text-xs text-muted-foreground">{t.retention(storage.retention_days)}</span>
           </div>
 
           <div class="mt-3 h-2 w-full overflow-hidden rounded-full bg-muted">
@@ -191,24 +202,24 @@
 
           <div class="mt-4 grid grid-cols-2 gap-4 border-t pt-4 text-sm">
             <div>
-              <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Billed this month</p>
-              <p class="mt-1 text-lg font-semibold tabular-nums">{fmtGB(storage.gb_month * 1e9)}<span class="text-xs font-normal text-muted-foreground"> · GB-month avg</span></p>
+              <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t.billedThisMonth}</p>
+              <p class="mt-1 text-lg font-semibold tabular-nums">{fmtGB(storage.gb_month * 1e9)}<span class="text-xs font-normal text-muted-foreground">{t.gbMonthAvg}</span></p>
             </div>
             <div>
-              <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overage so far</p>
+              <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t.overageSoFar}</p>
               {#if hasOverage(storage)}
                 <p class="mt-1 text-lg font-semibold tabular-nums text-destructive">{money(storage.projected_overage, storage.currency)}</p>
               {:else}
-                <p class="mt-1 text-lg font-semibold tabular-nums">{money(0, storage.currency)}<span class="text-xs font-normal text-muted-foreground"> · within plan</span></p>
+                <p class="mt-1 text-lg font-semibold tabular-nums">{money(0, storage.currency)}<span class="text-xs font-normal text-muted-foreground">{t.withinPlan}</span></p>
               {/if}
             </div>
           </div>
 
           <p class="mt-3 text-xs text-muted-foreground">
-            {storage.clip_count} clip{storage.clip_count === 1 ? "" : "s"} in the cloud. GB-month is the average footage held across the month — the quantity your invoice bills, not the peak.
+            {t.storageNote(storage.clip_count)}
           </p>
         {:else}
-          <p class="text-sm text-muted-foreground">Cloud recording isn't included in your current plan. Choose a plan with cloud retention to keep footage off-site.</p>
+          <p class="text-sm text-muted-foreground">{t.noCloudPlan}</p>
         {/if}
       </Card.Content>
     </Card.Root>
@@ -219,17 +230,17 @@
           <Card.Header>
             <Card.Title class="flex items-center justify-between">
               {p.name}
-              {#if isCurrent(p)}<Badge variant="secondary" class="text-[10px]">current</Badge>{/if}
+              {#if isCurrent(p)}<Badge variant="secondary" class="text-[10px]">{t.current}</Badge>{/if}
             </Card.Title>
           </Card.Header>
           <Card.Content class="space-y-3">
-            <p class="text-2xl font-semibold">{p.amount > 0 ? money(p.amount, p.currency) : "Free"}<span class="text-sm font-normal text-muted-foreground">{p.amount > 0 ? "/mo" : ""}</span></p>
+            <p class="text-2xl font-semibold">{p.amount > 0 ? money(p.amount, p.currency) : t.free}<span class="text-sm font-normal text-muted-foreground">{p.amount > 0 ? t.perMonth : ""}</span></p>
             <ul class="space-y-1 text-sm text-muted-foreground">
-              <li>Up to {p.camera_cap} cameras</li>
-              {#if p.trial_days}<li>{p.trial_days}-day free trial</li>{/if}
+              <li>{t.upToCameras(p.camera_cap)}</li>
+              {#if p.trial_days}<li>{t.trialDays(p.trial_days)}</li>{/if}
             </ul>
             <Button class="w-full" variant={isCurrent(p) ? "outline" : "default"} disabled={isCurrent(p) || p.amount === 0} onclick={() => choose(p)}>
-              {#if isCurrent(p)}Current plan{:else if p.amount === 0}Trial only{:else}Choose {p.name}{/if}
+              {#if isCurrent(p)}{t.currentPlanButton}{:else if p.amount === 0}{t.trialOnly}{:else}{t.choosePlan(p.name)}{/if}
             </Button>
           </Card.Content>
         </Card.Root>
@@ -237,15 +248,15 @@
     </div>
 
     <Card.Root>
-      <Card.Header><Card.Title>Invoices</Card.Title></Card.Header>
+      <Card.Header><Card.Title>{t.invoices}</Card.Title></Card.Header>
       <Card.Content class="overflow-x-auto">
         <table class="w-full border-collapse text-sm">
           <thead>
             <tr class="border-b border-border">
-              <th class="py-2 pr-4 text-left font-medium">Period</th>
-              <th class="px-3 py-2 text-left font-medium">Plan</th>
-              <th class="px-3 py-2 text-left font-medium">Status</th>
-              <th class="px-3 py-2 text-right font-medium">Total</th>
+              <th class="py-2 pr-4 text-left font-medium">{t.colPeriod}</th>
+              <th class="px-3 py-2 text-left font-medium">{t.colPlan}</th>
+              <th class="px-3 py-2 text-left font-medium">{t.colStatus}</th>
+              <th class="px-3 py-2 text-right font-medium">{t.colTotal}</th>
             </tr>
           </thead>
           <tbody>
@@ -258,7 +269,7 @@
               </tr>
             {/each}
             {#if invoices.length === 0}
-              <tr><td colspan={4}><EmptyState title="No invoices yet" description="Invoices appear here once a billing period closes." /></td></tr>
+              <tr><td colspan={4}><EmptyState title={t.noInvoicesTitle} description={t.noInvoicesDescription} /></td></tr>
             {/if}
           </tbody>
         </table>
@@ -271,16 +282,16 @@
 <Dialog.Root open={picked !== null} onOpenChange={(o) => { if (!o) picked = null; }}>
   <Dialog.Content>
     <Dialog.Header>
-      <Dialog.Title>Subscribe{picked ? ` — ${picked.name}` : ""}</Dialog.Title>
+      <Dialog.Title>{picked ? t.subscribeNamed(picked.name) : t.subscribe}</Dialog.Title>
       <Dialog.Description>
-        {picked ? `${money(picked.amount, picked.currency)}/mo, up to ${picked.camera_cap} cameras.` : ""}
+        {picked ? t.subscribeSummary(money(picked.amount, picked.currency), picked.camera_cap) : ""}
       </Dialog.Description>
     </Dialog.Header>
     <form class="space-y-3" onsubmit={confirmSubscribe}>
       <div class="space-y-1.5">
-        <Label>Payment method</Label>
+        <Label>{t.paymentMethod}</Label>
         {#if methods.length === 0}
-          <p class="text-sm text-muted-foreground">No payment method is available right now. Please try again shortly.</p>
+          <p class="text-sm text-muted-foreground">{t.noMethods}</p>
         {:else}
           <div class="flex gap-2">
             {#each methods as bt (bt)}
@@ -292,20 +303,20 @@
         {/if}
       </div>
       <div class="space-y-1.5">
-        <Label for="s-name">Full name</Label>
-        <Input id="s-name" bind:value={name} placeholder="Maria Silva" />
+        <Label for="s-name">{t.fullName}</Label>
+        <Input id="s-name" bind:value={name} placeholder={t.fullNamePlaceholder} />
       </div>
       <div class="space-y-1.5">
-        <Label for="s-email">Email</Label>
-        <Input id="s-email" type="email" bind:value={email} placeholder="maria@empresa.com.br" />
+        <Label for="s-email">{t.email}</Label>
+        <Input id="s-email" type="email" bind:value={email} placeholder={t.emailPlaceholder} />
       </div>
       <div class="space-y-1.5">
-        <Label for="s-cpf">CPF / CNPJ <span class="text-muted-foreground">(optional)</span></Label>
+        <Label for="s-cpf">{t.taxIdLabel} <span class="text-muted-foreground">{t.optional}</span></Label>
         <Input id="s-cpf" bind:value={cpf} placeholder="000.000.000-00" />
       </div>
       <Dialog.Footer>
         <Button type="submit" disabled={!canSubscribe || subscribing}>
-          {#if subscribing}<Busy />{/if} Confirm subscription
+          {#if subscribing}<Busy />{/if} {t.confirmSubscription}
         </Button>
       </Dialog.Footer>
     </form>

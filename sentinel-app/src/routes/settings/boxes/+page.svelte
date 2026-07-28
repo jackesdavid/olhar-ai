@@ -26,6 +26,10 @@
   import { hasPerm } from "$lib/auth.svelte";
   import { pendingInstall } from "$lib/box-install.svelte";
   import { fmtTs } from "$lib/utils";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].boxes);
+  const c = $derived(dict[lang()].common);
 
   const allowed = hasPerm("devices.write");
 
@@ -54,7 +58,7 @@
         boxApi.latestVersion().then((r) => r.version).catch(() => ""),
       ]);
     } catch (e) {
-      if (!silent) toast.error(e instanceof Error ? e.message : "Failed to load boxes");
+      if (!silent) toast.error(e instanceof Error ? e.message : t.loadFailed);
     } finally {
       if (!silent) loading = false;
     }
@@ -97,7 +101,7 @@
       await load();
       goto("/settings/boxes/install");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to create box");
+      toast.error(e instanceof Error ? e.message : t.createFailed);
     } finally {
       creating = false;
     }
@@ -106,9 +110,9 @@
   async function copy(text: string) {
     try {
       await navigator.clipboard.writeText(text);
-      toast.success("Copied to clipboard");
+      toast.success(t.copied);
     } catch {
-      toast.error("Couldn't copy — select and copy manually.");
+      toast.error(t.copyFailed);
     }
   }
 
@@ -117,18 +121,18 @@
     deleting = true;
     try {
       await boxApi.del(deleteTarget.id);
-      toast.success(`Removed "${deleteTarget.name}"`);
+      toast.success(t.removed(deleteTarget.name));
       deleteTarget = null;
       await load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to remove box");
+      toast.error(e instanceof Error ? e.message : t.removeFailed);
     } finally {
       deleting = false;
     }
   }
 
   function seen(b: Box): string {
-    if (!b.last_seen) return "never";
+    if (!b.last_seen) return t.neverConnected;
     return fmtTs(b.last_seen);
   }
 
@@ -146,7 +150,7 @@
   // commands + live over its own outbound connection), so there is no tailnet to be "offline" on.
   const unhealthy = $derived(list.filter((b) => mediaMissing(b)));
   function healthHint(b: Box): string {
-    if (mediaMissing(b)) return `${b.name}: no media backend — live / snapshots will fail (reinstall to get GStreamer).`;
+    if (mediaMissing(b)) return t.healthHint(b.name);
     return "";
   }
 
@@ -176,9 +180,9 @@
     restartingId = b.id;
     try {
       await boxApi.restart(b.id);
-      toast.success(`Restart requested for "${b.name}"`, { description: "It relaunches and reconnects within ~30s." });
+      toast.success(t.restartRequested(b.name), { description: t.restartHint });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to request restart");
+      toast.error(e instanceof Error ? e.message : t.restartFailed);
     } finally {
       restartingId = null;
     }
@@ -202,10 +206,10 @@
       const box = list.find((b) => b.id === boxId);
       if (box && target && box.version === target) {
         stopUpdatePoll();
-        toast.success(`"${name}" updated to v${target}`);
+        toast.success(t.updated(name, target));
       } else if (attempts >= 36) {
         stopUpdatePoll();
-        toast.warning(`"${name}" update is taking longer than expected — check the box logs.`);
+        toast.warning(t.updateSlow(name));
       }
     }, 5000);
     updatePollStop = () => {
@@ -220,11 +224,11 @@
     const target = latest;
     try {
       await boxApi.update(b.id);
-      toast.info(`Update started for "${b.name}" — waiting for v${target}…`);
+      toast.info(t.updateStarted(b.name, target));
       startUpdatePoll(b.id, b.name, target);
     } catch (e) {
       updatingId = null;
-      toast.error(e instanceof Error ? e.message : "Failed to request update");
+      toast.error(e instanceof Error ? e.message : t.updateFailed);
     }
   }
 
@@ -233,14 +237,14 @@
 
 <div class="space-y-6">
   <PageHeader
-    title="Edge boxes"
-    description="Install a Sentinel edge appliance on-site. It pulls only this workspace's cameras and streams them privately."
+    title={t.title}
+    description={t.description}
     icon={HardDrive}
   />
 
   {#if !allowed}
     <Card.Root><Card.Content class="py-10 text-center text-sm text-muted-foreground">
-      You don't have permission to manage edge boxes.
+      {t.noPermission}
     </Card.Content></Card.Root>
   {:else if loading}
     <Loader />
@@ -254,16 +258,16 @@
       </div>
     {/if}
     <Card.Root>
-      <Card.Header><Card.Title>Your boxes</Card.Title></Card.Header>
+      <Card.Header><Card.Title>{t.yourBoxes}</Card.Title></Card.Header>
       <Card.Content class="overflow-x-auto">
         <table class="w-full border-collapse text-sm">
           <thead>
             <tr class="border-b border-border">
-              <th class="py-2 pr-4 text-left font-medium">Name</th>
-              <th class="px-3 py-2 text-left font-medium">Version</th>
-              <th class="px-3 py-2 text-left font-medium">Health</th>
-              <th class="px-3 py-2 text-left font-medium">Resources</th>
-              <th class="px-3 py-2 text-left font-medium">Last seen</th>
+              <th class="py-2 pr-4 text-left font-medium">{t.colName}</th>
+              <th class="px-3 py-2 text-left font-medium">{t.colVersion}</th>
+              <th class="px-3 py-2 text-left font-medium">{t.colHealth}</th>
+              <th class="px-3 py-2 text-left font-medium">{t.colResources}</th>
+              <th class="px-3 py-2 text-left font-medium">{t.colLastSeen}</th>
               <th class="px-3 py-2 text-right font-medium"></th>
             </tr>
           </thead>
@@ -274,7 +278,7 @@
                   <div>{b.name}</div>
                   <button
                     class="interactive mt-0.5 inline-flex items-center gap-1 font-mono text-[10px] font-normal text-muted-foreground hover:text-foreground"
-                    title="Copy edge ID — filter this box's logs in Datadog with edge_id:{b.id}"
+                    title={t.copyIdTitle(b.id)}
                     onclick={() => copy(b.id)}
                   >
                     <Copy class="size-3" />{b.id.slice(0, 8)}…
@@ -286,14 +290,14 @@
                     {#if outdated(b)}
                       <button
                         class="interactive ml-2 inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400 disabled:opacity-50"
-                        title="Update to v{latest}"
+                        title={t.updateTo(latest)}
                         disabled={updatingId === b.id}
                         onclick={() => updateBox(b)}
                       >
                         {#if updatingId === b.id}
-                          <Busy size={12} /> Updating…
+                          <Busy size={12} /> {t.updating}
                         {:else}
-                          <ArrowUpCircle class="size-3" /> Update → v{latest}
+                          <ArrowUpCircle class="size-3" /> {t.updateArrow(latest)}
                         {/if}
                       </button>
                     {/if}
@@ -304,22 +308,22 @@
                 <td class="px-3 py-2">
                   <span class="flex flex-wrap items-center gap-1">
                     {#if b.platform}
-                      <span class="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground" title="Reported platform (OS · arch)">
+                      <span class="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground" title={t.platformTitle}>
                         {b.platform}
                       </span>
                     {/if}
                     {#if b.hwaccel && b.hwaccel !== "none"}
-                      <span class="inline-flex items-center rounded-full border border-foreground/30 bg-foreground/5 px-2 py-0.5 text-[10px] font-medium text-foreground" title="GPU video decode available — the box can run HD face capture (#120)">
-                        GPU decode · {hwLabel(b.hwaccel)}
+                      <span class="inline-flex items-center rounded-full border border-foreground/30 bg-foreground/5 px-2 py-0.5 text-[10px] font-medium text-foreground" title={t.gpuDecodeTitle}>
+                        {t.gpuDecode(hwLabel(b.hwaccel))}
                       </span>
                     {:else if b.hwaccel === "none"}
-                      <span class="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground" title="No GPU video decode — HD face capture would be CPU-only">
-                        CPU decode
+                      <span class="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground" title={t.cpuDecodeTitle}>
+                        {t.cpuDecode}
                       </span>
                     {/if}
                     {#if mediaMissing(b)}
-                      <span class="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive" title="no media backend — snapshots / GetCurrentFrame will fail">
-                        no media backend
+                      <span class="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive" title={t.noMediaTitle}>
+                        {t.noMedia}
                       </span>
                     {/if}
                   </span>
@@ -345,14 +349,14 @@
                   {#if b.last_seen}
                     <span class="text-muted-foreground">{seen(b)}</span>
                   {:else}
-                    <Badge variant="secondary" class="text-[10px]">never connected</Badge>
+                    <Badge variant="secondary" class="text-[10px]">{t.neverConnected}</Badge>
                   {/if}
                 </td>
                 <td class="px-3 py-2 text-right">
-                  <Button variant="ghost" size="icon" title="Restart the box" disabled={restartingId === b.id} onclick={() => restartBox(b)}>
+                  <Button variant="ghost" size="icon" title={t.restartTitle} disabled={restartingId === b.id} onclick={() => restartBox(b)}>
                     {#if restartingId === b.id}<Busy />{:else}<RotateCcw class="size-4" />{/if}
                   </Button>
-                  <Button variant="ghost" size="icon" title="Remove" onclick={() => (deleteTarget = b)}>
+                  <Button variant="ghost" size="icon" title={t.removeTitle} onclick={() => (deleteTarget = b)}>
                     <Trash2 class="size-4" />
                   </Button>
                 </td>
@@ -361,8 +365,8 @@
             {#if list.length === 0}
               <tr><td colspan={7}>
                 <EmptyState
-                  title="No edge boxes yet"
-                  description="Create a box below, then run its installer on the on-prem machine to connect it."
+                  title={t.emptyTitle}
+                  description={t.emptyDescription}
                 />
               </td></tr>
             {/if}
@@ -373,20 +377,18 @@
 
     <Card.Root>
       <Card.Header>
-        <Card.Title>Add an edge box</Card.Title>
-        <Card.Description>
-          Name it and run the generated command on the on-site machine — private networking is handled for you.
-        </Card.Description>
+        <Card.Title>{t.addTitle}</Card.Title>
+        <Card.Description>{t.addDescription}</Card.Description>
       </Card.Header>
       <Card.Content>
         <form class="space-y-4" onsubmit={create}>
           <div class="space-y-1.5">
-            <Label for="box-name">Box name</Label>
-            <Input id="box-name" bind:value={name} placeholder="Front office" />
+            <Label for="box-name">{t.boxName}</Label>
+            <Input id="box-name" bind:value={name} placeholder={t.boxNamePlaceholder} />
           </div>
           <Button type="submit" disabled={!name.trim() || creating}>
             {#if creating}<Busy />{:else}<Plus class="size-4" />{/if}
-            Create box
+            {t.createBox}
           </Button>
         </form>
       </Card.Content>
@@ -398,16 +400,14 @@
 <Dialog.Root open={deleteTarget !== null} onOpenChange={(o) => { if (!o) deleteTarget = null; }}>
   <Dialog.Content>
     <Dialog.Header>
-      <Dialog.Title>Remove edge box?</Dialog.Title>
-      <Dialog.Description>
-        "{deleteTarget?.name}" will stop receiving camera config. Its token is revoked; reinstalling needs a new box.
-      </Dialog.Description>
+      <Dialog.Title>{t.deleteTitle}</Dialog.Title>
+      <Dialog.Description>{t.deleteDescription(deleteTarget?.name ?? "")}</Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
-      <Button variant="outline" onclick={() => (deleteTarget = null)}>Cancel</Button>
+      <Button variant="outline" onclick={() => (deleteTarget = null)}>{c.cancel}</Button>
       <Button variant="destructive" disabled={deleting} onclick={confirmDelete}>
         {#if deleting}<Busy />{/if}
-        Remove
+        {t.remove}
       </Button>
     </Dialog.Footer>
   </Dialog.Content>
