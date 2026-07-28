@@ -2,49 +2,52 @@
   // Keyboard-shortcut cheat sheet for the Map editor. Toggled by the "?" key or the
   // help button; a floating card over the canvas.
   import X from "@lucide/svelte/icons/x";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].map);
 
   let { open = false, onClose }: { open?: boolean; onClose: () => void } = $props();
 
-  const GROUPS: { title: string; rows: [string, string][] }[] = [
+  const GROUPS: { title: string; rows: [string, string][] }[] = $derived([
     {
-      title: "Tools",
+      title: t.groupTools,
       rows: [
-        ["V", "Select / move"],
-        ["W", "Draw wall"],
-        ["M", "Place furniture"],
-        ["F", "Fit to view"],
-        ["`", "Show / hide the panel"],
+        ["V", t.scSelect],
+        ["W", t.scWall],
+        ["M", t.scMarker],
+        ["F", t.scFit],
+        ["`", t.scPanel],
       ],
     },
     {
-      title: "Edit selection",
+      title: t.groupEdit,
       rows: [
-        ["Arrows", "Nudge"],
-        ["Shift + Arrows", "Grow room edge"],
-        ["Shift + Alt + Arrows", "Shrink room edge"],
-        ["[  /  ]", "Rotate (Shift = 1°)"],
-        ["C  /  ⇧C", "Cycle selection"],
-        ["Delete", "Delete selection"],
-        ["Esc", "Deselect"],
+        ["Arrows", t.scNudge],
+        ["Shift + Arrows", t.scGrow],
+        ["Shift + Alt + Arrows", t.scShrink],
+        ["[  /  ]", t.scRotate],
+        ["C  /  ⇧C", t.scCycle],
+        ["Delete", t.scDelete],
+        ["Esc", t.scDeselect],
       ],
     },
     {
-      title: "History",
+      title: t.groupHistory,
       rows: [
-        ["⌘Z / Ctrl+Z", "Undo"],
-        ["⇧⌘Z", "Redo"],
-        ["?", "Toggle this panel"],
+        ["⌘Z / Ctrl+Z", t.scUndo],
+        ["⇧⌘Z", t.scRedo],
+        ["?", t.scToggleHelp],
       ],
     },
-  ];
+  ]);
 </script>
 
 {#if open}
   <div class="absolute inset-0 z-20 flex items-center justify-center bg-overlay p-4 backdrop-blur-sm">
     <div class="w-full max-w-md rounded-xl border border-border bg-card p-4 shadow-2xl">
       <div class="mb-3 flex items-center justify-between">
-        <h2 class="text-sm font-semibold">Keyboard shortcuts</h2>
-        <button class="interactive rounded-md p-1 text-muted-foreground hover:bg-hover hover:text-foreground" title="Close" onclick={onClose}>
+        <h2 class="text-sm font-semibold">{t.shortcutsTitle}</h2>
+        <button class="interactive rounded-md p-1 text-muted-foreground hover:bg-hover hover:text-foreground" title={t.close} onclick={onClose}>
           <X class="size-4" />
         </button>
       </div>

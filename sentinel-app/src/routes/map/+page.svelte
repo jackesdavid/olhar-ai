@@ -38,6 +38,9 @@
   import MapScene from "$lib/three/map/MapScene.svelte";
   import SidePanel from "./components/SidePanel.svelte";
   import ShortcutsOverlay from "./components/ShortcutsOverlay.svelte";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].map);
 
   const store = new MapStore();
   const viewport = new Viewport();
@@ -46,6 +49,19 @@
 
   function toolVariant(m: ToolMode): "default" | "ghost" {
     return tools.mode === m ? "default" : "ghost";
+  }
+
+  /** Legend label for a presence category, in the reader's language. */
+  function categoryText(cat: keyof typeof CATEGORY_STYLE): string {
+    const labels: Record<string, string> = {
+      known_person: t.catKnownPerson,
+      person: t.catPerson,
+      car: t.catCar,
+      cat: t.catCat,
+      dog: t.catDog,
+      unknown: t.catUnknown,
+    };
+    return labels[cat] ?? CATEGORY_STYLE[cat].label;
   }
 
   function bounds() {
@@ -82,10 +98,10 @@
   async function save() {
     try {
       await store.save();
-      toast.success("Map saved.");
+      toast.success(t.saved);
     } catch (err) {
       console.error("Failed to save map", err);
-      toast.error("Failed to save map", { description: String(err) });
+      toast.error(t.saveFailed, { description: String(err) });
     }
   }
 
@@ -165,7 +181,7 @@
       // canvas has real dimensions — see the view-init effect above.
     } catch (err) {
       console.error("Failed to load map", err);
-      toast.error("Failed to load map", { description: String(err) });
+      toast.error(t.loadFailed, { description: String(err) });
     }
   });
 </script>
@@ -174,24 +190,22 @@
   <!-- header -->
   <div class="flex items-center justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Map</h1>
-      <p class="text-sm text-muted-foreground">
-        Top-down floor plan — draw walls, place cameras, and jump to Live.
-      </p>
+      <h1 class="text-2xl font-semibold tracking-tight">{t.title}</h1>
+      <p class="text-sm text-muted-foreground">{t.description}</p>
     </div>
     <Button onclick={save} disabled={store.saving || !store.dirty}>
       {#if store.saving}
         <Busy />
-        Saving…
+        {t.saving}
       {:else}
         <Save class="size-4" />
-        Save{store.dirty ? " *" : ""}
+        {t.save}{store.dirty ? t.dirtyMark : ""}
       {/if}
     </Button>
   </div>
 
   {#if store.loading}
-    <Loader label="Loading map…" />
+    <Loader label={t.loadingMap} />
   {:else}
     <div class="flex min-h-0 flex-1 gap-3">
       <!-- 3D canvas (top-down) -->
@@ -204,60 +218,60 @@
 
         <!-- undo / redo (top-left) -->
         <div class="absolute left-3 top-3 flex items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur">
-          <Button variant="ghost" size="icon" class="size-8" title="Undo (⌘Z)" disabled={!store.canUndo} onclick={() => store.undo()}>
+          <Button variant="ghost" size="icon" class="size-8" title={t.undo} disabled={!store.canUndo} onclick={() => store.undo()}>
             <Undo2 class="size-4" />
           </Button>
-          <Button variant="ghost" size="icon" class="size-8" title="Redo (⇧⌘Z)" disabled={!store.canRedo} onclick={() => store.redo()}>
+          <Button variant="ghost" size="icon" class="size-8" title={t.redo} disabled={!store.canRedo} onclick={() => store.redo()}>
             <Redo2 class="size-4" />
           </Button>
-          <Button variant="ghost" size="icon" class="size-8" title="Keyboard shortcuts (?)" onclick={() => (showHelp = !showHelp)}>
+          <Button variant="ghost" size="icon" class="size-8" title={t.shortcutsButton} onclick={() => (showHelp = !showHelp)}>
             <Keyboard class="size-4" />
           </Button>
         </div>
 
         <!-- zoom / fit (top-right) -->
         <div class="absolute right-3 top-3 flex items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur">
-          <Button variant="ghost" size="icon" class="size-8" title="Zoom out" onclick={() => viewport.zoomBy(1 / 1.2)}>
+          <Button variant="ghost" size="icon" class="size-8" title={t.zoomOut} onclick={() => viewport.zoomBy(1 / 1.2)}>
             <ZoomOut class="size-4" />
           </Button>
           <span class="w-10 text-center text-[11px] tabular-nums text-muted-foreground">
             {Math.round(viewport.zoom * 100)}%
           </span>
-          <Button variant="ghost" size="icon" class="size-8" title="Zoom in" onclick={() => viewport.zoomBy(1.2)}>
+          <Button variant="ghost" size="icon" class="size-8" title={t.zoomIn} onclick={() => viewport.zoomBy(1.2)}>
             <ZoomIn class="size-4" />
           </Button>
-          <Button variant="ghost" size="icon" class="size-8" title="Fit to view" onclick={fit}>
+          <Button variant="ghost" size="icon" class="size-8" title={t.fitToView} onclick={fit}>
             <Maximize class="size-4" />
           </Button>
         </div>
 
         <!-- tool palette (center-right) -->
         <div class="absolute right-3 top-1/2 flex -translate-y-1/2 flex-col items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur">
-          <Button variant={toolVariant("select")} size="icon" class="size-9" title="Select / move (V)" onclick={() => tools.setMode("select")}>
+          <Button variant={toolVariant("select")} size="icon" class="size-9" title={t.toolSelect} onclick={() => tools.setMode("select")}>
             <MousePointer2 class="size-4" />
           </Button>
           <div class="my-0.5 h-px w-6 bg-border"></div>
-          <Button variant={toolVariant("wall")} size="icon" class="size-9" title="Draw wall (W)" onclick={() => tools.setMode("wall")}>
+          <Button variant={toolVariant("wall")} size="icon" class="size-9" title={t.toolWall} onclick={() => tools.setMode("wall")}>
             <Spline class="size-4" />
           </Button>
-          <Button variant={toolVariant("line")} size="icon" class="size-9" title="Draw line (L)" onclick={() => tools.setMode("line")}>
+          <Button variant={toolVariant("line")} size="icon" class="size-9" title={t.toolLine} onclick={() => tools.setMode("line")}>
             <Minus class="size-4" />
           </Button>
           <div class="my-0.5 h-px w-6 bg-border"></div>
-          <Button variant={toolVariant("rect")} size="icon" class="size-9" title="Rectangle (R)" onclick={() => tools.setMode("rect")}>
+          <Button variant={toolVariant("rect")} size="icon" class="size-9" title={t.toolRect} onclick={() => tools.setMode("rect")}>
             <Square class="size-4" />
           </Button>
-          <Button variant={toolVariant("triangle")} size="icon" class="size-9" title="Triangle (T)" onclick={() => tools.setMode("triangle")}>
+          <Button variant={toolVariant("triangle")} size="icon" class="size-9" title={t.toolTriangle} onclick={() => tools.setMode("triangle")}>
             <Triangle class="size-4" />
           </Button>
-          <Button variant={toolVariant("circle")} size="icon" class="size-9" title="Circle (C)" onclick={() => tools.setMode("circle")}>
+          <Button variant={toolVariant("circle")} size="icon" class="size-9" title={t.toolCircle} onclick={() => tools.setMode("circle")}>
             <Circle class="size-4" />
           </Button>
           <div class="my-0.5 h-px w-6 bg-border"></div>
-          <Button variant={toolVariant("text")} size="icon" class="size-9" title="Text label" onclick={() => tools.setMode("text")}>
+          <Button variant={toolVariant("text")} size="icon" class="size-9" title={t.toolText} onclick={() => tools.setMode("text")}>
             <Type class="size-4" />
           </Button>
-          <Button variant={toolVariant("marker")} size="icon" class="size-9" title="Place furniture (M)" onclick={() => tools.setMode("marker")}>
+          <Button variant={toolVariant("marker")} size="icon" class="size-9" title={t.toolMarker} onclick={() => tools.setMode("marker")}>
             <Armchair class="size-4" />
           </Button>
         </div>
@@ -267,7 +281,7 @@
           {#each CATEGORY_ORDER as cat (cat)}
             <span class="flex items-center gap-1.5">
               <span class="size-2 rounded-full" style="background:{CATEGORY_STYLE[cat].color}"></span>
-              {CATEGORY_STYLE[cat].label}
+              {categoryText(cat)}
             </span>
           {/each}
         </div>

@@ -7,22 +7,25 @@
   import * as Select from "$lib/components/ui/select";
   import type { MapStore } from "$lib/map/store.svelte";
   import type { StrokeStyle } from "$lib/types";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].map);
 
   let { store }: { store: MapStore } = $props();
 
   const s = $derived(store.selectedShape);
 
-  const STROKE_STYLES: { value: StrokeStyle; label: string }[] = [
-    { value: "solid",  label: "Solid" },
-    { value: "dashed", label: "Dashed" },
-    { value: "dotted", label: "Dotted" },
-  ];
+  const STROKE_STYLES: { value: StrokeStyle; label: string }[] = $derived([
+    { value: "solid",  label: t.styleSolid },
+    { value: "dashed", label: t.styleDashed },
+    { value: "dotted", label: t.styleDotted },
+  ]);
 
   const strokeStyleLabel = $derived(
-    STROKE_STYLES.find((x) => x.value === (s?.strokeStyle ?? "solid"))?.label ?? "Solid"
+    STROKE_STYLES.find((x) => x.value === (s?.strokeStyle ?? "solid"))?.label ?? t.styleSolid
   );
 
-  const kindLabel: Record<string, string> = { rect: "Rectangle", triangle: "Triangle", circle: "Circle" };
+  const kindLabel: Record<string, string> = $derived({ rect: t.shapeRect, triangle: t.shapeTriangle, circle: t.shapeCircle });
 
   function patch(p: Parameters<typeof store.updateShape>[1]) {
     if (!s) return;
@@ -64,7 +67,7 @@
 
     <!-- Stroke color -->
     <div class="space-y-1.5">
-      <Label class="text-xs text-muted-foreground">Stroke color</Label>
+      <Label class="text-xs text-muted-foreground">{t.strokeColor}</Label>
       <div class="flex items-center gap-2">
         <input
           type="color"
@@ -79,14 +82,14 @@
             Reset
           </Button>
         {:else}
-          <span class="text-xs text-muted-foreground">White</span>
+          <span class="text-xs text-muted-foreground">{t.white}</span>
         {/if}
       </div>
     </div>
 
     <!-- Stroke style -->
     <div class="space-y-1.5">
-      <Label class="text-xs text-muted-foreground">Stroke style</Label>
+      <Label class="text-xs text-muted-foreground">{t.strokeStyle}</Label>
       <Select.Root
         type="single"
         value={s.strokeStyle ?? "solid"}
@@ -103,7 +106,7 @@
 
     <!-- Fill color -->
     <div class="space-y-1.5">
-      <Label class="text-xs text-muted-foreground">Fill</Label>
+      <Label class="text-xs text-muted-foreground">{t.fill}</Label>
       <div class="flex items-center gap-2">
         <input
           type="color"
@@ -128,7 +131,7 @@
     <!-- Rotation (not applicable for triangles) -->
     {#if s.kind !== "triangle"}
       <div class="space-y-1.5">
-        <Label class="text-xs text-muted-foreground">Rotate</Label>
+        <Label class="text-xs text-muted-foreground">{t.rotate}</Label>
         <div class="flex items-center gap-2">
           <Button variant="outline" size="sm" class="flex-1" onclick={() => store.rotateSelected(-15)}>
             <RotateCcw class="size-4" /> −15°

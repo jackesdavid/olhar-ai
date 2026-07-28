@@ -27,6 +27,8 @@ import { boxInstall } from "./messages/boxInstall";
 import { peopleDirectory } from "./messages/peopleDirectory";
 import { personDetail } from "./messages/personDetail";
 import { enroll } from "./messages/enroll";
+import { chat } from "./messages/chat";
+import { map } from "./messages/map";
 
 export { lang, setLang, initLang, locale, type Lang } from "./runtime.svelte";
 
@@ -62,6 +64,8 @@ const modules = {
   peopleDirectory: domain(peopleDirectory),
   personDetail: domain(personDetail),
   enroll: domain(enroll),
+  chat: domain(chat),
+  map: domain(map),
 };
 
 /** One language's messages — every module, narrowed to that language. */

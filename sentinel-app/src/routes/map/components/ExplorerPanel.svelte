@@ -12,6 +12,9 @@
   import type { MapStore } from "$lib/map/store.svelte";
   import type { MapWall } from "$lib/types";
   import { iconLabel } from "$lib/map/icons";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].map);
 
   let { store }: { store: MapStore } = $props();
 
@@ -33,14 +36,14 @@
   <section class="space-y-1.5">
     <header class="flex items-center justify-between">
       <h3 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Rooms <span class="tabular-nums">({store.rooms.length})</span>
+        {t.rooms} <span class="tabular-nums">({store.rooms.length})</span>
       </h3>
       <Button size="sm" variant="ghost" class="h-7 px-2 text-xs" onclick={() => store.addRoom()}>
-        <Plus class="size-3.5" /> Add
+        <Plus class="size-3.5" /> {t.add}
       </Button>
     </header>
     {#if store.rooms.length === 0}
-      <p class="px-1 text-xs text-muted-foreground">No rooms yet.</p>
+      <p class="px-1 text-xs text-muted-foreground">{t.noRooms}</p>
     {:else}
       <ul class="space-y-0.5">
         {#each store.rooms as room (room.id)}
@@ -53,7 +56,7 @@
                   <span class="ml-auto inline-flex items-center gap-1 text-[10px] text-muted-foreground"><Cctv class="size-3" />{room.cameras.length}</span>
                 {/if}
               </button>
-              <button type="button" class="interactive rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100 [@media(hover:none)]:opacity-100" title="Delete room" onclick={() => store.deleteRoom(room.id)}>
+              <button type="button" class="interactive rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100 [@media(hover:none)]:opacity-100" title={t.deleteRoom} onclick={() => store.deleteRoom(room.id)}>
                 <Trash2 class="size-3.5" />
               </button>
             </div>
@@ -63,7 +66,7 @@
                   <li class="group flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground">
                     <Cctv class="size-3 shrink-0 opacity-70" />
                     <span class="truncate">{store.deviceName(cam.ip)}</span>
-                    <button type="button" class="interactive ml-auto rounded p-0.5 opacity-0 hover:text-destructive group-hover:opacity-100 [@media(hover:none)]:opacity-100" title="Unassign camera" onclick={() => { store.selectRoom(room.id); store.unassignCamera(cam.ip); }}>
+                    <button type="button" class="interactive ml-auto rounded p-0.5 opacity-0 hover:text-destructive group-hover:opacity-100 [@media(hover:none)]:opacity-100" title={t.unassignCamera} onclick={() => { store.selectRoom(room.id); store.unassignCamera(cam.ip); }}>
                       <Trash2 class="size-3" />
                     </button>
                   </li>
@@ -79,20 +82,20 @@
   <!-- Walls -->
   <section class="space-y-1.5">
     <h3 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-      Walls <span class="tabular-nums">({store.walls.length})</span>
+      {t.walls} <span class="tabular-nums">({store.walls.length})</span>
     </h3>
     {#if store.walls.length === 0}
-      <p class="px-1 text-xs text-muted-foreground">No walls drawn.</p>
+      <p class="px-1 text-xs text-muted-foreground">{t.noWalls}</p>
     {:else}
       <ul class="space-y-0.5">
         {#each store.walls as wall, i (wall.id)}
           <li class="group flex items-center gap-1 rounded-md border px-2 py-1.5 text-sm {rowClass(wall.id === store.selectedWallId)}">
             <button type="button" class="interactive flex min-w-0 flex-1 items-center gap-2" onclick={() => store.selectWall(wall.id)}>
               <Spline class="size-3.5 shrink-0 opacity-70" />
-              <span class="truncate">Wall {i + 1}</span>
+              <span class="truncate">{t.wallN(i + 1)}</span>
               <span class="ml-auto text-[10px] tabular-nums text-muted-foreground">{wallLen(wall)}m</span>
             </button>
-            <button type="button" class="interactive rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100 [@media(hover:none)]:opacity-100" title="Delete wall" onclick={() => store.deleteWall(wall.id)}>
+            <button type="button" class="interactive rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100 [@media(hover:none)]:opacity-100" title={t.deleteWall} onclick={() => store.deleteWall(wall.id)}>
               <Trash2 class="size-3.5" />
             </button>
           </li>
@@ -104,10 +107,10 @@
   <!-- Markers -->
   <section class="space-y-1.5">
     <h3 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-      Markers <span class="tabular-nums">({store.markers.length})</span>
+      {t.markers} <span class="tabular-nums">({store.markers.length})</span>
     </h3>
     {#if store.markers.length === 0}
-      <p class="px-1 text-xs text-muted-foreground">No markers placed.</p>
+      <p class="px-1 text-xs text-muted-foreground">{t.noMarkers}</p>
     {:else}
       <ul class="space-y-0.5">
         {#each store.markers as marker (marker.id)}
@@ -116,7 +119,7 @@
               <Armchair class="size-3.5 shrink-0 opacity-70" />
               <span class="truncate">{markerName(marker.icon, marker.label)}</span>
             </button>
-            <button type="button" class="interactive rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100 [@media(hover:none)]:opacity-100" title="Delete marker" onclick={() => store.deleteMarker(marker.id)}>
+            <button type="button" class="interactive rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100 [@media(hover:none)]:opacity-100" title={t.deleteMarker} onclick={() => store.deleteMarker(marker.id)}>
               <Trash2 class="size-3.5" />
             </button>
           </li>

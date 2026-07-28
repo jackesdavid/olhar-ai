@@ -8,27 +8,30 @@
   import * as Select from "$lib/components/ui/select";
   import type { MapStore } from "$lib/map/store.svelte";
   import type { WallStyle } from "$lib/types";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].map);
 
   let { store }: { store: MapStore } = $props();
 
   const wall = $derived(store.selectedWall);
   const length = $derived(wall ? Math.hypot(wall.x2 - wall.x1, wall.y2 - wall.y1) : 0);
 
-  const STYLES: { value: WallStyle; label: string }[] = [
-    { value: "solid",     label: "Solid" },
-    { value: "wireframe", label: "Wireframe" },
-    { value: "line",      label: "Line" },
-    { value: "dashed",    label: "Dashed" },
-    { value: "dotted",    label: "Dotted" },
-  ];
+  const STYLES: { value: WallStyle; label: string }[] = $derived([
+    { value: "solid",     label: t.styleSolid },
+    { value: "wireframe", label: t.styleWireframe },
+    { value: "line",      label: t.styleLine },
+    { value: "dashed",    label: t.styleDashed },
+    { value: "dotted",    label: t.styleDotted },
+  ]);
 
   const style = $derived((wall?.style ?? "solid") as WallStyle);
-  const styleLabel = $derived(STYLES.find((s) => s.value === style)?.label ?? "Solid");
+  const styleLabel = $derived(STYLES.find((s) => s.value === style)?.label ?? t.styleSolid);
 
-  function widthLabel(t: number): string {
-    if (t >= 0.3) return "Thick";
-    if (t >= 0.15) return "Medium";
-    return "Thin";
+  function widthLabel(width: number): string {
+    if (width >= 0.3) return t.thick;
+    if (width >= 0.15) return t.medium;
+    return t.thin;
   }
 
   function setStyle(value: string) {
@@ -52,13 +55,13 @@
 {#if wall}
   <div class="space-y-3">
     <div class="flex items-center justify-between">
-      <Label>Wall</Label>
+      <Label>{t.wall}</Label>
       <span class="text-xs text-muted-foreground tabular-nums">{length.toFixed(1)} units</span>
     </div>
 
     <!-- Style -->
     <div class="space-y-1.5">
-      <Label class="text-xs text-muted-foreground">Style</Label>
+      <Label class="text-xs text-muted-foreground">{t.style}</Label>
       <Select.Root type="single" value={style} onValueChange={setStyle}>
         <Select.Trigger class="w-full">{styleLabel}</Select.Trigger>
         <Select.Content>
@@ -71,7 +74,7 @@
 
     <!-- Color -->
     <div class="space-y-1.5">
-      <Label class="text-xs text-muted-foreground">Color</Label>
+      <Label class="text-xs text-muted-foreground">{t.color}</Label>
       <div class="flex items-center gap-2">
         <input
           type="color"
@@ -85,7 +88,7 @@
             Reset
           </Button>
         {:else}
-          <span class="text-xs text-muted-foreground">Default</span>
+          <span class="text-xs text-muted-foreground">{t.default}</span>
         {/if}
       </div>
     </div>
@@ -94,7 +97,7 @@
     {#if style === "solid" || style === "wireframe"}
       <div class="space-y-1.5">
         <div class="flex items-center justify-between">
-          <Label class="text-xs text-muted-foreground">Thickness</Label>
+          <Label class="text-xs text-muted-foreground">{t.thickness}</Label>
           <span class="text-xs tabular-nums text-muted-foreground">{widthLabel(wall.thickness)}</span>
         </div>
         <input
@@ -112,7 +115,7 @@
 
     <!-- Rotate -->
     <div class="space-y-1.5">
-      <Label class="text-xs text-muted-foreground">Rotate (about centre)</Label>
+      <Label class="text-xs text-muted-foreground">{t.rotateAboutCentre}</Label>
       <div class="flex items-center gap-2">
         <Button variant="outline" size="sm" class="flex-1" onclick={() => store.rotateSelected(-15)}>
           <RotateCcw class="size-4" /> −15°

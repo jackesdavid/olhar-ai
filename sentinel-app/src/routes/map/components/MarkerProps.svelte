@@ -6,6 +6,9 @@
   import { Label } from "$lib/components/ui/label";
   import { MARKER_ICONS } from "$lib/map/icons";
   import type { MapStore } from "$lib/map/store.svelte";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].map);
 
   let { store }: { store: MapStore } = $props();
 
@@ -22,7 +25,7 @@
 
 {#if marker}
   <div class="space-y-3">
-    <Label>Marker</Label>
+    <Label>{t.marker}</Label>
 
     <div class="grid grid-cols-5 gap-1.5">
       {#each MARKER_ICONS as icon (icon.key)}
@@ -43,18 +46,18 @@
     </div>
 
     <div class="space-y-1.5">
-      <Label for="marker-label" class="text-xs text-muted-foreground">Label</Label>
+      <Label for="marker-label" class="text-xs text-muted-foreground">{t.label}</Label>
       <Input
         id="marker-label"
         value={marker.label ?? ""}
-        placeholder="Optional caption"
+        placeholder={t.optionalCaption}
         oninput={(e) => store.updateMarker(marker.id, { label: e.currentTarget.value })}
       />
     </div>
 
     <div class="space-y-1.5">
       <div class="flex items-center justify-between">
-        <Label class="text-xs text-muted-foreground">Rotation</Label>
+        <Label class="text-xs text-muted-foreground">{t.rotation}</Label>
         <span class="text-xs tabular-nums text-muted-foreground">{Math.round(marker.rot)}°</span>
       </div>
       <input
@@ -70,7 +73,7 @@
 
     <div class="space-y-1.5">
       <div class="flex items-center justify-between">
-        <Label class="text-xs text-muted-foreground">Size</Label>
+        <Label class="text-xs text-muted-foreground">{t.size}</Label>
         <span class="text-xs tabular-nums text-muted-foreground">{marker.scale.toFixed(1)}×</span>
       </div>
       <input

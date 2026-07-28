@@ -5,26 +5,28 @@
   import { Button } from "$lib/components/ui/button";
   import { Label } from "$lib/components/ui/label";
   import type { MapStore } from "$lib/map/store.svelte";
+  import { dict, lang } from "$lib/i18n";
 
   let { store }: { store: MapStore } = $props();
 
-  const t = $derived(store.selectedText);
+  const t = $derived(dict[lang()].map);
+  const sel = $derived(store.selectedText);
 
   function setField(patch: Parameters<typeof store.updateText>[1]) {
-    if (!t) return;
-    store.updateText(t.id, patch);
+    if (!sel) return;
+    store.updateText(sel.id, patch);
   }
 </script>
 
-{#if t}
+{#if sel}
   <div class="space-y-3">
-    <Label>Text label</Label>
+    <Label>{t.textLabel}</Label>
 
     <div class="space-y-1.5">
-      <Label class="text-xs text-muted-foreground">Content</Label>
+      <Label class="text-xs text-muted-foreground">{t.content}</Label>
       <input
         type="text"
-        value={t.text}
+        value={sel.text}
         class="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
         oninput={(e) => setField({ text: e.currentTarget.value })}
       />
@@ -32,15 +34,15 @@
 
     <div class="space-y-1.5">
       <div class="flex items-center justify-between">
-        <Label class="text-xs text-muted-foreground">Size</Label>
-        <span class="text-xs tabular-nums text-muted-foreground">{(t.size ?? 0.5).toFixed(2)}</span>
+        <Label class="text-xs text-muted-foreground">{t.size}</Label>
+        <span class="text-xs tabular-nums text-muted-foreground">{(sel.size ?? 0.5).toFixed(2)}</span>
       </div>
       <input
         type="range"
         min="0.1"
         max="3"
         step="0.05"
-        value={t.size ?? 0.5}
+        value={sel.size ?? 0.5}
         class="h-1.5 w-full accent-primary"
         onpointerdown={() => store.checkpoint()}
         oninput={(e) => setField({ size: e.currentTarget.valueAsNumber })}
@@ -48,28 +50,28 @@
     </div>
 
     <div class="space-y-1.5">
-      <Label class="text-xs text-muted-foreground">Color</Label>
+      <Label class="text-xs text-muted-foreground">{t.color}</Label>
       <div class="flex items-center gap-2">
         <input
           type="color"
-          value={t.color ?? "#ffffff"}
+          value={sel.color ?? "#ffffff"}
           class="h-8 w-10 cursor-pointer rounded border border-border bg-transparent p-0.5"
           onpointerdown={() => store.checkpoint()}
           oninput={(e) => setField({ color: e.currentTarget.value })}
         />
-        {#if t.color && t.color !== "#ffffff"}
+        {#if sel.color && sel.color !== "#ffffff"}
           <Button variant="ghost" size="sm" class="h-8 text-xs text-muted-foreground"
             onclick={() => { store.checkpoint(); setField({ color: "#ffffff" }); }}>
-            Reset
+            {t.reset}
           </Button>
         {:else}
-          <span class="text-xs text-muted-foreground">White</span>
+          <span class="text-xs text-muted-foreground">{t.white}</span>
         {/if}
       </div>
     </div>
 
     <div class="space-y-1.5">
-      <Label class="text-xs text-muted-foreground">Rotate</Label>
+      <Label class="text-xs text-muted-foreground">{t.rotate}</Label>
       <div class="flex items-center gap-2">
         <Button variant="outline" size="sm" class="flex-1" onclick={() => store.rotateSelected(-15)}>
           <RotateCcw class="size-4" /> −15°
@@ -80,8 +82,8 @@
       </div>
     </div>
 
-    <Button variant="destructive" size="sm" class="w-full" onclick={() => store.deleteText(t.id)}>
-      <Trash2 class="size-4" /> Delete label
+    <Button variant="destructive" size="sm" class="w-full" onclick={() => store.deleteText(sel.id)}>
+      <Trash2 class="size-4" /> {t.deleteLabel}
     </Button>
   </div>
 {/if}

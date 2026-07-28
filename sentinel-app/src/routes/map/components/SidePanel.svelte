@@ -11,6 +11,9 @@
   import type { ToolState } from "$lib/map/tools.svelte";
   import PropertiesPanel from "./PropertiesPanel.svelte";
   import ExplorerPanel from "./ExplorerPanel.svelte";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].map);
 
   let {
     store,
@@ -76,8 +79,8 @@
       <button
         type="button"
         class="interactive inline-flex size-8 items-center justify-center rounded-md {tabClass(tab === 'properties')}"
-        title="Properties"
-        aria-label="Properties"
+        title={t.properties}
+        aria-label={t.properties}
         aria-pressed={tab === "properties"}
         onclick={() => setTab("properties")}
       >
@@ -86,8 +89,8 @@
       <button
         type="button"
         class="interactive inline-flex size-8 items-center justify-center rounded-md {tabClass(tab === 'explorer')}"
-        title="Explorer"
-        aria-label="Explorer"
+        title={t.explorer}
+        aria-label={t.explorer}
         aria-pressed={tab === "explorer"}
         onclick={() => setTab("explorer")}
       >
@@ -96,8 +99,8 @@
       <button
         type="button"
         class="interactive ml-auto inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
-        title="Collapse panel"
-        aria-label="Collapse panel"
+        title={t.collapsePanel}
+        aria-label={t.collapsePanel}
         onclick={toggle}
       >
         <PanelRightClose class="size-4" />
@@ -116,8 +119,8 @@
     <button
       type="button"
       class="interactive inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
-      title="Show panel"
-      aria-label="Show panel"
+      title={t.showPanel}
+      aria-label={t.showPanel}
       onclick={toggle}
     >
       <PanelRightOpen class="size-4" />

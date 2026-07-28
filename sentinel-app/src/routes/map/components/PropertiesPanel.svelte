@@ -16,6 +16,10 @@
   import MarkerPicker from "./MarkerPicker.svelte";
   import TextProps from "./TextProps.svelte";
   import ShapeProps from "./ShapeProps.svelte";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].map);
+  const c = $derived(dict[lang()].common);
 
   let {
     store,
@@ -30,14 +34,14 @@
     deleteOpen = false;
   }
 
-  const DRAW_HINTS: Partial<Record<string, string>> = {
-    wall: "Click to drop points and chain a wall. Hold Shift to snap to 45°/90°.",
-    line: "Click two points to draw a flat line. Hold Shift for ortho.",
-    rect: "Click the first corner, then the opposite corner.",
-    triangle: "Click three points to define the triangle vertices.",
-    circle: "Click the center, then drag out to set the radius.",
-    text: "Click anywhere on the floor to place a text label.",
-  };
+  const DRAW_HINTS: Partial<Record<string, string>> = $derived({
+    wall: t.hintWall,
+    line: t.hintLine,
+    rect: t.hintRect,
+    triangle: t.hintTriangle,
+    circle: t.hintCircle,
+    text: t.hintText,
+  });
 </script>
 
 <div class="flex flex-col gap-4">
@@ -53,7 +57,7 @@
 
   {#if tools.mode === "marker"}
     <div class="space-y-2">
-      <p class="text-xs text-muted-foreground">Pick an item, then click the floor to place it.</p>
+      <p class="text-xs text-muted-foreground">{t.pickItemHint}</p>
       <MarkerPicker {tools} />
     </div>
     <Separator />
@@ -71,14 +75,14 @@
     <RoomForm {store} />
     <Button variant="destructive" size="sm" class="w-full" onclick={() => (deleteOpen = true)}>
       <Trash2 class="size-4" />
-      Delete room
+      {t.deleteRoom}
     </Button>
     <Separator />
     <CameraAssign {store} {onGoLive} />
   {:else if tools.mode === "select"}
     <div class="flex flex-col items-center gap-2 rounded-md border border-dashed border-border px-4 py-8 text-center text-xs text-muted-foreground">
       <MousePointer2 class="size-5 opacity-60" />
-      <span>Select an item on the plan (or in the Explorer) to edit its properties.</span>
+      <span>{t.selectPrompt}</span>
     </div>
   {/if}
 </div>
@@ -86,17 +90,15 @@
 <Dialog.Root bind:open={deleteOpen}>
   <Dialog.Content>
     <Dialog.Header>
-      <Dialog.Title>Delete room?</Dialog.Title>
+      <Dialog.Title>{t.deleteRoomTitle}</Dialog.Title>
       <Dialog.Description>
-        {store.selectedRoom
-          ? `"${store.selectedRoom.name}" and its camera assignments will be removed.`
-          : ""}
-        This is part of the unsaved working copy until you Save.
+        {store.selectedRoom ? t.deleteRoomNamed(store.selectedRoom.name) : ""}
+        {t.unsavedNote}
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
-      <Button variant="outline" onclick={() => (deleteOpen = false)}>Cancel</Button>
-      <Button variant="destructive" onclick={confirmDelete}>Delete</Button>
+      <Button variant="outline" onclick={() => (deleteOpen = false)}>{c.cancel}</Button>
+      <Button variant="destructive" onclick={confirmDelete}>{t.delete}</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

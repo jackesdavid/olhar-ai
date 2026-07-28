@@ -17,6 +17,9 @@
   import { Button } from "$lib/components/ui/button";
   import VoiceOrb from "$lib/components/voice-orb.svelte";
   import { agent, type ChatTurn, type ChatToolEvent } from "$lib/api";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].chat);
 
   // `reveal` = number of words currently shown (audio-synced); undefined = show all.
   type Msg = { role: "user" | "assistant"; content: string; tools?: ChatToolEvent[]; reveal?: number };
@@ -65,10 +68,10 @@
   }
 
   function statusLine(): string {
-    if (recording) return "Listening…";
-    if (voiceState === "speaking") return "Speaking…";
-    if (busy) return "Thinking…";
-    return "Hold Ctrl or the orb to talk";
+    if (recording) return t.listening;
+    if (voiceState === "speaking") return t.speaking;
+    if (busy) return t.thinking;
+    return t.holdToTalkHint;
   }
 
   function bubbleClass(role: Msg["role"]): string {
@@ -117,7 +120,7 @@
         void scrollToEnd();
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "The assistant didn't respond.");
+      toast.error(e instanceof Error ? e.message : t.noReply);
     } finally {
       busy = false;
     }
@@ -215,7 +218,7 @@
       recording = true;
     } catch {
       voiceState = "idle";
-      toast.error("Couldn't access the microphone.");
+      toast.error(t.micFailed);
     }
   }
 
@@ -256,7 +259,7 @@
     try {
       text = await agent.stt(blob);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Transcription failed.");
+      toast.error(e instanceof Error ? e.message : t.transcriptionFailed);
       busy = false;
       return;
     }
@@ -307,13 +310,13 @@
 <div class="mx-auto flex h-[calc(100dvh-7rem)] max-w-3xl flex-col">
   <div class="flex items-start justify-between gap-3 pb-2">
     <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Assistant</h1>
-      <p class="text-sm text-muted-foreground">Ask Olhar AI about your cameras, alerts, and people.</p>
+      <h1 class="text-2xl font-semibold tracking-tight">{t.title}</h1>
+      <p class="text-sm text-muted-foreground">{t.description}</p>
     </div>
     <Button
       variant="ghost"
       size="icon"
-      title={speakReplies ? "Mute spoken replies" : "Speak replies aloud"}
+      title={speakReplies ? t.muteReplies : t.speakReplies}
       onclick={() => (speakReplies = !speakReplies)}
     >
       {#if speakReplies}<Volume2 class="size-4" />{:else}<VolumeX class="size-4" />{/if}
@@ -326,8 +329,8 @@
       type="button"
       class="interactive rounded-full transition-transform focus-visible:outline-none active:scale-95 disabled:opacity-50"
       style="touch-action:none"
-      title="Hold to talk (or hold Ctrl)"
-      aria-label="Hold to talk"
+      title={t.holdToTalk}
+      aria-label={t.holdToTalkLabel}
       disabled={busy}
       onpointerdown={(e) => {
         e.preventDefault();
@@ -346,7 +349,7 @@
   <div bind:this={scroller} class="flex-1 space-y-4 overflow-y-auto rounded-xl border border-border bg-elev-1 p-4">
     {#if messages.length === 0}
       <div class="flex h-full flex-col items-center justify-center gap-2 text-center text-muted-foreground">
-        <p class="max-w-sm text-sm">Try "list my cameras", "what's on the hall camera?", or "show me recent alerts".</p>
+        <p class="max-w-sm text-sm">{t.emptyHint}</p>
       </div>
     {/if}
 
@@ -368,14 +371,14 @@
               </figure>
             {:else if ev.type === "open_live"}
               <a href="/live" class="interactive mr-auto inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-primary">
-                <ExternalLink class="size-3" /> Open live view ({ev.ip})
+                <ExternalLink class="size-3" /> {t.openLive(ev.ip)}
               </a>
             {:else if ev.type === "print"}
               <pre class={`mr-auto max-w-[85%] overflow-x-auto rounded-lg border border-border bg-card px-3 py-2 text-xs ${printToneClass(ev.level)}`}>{ev.message}</pre>
             {:else if ev.type === "devices_changed"}
-              <p class="mr-auto text-xs text-muted-foreground">Camera list updated.</p>
+              <p class="mr-auto text-xs text-muted-foreground">{t.devicesChanged}</p>
             {:else if ev.type === "alerts_changed"}
-              <p class="mr-auto text-xs text-muted-foreground">Alerts updated.</p>
+              <p class="mr-auto text-xs text-muted-foreground">{t.alertsChanged}</p>
             {/if}
           {/each}
         {/if}
@@ -384,7 +387,7 @@
 
     {#if busy}
       <div class="mr-auto flex items-center gap-2 text-xs text-muted-foreground">
-        <Busy size={14} /> Thinking…
+        <Busy size={14} /> {t.thinking}
       </div>
     {/if}
   </div>
@@ -395,7 +398,7 @@
       variant={recording ? "destructive" : "outline"}
       size="icon"
       class="shrink-0"
-      title="Hold to talk (or hold Space)"
+      title={t.holdToTalkSpace}
       onpointerdown={(e) => {
         e.preventDefault();
         void pttStart();
@@ -409,10 +412,10 @@
       bind:value={input}
       onkeydown={onInputKeydown}
       rows="1"
-      placeholder="Message the assistant…"
+      placeholder={t.placeholder}
       class="flex max-h-40 min-h-10 flex-1 resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     ></textarea>
-    <Button class="shrink-0" size="icon" disabled={!canSend()} onclick={() => send()} title="Send">
+    <Button class="shrink-0" size="icon" disabled={!canSend()} onclick={() => send()} title={t.send}>
       <SendIcon class="size-4" />
     </Button>
   </div>

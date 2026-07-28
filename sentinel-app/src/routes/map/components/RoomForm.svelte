@@ -3,6 +3,9 @@
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import type { MapStore } from "$lib/map/store.svelte";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].map);
 
   let { store }: { store: MapStore } = $props();
 </script>
@@ -10,7 +13,7 @@
 {#if store.selectedRoom}
   <div class="space-y-3">
     <div class="space-y-1.5">
-      <Label for="room-name">Name</Label>
+      <Label for="room-name">{t.name}</Label>
       <Input
         id="room-name"
         value={store.selectedRoom.name}
@@ -38,7 +41,7 @@
         />
       </div>
       <div class="space-y-1.5">
-        <Label for="room-w">Width</Label>
+        <Label for="room-w">{t.width}</Label>
         <Input
           id="room-w"
           type="number"
@@ -47,7 +50,7 @@
         />
       </div>
       <div class="space-y-1.5">
-        <Label for="room-h">Height</Label>
+        <Label for="room-h">{t.height}</Label>
         <Input
           id="room-h"
           type="number"
@@ -59,7 +62,7 @@
 
     <div class="space-y-1.5">
       <div class="flex items-center justify-between">
-        <Label class="text-xs text-muted-foreground">Rotation</Label>
+        <Label class="text-xs text-muted-foreground">{t.rotation}</Label>
         <span class="text-xs tabular-nums text-muted-foreground">{Math.round(store.selectedRoom.rot ?? 0)}°</span>
       </div>
       <input

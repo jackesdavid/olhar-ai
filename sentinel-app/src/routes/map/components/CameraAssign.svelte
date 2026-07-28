@@ -9,6 +9,9 @@
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import type { MapStore } from "$lib/map/store.svelte";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].map);
 
   let { store, onGoLive }: { store: MapStore; onGoLive: (ip: string) => void } = $props();
 
@@ -17,7 +20,7 @@
   let assignDy = $state(0);
 
   const assignLabel = $derived(
-    assignIp ? store.deviceName(assignIp) : "Select a camera to assign",
+    assignIp ? store.deviceName(assignIp) : t.selectCameraToAssign,
   );
 
   function doAssign() {
@@ -31,10 +34,10 @@
 
 {#if store.selectedRoom}
   <div class="space-y-3">
-    <Label>Cameras</Label>
+    <Label>{t.cameras}</Label>
 
     {#if store.selectedRoom.cameras.length === 0}
-      <p class="text-sm text-muted-foreground">No cameras assigned.</p>
+      <p class="text-sm text-muted-foreground">{t.noCamerasAssigned}</p>
     {:else}
       <div class="flex flex-col gap-2">
         {#each store.selectedRoom.cameras as cam (cam.ip)}
@@ -51,7 +54,7 @@
                   size="icon"
                   variant="ghost"
                   class="size-7"
-                  title="Open in Live"
+                  title={t.openInLive}
                   onclick={() => onGoLive(cam.ip)}
                 >
                   <Video class="size-4" />
@@ -60,7 +63,7 @@
                   size="icon"
                   variant="ghost"
                   class="size-7"
-                  title="Unassign"
+                  title={t.unassign}
                   onclick={() => store.unassignCamera(cam.ip)}
                 >
                   <Trash2 class="size-4" />
@@ -68,7 +71,7 @@
               </div>
             </div>
             <div class="flex items-center gap-2">
-              <Label class="w-16 shrink-0 text-xs text-muted-foreground">Facing</Label>
+              <Label class="w-16 shrink-0 text-xs text-muted-foreground">{t.facing}</Label>
               <input
                 type="range"
                 min="0"
@@ -114,7 +117,7 @@
               <span class="w-10 text-right text-xs tabular-nums text-muted-foreground">{Math.round(cam.fov ?? 62)}°</span>
             </div>
             <div class="flex items-center gap-2">
-              <Label class="w-16 shrink-0 text-xs text-muted-foreground">Length</Label>
+              <Label class="w-16 shrink-0 text-xs text-muted-foreground">{t.length}</Label>
               <input
                 type="range"
                 min="1"
@@ -133,12 +136,12 @@
 
     <!-- assign a saved device -->
     <div class="space-y-2 rounded-md border border-dashed border-border p-2">
-      <Label class="text-xs text-muted-foreground">Assign a camera</Label>
+      <Label class="text-xs text-muted-foreground">{t.assignACamera}</Label>
       <Select.Root type="single" bind:value={assignIp}>
         <Select.Trigger class="w-full">{assignLabel}</Select.Trigger>
         <Select.Content>
           {#if store.assignable.length === 0}
-            <div class="px-2 py-1.5 text-sm text-muted-foreground">No more saved devices.</div>
+            <div class="px-2 py-1.5 text-sm text-muted-foreground">{t.noMoreDevices}</div>
           {:else}
             {#each store.assignable as d (d.ip)}
               <Select.Item value={d.ip} label={d.name}>
