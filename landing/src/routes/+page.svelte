@@ -110,47 +110,51 @@
 
 <main class="mx-auto w-full max-w-6xl px-6">
   <!-- ===== hero ===== -->
-  <section class="relative overflow-hidden pt-24 pb-20 md:pt-32">
+  <section class="relative overflow-hidden pt-28 pb-24 md:pt-36">
     <!-- the living vision-network — nodes wired together, signals converging on the eye -->
     <HeroNet />
+    <!-- focal bloom: the eye reads as the luminous point the whole network feeds into -->
+    <div class="pointer-events-none absolute left-1/2 top-[30%] h-[34rem] w-[34rem] -translate-x-1/2 -translate-y-1/2 rounded-full"
+      style="background:radial-gradient(circle, var(--shimmer), transparent 66%);"></div>
     <div class="relative z-10 flex flex-col items-center text-center">
-      <!-- the mark, wrapped in concentric signal pings -->
-      <div class="relative mb-8 grid place-items-center">
-        <span class="ping-ring absolute size-28 rounded-full border border-primary/30" style="animation-delay:0s"></span>
-        <span class="ping-ring absolute size-28 rounded-full border border-primary/20" style="animation-delay:1.6s"></span>
-        <OlharMark label="" size={78} class="relative text-primary drop-shadow-[0_0_24px_oklch(1_0_0/0.3)]" />
+      <!-- the mark, at the centre of concentric signal pings — the network's focal node -->
+      <div class="relative mb-9 grid place-items-center">
+        <span class="ping-ring absolute size-32 rounded-full border border-primary/25"></span>
+        <span class="ping-ring absolute size-32 rounded-full border border-primary/20" style="animation-delay:1.05s"></span>
+        <span class="ping-ring absolute size-32 rounded-full border border-primary/15" style="animation-delay:2.1s"></span>
+        <OlharMark label="" size={94} class="relative text-primary drop-shadow-[0_0_34px_oklch(1_0_0/0.4)]" />
       </div>
 
-      <span use:reveal class="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3.5 py-1.5 text-xs font-semibold text-primary backdrop-blur-sm">
+      <span use:reveal class="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3.5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-primary backdrop-blur-sm">
         <span class="status-live size-1.5 rounded-full bg-primary"></span>
         {t.hero.badge}
       </span>
 
-      <h1 use:reveal={60} class="mt-6 max-w-3xl text-5xl font-extrabold leading-[1.04] tracking-tight md:text-7xl">
+      <h1 use:reveal={60} class="mt-7 max-w-3xl text-[2.75rem] font-extrabold leading-[1.02] tracking-tight sm:text-6xl md:text-7xl">
         {t.hero.title1}<br /><span class="text-grad">{t.hero.titleAccent}</span>
       </h1>
 
-      <p use:reveal={120} class="mt-6 max-w-xl text-lg text-muted-foreground">
+      <p use:reveal={120} class="mt-7 max-w-xl text-lg leading-relaxed text-muted-foreground">
         {t.hero.subtitle}
       </p>
 
-      <div use:reveal={180} class="mt-9 flex flex-wrap items-center justify-center gap-3.5">
-        <a class="press inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3.5 text-[15px] font-semibold text-primary-foreground shadow-[0_10px_36px_-10px_oklch(1_0_0/0.25)] transition-transform hover:-translate-y-0.5" href={APP}>
-          {t.hero.ctaStart} <ArrowRight class="size-4" />
+      <div use:reveal={180} class="mt-10 flex flex-wrap items-center justify-center gap-3.5">
+        <a class="press group inline-flex items-center gap-2 rounded-xl bg-primary px-7 py-3.5 text-[15px] font-semibold text-primary-foreground shadow-[0_12px_40px_-12px_oklch(1_0_0/0.3)] transition-transform hover:-translate-y-0.5" href={APP}>
+          {t.hero.ctaStart} <ArrowRight class="size-4 transition-transform group-hover:translate-x-0.5" />
         </a>
-        <a class="press inline-flex items-center gap-2 rounded-xl border border-border bg-card/40 px-6 py-3.5 text-[15px] font-semibold backdrop-blur transition-colors hover:border-primary/40" href="#how">
+        <a class="press inline-flex items-center gap-2 rounded-xl border border-border bg-card/40 px-7 py-3.5 text-[15px] font-semibold backdrop-blur transition-colors hover:border-primary/40" href="#how">
           {t.hero.ctaHow}
         </a>
       </div>
 
-      <p use:reveal={240} class="mt-5 flex items-center gap-2 text-[13px] text-muted-foreground/80">
+      <p use:reveal={240} class="mt-6 flex items-center gap-2 text-[13px] text-muted-foreground/80">
         <Check class="size-4 text-primary" /> {t.hero.trust}
       </p>
 
       <!-- spaces strip -->
-      <div use:reveal={120} class="mt-16">
-        <p class="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">{t.hero.spacesLabel}</p>
-        <div class="mt-4 flex flex-wrap items-center justify-center gap-x-7 gap-y-3 text-sm font-medium text-muted-foreground/80">
+      <div use:reveal={120} class="mt-20">
+        <p class="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/60">{t.hero.spacesLabel}</p>
+        <div class="mt-5 flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-sm font-medium text-muted-foreground/75">
           {#each t.hero.spaces as space (space)}
             <span class="inline-flex items-center gap-2">
               <span class="size-1 rounded-full bg-muted-foreground/40"></span>{space}

@@ -114,7 +114,7 @@
       // wires
       for (const e of edges) {
         const fa = (nodes[e.a].f + nodes[e.b].f) / 2;
-        const a = 0.045 + fa * 0.10 + e.lit * (0.28 + fa * 0.55);
+        const a = 0.03 + Math.pow(fa, 1.5) * 0.13 + e.lit * (0.3 + fa * 0.6);
         ctx.strokeStyle = `rgba(${INK},${a.toFixed(3)})`;
         ctx.lineWidth = 0.6 + e.lit * 0.9;
         ctx.beginPath();
@@ -143,8 +143,8 @@
       }
       // nodes
       for (const n of nodes) {
-        const a = Math.min(1, 0.1 + n.f * 0.42 + n.act * 0.5);
-        const r = 0.9 + n.f * 1.5 + n.act * 1.8;
+        const a = Math.min(1, 0.06 + Math.pow(n.f, 1.6) * 0.5 + n.act * 0.5);
+        const r = 0.7 + Math.pow(n.f, 1.4) * 1.7 + n.act * 1.9;
         ctx.fillStyle = `rgba(${INK},${a.toFixed(3)})`;
         ctx.beginPath();
         ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
