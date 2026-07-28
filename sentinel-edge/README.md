@@ -21,7 +21,7 @@ The client runs this once on their box; it installs Tailscale, fetches the
 tailnet + serves go2rtc, and starts it (`install.sh`):
 
 ```sh
-curl -fsSL https://github.com/jackesdavid/Sentinel/releases/latest/download/install.sh \
+curl -fsSL https://github.com/olharai/Sentinel/releases/latest/download/install.sh \
   | sudo sh -s -- \
       --authkey tskey-auth-xxxx \
       --hostname tenant-001 \

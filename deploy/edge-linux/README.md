@@ -26,7 +26,7 @@ task edge-linux-publish            # build (Fedora) + scp to the VPS dist server
 
 # Or the self-contained runtime image (ffmpeg + go2rtc + tailscale baked in):
 docker build --platform linux/amd64 -f deploy/edge-linux/Dockerfile --target runtime \
-  -t ghcr.io/jackesdavid/sentinel-edge:latest .
+  -t ghcr.io/olharai/sentinel-edge:latest .
 ```
 
 ## Run on a MUTABLE Linux box (Debian/Ubuntu/regular Fedora)
@@ -61,7 +61,7 @@ podman run -d --name sentinel-edge --restart=always \
   -v sentinel-edge-tailscale:/var/lib/tailscale \
   -v sentinel-edge-data:/opt/sentinel-edge \
   --env-file /etc/sentinel-edge/edge.env \
-  ghcr.io/jackesdavid/sentinel-edge:latest
+  ghcr.io/olharai/sentinel-edge:latest
 ```
 
 `--network=host` is required: ONVIF WS-Discovery uses LAN UDP multicast, and go2rtc binds

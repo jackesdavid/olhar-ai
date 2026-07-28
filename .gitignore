@@ -40,6 +40,12 @@ deploy/macos-pkg/build/
 # Windows installer build artifacts (payload + downloaded binaries + the zip).
 deploy/windows/build/
 
+# Edge cross-build outputs (per-platform binaries + container build dirs — regenerable).
+sentinel-edge/dist/
+deploy/edge-coral/out/
+out/
+dist/
+
 # Scratch git worktrees created by the agent tooling — never source.
 .claude/worktrees/
 deploy/olharai/sentinel.env

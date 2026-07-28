@@ -18,7 +18,7 @@ services:
   sentinel-postgres:
     # Postgres 17 + pgvector + pg_cron (deploy/postgres/Dockerfile). Deploy this BEFORE
     # sentinel-control: migration 0046 hard-requires the scheduler.
-    image: ghcr.io/jackesdavid/sentinel-postgres:latest
+    image: ghcr.io/olharai/sentinel-postgres:latest
     container_name: sentinel-postgres
     restart: unless-stopped
     command:
@@ -40,7 +40,7 @@ services:
       retries: 5
 
   sentinel-control:
-    image: ghcr.io/jackesdavid/sentinel-control:latest
+    image: ghcr.io/olharai/sentinel-control:latest
     container_name: sentinel-control
     restart: always
     # Docker defaults nofile to 1024 soft — far too low for a service holding browser SSE + edge SSE
@@ -94,7 +94,7 @@ services:
     # no Traefik labels, no published ports; only sentinel-control talks to it over the
     # compose network. Serves the same /runsync contract as RunPod (RunPod's local API
     # server). Built by .github/workflows/ai-sidecar.yml (tag: cpu).
-    image: ghcr.io/jackesdavid/sentinel-ai:cpu
+    image: ghcr.io/olharai/sentinel-ai:cpu
     container_name: sentinel-ai
     restart: always
     command: ["python", "-u", "handler.py", "--rp_serve_api", "--rp_api_host", "0.0.0.0", "--rp_api_port", "8000"]
@@ -105,13 +105,13 @@ services:
     # Behind the "experiment" profile so normal `up`/deploys NEVER start it. To run the
     # A/B: docker compose --profile experiment up -d sentinel-ai-dlib, then bench.py.
     profiles: ["experiment"]
-    image: ghcr.io/jackesdavid/sentinel-ai:dlib
+    image: ghcr.io/olharai/sentinel-ai:dlib
     container_name: sentinel-ai-dlib
     restart: unless-stopped
     command: ["python", "-u", "handler_dlib.py", "--rp_serve_api", "--rp_api_host", "0.0.0.0", "--rp_api_port", "8000"]
 
   sentinel-app:
-    image: ghcr.io/jackesdavid/sentinel-app:latest
+    image: ghcr.io/olharai/sentinel-app:latest
     container_name: sentinel-app
     restart: always
     labels:
@@ -122,7 +122,7 @@ services:
       - "traefik.http.services.sentinel-app.loadbalancer.server.port=80"
 
   sentinel-landing:
-    image: ghcr.io/jackesdavid/sentinel-landing:latest
+    image: ghcr.io/olharai/sentinel-landing:latest
     container_name: sentinel-landing
     restart: always
     labels:
@@ -133,7 +133,7 @@ services:
       - "traefik.http.services.sentinel-landing.loadbalancer.server.port=80"
 
   sentinel-gateway:
-    image: ghcr.io/jackesdavid/sentinel-gateway:latest
+    image: ghcr.io/olharai/sentinel-gateway:latest
     container_name: sentinel-gateway
     restart: always
     # Holds live WS streams (browser ⇄ edge) — same FD exposure as control; lift off the 1024 default.
@@ -170,7 +170,7 @@ services:
     # unique HOSTNAME (Docker-assigned container ID) which the engine uses as pod_name.
     # Docker's internal DNS round-robins across all replicas; control's FLOW_URL resolves
     # to whichever pod is next in the rotation — no extra proxy needed.
-    image: ghcr.io/jackesdavid/sentinel-flow:latest
+    image: ghcr.io/olharai/sentinel-flow:latest
     restart: always
     env_file:
       - sentinel.env   # TELEGRAM_* fallback, etc.
@@ -206,7 +206,7 @@ services:
     # Consumes the durable notification_queue and sends to recipients (Telegram). Internal
     # only (no Traefik). Reads recipient config from the shared Postgres; TELEGRAM_* fallback
     # (global send token) comes from sentinel.env. Flow only ENQUEUEs; this service sends.
-    image: ghcr.io/jackesdavid/sentinel-notification:latest
+    image: ghcr.io/olharai/sentinel-notification:latest
     restart: always
     env_file:
       - sentinel.env

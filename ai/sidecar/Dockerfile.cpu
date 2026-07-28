@@ -11,7 +11,7 @@
 FROM python:3.11-slim
 
 # Link the GHCR package to the repo.
-LABEL org.opencontainers.image.source="https://github.com/jackesdavid/Sentinel"
+LABEL org.opencontainers.image.source="https://github.com/olharai/Sentinel"
 
 # build-essential: InsightFace builds a small Cython extension at install time.
 # libgl1 + libglib2.0-0: opencv-python (pulled in by InsightFace) needs them at runtime

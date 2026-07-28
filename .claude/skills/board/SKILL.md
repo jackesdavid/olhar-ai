@@ -15,7 +15,7 @@ allowed-tools:
 
 The board is **GitHub Project #3 "OAI Board"** (`https://github.com/users/jackesdavid/projects/3`),
 shared with the co-founder, and it is the **single source of truth**. A card is a **real GitHub
-Issue** (in `jackesdavid/Sentinel`, assigned to the operator) added to the project — **never a draft
+Issue** (in `olharai/Sentinel`, assigned to the operator) added to the project — **never a draft
 item**; its **column is the project item's `Status` field**. This skill creates cards and moves them
 by editing that field via the `gh` CLI.
 
@@ -94,9 +94,9 @@ Then tell the user e.g. "Moved #119 → In review."
    ```sh
    N=<next number>; SLUG=<slug>
    # Real issue, assigned to the operator.
-   URL=$(gh issue create --repo jackesdavid/Sentinel --assignee jackesdavid \
+   URL=$(gh issue create --repo olharai/Sentinel --assignee jackesdavid \
          --title "#$N <title>" \
-         --body "Plan: https://github.com/jackesdavid/Sentinel/blob/main/docs/plans/$SLUG.md")
+         --body "Plan: https://github.com/olharai/Sentinel/blob/main/docs/plans/$SLUG.md")
    # Add the issue to the board (returns the project item id).
    ID=$(gh project item-add 3 --owner jackesdavid --url "$URL" --format json --jq .id)
    gh project item-edit --id "$ID" --project-id PVT_kwHOAE3EiM4BeByU \

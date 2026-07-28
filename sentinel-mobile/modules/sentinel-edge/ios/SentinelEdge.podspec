@@ -4,7 +4,7 @@ Pod::Spec.new do |s|
   s.summary        = 'Embedded sentinel-edge (Rust) for the phone-as-edge (card #144).'
   s.license        = 'MIT'
   s.author         = 'Sentinel'
-  s.homepage       = 'https://github.com/jackesdavid/Sentinel'
+  s.homepage       = 'https://github.com/olharai/Sentinel'
   s.platforms      = { :ios => '15.0' }
   s.swift_version  = '5.9'
   s.source         = { git: '' }

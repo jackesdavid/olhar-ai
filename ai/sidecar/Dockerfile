@@ -9,7 +9,7 @@
 FROM pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime
 
 # Link the GHCR package to the repo.
-LABEL org.opencontainers.image.source="https://github.com/jackesdavid/Sentinel"
+LABEL org.opencontainers.image.source="https://github.com/olharai/Sentinel"
 
 # OpenCV runtime libs (+ build tools: InsightFace builds a small Cython extension).
 RUN apt-get update \

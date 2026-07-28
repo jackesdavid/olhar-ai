@@ -26,7 +26,7 @@ jobs:
   # The CPU variant runs on the VPS in the face-recognition hot path — build it on its own so a
   # flaky/slow gpu or dlib build can never block the deploy below.
   build-cpu:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
       packages: write
@@ -46,12 +46,12 @@ jobs:
           file: ai/sidecar/Dockerfile.cpu
           platforms: linux/amd64
           push: true
-          tags: ghcr.io/jackesdavid/sentinel-ai:cpu
+          tags: ghcr.io/olharai/sentinel-ai:cpu
           provenance: false
 
   # GPU (RunPod / NVIDIA) + the dlib A/B variant — heavier, off the VPS hot path.
   build-heavy:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
       packages: write
@@ -85,13 +85,13 @@ jobs:
           file: ai/sidecar/${{ matrix.file }}
           platforms: linux/amd64
           push: true
-          tags: ghcr.io/jackesdavid/sentinel-ai:${{ matrix.tag }}
+          tags: ghcr.io/olharai/sentinel-ai:${{ matrix.tag }}
           provenance: false
 
   # Pull the freshly-built :cpu image on the VPS and restart the running sentinel-ai container.
   deploy:
     needs: build-cpu
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Pull + restart sentinel-ai on the VPS
         uses: appleboy/ssh-action@v1

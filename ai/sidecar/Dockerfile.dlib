@@ -6,7 +6,7 @@
 # InsightFace pgvector column) — this is for detection/latency/accuracy comparison.
 FROM python:3.11-slim
 
-LABEL org.opencontainers.image.source="https://github.com/jackesdavid/Sentinel"
+LABEL org.opencontainers.image.source="https://github.com/olharai/Sentinel"
 
 # libgomp1: dlib uses OpenMP at runtime. (No opencv here — face_recognition uses PIL.)
 RUN apt-get update \
