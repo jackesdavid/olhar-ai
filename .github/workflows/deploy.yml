@@ -120,8 +120,10 @@ jobs:
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # Org packages were created without a repo link, so GITHUB_TOKEN gets 403 on push.
+          # GHCR_PAT = token with write:packages (user/classic PAT).
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_PAT }}
       - uses: docker/build-push-action@v6
         with:
           context: .
