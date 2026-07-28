@@ -7,7 +7,7 @@
   import { goto } from "$app/navigation";
   import { data, onEvent } from "$lib/data";
   import { COMMIT } from "$lib/config";
-  import { initLang } from "$lib/i18n";
+  import { dict, lang, initLang } from "$lib/i18n";
   import type { Alert } from "$lib/types";
   import { navItems } from "$lib/nav";
   import { Toaster } from "$lib/components/ui/sonner";
@@ -47,6 +47,9 @@
   } from "$lib/auth.svelte";
 
   let { children } = $props();
+
+  // Reading `lang()` here re-renders the whole shell on a language switch.
+  const t = $derived(dict[lang()]);
 
   // Boot gate: hold the splash until the JWT session check completes.
   let ready = $state(false); // app content mounted
@@ -101,7 +104,7 @@
 
   let navCollapsed = $state(false);
   const themeLabel = $derived(
-    theme.current === "dark" ? "Switch to light" : "Switch to dark",
+    theme.current === "dark" ? t.shell.switchToLight : t.shell.switchToDark,
   );
   function toggleNav() {
     navCollapsed = !navCollapsed;
@@ -114,7 +117,7 @@
   // App-wide alert toasts: the relay forwards `alerts-changed` (tenant-scoped) whenever an
   // alert is raised/delivered; surface anything newer than the baseline as a toast, anywhere.
   function toastAlert(a: Alert) {
-    const title = `New ${a.level} alert`;
+    const title = dict[lang()].shell.newAlert(a.level);
     const opts = {
       description: a.room_name ? `${a.message} — ${a.room_name}` : a.message,
     };
@@ -148,9 +151,10 @@
         const { commit } = (await res.json()) as { commit?: string };
         if (commit && commit !== "dev" && commit.slice(0, 7) !== COMMIT) {
           updateToasted = true;
-          toast.info("Update available — reload to get the latest version.", {
+          const s = dict[lang()].shell;
+          toast.info(s.updateAvailable, {
             duration: Infinity,
-            action: { label: "Reload", onClick: () => location.reload() },
+            action: { label: s.reload, onClick: () => location.reload() },
           });
         }
       } catch { /* silent */ }
@@ -248,11 +252,13 @@
   const mainNav = $derived(
     !inTenant
       ? []
-      : navItems.filter(
-          (i) =>
-            !CLOUD_HIDE.has(i.href) &&
-            (NAV_PERM[i.href] == null || hasPerm(NAV_PERM[i.href]!)),
-        ),
+      : navItems
+          .filter(
+            (i) =>
+              !CLOUD_HIDE.has(i.href) &&
+              (NAV_PERM[i.href] == null || hasPerm(NAV_PERM[i.href]!)),
+          )
+          .map((i) => ({ ...i, label: t.nav[i.key] })),
   );
 
   // Settings group — tenant configuration screens (Devices moved here off the main menu),
@@ -261,32 +267,32 @@
     !inTenant
       ? []
       : [
-          { label: "General", href: "/settings", icon: SlidersHorizontal },
-          ...(hasPerm("devices.read") ? [{ label: "Devices", href: "/settings/devices", icon: Cpu }] : []),
-          ...(hasPerm("devices.write") ? [{ label: "Edge boxes", href: "/settings/boxes", icon: HardDrive }] : []),
-          ...(hasPerm("roles.manage") ? [{ label: "Roles", href: "/settings/roles", icon: ShieldCheck }] : []),
-          ...(hasPerm("users.manage") ? [{ label: "Users", href: "/settings/users", icon: UsersRound }] : []),
-          ...(hasPerm("tuya.read") ? [{ label: "Integrations", href: "/settings/integrations", icon: Plug }] : []),
-          ...(hasPerm("billing.read") ? [{ label: "Billing", href: "/billing", icon: Wallet }] : []),
+          { label: t.nav.general, href: "/settings", icon: SlidersHorizontal },
+          ...(hasPerm("devices.read") ? [{ label: t.nav.devices, href: "/settings/devices", icon: Cpu }] : []),
+          ...(hasPerm("devices.write") ? [{ label: t.nav.boxes, href: "/settings/boxes", icon: HardDrive }] : []),
+          ...(hasPerm("roles.manage") ? [{ label: t.nav.roles, href: "/settings/roles", icon: ShieldCheck }] : []),
+          ...(hasPerm("users.manage") ? [{ label: t.nav.users, href: "/settings/users", icon: UsersRound }] : []),
+          ...(hasPerm("tuya.read") ? [{ label: t.nav.integrations, href: "/settings/integrations", icon: Plug }] : []),
+          ...(hasPerm("billing.read") ? [{ label: t.nav.billing, href: "/billing", icon: Wallet }] : []),
         ],
   );
 
   // Master-only platform screens.
   const adminItems = $derived([
     ...(auth.me?.is_master
-      ? [{ label: "Tenants", href: "/admin/tenants", icon: Building2 }]
+      ? [{ label: t.nav.tenants, href: "/admin/tenants", icon: Building2 }]
       : []),
     ...(auth.me?.is_master
-      ? [{ label: "Billing", href: "/admin/billing", icon: Wallet }]
+      ? [{ label: t.nav.billing, href: "/admin/billing", icon: Wallet }]
       : []),
     ...(auth.me?.is_master
-      ? [{ label: "Storage", href: "/admin/storage", icon: HardDrive }]
+      ? [{ label: t.nav.storage, href: "/admin/storage", icon: HardDrive }]
       : []),
     ...(auth.me?.is_master
-      ? [{ label: "System load", href: "/admin/jobs", icon: Activity }]
+      ? [{ label: t.nav.systemLoad, href: "/admin/jobs", icon: Activity }]
       : []),
     ...(auth.me?.is_master
-      ? [{ label: "Providers", href: "/admin/providers", icon: Bell }]
+      ? [{ label: t.nav.providers, href: "/admin/providers", icon: Bell }]
       : []),
   ]);
 
@@ -318,8 +324,8 @@
           {#if navCollapsed}
             <button
               class="interactive rounded-md p-1.5 text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
-              title="Expand sidebar"
-              aria-label="Expand sidebar"
+              title={t.shell.expandSidebar}
+              aria-label={t.shell.expandSidebar}
               onclick={toggleNav}
             >
               <PanelLeftOpen class="size-5" />
@@ -328,8 +334,8 @@
             <SentinelLogo size={24} short />
             <button
               class="interactive ml-auto rounded-md p-1 text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
-              title="Collapse sidebar"
-              aria-label="Collapse sidebar"
+              title={t.shell.collapseSidebar}
+              aria-label={t.shell.collapseSidebar}
               onclick={toggleNav}
             >
               <PanelLeftClose class="size-4" />
@@ -365,7 +371,7 @@
             <div class="px-3 pb-1 pt-3 {navCollapsed ? 'hidden' : ''}">
               <span
                 class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
-                >Settings</span
+                >{t.nav.settingsGroup}</span
               >
             </div>
             {#each settingsItems as item (item.href)}
@@ -394,7 +400,7 @@
             <div class="px-3 pb-1 pt-3 {navCollapsed ? 'hidden' : ''}">
               <span
                 class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
-                >Admin</span
+                >{t.nav.adminGroup}</span
               >
             </div>
             {#each adminItems as item (item.href)}
@@ -429,18 +435,18 @@
                 class="truncate px-2 py-1 text-[11px] text-muted-foreground"
                 title={auth.me.email ?? auth.me.user_id}
               >
-                {auth.me.email ?? "Signed in"}
+                {auth.me.email ?? t.shell.signedIn}
               </div>
             {/if}
             <button
               class="interactive flex w-full items-center gap-3 rounded-md py-2 text-sm font-medium text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground {navCollapsed
                 ? 'justify-center px-0'
                 : 'px-3'}"
-              title="Sign out"
+              title={t.shell.signOut}
               onclick={signOut}
             >
               <LogOut class="size-4 shrink-0" />
-              {#if !navCollapsed}<span>Sign out</span>{/if}
+              {#if !navCollapsed}<span>{t.shell.signOut}</span>{/if}
             </button>
           </div>
         {/if}
@@ -453,7 +459,7 @@
           {#if !navCollapsed}
             <span class="size-1.5 rounded-full bg-primary status-live"></span>
             <span class="font-mono">v0.4.1</span>
-            <span class="font-mono" title="Deployed commit">· {COMMIT}</span>
+            <span class="font-mono" title={t.shell.deployedCommit}>· {COMMIT}</span>
             <button
               class="interactive ml-auto rounded-md p-1 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
               title={themeLabel}
@@ -488,15 +494,12 @@
           <div
             class="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-600 dark:text-amber-400"
           >
-            <span
-              >Acting as another tenant — you have full access to this
-              workspace, including live feeds.</span
-            >
+            <span>{t.shell.assumingBanner}</span>
             <button
               class="interactive ml-auto inline-flex items-center gap-1 rounded-md px-2 py-0.5 font-medium hover:bg-amber-500/15"
               onclick={leaveTenant}
             >
-              <Undo2 class="size-3.5" /> Exit
+              <Undo2 class="size-3.5" /> {t.shell.exit}
             </button>
           </div>
         {/if}
@@ -505,7 +508,7 @@
             class="flex items-center justify-between gap-4 border-b border-border bg-elev-1 px-6 py-2.5 text-sm"
           >
             <span>{billingLock.message}</span>
-            <Button size="sm" onclick={() => goto("/billing")}>Choose a plan</Button>
+            <Button size="sm" onclick={() => goto("/billing")}>{t.shell.choosePlan}</Button>
           </div>
         {/if}
         <main class="flex-1 overflow-y-auto">

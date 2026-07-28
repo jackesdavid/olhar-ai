@@ -18,10 +18,13 @@
   import { data } from "$lib/data";
   import { GATEWAY_BASE } from "$lib/config";
   import { auth } from "$lib/auth.svelte";
+  import { dict, lang } from "$lib/i18n";
   import type { Device, StreamInfo } from "$lib/types";
 
   // Web-only: live frames always come from the edge via the streaming gateway.
   const cloud = true;
+
+  const t = $derived(dict[lang()].live);
 
   let devices = $state<Device[]>([]);
   let streams = $state<StreamInfo[]>([]); // desktop only
@@ -39,7 +42,7 @@
 
   const selected = $derived(playable.find((d) => d.ip === selectedIp) ?? null);
   const selectedStream = $derived(selectedIp ? streamByIp.get(selectedIp) ?? null : null);
-  const selectedLabel = $derived(selected ? selected.name : "Select a camera");
+  const selectedLabel = $derived(selected ? selected.name : t.selectCamera);
 
   // go2rtc stream name for an IP (matches the edge: cam_<ip with dots→underscores>).
   // The edge serves a low-latency substream by default and an `_hd` main variant.
@@ -81,10 +84,7 @@
 
   /** Why a connect might have failed — codec-specific when we're on HD, else generic. */
   function connectFailMsg(): string {
-    if (hd) {
-      return "Couldn't play the HD stream — this camera's HD codec may not be supported in your browser. Try SD.";
-    }
-    return "Couldn't connect to the live stream. The camera or your edge's live video may be unreachable.";
+    return hd ? t.errHdCodec : t.errConnect;
   }
 
   // An advancing playhead is the ONLY honest signal that frames are rendering → truly live.
@@ -115,7 +115,7 @@
 
   function autoRetry() {
     if (retries >= MAX_RETRIES) {
-      fail("The live stream keeps dropping. Check the camera and that your edge is online.");
+      fail(t.errKeepsDropping);
       return;
     }
     retries += 1;
@@ -133,13 +133,13 @@
   function badgeSpec(): { text: string; dot: "online" | "warn" | "danger"; cls: string } | null {
     switch (phase) {
       case "live":
-        return { text: "LIVE", dot: "online", cls: "border-primary/30 bg-hud text-primary" };
+        return { text: t.badgeLive, dot: "online", cls: "border-primary/30 bg-hud text-primary" };
       case "connecting":
-        return { text: "Connecting…", dot: "warn", cls: "border-border bg-hud text-muted-foreground" };
+        return { text: t.badgeConnecting, dot: "warn", cls: "border-border bg-hud text-muted-foreground" };
       case "stalled":
-        return { text: "Reconnecting…", dot: "warn", cls: "border-border bg-hud text-muted-foreground" };
+        return { text: t.badgeReconnecting, dot: "warn", cls: "border-border bg-hud text-muted-foreground" };
       case "error":
-        return { text: "No signal", dot: "danger", cls: "border-red-400/30 bg-hud text-red-400" };
+        return { text: t.badgeNoSignal, dot: "danger", cls: "border-red-400/30 bg-hud text-red-400" };
       default:
         return null;
     }
@@ -148,7 +148,7 @@
     return phase === "connecting" || phase === "stalled";
   }
   function connectingLabel(): string {
-    return phase === "stalled" ? "Reconnecting…" : "Connecting to camera…";
+    return phase === "stalled" ? t.badgeReconnecting : t.connectingToCamera;
   }
 
   function probeCodecs(): string {
@@ -213,12 +213,12 @@
   function startStream(ip: string, reconnecting = false) {
     stopStream();
     if (!videoEl || !auth.token || !("MediaSource" in window)) {
-      fail("Live video isn't supported in this browser.");
+      fail(t.errUnsupportedBrowser);
       return;
     }
     // Nothing we send would decode → don't dangle on a black screen waiting for a frame.
     if (probeCodecs() === "") {
-      fail("This browser can't play any of the camera's video codecs.");
+      fail(t.errNoCodecs);
       return;
     }
     phase = reconnecting ? "stalled" : "connecting";
@@ -281,7 +281,7 @@
         phase = "stalled";
         autoRetry();
       } else {
-        fail("The live connection closed before video started. Your edge's live video may be unreachable.");
+        fail(t.errClosedEarly);
       }
     };
     socket.onerror = () => {}; // onclose will follow with the recovery/fail decision
@@ -305,12 +305,12 @@
       if (!selectedIp || !ok(selectedIp)) selectedIp = playable.length > 0 ? playable[0].ip : "";
       if (announce) {
         const n = playable.length;
-        if (n === 0) toast.info("No camera streams yet.", { description: "Add a camera with credentials on the Devices page." });
-        else toast.success(`${n} stream${n === 1 ? "" : "s"} ready.`);
+        if (n === 0) toast.info(t.noStreamsTitle, { description: t.noStreamsHint });
+        else toast.success(t.streamsReady(n));
       }
     } catch (err) {
       console.error("Failed to load live streams", err);
-      toast.error("Failed to load live streams", { description: String(err) });
+      toast.error(t.loadFailed, { description: String(err) });
     }
   }
 
@@ -334,34 +334,32 @@
 <div class="space-y-6">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Live</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{t.title}</h1>
       <p class="text-sm text-muted-foreground">
-        {cloud
-          ? "Live camera feeds over your private edge link — never a public stream."
-          : "Real-time camera video over WebRTC, served by the bundled go2rtc sidecar."}
+        {cloud ? t.descriptionCloud : t.descriptionLocal}
       </p>
     </div>
     <Button variant="outline" onclick={rescan} disabled={rescanning}>
-      {#if rescanning}<Busy /> Refreshing…{:else}<RefreshCw class="size-4" /> Refresh{/if}
+      {#if rescanning}<Busy /> {t.refreshing}{:else}<RefreshCw class="size-4" /> {t.refresh}{/if}
     </Button>
   </div>
 
   {#if loading}
-    <Loader label="Loading streams…" />
+    <Loader label={t.loadingStreams} />
   {:else}
     <Card.Root>
       <Card.Content class="space-y-4 pt-6">
         {#if playable.length === 0}
           <EmptyState
-            title="No camera streams yet"
-            description="Add a camera and set its credentials on the Devices page — your edge resolves the stream automatically."
+            title={t.emptyTitle}
+            description={t.emptyDescription}
           >
-            <Button href="/settings/devices" variant="outline">Go to Devices</Button>
+            <Button href="/settings/devices" variant="outline">{t.goToDevices}</Button>
           </EmptyState>
         {:else}
           <div class="flex flex-wrap items-end justify-between gap-4">
             <div class="space-y-2">
-              <Label>Camera</Label>
+              <Label>{t.camera}</Label>
               <Select.Root type="single" bind:value={selectedIp}>
                 <Select.Trigger class="w-72">{selectedLabel}</Select.Trigger>
                 <Select.Content>
@@ -414,11 +412,11 @@
                     <p class="max-w-sm text-sm text-white/80">{errorMsg}</p>
                     <div class="flex items-center gap-2">
                       <Button size="sm" variant="outline" onclick={manualRetry}>
-                        <RefreshCw class="size-4" /> Retry
+                        <RefreshCw class="size-4" /> {t.retry}
                       </Button>
                       {#if hd}
                         <Button size="sm" variant="ghost" class="text-white/80 hover:text-white" onclick={() => (hd = false)}>
-                          Try SD
+                          {t.trySd}
                         </Button>
                       {/if}
                     </div>
@@ -426,15 +424,15 @@
                 {/if}
               {:else if selectedStream}
                 <div class="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-1.5 rounded-full border border-primary/30 bg-hud px-2.5 py-1 text-[11px] font-medium tracking-wide text-primary backdrop-blur">
-                  <StatusDot state="online" /> LIVE
+                  <StatusDot state="online" /> {t.badgeLive}
                 </div>
                 {#key selectedStream.name}
-                  <iframe title="Live camera {selected.name}" src={selectedStream.player_url} allow="autoplay; fullscreen"></iframe>
+                  <iframe title={t.liveCameraFrame(selected.name)} src={selectedStream.player_url} allow="autoplay; fullscreen"></iframe>
                 {/key}
               {/if}
             {:else}
               <div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-                Select a camera to start streaming.
+                {t.selectToStart}
               </div>
             {/if}
           </div>
@@ -442,9 +440,7 @@
 
         {#if unvalidated.length > 0}
           <p class="text-xs text-muted-foreground">
-            {unvalidated.length} saved camera{unvalidated.length === 1 ? "" : "s"} without a stream yet
-            ({unvalidated.map((d) => d.name).join(", ")}). Set
-            {unvalidated.length === 1 ? "its" : "their"} credentials on the Devices page.
+            {t.unvalidated(unvalidated.length, unvalidated.map((d) => d.name).join(", "))}
           </p>
         {/if}
       </Card.Content>

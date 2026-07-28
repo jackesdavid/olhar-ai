@@ -12,8 +12,13 @@ import ScrollText from "@lucide/svelte/icons/scroll-text";
 import Clapperboard from "@lucide/svelte/icons/clapperboard";
 import Film from "@lucide/svelte/icons/film";
 
+import type { nav } from "$lib/i18n/messages/nav";
+
+/** A key into the `nav` message module — the label is resolved at render time, not here. */
+export type NavKey = keyof (typeof nav)["en"];
+
 export type NavItem = {
-  label: string;
+  key: NavKey;
   href: string;
   icon: Component;
 };
@@ -21,16 +26,16 @@ export type NavItem = {
 // Devices + Settings live in the sidebar's Settings group now (see +layout.svelte
 // `settingsItems`), not the main menu.
 export const navItems: NavItem[] = [
-  { label: "Dashboard", href: "/", icon: LayoutDashboard },
-  { label: "Live", href: "/live", icon: Video },
-  { label: "Events", href: "/events", icon: Rss },
-  { label: "Recipients", href: "/beacons", icon: Radio },
-  { label: "People", href: "/people", icon: Users },
-  { label: "Faces", href: "/faces", icon: ScanFace },
-  { label: "Map", href: "/map", icon: Map },
-  { label: "Chat", href: "/chat", icon: MessageSquare },
-  { label: "Workflows", href: "/workflows", icon: Workflow },
-  { label: "Recordings", href: "/recordings", icon: Clapperboard },
-  { label: "Playback", href: "/playback", icon: Film },
-  { label: "Logs", href: "/logs", icon: ScrollText },
+  { key: "dashboard", href: "/", icon: LayoutDashboard },
+  { key: "live", href: "/live", icon: Video },
+  { key: "events", href: "/events", icon: Rss },
+  { key: "recipients", href: "/beacons", icon: Radio },
+  { key: "people", href: "/people", icon: Users },
+  { key: "faces", href: "/faces", icon: ScanFace },
+  { key: "map", href: "/map", icon: Map },
+  { key: "chat", href: "/chat", icon: MessageSquare },
+  { key: "workflows", href: "/workflows", icon: Workflow },
+  { key: "recordings", href: "/recordings", icon: Clapperboard },
+  { key: "playback", href: "/playback", icon: Film },
+  { key: "logs", href: "/logs", icon: ScrollText },
 ];

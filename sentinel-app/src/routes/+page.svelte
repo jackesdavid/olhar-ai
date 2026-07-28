@@ -3,6 +3,7 @@
   import LayoutDashboard from "@lucide/svelte/icons/layout-dashboard";
   import { onMount } from "svelte";
   import { data } from "$lib/data";
+  import { dict, lang } from "$lib/i18n";
 
   import Cpu from "@lucide/svelte/icons/cpu";
   import Bell from "@lucide/svelte/icons/bell";
@@ -17,6 +18,8 @@
   type Alert = { deliveries?: { ok: boolean }[] };
   type Target = { enabled: boolean };
 
+  const t = $derived(dict[lang()].dashboard);
+
   let devices = $state<Device[]>([]);
   let alerts = $state<Alert[]>([]);
   let recipients = $state<Target[]>([]);
@@ -27,18 +30,18 @@
   const liveRecipients = $derived(recipients.filter((r) => r.enabled).length);
 
   const stats = $derived([
-    { title: "Devices", value: devices.length, icon: Cpu, href: "/settings/devices" },
-    { title: "Cameras live", value: camerasReady, icon: Video, href: "/live" },
-    { title: "Open alerts", value: openAlerts, icon: Bell, href: "/events?kind=alert" },
-    { title: "Recipients", value: liveRecipients, icon: Radio, href: "/beacons" },
+    { title: t.statDevices, value: devices.length, icon: Cpu, href: "/settings/devices" },
+    { title: t.statCamerasLive, value: camerasReady, icon: Video, href: "/live" },
+    { title: t.statOpenAlerts, value: openAlerts, icon: Bell, href: "/events?kind=alert" },
+    { title: t.statRecipients, value: liveRecipients, icon: Radio, href: "/beacons" },
   ]);
 
-  const actions = [
-    { title: "Ask Olhar AI", caption: "Chat with the assistant", icon: MessageSquare, href: "/chat" },
-    { title: "Build a workflow", caption: "Automate a response", icon: Workflow, href: "/workflows" },
-    { title: "Open the map", caption: "See your floor plan", icon: Map, href: "/map" },
-    { title: "Watch live", caption: "Real-time camera video", icon: Video, href: "/live" },
-  ];
+  const actions = $derived([
+    { title: t.askTitle, caption: t.askCaption, icon: MessageSquare, href: "/chat" },
+    { title: t.workflowTitle, caption: t.workflowCaption, icon: Workflow, href: "/workflows" },
+    { title: t.mapTitle, caption: t.mapCaption, icon: Map, href: "/map" },
+    { title: t.liveTitle, caption: t.liveCaption, icon: Video, href: "/live" },
+  ]);
 
   onMount(async () => {
     try {
@@ -58,8 +61,8 @@
 
 <div class="space-y-8">
   <PageHeader
-    title="Dashboard"
-    description="Overview of your devices, alerts, and automations."
+    title={t.title}
+    description={t.description}
     icon={LayoutDashboard}
   >
     {#snippet actions()}
@@ -67,14 +70,14 @@
         class="flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
       >
         <span class="size-1.5 rounded-full bg-primary status-live"></span>
-        System ready
+        {t.systemReady}
       </div>
     {/snippet}
   </PageHeader>
 
   <!-- Stat cards -->
   <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-    {#each stats as stat (stat.title)}
+    {#each stats as stat (stat.href)}
       {@const Icon = stat.icon}
       <a
         href={stat.href}
@@ -100,7 +103,7 @@
 
   <!-- Quick actions -->
   <div class="space-y-3">
-    <h2 class="text-sm font-medium text-muted-foreground">Quick actions</h2>
+    <h2 class="text-sm font-medium text-muted-foreground">{t.quickActions}</h2>
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
       {#each actions as action (action.href)}
         {@const Icon = action.icon}
