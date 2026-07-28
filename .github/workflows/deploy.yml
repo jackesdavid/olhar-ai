@@ -129,6 +129,9 @@ jobs:
           build-args: ${{ matrix.build-args }}
           push: true
           tags: ghcr.io/olharai/${{ matrix.service }}:latest
+          # GHCR rejects attestation/SBOM blob HEADs with 403 for this org token; keep the image push only.
+          provenance: false
+          sbom: false
           # Cache Docker layers (incl. the Rust compile) in the GHA cache so a subsequent build only
           # recompiles what changed — cuts the ~12–16m cold builds to a few minutes. Per-service scope.
           cache-from: type=gha,scope=${{ matrix.service }}
