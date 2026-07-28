@@ -14,6 +14,9 @@
   import Loader from "$lib/components/loader.svelte";
   import { Button } from "$lib/components/ui/button";
   import { data, type WorkflowInstance, type InstanceValues } from "$lib/data";
+  import { dict, lang, locale } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].workflowPages);
 
   const graphId = $derived($page.url.searchParams.get("graph") ?? "");
   const graphName = $derived($page.url.searchParams.get("name") ?? "");
@@ -43,7 +46,7 @@
       if (instances.length === 1) select(instances[0].instance_key);
       else if (selected && !instances.some((i) => i.instance_key === selected)) selected = null;
     } catch (err) {
-      toast.error("Couldn't load instances", { description: String(err) });
+      toast.error(t.instancesLoadFailed, { description: String(err) });
     } finally {
       loading = false;
     }
@@ -71,55 +74,55 @@
     try {
       values = await data.getInstanceValues(graphId, key);
     } catch (err) {
-      toast.error("Couldn't load instance values", { description: String(err) });
+      toast.error(t.valuesLoadFailed, { description: String(err) });
     } finally {
       valuesLoading = false;
     }
   }
   function label(key: string): string {
-    return key === "" ? "Default (single)" : key;
+    return key === "" ? t.defaultInstance : key;
   }
   function fmtTs(ts: string | null): string {
     if (!ts) return "";
     const d = new Date(ts);
-    return Number.isNaN(d.getTime()) ? "" : d.toLocaleString();
+    return Number.isNaN(d.getTime()) ? "" : d.toLocaleString(locale());
   }
 </script>
 
 <div class="flex h-full flex-col gap-6">
   <PageHeader
-    title={graphName ? `Instances — ${graphName}` : "Instances"}
-    description="Each run context that has saved data, and the last value every node produced in it."
+    title={graphName ? t.instancesNamed(graphName) : t.instances}
+    description={t.instancesDescription}
     icon={Layers}
   >
     {#snippet actions()}
       <Button variant="outline" onclick={() => goto("/workflows")}>
-        <ArrowLeft class="size-4" /> Workflows
+        <ArrowLeft class="size-4" /> {t.workflows}
       </Button>
       <Button variant="outline" onclick={load} disabled={loading}>
-        <RefreshCw class="size-4 {loading ? 'animate-spin' : ''}" /> Refresh
+        <RefreshCw class="size-4 {loading ? 'animate-spin' : ''}" /> {t.refresh}
       </Button>
     {/snippet}
   </PageHeader>
 
   {#if !graphId}
-    <EmptyState title="No workflow selected" description="Open a workflow's instances from its row on the Workflows page.">
+    <EmptyState title={t.noGraphTitle} description={t.noGraphDescription}>
       {#snippet children()}
         <Button variant="outline" onclick={() => goto("/workflows")}>
-          <ArrowLeft class="size-4" /> Back to workflows
+          <ArrowLeft class="size-4" /> {t.backToWorkflows}
         </Button>
       {/snippet}
     </EmptyState>
   {:else if loading}
-    <Loader label="Loading instances…" />
+    <Loader label={t.loadingInstances} />
   {:else if instances.length === 0}
     <EmptyState
-      title="No saved run contexts yet"
-      description="Run this workflow, then its instances and their saved node values appear here."
+      title={t.instancesEmptyTitle}
+      description={t.instancesEmptyDescription}
     >
       {#snippet children()}
         <Button variant="outline" onclick={() => goto("/workflows")}>
-          <ArrowLeft class="size-4" /> Back to workflows
+          <ArrowLeft class="size-4" /> {t.backToWorkflows}
         </Button>
       {/snippet}
     </EmptyState>
@@ -146,18 +149,18 @@
       <!-- selected instance's per-node values -->
       <div class="min-h-0 overflow-y-auto rounded-2xl border border-border bg-card p-5">
         {#if !selected}
-          <p class="py-12 text-center text-sm text-muted-foreground">Pick an instance to see its saved values.</p>
+          <p class="py-12 text-center text-sm text-muted-foreground">{t.pickInstance}</p>
         {:else if valuesLoading}
-          <Loader label="Loading values…" />
+          <Loader label={t.loadingValues} />
         {:else if !values || values.nodes.length === 0}
-          <p class="py-12 text-center text-sm text-muted-foreground">No node values saved in this instance.</p>
+          <p class="py-12 text-center text-sm text-muted-foreground">{t.noValues}</p>
         {:else}
           <div class="space-y-4">
             {#each values.nodes as n (n.node_id)}
               <div>
-                <div class="mb-1.5 text-sm font-semibold tracking-tight">{n.label ?? `Node ${n.node_id}`}</div>
+                <div class="mb-1.5 text-sm font-semibold tracking-tight">{n.label ?? t.nodeN(n.node_id)}</div>
                 {#if Object.keys(n.values).length === 0}
-                  <p class="text-[11px] text-muted-foreground/70">— no outputs —</p>
+                  <p class="text-[11px] text-muted-foreground/70">{t.noOutputs}</p>
                 {:else}
                   <div class="space-y-1 font-mono text-xs">
                     {#each Object.entries(n.values) as [port, val] (port)}

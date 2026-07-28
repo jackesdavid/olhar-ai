@@ -19,6 +19,10 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { data, type Dictionary, type DictColumn, type DictCell } from "$lib/data";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].workflowPages);
+  const c = $derived(dict[lang()].common);
 
   let dicts = $state<Dictionary[]>([]);
   let cameras = $state<{ value: string; label: string }[]>([]);
@@ -42,7 +46,7 @@
       cameras = devs.map((d) => ({ value: d.id || d.ip || d.name, label: d.name }));
       recipients = beacons.map((b) => ({ value: b.label, label: b.label }));
     } catch (err) {
-      toast.error("Couldn't load dictionary tables", { description: String(err) });
+      toast.error(t.dictionariesLoadFailed, { description: String(err) });
     } finally {
       loading = false;
     }
@@ -80,11 +84,11 @@
       } else {
         await data.createDictionary(body);
       }
-      toast.success(`Saved “${body.name}”`);
+      toast.success(t.dictionarySaved(body.name));
       editing = null;
       await load();
     } catch (err) {
-      toast.error("Couldn't save", { description: String(err) });
+      toast.error(t.dictionarySaveFailed, { description: String(err) });
     } finally {
       saving = false;
     }
@@ -94,9 +98,9 @@
     try {
       await data.deleteDictionary(d.id);
       dicts = dicts.filter((x) => x.id !== d.id);
-      toast.success(`Deleted “${d.name}”`);
+      toast.success(t.dictionaryDeleted(d.name));
     } catch (err) {
-      toast.error("Couldn't delete", { description: String(err) });
+      toast.error(t.dictionaryDeleteFailed, { description: String(err) });
     }
   }
 </script>
@@ -104,51 +108,51 @@
 <div class="space-y-6">
   {#if editing}
     <PageHeader
-      title={editing.id ? "Edit dictionary table" : "New dictionary table"}
-      description="Define the columns (the structure), then add rows of typed values."
+      title={editing.id ? t.editDictionary : t.newDictionary}
+      description={t.dictionaryEditorDescription}
       icon={Table2}
     >
       {#snippet actions()}
-        <Button variant="ghost" onclick={cancelEdit}>Cancel</Button>
+        <Button variant="ghost" onclick={cancelEdit}>{c.cancel}</Button>
         <Button class="press" disabled={saveDisabled()} onclick={save}>
-          {saving ? "Saving…" : "Save dictionary table"}
+          {saving ? t.saving : t.saveDictionary}
         </Button>
       {/snippet}
     </PageHeader>
 
     <div class="space-y-4">
       <div class="max-w-sm space-y-1.5">
-        <label for="dict-name" class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Name</label>
-        <Input id="dict-name" placeholder="e.g. Store hours" bind:value={editing.name} />
+        <label for="dict-name" class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t.name}</label>
+        <Input id="dict-name" placeholder={t.namePlaceholder} bind:value={editing.name} />
       </div>
       <TableEditor columns={editing.columns} rows={editing.rows} {cameras} {recipients} onchange={onTableChange} />
     </div>
   {:else}
     <PageHeader
-      title="Dictionary Tables"
-      description="Reusable typed tables — reference one from a workflow variable; edit it once and every workflow sees it."
+      title={t.dictionariesTitle}
+      description={t.dictionariesDescription}
       icon={Table2}
     >
       {#snippet actions()}
         <Button variant="outline" onclick={() => goto("/workflows")}>
-          <ArrowLeft class="size-4" /> Workflows
+          <ArrowLeft class="size-4" /> {t.workflows}
         </Button>
         <Button class="press" onclick={startNew}>
-          <Plus class="size-4" /> New dictionary table
+          <Plus class="size-4" /> {t.newDictionaryButton}
         </Button>
       {/snippet}
     </PageHeader>
 
     {#if loading}
-      <Loader label="Loading dictionary tables…" />
+      <Loader label={t.loadingDictionaries} />
     {:else if dicts.length === 0}
       <EmptyState
-        title="No dictionary tables yet"
-        description="Create a typed table of values you can reference from workflow variables and mutate through graphs."
+        title={t.dictionariesEmptyTitle}
+        description={t.dictionariesEmptyDescription}
       >
         {#snippet children()}
           <Button class="press" onclick={startNew}>
-            <Plus class="size-4" /> New dictionary table
+            <Plus class="size-4" /> {t.newDictionaryButton}
           </Button>
         {/snippet}
       </EmptyState>
@@ -164,7 +168,7 @@
                 variant="ghost"
                 size="icon"
                 class="size-8 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100 [@media(hover:none)]:opacity-100"
-                title="Delete dictionary table"
+                title={t.deleteDictionary}
                 onclick={(e) => { e.stopPropagation(); remove(d); }}
               >
                 <Trash2 class="size-4" />
@@ -173,8 +177,8 @@
             <button class="text-left" onclick={() => startEdit(d)}>
               <h3 class="text-[15px] font-semibold tracking-tight">{d.name}</h3>
               <div class="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
-                <span class="inline-flex items-center gap-1"><Columns3 class="size-3.5" /> {d.columns.length} cols</span>
-                <span class="inline-flex items-center gap-1"><Rows3 class="size-3.5" /> {d.rows.length} rows</span>
+                <span class="inline-flex items-center gap-1"><Columns3 class="size-3.5" /> {t.colsCount(d.columns.length)}</span>
+                <span class="inline-flex items-center gap-1"><Rows3 class="size-3.5" /> {t.rowsCount(d.rows.length)}</span>
               </div>
             </button>
           </div>

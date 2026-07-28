@@ -16,6 +16,9 @@
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
   import { data } from "$lib/data";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].workflowPages);
 
   type TemplateSummary = {
     id: string;
@@ -35,80 +38,80 @@
     try {
       templates = await data.listTemplates<TemplateSummary>();
     } catch (err) {
-      toast.error("Couldn't load templates", { description: String(err) });
+      toast.error(t.templatesLoadFailed, { description: String(err) });
     } finally {
       loading = false;
     }
   }
 
   // Clone a template into this tenant, then open the new workflow to fill in its inputs.
-  async function use(t: TemplateSummary) {
-    usingId = t.id;
+  async function use(tpl: TemplateSummary) {
+    usingId = tpl.id;
     try {
-      const id = await data.useTemplate(t.id);
-      toast.info(`Created “${t.name}” — fill in its inputs and turn it on.`);
+      const id = await data.useTemplate(tpl.id);
+      toast.info(t.templateCreated(tpl.name));
       goto(`/workflows/${id}`);
     } catch (err) {
       usingId = null;
-      toast.error("Couldn't use template", { description: String(err) });
+      toast.error(t.templateUseFailed, { description: String(err) });
     }
   }
 </script>
 
 <div class="space-y-6">
   <PageHeader
-    title="Templates"
-    description="Ready-made workflows to start from — cloned into your workspace to fill in and turn on."
+    title={t.templatesTitle}
+    description={t.templatesDescription}
     icon={LayoutTemplate}
   >
     {#snippet actions()}
       <Button variant="outline" onclick={() => goto("/workflows")}>
-        <ArrowLeft class="size-4" /> Workflows
+        <ArrowLeft class="size-4" /> {t.workflows}
       </Button>
     {/snippet}
   </PageHeader>
 
   {#if loading}
-    <Loader label="Loading templates…" />
+    <Loader label={t.loadingTemplates} />
   {:else if templates.length === 0}
     <EmptyState
-      title="No templates yet"
-      description="Save a workflow as a template with the bookmark on its row, and it'll appear here to reuse."
+      title={t.templatesEmptyTitle}
+      description={t.templatesEmptyDescription}
     >
       {#snippet children()}
         <Button variant="outline" onclick={() => goto("/workflows")}>
-          <ArrowLeft class="size-4" /> Back to workflows
+          <ArrowLeft class="size-4" /> {t.backToWorkflows}
         </Button>
       {/snippet}
     </EmptyState>
   {:else}
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {#each templates as t (t.id)}
+      {#each templates as tpl (tpl.id)}
         <div class="interactive flex flex-col rounded-2xl border border-border bg-card p-5">
           <div class="mb-3 flex items-start justify-between gap-3">
             <IconChip>
               {#snippet children()}<LayoutTemplate class="size-5" />{/snippet}
             </IconChip>
-            {#if t.global}
+            {#if tpl.global}
               <Badge variant="outline" class="border-primary/25 bg-primary/10 text-primary">
-                <Globe class="mr-1 size-3" /> Global
+                <Globe class="mr-1 size-3" /> {t.global}
               </Badge>
             {/if}
           </div>
-          <h3 class="text-[15px] font-semibold tracking-tight">{t.name}</h3>
-          {#if t.description}
-            <p class="mt-1 line-clamp-2 text-sm text-muted-foreground">{t.description}</p>
+          <h3 class="text-[15px] font-semibold tracking-tight">{tpl.name}</h3>
+          {#if tpl.description}
+            <p class="mt-1 line-clamp-2 text-sm text-muted-foreground">{tpl.description}</p>
           {/if}
-          {#if t.inputs.length}
+          {#if tpl.inputs.length}
             <div class="mt-3 flex items-start gap-1.5 text-xs text-muted-foreground/80">
               <SlidersHorizontal class="mt-0.5 size-3.5 shrink-0" />
-              <span>Asks for {t.inputs.map((v) => v.name).join(", ")}</span>
+              <span>{t.asksFor(tpl.inputs.map((v) => v.name).join(", "))}</span>
             </div>
           {/if}
           <div class="mt-4 flex justify-end">
-            <Button size="sm" class="press" disabled={usingId === t.id} onclick={() => use(t)}>
-              {usingId === t.id ? "Creating…" : "Use template"}
-              {#if usingId !== t.id}<ArrowRight class="size-3.5" />{/if}
+            <Button size="sm" class="press" disabled={usingId === tpl.id} onclick={() => use(tpl)}>
+              {usingId === tpl.id ? t.creating : t.useTemplate}
+              {#if usingId !== tpl.id}<ArrowRight class="size-3.5" />{/if}
             </Button>
           </div>
         </div>
