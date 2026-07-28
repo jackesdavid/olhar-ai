@@ -115,7 +115,7 @@
       for (const e of edges) {
         const fa = (nodes[e.a].f + nodes[e.b].f) / 2;
         // resting wires stay very dim so they never muddy the text; a passing signal lights its edge.
-        const a = 0.008 + Math.pow(fa, 2.0) * 0.032 + e.lit * (0.2 + fa * 0.4);
+        const a = 0.005 + Math.pow(fa, 2.1) * 0.022 + e.lit * (0.16 + fa * 0.34);
         ctx.strokeStyle = `rgba(${INK},${a.toFixed(3)})`;
         ctx.lineWidth = 0.6 + e.lit * 0.9;
         ctx.beginPath();
@@ -130,22 +130,22 @@
         const from = nodes[sig.from], to = nodes[other(e, sig.from)];
         const x = from.x + (to.x - from.x) * sig.t;
         const y = from.y + (to.y - from.y) * sig.t;
-        const g = ctx.createRadialGradient(x, y, 0, x, y, 8);
-        g.addColorStop(0, `rgba(${INK},0.5)`);
+        const g = ctx.createRadialGradient(x, y, 0, x, y, 7);
+        g.addColorStop(0, `rgba(${INK},0.38)`);
         g.addColorStop(1, `rgba(${INK},0)`);
         ctx.fillStyle = g;
         ctx.beginPath();
-        ctx.arc(x, y, 8, 0, Math.PI * 2);
+        ctx.arc(x, y, 7, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = `rgba(${INK},0.78)`;
+        ctx.fillStyle = `rgba(${INK},0.6)`;
         ctx.beginPath();
-        ctx.arc(x, y, 1.4, 0, Math.PI * 2);
+        ctx.arc(x, y, 1.2, 0, Math.PI * 2);
         ctx.fill();
       }
       // nodes
       for (const n of nodes) {
-        const a = Math.min(1, 0.028 + Math.pow(n.f, 2.0) * 0.3 + n.act * 0.38);
-        const r = 0.55 + Math.pow(n.f, 1.6) * 1.35 + n.act * 1.4;
+        const a = Math.min(1, 0.02 + Math.pow(n.f, 2.1) * 0.22 + n.act * 0.3);
+        const r = 0.5 + Math.pow(n.f, 1.7) * 1.2 + n.act * 1.2;
         ctx.fillStyle = `rgba(${INK},${a.toFixed(3)})`;
         ctx.beginPath();
         ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
@@ -159,7 +159,7 @@
       if (!running || document.hidden) { prev = now; return; }
       const dt = Math.min(0.05, (now - prev) / 1000) || 0.016;
       prev = now;
-      if (now - lastSpawn > 130 && sigs.length < 28) { spawnSignal(); lastSpawn = now; }
+      if (now - lastSpawn > 240 && sigs.length < 14) { spawnSignal(); lastSpawn = now; }
       step(dt);
       draw();
     }

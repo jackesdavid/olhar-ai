@@ -115,7 +115,7 @@
     <HeroNet />
     <!-- legibility scrim: settle the field behind the text column so the light copy stays crisp -->
     <div class="pointer-events-none absolute inset-0"
-      style="background:radial-gradient(64% 54% at 50% 44%, color-mix(in srgb, var(--background) 78%, transparent), transparent 74%);"></div>
+      style="background:radial-gradient(70% 58% at 50% 44%, color-mix(in srgb, var(--background) 82%, transparent), transparent 76%);"></div>
     <!-- focal bloom: the eye reads as the luminous point the whole network feeds into -->
     <div class="pointer-events-none absolute left-1/2 top-[27%] h-[26rem] w-[26rem] -translate-x-1/2 -translate-y-1/2 rounded-full"
       style="background:radial-gradient(circle, var(--shimmer), transparent 64%);"></div>
