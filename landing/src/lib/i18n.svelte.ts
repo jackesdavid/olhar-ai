@@ -41,9 +41,6 @@ type Copy = {
     ctaStart: string;
     ctaHow: string;
     trust: string;
-    previewCam: string;
-    live: string;
-    recognised: string;
     spacesLabel: string;
     spaces: string[];
   };
@@ -69,9 +66,6 @@ const en: Copy = {
     ctaStart: "Start free",
     ctaHow: "See how it works",
     trust: "Private by design · runs on your own edge · no card to start",
-    previewCam: "front_entrance · live",
-    live: "LIVE",
-    recognised: "Recognised · Maya",
     spacesLabel: "One calm assistant for every space",
     spaces: ["Homes", "Offices", "Retail", "Schools", "Sites"],
   },
@@ -152,9 +146,6 @@ const pt: Copy = {
     ctaStart: "Comece grátis",
     ctaHow: "Veja como funciona",
     trust: "Privado por design · roda no seu próprio edge · sem cartão para começar",
-    previewCam: "entrada_frontal · ao vivo",
-    live: "AO VIVO",
-    recognised: "Reconhecido · Maya",
     spacesLabel: "Um assistente tranquilo para cada espaço",
     spaces: ["Casas", "Escritórios", "Varejo", "Escolas", "Indústrias"],
   },

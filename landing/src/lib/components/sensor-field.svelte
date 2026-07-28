@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The living background. A permanent, dim emerald dot-lattice (the logo's
+  // The living background. A permanent, dim ink dot-lattice (the logo's
   // halftone) — the dots are always *there*, just not activated. Every few
   // seconds a pulse emanates from the focal centre and a WIDE, soft wavefront
   // spreads outward: each dot swells up and gently back down as the light passes,
@@ -11,12 +11,11 @@
   let canvas: HTMLCanvasElement;
 
   onMount(() => {
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const ctx = canvas.getContext("2d")!;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     const S = 44; // lattice spacing (px)
-    const RGB = "52,211,153"; // emerald-400
+    const RGB = "250,250,250"; // ink — Noir #FAFAFA (no brand hue)
     const REST = 0.05; // resting alpha — dots are always visible (dim)
     const PEAK = 0.3; // extra alpha at full activation
     const SPEED = 90; // px/s the wavefront spreads

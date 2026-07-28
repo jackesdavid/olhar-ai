@@ -15,6 +15,7 @@
 
   import OlharMark from "$lib/components/olhar-mark.svelte";
   import SensorField from "$lib/components/sensor-field.svelte";
+  import HeroNet from "$lib/components/hero-net.svelte";
   import { lang, setLang, initLang, dict, type Lang } from "$lib/i18n.svelte";
 
   const APP = "https://app.olharai.com";
@@ -109,78 +110,53 @@
 
 <main class="mx-auto w-full max-w-6xl px-6">
   <!-- ===== hero ===== -->
-  <section class="relative flex flex-col items-center pt-24 pb-16 text-center md:pt-32">
-    <!-- the mark, wrapped in concentric signal pings -->
-    <div class="relative mb-8 grid place-items-center">
-      <span class="ping-ring absolute size-28 rounded-full border border-primary/30" style="animation-delay:0s"></span>
-      <span class="ping-ring absolute size-28 rounded-full border border-primary/20" style="animation-delay:1.6s"></span>
-      <OlharMark label="" size={78} class="relative text-primary drop-shadow-[0_0_24px_oklch(1_0_0/0.3)]" />
-    </div>
-
-    <span use:reveal class="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3.5 py-1.5 text-xs font-semibold text-primary">
-      <span class="status-live size-1.5 rounded-full bg-primary"></span>
-      {t.hero.badge}
-    </span>
-
-    <h1 use:reveal={60} class="mt-6 max-w-3xl text-5xl font-extrabold leading-[1.04] tracking-tight md:text-7xl">
-      {t.hero.title1}<br /><span class="text-grad">{t.hero.titleAccent}</span>
-    </h1>
-
-    <p use:reveal={120} class="mt-6 max-w-xl text-lg text-muted-foreground">
-      {t.hero.subtitle}
-    </p>
-
-    <div use:reveal={180} class="mt-9 flex flex-wrap items-center justify-center gap-3.5">
-      <a class="press inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3.5 text-[15px] font-semibold text-primary-foreground shadow-[0_10px_36px_-10px_oklch(1_0_0/0.25)] transition-transform hover:-translate-y-0.5" href={APP}>
-        {t.hero.ctaStart} <ArrowRight class="size-4" />
-      </a>
-      <a class="press inline-flex items-center gap-2 rounded-xl border border-border bg-card/40 px-6 py-3.5 text-[15px] font-semibold backdrop-blur transition-colors hover:border-primary/40" href="#how">
-        {t.hero.ctaHow}
-      </a>
-    </div>
-
-    <p use:reveal={240} class="mt-5 flex items-center gap-2 text-[13px] text-muted-foreground/80">
-      <Check class="size-4 text-primary" /> {t.hero.trust}
-    </p>
-
-    <!-- ===== product preview: a live feed mock ===== -->
-    <div use:reveal={300} class="mt-16 w-full max-w-4xl">
-      <div class="rounded-2xl border border-border bg-card/50 p-3 shadow-[0_50px_140px_-50px_oklch(0_0_0/0.85)] backdrop-blur-xl">
-        <div class="flex items-center gap-2 px-2 py-2.5">
-          <span class="size-2.5 rounded-full bg-muted-foreground/30"></span>
-          <span class="size-2.5 rounded-full bg-muted-foreground/30"></span>
-          <span class="size-2.5 rounded-full bg-muted-foreground/30"></span>
-          <span class="ml-2 font-mono text-xs text-muted-foreground">{t.hero.previewCam}</span>
-          <span class="ml-auto flex items-center gap-1.5 text-[11px] font-semibold text-primary">
-            <span class="status-live size-1.5 rounded-full bg-primary"></span> {t.hero.live}
-          </span>
-        </div>
-        <div class="feed relative aspect-[16/9] overflow-hidden rounded-xl border border-border">
-          <span class="sweep absolute inset-y-0 w-2/5"></span>
-          <!-- corner ticks -->
-          <span class="absolute left-3 top-3 size-4 border-l-2 border-t-2 border-primary/50"></span>
-          <span class="absolute right-3 top-3 size-4 border-r-2 border-t-2 border-primary/50"></span>
-          <span class="absolute bottom-3 left-3 size-4 border-b-2 border-l-2 border-primary/50"></span>
-          <span class="absolute bottom-3 right-3 size-4 border-b-2 border-r-2 border-primary/50"></span>
-          <!-- detection -->
-          <div class="absolute left-[26%] top-[22%] h-[58%] w-[30%] rounded-lg border-[1.5px] border-primary shadow-[0_0_28px_-4px_oklch(1_0_0/0.35)]">
-            <span class="absolute -top-3 left-0 -translate-y-full rounded-md bg-primary px-2 py-1 text-[11px] font-bold text-primary-foreground whitespace-nowrap">{t.hero.recognised}</span>
-            <span class="absolute -bottom-3 right-0 translate-y-full font-mono text-[10.5px] text-primary tabular-nums">99.2%</span>
-            <span class="ping-ring absolute left-1/2 top-1/2 size-10 -translate-x-1/2 -translate-y-1/2 rounded-full border border-primary/50"></span>
-          </div>
-        </div>
+  <section class="relative overflow-hidden pt-24 pb-20 md:pt-32">
+    <!-- the living vision-network — nodes wired together, signals converging on the eye -->
+    <HeroNet />
+    <div class="relative z-10 flex flex-col items-center text-center">
+      <!-- the mark, wrapped in concentric signal pings -->
+      <div class="relative mb-8 grid place-items-center">
+        <span class="ping-ring absolute size-28 rounded-full border border-primary/30" style="animation-delay:0s"></span>
+        <span class="ping-ring absolute size-28 rounded-full border border-primary/20" style="animation-delay:1.6s"></span>
+        <OlharMark label="" size={78} class="relative text-primary drop-shadow-[0_0_24px_oklch(1_0_0/0.3)]" />
       </div>
-    </div>
 
-    <!-- spaces strip -->
-    <div use:reveal={120} class="mt-14">
-      <p class="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">{t.hero.spacesLabel}</p>
-      <div class="mt-4 flex flex-wrap items-center justify-center gap-x-7 gap-y-3 text-sm font-medium text-muted-foreground/80">
-        {#each t.hero.spaces as space (space)}
-          <span class="inline-flex items-center gap-2">
-            <span class="size-1 rounded-full bg-muted-foreground/40"></span>{space}
-          </span>
-        {/each}
+      <span use:reveal class="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3.5 py-1.5 text-xs font-semibold text-primary backdrop-blur-sm">
+        <span class="status-live size-1.5 rounded-full bg-primary"></span>
+        {t.hero.badge}
+      </span>
+
+      <h1 use:reveal={60} class="mt-6 max-w-3xl text-5xl font-extrabold leading-[1.04] tracking-tight md:text-7xl">
+        {t.hero.title1}<br /><span class="text-grad">{t.hero.titleAccent}</span>
+      </h1>
+
+      <p use:reveal={120} class="mt-6 max-w-xl text-lg text-muted-foreground">
+        {t.hero.subtitle}
+      </p>
+
+      <div use:reveal={180} class="mt-9 flex flex-wrap items-center justify-center gap-3.5">
+        <a class="press inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3.5 text-[15px] font-semibold text-primary-foreground shadow-[0_10px_36px_-10px_oklch(1_0_0/0.25)] transition-transform hover:-translate-y-0.5" href={APP}>
+          {t.hero.ctaStart} <ArrowRight class="size-4" />
+        </a>
+        <a class="press inline-flex items-center gap-2 rounded-xl border border-border bg-card/40 px-6 py-3.5 text-[15px] font-semibold backdrop-blur transition-colors hover:border-primary/40" href="#how">
+          {t.hero.ctaHow}
+        </a>
+      </div>
+
+      <p use:reveal={240} class="mt-5 flex items-center gap-2 text-[13px] text-muted-foreground/80">
+        <Check class="size-4 text-primary" /> {t.hero.trust}
+      </p>
+
+      <!-- spaces strip -->
+      <div use:reveal={120} class="mt-16">
+        <p class="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">{t.hero.spacesLabel}</p>
+        <div class="mt-4 flex flex-wrap items-center justify-center gap-x-7 gap-y-3 text-sm font-medium text-muted-foreground/80">
+          {#each t.hero.spaces as space (space)}
+            <span class="inline-flex items-center gap-2">
+              <span class="size-1 rounded-full bg-muted-foreground/40"></span>{space}
+            </span>
+          {/each}
+        </div>
       </div>
     </div>
   </section>
@@ -357,32 +333,6 @@
     :global(.rv) {
       opacity: 1;
       transform: none;
-    }
-  }
-
-  /* live-feed mock: dot-grid (the halftone) + a soft scanning sweep.
-     The "screen" is recessed — elev-1 → elev-0 — so it reads as a display sunk
-     into its panel frame, not as another card. */
-  .feed {
-    background:
-      radial-gradient(oklch(1 0 0 / 0.04) 1px, transparent 1.4px) 0 0 / 22px 22px,
-      radial-gradient(120% 80% at 50% 0%, var(--elev-1), var(--elev-0));
-  }
-  .sweep {
-    background: linear-gradient(90deg, transparent, oklch(1 0 0 / 0.06), transparent);
-    animation: feed-sweep 4.5s cubic-bezier(0.45, 0, 0.55, 1) infinite;
-  }
-  @keyframes feed-sweep {
-    0% {
-      transform: translateX(-60%);
-    }
-    100% {
-      transform: translateX(260%);
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .sweep {
-      animation: none;
     }
   }
 </style>
