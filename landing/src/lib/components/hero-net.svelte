@@ -114,8 +114,8 @@
       // wires
       for (const e of edges) {
         const fa = (nodes[e.a].f + nodes[e.b].f) / 2;
-        // resting wires stay dim so they never muddy the text; a passing signal lights its edge.
-        const a = 0.014 + Math.pow(fa, 1.8) * 0.055 + e.lit * (0.26 + fa * 0.5);
+        // resting wires stay very dim so they never muddy the text; a passing signal lights its edge.
+        const a = 0.01 + Math.pow(fa, 1.9) * 0.04 + e.lit * (0.24 + fa * 0.45);
         ctx.strokeStyle = `rgba(${INK},${a.toFixed(3)})`;
         ctx.lineWidth = 0.6 + e.lit * 0.9;
         ctx.beginPath();
@@ -144,8 +144,8 @@
       }
       // nodes
       for (const n of nodes) {
-        const a = Math.min(1, 0.06 + Math.pow(n.f, 1.6) * 0.5 + n.act * 0.5);
-        const r = 0.7 + Math.pow(n.f, 1.4) * 1.7 + n.act * 1.9;
+        const a = Math.min(1, 0.035 + Math.pow(n.f, 1.9) * 0.34 + n.act * 0.5);
+        const r = 0.6 + Math.pow(n.f, 1.5) * 1.5 + n.act * 1.9;
         ctx.fillStyle = `rgba(${INK},${a.toFixed(3)})`;
         ctx.beginPath();
         ctx.arc(n.x, n.y, r, 0, Math.PI * 2);

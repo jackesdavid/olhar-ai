@@ -113,9 +113,12 @@
   <section class="relative overflow-hidden pt-28 pb-24 md:pt-36">
     <!-- the living vision-network — nodes wired together, signals converging on the eye -->
     <HeroNet />
+    <!-- legibility scrim: settle the field behind the text column so the light copy stays crisp -->
+    <div class="pointer-events-none absolute inset-0"
+      style="background:radial-gradient(58% 48% at 50% 44%, color-mix(in srgb, var(--background) 72%, transparent), transparent 72%);"></div>
     <!-- focal bloom: the eye reads as the luminous point the whole network feeds into -->
-    <div class="pointer-events-none absolute left-1/2 top-[30%] h-[34rem] w-[34rem] -translate-x-1/2 -translate-y-1/2 rounded-full"
-      style="background:radial-gradient(circle, var(--shimmer), transparent 66%);"></div>
+    <div class="pointer-events-none absolute left-1/2 top-[27%] h-[26rem] w-[26rem] -translate-x-1/2 -translate-y-1/2 rounded-full"
+      style="background:radial-gradient(circle, var(--shimmer), transparent 64%);"></div>
     <div class="relative z-10 flex flex-col items-center text-center">
       <!-- the mark, at the centre of concentric signal pings — the network's focal node -->
       <div class="relative mb-9 grid place-items-center">
