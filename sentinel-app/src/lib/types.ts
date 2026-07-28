@@ -16,6 +16,20 @@ export type Settings = {
   pre_roll_secs: number;
   /** MOG2 varThreshold for motion detection. Lower = more sensitive (default 16). */
   motion_var_threshold: number;
+  /** Frames/second sampled into MOG2 (higher = more responsive, more decode). Default 4. */
+  motion_fps: number;
+  /** % of the frame that must change to count as motion (lower = more sensitive). Default 0.5. */
+  motion_floor_pct: number;
+  /** Minimum seconds between motion events (debounce). Default 4. */
+  motion_min_interval_secs: number;
+  /** Minimum blob area (processing pixels) to qualify as motion. Default 300. */
+  motion_min_area: number;
+  /** Processing width the frame is downscaled to before MOG2. Default 480. */
+  motion_proc_w: number;
+  /** Processing height the frame is downscaled to before MOG2. Default 270. */
+  motion_proc_h: number;
+  /** MOG2 background-model history, in FRAMES (adaptation window ≈ history / fps). Default 333. */
+  motion_history: number;
   /** Maximum recording storage in MB before old clips are auto-evicted (default 10000 = ~10 GB). */
   max_storage_mb: number;
   /** Directory on the edge where .mp4 clips are saved (default /opt/sentinel-edge/recordings). */
@@ -374,6 +388,13 @@ export const DEFAULT_SETTINGS: Settings = {
   face_capture_stream: "preview",
   pre_roll_secs: 10,
   motion_var_threshold: 16,
+  motion_fps: 4,
+  motion_floor_pct: 0.5,
+  motion_min_interval_secs: 4,
+  motion_min_area: 300,
+  motion_proc_w: 480,
+  motion_proc_h: 270,
+  motion_history: 333,
   max_storage_mb: 10000,
   recordings_path: "/opt/sentinel-edge/recordings",
   delete_local_after_upload: false,

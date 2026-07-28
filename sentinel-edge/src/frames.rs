@@ -177,10 +177,35 @@ fn source(state: Arc<AppState>, ip: String, stop: Arc<AtomicBool>) {
 
 /// Env tunables, with the box's `recording_config` allowed to override the MOG2 sensitivity.
 fn motion_params(state: &Arc<AppState>) -> Params {
+    // The per-box `recording_config` (set from the UI) is authoritative; `MOTION_*` env vars are the
+    // fallback base. Each config field carries the same serde default `Params::from_env` uses, so a
+    // box with an older config (missing these) is unchanged. Guards (`> 0`) keep a bogus 0 from a
+    // hand-edited config from zeroing a knob.
     let mut params = Params::from_env();
-    let cfg_var = state.recording.config.motion_var_threshold;
-    if cfg_var > 0.0 {
-        params.var_threshold = cfg_var;
+    let c = &state.recording.config;
+    if c.motion_var_threshold > 0.0 {
+        params.var_threshold = c.motion_var_threshold;
+    }
+    if c.motion_fps > 0 {
+        params.fps = c.motion_fps;
+    }
+    if c.motion_floor_pct > 0.0 {
+        params.floor_pct = c.motion_floor_pct;
+    }
+    if c.motion_min_interval_secs > 0 {
+        params.min_interval = std::time::Duration::from_secs(c.motion_min_interval_secs);
+    }
+    if c.motion_min_area > 0.0 {
+        params.min_area = c.motion_min_area;
+    }
+    if c.motion_proc_w > 0 {
+        params.proc_w = c.motion_proc_w;
+    }
+    if c.motion_proc_h > 0 {
+        params.proc_h = c.motion_proc_h;
+    }
+    if c.motion_history > 0 {
+        params.history = c.motion_history;
     }
     params
 }

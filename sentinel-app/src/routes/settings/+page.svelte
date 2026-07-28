@@ -33,6 +33,14 @@
    *  so "delete the local copy once it's in the cloud" would delete the only copy there is. */
   let cloudRecording = $state(false);
 
+  // Settings split into tabs — the page grew past one scroll of Cards.
+  const TABS = [
+    { id: "general", label: "General" },
+    { id: "cameras", label: "Cameras" },
+    { id: "motion", label: "Detection" },
+  ] as const;
+  let tab = $state<(typeof TABS)[number]["id"]>("general");
+
   const transportOptions: { value: Transport; label: string }[] = [
     { value: "tcp", label: "TCP" },
     { value: "udp", label: "UDP" },
@@ -68,6 +76,13 @@
         settings.face_capture_stream = firstBox.recording_config.face_capture_stream ?? "preview";
         settings.pre_roll_secs = firstBox.recording_config.pre_roll_secs ?? 10;
         settings.motion_var_threshold = firstBox.recording_config.motion_var_threshold ?? 16;
+        settings.motion_fps = firstBox.recording_config.motion_fps ?? 4;
+        settings.motion_floor_pct = firstBox.recording_config.motion_floor_pct ?? 0.5;
+        settings.motion_min_interval_secs = firstBox.recording_config.motion_min_interval_secs ?? 4;
+        settings.motion_min_area = firstBox.recording_config.motion_min_area ?? 300;
+        settings.motion_proc_w = firstBox.recording_config.motion_proc_w ?? 480;
+        settings.motion_proc_h = firstBox.recording_config.motion_proc_h ?? 270;
+        settings.motion_history = firstBox.recording_config.motion_history ?? 333;
         settings.max_storage_mb = firstBox.recording_config.max_storage_mb ?? 10000;
         settings.recordings_path = firstBox.recording_config.recordings_path ?? "/opt/sentinel-edge/recordings";
         settings.delete_local_after_upload = firstBox.recording_config.delete_local_after_upload ?? false;
@@ -116,6 +131,13 @@
             cameras_always_warm: snap.cameras_always_warm,
             face_capture_stream: snap.face_capture_stream,
             motion_var_threshold: snap.motion_var_threshold,
+            motion_fps: snap.motion_fps,
+            motion_floor_pct: snap.motion_floor_pct,
+            motion_min_interval_secs: snap.motion_min_interval_secs,
+            motion_min_area: snap.motion_min_area,
+            motion_proc_w: snap.motion_proc_w,
+            motion_proc_h: snap.motion_proc_h,
+            motion_history: snap.motion_history,
             // Never persist "delete the local copy" for a tenant with nowhere to copy it to.
             delete_local_after_upload: cloudRecording && snap.delete_local_after_upload,
           })
@@ -198,6 +220,21 @@
     {/snippet}
   </PageHeader>
 
+  <div class="flex gap-1 border-b">
+    {#each TABS as t (t.id)}
+      <button
+        type="button"
+        class="-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors {tab === t.id
+          ? 'border-primary text-foreground'
+          : 'border-transparent text-muted-foreground hover:text-foreground'}"
+        onclick={() => (tab = t.id)}
+      >
+        {t.label}
+      </button>
+    {/each}
+  </div>
+
+  {#if tab === "general"}
   <Card.Root>
     <Card.Header>
       <Card.Title>Audio</Card.Title>
@@ -308,7 +345,9 @@
       </div>
     </Card.Content>
   </Card.Root>
+  {/if}
 
+  {#if tab === "cameras"}
   <Card.Root>
     <Card.Header>
       <Card.Title>Cameras</Card.Title>
@@ -374,30 +413,6 @@
         <p class="text-xs text-muted-foreground">
           How many seconds of footage the ring buffer keeps before a recording trigger
           (0–60 s). The recording node can request up to this amount.
-        </p>
-      </div>
-
-      <Separator />
-
-      <div class="space-y-2">
-        <div class="flex items-center justify-between">
-          <Label>Motion sensitivity</Label>
-          <span class="text-sm tabular-nums text-muted-foreground">
-            {sensitivityLabel(settings.motion_var_threshold)}
-          </span>
-        </div>
-        <Slider
-          type="single"
-          min={4}
-          max={128}
-          step={4}
-          bind:value={settings.motion_var_threshold}
-          disabled={loading}
-        />
-        <p class="text-xs text-muted-foreground">
-          Controls how much pixel change triggers a motion event. Lower = more sensitive
-          (reacts to subtle movement); higher = less sensitive (ignores small changes).
-          Takes effect after the edge restarts.
         </p>
       </div>
 
@@ -479,4 +494,107 @@
       {/if}
     </Card.Content>
   </Card.Root>
+  {/if}
+
+  {#if tab === "motion"}
+  <Card.Root>
+    <Card.Header>
+      <Card.Title>Motion detection</Card.Title>
+      <Card.Description>
+        MOG2 background-subtraction tuning, per box. Takes effect after the edge restarts.
+      </Card.Description>
+    </Card.Header>
+    <Card.Content class="space-y-6">
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <Label>Sensitivity</Label>
+          <span class="text-sm tabular-nums text-muted-foreground">
+            {sensitivityLabel(settings.motion_var_threshold)} ({settings.motion_var_threshold})
+          </span>
+        </div>
+        <Slider type="single" min={4} max={128} step={4}
+          bind:value={settings.motion_var_threshold} disabled={loading} />
+        <p class="text-xs text-muted-foreground">
+          MOG2 varThreshold — how much pixel change triggers motion. Lower = more sensitive.
+        </p>
+      </div>
+
+      <Separator />
+
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <Label>Frames per second</Label>
+          <span class="text-sm tabular-nums text-muted-foreground">{settings.motion_fps} fps</span>
+        </div>
+        <Slider type="single" min={1} max={15} step={1}
+          bind:value={settings.motion_fps} disabled={loading} />
+        <p class="text-xs text-muted-foreground">
+          How many frames/second feed the detector. Higher = more responsive, but more decode load.
+        </p>
+      </div>
+
+      <Separator />
+
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <Label>Motion floor</Label>
+          <span class="text-sm tabular-nums text-muted-foreground">{settings.motion_floor_pct}%</span>
+        </div>
+        <Slider type="single" min={0.1} max={5} step={0.1}
+          bind:value={settings.motion_floor_pct} disabled={loading} />
+        <p class="text-xs text-muted-foreground">
+          Minimum share of the frame that must change to count as motion. Lower = catches subtler movement.
+        </p>
+      </div>
+
+      <Separator />
+
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <Label>Event debounce</Label>
+          <span class="text-sm tabular-nums text-muted-foreground">{settings.motion_min_interval_secs}s</span>
+        </div>
+        <Slider type="single" min={0} max={30} step={1}
+          bind:value={settings.motion_min_interval_secs} disabled={loading} />
+        <p class="text-xs text-muted-foreground">Minimum seconds between motion events for a camera.</p>
+      </div>
+
+      <Separator />
+
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <Label>Background history</Label>
+          <span class="text-sm tabular-nums text-muted-foreground">
+            {settings.motion_history} frames (~{Math.round(settings.motion_history / Math.max(1, settings.motion_fps))}s)
+          </span>
+        </div>
+        <Slider type="single" min={30} max={1000} step={10}
+          bind:value={settings.motion_history} disabled={loading} />
+        <p class="text-xs text-muted-foreground">
+          How many frames the background model adapts over. Longer = slower to absorb new static objects.
+        </p>
+      </div>
+
+      <Separator />
+
+      <div class="grid grid-cols-3 gap-4">
+        <div class="space-y-2">
+          <Label>Min blob area</Label>
+          <Input type="number" min={0} bind:value={settings.motion_min_area} disabled={loading} />
+          <p class="text-xs text-muted-foreground">Processing px</p>
+        </div>
+        <div class="space-y-2">
+          <Label>Proc width</Label>
+          <Input type="number" min={1} bind:value={settings.motion_proc_w} disabled={loading} />
+          <p class="text-xs text-muted-foreground">Downscale W</p>
+        </div>
+        <div class="space-y-2">
+          <Label>Proc height</Label>
+          <Input type="number" min={1} bind:value={settings.motion_proc_h} disabled={loading} />
+          <p class="text-xs text-muted-foreground">Downscale H</p>
+        </div>
+      </div>
+    </Card.Content>
+  </Card.Root>
+  {/if}
 </div>

@@ -153,6 +153,14 @@ export type RecordingConfig = {
   /** Which stream feeds face capture (#120): "preview" (substream) or "hd" (main stream). */
   face_capture_stream?: "preview" | "hd";
   motion_var_threshold?: number;
+  /** MOG2 motion tuning (per-box). See `Settings` in types.ts for units/defaults. */
+  motion_fps?: number;
+  motion_floor_pct?: number;
+  motion_min_interval_secs?: number;
+  motion_min_area?: number;
+  motion_proc_w?: number;
+  motion_proc_h?: number;
+  motion_history?: number;
   /** Drop a clip's local file once the cloud confirms it's durable (the box becomes a spool). */
   delete_local_after_upload?: boolean;
   /** Which media tool this box shells out to for decode/mux (card #138): "ffmpeg" (default) or

@@ -116,8 +116,31 @@ pub struct RecordingConfig {
     /// "hd" (the main/HD stream — sharper faces, heavier decode; gate on a GPU-decode-capable box).
     #[serde(default = "default_capture_stream")]
     pub face_capture_stream: String,
+    // ---- MOG2 motion detection (per-box, UI-tunable) — see `motion.rs` `Params`. Each defaults to
+    //      the same value `Params::from_env` uses, so an older config (missing these) behaves exactly
+    //      as before. The per-box config is now authoritative; the `MOTION_*` env vars are a fallback.
     #[serde(default = "default_motion_var")]
     pub motion_var_threshold: f64,
+    /// Frames/second sampled into MOG2 (heavier = more responsive, costs more decode). Default 4.
+    #[serde(default = "default_motion_fps")]
+    pub motion_fps: u32,
+    /// % of the frame that must change to count as motion (lower = more sensitive). Default 0.5.
+    #[serde(default = "default_motion_floor")]
+    pub motion_floor_pct: f64,
+    /// Minimum seconds between motion events (debounce). Default 4.
+    #[serde(default = "default_motion_interval")]
+    pub motion_min_interval_secs: u64,
+    /// Minimum blob area (in processing pixels) to qualify as motion. Default 300.
+    #[serde(default = "default_motion_min_area")]
+    pub motion_min_area: f64,
+    /// Processing resolution the frame is downscaled to before MOG2. Default 480×270.
+    #[serde(default = "default_motion_proc_w")]
+    pub motion_proc_w: u32,
+    #[serde(default = "default_motion_proc_h")]
+    pub motion_proc_h: u32,
+    /// MOG2 background-model history, in FRAMES (adaptation window ≈ history / fps). Default 333.
+    #[serde(default = "default_motion_history")]
+    pub motion_history: i32,
     #[serde(default = "default_recordings_path")]
     pub recordings_path: String,
     /// Delete a clip's local file as soon as R2 confirms it's durable, making this box's disk a
@@ -145,6 +168,13 @@ impl Default for RecordingConfig {
             cameras_always_warm: false,
             face_capture_stream: default_capture_stream(),
             motion_var_threshold: 16.0,
+            motion_fps: default_motion_fps(),
+            motion_floor_pct: default_motion_floor(),
+            motion_min_interval_secs: default_motion_interval(),
+            motion_min_area: default_motion_min_area(),
+            motion_proc_w: default_motion_proc_w(),
+            motion_proc_h: default_motion_proc_h(),
+            motion_history: default_motion_history(),
             recordings_path: default_recordings_path(),
             delete_local_after_upload: false,
             media_backend: default_media_backend(),
@@ -154,6 +184,27 @@ impl Default for RecordingConfig {
 
 fn default_motion_var() -> f64 {
     16.0
+}
+fn default_motion_fps() -> u32 {
+    4
+}
+fn default_motion_floor() -> f64 {
+    0.5
+}
+fn default_motion_interval() -> u64 {
+    4
+}
+fn default_motion_min_area() -> f64 {
+    300.0
+}
+fn default_motion_proc_w() -> u32 {
+    480
+}
+fn default_motion_proc_h() -> u32 {
+    270
+}
+fn default_motion_history() -> i32 {
+    333
 }
 fn default_pre_roll() -> u32 {
     10
