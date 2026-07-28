@@ -36,6 +36,10 @@
     type UploadState,
     type TenantStorage,
   } from "$lib/api";
+  import { dict, lang, locale } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].recordings);
+  const c = $derived(dict[lang()].common);
 
   // ---- query state -----------------------------------------------------------
 
@@ -180,17 +184,17 @@
   // ---- clip state badge ------------------------------------------------------
 
   type BadgeSpec = { label: string; cls: string };
-  const STATE_BADGE: Record<UploadState, BadgeSpec> = {
+  const STATE_BADGE: Record<UploadState, BadgeSpec> = $derived({
     // Cloud = durable, inked primary. Local/in-transit = muted. Failed = destructive.
-    uploaded:  { label: "Cloud",      cls: "border-primary/25 bg-primary/10 text-primary" },
-    uploading: { label: "In transit", cls: "border-border bg-muted/40 text-muted-foreground animate-pulse" },
-    pending:   { label: "Local",      cls: "border-border bg-muted/40 text-muted-foreground" },
-    failed:    { label: "Failed",     cls: "border-destructive/30 bg-destructive/10 text-destructive" },
-  };
-  const DELETING_BADGE: BadgeSpec = {
-    label: "Deleting",
+    uploaded:  { label: t.badgeCloud,     cls: "border-primary/25 bg-primary/10 text-primary" },
+    uploading: { label: t.badgeInTransit, cls: "border-border bg-muted/40 text-muted-foreground animate-pulse" },
+    pending:   { label: t.badgeLocal,     cls: "border-border bg-muted/40 text-muted-foreground" },
+    failed:    { label: t.badgeFailed,    cls: "border-destructive/30 bg-destructive/10 text-destructive" },
+  });
+  const DELETING_BADGE: BadgeSpec = $derived({
+    label: t.badgeDeleting,
     cls: "border-border bg-muted/40 text-muted-foreground animate-pulse",
-  };
+  });
   function badgeFor(rec: Recording): BadgeSpec {
     if (rec.deleting) return DELETING_BADGE;
     return STATE_BADGE[rec.upload_state] ?? STATE_BADGE.pending;
@@ -216,7 +220,7 @@
       const { url } = await recordings.cloudUrl(rec.id);
       player = { rec, url };
     } catch (e) {
-      toast.error("Could not open this clip for playback.");
+      toast.error(t.playFailed);
     } finally {
       playLoading = null;
     }
@@ -238,7 +242,7 @@
     deleteTarget = null;
     try {
       await recordings.del(id);
-      toast.success("Deletion started — the clip is being removed.");
+      toast.success(t.deletionStarted);
       await load();
       reloadSoon();
     } catch (e) {
@@ -260,7 +264,7 @@
     try {
       const res = await recordings.bulkDel(ids);
       selected = new Set();
-      toast.success(`Deleting ${res.deleted} recording${res.deleted !== 1 ? "s" : ""}…`);
+      toast.success(t.bulkDeleting(res.deleted));
       await load();
       reloadSoon();
     } catch (e) {
@@ -308,18 +312,19 @@
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
+  // Dates follow the language the user picked, not the browser's own locale.
   function fmtDate(iso: string) {
     const d = new Date(iso);
     return (
-      d.toLocaleDateString(undefined, { day: "2-digit", month: "short" }) +
+      d.toLocaleDateString(locale(), { day: "2-digit", month: "short" }) +
       " " +
-      d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+      d.toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" })
     );
   }
 
   function fmtDay(dateStr: string) {
     const d = new Date(dateStr + "T00:00:00");
-    return d.toLocaleDateString(undefined, {
+    return d.toLocaleDateString(locale(), {
       weekday: "long",
       day: "numeric",
       month: "long",
@@ -330,6 +335,12 @@
   function sortIcon(field: string) {
     if (sortField !== field) return "none";
     return sortDir === "desc" ? "desc" : "asc";
+  }
+
+  function groupByLabel(): string {
+    if (groupBy === "camera") return t.groupCamera;
+    if (groupBy === "day") return t.groupDay;
+    return t.groupNone;
   }
 
   function cameraLabel(ip: string) {
@@ -347,8 +358,7 @@
     return `${gb.toFixed(gb < 10 ? 2 : 1)} GB`;
   }
   function money(n: number, currency: string): string {
-    const locale = currency === "BRL" ? "pt-BR" : "en-US";
-    return new Intl.NumberFormat(locale, { style: "currency", currency }).format(n);
+    return new Intl.NumberFormat(locale(), { style: "currency", currency }).format(n);
   }
   /** Percent of quota used, clamped to 100 for the bar width. 0 when there's no quota. */
   function usedPct(s: TenantStorage): number {
@@ -388,15 +398,14 @@
 >
   <Dialog.Content>
     <Dialog.Header>
-      <Dialog.Title>Delete recording?</Dialog.Title>
+      <Dialog.Title>{t.deleteTitle}</Dialog.Title>
       <Dialog.Description>
-        "{deleteTarget?.friendly_name || deleteTarget?.clip_id}" will be permanently removed from
-        the edge disk. This cannot be undone.
+        {t.deleteDescription(deleteTarget?.friendly_name || deleteTarget?.clip_id || "")}
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
-      <Button variant="outline" onclick={() => (deleteTarget = null)}>Cancel</Button>
-      <Button variant="destructive" onclick={confirmDelete}>Delete</Button>
+      <Button variant="outline" onclick={() => (deleteTarget = null)}>{c.cancel}</Button>
+      <Button variant="destructive" onclick={confirmDelete}>{t.delete}</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
@@ -405,15 +414,13 @@
 <Dialog.Root open={bulkDeleteOpen} onOpenChange={(o: boolean) => { if (!o) bulkDeleteOpen = false; }}>
   <Dialog.Content>
     <Dialog.Header>
-      <Dialog.Title>Delete {selected.size} recording{selected.size !== 1 ? "s" : ""}?</Dialog.Title>
-      <Dialog.Description>
-        These clips will be permanently removed from the edge disk. This cannot be undone.
-      </Dialog.Description>
+      <Dialog.Title>{t.bulkDeleteTitle(selected.size)}</Dialog.Title>
+      <Dialog.Description>{t.bulkDeleteDescription}</Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
-      <Button variant="outline" onclick={() => (bulkDeleteOpen = false)}>Cancel</Button>
+      <Button variant="outline" onclick={() => (bulkDeleteOpen = false)}>{c.cancel}</Button>
       <Button variant="destructive" onclick={confirmBulkDelete}>
-        Delete {selected.size}
+        {t.deleteCount(selected.size)}
       </Button>
     </Dialog.Footer>
   </Dialog.Content>
@@ -431,7 +438,7 @@
     {#if player}
       <!-- svelte-ignore a11y_media_has_caption -->
       <video src={player.url} controls autoplay class="w-full rounded-lg bg-video-well">
-        Your browser cannot play this clip.
+        {t.cannotPlay}
       </video>
     {/if}
   </Dialog.Content>
@@ -440,10 +447,8 @@
 <div class="flex flex-col gap-6 p-6">
   <!-- header -->
   <PageHeader
-    title="Recordings"
-    description={total > 0
-      ? `${total} recording${total === 1 ? "" : "s"} saved from your cameras.`
-      : "Clips saved from your cameras."}
+    title={t.title}
+    description={total > 0 ? t.countDescription(total) : t.emptyDescription}
     icon={Clapperboard}
   >
     {#snippet actions()}
@@ -459,12 +464,12 @@
           {:else}
             <Trash2 class="mr-2 h-4 w-4" />
           {/if}
-          Delete {selected.size}
+          {t.deleteCount(selected.size)}
         </Button>
       {/if}
       <Button variant="outline" size="sm" onclick={load} disabled={loading}>
         {#if loading}<Busy class="mr-2" />{:else}<RefreshCw class="mr-2 h-4 w-4" />{/if}
-        Refresh
+        {t.refresh}
       </Button>
     {/snippet}
   </PageHeader>
@@ -477,11 +482,11 @@
           <div class="flex items-baseline gap-2">
             <span class="text-sm font-semibold tabular-nums">{fmtGB(storage.stored_bytes)}</span>
             <span class="text-sm text-muted-foreground">
-              stored of {storage.included_storage_gb} GB · {storage.retention_days}-day cloud retention
+              {t.storedOf(storage.included_storage_gb, storage.retention_days)}
             </span>
           </div>
           <span class="text-xs text-muted-foreground tabular-nums">
-            {storage.clip_count} clip{storage.clip_count === 1 ? "" : "s"} in the cloud
+            {t.clipsInCloud(storage.clip_count)}
           </span>
         </div>
         <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
@@ -489,20 +494,16 @@
         </div>
         {#if storage.projected_overage > 0}
           <p class="mt-2 text-xs text-amber-500">
-            Over quota this month — about {money(storage.projected_overage, storage.currency)} in overage so far.
+            {t.overQuota(money(storage.projected_overage, storage.currency))}
           </p>
         {:else}
-          <p class="mt-2 text-xs text-muted-foreground">
-            New clips upload automatically. Past {storage.retention_days} days, cloud copies expire on their own.
-          </p>
+          <p class="mt-2 text-xs text-muted-foreground">{t.uploadNote(storage.retention_days)}</p>
         {/if}
       </div>
     {:else}
       <div class="flex items-center justify-between rounded-lg border border-border bg-card p-4">
-        <p class="text-sm text-muted-foreground">
-          Your plan keeps clips on the box only. Cloud backup survives the box being stolen or wiped.
-        </p>
-        <Button href="/billing" variant="outline" size="sm">See plans</Button>
+        <p class="text-sm text-muted-foreground">{t.noCloudPlan}</p>
+        <Button href="/billing" variant="outline" size="sm">{t.seePlans}</Button>
       </div>
     {/if}
   {/if}
@@ -511,17 +512,17 @@
   <div class="flex flex-wrap items-end gap-3">
     <!-- camera dropdown -->
     <div class="flex flex-col gap-1">
-      <Label class="text-xs text-muted-foreground">Camera</Label>
+      <Label class="text-xs text-muted-foreground">{t.camera}</Label>
       <Select.Root
         type="single"
         value={filterCamera || "_all"}
         onValueChange={(v) => { filterCamera = v === "_all" ? "" : v; }}
       >
         <Select.Trigger class="h-8 w-44 text-sm">
-          {filterCamera ? cameraLabel(filterCamera) : "All cameras"}
+          {filterCamera ? cameraLabel(filterCamera) : t.allCameras}
         </Select.Trigger>
         <Select.Content>
-          <Select.Item value="_all" label="All cameras">All cameras</Select.Item>
+          <Select.Item value="_all" label={t.allCameras}>{t.allCameras}</Select.Item>
           {#each cameraList as cam (cam.ip)}
             <Select.Item value={cam.ip} label={cam.name}>{cam.name}</Select.Item>
           {/each}
@@ -530,28 +531,26 @@
     </div>
 
     <div class="flex flex-col gap-1">
-      <Label class="text-xs text-muted-foreground">From</Label>
+      <Label class="text-xs text-muted-foreground">{t.from}</Label>
       <Input type="date" class="h-8 w-36 text-sm" bind:value={filterFrom} />
     </div>
     <div class="flex flex-col gap-1">
-      <Label class="text-xs text-muted-foreground">To</Label>
+      <Label class="text-xs text-muted-foreground">{t.to}</Label>
       <Input type="date" class="h-8 w-36 text-sm" bind:value={filterTo} />
     </div>
-    <Button size="sm" class="h-8" onclick={applyFilters}>Apply</Button>
+    <Button size="sm" class="h-8" onclick={applyFilters}>{t.apply}</Button>
     {#if filterCamera || filterFrom || filterTo}
-      <Button size="sm" variant="ghost" class="h-8" onclick={resetFilters}>Clear</Button>
+      <Button size="sm" variant="ghost" class="h-8" onclick={resetFilters}>{t.clear}</Button>
     {/if}
 
     <div class="ml-auto flex items-center gap-2">
-      <Label class="text-xs text-muted-foreground whitespace-nowrap">Group by</Label>
+      <Label class="text-xs text-muted-foreground whitespace-nowrap">{t.groupBy}</Label>
       <Select.Root type="single" bind:value={groupBy}>
-        <Select.Trigger class="h-8 w-32 text-sm">
-          {groupBy === "none" ? "None" : groupBy === "camera" ? "Camera" : "Day"}
-        </Select.Trigger>
+        <Select.Trigger class="h-8 w-32 text-sm">{groupByLabel()}</Select.Trigger>
         <Select.Content>
-          <Select.Item value="none" label="None">None</Select.Item>
-          <Select.Item value="camera" label="Camera">Camera</Select.Item>
-          <Select.Item value="day" label="Day">Day</Select.Item>
+          <Select.Item value="none" label={t.groupNone}>{t.groupNone}</Select.Item>
+          <Select.Item value="camera" label={t.groupCamera}>{t.groupCamera}</Select.Item>
+          <Select.Item value="day" label={t.groupDay}>{t.groupDay}</Select.Item>
         </Select.Content>
       </Select.Root>
     </div>
@@ -560,10 +559,7 @@
   {#if loading}
     <Loader />
   {:else if items.length === 0}
-    <EmptyState
-      title="No recordings found"
-      description="Recordings appear here once a workflow triggers the Start Recording node and a clip is finalised."
-    />
+    <EmptyState title={t.emptyTitle} description={t.emptyHint} />
   {:else}
     {@const groups = groupedItems()}
     <div class="rounded-lg border border-border overflow-hidden">
@@ -575,7 +571,7 @@
               <button
                 class="flex items-center justify-center"
                 onclick={toggleAll}
-                title={allSelected ? "Deselect all" : "Select all"}
+                title={allSelected ? t.deselectAll : t.selectAll}
               >
                 {#if allSelected}
                   <CheckSquare class="h-4 w-4 text-primary" />
@@ -586,7 +582,7 @@
             </Table.Head>
             <Table.Head class="w-48">
               <button class="flex items-center gap-1 hover:text-foreground" onclick={() => toggleSort("friendly_name")}>
-                Name
+                {t.colName}
                 {#if sortIcon("friendly_name") === "asc"}<ChevronUp class="h-3 w-3" />
                 {:else if sortIcon("friendly_name") === "desc"}<ChevronDown class="h-3 w-3" />
                 {:else}<ChevronsUpDown class="h-3 w-3 opacity-40" />
@@ -595,7 +591,7 @@
             </Table.Head>
             <Table.Head>
               <button class="flex items-center gap-1 hover:text-foreground" onclick={() => toggleSort("camera_ip")}>
-                Camera
+                {t.camera}
                 {#if sortIcon("camera_ip") === "asc"}<ChevronUp class="h-3 w-3" />
                 {:else if sortIcon("camera_ip") === "desc"}<ChevronDown class="h-3 w-3" />
                 {:else}<ChevronsUpDown class="h-3 w-3 opacity-40" />
@@ -604,7 +600,7 @@
             </Table.Head>
             <Table.Head>
               <button class="flex items-center gap-1 hover:text-foreground" onclick={() => toggleSort("started_at")}>
-                Date
+                {t.colDate}
                 {#if sortIcon("started_at") === "asc"}<ChevronUp class="h-3 w-3" />
                 {:else if sortIcon("started_at") === "desc"}<ChevronDown class="h-3 w-3" />
                 {:else}<ChevronsUpDown class="h-3 w-3 opacity-40" />
@@ -613,7 +609,7 @@
             </Table.Head>
             <Table.Head>
               <button class="flex items-center gap-1 hover:text-foreground" onclick={() => toggleSort("duration_secs")}>
-                Duration
+                {t.colDuration}
                 {#if sortIcon("duration_secs") === "asc"}<ChevronUp class="h-3 w-3" />
                 {:else if sortIcon("duration_secs") === "desc"}<ChevronDown class="h-3 w-3" />
                 {:else}<ChevronsUpDown class="h-3 w-3 opacity-40" />
@@ -622,15 +618,15 @@
             </Table.Head>
             <Table.Head>
               <button class="flex items-center gap-1 hover:text-foreground" onclick={() => toggleSort("size_bytes")}>
-                Size
+                {t.colSize}
                 {#if sortIcon("size_bytes") === "asc"}<ChevronUp class="h-3 w-3" />
                 {:else if sortIcon("size_bytes") === "desc"}<ChevronDown class="h-3 w-3" />
                 {:else}<ChevronsUpDown class="h-3 w-3 opacity-40" />
                 {/if}
               </button>
             </Table.Head>
-            <Table.Head class="w-28">Storage</Table.Head>
-            <Table.Head class="w-28 text-right">Actions</Table.Head>
+            <Table.Head class="w-28">{t.colStorage}</Table.Head>
+            <Table.Head class="w-28 text-right">{t.colActions}</Table.Head>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -682,7 +678,7 @@
                       <Button
                         variant="ghost"
                         size="icon"
-                        title="Play"
+                        title={t.play}
                         disabled={playLoading === rec.id || rec.deleting}
                         onclick={() => play(rec)}
                       >
@@ -696,7 +692,7 @@
                     <Button
                       variant="ghost"
                       size="icon"
-                      title="Download"
+                      title={t.download}
                       disabled={downloading === rec.id || rec.deleting}
                       onclick={() => download(rec)}
                     >
@@ -709,7 +705,7 @@
                     <Button
                       variant="ghost"
                       size="icon"
-                      title="Delete"
+                      title={t.delete}
                       disabled={deleting === rec.id || rec.deleting}
                       onclick={() => (deleteTarget = rec)}
                     >
@@ -731,14 +727,14 @@
     <!-- pagination -->
     {#if pageCount > 1}
       <div class="flex items-center justify-between text-sm text-muted-foreground">
-        <span>Page {page + 1} of {pageCount} ({total} recordings)</span>
+        <span>{t.pageOf(page + 1, pageCount, total)}</span>
         <div class="flex gap-2">
           <Button variant="outline" size="sm" onclick={prevPage} disabled={page === 0}>
             <ChevronLeft class="h-4 w-4" />
-            Prev
+            {t.prev}
           </Button>
           <Button variant="outline" size="sm" onclick={nextPage} disabled={page >= pageCount - 1}>
-            Next
+            {t.next}
             <ChevronRight class="h-4 w-4" />
           </Button>
         </div>

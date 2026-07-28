@@ -17,8 +17,9 @@ import { people } from "./messages/people";
 import { beacons } from "./messages/beacons";
 import { settings } from "./messages/settings";
 import { devices } from "./messages/devices";
+import { recordings } from "./messages/recordings";
 
-export { lang, setLang, initLang, type Lang } from "./runtime.svelte";
+export { lang, setLang, initLang, locale, type Lang } from "./runtime.svelte";
 
 /**
  * Pins a module's `pt` to its `en` shape, so a key that exists in English but was never
@@ -42,6 +43,7 @@ const modules = {
   beacons: domain(beacons),
   settings: domain(settings),
   devices: domain(devices),
+  recordings: domain(recordings),
 };
 
 /** One language's messages — every module, narrowed to that language. */

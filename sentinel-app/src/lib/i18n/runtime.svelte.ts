@@ -16,6 +16,14 @@ export function lang(): Lang {
   return current;
 }
 
+/**
+ * BCP-47 locale for the current language — pass this to `Intl` / `toLocale*String` so dates,
+ * numbers and currency follow the language the user picked, not whatever the browser is set to.
+ */
+export function locale(): string {
+  return current === "pt" ? "pt-BR" : "en-US";
+}
+
 /** Switch language and persist the choice. */
 export function setLang(l: Lang) {
   current = l;
