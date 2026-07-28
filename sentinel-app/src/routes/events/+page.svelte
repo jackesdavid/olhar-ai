@@ -27,7 +27,11 @@
   import { Label } from "$lib/components/ui/label";
 
   import { events, type EventRow, type EventKind } from "$lib/api";
+  import { dict, lang } from "$lib/i18n";
   import { fmtTs } from "$lib/utils";
+
+  const t = $derived(dict[lang()].events);
+  const c = $derived(dict[lang()].common);
 
   const PAGE = 50;
 
@@ -42,18 +46,24 @@
   let expanded = $state<Set<number>>(new Set());
 
   // Auto-refresh — silent reload of the newest page each tick.
-  const REFRESH_OPTIONS = [
-    { value: "0", label: "Off" },
+  const REFRESH_OPTIONS = $derived([
+    { value: "0", label: t.off },
     { value: "5", label: "5s" },
     { value: "10", label: "10s" },
     { value: "30", label: "30s" },
-  ];
+  ]);
   let autoSecs = $state(0);
   function autoLabel(secs: number): string {
-    return REFRESH_OPTIONS.find((o) => o.value === String(secs))?.label ?? "Off";
+    return REFRESH_OPTIONS.find((o) => o.value === String(secs))?.label ?? t.off;
   }
 
   const SEVERITIES = ["debug", "info", "warn", "error"];
+  function severityLabel(s: string): string {
+    if (s === "debug") return t.sevDebug;
+    if (s === "warn") return t.sevWarn;
+    if (s === "error") return t.sevError;
+    return t.sevInfo;
+  }
 
   function kindLabel(kind: string): string {
     return kinds.find((k) => k.kind === kind)?.label ?? kind;
@@ -92,12 +102,12 @@
     const then = new Date(iso).getTime();
     if (!Number.isFinite(then)) return "";
     const s = Math.max(0, (Date.now() - then) / 1000);
-    if (s < 60) return "just now";
+    if (s < 60) return t.justNow;
     const m = Math.floor(s / 60);
-    if (m < 60) return `${m}m ago`;
+    if (m < 60) return t.minutesAgo(m);
     const h = Math.floor(m / 60);
-    if (h < 24) return `${h}h ago`;
-    return `${Math.floor(h / 24)}d ago`;
+    if (h < 24) return t.hoursAgo(h);
+    return t.daysAgo(Math.floor(h / 24));
   }
 
   function isAlert(e: EventRow): boolean {
@@ -118,14 +128,14 @@
   // Entity refs worth showing in the detail panel, skipping the empty ones.
   function refs(e: EventRow): { label: string; value: string }[] {
     const out: { label: string; value: string }[] = [];
-    if (e.camera) out.push({ label: "Camera", value: e.camera });
-    if (e.clip_id) out.push({ label: "Clip", value: e.clip_id });
-    if (e.room_name) out.push({ label: "Room", value: e.room_name });
-    if (e.graph_id != null) out.push({ label: "Workflow", value: `#${e.graph_id}` });
-    if (e.device_id) out.push({ label: "Device", value: e.device_id });
-    if (e.user_id) out.push({ label: "User", value: e.user_id.slice(0, 8) });
-    out.push({ label: "Source", value: e.source });
-    out.push({ label: "Occurred", value: fmtTs(e.occurred_at) });
+    if (e.camera) out.push({ label: t.refCamera, value: e.camera });
+    if (e.clip_id) out.push({ label: t.refClip, value: e.clip_id });
+    if (e.room_name) out.push({ label: t.refRoom, value: e.room_name });
+    if (e.graph_id != null) out.push({ label: t.refWorkflow, value: `#${e.graph_id}` });
+    if (e.device_id) out.push({ label: t.refDevice, value: e.device_id });
+    if (e.user_id) out.push({ label: t.refUser, value: e.user_id.slice(0, 8) });
+    out.push({ label: t.refSource, value: e.source });
+    out.push({ label: t.refOccurred, value: fmtTs(e.occurred_at) });
     return out;
   }
   // The payload minus `deliveries` (rendered on its own), pretty-printed — or "" when empty.
@@ -157,7 +167,7 @@
       items = rows;
       hasMore = rows.length === PAGE;
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load events");
+      toast.error(e instanceof Error ? e.message : t.loadFailed);
     } finally {
       loading = false;
     }
@@ -186,8 +196,8 @@
 
   $effect(() => {
     if (autoSecs <= 0) return;
-    const t = setInterval(silentReload, autoSecs * 1000);
-    return () => clearInterval(t);
+    const iv = setInterval(silentReload, autoSecs * 1000);
+    return () => clearInterval(iv);
   });
 
   function onKind(v: string) { kindFilter = v === "_all" ? "" : v; load(); }
@@ -201,7 +211,7 @@
       toast.success(await events.deliver(e.id));
       await silentReload();
     } catch (err) {
-      toast.error("Delivery failed", { description: String(err) });
+      toast.error(t.deliveryFailed, { description: String(err) });
     } finally {
       deliveringId = null;
     }
@@ -217,43 +227,43 @@
       await events.remove(target.id);
       items = items.filter((x) => x.id !== target.id);
       deleteTarget = null;
-      toast.success("Event deleted.");
+      toast.success(t.eventDeleted);
     } catch (err) {
-      toast.error("Delete failed", { description: String(err) });
+      toast.error(t.deleteFailed, { description: String(err) });
     } finally {
       deleting = false;
     }
   }
 
   // ---- raise an alert by hand -------------------------------------------------
-  const LEVELS = [
-    { value: "info", label: "Info" },
-    { value: "warn", label: "Warn" },
-    { value: "error", label: "Error" },
-    { value: "debug", label: "Debug" },
-  ];
+  const LEVELS = $derived([
+    { value: "info", label: t.levelInfo },
+    { value: "warn", label: t.levelWarn },
+    { value: "error", label: t.levelError },
+    { value: "debug", label: t.levelDebug },
+  ]);
   let createOpen = $state(false);
   let fLevel = $state("info");
   let fMessage = $state("");
   let fRoom = $state("");
   let fSource = $state("");
   let creating = $state(false);
-  const fLevelLabel = $derived(LEVELS.find((l) => l.value === fLevel)?.label ?? "Info");
+  const fLevelLabel = $derived(LEVELS.find((l) => l.value === fLevel)?.label ?? t.levelInfo);
 
   function openCreate() {
     fLevel = "info"; fMessage = ""; fRoom = ""; fSource = "";
     createOpen = true;
   }
   async function doCreate() {
-    if (!fMessage.trim()) { toast.error("Enter a message first."); return; }
+    if (!fMessage.trim()) { toast.error(t.enterMessage); return; }
     creating = true;
     try {
       await events.create(fLevel, fMessage.trim(), fRoom.trim() || null, fSource.trim() || null);
-      toast.success("Alert raised.");
+      toast.success(t.alertRaised);
       createOpen = false;
       await load();
     } catch (err) {
-      toast.error("Couldn't raise alert", { description: String(err) });
+      toast.error(t.raiseFailed, { description: String(err) });
     } finally {
       creating = false;
     }
@@ -271,16 +281,16 @@
 
 <div class="flex flex-col gap-6 p-6">
   <PageHeader
-    title="Events"
-    description="A unified feed of everything that happens across your site — alerts, presence, recordings, sign-ins."
+    title={t.title}
+    description={t.description}
     icon={Rss}
   >
     {#snippet actions()}
       <Button variant="outline" size="sm" onclick={openCreate}>
-        <Plus class="mr-2 h-4 w-4" /> New alert
+        <Plus class="mr-2 h-4 w-4" /> {t.newAlert}
       </Button>
       <Select.Root type="single" value={String(autoSecs)} onValueChange={(v) => (autoSecs = Number(v))}>
-        <Select.Trigger class="h-8 w-28 text-sm" title="Auto-refresh">Auto: {autoLabel(autoSecs)}</Select.Trigger>
+        <Select.Trigger class="h-8 w-28 text-sm" title={t.autoRefresh}>{t.autoPrefix(autoLabel(autoSecs))}</Select.Trigger>
         <Select.Content>
           {#each REFRESH_OPTIONS as o (o.value)}
             <Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>
@@ -289,7 +299,7 @@
       </Select.Root>
       <Button variant="outline" size="sm" onclick={load} disabled={loading}>
         {#if loading}<Busy class="mr-2" />{:else}<RefreshCw class="mr-2 h-4 w-4" />{/if}
-        Refresh
+        {t.refresh}
       </Button>
     {/snippet}
   </PageHeader>
@@ -297,20 +307,20 @@
   <!-- filters -->
   <div class="flex flex-wrap items-center gap-2">
     <Select.Root type="single" value={kindFilter || "_all"} onValueChange={onKind}>
-      <Select.Trigger class="h-8 w-44 text-sm">{kindFilter ? kindLabel(kindFilter) : "All kinds"}</Select.Trigger>
+      <Select.Trigger class="h-8 w-44 text-sm">{kindFilter ? kindLabel(kindFilter) : t.allKinds}</Select.Trigger>
       <Select.Content>
-        <Select.Item value="_all" label="All kinds">All kinds</Select.Item>
+        <Select.Item value="_all" label={t.allKinds}>{t.allKinds}</Select.Item>
         {#each kinds as k (k.kind)}
           <Select.Item value={k.kind} label={k.label}>{k.label}</Select.Item>
         {/each}
       </Select.Content>
     </Select.Root>
     <Select.Root type="single" value={severityFilter || "_all"} onValueChange={onSeverity}>
-      <Select.Trigger class="h-8 w-36 text-sm">{severityFilter || "All severities"}</Select.Trigger>
+      <Select.Trigger class="h-8 w-36 text-sm">{severityFilter ? severityLabel(severityFilter) : t.allSeverities}</Select.Trigger>
       <Select.Content>
-        <Select.Item value="_all" label="All severities">All severities</Select.Item>
+        <Select.Item value="_all" label={t.allSeverities}>{t.allSeverities}</Select.Item>
         {#each SEVERITIES as s (s)}
-          <Select.Item value={s} label={s}>{s}</Select.Item>
+          <Select.Item value={s} label={severityLabel(s)}>{severityLabel(s)}</Select.Item>
         {/each}
       </Select.Content>
     </Select.Root>
@@ -319,7 +329,7 @@
   {#if loading}
     <Loader />
   {:else if items.length === 0}
-    <EmptyState title="No events yet" description="Events appear here as things happen across your site." />
+    <EmptyState title={t.emptyTitle} description={t.emptyDescription} />
   {:else}
     <div class="overflow-hidden rounded-lg border border-border divide-y divide-white/5">
       {#each items as e (e.id)}
@@ -341,7 +351,7 @@
                 <Badge variant="outline" class="border-primary/25 bg-primary/10 text-primary">{kindLabel(e.kind)}</Badge>
                 <span class="truncate text-sm font-medium">{line(e)}</span>
                 {#if isAlert(e) && isDelivered(e)}
-                  <Badge variant="outline" class="border-primary/30 bg-primary/10 text-primary">Sent</Badge>
+                  <Badge variant="outline" class="border-primary/30 bg-primary/10 text-primary">{t.sent}</Badge>
                 {/if}
               </div>
               {#if hasSubMessage(e)}
@@ -369,12 +379,12 @@
 
               {#if isAlert(e) && deliveries(e).length > 0}
                 <div class="mt-3">
-                  <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground/70">Deliveries</p>
+                  <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground/70">{t.deliveries}</p>
                   <ul class="mt-1 space-y-0.5 text-xs">
                     {#each deliveries(e) as d (d.target)}
                       <li class="flex items-center gap-2">
                         <span class="h-1.5 w-1.5 rounded-full {d.ok ? 'bg-primary' : 'bg-destructive'}"></span>
-                        <span class="text-muted-foreground">{d.target ?? "beacon"}</span>
+                        <span class="text-muted-foreground">{d.target ?? t.beacon}</span>
                       </li>
                     {/each}
                   </ul>
@@ -389,11 +399,11 @@
                 {#if isAlert(e)}
                   <Button variant="outline" size="sm" disabled={deliveringId === e.id} onclick={() => doDeliver(e)}>
                     {#if deliveringId === e.id}<Busy class="mr-2" />{:else}<Send class="mr-2 h-3.5 w-3.5" />{/if}
-                    Deliver to recipients
+                    {t.deliverToRecipients}
                   </Button>
                 {/if}
                 <Button variant="ghost" size="sm" class="text-destructive hover:text-destructive" onclick={() => (deleteTarget = e)}>
-                  <Trash2 class="mr-2 h-3.5 w-3.5" /> Delete
+                  <Trash2 class="mr-2 h-3.5 w-3.5" /> {t.delete}
                 </Button>
               </div>
             </div>
@@ -406,7 +416,7 @@
       <div class="flex justify-center">
         <Button variant="outline" size="sm" onclick={loadMore} disabled={loadingMore}>
           {#if loadingMore}<Busy class="mr-2" />{/if}
-          Load more
+          {t.loadMore}
         </Button>
       </div>
     {/if}
@@ -417,12 +427,12 @@
 <Dialog.Root bind:open={createOpen}>
   <Dialog.Content class="sm:max-w-md">
     <Dialog.Header>
-      <Dialog.Title>New alert</Dialog.Title>
-      <Dialog.Description>Raise an alert event into the feed.</Dialog.Description>
+      <Dialog.Title>{t.raiseTitle}</Dialog.Title>
+      <Dialog.Description>{t.raiseDescription}</Dialog.Description>
     </Dialog.Header>
     <div class="space-y-4">
       <div class="space-y-2">
-        <Label>Level</Label>
+        <Label>{t.level}</Label>
         <Select.Root type="single" bind:value={fLevel}>
           <Select.Trigger class="w-full">{fLevelLabel}</Select.Trigger>
           <Select.Content>
@@ -431,24 +441,24 @@
         </Select.Root>
       </div>
       <div class="space-y-2">
-        <Label for="ev-message">Message</Label>
-        <Input id="ev-message" bind:value={fMessage} placeholder="Motion detected at the gate" />
+        <Label for="ev-message">{t.message}</Label>
+        <Input id="ev-message" bind:value={fMessage} placeholder={t.messagePlaceholder} />
       </div>
       <div class="grid grid-cols-2 gap-3">
         <div class="space-y-2">
-          <Label for="ev-room">Room (optional)</Label>
-          <Input id="ev-room" bind:value={fRoom} placeholder="garage" />
+          <Label for="ev-room">{t.roomOptional}</Label>
+          <Input id="ev-room" bind:value={fRoom} placeholder={t.roomPlaceholder} />
         </div>
         <div class="space-y-2">
-          <Label for="ev-source">Source (optional)</Label>
-          <Input id="ev-source" bind:value={fSource} placeholder="operator" />
+          <Label for="ev-source">{t.sourceOptional}</Label>
+          <Input id="ev-source" bind:value={fSource} placeholder={t.sourcePlaceholder} />
         </div>
       </div>
     </div>
     <Dialog.Footer>
-      <Button variant="outline" onclick={() => (createOpen = false)} disabled={creating}>Cancel</Button>
+      <Button variant="outline" onclick={() => (createOpen = false)} disabled={creating}>{c.cancel}</Button>
       <Button onclick={doCreate} disabled={creating}>
-        {#if creating}<Busy class="mr-2" />Raising…{:else}Raise alert{/if}
+        {#if creating}<Busy class="mr-2" />{t.raising}{:else}{t.raiseAlert}{/if}
       </Button>
     </Dialog.Footer>
   </Dialog.Content>
@@ -458,14 +468,14 @@
 <Dialog.Root open={deleteTarget !== null} onOpenChange={(o) => { if (!o) deleteTarget = null; }}>
   <Dialog.Content class="sm:max-w-md">
     <Dialog.Header>
-      <Dialog.Title>Delete event?</Dialog.Title>
+      <Dialog.Title>{t.deleteTitle}</Dialog.Title>
       <Dialog.Description>
-        Remove <span class="font-medium text-foreground">{deleteTarget ? line(deleteTarget) : ""}</span> from the feed. This can't be undone.
+        {t.deleteBefore}<span class="font-medium text-foreground">{deleteTarget ? line(deleteTarget) : ""}</span>{t.deleteAfter}
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
-      <Button variant="outline" onclick={() => (deleteTarget = null)} disabled={deleting}>Cancel</Button>
-      <Button variant="destructive" onclick={doDelete} disabled={deleting}>{deleting ? "Deleting…" : "Delete"}</Button>
+      <Button variant="outline" onclick={() => (deleteTarget = null)} disabled={deleting}>{c.cancel}</Button>
+      <Button variant="destructive" onclick={doDelete} disabled={deleting}>{deleting ? t.deleting : t.delete}</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

@@ -10,7 +10,10 @@
 
   import * as Card from "$lib/components/ui/card";
 
+  import { dict, lang } from "$lib/i18n";
   import type { Person } from "$lib/types";
+
+  const t = $derived(dict[lang()].people);
 
   // Light stats for the dashboard cards.
   let count = $state<number | null>(null);
@@ -29,37 +32,37 @@
     }
   });
 
-  const tiles = [
+  const tiles = $derived([
     {
-      title: "Directory",
-      desc: "Browse, add and edit people, the hierarchy, recipients and permissions.",
+      title: t.directoryTitle,
+      desc: t.directoryDesc,
       icon: Users,
       href: "/people/directory",
-      stat: () => (count === null ? "" : `${count} ${count === 1 ? "person" : "people"}`),
+      stat: () => (count === null ? "" : t.peopleCount(count)),
     },
     {
-      title: "Recognition",
-      desc: "Probe a camera frame or photo against the enrolled people — target vs. match.",
+      title: t.recognitionTitle,
+      desc: t.recognitionDesc,
       icon: ScanSearch,
       href: "/people/recognize",
-      stat: () => (enrolled === null ? "" : `${enrolled} enrolled`),
+      stat: () => (enrolled === null ? "" : t.enrolledCount(enrolled)),
     },
-  ];
+  ]);
 </script>
 
 <div class="space-y-6">
   <PageHeader
-    title="People"
-    description="Manage the people Sentinel knows, or test who it recognises."
+    title={t.title}
+    description={t.description}
     icon={Users}
   />
 
   <div class="grid gap-4 sm:grid-cols-2">
-    {#each tiles as t (t.href)}
-      {@const Icon = t.icon}
+    {#each tiles as tile (tile.href)}
+      {@const Icon = tile.icon}
       <button
         class="interactive group text-left"
-        onclick={() => goto(t.href)}
+        onclick={() => goto(tile.href)}
       >
         <Card.Root class="h-full transition-colors hover:border-primary/40 hover:bg-primary/5">
           <Card.Header>
@@ -70,10 +73,10 @@
               <ChevronRight class="size-5 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
             </div>
             <Card.Title class="mt-3 flex items-center gap-2">
-              {t.title}
-              {#if t.stat()}<span class="text-xs font-normal text-muted-foreground">· {t.stat()}</span>{/if}
+              {tile.title}
+              {#if tile.stat()}<span class="text-xs font-normal text-muted-foreground">· {tile.stat()}</span>{/if}
             </Card.Title>
-            <Card.Description>{t.desc}</Card.Description>
+            <Card.Description>{tile.desc}</Card.Description>
           </Card.Header>
         </Card.Root>
       </button>
