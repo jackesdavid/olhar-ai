@@ -16,6 +16,11 @@ export const shell = {
     updateAvailable: "Update available — reload to get the latest version.",
     reload: "Reload",
     newAlert: (level: string) => `New ${level} alert`,
+    // boot splash
+    splashConnecting: "Initializing Olhar AI…",
+    splashConnectingDetail: "Bringing services online",
+    splashError: "Waiting for database…",
+    splashErrorDetail: "Can't reach Postgres. Start it with “task db-up” — retrying…",
   },
   pt: {
     expandSidebar: "Expandir menu",
@@ -32,5 +37,10 @@ export const shell = {
     updateAvailable: "Atualização disponível — recarregue para obter a versão mais recente.",
     reload: "Recarregar",
     newAlert: (level: string) => `Novo alerta ${level}`,
+    // boot splash
+    splashConnecting: "Inicializando a Olhar AI…",
+    splashConnectingDetail: "Colocando os serviços no ar",
+    splashError: "Aguardando o banco de dados…",
+    splashErrorDetail: "Não é possível alcançar o Postgres. Inicie com “task db-up” — tentando de novo…",
   },
 };

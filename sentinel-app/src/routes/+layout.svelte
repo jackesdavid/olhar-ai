@@ -48,6 +48,10 @@
 
   let { children } = $props();
 
+  // Resolve the language before first paint (initLang no-ops on the server). In onMount it would
+  // land a frame late and the splash — the very first thing anyone sees — would flash English.
+  initLang();
+
   // Reading `lang()` here re-renders the whole shell on a language switch.
   const t = $derived(dict[lang()]);
 
@@ -127,7 +131,6 @@
   }
 
   onMount(() => {
-    initLang();
     loadTheme();
     if (localStorage.getItem("sentinel.navCollapsed") === "true")
       navCollapsed = true;

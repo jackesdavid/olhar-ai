@@ -12,18 +12,19 @@
   // slowed the orbit in the error state as a wordless "something is wrong" signal, which was a
   // nice idea and not the brand's. The error state says so in words instead.
   import OlharMark from "./olhar-mark.svelte";
+  import { dict, lang } from "$lib/i18n";
+
+  const t = $derived(dict[lang()].shell);
 
   let { state = "connecting", leaving = false }: { state?: "connecting" | "error"; leaving?: boolean } =
     $props();
 
   // No nested ternaries in markup — resolve the copy in named helpers.
   function titleFor(s: "connecting" | "error"): string {
-    if (s === "error") return "Waiting for database…";
-    return "Initializing Olhar AI…";
+    return s === "error" ? t.splashError : t.splashConnecting;
   }
   function detailFor(s: "connecting" | "error"): string {
-    if (s === "error") return "Can't reach Postgres. Start it with “task db-up” — retrying…";
-    return "Bringing services online";
+    return s === "error" ? t.splashErrorDetail : t.splashConnectingDetail;
   }
   const title = $derived(titleFor(state));
   const detail = $derived(detailFor(state));
