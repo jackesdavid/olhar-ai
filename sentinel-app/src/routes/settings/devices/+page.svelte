@@ -26,7 +26,11 @@
   import EmptyState from "$lib/components/empty-state.svelte";
   import StatusDot from "$lib/components/status-dot.svelte";
 
+  import { dict, lang } from "$lib/i18n";
   import type { Device } from "$lib/types";
+
+  const t = $derived(dict[lang()].devices);
+  const c = $derived(dict[lang()].common);
 
   let devices = $state<Device[]>([]);
   let loading = $state(true);
@@ -60,13 +64,13 @@
     return "offline";
   }
   function cameraTitle(d: Device): string {
-    if (streamingIps.has(d.ip)) return "Online — the edge has a working stream (credentials valid, camera reachable)";
+    if (streamingIps.has(d.ip)) return t.stateOnline;
     const onLan = discoveredIps.has(d.ip);
     const configured = isConfigured(d);
-    if (configured && onLan) return "Credentials set and camera visible, but no stream yet — check credentials, or it's still resolving";
-    if (configured) return "Credentials set, but no stream and not visible on the network (offline, or its IP changed — try Rescan)";
-    if (onLan) return "Visible on the network — set its credentials to start streaming";
-    return "Not set up, and not visible on the network";
+    if (configured && onLan) return t.stateConfiguredOnLan;
+    if (configured) return t.stateConfiguredOffline;
+    if (onLan) return t.stateOnLan;
+    return t.stateUnknown;
   }
 
   // ---- Detail dialog (edit name + credentials, test, snapshot) -------------
@@ -150,7 +154,7 @@
       console.error("Failed to add camera manually", err);
       manualVerdict = null;
       manualState = "failed";
-      toast.error("Couldn't add the camera", { description: String(err) });
+      toast.error(t.manualAddFailed, { description: String(err) });
     } finally {
       savingManual = false;
     }
@@ -162,15 +166,15 @@
   function manualAdvice(v: ProbeResult | null): string {
     const base = verdictAdvice(v);
     if (v && (v.status === "unreachable" || v.status === "timeout" || v.status === "error")) {
-      return `${base} If the camera is reachable but this keeps failing, double-check the ONVIF port — it's ${manualPort} here; Tapo uses 2020, many cameras use 80.`;
+      return `${base} ${t.portAdvice(manualPort)}`;
     }
     return base;
   }
 
   function manualButtonLabel(): string {
-    if (savingManual) return "Testing…";
-    if (manualState === "failed" && canRetry(manualVerdict)) return "Test again";
-    return "Add & test";
+    if (savingManual) return t.testing;
+    if (manualState === "failed" && canRetry(manualVerdict)) return t.testAgain;
+    return t.addAndTest;
   }
 
   // ---- Delete confirm dialog ----------------------------------------------
@@ -189,7 +193,7 @@
       devices = await data.listDevices();
     } catch (err) {
       console.error("Failed to list devices", err);
-      toast.error("Failed to load devices", { description: String(err) });
+      toast.error(t.listFailed, { description: String(err) });
     } finally {
       loading = false;
     }
@@ -220,15 +224,13 @@
     rescanning = true;
     try {
       await data.rescan();
-      toast.success("Rescan requested", {
-        description: "Your edge box is re-running discovery — moved cameras self-heal by ONVIF id.",
-      });
+      toast.success(t.rescanRequested, { description: t.rescanRequestedHint });
       setTimeout(() => {
         loadDevices();
         loadEdgeFound();
       }, 4000);
     } catch (err) {
-      toast.error("Rescan failed", { description: String(err) });
+      toast.error(t.rescanFailed, { description: String(err) });
     } finally {
       rescanning = false;
     }
@@ -255,10 +257,10 @@
         manufacturer: d.manufacturer,
         model: d.model,
       });
-      toast.success(`Added ${d.name || d.ip} — open it to add credentials.`);
+      toast.success(t.added(d.name || d.ip));
       await loadDevices();
     } catch (err) {
-      toast.error("Failed to add camera", { description: String(err) });
+      toast.error(t.addFailed, { description: String(err) });
     }
   }
   // Edge-found cameras not already saved.
@@ -314,7 +316,7 @@
       console.error("Failed to test device", err);
       verdict = null;
       testState = "failed";
-      toast.error("Couldn't test the camera", { description: String(err) });
+      toast.error(t.testFailed, { description: String(err) });
     } finally {
       savingDetail = false;
     }
@@ -323,34 +325,29 @@
   // One cause, one piece of advice. `detail` from the edge is the operator-facing reason and is
   // shown underneath, but the headline has to tell the user what to actually DO.
   function verdictTitle(v: ProbeResult | null): string {
-    if (!v) return "Couldn't test this camera.";
+    if (!v) return t.vError;
     const titles: Record<ProbeStatus, string> = {
-      ok: "Camera verified — the credentials work.",
-      auth_failed: "The camera rejected these credentials.",
-      locked: "The camera has locked its video stream.",
-      not_found: "Signed in, but found no video stream.",
-      unreachable: "Couldn't reach the camera.",
-      timeout: "The camera didn't answer.",
-      error: "Couldn't test this camera.",
+      ok: t.vOk,
+      auth_failed: t.vAuthFailed,
+      locked: t.vLocked,
+      not_found: t.vNotFound,
+      unreachable: t.vUnreachable,
+      timeout: t.vTimeout,
+      error: t.vError,
     };
     return titles[v.status] ?? titles.error;
   }
 
   function verdictAdvice(v: ProbeResult | null): string {
-    if (!v) return "Something went wrong before we could reach the camera. Nothing was saved.";
+    if (!v) return t.aNone;
     const advice: Record<ProbeStatus, string> = {
       ok: "",
-      auth_failed:
-        "Double-check the username and password. Many cameras need a separate account you create in their own app, not your cloud login. Nothing was saved.",
-      locked:
-        "It's refusing every connection, not just ours — cameras do this after repeated failed logins. Unplug it for about 30 seconds, then test again. Your saved credentials weren't changed.",
-      not_found:
-        "The credentials are right, but the camera didn't offer a stream at the expected path. It may need RTSP enabled in its own settings.",
-      unreachable:
-        "Nothing answered at this address. Check the camera is powered on and on the same network as your box — if its IP changed, try Rescan.",
-      timeout:
-        "It accepted the connection but never replied. It may be busy or half-crashed; a power cycle usually clears it.",
-      error: "Nothing was saved.",
+      auth_failed: t.aAuthFailed,
+      locked: t.aLocked,
+      not_found: t.aNotFound,
+      unreachable: t.aUnreachable,
+      timeout: t.aTimeout,
+      error: t.aError,
     };
     return advice[v.status] ?? advice.error;
   }
@@ -371,9 +368,9 @@
   }
 
   function testButtonLabel(): string {
-    if (savingDetail) return "Testing…";
-    if (testState === "failed" && canRetry(verdict)) return "Test again";
-    return "Test & save";
+    if (savingDetail) return t.testing;
+    if (testState === "failed" && canRetry(verdict)) return t.testAgain;
+    return t.testAndSave;
   }
 
   async function saveDetail() {
@@ -385,16 +382,16 @@
       await data.saveDevice(device);
       if (editUser.length > 0) {
         await data.setCredentials(detail.ip, editUser, editPass);
-        toast.success("Saved — credentials sent to your edge.");
+        toast.success(t.savedWithCreds);
       } else {
-        toast.success("Device saved.");
+        toast.success(t.savedDevice);
       }
       detail = device;
       await loadDevices();
       await loadEdgeFound(); // refresh the "configured" flags
     } catch (err) {
       console.error("Failed to save device", err);
-      toast.error("Failed to save device", { description: String(err) });
+      toast.error(t.saveFailed, { description: String(err) });
     } finally {
       savingDetail = false;
     }
@@ -410,13 +407,13 @@
     deleting = true;
     try {
       await data.deleteDevice(deleteTarget.ip);
-      toast.success(`Removed ${deleteTarget.name}.`);
+      toast.success(t.removed(deleteTarget.name));
       deleteOpen = false;
       deleteTarget = null;
       await loadDevices();
     } catch (err) {
       console.error("Failed to delete device", err);
-      toast.error("Failed to delete device", { description: String(err) });
+      toast.error(t.deleteFailed, { description: String(err) });
     } finally {
       deleting = false;
     }
@@ -425,16 +422,16 @@
 
 <div class="space-y-6">
   <PageHeader
-    title="Devices"
-    description="Save and manage the cameras your edge appliance finds on its local network."
+    title={t.title}
+    description={t.description}
     icon={Cpu}
   >
     {#snippet actions()}
-      <Button variant="outline" onclick={rescan} disabled={rescanning} title="Re-run ONVIF discovery on your edge box now (fixes cameras that changed IP)">
-        <Radar class="size-4" /> {rescanning ? "Rescanning…" : "Rescan"}
+      <Button variant="outline" onclick={rescan} disabled={rescanning} title={t.rescanTitle}>
+        <Radar class="size-4" /> {rescanning ? t.rescanning : t.rescan}
       </Button>
-      <Button variant="outline" onclick={openManual} title="Add a camera by its IP when discovery can't find it (e.g. the network blocks discovery)">
-        <Plus class="size-4" /> Add manually
+      <Button variant="outline" onclick={openManual} title={t.addManuallyTitle}>
+        <Plus class="size-4" /> {t.addManually}
       </Button>
     {/snippet}
   </PageHeader>
@@ -442,26 +439,23 @@
   <!-- Saved devices -->
   <Card.Root>
     <Card.Header>
-      <Card.Title>Saved devices</Card.Title>
-      <Card.Description>Cameras you've added, with stored credentials.</Card.Description>
+      <Card.Title>{t.savedTitle}</Card.Title>
+      <Card.Description>{t.savedDescription}</Card.Description>
     </Card.Header>
     <Card.Content>
       {#if loading}
-        <Loader label="Loading devices…" />
+        <Loader label={t.loadingDevices} />
       {:else if devices.length === 0}
-        <EmptyState
-          title="No devices yet"
-          description="When your edge appliance discovers cameras on its network, they'll appear below to add."
-        />
+        <EmptyState title={t.emptyTitle} description={t.emptyDescription} />
       {:else}
         <Table.Root>
           <Table.Header>
             <Table.Row>
-              <Table.Head>Name</Table.Head>
-              <Table.Head>IP</Table.Head>
-              <Table.Head>Make / Model</Table.Head>
-              <Table.Head>Credentials</Table.Head>
-              <Table.Head class="text-right">Actions</Table.Head>
+              <Table.Head>{t.colName}</Table.Head>
+              <Table.Head>{t.colIp}</Table.Head>
+              <Table.Head>{t.colMakeModel}</Table.Head>
+              <Table.Head>{t.colCredentials}</Table.Head>
+              <Table.Head class="text-right">{t.colActions}</Table.Head>
             </Table.Row>
           </Table.Header>
           <Table.Body>
@@ -475,7 +469,7 @@
                       <Badge
                         variant="outline"
                         class="font-mono text-[10px] font-normal text-muted-foreground"
-                        title="Video codec this camera is streaming, as detected by the edge"
+                        title={t.codecTitle}
                       >
                         {codecByIp.get(d.ip)}
                       </Badge>
@@ -490,10 +484,10 @@
                       variant="outline"
                       class="border-primary/30 bg-primary/10 text-primary"
                     >
-                      Configured
+                      {t.configured}
                     </Badge>
                   {:else}
-                    <Badge variant="outline">Setup needed</Badge>
+                    <Badge variant="outline">{t.setupNeeded}</Badge>
                   {/if}
                 </Table.Cell>
                 <Table.Cell class="text-right">
@@ -501,7 +495,7 @@
                     <Button
                       variant="ghost"
                       size="sm"
-                      title="View this camera's edge logs"
+                      title={t.viewLogs}
                       onclick={() => goto(`/logs?device=${encodeURIComponent(d.ip)}`)}
                     >
                       <ScrollText class="size-4" />
@@ -509,7 +503,7 @@
                     <Button
                       variant="ghost"
                       size="sm"
-                      title="Edit / snapshot"
+                      title={t.editSnapshot}
                       onclick={() => openDetail(d)}
                     >
                       <Pencil class="size-4" />
@@ -517,7 +511,7 @@
                     <Button
                       variant="ghost"
                       size="sm"
-                      title="Delete"
+                      title={t.delete}
                       onclick={() => confirmDelete(d)}
                     >
                       <Trash2 class="size-4" />
@@ -536,17 +530,17 @@
   {#if edgeUnsaved.length > 0}
     <Card.Root>
       <Card.Header>
-        <Card.Title class="flex items-center gap-2"><Radar class="size-4 text-primary" /> Found on your edge</Card.Title>
-        <Card.Description>Cameras your edge appliance discovered on its network. Add one, then open it to set credentials.</Card.Description>
+        <Card.Title class="flex items-center gap-2"><Radar class="size-4 text-primary" /> {t.foundTitle}</Card.Title>
+        <Card.Description>{t.foundDescription}</Card.Description>
       </Card.Header>
       <Card.Content>
         <Table.Root>
           <Table.Header>
             <Table.Row>
-              <Table.Head>Name</Table.Head>
-              <Table.Head>IP</Table.Head>
-              <Table.Head>Make / Model</Table.Head>
-              <Table.Head class="text-right">Action</Table.Head>
+              <Table.Head>{t.colName}</Table.Head>
+              <Table.Head>{t.colIp}</Table.Head>
+              <Table.Head>{t.colMakeModel}</Table.Head>
+              <Table.Head class="text-right">{t.colAction}</Table.Head>
             </Table.Row>
           </Table.Header>
           <Table.Body>
@@ -557,7 +551,7 @@
                 <Table.Cell class="text-muted-foreground">{[d.manufacturer, d.model].filter(Boolean).join(" ") || "—"}</Table.Cell>
                 <Table.Cell class="text-right">
                   <Button variant="outline" size="sm" onclick={() => addEdgeFound(d)}>
-                    <Plus class="size-4" /> Add
+                    <Plus class="size-4" /> {t.add}
                   </Button>
                 </Table.Cell>
               </Table.Row>
@@ -574,7 +568,7 @@
 <Dialog.Root bind:open={detailOpen}>
   <Dialog.Content class="sm:max-w-lg">
     <Dialog.Header>
-      <Dialog.Title>{detail?.name ?? "Device"}</Dialog.Title>
+      <Dialog.Title>{detail?.name ?? t.device}</Dialog.Title>
       <Dialog.Description>
         {detail?.ip}{detail?.xaddr ? ` · ${detail.xaddr}` : ""}
       </Dialog.Description>
@@ -583,49 +577,45 @@
     {#if detail}
       <div class="space-y-4">
         <div class="space-y-2">
-          <Label for="detail-name">Name</Label>
-          <Input id="detail-name" bind:value={editName} placeholder="Display name" />
+          <Label for="detail-name">{t.colName}</Label>
+          <Input id="detail-name" bind:value={editName} placeholder={t.displayName} />
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div class="space-y-2">
-            <Label for="detail-user">Username</Label>
+            <Label for="detail-user">{t.username}</Label>
             <Input id="detail-user" bind:value={editUser} placeholder="admin" autocomplete="off" />
           </div>
           <div class="space-y-2">
-            <Label for="detail-pass">Password</Label>
+            <Label for="detail-pass">{t.password}</Label>
             <Input id="detail-pass" type="password" bind:value={editPass} placeholder="••••••" autocomplete="off" />
           </div>
         </div>
 
-        <p class="text-xs text-muted-foreground">
-          Set the camera's credentials — your edge resolves the stream on its own network. The RTSP URL stays on the edge.
-        </p>
+        <p class="text-xs text-muted-foreground">{t.credsHint}</p>
 
         <!-- Stream mode (#120): Split (sub + main) vs Unified (main only, HD faces). -->
         <div class="space-y-2 rounded-lg border border-border bg-well p-3">
-          <Label class="text-sm font-medium">Stream mode</Label>
+          <Label class="text-sm font-medium">{t.streamMode}</Label>
           <div class="grid gap-2 sm:grid-cols-2">
             <button
               type="button"
               class="rounded-md border px-3 py-2 text-left text-sm transition-colors {editStreamMode === 'split' ? 'border-primary bg-primary/10' : 'border-border hover:bg-primary/5'}"
               onclick={() => (editStreamMode = "split")}
             >
-              <span class="font-medium">Split</span>
-              <span class="mt-0.5 block text-[11px] leading-snug text-muted-foreground">Substream for preview + motion, main for HD/recording. Default.</span>
+              <span class="font-medium">{t.split}</span>
+              <span class="mt-0.5 block text-[11px] leading-snug text-muted-foreground">{t.splitHint}</span>
             </button>
             <button
               type="button"
               class="rounded-md border px-3 py-2 text-left text-sm transition-colors {editStreamMode === 'unified' ? 'border-primary bg-primary/10' : 'border-border hover:bg-primary/5'}"
               onclick={() => (editStreamMode = "unified")}
             >
-              <span class="font-medium">Unified (HD)</span>
-              <span class="mt-0.5 block text-[11px] leading-snug text-muted-foreground">Main stream only — sharp HD faces, no substream. One camera session.</span>
+              <span class="font-medium">{t.unified}</span>
+              <span class="mt-0.5 block text-[11px] leading-snug text-muted-foreground">{t.unifiedHint}</span>
             </button>
           </div>
           {#if editStreamMode === "unified"}
-            <p class="text-[11px] leading-snug text-muted-foreground">
-              Motion still runs (on a downscaled copy of the main frame). Use this when the camera can't serve two streams at once, or when you want HD faces.
-            </p>
+            <p class="text-[11px] leading-snug text-muted-foreground">{t.unifiedNote}</p>
           {/if}
         </div>
 
@@ -634,7 +624,7 @@
             {#if testState === "testing"}
               <div class="flex items-center gap-3 text-sm text-muted-foreground">
                 <Busy />
-                Asking {detail.ip} to prove these credentials… nothing is saved until it does.
+                {t.provingCreds(detail.ip)}
               </div>
             {:else if testState === "verified"}
               <div class="space-y-2">
@@ -642,7 +632,7 @@
                   <Check class="size-4" /> {verdictTitle(verdict)}
                 </p>
                 {#if testSnapshotUrl}
-                  <img src={testSnapshotUrl} alt="Live frame from {detail.ip}" class="w-full rounded-md border border-border" />
+                  <img src={testSnapshotUrl} alt={t.liveFrameAlt(detail.ip)} class="w-full rounded-md border border-border" />
                 {/if}
               </div>
             {:else if testState === "failed"}
@@ -652,7 +642,7 @@
                 </p>
                 <p class="text-muted-foreground">{verdictAdvice(verdict)}</p>
                 {#if verdict?.detail}
-                  <p class="pt-1 text-xs text-muted-foreground/70">The camera said: {verdict.detail}</p>
+                  <p class="pt-1 text-xs text-muted-foreground/70">{t.cameraSaid(verdict.detail)}</p>
                 {/if}
               </div>
             {/if}
@@ -665,22 +655,18 @@
               {testButtonLabel()}
             </Button>
             {#if canSaveUntested()}
-              <Button variant="outline" onclick={saveDetail} disabled={savingDetail} title="Send these credentials to the box without a live camera test — for a box that can't be probed (e.g. an on-device edge with no tailnet).">
-                {savingDetail ? "Saving…" : "Save without testing"}
+              <Button variant="outline" onclick={saveDetail} disabled={savingDetail} title={t.saveWithoutTestingTitle}>
+                {savingDetail ? t.saving : t.saveWithoutTesting}
               </Button>
             {/if}
           {:else}
             <Button onclick={saveDetail} disabled={savingDetail}>
-              {savingDetail ? "Saving…" : "Save"}
+              {savingDetail ? t.saving : c.save}
             </Button>
           {/if}
         </div>
         {#if canSaveUntested()}
-          <p class="text-xs text-muted-foreground">
-            Couldn't reach a box to test these credentials — no edge is online over the tailnet. If you're
-            provisioning an on-device edge (it polls directly, not over the tailnet), you can save the
-            credentials without testing and it'll collect them on its next poll.
-          </p>
+          <p class="text-xs text-muted-foreground">{t.untestedHint}</p>
         {/if}
       </div>
     {/if}
@@ -691,18 +677,17 @@
 <Dialog.Root bind:open={deleteOpen}>
   <Dialog.Content class="sm:max-w-md">
     <Dialog.Header>
-      <Dialog.Title>Delete device?</Dialog.Title>
+      <Dialog.Title>{t.deleteTitle}</Dialog.Title>
       <Dialog.Description>
-        Remove <span class="font-medium text-foreground">{deleteTarget?.name}</span>
-        ({deleteTarget?.ip}) and its saved credentials. This can't be undone.
+        {t.deleteBefore}<span class="font-medium text-foreground">{deleteTarget?.name}</span>{t.deleteAfter(deleteTarget?.ip ?? "")}
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
       <Button variant="outline" onclick={() => (deleteOpen = false)} disabled={deleting}>
-        Cancel
+        {c.cancel}
       </Button>
       <Button variant="destructive" onclick={doDelete} disabled={deleting}>
-        {deleting ? "Deleting…" : "Delete"}
+        {deleting ? t.deleting : t.delete}
       </Button>
     </Dialog.Footer>
   </Dialog.Content>
@@ -712,42 +697,39 @@
 <Dialog.Root bind:open={manualOpen}>
   <Dialog.Content class="sm:max-w-lg">
     <Dialog.Header>
-      <Dialog.Title>Add a camera by hand</Dialog.Title>
-      <Dialog.Description>
-        For a camera your box can reach but can't discover — usually when the network blocks camera
-        discovery. Enter its address and credentials; your edge resolves the stream the same way.
-      </Dialog.Description>
+      <Dialog.Title>{t.manualTitle}</Dialog.Title>
+      <Dialog.Description>{t.manualDescription}</Dialog.Description>
     </Dialog.Header>
 
     <div class="space-y-4">
       <div class="space-y-2">
-        <Label for="m-name">Name</Label>
-        <Input id="m-name" bind:value={manualName} placeholder="e.g. Hall" />
+        <Label for="m-name">{t.colName}</Label>
+        <Input id="m-name" bind:value={manualName} placeholder={t.namePlaceholder} />
       </div>
       <div class="grid grid-cols-[1fr_auto] gap-3">
         <div class="space-y-2">
-          <Label for="m-ip">IP address</Label>
+          <Label for="m-ip">{t.ipAddress}</Label>
           <Input id="m-ip" bind:value={manualIp} placeholder="192.168.1.187" />
         </div>
         <div class="space-y-2">
-          <Label for="m-port">ONVIF port</Label>
+          <Label for="m-port">{t.onvifPort}</Label>
           <Input id="m-port" bind:value={manualPort} placeholder="2020" class="w-28" />
         </div>
       </div>
       <div class="grid grid-cols-2 gap-3">
         <div class="space-y-2">
-          <Label for="m-user">Username</Label>
+          <Label for="m-user">{t.username}</Label>
           <Input id="m-user" bind:value={manualUser} placeholder="admin" autocomplete="off" />
         </div>
         <div class="space-y-2">
-          <Label for="m-pass">Password</Label>
+          <Label for="m-pass">{t.password}</Label>
           <Input id="m-pass" type="password" bind:value={manualPass} placeholder="••••••" autocomplete="off" />
         </div>
       </div>
       <p class="text-xs text-muted-foreground">
-        The ONVIF port is the camera's control port — Tapo uses <span class="font-medium">2020</span>,
-        many others use <span class="font-medium">80</span>. The camera's credentials are usually a
-        separate account you create in its own app, not your cloud login.
+        {t.portHintBefore}<span class="font-medium">2020</span>{t.portHintMiddle}<span
+          class="font-medium">80</span
+        >{t.portHintAfter}
       </p>
 
       {#if manualState !== "idle"}
@@ -755,7 +737,7 @@
           {#if manualState === "testing"}
             <div class="flex items-center gap-3 text-sm text-muted-foreground">
               <Busy />
-              Asking {manualIp} to prove these details… nothing is saved until it does.
+              {t.provingDetails(manualIp)}
             </div>
           {:else if manualState === "verified"}
             <div class="space-y-2">
@@ -763,7 +745,7 @@
                 <Check class="size-4" /> {verdictTitle(manualVerdict)}
               </p>
               {#if manualSnapshotUrl}
-                <img src={manualSnapshotUrl} alt="Live frame from {manualIp}" class="w-full rounded-md border border-border" />
+                <img src={manualSnapshotUrl} alt={t.liveFrameAlt(manualIp)} class="w-full rounded-md border border-border" />
               {/if}
             </div>
           {:else if manualState === "failed"}
@@ -773,7 +755,7 @@
               </p>
               <p class="text-muted-foreground">{manualAdvice(manualVerdict)}</p>
               {#if manualVerdict?.detail}
-                <p class="pt-1 text-xs text-muted-foreground/70">The camera said: {manualVerdict.detail}</p>
+                <p class="pt-1 text-xs text-muted-foreground/70">{t.cameraSaid(manualVerdict.detail)}</p>
               {/if}
             </div>
           {/if}
@@ -783,9 +765,9 @@
 
     <Dialog.Footer>
       {#if manualState === "verified"}
-        <Button onclick={() => (manualOpen = false)}>Done</Button>
+        <Button onclick={() => (manualOpen = false)}>{t.done}</Button>
       {:else}
-        <Button variant="outline" onclick={() => (manualOpen = false)} disabled={savingManual}>Cancel</Button>
+        <Button variant="outline" onclick={() => (manualOpen = false)} disabled={savingManual}>{c.cancel}</Button>
         <Button onclick={saveManual} disabled={!manualValid || savingManual}>{manualButtonLabel()}</Button>
       {/if}
     </Dialog.Footer>
