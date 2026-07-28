@@ -451,16 +451,46 @@ async fn device_moved(State(st): State<AppState>, headers: HeaderMap, body: Opti
     StatusCode::NO_CONTENT.into_response()
 }
 
+/// One camera in the edge's streaming report — resolved-stream IP + probed codec, if the edge
+/// knows it (gstreamer-linked backend only, and only once probed). `codec` is `None` on an older
+/// edge build's plain-string report too, via [`StreamingIn`]'s untagged fallback.
+#[derive(serde::Deserialize)]
+struct StreamingCamIn {
+    ip: String,
+    #[serde(default)]
+    codec: Option<String>,
+}
+
+/// Accepts either the old wire shape (`["1.2.3.4", ...]`) or the current one
+/// (`[{"ip": "1.2.3.4", "codec": "H264"}, ...]`) so control never breaks for an edge that hasn't
+/// auto-updated yet.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum StreamingIn {
+    Rich(Vec<StreamingCamIn>),
+    Plain(Vec<String>),
+}
+
+impl StreamingIn {
+    fn into_cams(self) -> Vec<StreamingCamIn> {
+        match self {
+            Self::Rich(v) => v,
+            Self::Plain(ips) => ips.into_iter().map(|ip| StreamingCamIn { ip, codec: None }).collect(),
+        }
+    }
+}
+
 /// The edge reports which cameras it currently has a resolved stream for (box token). Drives
-/// the precise "online & correct" status dot on the Devices page.
-async fn streaming_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<Vec<String>>>) -> Response {
+/// the precise "online & correct" status dot + codec badge on the Devices page.
+async fn streaming_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<StreamingIn>>) -> Response {
     let tenant = match box_tenant(&st, &headers).await {
         Ok(Some(t)) => t,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
         Err(resp) => return resp,
     };
-    let ips = body.map(|Json(v)| v).unwrap_or_default();
-    if let Err(e) = store::upsert_streaming(&st.pool, tenant, &ips).await {
+    let cams = body.map(|Json(v)| v.into_cams()).unwrap_or_default();
+    let rows: Vec<(String, Option<String>)> = cams.into_iter().map(|c| (c.ip, c.codec)).collect();
+    if let Err(e) = store::upsert_streaming(&st.pool, tenant, &rows).await {
         log::error!("upsert_streaming failed: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, "store failed").into_response();
     }

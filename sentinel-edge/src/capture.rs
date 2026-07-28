@@ -27,6 +27,10 @@ struct Cam {
     /// (card #138, G2) — not a second connection to the camera.
     #[cfg(feature = "gst-linked")]
     mse: Mutex<crate::gst_mse::Feed>,
+    /// The codec detected by [`probe_codec`] on the gstreamer-linked path ("H264"/"H265") —
+    /// `None` until the pipeline's first (re)start has probed it. Surfaced to the cloud so the
+    /// Devices page can show what each camera is actually sending.
+    codec: Mutex<Option<&'static str>>,
 }
 
 fn cams() -> &'static Mutex<HashMap<String, Arc<Cam>>> {
@@ -43,6 +47,7 @@ fn cam_for(ip: &str) -> Arc<Cam> {
                 started: AtomicBool::new(false),
                 #[cfg(feature = "gst-linked")]
                 mse: Mutex::new(crate::gst_mse::Feed::default()),
+                codec: Mutex::new(None),
             })
         })
         .clone()
@@ -97,6 +102,15 @@ pub fn mse_feed(
     let cam = cams().lock().unwrap().get(ip).cloned()?;
     let feed = cam.mse.lock().unwrap().subscribe();
     feed
+}
+
+/// The video codec [`probe_codec`] detected for `ip` ("H264"/"H265"), if the gstreamer-linked
+/// pipeline has started and probed it at least once. `None` on the ffmpeg/subprocess-gstreamer
+/// backends (they don't probe) or before the first probe completes.
+pub fn codec_for(ip: &str) -> Option<&'static str> {
+    let cam = cams().lock().unwrap().get(ip).cloned()?;
+    let codec = *cam.codec.lock().unwrap();
+    codec
 }
 
 /// The freshest decoded JPEG for `ip`, only if newer than `max_age` — else `None` so the hub falls
@@ -244,22 +258,19 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
     // mp4mux both work). Every OTHER platform keeps `rtspsrc` untouched.
     let use_retina = crate::media::is_tegra();
 
-    // On the retina path we PROBE the camera's codec from its SDP and build a matching pipeline —
-    // H264 or H265. Cameras vary (a Dahua that was H265 vs one switched to H264), and only the parser
-    // + caps differ; `nvv4l2decoder` decodes both. Detected + logged per camera here; storing the
-    // result and exposing a per-camera override in the UI is a near-future card. The `rtspsrc` path
-    // (other platforms) stays H264 via `rtph264depay`, unchanged.
-    let codec = if use_retina {
-        match probe_codec(&url) {
-            Ok(c) => {
-                log::info!("capture-decoder[{ip}]: codec probe → {}", c.label());
-                c
-            }
-            Err(e) => return Err(format!("codec probe: {e}")),
+    // PROBE the camera's codec from its SDP and build a matching pipeline — H264 or H265 — on
+    // EVERY platform, not just Tegra/retina: cameras vary (a Dahua that was H265 vs one switched
+    // to H264) regardless of which platform is watching them, and only the depay/parser/caps
+    // differ; `decodebin`/`nvv4l2decoder` decode both. Used both to pick the right elements below
+    // and to report the camera's codec (`codec_for`) for the UI.
+    let codec = match probe_codec(&url) {
+        Ok(c) => {
+            log::info!("capture-decoder[{ip}]: codec probe → {}", c.label());
+            c
         }
-    } else {
-        VideoCodec::H264
+        Err(e) => return Err(format!("codec probe: {e}")),
     };
+    *cam.codec.lock().unwrap() = Some(codec.label());
 
     // ONE connection, `tee`'d: the decode branch feeds motion + detectors, the mux branch feeds the
     // live `/api/ws` viewers. Both leak-on-full — a consumer that stalls must never back the source
@@ -279,7 +290,10 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
         // gets the PTS it needs (retina gives us bare access units, no container timing).
         "appsrc name=src is-live=true do-timestamp=true format=time".to_string()
     } else {
-        format!("rtspsrc location=\"{url}\" protocols=tcp latency=200 ! rtph264depay")
+        format!(
+            "rtspsrc location=\"{url}\" protocols=tcp latency=200 ! {}",
+            codec.depay_element()
+        )
     };
     let desc = format!(
         "{source} ! {parse} name=parse ! tee name=t \
@@ -453,6 +467,13 @@ impl VideoCodec {
             Self::H265 => "h265parse",
         }
     }
+    /// The RTP depayloader for the `rtspsrc` ingest path (non-Tegra platforms).
+    fn depay_element(self) -> &'static str {
+        match self {
+            Self::H264 => "rtph264depay",
+            Self::H265 => "rtph265depay",
+        }
+    }
     /// The mux-branch caps `mp4mux` accepts (avc for H264, hvc1 for H265).
     fn mux_caps(self) -> &'static str {
         match self {
@@ -567,7 +588,21 @@ async fn retina_feed(
         // the feeder ends and the pipeline restarts (the watchdog would also catch it downstream).
         match tokio::time::timeout(Duration::from_secs(5), demuxed.next()).await {
             Ok(Some(Ok(retina::codec::CodecItem::VideoFrame(f)))) => {
-                let buf = gst::Buffer::from_mut_slice(f.into_data());
+                let data = f.into_data();
+                let key = is_keyframe(&data, codec);
+                let mut buf = gst::Buffer::from_mut_slice(data);
+                // The appsrc's declared caps already match the mux branch's desired output
+                // (avc/hvc1 + alignment=au), so both `{parse}` instances downstream run in
+                // PASSTHROUGH — neither does bitstream analysis, so whatever sync-point flag
+                // we set here is exactly what `mp4mux` sees. Without this, every buffer defaults
+                // to "keyframe" (`DELTA_UNIT` unset on a fresh `Buffer`), which happens to work
+                // by accident for H264, but see the `is_keyframe` doc for why H265 needs it set
+                // explicitly and correctly.
+                if !key {
+                    buf.get_mut()
+                        .expect("buffer uniquely owned right after creation")
+                        .set_flags(gst::BufferFlags::DELTA_UNIT);
+                }
                 if appsrc.push_buffer(buf).is_err() {
                     return Ok(()); // pipeline gone; not an error worth logging
                 }
@@ -578,6 +613,47 @@ async fn retina_feed(
             Err(_) => return Err("frame read timeout".to_string()),
         }
     }
+}
+
+/// Whether `au` (one retina access unit, four-byte-length-prefixed NALs per
+/// `retina::codec::VideoFrame::into_data`) contains an intra random-access-point NAL — i.e.
+/// whether `mp4mux` can start a new fragment here.
+///
+/// Determined by direct NAL-type inspection rather than trusting `retina`'s own
+/// `VideoFrame::is_random_access_point()`: that call only recognizes H.265 IDR (NAL types 19/20)
+/// and misses the BLA/CRA types (16-18, 21-23) many camera encoders use for periodic refresh
+/// instead of IDR (confirmed live on a Dahua substream, and a known upstream gap —
+/// https://github.com/scottlamb/retina/issues/132). Miss every keyframe and `mp4mux`'s
+/// `streamable=true` fragmenting never sees a sync sample to start a fragment on — the pipeline
+/// doesn't error, it just never produces the first fragment, forever (`live-push`/`mse` then log
+/// "produced no fragment within 10s"). H264 IDR (type 5) isn't affected by that particular bug,
+/// but is checked here too — same cost, one fewer place a future codec-detection change could
+/// silently reintroduce this.
+#[cfg(feature = "gst-linked")]
+fn is_keyframe(au: &[u8], codec: VideoCodec) -> bool {
+    let mut i = 0usize;
+    while i + 4 <= au.len() {
+        let len = u32::from_be_bytes([au[i], au[i + 1], au[i + 2], au[i + 3]]) as usize;
+        let nal = i + 4;
+        if len == 0 || nal >= au.len() {
+            break;
+        }
+        let header = au[nal];
+        let is_irap = match codec {
+            VideoCodec::H264 => (header & 0x1F) == 5, // IDR
+            // H.265 NAL type is bits 1-6 of the (2-byte) header's first byte. 16-23 is the full
+            // IRAP range (BLA_W_LP..RSV_IRAP_VCL23) — the set `retina` under-recognizes.
+            VideoCodec::H265 => {
+                let nal_type = (header >> 1) & 0x3F;
+                (16..=23).contains(&nal_type)
+            }
+        };
+        if is_irap {
+            return true;
+        }
+        i = (nal + len).min(au.len());
+    }
+    false
 }
 
 /// Consecutive fast (<30s) failures while GPU decode is on before we give up on it for this
@@ -744,6 +820,70 @@ fn read_mjpeg(mut stdout: std::process::ChildStdout, cam: &Arc<Cam>) {
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
+}
+
+#[cfg(all(test, feature = "gst-linked"))]
+mod is_keyframe_tests {
+    use super::{is_keyframe, VideoCodec};
+
+    /// Builds one retina-style access unit: 4-byte big-endian length + NAL bytes, whose first
+    /// byte carries `nal_header` (H264: `nal_unit_type` in bits 0-4; H265: `nal_unit_type` in
+    /// bits 1-6 of the FIRST of its two header bytes).
+    fn au(nal_header: u8, rest: &[u8]) -> Vec<u8> {
+        let mut nal = vec![nal_header];
+        nal.extend_from_slice(rest);
+        if matches!(rest.first(), None) {
+            nal.push(0); // H265's 2-byte header — pad so real slice data isn't required
+        }
+        let mut out = (nal.len() as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(&nal);
+        out
+    }
+
+    #[test]
+    fn h264_idr_is_a_keyframe() {
+        let data = au(0x65, &[0x88]); // nal_unit_type = 5 (IDR), nal_ref_idc = 3
+        assert!(is_keyframe(&data, VideoCodec::H264));
+    }
+
+    #[test]
+    fn h264_non_idr_is_not_a_keyframe() {
+        let data = au(0x41, &[0x9a]); // nal_unit_type = 1 (non-IDR slice)
+        assert!(!is_keyframe(&data, VideoCodec::H264));
+    }
+
+    #[test]
+    fn h265_idr_is_a_keyframe() {
+        // nal_unit_type = 19 (IDR_W_RADL) in bits 1-6: header byte = 19 << 1 = 0x26.
+        let data = au(0x26, &[]);
+        assert!(is_keyframe(&data, VideoCodec::H265));
+    }
+
+    #[test]
+    fn h265_cra_is_a_keyframe() {
+        // The exact case `retina::VideoFrame::is_random_access_point()` misses (#132): CRA_NUT
+        // is NAL type 21 → header byte = 21 << 1 = 0x2a. Cameras that refresh via CRA instead of
+        // IDR (verified live on a Dahua) would otherwise never produce a fragment, ever.
+        let data = au(0x2a, &[]);
+        assert!(is_keyframe(&data, VideoCodec::H265));
+    }
+
+    #[test]
+    fn h265_trail_r_is_not_a_keyframe() {
+        // TRAIL_R = NAL type 1 → header byte = 1 << 1 = 0x02.
+        let data = au(0x02, &[]);
+        assert!(!is_keyframe(&data, VideoCodec::H265));
+    }
+
+    #[test]
+    fn multiple_nals_in_one_au_are_all_scanned() {
+        // A real AU can carry VPS+SPS+PPS+slice concatenated; the slice's IRAP-ness is what
+        // matters, wherever in the AU it lands.
+        let vps = au(0x40, &[]); // VPS_NUT = 32 → 0x40
+        let mut data = vps;
+        data.extend(au(0x2a, &[])); // CRA slice appended after it
+        assert!(is_keyframe(&data, VideoCodec::H265));
+    }
 }
 
 #[cfg(all(test, feature = "gst-linked"))]

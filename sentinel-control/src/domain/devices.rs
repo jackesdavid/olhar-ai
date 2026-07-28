@@ -52,14 +52,23 @@ async fn configured(UserClaims(c): UserClaims, State(st): State<AppState>) -> Re
         })
 }
 
-/// IPs the tenant's edge currently has a resolved stream for — drives the "online" status
-/// dot (creds valid + camera reachable). The cloud never holds the RTSP URL itself.
-async fn streaming(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<String>>, ApiErr> {
+/// One camera the tenant's edge has a resolved stream for, plus the codec it probed off the
+/// camera's own SDP ("H264"/"H265"), when known.
+#[derive(serde::Serialize)]
+struct StreamingCam {
+    ip: String,
+    codec: Option<String>,
+}
+
+/// Cameras the tenant's edge currently has a resolved stream for — drives the "online" status
+/// dot (creds valid + camera reachable) and the codec badge. The cloud never holds the RTSP URL
+/// itself.
+async fn streaming(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<StreamingCam>>, ApiErr> {
     auth::require(&c, "devices.read")?;
     let tid = tenant_of(&c)?;
     store::list_streaming(&st.pool, tid)
         .await
-        .map(Json)
+        .map(|rows| Json(rows.into_iter().map(|(ip, codec)| StreamingCam { ip, codec }).collect()))
         .map_err(|e| {
             log::error!("list_streaming failed: {e}");
             err(StatusCode::INTERNAL_SERVER_ERROR, "database error")

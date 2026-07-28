@@ -9,6 +9,15 @@ use std::time::Duration;
 
 use app_core::devices::Device;
 
+/// One camera in the `push_streaming` report — its resolved-stream IP plus the codec probed off
+/// its own SDP, if known. `#[serde(rename_all)]` matches what `sentinel-control`'s
+/// `/config/streaming` expects (`domain/devices.rs`, `store.rs`).
+#[derive(serde::Serialize)]
+pub struct StreamingCamera {
+    pub ip: String,
+    pub codec: Option<&'static str>,
+}
+
 /// Everything the HTTP handlers + go2rtc manager share.
 pub struct AppState {
     /// The control-plane base URL the camera list is pulled from.
@@ -265,10 +274,12 @@ impl AppState {
     }
 
     /// Report which cameras the edge currently has a resolved stream for (rtsp_url set →
-    /// creds valid + camera reachable). Drives the cloud's "online & correct" status dot.
-    /// Best-effort.
+    /// creds valid + camera reachable), plus each one's detected video codec when the
+    /// gstreamer-linked pipeline has probed it (`None` on older backends or before the first
+    /// probe). Drives the cloud's "online & correct" status dot and the Devices page's codec
+    /// badge. Best-effort.
     pub fn push_streaming(&self) {
-        let ips: Vec<String> = self
+        let cams: Vec<StreamingCamera> = self
             .devices
             .lock()
             .unwrap()
@@ -279,10 +290,13 @@ impl AppState {
                     .map(|u| !u.trim().is_empty())
                     .unwrap_or(false)
             })
-            .map(|d| d.ip.clone())
+            .map(|d| StreamingCamera {
+                ip: d.ip.clone(),
+                codec: crate::capture::codec_for(&d.ip),
+            })
             .collect();
         let url = format!("{}/config/streaming", self.control_url);
-        if let Err(e) = self.box_agent().post(&url).send_json(&ips) {
+        if let Err(e) = self.box_agent().post(&url).send_json(&cams) {
             log::debug!("streaming push failed: {e}");
         }
     }

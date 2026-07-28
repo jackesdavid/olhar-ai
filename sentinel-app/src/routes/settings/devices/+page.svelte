@@ -3,7 +3,7 @@
   import Cpu from "@lucide/svelte/icons/cpu";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { data, onEvent, type EdgeDiscovered, type ProbeResult, type ProbeStatus } from "$lib/data";
+  import { data, onEvent, type EdgeDiscovered, type ProbeResult, type ProbeStatus, type StreamingCamera } from "$lib/data";
   import { toast } from "svelte-sonner";
 
   import Radar from "@lucide/svelte/icons/radar";
@@ -44,6 +44,9 @@
   const discoveredIps = $derived(new Set(edgeFound.map((c) => c.ip)));
   // IPs the edge has a RESOLVED stream for (creds valid + reachable) — the precise signal.
   let streamingIps = $state<Set<string>>(new Set());
+  // Codec the edge probed off each streaming camera's own SDP ("H264"/"H265"), keyed by IP —
+  // `undefined` until reported (older edge build, or not probed yet).
+  let codecByIp = $state<Map<string, string>>(new Map());
 
   // The status dot, using what the CLOUD actually knows (it never holds the RTSP URL — that's
   // edge-local — so the old rtsp_url check was always gray):
@@ -197,11 +200,14 @@
       const [found, configured, streaming] = await Promise.all([
         data.listDiscovered(),
         data.listConfigured(),
-        data.listStreaming().catch(() => [] as string[]),
+        data.listStreaming().catch(() => [] as StreamingCamera[]),
       ]);
       edgeFound = found;
       configuredIps = new Set(configured);
-      streamingIps = new Set(streaming);
+      streamingIps = new Set(streaming.map((s) => s.ip));
+      codecByIp = new Map(
+        streaming.filter((s): s is StreamingCamera & { codec: string } => !!s.codec).map((s) => [s.ip, s.codec]),
+      );
     } catch {
       edgeFound = [];
     }
@@ -465,6 +471,15 @@
                   <span class="flex items-center gap-2" title={cameraTitle(d)}>
                     <StatusDot state={cameraState(d)} />
                     {d.name}
+                    {#if codecByIp.get(d.ip)}
+                      <Badge
+                        variant="outline"
+                        class="font-mono text-[10px] font-normal text-muted-foreground"
+                        title="Video codec this camera is streaming, as detected by the edge"
+                      >
+                        {codecByIp.get(d.ip)}
+                      </Badge>
+                    {/if}
                   </span>
                 </Table.Cell>
                 <Table.Cell class="tabular-nums text-muted-foreground">{d.ip}</Table.Cell>

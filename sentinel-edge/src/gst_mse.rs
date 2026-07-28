@@ -110,12 +110,58 @@ impl Fragment {
     }
 }
 
-/// The `codecs=` string MSE needs, read from the `avcC` box in the init segment:
-/// `avc1.` + profile / constraint flags / level as hex (`01 64 00 16` → `avc1.640016`).
+/// The `codecs=` string MSE needs, read from whichever decoder-config box the init segment
+/// carries: `avcC` (H264) or `hvcC` (H265) — a camera's codec (probed in `capture.rs`) decides
+/// which one `mp4mux` emits. `None` here means the mux branch is producing fragments but MSE has
+/// no codec string to hand the player, which is just as fatal to Live as no fragment at all
+/// (`Feed::subscribe` withholds until both exist) — this was H265's actual remaining gap after
+/// the keyframe fix: `mp4mux` fragments fine, but every init segment was silently unusable.
 fn codecs_from_init(init: &[u8]) -> Option<String> {
-    let pos = init.windows(4).position(|w| w == b"avcC")?;
-    let b = init.get(pos + 4..pos + 8)?; // configurationVersion, profile, compat, level
+    if let Some(pos) = init.windows(4).position(|w| w == b"avcC") {
+        return avc_codec_string(init.get(pos + 4..)?);
+    }
+    if let Some(pos) = init.windows(4).position(|w| w == b"hvcC") {
+        return hevc_codec_string(init.get(pos + 4..)?);
+    }
+    None
+}
+
+/// `avc1.` + profile / constraint flags / level as hex, from an `AVCDecoderConfigurationRecord`
+/// (`01 64 00 16` → `avc1.640016`).
+fn avc_codec_string(avcc: &[u8]) -> Option<String> {
+    let b = avcc.get(..4)?; // configurationVersion, profile, compat, level
     Some(format!("avc1.{:02x}{:02x}{:02x}", b[1], b[2], b[3]))
+}
+
+/// `hvc1.` + profile space/idc + '.' + compatibility flags (bit-reversed, hex) + '.' + tier/level
+/// + '.' + constraint flags (trailing zero bytes trimmed, hex), from an
+/// `HEVCDecoderConfigurationRecord` — the layout ISO/IEC 14496-15 §8.3.3.1 and the codec-string
+/// grammar in Annex E.3 both define. e.g. profile_idc=1, tier=Main, level_idc=153,
+/// constraint=0xB0.. → `hvc1.1.6.L153.B0`.
+fn hevc_codec_string(hvcc: &[u8]) -> Option<String> {
+    // configurationVersion (1) + profile byte (1) + compatibility flags (4) + constraint flags
+    // (6) + level_idc (1) = 13 bytes before the rest of the record.
+    let b = hvcc.get(1..13)?;
+    let profile_space = (b[0] >> 6) & 0x3;
+    let tier_flag = (b[0] >> 5) & 0x1;
+    let profile_idc = b[0] & 0x1f;
+    let compat = u32::from_be_bytes([b[1], b[2], b[3], b[4]]).reverse_bits();
+    let constraint = &b[5..11];
+    let level_idc = b[11];
+
+    let space = match profile_space {
+        1 => "A",
+        2 => "B",
+        3 => "C",
+        _ => "",
+    };
+    let tier = if tier_flag == 1 { "H" } else { "L" };
+    let end = constraint.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+    let mut s = format!("hvc1.{space}{profile_idc}.{compat:X}.{tier}{level_idc}");
+    for byte in &constraint[..end] {
+        s.push_str(&format!(".{byte:X}"));
+    }
+    Some(s)
 }
 
 /// The live fMP4 feed of one camera, fed by the shared ingest pipeline in [`crate::capture`].
@@ -231,8 +277,34 @@ mod tests {
     }
 
     #[test]
-    fn no_avcc_means_no_codec_string() {
+    fn no_avcc_or_hvcc_means_no_codec_string() {
         assert_eq!(codecs_from_init(b"\x00\x00\x00\x08ftypfake"), None);
+    }
+
+    /// Main profile, level 5.1 (level_idc 153), one non-zero constraint byte (0xB0) — matches the
+    /// `hvc1.1.6.L153.B0` example that motivated this fix (H265 cameras with an otherwise-healthy
+    /// mux branch: `mp4mux` fragmented fine, but the init segment carries `hvcC` not `avcC`, so the
+    /// old `avcC`-only reader left `codecs_from_init` returning `None` forever).
+    #[test]
+    fn reads_the_codec_string_out_of_hvcc() {
+        let mut hvcc = b"\x00\x00\x00\x17hvcC".to_vec();
+        hvcc.push(0x01); // configurationVersion
+        hvcc.push(0x01); // profile_space=0, tier=0 (Main), profile_idc=1
+        hvcc.extend_from_slice(&[0x60, 0x00, 0x00, 0x00]); // compatibility flags, pre-reverse
+        hvcc.extend_from_slice(&[0xB0, 0x00, 0x00, 0x00, 0x00, 0x00]); // constraint flags
+        hvcc.push(153); // level_idc = 153 (level 5.1)
+        assert_eq!(codecs_from_init(&hvcc).as_deref(), Some("hvc1.1.6.L153.B0"));
+    }
+
+    #[test]
+    fn hvcc_drops_trailing_zero_constraint_bytes_but_keeps_interior_ones() {
+        let mut hvcc = b"\x00\x00\x00\x17hvcC".to_vec();
+        hvcc.push(0x01);
+        hvcc.push(0x02); // profile_idc=2
+        hvcc.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+        hvcc.extend_from_slice(&[0x00, 0x0A, 0x00, 0x00, 0x00, 0x00]); // non-zero in the middle
+        hvcc.push(93);
+        assert_eq!(codecs_from_init(&hvcc).as_deref(), Some("hvc1.2.0.L93.0.A"));
     }
 }
 

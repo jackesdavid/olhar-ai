@@ -83,6 +83,13 @@ export type EdgeDiscovered = {
   last_seen: string;
 };
 
+/** A camera the edge has a resolved stream for, plus the codec it probed off the camera's own
+ * SDP ("H264"/"H265") — `null` on an edge build that hasn't reported it yet. */
+export type StreamingCamera = {
+  ip: string;
+  codec: string | null;
+};
+
 /** What the edge found when it tried the credentials against the camera (card #88).
  *
  * These are deliberately distinct causes, not one "failed": a locked camera and a wrong
@@ -244,9 +251,10 @@ export const data = {
   listDiscovered: (): Promise<EdgeDiscovered[]> => api.get<EdgeDiscovered[]>("/devices/discovered"),
   /** IPs of cameras whose credentials have been set/relayed to the edge. */
   listConfigured: (): Promise<string[]> => api.get<string[]>("/devices/configured"),
-  /** IPs the edge currently has a RESOLVED stream for (creds valid + camera reachable) —
-   * the precise "online & correct" signal for the status dot. */
-  listStreaming: (): Promise<string[]> => api.get<string[]>("/devices/streaming"),
+  /** Cameras the edge currently has a RESOLVED stream for (creds valid + camera reachable) —
+   * the precise "online & correct" signal for the status dot, plus the codec the edge probed
+   * off each camera's own SDP ("H264"/"H265"), when known. */
+  listStreaming: (): Promise<StreamingCamera[]> => api.get<StreamingCamera[]>("/devices/streaming"),
   /** Ask the tenant's edge box(es) to re-run ONVIF discovery now (e.g. after a camera
    * changed IP). The edge reconciles moves by stable ONVIF id and pushes corrections back. */
   rescan: async (): Promise<void> => {
