@@ -114,7 +114,8 @@
       // wires
       for (const e of edges) {
         const fa = (nodes[e.a].f + nodes[e.b].f) / 2;
-        const a = 0.03 + Math.pow(fa, 1.5) * 0.13 + e.lit * (0.3 + fa * 0.6);
+        // resting wires stay dim so they never muddy the text; a passing signal lights its edge.
+        const a = 0.014 + Math.pow(fa, 1.8) * 0.055 + e.lit * (0.26 + fa * 0.5);
         ctx.strokeStyle = `rgba(${INK},${a.toFixed(3)})`;
         ctx.lineWidth = 0.6 + e.lit * 0.9;
         ctx.beginPath();
