@@ -22,7 +22,10 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { data } from "$lib/data";
+  import { dict, lang } from "$lib/i18n";
   import type { FaceCluster, Person } from "$lib/types";
+
+  const t = $derived(dict[lang()].faces);
 
   let clusters = $state<FaceCluster[]>([]);
   let people = $state<Person[]>([]);
@@ -47,7 +50,7 @@
       people = pp;
       active = 0;
     } catch (e) {
-      toast.error("Couldn't load faces", { description: String(e) });
+      toast.error(t.loadFailed, { description: String(e) });
     } finally {
       loading = false;
     }
@@ -60,7 +63,7 @@
       clusters = await data.listFaceClusters(eps);
       active = 0;
     } catch (e) {
-      toast.error("Couldn't re-group", { description: String(e) });
+      toast.error(t.regroupFailed, { description: String(e) });
     } finally {
       reclustering = false;
     }
@@ -79,19 +82,19 @@
   async function commit(c: FaceCluster, target: { personId?: string; newPersonName?: string }, who: string) {
     const ids = faceIdsFor(c);
     if (!ids.length) {
-      toast.error("No faces selected");
+      toast.error(t.noFacesSelected);
       return;
     }
     busyKey = c.key;
     try {
       const res = await data.labelFaces(ids, target);
-      toast.success(`Labeled ${res.labeled} face${res.labeled === 1 ? "" : "s"} as ${who}`);
+      toast.success(t.labeled(res.labeled, who));
       clusters = clusters.filter((x) => x.key !== c.key);
       labeling = null;
       active = Math.min(active, Math.max(0, clusters.length - 1));
       if (target.newPersonName) people = await data.listPeople();
     } catch (e) {
-      toast.error("Couldn't label", { description: String(e) });
+      toast.error(t.labelFailed, { description: String(e) });
     } finally {
       busyKey = null;
     }
@@ -110,7 +113,7 @@
     if (n) commit(c, { newPersonName: n }, n);
   }
   function pickPerson(c: FaceCluster, personId: string) {
-    commit(c, { personId }, people.find((p) => p.id === personId)?.name ?? "person");
+    commit(c, { personId }, people.find((p) => p.id === personId)?.name ?? t.person);
   }
   // Existing People whose name matches the typed query (autocomplete). Empty query → all.
   function matchingPeople(): Person[] {
@@ -137,7 +140,7 @@
       clusters = clusters.filter((x) => x.key !== c.key);
       active = Math.min(active, Math.max(0, clusters.length - 1));
     } catch (e) {
-      toast.error("Couldn't dismiss", { description: String(e) });
+      toast.error(t.dismissFailed, { description: String(e) });
     } finally {
       busyKey = null;
     }
@@ -154,9 +157,9 @@
           clusters = [...clusters];
         }
       }
-      toast.success("Face deleted");
+      toast.success(t.faceDeleted);
     } catch (e) {
-      toast.error("Couldn't delete", { description: String(e) });
+      toast.error(t.deleteFailed, { description: String(e) });
     }
   }
   function toggleExcluded(key: string, faceId: string) {
@@ -202,13 +205,13 @@
 
 <div class="space-y-6">
   <PageHeader
-    title="Faces"
-    description="Unknown faces, grouped by who they look like — name a whole group in one tap."
+    title={t.title}
+    description={t.description}
     icon={ScanFace}
   >
     {#snippet actions()}
-      <div class="flex items-center gap-2 rounded-md border border-border px-3 py-1.5" title="Grouping distance — looser groups more faces together">
-        <span class="text-xs text-muted-foreground">Grouping</span>
+      <div class="flex items-center gap-2 rounded-md border border-border px-3 py-1.5" title={t.groupingTitle}>
+        <span class="text-xs text-muted-foreground">{t.grouping}</span>
         <input
           type="range" min="0.30" max="0.80" step="0.01" value={eps}
           oninput={(e) => onEpsInput(parseFloat(e.currentTarget.value))}
@@ -217,38 +220,38 @@
         <span class="w-9 text-right text-xs tabular-nums {reclustering ? 'text-muted-foreground' : 'font-medium'}">{eps.toFixed(2)}</span>
       </div>
       <Button variant="outline" onclick={load} disabled={loading}>
-        <RefreshCw class="size-4 {loading || reclustering ? 'animate-spin' : ''}" /> Refresh
+        <RefreshCw class="size-4 {loading || reclustering ? 'animate-spin' : ''}" /> {t.refresh}
       </Button>
-      <Button variant={showBox ? "default" : "outline"} onclick={() => (showBox = !showBox)} title="Show the full frame with the detection box (context)">
-        <Frame class="size-4" /> Context
+      <Button variant={showBox ? "default" : "outline"} onclick={() => (showBox = !showBox)} title={t.contextTitle}>
+        <Frame class="size-4" /> {t.context}
       </Button>
       <Button variant="outline" onclick={() => goto("/faces/canvas")}>
-        <LayoutDashboard class="size-4" /> Canvas
+        <LayoutDashboard class="size-4" /> {t.canvas}
       </Button>
       <Button variant="outline" onclick={() => goto("/people")}>
-        <Users class="size-4" /> People
+        <Users class="size-4" /> {t.people}
       </Button>
     {/snippet}
   </PageHeader>
 
   {#if loading}
-    <Loader label="Grouping faces…" />
+    <Loader label={t.groupingFaces} />
   {:else if clusters.length === 0}
     <EmptyState
-      title="No faces to label"
-      description="As your cameras see people, unknown faces gather here for one-tap naming."
+      title={t.emptyTitle}
+      description={t.emptyDescription}
     >
       {#snippet children()}
-        <Button variant="outline" onclick={() => goto("/people")}><Users class="size-4" /> People</Button>
+        <Button variant="outline" onclick={() => goto("/people")}><Users class="size-4" /> {t.people}</Button>
       {/snippet}
     </EmptyState>
   {:else}
     <p class="text-sm text-muted-foreground">
-      {clusters.length} group{clusters.length === 1 ? "" : "s"} to label ·
-      <kbd class="rounded border border-border px-1 text-[10px]">Enter</kbd> confirm ·
-      <kbd class="rounded border border-border px-1 text-[10px]">E</kbd> pick / name ·
-      <kbd class="rounded border border-border px-1 text-[10px]">X</kbd> dismiss ·
-      <kbd class="rounded border border-border px-1 text-[10px]">J/K</kbd> move
+      {t.groupsToLabel(clusters.length)} ·
+      <kbd class="rounded border border-border px-1 text-[10px]">Enter</kbd> {t.kbdConfirm} ·
+      <kbd class="rounded border border-border px-1 text-[10px]">E</kbd> {t.kbdPick} ·
+      <kbd class="rounded border border-border px-1 text-[10px]">X</kbd> {t.kbdDismiss} ·
+      <kbd class="rounded border border-border px-1 text-[10px]">J/K</kbd> {t.kbdMove}
     </p>
 
     <div class="grid gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
@@ -263,7 +266,7 @@
           <!-- representative crop -->
           <div class="relative mb-2 overflow-hidden rounded-md border border-border bg-well">
             {#if c.representative.image_key}
-              <img src={data.faceImageUrl(c.representative.id, { box: showBox })} alt="face" class="aspect-square w-full object-cover" />
+              <img src={data.faceImageUrl(c.representative.id, { box: showBox })} alt={t.faceAlt} class="aspect-square w-full object-cover" />
             {:else}
               <div class="grid aspect-square w-full place-items-center border border-dashed border-border text-muted-foreground">
                 <ScanFace class="size-7" />
@@ -279,7 +282,7 @@
           <!-- suggestion -->
           {#if c.suggestion}
             <p class="mb-1.5 truncate text-xs text-muted-foreground">
-              Looks like <span class={confClass(c.suggestion.confidence)}>{c.suggestion.name}</span>
+              {t.looksLike} <span class={confClass(c.suggestion.confidence)}>{c.suggestion.name}</span>
               · <span class="tabular-nums">{Math.round(c.suggestion.confidence)}%</span>
             </p>
           {/if}
@@ -290,7 +293,7 @@
             <!-- svelte-ignore a11y_autofocus -->
             <form class="relative" onsubmit={(e) => { e.preventDefault(); submitLabel(c); }}>
               <div class="flex gap-1">
-                <Input placeholder="Search or name…" bind:value={query} autofocus class="h-8 text-xs" />
+                <Input placeholder={t.searchOrName} bind:value={query} autofocus class="h-8 text-xs" />
                 <Button type="button" variant="ghost" class="size-8 shrink-0 p-0" onclick={() => (labeling = null)}><X class="size-4" /></Button>
               </div>
               <div class="mt-1 overflow-hidden rounded-md border border-border bg-popover">
@@ -303,11 +306,11 @@
                 {#if query.trim() && !exactExists()}
                   <button type="button" class="flex w-full items-center gap-2 border-t border-border px-2 py-1.5 text-left text-xs hover:bg-accent"
                     disabled={busyKey === c.key} onclick={() => createPerson(c)}>
-                    <UserPlus class="size-3.5 shrink-0 text-primary" /> Create “<span class="truncate font-medium">{query.trim()}</span>”
+                    <UserPlus class="size-3.5 shrink-0 text-primary" /> {t.createBefore}<span class="truncate font-medium">{query.trim()}</span>{t.createAfter}
                   </button>
                 {/if}
                 {#if !query.trim() && matchingPeople().length === 0}
-                  <p class="px-2 py-1.5 text-xs text-muted-foreground">No people yet — type a name to create one.</p>
+                  <p class="px-2 py-1.5 text-xs text-muted-foreground">{t.noPeopleYet}</p>
                 {/if}
               </div>
             </form>
@@ -317,17 +320,17 @@
                 {#if busyKey === c.key}
                   <Busy />
                 {:else if c.suggestion}
-                  <Check class="size-3.5 shrink-0" /> <span class="truncate">Confirm {c.suggestion.name}</span>
+                  <Check class="size-3.5 shrink-0" /> <span class="truncate">{t.confirmNamed(c.suggestion.name)}</span>
                 {:else}
-                  <UserPlus class="size-3.5 shrink-0" /> <span class="truncate">Label</span>
+                  <UserPlus class="size-3.5 shrink-0" /> <span class="truncate">{t.label}</span>
                 {/if}
               </Button>
               {#if c.suggestion}
-                <Button variant="outline" class="size-8 shrink-0 p-0" title="Someone else (E)" onclick={() => startLabeling(c)}>
+                <Button variant="outline" class="size-8 shrink-0 p-0" title={t.someoneElse} onclick={() => startLabeling(c)}>
                   <Users class="size-4" />
                 </Button>
               {/if}
-              <Button variant="ghost" class="size-8 shrink-0 p-0 text-muted-foreground hover:text-destructive" title="Dismiss (X)" onclick={() => dismiss(c)}>
+              <Button variant="ghost" class="size-8 shrink-0 p-0 text-muted-foreground hover:text-destructive" title={t.dismissTitle} onclick={() => dismiss(c)}>
                 <X class="size-4" />
               </Button>
             </div>
@@ -340,24 +343,24 @@
               onclick={() => (expanded = expanded === c.key ? null : c.key)}
             >
               <ChevronDown class="size-3 transition-transform {expanded === c.key ? 'rotate-180' : ''}" />
-              Review {c.size} faces{#if excludedCount(c.key)} · {excludedCount(c.key)} excluded{/if}
+              {t.reviewFaces(c.size)}{#if excludedCount(c.key)}{t.excludedSuffix(excludedCount(c.key))}{/if}
             </button>
             {#if expanded === c.key}
               <div class="mt-2 grid grid-cols-4 gap-1.5">
                 {#each c.face_ids as fid (fid)}
                   <div class="group/thumb relative overflow-hidden rounded-md border {excluded[c.key]?.has(fid) ? 'border-dashed border-border opacity-40' : 'border-border'}">
-                    <img src={data.faceImageUrl(fid, { box: showBox })} alt="face" class="aspect-square w-full object-cover" />
+                    <img src={data.faceImageUrl(fid, { box: showBox })} alt={t.faceAlt} class="aspect-square w-full object-cover" />
                     <button
                       class="absolute inset-0"
-                      title={excluded[c.key]?.has(fid) ? "Excluded — click to include" : "Click to exclude"}
+                      title={excluded[c.key]?.has(fid) ? t.excludedClickInclude : t.clickToExclude}
                       onclick={() => toggleExcluded(c.key, fid)}
-                      aria-label="toggle exclude"
+                      aria-label={t.toggleExclude}
                     ></button>
                     <button
                       class="absolute right-0.5 top-0.5 rounded bg-black/60 p-0.5 text-white/90 opacity-0 transition-opacity hover:bg-destructive group-hover/thumb:opacity-100"
-                      title="Delete this face (permanent)"
+                      title={t.deleteFaceTitle}
                       onclick={(e) => { e.stopPropagation(); deleteFace(c, fid); }}
-                      aria-label="delete face"
+                      aria-label={t.deleteFaceLabel}
                     ><Trash2 class="size-3" /></button>
                   </div>
                 {/each}

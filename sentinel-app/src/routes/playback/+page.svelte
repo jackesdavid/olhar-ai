@@ -26,6 +26,7 @@
   import { Input } from "$lib/components/ui/input";
 
   import { recordings, events as eventsApi, type Recording, type RecordingCamera, type EventRow } from "$lib/api";
+  import { dict, lang } from "$lib/i18n";
   import {
     buildTracks,
     buildMarkers,
@@ -45,6 +46,8 @@
     type TLSegment,
     type TLMarker,
   } from "$lib/timeline";
+
+  const t = $derived(dict[lang()].playback);
 
   const DAY_SECS = 86_400;
 
@@ -128,7 +131,7 @@
   }
 
   function cameraLabel(): string {
-    if (!cameraFilter) return "All cameras";
+    if (!cameraFilter) return t.allCameras;
     return cameras.find((c) => c.ip === cameraFilter)?.name ?? cameraFilter;
   }
 
@@ -150,8 +153,7 @@
       : "border-dashed border-primary/30 bg-primary/5 hover:bg-primary/10";
   }
   function segTitle(s: TLSegment): string {
-    const clips = `${s.clipCount} clip${s.clipCount === 1 ? "" : "s"}`;
-    return `${hhmm(s.startTs)}–${hhmm(s.endTs)} · ${clips}${s.uploaded ? "" : " · has edge-only footage"}`;
+    return t.segTitle(hhmm(s.startTs), hhmm(s.endTs), s.clipCount, !s.uploaded);
   }
   function segWide(s: TLSegment, next?: TLSegment): boolean {
     return segWidth(s, next) > 44;
@@ -211,7 +213,7 @@
       void resolveVideo();
       void revealPlayhead();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load the timeline");
+      toast.error(e instanceof Error ? e.message : t.loadFailed);
     } finally {
       loading = false;
     }
@@ -391,7 +393,7 @@
   function jumpNextClip() {
     const ns = nextClipStart(activeTrack, playheadMs);
     if (ns == null) {
-      toast.info("No later clip on this camera.");
+      toast.info(t.noLaterClip);
       return;
     }
     seekTo(ns);
@@ -400,7 +402,7 @@
   function jumpPrevClip() {
     const ps = prevClipStart(activeTrack, playheadMs);
     if (ps == null) {
-      toast.info("No earlier clip on this camera.");
+      toast.info(t.noEarlierClip);
       return;
     }
     seekTo(ps);
@@ -410,7 +412,7 @@
   function jumpNextEvent() {
     const m = markers.find((m) => m.ts > playheadMs + 500);
     if (!m) {
-      toast.info("No later event.");
+      toast.info(t.noLaterEvent);
       return;
     }
     seekTo(m.ts);
@@ -423,7 +425,7 @@
       else break;
     }
     if (prev == null) {
-      toast.info("No earlier event.");
+      toast.info(t.noEarlierEvent);
       return;
     }
     seekTo(prev);
@@ -525,30 +527,30 @@
 
 <div class="flex h-full flex-col gap-4 p-6">
   <PageHeader
-    title="Playback"
-    description="Every camera on one timeline — scrub the day. Clips are ink blocks; the dashed lane is a gap with no footage."
+    title={t.title}
+    description={t.description}
     icon={Film}
   />
 
   <!-- toolbar -->
   <div class="flex shrink-0 flex-wrap items-center gap-2">
     <div class="flex items-center gap-1">
-      <Button variant="outline" size="icon" class="size-8" title="Previous day" onclick={() => shiftDay(-1)}>
+      <Button variant="outline" size="icon" class="size-8" title={t.previousDay} onclick={() => shiftDay(-1)}>
         <ChevronLeft class="size-4" />
       </Button>
       <Input type="date" value={day} onchange={(e) => { day = e.currentTarget.value; load(); }} class="h-8 w-40" />
-      <Button variant="outline" size="icon" class="size-8" title="Next day" disabled={isToday} onclick={() => shiftDay(1)}>
+      <Button variant="outline" size="icon" class="size-8" title={t.nextDay} disabled={isToday} onclick={() => shiftDay(1)}>
         <ChevronRight class="size-4" />
       </Button>
       {#if !isToday}
-        <Button variant="ghost" size="sm" class="h-8" onclick={goToday}>Today</Button>
+        <Button variant="ghost" size="sm" class="h-8" onclick={goToday}>{t.today}</Button>
       {/if}
     </div>
 
     <Select.Root type="single" value={cameraFilter || "_all"} onValueChange={(v) => (cameraFilter = v === "_all" ? "" : v)}>
       <Select.Trigger class="h-8 w-44 text-sm">{cameraLabel()}</Select.Trigger>
       <Select.Content>
-        <Select.Item value="_all" label="All cameras">All cameras</Select.Item>
+        <Select.Item value="_all" label={t.allCameras}>{t.allCameras}</Select.Item>
         {#each cameras as c (c.ip)}
           <Select.Item value={c.ip} label={c.name}>{c.name}</Select.Item>
         {/each}
@@ -559,10 +561,10 @@
       variant="outline"
       size="sm"
       class="h-8"
-      title="Which events show on the marker lane"
+      title={t.eventLaneTitle}
       onclick={() => (showAllKinds = !showAllKinds)}
     >
-      Events: {showAllKinds ? "all" : "footage"}
+      {t.eventsAll(showAllKinds ? t.modeAll : t.modeFootage)}
     </Button>
   </div>
 
@@ -570,8 +572,8 @@
     <Loader />
   {:else if tracks.length === 0}
     <EmptyState
-      title="No footage on this day"
-      description="Nothing was recorded on {day}. Pick another day, or set a workflow to record on motion."
+      title={t.emptyTitle}
+      description={t.emptyDescription(day)}
     />
   {:else}
     <div class="flex min-h-0 flex-1 flex-col gap-3">
@@ -596,7 +598,7 @@
               {#if videoErr}
                 {videoErr}
               {:else}
-                No footage on {activeTrack?.cameraName ?? "this camera"} at {hms(playheadMs)} — jump to the next clip.
+                {t.noFootageAt(activeTrack?.cameraName ?? t.thisCamera, hms(playheadMs))}
               {/if}
             </div>
           {/if}
@@ -610,18 +612,18 @@
         </div>
 
         <div class="grid flex-1 auto-rows-min grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3">
-          {#each tracks as t (t.cameraIp)}
+          {#each tracks as tr (tr.cameraIp)}
             <button
               type="button"
-              class="flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors {t.cameraIp === activeCamera
+              class="flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors {tr.cameraIp === activeCamera
                 ? 'border-primary bg-primary/5'
                 : 'border-border hover:bg-muted/40'}"
-              onclick={() => setActive(t.cameraIp)}
+              onclick={() => setActive(tr.cameraIp)}
             >
-              <span class="size-2 shrink-0 rounded-full {clipAt(t, playheadMs) ? 'bg-primary' : 'bg-muted-foreground/40'}"></span>
+              <span class="size-2 shrink-0 rounded-full {clipAt(tr, playheadMs) ? 'bg-primary' : 'bg-muted-foreground/40'}"></span>
               <span class="min-w-0">
-                <span class="block truncate text-sm font-medium">{t.cameraName}</span>
-                <span class="block text-[11px] text-muted-foreground">{clipAt(t, playheadMs) ? "recording" : "no footage"}</span>
+                <span class="block truncate text-sm font-medium">{tr.cameraName}</span>
+                <span class="block text-[11px] text-muted-foreground">{clipAt(tr, playheadMs) ? t.recording : t.noFootage}</span>
               </span>
             </button>
           {/each}
@@ -630,21 +632,21 @@
 
       <!-- transport -->
       <div class="flex shrink-0 items-center gap-2 rounded-xl border border-border bg-card px-3 py-2">
-        <Button variant="outline" size="icon" class="size-9" title="Previous clip (,)" onclick={jumpPrevClip}>
+        <Button variant="outline" size="icon" class="size-9" title={t.previousClip} onclick={jumpPrevClip}>
           <SkipBack class="size-4" />
         </Button>
-        <Button size="icon" class="size-9" title={playing ? "Pause (Space)" : "Play (Space)"} onclick={togglePlay}>
+        <Button size="icon" class="size-9" title={playing ? t.pause : t.play} onclick={togglePlay}>
           {#if playing}<Pause class="size-4" />{:else}<Play class="size-4" />{/if}
         </Button>
-        <Button variant="outline" size="icon" class="size-9" title="Next clip (.)" onclick={jumpNextClip}>
+        <Button variant="outline" size="icon" class="size-9" title={t.nextClip} onclick={jumpNextClip}>
           <SkipForward class="size-4" />
         </Button>
 
         <span class="mx-1 h-5 w-px bg-border"></span>
-        <Button variant="outline" size="icon" class="size-9" title="Previous event ([)" onclick={jumpPrevEvent}>
+        <Button variant="outline" size="icon" class="size-9" title={t.previousEvent} onclick={jumpPrevEvent}>
           <ChevronsLeft class="size-4" />
         </Button>
-        <Button variant="outline" size="icon" class="size-9" title="Next event (])" onclick={jumpNextEvent}>
+        <Button variant="outline" size="icon" class="size-9" title={t.nextEvent} onclick={jumpNextEvent}>
           <ChevronsRight class="size-4" />
         </Button>
 
@@ -652,18 +654,18 @@
         <span class="text-xs text-muted-foreground">· {activeTrack?.cameraName ?? "—"}</span>
         <div class="ml-auto flex items-center gap-2">
           {#if tracksFiltered}
-            <Button variant="ghost" size="sm" class="h-8" onclick={resetTracks}>Show all cameras</Button>
+            <Button variant="ghost" size="sm" class="h-8" onclick={resetTracks}>{t.showAllCameras}</Button>
           {/if}
-          <span class="hidden text-[11px] text-muted-foreground lg:block">, / . clip · [ / ] event · Space play</span>
-          <Button variant="outline" size="icon" class="size-8" title="Zoom out" disabled={pxIdx === 0} onclick={() => zoom(-1)}>
+          <span class="hidden text-[11px] text-muted-foreground lg:block">{t.shortcutHint}</span>
+          <Button variant="outline" size="icon" class="size-8" title={t.zoomOut} disabled={pxIdx === 0} onclick={() => zoom(-1)}>
             <ZoomOut class="size-4" />
           </Button>
-          <span class="w-12 text-center text-[11px] tabular-nums text-muted-foreground" title="Ruler step at this zoom">{zoomLabel}</span>
+          <span class="w-12 text-center text-[11px] tabular-nums text-muted-foreground" title={t.rulerStep}>{zoomLabel}</span>
           <Button
             variant="outline"
             size="icon"
             class="size-8"
-            title="Zoom in"
+            title={t.zoomIn}
             disabled={pxIdx === PX_PER_SEC_PRESETS.length - 1}
             onclick={() => zoom(1)}
           >
@@ -686,29 +688,29 @@
             {/each}
             {#if eventKinds.length === 0}
               <div class="flex h-7 items-center border-b border-border px-3">
-                <span class="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/50">No events</span>
+                <span class="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/50">{t.noEvents}</span>
               </div>
             {/if}
-            {#each visibleTracks as t (t.cameraIp)}
+            {#each visibleTracks as tr (tr.cameraIp)}
               <div class="flex h-11 items-center gap-1.5 border-b border-border/60 px-3">
                 <span class="size-2 shrink-0 rounded-full bg-primary/60"></span>
                 <div class="min-w-0 flex-1">
-                  <p class="truncate text-sm font-medium">{t.cameraName}</p>
-                  <p class="text-[11px] text-muted-foreground tabular-nums">{t.clips.length} clip{t.clips.length === 1 ? "" : "s"}</p>
+                  <p class="truncate text-sm font-medium">{tr.cameraName}</p>
+                  <p class="text-[11px] text-muted-foreground tabular-nums">{t.clipCount(tr.clips.length)}</p>
                 </div>
                 <button
                   type="button"
-                  class="grid size-6 place-items-center rounded transition-colors hover:bg-muted/60 {soloCamera === t.cameraIp ? 'text-primary' : 'text-muted-foreground'}"
-                  title={soloCamera === t.cameraIp ? "Exit solo" : "Solo this camera"}
-                  onclick={() => toggleSolo(t.cameraIp)}
+                  class="grid size-6 place-items-center rounded transition-colors hover:bg-muted/60 {soloCamera === tr.cameraIp ? 'text-primary' : 'text-muted-foreground'}"
+                  title={soloCamera === tr.cameraIp ? t.exitSolo : t.soloCamera}
+                  onclick={() => toggleSolo(tr.cameraIp)}
                 >
                   <Focus class="size-3.5" />
                 </button>
                 <button
                   type="button"
                   class="grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted/60"
-                  title="Hide this camera"
-                  onclick={() => toggleHide(t.cameraIp)}
+                  title={t.hideCamera}
+                  onclick={() => toggleHide(tr.cameraIp)}
                 >
                   <EyeOff class="size-3.5" />
                 </button>
@@ -724,7 +726,7 @@
               bind:this={contentEl}
               role="slider"
               tabindex="0"
-              aria-label="Playhead — click or use arrow keys to scrub"
+              aria-label={t.playheadLabel}
               aria-valuemin={0}
               aria-valuemax={DAY_SECS}
               aria-valuenow={Math.round((playheadMs - originMs) / 1000)}
@@ -750,7 +752,7 @@
                       style="left: {markerLeft(m)}px"
                       role="button"
                       tabindex="0"
-                      aria-label="{m.events.length} {k} event(s) at {hhmm(m.ts)}"
+                      aria-label={t.markerLabel(m.events.length, k, hhmm(m.ts))}
                       onmouseenter={() => (hovered = m)}
                       onmouseleave={() => (hovered = null)}
                       onfocus={() => (hovered = m)}
@@ -775,8 +777,8 @@
                 {#each markers as m (m.ts)}
                   <div class="pointer-events-none absolute inset-y-0 w-px bg-primary/10" style="left: {markerLeft(m)}px"></div>
                 {/each}
-                {#each visibleTracks as t (t.cameraIp)}
-                  {@const segs = mergeSegments(t.clips)}
+                {#each visibleTracks as tr (tr.cameraIp)}
+                  {@const segs = mergeSegments(tr.clips)}
                   <div class="relative h-11 border-b border-border/60">
                     <!-- gap baseline: no footage shows through as a dashed lane -->
                     <div class="absolute inset-x-0 top-1/2 border-t border-dashed border-border/50"></div>
@@ -798,7 +800,7 @@
               <!-- "now" guide (today only) — amber, distinct from the ink playhead -->
               {#if isToday && nowX >= 0 && nowX <= contentWidth}
                 <div class="pointer-events-none absolute inset-y-0 z-10 w-px bg-amber-500/80" style="left: {nowX}px">
-                  <span class="absolute -top-0 left-0.5 rounded-sm bg-amber-500 px-1 text-[9px] font-semibold leading-tight text-white">now</span>
+                  <span class="absolute -top-0 left-0.5 rounded-sm bg-amber-500 px-1 text-[9px] font-semibold leading-tight text-white">{t.now}</span>
                 </div>
               {/if}
 
@@ -808,8 +810,8 @@
                   <button
                     type="button"
                     class="pointer-events-auto absolute -left-[7px] top-1.5 size-3.5 cursor-ew-resize rounded-full bg-primary shadow ring-2 ring-card"
-                    title="Drag to scrub"
-                    aria-label="Drag playhead"
+                    title={t.dragToScrub}
+                    aria-label={t.dragPlayhead}
                     onpointerdown={startDrag}
                     onclick={(e) => e.stopPropagation()}
                   ></button>
@@ -823,7 +825,7 @@
                   style="left: {markerLeft(hovered)}px; top: {lanesBottom}px"
                 >
                   <p class="mb-1 text-[11px] font-semibold text-muted-foreground tabular-nums">
-                    {hhmm(hovered.ts)} · {hovered.events.length} event{hovered.events.length === 1 ? "" : "s"}
+                    {t.hoverEvents(hhmm(hovered.ts), hovered.events.length)}
                   </p>
                   <ul class="space-y-0.5">
                     {#each hovered.events.slice(0, 6) as e (e.id)}
@@ -833,7 +835,7 @@
                       </li>
                     {/each}
                     {#if hovered.events.length > 6}
-                      <li class="text-[11px] text-muted-foreground">+{hovered.events.length - 6} more</li>
+                      <li class="text-[11px] text-muted-foreground">{t.moreEvents(hovered.events.length - 6)}</li>
                     {/if}
                   </ul>
                 </div>

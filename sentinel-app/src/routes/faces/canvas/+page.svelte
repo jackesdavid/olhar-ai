@@ -18,7 +18,10 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { data } from "$lib/data";
+  import { dict, lang, locale } from "$lib/i18n";
   import type { Island, Person, FaceDetail } from "$lib/types";
+
+  const t = $derived(dict[lang()].faces);
 
   let canvasEl: HTMLCanvasElement;
   let wrapEl: HTMLDivElement;
@@ -70,11 +73,11 @@
   function toggleLasso() { lassoMode = !lassoMode; lassoPts = []; if (!lassoMode) lassoIds = []; }
   let showBox = $state(false); // full frame + detection rectangle vs cropped face
   function toggleBox() { showBox = !showBox; imgs.clear(); attempts.clear(); pending.length = 0; dirty = true; }
-  const SCOPES: Array<{ v: "unknown" | "known" | "all"; label: string }> = [
-    { v: "unknown", label: "Unknown" },
-    { v: "known", label: "Known" },
-    { v: "all", label: "All" },
-  ];
+  const SCOPES: Array<{ v: "unknown" | "known" | "all"; label: string }> = $derived([
+    { v: "unknown", label: t.scopeUnknown },
+    { v: "known", label: t.scopeKnown },
+    { v: "all", label: t.scopeAll },
+  ]);
 
   // camera: world point at screen centre + scale (screen px per world unit)
   const cam = { x: 0, y: 0, scale: 1 };
@@ -158,7 +161,7 @@
       if (fit) fitView();
       dirty = true;
     } catch (e) {
-      toast.error("Couldn't load canvas", { description: String(e) });
+      toast.error(t.canvasLoadFailed, { description: String(e) });
     } finally {
       loading = false;
     }
@@ -181,7 +184,7 @@
       if (fit) fitView();
       dirty = true;
     } catch (e) {
-      toast.error("Couldn't re-group", { description: String(e) });
+      toast.error(t.regroupFailed, { description: String(e) });
     }
   }
   // Auto-refresh: re-fetch the layout on the chosen interval (0 = off). Silent (no fit/toast churn).
@@ -372,7 +375,7 @@
     }
     lassoIds = ids;
     bulkQuery = "";
-    if (!ids.length) toast.info("Lasso caught no faces — draw around some dots.");
+    if (!ids.length) toast.info(t.lassoEmpty);
     dirty = true;
   }
   function pointInPoly(x: number, y: number, poly: { x: number; y: number }[]): boolean {
@@ -396,11 +399,11 @@
     bulkBusy = true;
     try {
       await data.labelFaces(lassoIds, target);
-      toast.success(`Labeled ${lassoIds.length} face${lassoIds.length === 1 ? "" : "s"} → ${name}`);
+      toast.success(t.lassoLabeled(lassoIds.length, name));
       lassoIds = []; lassoMode = false;
       await recluster(true);
     } catch (e) {
-      toast.error("Couldn't label", { description: String(e) });
+      toast.error(t.labelFailed, { description: String(e) });
     } finally {
       bulkBusy = false;
     }
@@ -411,11 +414,11 @@
     bulkBusy = true;
     try {
       const { deleted } = await data.deleteFaces(lassoIds);
-      toast.success(`Deleted ${deleted} face${deleted === 1 ? "" : "s"}`);
+      toast.success(t.deletedCount(deleted));
       lassoIds = []; lassoMode = false;
       await recluster(true);
     } catch (e) {
-      toast.error("Couldn't delete", { description: String(e) });
+      toast.error(t.deleteFailed, { description: String(e) });
     } finally {
       bulkBusy = false;
     }
@@ -425,11 +428,11 @@
     bulkBusy = true;
     try {
       await data.ignoreFaces(lassoIds, true);
-      toast.success(`Ignored ${lassoIds.length} face${lassoIds.length === 1 ? "" : "s"}`);
+      toast.success(t.ignoredCount(lassoIds.length));
       lassoIds = []; lassoMode = false;
       await recluster(true);
     } catch (e) {
-      toast.error("Couldn't ignore", { description: String(e) });
+      toast.error(t.ignoreFailed, { description: String(e) });
     } finally {
       bulkBusy = false;
     }
@@ -493,7 +496,7 @@
       const d = await data.faceDetail(f.id);
       if (detail?.id === f.id) detail = { ...detail, data: d };
     } catch (e) {
-      toast.error("Couldn't load face", { description: String(e) });
+      toast.error(t.faceLoadFailed, { description: String(e) });
     }
   }
   function closeDetail() {
@@ -533,7 +536,7 @@
       detailPoints = { pts: res.landmarks, w: dims.w, h: dims.h };
     } catch (e) {
       detailPoints = { pts: [], w: 0, h: 0 };
-      toast.error("Couldn't detect landmarks", { description: String(e) });
+      toast.error(t.landmarksFailed, { description: String(e) });
     } finally {
       pointsBusy = false;
     }
@@ -558,11 +561,11 @@
     const faceId = detail.id;
     try {
       await data.reassignFace(faceId, p.id);
-      toast.success(`Moved to ${p.name}`);
+      toast.success(t.movedTo(p.name));
       startFly(faceId, p.name); // flies on the canvas; its landing triggers recluster
       closeDetail();
     } catch (e) {
-      toast.error("Couldn't move", { description: String(e) });
+      toast.error(t.moveFailed, { description: String(e) });
     } finally {
       busyDetail = false;
     }
@@ -574,12 +577,12 @@
     const faceId = detail.id;
     try {
       await data.labelFaces([faceId], { newPersonName: n });
-      toast.success(`Assigned to ${n}`);
+      toast.success(t.assignedTo(n));
       people = await data.listPeople();
       startFly(faceId, n);
       closeDetail();
     } catch (e) {
-      toast.error("Couldn't assign", { description: String(e) });
+      toast.error(t.assignFailed, { description: String(e) });
     } finally {
       busyDetail = false;
     }
@@ -590,11 +593,11 @@
     const faceId = detail.id;
     try {
       await data.deleteFaces([faceId]);
-      toast.success("Face deleted");
+      toast.success(t.faceDeleted);
       closeDetail();
       recluster();
     } catch (e) {
-      toast.error("Couldn't delete", { description: String(e) });
+      toast.error(t.deleteFailed, { description: String(e) });
     } finally {
       busyDetail = false;
     }
@@ -619,12 +622,12 @@
     busy = true;
     try {
       const res = await data.labelFaces(selected.faces.map((f) => f.id), target);
-      toast.success(`Labeled ${res.labeled} face${res.labeled === 1 ? "" : "s"} as ${who}`);
+      toast.success(t.labeled(res.labeled, who));
       selected = null; query = "";
       if (target.newPersonName) people = await data.listPeople();
       await recluster(true); // membership changed → recompute the similarity islands
     } catch (e) {
-      toast.error("Couldn't label", { description: String(e) });
+      toast.error(t.labelFailed, { description: String(e) });
     } finally {
       busy = false;
     }
@@ -637,11 +640,11 @@
     busy = true;
     try {
       const res = await data.deleteFaces(selected.faces.map((f) => f.id));
-      toast.success(`Deleted ${res.deleted} face${res.deleted === 1 ? "" : "s"}`);
+      toast.success(t.deletedCount(res.deleted));
       selected = null; confirmDel = false;
       await recluster(true); // the pile changed → recompute the similarity islands
     } catch (e) {
-      toast.error("Couldn't delete", { description: String(e) });
+      toast.error(t.deleteFailed, { description: String(e) });
     } finally {
       busy = false;
     }
@@ -655,8 +658,8 @@
   <div class="flex items-center justify-between gap-3">
     <div class="flex items-center gap-2">
       <ScanFace class="size-5" />
-      <h1 class="text-lg font-semibold">Faces canvas</h1>
-      <span class="text-sm text-muted-foreground">{islands.length} islands · similar faces sit together</span>
+      <h1 class="text-lg font-semibold">{t.canvasTitle}</h1>
+      <span class="text-sm text-muted-foreground">{t.islandsHint(islands.length)}</span>
     </div>
     <div class="flex items-center gap-2">
       <div class="flex overflow-hidden rounded-md border border-border">
@@ -667,34 +670,34 @@
           >{s.label}</button>
         {/each}
       </div>
-      <Button variant={showBox ? "default" : "outline"} onclick={toggleBox} title="Show the full frame with the detection box (context)">
-        <Frame class="size-4" /> Context
+      <Button variant={showBox ? "default" : "outline"} onclick={toggleBox} title={t.contextTitle}>
+        <Frame class="size-4" /> {t.context}
       </Button>
-      <Button variant={lassoMode ? "default" : "outline"} onclick={toggleLasso} title="Lasso-select faces to bulk-label / delete / ignore">
-        <Lasso class="size-4" /> Lasso
+      <Button variant={lassoMode ? "default" : "outline"} onclick={toggleLasso} title={t.lassoTitle}>
+        <Lasso class="size-4" /> {t.lasso}
       </Button>
-      <select bind:value={autoSecs} class="h-9 rounded-md border border-border bg-background px-2 text-xs" title="Auto-refresh the layout on an interval">
+      <select bind:value={autoSecs} class="h-9 rounded-md border border-border bg-background px-2 text-xs" title={t.autoRefreshTitle}>
         {#each AUTO_OPTS as s (s)}
-          <option value={s}>{s === 0 ? "Manual" : `Auto ${s}s`}</option>
+          <option value={s}>{s === 0 ? t.manual : t.autoEvery(s)}</option>
         {/each}
       </select>
       <Button variant="outline" onclick={() => load(true)} disabled={loading}>
-        <RefreshCw class="size-4 {loading ? 'animate-spin' : ''}" /> Refresh
+        <RefreshCw class="size-4 {loading ? 'animate-spin' : ''}" /> {t.refresh}
       </Button>
     </div>
   </div>
 
   <!-- Persistent filter/tuning bar — always visible (no popover) -->
   <div class="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs">
-    <div class="flex items-center gap-2" title="Grouping distance (unknown faces only)">
+    <div class="flex items-center gap-2" title={t.groupingUnknownTitle}>
       <SlidersHorizontal class="size-3.5 text-muted-foreground" />
-      <span class="text-muted-foreground">Grouping</span>
+      <span class="text-muted-foreground">{t.grouping}</span>
       <input type="range" min="0.30" max="0.80" step="0.01" value={eps}
         oninput={(e) => onEps(parseFloat(e.currentTarget.value))} class="h-1 w-24 cursor-pointer accent-primary" />
       <span class="w-8 tabular-nums">{eps.toFixed(2)}</span>
     </div>
-    <div class="flex items-center gap-2" title="Distance between islands">
-      <span class="text-muted-foreground">Spread</span>
+    <div class="flex items-center gap-2" title={t.spreadTitle}>
+      <span class="text-muted-foreground">{t.spread}</span>
       <input type="range" min="0.5" max="3" step="0.1" value={spread}
         oninput={(e) => onSpread(parseFloat(e.currentTarget.value))} class="h-1 w-24 cursor-pointer accent-primary" />
       <span class="w-8 tabular-nums">{spread.toFixed(1)}×</span>
@@ -738,36 +741,36 @@
     {#if lassoIds.length}
       <div class="absolute left-1/2 top-4 z-20 w-80 -translate-x-1/2 rounded-lg border border-border bg-background p-3 shadow-2xl">
         <div class="flex items-center justify-between">
-          <p class="text-sm font-medium">{lassoIds.length} face{lassoIds.length === 1 ? "" : "s"} selected</p>
-          <button onclick={cancelBulk} class="text-muted-foreground hover:text-foreground" aria-label="cancel"><X class="size-4" /></button>
+          <p class="text-sm font-medium">{t.selectedCount(lassoIds.length)}</p>
+          <button onclick={cancelBulk} class="text-muted-foreground hover:text-foreground" aria-label={t.cancel}><X class="size-4" /></button>
         </div>
-        <p class="mt-1 text-xs text-muted-foreground">Label them all as…</p>
-        <Input placeholder="Search or name…" bind:value={bulkQuery} class="mt-2 h-8 text-xs" />
+        <p class="mt-1 text-xs text-muted-foreground">{t.labelThemAll}</p>
+        <Input placeholder={t.searchOrName} bind:value={bulkQuery} class="mt-2 h-8 text-xs" />
         <div class="mt-1 max-h-44 overflow-y-auto rounded-md border border-border">
           {#each matchingBulk() as p (p.id)}
             <button class="flex w-full px-2 py-1.5 text-left text-xs hover:bg-accent" disabled={bulkBusy} onclick={() => bulkLabel({ personId: p.id }, p.name)}>{p.name}</button>
           {/each}
           {#if bulkQuery.trim() && !bulkExact()}
             <button class="flex w-full items-center gap-2 border-t border-border px-2 py-1.5 text-left text-xs hover:bg-accent" disabled={bulkBusy} onclick={() => bulkLabel({ newPersonName: bulkQuery.trim() }, bulkQuery.trim())}>
-              <UserPlus class="size-3.5 text-primary" /> Create “{bulkQuery.trim()}”
+              <UserPlus class="size-3.5 text-primary" /> {t.createBefore}{bulkQuery.trim()}{t.createAfter}
             </button>
           {/if}
         </div>
         <div class="mt-2 flex gap-2">
           <button class="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:border-foreground hover:text-foreground" disabled={bulkBusy} onclick={bulkIgnore}>
-            <EyeOff class="size-3.5" /> Ignore
+            <EyeOff class="size-3.5" /> {t.ignore}
           </button>
           <button class="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:border-destructive hover:text-destructive" disabled={bulkBusy} onclick={bulkDelete}>
-            <Trash2 class="size-3.5" /> Delete
+            <Trash2 class="size-3.5" /> {t.delete}
           </button>
         </div>
       </div>
     {/if}
 
     {#if loading}
-      <div class="pointer-events-none absolute inset-0 grid place-items-center text-sm text-white/60">Laying out faces…</div>
+      <div class="pointer-events-none absolute inset-0 grid place-items-center text-sm text-white/60">{t.layingOut}</div>
     {:else if islands.length === 0}
-      <div class="absolute inset-0 grid place-items-center text-sm text-white/60">No unknown faces to place.</div>
+      <div class="absolute inset-0 grid place-items-center text-sm text-white/60">{t.noUnknownFaces}</div>
     {/if}
 
     <!-- floating label popup anchored above the selected island -->
@@ -777,17 +780,17 @@
         style="left:{selScreen.x}px; top:{selScreen.y - 10}px"
       >
         <div class="mb-1 flex items-center justify-between px-1">
-          <span class="text-xs font-medium">Label {selected.size} face{selected.size === 1 ? "" : "s"}</span>
+          <span class="text-xs font-medium">{t.labelCount(selected.size)}</span>
           <button class="text-muted-foreground hover:text-foreground" onclick={() => (selected = null)}><X class="size-3.5" /></button>
         </div>
         {#if selected.suggestion}
           <button class="press mb-1 flex w-full items-center gap-2 rounded-md bg-primary px-2 py-1.5 text-xs text-primary-foreground disabled:opacity-50"
             disabled={busy} onclick={confirmSuggestion}>
-            <Check class="size-3.5" /> Confirm {selected.suggestion.name} · {Math.round(selected.suggestion.confidence)}%
+            <Check class="size-3.5" /> {t.confirmWithConfidence(selected.suggestion.name, Math.round(selected.suggestion.confidence))}
           </button>
         {/if}
         <!-- svelte-ignore a11y_autofocus -->
-        <Input placeholder="Search or name…" bind:value={query} autofocus class="h-8 text-xs" />
+        <Input placeholder={t.searchOrName} bind:value={query} autofocus class="h-8 text-xs" />
         <div class="mt-1 overflow-hidden rounded-md border border-border">
           {#each matchingPeople() as p (p.id)}
             <button class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-accent" disabled={busy} onclick={() => pick(p)}>
@@ -796,7 +799,7 @@
           {/each}
           {#if query.trim() && !exactExists()}
             <button class="flex w-full items-center gap-2 border-t border-border px-2 py-1.5 text-left text-xs hover:bg-accent" disabled={busy} onclick={createNew}>
-              <UserPlus class="size-3.5 text-primary" /> Create “{query.trim()}”
+              <UserPlus class="size-3.5 text-primary" /> {t.createBefore}{query.trim()}{t.createAfter}
             </button>
           {/if}
         </div>
@@ -820,7 +823,7 @@
       class="absolute inset-0 bg-black/75 transition-opacity duration-300"
       style:opacity={detailReady ? 1 : 0}
       onclick={closeDetail}
-      aria-label="Close detail"
+      aria-label={t.closeDetail}
     ></button>
 
     {#if hero}
@@ -852,7 +855,7 @@
       {:else}
         <img
           src={data.faceImageUrl(detail.id, { box: detail.box })}
-          alt="face"
+          alt={t.faceAlt}
           class="pointer-events-none fixed z-40 rounded-xl object-cover shadow-2xl ring-1 ring-white/15 transition-all duration-[360ms] ease-out"
           style="left:{hero.x}px; top:{hero.y}px; width:{hero.w}px; height:{hero.h}px"
         />
@@ -867,41 +870,41 @@
       <div class="flex items-start justify-between gap-2">
         <div class="min-w-0">
           <p class="truncate text-lg font-semibold">
-            {detail.data?.person_name ?? (detail.data && detail.data.person_id ? "Labeled" : "Unknown")}
+            {detail.data?.person_name ?? (detail.data && detail.data.person_id ? t.labeledPerson : t.unknown)}
           </p>
           <p class="text-xs text-muted-foreground">
-            {detail.data ? new Date(detail.data.created_at).toLocaleString() : "loading…"}
+            {detail.data ? new Date(detail.data.created_at).toLocaleString(locale()) : t.loadingEllipsis}
           </p>
         </div>
-        <button class="text-muted-foreground hover:text-foreground" onclick={closeDetail} aria-label="close"><X class="size-5" /></button>
+        <button class="text-muted-foreground hover:text-foreground" onclick={closeDetail} aria-label={t.close}><X class="size-5" /></button>
       </div>
 
       <div class="mt-2 flex items-center gap-3 text-xs">
         <button class="flex items-center gap-1.5 text-muted-foreground hover:text-foreground" onclick={toggleDetailBox}>
-          <Frame class="size-3.5" /> {detail.box ? "Show face crop" : "Show full frame + box"}
+          <Frame class="size-3.5" /> {detail.box ? t.showFaceCrop : t.showFullFrame}
         </button>
         <button class="flex items-center gap-1.5 {pointsOn ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}" disabled={pointsBusy} onclick={toggleDetailPoints}>
-          <ScanFace class="size-3.5" /> {pointsBusy ? "Detecting…" : pointsOn ? "Hide points" : "Face points"}
+          <ScanFace class="size-3.5" /> {pointsBusy ? t.detecting : pointsOn ? t.hidePoints : t.facePoints}
         </button>
       </div>
 
       {#if detail.data}
         <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-          <div><dt class="text-muted-foreground">Camera</dt><dd class="truncate">{detail.data.camera || "—"}</dd></div>
-          <div><dt class="text-muted-foreground">Source</dt><dd>{detail.data.source}</dd></div>
-          <div><dt class="text-muted-foreground">Match confidence</dt><dd class="tabular-nums">{Math.round(detail.data.confidence)}%</dd></div>
-          <div><dt class="text-muted-foreground">Face size</dt><dd class="tabular-nums">{(detail.data.face_ratio * 100).toFixed(1)}% of frame</dd></div>
+          <div><dt class="text-muted-foreground">{t.camera}</dt><dd class="truncate">{detail.data.camera || "—"}</dd></div>
+          <div><dt class="text-muted-foreground">{t.source}</dt><dd>{detail.data.source}</dd></div>
+          <div><dt class="text-muted-foreground">{t.matchConfidence}</dt><dd class="tabular-nums">{Math.round(detail.data.confidence)}%</dd></div>
+          <div><dt class="text-muted-foreground">{t.faceSize}</dt><dd class="tabular-nums">{(detail.data.face_ratio * 100).toFixed(1)}{t.ofFrame}</dd></div>
           {#if detail.data.bbox}
-            <div class="col-span-2"><dt class="text-muted-foreground">Detection box</dt><dd class="tabular-nums">[{detail.data.bbox.join(", ")}]</dd></div>
+            <div class="col-span-2"><dt class="text-muted-foreground">{t.detectionBox}</dt><dd class="tabular-nums">[{detail.data.bbox.join(", ")}]</dd></div>
           {/if}
         </dl>
       {:else}
-        <p class="mt-3 text-xs text-muted-foreground">Loading details…</p>
+        <p class="mt-3 text-xs text-muted-foreground">{t.loadingDetails}</p>
       {/if}
 
       <div class="mt-auto space-y-2 pt-4">
-        <p class="text-xs font-medium text-muted-foreground">Assign this face to a person</p>
-        <Input placeholder="Search or name…" bind:value={faceQuery} class="h-8 text-xs" />
+        <p class="text-xs font-medium text-muted-foreground">{t.assignToPerson}</p>
+        <Input placeholder={t.searchOrName} bind:value={faceQuery} class="h-8 text-xs" />
         <div class="max-h-40 overflow-y-auto rounded-md border border-border">
           {#each matchingMove() as p (p.id)}
             <button class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-accent" disabled={busyDetail} onclick={() => moveFaceTo(p)}>
@@ -910,7 +913,7 @@
           {/each}
           {#if faceQuery.trim() && !moveExact()}
             <button class="flex w-full items-center gap-2 border-t border-border px-2 py-1.5 text-left text-xs hover:bg-accent" disabled={busyDetail} onclick={createFromDetail}>
-              <UserPlus class="size-3.5 text-primary" /> Create “{faceQuery.trim()}”
+              <UserPlus class="size-3.5 text-primary" /> {t.createBefore}{faceQuery.trim()}{t.createAfter}
             </button>
           {/if}
         </div>
@@ -919,7 +922,7 @@
           disabled={busyDetail}
           onclick={deleteFromDetail}
         >
-          <Trash2 class="size-3.5" /> Delete face
+          <Trash2 class="size-3.5" /> {t.deleteFace}
         </button>
       </div>
     </div>

@@ -29,6 +29,8 @@ import { personDetail } from "./messages/personDetail";
 import { enroll } from "./messages/enroll";
 import { chat } from "./messages/chat";
 import { map } from "./messages/map";
+import { faces } from "./messages/faces";
+import { playback } from "./messages/playback";
 
 export { lang, setLang, initLang, locale, type Lang } from "./runtime.svelte";
 
@@ -66,6 +68,8 @@ const modules = {
   enroll: domain(enroll),
   chat: domain(chat),
   map: domain(map),
+  faces: domain(faces),
+  playback: domain(playback),
 };
 
 /** One language's messages — every module, narrowed to that language. */
