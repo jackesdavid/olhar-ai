@@ -34,7 +34,8 @@ const CHALLENGE_TTL_SECS: u64 = 300;
 /// bad config) makes every endpoint answer 501, so the app cleanly degrades to password login.
 static WEBAUTHN: LazyLock<Option<Webauthn>> = LazyLock::new(|| {
     let rp_id = std::env::var("WEBAUTHN_RP_ID").unwrap_or_else(|_| "localhost".into());
-    let origin = std::env::var("WEBAUTHN_RP_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".into());
+    let origin =
+        std::env::var("WEBAUTHN_RP_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".into());
     let url = Url::parse(&origin).ok()?;
     let mut builder = WebauthnBuilder::new(&rp_id, &url).ok()?.rp_name("Olhar AI");
     // When RP ID is the apex but the app is on a subdomain, list the subdomain origin too.
@@ -117,7 +118,10 @@ pub async fn register_finish(
         reg.remove(&uid)
             .filter(|(_, t)| !expired(t))
             .map(|(s, _)| s)
-            .ok_or((StatusCode::BAD_REQUEST, "no registration in progress".into()))?
+            .ok_or((
+                StatusCode::BAD_REQUEST,
+                "no registration in progress".into(),
+            ))?
     };
 
     let passkey = webauthn
@@ -179,12 +183,17 @@ pub async fn login_start(
         return Err((StatusCode::NOT_FOUND, "no passkey for this account".into()));
     }
 
-    let (rcr, state) = webauthn.start_passkey_authentication(&passkeys).map_err(bad)?;
+    let (rcr, state) = webauthn
+        .start_passkey_authentication(&passkeys)
+        .map_err(bad)?;
     let handle = Uuid::new_v4().to_string();
     let mut a = AUTHN.lock().unwrap();
     a.retain(|_, (_, _, t)| !expired(t));
     a.insert(handle.clone(), (state, user.id, Instant::now()));
-    Ok(Json(LoginChallenge { handle, options: rcr }))
+    Ok(Json(LoginChallenge {
+        handle,
+        options: rcr,
+    }))
 }
 
 #[derive(serde::Deserialize)]
@@ -219,13 +228,15 @@ pub async fn login_finish(
             if passkey.cred_id() == result.cred_id() {
                 passkey.update_credential(&result);
                 let json = serde_json::to_value(&passkey).map_err(db)?;
-                sqlx::query("UPDATE user_credentials SET passkey = $1, last_used_at = $2 WHERE id = $3")
-                    .bind(&json)
-                    .bind(now_rfc3339())
-                    .bind(row_id)
-                    .execute(&st.pool)
-                    .await
-                    .map_err(db)?;
+                sqlx::query(
+                    "UPDATE user_credentials SET passkey = $1, last_used_at = $2 WHERE id = $3",
+                )
+                .bind(&json)
+                .bind(now_rfc3339())
+                .bind(row_id)
+                .execute(&st.pool)
+                .await
+                .map_err(db)?;
                 break;
             }
         }
