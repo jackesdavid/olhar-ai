@@ -461,7 +461,7 @@
         >
           {#if !navCollapsed}
             <span class="size-1.5 rounded-full bg-primary status-live"></span>
-            <span class="font-mono">v0.4.1</span>
+            <span class="font-mono">v0.5.0</span>
             <span class="font-mono" title={t.shell.deployedCommit}>· {COMMIT}</span>
             <button
               class="interactive ml-auto rounded-md p-1 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
