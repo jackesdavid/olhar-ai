@@ -31,8 +31,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64 → org self-hosted runner (label: self-hosted / Linux / X64).
-          # Arm/Windows/macOS stay on GitHub-hosted — no matching self-hosted runners yet.
+          # Linux x86_64 → org self-hosted runner (label: self-hosted / Linux / X64);
+          # arm64 on a GitHub-hosted native arm runner. macOS + Windows are built out-of-band.
           - target: x86_64-unknown-linux-gnu
             os: self-hosted
             setup: linux
@@ -41,18 +41,6 @@ jobs:
             os: ubuntu-22.04-arm      # native arm64 runner — no cross-compile of GStreamer
             setup: linux
             asset: sentinel-edge-linux-aarch64
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            setup: windows
-            asset: sentinel-edge-windows-x86_64.exe
-          - target: aarch64-apple-darwin
-            os: macos-latest          # arm64 runner
-            setup: macos
-            asset: sentinel-edge-macos-arm64
-          - target: x86_64-apple-darwin
-            os: macos-13              # native intel runner (macos-latest is arm64)
-            setup: macos
-            asset: sentinel-edge-macos-x86_64
     steps:
       - uses: actions/checkout@v4
 
@@ -74,103 +62,30 @@ jobs:
           sudo apt-get install -y --no-install-recommends pkg-config libunwind-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
-      - name: GStreamer dev (macOS)
-        if: matrix.setup == 'macos'
-        run: brew install gstreamer pkg-config
-      - name: GStreamer dev (Windows — MSVC runtime + devel)
-        if: matrix.setup == 'windows'
-        shell: pwsh
-        run: |
-          $ver  = "1.24.10"
-          $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc"
-          curl.exe -sSL -o rt.msi  "$base/gstreamer-1.0-msvc-x86_64-$ver.msi"
-          curl.exe -sSL -o dev.msi "$base/gstreamer-1.0-devel-msvc-x86_64-$ver.msi"
-          Start-Process msiexec.exe -ArgumentList "/i rt.msi  /qn ADDLOCAL=ALL" -Wait
-          Start-Process msiexec.exe -ArgumentList "/i dev.msi /qn ADDLOCAL=ALL" -Wait
-          $root = "C:\gstreamer\1.0\msvc_x86_64"
-          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root"      | Out-File -Append -Encoding ascii $env:GITHUB_ENV
-          "PKG_CONFIG_PATH=$root\lib\pkgconfig"        | Out-File -Append -Encoding ascii $env:GITHUB_ENV
-          "$root\bin"                                  | Out-File -Append -Encoding ascii $env:GITHUB_PATH
 
       # sentinel-edge is a STANDALONE crate (not in the root workspace), so build via its own manifest.
       - name: Build (gst-linked)
         run: cargo build --release --locked --features gst-linked --manifest-path sentinel-edge/Cargo.toml --target ${{ matrix.target }}
 
-      - name: Stage asset (unix)
-        if: matrix.setup != 'windows'
+      - name: Stage asset
         run: |
           mkdir -p dist
           cp "sentinel-edge/target/${{ matrix.target }}/release/sentinel-edge" "dist/${{ matrix.asset }}"
-      - name: Stage asset (windows)
-        if: matrix.setup == 'windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item "sentinel-edge/target/${{ matrix.target }}/release/sentinel-edge.exe" "dist/${{ matrix.asset }}"
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
           path: dist/${{ matrix.asset }}
 
-  # Signed + notarized macOS installer. Self-contained (build.sh builds the edge + bundles go2rtc +
-  # ffmpeg), so it doesn't need the `build` job. Certs ride in as base64 .p12 secrets; notarization
-  # uses the Apple-ID app-password (NOTARY_* secrets).
-  pkg:
-    name: macOS .pkg (signed + notarized)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: pkg-macos
-          workspaces: sentinel-edge
-      - name: Import signing certs into a temp keychain
-        env:
-          APP_P12: ${{ secrets.MACOS_APP_CERT_P12 }}
-          PKG_P12: ${{ secrets.MACOS_PKG_CERT_P12 }}
-          APP_PW: ${{ secrets.MACOS_APP_CERT_PW }}
-          PKG_PW: ${{ secrets.MACOS_PKG_CERT_PW }}
-        run: |
-          set -euo pipefail
-          KC="$RUNNER_TEMP/signing.keychain-db"
-          KPW="$(openssl rand -hex 16)"
-          security create-keychain -p "$KPW" "$KC"
-          security default-keychain -s "$KC"
-          security unlock-keychain -p "$KPW" "$KC"
-          security set-keychain-settings -lut 21600 "$KC"
-          # strip any line-wrapping the secret picked up, so the decoded .p12 bytes are byte-exact
-          printf '%s' "$APP_P12" | tr -d '[:space:]' | base64 -d > "$RUNNER_TEMP/app.p12"
-          printf '%s' "$PKG_P12" | tr -d '[:space:]' | base64 -d > "$RUNNER_TEMP/pkg.p12"
-          security import "$RUNNER_TEMP/app.p12" -k "$KC" -P "$APP_PW" -T /usr/bin/codesign -T /usr/bin/productbuild
-          security import "$RUNNER_TEMP/pkg.p12" -k "$KC" -P "$PKG_PW" -T /usr/bin/codesign -T /usr/bin/productbuild
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KPW" "$KC" >/dev/null
-          rm -f "$RUNNER_TEMP/app.p12" "$RUNNER_TEMP/pkg.p12"
-      - name: Build + sign + notarize .pkg
-        env:
-          MACOS_APP_CERT: "Developer ID Application: Jackes Lemos (3A4H2Y6ZVM)"
-          MACOS_PKG_CERT: "Developer ID Installer: Jackes Lemos (3A4H2Y6ZVM)"
-          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
-          NOTARY_APP_PW: ${{ secrets.NOTARY_APP_PW }}
-          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
-        run: ./deploy/macos-pkg/build.sh --sign
-      - name: Stage .pkg
-        run: |
-          mkdir -p dist
-          cp "$(find deploy/macos-pkg -name 'Sentinel-Edge-*.pkg' | head -1)" dist/
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pkg
-          path: dist/*.pkg
-
   release:
     name: publish release
-    needs: [build, pkg]
-    # Publish the edge binaries whenever the BUILDS succeed, even if the signed macOS `.pkg` job
-    # fails (its Apple cert-import is a separate, pre-existing infra issue that must not block the
-    # Linux/raw binaries the appliances actually pull). The `.pkg` just won't be attached when it fails.
-    if: ${{ always() && needs.build.result == 'success' }}
+    needs: [build]
+    # macOS and Windows are NOT built here: GitHub retired the Intel macOS runners (`macos-13`
+    # queues forever, which silently blocked every release since 2026-07-27) and the Windows
+    # gst build can't resolve GStreamer through pkg-config. Both are produced out-of-band and
+    # uploaded to /ibbf/edge-dist directly; this workflow ships the Linux binaries the
+    # appliances actually pull, so one broken platform can no longer hold the others hostage.
+    if: ${{ needs.build.result == 'success' }}
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
@@ -185,10 +100,6 @@ jobs:
       - name: Add installers
         run: |
           cp sentinel-edge/install.sh dist/install.sh
-          # Windows bundle: the installer + its uninstaller + the WinSW service shim, alongside the
-          # sentinel-edge-windows-x86_64.exe binary the build job produced.
-          cp deploy/windows/install.ps1 dist/install.ps1
-          cp deploy/windows/uninstall.ps1 dist/uninstall.ps1 || true
 
       - uses: softprops/action-gh-release@v2
         with:
