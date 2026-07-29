@@ -184,12 +184,26 @@ async fn login(
         .await
         .map_err(db_err)?
         .ok_or(err(StatusCode::UNAUTHORIZED, "invalid credentials"))?;
+    // Locked accounts are refused before the password is even considered — otherwise the lockout
+    // still leaks whether a guess was right, which is most of what an attacker wanted.
+    if locked_now(user.locked_until.as_deref()) {
+        return Err(err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many attempts — try again later",
+        ));
+    }
     let hash = user.password_hash.as_deref().ok_or(err(
         StatusCode::UNAUTHORIZED,
         "use social login for this account",
     ))?;
     if !auth::verify_password(&b.password, hash) {
+        store::note_failed_login(&st.pool, user.id, lockout_until(user.failed_logins + 1)).await;
+        // Deliberately the same message and status as an unknown address: the throttle must not
+        // become an oracle for which accounts exist.
         return Err(err(StatusCode::UNAUTHORIZED, "invalid credentials"));
+    }
+    if user.failed_logins > 0 {
+        store::clear_failed_logins(&st.pool, user.id).await;
     }
     let perms = if user.is_master {
         Vec::new()
@@ -516,4 +530,99 @@ async fn assume_tenant(
         token,
         tenant_id: tenant.id,
     }))
+}
+
+// ---- login throttling -------------------------------------------------------
+
+/// Failures tolerated before the account is locked at all.
+///
+/// Generous on purpose: a real person mistyping twice must not be locked out, and the goal is to
+/// make guessing uneconomic rather than to punish fumbling. The escalation below does the work.
+const LOCKOUT_AFTER: i32 = 5;
+
+/// How long an account is locked after `failures` consecutive failed sign-ins.
+///
+/// Escalating, and capped at an hour. The cap matters: an unbounded backoff hands an attacker a
+/// denial-of-service — anyone who knows an address could lock its owner out permanently by failing
+/// on purpose. An hour is long enough to make guessing hopeless (a few attempts per hour against a
+/// real password) and short enough that a locked-out user is inconvenienced, not stranded.
+fn lockout_until(failures: i32) -> Option<String> {
+    if failures < LOCKOUT_AFTER {
+        return None;
+    }
+    let secs = match failures {
+        5..=6 => 60,
+        7..=9 => 300,
+        _ => 3600,
+    };
+    Some(app_core::timeutil::plus_secs_rfc3339(secs))
+}
+
+/// Whether a stored `locked_until` is still in the future.
+///
+/// Parsed rather than compared as text, unlike most timestamp checks here. Textual comparison is
+/// sound only for two values that are both valid RFC3339 from the same clock, and this one is a
+/// gate on someone's ability to sign in: any string that is not a timestamp sorts above `"2026-…"`
+/// — `"not-a-timestamp"` starts with `n` — and would lock the account out permanently. Parsing
+/// makes a corrupt value fail open, which is the right direction for a throttle. The counter still
+/// escalates, so this is not a way around the lockout.
+fn locked_now(locked_until: Option<&str>) -> bool {
+    let Some(t) = locked_until.map(str::trim).filter(|t| !t.is_empty()) else {
+        return false;
+    };
+    match chrono::DateTime::parse_from_rfc3339(t) {
+        Ok(until) => until > chrono::Local::now(),
+        Err(_) => {
+            log::warn!("login: unparseable locked_until {t:?} — treating the account as unlocked");
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod lockout_tests {
+    use super::*;
+
+    /// Ordinary mistyping must not lock a real person out.
+    #[test]
+    fn a_few_failures_do_not_lock_the_account() {
+        for n in 1..LOCKOUT_AFTER {
+            assert_eq!(lockout_until(n), None, "{n} failures should not lock");
+        }
+        assert!(lockout_until(LOCKOUT_AFTER).is_some());
+    }
+
+    /// The lock must escalate — a fixed short delay barely slows an automated guesser.
+    #[test]
+    fn repeated_failures_escalate() {
+        let at = |n| lockout_until(n).unwrap();
+        assert!(at(5) < at(8), "5 failures must unlock sooner than 8");
+        assert!(at(8) < at(20), "8 failures must unlock sooner than 20");
+    }
+
+    /// The escalation is capped, or knowing someone's email is enough to lock them out forever.
+    #[test]
+    fn the_lockout_is_capped_so_it_cannot_become_a_denial_of_service() {
+        let hour_ish = app_core::timeutil::plus_secs_rfc3339(3700);
+        assert!(
+            lockout_until(10_000).unwrap() < hour_ish,
+            "an unbounded backoff would let anyone lock any account permanently"
+        );
+    }
+
+    #[test]
+    fn a_future_lock_holds_and_a_past_one_does_not() {
+        assert!(locked_now(Some(&app_core::timeutil::plus_secs_rfc3339(60))));
+        assert!(!locked_now(Some(&app_core::timeutil::plus_secs_rfc3339(
+            -60
+        ))));
+        assert!(!locked_now(None));
+        assert!(!locked_now(Some("")));
+    }
+
+    /// A corrupt value must fail open, not strand the user forever.
+    #[test]
+    fn an_unparseable_lock_does_not_strand_the_user() {
+        assert!(!locked_now(Some("not-a-timestamp")));
+    }
 }

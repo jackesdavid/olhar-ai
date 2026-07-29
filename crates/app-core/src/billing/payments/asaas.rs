@@ -147,12 +147,25 @@ impl PaymentGateway for AsaasGateway {
     }
 
     fn verify_webhook(&self, _raw_body: &[u8], headers: &HashMap<String, String>) -> bool {
-        match &self.webhook_token {
-            Some(expected) => {
-                headers.get("asaas-access-token").map(String::as_str) == Some(expected.as_str())
+        let Some(expected) = &self.webhook_token else {
+            // Fail CLOSED, for the same reason as Stripe: this endpoint mutates billing state from
+            // an unauthenticated request, and an unset token is a deployment mistake rather than a
+            // decision to trust the internet.
+            if cfg!(debug_assertions) {
+                log::warn!("asaas: webhook token unset — accepting unverified (debug build only)");
+                return true;
             }
-            None => true, // no token configured (dev) → accept
-        }
+            log::error!("asaas: webhook token unset — rejecting webhook");
+            return false;
+        };
+        let Some(presented) = headers.get("asaas-access-token") else {
+            return false;
+        };
+        // Constant-time via a MAC over both sides rather than `==`. Not because a timing oracle
+        // across the internet is plausible, but because a shared-secret comparison is exactly the
+        // place the habit is worth keeping.
+        crate::signing::hmac_sha256_hex(b"asaas-webhook-token", presented.as_bytes())
+            == crate::signing::hmac_sha256_hex(b"asaas-webhook-token", expected.as_bytes())
     }
 
     fn parse_event(&self, raw_body: &[u8]) -> Option<WebhookEvent> {

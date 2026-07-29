@@ -197,14 +197,29 @@ fn enroll_limiter() -> &'static std::sync::Mutex<HashMap<String, (u32, std::time
     LIMITER.get_or_init(Default::default)
 }
 
-/// Who is asking. Control sits behind the VPS reverse proxy, so the peer address is the proxy —
-/// `X-Forwarded-For`'s first hop is the real client. An absent header collapses everyone into one
-/// shared bucket, which fails *closed* (stricter), not open.
+/// Who is asking. Control sits behind the VPS reverse proxy, so the peer address is the proxy.
+///
+/// **The LAST `X-Forwarded-For` hop, not the first.** The first hop is whatever the client typed:
+/// a request arriving with `X-Forwarded-For: 1.2.3.4` gets that value appended to, so trusting the
+/// front of the list lets anyone pick their own rate-limit bucket and defeat the limiter with a
+/// counter of their own. The last hop is the one our proxy appended, which is the only entry the
+/// client could not choose. `X-Real-Ip` is preferred where the proxy sets it, since it is
+/// single-valued and unambiguous.
+///
+/// An absent header collapses everyone into one shared bucket, which fails *closed* (stricter).
 fn enroll_client(headers: &HeaderMap) -> String {
+    let real_ip = headers
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if let Some(ip) = real_ip {
+        return ip.to_string();
+    }
     headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
+        .and_then(|v| v.rsplit(',').next())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".to_string())
@@ -1027,5 +1042,59 @@ async fn clip_uploaded(
             log::error!("clip {clip_id} confirm failed: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, "confirm failed").into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod enroll_client_tests {
+    use super::*;
+
+    fn h(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut m = HeaderMap::new();
+        for (k, v) in pairs {
+            m.insert(
+                axum::http::HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                v.parse().unwrap(),
+            );
+        }
+        m
+    }
+
+    /// The bug this replaces: taking the FIRST hop let a caller send its own `X-Forwarded-For` and
+    /// choose which rate-limit bucket to land in — a fresh one per attempt defeats the limiter
+    /// entirely. Only the last hop is written by our proxy.
+    #[test]
+    fn a_spoofed_forwarded_for_cannot_pick_its_own_bucket() {
+        let spoofed = h(&[("x-forwarded-for", "1.2.3.4, 203.0.113.9")]);
+        assert_eq!(enroll_client(&spoofed), "203.0.113.9");
+
+        // Two attempts claiming different origins must still share a bucket.
+        let a = h(&[("x-forwarded-for", "10.0.0.1, 203.0.113.9")]);
+        let b = h(&[("x-forwarded-for", "10.0.0.2, 203.0.113.9")]);
+        assert_eq!(enroll_client(&a), enroll_client(&b));
+    }
+
+    #[test]
+    fn x_real_ip_wins_when_the_proxy_sets_it() {
+        let m = h(&[
+            ("x-real-ip", "203.0.113.9"),
+            ("x-forwarded-for", "1.2.3.4, 5.6.7.8"),
+        ]);
+        assert_eq!(enroll_client(&m), "203.0.113.9");
+    }
+
+    #[test]
+    fn a_single_hop_is_used_as_is() {
+        assert_eq!(
+            enroll_client(&h(&[("x-forwarded-for", "203.0.113.9")])),
+            "203.0.113.9"
+        );
+    }
+
+    /// No headers must not mean "no limit" — everyone shares one bucket, which is stricter.
+    #[test]
+    fn a_missing_header_shares_one_strict_bucket() {
+        assert_eq!(enroll_client(&h(&[])), "unknown");
+        assert_eq!(enroll_client(&h(&[("x-forwarded-for", "  ")])), "unknown");
     }
 }

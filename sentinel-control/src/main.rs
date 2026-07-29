@@ -114,6 +114,35 @@ impl AppState {
     }
 }
 
+/// The dev-only fallback secret. Anyone can read it here, which is exactly why a release build must
+/// never reach for it.
+const DEV_JWT_SECRET: &str = "dev-insecure-secret-change-me";
+
+/// Resolve the JWT signing secret, or refuse to boot.
+///
+/// This secret mints every session, including `master: true` — a token forged with a known value is
+/// total compromise of every tenant. The old behaviour fell back to a literal from this file with
+/// only a `log::warn!`, so one missing env var in production silently published the keys.
+///
+/// The escape hatch is a property of the BINARY, not of the environment (same shape as
+/// `untenanted_dev_config()` in `http.rs`): a release build cannot be talked into dev behaviour by
+/// anything set on the host. Crashing is the point — a control plane that cannot authenticate
+/// safely should not serve, and a boot loop is far louder than a warning nobody reads.
+fn resolve_jwt_secret(configured: Option<String>) -> Result<String, &'static str> {
+    match configured {
+        // 32 chars is not cryptographic rigour, it is a typo guard: it rejects "changeme" and the
+        // half-pasted value, which is the realistic failure.
+        Some(s) if s.trim().len() >= 32 => Ok(s),
+        Some(_) if cfg!(debug_assertions) => Ok(DEV_JWT_SECRET.to_string()),
+        Some(_) => Err("JWT_SECRET is set but shorter than 32 characters"),
+        None if cfg!(debug_assertions) => {
+            log::warn!("JWT_SECRET unset — using the insecure dev secret (debug build only)");
+            Ok(DEV_JWT_SECRET.to_string())
+        }
+        None => Err("JWT_SECRET is unset"),
+    }
+}
+
 fn main() {
     // Structured logging → Datadog (card #146): every log ships with service:control + span context.
     app_core::datadog::init_tracing("control");
@@ -121,10 +150,13 @@ fn main() {
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://sentinel:sentinel@localhost/sentinel".to_string());
     let bind = std::env::var("CONTROL_BIND").unwrap_or_else(|_| "0.0.0.0:8790".to_string());
-    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| {
-        log::warn!("JWT_SECRET unset — using an insecure dev secret");
-        "dev-insecure-secret-change-me".to_string()
-    });
+    let jwt_secret = match resolve_jwt_secret(std::env::var("JWT_SECRET").ok()) {
+        Ok(s) => s,
+        Err(why) => {
+            log::error!("refusing to start: {why}");
+            std::process::exit(1);
+        }
+    };
 
     // Boot synchronously (Db::connect drives its own runtime + runs migrations).
     let db = boot_db(&database_url);
@@ -283,4 +315,52 @@ async fn shutdown_signal() {
         _ = term => {},
     }
     log::info!("shutdown signal received");
+}
+
+#[cfg(test)]
+mod jwt_secret_tests {
+    use super::*;
+
+    /// The failure this exists to prevent: one missing env var in production silently publishing a
+    /// secret that is readable in this repository, and with it the ability to forge `master: true`.
+    #[test]
+    fn an_unset_secret_never_falls_back_to_the_literal_in_release() {
+        let got = resolve_jwt_secret(None);
+        if cfg!(debug_assertions) {
+            assert_eq!(got.as_deref(), Ok(DEV_JWT_SECRET), "dev stays zero-config");
+        } else {
+            assert!(got.is_err(), "release must refuse to boot, not guess");
+        }
+    }
+
+    /// A short value is the realistic mistake — a placeholder, or a half-pasted secret — and it is
+    /// indistinguishable from a real one to everything except this check.
+    #[test]
+    fn a_too_short_secret_is_rejected_in_release() {
+        assert_eq!(
+            resolve_jwt_secret(Some("changeme".into())).is_err(),
+            !cfg!(debug_assertions)
+        );
+    }
+
+    #[test]
+    fn a_real_secret_is_used_in_every_build() {
+        let secret = "b77d6d5438011bee58f186b01296e324f8f5bea9c0f75ad6";
+        assert_eq!(
+            resolve_jwt_secret(Some(secret.into())).as_deref(),
+            Ok(secret)
+        );
+    }
+
+    /// The dev fallback must not be reachable in a release build by any input, or the escape hatch
+    /// is an environment property again rather than a property of the binary.
+    #[test]
+    fn the_dev_secret_is_unreachable_in_release() {
+        if cfg!(debug_assertions) {
+            return;
+        }
+        for input in [None, Some(String::new()), Some("short".into())] {
+            assert_ne!(resolve_jwt_secret(input).as_deref(), Ok(DEV_JWT_SECRET));
+        }
+    }
 }

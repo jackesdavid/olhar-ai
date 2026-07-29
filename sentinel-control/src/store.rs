@@ -9,6 +9,12 @@ pub struct UserRow {
     pub email: String,
     pub password_hash: Option<String>,
     pub is_master: bool,
+    /// Consecutive failed sign-ins; cleared on success. Drives [`lockout_until`].
+    #[sqlx(default)]
+    pub failed_logins: i32,
+    /// RFC3339; while in the future, sign-in is refused without checking the password.
+    #[sqlx(default)]
+    pub locked_until: Option<String>,
 }
 
 #[derive(sqlx::FromRow, serde::Serialize)]
@@ -40,7 +46,8 @@ pub struct UserListRow {
 
 pub async fn find_user_by_email(pool: &PgPool, email: &str) -> sqlx::Result<Option<UserRow>> {
     sqlx::query_as::<_, UserRow>(
-        "SELECT id, tenant_id, email, password_hash, is_master FROM users WHERE email = $1",
+        "SELECT id, tenant_id, email, password_hash, is_master, failed_logins, locked_until \
+         FROM users WHERE email = $1",
     )
     .bind(email)
     .fetch_optional(pool)
@@ -49,7 +56,8 @@ pub async fn find_user_by_email(pool: &PgPool, email: &str) -> sqlx::Result<Opti
 
 pub async fn find_user_by_id(pool: &PgPool, id: Uuid) -> sqlx::Result<Option<UserRow>> {
     sqlx::query_as::<_, UserRow>(
-        "SELECT id, tenant_id, email, password_hash, is_master FROM users WHERE id = $1",
+        "SELECT id, tenant_id, email, password_hash, is_master, failed_logins, locked_until \
+         FROM users WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -1336,4 +1344,25 @@ pub async fn pairing_status(
     .bind(tenant_id)
     .fetch_optional(pool)
     .await
+}
+
+// ---- login throttling -------------------------------------------------------
+
+/// Record a failed sign-in and lock the account once the attempts justify it.
+pub async fn note_failed_login(pool: &PgPool, user_id: Uuid, lock_until: Option<String>) {
+    let _ = sqlx::query(
+        "UPDATE users SET failed_logins = failed_logins + 1, locked_until = COALESCE($2, locked_until) WHERE id = $1",
+    )
+    .bind(user_id)
+    .bind(lock_until)
+    .execute(pool)
+    .await;
+}
+
+/// Clear the counter after a successful sign-in.
+pub async fn clear_failed_logins(pool: &PgPool, user_id: Uuid) {
+    let _ = sqlx::query("UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await;
 }

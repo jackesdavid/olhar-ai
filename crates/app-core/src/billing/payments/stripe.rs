@@ -16,6 +16,12 @@ use uuid::Uuid;
 
 use super::{EventKind, PaymentGateway, PlanRef, StartedSubscription, WebhookEvent};
 
+/// How stale a Stripe webhook may be before we refuse it.
+///
+/// Stripe's own guidance is five minutes. It has to absorb Stripe's retry backoff and our own
+/// queueing, so it is a replay bound rather than a freshness guarantee.
+const WEBHOOK_TOLERANCE_SECS: i64 = 300;
+
 type HmacSha256 = Hmac<Sha256>;
 
 pub struct StripeGateway {
@@ -211,8 +217,18 @@ impl PaymentGateway for StripeGateway {
 
     fn verify_webhook(&self, raw_body: &[u8], headers: &HashMap<String, String>) -> bool {
         let Some(secret) = &self.webhook_secret else {
-            log::warn!("stripe: STRIPE_WEBHOOK_SECRET unset — webhook signature NOT verified");
-            return true;
+            // Fail CLOSED. This endpoint mutates billing state from an unauthenticated request:
+            // `parse_event` reads tenant_id and plan_id straight out of the body, so accepting
+            // unverified events lets anyone grant themselves any plan. An unconfigured secret is a
+            // deployment mistake, and the safe response to it is to reject, not to trust.
+            if cfg!(debug_assertions) {
+                log::warn!(
+                    "stripe: STRIPE_WEBHOOK_SECRET unset — accepting unverified (debug build only)"
+                );
+                return true;
+            }
+            log::error!("stripe: STRIPE_WEBHOOK_SECRET unset — rejecting webhook");
+            return false;
         };
         let Some(sig_header) = headers.get("stripe-signature") else {
             return false;
@@ -230,6 +246,17 @@ impl PaymentGateway for StripeGateway {
         let Some(t) = timestamp else { return false };
         if signatures.is_empty() {
             return false;
+        }
+        // The timestamp is inside the MAC, so it cannot be edited — but folding it in proves only
+        // that Stripe once sent this, not that it sent it recently. Without a window, a single
+        // captured webhook is replayable forever.
+        match t.parse::<i64>() {
+            Ok(ts) if (crate::signing::now_unix() - ts).abs() <= WEBHOOK_TOLERANCE_SECS => {}
+            Ok(_) => {
+                log::warn!("stripe: webhook timestamp outside the {WEBHOOK_TOLERANCE_SECS}s window — rejecting");
+                return false;
+            }
+            Err(_) => return false,
         }
 
         // `verify_slice` is constant-time. A fresh MAC per candidate (it consumes self).
@@ -295,5 +322,85 @@ impl PaymentGateway for StripeGateway {
             _ => return None,
         };
         Some(WebhookEvent { event_id, kind: ev })
+    }
+}
+
+#[cfg(test)]
+mod webhook_tests {
+    use super::*;
+
+    fn gw(secret: Option<&str>) -> StripeGateway {
+        StripeGateway {
+            api_key: "sk_test".into(),
+            webhook_secret: secret.map(str::to_string),
+            base: String::new(),
+            success_url: String::new(),
+            cancel_url: String::new(),
+        }
+    }
+
+    fn signed(secret: &str, ts: i64, body: &[u8]) -> HashMap<String, String> {
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(ts.to_string().as_bytes());
+        mac.update(b".");
+        mac.update(body);
+        let sig = hex::encode(mac.finalize().into_bytes());
+        HashMap::from([("stripe-signature".to_string(), format!("t={ts},v1={sig}"))])
+    }
+
+    /// The check that keeps the new timestamp window from breaking every real webhook: a correctly
+    /// signed, current event must still pass.
+    #[test]
+    fn a_current_correctly_signed_webhook_passes() {
+        let body = br#"{"id":"evt_1","type":"invoice.paid"}"#;
+        let now = crate::signing::now_unix();
+        assert!(gw(Some("whsec_test")).verify_webhook(body, &signed("whsec_test", now, body)));
+    }
+
+    /// A captured webhook must stop working. Without a window it replays forever, and replaying
+    /// `SubscriptionStarted` re-grants a plan.
+    #[test]
+    fn an_old_webhook_is_refused_even_though_its_mac_is_valid() {
+        let body = br#"{"id":"evt_1"}"#;
+        let stale = crate::signing::now_unix() - (WEBHOOK_TOLERANCE_SECS + 60);
+        let headers = signed("whsec_test", stale, body);
+        assert!(
+            !gw(Some("whsec_test")).verify_webhook(body, &headers),
+            "the MAC is genuine; only its age disqualifies it"
+        );
+    }
+
+    #[test]
+    fn a_tampered_body_is_refused() {
+        let now = crate::signing::now_unix();
+        let headers = signed("whsec_test", now, br#"{"plan":"free"}"#);
+        assert!(!gw(Some("whsec_test")).verify_webhook(br#"{"plan":"enterprise"}"#, &headers));
+    }
+
+    #[test]
+    fn a_wrong_secret_is_refused() {
+        let body = br#"{"id":"evt_1"}"#;
+        let now = crate::signing::now_unix();
+        assert!(!gw(Some("whsec_real")).verify_webhook(body, &signed("whsec_forged", now, body)));
+    }
+
+    #[test]
+    fn a_missing_signature_header_is_refused() {
+        assert!(!gw(Some("whsec_test")).verify_webhook(b"{}", &HashMap::new()));
+    }
+
+    /// The fail-open that was there before: no secret configured meant every caller was believed,
+    /// on an endpoint that reads tenant_id and plan_id out of the request body.
+    #[test]
+    fn an_unconfigured_secret_refuses_in_release() {
+        let accepted = gw(None).verify_webhook(b"{}", &HashMap::new());
+        if cfg!(debug_assertions) {
+            assert!(accepted, "dev stays convenient");
+        } else {
+            assert!(
+                !accepted,
+                "release must not accept unverified billing events"
+            );
+        }
     }
 }

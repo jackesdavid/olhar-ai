@@ -46,10 +46,27 @@ async fn main() {
     // Shared with sentinel-control: the live endpoints require a JWT carrying
     // `live.view`. Falls back to the same insecure dev default control uses so a local
     // end-to-end setup works; both MUST set a real JWT_SECRET in production.
-    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| {
-        log::warn!("JWT_SECRET unset — using an insecure dev secret (must match control)");
-        "dev-insecure-secret-change-me".to_string()
-    });
+    // Must resolve identically to control: a mismatch here does not fail loudly, it silently
+    // rejects every live-video token. Same fail-closed rule — a release build never invents one.
+    let jwt_secret = match std::env::var("JWT_SECRET").ok() {
+        Some(s) if s.trim().len() >= 32 => s,
+        other => {
+            if cfg!(debug_assertions) {
+                log::warn!("JWT_SECRET unset or too short — using the insecure dev secret (debug build only)");
+                "dev-insecure-secret-change-me".to_string()
+            } else {
+                log::error!(
+                    "refusing to start: JWT_SECRET {} (it must match control's)",
+                    if other.is_none() {
+                        "is unset"
+                    } else {
+                        "is shorter than 32 characters"
+                    }
+                );
+                std::process::exit(1);
+            }
+        }
+    };
 
     // Join the tailnet if configured (so MagicDNS upstreams resolve over the VPN).
     tailscale::ensure_up();
