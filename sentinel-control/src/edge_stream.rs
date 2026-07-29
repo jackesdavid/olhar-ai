@@ -222,16 +222,28 @@ pub async fn command_result(
     headers: HeaderMap,
     body: Option<Json<CommandResultIn>>,
 ) -> Response {
-    match box_identity(&st, &headers).await {
-        Ok(Some(_)) => {}
+    // Keep the box id: the result write is scoped to it, so a box can only ever finish a command
+    // that was addressed to it. The id in the body is client-supplied and is not, by itself,
+    // authorization to write that row.
+    let (_tenant, box_id) = match box_identity(&st, &headers).await {
+        Ok(Some(pair)) => pair,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
         Err(resp) => return resp,
-    }
+    };
     let Some(Json(b)) = body else {
         return (StatusCode::BAD_REQUEST, "result body required").into_response();
     };
-    match edge_commands::finish(&st.pool, b.id, b.ok, b.result, b.error.as_deref()).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+    match edge_commands::finish(&st.pool, b.id, box_id, b.ok, b.result, b.error.as_deref()).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        // 404, not 403: a box probing for another tenant's command ids must not learn which ones
+        // exist. "Not yours" and "not a command" are deliberately indistinguishable.
+        Ok(false) => {
+            log::warn!(
+                "[edge-stream] box {box_id} tried to finish foreign command {}",
+                b.id
+            );
+            (StatusCode::NOT_FOUND, "unknown command").into_response()
+        }
         Err(e) => {
             log::error!("[edge-stream] finish {}: {e}", b.id);
             (StatusCode::INTERNAL_SERVER_ERROR, "result save failed").into_response()

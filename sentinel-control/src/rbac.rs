@@ -27,6 +27,7 @@ pub const PERMISSIONS: &[(&str, &str)] = &[
     ("billing.write", "Subscribe to a plan and manage payment"),
     ("tuya.read", "View and sync Tuya smart-home devices"),
     ("tuya.write", "Link a Tuya account and edit device labels"),
+    ("assistant.use", "Use the AI assistant (chat, voice)"),
 ];
 
 /// All action keys (the Admin role gets these — including `live.view`).
@@ -35,10 +36,16 @@ pub fn all_perms() -> Vec<&'static str> {
 }
 
 /// Read-only actions (the default Viewer role) — NO `live.view` (Admin-only by default).
+///
+/// `assistant.use` is granted despite not ending in `.read`: the assistant was available to every
+/// authenticated user before it was gated, and it is a read-mostly surface, so making it Admin-only
+/// would be a feature removal rather than a security gain. Gating it buys the ability for a tenant
+/// to *revoke* it with a custom role, which is what was missing. Cost control belongs in a
+/// per-tenant quota, not in a permission — an Admin can spend just as much.
 pub fn viewer_perms() -> Vec<&'static str> {
     PERMISSIONS
         .iter()
         .map(|(k, _)| *k)
-        .filter(|k| k.ends_with(".read"))
+        .filter(|k| k.ends_with(".read") || *k == "assistant.use")
         .collect()
 }

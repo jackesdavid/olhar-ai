@@ -352,11 +352,15 @@ struct UpstreamResp {
 }
 
 /// The gateway calls this (forwarding the user's JWT) to resolve the caller's tenant's
-/// live upstream. Any authenticated user with a tenant context may resolve their own.
+/// live upstream. Gated on `devices.read` — which Viewer already holds, so this costs no
+/// legitimate caller anything; it exists so the route isn't reachable by a token with an
+/// empty permission set. `/internal/*` is merged into the PUBLIC router, so "the gateway
+/// calls this" is a description of the intended caller, never an access control.
 async fn box_upstream(
     UserClaims(c): UserClaims,
     State(st): State<AppState>,
 ) -> Result<Json<UpstreamResp>, ApiErr> {
+    auth::require(&c, "devices.read")?;
     let tid = tenant_of(&c)?;
     Ok(Json(UpstreamResp {
         host: store::box_host_for_tenant(&st.pool, tid)
@@ -381,15 +385,49 @@ struct LiveStartResp {
     host: Option<String>,
 }
 
+/// Whether the edge may be told to dial `callback`.
+///
+/// This endpoint hands an attacker-supplied URL to the appliance, which dials it and pushes live
+/// camera frames up it (`sentinel-edge/src/live_push.rs`). Without this check, one authenticated
+/// request exfiltrates a customer's cameras to any host on the internet — so the callback must be
+/// exactly the rendezvous URL the gateway would have generated: `{base}/edge/live/<uuid>`.
+///
+/// `base` unset ⇒ **false**. Outbound live is simply unavailable until an operator names the
+/// gateway, which is the correct failure direction: the alternative is an allow-anything default
+/// on the one route that reaches inside a customer's LAN.
+fn callback_allowed(callback: &str, base: &str) -> bool {
+    let base = base.trim_end_matches('/');
+    if base.is_empty() {
+        return false;
+    }
+    let prefix = format!("{base}/edge/live/");
+    // The suffix must be a bare UUID: no extra path segments, no query, no fragment — each of
+    // which would otherwise let a matching prefix carry the connection somewhere else.
+    callback
+        .strip_prefix(&prefix)
+        .is_some_and(|rest| Uuid::parse_str(rest).is_ok())
+}
+
 /// The gateway calls this (forwarding the user's JWT) to set up a live stream. If the tenant has a
 /// box on the SSE command stream, we tell that box to dial the gateway back (`start_live`) — live
 /// over the edge's OUTBOUND connection, card #144, so it works with no tailnet. Otherwise we return
 /// the tailnet host and the gateway dials the edge itself, exactly as before.
+///
+/// Guarded on `live.view`: this causes live video to flow, and `live.view` is the one action the
+/// master bypass never grants (`auth::LIVE_VIEW`). Without the guard a Viewer — who by definition
+/// does not hold it — could obtain the feed anyway, straight past the permission the gateway
+/// exists to enforce.
 async fn live_start(
     UserClaims(c): UserClaims,
     State(st): State<AppState>,
     Json(b): Json<LiveStartReq>,
 ) -> Result<Json<LiveStartResp>, ApiErr> {
+    auth::require(&c, auth::LIVE_VIEW)?;
+    let gateway_ws = std::env::var("GATEWAY_PUBLIC_WS").unwrap_or_default();
+    if !callback_allowed(&b.callback, &gateway_ws) {
+        log::warn!("live_start rejected callback: {}", b.callback);
+        return Err(err(StatusCode::BAD_REQUEST, "callback not allowed"));
+    }
     let tid = tenant_of(&c)?;
     if let Some(box_id) = app_core::edge_commands::live_box_for_tenant(&st.pool, tid, 30).await {
         let args = serde_json::json!({ "src": b.src, "url": b.callback });
@@ -504,6 +542,65 @@ async fn storage_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const GW: &str = "wss://gateway.olharai.com";
+
+    /// The legitimate call must keep working, and a trailing slash on the configured base is the
+    /// kind of thing an operator writes without thinking.
+    #[test]
+    fn callback_allows_the_gateway_rendezvous_url() {
+        let url = format!("{GW}/edge/live/2f9c0b1e-6a4d-4f7b-9d2a-1c3e5a7b9d10");
+        assert!(callback_allowed(&url, GW));
+        assert!(callback_allowed(&url, "wss://gateway.olharai.com/"));
+    }
+
+    /// Each of these is a way to keep the configured host as a prefix while sending the stream
+    /// somewhere else. They are the whole reason this function exists, so they get named
+    /// individually rather than hidden in a loop with one assert message.
+    #[test]
+    fn callback_rejects_every_way_of_leaving_the_gateway() {
+        let id = "2f9c0b1e-6a4d-4f7b-9d2a-1c3e5a7b9d10";
+        // A different host entirely.
+        assert!(!callback_allowed(
+            &format!("wss://evil.com/edge/live/{id}"),
+            GW
+        ));
+        // Suffix on the domain — the classic prefix-match bypass.
+        assert!(!callback_allowed(
+            &format!("wss://gateway.olharai.com.evil.com/edge/live/{id}"),
+            GW
+        ));
+        // Userinfo pointing the real connection at evil.com.
+        assert!(!callback_allowed(
+            &format!("wss://gateway.olharai.com@evil.com/edge/live/{id}"),
+            GW
+        ));
+        // Right host, wrong path.
+        assert!(!callback_allowed(&format!("{GW}/anything/{id}"), GW));
+        // Extra segment, query, and fragment after a valid uuid.
+        assert!(!callback_allowed(&format!("{GW}/edge/live/{id}/../x"), GW));
+        assert!(!callback_allowed(
+            &format!("{GW}/edge/live/{id}?to=evil"),
+            GW
+        ));
+        assert!(!callback_allowed(&format!("{GW}/edge/live/{id}#evil"), GW));
+        // Not a uuid at all.
+        assert!(!callback_allowed(&format!("{GW}/edge/live/notauuid"), GW));
+        // Plaintext downgrade of a wss:// base.
+        assert!(!callback_allowed(
+            &format!("ws://gateway.olharai.com/edge/live/{id}"),
+            GW
+        ));
+    }
+
+    /// With no gateway configured there is no URL we can vouch for, so the answer is "no" — not
+    /// "anything". This is the fail-closed default the whole check depends on.
+    #[test]
+    fn callback_rejects_everything_when_no_gateway_is_configured() {
+        let url = format!("{GW}/edge/live/2f9c0b1e-6a4d-4f7b-9d2a-1c3e5a7b9d10");
+        assert!(!callback_allowed(&url, ""));
+        assert!(!callback_allowed(&url, "/"));
+    }
 
     /// A code is read off one screen and typed into another. Everything a human plausibly does to
     /// it on the way — lowercase it, drop the dash, add a space, or confuse Crockford's lookalike

@@ -144,24 +144,42 @@ pub async fn release(pool: &PgPool, id: Uuid, delay_secs: i64) -> sqlx::Result<(
 
 /// Record a command's terminal result (from the edge's result POST) and NOTIFY the result channel so
 /// the waiting caller wakes immediately. `ok=false` parks it `failed` with `error`.
+///
+/// Scoped to `box_id` — the box the caller's token resolved to, never a value from the request.
+/// The command id is a v4 UUID, but it is the ONLY thing the body carries, so without this
+/// predicate any appliance holding any valid box token could terminate another tenant's command
+/// and choose the `result` JSON handed back to the waiting cloud caller by [`await_result`].
+/// Mirrors [`claim_for_box`], which has always filtered on `box_id`.
+///
+/// Returns whether a row actually matched. NOTIFY only fires on a real update: waking a waiting
+/// caller for a command that was never touched would let a forged call interrupt the victim's
+/// poll even though the write was correctly refused.
 pub async fn finish(
     pool: &PgPool,
     id: Uuid,
+    box_id: Uuid,
     ok: bool,
     result: Option<serde_json::Value>,
     error: Option<&str>,
-) -> sqlx::Result<()> {
+) -> sqlx::Result<bool> {
     let status = if ok { "done" } else { "failed" };
     let mut tx = pool.begin().await?;
-    sqlx::query("UPDATE edge_commands SET status = $2, result = $3, error = $4, updated_at = $5 WHERE id = $1")
-        .bind(id).bind(status).bind(&result).bind(error).bind(now_rfc3339())
-        .execute(&mut *tx).await?;
+    let updated = sqlx::query("UPDATE edge_commands SET status = $2, result = $3, error = $4, updated_at = $5 WHERE id = $1 AND box_id = $6")
+        .bind(id).bind(status).bind(&result).bind(error).bind(now_rfc3339()).bind(box_id)
+        .execute(&mut *tx).await?
+        .rows_affected()
+        > 0;
+    if !updated {
+        tx.rollback().await?;
+        return Ok(false);
+    }
     sqlx::query("SELECT pg_notify($1, $2)")
         .bind(RESULT_CHANNEL)
         .bind(id.to_string())
         .execute(&mut *tx)
         .await?;
-    tx.commit().await
+    tx.commit().await?;
+    Ok(true)
 }
 
 // ---- session tracking (which boxes are reachable over SSE) ------------------

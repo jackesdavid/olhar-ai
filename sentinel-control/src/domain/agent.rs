@@ -21,7 +21,7 @@ use app_core::agent::tools::{ToolContext, ToolRegistry, ToolUiEvent};
 use app_core::notification::{NotificationConfig, NotificationStore};
 
 use super::{blocking, err, tenant_of, ApiErr};
-use crate::auth::UserClaims;
+use crate::auth::{self, UserClaims};
 use crate::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -58,6 +58,7 @@ async fn chat(
     State(st): State<AppState>,
     Json(req): Json<ChatReq>,
 ) -> Result<Json<ChatResp>, ApiErr> {
+    auth::require(&c, "assistant.use")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
 
@@ -168,7 +169,8 @@ struct TtsReq {
 }
 
 /// Synthesize the assistant's reply to MP3 (ElevenLabs). 503 when no voice key is configured.
-async fn tts(UserClaims(_c): UserClaims, Json(req): Json<TtsReq>) -> Result<Response, ApiErr> {
+async fn tts(UserClaims(c): UserClaims, Json(req): Json<TtsReq>) -> Result<Response, ApiErr> {
+    auth::require(&c, "assistant.use")?;
     let mp3 = blocking(move || app_core::voice::synthesize(&req.text)).await?;
     match mp3 {
         Some(bytes) => Ok(([(header::CONTENT_TYPE, "audio/mpeg")], bytes).into_response()),
@@ -181,10 +183,11 @@ async fn tts(UserClaims(_c): UserClaims, Json(req): Json<TtsReq>) -> Result<Resp
 /// Transcribe a recorded audio clip (ElevenLabs Scribe). The browser posts the raw
 /// `MediaRecorder` blob as the request body with its `Content-Type` (WebM/Opus or WAV).
 async fn stt(
-    UserClaims(_c): UserClaims,
+    UserClaims(c): UserClaims,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<Value>, ApiErr> {
+    auth::require(&c, "assistant.use")?;
     if body.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "empty audio body"));
     }

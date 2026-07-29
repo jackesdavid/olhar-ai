@@ -16,7 +16,7 @@ use uuid::Uuid;
 use app_core::platform_logs::{self, LogQuery, PlatformLog};
 
 use super::{tenant_of, ApiErr};
-use crate::auth::UserClaims;
+use crate::auth::{self, UserClaims};
 use crate::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -104,7 +104,10 @@ async fn list(
     State(st): State<AppState>,
     Query(q): Query<ListQuery>,
 ) -> Result<impl IntoResponse, ApiErr> {
-    // Any authenticated user can read logs; tighten to "logs.read" if needed later.
+    // The tenant's audit trail — every action, actor, and error. Gated on `settings.read` rather
+    // than left open: Viewer already holds that key, so no legitimate reader loses access, but a
+    // narrow custom role can now be denied it. Was reachable by any token with an empty perm set.
+    auth::require(&c, "settings.read")?;
     let tid = tenant_of(&c)?;
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
 
