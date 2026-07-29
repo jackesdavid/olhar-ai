@@ -263,7 +263,7 @@ fn fetch_remote(control_url: &str) -> Option<RemoteConfig> {
             req = req.set("Authorization", &format!("Bearer {t}"));
         }
     }
-    match req.call() {
+    match crate::signer::sign(req, "GET", &url, b"").call() {
         Ok(resp) => resp.into_json::<RemoteConfig>().ok(),
         Err(e) => {
             log::debug!("tracking config fetch failed (using env-var fallback): {e}");

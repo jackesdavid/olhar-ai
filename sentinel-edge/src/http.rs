@@ -229,7 +229,8 @@ async fn snapshot(State(state): State<Arc<AppState>>, Path(ip): Path<String>) ->
     // Wait out a cold start (RTSP connect + first decoded frame) before giving up.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
     loop {
-        if let Some(jpeg) = crate::capture::latest_fresh(&ip, hd, std::time::Duration::from_secs(3)) {
+        if let Some(jpeg) = crate::capture::latest_fresh(&ip, hd, std::time::Duration::from_secs(3))
+        {
             return (
                 StatusCode::OK,
                 [
@@ -396,7 +397,8 @@ fn push_manifest(control_url: &str, payload: &serde_json::Value) -> Option<Strin
             req = req.set("Authorization", &format!("Bearer {t}"));
         }
     }
-    let resp = match req.send_string(&payload.to_string()) {
+    let clip_body = payload.to_string().into_bytes();
+    let resp = match crate::signer::sign(req, "POST", &url, &clip_body).send_bytes(&clip_body) {
         Ok(r) => r,
         Err(e) => {
             log::warn!("clip push failed: {e}");
@@ -519,7 +521,6 @@ async fn mse_ws(
     ws.on_upgrade(move |socket| mse_socket(socket, ip, slot))
 }
 
-
 #[cfg(feature = "gst-linked")]
 async fn mse_socket(mut socket: axum::extract::ws::WebSocket, ip: String, hd: bool) {
     use axum::extract::ws::Message;
@@ -616,7 +617,9 @@ pub(crate) fn go2rtc_src_to_camera(src: &str) -> Option<(String, bool)> {
     // Only a dotted-quad may reach a camera lookup — anything else is not a stream we serve.
     let ip = octets.replace('_', ".");
     let ok = ip.split('.').count() == 4
-        && ip.split('.').all(|o| !o.is_empty() && o.bytes().all(|b| b.is_ascii_digit()));
+        && ip
+            .split('.')
+            .all(|o| !o.is_empty() && o.bytes().all(|b| b.is_ascii_digit()));
     ok.then_some((ip, hd))
 }
 

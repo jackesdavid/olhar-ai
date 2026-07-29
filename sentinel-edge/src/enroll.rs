@@ -180,7 +180,8 @@ pub async fn gst_selftest_route() -> Response {
     }
     #[cfg(not(feature = "gst-linked"))]
     {
-        axum::Json(serde_json::json!({ "ok": false, "error": "build without gst-linked" })).into_response()
+        axum::Json(serde_json::json!({ "ok": false, "error": "build without gst-linked" }))
+            .into_response()
     }
 }
 
@@ -200,9 +201,14 @@ pub struct RecordQuery {
     #[serde(default)]
     control: Option<String>,
 }
-fn default_secs() -> u64 { 8 }
+fn default_secs() -> u64 {
+    8
+}
 
-pub async fn dev_record(State(control_url): State<String>, Query(q): Query<RecordQuery>) -> Response {
+pub async fn dev_record(
+    State(control_url): State<String>,
+    Query(q): Query<RecordQuery>,
+) -> Response {
     #[cfg(feature = "gst-linked")]
     {
         // A writable path on any platform — on iOS this is the app's tmp dir.
@@ -211,7 +217,11 @@ pub async fn dev_record(State(control_url): State<String>, Query(q): Query<Recor
         let url = q.url.clone();
         let secs = q.secs.clamp(2, 30);
         let token = q.token.clone();
-        let control = q.control.clone().filter(|c| !c.trim().is_empty()).unwrap_or(control_url);
+        let control = q
+            .control
+            .clone()
+            .filter(|c| !c.trim().is_empty())
+            .unwrap_or(control_url);
         let res = tokio::task::spawn_blocking(move || match token {
             Some(t) if !t.trim().is_empty() =>
                 crate::media::record_and_upload(&url, secs, &out2, t.trim(), control.trim_end_matches('/')),
@@ -223,7 +233,10 @@ pub async fn dev_record(State(control_url): State<String>, Query(q): Query<Recor
         .and_then(|r| r);
         match res {
             Ok(mut v) => {
-                if let Some(o) = v.as_object_mut() { o.insert("ok".into(), true.into()); o.insert("path".into(), out.to_string_lossy().into()); }
+                if let Some(o) = v.as_object_mut() {
+                    o.insert("ok".into(), true.into());
+                    o.insert("path".into(), out.to_string_lossy().into());
+                }
                 axum::Json(v).into_response()
             }
             Err(e) => axum::Json(serde_json::json!({ "ok": false, "error": e })).into_response(),
@@ -232,7 +245,8 @@ pub async fn dev_record(State(control_url): State<String>, Query(q): Query<Recor
     #[cfg(not(feature = "gst-linked"))]
     {
         let _ = q;
-        axum::Json(serde_json::json!({ "ok": false, "error": "build without gst-linked" })).into_response()
+        axum::Json(serde_json::json!({ "ok": false, "error": "build without gst-linked" }))
+            .into_response()
     }
 }
 

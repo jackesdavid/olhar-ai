@@ -112,7 +112,13 @@ fn ensure_with_url(ip: &str, hd: bool, backend: &str, url: &str) {
     if cam.started.swap(true, Ordering::SeqCst) {
         return;
     }
-    ensure_started(ip, hd, cam, Backend::resolve(backend), Some(url.to_string()));
+    ensure_started(
+        ip,
+        hd,
+        cam,
+        Backend::resolve(backend),
+        Some(url.to_string()),
+    );
 }
 
 /// What a live viewer needs for `ip` on the given stream slot: the MSE init segment, the MIME for
@@ -122,7 +128,11 @@ fn ensure_with_url(ip: &str, hd: bool, backend: &str, url: &str) {
 pub fn mse_feed(
     ip: &str,
     hd: bool,
-) -> Option<(Vec<u8>, String, tokio::sync::broadcast::Receiver<Arc<Vec<u8>>>)> {
+) -> Option<(
+    Vec<u8>,
+    String,
+    tokio::sync::broadcast::Receiver<Arc<Vec<u8>>>,
+)> {
     let cam = cams().lock().unwrap().get(&cam_key(ip, hd)).cloned()?;
     let feed = cam.mse.lock().unwrap().subscribe();
     feed
@@ -271,9 +281,11 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
     use gstreamer_app as gst_app;
 
     crate::media::init_gstreamer()?; // init + iOS static plugin registration
-    // The camera's own URL when we have it; go2rtc's re-serve only as a fallback for a device whose
-    // RTSP never resolved. Owning the dial is what lets the sidecar go away.
-    let url = url.map(str::to_string).unwrap_or_else(|| stream_url(ip, hd));
+                                     // The camera's own URL when we have it; go2rtc's re-serve only as a fallback for a device whose
+                                     // RTSP never resolved. Owning the dial is what lets the sidecar go away.
+    let url = url
+        .map(str::to_string)
+        .unwrap_or_else(|| stream_url(ip, hd));
 
     // The RTSP INGEST is platform-specific; everything from `h264parse` on is identical.
     //
@@ -411,7 +423,10 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
         let ip_c = ip.to_string();
         let stop_c = Arc::clone(&feeder_stop);
         Some(std::thread::spawn(move || {
-            match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
                 Ok(rt) => {
                     if let Err(e) = rt.block_on(retina_feed(&url_c, &appsrc, &stop_c, codec)) {
                         log::warn!("capture-decoder[{ip_c}]: retina ingest: {e}");
@@ -536,7 +551,9 @@ fn probe_codec(url: &str) -> Result<VideoCodec, String> {
         .map_err(|e| format!("tokio rt: {e}"))?;
     rt.block_on(async {
         let (bare, creds) = crate::recording::split_rtsp_credentials(url);
-        let parsed = bare.parse::<url::Url>().map_err(|e| format!("bad url: {e}"))?;
+        let parsed = bare
+            .parse::<url::Url>()
+            .map_err(|e| format!("bad url: {e}"))?;
         let opts = match creds {
             Some((username, password)) => retina::client::SessionOptions::default()
                 .creds(Some(retina::client::Credentials { username, password })),
@@ -570,7 +587,9 @@ async fn retina_feed(
     use gstreamer as gst;
 
     let (bare, creds) = crate::recording::split_rtsp_credentials(url);
-    let parsed = bare.parse::<url::Url>().map_err(|e| format!("bad url: {e}"))?;
+    let parsed = bare
+        .parse::<url::Url>()
+        .map_err(|e| format!("bad url: {e}"))?;
     let opts = match creds {
         Some((username, password)) => retina::client::SessionOptions::default()
             .creds(Some(retina::client::Credentials { username, password })),
@@ -927,7 +946,8 @@ mod gst_linked_it {
     #[test]
     #[ignore = "needs a live camera"]
     fn one_connection_feeds_both_the_decoder_and_the_live_muxer() {
-        let url = std::env::var("GST_IT_CAM_URL").expect("set GST_IT_CAM_URL to a live camera RTSP URL");
+        let url =
+            std::env::var("GST_IT_CAM_URL").expect("set GST_IT_CAM_URL to a live camera RTSP URL");
         let ip = "10.255.255.1"; // a key, not a dial — the URL above is what gets connected
         super::ensure_with_url(ip, false, "gstreamer-linked", &url);
 
@@ -941,14 +961,24 @@ mod gst_linked_it {
             std::thread::sleep(Duration::from_millis(500));
         }
         let jpeg = jpeg.expect("decode branch produced no JPEG within 30s");
-        assert!(jpeg.starts_with(&[0xFF, 0xD8]), "not a JPEG: {:02x?}", &jpeg[..4.min(jpeg.len())]);
+        assert!(
+            jpeg.starts_with(&[0xFF, 0xD8]),
+            "not a JPEG: {:02x?}",
+            &jpeg[..4.min(jpeg.len())]
+        );
 
         // Mux branch: an init segment a browser can start on, then live fragments.
         let feed = super::mse_feed(ip, false).expect("mux branch produced no feed");
         let (init, mime, mut rx) = feed;
         assert_eq!(&init[4..8], b"ftyp", "init segment must open with ftyp");
-        assert!(init.windows(4).any(|w| w == b"moov"), "init segment must carry moov");
-        assert!(mime.starts_with("video/mp4; codecs=\"avc1."), "unexpected mime: {mime}");
+        assert!(
+            init.windows(4).any(|w| w == b"moov"),
+            "init segment must carry moov"
+        );
+        assert!(
+            mime.starts_with("video/mp4; codecs=\"avc1."),
+            "unexpected mime: {mime}"
+        );
 
         let mut got = 0;
         while got < 3 {

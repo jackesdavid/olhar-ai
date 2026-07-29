@@ -308,7 +308,11 @@ fn try_coalesce_truns(frag: &[u8]) -> Option<Vec<u8>> {
             if fl & 0x800 != 0 {
                 o += 4;
             } // composition time offset — dropped
-            samples.push(Sample { duration, size, flags });
+            samples.push(Sample {
+                duration,
+                size,
+                flags,
+            });
         }
     }
     if samples.is_empty() {
@@ -440,7 +444,10 @@ fn hevc_codec_string(hvcc: &[u8]) -> Option<String> {
         _ => "",
     };
     let tier = if tier_flag == 1 { "H" } else { "L" };
-    let end = constraint.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+    let end = constraint
+        .iter()
+        .rposition(|&b| b != 0)
+        .map_or(0, |i| i + 1);
     let mut s = format!("hvc1.{space}{profile_idc}.{compat:X}.{tier}{level_idc}");
     for byte in &constraint[..end] {
         s.push_str(&format!(".{byte:X}"));
@@ -495,9 +502,12 @@ impl Feed {
     /// What a newly-attached viewer needs: the init segment, the MIME for `addSourceBuffer`, and the
     /// live fragments from here on. `None` until the first keyframe has closed the init segment.
     pub fn subscribe(&self) -> Option<(Vec<u8>, String, broadcast::Receiver<Arc<Vec<u8>>>)> {
-        Some((self.init.finished()?, self.mime.clone()?, self.tx.subscribe()))
+        Some((
+            self.init.finished()?,
+            self.mime.clone()?,
+            self.tx.subscribe(),
+        ))
     }
-
 }
 
 #[cfg(test)]
@@ -521,10 +531,16 @@ mod tests {
         assert!(init.take_box(b"\x00\x00\x00\x20ftyp...."));
         assert!(init.take_box(b"\x00\x00\x03\x46moovbody"));
         assert_eq!(init.finished(), None, "not closed until a moof arrives");
-        assert!(!init.take_box(b"\x00\x00\x00\x60moofdata"), "moof belongs to the live stream");
+        assert!(
+            !init.take_box(b"\x00\x00\x00\x60moofdata"),
+            "moof belongs to the live stream"
+        );
         let got = init.finished().expect("closed by the moof");
         assert_eq!(got, b"\x00\x00\x00\x20ftyp....\x00\x00\x03\x46moovbody");
-        assert!(!init.take_box(b"\x00\x00\x00\x08mdat"), "later boxes are live too");
+        assert!(
+            !init.take_box(b"\x00\x00\x00\x08mdat"),
+            "later boxes are live too"
+        );
     }
 
     fn boxed(kind: &[u8], size: u32, body: &[u8]) -> Vec<u8> {
@@ -543,7 +559,9 @@ mod tests {
         // mdat declares 8 header + 12 payload; the header buffer alone must not close it.
         assert_eq!(f.push(&boxed(b"mdat", 20, b"")), None);
         assert_eq!(f.push(b"1234"), None, "still owed 8 bytes");
-        let whole = f.push(b"56789012").expect("last payload byte closes the fragment");
+        let whole = f
+            .push(b"56789012")
+            .expect("last payload byte closes the fragment");
         assert_eq!(whole.len(), 16 + 8 + 12);
         assert_eq!(&whole[4..8], b"moof");
     }
@@ -555,7 +573,9 @@ mod tests {
         assert_eq!(f.push(&boxed(b"moof", 16, b"moofbody")), None);
         assert_eq!(f.push(&boxed(b"mdat", 0, b"")), None);
         assert_eq!(f.push(b"payload"), None);
-        let first = f.push(&boxed(b"moof", 16, b"moofbody")).expect("next moof flushes it");
+        let first = f
+            .push(&boxed(b"moof", 16, b"moofbody"))
+            .expect("next moof flushes it");
         assert_eq!(&first[4..8], b"moof");
         assert!(first.ends_with(b"payload"));
     }
@@ -623,14 +643,9 @@ mod tests {
         ensure_default_base_is_moof(&mut frag);
         // flags at tfhd FullBox bytes 1..3 must now include 0x020000
         let tfhd_at = frag.windows(4).position(|w| w == b"tfhd").expect("tfhd");
-        let flags = u32::from_be_bytes([
-            0,
-            frag[tfhd_at + 5],
-            frag[tfhd_at + 6],
-            frag[tfhd_at + 7],
-        ]);
+        let flags =
+            u32::from_be_bytes([0, frag[tfhd_at + 5], frag[tfhd_at + 6], frag[tfhd_at + 7]]);
         assert_eq!(flags & TFHD_DEFAULT_BASE_IS_MOOF, TFHD_DEFAULT_BASE_IS_MOOF);
         assert_eq!(flags & 0x20, 0x20, "pre-existing flags preserved");
     }
 }
-

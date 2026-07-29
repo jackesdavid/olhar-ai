@@ -148,7 +148,7 @@ fn confirm(control_url: &str, clip_id: &str) -> Result<(), Failure> {
                 req = req.set("Authorization", &format!("Bearer {t}"));
             }
         }
-        status(req.call())
+        status(crate::signer::sign(req, "POST", &url, b"").call())
     })
 }
 

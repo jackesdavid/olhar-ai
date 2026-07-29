@@ -96,6 +96,13 @@ fn presented(h: &HeaderMap) -> Option<Result<Presented, ()>> {
     Some(parsed.ok_or(()))
 }
 
+/// The one route that can never require a signature — see [`unsigned_allowed`].
+pub const BOOTSTRAP_PATH: &str = "/config/signing-key";
+
+fn is_bootstrap(path: &str) -> bool {
+    path.trim_end_matches('/') == BOOTSTRAP_PATH
+}
+
 fn refuse(code: &str, msg: &str) -> Response {
     (
         StatusCode::UNAUTHORIZED,
@@ -113,8 +120,9 @@ pub async fn verify_signature(State(st): State<AppState>, req: Request, next: Ne
     let (mut parts, body) = req.into_parts();
 
     let Some(parsed) = presented(&parts.headers) else {
-        // Unsigned. Allowed only while this box is still on 'off'.
-        return match unsigned_allowed(&st, &parts.headers).await {
+        // Unsigned. Allowed only while this box is still on 'off' — except on the bootstrap route,
+        // which can never require a signature.
+        return match unsigned_allowed(&st, &parts.headers, parts.uri.path()).await {
             Ok(()) => next.run(Request::from_parts(parts, body)).await,
             Err(resp) => resp,
         };
@@ -207,7 +215,16 @@ pub async fn verify_signature(State(st): State<AppState>, req: Request, next: Ne
 /// A token we cannot resolve is passed through rather than refused here: authenticating the bearer
 /// is the handler's job (`box_tenant`), and duplicating it would mean two different 401s for the
 /// same cause.
-async fn unsigned_allowed(st: &AppState, headers: &HeaderMap) -> Result<(), Response> {
+async fn unsigned_allowed(st: &AppState, headers: &HeaderMap, path: &str) -> Result<(), Response> {
+    // The bootstrap route is exempt in every mode, and it has to be: it is unsigned by
+    // construction, so requiring a signature on it means a box that loses its key — a wiped disk, a
+    // corrupted edge.env, a revoked key, or the edge's own self-heal after a rejected signature —
+    // can never obtain another. That is a permanently bricked appliance, recoverable only by
+    // re-enrolling it by hand on site. Exempting it costs nothing: it is still bearer-authed and
+    // still only ever serves the key belonging to the box that bearer names.
+    if is_bootstrap(path) {
+        return Ok(());
+    }
     let Some(hash) = bearer_hash(headers) else {
         return Ok(());
     };
@@ -475,6 +492,22 @@ mod tests {
         assert_eq!(p.timestamp, 1_800_000_000);
         assert_eq!(p.nonce, "a1b2");
         assert_eq!(p.signature, "v1=abc");
+    }
+
+    /// Regression: a box on `signing_mode='required'` that has lost its key must still be able to
+    /// fetch a new one. Requiring a signature on the bootstrap route deadlocks the appliance
+    /// forever — it is unsigned by construction, so it can never satisfy the requirement, and the
+    /// only recovery is re-enrolling the box by hand on site. Caught end-to-end against a live
+    /// control before it shipped; this pins it.
+    #[test]
+    fn the_bootstrap_route_is_exempt_so_a_keyless_box_can_recover() {
+        assert!(is_bootstrap("/config/signing-key"));
+        assert!(is_bootstrap("/config/signing-key/"));
+        // Nothing else is exempt — especially not a path that merely starts with it.
+        assert!(!is_bootstrap("/config/signing-keys"));
+        assert!(!is_bootstrap("/config/signing-key/rotate"));
+        assert!(!is_bootstrap("/config/cameras"));
+        assert!(!is_bootstrap("/config/face"));
     }
 
     /// The bearer hash must match what the box registry stores, or every signed request would fail

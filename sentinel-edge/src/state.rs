@@ -215,7 +215,7 @@ impl AppState {
     fn post_discovered(&self, found: &[app_core::onvif::DiscoveredDevice]) {
         let n = found.len();
         let url = format!("{}/config/discovered", self.control_url);
-        match self.box_agent().post(&url).send_json(found) {
+        match self.box_agent().send_signed_json(&url, found) {
             Ok(_) => log::info!("discovery: pushed {n} camera(s) to control"),
             Err(e) => log::warn!("discovery push failed: {e}"),
         }
@@ -224,7 +224,7 @@ impl AppState {
     /// Report cameras whose IP changed so the cloud follows the move (box-authed). Best-effort.
     fn push_device_moves(&self, moves: &[serde_json::Value]) {
         let url = format!("{}/config/device-moved", self.control_url);
-        match self.box_agent().post(&url).send_json(moves) {
+        match self.box_agent().send_signed_json(&url, moves) {
             Ok(_) => log::info!("reported {} camera IP move(s) to control", moves.len()),
             Err(e) => log::warn!("device-moved push failed: {e}"),
         }
@@ -296,7 +296,7 @@ impl AppState {
             })
             .collect();
         let url = format!("{}/config/streaming", self.control_url);
-        if let Err(e) = self.box_agent().post(&url).send_json(&cams) {
+        if let Err(e) = self.box_agent().send_signed_json(&url, &cams) {
             log::debug!("streaming push failed: {e}");
         }
     }
@@ -307,14 +307,14 @@ impl AppState {
     /// Best-effort.
     pub fn push_motion(&self, ev: &MotionEvent) {
         let url = format!("{}/config/motion", self.control_url);
-        if let Err(e) = self.box_agent().post(&url).send_json(ev) {
+        if let Err(e) = self.box_agent().send_signed_json(&url, ev) {
             log::debug!("motion push failed: {e}");
         }
     }
 
     pub fn push_face(&self, ev: &FaceEvent) {
         let url = format!("{}/config/face", self.control_url);
-        if let Err(e) = self.box_agent().post(&url).send_json(ev) {
+        if let Err(e) = self.box_agent().send_signed_json(&url, ev) {
             log::debug!("face push failed: {e}");
         }
     }
@@ -323,7 +323,7 @@ impl AppState {
     /// `OnEvent("object_entered"/"object_exited")`. Best-effort like motion.
     pub fn push_track_event(&self, ev: &TrackEventOut) {
         let url = format!("{}/config/track-event", self.control_url);
-        if let Err(e) = self.box_agent().post(&url).send_json(ev) {
+        if let Err(e) = self.box_agent().send_signed_json(&url, ev) {
             log::debug!("track-event push failed: {e}");
         }
     }
@@ -348,7 +348,7 @@ impl AppState {
     /// Push a batch of recent log lines to control (box-authed). Returns true on success.
     pub fn push_logs(&self, lines: &[crate::logbuf::LogLine]) -> bool {
         let url = format!("{}/config/logs", self.control_url);
-        self.box_agent().post(&url).send_json(lines).is_ok()
+        self.box_agent().send_signed_json(&url, lines).is_ok()
     }
 
     /// Notify control that disk usage has crossed the warning threshold.
@@ -361,7 +361,7 @@ impl AppState {
             "pct":        pct,
             "path":       path,
         });
-        if let Err(e) = self.box_agent().post(&url).send_json(&body) {
+        if let Err(e) = self.box_agent().send_signed_json(&url, &body) {
             log::debug!("disk alert push failed: {e}");
         }
     }
@@ -616,6 +616,29 @@ impl BoxReq {
     fn post(&self, url: &str) -> ureq::Request {
         Self::auth(self.agent.post(url))
     }
+
+    /// A signed GET.
+    fn get_signed(&self, url: &str) -> ureq::Request {
+        crate::signer::sign(self.get(url), "GET", url, b"")
+    }
+
+    /// POST a JSON body, signed.
+    ///
+    /// Cannot use `ureq`'s `send_json`: it serializes internally, so the caller never sees the bytes
+    /// it has to hash — and a signature over a re-serialization that differs by even a space is a
+    /// signature over something other than what was sent. Serialize once, hash and send the same
+    /// buffer. Every signed POST on the edge must go through here for that reason.
+    // `?Sized` so callers can pass slices (`&[Device]`, `&[LogLine]`) directly, which several do.
+    fn send_signed_json<T: serde::Serialize + ?Sized>(
+        &self,
+        url: &str,
+        body: &T,
+    ) -> Result<ureq::Response, ureq::Error> {
+        let bytes = serde_json::to_vec(body).unwrap_or_else(|_| b"null".to_vec());
+        crate::signer::sign(self.post(url), "POST", url, &bytes)
+            .set("Content-Type", "application/json")
+            .send_bytes(&bytes)
+    }
     fn auth(mut req: ureq::Request) -> ureq::Request {
         if let Ok(t) = std::env::var("BOX_TOKEN") {
             let t = t.trim();
@@ -788,6 +811,10 @@ fn fetch_cameras(control_url: &str, wait: u64) -> Result<Vec<Device>, String> {
     }
     req = req.set("X-Edge-Version", env!("CARGO_PKG_VERSION"));
     req = with_health(req); // report Tailscale + ffmpeg health on the regular heartbeat
+                            // Signed last, so the `?wait=N` in the URL is covered and cannot be lengthened in flight. The
+                            // health headers are deliberately outside the signature: they change every poll and are
+                            // advisory display values, so binding them would make the canonical string fragile for nothing.
+    req = crate::signer::sign(req, "GET", &url, b"");
     req.call()
         .map_err(|e| format!("{e}"))?
         .into_json::<Vec<Device>>()
@@ -840,7 +867,9 @@ mod camera_rtsp_tests {
 
     #[test]
     fn falls_back_to_main_when_there_is_no_substream() {
-        assert!(pick_camera_rtsp(&cam(None, true), false).unwrap().ends_with("/stream1"));
+        assert!(pick_camera_rtsp(&cam(None, true), false)
+            .unwrap()
+            .ends_with("/stream1"));
     }
 
     /// Unified mode (#120) means main-only — pulling the substream there is exactly the dual-stream

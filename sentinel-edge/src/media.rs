@@ -143,14 +143,28 @@ pub fn gst_selftest() -> Result<(), String> {
     // bundle whose plugins couldn't be scanned (missing LC_RPATH) silently broke all live/RTSP while
     // this selftest reported OK. Checking them here turns that into a loud postinstall failure.
     let required = [
-        "rtspsrc", "rtph264depay", "h264parse", "tee", "queue", "capsfilter", "decodebin",
-        "videoconvert", "videorate", "jpegenc", "mp4mux", "appsink", "fakesink",
-        "rtpbin", "rtpjitterbuffer", "udpsrc", "udpsink",
+        "rtspsrc",
+        "rtph264depay",
+        "h264parse",
+        "tee",
+        "queue",
+        "capsfilter",
+        "decodebin",
+        "videoconvert",
+        "videorate",
+        "jpegenc",
+        "mp4mux",
+        "appsink",
+        "fakesink",
+        "rtpbin",
+        "rtpjitterbuffer",
+        "udpsrc",
+        "udpsink",
     ];
     for name in required {
-        gst::ElementFactory::make(name)
-            .build()
-            .map_err(|_| format!("cannot create `{name}` — its plugin is missing or failed to load"))?;
+        gst::ElementFactory::make(name).build().map_err(|_| {
+            format!("cannot create `{name}` — its plugin is missing or failed to load")
+        })?;
     }
 
     // The hardware decoder is not fatal — the pipeline falls back to `decodebin` software decode —
@@ -166,7 +180,9 @@ pub fn gst_selftest() -> Result<(), String> {
             _ => "",
         };
         if !element.is_empty() && gst::ElementFactory::make(element).build().is_err() {
-            return Err(format!("hardware decoder `{element}` is advertised but will not build"));
+            return Err(format!(
+                "hardware decoder `{element}` is advertised but will not build"
+            ));
         }
     }
     Ok(())
@@ -228,7 +244,7 @@ mod ios_static_plugins {
             gst_plugin_app_register();
             gst_plugin_applemedia_register();
             gst_plugin_rtpmanager_register(); // rtspsrc's RTP session (rtpbin/jitterbuffer)
-            gst_plugin_udp_register();          // udpsrc/udpsink for RTP-over-UDP
+            gst_plugin_udp_register(); // udpsrc/udpsink for RTP-over-UDP
         });
     }
 }
@@ -276,8 +292,12 @@ pub fn record_camera(url: &str, secs: u64, out: &std::path::Path) -> Result<(u64
     // caps, which is the `not-negotiated`/`No RTP format` error). Link the FIRST video RTP pad only.
     let depay_weak = depay.downgrade();
     src.connect_pad_added(move |_src, pad| {
-        let Some(depay) = depay_weak.upgrade() else { return };
-        let Some(sink_pad) = depay.static_pad("sink") else { return };
+        let Some(depay) = depay_weak.upgrade() else {
+            return;
+        };
+        let Some(sink_pad) = depay.static_pad("sink") else {
+            return;
+        };
         if sink_pad.is_linked() {
             return;
         }
@@ -322,7 +342,9 @@ pub fn record_camera(url: &str, secs: u64, out: &std::path::Path) -> Result<(u64
 
     let bytes = std::fs::metadata(out).map(|m| m.len()).unwrap_or(0);
     if bytes < 1000 {
-        return Err(format!("recorded only {bytes} B — camera unreachable or no video"));
+        return Err(format!(
+            "recorded only {bytes} B — camera unreachable or no video"
+        ));
     }
     Ok((bytes, start.elapsed().as_secs()))
 }
@@ -340,13 +362,18 @@ pub fn record_and_upload(
     control_url: &str,
 ) -> Result<serde_json::Value, String> {
     let crumb = std::env::temp_dir().join("r2-step.txt");
-    let step = |msg: &str| { let _ = std::fs::write(&crumb, msg); };
+    let step = |msg: &str| {
+        let _ = std::fs::write(&crumb, msg);
+    };
     step("0-start");
     let (bytes, elapsed) = record_camera(url, secs, out)?;
     step(&format!("1-recorded {bytes}B"));
 
     let epoch = app_core::timeutil::now_rfc3339();
-    let clip_id = format!("phone-{}", out.file_stem().and_then(|s| s.to_str()).unwrap_or("clip"));
+    let clip_id = format!(
+        "phone-{}",
+        out.file_stem().and_then(|s| s.to_str()).unwrap_or("clip")
+    );
     let clip_id = format!("{clip_id}-{}", bytes); // unique-ish per capture without a clock call
     let payload = serde_json::json!({
         "camera_ip": "phone",
@@ -364,14 +391,21 @@ pub fn record_and_upload(
 
     // 1. Manifest → presigned PUT.
     step("2-manifest-req");
-    let manifest = agent
-        .post(&format!("{control_url}/config/recordings/clip-metadata"))
-        .set("Authorization", &format!("Bearer {box_token}"))
-        .set("Content-Type", "application/json")
-        .send_string(&payload.to_string())
-        .map_err(|e| format!("manifest push: {e}"))?
-        .into_json::<serde_json::Value>()
-        .map_err(|e| format!("manifest response: {e}"))?;
+    let manifest_url = format!("{control_url}/config/recordings/clip-metadata");
+    let manifest_body = payload.to_string().into_bytes();
+    let manifest = crate::signer::sign(
+        agent
+            .post(&manifest_url)
+            .set("Authorization", &format!("Bearer {box_token}"))
+            .set("Content-Type", "application/json"),
+        "POST",
+        &manifest_url,
+        &manifest_body,
+    )
+    .send_bytes(&manifest_body)
+    .map_err(|e| format!("manifest push: {e}"))?
+    .into_json::<serde_json::Value>()
+    .map_err(|e| format!("manifest response: {e}"))?;
     let put_url = manifest
         .get("upload")
         .and_then(|u| u.get("url"))
@@ -393,10 +427,16 @@ pub fn record_and_upload(
 
     step("5-put-ok");
     // 3. Confirm the clip is durable so control marks it uploaded.
-    let _ = agent
-        .post(&format!("{control_url}/config/recordings/{clip_id}/uploaded"))
-        .set("Authorization", &format!("Bearer {box_token}"))
-        .call();
+    let confirm_url = format!("{control_url}/config/recordings/{clip_id}/uploaded");
+    let _ = crate::signer::sign(
+        agent
+            .post(&confirm_url)
+            .set("Authorization", &format!("Bearer {box_token}")),
+        "POST",
+        &confirm_url,
+        b"",
+    )
+    .call();
 
     step("6-done");
     Ok(serde_json::json!({ "clip_id": clip_id, "bytes": bytes, "uploaded": true }))

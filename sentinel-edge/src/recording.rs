@@ -512,7 +512,13 @@ impl RecordingManager {
                 .enable_all()
                 .build()
                 .expect("tokio rt for RTSP ring");
-            rt.block_on(run_rtsp_collector(ip_t, dial, pre_roll_secs, mem_ring_t, stop_rx));
+            rt.block_on(run_rtsp_collector(
+                ip_t,
+                dial,
+                pre_roll_secs,
+                mem_ring_t,
+                stop_rx,
+            ));
         });
 
         self.ring_sessions
@@ -1011,12 +1017,8 @@ async fn rtsp_stream_once(
         .parse::<url::Url>()
         .map_err(|e| format!("bad URL: {e}"))?;
     let opts = match creds {
-        Some((username, password)) => {
-            retina::client::SessionOptions::default().creds(Some(retina::client::Credentials {
-                username,
-                password,
-            }))
-        }
+        Some((username, password)) => retina::client::SessionOptions::default()
+            .creds(Some(retina::client::Credentials { username, password })),
         None => retina::client::SessionOptions::default(),
     };
 
@@ -1299,7 +1301,11 @@ fn fetch_config(control_url: &str) -> Option<RecordingConfig> {
             req = req.set("Authorization", &format!("Bearer {t}"));
         }
     }
-    req.call().ok()?.into_json::<RecordingConfig>().ok()
+    crate::signer::sign(req, "GET", &url, b"")
+        .call()
+        .ok()?
+        .into_json::<RecordingConfig>()
+        .ok()
 }
 
 #[cfg(test)]

@@ -32,6 +32,7 @@ mod motion;
 mod paths;
 mod proc;
 mod recording;
+mod signer;
 mod state;
 mod tracking;
 
@@ -126,6 +127,13 @@ pub fn run() {
     // the plist at INSTALL time — so a box that acquires its identity at runtime (enrollment, #81)
     // would never see it on macOS. Loading it ourselves makes every platform behave the same.
     envfile::load();
+
+    // Request signing (see `signer`). Load any key we already hold, then fetch one if we have none —
+    // both before the first outbound call, so nothing goes out unsigned once a key exists. A box
+    // that cannot reach control here simply stays unsigned and retries next boot, which control
+    // accepts while this box is on signing_mode='off'.
+    signer::init();
+    signer::bootstrap(&AppState::control_url());
 
     // An appliance binds all interfaces (the gateway/control reach it over the LAN/tailnet); an
     // embedded edge on a phone only ever serves the app on the same device, and iOS is happiest with
@@ -402,7 +410,11 @@ pub unsafe extern "C" fn start_edge(
         if p.is_null() {
             return None;
         }
-        std::ffi::CStr::from_ptr(p).to_str().ok().map(str::to_string).filter(|s| !s.trim().is_empty())
+        std::ffi::CStr::from_ptr(p)
+            .to_str()
+            .ok()
+            .map(str::to_string)
+            .filter(|s| !s.trim().is_empty())
     };
     if let Some(t) = cstr(box_token) {
         std::env::set_var("BOX_TOKEN", t.trim());

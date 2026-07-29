@@ -46,25 +46,37 @@ pub fn run(control_url: String, local_api: String, state: Arc<AppState>) {
 }
 
 fn token() -> Option<String> {
-    std::env::var("BOX_TOKEN").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    std::env::var("BOX_TOKEN")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Connect and read SSE frames until the stream ends or errors. Returns Ok on a clean EOF.
 fn pump(control_url: &str, local_api: &str) -> Result<(), String> {
-    let Some(tok) = token() else { return Err("no BOX_TOKEN — not enrolled".into()) };
+    let Some(tok) = token() else {
+        return Err("no BOX_TOKEN — not enrolled".into());
+    };
     let url = format!("{control_url}/config/edge/stream");
     // A dedicated agent with a bounded READ timeout (not an overall one) so the never-ending stream
     // isn't killed mid-flight, but a dead socket is still detected between keep-alives.
     let agent = ureq::AgentBuilder::new()
         .timeout_read(Duration::from_secs(READ_TIMEOUT_SECS))
         .build();
-    let resp = agent
-        .get(&url)
-        .set("Authorization", &format!("Bearer {tok}"))
-        .set("Accept", "text/event-stream")
-        .set("X-Edge-Protocol", "1")
-        .call()
-        .map_err(|e| format!("connect: {e}"))?;
+    // Only the handshake is signed; once established the stream's integrity is TLS's job, and each
+    // command's result is a separate, independently signed POST.
+    let resp = crate::signer::sign(
+        agent
+            .get(&url)
+            .set("Authorization", &format!("Bearer {tok}"))
+            .set("Accept", "text/event-stream")
+            .set("X-Edge-Protocol", "1"),
+        "GET",
+        &url,
+        b"",
+    )
+    .call()
+    .map_err(|e| format!("connect: {e}"))?;
     log::info!("command stream: connected to {url}");
 
     let reader = BufReader::new(resp.into_reader());
@@ -103,20 +115,37 @@ fn handle(control_url: &str, local_api: &str, tok: &str, data: &str) {
             return;
         }
     };
-    let id = v.get("id").and_then(|x| x.as_str()).unwrap_or_default().to_string();
+    let id = v
+        .get("id")
+        .and_then(|x| x.as_str())
+        .unwrap_or_default()
+        .to_string();
     let cmd = v.get("cmd").and_then(|x| x.as_str()).unwrap_or_default();
-    let args = v.get("args").cloned().unwrap_or_else(|| serde_json::json!({}));
+    let args = v
+        .get("args")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
     log::info!("command stream: <- {cmd} (id={id})");
 
     let (ok, result, error) = dispatch(local_api, cmd, &args);
 
     // Report the outcome so the waiting cloud caller wakes.
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(30)).build();
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(30))
+        .build();
     let body = serde_json::json!({ "id": id, "ok": ok, "result": result, "error": error });
-    if let Err(e) = agent
-        .post(&format!("{control_url}/config/edge/command-result"))
-        .set("Authorization", &format!("Bearer {tok}"))
-        .send_json(body)
+    let result_url = format!("{control_url}/config/edge/command-result");
+    let bytes = serde_json::to_vec(&body).unwrap_or_default();
+    if let Err(e) = crate::signer::sign(
+        agent
+            .post(&result_url)
+            .set("Authorization", &format!("Bearer {tok}"))
+            .set("Content-Type", "application/json"),
+        "POST",
+        &result_url,
+        &bytes,
+    )
+    .send_bytes(&bytes)
     {
         log::warn!("command stream: result POST failed for {id}: {e}");
     }
@@ -130,7 +159,11 @@ fn handle(control_url: &str, local_api: &str, tok: &str, data: &str) {
 /// performs that call against `127.0.0.1:<port>` and returns `{status, content_type, body_b64}` — so
 /// ANY discrete cloud→edge HTTP (probe, snapshot, tracks, get-frame, clip-delete…) rides the SSE
 /// channel without a per-endpoint command. `body_b64` carries binary (a JPEG, JSON, anything) intact.
-fn dispatch(local_api: &str, cmd: &str, args: &serde_json::Value) -> (bool, Option<serde_json::Value>, Option<String>) {
+fn dispatch(
+    local_api: &str,
+    cmd: &str,
+    args: &serde_json::Value,
+) -> (bool, Option<serde_json::Value>, Option<String>) {
     match cmd {
         "start_recording" => named_post(local_api, "/recording/start", args),
         "stop_recording" => named_post(local_api, "/recording/stop", args),
@@ -169,18 +202,34 @@ rm -rf /opt/sentinel-edge /etc/sentinel-edge";
     let script = "";
 
     if script.is_empty() {
-        return (true, Some(serde_json::json!({ "uninstalled": false, "reason": "on-device edge — nothing to uninstall" })), None);
+        return (
+            true,
+            Some(
+                serde_json::json!({ "uninstalled": false, "reason": "on-device edge — nothing to uninstall" }),
+            ),
+            None,
+        );
     }
 
     // `setsid` puts the uninstaller in a new session so `bootout`/`stop` killing THIS process's group
     // doesn't take the uninstaller with it. Detached from our stdio so it survives our death.
     let spawned = std::process::Command::new("sh")
         .arg("-c")
-        .arg(format!("setsid sh -c '{script}' </dev/null >/dev/null 2>&1 &"))
+        .arg(format!(
+            "setsid sh -c '{script}' </dev/null >/dev/null 2>&1 &"
+        ))
         .spawn();
     match spawned {
-        Ok(_) => (true, Some(serde_json::json!({ "uninstalling": true })), None),
-        Err(e) => (false, None, Some(format!("could not launch uninstaller: {e}"))),
+        Ok(_) => (
+            true,
+            Some(serde_json::json!({ "uninstalling": true })),
+            None,
+        ),
+        Err(e) => (
+            false,
+            None,
+            Some(format!("could not launch uninstaller: {e}")),
+        ),
     }
 }
 
@@ -205,7 +254,10 @@ fn start_live(args: &serde_json::Value) -> (bool, Option<serde_json::Value>, Opt
     // Its own current-thread runtime: one live session per outbound socket, isolated from the
     // command stream and torn down with the thread when the gateway closes.
     std::thread::spawn(move || {
-        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
             Ok(rt) => rt,
             Err(e) => {
                 log::warn!("live-push: runtime build failed: {e}");
@@ -219,37 +271,64 @@ fn start_live(args: &serde_json::Value) -> (bool, Option<serde_json::Value>, Opt
 
 #[cfg(not(feature = "gst-linked"))]
 fn start_live(_args: &serde_json::Value) -> (bool, Option<serde_json::Value>, Option<String>) {
-    (false, None, Some("live requires the GStreamer backend (gst-linked)".into()))
+    (
+        false,
+        None,
+        Some("live requires the GStreamer backend (gst-linked)".into()),
+    )
 }
 
 /// A named POST whose JSON reply is the command result (the recording commands).
-fn named_post(local_api: &str, path: &str, args: &serde_json::Value) -> (bool, Option<serde_json::Value>, Option<String>) {
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(120)).build();
-    match agent.post(&format!("{local_api}{path}")).send_json(args.clone()) {
+fn named_post(
+    local_api: &str,
+    path: &str,
+    args: &serde_json::Value,
+) -> (bool, Option<serde_json::Value>, Option<String>) {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(120))
+        .build();
+    match agent
+        .post(&format!("{local_api}{path}"))
+        .send_json(args.clone())
+    {
         Ok(resp) => match resp.into_json::<serde_json::Value>() {
             Ok(v) => (true, Some(v), None),
             Err(e) => (false, None, Some(format!("decode: {e}"))),
         },
-        Err(ureq::Error::Status(code, resp)) => {
-            (false, None, Some(resp.into_string().unwrap_or_else(|_| format!("HTTP {code}"))))
-        }
+        Err(ureq::Error::Status(code, resp)) => (
+            false,
+            None,
+            Some(
+                resp.into_string()
+                    .unwrap_or_else(|_| format!("HTTP {code}")),
+            ),
+        ),
         Err(e) => (false, None, Some(format!("{e}"))),
     }
 }
 
 /// The generic local-HTTP proxy. Reconstructs the edge's response as `{status, content_type,
 /// body_b64}` so the cloud caller can rebuild it verbatim (bytes and status preserved).
-fn http_request(local_api: &str, args: &serde_json::Value) -> (bool, Option<serde_json::Value>, Option<String>) {
-    use std::io::Read;
+fn http_request(
+    local_api: &str,
+    args: &serde_json::Value,
+) -> (bool, Option<serde_json::Value>, Option<String>) {
     use base64::Engine;
+    use std::io::Read;
 
-    let method = args.get("method").and_then(|m| m.as_str()).unwrap_or("GET").to_uppercase();
+    let method = args
+        .get("method")
+        .and_then(|m| m.as_str())
+        .unwrap_or("GET")
+        .to_uppercase();
     let Some(path) = args.get("path").and_then(|p| p.as_str()) else {
         return (false, None, Some("http_request: missing 'path'".into()));
     };
     let url = format!("{local_api}{path}");
     // 120s: a snapshot may cold-start its decoder; a clip fetch can be large.
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(120)).build();
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(120))
+        .build();
     let req = agent.request(&method, &url);
     // `body` is an arbitrary JSON value (POST/PUT payload); GET/DELETE usually omit it.
     let sent = match args.get("body") {
@@ -267,9 +346,19 @@ fn http_request(local_api: &str, args: &serde_json::Value) -> (bool, Option<serd
     let status = resp.status();
     let content_type = resp.content_type().to_string();
     let mut bytes = Vec::new();
-    if let Err(e) = resp.into_reader().take(64 * 1024 * 1024).read_to_end(&mut bytes) {
+    if let Err(e) = resp
+        .into_reader()
+        .take(64 * 1024 * 1024)
+        .read_to_end(&mut bytes)
+    {
         return (false, None, Some(format!("read body: {e}")));
     }
     let body_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    (true, Some(serde_json::json!({ "status": status, "content_type": content_type, "body_b64": body_b64 })), None)
+    (
+        true,
+        Some(
+            serde_json::json!({ "status": status, "content_type": content_type, "body_b64": body_b64 }),
+        ),
+        None,
+    )
 }

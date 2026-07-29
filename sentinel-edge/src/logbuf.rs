@@ -59,7 +59,13 @@ impl LogBuf {
     }
 
     /// Append a line with structured fields (oldest dropped past [`CAP`]).
-    pub fn push_fields(&self, level: &str, target: &str, message: String, fields: Map<String, Value>) {
+    pub fn push_fields(
+        &self,
+        level: &str,
+        target: &str,
+        message: String,
+        fields: Map<String, Value>,
+    ) {
         let mut r = self.0.lock().unwrap();
         let seq = r.next_seq;
         r.next_seq += 1;
@@ -105,7 +111,8 @@ impl tracing::field::Visit for JsonVisitor {
         self.0.insert(f.name().into(), Value::from(v));
     }
     fn record_debug(&mut self, f: &tracing::field::Field, v: &dyn std::fmt::Debug) {
-        self.0.insert(f.name().into(), Value::from(format!("{v:?}")));
+        self.0
+            .insert(f.name().into(), Value::from(format!("{v:?}")));
     }
 }
 
@@ -123,7 +130,12 @@ impl<S> tracing_subscriber::Layer<S> for RingLayer
 where
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {
-    fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, id: &tracing::span::Id, ctx: tracing_subscriber::layer::Context<'_, S>) {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
         let mut v = JsonVisitor::default();
         attrs.record(&mut v);
         if let Some(span) = ctx.span(id) {
@@ -145,11 +157,10 @@ where
         }
         let mut ev = JsonVisitor::default();
         event.record(&mut ev);
-        let message = ev
-            .0
-            .remove("message")
-            .and_then(|m| m.as_str().map(str::to_string))
-            .unwrap_or_default();
+        let message =
+            ev.0.remove("message")
+                .and_then(|m| m.as_str().map(str::to_string))
+                .unwrap_or_default();
         for (k, val) in ev.0 {
             fields.insert(k, val);
         }
@@ -161,7 +172,10 @@ where
         if fields.is_empty() {
             eprintln!("[{ts} {level} {target}] {message}");
         } else {
-            eprintln!("[{ts} {level} {target}] {message} {}", Value::Object(fields.clone()));
+            eprintln!(
+                "[{ts} {level} {target}] {message} {}",
+                Value::Object(fields.clone())
+            );
         }
         self.buf.push_fields(&level, target, message, fields);
     }
