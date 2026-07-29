@@ -28,6 +28,8 @@ chrono = { version = "0.4", features = ["serde"] }
 # Social login (Google now; Apple later) — hand-rolled OAuth2 code flow over reqwest.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 urlencoding = "2"
+# FIDO2 / WebAuthn passkey login (card #147, security plan §2).
+webauthn-rs = "0.5"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

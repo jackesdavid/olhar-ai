@@ -29,6 +29,7 @@ mod rbac;
 mod seed;
 mod seed_templates;
 mod store;
+mod webauthn;
 
 /// Shared state. `db` (app-core) owns migrations + the domain repos; `pool` is this
 /// service's own async pool for auth/tenancy queries (runs on this runtime).

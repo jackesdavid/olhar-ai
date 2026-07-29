@@ -25,6 +25,17 @@ pub fn router() -> Router<AppState> {
             "/auth/oauth/google/callback",
             get(crate::oauth::google_callback),
         )
+        // FIDO2 / WebAuthn passkeys (card #147, §2 E0). register/* + credentials are authenticated
+        // (UserClaims); login/* are public.
+        .route("/auth/webauthn/register/start", post(crate::webauthn::register_start))
+        .route("/auth/webauthn/register/finish", post(crate::webauthn::register_finish))
+        .route("/auth/webauthn/login/start", post(crate::webauthn::login_start))
+        .route("/auth/webauthn/login/finish", post(crate::webauthn::login_finish))
+        .route("/auth/webauthn/credentials", get(crate::webauthn::list_credentials))
+        .route(
+            "/auth/webauthn/credentials/:id",
+            axum::routing::delete(crate::webauthn::delete_credential),
+        )
         .route("/permissions", get(list_permissions))
         .route("/roles", get(list_roles).post(create_role))
         .route(

@@ -68,6 +68,51 @@ pub fn issue(secret: &str, claims: &Claims) -> Result<String, String> {
     .map_err(|e| e.to_string())
 }
 
+/// The JSON a successful login returns to the SPA.
+#[derive(Serialize)]
+pub struct SessionResp {
+    pub token: String,
+    pub user_id: Uuid,
+    pub tenant_id: Option<Uuid>,
+    pub email: String,
+    pub is_master: bool,
+    pub perms: Vec<String>,
+}
+
+/// Build a signed session for a user — the shared tail of every login path (password, OAuth,
+/// passkey). `Ok(None)` when the user id no longer resolves.
+pub async fn issue_session(
+    pool: &sqlx::PgPool,
+    jwt_secret: &str,
+    uid: Uuid,
+) -> sqlx::Result<Option<SessionResp>> {
+    let Some(user) = crate::store::find_user_by_id(pool, uid).await? else {
+        return Ok(None);
+    };
+    let perms = if user.is_master {
+        Vec::new()
+    } else {
+        crate::store::effective_perms(pool, user.id).await?
+    };
+    let claims = Claims {
+        sub: user.id.to_string(),
+        tid: user.tenant_id.map(|t| t.to_string()),
+        master: user.is_master,
+        act_as: false,
+        perms: perms.clone(),
+        exp: expiry_24h(),
+    };
+    let token = issue(jwt_secret, &claims).unwrap_or_default();
+    Ok(Some(SessionResp {
+        token,
+        user_id: user.id,
+        tenant_id: user.tenant_id,
+        email: user.email,
+        is_master: user.is_master,
+        perms,
+    }))
+}
+
 pub fn verify(secret: &str, token: &str) -> Result<Claims, String> {
     jsonwebtoken::decode::<Claims>(
         token,
