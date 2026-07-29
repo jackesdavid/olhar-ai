@@ -88,6 +88,39 @@ services:
       - "traefik.http.routers.sentinel-control.entrypoints=websecure"
       - "traefik.http.routers.sentinel-control.tls.certresolver=letsencrypt"
       - "traefik.http.services.sentinel-control.loadbalancer.server.port=8790"
+      # Per-IP throttle on the unauthenticated credential endpoints — the half of login rate
+      # limiting that cannot live in the process: an in-process map is per-replica and resets on
+      # every deploy, so it is exactly the wrong place for it. The account-side lockout (migration
+      # 0078) stops guessing at ONE address; this stops one source spraying MANY addresses, which
+      # no per-account counter can see.
+      #
+      # Deliberately generous. A whole office shares one NAT address, and locking a paying customer
+      # out of their own login is a worse outage than slowing an attacker who can rent more
+      # addresses. Logins are rare per person (a token lasts 24h), so 20/min with a burst of 40 is
+      # invisible to humans and useless for stuffing. This is defence in depth, not the main
+      # control — the per-account lockout is.
+      #
+      # No ipStrategy on purpose: DNS points straight at this host (no CDN), so Traefik's remote
+      # address IS the client. Reading X-Forwarded-For here would let a caller pick its own bucket
+      # by sending the header — the same bug fixed in the app's own client_ip().
+      - "traefik.http.middlewares.sentinel-login-throttle.ratelimit.average=20"
+      - "traefik.http.middlewares.sentinel-login-throttle.ratelimit.period=1m"
+      - "traefik.http.middlewares.sentinel-login-throttle.ratelimit.burst=40"
+      # A SEPARATE router for just these four paths. The throttle must not reach /auth/me (the app
+      # calls it on every page load) or the edge's /config/* long-polls, so it cannot hang off the
+      # catch-all router above. Explicit priority beats that router, whose own priority defaults to
+      # its rule length.
+      #
+      # Both hosts, deliberately: the live control router also answers control.olharai.com (the #99
+      # cutover, applied straight to the VPS copy of this file and never backported here). A rule
+      # listing only thesentinels host would leave every olharai login unthrottled — working, so
+      # nothing would look broken. Mixed &&/|| needs the explicit parens.
+      - "traefik.http.routers.sentinel-login.rule=(Host(`control.thesentinels.online`) || Host(`control.olharai.com`)) && (Path(`/auth/login`) || Path(`/auth/signup`) || PathPrefix(`/auth/webauthn/login`))"
+      - "traefik.http.routers.sentinel-login.priority=200"
+      - "traefik.http.routers.sentinel-login.entrypoints=websecure"
+      - "traefik.http.routers.sentinel-login.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.sentinel-login.service=sentinel-control"
+      - "traefik.http.routers.sentinel-login.middlewares=sentinel-login-throttle"
 
   sentinel-ai:
     # CPU, face-only vision sidecar (SCRFD detect + ArcFace embed). Internal only —
