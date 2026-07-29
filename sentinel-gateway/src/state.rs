@@ -218,6 +218,9 @@ mod live_edge_ws_tests {
             "http://127.0.0.1:1984".into(),
             "http://control".into(),
             "s".into(),
+            // No public WS address → live-over-outbound off, which is what these
+            // upstream-mapping unit tests are about.
+            String::new(),
         )
     }
 

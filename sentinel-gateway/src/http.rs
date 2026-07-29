@@ -26,12 +26,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-async fn health(
-    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-) -> impl IntoResponse {
-    Json(
-        json!({ "status": "ok", "service": "sentinel-gateway", "upstream": state.resolve_upstream() }),
-    )
+/// Liveness only. Deliberately says nothing about topology: this endpoint is public and
+/// unauthenticated, and it used to publish `upstream` — the internal edge host — to anyone who
+/// asked, which is how an address that should never have been discoverable became a scan target.
+/// A health check answers "am I up", not "what is behind me".
+async fn health() -> impl IntoResponse {
+    Json(json!({ "status": "ok", "service": "sentinel-gateway" }))
 }
 
 /// Convenience: open go2rtc's player (proxied) forced to MSE for a camera.

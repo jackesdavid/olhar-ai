@@ -243,13 +243,44 @@ async fn bridge_ws(client: WebSocket, state: Arc<AppState>, candidates: Vec<Stri
 /// credentials / full config, or allow inspecting the box. The gateway is a public
 /// edge, so we block these even though the gateway only forwards GET. The player needs
 /// only `/api/frame.jpeg`, `/api/ws` (its own route), and the static UI — all allowed.
-fn is_blocked(path: &str) -> bool {
-    const BLOCKED: &[&str] = &["/api/streams", "/api/config", "/api/log", "/api/exec"];
-    path == "/api"
+/// Paths this gateway will forward upstream — an ALLOWLIST, not a denylist.
+///
+/// This is a public, internet-facing proxy: it is scanned continuously for `/.env`, `/.git/config`,
+/// `phpinfo.php` and friends. It previously forwarded *every* unmatched path upstream and only
+/// refused four go2rtc endpoints, so anything not on that short list reached the edge host
+/// unauthenticated. Nothing was exposed only because the upstream happened to be unreachable —
+/// security by broken config. Inverting it means a path has to be named here to leave the gateway.
+///
+/// Live media (frames) is additionally gated by `live.view` — see [`is_live_media`]. The player
+/// assets carry no video, so they pass ungated but still only if they match.
+fn is_allowed(path: &str) -> bool {
+    // Refused FIRST, before the live-media prefix below. `is_live_media` matches the prefix
+    // `/api/stream`, which also swallows `/api/streams` — go2rtc's stream listing, whose JSON
+    // contains the RTSP URLs *including camera credentials*. The old denylist happened to catch
+    // it because it ran before that prefix test; keeping it explicit means the ordering is stated,
+    // not accidental.
+    const NEVER: &[&str] = &["/api/streams", "/api/config", "/api/log", "/api/exec"];
+    if path == "/api"
         || path == "/api/"
-        || BLOCKED
+        || NEVER
             .iter()
             .any(|p| path == *p || path.starts_with(&format!("{p}/")))
+    {
+        return false;
+    }
+    if is_live_media(path) {
+        return true;
+    }
+    // go2rtc's player page + its static assets (no video, safe ungated).
+    if path == "/stream.html" || path == "/webrtc.html" {
+        return true;
+    }
+    matches!(
+        std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str()),
+        Some("js" | "css" | "ico" | "png" | "svg" | "woff2" | "map")
+    )
 }
 
 /// Live media that carries actual frames — gated by `live.view`. Player UI assets
@@ -268,8 +299,11 @@ pub async fn passthrough(
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
-    if is_blocked(uri.path()) {
-        return (StatusCode::FORBIDDEN, "blocked").into_response();
+    if !is_allowed(uri.path()) {
+        // 404, not 403: a refusal that distinguishes "exists but forbidden" from "no such thing"
+        // hands a scanner a map. Logged at debug so a legitimate asset we forgot is still findable.
+        log::debug!("passthrough refused (not allowlisted): {}", uri.path());
+        return (StatusCode::NOT_FOUND, "not found").into_response();
     }
     // Live media is gated + routed to the requester's tenant box; the (identical) player
     // UI assets come from the static fallback upstream.
@@ -319,4 +353,72 @@ pub async fn passthrough(
     }
     let body = Body::from_stream(resp.bytes_stream());
     (status, headers, body).into_response()
+}
+
+#[cfg(test)]
+mod allowlist_tests {
+    use super::{is_allowed, is_live_media};
+
+    /// The paths a real scanner hit this gateway with (from production logs) must never leave it.
+    #[test]
+    fn scanner_probes_are_refused() {
+        for p in [
+            "/.env",
+            "/.env.supabase",
+            "/.env.neon",
+            "/.git/config",
+            "/phpinfo.php",
+            "/admin/phpinfo.php",
+            "/_profiler/phpinfo",
+            "/server-status.php",
+            "/webroot/index.php/_environment",
+            "/mail/phpinfo.php",
+            "/debug.php",
+            "/i.php",
+        ] {
+            assert!(!is_allowed(p), "{p} must not be forwarded upstream");
+        }
+    }
+
+    /// The go2rtc endpoints that previously had to be denied explicitly are now simply not allowed.
+    #[test]
+    fn credential_leaking_go2rtc_endpoints_are_refused() {
+        for p in [
+            "/api",
+            "/api/",
+            "/api/streams",
+            "/api/config",
+            "/api/log",
+            "/api/exec",
+        ] {
+            assert!(!is_allowed(p), "{p} must not be forwarded upstream");
+        }
+    }
+
+    /// Live media still passes the allowlist — it is separately gated by `live.view`.
+    #[test]
+    fn live_media_is_allowed_and_gated() {
+        for p in ["/api/frame.jpeg", "/api/frame.mp4", "/api/stream.m3u8"] {
+            assert!(is_allowed(p), "{p} must reach the live gate");
+            assert!(is_live_media(p), "{p} must require live.view");
+        }
+    }
+
+    /// The player page + its assets pass ungated: they carry no video.
+    #[test]
+    fn player_assets_are_allowed() {
+        for p in [
+            "/stream.html",
+            "/main.js",
+            "/style.css",
+            "/favicon.ico",
+            "/logo.svg",
+        ] {
+            assert!(is_allowed(p), "{p} is a player asset and should pass");
+            assert!(
+                !is_live_media(p),
+                "{p} carries no video, must not need live.view"
+            );
+        }
+    }
 }
