@@ -16,11 +16,58 @@
   import { DEFAULT_SETTINGS, type Settings, type Transport } from "$lib/types";
   import { billing, boxes, type StorageStats, type Box } from "$lib/api";
   import { Input } from "$lib/components/ui/input";
-  import { dict, lang, setLang, type Lang } from "$lib/i18n";
+  import { dict, lang, setLang, locale, type Lang } from "$lib/i18n";
+  import {
+    registerPasskey,
+    listPasskeys,
+    deletePasskey,
+    passkeysSupported,
+    type PasskeyMeta,
+  } from "$lib/auth.svelte";
 
   const t = $derived(dict[lang()].settings);
   const c = $derived(dict[lang()].common);
+  const w = $derived(dict[lang()].webauthn);
   const langs: Lang[] = ["en", "pt"];
+
+  // FIDO2 passkeys (card #147, §2 E0).
+  let passkeys = $state<PasskeyMeta[]>([]);
+  let pkBusy = $state(false);
+  function pkName(pk: PasskeyMeta): string {
+    return pk.nickname?.trim() || "Passkey";
+  }
+  function pkLastUsed(pk: PasskeyMeta): string {
+    return pk.last_used_at ? new Date(pk.last_used_at).toLocaleDateString(locale()) : w.never;
+  }
+  async function loadPasskeys() {
+    try {
+      passkeys = await listPasskeys();
+    } catch {
+      /* leave empty */
+    }
+  }
+  async function addPasskey() {
+    if (pkBusy) return;
+    pkBusy = true;
+    try {
+      await registerPasskey();
+      toast.success(w.added);
+      await loadPasskeys();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : w.failed);
+    } finally {
+      pkBusy = false;
+    }
+  }
+  async function removePasskey(id: string) {
+    try {
+      await deletePasskey(id);
+      toast.success(w.removed);
+      await loadPasskeys();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : w.failed);
+    }
+  }
 
   let settings = $state<Settings>({ ...DEFAULT_SETTINGS });
   let loading = $state(true);
@@ -66,6 +113,7 @@
   ] as const);
 
   onMount(async () => {
+    loadPasskeys();
     try {
       const [loaded, allBoxes] = await Promise.all([
         data.getSettings(),
@@ -254,6 +302,32 @@
       </div>
     </Card.Content>
   </Card.Root>
+  {#if passkeysSupported()}
+  <Card.Root>
+    <Card.Header>
+      <Card.Title>{w.title}</Card.Title>
+      <Card.Description>{w.subtitle}</Card.Description>
+    </Card.Header>
+    <Card.Content class="space-y-4">
+      {#if passkeys.length === 0}
+        <p class="text-sm text-muted-foreground">{w.none}</p>
+      {:else}
+        <ul class="space-y-2">
+          {#each passkeys as pk (pk.id)}
+            <li class="flex items-center justify-between rounded-lg border p-3">
+              <div class="min-w-0">
+                <div class="truncate text-sm font-medium">{pkName(pk)}</div>
+                <div class="text-xs text-muted-foreground">{w.lastUsed}: {pkLastUsed(pk)}</div>
+              </div>
+              <Button variant="ghost" size="sm" onclick={() => removePasskey(pk.id)}>{w.remove}</Button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      <Button variant="outline" onclick={addPasskey} disabled={pkBusy}>{w.addKey}</Button>
+    </Card.Content>
+  </Card.Root>
+  {/if}
   <Card.Root>
     <Card.Header>
       <Card.Title>{t.audio}</Card.Title>

@@ -35,6 +35,7 @@ import { workflowPages } from "./messages/workflowPages";
 import { admin } from "./messages/admin";
 import { workflowsList } from "./messages/workflowsList";
 import { workflowEditor } from "./messages/workflowEditor";
+import { webauthn } from "./messages/webauthn";
 
 export { lang, setLang, initLang, locale, type Lang } from "./runtime.svelte";
 
@@ -78,6 +79,7 @@ const modules = {
   admin: domain(admin),
   workflowsList: domain(workflowsList),
   workflowEditor: domain(workflowEditor),
+  webauthn: domain(webauthn),
 };
 
 /** One language's messages — every module, narrowed to that language. */

@@ -3,6 +3,11 @@
 // mirrors the control plane's `Claims::allows` (the master bypasses everything except
 // the tenant-private `live.view`).
 import { API_BASE } from "./config";
+import {
+  startRegistration,
+  startAuthentication,
+  browserSupportsWebAuthn,
+} from "@simplewebauthn/browser";
 
 export type Me = {
   user_id: string;
@@ -100,6 +105,78 @@ export function logout(): void {
 /** Begin Google login (full-page redirect to the control plane's start endpoint). */
 export function googleLoginUrl(): string {
   return `${API_BASE}/auth/oauth/google/start`;
+}
+
+// ---- FIDO2 / WebAuthn passkeys (card #147, §2 E0) ----------------------------
+
+/** Whether this browser can do WebAuthn at all (hide the passkey UI otherwise). */
+export function passkeysSupported(): boolean {
+  return browserSupportsWebAuthn();
+}
+
+/** Register a new passkey for the signed-in user (a roaming key or this device's biometric). */
+export async function registerPasskey(nickname?: string): Promise<void> {
+  const start = await fetch(`${API_BASE}/auth/webauthn/register/start`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${auth.token}` },
+  });
+  if (!start.ok) throw new Error((await start.text()) || "Could not start registration");
+  const optionsJSON = (await start.json()).publicKey;
+  const credential = await startRegistration({ optionsJSON });
+  const finish = await fetch(`${API_BASE}/auth/webauthn/register/finish`, {
+    method: "POST",
+    headers: { "content-type": "application/json", Authorization: `Bearer ${auth.token}` },
+    body: JSON.stringify({ credential, nickname: nickname?.trim() || null }),
+  });
+  if (!finish.ok) throw new Error((await finish.text()) || "Could not save the passkey");
+}
+
+/** Sign in with a passkey. Returns false when this address has no passkey (fall back to password). */
+export async function loginWithPasskey(email: string): Promise<boolean> {
+  const start = await fetch(`${API_BASE}/auth/webauthn/login/start`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (start.status === 404) return false;
+  if (!start.ok) throw new Error((await start.text()) || "Passkey login failed");
+  const { handle, options } = await start.json();
+  const credential = await startAuthentication({ optionsJSON: options.publicKey });
+  const finish = await fetch(`${API_BASE}/auth/webauthn/login/finish`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ handle, credential }),
+  });
+  if (!finish.ok) throw new Error((await finish.text()) || "Passkey login failed");
+  const data = await finish.json();
+  setToken(data.token);
+  await loadMe();
+  return true;
+}
+
+export type PasskeyMeta = {
+  id: string;
+  nickname: string | null;
+  created_at: string;
+  last_used_at: string | null;
+};
+
+/** The signed-in user's registered passkeys. */
+export async function listPasskeys(): Promise<PasskeyMeta[]> {
+  const r = await fetch(`${API_BASE}/auth/webauthn/credentials`, {
+    headers: { Authorization: `Bearer ${auth.token}` },
+  });
+  if (!r.ok) throw new Error("Could not load passkeys");
+  return r.json();
+}
+
+/** Remove one of the signed-in user's passkeys. */
+export async function deletePasskey(id: string): Promise<void> {
+  const r = await fetch(`${API_BASE}/auth/webauthn/credentials/${id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${auth.token}` },
+  });
+  if (!r.ok) throw new Error("Could not remove the passkey");
 }
 
 // ---- master: navigate as tenant ---------------------------------------------

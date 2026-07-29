@@ -12,7 +12,7 @@
   import { Separator } from "$lib/components/ui/separator";
   import SentinelLogo from "$lib/components/sentinel-logo.svelte";
 
-  import { login, signup, loadMe, setToken, googleLoginUrl } from "$lib/auth.svelte";
+  import { login, signup, loadMe, setToken, googleLoginUrl, loginWithPasskey, passkeysSupported } from "$lib/auth.svelte";
   import { dict, lang } from "$lib/i18n";
 
   const t = $derived(dict[lang()]);
@@ -52,6 +52,23 @@
       await goto("/");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t.login.genericError);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function passkey() {
+    if (busy) return;
+    busy = true;
+    try {
+      const ok = await loginWithPasskey(email.trim());
+      if (!ok) {
+        toast.error(t.webauthn.noPasskey);
+        return;
+      }
+      await goto("/");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t.webauthn.failed);
     } finally {
       busy = false;
     }
@@ -108,6 +125,11 @@
       </div>
 
       <div class="space-y-2">
+        {#if mode === "signin" && passkeysSupported()}
+          <Button variant="outline" class="w-full" onclick={passkey} disabled={busy || email.trim().length === 0}>
+            {t.webauthn.passkeyButton}
+          </Button>
+        {/if}
         <Button variant="outline" class="w-full" onclick={() => (window.location.href = googleLoginUrl())}>
           {t.login.continueGoogle}
         </Button>
