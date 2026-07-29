@@ -19,13 +19,15 @@ use crate::state::AppState;
 /// gateway (or the browser behind it) closes. `hd` picks main vs substream, matching `/api/ws`.
 pub async fn run(url: String, ip: String, hd: bool, state: Arc<AppState>) {
     // Idempotent: starts the shared pipeline if this camera has no consumer yet, joins it otherwise.
+    // Split keeps preview/HD in separate slots so motion (sub) and Live HD (main) coexist.
+    let slot = crate::capture::stream_slot(&state, &ip, hd);
     crate::capture::ensure(&state, &ip, hd);
 
     // The pipeline needs a moment to reach its first fragment on a cold camera; poll rather than
     // block, and give up rather than hold a socket open on a camera that never comes.
     let mut feed = None;
     for _ in 0..100 {
-        if let Some(f) = crate::capture::mse_feed(&ip) {
+        if let Some(f) = crate::capture::mse_feed(&ip, slot) {
             feed = Some(f);
             break;
         }
@@ -65,10 +67,20 @@ pub async fn run(url: String, ip: String, hd: bool, state: Arc<AppState>) {
     }
     log::info!("live-push: {ip} streaming to the gateway");
 
+    // Chrome (unlike Safari) refuses a cold start on a P-frame — wait for the next IDR/IRAP
+    // before the first media fragment. Mid-GOP joins were "all cameras work in Safari / none in
+    // Chrome" after the default-base-is-moof fix.
+    let mut started = false;
     loop {
         tokio::select! {
             frag = fragments.recv() => match frag {
                 Ok(bytes) => {
+                    if !started {
+                        if !crate::gst_mse::fragment_has_keyframe(&bytes) {
+                            continue;
+                        }
+                        started = true;
+                    }
                     if tx.send(Message::Binary(bytes.to_vec().into())).await.is_err() {
                         break;
                     }

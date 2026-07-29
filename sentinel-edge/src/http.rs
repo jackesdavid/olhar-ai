@@ -229,7 +229,7 @@ async fn snapshot(State(state): State<Arc<AppState>>, Path(ip): Path<String>) ->
     // Wait out a cold start (RTSP connect + first decoded frame) before giving up.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
     loop {
-        if let Some(jpeg) = crate::capture::latest_fresh(&ip, std::time::Duration::from_secs(3)) {
+        if let Some(jpeg) = crate::capture::latest_fresh(&ip, hd, std::time::Duration::from_secs(3)) {
             return (
                 StatusCode::OK,
                 [
@@ -513,20 +513,22 @@ async fn mse_ws(
         return (StatusCode::BAD_REQUEST, "bad src").into_response();
     };
     // Idempotent: starts the shared pipeline if this camera has no consumer yet, joins it otherwise.
+    // Split: preview and HD are separate slots; Unified collapses to one main-only slot.
+    let slot = crate::capture::stream_slot(&state, &ip, hd);
     crate::capture::ensure(&state, &ip, hd);
-    ws.on_upgrade(move |socket| mse_socket(socket, ip))
+    ws.on_upgrade(move |socket| mse_socket(socket, ip, slot))
 }
 
 
 #[cfg(feature = "gst-linked")]
-async fn mse_socket(mut socket: axum::extract::ws::WebSocket, ip: String) {
+async fn mse_socket(mut socket: axum::extract::ws::WebSocket, ip: String, hd: bool) {
     use axum::extract::ws::Message;
 
     // The pipeline needs a moment to reach its first fragment on a cold camera; poll rather than
     // block the runtime, and give up rather than hold a socket open on a camera that never comes.
     let mut feed = None;
     for _ in 0..100 {
-        if let Some(f) = crate::capture::mse_feed(&ip) {
+        if let Some(f) = crate::capture::mse_feed(&ip, hd) {
             feed = Some(f);
             break;
         }
@@ -556,10 +558,18 @@ async fn mse_socket(mut socket: axum::extract::ws::WebSocket, ip: String) {
         return;
     }
 
+    // See live_push: Chrome needs the first media fragment to carry a keyframe.
+    let mut started = false;
     loop {
         tokio::select! {
             frag = fragments.recv() => match frag {
                 Ok(bytes) => {
+                    if !started {
+                        if !crate::gst_mse::fragment_has_keyframe(&bytes) {
+                            continue;
+                        }
+                        started = true;
+                    }
                     if socket.send(Message::Binary(bytes.to_vec())).await.is_err() {
                         break;
                     }

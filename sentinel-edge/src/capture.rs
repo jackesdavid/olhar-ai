@@ -38,9 +38,29 @@ fn cams() -> &'static Mutex<HashMap<String, Arc<Cam>>> {
     C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn cam_for(ip: &str) -> Arc<Cam> {
+/// Slot key for a camera stream. Split keeps preview (`ip`) and HD (`ip/hd`) independent so motion
+/// can stay on the substream while Live HD dials main. Unified collapses everything onto the
+/// preview slot (which already dials main via [`crate::state::pick_camera_rtsp`]).
+fn cam_key(ip: &str, hd: bool) -> String {
+    if hd {
+        format!("{ip}/hd")
+    } else {
+        ip.to_string()
+    }
+}
+
+/// Which decoder slot a request should join. Unified never opens a second main-stream session.
+pub fn stream_slot(state: &crate::state::AppState, ip: &str, hd: bool) -> bool {
+    let unified = state
+        .device_by_ip(ip)
+        .map(|d| d.is_unified())
+        .unwrap_or(false);
+    hd && !unified
+}
+
+fn cam_for(ip: &str, hd: bool) -> Arc<Cam> {
     let mut map = cams().lock().unwrap();
-    map.entry(ip.to_string())
+    map.entry(cam_key(ip, hd))
         .or_insert_with(|| {
             Arc::new(Cam {
                 latest: Mutex::new(None),
@@ -55,25 +75,27 @@ fn cam_for(ip: &str) -> Arc<Cam> {
 
 use crate::media::Backend;
 
-/// Ensure a supervised decoder is running for `ip` on the sub/HD stream. Idempotent — spawns the
-/// supervisor exactly once per camera (the `hd` of the first call wins for its lifetime; the setting
-/// is boot-time anyway). `media_backend` is the box's `RecordingConfig.media_backend` ("ffmpeg" or
-/// "gstreamer", card #138) — resolved once here, at the same point the caller already reads
-/// `face_capture_stream` (`frames.rs`).
+/// Ensure a supervised decoder is running for `ip` on the requested stream. Idempotent **per
+/// slot** — Split mode can run preview (sub) and HD (main) at once; Unified keeps a single
+/// main-only slot. `media_backend` is the box's `RecordingConfig.media_backend` ("ffmpeg" or
+/// "gstreamer", card #138).
 pub fn ensure(state: &crate::state::AppState, ip: &str, hd: bool) {
-    let cam = cam_for(ip);
+    let slot = stream_slot(state, ip, hd);
+    let cam = cam_for(ip, slot);
     if cam.started.swap(true, Ordering::SeqCst) {
         return;
     }
     let backend = Backend::resolve(&state.recording.config.media_backend);
     // The linked path dials the camera itself; the ffmpeg path still goes through go2rtc's re-serve,
     // which is the whole difference between owning the ingest and renting it.
+    // `slot` (not the caller's raw `hd`) picks the URL — unified always resolves to main inside
+    // `camera_rtsp` via `Device::is_unified`, even when the slot is the preview key.
     let url = match backend {
         #[cfg(feature = "gst-linked")]
-        Backend::GstreamerLinked => state.camera_rtsp(ip, hd),
+        Backend::GstreamerLinked => state.camera_rtsp(ip, slot),
         _ => None,
     };
-    ensure_started(ip, hd, cam, backend, url);
+    ensure_started(ip, slot, cam, backend, url);
 }
 
 /// Start the supervisor for a camera whose RTSP URL the caller already has — the same path as
@@ -86,37 +108,44 @@ fn ensure_started(ip: &str, hd: bool, cam: Arc<Cam>, backend: Backend, url: Opti
 /// Test-only entry point: dial `url` directly for `ip`, bypassing device state.
 #[cfg(test)]
 fn ensure_with_url(ip: &str, hd: bool, backend: &str, url: &str) {
-    let cam = cam_for(ip);
+    let cam = cam_for(ip, hd);
     if cam.started.swap(true, Ordering::SeqCst) {
         return;
     }
     ensure_started(ip, hd, cam, Backend::resolve(backend), Some(url.to_string()));
 }
 
-/// What a live viewer needs for `ip`: the MSE init segment, the MIME for `addSourceBuffer`, and the
-/// live fragments from here on. `None` until the shared pipeline has muxed its first fragment.
+/// What a live viewer needs for `ip` on the given stream slot: the MSE init segment, the MIME for
+/// `addSourceBuffer`, and the live fragments from here on. `None` until that slot's pipeline has
+/// muxed its first fragment. `hd` must match the slot [`ensure`] joined (use [`stream_slot`]).
 #[cfg(feature = "gst-linked")]
 pub fn mse_feed(
     ip: &str,
+    hd: bool,
 ) -> Option<(Vec<u8>, String, tokio::sync::broadcast::Receiver<Arc<Vec<u8>>>)> {
-    let cam = cams().lock().unwrap().get(ip).cloned()?;
+    let cam = cams().lock().unwrap().get(&cam_key(ip, hd)).cloned()?;
     let feed = cam.mse.lock().unwrap().subscribe();
     feed
 }
 
-/// The video codec [`probe_codec`] detected for `ip` ("H264"/"H265"), if the gstreamer-linked
-/// pipeline has started and probed it at least once. `None` on the ffmpeg/subprocess-gstreamer
-/// backends (they don't probe) or before the first probe completes.
+/// The video codec [`probe_codec`] detected for `ip` ("H264"/"H265"), if a gstreamer-linked
+/// pipeline has started and probed it at least once. Prefers the HD slot when both are running
+/// (Devices page cares about the camera's main encode).
 pub fn codec_for(ip: &str) -> Option<&'static str> {
-    let cam = cams().lock().unwrap().get(ip).cloned()?;
-    let codec = *cam.codec.lock().unwrap();
-    codec
+    for hd in [true, false] {
+        if let Some(cam) = cams().lock().unwrap().get(&cam_key(ip, hd)).cloned() {
+            if let Some(c) = *cam.codec.lock().unwrap() {
+                return Some(c);
+            }
+        }
+    }
+    None
 }
 
-/// The freshest decoded JPEG for `ip`, only if newer than `max_age` — else `None` so the hub falls
-/// back to go2rtc `frame.jpeg`.
-pub fn latest_fresh(ip: &str, max_age: Duration) -> Option<Arc<Vec<u8>>> {
-    let cam = cams().lock().unwrap().get(ip).cloned()?;
+/// The freshest decoded JPEG for `ip` on the given stream slot, only if newer than `max_age` —
+/// else `None` so the hub falls back to go2rtc `frame.jpeg`.
+pub fn latest_fresh(ip: &str, hd: bool, max_age: Duration) -> Option<Arc<Vec<u8>>> {
+    let cam = cams().lock().unwrap().get(&cam_key(ip, hd)).cloned()?;
     let g = cam.latest.lock().unwrap();
     match &*g {
         Some((jpeg, at)) if at.elapsed() <= max_age => Some(Arc::clone(jpeg)),
@@ -905,7 +934,7 @@ mod gst_linked_it {
         // Decode branch: a fresh JPEG lands in the slot every consumer reads.
         let mut jpeg = None;
         for _ in 0..60 {
-            if let Some(j) = super::latest_fresh(ip, Duration::from_secs(5)) {
+            if let Some(j) = super::latest_fresh(ip, false, Duration::from_secs(5)) {
                 jpeg = Some(j);
                 break;
             }
@@ -915,7 +944,7 @@ mod gst_linked_it {
         assert!(jpeg.starts_with(&[0xFF, 0xD8]), "not a JPEG: {:02x?}", &jpeg[..4.min(jpeg.len())]);
 
         // Mux branch: an init segment a browser can start on, then live fragments.
-        let feed = super::mse_feed(ip).expect("mux branch produced no feed");
+        let feed = super::mse_feed(ip, false).expect("mux branch produced no feed");
         let (init, mime, mut rx) = feed;
         assert_eq!(&init[4..8], b"ftyp", "init segment must open with ftyp");
         assert!(init.windows(4).any(|w| w == b"moov"), "init segment must carry moov");

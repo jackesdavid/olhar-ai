@@ -285,7 +285,7 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
         // model and try again, never tear the source down.
         // Prefer the warm decoder's freshest frame; fall back to the go2rtc frame.jpeg poll only when
         // no fresh frame is available (decoder warming/restarting) so capture never stalls.
-        let jpeg = match crate::capture::latest_fresh(ip, Duration::from_secs(3)) {
+        let jpeg = match crate::capture::latest_fresh(ip, hd, Duration::from_secs(3)) {
             Some(j) => (*j).clone(),
             None => match grab(&agent, &base, ip) {
                 Ok(b) => b,
