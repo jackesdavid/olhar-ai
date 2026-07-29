@@ -544,6 +544,29 @@ fn forward_epoch(
                 .iter()
                 .find(|e| e.to == nid && e.to_port == port.name)
             {
+                // A pure source (GetVariable/GetCameraByName/GetRecipient) reads AMBIENT state —
+                // the run's variable map — not a wired input, so nothing in the graph orders it
+                // against the `SetVariable` that fills that state. It therefore lands wherever the
+                // topological tie-break puts it, which is by node id: a Get created before its Set
+                // ran first and read an empty variable. For most types that surfaced as a silent
+                // zero (an all-zero bbox); for Image/File/Person/Face/Camera, whose `zero_value` is
+                // None, it surfaced as "missing required input".
+                //
+                // Re-evaluate it HERE, at the moment its consumer reads it, so it observes the
+                // state the exec chain has actually produced by this point. Ordering then follows
+                // the wires — a Set wired earlier in the flow is seen — instead of node ids.
+                let pure_now = graph
+                    .node(edge.from)
+                    .filter(|u| u.kind.is_pure_source())
+                    .and_then(|u| {
+                        node::run_node(u.kind, &u.config, &PortValues::new(), sys)
+                            .ok()
+                            .and_then(|mut o| o.remove(&edge.from_port))
+                    });
+                if let Some(v) = pure_now {
+                    inputs.insert(port.name.clone(), v);
+                    continue;
+                }
                 match outputs.get(&edge.from).and_then(|m| m.get(&edge.from_port)) {
                     Some(v) => {
                         inputs.insert(port.name.clone(), v.clone());
@@ -1639,6 +1662,108 @@ mod tests {
             .map(|(_, m)| m.clone())
             .collect();
         assert_eq!(body_logs, vec!["→ a", "→ b", "→ c"], "item flows in order");
+    }
+
+    /// The real graph this bug was found in ("Face Test", tenant workflow 5ef37805). Shape copied
+    /// from production: `When Event` fans out to four `Set Variable`s, the numeric ones drive
+    /// `>=` → `And` → `Branch`, and the branch's true arm feeds a consumer whose input comes from a
+    /// `Get Variable` — a Get created early in the editor, so it carries a LOWER node id (19) than
+    /// the Set that fills it (27).
+    ///
+    /// Before the fix the Get won the topological tie-break, read an unset variable, and the
+    /// consumer reported `missing required input` — while `bbox`, whose `zero_value` is a real
+    /// all-zero box rather than `None`, was silently filled with garbage instead of erroring.
+    /// Uses Text so the test needs no camera, sidecar or event payload; the ordering is the bug.
+    #[test]
+    fn face_test_graph_shape_get_before_set_reads_the_written_value() {
+        let ctx = test_ctx();
+        let mut g = Graph::new("Face Test");
+
+        // Created FIRST, exactly as in the real graph → lowest ids, wins the tie-break.
+        let get_image = g.add_node(NodeKind::GetVariable, 0, 0);
+        g.node_mut(get_image).unwrap().config["variable"] = json!("image");
+        g.node_mut(get_image).unwrap().config["type"] = json!("text");
+
+        // The event's payload stand-in + the four Sets it fans out to.
+        let entry = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(entry).unwrap().config["template"] = json!("FRAME");
+        let set_image = g.add_node(NodeKind::SetVariable, 0, 0);
+        g.node_mut(set_image).unwrap().config["variable"] = json!("image");
+        g.node_mut(set_image).unwrap().config["type"] = json!("text");
+        g.add_edge(entry, "exec_out", set_image, "exec_in").unwrap();
+        g.add_edge(entry, "text", set_image, "value").unwrap();
+
+        // face_width >= 20 AND face_confidence >= 60 → Branch, as in the real graph.
+        let gte_w = g.add_node(NodeKind::NumGte, 0, 0);
+        g.node_mut(gte_w).unwrap().config["a"] = json!(33);
+        g.node_mut(gte_w).unwrap().config["b"] = json!(20);
+        let gte_c = g.add_node(NodeKind::NumGte, 0, 0);
+        g.node_mut(gte_c).unwrap().config["a"] = json!(89);
+        g.node_mut(gte_c).unwrap().config["b"] = json!(60);
+        let and = g.add_node(NodeKind::And, 0, 0);
+        g.add_edge(gte_w, "result", and, "a").unwrap();
+        g.add_edge(gte_c, "result", and, "b").unwrap();
+        let branch = g.add_node(NodeKind::If, 0, 0);
+        g.add_edge(and, "result", branch, "condition").unwrap();
+        g.add_edge(set_image, "exec_out", branch, "exec_in")
+            .unwrap();
+
+        // The gated consumer, fed from the Get — the node that reported the missing input.
+        let consumer = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(consumer).unwrap().config["template"] = json!("{p1}");
+        g.add_edge(branch, "true", consumer, "exec_in").unwrap();
+        g.add_edge(get_image, "value", consumer, "p1").unwrap();
+
+        assert!(
+            get_image < set_image,
+            "the Get must hold the lower id — that is the condition that triggered the bug"
+        );
+
+        let outs = run_dag(&g, &ctx).expect("run");
+        assert_eq!(
+            outs.get(&consumer)
+                .and_then(|m| m.get("text"))
+                .and_then(PortValue::as_text),
+            Some("FRAME"),
+            "the gated consumer must see what the Set wrote, not an empty epoch-0 read"
+        );
+    }
+
+    /// The same Set→Get contract, but with the Get created FIRST so it holds the lower node id.
+    /// `set_variable_then_get_variable_reads_the_value` builds Set first and so passes on the
+    /// topological tie-break (lowest id wins) rather than on the wiring — it would pass even if
+    /// ordering were broken. This is the case that actually bit: a real graph whose Get was node 19
+    /// and whose Set was node 27 read the variable before it was written.
+    #[test]
+    fn get_created_before_set_still_reads_the_written_value() {
+        let ctx = test_ctx();
+        let mut g = Graph::new("vars-id-order");
+        // Get FIRST → lowest id → wins the tie-break → would run before Set without the fix.
+        let get = g.add_node(NodeKind::GetVariable, 0, 0);
+        g.node_mut(get).unwrap().config["variable"] = json!("greeting");
+        g.node_mut(get).unwrap().config["type"] = json!("text");
+        let src = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(src).unwrap().config["template"] = json!("hello");
+        let set = g.add_node(NodeKind::SetVariable, 0, 0);
+        g.node_mut(set).unwrap().config["variable"] = json!("greeting");
+        g.node_mut(set).unwrap().config["type"] = json!("text");
+        let sink = g.add_node(NodeKind::Format, 0, 0);
+        g.node_mut(sink).unwrap().config["template"] = json!("{p1}");
+        g.add_edge(src, "exec_out", set, "exec_in").unwrap();
+        g.add_edge(src, "text", set, "value").unwrap();
+        g.add_edge(set, "exec_out", sink, "exec_in").unwrap();
+        g.add_edge(get, "value", sink, "p1").unwrap();
+
+        let outs = run_dag(&g, &ctx).expect("run");
+        let got = outs
+            .get(&sink)
+            .and_then(|m| m.get("text"))
+            .and_then(PortValue::as_text);
+        assert_eq!(
+            got,
+            Some("hello"),
+            "the Get must read what the Set wrote — ordering follows the wires, not node ids"
+        );
     }
 
     #[test]
