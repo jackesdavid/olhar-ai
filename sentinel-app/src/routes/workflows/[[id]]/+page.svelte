@@ -3386,6 +3386,22 @@
                       stroke-dasharray={editorMode === "break" ? "6 4" : undefined}
                       role="presentation"
                     />
+                    <!-- Data in flight: a dot rides the wire while the edge is live, fading in as
+                         it leaves the output pin and out as it reaches the input. Follows `pathD`
+                         directly (no <mpath>/id plumbing), so it tracks bend handles for free.
+                         Rendered only while live — an idle graph stays perfectly still. -->
+                    {#if eLive}
+                      <circle r={3.5 / zoom} fill={eColor} class="pointer-events-none">
+                        <animateMotion dur="1.1s" repeatCount="indefinite" path={pathD} />
+                        <animate
+                          attributeName="opacity"
+                          values="0;1;1;0"
+                          keyTimes="0;0.18;0.72;1"
+                          dur="1.1s"
+                          repeatCount="indefinite"
+                        />
+                      </circle>
+                    {/if}
                     <!-- bend handles; alt+click removes that via-point -->
                     {#each vias as via, vi}
                       <circle

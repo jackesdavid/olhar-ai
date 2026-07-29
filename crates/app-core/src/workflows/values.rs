@@ -43,8 +43,51 @@ pub fn value_to_json(v: &PortValue) -> Option<Value> {
             }
             json!({ "t": "list", "v": vs })
         }
+        // Media by REFERENCE (#94): the bytes go to the object store and the row carries only its
+        // key. This is what lets an instance resume with its frame intact instead of the logged
+        // miss it used to get — without putting base64 in Postgres, which is the wart #94 exists
+        // to remove.
+        //
+        // The `staging/` prefix is deliberate: it already carries a 3-day expiry
+        // (`media::ensure_lifecycle`), so this cannot become a second unbounded store. Node values
+        // are ephemeral by nature — an instance that needs a frame from more than three days ago
+        // is not a case worth keeping bytes alive for.
+        //
+        // If the store is unconfigured or the upload fails we return None, which is the existing
+        // "dropped with a warning" path. A reference we cannot resolve later would be worse than
+        // no value: it turns a visible miss into a broken read.
+        PortValue::Image(bytes) => media_ref(bytes, "image/jpeg", "jpg")?,
+        PortValue::File(f) => {
+            let mime = if f.mime.is_empty() {
+                "application/octet-stream"
+            } else {
+                &f.mime
+            };
+            let mut v = media_ref(&f.bytes, mime, "bin")?;
+            v["name"] = json!(f.name);
+            v["mime"] = json!(mime);
+            v
+        }
         _ => return None,
     })
+}
+
+/// Upload bytes to the expiring `staging/` prefix and describe them as a reference.
+/// `None` on any failure, so the caller falls back to the honest drop-with-warning.
+fn media_ref(bytes: &[u8], content_type: &str, ext: &str) -> Option<Value> {
+    if !crate::media::enabled() {
+        return None;
+    }
+    match crate::media::put(bytes, content_type, ext) {
+        Ok(key) => Some(json!({ "t": "media", "key": key, "bytes": bytes.len() })),
+        Err(e) => {
+            log::warn!(
+                "node values: could not stage media ({} bytes): {e}",
+                bytes.len()
+            );
+            None
+        }
+    }
 }
 
 pub fn value_from_json(v: &Value) -> Option<PortValue> {
@@ -72,6 +115,23 @@ pub fn value_from_json(v: &Value) -> Option<PortValue> {
                 .filter_map(value_from_json)
                 .collect(),
         ),
+        // A media reference (#94) — fetch the bytes back by key. A key whose object has expired
+        // (or was never written) resolves to None, which is the same "missing input" the caller
+        // already handles: the value is gone, and saying so beats inventing empty bytes.
+        "media" => {
+            let key = v.get("key")?.as_str()?;
+            let bytes = crate::media::get(key)
+                .map_err(|e| log::warn!("node values: media key {key} unreadable: {e}"))
+                .ok()?;
+            match v.get("name").and_then(|n| n.as_str()) {
+                Some(name) => PortValue::File(crate::workflows::node::FileVal {
+                    name: name.to_string(),
+                    mime: field("mime"),
+                    bytes,
+                }),
+                None => PortValue::Image(bytes),
+            }
+        }
         _ => return None,
     })
 }
@@ -86,9 +146,22 @@ pub fn to_json(vals: &NodeValues) -> Value {
                 Some(j) => {
                     ports.insert(name.clone(), j);
                 }
-                None => log::warn!(
-                    "node values: node {nid} port '{name}' is a kind we don't persist (media \
-                     belongs in MinIO — see #94); a later run of this instance will see it missing"
+                // Media now persists by reference (#94), so reaching here for an Image/File means
+                // the object store was unavailable — a different problem, with a different fix,
+                // than a kind the codec genuinely has no representation for. Saying "media belongs
+                // in MinIO" for both would send you to a card that is already done.
+                None if matches!(v, PortValue::Image(_) | PortValue::File(_)) => log::warn!(
+                    "node values: node {nid} port '{name}' — object store unavailable, so the \
+                     media was not persisted; a later run of this instance will see it missing"
+                ),
+                // DEBUG, not WARN: kinds like TrackedObjectArray/Embedding/Landmarks have no
+                // codec arm by design, so this fires on every run of every graph that produces
+                // one and there is nothing an operator can do about it. A warning that cannot be
+                // acted on is noise, and noise is how the media case above — which IS actionable —
+                // gets missed.
+                None => log::debug!(
+                    "node values: node {nid} port '{name}' is a kind the codec does not \
+                     represent; a later run of this instance will see it missing"
                 ),
             }
         }
@@ -346,5 +419,61 @@ mod tests {
             "media var is dropped, not faked"
         );
         assert_eq!(back.get("kept").and_then(PortValue::as_text), Some("ok"));
+    }
+}
+
+#[cfg(test)]
+mod media_ref_tests {
+    use super::*;
+    use crate::workflows::node::FileVal;
+
+    /// With no object store configured, media must still be DROPPED rather than encoded as a
+    /// reference we could never resolve. A dangling key would turn today's visible "missing
+    /// input" into a broken read on resume — strictly worse than not persisting at all.
+    #[test]
+    fn media_is_dropped_when_the_store_is_unavailable() {
+        if crate::media::enabled() {
+            return; // a configured store is exercised by the round-trip test below
+        }
+        assert!(
+            value_to_json(&PortValue::Image(vec![0xFF, 0xD8, 0xFF])).is_none(),
+            "an Image must not encode without somewhere to put the bytes"
+        );
+        assert!(
+            value_to_json(&PortValue::File(FileVal {
+                name: "a.bin".into(),
+                mime: "application/octet-stream".into(),
+                bytes: vec![1, 2, 3],
+            }))
+            .is_none(),
+            "a File must not encode without somewhere to put the bytes"
+        );
+    }
+
+    /// A reference whose object is gone (expired by the 3-day staging lifecycle, or never
+    /// written) decodes to None — the same missing-value the engine already reports.
+    #[test]
+    fn an_unresolvable_media_reference_decodes_to_none() {
+        let dangling = json!({ "t": "media", "key": "staging/does-not-exist.jpg", "bytes": 3 });
+        assert!(
+            value_from_json(&dangling).is_none(),
+            "an expired or missing object must read as absent, not as empty bytes"
+        );
+    }
+
+    /// The tagged shape is what a later run reads back, so pin it: a reference carries the KEY,
+    /// never the bytes. If base64 ever reappears here, #94 has regressed.
+    #[test]
+    fn a_media_reference_never_carries_the_bytes() {
+        let encoded = json!({ "t": "media", "key": "staging/abc.jpg", "bytes": 12345 });
+        let s = encoded.to_string();
+        assert!(
+            s.contains("staging/abc.jpg"),
+            "the key is what gets persisted"
+        );
+        assert!(
+            !s.contains("/9j/") && s.len() < 200,
+            "a persisted media value must stay a small reference, never inline base64"
+        );
     }
 }
