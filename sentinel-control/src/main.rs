@@ -18,6 +18,7 @@ use app_core::db::Db;
 
 mod auth;
 mod billing_gate;
+mod box_signing;
 mod clip_purge;
 mod domain;
 mod edge_stream;

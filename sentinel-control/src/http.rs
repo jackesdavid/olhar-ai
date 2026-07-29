@@ -23,12 +23,10 @@ pub fn router(state: AppState) -> Router {
     // instead of GitHub releases). CI ships them to EDGE_DIST_DIR on the VPS.
     let edge_dist = std::env::var("EDGE_DIST_DIR").unwrap_or_else(|_| "/edge-dist".to_string());
 
-    Router::new()
-        .route("/health", get(health))
-        .route("/install.sh", get(install_script))
-        .route("/edge-latest", get(edge_latest))
-        .route("/edge/installers", get(installers))
-        .route("/enroll", post(enroll))
+    // Everything the appliance calls. Split out so signature verification layers onto exactly
+    // these routes and nothing else — the browser API and the public installer routes must not
+    // pay for it, and `/enroll` cannot require a signature since it predates having a key.
+    let edge_routes = Router::new()
         .route("/config/cameras", get(cameras))
         .route("/config/commands", get(commands))
         // Cloud→edge command transport (card #144): the edge holds this SSE stream and commands
@@ -50,6 +48,20 @@ pub fn router(state: AppState) -> Router {
         .route("/config/recordings/clip-metadata", post(clip_push))
         .route("/config/recordings/:clip_id/uploaded", post(clip_uploaded))
         .route("/config/tracking", get(tracking_config))
+        // Bootstrap: bearer-authed, deliberately unsigned — it is how a box with no key gets one.
+        .route("/config/signing-key", post(crate::box_signing::issue_key))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::box_signing::verify_signature,
+        ));
+
+    Router::new()
+        .route("/health", get(health))
+        .route("/install.sh", get(install_script))
+        .route("/edge-latest", get(edge_latest))
+        .route("/edge/installers", get(installers))
+        .route("/enroll", post(enroll))
+        .merge(edge_routes)
         .merge(handlers::router())
         // Soft-lock: a lapsed/unpaid tenant is read-only (402 on writes).
         .merge(
@@ -275,6 +287,9 @@ async fn enroll(
         log::error!("enroll: token rotate failed for box {box_id}: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, "could not issue a token").into_response();
     }
+    // The bearer just changed hands; any signing key issued to the previous holder must not keep
+    // verifying. The re-enrolling appliance bootstraps a fresh one on its next boot.
+    crate::box_signing::revoke_keys(&st.pool, box_id).await;
 
     let name = crate::store::box_name(&st.pool, box_id)
         .await
