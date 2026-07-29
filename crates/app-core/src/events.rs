@@ -146,6 +146,18 @@ pub fn catalog() -> &'static [KindInfo] {
             kind: "auth.login",
             label: "Login",
         },
+        // The failure side of sign-in. `auth.login_failed` is bounded by the lockout that follows
+        // it (attempts past the limit never reach the producer), so it cannot be used to flood a
+        // tenant's feed; attempts against an already-locked account are deliberately log-only for
+        // exactly that reason. See `handlers::login`.
+        KindInfo {
+            kind: "auth.login_failed",
+            label: "Failed sign-in",
+        },
+        KindInfo {
+            kind: "auth.account_locked",
+            label: "Account locked",
+        },
     ]
 }
 

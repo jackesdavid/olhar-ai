@@ -27,11 +27,26 @@ pub fn router() -> Router<AppState> {
         )
         // FIDO2 / WebAuthn passkeys (card #147, §2 E0). register/* + credentials are authenticated
         // (UserClaims); login/* are public.
-        .route("/auth/webauthn/register/start", post(crate::webauthn::register_start))
-        .route("/auth/webauthn/register/finish", post(crate::webauthn::register_finish))
-        .route("/auth/webauthn/login/start", post(crate::webauthn::login_start))
-        .route("/auth/webauthn/login/finish", post(crate::webauthn::login_finish))
-        .route("/auth/webauthn/credentials", get(crate::webauthn::list_credentials))
+        .route(
+            "/auth/webauthn/register/start",
+            post(crate::webauthn::register_start),
+        )
+        .route(
+            "/auth/webauthn/register/finish",
+            post(crate::webauthn::register_finish),
+        )
+        .route(
+            "/auth/webauthn/login/start",
+            post(crate::webauthn::login_start),
+        )
+        .route(
+            "/auth/webauthn/login/finish",
+            post(crate::webauthn::login_finish),
+        )
+        .route(
+            "/auth/webauthn/credentials",
+            get(crate::webauthn::list_credentials),
+        )
         .route(
             "/auth/webauthn/credentials/:id",
             axum::routing::delete(crate::webauthn::delete_credential),
@@ -191,24 +206,80 @@ async fn login(
     Json(b): Json<LoginReq>,
 ) -> Result<Json<AuthResp>, ApiErr> {
     let email = b.email.trim().to_lowercase();
-    let user = store::find_user_by_email(&st.pool, &email)
+    let Some(user) = store::find_user_by_email(&st.pool, &email)
         .await
         .map_err(db_err)?
-        .ok_or(err(StatusCode::UNAUTHORIZED, "invalid credentials"))?;
+    else {
+        // Log-only by construction: there is no user, so no tenant to attach an event to. Worth a
+        // line anyway — a sweep through addresses that do not exist is what enumeration looks like,
+        // and it is the one attack shape the events stream can never show.
+        log::warn!("login: attempt for unknown address {}", log_email(&email));
+        return Err(err(StatusCode::UNAUTHORIZED, "invalid credentials"));
+    };
     // Locked accounts are refused before the password is even considered — otherwise the lockout
     // still leaks whether a guess was right, which is most of what an attacker wanted.
     if locked_now(user.locked_until.as_deref()) {
+        // Log, but deliberately do NOT event: this path is reached as often as an attacker cares to
+        // keep knocking, so eventing it would hand them a way to flood a tenant's feed — and burn
+        // its retention quota — at will. The lock was already evented once, when it engaged.
+        log::warn!(
+            "login: attempt against locked account {} (user {})",
+            log_email(&email),
+            user.id
+        );
         return Err(err(
             StatusCode::TOO_MANY_REQUESTS,
             "too many attempts — try again later",
         ));
     }
-    let hash = user.password_hash.as_deref().ok_or(err(
-        StatusCode::UNAUTHORIZED,
-        "use social login for this account",
-    ))?;
+    let Some(hash) = user.password_hash.as_deref() else {
+        log::info!(
+            "login: password attempt on a social-only account {}",
+            log_email(&email)
+        );
+        return Err(err(
+            StatusCode::UNAUTHORIZED,
+            "use social login for this account",
+        ));
+    };
     if !auth::verify_password(&b.password, hash) {
-        store::note_failed_login(&st.pool, user.id, lockout_until(user.failed_logins + 1)).await;
+        let failures = user.failed_logins + 1;
+        let lock_until = lockout_until(failures);
+        store::note_failed_login(&st.pool, user.id, lock_until.clone()).await;
+        // PR 2 shipped the lockout with no trace of it ever firing: the failure path bumped a
+        // counter and recorded nothing, so neither the tenant nor an operator could see an account
+        // being worked on, or answer why someone was locked out. The log line is the forensic trail
+        // (it ships to Datadog); the events below are what the tenant should actually see.
+        log::warn!(
+            "login: failed attempt {failures} for {} (user {})",
+            log_email(&email),
+            user.id
+        );
+        // A master account carries no tenant, so it has no feed to land on — the log line above is
+        // the whole record for it.
+        if let Some(tid) = user.tenant_id {
+            // Bounded, which is why this one is safe to event: after LOCKOUT_AFTER failures the
+            // account locks and every further attempt short-circuits at the check above without
+            // reaching here, so an attacker cannot mint these indefinitely.
+            let mut ev = app_core::events::NewEvent::new(tid, "auth.login_failed", "system");
+            ev.severity = "warn".to_string();
+            ev.title = Some("Failed sign-in".to_string());
+            ev.message = Some(format!("Wrong password for {email}"));
+            ev.user_id = Some(user.id);
+            ev.data = Some(serde_json::json!({ "attempt": failures }));
+            st.event_queue.push(ev);
+            if let Some(until) = lock_until.as_deref() {
+                let mut ev = app_core::events::NewEvent::new(tid, "auth.account_locked", "system");
+                ev.severity = "error".to_string();
+                ev.title = Some("Account locked".to_string());
+                ev.message = Some(format!(
+                    "{email} locked after {failures} failed sign-ins — try again after {until}"
+                ));
+                ev.user_id = Some(user.id);
+                ev.data = Some(serde_json::json!({ "attempts": failures, "until": until }));
+                st.event_queue.push(ev);
+            }
+        }
         // Deliberately the same message and status as an unknown address: the throttle must not
         // become an oracle for which accounts exist.
         return Err(err(StatusCode::UNAUTHORIZED, "invalid credentials"));
@@ -545,6 +616,24 @@ async fn assume_tenant(
 
 // ---- login throttling -------------------------------------------------------
 
+/// An address rendered safe to put in a log line.
+///
+/// The address on a failed sign-in is attacker-controlled, and both of its abuses are cheap.
+/// `{:?}` quotes and escapes, so an embedded newline cannot forge a second log line (nor a fake
+/// one claiming a successful sign-in); the cap stops a megabyte of submitted text becoming a
+/// megabyte of log, billed and shipped. Truncation counts CHARS, not bytes — slicing a non-ASCII
+/// address mid-codepoint would panic, and panicking inside the login path is a denial of service
+/// reachable by anyone who can type a UTF-8 address into a form.
+fn log_email(email: &str) -> String {
+    const MAX_CHARS: usize = 120;
+    let clipped: String = email.chars().take(MAX_CHARS).collect();
+    if clipped.len() < email.len() {
+        format!("{clipped:?}…")
+    } else {
+        format!("{clipped:?}")
+    }
+}
+
 /// Failures tolerated before the account is locked at all.
 ///
 /// Generous on purpose: a real person mistyping twice must not be locked out, and the goal is to
@@ -635,5 +724,49 @@ mod lockout_tests {
     #[test]
     fn an_unparseable_lock_does_not_strand_the_user() {
         assert!(!locked_now(Some("not-a-timestamp")));
+    }
+}
+
+#[cfg(test)]
+mod failed_login_record_tests {
+    use super::*;
+
+    /// Truncating by BYTES would panic on this input, and a panic inside the login path is a denial
+    /// of service anyone can reach by typing a non-ASCII address into the form. Byte 120 of this
+    /// string falls inside a 3-byte character on purpose.
+    #[test]
+    fn a_long_multibyte_address_is_clipped_without_panicking() {
+        let email = format!("ab{}", "日".repeat(200));
+        let out = log_email(&email);
+        assert!(out.ends_with('…'), "expected a truncation marker: {out}");
+        assert!(out.chars().count() < email.chars().count());
+    }
+
+    /// The address is attacker-controlled, so it must not be able to forge a second log line —
+    /// least of all one that reads like a successful sign-in.
+    #[test]
+    fn a_newline_in_the_address_cannot_forge_a_log_line() {
+        let out = log_email("a@b.c\nlogin: signed in as admin");
+        assert!(!out.contains('\n'), "a raw newline reached the log: {out}");
+        assert!(out.contains("\\n"), "the newline should be escaped: {out}");
+    }
+
+    /// The ordinary case has to stay readable, or the logging is useless to whoever reads it.
+    #[test]
+    fn an_ordinary_address_is_quoted_and_otherwise_intact() {
+        assert_eq!(log_email("someone@example.com"), "\"someone@example.com\"");
+    }
+
+    /// An event kind the feed cannot label still stores fine — and then shows up blank in the UI,
+    /// which is how a typo here stays invisible. Keeps the producer and the catalog honest.
+    #[test]
+    fn the_auth_kinds_this_module_emits_are_in_the_feed_catalog() {
+        let known: Vec<&str> = app_core::events::catalog().iter().map(|k| k.kind).collect();
+        for kind in ["auth.login", "auth.login_failed", "auth.account_locked"] {
+            assert!(
+                known.contains(&kind),
+                "{kind} is emitted by handlers::login but missing from events::catalog()"
+            );
+        }
     }
 }

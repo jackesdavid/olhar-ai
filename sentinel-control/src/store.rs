@@ -1349,14 +1349,33 @@ pub async fn pairing_status(
 // ---- login throttling -------------------------------------------------------
 
 /// Record a failed sign-in and lock the account once the attempts justify it.
+///
+/// A failure here is logged rather than discarded. If this UPDATE does not land, the attempt is
+/// never counted, the lockout never engages, and the throttle is simply absent — fail-open with no
+/// trace, which is the exact shape of bug the lockout was added to remove. `log::error!` because it
+/// means a security control is silently off, not that one request went wrong.
+///
+/// Still returns `()`: refusing the sign-in is the caller's job and happens regardless, and a
+/// bookkeeping failure must not turn a wrong password into a 500 — that would answer "was this
+/// password right?" differently depending on whether the write succeeded.
 pub async fn note_failed_login(pool: &PgPool, user_id: Uuid, lock_until: Option<String>) {
-    let _ = sqlx::query(
+    let r = sqlx::query(
         "UPDATE users SET failed_logins = failed_logins + 1, locked_until = COALESCE($2, locked_until) WHERE id = $1",
     )
     .bind(user_id)
     .bind(lock_until)
     .execute(pool)
     .await;
+    match r {
+        Err(e) => log::error!("note_failed_login: attempt for user {user_id} NOT counted: {e}"),
+        // No row updated means the id did not match. The caller just read this user, so this is a
+        // deleted-mid-request race rather than a bug — but it still means the attempt went
+        // uncounted, which is the thing worth knowing.
+        Ok(res) if res.rows_affected() == 0 => {
+            log::warn!("note_failed_login: user {user_id} vanished — attempt not counted")
+        }
+        Ok(_) => {}
+    }
 }
 
 /// Clear the counter after a successful sign-in.
