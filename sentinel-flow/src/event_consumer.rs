@@ -76,19 +76,49 @@ fn process(state: &Arc<AppState>, job: work_queue::Job) {
     // flow replica, so this pod still has the old (disabled/absent) copy. Surface it to Datadog
     // (service:flow) with the pod name so cross-pod divergence is queryable/alertable.
     if matched == 0 {
-        let loaded = state
-            .store
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(t, _)| *t == job.tenant_id)
-            .count();
-        log::warn!(
-            "inbound event '{event}' (source '{source}', tenant {tenant}) matched 0 graphs on pod {pod} — possible stale graph store (this pod holds {loaded} graph(s) for the tenant); job {job} consumed with no run",
-            tenant = job.tenant_id,
-            pod = state.pod_name,
-            job = job.id,
-        );
+        // Distinguish the two very different reasons for zero listeners. `fire_event` filters on
+        // `g.enabled` BEFORE matching, so a graph that handles this event but is switched off is
+        // indistinguishable from one that doesn't exist — and the old message blamed a "stale graph
+        // store" for both. A disabled workflow is ordinary user configuration, and warning about it
+        // on every motion event buries the cross-pod divergence this log exists to catch.
+        let (loaded, disabled_listeners) = {
+            let store = state.store.lock().unwrap();
+            let mine: Vec<_> = store
+                .iter()
+                .filter(|(t, _)| *t == job.tenant_id)
+                .map(|(_, g)| g)
+                .collect();
+            let disabled = mine
+                .iter()
+                .filter(|g| !g.enabled)
+                .filter(|g| {
+                    g.nodes.iter().any(|n| {
+                        n.kind == app_core::workflows::domain::NodeKind::OnEvent
+                            && n.config.get("event").and_then(|v| v.as_str())
+                                == Some(event.as_str())
+                    })
+                })
+                .count();
+            (mine.len(), disabled)
+        };
+        if disabled_listeners > 0 {
+            log::info!(
+                "inbound event '{event}' (source '{source}', tenant {tenant}) matched 0 graphs: \
+                 {disabled_listeners} graph(s) handle it but are disabled — enable one to run it; \
+                 job {job} consumed with no run",
+                tenant = job.tenant_id,
+                job = job.id,
+            );
+        } else {
+            log::warn!(
+                "inbound event '{event}' (source '{source}', tenant {tenant}) matched 0 graphs on \
+                 pod {pod} and NO graph here handles it — possible stale graph store (this pod \
+                 holds {loaded} graph(s) for the tenant); job {job} consumed with no run",
+                tenant = job.tenant_id,
+                pod = state.pod_name,
+                job = job.id,
+            );
+        }
     }
     work_queue::mark_done_blocking(&state.db, job.id);
 }
