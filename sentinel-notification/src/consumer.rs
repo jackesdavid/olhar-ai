@@ -59,10 +59,16 @@ pub fn spawn_media_purge(state: Arc<AppState>) {
     }
     match app_core::media::ensure_lifecycle(ORPHAN_EXPIRY_DAYS) {
         Ok(()) => log::info!("media purge: bucket expires orphans after {ORPHAN_EXPIRY_DAYS}d"),
-        Err(e) => log::warn!("media purge: could not set lifecycle ({e}) — prompt reclaim still runs"),
+        Err(e) => {
+            log::warn!("media purge: could not set lifecycle ({e}) — prompt reclaim still runs")
+        }
     }
     std::thread::spawn(move || loop {
-        let batch = work_queue::purgeable_notification_media_blocking(&state.db, PURGE_GRACE_SECS, PURGE_BATCH);
+        let batch = work_queue::purgeable_notification_media_blocking(
+            &state.db,
+            PURGE_GRACE_SECS,
+            PURGE_BATCH,
+        );
         let mut reclaimed = Vec::new();
         for row in &batch {
             // Only forget the keys once every object for that row is actually gone, or a
@@ -79,7 +85,11 @@ pub fn spawn_media_purge(state: Arc<AppState>) {
         }
         std::thread::sleep(PURGE_INTERVAL);
     });
-    log::info!("media purge started (every {}s, {}s grace)", PURGE_INTERVAL.as_secs(), PURGE_GRACE_SECS);
+    log::info!(
+        "media purge started (every {}s, {}s grace)",
+        PURGE_INTERVAL.as_secs(),
+        PURGE_GRACE_SECS
+    );
 }
 
 /// Delete one object. S3 deletes are idempotent, so an already-missing key is a success.
@@ -98,7 +108,11 @@ fn process(state: &AppState, job: work_queue::Job) {
     let p = &job.payload;
     let target = p.get("target").and_then(|v| v.as_str());
     let chat_id = p.get("chat_id").and_then(|v| v.as_i64());
-    let message = p.get("message").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let message = p
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
     let image_key = p.get("image_key").and_then(|v| v.as_str());
     let video_key = p.get("video_key").and_then(|v| v.as_str());
 
@@ -115,7 +129,10 @@ fn process(state: &AppState, job: work_queue::Job) {
     // job when the tenant has no Telegram config: a push-only tenant must not be blocked by that.
     // Absent `channel` = "telegram", so jobs queued before this existed are unaffected.
     if p.get("channel").and_then(|v| v.as_str()) == Some("push") {
-        let title = p.get("title").and_then(|v| v.as_str()).unwrap_or("Sentinel");
+        let title = p
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Sentinel");
         let tokens = app_core::notification::push::enabled_tokens(&state.db, job.tenant_id, target);
         match app_core::notification::push::send(&tokens, title, &message) {
             Ok(n) => {
@@ -198,7 +215,10 @@ fn resolve_config(db: &app_core::db::Db, tenant: uuid::Uuid) -> Option<Notificat
     if token.trim().is_empty() {
         return None;
     }
-    Some(NotificationConfig { bot_token: token, pairing_code: code })
+    Some(NotificationConfig {
+        bot_token: token,
+        pairing_code: code,
+    })
 }
 
 /// Exponential backoff, capped at 5 minutes: attempt 1 → 5s, 2 → 10s, 3 → 20s, …

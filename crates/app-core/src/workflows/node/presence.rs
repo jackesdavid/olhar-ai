@@ -4,7 +4,11 @@ use serde_json::Value;
 
 /// Record a categorized presence in a room: persist it and pulse it live on the map.
 /// Inputs override config; the room name resolves to a room_id like Create Alert.
-pub(super) fn run_record_presence(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+pub(super) fn run_record_presence(
+    config: &Value,
+    inputs: &PortValues,
+    sys: &ToolContext,
+) -> Result<PortValues, String> {
     let cat_str = inputs
         .get("category")
         .and_then(PortValue::as_text)
@@ -44,7 +48,10 @@ pub(super) fn run_record_presence(config: &Value, inputs: &PortValues, sys: &Too
     {
         Some(name) => {
             let rooms = crate::map::repo::load(&sys.db, sys.tenant_id);
-            match rooms.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim())) {
+            match rooms
+                .iter()
+                .find(|r| r.name.eq_ignore_ascii_case(name.trim()))
+            {
                 Some(r) => (Some(r.id), Some(r.name.clone())),
                 None => (None, Some(name.to_string())),
             }
@@ -60,7 +67,9 @@ pub(super) fn run_record_presence(config: &Value, inputs: &PortValues, sys: &Too
         let y2 = bbox.y2 as f32;
         let fw = inputs.get("frame_w").and_then(PortValue::as_num)? as f32;
         let fh = inputs.get("frame_h").and_then(PortValue::as_num)? as f32;
-        if fw <= 0.0 || fh <= 0.0 { return None; }
+        if fw <= 0.0 || fh <= 0.0 {
+            return None;
+        }
         let cx = (x1 + x2) / 2.0 / fw - 0.5;
         let cy = (y1 + y2) / 2.0 / fh;
         let depth = 1.0 - cy;

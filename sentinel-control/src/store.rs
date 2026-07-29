@@ -99,11 +99,17 @@ pub async fn list_users(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<User
     .await?;
     let mut out = Vec::with_capacity(users.len());
     for (id, email, is_master) in users {
-        let roles: Vec<(Uuid,)> = sqlx::query_as("SELECT role_id FROM user_roles WHERE user_id = $1")
-            .bind(id)
-            .fetch_all(pool)
-            .await?;
-        out.push(UserListRow { id, email, is_master, role_ids: roles.into_iter().map(|(r,)| r).collect() });
+        let roles: Vec<(Uuid,)> =
+            sqlx::query_as("SELECT role_id FROM user_roles WHERE user_id = $1")
+                .bind(id)
+                .fetch_all(pool)
+                .await?;
+        out.push(UserListRow {
+            id,
+            email,
+            is_master,
+            role_ids: roles.into_iter().map(|(r,)| r).collect(),
+        });
     }
     Ok(out)
 }
@@ -183,7 +189,12 @@ pub async fn create_box_with_platform(
     Ok(id)
 }
 
-pub async fn create_box(pool: &PgPool, tenant_id: Uuid, name: &str, token_hash: &str) -> sqlx::Result<Uuid> {
+pub async fn create_box(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    name: &str,
+    token_hash: &str,
+) -> sqlx::Result<Uuid> {
     let (id,): (Uuid,) = sqlx::query_as(
         "INSERT INTO tenant_boxes (tenant_id, name, token_hash) VALUES ($1,$2,$3) RETURNING id",
     )
@@ -351,7 +362,10 @@ pub async fn upsert_discovered(
     cams: &[app_core::onvif::DiscoveredDevice],
 ) -> sqlx::Result<()> {
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM discovered_cameras WHERE tenant_id = $1").bind(tenant_id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM discovered_cameras WHERE tenant_id = $1")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
     for c in cams {
         sqlx::query(
             "INSERT INTO discovered_cameras (tenant_id, ip, name, xaddr, manufacturer, model, onvif_id)
@@ -386,7 +400,10 @@ pub async fn list_discovered(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec
 /// (ip, display name) per configured camera — the **user-given** name from `devices.name`, not the
 /// raw ONVIF/model string in `discovered_cameras`. Everything user-facing (the recordings/playback
 /// camera list) should read this. Falls back to the ip when a camera has no name yet.
-pub async fn list_camera_names(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<(String, String)>> {
+pub async fn list_camera_names(
+    pool: &PgPool,
+    tenant_id: Uuid,
+) -> sqlx::Result<Vec<(String, String)>> {
     sqlx::query_as::<_, (String, String)>(
         "SELECT ip, COALESCE(NULLIF(name, ''), ip) AS name FROM devices WHERE tenant_id = $1 ORDER BY name",
     )
@@ -398,12 +415,14 @@ pub async fn list_camera_names(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<V
 /// Mark a camera as configured (its credentials were relayed to the edge). The creds
 /// themselves are never stored — only this flag.
 pub async fn mark_configured(pool: &PgPool, tenant_id: Uuid, ip: &str) -> sqlx::Result<()> {
-    sqlx::query("INSERT INTO configured_cameras (tenant_id, ip) VALUES ($1,$2) ON CONFLICT DO NOTHING")
-        .bind(tenant_id)
-        .bind(ip)
-        .execute(pool)
-        .await
-        .map(|_| ())
+    sqlx::query(
+        "INSERT INTO configured_cameras (tenant_id, ip) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+    )
+    .bind(tenant_id)
+    .bind(ip)
+    .execute(pool)
+    .await
+    .map(|_| ())
 }
 
 pub async fn unmark_configured(pool: &PgPool, tenant_id: Uuid, ip: &str) -> sqlx::Result<()> {
@@ -428,9 +447,16 @@ pub async fn list_configured(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec
 /// resolved stream for (the edge pushes its full current set on each reload/rediscover).
 /// `codec` is `None` when the edge hasn't probed it (older build, or ffmpeg/subprocess-gstreamer
 /// backend). Best-effort.
-pub async fn upsert_streaming(pool: &PgPool, tenant_id: Uuid, cams: &[(String, Option<String>)]) -> sqlx::Result<()> {
+pub async fn upsert_streaming(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    cams: &[(String, Option<String>)],
+) -> sqlx::Result<()> {
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM streaming_cameras WHERE tenant_id = $1").bind(tenant_id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM streaming_cameras WHERE tenant_id = $1")
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
     for (ip, codec) in cams {
         sqlx::query(
             "INSERT INTO streaming_cameras (tenant_id, ip, codec) VALUES ($1,$2,$3) \
@@ -447,7 +473,10 @@ pub async fn upsert_streaming(pool: &PgPool, tenant_id: Uuid, cams: &[(String, O
 
 /// (ip, codec) pairs the tenant's edge currently has a resolved stream for (the "online &
 /// correct" set) — `codec` is `None` when the edge hasn't reported it.
-pub async fn list_streaming(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<(String, Option<String>)>> {
+pub async fn list_streaming(
+    pool: &PgPool,
+    tenant_id: Uuid,
+) -> sqlx::Result<Vec<(String, Option<String>)>> {
     let rows: Vec<(String, Option<String>)> =
         sqlx::query_as("SELECT ip, codec FROM streaming_cameras WHERE tenant_id = $1")
             .bind(tenant_id)
@@ -472,17 +501,24 @@ pub async fn box_host_for_tenant(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result
 // ---- recording config (per box) --------------------------------------------
 
 /// The recording_config jsonb for a specific box, resolved by its token hash.
-pub async fn recording_config_by_token(pool: &PgPool, token_hash: &str) -> sqlx::Result<Option<serde_json::Value>> {
-    let row: Option<(serde_json::Value,)> = sqlx::query_as(
-        "SELECT recording_config FROM tenant_boxes WHERE token_hash = $1",
-    )
-    .bind(token_hash)
-    .fetch_optional(pool)
-    .await?;
+pub async fn recording_config_by_token(
+    pool: &PgPool,
+    token_hash: &str,
+) -> sqlx::Result<Option<serde_json::Value>> {
+    let row: Option<(serde_json::Value,)> =
+        sqlx::query_as("SELECT recording_config FROM tenant_boxes WHERE token_hash = $1")
+            .bind(token_hash)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.map(|(v,)| v))
 }
 
-pub async fn set_recording_config(pool: &PgPool, tenant_id: Uuid, box_id: Uuid, config: serde_json::Value) -> sqlx::Result<bool> {
+pub async fn set_recording_config(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    box_id: Uuid,
+    config: serde_json::Value,
+) -> sqlx::Result<bool> {
     let r = sqlx::query(
         "UPDATE tenant_boxes SET recording_config = $1 WHERE tenant_id = $2 AND id = $3",
     )
@@ -498,31 +534,41 @@ pub async fn set_recording_config(pool: &PgPool, tenant_id: Uuid, box_id: Uuid, 
 
 /// The tracking_config jsonb for a specific box, resolved by its token hash — mirrors
 /// [`recording_config_by_token`].
-pub async fn tracking_config_by_token(pool: &PgPool, token_hash: &str) -> sqlx::Result<Option<serde_json::Value>> {
-    let row: Option<(serde_json::Value,)> = sqlx::query_as(
-        "SELECT tracking_config FROM tenant_boxes WHERE token_hash = $1",
-    )
-    .bind(token_hash)
-    .fetch_optional(pool)
-    .await?;
+pub async fn tracking_config_by_token(
+    pool: &PgPool,
+    token_hash: &str,
+) -> sqlx::Result<Option<serde_json::Value>> {
+    let row: Option<(serde_json::Value,)> =
+        sqlx::query_as("SELECT tracking_config FROM tenant_boxes WHERE token_hash = $1")
+            .bind(token_hash)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.map(|(v,)| v))
 }
 
 /// The tracking_config jsonb for a specific box, resolved by its id — used by the graph-save
 /// sync (`workflows::sync_tracking_config`) to read a box's current `enabled`/`detect_ms` before
 /// overwriting only `trackers` with what the graphs now declare.
-pub async fn tracking_config_by_id(pool: &PgPool, tenant_id: Uuid, box_id: Uuid) -> sqlx::Result<Option<serde_json::Value>> {
-    let row: Option<(serde_json::Value,)> = sqlx::query_as(
-        "SELECT tracking_config FROM tenant_boxes WHERE tenant_id = $1 AND id = $2",
-    )
-    .bind(tenant_id)
-    .bind(box_id)
-    .fetch_optional(pool)
-    .await?;
+pub async fn tracking_config_by_id(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    box_id: Uuid,
+) -> sqlx::Result<Option<serde_json::Value>> {
+    let row: Option<(serde_json::Value,)> =
+        sqlx::query_as("SELECT tracking_config FROM tenant_boxes WHERE tenant_id = $1 AND id = $2")
+            .bind(tenant_id)
+            .bind(box_id)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.map(|(v,)| v))
 }
 
-pub async fn set_tracking_config(pool: &PgPool, tenant_id: Uuid, box_id: Uuid, config: serde_json::Value) -> sqlx::Result<bool> {
+pub async fn set_tracking_config(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    box_id: Uuid,
+    config: serde_json::Value,
+) -> sqlx::Result<bool> {
     let r = sqlx::query(
         "UPDATE tenant_boxes SET tracking_config = $1 WHERE tenant_id = $2 AND id = $3",
     )
@@ -537,13 +583,20 @@ pub async fn set_tracking_config(pool: &PgPool, tenant_id: Uuid, box_id: Uuid, c
 // ---- persistent edge commands (survive control restarts) -------------------
 
 /// Set a pending command flag for a box. Idempotent.
-pub async fn set_box_command(pool: &PgPool, box_id: Uuid, field: &str, value: bool) -> sqlx::Result<()> {
+pub async fn set_box_command(
+    pool: &PgPool,
+    box_id: Uuid,
+    field: &str,
+    value: bool,
+) -> sqlx::Result<()> {
     // field is a trusted internal string (never user input), so we construct the query
     // with the column name inline. The caller is responsible for passing a valid column.
-    let sql = format!(
-        "UPDATE tenant_boxes SET {field} = $1 WHERE id = $2"
-    );
-    sqlx::query(&sql).bind(value).bind(box_id).execute(pool).await?;
+    let sql = format!("UPDATE tenant_boxes SET {field} = $1 WHERE id = $2");
+    sqlx::query(&sql)
+        .bind(value)
+        .bind(box_id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -576,30 +629,30 @@ pub async fn take_box_commands(pool: &PgPool, box_id: Uuid) -> sqlx::Result<(boo
 // ---- recordings (clip metadata pushed by edge) -----------------------------
 
 const FNAME_ADJ: &[&str] = &[
-    "amber","azure","bold","bright","calm","cedar","clear","cloud","coral","crisp",
-    "dark","dawn","deep","deft","dense","drift","dusk","early","faint","fast",
-    "fern","firm","flash","fleet","frost","gentle","ghost","glad","glide","gold",
-    "grand","grey","gust","hardy","haze","high","hollow","iron","jade","keen",
-    "kind","lake","lean","light","lofty","lone","loud","mist","misty","moss",
-    "muted","night","noble","north","oak","pale","peak","pine","plain","prime",
-    "pure","quick","quiet","rapid","raw","reef","rich","ridge","ripple","rise",
-    "roam","rocky","rough","sage","sharp","silver","sleek","slim","slow","smooth",
-    "soft","solid","stark","steady","steel","still","stone","storm","strong","swift",
-    "tall","thin","tidal","trim","true","vast","veil","warm","wide","wild",
+    "amber", "azure", "bold", "bright", "calm", "cedar", "clear", "cloud", "coral", "crisp",
+    "dark", "dawn", "deep", "deft", "dense", "drift", "dusk", "early", "faint", "fast", "fern",
+    "firm", "flash", "fleet", "frost", "gentle", "ghost", "glad", "glide", "gold", "grand", "grey",
+    "gust", "hardy", "haze", "high", "hollow", "iron", "jade", "keen", "kind", "lake", "lean",
+    "light", "lofty", "lone", "loud", "mist", "misty", "moss", "muted", "night", "noble", "north",
+    "oak", "pale", "peak", "pine", "plain", "prime", "pure", "quick", "quiet", "rapid", "raw",
+    "reef", "rich", "ridge", "ripple", "rise", "roam", "rocky", "rough", "sage", "sharp", "silver",
+    "sleek", "slim", "slow", "smooth", "soft", "solid", "stark", "steady", "steel", "still",
+    "stone", "storm", "strong", "swift", "tall", "thin", "tidal", "trim", "true", "vast", "veil",
+    "warm", "wide", "wild",
 ];
 
 const FNAME_NOUN: &[&str] = &[
-    "arc","ash","bay","beam","birch","blade","blaze","bloom","boulder","branch",
-    "bridge","brook","canyon","cedar","cliff","cloud","comet","cove","creek","crest",
-    "dawn","delta","drift","dune","dusk","echo","ember","falcon","fern","field",
-    "fjord","flame","flare","flash","flint","fog","forest","gale","gate","glacier",
-    "glen","grove","gust","harbor","hawk","haze","hill","hollow","horizon","isle",
-    "jade","lake","ledge","light","loch","mesa","meteor","mist","moon","moss",
-    "mount","nebula","night","north","oak","orbit","pass","peak","pine","plain",
-    "pond","pulse","quarry","rain","range","rapid","reef","ridge","rift","river",
-    "rock","root","run","sage","salt","sand","shore","sierra","sky","slate",
-    "snow","sol","spark","spire","spring","star","stone","storm","stream","summit",
-    "sun","surge","tide","timber","torch","trail","vale","vault","wave","wind",
+    "arc", "ash", "bay", "beam", "birch", "blade", "blaze", "bloom", "boulder", "branch", "bridge",
+    "brook", "canyon", "cedar", "cliff", "cloud", "comet", "cove", "creek", "crest", "dawn",
+    "delta", "drift", "dune", "dusk", "echo", "ember", "falcon", "fern", "field", "fjord", "flame",
+    "flare", "flash", "flint", "fog", "forest", "gale", "gate", "glacier", "glen", "grove", "gust",
+    "harbor", "hawk", "haze", "hill", "hollow", "horizon", "isle", "jade", "lake", "ledge",
+    "light", "loch", "mesa", "meteor", "mist", "moon", "moss", "mount", "nebula", "night", "north",
+    "oak", "orbit", "pass", "peak", "pine", "plain", "pond", "pulse", "quarry", "rain", "range",
+    "rapid", "reef", "ridge", "rift", "river", "rock", "root", "run", "sage", "salt", "sand",
+    "shore", "sierra", "sky", "slate", "snow", "sol", "spark", "spire", "spring", "star", "stone",
+    "storm", "stream", "summit", "sun", "surge", "tide", "timber", "torch", "trail", "vale",
+    "vault", "wave", "wind",
 ];
 
 pub fn generate_friendly_name(epoch: i64) -> String {
@@ -641,24 +694,24 @@ pub async fn backfill_friendly_names(pool: &PgPool) -> sqlx::Result<u64> {
 
 #[derive(sqlx::FromRow, serde::Serialize)]
 pub struct RecordingRow {
-    pub id:            i64,
-    pub camera_ip:     String,
-    pub clip_id:       String,
+    pub id: i64,
+    pub camera_ip: String,
+    pub clip_id: String,
     pub friendly_name: String,
     pub duration_secs: i32,
-    pub size_bytes:    i64,
-    pub started_at:    String,
-    pub created_at:    String,
+    pub size_bytes: i64,
+    pub started_at: String,
+    pub created_at: String,
     /// Where this clip lives: `pending` (edge only), `uploading` (in transit), `uploaded`
     /// (durable in R2), `failed`. Drives the badge and whether cloud playback is offered.
-    pub upload_state:  String,
+    pub upload_state: String,
     // Enriched at query time — not DB columns.
     #[sqlx(default)]
-    pub camera_name:   Option<String>,
+    pub camera_name: Option<String>,
     /// True while a delete request for this clip is still working through the queue. Set in the
     /// list handler from `work_queue::open_recording_ids`, not stored.
     #[sqlx(default)]
-    pub deleting:      bool,
+    pub deleting: bool,
 }
 
 /// Persist clip metadata only — the video file stays on the edge and is proxied on download.
@@ -700,7 +753,11 @@ pub async fn set_clip_uploading(pool: &PgPool, id: i64, cloud_key: &str) -> sqlx
 
 /// The edge confirmed the object is in the bucket. Scoped by tenant: `clip_id` comes from a
 /// box, and a box must not be able to mark another tenant's clip durable.
-pub async fn mark_clip_uploaded(pool: &PgPool, tenant_id: Uuid, clip_id: &str) -> sqlx::Result<u64> {
+pub async fn mark_clip_uploaded(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    clip_id: &str,
+) -> sqlx::Result<u64> {
     let now = app_core::timeutil::now_rfc3339();
     let res = sqlx::query(
         "UPDATE recordings
@@ -771,10 +828,10 @@ pub async fn list_recordings_filtered(
 ) -> sqlx::Result<RecordingPage> {
     let col = match sort {
         "duration_secs" => "r.duration_secs",
-        "size_bytes"    => "r.size_bytes",
+        "size_bytes" => "r.size_bytes",
         "friendly_name" => "r.friendly_name",
-        "camera_ip"     => "r.camera_ip",
-        _               => "r.started_at",
+        "camera_ip" => "r.camera_ip",
+        _ => "r.started_at",
     };
     let ord = if dir == "asc" { "ASC" } else { "DESC" };
 
@@ -794,26 +851,38 @@ pub async fn list_recordings_filtered(
           ORDER BY {col} {ord}
           LIMIT $5 OFFSET $6"
     );
-    let count_sql =
-        "SELECT COUNT(*) FROM recordings r
+    let count_sql = "SELECT COUNT(*) FROM recordings r
           WHERE r.tenant_id = $1
             AND ($2::text IS NULL OR r.camera_ip = $2)
             AND ($3::text IS NULL OR r.started_at::timestamptz >= $3::timestamptz)
             AND ($4::text IS NULL OR r.started_at::timestamptz <= $4::timestamptz)";
 
     let (total,): (i64,) = sqlx::query_as(count_sql)
-        .bind(tenant_id).bind(camera_ip).bind(from).bind(to)
-        .fetch_one(pool).await?;
+        .bind(tenant_id)
+        .bind(camera_ip)
+        .bind(from)
+        .bind(to)
+        .fetch_one(pool)
+        .await?;
 
     let items = sqlx::query_as::<_, RecordingRow>(&sql)
-        .bind(tenant_id).bind(camera_ip).bind(from).bind(to)
-        .bind(limit).bind(offset)
-        .fetch_all(pool).await?;
+        .bind(tenant_id)
+        .bind(camera_ip)
+        .bind(from)
+        .bind(to)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?;
 
     Ok(RecordingPage { total, items })
 }
 
-pub async fn get_recording(pool: &PgPool, tenant_id: Uuid, id: i64) -> sqlx::Result<Option<RecordingRow>> {
+pub async fn get_recording(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    id: i64,
+) -> sqlx::Result<Option<RecordingRow>> {
     sqlx::query_as::<_, RecordingRow>(
         "SELECT id, camera_ip, clip_id, friendly_name, duration_secs, size_bytes, started_at, created_at, upload_state, NULL::text AS camera_name
            FROM recordings WHERE tenant_id = $1 AND id = $2",
@@ -826,12 +895,18 @@ pub async fn get_recording(pool: &PgPool, tenant_id: Uuid, id: i64) -> sqlx::Res
 /// each work-queue job can carry its own target in its payload. `cloud_key` is returned in **any**
 /// upload state — a `failed` or mid-`uploading` clip can have left an object in the bucket, and
 /// the delete must reach it too, not only `uploaded` ones.
-pub async fn recording_for_delete(pool: &PgPool, tenant_id: Uuid, id: i64) -> sqlx::Result<Option<(String, Option<String>)>> {
+pub async fn recording_for_delete(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    id: i64,
+) -> sqlx::Result<Option<(String, Option<String>)>> {
     sqlx::query_as::<_, (String, Option<String>)>(
         "SELECT clip_id, cloud_key FROM recordings WHERE tenant_id = $1 AND id = $2",
     )
-    .bind(tenant_id).bind(id)
-    .fetch_optional(pool).await
+    .bind(tenant_id)
+    .bind(id)
+    .fetch_optional(pool)
+    .await
 }
 
 /// After the objects are gone from R2, detach the rows from the cloud: clear the key and drop
@@ -853,20 +928,28 @@ pub async fn clear_tenant_cloud_keys(pool: &PgPool, tenant_id: Uuid) -> sqlx::Re
 /// but isn't in the cloud (still local / in transit / failed); `None` means no such clip for
 /// this tenant. `cloud_key` never leaves the server — it's the input to a presigned URL, not
 /// something the browser is handed.
-pub async fn recording_cloud_key(pool: &PgPool, tenant_id: Uuid, id: i64) -> sqlx::Result<Option<Option<String>>> {
+pub async fn recording_cloud_key(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    id: i64,
+) -> sqlx::Result<Option<Option<String>>> {
     let row: Option<(Option<String>, String)> = sqlx::query_as(
         "SELECT cloud_key, upload_state FROM recordings WHERE tenant_id = $1 AND id = $2",
     )
-    .bind(tenant_id).bind(id)
-    .fetch_optional(pool).await?;
+    .bind(tenant_id)
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
     // Only an 'uploaded' clip is durable and streamable; a key present mid-upload isn't there yet.
     Ok(row.map(|(key, state)| if state == "uploaded" { key } else { None }))
 }
 
 pub async fn delete_recording(pool: &PgPool, tenant_id: Uuid, id: i64) -> sqlx::Result<bool> {
     let r = sqlx::query("DELETE FROM recordings WHERE tenant_id = $1 AND id = $2")
-        .bind(tenant_id).bind(id)
-        .execute(pool).await?;
+        .bind(tenant_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(r.rows_affected() > 0)
 }
 
@@ -968,11 +1051,17 @@ pub async fn ensure_tenant_roles(pool: &PgPool) -> sqlx::Result<usize> {
 
     for (tenant_id,) in &rows {
         let admin = create_role(pool, *tenant_id, "Admin", true).await?;
-        let admin_keys: Vec<String> = crate::rbac::all_perms().into_iter().map(String::from).collect();
+        let admin_keys: Vec<String> = crate::rbac::all_perms()
+            .into_iter()
+            .map(String::from)
+            .collect();
         set_role_permissions(pool, *tenant_id, admin, &admin_keys).await?;
 
         let viewer = create_role(pool, *tenant_id, "Viewer", true).await?;
-        let viewer_keys: Vec<String> = crate::rbac::viewer_perms().into_iter().map(String::from).collect();
+        let viewer_keys: Vec<String> = crate::rbac::viewer_perms()
+            .into_iter()
+            .map(String::from)
+            .collect();
         set_role_permissions(pool, *tenant_id, viewer, &viewer_keys).await?;
     }
     Ok(rows.len())
@@ -1015,16 +1104,21 @@ pub async fn sync_system_roles(pool: &PgPool, viewer_keys: &[&str]) -> sqlx::Res
 /// this: the role id is a client-supplied UUID, and `role_permissions` carries no tenant of
 /// its own, so without the join a tenant admin could read or rewrite another tenant's roles.
 pub async fn role_in_tenant(pool: &PgPool, tenant_id: Uuid, role_id: Uuid) -> sqlx::Result<bool> {
-    let row: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM roles WHERE id = $1 AND tenant_id = $2")
-        .bind(role_id)
-        .bind(tenant_id)
-        .fetch_optional(pool)
-        .await?;
+    let row: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM roles WHERE id = $1 AND tenant_id = $2")
+            .bind(role_id)
+            .bind(tenant_id)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.is_some())
 }
 
 /// A role's granted permission keys. Tenant-scoped via a join on `roles`.
-pub async fn role_perm_keys(pool: &PgPool, tenant_id: Uuid, role_id: Uuid) -> sqlx::Result<Vec<String>> {
+pub async fn role_perm_keys(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    role_id: Uuid,
+) -> sqlx::Result<Vec<String>> {
     let rows: Vec<(String,)> = sqlx::query_as(
         "SELECT rp.permission_key FROM role_permissions rp
          JOIN roles r ON r.id = rp.role_id
@@ -1040,7 +1134,12 @@ pub async fn role_perm_keys(pool: &PgPool, tenant_id: Uuid, role_id: Uuid) -> sq
 
 /// Replace a role's permission set (the matrix row). The `DELETE` is scoped by the same
 /// tenant join, so a mismatched role id removes nothing instead of wiping a stranger's role.
-pub async fn set_role_permissions(pool: &PgPool, tenant_id: Uuid, role_id: Uuid, keys: &[String]) -> sqlx::Result<()> {
+pub async fn set_role_permissions(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    role_id: Uuid,
+    keys: &[String],
+) -> sqlx::Result<()> {
     let mut tx = pool.begin().await?;
     sqlx::query(
         "DELETE FROM role_permissions rp
@@ -1068,17 +1167,27 @@ pub async fn set_role_permissions(pool: &PgPool, tenant_id: Uuid, role_id: Uuid,
 
 // ---- oauth ------------------------------------------------------------------
 
-pub async fn find_oauth_user(pool: &PgPool, provider: &str, uid: &str) -> sqlx::Result<Option<Uuid>> {
-    let row: Option<(Uuid,)> =
-        sqlx::query_as("SELECT user_id FROM oauth_identities WHERE provider = $1 AND provider_uid = $2")
-            .bind(provider)
-            .bind(uid)
-            .fetch_optional(pool)
-            .await?;
+pub async fn find_oauth_user(
+    pool: &PgPool,
+    provider: &str,
+    uid: &str,
+) -> sqlx::Result<Option<Uuid>> {
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT user_id FROM oauth_identities WHERE provider = $1 AND provider_uid = $2",
+    )
+    .bind(provider)
+    .bind(uid)
+    .fetch_optional(pool)
+    .await?;
     Ok(row.map(|(id,)| id))
 }
 
-pub async fn link_oauth(pool: &PgPool, provider: &str, uid: &str, user_id: Uuid) -> sqlx::Result<()> {
+pub async fn link_oauth(
+    pool: &PgPool,
+    provider: &str,
+    uid: &str,
+    user_id: Uuid,
+) -> sqlx::Result<()> {
     sqlx::query("INSERT INTO oauth_identities (provider, provider_uid, user_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING")
         .bind(provider)
         .bind(uid)
@@ -1108,11 +1217,17 @@ pub async fn provision_tenant_with_admin(
             .await?;
 
     let admin_role = create_role(pool, tenant_id, "Admin", true).await?;
-    let admin_keys: Vec<String> = crate::rbac::all_perms().into_iter().map(String::from).collect();
+    let admin_keys: Vec<String> = crate::rbac::all_perms()
+        .into_iter()
+        .map(String::from)
+        .collect();
     set_role_permissions(pool, tenant_id, admin_role, &admin_keys).await?;
 
     let viewer_role = create_role(pool, tenant_id, "Viewer", true).await?;
-    let viewer_keys: Vec<String> = crate::rbac::viewer_perms().into_iter().map(String::from).collect();
+    let viewer_keys: Vec<String> = crate::rbac::viewer_perms()
+        .into_iter()
+        .map(String::from)
+        .collect();
     set_role_permissions(pool, tenant_id, viewer_role, &viewer_keys).await?;
 
     let user_id = create_user(pool, Some(tenant_id), admin_email, password_hash, false).await?;
@@ -1201,7 +1316,11 @@ pub async fn box_name(pool: &PgPool, box_id: Uuid) -> sqlx::Result<Option<String
 ///
 /// `created_at` is RFC3339 text (0055); casting it to `timestamptz` normalizes its offset to UTC so
 /// the comparison against `last_seen` (a `now()` timestamptz) is correct.
-pub async fn pairing_status(pool: &PgPool, tenant_id: Uuid, box_id: Uuid) -> sqlx::Result<Option<(bool, bool)>> {
+pub async fn pairing_status(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    box_id: Uuid,
+) -> sqlx::Result<Option<(bool, bool)>> {
     sqlx::query_as::<_, (bool, bool)>(
         "SELECT \
            (lp.claimed_at IS NOT NULL) AS claimed, \

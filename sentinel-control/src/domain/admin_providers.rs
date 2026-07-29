@@ -15,7 +15,10 @@ use crate::auth::UserClaims;
 use crate::AppState;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/admin/telegram-provider", get(get_provider).put(set_provider))
+    Router::new().route(
+        "/admin/telegram-provider",
+        get(get_provider).put(set_provider),
+    )
 }
 
 #[derive(Serialize)]
@@ -76,11 +79,17 @@ async fn set_provider(
             notification::repo::save_global_telegram(&db, "");
             return Ok((None, notification::repo::count_tenant_telegram_bots(&db)));
         }
-        let cfg = notification::NotificationConfig { bot_token: token.clone(), pairing_code: String::new() };
+        let cfg = notification::NotificationConfig {
+            bot_token: token.clone(),
+            pairing_code: String::new(),
+        };
         let username = notification::client::get_me(&cfg)?; // Err → token rejected, nothing saved
         notification::repo::save_global_telegram(&db, &token);
         notification::repo::save_global_telegram_username(&db, &username);
-        Ok((Some(username), notification::repo::count_tenant_telegram_bots(&db)))
+        Ok((
+            Some(username),
+            notification::repo::count_tenant_telegram_bots(&db),
+        ))
     })
     .await?;
 
@@ -92,7 +101,10 @@ async fn set_provider(
         })),
         Err(e) => {
             log::warn!("global telegram token rejected: {e}");
-            Err(err(StatusCode::BAD_REQUEST, "Telegram rejected that token — double-check it and try again."))
+            Err(err(
+                StatusCode::BAD_REQUEST,
+                "Telegram rejected that token — double-check it and try again.",
+            ))
         }
     }
 }

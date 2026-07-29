@@ -11,8 +11,12 @@ use std::io::Read;
 
 struct StderrLog;
 impl log::Log for StderrLog {
-    fn enabled(&self, _: &log::Metadata) -> bool { true }
-    fn log(&self, r: &log::Record) { eprintln!("{}: {}", r.level(), r.args()); }
+    fn enabled(&self, _: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, r: &log::Record) {
+        eprintln!("{}: {}", r.level(), r.args());
+    }
     fn flush(&self) {}
 }
 static LOG: StderrLog = StderrLog;
@@ -26,7 +30,8 @@ fn main() {
         eprintln!("usage: r2_seed_clip <mp4> <retention_days> <tenant_uuid> <clip_id> <started_at_rfc3339>");
         std::process::exit(2);
     }
-    let (path, days, tenant, clip_id, started_at) = (&args[1], &args[2], &args[3], &args[4], &args[5]);
+    let (path, days, tenant, clip_id, started_at) =
+        (&args[1], &args[2], &args[3], &args[4], &args[5]);
 
     use app_core::clip_store as cs;
     if !cs::enabled() {
@@ -37,7 +42,10 @@ fn main() {
     let days: i32 = days.parse().expect("retention_days");
 
     let mut bytes = Vec::new();
-    std::fs::File::open(path).expect("open mp4").read_to_end(&mut bytes).expect("read mp4");
+    std::fs::File::open(path)
+        .expect("open mp4")
+        .read_to_end(&mut bytes)
+        .expect("read mp4");
 
     let key = cs::object_key(days, tenant, started_at, clip_id);
     let put_url = cs::presign_put(&key, 300).expect("presign put");

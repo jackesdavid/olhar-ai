@@ -69,7 +69,10 @@ async fn reload_graphs(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         "graphs reloaded on request — {n} graph(s), {enabled} enabled (pod {})",
         state.pod_name
     );
-    (StatusCode::OK, Json(json!({ "reloaded": n, "enabled": enabled, "pod": state.pod_name })))
+    (
+        StatusCode::OK,
+        Json(json!({ "reloaded": n, "enabled": enabled, "pod": state.pod_name })),
+    )
 }
 
 #[derive(Deserialize)]
@@ -247,7 +250,12 @@ async fn graph_logs(
     axum::extract::Path(graph_id): axum::extract::Path<Uuid>,
     Query(q): Query<HistoryQuery>,
 ) -> impl IntoResponse {
-    let logs = app_core::workflows::repo::list_graph_run_logs(&state.db, q.tenant, graph_id, q.limit.unwrap_or(50));
+    let logs = app_core::workflows::repo::list_graph_run_logs(
+        &state.db,
+        q.tenant,
+        graph_id,
+        q.limit.unwrap_or(50),
+    );
     Json(logs)
 }
 

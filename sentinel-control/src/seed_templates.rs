@@ -61,18 +61,18 @@ pub async fn run(pool: &PgPool) -> sqlx::Result<()> {
 /// Every global template, in curriculum order. Built via the validated domain API.
 fn templates() -> Vec<Graph> {
     vec![
-        onboarding_tour(),   // L0
-        alerta_pessoa(),     // L1
-        quem_na_porta(),     // L1
-        snapshot_anotado(),  // L2
-        clipe_movimento(),   // L2
-        bot_comandos(),      // L3
-        bot_linguagem(),     // L3
-        relatorio_diario(),  // L4
-        cruzamento_linha(),  // L4
-        reconhece_rosto(),   // L5
-        luz_presenca(),      // L5
-        presenca_mapa(),     // L6
+        onboarding_tour(),  // L0
+        alerta_pessoa(),    // L1
+        quem_na_porta(),    // L1
+        snapshot_anotado(), // L2
+        clipe_movimento(),  // L2
+        bot_comandos(),     // L3
+        bot_linguagem(),    // L3
+        relatorio_diario(), // L4
+        cruzamento_linha(), // L4
+        reconhece_rosto(),  // L5
+        luz_presenca(),     // L5
+        presenca_mapa(),    // L6
     ]
 }
 
@@ -112,7 +112,11 @@ fn ex(g: &mut Graph, from: u32, from_exec: &str, to: u32) {
 // A Title heading doc node.
 fn title(g: &mut Graph, x: i32, y: i32, text: &str) -> u32 {
     let n = g.add_node(NodeKind::Title, x, y);
-    set_cfg(g, n, json!({ "text": text, "color": "#e5e7eb", "size": "lg" }));
+    set_cfg(
+        g,
+        n,
+        json!({ "text": text, "color": "#e5e7eb", "size": "lg" }),
+    );
     n
 }
 // A Markdown explainer doc node.
@@ -132,25 +136,41 @@ fn onboarding_tour() -> Graph {
     );
 
     let title = g.add_node(NodeKind::Title, 40, 40);
-    set_cfg(&mut g, title, json!({ "text": "Bem-vindo ao editor de workflows", "color": "#e5e7eb", "size": "xl" }));
+    set_cfg(
+        &mut g,
+        title,
+        json!({ "text": "Bem-vindo ao editor de workflows", "color": "#e5e7eb", "size": "xl" }),
+    );
 
     let intro = g.add_node(NodeKind::Markdown, 40, 150);
-    set_cfg(&mut g, intro, json!({
-        "text": "## O que é um workflow\n\nUm grafo de **nós** ligados por fios.\n\n- Fios de **execução** definem a ORDEM\n- Fios de **dados** passam valores tipados (imagem, texto, número, câmera…)\n- Adicione nós pelo palete (tecla `n`)\n- Ligue uma saída a uma entrada arrastando entre as bolinhas",
-        "width": 430, "height": 240
-    }));
+    set_cfg(
+        &mut g,
+        intro,
+        json!({
+            "text": "## O que é um workflow\n\nUm grafo de **nós** ligados por fios.\n\n- Fios de **execução** definem a ORDEM\n- Fios de **dados** passam valores tipados (imagem, texto, número, câmera…)\n- Adicione nós pelo palete (tecla `n`)\n- Ligue uma saída a uma entrada arrastando entre as bolinhas",
+            "width": 430, "height": 240
+        }),
+    );
 
     let triggers = g.add_node(NodeKind::Markdown, 510, 150);
-    set_cfg(&mut g, triggers, json!({
-        "text": "## Como um grafo dispara\n\n- **Manual** — só pelo Run now\n- **Cron** — a cada N segundos\n- **Agenda** — calendário no fuso\n- **On event** — reage a movimento, telegram, rosto…",
-        "width": 380, "height": 200
-    }));
+    set_cfg(
+        &mut g,
+        triggers,
+        json!({
+            "text": "## Como um grafo dispara\n\n- **Manual** — só pelo Run now\n- **Cron** — a cada N segundos\n- **Agenda** — calendário no fuso\n- **On event** — reage a movimento, telegram, rosto…",
+            "width": 380, "height": 200
+        }),
+    );
 
     let tip = g.add_node(NodeKind::Comment, 40, 420);
-    set_cfg(&mut g, tip, json!({
-        "text": "Dica: use \"Usar template\" para duplicar este fluxo na sua conta e começar a mexer. Nada aqui executa — é só a aula.",
-        "color": "#facc15", "width": 850, "height": 84
-    }));
+    set_cfg(
+        &mut g,
+        tip,
+        json!({
+            "text": "Dica: use \"Usar template\" para duplicar este fluxo na sua conta e começar a mexer. Nada aqui executa — é só a aula.",
+            "color": "#facc15", "width": 850, "height": 84
+        }),
+    );
 
     g
 }
@@ -168,7 +188,11 @@ fn alerta_pessoa() -> Graph {
     title(&mut g, 40, -120, "Alerta de pessoa");
     note(&mut g, 40, -60, "**Cron 2s** pega o frame, detecta pessoas e — se houver — te avisa.\n\n- **Compare** count > 0\n- **Cooldown** evita spam (5 min)\n- **Notify** com a foto\n\nEscolha a câmera no nó Get current frame.");
     let frame = g.add_node(NodeKind::GetCurrentFrame, 40, 120);
-    set_cfg(&mut g, frame, json!({ "camera": "first", "max_age_ms": "2000" }));
+    set_cfg(
+        &mut g,
+        frame,
+        json!({ "camera": "first", "max_age_ms": "2000" }),
+    );
     let det = g.add_node(NodeKind::PersonDetection, 300, 120);
     let cmp = g.add_node(NodeKind::Compare, 300, 320);
     set_cfg(&mut g, cmp, json!({ "operator": ">", "a": "0", "b": "0" }));
@@ -199,7 +223,11 @@ fn quem_na_porta() -> Graph {
     let snap = g.add_node(NodeKind::CameraSnapshot, 40, 120);
     set_cfg(&mut g, snap, json!({ "camera": "first" }));
     let desc = g.add_node(NodeKind::DescribeImage, 320, 120);
-    set_cfg(&mut g, desc, json!({ "label": "", "question": "Tem alguém na porta? O que você vê?" }));
+    set_cfg(
+        &mut g,
+        desc,
+        json!({ "label": "", "question": "Tem alguém na porta? O que você vê?" }),
+    );
     let notify = g.add_node(NodeKind::NotifyRecipient, 600, 120);
     set_cfg(&mut g, notify, json!({ "message": "" }));
     ex(&mut g, snap, "exec_out", desc);
@@ -228,9 +256,17 @@ fn snapshot_anotado() -> Graph {
     let fe = g.add_node(NodeKind::ForEach, 540, 140);
     let brk = g.add_node(NodeKind::BreakDetection, 780, 140);
     let dbox = g.add_node(NodeKind::DrawBbox, 1020, 140);
-    set_cfg(&mut g, dbox, json!({ "color": "#00FF00", "thickness": "2", "style": "reticle", "expand": "0" }));
+    set_cfg(
+        &mut g,
+        dbox,
+        json!({ "color": "#00FF00", "thickness": "2", "style": "reticle", "expand": "0" }),
+    );
     let dtext = g.add_node(NodeKind::DrawText, 1260, 140);
-    set_cfg(&mut g, dtext, json!({ "text": "objeto", "position": "top-left", "size": "18", "text_color": "#FFFFFF", "background": true, "bg_color": "#000000" }));
+    set_cfg(
+        &mut g,
+        dtext,
+        json!({ "text": "objeto", "position": "top-left", "size": "18", "text_color": "#FFFFFF", "background": true, "bg_color": "#000000" }),
+    );
     let show = g.add_node(NodeKind::ShowImage, 1500, 140);
     set_cfg(&mut g, show, json!({ "label": "anotado" }));
     ex(&mut g, snap, "exec_out", det);
@@ -314,7 +350,11 @@ fn bot_linguagem() -> Graph {
     let onev = g.add_node(NodeKind::OnEvent, 40, 160);
     set_cfg(&mut g, onev, json!({ "event": "telegram_message" }));
     let aisw = g.add_node(NodeKind::AiSwitch, 300, 160);
-    set_cfg(&mut g, aisw, json!({ "arms": ["tirar foto", "responder pergunta"], "timeout_secs": "30" }));
+    set_cfg(
+        &mut g,
+        aisw,
+        json!({ "arms": ["tirar foto", "responder pergunta"], "timeout_secs": "30" }),
+    );
     let snap = g.add_node(NodeKind::CameraSnapshot, 560, 60);
     set_cfg(&mut g, snap, json!({ "camera": "first" }));
     let reply = g.add_node(NodeKind::ReplyToSender, 820, 60);
@@ -354,11 +394,19 @@ fn relatorio_diario() -> Graph {
     title(&mut g, 40, -120, "Relatório diário");
     note(&mut g, 40, -60, "**Agenda (diário, 08:00)** → frame → conta pessoas → **Format** monta o texto → **Notify**.\n\nExtensão: grave o número numa **Dictionary Table** com Add Row pra ter histórico.");
     let frame = g.add_node(NodeKind::GetCurrentFrame, 40, 120);
-    set_cfg(&mut g, frame, json!({ "camera": "first", "max_age_ms": "2000" }));
+    set_cfg(
+        &mut g,
+        frame,
+        json!({ "camera": "first", "max_age_ms": "2000" }),
+    );
     let det = g.add_node(NodeKind::PersonDetection, 300, 120);
     let ntt = g.add_node(NodeKind::NumToText, 300, 300); // Num → Text so Format can use it
     let fmt = g.add_node(NodeKind::Format, 560, 120);
-    set_cfg(&mut g, fmt, json!({ "template": "Ocupação agora: {p1} pessoa(s).", "p1": "", "p2": "", "p3": "" }));
+    set_cfg(
+        &mut g,
+        fmt,
+        json!({ "template": "Ocupação agora: {p1} pessoa(s).", "p1": "", "p2": "", "p3": "" }),
+    );
     let notify = g.add_node(NodeKind::NotifyRecipient, 820, 120);
     set_cfg(&mut g, notify, json!({ "message": "" }));
     ex(&mut g, frame, "exec_out", det);
@@ -379,11 +427,19 @@ fn cruzamento_linha() -> Graph {
     title(&mut g, 40, -120, "Cruzamento de linha");
     note(&mut g, 40, -60, "**Region** (desenhe a linha) reutilizada em **When Event(line_crossed)** → **Notify**.\n\nDepois de clonar, desenhe a linha no nó Region e ligue-o ao When Event (campo região).");
     let region = g.add_node(NodeKind::Region, 40, 300);
-    set_cfg(&mut g, region, json!({ "camera": "first", "name": "linha", "points": [] }));
+    set_cfg(
+        &mut g,
+        region,
+        json!({ "camera": "first", "name": "linha", "points": [] }),
+    );
     let onev = g.add_node(NodeKind::OnEvent, 40, 120);
     set_cfg(&mut g, onev, json!({ "event": "line_crossed" }));
     let notify = g.add_node(NodeKind::NotifyRecipient, 320, 120);
-    set_cfg(&mut g, notify, json!({ "message": "Cruzamento de linha detectado" }));
+    set_cfg(
+        &mut g,
+        notify,
+        json!({ "message": "Cruzamento de linha detectado" }),
+    );
     let _ = region;
     ex(&mut g, onev, "exec_out", notify);
     g
@@ -406,9 +462,17 @@ fn reconhece_rosto() -> Graph {
     let rec = g.add_node(NodeKind::RecognizeFace, 560, 160);
     let iff = g.add_node(NodeKind::If, 820, 160);
     let notify = g.add_node(NodeKind::NotifyRecipient, 1080, 60);
-    set_cfg(&mut g, notify, json!({ "message": "Rosto conhecido reconhecido" }));
+    set_cfg(
+        &mut g,
+        notify,
+        json!({ "message": "Rosto conhecido reconhecido" }),
+    );
     let store = g.add_node(NodeKind::StoreFace, 1080, 260);
-    set_cfg(&mut g, store, json!({ "source": "template", "dedup_distance": "0.15" }));
+    set_cfg(
+        &mut g,
+        store,
+        json!({ "source": "template", "dedup_distance": "0.15" }),
+    );
     ex(&mut g, onev, "exec_out", emb);
     ex(&mut g, emb, "exec_out", rec);
     ex(&mut g, rec, "exec_out", iff);
@@ -432,11 +496,19 @@ fn luz_presenca() -> Graph {
     let onin = g.add_node(NodeKind::OnEvent, 40, 120);
     set_cfg(&mut g, onin, json!({ "event": "object_entered" }));
     let ton = g.add_node(NodeKind::TuyaControl, 320, 120);
-    set_cfg(&mut g, ton, json!({ "tuya_device": "", "tuya_code": "", "value": "true", "value_type": "bool", "timeout_secs": "15" }));
+    set_cfg(
+        &mut g,
+        ton,
+        json!({ "tuya_device": "", "tuya_code": "", "value": "true", "value_type": "bool", "timeout_secs": "15" }),
+    );
     let onout = g.add_node(NodeKind::OnEvent, 40, 300);
     set_cfg(&mut g, onout, json!({ "event": "object_exited" }));
     let toff = g.add_node(NodeKind::TuyaControl, 320, 300);
-    set_cfg(&mut g, toff, json!({ "tuya_device": "", "tuya_code": "", "value": "false", "value_type": "bool", "timeout_secs": "15" }));
+    set_cfg(
+        &mut g,
+        toff,
+        json!({ "tuya_device": "", "tuya_code": "", "value": "false", "value_type": "bool", "timeout_secs": "15" }),
+    );
     ex(&mut g, onin, "exec_out", ton);
     ex(&mut g, onout, "exec_out", toff);
     g
@@ -455,10 +527,18 @@ fn presenca_mapa() -> Graph {
     title(&mut g, 40, -120, "Presença viva no Mapa");
     note(&mut g, 40, -60, "**Cron 3s** → frame → detecta pessoas → **Record presence** (categoria `person`).\n\nAbra o **Mapa** pra ver o pulso ao vivo. Escolha a câmera/sala.");
     let frame = g.add_node(NodeKind::GetCurrentFrame, 40, 120);
-    set_cfg(&mut g, frame, json!({ "camera": "first", "max_age_ms": "2000" }));
+    set_cfg(
+        &mut g,
+        frame,
+        json!({ "camera": "first", "max_age_ms": "2000" }),
+    );
     let det = g.add_node(NodeKind::PersonDetection, 300, 120);
     let pres = g.add_node(NodeKind::RecordPresence, 560, 120);
-    set_cfg(&mut g, pres, json!({ "category": "person", "label": "", "duration_secs": 8 }));
+    set_cfg(
+        &mut g,
+        pres,
+        json!({ "category": "person", "label": "", "duration_secs": 8 }),
+    );
     ex(&mut g, frame, "exec_out", det);
     ex(&mut g, det, "exec_out", pres);
     g
@@ -475,13 +555,25 @@ mod tests {
         assert!(!ts.is_empty());
         let mut ids = HashSet::new();
         for g in &ts {
-            assert!(g.template && g.global, "template {} must be template+global", g.name);
+            assert!(
+                g.template && g.global,
+                "template {} must be template+global",
+                g.name
+            );
             assert!(!g.nodes.is_empty(), "template {} has no nodes", g.name);
-            assert!(ids.insert(g.id), "duplicate stable id in template {}", g.name);
+            assert!(
+                ids.insert(g.id),
+                "duplicate stable id in template {}",
+                g.name
+            );
             // Every edge must reference real nodes + valid ports (domain-validated on build).
             let node_ids: HashSet<u32> = g.nodes.iter().map(|n| n.id).collect();
             for e in &g.edges {
-                assert!(node_ids.contains(&e.from) && node_ids.contains(&e.to), "dangling edge in {}", g.name);
+                assert!(
+                    node_ids.contains(&e.from) && node_ids.contains(&e.to),
+                    "dangling edge in {}",
+                    g.name
+                );
             }
         }
     }

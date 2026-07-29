@@ -18,10 +18,16 @@ fn bucket() -> Option<&'static Bucket> {
 }
 
 fn build() -> Option<Box<Bucket>> {
-    let endpoint = std::env::var("S3_ENDPOINT").ok().filter(|s| !s.trim().is_empty())?;
+    let endpoint = std::env::var("S3_ENDPOINT")
+        .ok()
+        .filter(|s| !s.trim().is_empty())?;
     let name = std::env::var("S3_BUCKET").unwrap_or_else(|_| "sentinel-media".to_string());
-    let key = std::env::var("S3_KEY").ok().filter(|s| !s.trim().is_empty())?;
-    let secret = std::env::var("S3_SECRET").ok().filter(|s| !s.trim().is_empty())?;
+    let key = std::env::var("S3_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty())?;
+    let secret = std::env::var("S3_SECRET")
+        .ok()
+        .filter(|s| !s.trim().is_empty())?;
     let region = Region::Custom {
         region: std::env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
         endpoint,
@@ -63,7 +69,12 @@ fn ok_status(what: &str, code: u16, body: &[u8]) -> Result<(), String> {
 const STAGING_PREFIX: &str = "staging/";
 const FACES_PREFIX: &str = "faces/";
 
-fn put_prefixed(prefix: &str, bytes: &[u8], content_type: &str, ext: &str) -> Result<String, String> {
+fn put_prefixed(
+    prefix: &str,
+    bytes: &[u8],
+    content_type: &str,
+    ext: &str,
+) -> Result<String, String> {
     let b = bucket().ok_or("object store not configured")?;
     let key = format!("{prefix}{}.{}", uuid::Uuid::new_v4(), ext);
     let resp = b
@@ -120,7 +131,13 @@ pub fn ensure_lifecycle(days: u32) -> Result<(), String> {
     // Scope the expiry to the `staging/` prefix ONLY — `faces/` crops (#119) must be retained.
     let rule = LifecycleRule::builder("Enabled")
         .id("expire-staging")
-        .filter(LifecycleFilter::new(None, None, None, Some(STAGING_PREFIX.to_string()), None))
+        .filter(LifecycleFilter::new(
+            None,
+            None,
+            None,
+            Some(STAGING_PREFIX.to_string()),
+            None,
+        ))
         .expiration(Expiration::new(None, Some(days), None))
         .build();
     let config = BucketLifecycleConfiguration::new(vec![rule]);

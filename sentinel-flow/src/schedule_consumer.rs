@@ -38,7 +38,9 @@ pub fn reconcile(state: &AppState) {
         s.iter()
             .filter(|(_, g)| g.enabled)
             .filter_map(|(t, g)| match &g.trigger {
-                Trigger::Schedule(sched) => next_occurrence(sched, now).map(|n| (*t, g.id, n.to_rfc3339())),
+                Trigger::Schedule(sched) => {
+                    next_occurrence(sched, now).map(|n| (*t, g.id, n.to_rfc3339()))
+                }
                 _ => None,
             })
             .collect()
@@ -46,7 +48,14 @@ pub fn reconcile(state: &AppState) {
     let n = jobs.len();
     for (tenant, graph_id, run_after) in jobs {
         let payload = json!({ "graph": graph_id.to_string() });
-        work_queue::enqueue_at_blocking(&state.db, tenant, SCHEDULE_CATEGORY, SCHEDULE_KIND, payload, &run_after);
+        work_queue::enqueue_at_blocking(
+            &state.db,
+            tenant,
+            SCHEDULE_CATEGORY,
+            SCHEDULE_KIND,
+            payload,
+            &run_after,
+        );
     }
     if n > 0 {
         log::info!("workflow schedules reconciled: {n} armed");
@@ -69,7 +78,12 @@ pub fn spawn(state: Arc<AppState>) {
 }
 
 fn process(state: &Arc<AppState>, job: work_queue::Job) {
-    let Some(graph_id) = job.payload.get("graph").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok()) else {
+    let Some(graph_id) = job
+        .payload
+        .get("graph")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+    else {
         work_queue::mark_failed_blocking(&state.db, job.id, "missing/!uuid graph", 1);
         return;
     };
@@ -77,9 +91,18 @@ fn process(state: &Arc<AppState>, job: work_queue::Job) {
     match state::find_graph(&state.store, job.tenant_id, graph_id) {
         Some(g) if g.enabled => match &g.trigger {
             Trigger::Schedule(sched) => {
-                fire_graph(state, job.tenant_id, graph_id, &g.concurrency, TriggerSource::Cron, HashMap::new());
+                fire_graph(
+                    state,
+                    job.tenant_id,
+                    graph_id,
+                    &g.concurrency,
+                    TriggerSource::Cron,
+                    HashMap::new(),
+                );
                 match next_occurrence(sched, Utc::now()) {
-                    Some(next) => work_queue::reschedule_blocking(&state.db, job.id, &next.to_rfc3339()),
+                    Some(next) => {
+                        work_queue::reschedule_blocking(&state.db, job.id, &next.to_rfc3339())
+                    }
                     None => work_queue::mark_done_blocking(&state.db, job.id),
                 }
             }

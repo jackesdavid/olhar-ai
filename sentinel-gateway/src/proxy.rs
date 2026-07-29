@@ -7,8 +7,8 @@
 //! indistinguishable to the player.
 use axum::body::Body;
 use axum::extract::ws::{Message as AxMsg, WebSocket};
-use axum::extract::{State, WebSocketUpgrade};
 use axum::extract::RawQuery;
+use axum::extract::{State, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use futures::{SinkExt, StreamExt};
@@ -31,7 +31,8 @@ pub async fn ws_handler(
     RawQuery(query): RawQuery,
 ) -> Response {
     let q = query.unwrap_or_default();
-    let Some((token, claims)) = crate::auth::authorize_live(&state.jwt_secret, &headers, Some(&q)) else {
+    let Some((token, claims)) = crate::auth::authorize_live(&state.jwt_secret, &headers, Some(&q))
+    else {
         return (StatusCode::UNAUTHORIZED, "live.view required").into_response();
     };
     let params = strip_token(&q);
@@ -43,10 +44,17 @@ pub async fn ws_handler(
     // tailnet path below, unchanged.
     if !state.public_ws_url.is_empty() {
         let session = uuid::Uuid::new_v4().to_string();
-        let callback = format!("{}/edge/live/{session}", state.public_ws_url.trim_end_matches('/'));
+        let callback = format!(
+            "{}/edge/live/{session}",
+            state.public_ws_url.trim_end_matches('/')
+        );
         if let crate::state::LiveStart::Sse = state.live_start(&token, &src, &callback).await {
             let (tx, rx) = futures::channel::oneshot::channel();
-            state.edge_sessions.lock().unwrap().insert(session.clone(), tx);
+            state
+                .edge_sessions
+                .lock()
+                .unwrap()
+                .insert(session.clone(), tx);
             return ws.on_upgrade(move |client| bridge_outbound(client, state, session, rx));
         }
     }
@@ -237,7 +245,11 @@ async fn bridge_ws(client: WebSocket, state: Arc<AppState>, candidates: Vec<Stri
 /// only `/api/frame.jpeg`, `/api/ws` (its own route), and the static UI — all allowed.
 fn is_blocked(path: &str) -> bool {
     const BLOCKED: &[&str] = &["/api/streams", "/api/config", "/api/log", "/api/exec"];
-    path == "/api" || path == "/api/" || BLOCKED.iter().any(|p| path == *p || path.starts_with(&format!("{p}/")))
+    path == "/api"
+        || path == "/api/"
+        || BLOCKED
+            .iter()
+            .any(|p| path == *p || path.starts_with(&format!("{p}/")))
 }
 
 /// Live media that carries actual frames — gated by `live.view`. Player UI assets
@@ -251,14 +263,20 @@ fn is_live_media(path: &str) -> bool {
 /// (snapshots `/api/frame.jpeg`, the player `/stream.html` + assets). No buffering.
 /// Credential-leaking go2rtc endpoints are blocked (see [`is_blocked`]); live media is
 /// gated by `live.view` (see [`is_live_media`]).
-pub async fn passthrough(State(state): State<Arc<AppState>>, headers: HeaderMap, uri: Uri) -> Response {
+pub async fn passthrough(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
     if is_blocked(uri.path()) {
         return (StatusCode::FORBIDDEN, "blocked").into_response();
     }
     // Live media is gated + routed to the requester's tenant box; the (identical) player
     // UI assets come from the static fallback upstream.
     let base = if is_live_media(uri.path()) {
-        let Some((token, claims)) = crate::auth::authorize_live(&state.jwt_secret, &headers, uri.query()) else {
+        let Some((token, claims)) =
+            crate::auth::authorize_live(&state.jwt_secret, &headers, uri.query())
+        else {
             return (StatusCode::UNAUTHORIZED, "live.view required").into_response();
         };
         state.upstream_for(claims.tid.as_deref(), &token).await
@@ -269,7 +287,11 @@ pub async fn passthrough(State(state): State<Arc<AppState>>, headers: HeaderMap,
     let fwd = match uri.query() {
         Some(q) => {
             let s = strip_token(q);
-            if s.is_empty() { uri.path().to_string() } else { format!("{}?{}", uri.path(), s) }
+            if s.is_empty() {
+                uri.path().to_string()
+            } else {
+                format!("{}?{}", uri.path(), s)
+            }
         }
         None => uri.path().to_string(),
     };
@@ -285,7 +307,10 @@ pub async fn passthrough(State(state): State<Arc<AppState>>, headers: HeaderMap,
 
     let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let mut headers = HeaderMap::new();
-    for h in [axum::http::header::CONTENT_TYPE, axum::http::header::CACHE_CONTROL] {
+    for h in [
+        axum::http::header::CONTENT_TYPE,
+        axum::http::header::CACHE_CONTROL,
+    ] {
         if let Some(v) = resp.headers().get(&h) {
             if let Ok(v) = axum::http::HeaderValue::from_bytes(v.as_bytes()) {
                 headers.insert(h, v);

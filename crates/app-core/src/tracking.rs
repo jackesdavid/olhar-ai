@@ -34,7 +34,13 @@ pub struct TrackerConfig {
 
 impl Default for TrackerConfig {
     fn default() -> Self {
-        TrackerConfig { high_thresh: 0.5, low_thresh: 0.1, iou_thresh: 0.3, min_hits: 3, max_age: 30 }
+        TrackerConfig {
+            high_thresh: 0.5,
+            low_thresh: 0.1,
+            iou_thresh: 0.3,
+            min_hits: 3,
+            max_age: 30,
+        }
     }
 }
 
@@ -50,7 +56,11 @@ struct Kalman1D {
 impl Kalman1D {
     fn new(pos: f32) -> Self {
         // Start confident on position (from the first detection), very unsure on velocity.
-        Kalman1D { pos, vel: 0.0, p: [[1.0, 0.0], [0.0, 1000.0]] }
+        Kalman1D {
+            pos,
+            vel: 0.0,
+            p: [[1.0, 0.0], [0.0, 1000.0]],
+        }
     }
     fn predict(&mut self) {
         const Q_POS: f32 = 1.0;
@@ -180,15 +190,38 @@ impl Track {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TrackEvent {
     /// A track became Confirmed for the first time (whole-frame — no zone configured).
-    Entered { uuid: Uuid, class: u32, bbox: [f32; 4] },
+    Entered {
+        uuid: Uuid,
+        class: u32,
+        bbox: [f32; 4],
+    },
     /// A confirmed track was removed after `max_age` unmatched cycles (whole-frame).
-    Exited { uuid: Uuid, class: u32, bbox: [f32; 4], dwell_ms: u64 },
+    Exited {
+        uuid: Uuid,
+        class: u32,
+        bbox: [f32; 4],
+        dwell_ms: u64,
+    },
     /// A confirmed track's centre crossed a configured [`Line`] between this cycle and the last.
-    Crossed { uuid: Uuid, class: u32, line: String, direction: Direction },
+    Crossed {
+        uuid: Uuid,
+        class: u32,
+        line: String,
+        direction: Direction,
+    },
     /// A confirmed track's presence in a configured [`Polygon`] flipped outside → inside.
-    ZoneEntered { uuid: Uuid, class: u32, zone: String },
+    ZoneEntered {
+        uuid: Uuid,
+        class: u32,
+        zone: String,
+    },
     /// ... flipped inside → outside. `dwell_ms` is how long it was considered inside the zone.
-    ZoneExited { uuid: Uuid, class: u32, zone: String, dwell_ms: u64 },
+    ZoneExited {
+        uuid: Uuid,
+        class: u32,
+        zone: String,
+        dwell_ms: u64,
+    },
 
     // -- Diagnostic-only below: internal algorithm state transitions, never a domain lifecycle
     // signal on their own (no `object_entered`/`object_exited`/`line_crossed` follows from these
@@ -199,10 +232,19 @@ pub enum TrackEvent {
     Lost { uuid: Uuid, class: u32 },
     /// A `Lost` track re-matched a detection before ageing out → `Confirmed` again, same uuid.
     /// `cycles_lost` is how many consecutive cycles it had gone unmatched.
-    Revived { uuid: Uuid, class: u32, cycles_lost: u32 },
+    Revived {
+        uuid: Uuid,
+        class: u32,
+        cycles_lost: u32,
+    },
     /// A track was dropped after exceeding `max_age` unmatched cycles. `was_confirmed` mirrors
     /// whether an `Exited` accompanies this (it does iff the track had ever been confirmed).
-    Removed { uuid: Uuid, class: u32, cycles_survived: u32, was_confirmed: bool },
+    Removed {
+        uuid: Uuid,
+        class: u32,
+        cycles_survived: u32,
+        was_confirmed: bool,
+    },
 }
 
 /// A user-drawn virtual line for crossing detection, in **normalized** frame coordinates
@@ -283,12 +325,18 @@ pub struct MultiTracker {
 
 impl MultiTracker {
     pub fn new(cfg: TrackerConfig) -> Self {
-        MultiTracker { cfg, tracks: Vec::new(), confirmed_emitted: Vec::new() }
+        MultiTracker {
+            cfg,
+            tracks: Vec::new(),
+            confirmed_emitted: Vec::new(),
+        }
     }
 
     /// The confirmed tracks currently on screen (for count + map position emit).
     pub fn confirmed(&self) -> impl Iterator<Item = &Track> {
-        self.tracks.iter().filter(|t| t.state == TrackState::Confirmed)
+        self.tracks
+            .iter()
+            .filter(|t| t.state == TrackState::Confirmed)
     }
     /// Count of confirmed tracks (the "how many in the viewport" number).
     pub fn count(&self) -> usize {
@@ -365,14 +413,25 @@ impl MultiTracker {
                     t.state = TrackState::Confirmed;
                     if !self.confirmed_emitted[ti] {
                         self.confirmed_emitted[ti] = true;
-                        events.push(TrackEvent::Entered { uuid: t.uuid, class: t.class, bbox: t.bbox() });
+                        events.push(TrackEvent::Entered {
+                            uuid: t.uuid,
+                            class: t.class,
+                            bbox: t.bbox(),
+                        });
                     } else if was_lost {
-                        events.push(TrackEvent::Revived { uuid: t.uuid, class: t.class, cycles_lost: unmatched_before[ti] });
+                        events.push(TrackEvent::Revived {
+                            uuid: t.uuid,
+                            class: t.class,
+                            cycles_lost: unmatched_before[ti],
+                        });
                     }
                 }
             } else if t.state == TrackState::Confirmed {
                 t.state = TrackState::Lost;
-                events.push(TrackEvent::Lost { uuid: t.uuid, class: t.class });
+                events.push(TrackEvent::Lost {
+                    uuid: t.uuid,
+                    class: t.class,
+                });
             }
         }
 
@@ -444,7 +503,11 @@ impl MultiTracker {
             return events;
         }
         let (fw, fh) = frame_wh;
-        for t in self.tracks.iter().filter(|t| t.state == TrackState::Confirmed) {
+        for t in self
+            .tracks
+            .iter()
+            .filter(|t| t.state == TrackState::Confirmed)
+        {
             let Some(prev) = t.prev_centre else { continue };
             let cur = t.centre();
             for line in lines {
@@ -489,14 +552,24 @@ impl MultiTracker {
     /// against its last-known state, emitting `ZoneEntered`/`ZoneExited` only on a transition —
     /// a track that's simply *still* inside/outside produces nothing every cycle. `zone` needs
     /// 3+ points to be meaningful; fewer and every track is (silently) considered never inside.
-    fn check_zone(&mut self, frame_wh: (f32, f32), zone: &Polygon, trigger: ZoneTrigger, ts_ms: u64) -> Vec<TrackEvent> {
+    fn check_zone(
+        &mut self,
+        frame_wh: (f32, f32),
+        zone: &Polygon,
+        trigger: ZoneTrigger,
+        ts_ms: u64,
+    ) -> Vec<TrackEvent> {
         let mut events = Vec::new();
         if zone.points.len() < 3 {
             return events;
         }
         let (fw, fh) = frame_wh;
         let poly: Vec<(f32, f32)> = zone.points.iter().map(|&(x, y)| (x * fw, y * fh)).collect();
-        for t in self.tracks.iter_mut().filter(|t| t.state == TrackState::Confirmed) {
+        for t in self
+            .tracks
+            .iter_mut()
+            .filter(|t| t.state == TrackState::Confirmed)
+        {
             let inside = match trigger {
                 ZoneTrigger::CentroidInside => point_in_polygon(t.centre(), &poly),
                 ZoneTrigger::Intersects => bbox_intersects_polygon(t.bbox(), &poly),
@@ -505,12 +578,24 @@ impl MultiTracker {
                 (None, true) | (Some(false), true) => {
                     t.zone_inside = Some(true);
                     t.zone_entered_ts_ms = Some(ts_ms);
-                    events.push(TrackEvent::ZoneEntered { uuid: t.uuid, class: t.class, zone: zone.name.clone() });
+                    events.push(TrackEvent::ZoneEntered {
+                        uuid: t.uuid,
+                        class: t.class,
+                        zone: zone.name.clone(),
+                    });
                 }
                 (Some(true), false) => {
-                    let dwell_ms = t.zone_entered_ts_ms.map(|s| ts_ms.saturating_sub(s)).unwrap_or(0);
+                    let dwell_ms = t
+                        .zone_entered_ts_ms
+                        .map(|s| ts_ms.saturating_sub(s))
+                        .unwrap_or(0);
                     t.zone_inside = Some(false);
-                    events.push(TrackEvent::ZoneExited { uuid: t.uuid, class: t.class, zone: zone.name.clone(), dwell_ms });
+                    events.push(TrackEvent::ZoneExited {
+                        uuid: t.uuid,
+                        class: t.class,
+                        zone: zone.name.clone(),
+                        dwell_ms,
+                    });
                 }
                 (None, false) => t.zone_inside = Some(false),
                 (Some(true), true) | (Some(false), false) => {} // no change — still inside/outside
@@ -521,7 +606,12 @@ impl MultiTracker {
 
     /// Greedy IoU association: pair each detection in `subset` (indices into `dets`) with the best
     /// unmatched track above `iou_thresh`, highest IoU first. Returns `(subset_idx, track_idx)` pairs.
-    fn associate(&self, subset: &[usize], dets: &[Detection], track_matched: &[bool]) -> Vec<(usize, usize)> {
+    fn associate(
+        &self,
+        subset: &[usize],
+        dets: &[Detection],
+        track_matched: &[bool],
+    ) -> Vec<(usize, usize)> {
         let mut candidates: Vec<(f32, usize, usize)> = Vec::new(); // (iou, subset_idx, track_idx)
         for (si, di) in subset.iter().enumerate() {
             let dbox = dets[*di].xyxy;
@@ -591,7 +681,11 @@ fn crossing_direction(
     }
     // prev right-of line_p1→line_p2 (< 0) crossing to left-of it (cur > 0): crossed "Forward".
     let d1 = orient(line_p1, line_p2, prev);
-    Some(if d1 < 0.0 { Direction::Forward } else { Direction::Backward })
+    Some(if d1 < 0.0 {
+        Direction::Forward
+    } else {
+        Direction::Backward
+    })
 }
 
 /// Ray-casting point-in-polygon test (even-odd rule). `poly` must have 3+ points (callers already
@@ -616,18 +710,28 @@ fn point_in_polygon(p: (f32, f32), poly: &[(f32, f32)]) -> bool {
 /// edge — covers full containment either way plus a partial/edge overlap. `poly` needs 3+ points.
 fn bbox_intersects_polygon(bbox: [f32; 4], poly: &[(f32, f32)]) -> bool {
     let [x1, y1, x2, y2] = bbox;
-    if poly.iter().any(|&(x, y)| x >= x1 && x <= x2 && y >= y1 && y <= y2) {
+    if poly
+        .iter()
+        .any(|&(x, y)| x >= x1 && x <= x2 && y >= y1 && y <= y2)
+    {
         return true;
     }
     let corners = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)];
     if corners.iter().any(|&c| point_in_polygon(c, poly)) {
         return true;
     }
-    let bbox_edges = [(corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[3]), (corners[3], corners[0])];
+    let bbox_edges = [
+        (corners[0], corners[1]),
+        (corners[1], corners[2]),
+        (corners[2], corners[3]),
+        (corners[3], corners[0]),
+    ];
     let n = poly.len();
     (0..n).any(|i| {
         let (a, b) = (poly[i], poly[(i + 1) % n]);
-        bbox_edges.iter().any(|&(c, d)| segments_intersect(a, b, c, d))
+        bbox_edges
+            .iter()
+            .any(|&(c, d)| segments_intersect(a, b, c, d))
     })
 }
 
@@ -659,7 +763,13 @@ mod tests {
     }
     fn cfg() -> TrackerConfig {
         // min_hits=3 → confirm on the 3rd frame; max_age=3 → removed after 3 unmatched cycles.
-        TrackerConfig { high_thresh: 0.5, low_thresh: 0.1, iou_thresh: 0.2, min_hits: 3, max_age: 3 }
+        TrackerConfig {
+            high_thresh: 0.5,
+            low_thresh: 0.1,
+            iou_thresh: 0.2,
+            min_hits: 3,
+            max_age: 3,
+        }
     }
 
     #[test]
@@ -679,7 +789,11 @@ mod tests {
         }
         assert_eq!(entered, 1, "exactly one Entered for one moving object");
         assert_eq!(mt.count(), 1);
-        assert_eq!(mt.confirmed().next().unwrap().uuid, uuid.unwrap(), "same uuid throughout");
+        assert_eq!(
+            mt.confirmed().next().unwrap().uuid,
+            uuid.unwrap(),
+            "same uuid throughout"
+        );
     }
 
     #[test]
@@ -700,7 +814,11 @@ mod tests {
             }
         }
         assert!(exited.is_some(), "an Exited event fired");
-        assert_eq!(exited.unwrap(), 300, "dwell = last_seen - first_seen (frames 0..3 = 300ms)");
+        assert_eq!(
+            exited.unwrap(),
+            300,
+            "dwell = last_seen - first_seen (frames 0..3 = 300ms)"
+        );
         assert_eq!(mt.count(), 0);
     }
 
@@ -741,7 +859,10 @@ mod tests {
             let a = 20.0 + f as f32 * 5.0;
             let b = 300.0 - f as f32 * 5.0;
             for e in mt.update(
-                &[det(0, 0.9, [a, 100.0, a + 40.0, 180.0]), det(0, 0.9, [b, 100.0, b + 40.0, 180.0])],
+                &[
+                    det(0, 0.9, [a, 100.0, a + 40.0, 180.0]),
+                    det(0, 0.9, [b, 100.0, b + 40.0, 180.0]),
+                ],
                 f * 100,
             ) {
                 if let TrackEvent::Entered { uuid, .. } = e {
@@ -765,7 +886,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(entered, 0, "low-confidence-only detections never spawn a confirmed track");
+        assert_eq!(
+            entered, 0,
+            "low-confidence-only detections never spawn a confirmed track"
+        );
         assert_eq!(mt.count(), 0);
     }
 
@@ -774,7 +898,9 @@ mod tests {
     fn crossed_events(evs: &[TrackEvent]) -> Vec<(&str, Direction)> {
         evs.iter()
             .filter_map(|e| match e {
-                TrackEvent::Crossed { line, direction, .. } => Some((line.as_str(), *direction)),
+                TrackEvent::Crossed {
+                    line, direction, ..
+                } => Some((line.as_str(), *direction)),
                 _ => None,
             })
             .collect()
@@ -783,7 +909,12 @@ mod tests {
     #[test]
     fn crossing_a_line_emits_crossed_with_direction() {
         let mut mt = MultiTracker::new(cfg());
-        let gate = Line { camera: "cam".to_string(), name: "gate".to_string(), p1: (0.5, 0.0), p2: (0.5, 1.0) }; // pixel x=50
+        let gate = Line {
+            camera: "cam".to_string(),
+            name: "gate".to_string(),
+            p1: (0.5, 0.0),
+            p2: (0.5, 1.0),
+        }; // pixel x=50
         let mut crossed = Vec::new();
         for f in 0..8u64 {
             let x = 10.0 + f as f32 * 13.0; // centre x: 30,43,56,69,82,95,108,121
@@ -793,17 +924,34 @@ mod tests {
                 (100.0, 100.0),
                 std::slice::from_ref(&gate),
             );
-            crossed.extend(crossed_events(&evs).into_iter().map(|(l, d)| (l.to_string(), d)));
+            crossed.extend(
+                crossed_events(&evs)
+                    .into_iter()
+                    .map(|(l, d)| (l.to_string(), d)),
+            );
         }
-        assert_eq!(crossed.len(), 1, "exactly one crossing of a single line by a single pass");
+        assert_eq!(
+            crossed.len(),
+            1,
+            "exactly one crossing of a single line by a single pass"
+        );
         assert_eq!(crossed[0].0, "gate");
-        assert_eq!(crossed[0].1, Direction::Backward, "centre 43→56 vs line p1=(50,0)→p2=(50,100)");
+        assert_eq!(
+            crossed[0].1,
+            Direction::Backward,
+            "centre 43→56 vs line p1=(50,0)→p2=(50,100)"
+        );
     }
 
     #[test]
     fn movement_confined_to_one_side_never_crosses() {
         let mut mt = MultiTracker::new(cfg());
-        let gate = Line { camera: "cam".to_string(), name: "gate".to_string(), p1: (0.5, 0.0), p2: (0.5, 1.0) };
+        let gate = Line {
+            camera: "cam".to_string(),
+            name: "gate".to_string(),
+            p1: (0.5, 0.0),
+            p2: (0.5, 1.0),
+        };
         let mut crossed = Vec::new();
         for f in 0..8u64 {
             let x = 10.0 + f as f32 * 2.0; // centre x: 30..44, always left of pixel x=50
@@ -813,18 +961,40 @@ mod tests {
                 (100.0, 100.0),
                 std::slice::from_ref(&gate),
             );
-            crossed.extend(crossed_events(&evs).into_iter().map(|(l, d)| (l.to_string(), d)));
+            crossed.extend(
+                crossed_events(&evs)
+                    .into_iter()
+                    .map(|(l, d)| (l.to_string(), d)),
+            );
         }
-        assert!(crossed.is_empty(), "never reaches the line, so it never fires");
+        assert!(
+            crossed.is_empty(),
+            "never reaches the line, so it never fires"
+        );
     }
 
     #[test]
     fn multiple_lines_fire_independently() {
         let mut mt = MultiTracker::new(cfg());
         let lines = vec![
-            Line { camera: "cam".to_string(), name: "gate".to_string(), p1: (0.5, 0.0), p2: (0.5, 1.0) }, // pixel x=50
-            Line { camera: "cam".to_string(), name: "till".to_string(), p1: (0.9, 0.0), p2: (0.9, 1.0) }, // pixel x=90
-            Line { camera: "cam".to_string(), name: "far".to_string(), p1: (2.0, 0.0), p2: (2.0, 1.0) },  // pixel x=200, unreachable
+            Line {
+                camera: "cam".to_string(),
+                name: "gate".to_string(),
+                p1: (0.5, 0.0),
+                p2: (0.5, 1.0),
+            }, // pixel x=50
+            Line {
+                camera: "cam".to_string(),
+                name: "till".to_string(),
+                p1: (0.9, 0.0),
+                p2: (0.9, 1.0),
+            }, // pixel x=90
+            Line {
+                camera: "cam".to_string(),
+                name: "far".to_string(),
+                p1: (2.0, 0.0),
+                p2: (2.0, 1.0),
+            }, // pixel x=200, unreachable
         ];
         let mut crossed = Vec::new();
         for f in 0..8u64 {
@@ -835,10 +1005,18 @@ mod tests {
                 (100.0, 100.0),
                 &lines,
             );
-            crossed.extend(crossed_events(&evs).into_iter().map(|(l, d)| (l.to_string(), d)));
+            crossed.extend(
+                crossed_events(&evs)
+                    .into_iter()
+                    .map(|(l, d)| (l.to_string(), d)),
+            );
         }
         let names: Vec<&str> = crossed.iter().map(|(l, _)| l.as_str()).collect();
-        assert_eq!(names, vec!["gate", "till"], "gate then till, each exactly once; far never reached");
+        assert_eq!(
+            names,
+            vec!["gate", "till"],
+            "gate then till, each exactly once; far never reached"
+        );
     }
 
     // ---- zone enter/exit (polygon region of interest) ---------------------------------------
@@ -854,7 +1032,10 @@ mod tests {
 
     /// Runs the same L→R pass (bbox x1: 10,23,36,49,62,75,88,101 over 8 frames — confirms at
     /// frame 2) and returns the frame indices at which `ZoneEntered`/`ZoneExited` first fired.
-    fn run_zone_pass(zone: &Polygon, trigger: ZoneTrigger) -> (Option<u64>, Option<u64>, Option<u64>) {
+    fn run_zone_pass(
+        zone: &Polygon,
+        trigger: ZoneTrigger,
+    ) -> (Option<u64>, Option<u64>, Option<u64>) {
         let mut mt = MultiTracker::new(cfg());
         let (mut entered_at, mut exited_at, mut dwell) = (None, None, None);
         for f in 0..8u64 {
@@ -898,15 +1079,33 @@ mod tests {
         // Intersects only needs the bbox to touch the zone — fires the moment the track is
         // first Confirmed (frame 2, bbox already overlapping) and releases only once the whole
         // bbox has cleared the zone (frame 7) — a strictly wider window than CentroidInside's.
-        assert_eq!(in_entered, Some(2), "bbox already overlaps on first confirmed frame");
-        assert_eq!(in_exited, Some(7), "bbox clears the zone only once fully past it");
-        assert!(in_entered < ci_entered, "intersects enters no later than centroid");
-        assert!(in_exited > ci_exited, "intersects exits no earlier than centroid");
+        assert_eq!(
+            in_entered,
+            Some(2),
+            "bbox already overlaps on first confirmed frame"
+        );
+        assert_eq!(
+            in_exited,
+            Some(7),
+            "bbox clears the zone only once fully past it"
+        );
+        assert!(
+            in_entered < ci_entered,
+            "intersects enters no later than centroid"
+        );
+        assert!(
+            in_exited > ci_exited,
+            "intersects exits no earlier than centroid"
+        );
     }
 
     #[test]
     fn zone_with_fewer_than_three_points_never_fires() {
-        let degenerate = Polygon { camera: "cam".to_string(), name: "bad".to_string(), points: vec![(0.6, 0.0), (1.0, 1.0)] };
+        let degenerate = Polygon {
+            camera: "cam".to_string(),
+            name: "bad".to_string(),
+            points: vec![(0.6, 0.0), (1.0, 1.0)],
+        };
         let (entered_at, exited_at, _) = run_zone_pass(&degenerate, ZoneTrigger::Intersects);
         assert_eq!(entered_at, None);
         assert_eq!(exited_at, None);

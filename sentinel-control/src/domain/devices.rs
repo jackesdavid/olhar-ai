@@ -31,7 +31,10 @@ pub fn router() -> Router<AppState> {
 /// Ask the tenant's edge box(es) to re-run ONVIF discovery now (e.g. after a camera got a
 /// new DHCP IP). Queues a command the edge consumes on its next poll (woken immediately);
 /// moved cameras are reconciled by stable ONVIF id on the edge + pushed back.
-async fn rescan(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<StatusCode, ApiErr> {
+async fn rescan(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "devices.write")?;
     let tid = tenant_of(&c)?;
     st.request_rescan(tid);
@@ -40,7 +43,10 @@ async fn rescan(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result
 
 /// IPs of cameras whose credentials have been set (relayed to the edge). Lets the UI
 /// show "Configured" without the cloud ever holding the credentials.
-async fn configured(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<String>>, ApiErr> {
+async fn configured(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<String>>, ApiErr> {
     auth::require(&c, "devices.read")?;
     let tid = tenant_of(&c)?;
     store::list_configured(&st.pool, tid)
@@ -63,12 +69,21 @@ struct StreamingCam {
 /// Cameras the tenant's edge currently has a resolved stream for — drives the "online" status
 /// dot (creds valid + camera reachable) and the codec badge. The cloud never holds the RTSP URL
 /// itself.
-async fn streaming(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<StreamingCam>>, ApiErr> {
+async fn streaming(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<StreamingCam>>, ApiErr> {
     auth::require(&c, "devices.read")?;
     let tid = tenant_of(&c)?;
     store::list_streaming(&st.pool, tid)
         .await
-        .map(|rows| Json(rows.into_iter().map(|(ip, codec)| StreamingCam { ip, codec }).collect()))
+        .map(|rows| {
+            Json(
+                rows.into_iter()
+                    .map(|(ip, codec)| StreamingCam { ip, codec })
+                    .collect(),
+            )
+        })
         .map_err(|e| {
             log::error!("list_streaming failed: {e}");
             err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
@@ -83,13 +98,18 @@ struct CredsReq {
 
 /// Stage camera credentials for the tenant's edge to collect on its next config pull.
 /// **Never stored in the DB** — held in memory only until delivered, then discarded.
-async fn set_credentials(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip): Path<String>, Json(b): Json<CredsReq>) -> Result<StatusCode, ApiErr> {
+async fn set_credentials(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(ip): Path<String>,
+    Json(b): Json<CredsReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "devices.write")?;
     let tid = tenant_of(&c)?;
-    st.pending_creds
-        .lock()
-        .unwrap()
-        .insert((tid, ip.clone()), (b.username, b.password, std::time::Instant::now()));
+    st.pending_creds.lock().unwrap().insert(
+        (tid, ip.clone()),
+        (b.username, b.password, std::time::Instant::now()),
+    );
     // Mark configured (non-sensitive flag for the UI) + wake the edge's long-poll now.
     let _ = store::mark_configured(&st.pool, tid, &ip).await;
     st.bump(tid);
@@ -104,7 +124,12 @@ async fn set_credentials(UserClaims(c): UserClaims, State(st): State<AppState>, 
 /// `set_credentials` on a verified `ok`. The edge returns a typed verdict (`ok`, `auth_failed`,
 /// `locked`, `not_found`, `unreachable`, `timeout`, `error`) so the UI can name the real cause
 /// instead of blaming the password for a locked or unreachable camera.
-async fn probe(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip): Path<String>, Json(b): Json<CredsReq>) -> Result<Response, ApiErr> {
+async fn probe(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(ip): Path<String>,
+    Json(b): Json<CredsReq>,
+) -> Result<Response, ApiErr> {
     // Read-only for our data (nothing is persisted), but it does drive a camera login, so it
     // sits behind the same permission as setting credentials.
     auth::require(&c, "devices.write")?;
@@ -116,7 +141,15 @@ async fn probe(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip): 
     // tailnet, which is exactly why the Devices "Test" used to fail on those. Fall back to the
     // legacy tailnet POST for a box that isn't on SSE.
     let (status, body): (u16, Vec<u8>) = if let Some(res) =
-        app_core::edge_commands::edge_http_via_sse(&st.pool, tid, "POST", &path, Some(creds.clone()), 35).await
+        app_core::edge_commands::edge_http_via_sse(
+            &st.pool,
+            tid,
+            "POST",
+            &path,
+            Some(creds.clone()),
+            35,
+        )
+        .await
     {
         res.map_err(|e| err(StatusCode::BAD_GATEWAY, format!("edge probe over SSE: {e}")))?
     } else {
@@ -127,7 +160,12 @@ async fn probe(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip): 
                 log::error!("box host lookup: {e}");
                 err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
             })?
-            .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "no edge box connected for this tenant"))?;
+            .ok_or_else(|| {
+                err(
+                    StatusCode::BAD_GATEWAY,
+                    "no edge box connected for this tenant",
+                )
+            })?;
         let base = edge_api_base(&normalize_host(&edge_host));
         let url = format!("{base}{path}");
         // The probe opens a real socket to the camera, so allow for a slow handshake — but bound it.
@@ -152,14 +190,24 @@ async fn probe(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip): 
     };
 
     if !(200..300).contains(&status) {
-        return Err(err(StatusCode::BAD_GATEWAY, format!("edge returned {status}")));
+        return Err(err(
+            StatusCode::BAD_GATEWAY,
+            format!("edge returned {status}"),
+        ));
     }
-    Ok(([(header::CONTENT_TYPE, "application/json")], Body::from(body)).into_response())
+    Ok((
+        [(header::CONTENT_TYPE, "application/json")],
+        Body::from(body),
+    )
+        .into_response())
 }
 
 /// Cameras the tenant's edge found on its LAN (ONVIF), pushed up by the edge. The admin
 /// promotes one into the device list (with credentials) via PUT /devices.
-async fn discovered(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<store::DiscoveredRow>>, ApiErr> {
+async fn discovered(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<store::DiscoveredRow>>, ApiErr> {
     auth::require(&c, "devices.read")?;
     let tid = tenant_of(&c)?;
     store::list_discovered(&st.pool, tid)
@@ -172,7 +220,10 @@ async fn discovered(UserClaims(c): UserClaims, State(st): State<AppState>) -> Re
 }
 
 /// All cameras for the caller's tenant.
-async fn list(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<Device>>, ApiErr> {
+async fn list(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<Device>>, ApiErr> {
     auth::require(&c, "devices.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
@@ -181,7 +232,11 @@ async fn list(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<J
 }
 
 /// Upsert one camera by `ip` (replace in place if present, else append), persist.
-async fn upsert(UserClaims(c): UserClaims, State(st): State<AppState>, Json(device): Json<Device>) -> Result<StatusCode, ApiErr> {
+async fn upsert(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(device): Json<Device>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "devices.write")?;
     let tid = tenant_of(&c)?;
     // Camera credentials are NEVER persisted in the cloud — they go to the edge via
@@ -219,23 +274,40 @@ async fn upsert(UserClaims(c): UserClaims, State(st): State<AppState>, Json(devi
 /// /snapshot/:ip` on the edge API) — used by the workflow editor's line-drawing UI (card:
 /// edge tracking) to show a frame to trace a crossing line over. Mirrors the recording
 /// `download` proxy's box-resolution + passthrough shape.
-async fn snapshot(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip): Path<String>) -> Result<Response, ApiErr> {
+async fn snapshot(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(ip): Path<String>,
+) -> Result<Response, ApiErr> {
     use crate::domain::recordings::{edge_api_base, normalize_host};
     auth::require(&c, "devices.read")?;
     let tid = tenant_of(&c)?;
 
     // SSE command channel first (card #144 — outbound-only boxes); tailnet fallback below.
     let path = format!("/snapshot/{}", urlencoding::encode(&ip));
-    if let Some(res) = app_core::edge_commands::edge_http_via_sse(&st.pool, tid, "GET", &path, None, 20).await {
-        let (status, body) = res.map_err(|e| err(StatusCode::BAD_GATEWAY, format!("edge snapshot over SSE: {e}")))?;
+    if let Some(res) =
+        app_core::edge_commands::edge_http_via_sse(&st.pool, tid, "GET", &path, None, 20).await
+    {
+        let (status, body) = res.map_err(|e| {
+            err(
+                StatusCode::BAD_GATEWAY,
+                format!("edge snapshot over SSE: {e}"),
+            )
+        })?;
         if status == 404 {
             return Err(err(StatusCode::NOT_FOUND, "no frame available"));
         }
         if !(200..300).contains(&status) {
-            return Err(err(StatusCode::BAD_GATEWAY, format!("edge returned {status}")));
+            return Err(err(
+                StatusCode::BAD_GATEWAY,
+                format!("edge returned {status}"),
+            ));
         }
         return Ok((
-            [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-store")],
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
             Body::from(body),
         )
             .into_response());
@@ -247,7 +319,12 @@ async fn snapshot(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip
             log::error!("box host lookup: {e}");
             err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
         })?
-        .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "no edge box connected for this tenant"))?;
+        .ok_or_else(|| {
+            err(
+                StatusCode::BAD_GATEWAY,
+                "no edge box connected for this tenant",
+            )
+        })?;
 
     let base = edge_api_base(&normalize_host(&edge_host));
     let url = format!("{base}/snapshot/{}", urlencoding::encode(&ip));
@@ -269,7 +346,10 @@ async fn snapshot(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip
 
     let stream = resp.bytes_stream();
     Ok((
-        [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "no-store")],
+        [
+            (header::CONTENT_TYPE, "image/jpeg"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
         Body::from_stream(stream),
     )
         .into_response())
@@ -278,19 +358,37 @@ async fn snapshot(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip
 /// Proxy the tracker's live "state of the world" for camera `ip` from the tenant's edge box
 /// (`GET /tracks/:ip` on the edge API) — the `GetTrackedObjects` node's backing call. JSON
 /// passthrough (unlike `snapshot`'s binary), otherwise the same box-resolution shape.
-async fn tracks(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip): Path<String>) -> Result<Response, ApiErr> {
+async fn tracks(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(ip): Path<String>,
+) -> Result<Response, ApiErr> {
     use crate::domain::recordings::{edge_api_base, normalize_host};
     auth::require(&c, "devices.read")?;
     let tid = tenant_of(&c)?;
 
     // SSE command channel first (card #144); tailnet fallback below.
     let path = format!("/tracks/{}", urlencoding::encode(&ip));
-    if let Some(res) = app_core::edge_commands::edge_http_via_sse(&st.pool, tid, "GET", &path, None, 15).await {
-        let (status, body) = res.map_err(|e| err(StatusCode::BAD_GATEWAY, format!("edge tracks over SSE: {e}")))?;
+    if let Some(res) =
+        app_core::edge_commands::edge_http_via_sse(&st.pool, tid, "GET", &path, None, 15).await
+    {
+        let (status, body) = res.map_err(|e| {
+            err(
+                StatusCode::BAD_GATEWAY,
+                format!("edge tracks over SSE: {e}"),
+            )
+        })?;
         if !(200..300).contains(&status) {
-            return Err(err(StatusCode::BAD_GATEWAY, format!("edge returned {status}")));
+            return Err(err(
+                StatusCode::BAD_GATEWAY,
+                format!("edge returned {status}"),
+            ));
         }
-        return Ok(([(header::CONTENT_TYPE, "application/json")], Body::from(body)).into_response());
+        return Ok((
+            [(header::CONTENT_TYPE, "application/json")],
+            Body::from(body),
+        )
+            .into_response());
     }
 
     let edge_host = store::box_host_for_tenant(&st.pool, tid)
@@ -299,7 +397,12 @@ async fn tracks(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip):
             log::error!("box host lookup: {e}");
             err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
         })?
-        .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "no edge box connected for this tenant"))?;
+        .ok_or_else(|| {
+            err(
+                StatusCode::BAD_GATEWAY,
+                "no edge box connected for this tenant",
+            )
+        })?;
 
     let base = edge_api_base(&normalize_host(&edge_host));
     let url = format!("{base}/tracks/{}", urlencoding::encode(&ip));
@@ -310,10 +413,16 @@ async fn tracks(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip):
     })?;
 
     if !resp.status().is_success() {
-        return Err(err(StatusCode::BAD_GATEWAY, format!("edge returned {}", resp.status())));
+        return Err(err(
+            StatusCode::BAD_GATEWAY,
+            format!("edge returned {}", resp.status()),
+        ));
     }
 
-    let body = resp.bytes().await.map_err(|e| err(StatusCode::BAD_GATEWAY, format!("edge response read: {e}")))?;
+    let body = resp
+        .bytes()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, format!("edge response read: {e}")))?;
     Ok((
         [(header::CONTENT_TYPE, "application/json")],
         Body::from(body),
@@ -322,7 +431,11 @@ async fn tracks(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip):
 }
 
 /// Remove the camera with `ip`, persist.
-async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(ip): Path<String>) -> Result<StatusCode, ApiErr> {
+async fn remove(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(ip): Path<String>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "devices.write")?;
     let tid = tenant_of(&c)?;
     let ipc = ip.clone();

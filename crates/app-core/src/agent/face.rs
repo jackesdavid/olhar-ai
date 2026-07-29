@@ -59,7 +59,10 @@ pub fn embed_face_crop(db: &Db, tenant_id: Uuid, image_bytes: &[u8]) -> Result<V
     }
     // SCRFD missed it, but the edge already localized this crop — embed it align-free.
     let op = "face_embed";
-    let outcome = ai_service::call(op, json!({ "image_b64": ai_service::image_b64(image_bytes) }))?;
+    let outcome = ai_service::call(
+        op,
+        json!({ "image_b64": ai_service::image_b64(image_bytes) }),
+    )?;
     crate::billing::record_ai_usage(db, tenant_id, op, outcome.delay_ms, outcome.exec_ms, true);
     parse_embedding(&outcome.output)
 }
@@ -108,7 +111,14 @@ pub fn detect_landmarks(
     // Fall back to the detector's 5-point `kps` (`face_detect`) on an older sidecar that doesn't
     // know the op, so the overlay still works during a staged deploy.
     if let Ok(outcome) = ai_service::call("face_landmarks", json!({ "image_b64": &img_b64 })) {
-        crate::billing::record_ai_usage(db, tenant_id, "face_landmarks", outcome.delay_ms, outcome.exec_ms, true);
+        crate::billing::record_ai_usage(
+            db,
+            tenant_id,
+            "face_landmarks",
+            outcome.delay_ms,
+            outcome.exec_ms,
+            true,
+        );
         return Ok(parse_points(outcome.output.get("landmarks")));
     }
     let op = "face_detect";
@@ -139,7 +149,10 @@ fn parse_points(v: Option<&Value>) -> Vec<[f32; 2]> {
 /// output object; the caller decides what a missing face means.
 fn call_detect_embed(db: &Db, tenant_id: Uuid, image_bytes: &[u8]) -> Result<Value, String> {
     let op = "face_detect_embed";
-    let outcome = ai_service::call(op, json!({ "image_b64": ai_service::image_b64(image_bytes) }))?;
+    let outcome = ai_service::call(
+        op,
+        json!({ "image_b64": ai_service::image_b64(image_bytes) }),
+    )?;
     // The job ran and was billed by RunPod — record it before we branch on the result.
     crate::billing::record_ai_usage(db, tenant_id, op, outcome.delay_ms, outcome.exec_ms, true);
     Ok(outcome.output)

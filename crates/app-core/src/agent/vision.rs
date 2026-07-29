@@ -30,7 +30,8 @@ pub fn describe_image(raw: &[u8], camera_name: &str) -> Result<String, String> {
     // Decode and re-encode to a bounded JPEG so the media type is predictable
     // (the snapshot may arrive as JPEG over HTTP or a frame from the RTSP
     // fallback) and the payload stays modest.
-    let img = image::load_from_memory(raw).map_err(|e| format!("Could not decode snapshot: {e}"))?;
+    let img =
+        image::load_from_memory(raw).map_err(|e| format!("Could not decode snapshot: {e}"))?;
     let img = if img.width().max(img.height()) > MAX_EDGE {
         img.resize(MAX_EDGE, MAX_EDGE, image::imageops::FilterType::Triangle)
     } else {
@@ -59,7 +60,9 @@ pub fn describe_image(raw: &[u8], camera_name: &str) -> Result<String, String> {
         }]
     });
 
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(60)).build();
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(60))
+        .build();
     let resp = agent
         .post(ENDPOINT)
         .set("x-api-key", &cfg.api_key)
@@ -72,7 +75,9 @@ pub fn describe_image(raw: &[u8], camera_name: &str) -> Result<String, String> {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .ok_or("Vision response was not valid JSON.")?;
-    let content = parsed.get("content").ok_or("Vision response had no content.")?;
+    let content = parsed
+        .get("content")
+        .ok_or("Vision response had no content.")?;
 
     let text = text_of(content).trim().to_string();
     if text.is_empty() {
@@ -85,8 +90,8 @@ pub fn describe_image(raw: &[u8], camera_name: &str) -> Result<String, String> {
 /// Single-turn free-text answer to `prompt`, with an optional image for vision. One round-trip
 /// (no tool-use loop) so it's fast enough for a Telegram reply. Backs the `AI Answer` node.
 pub fn ask_text(prompt: &str, image: Option<&[u8]>) -> Result<String, String> {
-    let cfg = AgentConfig::from_env()
-        .ok_or("AI Answer needs an ANTHROPIC_API_KEY — none configured.")?;
+    let cfg =
+        AgentConfig::from_env().ok_or("AI Answer needs an ANTHROPIC_API_KEY — none configured.")?;
 
     let mut content: Vec<Value> = Vec::new();
     if let Some(raw) = image {
@@ -116,7 +121,9 @@ pub fn ask_text(prompt: &str, image: Option<&[u8]>) -> Result<String, String> {
         "messages": [{ "role": "user", "content": content }]
     });
 
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(60)).build();
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(60))
+        .build();
     let resp = agent
         .post(ENDPOINT)
         .set("x-api-key", &cfg.api_key)
@@ -129,9 +136,13 @@ pub fn ask_text(prompt: &str, image: Option<&[u8]>) -> Result<String, String> {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .ok_or("AI Answer response was not valid JSON.")?;
-    let text = text_of(parsed.get("content").ok_or("AI Answer response had no content.")?)
-        .trim()
-        .to_string();
+    let text = text_of(
+        parsed
+            .get("content")
+            .ok_or("AI Answer response had no content.")?,
+    )
+    .trim()
+    .to_string();
     if text.is_empty() {
         Err("The model returned an empty answer.".into())
     } else {
@@ -147,8 +158,8 @@ pub fn classify_intent(text: &str, arms: &[String]) -> Result<Option<String>, St
     if arms.is_empty() {
         return Ok(None);
     }
-    let cfg = AgentConfig::from_env()
-        .ok_or("AI Switch needs an ANTHROPIC_API_KEY — none configured.")?;
+    let cfg =
+        AgentConfig::from_env().ok_or("AI Switch needs an ANTHROPIC_API_KEY — none configured.")?;
     let list = arms
         .iter()
         .enumerate()
@@ -168,7 +179,9 @@ pub fn classify_intent(text: &str, arms: &[String]) -> Result<Option<String>, St
         "messages": [{ "role": "user", "content": format!("Options:\n{list}\n\nMessage: {text}") }]
     });
 
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(30)).build();
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(30))
+        .build();
     let resp = agent
         .post(ENDPOINT)
         .set("x-api-key", &cfg.api_key)
@@ -181,7 +194,11 @@ pub fn classify_intent(text: &str, arms: &[String]) -> Result<Option<String>, St
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .ok_or("AI Switch response was not valid JSON.")?;
-    let reply = text_of(parsed.get("content").ok_or("AI Switch response had no content.")?);
+    let reply = text_of(
+        parsed
+            .get("content")
+            .ok_or("AI Switch response had no content.")?,
+    );
     // Parse the leading integer the model returned; map 1-based index → arm, else None.
     let n: usize = reply
         .trim()
@@ -214,7 +231,9 @@ pub fn extract_field(text: &str, field: &str) -> Result<String, String> {
         "system": system,
         "messages": [{ "role": "user", "content": text }]
     });
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(30)).build();
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(30))
+        .build();
     let resp = agent
         .post(ENDPOINT)
         .set("x-api-key", &cfg.api_key)
@@ -227,17 +246,21 @@ pub fn extract_field(text: &str, field: &str) -> Result<String, String> {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .ok_or("AI Extract response was not valid JSON.")?;
-    Ok(text_of(parsed.get("content").ok_or("AI Extract response had no content.")?)
-        .trim()
-        .to_string())
+    Ok(text_of(
+        parsed
+            .get("content")
+            .ok_or("AI Extract response had no content.")?,
+    )
+    .trim()
+    .to_string())
 }
 
 /// Ask a yes/no question about an optional image frame. Returns `true` for YES, `false`
 /// for NO. The model is forced to one-word answers via the system prompt and `max_tokens: 8`.
 /// When `image` is `None` the question is asked as plain text (useful for time/logic checks).
 pub fn ask_yes_no(question: &str, image: Option<&[u8]>) -> Result<bool, String> {
-    let cfg = AgentConfig::from_env()
-        .ok_or("AI If needs an ANTHROPIC_API_KEY — none configured.")?;
+    let cfg =
+        AgentConfig::from_env().ok_or("AI If needs an ANTHROPIC_API_KEY — none configured.")?;
 
     let mut content: Vec<Value> = Vec::new();
     if let Some(raw) = image {
@@ -266,7 +289,9 @@ pub fn ask_yes_no(question: &str, image: Option<&[u8]>) -> Result<bool, String> 
         "messages": [{ "role": "user", "content": content }]
     });
 
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(60)).build();
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(60))
+        .build();
     let resp = agent
         .post(ENDPOINT)
         .set("x-api-key", &cfg.api_key)
@@ -279,8 +304,12 @@ pub fn ask_yes_no(question: &str, image: Option<&[u8]>) -> Result<bool, String> 
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .ok_or("AI If response was not valid JSON.")?;
-    let text = text_of(parsed.get("content").ok_or("AI If response had no content.")?)
-        .trim()
-        .to_uppercase();
+    let text = text_of(
+        parsed
+            .get("content")
+            .ok_or("AI If response had no content.")?,
+    )
+    .trim()
+    .to_uppercase();
     Ok(text.starts_with('Y'))
 }

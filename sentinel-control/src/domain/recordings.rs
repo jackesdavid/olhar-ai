@@ -58,13 +58,15 @@ async fn cloud_url(
         .ok_or_else(|| err(StatusCode::CONFLICT, "clip is not in the cloud"))?;
 
     // `presign_get` builds its own runtime — it must not run on the async worker.
-    let url = tokio::task::spawn_blocking(move || app_core::clip_store::presign_get(&key, PLAYBACK_URL_TTL_SECS))
-        .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")))?
-        .map_err(|e| {
-            log::error!("presign get {id}: {e}");
-            err(StatusCode::BAD_GATEWAY, "could not sign playback url")
-        })?;
+    let url = tokio::task::spawn_blocking(move || {
+        app_core::clip_store::presign_get(&key, PLAYBACK_URL_TTL_SECS)
+    })
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")))?
+    .map_err(|e| {
+        log::error!("presign get {id}: {e}");
+        err(StatusCode::BAD_GATEWAY, "could not sign playback url")
+    })?;
 
     Ok(Json(serde_json::json!({ "url": url })))
 }
@@ -72,14 +74,14 @@ async fn cloud_url(
 #[derive(Deserialize)]
 struct ListQuery {
     camera_ip: Option<String>,
-    from:      Option<String>,
-    to:        Option<String>,
-    sort:      Option<String>,
-    dir:       Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+    sort: Option<String>,
+    dir: Option<String>,
     #[serde(default)]
-    limit:     Option<i64>,
+    limit: Option<i64>,
     #[serde(default)]
-    offset:    Option<i64>,
+    offset: Option<i64>,
 }
 
 async fn list(
@@ -89,17 +91,21 @@ async fn list(
 ) -> Result<impl IntoResponse, ApiErr> {
     auth::require(&c, "recordings.read")?;
     let tid = tenant_of(&c)?;
-    let limit  = q.limit.unwrap_or(50).clamp(1, 500);
+    let limit = q.limit.unwrap_or(50).clamp(1, 500);
     let offset = q.offset.unwrap_or(0).max(0);
-    let sort   = q.sort.as_deref().unwrap_or("started_at");
-    let dir    = q.dir.as_deref().unwrap_or("desc");
+    let sort = q.sort.as_deref().unwrap_or("started_at");
+    let dir = q.dir.as_deref().unwrap_or("desc");
 
     let mut page = store::list_recordings_filtered(
-        &st.pool, tid,
+        &st.pool,
+        tid,
         q.camera_ip.as_deref(),
         q.from.as_deref(),
         q.to.as_deref(),
-        sort, dir, limit, offset,
+        sort,
+        dir,
+        limit,
+        offset,
     )
     .await
     .map_err(|e| {
@@ -118,7 +124,9 @@ async fn list(
         }
     }
 
-    Ok(Json(serde_json::json!({ "total": page.total, "items": page.items })))
+    Ok(Json(
+        serde_json::json!({ "total": page.total, "items": page.items }),
+    ))
 }
 
 /// Create a recording row directly (JWT auth, recordings.write). Used for manual imports
@@ -131,15 +139,24 @@ async fn create(
     auth::require(&c, "recordings.write")?;
     let tid = tenant_of(&c)?;
     let id = store::insert_recording(
-        &st.pool, tid, &body.camera_ip, &body.clip_id, &body.friendly_name,
-        body.duration_secs, body.size_bytes, &body.started_at,
+        &st.pool,
+        tid,
+        &body.camera_ip,
+        &body.clip_id,
+        &body.friendly_name,
+        body.duration_secs,
+        body.size_bytes,
+        &body.started_at,
     )
     .await
     .map_err(|e| {
         log::error!("create recording: {e}");
         err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
     })?;
-    Ok((StatusCode::CREATED, axum::Json(serde_json::json!({ "id": id }))))
+    Ok((
+        StatusCode::CREATED,
+        axum::Json(serde_json::json!({ "id": id })),
+    ))
 }
 
 /// The work-queue category for clip deletion, and its three actions. One delete request enqueues
@@ -153,10 +170,12 @@ pub const KIND_DB: &str = "db";
 /// the queue — not the recording row — is the durable pointer: even once the `db` job drops the
 /// row, the `cloud` job still holds the key and finishes. Returns whether the clip existed.
 async fn enqueue_delete(st: &AppState, tenant: uuid::Uuid, id: i64) -> Result<bool, ApiErr> {
-    let Some((clip_id, cloud_key)) = store::recording_for_delete(&st.pool, tenant, id).await.map_err(|e| {
-        log::error!("recording_for_delete {id}: {e}");
-        err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
-    })?
+    let Some((clip_id, cloud_key)) = store::recording_for_delete(&st.pool, tenant, id)
+        .await
+        .map_err(|e| {
+            log::error!("recording_for_delete {id}: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+        })?
     else {
         return Ok(false);
     };
@@ -166,15 +185,29 @@ async fn enqueue_delete(st: &AppState, tenant: uuid::Uuid, id: i64) -> Result<bo
         "cloud_key": cloud_key,
     });
     let jobs = vec![
-        work_queue::NewJob { kind: KIND_EDGE.into(),  payload: payload.clone() },
-        work_queue::NewJob { kind: KIND_CLOUD.into(), payload: payload.clone() },
-        work_queue::NewJob { kind: KIND_DB.into(),    payload },
+        work_queue::NewJob {
+            kind: KIND_EDGE.into(),
+            payload: payload.clone(),
+        },
+        work_queue::NewJob {
+            kind: KIND_CLOUD.into(),
+            payload: payload.clone(),
+        },
+        work_queue::NewJob {
+            kind: KIND_DB.into(),
+            payload,
+        },
     ];
     let request_id = uuid::Uuid::new_v4();
-    work_queue::enqueue(&st.pool, request_id, tenant, DELETE_CATEGORY, &jobs).await.map_err(|e| {
-        log::error!("enqueue delete {id}: {e}");
-        err(StatusCode::INTERNAL_SERVER_ERROR, "could not queue deletion")
-    })?;
+    work_queue::enqueue(&st.pool, request_id, tenant, DELETE_CATEGORY, &jobs)
+        .await
+        .map_err(|e| {
+            log::error!("enqueue delete {id}: {e}");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not queue deletion",
+            )
+        })?;
     Ok(true)
 }
 
@@ -236,7 +269,12 @@ async fn download(
             log::error!("box host lookup: {e}");
             err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
         })?
-        .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "no edge box connected for this tenant"))?;
+        .ok_or_else(|| {
+            err(
+                StatusCode::BAD_GATEWAY,
+                "no edge box connected for this tenant",
+            )
+        })?;
 
     // magicdns_host is the go2rtc URL (port 443). The edge API runs on :8080.
     let base = normalize_host(&edge_host);
@@ -287,7 +325,9 @@ pub fn normalize_host(host: &str) -> String {
 /// magicdns_host is the base URL (port 443, go2rtc). Rewrite to :8080 for API calls.
 pub fn edge_api_base(base: &str) -> String {
     // If it already has a port, use as-is.
-    let after_scheme = base.trim_start_matches("https://").trim_start_matches("http://");
+    let after_scheme = base
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
     if after_scheme.contains(':') {
         return base.to_string();
     }
@@ -344,13 +384,13 @@ async fn bulk_delete(
 /// The edge calls this when a recording is finalised.
 #[derive(Deserialize)]
 pub struct ClipPush {
-    pub camera_ip:     String,
-    pub clip_id:       String,
+    pub camera_ip: String,
+    pub clip_id: String,
     #[serde(default)]
     pub friendly_name: String,
     pub duration_secs: i32,
-    pub size_bytes:    i64,
-    pub started_at:    String,
+    pub size_bytes: i64,
+    pub started_at: String,
 }
 
 /// Accept a finalised clip from the edge. Authenticated via the same BOX_TOKEN

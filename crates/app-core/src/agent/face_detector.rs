@@ -33,6 +33,13 @@ impl FaceBox {
     pub fn area(&self) -> f32 {
         (self.xyxy[2] - self.xyxy[0]).max(0.0) * (self.xyxy[3] - self.xyxy[1]).max(0.0)
     }
+    /// Box width in source pixels — the face-size signal the pipeline gates on. Recognition
+    /// quality tracks this directly (ArcFace aligns to 112x112, so a narrower face is upscaled
+    /// and loses detail); an area-over-frame ratio does not, because it moves with the camera's
+    /// resolution as well as the subject's distance.
+    pub fn width(&self) -> f32 {
+        (self.xyxy[2] - self.xyxy[0]).max(0.0)
+    }
 }
 
 /// Detect faces in a JPEG/PNG frame → source-pixel boxes above [`CONF_THRESH`], post-NMS.
@@ -63,7 +70,9 @@ fn run_and_decode(input: Array4<f32>, ratio: f32) -> Result<Vec<FaceBox>, String
         let v = out[i]
             .to_plain_array_view::<f32>()
             .map_err(|e| format!("yunet: read output {i}: {e}"))?;
-        Ok(v.as_slice().map(<[f32]>::to_vec).unwrap_or_else(|| v.iter().copied().collect()))
+        Ok(v.as_slice()
+            .map(<[f32]>::to_vec)
+            .unwrap_or_else(|| v.iter().copied().collect()))
     };
 
     let mut dets: Vec<FaceBox> = Vec::new();
@@ -131,7 +140,10 @@ fn build_model() -> Result<Arc<TypedRunnableModel>, String> {
     let plan = tract_onnx::onnx()
         .model_for_read(&mut cursor)
         .map_err(|e| format!("yunet: parse ONNX: {e}"))?
-        .with_input_fact(0, InferenceFact::dt_shape(f32::datum_type(), tvec!(1, 3, INPUT, INPUT)))
+        .with_input_fact(
+            0,
+            InferenceFact::dt_shape(f32::datum_type(), tvec!(1, 3, INPUT, INPUT)),
+        )
         .map_err(|e| format!("yunet: set input fact: {e}"))?
         .into_optimized()
         .map_err(|e| format!("yunet: optimize: {e}"))?
@@ -160,7 +172,10 @@ fn preprocess(image_bytes: &[u8]) -> Result<(Array4<f32>, f32), String> {
 fn preprocess_bgr(bgr: &[u8], w: u32, h: u32) -> Result<(Array4<f32>, f32), String> {
     let want = (w as usize) * (h as usize) * 3;
     if want == 0 || bgr.len() < want {
-        return Err(format!("yunet: bgr buffer is {} bytes, want {want} for {w}x{h}", bgr.len()));
+        return Err(format!(
+            "yunet: bgr buffer is {} bytes, want {want} for {w}x{h}",
+            bgr.len()
+        ));
     }
     let img: image::RgbImage = image::ImageBuffer::from_raw(w, h, bgr[..want].to_vec())
         .ok_or_else(|| "yunet: bgr buffer does not match w*h*3".to_string())?;
@@ -217,7 +232,11 @@ fn iou(a: [f32; 4], b: [f32; 4]) -> f32 {
     let area_a = (a[2] - a[0]).max(0.0) * (a[3] - a[1]).max(0.0);
     let area_b = (b[2] - b[0]).max(0.0) * (b[3] - b[1]).max(0.0);
     let union = area_a + area_b - inter;
-    if union <= 0.0 { 0.0 } else { inter / union }
+    if union <= 0.0 {
+        0.0
+    } else {
+        inter / union
+    }
 }
 
 #[cfg(test)]
@@ -228,7 +247,10 @@ mod tests {
     #[test]
     fn yunet_loads_and_runs() {
         let blank = Array4::<f32>::zeros((1, 3, INPUT, INPUT));
-        let out = model().unwrap().run(tvec!(Tensor::from(blank).into())).unwrap();
+        let out = model()
+            .unwrap()
+            .run(tvec!(Tensor::from(blank).into()))
+            .unwrap();
         assert_eq!(out.len(), 12, "YuNet has 12 outputs");
     }
 
@@ -241,6 +263,10 @@ mod tests {
             .write_to(&mut buf, image::ImageFormat::Jpeg)
             .unwrap();
         let faces = detect(buf.get_ref()).unwrap();
-        assert!(faces.is_empty(), "a black frame must have no faces, got {}", faces.len());
+        assert!(
+            faces.is_empty(),
+            "a black frame must have no faces, got {}",
+            faces.len()
+        );
     }
 }

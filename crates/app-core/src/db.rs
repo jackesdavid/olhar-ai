@@ -50,7 +50,11 @@ impl Db {
             Ok::<_, sqlx::Error>(pool)
         })?;
 
-        Ok(Db { pool, rt: Arc::new(rt), url: database_url.to_string() })
+        Ok(Db {
+            pool,
+            rt: Arc::new(rt),
+            url: database_url.to_string(),
+        })
     }
 
     /// A `Db` whose pool connects lazily (on first query) and runs no migrations.
@@ -75,7 +79,11 @@ impl Db {
                 .connect_lazy(database_url)
                 .expect("lazy pool")
         };
-        Db { pool, rt: Arc::new(rt), url: database_url.to_string() }
+        Db {
+            pool,
+            rt: Arc::new(rt),
+            url: database_url.to_string(),
+        }
     }
 
     /// The connection pool (cheap clone). Feature repos use this to run their own
@@ -97,7 +105,8 @@ impl Db {
         self.rt.spawn(async move {
             let _ = tx.send(fut.await);
         });
-        rx.recv().expect("db runtime task dropped before completing")
+        rx.recv()
+            .expect("db runtime task dropped before completing")
     }
 
     /// Fire a Postgres `NOTIFY <channel>, <payload>` (best-effort, blocking). The workflow

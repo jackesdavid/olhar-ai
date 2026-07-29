@@ -893,7 +893,7 @@
           <div><dt class="text-muted-foreground">{t.camera}</dt><dd class="truncate">{detail.data.camera || "—"}</dd></div>
           <div><dt class="text-muted-foreground">{t.source}</dt><dd>{detail.data.source}</dd></div>
           <div><dt class="text-muted-foreground">{t.matchConfidence}</dt><dd class="tabular-nums">{Math.round(detail.data.confidence)}%</dd></div>
-          <div><dt class="text-muted-foreground">{t.faceSize}</dt><dd class="tabular-nums">{(detail.data.face_ratio * 100).toFixed(1)}{t.ofFrame}</dd></div>
+          <div><dt class="text-muted-foreground">{t.faceSize}</dt><dd class="tabular-nums">{t.facePx(detail.data.face_width)}</dd></div>
           {#if detail.data.bbox}
             <div class="col-span-2"><dt class="text-muted-foreground">{t.detectionBox}</dt><dd class="tabular-nums">[{detail.data.bbox.join(", ")}]</dd></div>
           {/if}

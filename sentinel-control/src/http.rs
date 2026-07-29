@@ -34,7 +34,10 @@ pub fn router(state: AppState) -> Router {
         // Cloud→edge command transport (card #144): the edge holds this SSE stream and commands
         // ride down it; it POSTs each command's result back. Replaces the tailnet for commanding.
         .route("/config/edge/stream", get(crate::edge_stream::edge_stream))
-        .route("/config/edge/command-result", post(crate::edge_stream::command_result))
+        .route(
+            "/config/edge/command-result",
+            post(crate::edge_stream::command_result),
+        )
         .route("/config/discovered", post(discovered_push))
         .route("/config/device-moved", post(device_moved))
         .route("/config/streaming", post(streaming_push))
@@ -49,14 +52,19 @@ pub fn router(state: AppState) -> Router {
         .route("/config/tracking", get(tracking_config))
         .merge(handlers::router())
         // Soft-lock: a lapsed/unpaid tenant is read-only (402 on writes).
-        .merge(crate::domain::router().layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            crate::billing_gate::soft_lock,
-        )))
+        .merge(
+            crate::domain::router().layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::billing_gate::soft_lock,
+            )),
+        )
         .nest_service("/edge", ServeDir::new(edge_dist))
         // Card #146: wrap every request in a tenant span so all logs during it ship to Datadog
         // tagged tenant:<id> — the central place, set once, not per handler.
-        .layer(axum::middleware::from_fn_with_state(state.clone(), tenant_span))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            tenant_span,
+        ))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -78,7 +86,9 @@ async fn tenant_span(
         .and_then(|c| c.tenant())
         .map(|t| t.to_string())
         .unwrap_or_default();
-    next.run(req).instrument(tracing::info_span!("http", tenant = %tenant)).await
+    next.run(req)
+        .instrument(tracing::info_span!("http", tenant = %tenant))
+        .await
 }
 
 /// Serve the edge appliance installer so a tenant admin's one-liner works.
@@ -103,15 +113,27 @@ async fn installers() -> impl IntoResponse {
     // Each downloadable file: (os, label, kind, filename). Built from the version + naming scheme
     // used by deploy/macos-pkg/build.sh and deploy/windows/build-installer.sh.
     let files = [
-        ("macos", "macOS (Apple Silicon + Intel)", "pkg", format!("Sentinel-Edge-{version}.pkg")),
-        ("windows", "Windows 10/11 (64-bit)", "zip", format!("SentinelEdge-Windows-{version}.zip")),
+        (
+            "macos",
+            "macOS (Apple Silicon + Intel)",
+            "pkg",
+            format!("Sentinel-Edge-{version}.pkg"),
+        ),
+        (
+            "windows",
+            "Windows 10/11 (64-bit)",
+            "zip",
+            format!("SentinelEdge-Windows-{version}.zip"),
+        ),
     ];
 
     let mut installers: Vec<serde_json::Value> = files
         .iter()
         .filter_map(|(os, label, kind, filename)| {
             // Only offer what's on disk — the button must never 404.
-            let size = std::fs::metadata(std::path::Path::new(&dist).join(filename)).ok()?.len();
+            let size = std::fs::metadata(std::path::Path::new(&dist).join(filename))
+                .ok()?
+                .len();
             Some(json!({
                 "os": os,
                 "label": label,
@@ -157,8 +179,9 @@ const ENROLL_WINDOW_SECS: u64 = 300;
 /// resets on deploy. Putting it in Postgres would mean an unauthenticated request writes a row —
 /// which is a DoS lever, not a defence.
 fn enroll_limiter() -> &'static std::sync::Mutex<HashMap<String, (u32, std::time::Instant)>> {
-    static LIMITER: std::sync::OnceLock<std::sync::Mutex<HashMap<String, (u32, std::time::Instant)>>> =
-        std::sync::OnceLock::new();
+    static LIMITER: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<String, (u32, std::time::Instant)>>,
+    > = std::sync::OnceLock::new();
     LIMITER.get_or_init(Default::default)
 }
 
@@ -179,12 +202,16 @@ fn enroll_rate_limited(client: &str) -> bool {
     let mut map = enroll_limiter().lock().unwrap();
     let window = std::time::Duration::from_secs(ENROLL_WINDOW_SECS);
     map.retain(|_, (_, at)| at.elapsed() < window);
-    map.get(client).map(|(n, _)| *n >= ENROLL_MAX_FAILURES).unwrap_or(false)
+    map.get(client)
+        .map(|(n, _)| *n >= ENROLL_MAX_FAILURES)
+        .unwrap_or(false)
 }
 
 fn enroll_record_failure(client: &str) {
     let mut map = enroll_limiter().lock().unwrap();
-    let e = map.entry(client.to_string()).or_insert((0, std::time::Instant::now()));
+    let e = map
+        .entry(client.to_string())
+        .or_insert((0, std::time::Instant::now()));
     e.0 += 1;
     e.1 = std::time::Instant::now();
 }
@@ -195,7 +222,11 @@ struct EnrollReq {
 }
 
 /// Redeem a pairing code → everything the edge needs to become this tenant's box.
-async fn enroll(State(st): State<AppState>, headers: HeaderMap, Json(body): Json<EnrollReq>) -> Response {
+async fn enroll(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<EnrollReq>,
+) -> Response {
     // One message for every failure mode. Deliberately uninformative.
     let refuse = || {
         (
@@ -237,12 +268,19 @@ async fn enroll(State(st): State<AppState>, headers: HeaderMap, Json(body): Json
     // The code is spent. Mint the box's real credentials now — this is why none of them had to be
     // stored anywhere.
     let token = crate::domain::boxes::new_box_token();
-    if let Err(e) = crate::store::rotate_box_token(&st.pool, box_id, &crate::domain::boxes::hash_token(&token)).await {
+    if let Err(e) =
+        crate::store::rotate_box_token(&st.pool, box_id, &crate::domain::boxes::hash_token(&token))
+            .await
+    {
         log::error!("enroll: token rotate failed for box {box_id}: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, "could not issue a token").into_response();
     }
 
-    let name = crate::store::box_name(&st.pool, box_id).await.ok().flatten().unwrap_or_default();
+    let name = crate::store::box_name(&st.pool, box_id)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     let hostname = format!("sentinel-{}", &box_id.to_string()[..8]);
     // No tailnet (card #144) — enrollment issues only the box token; the edge is outbound-only.
     log::info!("box {box_id} ({name}) enrolled by pairing code");
@@ -282,7 +320,11 @@ async fn box_tenant(st: &AppState, headers: &HeaderMap) -> Result<Option<uuid::U
     let (ts, ff, gs, plat, hw) = box_health_headers(headers);
     let metrics = box_metrics_header(headers);
     let hash = hex::encode(Sha256::digest(tok.as_bytes()));
-    match store::touch_box_by_token(&st.pool, &hash, host, version, ts, ff, gs, plat, hw, metrics).await {
+    match store::touch_box_by_token(
+        &st.pool, &hash, host, version, ts, ff, gs, plat, hw, metrics,
+    )
+    .await
+    {
         Ok(Some(tid)) => Ok(Some(tid)),
         Ok(None) => Err((StatusCode::UNAUTHORIZED, "unknown box token").into_response()),
         Err(e) => {
@@ -295,12 +337,28 @@ async fn box_tenant(st: &AppState, headers: &HeaderMap) -> Result<Option<uuid::U
 /// Extract the edge health headers (`X-Edge-Tailscale`, `X-Edge-Ffmpeg`, `X-Edge-Gstreamer`,
 /// `X-Edge-Platform`) — present only on the box's regular config poll, absent on the high-rate
 /// pushes (then `None` keeps the prior value via COALESCE).
-fn box_health_headers(headers: &HeaderMap) -> (Option<&str>, Option<bool>, Option<bool>, Option<&str>, Option<&str>) {
-    let ts = headers.get("x-edge-tailscale").and_then(|v| v.to_str().ok());
-    let ff = headers.get("x-edge-ffmpeg").and_then(|v| v.to_str().ok()).map(|v| v.trim() == "1");
+fn box_health_headers(
+    headers: &HeaderMap,
+) -> (
+    Option<&str>,
+    Option<bool>,
+    Option<bool>,
+    Option<&str>,
+    Option<&str>,
+) {
+    let ts = headers
+        .get("x-edge-tailscale")
+        .and_then(|v| v.to_str().ok());
+    let ff = headers
+        .get("x-edge-ffmpeg")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim() == "1");
     // card #138: whether gst-launch-1.0 is on PATH — lets an operator tell a box is ready before
     // flipping its `media_backend` to "gstreamer".
-    let gs = headers.get("x-edge-gstreamer").and_then(|v| v.to_str().ok()).map(|v| v.trim() == "1");
+    let gs = headers
+        .get("x-edge-gstreamer")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim() == "1");
     let plat = headers.get("x-edge-platform").and_then(|v| v.to_str().ok());
     let hw = headers.get("x-edge-hwaccel").and_then(|v| v.to_str().ok());
     (ts, ff, gs, plat, hw)
@@ -335,7 +393,11 @@ fn untenanted_dev_config() -> bool {
 /// cameras. The `ALLOW_UNTENANTED_CONFIG` escape hatch (a single-tenant dev edge pointed at the
 /// default tenant) is compiled out of release builds entirely: `debug_assertions` is off there, so
 /// the env var is not even read. Setting it on the VPS by accident does nothing.
-async fn cameras(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): RawQuery) -> Response {
+async fn cameras(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    RawQuery(q): RawQuery,
+) -> Response {
     let tenant = match box_tenant(&st, &headers).await {
         Ok(Some(tid)) => tid,
         Ok(None) if untenanted_dev_config() => DEFAULT_TENANT_ID,
@@ -353,7 +415,12 @@ async fn cameras(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Ra
         .and_then(|v| v.parse().ok())
         .unwrap_or(0)
         .min(60);
-    let has_pending = st.pending_creds.lock().unwrap().keys().any(|(t, _)| *t == tenant);
+    let has_pending = st
+        .pending_creds
+        .lock()
+        .unwrap()
+        .keys()
+        .any(|(t, _)| *t == tenant);
     if wait > 0 && !has_pending {
         let n = st.notifier(tenant);
         let _ = tokio::time::timeout(Duration::from_secs(wait), n.notified()).await;
@@ -376,7 +443,10 @@ async fn cameras(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Ra
 }
 
 /// Like [`box_tenant`] but also resolves the box id (for log tagging).
-pub(crate) async fn box_identity(st: &AppState, headers: &HeaderMap) -> Result<Option<(uuid::Uuid, uuid::Uuid)>, Response> {
+pub(crate) async fn box_identity(
+    st: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<(uuid::Uuid, uuid::Uuid)>, Response> {
     let token = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -412,7 +482,8 @@ async fn commands(State(st): State<AppState>, headers: HeaderMap) -> Response {
         "rescan":  st.take_rescan(tenant),
         "restart": restart,
         "update":  update,
-    })).into_response()
+    }))
+    .into_response()
 }
 
 /// A camera that changed IP, reported by the edge (matched on its stable ONVIF id).
@@ -428,7 +499,11 @@ struct DeviceMove {
 
 /// The edge reports cameras whose IP changed so the cloud device rows + Live page follow
 /// the move (box token required). Keyed by stable ONVIF id.
-async fn device_moved(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<Vec<DeviceMove>>>) -> Response {
+async fn device_moved(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<Vec<DeviceMove>>>,
+) -> Response {
     let tenant = match box_tenant(&st, &headers).await {
         Ok(Some(t)) => t,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
@@ -475,14 +550,21 @@ impl StreamingIn {
     fn into_cams(self) -> Vec<StreamingCamIn> {
         match self {
             Self::Rich(v) => v,
-            Self::Plain(ips) => ips.into_iter().map(|ip| StreamingCamIn { ip, codec: None }).collect(),
+            Self::Plain(ips) => ips
+                .into_iter()
+                .map(|ip| StreamingCamIn { ip, codec: None })
+                .collect(),
         }
     }
 }
 
 /// The edge reports which cameras it currently has a resolved stream for (box token). Drives
 /// the precise "online & correct" status dot + codec badge on the Devices page.
-async fn streaming_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<StreamingIn>>) -> Response {
+async fn streaming_push(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<StreamingIn>>,
+) -> Response {
     let tenant = match box_tenant(&st, &headers).await {
         Ok(Some(t)) => t,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
@@ -522,7 +604,11 @@ struct MotionIn {
 /// fabric (`flow:inject`) so flow fires a `motion` System event to that tenant's `OnEvent`
 /// handler graphs, and (once per tenant per process) ensure the `motion` event is registered
 /// with its typed payload so OnEvent nodes expose camera/score/area/blobs/bbox outputs.
-async fn motion_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<MotionIn>>) -> Response {
+async fn motion_push(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<MotionIn>>,
+) -> Response {
     let tenant = match box_tenant(&st, &headers).await {
         Ok(Some(t)) => t,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
@@ -564,7 +650,7 @@ struct FaceIn {
     #[serde(default)]
     confidence: f64, // 0..100
     #[serde(default)]
-    face_ratio: f64, // face area ÷ frame area, 0..100
+    face_width: i64, // face box width in source pixels (face-size signal)
     #[serde(default)]
     kps: Vec<i32>, // YuNet 5 landmarks, flat [x0,y0,…] source px (#122)
     #[allow(dead_code)]
@@ -576,8 +662,12 @@ struct FaceIn {
 
 /// The edge reports a face detection (box token → tenant). Durable-enqueued as a `face_detected`
 /// System event so the tenant's `OnEvent("face_detected")` graphs fire with the frame + bbox +
-/// confidence + face_ratio — the entry point of the face recognition pipeline (#117).
-async fn face_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<FaceIn>>) -> Response {
+/// confidence + face_width — the entry point of the face recognition pipeline (#117).
+async fn face_push(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<FaceIn>>,
+) -> Response {
     let tenant = match box_tenant(&st, &headers).await {
         Ok(Some(t)) => t,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
@@ -590,7 +680,7 @@ async fn face_push(State(st): State<AppState>, headers: HeaderMap, body: Option<
         "camera": ev.camera_ip,
         "bbox": ev.bbox, // already xyxy
         "confidence": ev.confidence.round() as i64,
-        "face_ratio": ev.face_ratio.round() as i64,
+        "face_width": ev.face_width,
         "kps": ev.kps, // flat [x0,y0,…] → face_detected Landmarks port → ArcFace align (#122)
     });
     if let (Some(obj), Some(f)) = (payload.as_object_mut(), ev.frame_b64) {
@@ -603,14 +693,24 @@ async fn face_push(State(st): State<AppState>, headers: HeaderMap, body: Option<
 /// The edge reports disk usage is near/over the configured limit (box token → tenant). Enqueues
 /// an `edge:full-disk` event into the durable `event_queue` so tenant `OnEvent("edge:full-disk")`
 /// workflow graphs can react (send alert, stop recordings, etc.).
-async fn disk_alert_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<serde_json::Value>>) -> Response {
+async fn disk_alert_push(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<serde_json::Value>>,
+) -> Response {
     let tenant = match box_tenant(&st, &headers).await {
         Ok(Some(t)) => t,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
         Err(resp) => return resp,
     };
     let payload = body.map(|Json(v)| v).unwrap_or_default();
-    app_core::work_queue::enqueue_event_blocking(&st.db, tenant, "edge:full-disk", "edge", &payload);
+    app_core::work_queue::enqueue_event_blocking(
+        &st.db,
+        tenant,
+        "edge:full-disk",
+        "edge",
+        &payload,
+    );
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -638,7 +738,11 @@ struct TrackEventIn {
     zone: Option<String>,
 }
 
-async fn track_event_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<TrackEventIn>>) -> Response {
+async fn track_event_push(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<TrackEventIn>>,
+) -> Response {
     let tenant = match box_tenant(&st, &headers).await {
         Ok(Some(t)) => t,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
@@ -678,7 +782,11 @@ async fn track_event_push(State(st): State<AppState>, headers: HeaderMap, body: 
 
 /// The edge pushes a batch of its recent log lines here (box token). Control persists a
 /// bounded tail and re-broadcasts each line for any live per-box log viewer.
-async fn box_logs_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<Vec<store::LogLineIn>>>) -> Response {
+async fn box_logs_push(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<Vec<store::LogLineIn>>>,
+) -> Response {
     let (tenant, box_id) = match box_identity(&st, &headers).await {
         Ok(Some(pair)) => pair,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
@@ -691,7 +799,11 @@ async fn box_logs_push(State(st): State<AppState>, headers: HeaderMap, body: Opt
     // Card #146: the box holds its token, not its name — control resolves `edge_name` here (once per
     // batch) so every edge log in Datadog can be faceted by a human name, not just the box id.
     let edge_id = box_id.to_string();
-    let edge_name = store::box_name(&st.pool, box_id).await.ok().flatten().filter(|s| !s.trim().is_empty());
+    let edge_name = store::box_name(&st.pool, box_id)
+        .await
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty());
     // Card #145/#146: the edge keeps relaying its lines here; they go to the unified log queue, which
     // ships to Datadog when configured (else Postgres). Structured fields (`camera_ip`, `fps`, …) plus
     // the stamped identity ride in `payload` and are spread to searchable attributes / facets by the
@@ -712,9 +824,9 @@ async fn box_logs_push(State(st): State<AppState>, headers: HeaderMap, body: Opt
             entity_type: Some("edge_box"),
             level: match l.level.to_lowercase().as_str() {
                 "error" => "error",
-                "warn"  => "warn",
+                "warn" => "warn",
                 "debug" => "debug",
-                _       => "info",
+                _ => "info",
             },
             message: l.message.clone(),
             payload: Some(serde_json::Value::Object(payload)),
@@ -725,7 +837,11 @@ async fn box_logs_push(State(st): State<AppState>, headers: HeaderMap, body: Opt
 
 /// The edge pushes its latest ONVIF discovery sweep here (box token required); control
 /// stores it tenant-scoped for the cloud Devices page.
-async fn discovered_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<Vec<DiscoveredDevice>>>) -> Response {
+async fn discovered_push(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<Vec<DiscoveredDevice>>>,
+) -> Response {
     let tenant = match box_tenant(&st, &headers).await {
         Ok(Some(tid)) => tid,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
@@ -789,7 +905,11 @@ async fn tracking_config(State(st): State<AppState>, headers: HeaderMap) -> Resp
 
 /// The edge pushes a finalised clip manifest (box token). Persists metadata
 /// and fans out a `recording-ready` SSE event to the tenant's browsers.
-async fn clip_push(State(st): State<AppState>, headers: HeaderMap, body: Option<Json<crate::domain::recordings::ClipPush>>) -> Response {
+async fn clip_push(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<crate::domain::recordings::ClipPush>>,
+) -> Response {
     let tenant = match box_tenant(&st, &headers).await {
         Ok(Some(t)) => t,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
@@ -825,7 +945,10 @@ async fn clip_push(State(st): State<AppState>, headers: HeaderMap, body: Option<
     // offered an upload is still recorded, it just stays local.
     let upload = upload_ticket(&st, tenant, id, &clip_id, &started_at).await;
     match upload {
-        Some((url, key)) => Json(serde_json::json!({ "id": id, "upload": { "url": url, "key": key } })).into_response(),
+        Some((url, key)) => {
+            Json(serde_json::json!({ "id": id, "upload": { "url": url, "key": key } }))
+                .into_response()
+        }
         None => Json(serde_json::json!({ "id": id })).into_response(),
     }
 }
@@ -835,11 +958,19 @@ const UPLOAD_URL_TTL_SECS: u32 = 3600;
 
 /// `Some((presigned_put_url, object_key))` when the tenant's plan sells cloud recording and the
 /// bucket's retention rules are proven present.
-async fn upload_ticket(st: &AppState, tenant: uuid::Uuid, id: i64, clip_id: &str, started_at: &str) -> Option<(String, String)> {
+async fn upload_ticket(
+    st: &AppState,
+    tenant: uuid::Uuid,
+    id: i64,
+    clip_id: &str,
+    started_at: &str,
+) -> Option<(String, String)> {
     if !app_core::clip_store::armed() {
         return None;
     }
-    let days = crate::store::tenant_retention_days(&st.pool, tenant).await.unwrap_or(0);
+    let days = crate::store::tenant_retention_days(&st.pool, tenant)
+        .await
+        .unwrap_or(0);
     if days <= 0 {
         return None;
     }
@@ -847,11 +978,13 @@ async fn upload_ticket(st: &AppState, tenant: uuid::Uuid, id: i64, clip_id: &str
 
     // `presign_put` drives its own runtime; calling it on this async task would panic.
     let k = key.clone();
-    let url = tokio::task::spawn_blocking(move || app_core::clip_store::presign_put(&k, UPLOAD_URL_TTL_SECS))
-        .await
-        .ok()?
-        .map_err(|e| log::error!("clip upload presign: {e}"))
-        .ok()?;
+    let url = tokio::task::spawn_blocking(move || {
+        app_core::clip_store::presign_put(&k, UPLOAD_URL_TTL_SECS)
+    })
+    .await
+    .ok()?
+    .map_err(|e| log::error!("clip upload presign: {e}"))
+    .ok()?;
 
     if let Err(e) = crate::store::set_clip_uploading(&st.pool, id, &key).await {
         log::error!("clip {clip_id}: could not mark uploading: {e}");
@@ -862,7 +995,11 @@ async fn upload_ticket(st: &AppState, tenant: uuid::Uuid, id: i64, clip_id: &str
 
 /// The edge confirms the object landed in the bucket. Until this arrives the clip stays
 /// `uploading` and the UI shows it as in transit, never as durable.
-async fn clip_uploaded(State(st): State<AppState>, headers: HeaderMap, axum::extract::Path(clip_id): axum::extract::Path<String>) -> Response {
+async fn clip_uploaded(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(clip_id): axum::extract::Path<String>,
+) -> Response {
     let tenant = match box_tenant(&st, &headers).await {
         Ok(Some(t)) => t,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),

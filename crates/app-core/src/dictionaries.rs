@@ -136,7 +136,14 @@ impl Dictionary {
 
 // ---- Persistence -----------------------------------------------------------------------------
 
-type Row = (Uuid, String, serde_json::Value, serde_json::Value, String, String);
+type Row = (
+    Uuid,
+    String,
+    serde_json::Value,
+    serde_json::Value,
+    String,
+    String,
+);
 
 fn from_row(r: Row) -> Dictionary {
     Dictionary {
@@ -206,8 +213,12 @@ pub fn create(
         created_at: String::new(),
         updated_at: String::new(),
     };
-    let conformed: Vec<Vec<Cell>> =
-        scaffold.rows.iter().cloned().map(|r| scaffold.conform_row(r)).collect();
+    let conformed: Vec<Vec<Cell>> = scaffold
+        .rows
+        .iter()
+        .cloned()
+        .map(|r| scaffold.conform_row(r))
+        .collect();
     let cols = serde_json::to_value(columns).unwrap_or_else(|_| serde_json::json!([]));
     let rows_json = serde_json::to_value(&conformed).unwrap_or_else(|_| serde_json::json!([]));
     let now = now_rfc3339();
@@ -258,8 +269,7 @@ pub fn update(
         let mut dict = lock_for_update(&mut tx, tenant_id, id).await?;
         dict.name = name;
         dict.columns = columns;
-        let conformed: Vec<Vec<Cell>> =
-            rows.iter().cloned().map(|r| dict.conform_row(r)).collect();
+        let conformed: Vec<Vec<Cell>> = rows.iter().cloned().map(|r| dict.conform_row(r)).collect();
         dict.rows = conformed;
         write_back(&mut tx, tenant_id, &dict).await.map_err(|e| {
             if e.contains("dictionaries_tenant_name_uidx") {
@@ -293,10 +303,21 @@ pub fn delete(db: &Db, tenant_id: Uuid, id: Uuid) -> Result<(), String> {
 pub enum Mutation {
     AddRow(Vec<Cell>),
     /// (match key, key column index or None→first column, new full row)
-    UpdateRowByKey { key: String, col: Option<usize>, row: Vec<Cell> },
-    DeleteRowByKey { key: String, col: Option<usize> },
+    UpdateRowByKey {
+        key: String,
+        col: Option<usize>,
+        row: Vec<Cell>,
+    },
+    DeleteRowByKey {
+        key: String,
+        col: Option<usize>,
+    },
     DeleteRowAt(usize),
-    SetCell { row: usize, col: usize, value: Cell },
+    SetCell {
+        row: usize,
+        col: usize,
+        value: Cell,
+    },
     Clear,
 }
 
@@ -341,7 +362,11 @@ pub fn apply(dict: &mut Dictionary, m: Mutation) -> Result<(), String> {
                 .get_mut(row)
                 .and_then(|r| r.get_mut(col))
                 .ok_or("Cell out of range")?;
-            let ty = dict.columns.get(col).map(|c| c.ty).unwrap_or(CellType::Text);
+            let ty = dict
+                .columns
+                .get(col)
+                .map(|c| c.ty)
+                .unwrap_or(CellType::Text);
             *cell = ty.coerce(&value);
         }
         Mutation::Clear => dict.rows.clear(),
@@ -352,7 +377,9 @@ pub fn apply(dict: &mut Dictionary, m: Mutation) -> Result<(), String> {
 /// First row index whose key-column cell matches `key` (string-wise). `col=None` → first column.
 pub fn find_by_key(dict: &Dictionary, key: &str, col: Option<usize>) -> Option<usize> {
     let c = col.unwrap_or(0);
-    dict.rows.iter().position(|r| r.get(c).is_some_and(|cell| cell.matches_key(key)))
+    dict.rows
+        .iter()
+        .position(|r| r.get(c).is_some_and(|cell| cell.matches_key(key)))
 }
 
 async fn lock_for_update(
@@ -404,13 +431,30 @@ mod tests {
             id: Uuid::nil(),
             name: "hours".into(),
             columns: vec![
-                Column { name: "day".into(), ty: CellType::Text },
-                Column { name: "open".into(), ty: CellType::Text },
-                Column { name: "h24".into(), ty: CellType::Bool },
+                Column {
+                    name: "day".into(),
+                    ty: CellType::Text,
+                },
+                Column {
+                    name: "open".into(),
+                    ty: CellType::Text,
+                },
+                Column {
+                    name: "h24".into(),
+                    ty: CellType::Bool,
+                },
             ],
             rows: vec![
-                vec![Cell::Text("Mon".into()), Cell::Text("09:00".into()), Cell::Bool(false)],
-                vec![Cell::Text("Sat".into()), Cell::Text("10:00".into()), Cell::Bool(false)],
+                vec![
+                    Cell::Text("Mon".into()),
+                    Cell::Text("09:00".into()),
+                    Cell::Bool(false),
+                ],
+                vec![
+                    Cell::Text("Sat".into()),
+                    Cell::Text("10:00".into()),
+                    Cell::Bool(false),
+                ],
             ],
             created_at: String::new(),
             updated_at: String::new(),
@@ -421,7 +465,11 @@ mod tests {
     fn add_row_conforms_to_schema() {
         let mut d = sample();
         // short + wrongly-typed row → zero-filled + coerced
-        apply(&mut d, Mutation::AddRow(vec![Cell::Text("Sun".into()), Cell::Num(1)])).unwrap();
+        apply(
+            &mut d,
+            Mutation::AddRow(vec![Cell::Text("Sun".into()), Cell::Num(1)]),
+        )
+        .unwrap();
         assert_eq!(d.rows.len(), 3);
         assert_eq!(d.rows[2].len(), 3);
         assert_eq!(d.rows[2][2], Cell::Bool(false)); // zero-filled bool
@@ -435,12 +483,23 @@ mod tests {
             Mutation::UpdateRowByKey {
                 key: "Sat".into(),
                 col: None,
-                row: vec![Cell::Text("Sat".into()), Cell::Text("11:00".into()), Cell::Bool(true)],
+                row: vec![
+                    Cell::Text("Sat".into()),
+                    Cell::Text("11:00".into()),
+                    Cell::Bool(true),
+                ],
             },
         )
         .unwrap();
         assert_eq!(d.rows[1][1], Cell::Text("11:00".into()));
-        apply(&mut d, Mutation::DeleteRowByKey { key: "Mon".into(), col: None }).unwrap();
+        apply(
+            &mut d,
+            Mutation::DeleteRowByKey {
+                key: "Mon".into(),
+                col: None,
+            },
+        )
+        .unwrap();
         assert_eq!(d.rows.len(), 1);
         assert_eq!(d.rows[0][0], Cell::Text("Sat".into()));
     }

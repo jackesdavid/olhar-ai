@@ -36,7 +36,10 @@ pub fn router() -> Router<AppState> {
         .route("/admin/billing/:tenant/close", post(admin_close))
         .route("/admin/billing/:tenant/trial", post(admin_grant_trial))
         .route("/admin/billing/:tenant/plan", post(admin_set_plan))
-        .route("/admin/plans", get(admin_list_plans).post(admin_upsert_plan))
+        .route(
+            "/admin/plans",
+            get(admin_list_plans).post(admin_upsert_plan),
+        )
         .route("/admin/plans/:id/price", post(admin_set_price))
         // Public: authenticated by the provider (Stripe HMAC / Asaas token), not a JWT.
         .route("/webhooks/stripe", post(payments_webhook))
@@ -65,15 +68,20 @@ fn require_master(c: &crate::auth::Claims) -> Result<(), ApiErr> {
 // ---- tenant self-serve (billing.read) ----
 
 /// Active tiers priced in the tenant's own currency (BRL or USD).
-async fn list_plans(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<plans::PricedPlan>>, ApiErr> {
+async fn list_plans(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<plans::PricedPlan>>, ApiErr> {
     auth::require(&c, "billing.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    Ok(Json(blocking(move || {
-        let currency = billing::tenant_currency(&db, tid);
-        plans::list_active_priced(&db, &currency)
-    })
-    .await?))
+    Ok(Json(
+        blocking(move || {
+            let currency = billing::tenant_currency(&db, tid);
+            plans::list_active_priced(&db, &currency)
+        })
+        .await?,
+    ))
 }
 
 /// The billing types the configured gateway can actually charge. Empty when no provider is
@@ -106,16 +114,25 @@ fn storage_json(s: &storage::TenantStorage) -> serde_json::Value {
 }
 
 /// This tenant's own storage: durable footage vs quota, retention, projected overage.
-async fn my_storage(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<serde_json::Value>, ApiErr> {
+async fn my_storage(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
     auth::require(&c, "billing.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     let row = blocking(move || storage::for_tenant(&db, tid)).await?;
-    Ok(Json(row.map(|s| storage_json(&s)).unwrap_or(serde_json::Value::Null)))
+    Ok(Json(
+        row.map(|s| storage_json(&s))
+            .unwrap_or(serde_json::Value::Null),
+    ))
 }
 
 /// Every tenant's storage, heaviest first — the master's view to catch a runaway recorder.
-async fn admin_storage(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<serde_json::Value>>, ApiErr> {
+async fn admin_storage(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiErr> {
     require_master(&c)?;
     let db = st.db.clone();
     let rows = blocking(move || storage::overview(&db)).await?;
@@ -134,18 +151,25 @@ async fn admin_purge_storage(
     let db = st.db.clone();
     // Purge across every retention tier the catalog defines — a tenant may have clips under a
     // prefix from an older plan, not just their current one.
-    let tiers = blocking({ let db = db.clone(); move || plans::retention_tiers(&db) }).await?;
-    let removed = tokio::task::spawn_blocking(move || app_core::clip_store::purge_tenant(tenant, &tiers))
+    let tiers = blocking({
+        let db = db.clone();
+        move || plans::retention_tiers(&db)
+    })
+    .await?;
+    let removed =
+        tokio::task::spawn_blocking(move || app_core::clip_store::purge_tenant(tenant, &tiers))
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")))?
+            .map_err(|e| {
+                log::error!("purge tenant {tenant} storage: {e}");
+                err(StatusCode::BAD_GATEWAY, "purge failed")
+            })?;
+    let cleared = crate::store::clear_tenant_cloud_keys(&st.pool, tenant)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")))?
         .map_err(|e| {
-            log::error!("purge tenant {tenant} storage: {e}");
-            err(StatusCode::BAD_GATEWAY, "purge failed")
+            log::error!("clear cloud keys {tenant}: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
         })?;
-    let cleared = crate::store::clear_tenant_cloud_keys(&st.pool, tenant).await.map_err(|e| {
-        log::error!("clear cloud keys {tenant}: {e}");
-        err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
-    })?;
 
     // Audit: who purged what, when. This is the record a data-subject deletion is answered with.
     st.log_queue.push(app_core::platform_logs::PlatformLog {
@@ -155,29 +179,49 @@ async fn admin_purge_storage(
         entity_id: Some(tenant.to_string()),
         entity_type: Some("tenant"),
         level: "warn",
-        message: format!("cloud storage purged: {removed} object(s) removed, {cleared} clip(s) detached"),
-        payload: Some(serde_json::json!({ "objects_removed": removed, "rows_cleared": cleared, "by": c.sub })),
+        message: format!(
+            "cloud storage purged: {removed} object(s) removed, {cleared} clip(s) detached"
+        ),
+        payload: Some(
+            serde_json::json!({ "objects_removed": removed, "rows_cleared": cleared, "by": c.sub }),
+        ),
     });
 
-    Ok(Json(serde_json::json!({ "objects_removed": removed, "rows_cleared": cleared })))
+    Ok(Json(
+        serde_json::json!({ "objects_removed": removed, "rows_cleared": cleared }),
+    ))
 }
 
-async fn my_subscription(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Option<subscriptions::Subscription>>, ApiErr> {
+async fn my_subscription(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Option<subscriptions::Subscription>>, ApiErr> {
     auth::require(&c, "billing.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    Ok(Json(blocking(move || subscriptions::current(&db, tid)).await?))
+    Ok(Json(
+        blocking(move || subscriptions::current(&db, tid)).await?,
+    ))
 }
 
-async fn my_invoices(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<invoices::Invoice>>, ApiErr> {
+async fn my_invoices(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<invoices::Invoice>>, ApiErr> {
     auth::require(&c, "billing.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    Ok(Json(blocking(move || invoices::list_for_tenant(&db, tid)).await?))
+    Ok(Json(
+        blocking(move || invoices::list_for_tenant(&db, tid)).await?,
+    ))
 }
 
 /// One period: the stored invoice + its line items if closed, else a computed draft.
-async fn my_invoice(UserClaims(c): UserClaims, State(st): State<AppState>, Path(period): Path<String>) -> Result<Json<serde_json::Value>, ApiErr> {
+async fn my_invoice(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(period): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
     auth::require(&c, "billing.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
@@ -194,14 +238,25 @@ async fn my_invoice(UserClaims(c): UserClaims, State(st): State<AppState>, Path(
 
 // ---- master cross-tenant ----
 
-async fn admin_list(UserClaims(c): UserClaims, State(st): State<AppState>, Query(q): Query<PeriodQuery>) -> Result<Json<Vec<invoices::Invoice>>, ApiErr> {
+async fn admin_list(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Query(q): Query<PeriodQuery>,
+) -> Result<Json<Vec<invoices::Invoice>>, ApiErr> {
     require_master(&c)?;
     let period = q.period.unwrap_or_else(current_period);
     let db = st.db.clone();
-    Ok(Json(blocking(move || invoices::list_for_period(&db, &period)).await?))
+    Ok(Json(
+        blocking(move || invoices::list_for_period(&db, &period)).await?,
+    ))
 }
 
-async fn admin_close(UserClaims(c): UserClaims, State(st): State<AppState>, Path(tenant): Path<Uuid>, Query(q): Query<PeriodQuery>) -> Result<Json<invoices::Invoice>, ApiErr> {
+async fn admin_close(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(tenant): Path<Uuid>,
+    Query(q): Query<PeriodQuery>,
+) -> Result<Json<invoices::Invoice>, ApiErr> {
     require_master(&c)?;
     let period = q.period.unwrap_or_else(current_period);
     let db = st.db.clone();
@@ -211,7 +266,11 @@ async fn admin_close(UserClaims(c): UserClaims, State(st): State<AppState>, Path
     Ok(Json(inv))
 }
 
-async fn admin_grant_trial(UserClaims(c): UserClaims, State(st): State<AppState>, Path(tenant): Path<Uuid>) -> Result<Json<serde_json::Value>, ApiErr> {
+async fn admin_grant_trial(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(tenant): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
     require_master(&c)?;
     let db = st.db.clone();
     let id = blocking(move || subscriptions::start_trial(&db, tenant))
@@ -221,7 +280,10 @@ async fn admin_grant_trial(UserClaims(c): UserClaims, State(st): State<AppState>
 }
 
 /// Every tenant with its current plan + status.
-async fn admin_overview(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<subscriptions::TenantBilling>>, ApiErr> {
+async fn admin_overview(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<subscriptions::TenantBilling>>, ApiErr> {
     require_master(&c)?;
     let db = st.db.clone();
     Ok(Json(blocking(move || subscriptions::overview(&db)).await?))
@@ -233,7 +295,12 @@ struct SetPlanReq {
 }
 
 /// Master override: put a tenant onto a plan directly (no payment).
-async fn admin_set_plan(UserClaims(c): UserClaims, State(st): State<AppState>, Path(tenant): Path<Uuid>, Json(req): Json<SetPlanReq>) -> Result<Json<serde_json::Value>, ApiErr> {
+async fn admin_set_plan(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(tenant): Path<Uuid>,
+    Json(req): Json<SetPlanReq>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
     require_master(&c)?;
     let db = st.db.clone();
     let id = blocking(move || subscriptions::set_plan(&db, tenant, &req.plan_id))
@@ -243,14 +310,23 @@ async fn admin_set_plan(UserClaims(c): UserClaims, State(st): State<AppState>, P
 }
 
 /// The full plan catalog (active + inactive), each tier with its per-currency prices.
-async fn admin_list_plans(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<plans::PlanWithPrices>>, ApiErr> {
+async fn admin_list_plans(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<plans::PlanWithPrices>>, ApiErr> {
     require_master(&c)?;
     let db = st.db.clone();
-    Ok(Json(blocking(move || plans::list_all_with_prices(&db)).await?))
+    Ok(Json(
+        blocking(move || plans::list_all_with_prices(&db)).await?,
+    ))
 }
 
 /// Create or edit a tier (cap, trial, quotas — money lives in prices).
-async fn admin_upsert_plan(UserClaims(c): UserClaims, State(st): State<AppState>, Json(plan): Json<plans::Plan>) -> Result<StatusCode, ApiErr> {
+async fn admin_upsert_plan(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(plan): Json<plans::Plan>,
+) -> Result<StatusCode, ApiErr> {
     require_master(&c)?;
     let db = st.db.clone();
     blocking(move || plans::upsert(&db, plan))
@@ -270,12 +346,25 @@ struct SetPriceReq {
 
 /// Set a tier's money in one currency: base fee + storage overage rate. Quotas live on the
 /// tier (`POST /admin/plans`) — a GB is a GB in any currency, but a rate is money.
-async fn admin_set_price(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<String>, Json(req): Json<SetPriceReq>) -> Result<StatusCode, ApiErr> {
+async fn admin_set_price(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<SetPriceReq>,
+) -> Result<StatusCode, ApiErr> {
     require_master(&c)?;
     let db = st.db.clone();
-    blocking(move || plans::set_price(&db, &id, &req.currency.to_uppercase(), req.amount, req.overage_storage_per_gb))
-        .await?
-        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    blocking(move || {
+        plans::set_price(
+            &db,
+            &id,
+            &req.currency.to_uppercase(),
+            req.amount,
+            req.overage_storage_per_gb,
+        )
+    })
+    .await?
+    .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -293,7 +382,11 @@ struct SubscribeReq {
 /// Start a paid subscription: ensure the provider customer, then create the subscription
 /// (Asaas) or a hosted Checkout session (Stripe). The tenant is moved onto the paid plan
 /// only when the provider's webhook confirms payment — never optimistically here.
-async fn subscribe(UserClaims(c): UserClaims, State(st): State<AppState>, Json(req): Json<SubscribeReq>) -> Result<Json<serde_json::Value>, ApiErr> {
+async fn subscribe(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(req): Json<SubscribeReq>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
     auth::require(&c, "billing.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
@@ -341,7 +434,15 @@ async fn subscribe(UserClaims(c): UserClaims, State(st): State<AppState>, Json(r
         }
         // Asaas knows the subscription now; park it as `pending` until payment confirms.
         if let Some(sub_ref) = &started.subscription_ref {
-            payments::record_subscription(&db, tid, provider, sub_ref, &plan.id, &req.billing_type, "pending");
+            payments::record_subscription(
+                &db,
+                tid,
+                provider,
+                sub_ref,
+                &plan.id,
+                &req.billing_type,
+                "pending",
+            );
         }
         Ok::<_, String>(started)
     })
@@ -357,11 +458,19 @@ async fn subscribe(UserClaims(c): UserClaims, State(st): State<AppState>, Json(r
 /// Payment-provider webhook (public — authenticated by the provider's own scheme, not a
 /// JWT): Stripe signs the raw body (HMAC), Asaas sends a shared token. Events are applied
 /// **at most once** (`payment_events` idempotency) — providers retry deliveries.
-async fn payments_webhook(State(st): State<AppState>, headers: HeaderMap, body: Bytes) -> Result<StatusCode, ApiErr> {
+async fn payments_webhook(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, ApiErr> {
     // Lowercased header map — the gateway looks up whatever it signs with.
     let hdrs: HashMap<String, String> = headers
         .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_ascii_lowercase(), v.to_string())))
+        .filter_map(|(k, v)| {
+            v.to_str()
+                .ok()
+                .map(|v| (k.as_str().to_ascii_lowercase(), v.to_string()))
+        })
         .collect();
     let db = st.db.clone();
     blocking(move || {
@@ -377,11 +486,26 @@ async fn payments_webhook(State(st): State<AppState>, headers: HeaderMap, body: 
             return Ok(());
         }
         match ev.kind {
-            payments::EventKind::StatusChanged { subscription_ref, status } => {
+            payments::EventKind::StatusChanged {
+                subscription_ref,
+                status,
+            } => {
                 payments::apply_status(&db, gw.provider(), &subscription_ref, status);
             }
-            payments::EventKind::SubscriptionStarted { subscription_ref, tenant_id, plan_id, billing_type } => {
-                payments::bind_subscription(&db, tenant_id, gw.provider(), &subscription_ref, &plan_id, &billing_type);
+            payments::EventKind::SubscriptionStarted {
+                subscription_ref,
+                tenant_id,
+                plan_id,
+                billing_type,
+            } => {
+                payments::bind_subscription(
+                    &db,
+                    tenant_id,
+                    gw.provider(),
+                    &subscription_ref,
+                    &plan_id,
+                    &billing_type,
+                );
             }
         }
         Ok::<_, String>(())

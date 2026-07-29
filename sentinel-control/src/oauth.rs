@@ -27,10 +27,19 @@ pub struct GoogleOauth {
 
 impl GoogleOauth {
     pub fn from_env() -> Option<Self> {
-        let client_id = std::env::var("GOOGLE_CLIENT_ID").ok().filter(|s| !s.is_empty())?;
-        let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").ok().filter(|s| !s.is_empty())?;
-        let base = std::env::var("OAUTH_REDIRECT_BASE").unwrap_or_else(|_| "http://localhost:8790".into());
-        Some(Self { client_id, client_secret, redirect_uri: format!("{base}/auth/oauth/google/callback") })
+        let client_id = std::env::var("GOOGLE_CLIENT_ID")
+            .ok()
+            .filter(|s| !s.is_empty())?;
+        let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
+            .ok()
+            .filter(|s| !s.is_empty())?;
+        let base =
+            std::env::var("OAUTH_REDIRECT_BASE").unwrap_or_else(|_| "http://localhost:8790".into());
+        Some(Self {
+            client_id,
+            client_secret,
+            redirect_uri: format!("{base}/auth/oauth/google/callback"),
+        })
     }
 }
 
@@ -40,7 +49,10 @@ pub async fn google_start(State(st): State<AppState>) -> impl IntoResponse {
         return (StatusCode::NOT_IMPLEMENTED, "google login not configured").into_response();
     };
     let state = Uuid::new_v4().to_string();
-    st.oauth_states.lock().unwrap().insert(state.clone(), Instant::now());
+    st.oauth_states
+        .lock()
+        .unwrap()
+        .insert(state.clone(), Instant::now());
     let enc = urlencoding::encode;
     let url = format!(
         "{AUTH_URL}?client_id={}&redirect_uri={}&response_type=code&scope={}&state={}&access_type=online&prompt=select_account",
@@ -71,7 +83,10 @@ struct Userinfo {
 
 /// Complete the flow: validate state, exchange the code, read the email, then
 /// find/link/sign-up the user and issue a JWT.
-pub async fn google_callback(State(st): State<AppState>, Query(q): Query<Callback>) -> impl IntoResponse {
+pub async fn google_callback(
+    State(st): State<AppState>,
+    Query(q): Query<Callback>,
+) -> impl IntoResponse {
     let Some(g) = st.google.clone() else {
         return (StatusCode::NOT_IMPLEMENTED, "google login not configured").into_response();
     };
@@ -98,35 +113,61 @@ pub async fn google_callback(State(st): State<AppState>, Query(q): Query<Callbac
         .await
     {
         Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("token request failed: {e}")).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("token request failed: {e}"),
+            )
+                .into_response()
+        }
     };
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
         // Surface Google's exact error (e.g. invalid_client / redirect_uri_mismatch).
         log::error!("google token exchange {status}: {body}");
-        return (StatusCode::BAD_GATEWAY, format!("google token exchange {status}: {body}")).into_response();
+        return (
+            StatusCode::BAD_GATEWAY,
+            format!("google token exchange {status}: {body}"),
+        )
+            .into_response();
     }
     let token: TokenResp = match serde_json::from_str(&body) {
         Ok(t) => t,
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("token parse: {e}")).into_response(),
     };
 
-    let info: Userinfo = match http.get(USERINFO_URL).bearer_auth(&token.access_token).send().await {
+    let info: Userinfo = match http
+        .get(USERINFO_URL)
+        .bearer_auth(&token.access_token)
+        .send()
+        .await
+    {
         Ok(r) => match r.json().await {
             Ok(i) => i,
-            Err(e) => return (StatusCode::BAD_GATEWAY, format!("userinfo parse: {e}")).into_response(),
+            Err(e) => {
+                return (StatusCode::BAD_GATEWAY, format!("userinfo parse: {e}")).into_response()
+            }
         },
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("userinfo failed: {e}")).into_response(),
+        Err(e) => {
+            return (StatusCode::BAD_GATEWAY, format!("userinfo failed: {e}")).into_response()
+        }
     };
 
     match resolve_user(&st, &info).await {
         // For the SPA flow, bounce back to the frontend carrying the token in the URL
         // fragment (so it never reaches a server log). Falls back to JSON when no
         // frontend redirect is configured (curl / dev probing).
-        Ok(resp) => match std::env::var("OAUTH_SUCCESS_REDIRECT").ok().filter(|s| !s.is_empty()) {
+        Ok(resp) => match std::env::var("OAUTH_SUCCESS_REDIRECT")
+            .ok()
+            .filter(|s| !s.is_empty())
+        {
             Some(base) => {
-                let url = format!("{}#token={}", base.trim_end_matches('/'), urlencoding::encode(&resp.token));
+                let url = format!(
+                    "{}#token={}",
+                    base.trim_end_matches('/'),
+                    urlencoding::encode(&resp.token)
+                );
                 Redirect::temporary(&url).into_response()
             }
             None => Json(resp).into_response(),
@@ -188,7 +229,14 @@ async fn resolve_user(st: &AppState, info: &Userinfo) -> sqlx::Result<AuthResp> 
         exp: auth::expiry_24h(),
     };
     let token = auth::issue(&st.jwt_secret, &claims).unwrap_or_default();
-    Ok(AuthResp { token, user_id: user.id, tenant_id: user.tenant_id, email: user.email, is_master: user.is_master, perms })
+    Ok(AuthResp {
+        token,
+        user_id: user.id,
+        tenant_id: user.tenant_id,
+        email: user.email,
+        is_master: user.is_master,
+        perms,
+    })
 }
 
 fn slugify(name: &str) -> String {
@@ -198,5 +246,9 @@ fn slugify(name: &str) -> String {
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     let s = s.trim_matches('-').to_string();
-    if s.is_empty() { "workspace".into() } else { s }
+    if s.is_empty() {
+        "workspace".into()
+    } else {
+        s
+    }
 }

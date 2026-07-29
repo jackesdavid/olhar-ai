@@ -17,8 +17,12 @@ pub type PersonStore = Arc<Mutex<Vec<Person>>>;
 
 /// Permission actions a superior may perform over its subtree. Kept as plain
 /// strings (a `text[]` column) so the set can grow without a migration.
-pub const PERMISSIONS: [&str; 4] =
-    ["view_photo", "view_location", "view_report", "receive_notifications"];
+pub const PERMISSIONS: [&str; 4] = [
+    "view_photo",
+    "view_location",
+    "view_report",
+    "receive_notifications",
+];
 
 /// A managed person. The hierarchy is expressed by `parent_id` (its superior);
 /// `permissions` are the actions this person may perform over the people beneath it.
@@ -86,7 +90,9 @@ pub struct RecognitionResult {
 /// Confidence rewards both closeness *and* multiple supporting samples for the same
 /// person, so more enrolled faces → higher confidence.
 pub fn best_match(matches: &[RecognitionMatch], max_distance: f32) -> Option<RecognitionResult> {
-    let best = matches.iter().min_by(|a, b| a.distance.total_cmp(&b.distance))?;
+    let best = matches
+        .iter()
+        .min_by(|a, b| a.distance.total_cmp(&b.distance))?;
     if best.distance > max_distance {
         return None;
     }
@@ -97,7 +103,11 @@ pub fn best_match(matches: &[RecognitionMatch], max_distance: f32) -> Option<Rec
     let base = (1.0 - best.distance.max(0.0)) as f64; // cosine similarity ≈ 0..1
     let bonus = supporting.saturating_sub(1) as f64 * 0.03; // +3% per extra sample
     let confidence = ((base + bonus).clamp(0.0, 1.0) * 100.0).round() as i64;
-    Some(RecognitionResult { person_id: best.person_id.clone(), name: best.name.clone(), confidence })
+    Some(RecognitionResult {
+        person_id: best.person_id.clone(),
+        name: best.name.clone(),
+        confidence,
+    })
 }
 
 /// Find a person by id.
@@ -132,7 +142,10 @@ pub fn subtree<'a>(people: &'a [Person], id: &str) -> Vec<&'a Person> {
     let mut stack = vec![id.to_string()];
     let mut seen = std::collections::HashSet::new();
     while let Some(cur) = stack.pop() {
-        for p in people.iter().filter(|p| p.parent_id.as_deref() == Some(cur.as_str())) {
+        for p in people
+            .iter()
+            .filter(|p| p.parent_id.as_deref() == Some(cur.as_str()))
+        {
             if seen.insert(p.id.clone()) {
                 out.push(p);
                 stack.push(p.id.clone());
@@ -152,9 +165,9 @@ pub fn would_cycle(people: &[Person], id: &str, new_parent: &str) -> bool {
 /// permission AND `target` must lie within the superior's subtree.
 pub fn can(people: &[Person], superior_id: &str, action: &str, target_id: &str) -> bool {
     match find(people, superior_id) {
-        Some(s) if s.permissions.iter().any(|a| a == action) => {
-            subtree(people, superior_id).iter().any(|p| p.id == target_id)
-        }
+        Some(s) if s.permissions.iter().any(|a| a == action) => subtree(people, superior_id)
+            .iter()
+            .any(|p| p.id == target_id),
         _ => false,
     }
 }
@@ -226,7 +239,10 @@ mod tests {
     fn guardian_recipients_are_permitted_ancestors_with_a_target() {
         let f = family();
         // Both ancestors can receive; nearest (parent) first.
-        assert_eq!(guardian_recipients(&f, "c"), vec!["Parent phone", "GP phone"]);
+        assert_eq!(
+            guardian_recipients(&f, "c"),
+            vec!["Parent phone", "GP phone"]
+        );
     }
 
     #[test]

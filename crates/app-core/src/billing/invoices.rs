@@ -9,8 +9,8 @@ use chrono::Datelike;
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::timeutil::now_rfc3339;
 use crate::db::Db;
+use crate::timeutil::now_rfc3339;
 
 use super::{fx, plans, subscriptions};
 
@@ -168,8 +168,20 @@ pub fn compute(db: &Db, tenant_id: Uuid, period: &str) -> Option<InvoiceDraft> {
             rate: base_fee,
             amount: base_fee,
         },
-        line("gpu", usage.gpu_sec, "gpu_sec", plan.included_gpu_sec, plan.overage_gpu_per_sec),
-        line("storage", usage.storage_gb, "gb", plan.included_storage_gb, plan.overage_storage_per_gb),
+        line(
+            "gpu",
+            usage.gpu_sec,
+            "gpu_sec",
+            plan.included_gpu_sec,
+            plan.overage_gpu_per_sec,
+        ),
+        line(
+            "storage",
+            usage.storage_gb,
+            "gb",
+            plan.included_storage_gb,
+            plan.overage_storage_per_gb,
+        ),
         line(
             "notifications",
             usage.notifications as f64,
@@ -203,7 +215,8 @@ pub fn close_period(db: &Db, tenant_id: Uuid, period: &str) -> Result<Invoice, S
             return Ok(existing);
         }
     }
-    let draft = compute(db, tenant_id, period).ok_or("tenant had no subscription during that period")?;
+    let draft =
+        compute(db, tenant_id, period).ok_or("tenant had no subscription during that period")?;
     let invoice_id = Uuid::new_v4();
     let now = now_rfc3339();
     let period_owned = period.to_string();
@@ -256,7 +269,8 @@ pub fn close_period(db: &Db, tenant_id: Uuid, period: &str) -> Result<Invoice, S
         Ok::<_, sqlx::Error>(())
     });
     res.map_err(|e| format!("close_period: {e}"))?;
-    get(db, tenant_id, period).ok_or_else(|| "close_period: invoice vanished after write".to_string())
+    get(db, tenant_id, period)
+        .ok_or_else(|| "close_period: invoice vanished after write".to_string())
 }
 
 /// Close `period` for every tenant that has a plan. Returns `(closed, skipped)`.
@@ -267,7 +281,9 @@ pub fn close_period_all(db: &Db, period: &str) -> (usize, usize) {
     let (mut closed, mut skipped) = (0, 0);
     for row in subscriptions::overview(db) {
         // Not a customer during `period` (or ever) → nothing to bill.
-        if row.plan_id.is_none() || subscriptions::active_during(db, row.tenant_id, period).is_none() {
+        if row.plan_id.is_none()
+            || subscriptions::active_during(db, row.tenant_id, period).is_none()
+        {
             skipped += 1;
             continue;
         }
@@ -275,7 +291,10 @@ pub fn close_period_all(db: &Db, period: &str) -> (usize, usize) {
             Ok(_) => closed += 1,
             Err(e) => {
                 skipped += 1;
-                log::warn!("invoices: close {period} for {} failed: {e}", row.tenant_name);
+                log::warn!(
+                    "invoices: close {period} for {} failed: {e}",
+                    row.tenant_name
+                );
             }
         }
     }
@@ -295,15 +314,13 @@ pub fn get(db: &Db, tenant_id: Uuid, period: &str) -> Option<Invoice> {
     let pool = db.pool();
     let period = period.to_string();
     db.block(async move {
-        sqlx::query_as::<_, Invoice>(
-            "SELECT * FROM invoices WHERE tenant_id = $1 AND period = $2",
-        )
-        .bind(tenant_id)
-        .bind(&period)
-        .fetch_optional(&pool)
-        .await
-        .ok()
-        .flatten()
+        sqlx::query_as::<_, Invoice>("SELECT * FROM invoices WHERE tenant_id = $1 AND period = $2")
+            .bind(tenant_id)
+            .bind(&period)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten()
     })
 }
 
@@ -326,13 +343,11 @@ pub fn list_for_period(db: &Db, period: &str) -> Vec<Invoice> {
     let pool = db.pool();
     let period = period.to_string();
     db.block(async move {
-        sqlx::query_as::<_, Invoice>(
-            "SELECT * FROM invoices WHERE period = $1 ORDER BY total DESC",
-        )
-        .bind(&period)
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_default()
+        sqlx::query_as::<_, Invoice>("SELECT * FROM invoices WHERE period = $1 ORDER BY total DESC")
+            .bind(&period)
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_default()
     })
 }
 

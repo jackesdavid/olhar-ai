@@ -18,7 +18,10 @@ pub fn load(db: &Db, tenant_id: Uuid) -> Vec<MapRoom> {
         .fetch_all(&pool)
         .await;
         let mut rooms: Vec<MapRoom> = match rows {
-            Ok(rows) => rows.into_iter().filter_map(|(v,)| serde_json::from_value::<MapRoom>(v).ok()).collect(),
+            Ok(rows) => rows
+                .into_iter()
+                .filter_map(|(v,)| serde_json::from_value::<MapRoom>(v).ok())
+                .collect(),
             Err(e) => {
                 log::error!("map::repo::load query failed: {e}");
                 Vec::new()
@@ -36,7 +39,10 @@ pub fn save(db: &Db, tenant_id: Uuid, rooms: &[MapRoom]) {
     let rooms = rooms.to_vec();
     let res: Result<(), sqlx::Error> = db.block(async move {
         let mut tx = pool.begin().await?;
-        sqlx::query("DELETE FROM map_rooms WHERE tenant_id = $1").bind(tenant_id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM map_rooms WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await?;
         for r in &rooms {
             let data = serde_json::to_value(r).unwrap_or_else(|_| serde_json::json!({}));
             sqlx::query("INSERT INTO map_rooms (tenant_id, id, data) VALUES ($1, $2, $3)")
@@ -65,7 +71,10 @@ pub fn load_walls(db: &Db, tenant_id: Uuid) -> Vec<MapWall> {
         .fetch_all(&pool)
         .await;
         match rows {
-            Ok(rows) => rows.into_iter().filter_map(|(v,)| serde_json::from_value::<MapWall>(v).ok()).collect(),
+            Ok(rows) => rows
+                .into_iter()
+                .filter_map(|(v,)| serde_json::from_value::<MapWall>(v).ok())
+                .collect(),
             Err(e) => {
                 log::error!("map::repo::load_walls query failed: {e}");
                 Vec::new()
@@ -85,7 +94,10 @@ pub fn load_markers(db: &Db, tenant_id: Uuid) -> Vec<MapMarker> {
         .fetch_all(&pool)
         .await;
         match rows {
-            Ok(rows) => rows.into_iter().filter_map(|(v,)| serde_json::from_value::<MapMarker>(v).ok()).collect(),
+            Ok(rows) => rows
+                .into_iter()
+                .filter_map(|(v,)| serde_json::from_value::<MapMarker>(v).ok())
+                .collect(),
             Err(e) => {
                 log::error!("map::repo::load_markers query failed: {e}");
                 Vec::new()
@@ -105,7 +117,10 @@ pub fn load_texts(db: &Db, tenant_id: Uuid) -> Vec<MapText> {
         .fetch_all(&pool)
         .await;
         match rows {
-            Ok(rows) => rows.into_iter().filter_map(|(v,)| serde_json::from_value::<MapText>(v).ok()).collect(),
+            Ok(rows) => rows
+                .into_iter()
+                .filter_map(|(v,)| serde_json::from_value::<MapText>(v).ok())
+                .collect(),
             Err(e) => {
                 log::error!("map::repo::load_texts query failed: {e}");
                 Vec::new()
@@ -125,7 +140,10 @@ pub fn load_shapes(db: &Db, tenant_id: Uuid) -> Vec<MapShape> {
         .fetch_all(&pool)
         .await;
         match rows {
-            Ok(rows) => rows.into_iter().filter_map(|(v,)| serde_json::from_value::<MapShape>(v).ok()).collect(),
+            Ok(rows) => rows
+                .into_iter()
+                .filter_map(|(v,)| serde_json::from_value::<MapShape>(v).ok())
+                .collect(),
             Err(e) => {
                 log::error!("map::repo::load_shapes query failed: {e}");
                 Vec::new()
@@ -152,7 +170,10 @@ pub fn save_doc(db: &Db, tenant_id: Uuid, doc: &MapDoc) {
     let res: Result<(), sqlx::Error> = db.block(async move {
         let mut tx = pool.begin().await?;
 
-        sqlx::query("DELETE FROM map_rooms WHERE tenant_id = $1").bind(tenant_id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM map_rooms WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await?;
         for r in &doc.rooms {
             let data = serde_json::to_value(r).unwrap_or_else(|_| serde_json::json!({}));
             sqlx::query("INSERT INTO map_rooms (tenant_id, id, data) VALUES ($1, $2, $3)")
@@ -163,7 +184,10 @@ pub fn save_doc(db: &Db, tenant_id: Uuid, doc: &MapDoc) {
                 .await?;
         }
 
-        sqlx::query("DELETE FROM map_walls WHERE tenant_id = $1").bind(tenant_id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM map_walls WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await?;
         for w in &doc.walls {
             let data = serde_json::to_value(w).unwrap_or_else(|_| serde_json::json!({}));
             sqlx::query("INSERT INTO map_walls (tenant_id, id, data) VALUES ($1, $2, $3)")
@@ -174,7 +198,10 @@ pub fn save_doc(db: &Db, tenant_id: Uuid, doc: &MapDoc) {
                 .await?;
         }
 
-        sqlx::query("DELETE FROM map_markers WHERE tenant_id = $1").bind(tenant_id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM map_markers WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await?;
         for m in &doc.markers {
             let data = serde_json::to_value(m).unwrap_or_else(|_| serde_json::json!({}));
             sqlx::query("INSERT INTO map_markers (tenant_id, id, data) VALUES ($1, $2, $3)")
@@ -185,7 +212,10 @@ pub fn save_doc(db: &Db, tenant_id: Uuid, doc: &MapDoc) {
                 .await?;
         }
 
-        sqlx::query("DELETE FROM map_texts WHERE tenant_id = $1").bind(tenant_id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM map_texts WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await?;
         for t in &doc.texts {
             let data = serde_json::to_value(t).unwrap_or_else(|_| serde_json::json!({}));
             sqlx::query("INSERT INTO map_texts (tenant_id, id, data) VALUES ($1, $2, $3)")
@@ -196,7 +226,10 @@ pub fn save_doc(db: &Db, tenant_id: Uuid, doc: &MapDoc) {
                 .await?;
         }
 
-        sqlx::query("DELETE FROM map_shapes WHERE tenant_id = $1").bind(tenant_id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM map_shapes WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await?;
         for s in &doc.shapes {
             let data = serde_json::to_value(s).unwrap_or_else(|_| serde_json::json!({}));
             sqlx::query("INSERT INTO map_shapes (tenant_id, id, data) VALUES ($1, $2, $3)")

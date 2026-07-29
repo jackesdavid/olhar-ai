@@ -185,7 +185,7 @@ export type Face = {
   image_key: string | null;
   camera: string | null;
   confidence: number;
-  face_ratio: number;
+  face_width: number;
   source: string;
   created_at: string;
 };

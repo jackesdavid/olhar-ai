@@ -8,17 +8,22 @@ use crate::timeutil::now_rfc3339;
 
 use super::domain::{TuyaConfig, TuyaDevice};
 
-const COLS: &str = "device_id, name, category, product_id, online, functions_json, function_labels_json";
+const COLS: &str =
+    "device_id, name, category, product_id, online, functions_json, function_labels_json";
 
 /// The tenant's linked Tuya devices, ordered by name. Empty (and logged) on a query error.
 pub fn load(db: &Db, tenant_id: Uuid) -> Vec<TuyaDevice> {
     let pool = db.pool();
     db.block(async move {
         let sql = format!("SELECT {COLS} FROM tuya_devices WHERE tenant_id = $1 ORDER BY name");
-        sqlx::query_as::<_, TuyaDevice>(&sql).bind(tenant_id).fetch_all(&pool).await.unwrap_or_else(|e| {
-            log::error!("tuya::repo::load query failed: {e}");
-            Vec::new()
-        })
+        sqlx::query_as::<_, TuyaDevice>(&sql)
+            .bind(tenant_id)
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_else(|e| {
+                log::error!("tuya::repo::load query failed: {e}");
+                Vec::new()
+            })
     })
 }
 
@@ -30,11 +35,17 @@ pub fn find_selector(db: &Db, tenant_id: Uuid, selector: &str) -> Option<TuyaDev
     }
     let pool = db.pool();
     db.block(async move {
-        let sql = format!("SELECT {COLS} FROM tuya_devices WHERE tenant_id = $1 AND device_id = $2");
-        sqlx::query_as::<_, TuyaDevice>(&sql).bind(tenant_id).bind(&sel).fetch_optional(&pool).await.unwrap_or_else(|e| {
-            log::error!("tuya::repo::find_selector query failed: {e}");
-            None
-        })
+        let sql =
+            format!("SELECT {COLS} FROM tuya_devices WHERE tenant_id = $1 AND device_id = $2");
+        sqlx::query_as::<_, TuyaDevice>(&sql)
+            .bind(tenant_id)
+            .bind(&sel)
+            .fetch_optional(&pool)
+            .await
+            .unwrap_or_else(|e| {
+                log::error!("tuya::repo::find_selector query failed: {e}");
+                None
+            })
     })
 }
 
@@ -78,7 +89,12 @@ pub fn upsert_many(db: &Db, tenant_id: Uuid, devices: &[TuyaDevice]) -> Result<(
 
 /// Set a device's friendly per-function labels (`{ "<code>": "<label>" }` JSON) — a targeted
 /// update that survives sync (the column is not in `upsert_many`'s ON CONFLICT set).
-pub fn set_function_labels(db: &Db, tenant_id: Uuid, device_id: &str, labels_json: &str) -> Result<(), String> {
+pub fn set_function_labels(
+    db: &Db,
+    tenant_id: Uuid,
+    device_id: &str,
+    labels_json: &str,
+) -> Result<(), String> {
     let pool = db.pool();
     let device_id = device_id.to_string();
     let labels_json = labels_json.to_string();
@@ -135,16 +151,21 @@ pub fn resolve_config(db: &Db, tenant_id: Uuid) -> Option<TuyaConfig> {
 pub fn load_config(db: &Db, tenant_id: Uuid) -> Option<TuyaConfig> {
     let pool = db.pool();
     db.block(async move {
-        let row: Option<(String, String, String)> =
-            sqlx::query_as("SELECT access_id, access_key, endpoint FROM tuya_config WHERE tenant_id = $1")
-                .bind(tenant_id)
-                .fetch_optional(&pool)
-                .await
-                .unwrap_or_else(|e| {
-                    log::error!("tuya::repo::load_config failed: {e}");
-                    None
-                });
-        row.map(|(access_id, access_key, endpoint)| TuyaConfig { access_id, access_key, endpoint })
+        let row: Option<(String, String, String)> = sqlx::query_as(
+            "SELECT access_id, access_key, endpoint FROM tuya_config WHERE tenant_id = $1",
+        )
+        .bind(tenant_id)
+        .fetch_optional(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            log::error!("tuya::repo::load_config failed: {e}");
+            None
+        });
+        row.map(|(access_id, access_key, endpoint)| TuyaConfig {
+            access_id,
+            access_key,
+            endpoint,
+        })
     })
 }
 
@@ -179,7 +200,10 @@ pub fn save_config(db: &Db, tenant_id: Uuid, cfg: &TuyaConfig) -> Result<(), Str
 pub fn delete_config(db: &Db, tenant_id: Uuid) -> Result<(), String> {
     let pool = db.pool();
     let res: Result<(), sqlx::Error> = db.block(async move {
-        sqlx::query("DELETE FROM tuya_config WHERE tenant_id = $1").bind(tenant_id).execute(&pool).await?;
+        sqlx::query("DELETE FROM tuya_config WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await?;
         Ok(())
     });
     res.map_err(|e| {
@@ -192,13 +216,15 @@ pub fn delete_config(db: &Db, tenant_id: Uuid) -> Result<(), String> {
 pub fn linked_uids(db: &Db, tenant_id: Uuid) -> Vec<String> {
     let pool = db.pool();
     db.block(async move {
-        sqlx::query_scalar::<_, String>("SELECT tuya_uid FROM tuya_account_links WHERE tenant_id = $1")
-            .bind(tenant_id)
-            .fetch_all(&pool)
-            .await
-            .unwrap_or_else(|e| {
-                log::error!("tuya::repo::linked_uids query failed: {e}");
-                Vec::new()
-            })
+        sqlx::query_scalar::<_, String>(
+            "SELECT tuya_uid FROM tuya_account_links WHERE tenant_id = $1",
+        )
+        .bind(tenant_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            log::error!("tuya::repo::linked_uids query failed: {e}");
+            Vec::new()
+        })
     })
 }

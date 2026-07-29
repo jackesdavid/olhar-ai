@@ -15,8 +15,8 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::timeutil::now_rfc3339;
 use crate::db::Db;
+use crate::timeutil::now_rfc3339;
 
 /// Severity of an event, low → high. Relocated from the retired `alerts` module — the alert
 /// workflow nodes pick a level here, which maps to the event's `severity` string.
@@ -31,15 +31,30 @@ pub enum AlertLevel {
 
 impl AlertLevel {
     /// Ascending severity — the order the CreateAlert node's level dropdown offers.
-    pub const ALL: [AlertLevel; 4] = [AlertLevel::Debug, AlertLevel::Info, AlertLevel::Warn, AlertLevel::Error];
+    pub const ALL: [AlertLevel; 4] = [
+        AlertLevel::Debug,
+        AlertLevel::Info,
+        AlertLevel::Warn,
+        AlertLevel::Error,
+    ];
 
     pub fn label(self) -> &'static str {
-        match self { AlertLevel::Debug => "DEBUG", AlertLevel::Info => "INFO", AlertLevel::Warn => "WARN", AlertLevel::Error => "ERROR" }
+        match self {
+            AlertLevel::Debug => "DEBUG",
+            AlertLevel::Info => "INFO",
+            AlertLevel::Warn => "WARN",
+            AlertLevel::Error => "ERROR",
+        }
     }
 
     /// The `events.severity` string this level stores as.
     pub fn severity(self) -> &'static str {
-        match self { AlertLevel::Debug => "debug", AlertLevel::Info => "info", AlertLevel::Warn => "warn", AlertLevel::Error => "error" }
+        match self {
+            AlertLevel::Debug => "debug",
+            AlertLevel::Info => "info",
+            AlertLevel::Warn => "warn",
+            AlertLevel::Error => "error",
+        }
     }
 
     /// Parse a level name (case-insensitive).
@@ -55,7 +70,9 @@ impl AlertLevel {
 }
 
 impl Default for AlertLevel {
-    fn default() -> Self { AlertLevel::Info }
+    fn default() -> Self {
+        AlertLevel::Info
+    }
 }
 
 /// A new occurrence to record. Build with [`NewEvent::new`] then set the fields that apply;
@@ -63,21 +80,21 @@ impl Default for AlertLevel {
 /// the event describes a moment other than write time.
 #[derive(Debug, Clone, Default)]
 pub struct NewEvent {
-    pub tenant_id:   Uuid,
-    pub kind:        String,        // catalog slug
-    pub source:      String,        // system | user | workflow | edge
-    pub severity:    String,        // debug | info | warn | error
-    pub title:       Option<String>,
-    pub message:     Option<String>,
-    pub camera:      Option<String>,
-    pub clip_id:     Option<String>,
-    pub room_id:     Option<i64>,
-    pub room_name:   Option<String>,
-    pub device_id:   Option<String>,
-    pub graph_id:    Option<i64>,
-    pub user_id:     Option<Uuid>,
-    pub data:        Option<Value>,
-    pub occurred_at: String,        // RFC3339
+    pub tenant_id: Uuid,
+    pub kind: String,     // catalog slug
+    pub source: String,   // system | user | workflow | edge
+    pub severity: String, // debug | info | warn | error
+    pub title: Option<String>,
+    pub message: Option<String>,
+    pub camera: Option<String>,
+    pub clip_id: Option<String>,
+    pub room_id: Option<i64>,
+    pub room_name: Option<String>,
+    pub device_id: Option<String>,
+    pub graph_id: Option<i64>,
+    pub user_id: Option<Uuid>,
+    pub data: Option<Value>,
+    pub occurred_at: String, // RFC3339
 }
 
 impl NewEvent {
@@ -98,19 +115,37 @@ impl NewEvent {
 /// One known event kind, for the feed's filter. A code catalog (like `repo::system_events()`),
 /// not a table — kinds are defined where they're produced.
 pub struct KindInfo {
-    pub kind:  &'static str,
+    pub kind: &'static str,
     pub label: &'static str,
 }
 
 /// The kinds the feed knows how to label. Additive — an unknown kind still stores and lists fine.
 pub fn catalog() -> &'static [KindInfo] {
     &[
-        KindInfo { kind: "alert",           label: "Alert" },
-        KindInfo { kind: "presence",        label: "Presence" },
-        KindInfo { kind: "clip.started",    label: "Clip started" },
-        KindInfo { kind: "clip.stopped",    label: "Clip stopped" },
-        KindInfo { kind: "workflow.custom", label: "Workflow event" },
-        KindInfo { kind: "auth.login",      label: "Login" },
+        KindInfo {
+            kind: "alert",
+            label: "Alert",
+        },
+        KindInfo {
+            kind: "presence",
+            label: "Presence",
+        },
+        KindInfo {
+            kind: "clip.started",
+            label: "Clip started",
+        },
+        KindInfo {
+            kind: "clip.stopped",
+            label: "Clip stopped",
+        },
+        KindInfo {
+            kind: "workflow.custom",
+            label: "Workflow event",
+        },
+        KindInfo {
+            kind: "auth.login",
+            label: "Login",
+        },
     ]
 }
 
@@ -168,8 +203,15 @@ const SELECT_COLS: &str = "id, kind, source, severity, title, message, camera, c
 pub fn event_by_id_sync(db: &Db, tenant_id: Uuid, id: i64) -> Option<EventRow> {
     let pool = db.pool();
     db.block(async move {
-        sqlx::query_as::<_, EventRow>(&format!("SELECT {SELECT_COLS} FROM events WHERE tenant_id = $1 AND id = $2"))
-            .bind(tenant_id).bind(id).fetch_optional(&pool).await.ok().flatten()
+        sqlx::query_as::<_, EventRow>(&format!(
+            "SELECT {SELECT_COLS} FROM events WHERE tenant_id = $1 AND id = $2"
+        ))
+        .bind(tenant_id)
+        .bind(id)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten()
     })
 }
 
@@ -185,17 +227,29 @@ pub fn latest_of_kind_sync(db: &Db, tenant_id: Uuid, kind: &str) -> Option<Event
 
 /// A kind's events, newest first, optionally since a timestamp. Blocking. (Agent's alert list /
 /// daily summary.) `since` = an RFC3339 lower bound on `occurred_at`; `None` = the full log.
-pub fn list_kind_sync(db: &Db, tenant_id: Uuid, kind: &str, since: Option<String>, limit: i64) -> Vec<EventRow> {
+pub fn list_kind_sync(
+    db: &Db,
+    tenant_id: Uuid,
+    kind: &str,
+    since: Option<String>,
+    limit: i64,
+) -> Vec<EventRow> {
     let pool = db.pool();
     let kind = kind.to_string();
     db.block(async move {
-        let mut qb = sqlx::QueryBuilder::new(format!("SELECT {SELECT_COLS} FROM events WHERE tenant_id = "));
+        let mut qb = sqlx::QueryBuilder::new(format!(
+            "SELECT {SELECT_COLS} FROM events WHERE tenant_id = "
+        ));
         qb.push_bind(tenant_id).push(" AND kind = ").push_bind(kind);
         if let Some(s) = since {
             qb.push(" AND occurred_at >= ").push_bind(s);
         }
-        qb.push(" ORDER BY id DESC LIMIT ").push_bind(limit.clamp(1, 1000));
-        qb.build_query_as::<EventRow>().fetch_all(&pool).await.unwrap_or_default()
+        qb.push(" ORDER BY id DESC LIMIT ")
+            .push_bind(limit.clamp(1, 1000));
+        qb.build_query_as::<EventRow>()
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_default()
     })
 }
 
@@ -206,10 +260,14 @@ pub fn today_start_rfc3339() -> String {
 
 /// Whether an alert event's `data.deliveries` records at least one successful beacon delivery.
 pub fn event_delivered(e: &EventRow) -> bool {
-    e.data.as_ref()
+    e.data
+        .as_ref()
         .and_then(|d| d.get("deliveries"))
         .and_then(|d| d.as_array())
-        .map(|arr| arr.iter().any(|x| x.get("ok").and_then(|v| v.as_bool()).unwrap_or(false)))
+        .map(|arr| {
+            arr.iter()
+                .any(|x| x.get("ok").and_then(|v| v.as_bool()).unwrap_or(false))
+        })
         .unwrap_or(false)
 }
 
@@ -218,9 +276,15 @@ pub fn set_data_sync(db: &Db, tenant_id: Uuid, id: i64, data: Value) {
     let pool = db.pool();
     let res: Result<_, sqlx::Error> = db.block(async move {
         sqlx::query("UPDATE events SET data = $3 WHERE tenant_id = $1 AND id = $2")
-            .bind(tenant_id).bind(id).bind(&data).execute(&pool).await
+            .bind(tenant_id)
+            .bind(id)
+            .bind(&data)
+            .execute(&pool)
+            .await
     });
-    if let Err(e) = res { log::warn!("events::set_data_sync failed: {e}"); }
+    if let Err(e) = res {
+        log::warn!("events::set_data_sync failed: {e}");
+    }
 }
 
 /// Delete an event by id, tenant-scoped. Blocking. Returns whether a row was removed.
@@ -228,7 +292,12 @@ pub fn delete_event_sync(db: &Db, tenant_id: Uuid, id: i64) -> bool {
     let pool = db.pool();
     db.block(async move {
         sqlx::query("DELETE FROM events WHERE tenant_id = $1 AND id = $2")
-            .bind(tenant_id).bind(id).execute(&pool).await.map(|r| r.rows_affected() > 0).unwrap_or(false)
+            .bind(tenant_id)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .map(|r| r.rows_affected() > 0)
+            .unwrap_or(false)
     })
 }
 
@@ -245,10 +314,21 @@ pub fn deliver_event_to_beacons(
 ) -> Result<String, String> {
     let ev = event_by_id_sync(db, tenant_id, id).ok_or_else(|| format!("Alert {id} not found."))?;
     let loc = ev.room_name.as_deref().unwrap_or("site");
-    let msg = format!("[{}] {} \u{2014} {}", ev.severity.to_uppercase(), loc, ev.message.clone().unwrap_or_default());
+    let msg = format!(
+        "[{}] {} \u{2014} {}",
+        ev.severity.to_uppercase(),
+        loc,
+        ev.message.clone().unwrap_or_default()
+    );
 
     let beacons: Vec<crate::notification::NotificationTarget> = {
-        notif.lock().unwrap().iter().filter(|t| t.enabled).cloned().collect()
+        notif
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|t| t.enabled)
+            .cloned()
+            .collect()
     };
     if beacons.is_empty() {
         return Err("No live beacons to deliver to.".into());
@@ -257,11 +337,21 @@ pub fn deliver_event_to_beacons(
     let mut ok_count = 0usize;
     for b in &beacons {
         let ok = crate::notification::dispatch(notif, cfg, Some(&b.label), &msg, None).is_ok();
-        if ok { ok_count += 1; }
+        if ok {
+            ok_count += 1;
+        }
         deliveries.push(serde_json::json!({ "target": b.label, "chat_id": b.chat_id, "at": now_rfc3339(), "ok": ok }));
     }
-    set_data_sync(db, tenant_id, id, serde_json::json!({ "deliveries": deliveries }));
-    Ok(format!("Delivered alert {id} to {ok_count}/{} beacon(s).", beacons.len()))
+    set_data_sync(
+        db,
+        tenant_id,
+        id,
+        serde_json::json!({ "deliveries": deliveries }),
+    );
+    Ok(format!(
+        "Delivered alert {id} to {ok_count}/{} beacon(s).",
+        beacons.len()
+    ))
 }
 
 // ---- async queue (control) --------------------------------------------------
@@ -327,7 +417,11 @@ async fn insert_batch(pool: &PgPool, events: &[NewEvent]) -> sqlx::Result<()> {
         b.push_bind(e.tenant_id)
             .push_bind(&e.kind)
             .push_bind(&e.source)
-            .push_bind(if e.severity.is_empty() { "info" } else { &e.severity })
+            .push_bind(if e.severity.is_empty() {
+                "info"
+            } else {
+                &e.severity
+            })
             .push_bind(e.title.as_deref())
             .push_bind(e.message.as_deref())
             .push_bind(e.camera.as_deref())
@@ -349,39 +443,43 @@ async fn insert_batch(pool: &PgPool, events: &[NewEvent]) -> sqlx::Result<()> {
 /// One row from [`list_events`].
 #[derive(serde::Serialize, sqlx::FromRow)]
 pub struct EventRow {
-    pub id:          i64,
-    pub kind:        String,
-    pub source:      String,
-    pub severity:    String,
-    pub title:       Option<String>,
-    pub message:     Option<String>,
-    pub camera:      Option<String>,
-    pub clip_id:     Option<String>,
-    pub room_id:     Option<i64>,
-    pub room_name:   Option<String>,
-    pub device_id:   Option<String>,
-    pub graph_id:    Option<i64>,
-    pub user_id:     Option<Uuid>,
-    pub data:        Option<Value>,
+    pub id: i64,
+    pub kind: String,
+    pub source: String,
+    pub severity: String,
+    pub title: Option<String>,
+    pub message: Option<String>,
+    pub camera: Option<String>,
+    pub clip_id: Option<String>,
+    pub room_id: Option<i64>,
+    pub room_name: Option<String>,
+    pub device_id: Option<String>,
+    pub graph_id: Option<i64>,
+    pub user_id: Option<Uuid>,
+    pub data: Option<Value>,
     pub occurred_at: String,
-    pub created_at:  String,
+    pub created_at: String,
 }
 
 /// Filters + cursor for [`list_events`].
 #[derive(Default)]
 pub struct EventQuery {
-    pub kind:     Option<String>,
-    pub source:   Option<String>,
+    pub kind: Option<String>,
+    pub source: Option<String>,
     pub severity: Option<String>,
-    pub camera:   Option<String>,
-    pub from:     Option<String>,  // occurred_at >= (RFC3339)
-    pub to:       Option<String>,  // occurred_at <= (RFC3339)
-    pub after:    Option<i64>,     // cursor: rows with id < after (newest-first)
-    pub limit:    i64,
+    pub camera: Option<String>,
+    pub from: Option<String>, // occurred_at >= (RFC3339)
+    pub to: Option<String>,   // occurred_at <= (RFC3339)
+    pub after: Option<i64>,   // cursor: rows with id < after (newest-first)
+    pub limit: i64,
 }
 
 /// Paginated event query, newest-first. `limit` clamped 1–200.
-pub async fn list_events(pool: &PgPool, tenant_id: Uuid, q: EventQuery) -> sqlx::Result<Vec<EventRow>> {
+pub async fn list_events(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    q: EventQuery,
+) -> sqlx::Result<Vec<EventRow>> {
     let limit = q.limit.clamp(1, 200);
     let mut qb = sqlx::QueryBuilder::new(
         "SELECT id, kind, source, severity, title, message, camera, clip_id, room_id, room_name, \
@@ -406,10 +504,14 @@ pub async fn list_events(pool: &PgPool, tenant_id: Uuid, q: EventQuery) -> sqlx:
     // from the bound's (the same timezone bug that hid recent clips from Playback). The cast happens
     // in Postgres, so no timestamptz is decoded into Rust.
     if let Some(from) = &q.from {
-        qb.push(" AND occurred_at::timestamptz >= ").push_bind(from.clone()).push("::timestamptz");
+        qb.push(" AND occurred_at::timestamptz >= ")
+            .push_bind(from.clone())
+            .push("::timestamptz");
     }
     if let Some(to) = &q.to {
-        qb.push(" AND occurred_at::timestamptz <= ").push_bind(to.clone()).push("::timestamptz");
+        qb.push(" AND occurred_at::timestamptz <= ")
+            .push_bind(to.clone())
+            .push("::timestamptz");
     }
     if let Some(after) = q.after {
         qb.push(" AND id < ").push_bind(after);

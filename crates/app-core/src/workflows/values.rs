@@ -105,7 +105,9 @@ pub fn from_json(v: &Value) -> NodeValues {
         return vals;
     };
     for (nid, ports) in obj {
-        let Ok(nid) = nid.parse::<u32>() else { continue };
+        let Ok(nid) = nid.parse::<u32>() else {
+            continue;
+        };
         let Some(ports) = ports.as_object() else {
             continue;
         };
@@ -140,7 +142,11 @@ pub fn display_value(v: &PortValue) -> String {
         PortValue::Bbox(b) => format!("[{}, {}, {}, {}]", b.x1, b.y1, b.x2, b.y2),
         PortValue::List(items) => {
             let inner: Vec<String> = items.iter().take(8).map(display_value).collect();
-            let more = if items.len() > inner.len() { ", …" } else { "" };
+            let more = if items.len() > inner.len() {
+                ", …"
+            } else {
+                ""
+            };
             format!("[{}{}]", inner.join(", "), more)
         }
         // Kinds the codec never persists — a label, not bytes, so a stray value can't leak base64.
@@ -213,15 +219,22 @@ mod tests {
     fn the_camera_survives_postgres() {
         // OnEvent.camera → StopRecording.camera is the whole reason this exists. It crosses a
         // database and possibly a pod restart between the start and the stop.
-        let vals = one(18, "camera", PortValue::Camera(CameraEntity {
-            id: "cam-1".into(),
-            ip: "10.0.0.9".into(),
-            name: "Hall".into(),
-        }));
+        let vals = one(
+            18,
+            "camera",
+            PortValue::Camera(CameraEntity {
+                id: "cam-1".into(),
+                ip: "10.0.0.9".into(),
+                name: "Hall".into(),
+            }),
+        );
         let back = from_json(&to_json(&vals));
         match back[&18].get("camera") {
             Some(PortValue::Camera(c)) => {
-                assert_eq!((c.id.as_str(), c.ip.as_str(), c.name.as_str()), ("cam-1", "10.0.0.9", "Hall"));
+                assert_eq!(
+                    (c.id.as_str(), c.ip.as_str(), c.name.as_str()),
+                    ("cam-1", "10.0.0.9", "Hall")
+                );
             }
             other => panic!("camera didn't survive: {other:?}"),
         }
@@ -231,8 +244,15 @@ mod tests {
     fn the_clip_id_survives_postgres() {
         // StartRecording.clip_id → StopRecording.clip_id, written by the arming run and read by a
         // stop that happens in a different run entirely.
-        let back = from_json(&to_json(&one(3, "clip_id", PortValue::Text("clip-abc".into()))));
-        assert_eq!(back[&3].get("clip_id").and_then(PortValue::as_text), Some("clip-abc"));
+        let back = from_json(&to_json(&one(
+            3,
+            "clip_id",
+            PortValue::Text("clip-abc".into()),
+        )));
+        assert_eq!(
+            back[&3].get("clip_id").and_then(PortValue::as_text),
+            Some("clip-abc")
+        );
     }
 
     #[test]
@@ -256,7 +276,10 @@ mod tests {
         // required input, which would turn a visible miss into a wrong answer.
         assert!(value_to_json(&PortValue::Image(vec![1, 2, 3])).is_none());
         let vals = one(9, "image", PortValue::Image(vec![0xFF; 64]));
-        assert!(to_json(&vals).as_object().unwrap().is_empty(), "no row for an image-only node");
+        assert!(
+            to_json(&vals).as_object().unwrap().is_empty(),
+            "no row for an image-only node"
+        );
     }
 
     #[test]
@@ -291,7 +314,11 @@ mod tests {
         let mut vars: HashMap<String, PortValue> = HashMap::new();
         vars.insert(
             "current_camera".into(),
-            PortValue::Camera(CameraEntity { id: "cam-1".into(), ip: "10.0.0.9".into(), name: "Hall".into() }),
+            PortValue::Camera(CameraEntity {
+                id: "cam-1".into(),
+                ip: "10.0.0.9".into(),
+                name: "Hall".into(),
+            }),
         );
         vars.insert("current_clip_id".into(), PortValue::Text("clip-abc".into()));
 
@@ -300,7 +327,10 @@ mod tests {
             Some(PortValue::Camera(c)) => assert_eq!(c.id, "cam-1"),
             other => panic!("camera var didn't survive: {other:?}"),
         }
-        assert_eq!(back.get("current_clip_id").and_then(PortValue::as_text), Some("clip-abc"));
+        assert_eq!(
+            back.get("current_clip_id").and_then(PortValue::as_text),
+            Some("clip-abc")
+        );
     }
 
     #[test]
@@ -311,7 +341,10 @@ mod tests {
         vars.insert("frame".into(), PortValue::Image(vec![0xFF; 8]));
         vars.insert("kept".into(), PortValue::Text("ok".into()));
         let back = variables_from_json(&variables_to_json(&vars));
-        assert!(back.get("frame").is_none(), "media var is dropped, not faked");
+        assert!(
+            back.get("frame").is_none(),
+            "media var is dropped, not faked"
+        );
         assert_eq!(back.get("kept").and_then(PortValue::as_text), Some("ok"));
     }
 }

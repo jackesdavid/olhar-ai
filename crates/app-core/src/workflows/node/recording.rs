@@ -11,7 +11,11 @@ pub(super) fn edge_agent() -> ureq::Agent {
         .build()
 }
 
-pub(super) fn run_start_recording(_config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+pub(super) fn run_start_recording(
+    _config: &Value,
+    inputs: &PortValues,
+    sys: &ToolContext,
+) -> Result<PortValues, String> {
     let camera_ip = inputs
         .get("camera")
         .and_then(PortValue::as_camera)
@@ -27,7 +31,9 @@ pub(super) fn run_start_recording(_config: &Value, inputs: &PortValues, sys: &To
     }
     let json = edge_call(sys, "start_recording", "/recording/start", body)?;
     let clip_id: String = json
-        .get("clip_id").and_then(|s| s.as_str()).map(str::to_string)
+        .get("clip_id")
+        .and_then(|s| s.as_str())
+        .map(str::to_string)
         .unwrap_or_else(|| format!("{camera_ip}-{}", chrono::Utc::now().timestamp()));
     let is_new = json.get("new").and_then(|v| v.as_bool()).unwrap_or(true);
     let mut o = PortValues::new();
@@ -36,7 +42,10 @@ pub(super) fn run_start_recording(_config: &Value, inputs: &PortValues, sys: &To
     Ok(o)
 }
 
-pub(super) fn run_stop_recording(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+pub(super) fn run_stop_recording(
+    inputs: &PortValues,
+    sys: &ToolContext,
+) -> Result<PortValues, String> {
     let camera_ip = inputs
         .get("camera")
         .and_then(PortValue::as_camera)
@@ -80,12 +89,18 @@ fn sse_box(sys: &ToolContext) -> Option<uuid::Uuid> {
 /// and eventually every edge once the tailnet is retired). Otherwise it takes the historical
 /// **tailnet POST** to `magicdns_host:8080`, unchanged — so existing appliance boxes behave exactly
 /// as before. `cmd` is the SSE command name; `path` is the equivalent local HTTP endpoint.
-fn edge_call(sys: &ToolContext, cmd: &str, path: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
+fn edge_call(
+    sys: &ToolContext,
+    cmd: &str,
+    path: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     if let Some(box_id) = sse_box(sys) {
         // 20s TTL so a command outlives the await window a touch (redelivery/late run); the await
         // itself stays under the node's 15s watchdog.
-        let id = crate::edge_commands::enqueue_blocking(&sys.db, sys.tenant_id, box_id, cmd, body, 20)
-            .ok_or("edge command enqueue failed")?;
+        let id =
+            crate::edge_commands::enqueue_blocking(&sys.db, sys.tenant_id, box_id, cmd, body, 20)
+                .ok_or("edge command enqueue failed")?;
         crate::edge_commands::await_result_blocking(&sys.db, id, 12)
     } else {
         let base = resolve_edge_api_base(sys)?;
@@ -94,7 +109,10 @@ fn edge_call(sys: &ToolContext, cmd: &str, path: &str, body: serde_json::Value) 
             .set("Content-Type", "application/json")
             .send_string(&body.to_string())
             .map_err(|e| format!("edge {cmd}: {e}"))?;
-        Ok(resp.into_json::<serde_json::Value>().ok().unwrap_or_default())
+        Ok(resp
+            .into_json::<serde_json::Value>()
+            .ok()
+            .unwrap_or_default())
     }
 }
 
@@ -107,7 +125,9 @@ const MAX_CLIP_BYTES: u64 = 50 * 1024 * 1024;
 pub(super) fn fetch_clip(sys: &ToolContext, clip_id: &str) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let base = resolve_edge_api_base(sys)?;
-    let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(90)).build();
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(90))
+        .build();
     let resp = agent
         .get(&format!("{base}/recording/{clip_id}"))
         .call()
@@ -118,10 +138,14 @@ pub(super) fn fetch_clip(sys: &ToolContext, clip_id: &str) -> Result<Vec<u8>, St
         .read_to_end(&mut buf)
         .map_err(|e| format!("read clip {clip_id}: {e}"))?;
     if buf.is_empty() {
-        return Err(format!("clip {clip_id} was empty (not found or still recording?)"));
+        return Err(format!(
+            "clip {clip_id} was empty (not found or still recording?)"
+        ));
     }
     if buf.len() as u64 > MAX_CLIP_BYTES {
-        return Err(format!("clip {clip_id} exceeds {MAX_CLIP_BYTES} bytes — too large to relay"));
+        return Err(format!(
+            "clip {clip_id} exceeds {MAX_CLIP_BYTES} bytes — too large to relay"
+        ));
     }
     Ok(buf)
 }

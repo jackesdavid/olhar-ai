@@ -6,8 +6,8 @@
 //! lives elsewhere and never touches this claim path.
 use uuid::Uuid;
 
-use crate::timeutil::now_rfc3339;
 use crate::db::Db;
+use crate::timeutil::now_rfc3339;
 
 /// A claimed send job (status already flipped to `sending`).
 #[derive(Debug, Clone)]
@@ -185,10 +185,10 @@ pub struct HourBucket {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct QueueStats {
-    pub pending: i64,      // queued + sending
+    pub pending: i64, // queued + sending
     pub sent_today: i64,
     pub failed_today: i64,
-    pub queued_today: i64, // total enqueued today
+    pub queued_today: i64,       // total enqueued today
     pub hourly: Vec<HourBucket>, // today, per hour (enqueued)
 }
 
@@ -283,12 +283,15 @@ pub fn list(
           AND ($2::text IS NULL OR status = $2)
           AND ($3::text IS NULL OR lower(payload->>'message') LIKE $3 OR lower(coalesce(payload->>'target','')) LIKE $3)";
     let pool = db.pool();
-    let status = status.filter(|s| !s.is_empty()).map(|s| match s {
-        "queued" => "pending",
-        "sending" => "running",
-        "sent" => "done",
-        other => other, // 'failed' is the same
-    }.to_string());
+    let status = status.filter(|s| !s.is_empty()).map(|s| {
+        match s {
+            "queued" => "pending",
+            "sending" => "running",
+            "sent" => "done",
+            other => other, // 'failed' is the same
+        }
+        .to_string()
+    });
     let pattern = q
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty())
@@ -381,11 +384,13 @@ pub fn clear_media_keys(db: &Db, ids: &[Uuid]) -> u64 {
     let ids = ids.to_vec();
     let pool = db.pool();
     db.block(async move {
-        sqlx::query("UPDATE notification_queue SET image_key = NULL, video_key = NULL WHERE id = ANY($1)")
-            .bind(&ids)
-            .execute(&pool)
-            .await
-            .map(|r| r.rows_affected())
-            .unwrap_or(0)
+        sqlx::query(
+            "UPDATE notification_queue SET image_key = NULL, video_key = NULL WHERE id = ANY($1)",
+        )
+        .bind(&ids)
+        .execute(&pool)
+        .await
+        .map(|r| r.rows_affected())
+        .unwrap_or(0)
     })
 }

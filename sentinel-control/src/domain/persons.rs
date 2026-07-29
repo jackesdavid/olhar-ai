@@ -24,10 +24,16 @@ pub fn router() -> Router<AppState> {
         .route("/persons/recognize", post(recognize))
         .route("/persons/:id/embeddings", get(list_embeddings).post(enroll))
         .route("/persons/embeddings/:eid/approve", post(approve_embedding))
-        .route("/persons/embeddings/:eid", axum::routing::delete(delete_embedding))
+        .route(
+            "/persons/embeddings/:eid",
+            axum::routing::delete(delete_embedding),
+        )
 }
 
-async fn list(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<Person>>, ApiErr> {
+async fn list(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<Person>>, ApiErr> {
     auth::require(&c, "persons.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
@@ -37,11 +43,17 @@ async fn list(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<J
 /// The permission actions a superior can hold over its subtree (UI toggles).
 async fn permission_kinds(UserClaims(c): UserClaims) -> Result<Json<Vec<String>>, ApiErr> {
     auth::require(&c, "persons.read")?;
-    Ok(Json(persons::PERMISSIONS.iter().map(|s| s.to_string()).collect()))
+    Ok(Json(
+        persons::PERMISSIONS.iter().map(|s| s.to_string()).collect(),
+    ))
 }
 
 /// Upsert a person by `id` (validates name + guards the hierarchy against cycles).
-async fn upsert(UserClaims(c): UserClaims, State(st): State<AppState>, Json(mut person): Json<Person>) -> Result<StatusCode, ApiErr> {
+async fn upsert(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(mut person): Json<Person>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "persons.write")?;
     let tid = tenant_of(&c)?;
     person.name = person.name.trim().to_string();
@@ -53,7 +65,9 @@ async fn upsert(UserClaims(c): UserClaims, State(st): State<AppState>, Json(mut 
     }
     person.recipient_label = person.recipient_label.filter(|r| !r.trim().is_empty());
     person.parent_id = person.parent_id.filter(|p| !p.trim().is_empty());
-    person.permissions.retain(|a| persons::PERMISSIONS.contains(&a.as_str()));
+    person
+        .permissions
+        .retain(|a| persons::PERMISSIONS.contains(&a.as_str()));
 
     let db = st.db.clone();
     blocking(move || {
@@ -80,7 +94,11 @@ async fn upsert(UserClaims(c): UserClaims, State(st): State<AppState>, Json(mut 
 }
 
 /// Remove a person and detach any children that pointed to them.
-async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, ApiErr> {
+async fn remove(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "persons.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
@@ -89,7 +107,10 @@ async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id):
         let before = people.len();
         people.retain(|p| p.id != id);
         if people.len() != before {
-            for child in people.iter_mut().filter(|p| p.parent_id.as_deref() == Some(id.as_str())) {
+            for child in people
+                .iter_mut()
+                .filter(|p| p.parent_id.as_deref() == Some(id.as_str()))
+            {
                 child.parent_id = None;
             }
             persons::repo::save(&db, tid, &people);
@@ -100,18 +121,29 @@ async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id):
 }
 
 /// Ids of people with ≥1 approved embedding — the "enrolled" badge.
-async fn enrolled(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<String>>, ApiErr> {
+async fn enrolled(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<String>>, ApiErr> {
     auth::require(&c, "persons.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    Ok(Json(blocking(move || persons::repo::enrolled_person_ids(&db, tid)).await?))
+    Ok(Json(
+        blocking(move || persons::repo::enrolled_person_ids(&db, tid)).await?,
+    ))
 }
 
-async fn list_embeddings(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<String>) -> Result<Json<Vec<PersonEmbedding>>, ApiErr> {
+async fn list_embeddings(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<PersonEmbedding>>, ApiErr> {
     auth::require(&c, "persons.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    Ok(Json(blocking(move || persons::repo::list_embeddings(&db, tid, &id)).await?))
+    Ok(Json(
+        blocking(move || persons::repo::list_embeddings(&db, tid, &id)).await?,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -122,7 +154,12 @@ struct EnrollReq {
 }
 
 /// Enroll one face: embed `image` (base64, optionally a data URL) and insert it.
-async fn enroll(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<String>, Json(b): Json<EnrollReq>) -> Result<Json<String>, ApiErr> {
+async fn enroll(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<EnrollReq>,
+) -> Result<Json<String>, ApiErr> {
     auth::require(&c, "persons.write")?;
     let tid = tenant_of(&c)?;
     let bytes = decode_image(&b.image)?;
@@ -139,7 +176,11 @@ async fn enroll(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id):
     Ok(Json(new_id))
 }
 
-async fn approve_embedding(UserClaims(c): UserClaims, State(st): State<AppState>, Path(eid): Path<String>) -> Result<StatusCode, ApiErr> {
+async fn approve_embedding(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(eid): Path<String>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "persons.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
@@ -149,7 +190,11 @@ async fn approve_embedding(UserClaims(c): UserClaims, State(st): State<AppState>
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn delete_embedding(UserClaims(c): UserClaims, State(st): State<AppState>, Path(eid): Path<String>) -> Result<StatusCode, ApiErr> {
+async fn delete_embedding(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(eid): Path<String>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "persons.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
@@ -173,7 +218,11 @@ struct RecognizeResp {
 }
 
 /// Recognise a face: embed `image` and match it against the tenant's approved set.
-async fn recognize(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): Json<RecognizeReq>) -> Result<Json<RecognizeResp>, ApiErr> {
+async fn recognize(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(b): Json<RecognizeReq>,
+) -> Result<Json<RecognizeResp>, ApiErr> {
     auth::require(&c, "persons.read")?;
     let tid = tenant_of(&c)?;
     let bytes = decode_image(&b.image)?;
@@ -192,5 +241,6 @@ async fn recognize(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b
 /// Decode a base64 image (optionally a `data:…;base64,` URL) to bytes.
 fn decode_image(image: &str) -> Result<Vec<u8>, ApiErr> {
     let b64 = image.rsplit(',').next().unwrap_or(image);
-    B64.decode(b64.trim()).map_err(|e| err(StatusCode::BAD_REQUEST, format!("decode image: {e}")))
+    B64.decode(b64.trim())
+        .map_err(|e| err(StatusCode::BAD_REQUEST, format!("decode image: {e}")))
 }

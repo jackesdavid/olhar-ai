@@ -16,12 +16,19 @@ use crate::dictionaries::{self, Cell, Column, Dictionary, Mutation};
 fn table<'a>(inputs: &'a PortValues, node: &str) -> Result<&'a Dictionary, String> {
     match inputs.get("table") {
         Some(PortValue::Table(d)) => Ok(d),
-        _ => Err(format!("{node}: no dictionary selected (wire or pick a 'table')")),
+        _ => Err(format!(
+            "{node}: no dictionary selected (wire or pick a 'table')"
+        )),
     }
 }
 
 fn text_in(inputs: &PortValues, key: &str) -> String {
-    inputs.get(key).and_then(PortValue::as_text).unwrap_or("").trim().to_string()
+    inputs
+        .get(key)
+        .and_then(PortValue::as_text)
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 fn num_in(inputs: &PortValues, key: &str) -> Option<i64> {
     inputs.get(key).and_then(PortValue::as_num)
@@ -33,7 +40,12 @@ fn row_to_dict(dict: &Dictionary, row: &[Cell]) -> PortValue {
         .columns
         .iter()
         .enumerate()
-        .map(|(i, col)| (col.name.clone(), row.get(i).map(Cell::as_text).unwrap_or_default()))
+        .map(|(i, col)| {
+            (
+                col.name.clone(),
+                row.get(i).map(Cell::as_text).unwrap_or_default(),
+            )
+        })
         .collect();
     PortValue::Dict(pairs)
 }
@@ -102,7 +114,11 @@ pub(super) fn run_get_cell(inputs: &PortValues) -> Result<PortValues, String> {
     let column = text_in(inputs, "column");
     let ci = col_index(dict, &column, "Dictionary Get Cell")?;
     let ri = num_in(inputs, "row").unwrap_or(0);
-    match usize::try_from(ri).ok().and_then(|r| dict.rows.get(r)).and_then(|row| row.get(ci)) {
+    match usize::try_from(ri)
+        .ok()
+        .and_then(|r| dict.rows.get(r))
+        .and_then(|row| row.get(ci))
+    {
         Some(cell) => Ok(out(vec![
             ("value", PortValue::Text(cell.as_text())),
             ("found", PortValue::Bool(true)),
@@ -135,9 +151,15 @@ pub(super) fn run_set_cell(inputs: &PortValues, sys: &ToolContext) -> Result<Por
     let dict = table(inputs, "Dictionary Set Cell")?;
     let column = text_in(inputs, "column");
     let col = col_index(dict, &column, "Dictionary Set Cell")?;
-    let row = usize::try_from(num_in(inputs, "row").unwrap_or(0)).map_err(|_| "row out of range")?;
+    let row =
+        usize::try_from(num_in(inputs, "row").unwrap_or(0)).map_err(|_| "row out of range")?;
     let value = Cell::Text(text_in(inputs, "value"));
-    dictionaries::mutate(&sys.db, sys.tenant_id, dict.id, Mutation::SetCell { row, col, value })?;
+    dictionaries::mutate(
+        &sys.db,
+        sys.tenant_id,
+        dict.id,
+        Mutation::SetCell { row, col, value },
+    )?;
     Ok(PortValues::new())
 }
 
@@ -151,7 +173,11 @@ pub(super) fn run_update_row(inputs: &PortValues, sys: &ToolContext) -> Result<P
         &sys.db,
         sys.tenant_id,
         dict.id,
-        Mutation::UpdateRowByKey { key, col: Some(col), row },
+        Mutation::UpdateRowByKey {
+            key,
+            col: Some(col),
+            row,
+        },
     )?;
     Ok(PortValues::new())
 }
@@ -165,7 +191,10 @@ pub(super) fn run_delete_row(inputs: &PortValues, sys: &ToolContext) -> Result<P
         &sys.db,
         sys.tenant_id,
         dict.id,
-        Mutation::DeleteRowByKey { key, col: Some(col) },
+        Mutation::DeleteRowByKey {
+            key,
+            col: Some(col),
+        },
     )?;
     Ok(PortValues::new())
 }
@@ -242,7 +271,10 @@ mod tests {
     use serde_json::json;
 
     fn pv(inputs: Vec<(&str, PortValue)>) -> PortValues {
-        inputs.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
+        inputs
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
     }
 
     #[test]

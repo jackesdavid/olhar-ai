@@ -10,12 +10,12 @@
 //! carry raw JPEG bytes — JSON can't hold image bytes cleanly. Action nodes adapt
 //! the core domain functions directly (typed in/out, no string-result parsing).
 
-mod alerts;
 mod ai;
+mod alerts;
 mod camera;
 mod control;
-mod dictionary;
 mod debug_node;
+mod dictionary;
 mod logic;
 mod network;
 mod presence;
@@ -235,7 +235,9 @@ pub fn literal_for_named(config: &Value, name: &str, ty: PortType) -> Option<Por
             if let Some(n) = v.as_i64() {
                 Some(PortValue::Num(n))
             } else {
-                v.as_str().and_then(|s| s.trim().parse::<i64>().ok()).map(PortValue::Num)
+                v.as_str()
+                    .and_then(|s| s.trim().parse::<i64>().ok())
+                    .map(PortValue::Num)
             }
         }
         PortType::Bool => v.as_bool().map(PortValue::Bool),
@@ -263,16 +265,21 @@ pub fn literal_for_named(config: &Value, name: &str, ty: PortType) -> Option<Por
             let pairs = obj
                 .iter()
                 .map(|(k, val)| {
-                    let s = val.as_str().map(str::to_string).unwrap_or_else(|| val.to_string());
+                    let s = val
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| val.to_string());
                     (k.clone(), s)
                 })
                 .collect();
             Some(PortValue::Dict(pairs))
         }
         // A file literal is a path the user picked; read it at run time.
-        PortType::File => {
-            v.as_str().filter(|s| !s.trim().is_empty()).and_then(read_file_val).map(PortValue::File)
-        }
+        PortType::File => v
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .and_then(read_file_val)
+            .map(PortValue::File),
         // Control-flow ports never carry a value.
         PortType::Exec => None,
         // Camera literals are resolved by the engine (needs sys.devices); not a plain config value.
@@ -306,7 +313,10 @@ pub fn literal_for_named(config: &Value, name: &str, ty: PortType) -> Option<Por
 
 /// Resolve a query string (device id, IP, or name) to a `CameraEntity` using `sys.devices`.
 /// Returns `None` if the query is empty or no device matches.
-pub fn resolve_camera_entity(query: &str, sys: &ToolContext) -> Option<crate::workflows::domain::CameraEntity> {
+pub fn resolve_camera_entity(
+    query: &str,
+    sys: &ToolContext,
+) -> Option<crate::workflows::domain::CameraEntity> {
     let q = query.trim();
     if q.is_empty() {
         return None;
@@ -314,7 +324,11 @@ pub fn resolve_camera_entity(query: &str, sys: &ToolContext) -> Option<crate::wo
     let devices = sys.devices.lock().unwrap();
     let idx = dev_actions::resolve_device(&devices, q).ok()?;
     let d = &devices[idx];
-    Some(crate::workflows::domain::CameraEntity { id: d.id.clone(), ip: d.ip.clone(), name: d.name.clone() })
+    Some(crate::workflows::domain::CameraEntity {
+        id: d.id.clone(),
+        ip: d.ip.clone(),
+        name: d.name.clone(),
+    })
 }
 
 /// Seed a run's variables map from the graph's declared defaults (card #5b), so a `Get Variable`
@@ -323,7 +337,12 @@ pub fn resolve_camera_entity(query: &str, sys: &ToolContext) -> Option<crate::wo
 pub fn seed_variable_defaults(vars: &[crate::workflows::domain::VariableDecl], sys: &ToolContext) {
     let mut seeded: Vec<(String, PortValue)> = Vec::new();
     for v in vars {
-        let Some(raw) = v.default.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        let Some(raw) = v
+            .default
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
             continue;
         };
         if let Some(pv) = parse_variable_value(v.ty, raw, sys) {
@@ -370,14 +389,23 @@ pub fn parse_variable_value(
 /// from the run-start dictionaries snapshot. Called by the engine when a `PortType::Table` input
 /// port has no wired edge — the counterpart to [`resolve_camera_literal`].
 pub fn resolve_table_literal(config: &Value, key: &str, sys: &ToolContext) -> Option<PortValue> {
-    let id = config.get(key).and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty())?;
-    sys.dictionaries.get(id.trim()).cloned().map(PortValue::Table)
+    let id = config
+        .get(key)
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())?;
+    sys.dictionaries
+        .get(id.trim())
+        .cloned()
+        .map(PortValue::Table)
 }
 
 /// Resolve a `Camera` config literal (the dropdown-stored device id) to a `PortValue::Camera`.
 /// Called by the engine when a `PortType::Camera` input port has no wired edge.
 pub fn resolve_camera_literal(config: &Value, key: &str, sys: &ToolContext) -> Option<PortValue> {
-    let id = config.get(key).and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty())?;
+    let id = config
+        .get(key)
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())?;
     resolve_camera_entity(id, sys).map(PortValue::Camera)
 }
 
@@ -445,7 +473,9 @@ fn landmark_points(items: &[PortValue]) -> Vec<[f32; 2]> {
     }
     // Flat form: chunk the numbers into (x, y) pairs.
     let nums: Vec<i64> = items.iter().filter_map(PortValue::as_num).collect();
-    nums.chunks_exact(2).map(|c| [c[0] as f32, c[1] as f32]).collect()
+    nums.chunks_exact(2)
+        .map(|c| [c[0] as f32, c[1] as f32])
+        .collect()
 }
 
 /// Get the full `Device` from `sys.devices` using a `CameraEntity`'s stable id.
@@ -681,9 +711,10 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
 /// Read a non-negative integer config value, accepting both a JSON number and a numeric
 /// string (the editor often stores config fields as strings).
 fn config_u64(config: &Value, key: &str) -> Option<u64> {
-    config
-        .get(key)
-        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+    config.get(key).and_then(|v| {
+        v.as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+    })
 }
 
 /// Run a node under a hard deadline (see [`node_timeout`]). The body runs on a detached
@@ -745,9 +776,15 @@ pub fn debug_summary(
             Some(r) if !r.is_empty() => format!("recipient: {r}"),
             _ => "no recipient set".into(),
         },
-        NodeKind::CreateAlert => txt("result").map(clip).unwrap_or_else(|| "alert created".into()),
-        NodeKind::DeliverAlert => txt("result").map(clip).unwrap_or_else(|| "delivered".into()),
-        NodeKind::CameraSnapshot => txt("result").map(clip).unwrap_or_else(|| "snapshot captured".into()),
+        NodeKind::CreateAlert => txt("result")
+            .map(clip)
+            .unwrap_or_else(|| "alert created".into()),
+        NodeKind::DeliverAlert => txt("result")
+            .map(clip)
+            .unwrap_or_else(|| "delivered".into()),
+        NodeKind::CameraSnapshot => txt("result")
+            .map(clip)
+            .unwrap_or_else(|| "snapshot captured".into()),
         NodeKind::GetTrackedObjects => format!("{} tracked object(s)", num("count").unwrap_or(0)),
         NodeKind::BreakTrackedObject => {
             let cls = txt("class").unwrap_or("?");
@@ -758,20 +795,40 @@ pub fn debug_summary(
             }
         }
         NodeKind::GetCurrentFrame => {
-            let kb = inputs.get("image").and_then(PortValue::as_image).map_or(0, <[u8]>::len) / 1024;
-            format!("current frame ({} KB, {} ms old)", kb, num("age_ms").unwrap_or(0))
+            let kb = inputs
+                .get("image")
+                .and_then(PortValue::as_image)
+                .map_or(0, <[u8]>::len)
+                / 1024;
+            format!(
+                "current frame ({} KB, {} ms old)",
+                kb,
+                num("age_ms").unwrap_or(0)
+            )
         }
         NodeKind::DescribeImage => match txt("description") {
             Some(d) => clip(d),
             None => "described image".into(),
         },
-        NodeKind::NotifyRecipient => txt("result").map(clip).unwrap_or_else(|| "notification sent".into()),
+        NodeKind::NotifyRecipient => txt("result")
+            .map(clip)
+            .unwrap_or_else(|| "notification sent".into()),
         NodeKind::Format => format!("→ {}", clip(txt("text").unwrap_or(""))),
         NodeKind::Wait => "delay complete".into(),
-        NodeKind::HttpPost => format!("HTTP {} {}", num("status").unwrap_or(0), if flag("ok") { "ok" } else { "failed" }),
+        NodeKind::HttpPost => format!(
+            "HTTP {} {}",
+            num("status").unwrap_or(0),
+            if flag("ok") { "ok" } else { "failed" }
+        ),
         NodeKind::If => {
-            let cond = inputs.get("condition").and_then(PortValue::as_bool).unwrap_or(false);
-            format!("condition {cond} → '{}' branch", if cond { "true" } else { "false" })
+            let cond = inputs
+                .get("condition")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
+            format!(
+                "condition {cond} → '{}' branch",
+                if cond { "true" } else { "false" }
+            )
         }
         NodeKind::ForEach => match num("index") {
             Some(i) => match txt("item") {
@@ -783,7 +840,10 @@ pub fn debug_summary(
         NodeKind::MotionDetection => {
             let sens = config
                 .get("sensitivity")
-                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+                .and_then(|v| {
+                    v.as_i64()
+                        .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+                })
                 .unwrap_or(2);
             format!(
                 "score {}% (threshold {}%) → {}",
@@ -794,37 +854,62 @@ pub fn debug_summary(
         }
         NodeKind::MotionWatch => format!(
             "{} · score {}% → {}",
-            config.get("camera").and_then(|v| v.as_str()).unwrap_or("first"),
+            config
+                .get("camera")
+                .and_then(|v| v.as_str())
+                .unwrap_or("first"),
             num("score").unwrap_or(0),
             if flag("moved") { "moved" } else { "still" }
         ),
         NodeKind::PersonDetection => match num("count").unwrap_or(0) {
             0 => "no person detected".into(),
-            c => format!("{c} person(s) ({}% confidence)", num("confidence").unwrap_or(0)),
+            c => format!(
+                "{c} person(s) ({}% confidence)",
+                num("confidence").unwrap_or(0)
+            ),
         },
         NodeKind::ObjectDetection => {
-            let class = config.get("class").and_then(|v| v.as_str()).unwrap_or("person");
+            let class = config
+                .get("class")
+                .and_then(|v| v.as_str())
+                .unwrap_or("person");
             match num("count").unwrap_or(0) {
                 0 => format!("no {class} detected"),
-                c => format!("{c} {class}(s) ({}% confidence)", num("confidence").unwrap_or(0)),
+                c => format!(
+                    "{c} {class}(s) ({}% confidence)",
+                    num("confidence").unwrap_or(0)
+                ),
             }
         }
-        NodeKind::BreakPersonDetection | NodeKind::BreakDetection | NodeKind::BreakFaceDetection => {
+        NodeKind::BreakPersonDetection
+        | NodeKind::BreakDetection
+        | NodeKind::BreakFaceDetection => {
             format!("bbox + {}% confidence", num("confidence").unwrap_or(0))
         }
         NodeKind::Print => {
-            let msg = inputs.get("message").and_then(PortValue::as_text).unwrap_or("");
+            let msg = inputs
+                .get("message")
+                .and_then(PortValue::as_text)
+                .unwrap_or("");
             format!("print: {}", clip(msg))
         }
         NodeKind::RecognizePerson => {
             if flag("ok") {
-                format!("recognised {} ({}%)", txt("person").unwrap_or("?"), num("confidence").unwrap_or(0))
+                format!(
+                    "recognised {} ({}%)",
+                    txt("person").unwrap_or("?"),
+                    num("confidence").unwrap_or(0)
+                )
             } else {
                 "no match".into()
             }
         }
         NodeKind::FaceEmbedding => {
-            if flag("ok") { format!("embedded ({}-d)", num("dim").unwrap_or(0)) } else { "no face".into() }
+            if flag("ok") {
+                format!("embedded ({}-d)", num("dim").unwrap_or(0))
+            } else {
+                "no face".into()
+            }
         }
         NodeKind::RecognizeFace => {
             if flag("found") {
@@ -835,7 +920,11 @@ pub fn debug_summary(
             }
         }
         NodeKind::StoreFace => {
-            if flag("stored") { "face stored".into() } else { "skipped (duplicate)".into() }
+            if flag("stored") {
+                "face stored".into()
+            } else {
+                "skipped (duplicate)".into()
+            }
         }
         NodeKind::RecordPresence => format!("presence recorded (#{})", num("id").unwrap_or(0)),
         NodeKind::EmitEvent => {
@@ -847,7 +936,10 @@ pub fn debug_summary(
             format!("on '{ev}'")
         }
         NodeKind::ShowImage => {
-            let bytes = inputs.get("image").and_then(PortValue::as_image).map_or(0, <[u8]>::len);
+            let bytes = inputs
+                .get("image")
+                .and_then(PortValue::as_image)
+                .map_or(0, <[u8]>::len);
             if bytes > 0 {
                 format!("image shown ({} KB)", bytes / 1024)
             } else {
@@ -855,14 +947,24 @@ pub fn debug_summary(
             }
         }
         NodeKind::FlipFlop => {
-            let branch = outputs.get("is_a").and_then(PortValue::as_bool).map(|b| if b { "a" } else { "b" }).unwrap_or("?");
+            let branch = outputs
+                .get("is_a")
+                .and_then(PortValue::as_bool)
+                .map(|b| if b { "a" } else { "b" })
+                .unwrap_or("?");
             format!("flip flop → {branch}")
         }
         NodeKind::Compare => {
             let a = inputs.get("a").and_then(PortValue::as_num).unwrap_or(0);
             let b = inputs.get("b").and_then(PortValue::as_num).unwrap_or(0);
-            let op = config.get("operator").and_then(|v| v.as_str()).unwrap_or("==");
-            let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            let op = config
+                .get("operator")
+                .and_then(|v| v.as_str())
+                .unwrap_or("==");
+            let result = outputs
+                .get("result")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
             format!("{a} {op} {b} → {result}")
         }
         NodeKind::NumLt => num_cmp_summary("<", inputs, outputs),
@@ -873,108 +975,238 @@ pub fn debug_summary(
         NodeKind::NumNe => num_cmp_summary("!=", inputs, outputs),
         NodeKind::NumToText => {
             let v = inputs.get("value").and_then(PortValue::as_num).unwrap_or(0);
-            let text = outputs.get("text").and_then(PortValue::as_text).unwrap_or("");
+            let text = outputs
+                .get("text")
+                .and_then(PortValue::as_text)
+                .unwrap_or("");
             format!("{v} → \"{text}\"")
         }
         NodeKind::BoolToText => {
-            let v = inputs.get("value").and_then(PortValue::as_bool).unwrap_or(false);
-            let text = outputs.get("text").and_then(PortValue::as_text).unwrap_or("");
+            let v = inputs
+                .get("value")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
+            let text = outputs
+                .get("text")
+                .and_then(PortValue::as_text)
+                .unwrap_or("");
             format!("{v} → \"{text}\"")
         }
         NodeKind::Cooldown => {
-            let elapsed = outputs.get("elapsed_secs").and_then(PortValue::as_num).unwrap_or(0);
-            let ok = outputs.get("ok").and_then(PortValue::as_bool).unwrap_or(false);
-            let window = config.get("window_secs").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).unwrap_or(60);
-            format!("{elapsed}s elapsed / {window}s → {}", if ok { "pass" } else { "blocked" })
+            let elapsed = outputs
+                .get("elapsed_secs")
+                .and_then(PortValue::as_num)
+                .unwrap_or(0);
+            let ok = outputs
+                .get("ok")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
+            let window = config
+                .get("window_secs")
+                .and_then(|v| {
+                    v.as_u64()
+                        .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+                })
+                .unwrap_or(60);
+            format!(
+                "{elapsed}s elapsed / {window}s → {}",
+                if ok { "pass" } else { "blocked" }
+            )
         }
         NodeKind::DrawBbox => {
-            let bytes = outputs.get("image").and_then(PortValue::as_image).map_or(0, <[u8]>::len);
+            let bytes = outputs
+                .get("image")
+                .and_then(PortValue::as_image)
+                .map_or(0, <[u8]>::len);
             format!("bbox drawn ({} KB)", bytes / 1024)
         }
         NodeKind::DrawText => {
-            let t = inputs.get("text").and_then(PortValue::as_text)
+            let t = inputs
+                .get("text")
+                .and_then(PortValue::as_text)
                 .or_else(|| config.get("text").and_then(|v| v.as_str()))
                 .unwrap_or("");
             format!("text drawn: {}", clip(t))
         }
         NodeKind::BlurOutsideBbox => {
-            let bytes = outputs.get("image").and_then(PortValue::as_image).map_or(0, <[u8]>::len);
+            let bytes = outputs
+                .get("image")
+                .and_then(PortValue::as_image)
+                .map_or(0, <[u8]>::len);
             format!("blurred outside bbox ({} KB)", bytes / 1024)
         }
         NodeKind::GetImageSize => {
-            let w = outputs.get("width").and_then(PortValue::as_num).unwrap_or(0);
-            let h = outputs.get("height").and_then(PortValue::as_num).unwrap_or(0);
+            let w = outputs
+                .get("width")
+                .and_then(PortValue::as_num)
+                .unwrap_or(0);
+            let h = outputs
+                .get("height")
+                .and_then(PortValue::as_num)
+                .unwrap_or(0);
             format!("{w}×{h}")
         }
         NodeKind::And => {
-            let a = inputs.get("a").and_then(PortValue::as_bool).unwrap_or(false);
-            let b = inputs.get("b").and_then(PortValue::as_bool).unwrap_or(false);
-            let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            let a = inputs
+                .get("a")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
+            let b = inputs
+                .get("b")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
+            let result = outputs
+                .get("result")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
             format!("{a} AND {b} → {result}")
         }
         NodeKind::Or => {
-            let a = inputs.get("a").and_then(PortValue::as_bool).unwrap_or(false);
-            let b = inputs.get("b").and_then(PortValue::as_bool).unwrap_or(false);
-            let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            let a = inputs
+                .get("a")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
+            let b = inputs
+                .get("b")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
+            let result = outputs
+                .get("result")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
             format!("{a} OR {b} → {result}")
         }
         NodeKind::Not => {
-            let a = inputs.get("a").and_then(PortValue::as_bool).unwrap_or(false);
-            let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+            let a = inputs
+                .get("a")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
+            let result = outputs
+                .get("result")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
             format!("NOT {a} → {result}")
         }
         NodeKind::TextCompare => {
             let a = inputs.get("a").and_then(PortValue::as_text).unwrap_or("");
-            let b = inputs.get("b").and_then(PortValue::as_text)
+            let b = inputs
+                .get("b")
+                .and_then(PortValue::as_text)
                 .or_else(|| config.get("b").and_then(|v| v.as_str()))
                 .unwrap_or("");
-            let op = config.get("operator").and_then(|v| v.as_str()).unwrap_or("eq");
-            let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
-            let clip = |s: &str| if s.chars().count() > 20 { format!("{}…", s.chars().take(19).collect::<String>()) } else { s.to_string() };
+            let op = config
+                .get("operator")
+                .and_then(|v| v.as_str())
+                .unwrap_or("eq");
+            let result = outputs
+                .get("result")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
+            let clip = |s: &str| {
+                if s.chars().count() > 20 {
+                    format!("{}…", s.chars().take(19).collect::<String>())
+                } else {
+                    s.to_string()
+                }
+            };
             format!("\"{}\" {op} \"{}\" → {result}", clip(a), clip(b))
         }
         NodeKind::StringSwitch => {
-            let val = inputs.get("value").and_then(PortValue::as_text).unwrap_or("");
+            let val = inputs
+                .get("value")
+                .and_then(PortValue::as_text)
+                .unwrap_or("");
             let arms = super::domain::string_switch_arms(config);
-            let fired = if arms.iter().any(|a| a == val) { val } else { "default" };
+            let fired = if arms.iter().any(|a| a == val) {
+                val
+            } else {
+                "default"
+            };
             format!("\"{}\" → arm '{fired}'", clip(val))
         }
         NodeKind::CameraSwitch => {
             let cam = inputs.get("camera").and_then(PortValue::as_camera);
             if let Some(cam) = cam {
                 let arms = super::domain::camera_switch_arms(config);
-                let idx = arms.iter().position(|a| !a.is_empty() && (a == &cam.ip || a == &cam.id));
-                let fired = idx.map(|i| format!("arm_{}", i + 1)).unwrap_or_else(|| "default".to_string());
+                let idx = arms
+                    .iter()
+                    .position(|a| !a.is_empty() && (a == &cam.ip || a == &cam.id));
+                let fired = idx
+                    .map(|i| format!("arm_{}", i + 1))
+                    .unwrap_or_else(|| "default".to_string());
                 format!("{} → {fired}", cam.name)
             } else {
                 "no camera → default".to_string()
             }
         }
         NodeKind::AskAi => {
-            let q = inputs.get("question").and_then(PortValue::as_text)
+            let q = inputs
+                .get("question")
+                .and_then(PortValue::as_text)
                 .or_else(|| config.get("question").and_then(|v| v.as_str()))
                 .unwrap_or("");
-            let answer = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
-            format!("AI: \"{}\" → {}", clip(q), if answer { "true" } else { "false" })
+            let answer = outputs
+                .get("result")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
+            format!(
+                "AI: \"{}\" → {}",
+                clip(q),
+                if answer { "true" } else { "false" }
+            )
         }
         NodeKind::GetCameraByName => {
-            let name = outputs.get("camera").and_then(PortValue::as_camera).map(|c| c.name.as_str()).unwrap_or("?");
+            let name = outputs
+                .get("camera")
+                .and_then(PortValue::as_camera)
+                .map(|c| c.name.as_str())
+                .unwrap_or("?");
             format!("camera: {name}")
         }
         NodeKind::BreakCamera => {
-            let name = inputs.get("camera").and_then(PortValue::as_camera).map(|c| c.name.as_str()).unwrap_or("?");
+            let name = inputs
+                .get("camera")
+                .and_then(PortValue::as_camera)
+                .map(|c| c.name.as_str())
+                .unwrap_or("?");
             format!("break '{name}' → id/ip/name")
         }
         NodeKind::Region => match outputs.get("region").and_then(PortValue::as_region) {
-            Some(r) => format!("region '{}' ({} point{})", r.name, r.points.len(), if r.points.len() == 1 { "" } else { "s" }),
+            Some(r) => format!(
+                "region '{}' ({} point{})",
+                r.name,
+                r.points.len(),
+                if r.points.len() == 1 { "" } else { "s" }
+            ),
             None => "no region drawn".into(),
         },
         NodeKind::Comment => "comment".into(),
         NodeKind::Reroute => "reroute".into(),
-        NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown | NodeKind::Text | NodeKind::Gauge => "display".into(),
+        NodeKind::Title
+        | NodeKind::Paragraph
+        | NodeKind::Markdown
+        | NodeKind::Text
+        | NodeKind::Gauge => "display".into(),
         NodeKind::StartRecording => {
-            let new = outputs.get("recording_new").and_then(|v| if let PortValue::Bool(b) = v { Some(*b) } else { None }).unwrap_or(true);
-            txt("clip_id").map(|id| if new { format!("recording started: {id}") } else { format!("recording resumed: {id}") }).unwrap_or_else(|| "recording started".into())
+            let new = outputs
+                .get("recording_new")
+                .and_then(|v| {
+                    if let PortValue::Bool(b) = v {
+                        Some(*b)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(true);
+            txt("clip_id")
+                .map(|id| {
+                    if new {
+                        format!("recording started: {id}")
+                    } else {
+                        format!("recording resumed: {id}")
+                    }
+                })
+                .unwrap_or_else(|| "recording started".into())
         }
         NodeKind::StopRecording => "recording stopped".into(),
         NodeKind::TimeGate => "time gate".into(),
@@ -982,33 +1214,63 @@ pub fn debug_summary(
         // only the fallback for a node that somehow reached the generic summary path.
         NodeKind::DelayTrigger => "delay trigger".into(),
         NodeKind::GetVariable => {
-            let name = config.get("variable").and_then(|v| v.as_str()).unwrap_or("?");
+            let name = config
+                .get("variable")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             format!("get ${name}")
         }
         NodeKind::SetVariable => {
-            let name = config.get("variable").and_then(|v| v.as_str()).unwrap_or("?");
+            let name = config
+                .get("variable")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             format!("set ${name}")
         }
         NodeKind::ReplyToSender => {
-            let chat = num("chat_id").or_else(|| inputs.get("chat_id").and_then(PortValue::as_num)).unwrap_or(0);
-            txt("result").map(clip).unwrap_or_else(|| format!("reply → chat {chat}"))
+            let chat = num("chat_id")
+                .or_else(|| inputs.get("chat_id").and_then(PortValue::as_num))
+                .unwrap_or(0);
+            txt("result")
+                .map(clip)
+                .unwrap_or_else(|| format!("reply → chat {chat}"))
         }
-        NodeKind::AiAnswer => txt("response").map(clip).unwrap_or_else(|| "AI answered".into()),
+        NodeKind::AiAnswer => txt("response")
+            .map(clip)
+            .unwrap_or_else(|| "AI answered".into()),
         NodeKind::ReplyWithRecording => {
-            let chat = inputs.get("chat_id").and_then(PortValue::as_num).unwrap_or(0);
-            txt("result").map(clip).unwrap_or_else(|| format!("clip → chat {chat}"))
+            let chat = inputs
+                .get("chat_id")
+                .and_then(PortValue::as_num)
+                .unwrap_or(0);
+            txt("result")
+                .map(clip)
+                .unwrap_or_else(|| format!("clip → chat {chat}"))
         }
         NodeKind::AiSwitch => format!("→ {}", txt("arm").unwrap_or("default")),
         NodeKind::AiExtract => {
-            let found = outputs.get("found").and_then(PortValue::as_bool).unwrap_or(false);
+            let found = outputs
+                .get("found")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
             match txt("value") {
                 Some(v) => format!("extracted: {}", clip(v)),
-                None => if found { "extracted".into() } else { "not found".into() },
+                None => {
+                    if found {
+                        "extracted".into()
+                    } else {
+                        "not found".into()
+                    }
+                }
             }
         }
         NodeKind::DictRowCount => format!("{} row(s)", num("count").unwrap_or(0)),
         NodeKind::DictGetRow | NodeKind::DictFindRow => {
-            if flag("found") { "row found".into() } else { "no matching row".into() }
+            if flag("found") {
+                "row found".into()
+            } else {
+                "no matching row".into()
+            }
         }
         NodeKind::DictGetCell => match txt("value") {
             Some(v) if flag("found") => format!("cell: {}", clip(v)),
@@ -1023,8 +1285,15 @@ pub fn debug_summary(
         NodeKind::DictMakeRow => "row built".into(),
         NodeKind::DictAppendRow => "row appended".into(),
         NodeKind::TuyaControl => {
-            let code = config.get("tuya_code").and_then(Value::as_str).unwrap_or("?");
-            if flag("ok") { format!("Tuya {code} set") } else { format!("Tuya {code} failed") }
+            let code = config
+                .get("tuya_code")
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            if flag("ok") {
+                format!("Tuya {code} set")
+            } else {
+                format!("Tuya {code} failed")
+            }
         }
         NodeKind::TuyaReadStatus => match txt("value") {
             Some(v) if !v.is_empty() => format!("Tuya status: {}", clip(v)),
@@ -1036,7 +1305,10 @@ pub fn debug_summary(
 fn num_cmp_summary(op: &str, inputs: &PortValues, outputs: &PortValues) -> String {
     let a = inputs.get("a").and_then(PortValue::as_num).unwrap_or(0);
     let b = inputs.get("b").and_then(PortValue::as_num).unwrap_or(0);
-    let result = outputs.get("result").and_then(PortValue::as_bool).unwrap_or(false);
+    let result = outputs
+        .get("result")
+        .and_then(PortValue::as_bool)
+        .unwrap_or(false);
     format!("{a} {op} {b} → {result}")
 }
 
@@ -1059,8 +1331,11 @@ fn jpeg_dimensions(bytes: &[u8]) -> (i64, i64) {
 pub(crate) fn to_jpeg(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let img = image::load_from_memory(bytes).map_err(|e| format!("decode snapshot: {e}"))?;
     let mut out = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
-        .map_err(|e| format!("encode snapshot: {e}"))?;
+    img.write_to(
+        &mut std::io::Cursor::new(&mut out),
+        image::ImageFormat::Jpeg,
+    )
+    .map_err(|e| format!("encode snapshot: {e}"))?;
     Ok(out)
 }
 
@@ -1087,15 +1362,34 @@ mod tests {
         use crate::workflows::domain::PortType;
         let sys = test_ctx();
         // The types a manual-run input can carry — parsed identically to a stored default.
-        assert!(matches!(parse_variable_value(PortType::Text, "hi", &sys), Some(PortValue::Text(t)) if t == "hi"));
-        assert!(matches!(parse_variable_value(PortType::Num, "42", &sys), Some(PortValue::Num(42))));
-        assert!(matches!(parse_variable_value(PortType::Bool, "true", &sys), Some(PortValue::Bool(true))));
-        assert!(matches!(parse_variable_value(PortType::Bool, "nope", &sys), Some(PortValue::Bool(false))));
-        assert!(matches!(parse_variable_value(PortType::Recipient, "ops", &sys), Some(PortValue::Recipient(r)) if r == "ops"));
+        assert!(
+            matches!(parse_variable_value(PortType::Text, "hi", &sys), Some(PortValue::Text(t)) if t == "hi")
+        );
+        assert!(matches!(
+            parse_variable_value(PortType::Num, "42", &sys),
+            Some(PortValue::Num(42))
+        ));
+        assert!(matches!(
+            parse_variable_value(PortType::Bool, "true", &sys),
+            Some(PortValue::Bool(true))
+        ));
+        assert!(matches!(
+            parse_variable_value(PortType::Bool, "nope", &sys),
+            Some(PortValue::Bool(false))
+        ));
+        assert!(
+            matches!(parse_variable_value(PortType::Recipient, "ops", &sys), Some(PortValue::Recipient(r)) if r == "ops")
+        );
         // Rejections fall back to the Get's type-zero, never a wrong value or a run failure.
         assert!(parse_variable_value(PortType::Num, "not-a-number", &sys).is_none());
-        assert!(parse_variable_value(PortType::Text, "   ", &sys).is_none(), "blank is no value");
-        assert!(parse_variable_value(PortType::Image, "x", &sys).is_none(), "non-defaultable type");
+        assert!(
+            parse_variable_value(PortType::Text, "   ", &sys).is_none(),
+            "blank is no value"
+        );
+        assert!(
+            parse_variable_value(PortType::Image, "x", &sys).is_none(),
+            "non-defaultable type"
+        );
         // Camera needs a resolvable device; the empty test ctx has none → None (not a crash).
         assert!(parse_variable_value(PortType::Camera, "192.168.1.1", &sys).is_none());
     }
@@ -1103,20 +1397,45 @@ mod tests {
     #[test]
     fn node_timeout_maps_io_vs_pure_kinds() {
         use std::time::Duration;
-        for k in [NodeKind::Wait, NodeKind::Format, NodeKind::If, NodeKind::Print, NodeKind::ForEach, NodeKind::ShowImage] {
+        for k in [
+            NodeKind::Wait,
+            NodeKind::Format,
+            NodeKind::If,
+            NodeKind::Print,
+            NodeKind::ForEach,
+            NodeKind::ShowImage,
+        ] {
             assert_eq!(node_timeout(k, &json!({})), None, "{k:?} should run inline");
         }
-        assert_eq!(node_timeout(NodeKind::CameraSnapshot, &json!({})), Some(Duration::from_secs(10)));
-        assert_eq!(node_timeout(NodeKind::DescribeImage, &json!({})), Some(Duration::from_secs(65)));
-        assert_eq!(node_timeout(NodeKind::RecognizePerson, &json!({})), Some(Duration::from_secs(30)));
+        assert_eq!(
+            node_timeout(NodeKind::CameraSnapshot, &json!({})),
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(
+            node_timeout(NodeKind::DescribeImage, &json!({})),
+            Some(Duration::from_secs(65))
+        );
+        assert_eq!(
+            node_timeout(NodeKind::RecognizePerson, &json!({})),
+            Some(Duration::from_secs(30))
+        );
     }
 
     #[test]
     fn node_timeout_config_override_wins_and_zero_disables() {
         use std::time::Duration;
-        assert_eq!(node_timeout(NodeKind::CameraSnapshot, &json!({ "timeout_secs": "3" })), Some(Duration::from_secs(3)));
-        assert_eq!(node_timeout(NodeKind::CameraSnapshot, &json!({ "timeout_secs": 3 })), Some(Duration::from_secs(3)));
-        assert_eq!(node_timeout(NodeKind::CameraSnapshot, &json!({ "timeout_secs": "0" })), None);
+        assert_eq!(
+            node_timeout(NodeKind::CameraSnapshot, &json!({ "timeout_secs": "3" })),
+            Some(Duration::from_secs(3))
+        );
+        assert_eq!(
+            node_timeout(NodeKind::CameraSnapshot, &json!({ "timeout_secs": 3 })),
+            Some(Duration::from_secs(3))
+        );
+        assert_eq!(
+            node_timeout(NodeKind::CameraSnapshot, &json!({ "timeout_secs": "0" })),
+            None
+        );
     }
 
     #[test]
@@ -1124,27 +1443,58 @@ mod tests {
         use std::time::{Duration, Instant};
         let cfg = json!({ "seconds": "5" });
         let start = Instant::now();
-        let err = run_node_timed(NodeKind::Wait, &cfg, &PortValues::new(), &test_ctx(), Duration::from_millis(200))
-            .unwrap_err();
+        let err = run_node_timed(
+            NodeKind::Wait,
+            &cfg,
+            &PortValues::new(),
+            &test_ctx(),
+            Duration::from_millis(200),
+        )
+        .unwrap_err();
         let elapsed = start.elapsed();
-        assert!(err.contains("timed out"), "expected a timeout error, got: {err}");
-        assert!(elapsed < Duration::from_secs(2), "should return at the deadline, not after the 5s body: {elapsed:?}");
+        assert!(
+            err.contains("timed out"),
+            "expected a timeout error, got: {err}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "should return at the deadline, not after the 5s body: {elapsed:?}"
+        );
     }
 
     #[test]
     fn run_node_timed_returns_a_fast_nodes_output() {
         use std::time::Duration;
         let cfg = json!({ "template": "hello" });
-        let out = run_node_timed(NodeKind::Format, &cfg, &PortValues::new(), &test_ctx(), Duration::from_secs(5)).unwrap();
+        let out = run_node_timed(
+            NodeKind::Format,
+            &cfg,
+            &PortValues::new(),
+            &test_ctx(),
+            Duration::from_secs(5),
+        )
+        .unwrap();
         assert_eq!(out.get("text").and_then(PortValue::as_text), Some("hello"));
     }
 
     #[test]
     fn literal_for_coerces_and_skips_empty() {
         let cfg = json!({ "camera": "front", "blank": "  ", "n": "7" });
-        let text = Port { name: "camera", ty: PortType::Text, required: true };
-        let blank = Port { name: "blank", ty: PortType::Text, required: false };
-        let num = Port { name: "n", ty: PortType::Num, required: true };
+        let text = Port {
+            name: "camera",
+            ty: PortType::Text,
+            required: true,
+        };
+        let blank = Port {
+            name: "blank",
+            ty: PortType::Text,
+            required: false,
+        };
+        let num = Port {
+            name: "n",
+            ty: PortType::Num,
+            required: true,
+        };
         assert_eq!(literal_for(&cfg, text).unwrap().as_text(), Some("front"));
         assert!(literal_for(&cfg, blank).is_none());
         assert_eq!(literal_for(&cfg, num).unwrap().as_num(), Some(7));
@@ -1152,9 +1502,18 @@ mod tests {
 
     #[test]
     fn literal_for_parses_a_string_dictionary() {
-        let cfg = json!({ "headers": { "Authorization": "Bearer x", "X-Env": "prod" }, "empty": {} });
-        let dict = Port { name: "headers", ty: PortType::Dictionary, required: false };
-        let empty = Port { name: "empty", ty: PortType::Dictionary, required: false };
+        let cfg =
+            json!({ "headers": { "Authorization": "Bearer x", "X-Env": "prod" }, "empty": {} });
+        let dict = Port {
+            name: "headers",
+            ty: PortType::Dictionary,
+            required: false,
+        };
+        let empty = Port {
+            name: "empty",
+            ty: PortType::Dictionary,
+            required: false,
+        };
         let got = literal_for(&cfg, dict).unwrap();
         let pairs = got.as_dict().unwrap();
         assert_eq!(pairs.len(), 2);
@@ -1164,8 +1523,13 @@ mod tests {
 
     #[test]
     fn http_post_requires_a_url_before_any_request() {
-        let err = run_node(NodeKind::HttpPost, &json!({ "url": "  " }), &PortValues::new(), &test_ctx())
-            .unwrap_err();
+        let err = run_node(
+            NodeKind::HttpPost,
+            &json!({ "url": "  " }),
+            &PortValues::new(),
+            &test_ctx(),
+        )
+        .unwrap_err();
         assert!(err.contains("missing required input 'url'"), "got: {err}");
     }
 
@@ -1173,7 +1537,10 @@ mod tests {
         let img = image::RgbImage::from_pixel(w, h, image::Rgb([luma, luma, luma]));
         let mut buf = Vec::new();
         image::DynamicImage::ImageRgb8(img)
-            .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+            .write_to(
+                &mut std::io::Cursor::new(&mut buf),
+                image::ImageFormat::Jpeg,
+            )
             .unwrap();
         buf
     }
@@ -1198,15 +1565,25 @@ mod tests {
 
     #[test]
     fn person_detection_requires_an_image() {
-        let err = run_node(NodeKind::PersonDetection, &json!({}), &PortValues::new(), &test_ctx())
-            .unwrap_err();
+        let err = run_node(
+            NodeKind::PersonDetection,
+            &json!({}),
+            &PortValues::new(),
+            &test_ctx(),
+        )
+        .unwrap_err();
         assert!(err.contains("missing required input 'image'"), "got: {err}");
     }
 
     #[test]
     fn recognize_person_requires_an_image() {
-        let err = run_node(NodeKind::RecognizePerson, &json!({}), &PortValues::new(), &test_ctx())
-            .unwrap_err();
+        let err = run_node(
+            NodeKind::RecognizePerson,
+            &json!({}),
+            &PortValues::new(),
+            &test_ctx(),
+        )
+        .unwrap_err();
         assert!(err.contains("missing required input 'image'"), "got: {err}");
     }
 
@@ -1214,30 +1591,49 @@ mod tests {
     fn show_image_is_a_sink_with_no_data_outputs() {
         let mut inputs = PortValues::new();
         inputs.insert("image".into(), PortValue::Image(solid_jpeg(32, 24, 128)));
-        let out =
-            run_node(NodeKind::ShowImage, &json!({ "label": "frame" }), &inputs, &test_ctx())
-                .unwrap();
+        let out = run_node(
+            NodeKind::ShowImage,
+            &json!({ "label": "frame" }),
+            &inputs,
+            &test_ctx(),
+        )
+        .unwrap();
         assert!(out.is_empty());
     }
 
     #[test]
     fn motion_requires_both_frames() {
-        let err = run_node(NodeKind::MotionDetection, &json!({}), &PortValues::new(), &test_ctx())
-            .unwrap_err();
-        assert!(err.contains("missing required input 'image_a'"), "got: {err}");
+        let err = run_node(
+            NodeKind::MotionDetection,
+            &json!({}),
+            &PortValues::new(),
+            &test_ctx(),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("missing required input 'image_a'"),
+            "got: {err}"
+        );
     }
 
     #[test]
     fn if_requires_a_condition() {
-        let err =
-            run_node(NodeKind::If, &json!({}), &PortValues::new(), &test_ctx()).unwrap_err();
-        assert!(err.contains("missing required input 'condition'"), "got: {err}");
+        let err = run_node(NodeKind::If, &json!({}), &PortValues::new(), &test_ctx()).unwrap_err();
+        assert!(
+            err.contains("missing required input 'condition'"),
+            "got: {err}"
+        );
     }
 
     #[test]
     fn wait_is_pure_control_flow_no_data_outputs() {
-        let out = run_node(NodeKind::Wait, &json!({ "seconds": "0" }), &PortValues::new(), &test_ctx())
-            .unwrap();
+        let out = run_node(
+            NodeKind::Wait,
+            &json!({ "seconds": "0" }),
+            &PortValues::new(),
+            &test_ctx(),
+        )
+        .unwrap();
         assert!(out.is_empty());
     }
 
@@ -1255,18 +1651,29 @@ mod tests {
         let ctx = test_ctx();
         let cfg = NodeKind::CreateAlert.default_config();
         let err = run_node(NodeKind::CreateAlert, &cfg, &PortValues::new(), &ctx).unwrap_err();
-        assert!(err.contains("missing required input 'message'"), "got: {err}");
+        assert!(
+            err.contains("missing required input 'message'"),
+            "got: {err}"
+        );
     }
 
     #[test]
     fn ask_ai_requires_a_question() {
-        let err = run_node(NodeKind::AskAi, &json!({ "question": "" }), &PortValues::new(), &test_ctx())
-            .unwrap_err();
+        let err = run_node(
+            NodeKind::AskAi,
+            &json!({ "question": "" }),
+            &PortValues::new(),
+            &test_ctx(),
+        )
+        .unwrap_err();
         assert!(err.contains("question is required"), "got: {err}");
     }
 
     #[test]
     fn ask_ai_timeout_is_65s() {
-        assert_eq!(node_timeout(NodeKind::AskAi, &json!({})), Some(std::time::Duration::from_secs(65)));
+        assert_eq!(
+            node_timeout(NodeKind::AskAi, &json!({})),
+            Some(std::time::Duration::from_secs(65))
+        );
     }
 }

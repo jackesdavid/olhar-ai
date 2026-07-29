@@ -7,8 +7,8 @@ use std::time::Duration;
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::timeutil::now_rfc3339;
 use crate::db::Db;
+use crate::timeutil::now_rfc3339;
 
 #[derive(Debug, Clone, FromRow, serde::Serialize)]
 pub struct FxRate {

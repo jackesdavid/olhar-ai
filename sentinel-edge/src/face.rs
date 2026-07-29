@@ -32,7 +32,6 @@ pub fn detect_and_push(
     }
     // Encode the frame once; every face's event carries it (each becomes its own pipeline run).
     let frame_b64 = base64::engine::general_purpose::STANDARD.encode(jpeg);
-    let frame_area = (fw as f32 * fh as f32).max(1.0);
     log::info!("face detect[{ip}]: {} face(s)", faces.len());
     for face in &faces {
         let [x1, y1, x2, y2] = face.xyxy;
@@ -51,7 +50,7 @@ pub fn detect_and_push(
                 y2.round() as i32,
             ],
             confidence: (face.score * 100.0).clamp(0.0, 100.0) as f64,
-            face_ratio: (face.area() / frame_area * 100.0).clamp(0.0, 100.0) as f64,
+            face_width: face.width().round() as i64,
             kps,
             at: app_core::timeutil::now_rfc3339(),
             frame_b64: Some(frame_b64.clone()),

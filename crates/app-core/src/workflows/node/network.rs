@@ -1,12 +1,18 @@
-use super::{FileVal, PortValue, PortValues, req_text};
+use super::{req_text, FileVal, PortValue, PortValues};
 use serde_json::Value;
 
 /// POST form data to `url`. Fields are form fields; headers are extra request headers.
 /// If a `file` is provided the request is multipart/form-data; otherwise form-urlencoded.
 pub(super) fn run_http_post(_config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
     let url = req_text(inputs, "url")?.to_string();
-    let headers = inputs.get("headers").and_then(PortValue::as_dict).unwrap_or(&[]);
-    let fields = inputs.get("fields").and_then(PortValue::as_dict).unwrap_or(&[]);
+    let headers = inputs
+        .get("headers")
+        .and_then(PortValue::as_dict)
+        .unwrap_or(&[]);
+    let fields = inputs
+        .get("fields")
+        .and_then(PortValue::as_dict)
+        .unwrap_or(&[]);
     let file = inputs.get("file").and_then(PortValue::as_file);
 
     let agent = ureq::AgentBuilder::new()
@@ -20,17 +26,27 @@ pub(super) fn run_http_post(_config: &Value, inputs: &PortValues) -> Result<Port
     let result = if let Some(f) = file {
         let boundary = "----sentinelFormBoundary7MA4YWxkTrZu0gW";
         let body = multipart_body(fields, f, boundary);
-        req.set("Content-Type", &format!("multipart/form-data; boundary={boundary}"))
-            .send_bytes(&body)
+        req.set(
+            "Content-Type",
+            &format!("multipart/form-data; boundary={boundary}"),
+        )
+        .send_bytes(&body)
     } else {
-        let form: Vec<(&str, &str)> = fields.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let form: Vec<(&str, &str)> = fields
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         req.send_form(&form)
     };
 
     let (status, body, ok) = match result {
         Ok(resp) => {
             let s = resp.status();
-            (s as i64, resp.into_string().unwrap_or_default(), (200..300).contains(&s))
+            (
+                s as i64,
+                resp.into_string().unwrap_or_default(),
+                (200..300).contains(&s),
+            )
         }
         Err(ureq::Error::Status(code, resp)) => {
             (code as i64, resp.into_string().unwrap_or_default(), false)

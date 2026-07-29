@@ -121,7 +121,9 @@ impl EdgeFrameSource {
     pub fn new(base: impl Into<String>) -> Self {
         EdgeFrameSource {
             base: base.into(),
-            agent: ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(5)).build(),
+            agent: ureq::AgentBuilder::new()
+                .timeout(std::time::Duration::from_secs(5))
+                .build(),
         }
     }
 }
@@ -155,7 +157,11 @@ impl EdgeFrameSource {
     /// and when it isn't available we must fall back quickly rather than stall the workflow node.
     fn warm_snapshot(&self, ip: &str) -> Result<Vec<u8>, String> {
         let base = self.edge_api_base().ok_or("no edge api base")?;
-        if edge_api_dead().lock().map(|d| d.contains(&base)).unwrap_or(false) {
+        if edge_api_dead()
+            .lock()
+            .map(|d| d.contains(&base))
+            .unwrap_or(false)
+        {
             return Err("edge api known-unreachable".into());
         }
         let agent = ureq::AgentBuilder::new()
@@ -163,7 +169,10 @@ impl EdgeFrameSource {
             .build();
         let url = format!("{base}/snapshot/{}", ip);
         let res = (|| -> Result<Vec<u8>, String> {
-            let resp = agent.get(&url).call().map_err(|e| format!("edge snapshot: {e}"))?;
+            let resp = agent
+                .get(&url)
+                .call()
+                .map_err(|e| format!("edge snapshot: {e}"))?;
             let mut bytes = Vec::new();
             std::io::Read::read_to_end(&mut resp.into_reader(), &mut bytes)
                 .map_err(|e| format!("reading edge snapshot: {e}"))?;
@@ -301,14 +310,24 @@ impl Notifier for RemoteNotifier {
         image: Option<Vec<u8>>,
     ) -> Result<String, String> {
         let image_key = match image {
-            Some(bytes) if crate::media::enabled() => match crate::media::put(&bytes, "image/jpeg", "jpg") {
-                Ok(key) => Some(key),
-                Err(e) => {
-                    log::warn!("media upload failed ({e}); delivering image in-process");
-                    return crate::notification::dispatch(store, cfg, target, message, Some(bytes));
+            Some(bytes) if crate::media::enabled() => {
+                match crate::media::put(&bytes, "image/jpeg", "jpg") {
+                    Ok(key) => Some(key),
+                    Err(e) => {
+                        log::warn!("media upload failed ({e}); delivering image in-process");
+                        return crate::notification::dispatch(
+                            store,
+                            cfg,
+                            target,
+                            message,
+                            Some(bytes),
+                        );
+                    }
                 }
-            },
-            Some(bytes) => return crate::notification::dispatch(store, cfg, target, message, Some(bytes)),
+            }
+            Some(bytes) => {
+                return crate::notification::dispatch(store, cfg, target, message, Some(bytes))
+            }
             None => None,
         };
         crate::work_queue::enqueue_notification_blocking(
@@ -333,14 +352,16 @@ impl Notifier for RemoteNotifier {
         // Upload the image to the object store; the consumer downloads + sends. If the store is
         // off or the upload fails, send the reply in-process so it's never lost.
         let image_key = match image {
-            Some(bytes) if crate::media::enabled() => match crate::media::put(&bytes, "image/jpeg", "jpg") {
-                Ok(key) => Some(key),
-                Err(e) => {
-                    log::warn!("media upload failed ({e}); replying with image in-process");
-                    crate::notification::client::send_photo(cfg, chat_id, message, &bytes)?;
-                    return Ok("sent".to_string());
+            Some(bytes) if crate::media::enabled() => {
+                match crate::media::put(&bytes, "image/jpeg", "jpg") {
+                    Ok(key) => Some(key),
+                    Err(e) => {
+                        log::warn!("media upload failed ({e}); replying with image in-process");
+                        crate::notification::client::send_photo(cfg, chat_id, message, &bytes)?;
+                        return Ok("sent".to_string());
+                    }
                 }
-            },
+            }
             Some(bytes) => {
                 crate::notification::client::send_photo(cfg, chat_id, message, &bytes)?;
                 return Ok("sent".to_string());
@@ -394,14 +415,20 @@ mod edge_api_base_tests {
     #[test]
     fn tailnet_https_base_maps_to_8080() {
         let s = EdgeFrameSource::new("https://box-abc.tail1234.ts.net");
-        assert_eq!(s.edge_api_base().as_deref(), Some("https://box-abc.tail1234.ts.net:8080"));
+        assert_eq!(
+            s.edge_api_base().as_deref(),
+            Some("https://box-abc.tail1234.ts.net:8080")
+        );
     }
 
     /// A trailing slash must not produce a double slash in the derived URL.
     #[test]
     fn trailing_slash_is_trimmed() {
         let s = EdgeFrameSource::new("https://box.ts.net/");
-        assert_eq!(s.edge_api_base().as_deref(), Some("https://box.ts.net:8080"));
+        assert_eq!(
+            s.edge_api_base().as_deref(),
+            Some("https://box.ts.net:8080")
+        );
     }
 
     /// The local/dev fallback base (go2rtc on 1984) maps to the edge's own HTTP port.

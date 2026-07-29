@@ -54,7 +54,12 @@ pub fn send_photo(
 
 /// Send a video (raw mp4 bytes) with a caption to a chat. Used for `Reply with recording`
 /// (card #15) — a recording clip fetched from the edge, relayed to the sender.
-pub fn send_video(cfg: &NotificationConfig, chat_id: i64, caption: &str, mp4: &[u8]) -> Result<(), String> {
+pub fn send_video(
+    cfg: &NotificationConfig,
+    chat_id: i64,
+    caption: &str,
+    mp4: &[u8],
+) -> Result<(), String> {
     if mp4.is_empty() {
         return Err("no video bytes to send".into());
     }
@@ -71,12 +76,26 @@ pub fn send_video(cfg: &NotificationConfig, chat_id: i64, caption: &str, mp4: &[
 }
 
 fn photo_multipart(chat_id: i64, caption: &str, jpeg: &[u8]) -> Vec<u8> {
-    media_multipart(chat_id, caption, "photo", "snapshot.jpg", "image/jpeg", jpeg)
+    media_multipart(
+        chat_id,
+        caption,
+        "photo",
+        "snapshot.jpg",
+        "image/jpeg",
+        jpeg,
+    )
 }
 
 /// Build a Telegram multipart body with `chat_id` + `caption` text parts and one binary media
 /// part (`field` = "photo"/"video", with its filename + MIME). Shared by send_photo/send_video.
-fn media_multipart(chat_id: i64, caption: &str, field: &str, filename: &str, mime: &str, bytes: &[u8]) -> Vec<u8> {
+fn media_multipart(
+    chat_id: i64,
+    caption: &str,
+    field: &str,
+    filename: &str,
+    mime: &str,
+    bytes: &[u8],
+) -> Vec<u8> {
     let mut body = Vec::with_capacity(bytes.len() + 512);
     let mut push = |s: &str| body.extend_from_slice(s.as_bytes());
 
@@ -91,7 +110,9 @@ fn media_multipart(chat_id: i64, caption: &str, field: &str, filename: &str, mim
     push("\r\n");
 
     push(&format!("--{BOUNDARY}\r\n"));
-    push(&format!("Content-Disposition: form-data; name=\"{field}\"; filename=\"{filename}\"\r\n"));
+    push(&format!(
+        "Content-Disposition: form-data; name=\"{field}\"; filename=\"{filename}\"\r\n"
+    ));
     push(&format!("Content-Type: {mime}\r\n\r\n"));
     body.extend_from_slice(bytes);
     body.extend_from_slice(b"\r\n");
@@ -109,7 +130,9 @@ pub fn get_me(cfg: &NotificationConfig) -> Result<String, String> {
         .get(&method_url(cfg, "getMe"))
         .call()
         .map_err(|e| format!("getMe failed: {e}"))?;
-    let body = resp.into_string().map_err(|e| format!("read failed: {e}"))?;
+    let body = resp
+        .into_string()
+        .map_err(|e| format!("read failed: {e}"))?;
     let v: Value = serde_json::from_str(&body).map_err(|e| format!("bad JSON: {e}"))?;
     if v.get("ok").and_then(Value::as_bool) != Some(true) {
         return Err("getMe returned ok=false".into());
@@ -171,7 +194,11 @@ fn parse_updates(value: &Value) -> Vec<Update> {
                     let update_id = u.get("update_id")?.as_i64()?;
                     let msg = u.get("message")?;
                     let chat_id = msg.get("chat")?.get("id")?.as_i64()?;
-                    let text = msg.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+                    let text = msg
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
                     let from = msg.get("from");
                     let sender_label = from
                         .and_then(|f| f.get("first_name"))
@@ -179,7 +206,12 @@ fn parse_updates(value: &Value) -> Vec<Update> {
                         .or_else(|| from.and_then(|f| f.get("username")).and_then(Value::as_str))
                         .unwrap_or("operator")
                         .to_string();
-                    Some(Update { update_id, chat_id, text, sender_label })
+                    Some(Update {
+                        update_id,
+                        chat_id,
+                        text,
+                        sender_label,
+                    })
                 })
                 .collect()
         })
@@ -189,12 +221,15 @@ fn parse_updates(value: &Value) -> Vec<Update> {
 /// Read a Telegram response body and verify `ok: true`, surfacing the API's
 /// `description` on failure.
 fn check_ok(resp: ureq::Response) -> Result<(), String> {
-    let body = resp.into_string().map_err(|e| format!("read failed: {e}"))?;
+    let body = resp
+        .into_string()
+        .map_err(|e| format!("read failed: {e}"))?;
     let v: Value = serde_json::from_str(&body).map_err(|e| format!("bad response: {e}"))?;
     if v.get("ok").and_then(Value::as_bool) == Some(true) {
         Ok(())
     } else {
-        Err(v.get("description")
+        Err(v
+            .get("description")
             .and_then(Value::as_str)
             .unwrap_or("Telegram API error")
             .to_string())

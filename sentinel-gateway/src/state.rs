@@ -52,7 +52,12 @@ const CACHE_TTL: Duration = Duration::from_secs(30);
 const DEAD_TTL: Duration = Duration::from_secs(300);
 
 impl AppState {
-    pub fn new(upstream: String, control_url: String, jwt_secret: String, public_ws_url: String) -> Self {
+    pub fn new(
+        upstream: String,
+        control_url: String,
+        jwt_secret: String,
+        public_ws_url: String,
+    ) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .build()
@@ -75,7 +80,14 @@ impl AppState {
     pub async fn live_start(&self, token: &str, src: &str, callback: &str) -> LiveStart {
         let url = format!("{}/internal/live-start", self.control_url);
         let body = serde_json::json!({ "src": src, "callback": callback });
-        let resp = match self.http.post(&url).bearer_auth(token).json(&body).send().await {
+        let resp = match self
+            .http
+            .post(&url)
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 log::warn!("live-start lookup failed ({url}): {e}");
@@ -104,7 +116,9 @@ impl AppState {
     /// (cached `CACHE_TTL`), forwarding `token`; falls back to the static upstream when
     /// there's no tenant context or no box has reported a host.
     pub async fn upstream_for(&self, tid: Option<&str>, token: &str) -> String {
-        let Some(tid) = tid else { return self.upstream.clone() };
+        let Some(tid) = tid else {
+            return self.upstream.clone();
+        };
         if let Some((base, at)) = self.cache.lock().unwrap().get(tid).cloned() {
             if at.elapsed() < CACHE_TTL {
                 return base;
@@ -127,7 +141,10 @@ impl AppState {
             .filter(|h| !h.is_empty())
             .map(|h| Self::ensure_scheme(&h))
             .unwrap_or_else(|| self.upstream.clone());
-        self.cache.lock().unwrap().insert(tid.to_string(), (base.clone(), Instant::now()));
+        self.cache
+            .lock()
+            .unwrap()
+            .insert(tid.to_string(), (base.clone(), Instant::now()));
         base
     }
 
@@ -159,7 +176,9 @@ impl AppState {
             return Some(format!("wss://{rest}:8080"));
         }
         let local = b.strip_prefix("http://")?;
-        local.contains(":1984").then(|| format!("ws://{}", local.replace(":1984", ":8788")))
+        local
+            .contains(":1984")
+            .then(|| format!("ws://{}", local.replace(":1984", ":8788")))
     }
 
     /// Has this upstream recently refused us?
@@ -172,7 +191,10 @@ impl AppState {
     }
 
     pub fn live_edge_mark_dead(&self, url: &str) {
-        self.dead.lock().unwrap().insert(url.to_string(), Instant::now());
+        self.dead
+            .lock()
+            .unwrap()
+            .insert(url.to_string(), Instant::now());
     }
 
     /// Convert an `http(s)://` base to its WebSocket origin (`ws(s)://`).
@@ -192,7 +214,11 @@ mod live_edge_ws_tests {
     use super::*;
 
     fn state() -> AppState {
-        AppState::new("http://127.0.0.1:1984".into(), "http://control".into(), "s".into())
+        AppState::new(
+            "http://127.0.0.1:1984".into(),
+            "http://control".into(),
+            "s".into(),
+        )
     }
 
     /// The tailnet shape: the box reports its MagicDNS host, go2rtc answers on 443 and the edge's

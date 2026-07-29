@@ -46,7 +46,12 @@ pub fn spawn(state: Arc<AppState>) {
 
 fn process(state: &Arc<AppState>, job: work_queue::Job) {
     // Payload is `{ graph, node, expires_at }` — self-contained, so the timer needs nothing else.
-    let Some(graph_id) = job.payload.get("graph").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok()) else {
+    let Some(graph_id) = job
+        .payload
+        .get("graph")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+    else {
         log::warn!("workflow_window {}: missing/!uuid graph; dropping", job.id);
         work_queue::mark_failed_blocking(&state.db, job.id, "missing graph id", 1);
         return;
@@ -69,11 +74,23 @@ fn process(state: &Arc<AppState>, job: work_queue::Job) {
     // Close the window — but only if it's still armed AND still expired. This single conditional
     // write is what makes the cycle exactly-once: a re-trigger that extended the window loses
     // nothing (we simply don't win), and two consumers can't both fire the stop.
-    let won = workflows::repo::try_disarm_expired_node_state(&state.db, job.tenant_id, graph_id, node_id, &instance_key);
+    let won = workflows::repo::try_disarm_expired_node_state(
+        &state.db,
+        job.tenant_id,
+        graph_id,
+        node_id,
+        &instance_key,
+    );
     if !won {
         // Either the window moved (extended past now) or it's already closed. Re-read the state:
         // still armed → follow it to its new expiry; otherwise the cycle is over and so is this job.
-        let state_json = workflows::repo::get_node_state(&state.db, job.tenant_id, graph_id, node_id, &instance_key);
+        let state_json = workflows::repo::get_node_state(
+            &state.db,
+            job.tenant_id,
+            graph_id,
+            node_id,
+            &instance_key,
+        );
         let expires_at = state_json
             .as_ref()
             .filter(|v| v.get("state").and_then(|s| s.as_str()) == Some("armed"))

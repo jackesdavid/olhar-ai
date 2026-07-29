@@ -11,7 +11,10 @@ use super::domain::{VoiceConfig, SIMILARITY_BOOST, STABILITY};
 pub fn synthesize(text: &str) -> Option<Vec<u8>> {
     let cfg = VoiceConfig::from_env()?;
 
-    let url = format!("https://api.elevenlabs.io/v1/text-to-speech/{}", cfg.voice_id);
+    let url = format!(
+        "https://api.elevenlabs.io/v1/text-to-speech/{}",
+        cfg.voice_id
+    );
     let body = format!(
         "{{\"text\":\"{}\",\"model_id\":\"{}\",\"voice_settings\":{{\"stability\":{},\"similarity_boost\":{}}}}}",
         json_escape(text),

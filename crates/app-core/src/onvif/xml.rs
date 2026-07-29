@@ -77,7 +77,9 @@ pub fn parse_first_profile_token(xml: &str) -> Option<String> {
             i = lt + 1;
             continue;
         }
-        let name_end = rest.find(|c: char| c == '>' || c == ' ').unwrap_or(rest.len());
+        let name_end = rest
+            .find(|c: char| c == '>' || c == ' ')
+            .unwrap_or(rest.len());
         if local_name(&rest[..name_end]) == "Profiles" {
             let tag_end = xml[lt..].find('>')? + lt;
             let attrs = &xml[lt..tag_end];
@@ -123,7 +125,9 @@ pub fn parse_profiles(xml: &str) -> Vec<ProfileInfo> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < xml.len() {
-        let Some(lt) = xml[i..].find('<').map(|p| p + i) else { break };
+        let Some(lt) = xml[i..].find('<').map(|p| p + i) else {
+            break;
+        };
         let rest = &xml[lt + 1..];
         if rest.starts_with('/') || rest.starts_with('!') || rest.starts_with('?') {
             i = lt + 1;
@@ -136,7 +140,9 @@ pub fn parse_profiles(xml: &str) -> Vec<ProfileInfo> {
             i = lt + 1;
             continue;
         }
-        let Some(tag_end) = xml[lt..].find('>').map(|p| p + lt) else { break };
+        let Some(tag_end) = xml[lt..].find('>').map(|p| p + lt) else {
+            break;
+        };
         let attrs = &xml[lt..tag_end];
         let token = attrs.find("token=\"").and_then(|p| {
             let s = p + 7;
@@ -147,7 +153,11 @@ pub fn parse_profiles(xml: &str) -> Vec<ProfileInfo> {
         let block = &xml[content_start..close];
         let (width, height) = parse_resolution(block);
         if let Some(token) = token {
-            out.push(ProfileInfo { token, width, height });
+            out.push(ProfileInfo {
+                token,
+                width,
+                height,
+            });
         }
         i = close;
     }
@@ -157,9 +167,15 @@ pub fn parse_profiles(xml: &str) -> Vec<ProfileInfo> {
 /// `<…:Resolution><…:Width>1920</…:Width><…:Height>1080</…:Height></…:Resolution>`
 /// → `(1920, 1080)`; `(0, 0)` when absent or unparseable.
 fn parse_resolution(block: &str) -> (u32, u32) {
-    let Some(res) = extract_tag(block, "Resolution") else { return (0, 0) };
-    let w = extract_tag(res, "Width").and_then(|s| s.parse().ok()).unwrap_or(0);
-    let h = extract_tag(res, "Height").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let Some(res) = extract_tag(block, "Resolution") else {
+        return (0, 0);
+    };
+    let w = extract_tag(res, "Width")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let h = extract_tag(res, "Height")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
     (w, h)
 }
 

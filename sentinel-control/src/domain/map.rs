@@ -35,17 +35,26 @@ async fn recent_presence(
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     let limit = q.limit.unwrap_or(100).clamp(1, 500);
-    Ok(Json(blocking(move || presence::repo::load_recent(&db, tid, limit)).await?))
+    Ok(Json(
+        blocking(move || presence::repo::load_recent(&db, tid, limit)).await?,
+    ))
 }
 
-async fn load(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<MapDoc>, ApiErr> {
+async fn load(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<MapDoc>, ApiErr> {
     auth::require(&c, "map.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     Ok(Json(blocking(move || map::repo::load_doc(&db, tid)).await?))
 }
 
-async fn save(UserClaims(c): UserClaims, State(st): State<AppState>, Json(doc): Json<MapDoc>) -> Result<StatusCode, ApiErr> {
+async fn save(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(doc): Json<MapDoc>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "map.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();

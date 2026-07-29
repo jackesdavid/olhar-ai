@@ -20,13 +20,13 @@ pub const LIVE_VIEW: &str = "live.view";
 /// permissions), resolved at login — so guards are pure action checks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: String,           // user id (uuid)
-    pub tid: Option<String>,   // tenant id (uuid); None for the master's own token
-    pub master: bool,          // SaaS admin
+    pub sub: String,         // user id (uuid)
+    pub tid: Option<String>, // tenant id (uuid); None for the master's own token
+    pub master: bool,        // SaaS admin
     #[serde(default)]
-    pub act_as: bool,          // master operating inside a tenant (assume)
-    pub perms: Vec<String>,    // effective permissions (actions)
-    pub exp: usize,            // expiry (unix seconds)
+    pub act_as: bool, // master operating inside a tenant (assume)
+    pub perms: Vec<String>,  // effective permissions (actions)
+    pub exp: usize,          // expiry (unix seconds)
 }
 
 impl Claims {
@@ -47,7 +47,10 @@ pub fn require(claims: &Claims, action: &str) -> Result<(), (StatusCode, String)
     if claims.allows(action) {
         Ok(())
     } else {
-        Err((StatusCode::FORBIDDEN, format!("missing permission: {action}")))
+        Err((
+            StatusCode::FORBIDDEN,
+            format!("missing permission: {action}"),
+        ))
     }
 }
 
@@ -57,8 +60,12 @@ pub fn expiry_24h() -> usize {
 }
 
 pub fn issue(secret: &str, claims: &Claims) -> Result<String, String> {
-    jsonwebtoken::encode(&Header::default(), claims, &EncodingKey::from_secret(secret.as_bytes()))
-        .map_err(|e| e.to_string())
+    jsonwebtoken::encode(
+        &Header::default(),
+        claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|e| e.to_string())
 }
 
 pub fn verify(secret: &str, token: &str) -> Result<Claims, String> {
@@ -81,7 +88,11 @@ pub fn hash_password(pw: &str) -> Result<String, String> {
 
 pub fn verify_password(pw: &str, hash: &str) -> bool {
     PasswordHash::new(hash)
-        .map(|parsed| Argon2::default().verify_password(pw.as_bytes(), &parsed).is_ok())
+        .map(|parsed| {
+            Argon2::default()
+                .verify_password(pw.as_bytes(), &parsed)
+                .is_ok()
+        })
         .unwrap_or(false)
 }
 
@@ -92,7 +103,10 @@ pub struct UserClaims(pub Claims);
 impl FromRequestParts<AppState> for UserClaims {
     type Rejection = (StatusCode, String);
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let token = parts
             .headers
             .get(AUTHORIZATION)

@@ -20,8 +20,8 @@ pub mod subscriptions;
 
 use uuid::Uuid;
 
-use crate::timeutil::now_rfc3339;
 use crate::db::Db;
+use crate::timeutil::now_rfc3339;
 
 /// The currency a tenant is billed in (`BRL` for Brazil, `USD` for the American market).
 /// Defaults to `BRL` when the tenant row is missing or unset.

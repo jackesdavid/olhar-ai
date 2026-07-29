@@ -32,7 +32,8 @@ impl VoiceConfig {
         }
         Some(Self {
             api_key,
-            voice_id: std::env::var("ELEVENLABS_VOICE_ID").unwrap_or_else(|_| DEFAULT_VOICE_ID.into()),
+            voice_id: std::env::var("ELEVENLABS_VOICE_ID")
+                .unwrap_or_else(|_| DEFAULT_VOICE_ID.into()),
             model_id: std::env::var("ELEVENLABS_MODEL_ID")
                 .unwrap_or_else(|_| DEFAULT_MODEL_ID.into()),
         })

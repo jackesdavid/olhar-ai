@@ -56,11 +56,17 @@ impl Message {
     /// An assistant turn whose content (including any `tool_use` blocks) is kept
     /// verbatim — required so the next request echoes the tool calls back.
     pub fn assistant_raw(content: Value) -> Self {
-        Message { role: Role::Assistant, content }
+        Message {
+            role: Role::Assistant,
+            content,
+        }
     }
     /// A user turn carrying `tool_result` blocks.
     pub fn tool_results(results: Vec<Value>) -> Self {
-        Message { role: Role::User, content: Value::Array(results) }
+        Message {
+            role: Role::User,
+            content: Value::Array(results),
+        }
     }
 }
 
@@ -167,7 +173,8 @@ fn personality_paths() -> Vec<PathBuf> {
     paths
 }
 
-const DEFAULT_PERSONALITY: &str = "You are Olhar AI, a calm, precise AI assistant for the home and \
+const DEFAULT_PERSONALITY: &str =
+    "You are Olhar AI, a calm, precise AI assistant for the home and \
      the workplace. You help people monitor their cameras and sensors, automate everyday routines, \
      and stay informed about what matters. You are soft-spoken, measured, and competent. You state \
      things once, clearly, and stop. You exist to assist, and you will not, through action or \

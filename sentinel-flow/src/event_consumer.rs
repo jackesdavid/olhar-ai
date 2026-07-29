@@ -22,7 +22,12 @@ const BATCH: i64 = 50;
 
 pub fn spawn(state: Arc<AppState>) {
     std::thread::spawn(move || loop {
-        let jobs = work_queue::claim_blocking(&state.db, work_queue::EVENT_CATEGORY, work_queue::EVENT_KIND, BATCH);
+        let jobs = work_queue::claim_blocking(
+            &state.db,
+            work_queue::EVENT_CATEGORY,
+            work_queue::EVENT_KIND,
+            BATCH,
+        );
         if jobs.is_empty() {
             std::thread::sleep(IDLE_POLL);
             continue;
@@ -37,19 +42,31 @@ pub fn spawn(state: Arc<AppState>) {
 fn process(state: &Arc<AppState>, job: work_queue::Job) {
     // The payload is `{ event, source, fields }` — event/source are metadata, fields become the
     // OnEvent node's port values.
-    let event = job.payload.get("event").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let event = job
+        .payload
+        .get("event")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
     if event.is_empty() {
         log::warn!("workflow_event {}: missing event name; dropping", job.id);
         work_queue::mark_failed_blocking(&state.db, job.id, "missing event name", 1);
         return;
     }
-    let source = job.payload.get("source").and_then(|v| v.as_str()).unwrap_or("system").to_string();
+    let source = job
+        .payload
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("system")
+        .to_string();
     let payload = payload_to_portvalues(job.payload.get("fields"));
     // Fire as a System event → fans out to this tenant's OnEvent(event) handler graphs.
     let matched = crate::engine::fire_event(
         state,
         job.tenant_id,
-        EventSource::System { label: source.clone() },
+        EventSource::System {
+            label: source.clone(),
+        },
         event.clone(),
         None,
         payload,
@@ -59,7 +76,13 @@ fn process(state: &Arc<AppState>, job: work_queue::Job) {
     // flow replica, so this pod still has the old (disabled/absent) copy. Surface it to Datadog
     // (service:flow) with the pod name so cross-pod divergence is queryable/alertable.
     if matched == 0 {
-        let loaded = state.store.lock().unwrap().iter().filter(|(t, _)| *t == job.tenant_id).count();
+        let loaded = state
+            .store
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(t, _)| *t == job.tenant_id)
+            .count();
         log::warn!(
             "inbound event '{event}' (source '{source}', tenant {tenant}) matched 0 graphs on pod {pod} — possible stale graph store (this pod holds {loaded} graph(s) for the tenant); job {job} consumed with no run",
             tenant = job.tenant_id,

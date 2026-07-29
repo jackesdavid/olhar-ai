@@ -19,7 +19,7 @@ pub struct NewFace {
     pub camera: Option<String>,
     pub bbox: Option<serde_json::Value>,
     pub confidence: f32,
-    pub face_ratio: f32,
+    pub face_width: i32,
     pub source: String,
     /// Pre-cropped face thumbnail key (the proxy serves it as a passthrough); `None` = crop on read.
     pub crop_key: Option<String>,
@@ -33,7 +33,7 @@ pub struct Face {
     pub image_key: Option<String>,
     pub camera: Option<String>,
     pub confidence: f32,
-    pub face_ratio: f32,
+    pub face_width: i32,
     pub source: String,
     pub created_at: String,
 }
@@ -93,7 +93,7 @@ pub fn insert(db: &Db, tenant_id: Uuid, f: NewFace) -> Result<String, String> {
     db.block(async move {
         let row: (String,) = sqlx::query_as(
             "INSERT INTO faces (tenant_id, person_id, embedding, image_key, camera, bbox, \
-                                confidence, face_ratio, source, created_at, crop_key) \
+                                confidence, face_width, source, created_at, crop_key) \
              VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id::text",
         )
         .bind(tenant_id)
@@ -103,7 +103,7 @@ pub fn insert(db: &Db, tenant_id: Uuid, f: NewFace) -> Result<String, String> {
         .bind(&f.camera)
         .bind(&f.bbox)
         .bind(f.confidence)
-        .bind(f.face_ratio)
+        .bind(f.face_width)
         .bind(&f.source)
         .bind(&now)
         .bind(&f.crop_key)
@@ -122,7 +122,9 @@ pub fn recognize(db: &Db, tenant_id: Uuid, embedding: &[f32], k: i64) -> Vec<Fac
     db.block(async move {
         let result: Result<Vec<FaceMatch>, sqlx::Error> = async {
             let mut tx = pool.begin().await?;
-            sqlx::query("SET LOCAL statement_timeout = 15000").execute(&mut *tx).await?;
+            sqlx::query("SET LOCAL statement_timeout = 15000")
+                .execute(&mut *tx)
+                .await?;
             let rows = sqlx::query_as::<_, FaceMatch>(
                 "SELECT reference, label, distance, source FROM ( \
                    SELECT pe.person_id AS reference, p.name AS label, \
@@ -178,7 +180,7 @@ pub fn list(db: &Db, tenant_id: Uuid, limit: i64) -> Vec<Face> {
     let pool = db.pool();
     db.block(async move {
         sqlx::query_as::<_, Face>(
-            "SELECT id::text AS id, person_id, image_key, camera, confidence, face_ratio, source, \
+            "SELECT id::text AS id, person_id, image_key, camera, confidence, face_width, source, \
                     created_at \
              FROM faces WHERE tenant_id = $1 AND NOT ignored ORDER BY created_at DESC LIMIT $2",
         )
@@ -222,7 +224,7 @@ struct FaceEmbRow {
     image_key: Option<String>,
     camera: Option<String>,
     confidence: f32,
-    face_ratio: f32,
+    face_width: i32,
     source: String,
     created_at: String,
     embedding: Vec<f32>,
@@ -238,7 +240,7 @@ impl FaceEmbRow {
                 image_key: self.image_key,
                 camera: self.camera,
                 confidence: self.confidence,
-                face_ratio: self.face_ratio,
+                face_width: self.face_width,
                 source: self.source,
                 created_at: self.created_at,
             },
@@ -316,7 +318,7 @@ fn load_faces(
 ) -> Vec<(Face, Vec<f32>)> {
     let pool = db.pool();
     let sql = format!(
-        "SELECT id::text AS id, person_id, image_key, camera, confidence, face_ratio, source, \
+        "SELECT id::text AS id, person_id, image_key, camera, confidence, face_width, source, \
                 created_at, embedding::float4[] AS embedding \
          FROM faces WHERE tenant_id = $1 AND {} \
                 AND ($3::text IS NULL OR created_at >= $3) \
@@ -403,9 +405,20 @@ fn build_cores(db: &Db, tenant_id: Uuid, items: &[(Face, Vec<f32>)], eps: f32) -
                 &crate::persons::repo::recognize(db, tenant_id, &centroid, 5),
                 eps,
             )
-            .map(|m| ClusterSuggestion { person_id: m.person_id, name: m.name, confidence: m.confidence });
+            .map(|m| ClusterSuggestion {
+                person_id: m.person_id,
+                name: m.name,
+                confidence: m.confidence,
+            });
 
-            ClusterCore { idxs, representative, face_ids, centroid, suggestion, label: None }
+            ClusterCore {
+                idxs,
+                representative,
+                face_ids,
+                centroid,
+                suggestion,
+                label: None,
+            }
         })
         .collect();
     cores.sort_by(|a, b| b.face_ids.len().cmp(&a.face_ids.len()));
@@ -422,7 +435,8 @@ fn build_person_cores(
         return Vec::new();
     }
     let dim = items[0].1.len();
-    let mut by_person: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+    let mut by_person: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
     for (i, (f, _)) in items.iter().enumerate() {
         if let Some(pid) = &f.person_id {
             by_person.entry(pid.clone()).or_default().push(i);
@@ -450,7 +464,14 @@ fn build_person_cores(
                 }
             }
             let label = Some(name_of.get(&pid).cloned().unwrap_or(pid));
-            ClusterCore { idxs, representative, face_ids, centroid, suggestion: None, label }
+            ClusterCore {
+                idxs,
+                representative,
+                face_ids,
+                centroid,
+                suggestion: None,
+                label,
+            }
         })
         .collect();
     cores.sort_by(|a, b| b.face_ids.len().cmp(&a.face_ids.len()));
@@ -537,11 +558,15 @@ pub fn layout_faces(
     let eps = eps.clamp(0.20, 0.90);
     let items = load_faces(db, tenant_id, scope, opts.since.clone(), opts.until.clone());
     // Split labeled vs unlabeled — each groups differently (by person vs by embedding).
-    let (known, unknown): (Vec<_>, Vec<_>) = items.into_iter().partition(|(f, _)| f.person_id.is_some());
+    let (known, unknown): (Vec<_>, Vec<_>) =
+        items.into_iter().partition(|(f, _)| f.person_id.is_some());
     let name_of: std::collections::HashMap<String, String> = if known.is_empty() {
         std::collections::HashMap::new()
     } else {
-        crate::persons::repo::load(db, tenant_id).into_iter().map(|p| (p.id, p.name)).collect()
+        crate::persons::repo::load(db, tenant_id)
+            .into_iter()
+            .map(|p| (p.id, p.name))
+            .collect()
     };
     let mut cores = build_person_cores(&known, &name_of);
     cores.extend(build_cores(db, tenant_id, &unknown, eps));
@@ -554,7 +579,9 @@ pub fn layout_faces(
         cores.truncate(m);
     }
     if cores.is_empty() {
-        return CanvasLayout { islands: Vec::new() };
+        return CanvasLayout {
+            islands: Vec::new(),
+        };
     }
 
     // Island radius grows with sqrt(count) so face density stays roughly constant.
@@ -572,7 +599,10 @@ pub fn layout_faces(
     }
     let centres = stress_layout(
         &dist,
-        &cores.iter().map(|c| radius_of(c.face_ids.len())).collect::<Vec<_>>(),
+        &cores
+            .iter()
+            .map(|c| radius_of(c.face_ids.len()))
+            .collect::<Vec<_>>(),
         opts.spread.unwrap_or(1.0),
     );
 
@@ -588,7 +618,11 @@ pub fn layout_faces(
             let n = opts.max_per_island.map_or(total, |m| m.min(total)).max(1);
             let faces: Vec<FaceDot> = (0..n)
                 .map(|fi| {
-                    let fr = if n <= 1 { 0.0 } else { r * 0.82 * ((fi as f32 + 0.5) / n as f32).sqrt() };
+                    let fr = if n <= 1 {
+                        0.0
+                    } else {
+                        r * 0.82 * ((fi as f32 + 0.5) / n as f32).sqrt()
+                    };
                     let theta = fi as f32 * 2.399_963_2; // golden angle
                     FaceDot {
                         id: c.face_ids[fi].clone(),
@@ -598,7 +632,10 @@ pub fn layout_faces(
                 })
                 .collect();
             Island {
-                key: c.label.clone().unwrap_or_else(|| c.representative.id.clone()),
+                key: c
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| c.representative.id.clone()),
                 size: c.face_ids.len(),
                 cx,
                 cy,
@@ -666,7 +703,7 @@ pub fn get(db: &Db, tenant_id: Uuid, id: &str) -> Option<Face> {
     let id = id.to_string();
     db.block(async move {
         sqlx::query_as::<_, Face>(
-            "SELECT id::text AS id, person_id, image_key, camera, confidence, face_ratio, source, \
+            "SELECT id::text AS id, person_id, image_key, camera, confidence, face_width, source, \
                     created_at FROM faces WHERE tenant_id = $1 AND id = $2::uuid",
         )
         .bind(tenant_id)
@@ -713,7 +750,7 @@ struct FaceDetailRow {
     image_key: Option<String>,
     camera: Option<String>,
     confidence: f32,
-    face_ratio: f32,
+    face_width: i32,
     source: String,
     created_at: String,
     bbox: Option<serde_json::Value>,
@@ -727,7 +764,7 @@ pub fn get_detail(db: &Db, tenant_id: Uuid, id: &str) -> Option<FaceDetail> {
     db.block(async move {
         let row: Option<FaceDetailRow> = sqlx::query_as(
             "SELECT f.id::text AS id, f.person_id, f.image_key, f.camera, f.confidence, \
-                    f.face_ratio, f.source, f.created_at, f.bbox, p.name AS person_name \
+                    f.face_width, f.source, f.created_at, f.bbox, p.name AS person_name \
              FROM faces f \
              LEFT JOIN persons p ON p.tenant_id = f.tenant_id AND p.id = f.person_id \
              WHERE f.tenant_id = $1 AND f.id = $2::uuid",
@@ -744,7 +781,12 @@ pub fn get_detail(db: &Db, tenant_id: Uuid, id: &str) -> Option<FaceDetail> {
                 if a.len() != 4 {
                     return None;
                 }
-                Some([a[0].as_i64()?, a[1].as_i64()?, a[2].as_i64()?, a[3].as_i64()?])
+                Some([
+                    a[0].as_i64()?,
+                    a[1].as_i64()?,
+                    a[2].as_i64()?,
+                    a[3].as_i64()?,
+                ])
             });
             FaceDetail {
                 face: Face {
@@ -753,7 +795,7 @@ pub fn get_detail(db: &Db, tenant_id: Uuid, id: &str) -> Option<FaceDetail> {
                     image_key: r.image_key,
                     camera: r.camera,
                     confidence: r.confidence,
-                    face_ratio: r.face_ratio,
+                    face_width: r.face_width,
                     source: r.source,
                     created_at: r.created_at,
                 },
@@ -822,7 +864,12 @@ pub fn backfill_crops(db: &Db, tenant_id: Uuid, limit: i64) -> Result<usize, Str
             if a.len() != 4 {
                 return None;
             }
-            Some([a[0].as_i64()?, a[1].as_i64()?, a[2].as_i64()?, a[3].as_i64()?])
+            Some([
+                a[0].as_i64()?,
+                a[1].as_i64()?,
+                a[2].as_i64()?,
+                a[3].as_i64()?,
+            ])
         }) {
             Some(b) => b,
             None => continue,
@@ -885,7 +932,9 @@ pub fn render_face_image(jpeg: &[u8], bbox: [i64; 4], draw_box: bool) -> Option<
             }
         }
         image::DynamicImage::ImageRgb8(rgb)
-            .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 95))
+            .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+                &mut buf, 95,
+            ))
             .ok()?;
     } else {
         let (bw, bh) = ((x2 - x1).max(1), (y2 - y1).max(1));
@@ -894,15 +943,27 @@ pub fn render_face_image(jpeg: &[u8], bbox: [i64; 4], draw_box: bool) -> Option<
         let cy1 = (y1 - my).clamp(0, ih - 1);
         let cx2 = (x2 + mx).clamp(cx1 + 1, iw);
         let cy2 = (y2 + my).clamp(cy1 + 1, ih);
-        img.crop_imm(cx1 as u32, cy1 as u32, (cx2 - cx1) as u32, (cy2 - cy1) as u32)
-            .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 95))
-            .ok()?;
+        img.crop_imm(
+            cx1 as u32,
+            cy1 as u32,
+            (cx2 - cx1) as u32,
+            (cy2 - cy1) as u32,
+        )
+        .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+            &mut buf, 95,
+        ))
+        .ok()?;
     }
     Some(buf.into_inner())
 }
 
 /// Set (or clear, with `None`) the label on faces — the reassign path. Returns rows affected.
-pub fn set_person(db: &Db, tenant_id: Uuid, ids: &[String], person_id: Option<&str>) -> Result<u64, String> {
+pub fn set_person(
+    db: &Db,
+    tenant_id: Uuid,
+    ids: &[String],
+    person_id: Option<&str>,
+) -> Result<u64, String> {
     let pool = db.pool();
     let ids = ids.to_vec();
     let person_id = person_id.map(str::to_string);
@@ -938,7 +999,12 @@ pub fn set_ignored(db: &Db, tenant_id: Uuid, ids: &[String], ignored: bool) -> R
 /// exist): copy each face's embedding into `person_embeddings` (approved, so it recognizes next time)
 /// AND stamp `faces.person_id` — all-or-nothing in one tx. The `INSERT … SELECT` copies vectors
 /// server-side (no round-trip). Returns the number of faces labeled.
-pub fn label_faces(db: &Db, tenant_id: Uuid, ids: &[String], person_id: &str) -> Result<u64, String> {
+pub fn label_faces(
+    db: &Db,
+    tenant_id: Uuid,
+    ids: &[String],
+    person_id: &str,
+) -> Result<u64, String> {
     let pool = db.pool();
     let ids = ids.to_vec();
     let person_id = person_id.to_string();

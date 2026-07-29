@@ -62,6 +62,8 @@ pub async fn soft_lock(State(st): State<AppState>, req: Request, next: Next) -> 
 
 fn bearer_claims(st: &AppState, req: &Request) -> Option<crate::auth::Claims> {
     let raw = req.headers().get(AUTHORIZATION)?.to_str().ok()?;
-    let token = raw.strip_prefix("Bearer ").or_else(|| raw.strip_prefix("bearer "))?;
+    let token = raw
+        .strip_prefix("Bearer ")
+        .or_else(|| raw.strip_prefix("bearer "))?;
     crate::auth::verify(&st.jwt_secret, token).ok()
 }

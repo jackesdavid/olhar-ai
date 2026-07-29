@@ -5,8 +5,8 @@
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::timeutil::now_rfc3339;
 use crate::db::Db;
+use crate::timeutil::now_rfc3339;
 
 /// Slug of the free trial plan (seeded by migration 0040).
 pub const BETA_PLAN_ID: &str = "beta";

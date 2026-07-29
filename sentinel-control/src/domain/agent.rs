@@ -63,9 +63,12 @@ async fn chat(
 
     let resp = blocking(move || {
         // Stores freshly loaded from Postgres (devices/alerts/beacons can change between turns).
-        let devices = Arc::new(std::sync::Mutex::new(app_core::devices::repo::load(&db, tid)));
-        let notif: NotificationStore =
-            Arc::new(std::sync::Mutex::new(app_core::notification::repo::load_beacons(&db, tid)));
+        let devices = Arc::new(std::sync::Mutex::new(app_core::devices::repo::load(
+            &db, tid,
+        )));
+        let notif: NotificationStore = Arc::new(std::sync::Mutex::new(
+            app_core::notification::repo::load_beacons(&db, tid),
+        ));
         let notif_cfg = resolve_telegram_config(&db, tid);
 
         // Collect the tool layer's UI side-effects (snapshots, "list changed" pokes…) so we can
@@ -93,8 +96,10 @@ async fn chat(
         let registry = ToolRegistry::new();
         let text = match app_core::agent::client::ask(&history, &registry, &ctx, false) {
             Some(outcome) => outcome.reply_text,
-            None => "The assistant isn't reachable right now — check that ANTHROPIC_API_KEY is set."
-                .to_string(),
+            None => {
+                "The assistant isn't reachable right now — check that ANTHROPIC_API_KEY is set."
+                    .to_string()
+            }
         };
         drop(ctx); // release the Sender so the drain below terminates cleanly
 
@@ -108,7 +113,10 @@ async fn chat(
 
 /// Resolve the tenant's Telegram config (saved config if it has a token, else none). Mirrors
 /// `sentinel-flow`'s `resolve_telegram_config` so `send_notification` works the same in chat.
-fn resolve_telegram_config(db: &app_core::db::Db, tenant: uuid::Uuid) -> Option<NotificationConfig> {
+fn resolve_telegram_config(
+    db: &app_core::db::Db,
+    tenant: uuid::Uuid,
+) -> Option<NotificationConfig> {
     // tenant-own bot → shared GLOBAL provider bot → env (was tenant→none, skipping the global bot).
     app_core::notification::repo::resolve_effective_telegram(db, tenant)
 }
@@ -185,7 +193,12 @@ async fn stt(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("audio/webm")
         .to_string();
-    let filename = if mime.contains("wav") { "audio.wav" } else { "audio.webm" }.to_string();
+    let filename = if mime.contains("wav") {
+        "audio.wav"
+    } else {
+        "audio.webm"
+    }
+    .to_string();
     let audio = body.to_vec();
 
     let text = blocking(move || app_core::listen::transcribe(&audio, &filename, &mime))

@@ -27,7 +27,11 @@ impl AsaasGateway {
         let base = env_nonempty("ASAAS_BASE_URL")
             .map(|s| s.trim_end_matches('/').to_string())
             .unwrap_or_else(|| "https://api.asaas.com/v3".to_string());
-        Some(Self { api_key, base, webhook_token: env_nonempty("ASAAS_WEBHOOK_TOKEN") })
+        Some(Self {
+            api_key,
+            base,
+            webhook_token: env_nonempty("ASAAS_WEBHOOK_TOKEN"),
+        })
     }
 
     fn post(&self, path: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
@@ -53,7 +57,9 @@ impl AsaasGateway {
 
     /// The hosted checkout URL of the subscription's first charge (Pix QR / boleto / card).
     fn first_payment_url(&self, subscription_ref: &str) -> Option<String> {
-        let out = self.get(&format!("/subscriptions/{subscription_ref}/payments")).ok()?;
+        let out = self
+            .get(&format!("/subscriptions/{subscription_ref}/payments"))
+            .ok()?;
         out.get("data")?
             .as_array()?
             .first()?
@@ -64,7 +70,10 @@ impl AsaasGateway {
 }
 
 fn env_nonempty(key: &str) -> Option<String> {
-    std::env::var(key).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    std::env::var(key)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 impl PaymentGateway for AsaasGateway {
@@ -78,7 +87,12 @@ impl PaymentGateway for AsaasGateway {
         "asaas"
     }
 
-    fn ensure_customer(&self, name: &str, email: &str, tax_id: Option<&str>) -> Result<String, String> {
+    fn ensure_customer(
+        &self,
+        name: &str,
+        email: &str,
+        tax_id: Option<&str>,
+    ) -> Result<String, String> {
         let mut body = serde_json::json!({ "name": name, "email": email });
         if let Some(doc) = tax_id {
             body["cpfCnpj"] = serde_json::json!(doc);
@@ -90,13 +104,24 @@ impl PaymentGateway for AsaasGateway {
             .ok_or_else(|| format!("asaas: customer create returned no id: {out}"))
     }
 
-    fn start_subscription(&self, customer_ref: &str, plan: &PlanRef<'_>, billing_type: &str, _tenant_id: Uuid) -> Result<StartedSubscription, String> {
+    fn start_subscription(
+        &self,
+        customer_ref: &str,
+        plan: &PlanRef<'_>,
+        billing_type: &str,
+        _tenant_id: Uuid,
+    ) -> Result<StartedSubscription, String> {
         // Asaas bills in BRL only.
         if !plan.currency.eq_ignore_ascii_case("BRL") {
-            return Err(format!("asaas bills in BRL only, tenant currency is {}", plan.currency));
+            return Err(format!(
+                "asaas bills in BRL only, tenant currency is {}",
+                plan.currency
+            ));
         }
         // First charge tomorrow; Asaas then bills monthly on that day.
-        let next_due = (chrono::Local::now() + chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
+        let next_due = (chrono::Local::now() + chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
         let out = self.post(
             "/subscriptions",
             serde_json::json!({
@@ -114,12 +139,18 @@ impl PaymentGateway for AsaasGateway {
             .map(String::from)
             .ok_or_else(|| format!("asaas: subscription create returned no id: {out}"))?;
         let payment_url = self.first_payment_url(&subscription_ref);
-        Ok(StartedSubscription { subscription_ref: Some(subscription_ref), payment_url, price_ref: None })
+        Ok(StartedSubscription {
+            subscription_ref: Some(subscription_ref),
+            payment_url,
+            price_ref: None,
+        })
     }
 
     fn verify_webhook(&self, _raw_body: &[u8], headers: &HashMap<String, String>) -> bool {
         match &self.webhook_token {
-            Some(expected) => headers.get("asaas-access-token").map(String::as_str) == Some(expected.as_str()),
+            Some(expected) => {
+                headers.get("asaas-access-token").map(String::as_str) == Some(expected.as_str())
+            }
             None => true, // no token configured (dev) → accept
         }
     }
@@ -139,7 +170,11 @@ impl PaymentGateway for AsaasGateway {
             .get("payment")
             .and_then(|p| p.get("subscription"))
             .and_then(|v| v.as_str())
-            .or_else(|| body.get("subscription").and_then(|s| s.get("id")).and_then(|v| v.as_str()))?
+            .or_else(|| {
+                body.get("subscription")
+                    .and_then(|s| s.get("id"))
+                    .and_then(|v| v.as_str())
+            })?
             .to_string();
         // Asaas has no event id; the payment id is unique per delivery-worthy event.
         let event_id = body
@@ -148,6 +183,12 @@ impl PaymentGateway for AsaasGateway {
             .and_then(|v| v.as_str())
             .map(|id| format!("{event}:{id}"))
             .unwrap_or_else(|| format!("{event}:{subscription_ref}"));
-        Some(WebhookEvent { event_id, kind: EventKind::StatusChanged { subscription_ref, status } })
+        Some(WebhookEvent {
+            event_id,
+            kind: EventKind::StatusChanged {
+                subscription_ref,
+                status,
+            },
+        })
     }
 }

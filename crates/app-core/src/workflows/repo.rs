@@ -483,14 +483,16 @@ pub fn system_events() -> Vec<TenantEvent> {
             name: "face_detected".to_string(),
             category: "System".to_string(),
             source: "system".to_string(),
-            description: Some("Edge face detection (YuNet) — feeds the recognition pipeline".to_string()),
+            description: Some(
+                "Edge face detection (YuNet) — feeds the recognition pipeline".to_string(),
+            ),
             created_by_graph: None,
             fields: vec![
                 field("camera", PortType::Camera),
                 field("bbox", PortType::Bbox),
                 field("confidence", PortType::Num), // 0..100
-                field("face_ratio", PortType::Num), // face area ÷ frame area, 0..100
-                field("kps", PortType::Landmarks),  // 5 YuNet landmarks, source px (#122; empty until edge emits)
+                field("face_width", PortType::Num), // face box width in source pixels
+                field("kps", PortType::Landmarks), // 5 YuNet landmarks, source px (#122; empty until edge emits)
                 field("frame", PortType::Image),
             ],
         },
@@ -915,7 +917,16 @@ pub fn last_run_by_graph(db: &Db, tenant_id: Uuid) -> std::collections::HashMap<
             Vec::new()
         })
         .into_iter()
-        .map(|(gid, at, status, trigger)| (gid, LastRun { at, status, trigger }))
+        .map(|(gid, at, status, trigger)| {
+            (
+                gid,
+                LastRun {
+                    at,
+                    status,
+                    trigger,
+                },
+            )
+        })
         .collect()
     })
 }
@@ -956,15 +967,20 @@ pub fn list_run_logs(db: &Db, tenant_id: Uuid, run_id: Uuid) -> Vec<RunLogLine> 
 /// lines of a run share the run time).
 #[derive(serde::Serialize)]
 pub struct ConsoleLogLine {
-    pub label:   Option<String>,
-    pub kind:    String,
+    pub label: Option<String>,
+    pub kind: String,
     pub message: String,
-    pub at:      String,
+    pub at: String,
 }
 
 /// Recent execution lines across a graph's runs, newest first (bounded, `node`-kind UI pings
 /// excluded). Powers the workflow editor's console seed.
-pub fn list_graph_run_logs(db: &Db, tenant_id: Uuid, graph_id: Uuid, limit: i64) -> Vec<ConsoleLogLine> {
+pub fn list_graph_run_logs(
+    db: &Db,
+    tenant_id: Uuid,
+    graph_id: Uuid,
+    limit: i64,
+) -> Vec<ConsoleLogLine> {
     let pool = db.pool();
     let limit = limit.clamp(1, 200);
     db.block(async move {
@@ -984,7 +1000,12 @@ pub fn list_graph_run_logs(db: &Db, tenant_id: Uuid, graph_id: Uuid, limit: i64)
             Vec::new()
         })
         .into_iter()
-        .map(|(label, kind, message, at)| ConsoleLogLine { label, kind, message, at })
+        .map(|(label, kind, message, at)| ConsoleLogLine {
+            label,
+            kind,
+            message,
+            at,
+        })
         .collect()
     })
 }
@@ -1243,7 +1264,8 @@ pub fn list_instances(db: &Db, tenant_id: Uuid, graph_id: Uuid) -> Vec<InstanceI
 /// `active` if any of its nodes' `state_json` reads `state:armed`, `window_expires_at` the latest
 /// armed `expires_at`. Split out from [`list_instances`] so it's testable without a DB.
 fn instances_from_state_rows(rows: Vec<(String, String)>) -> Vec<InstanceInfo> {
-    let mut by_key: std::collections::HashMap<String, InstanceInfo> = std::collections::HashMap::new();
+    let mut by_key: std::collections::HashMap<String, InstanceInfo> =
+        std::collections::HashMap::new();
     for (key, state_json) in rows {
         let entry = by_key.entry(key.clone()).or_insert(InstanceInfo {
             instance_key: key,
@@ -1271,7 +1293,11 @@ fn instances_from_state_rows(rows: Vec<(String, String)>) -> Vec<InstanceInfo> {
 
     let mut out: Vec<InstanceInfo> = by_key.into_values().collect();
     // Deterministic order: active instances first, then by key.
-    out.sort_by(|a, b| b.active.cmp(&a.active).then_with(|| a.instance_key.cmp(&b.instance_key)));
+    out.sort_by(|a, b| {
+        b.active
+            .cmp(&a.active)
+            .then_with(|| a.instance_key.cmp(&b.instance_key))
+    });
     out
 }
 
@@ -1348,7 +1374,10 @@ mod tests {
         // node (no window). The instance list must show BOTH cameras as distinct instances, cam-A
         // active with its expiry, cam-B present but inactive.
         let rows = vec![
-            ("cam-A".to_string(), r#"{"state":"armed","expires_at":"2026-07-18T10:00:00+00:00"}"#.to_string()),
+            (
+                "cam-A".to_string(),
+                r#"{"state":"armed","expires_at":"2026-07-18T10:00:00+00:00"}"#.to_string(),
+            ),
             ("cam-A".to_string(), "{}".to_string()), // a non-window node's state
             ("cam-B".to_string(), r#"{"state":"idle"}"#.to_string()),
         ];
@@ -1357,7 +1386,10 @@ mod tests {
         // active first, then by key
         assert_eq!(out[0].instance_key, "cam-A");
         assert!(out[0].active, "cam-A's window is armed");
-        assert_eq!(out[0].window_expires_at.as_deref(), Some("2026-07-18T10:00:00+00:00"));
+        assert_eq!(
+            out[0].window_expires_at.as_deref(),
+            Some("2026-07-18T10:00:00+00:00")
+        );
         assert_eq!(out[1].instance_key, "cam-B");
         assert!(!out[1].active, "cam-B's window is idle");
         assert_eq!(out[1].window_expires_at, None);
@@ -1368,13 +1400,22 @@ mod tests {
         // One instance, two armed latent nodes with different expiries: the instance reports the
         // later one (the window is open until the last of them closes).
         let rows = vec![
-            ("".to_string(), r#"{"state":"armed","expires_at":"2026-07-18T10:00:00+00:00"}"#.to_string()),
-            ("".to_string(), r#"{"state":"armed","expires_at":"2026-07-18T10:05:00+00:00"}"#.to_string()),
+            (
+                "".to_string(),
+                r#"{"state":"armed","expires_at":"2026-07-18T10:00:00+00:00"}"#.to_string(),
+            ),
+            (
+                "".to_string(),
+                r#"{"state":"armed","expires_at":"2026-07-18T10:05:00+00:00"}"#.to_string(),
+            ),
         ];
         let out = instances_from_state_rows(rows);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].instance_key, "");
         assert!(out[0].active);
-        assert_eq!(out[0].window_expires_at.as_deref(), Some("2026-07-18T10:05:00+00:00"));
+        assert_eq!(
+            out[0].window_expires_at.as_deref(),
+            Some("2026-07-18T10:05:00+00:00")
+        );
     }
 }

@@ -15,10 +15,14 @@ pub fn load(db: &Db, tenant_id: Uuid) -> Vec<Person> {
     let pool = db.pool();
     db.block(async move {
         let sql = format!("SELECT {PERSON_COLS} FROM persons WHERE tenant_id = $1 ORDER BY name");
-        sqlx::query_as::<_, Person>(&sql).bind(tenant_id).fetch_all(&pool).await.unwrap_or_else(|e| {
-            log::error!("persons::repo::load query failed: {e}");
-            Vec::new()
-        })
+        sqlx::query_as::<_, Person>(&sql)
+            .bind(tenant_id)
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_else(|e| {
+                log::error!("persons::repo::load query failed: {e}");
+                Vec::new()
+            })
     })
 }
 
@@ -161,7 +165,9 @@ pub fn recognize(db: &Db, tenant_id: Uuid, embedding: &[f32], k: i64) -> Vec<Rec
         // migrations or long admin queries).
         let result: Result<Vec<RecognitionMatch>, sqlx::Error> = async {
             let mut tx = pool.begin().await?;
-            sqlx::query("SET LOCAL statement_timeout = 15000").execute(&mut *tx).await?;
+            sqlx::query("SET LOCAL statement_timeout = 15000")
+                .execute(&mut *tx)
+                .await?;
             let rows = sqlx::query_as::<_, RecognitionMatch>(
                 "SELECT pe.person_id AS person_id, p.name AS name, \
                         (pe.embedding <=> $1::vector)::float4 AS distance \
@@ -180,7 +186,11 @@ pub fn recognize(db: &Db, tenant_id: Uuid, embedding: &[f32], k: i64) -> Vec<Rec
         .await;
         match result {
             Ok(rows) => {
-                log::info!("recognize: pgvector kNN k={k} → {} rows in {:?}", rows.len(), t.elapsed());
+                log::info!(
+                    "recognize: pgvector kNN k={k} → {} rows in {:?}",
+                    rows.len(),
+                    t.elapsed()
+                );
                 rows
             }
             Err(e) => {

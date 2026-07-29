@@ -21,17 +21,25 @@ pub fn router() -> Router<AppState> {
         .route("/beacons", get(list))
         .route("/beacons/:chat_id/toggle", post(toggle))
         .route("/beacons/:chat_id/test", post(test_send))
-        .route("/beacons/:chat_id", axum::routing::patch(rename).delete(remove))
+        .route(
+            "/beacons/:chat_id",
+            axum::routing::patch(rename).delete(remove),
+        )
         .route("/telegram", get(get_config).put(set_config))
     // The notification queue view moved to the master load panel (/admin/jobs) — it is
     // cross-tenant system load, not a tenant-facing screen.
 }
 
-async fn list(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<NotificationTarget>>, ApiErr> {
+async fn list(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<NotificationTarget>>, ApiErr> {
     auth::require(&c, "beacons.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    Ok(Json(blocking(move || notification::repo::load_beacons(&db, tid)).await?))
+    Ok(Json(
+        blocking(move || notification::repo::load_beacons(&db, tid)).await?,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -39,16 +47,26 @@ struct ToggleReq {
     enabled: bool,
 }
 
-async fn toggle(UserClaims(c): UserClaims, State(st): State<AppState>, Path(chat_id): Path<i64>, Json(b): Json<ToggleReq>) -> Result<StatusCode, ApiErr> {
+async fn toggle(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(chat_id): Path<i64>,
+    Json(b): Json<ToggleReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "beacons.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     let found = blocking(move || {
-        let store: NotificationStore = Arc::new(Mutex::new(notification::repo::load_beacons(&db, tid)));
+        let store: NotificationStore =
+            Arc::new(Mutex::new(notification::repo::load_beacons(&db, tid)));
         notification::set_enabled_by_id(&store, Some(&db), tid, chat_id, b.enabled).is_some()
     })
     .await?;
-    if found { Ok(StatusCode::NO_CONTENT) } else { Err(err(StatusCode::NOT_FOUND, "Beacon not found.")) }
+    if found {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(err(StatusCode::NOT_FOUND, "Beacon not found."))
+    }
 }
 
 #[derive(Deserialize)]
@@ -56,12 +74,18 @@ struct RenameReq {
     label: String,
 }
 
-async fn rename(UserClaims(c): UserClaims, State(st): State<AppState>, Path(chat_id): Path<i64>, Json(b): Json<RenameReq>) -> Result<StatusCode, ApiErr> {
+async fn rename(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(chat_id): Path<i64>,
+    Json(b): Json<RenameReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "beacons.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     blocking(move || {
-        let store: NotificationStore = Arc::new(Mutex::new(notification::repo::load_beacons(&db, tid)));
+        let store: NotificationStore =
+            Arc::new(Mutex::new(notification::repo::load_beacons(&db, tid)));
         notification::rename_target(&store, Some(&db), tid, chat_id, &b.label)
     })
     .await?
@@ -69,16 +93,25 @@ async fn rename(UserClaims(c): UserClaims, State(st): State<AppState>, Path(chat
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(chat_id): Path<i64>) -> Result<StatusCode, ApiErr> {
+async fn remove(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(chat_id): Path<i64>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "beacons.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     let removed = blocking(move || {
-        let store: NotificationStore = Arc::new(Mutex::new(notification::repo::load_beacons(&db, tid)));
+        let store: NotificationStore =
+            Arc::new(Mutex::new(notification::repo::load_beacons(&db, tid)));
         notification::delete_target(&store, Some(&db), tid, chat_id).is_some()
     })
     .await?;
-    if removed { Ok(StatusCode::NO_CONTENT) } else { Err(err(StatusCode::NOT_FOUND, "Beacon not found.")) }
+    if removed {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(err(StatusCode::NOT_FOUND, "Beacon not found."))
+    }
 }
 
 #[derive(Serialize)]
@@ -90,7 +123,10 @@ struct TelegramState {
 }
 
 /// Telegram state without leaking any tokens.
-async fn get_config(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<TelegramState>, ApiErr> {
+async fn get_config(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<TelegramState>, ApiErr> {
     auth::require(&c, "beacons.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
@@ -102,7 +138,11 @@ async fn get_config(UserClaims(c): UserClaims, State(st): State<AppState>) -> Re
         if provider_configured && bot_username.as_deref().unwrap_or("").trim().is_empty() {
             bot_username = notification::repo::ensure_bot_username(&db, tid);
         }
-        TelegramState { provider_configured, pairing_code, bot_username }
+        TelegramState {
+            provider_configured,
+            pairing_code,
+            bot_username,
+        }
     })
     .await?;
     Ok(Json(state))
@@ -114,7 +154,11 @@ struct SetTelegramReq {
     pairing_code: String,
 }
 
-async fn set_config(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): Json<SetTelegramReq>) -> Result<StatusCode, ApiErr> {
+async fn set_config(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(b): Json<SetTelegramReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "beacons.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
@@ -146,9 +190,16 @@ async fn test_send(
             .or_else(|| notification::NotificationConfig::from_env().map(|c| c.bot_token))
             .ok_or_else(|| "Telegram provider not configured.".to_string())?;
 
-        let cfg = NotificationConfig { bot_token: token, pairing_code: String::new() };
-        notification::client::send_message(&cfg, chat_id, "Sentinel test \u{2713} — delivery confirmed.")
-            .map_err(|e| format!("Send failed: {e}"))
+        let cfg = NotificationConfig {
+            bot_token: token,
+            pairing_code: String::new(),
+        };
+        notification::client::send_message(
+            &cfg,
+            chat_id,
+            "Sentinel test \u{2713} — delivery confirmed.",
+        )
+        .map_err(|e| format!("Send failed: {e}"))
     })
     .await?
     .map_err(|e| err(StatusCode::BAD_GATEWAY, e))?;

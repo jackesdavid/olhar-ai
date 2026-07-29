@@ -205,7 +205,13 @@ pub fn upsert(db: &Db, plan: Plan) -> Result<(), String> {
 }
 
 /// Set one (plan, currency) price and its storage overage rate — both money, one row.
-pub fn set_price(db: &Db, plan_id: &str, currency: &str, amount: f64, overage_storage_per_gb: f64) -> Result<(), String> {
+pub fn set_price(
+    db: &Db,
+    plan_id: &str,
+    currency: &str,
+    amount: f64,
+    overage_storage_per_gb: f64,
+) -> Result<(), String> {
     let plan_id = plan_id.to_string();
     let currency = currency.to_string();
     let pool = db.pool();
@@ -223,7 +229,8 @@ pub fn set_price(db: &Db, plan_id: &str, currency: &str, amount: f64, overage_st
         .execute(&pool)
         .await
     });
-    res.map(|_| ()).map_err(|e| format!("plans::set_price: {e}"))
+    res.map(|_| ())
+        .map_err(|e| format!("plans::set_price: {e}"))
 }
 
 /// The provider's price-object ref for a plan **in one currency** (e.g. a Stripe `price_...`).
@@ -231,7 +238,12 @@ pub fn set_price(db: &Db, plan_id: &str, currency: &str, amount: f64, overage_st
 /// Keyed by currency because the provider's object is: a Stripe Price carries a single currency
 /// and amount. Looking one up without it hands a BRL Price to a USD tenant, who then pays
 /// R$ 39,90 instead of US$ 9,99.
-pub fn provider_price_ref(db: &Db, plan_id: &str, provider: &str, currency: &str) -> Option<String> {
+pub fn provider_price_ref(
+    db: &Db,
+    plan_id: &str,
+    provider: &str,
+    currency: &str,
+) -> Option<String> {
     let plan_id = plan_id.to_string();
     let provider = provider.to_string();
     let currency = currency.to_string();
@@ -252,7 +264,13 @@ pub fn provider_price_ref(db: &Db, plan_id: &str, provider: &str, currency: &str
 }
 
 /// Record the provider's price-object ref for a (plan, currency).
-pub fn set_provider_price_ref(db: &Db, plan_id: &str, provider: &str, currency: &str, price_ref: &str) -> Result<(), String> {
+pub fn set_provider_price_ref(
+    db: &Db,
+    plan_id: &str,
+    provider: &str,
+    currency: &str,
+    price_ref: &str,
+) -> Result<(), String> {
     let plan_id = plan_id.to_string();
     let provider = provider.to_string();
     let currency = currency.to_string();
@@ -270,7 +288,8 @@ pub fn set_provider_price_ref(db: &Db, plan_id: &str, provider: &str, currency: 
         .execute(&pool)
         .await
     });
-    res.map(|_| ()).map_err(|e| format!("plans::set_provider_price_ref: {e}"))
+    res.map(|_| ())
+        .map_err(|e| format!("plans::set_provider_price_ref: {e}"))
 }
 
 /// The distinct retention windows any plan sells — one bucket lifecycle rule per tier.

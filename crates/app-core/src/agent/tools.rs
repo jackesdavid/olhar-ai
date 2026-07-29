@@ -16,10 +16,10 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::events::{self, AlertLevel, NewEvent};
 use crate::db::Db;
 use crate::device_actions as actions;
 use crate::devices::DeviceStore;
+use crate::events::{self, AlertLevel, NewEvent};
 use crate::notification::{NotificationConfig, NotificationStore};
 use crate::ports::{FrameSource, Notifier, Recognizer, Vision};
 
@@ -680,14 +680,23 @@ fn alert_stats() -> ToolSpec {
             by level, and the locations (rooms) with the most alerts.",
         input_schema: json!({ "type": "object", "properties": {}, "required": [] }),
         run: |_input, ctx| {
-            let today = events::list_kind_sync(&ctx.db, ctx.tenant_id, "alert", Some(events::today_start_rfc3339()), 1000);
+            let today = events::list_kind_sync(
+                &ctx.db,
+                ctx.tenant_id,
+                "alert",
+                Some(events::today_start_rfc3339()),
+                1000,
+            );
             let total = today.len();
             let pending = today.iter().filter(|e| !events::event_delivered(e)).count();
 
             let levels = AlertLevel::ALL
                 .iter()
                 .map(|l| {
-                    let n = today.iter().filter(|e| AlertLevel::parse(&e.severity) == Some(*l)).count();
+                    let n = today
+                        .iter()
+                        .filter(|e| AlertLevel::parse(&e.severity) == Some(*l))
+                        .count();
                     format!("{} {}", l.label(), n)
                 })
                 .collect::<Vec<_>>()

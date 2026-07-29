@@ -26,9 +26,9 @@ use sqlx::PgPool;
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
-use app_core::edge_commands;
 use crate::http::box_identity;
 use crate::AppState;
+use app_core::edge_commands;
 
 /// One live edge stream: a unique connection id (to guard against a reconnect's cleanup removing the
 /// newer connection) and the channel that feeds its SSE response.
@@ -81,7 +81,10 @@ pub fn spawn_delivery(pool: PgPool, registry: EdgeStreams) {
                             deliver_box(&pool, &registry, box_id).await;
                         }
                     }
-                    Ok(Err(e)) => { log::warn!("[edge-stream] listener dropped ({e}); reconnecting"); break; }
+                    Ok(Err(e)) => {
+                        log::warn!("[edge-stream] listener dropped ({e}); reconnecting");
+                        break;
+                    }
                     Err(_) => {} // poll timeout — loop and drain
                 }
             }
@@ -112,13 +115,23 @@ pub async fn deliver_box(pool: &PgPool, registry: &EdgeStreams, box_id: Uuid) {
     };
     let cmds = match edge_commands::claim_for_box(pool, box_id, BATCH).await {
         Ok(c) => c,
-        Err(e) => { log::warn!("[edge-stream] claim for {box_id} failed: {e}"); return; }
+        Err(e) => {
+            log::warn!("[edge-stream] claim for {box_id} failed: {e}");
+            return;
+        }
     };
     for c in cmds {
         let payload = serde_json::json!({ "v": 1, "id": c.id, "cmd": c.cmd, "args": c.args });
-        let ev = match Event::default().event("command").id(c.id.to_string()).json_data(&payload) {
+        let ev = match Event::default()
+            .event("command")
+            .id(c.id.to_string())
+            .json_data(&payload)
+        {
             Ok(ev) => ev,
-            Err(e) => { log::error!("[edge-stream] encode command {}: {e}", c.id); continue; }
+            Err(e) => {
+                log::error!("[edge-stream] encode command {}: {e}", c.id);
+                continue;
+            }
         };
         if tx.send(Ok(ev)).await.is_err() {
             // Edge dropped between claim and send — hand it back for redelivery.
@@ -144,7 +157,10 @@ pub async fn edge_stream(State(st): State<AppState>, headers: HeaderMap) -> Resp
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
 
     // Register (replacing any stale entry for this box — a reconnect wins).
-    st.edge_streams.lock().unwrap().insert(box_id, (conn_id, tx.clone()));
+    st.edge_streams
+        .lock()
+        .unwrap()
+        .insert(box_id, (conn_id, tx.clone()));
     let _ = edge_commands::mark_session(&st.pool, box_id, &pod).await;
     log::info!("[edge-stream] box {box_id} connected (pod {pod})");
 
@@ -169,7 +185,11 @@ pub async fn edge_stream(State(st): State<AppState>, headers: HeaderMap) -> Resp
             // Cleanup — but don't evict a newer reconnect that replaced us.
             {
                 let mut map = registry.lock().unwrap();
-                if map.get(&box_id).map(|(cid, _)| *cid == conn_id).unwrap_or(false) {
+                if map
+                    .get(&box_id)
+                    .map(|(cid, _)| *cid == conn_id)
+                    .unwrap_or(false)
+                {
                     map.remove(&box_id);
                 }
             }

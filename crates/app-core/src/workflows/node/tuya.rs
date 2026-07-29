@@ -7,47 +7,78 @@ use crate::tuya::{self, TuyaConfig};
 use serde_json::Value;
 
 fn cfg_str<'a>(config: &'a Value, key: &str) -> &'a str {
-    config.get(key).and_then(Value::as_str).map(str::trim).unwrap_or("")
+    config
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("")
 }
 
-fn config_or_missing(config: &Value, sys: &ToolContext) -> Result<(TuyaConfig, tuya::TuyaDevice), String> {
-    let cfg = tuya::repo::resolve_config(&sys.db, sys.tenant_id)
-        .ok_or("Tuya is not connected — add your Tuya project credentials in Settings → Integrations.")?;
+fn config_or_missing(
+    config: &Value,
+    sys: &ToolContext,
+) -> Result<(TuyaConfig, tuya::TuyaDevice), String> {
+    let cfg = tuya::repo::resolve_config(&sys.db, sys.tenant_id).ok_or(
+        "Tuya is not connected — add your Tuya project credentials in Settings → Integrations.",
+    )?;
     let selector = cfg_str(config, "tuya_device");
-    let device = tuya::repo::find_selector(&sys.db, sys.tenant_id, selector)
-        .ok_or_else(|| format!("Tuya device '{selector}' not found — sync devices in Integrations."))?;
+    let device = tuya::repo::find_selector(&sys.db, sys.tenant_id, selector).ok_or_else(|| {
+        format!("Tuya device '{selector}' not found — sync devices in Integrations.")
+    })?;
     Ok((cfg, device))
 }
 
-pub(super) fn run_tuya_control(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+pub(super) fn run_tuya_control(
+    config: &Value,
+    inputs: &PortValues,
+    sys: &ToolContext,
+) -> Result<PortValues, String> {
     let (cfg, device) = config_or_missing(config, sys)?;
     let code = cfg_str(config, "tuya_code");
     if code.is_empty() {
-        return Err("no Tuya data point selected — pick a 'code' (e.g. switch_1) in the node.".into());
+        return Err(
+            "no Tuya data point selected — pick a 'code' (e.g. switch_1) in the node.".into(),
+        );
     }
     // A wired `value` input (dynamic) wins over the config literal (the adaptive widget fallback).
-    let raw = port_value_to_json(inputs.get("value"))
-        .unwrap_or_else(|| config.get("value").cloned().unwrap_or_else(|| Value::String(String::new())));
+    let raw = port_value_to_json(inputs.get("value")).unwrap_or_else(|| {
+        config
+            .get("value")
+            .cloned()
+            .unwrap_or_else(|| Value::String(String::new()))
+    });
     let ty = function_type(device.functions_json.as_deref(), code);
     let value = coerce_value(&raw, ty.as_deref());
 
     let resp = tuya::client::send_command(&cfg, &device.device_id, code, &value)?;
     let mut o = PortValues::new();
-    o.insert("ok".into(), PortValue::Bool(resp.get("result").and_then(Value::as_bool).unwrap_or(true)));
+    o.insert(
+        "ok".into(),
+        PortValue::Bool(resp.get("result").and_then(Value::as_bool).unwrap_or(true)),
+    );
     o.insert("response".into(), PortValue::Text(resp.to_string()));
     Ok(o)
 }
 
-pub(super) fn run_tuya_read_status(config: &Value, sys: &ToolContext) -> Result<PortValues, String> {
+pub(super) fn run_tuya_read_status(
+    config: &Value,
+    sys: &ToolContext,
+) -> Result<PortValues, String> {
     let (cfg, device) = config_or_missing(config, sys)?;
     let code = cfg_str(config, "tuya_code");
     let status = tuya::client::get_status(&cfg, &device.device_id)?;
 
     let raw = serde_json::to_string(
-        &status.iter().map(|(k, v)| serde_json::json!({ "code": k, "value": v })).collect::<Vec<_>>(),
+        &status
+            .iter()
+            .map(|(k, v)| serde_json::json!({ "code": k, "value": v }))
+            .collect::<Vec<_>>(),
     )
     .unwrap_or_default();
-    let found = status.iter().find(|(k, _)| k == code).map(|(_, v)| v.clone());
+    let found = status
+        .iter()
+        .find(|(k, _)| k == code)
+        .map(|(_, v)| v.clone());
     let ty = function_type(device.functions_json.as_deref(), code);
     let on = found.as_ref().map(as_bool).unwrap_or(false);
     // `value` is typed by the data point (Boolean→Bool, Integer→Num, else Text) so it wires into
@@ -89,7 +120,9 @@ fn function_type(functions_json: Option<&str>, code: &str) -> Option<String> {
 fn coerce_value(raw: &Value, ty: Option<&str>) -> Value {
     match ty {
         Some("Boolean") => Value::Bool(as_bool(raw)),
-        Some("Integer") => as_i64(raw).map(|n| Value::Number(n.into())).unwrap_or_else(|| Value::Number(0.into())),
+        Some("Integer") => as_i64(raw)
+            .map(|n| Value::Number(n.into()))
+            .unwrap_or_else(|| Value::Number(0.into())),
         Some("Enum") | Some("String") => Value::String(json_to_text(raw)),
         _ => raw.clone(),
     }
@@ -99,7 +132,10 @@ fn as_bool(v: &Value) -> bool {
     match v {
         Value::Bool(b) => *b,
         Value::Number(n) => n.as_i64().map(|i| i != 0).unwrap_or(false),
-        Value::String(s) => matches!(s.trim().to_ascii_lowercase().as_str(), "true" | "on" | "1" | "yes"),
+        Value::String(s) => matches!(
+            s.trim().to_ascii_lowercase().as_str(),
+            "true" | "on" | "1" | "yes"
+        ),
         _ => false,
     }
 }

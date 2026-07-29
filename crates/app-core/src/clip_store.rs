@@ -55,7 +55,10 @@ fn build() -> Option<Box<Bucket>> {
 }
 
 fn env(key: &str) -> Option<String> {
-    std::env::var(key).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    std::env::var(key)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// `rust-s3` returns `Ok(ResponseData)` for HTTP 4xx/5xx — a rejected request looks like a
@@ -104,7 +107,12 @@ fn block_on<F: std::future::Future>(f: F) -> Result<F::Output, String> {
 /// on its own — no purge job to run, forget, or get wrong. Changing a tenant's plan changes
 /// the prefix for *new* clips only: existing ones keep the retention they were stored under,
 /// so we never silently hold footage longer than we promised.
-pub fn object_key(retention_days: i32, tenant_id: Uuid, started_at_rfc3339: &str, clip_id: &str) -> String {
+pub fn object_key(
+    retention_days: i32,
+    tenant_id: Uuid,
+    started_at_rfc3339: &str,
+    clip_id: &str,
+) -> String {
     // RFC3339 begins `YYYY-MM-…`; fall back to `0000/00` rather than panic on a malformed one.
     let (year, month) = match started_at_rfc3339.len() >= 7 {
         true => (&started_at_rfc3339[0..4], &started_at_rfc3339[5..7]),
@@ -119,7 +127,8 @@ pub fn object_key(retention_days: i32, tenant_id: Uuid, started_at_rfc3339: &str
 /// (tokio panics). Wrap in `spawn_blocking` from an axum handler.
 pub fn presign_put(key: &str, expiry_secs: u32) -> Result<String, String> {
     let b = bucket().ok_or("clip store not configured")?;
-    block_on(b.presign_put(key, expiry_secs, None, None))?.map_err(|e| format!("clip_store: presign put: {e}"))
+    block_on(b.presign_put(key, expiry_secs, None, None))?
+        .map_err(|e| format!("clip_store: presign put: {e}"))
 }
 
 /// A short-lived URL the browser can stream the clip from. R2 charges no egress.
@@ -129,7 +138,8 @@ pub fn presign_put(key: &str, expiry_secs: u32) -> Result<String, String> {
 /// from CORS.
 pub fn presign_get(key: &str, expiry_secs: u32) -> Result<String, String> {
     let b = bucket().ok_or("clip store not configured")?;
-    block_on(b.presign_get(key, expiry_secs, None))?.map_err(|e| format!("clip_store: presign get: {e}"))
+    block_on(b.presign_get(key, expiry_secs, None))?
+        .map_err(|e| format!("clip_store: presign get: {e}"))
 }
 
 /// Remove one object. Idempotent, like every S3 delete.
@@ -144,13 +154,19 @@ pub fn presign_get(key: &str, expiry_secs: u32) -> Result<String, String> {
 /// DELETE signs the URL instead of the headers, and R2 accepts it.
 pub fn delete(key: &str) -> Result<(), String> {
     let b = bucket().ok_or("clip store not configured")?;
-    let url = block_on(b.presign_delete(key, 60))?.map_err(|e| format!("clip_store: presign delete: {e}"))?;
+    let url = block_on(b.presign_delete(key, 60))?
+        .map_err(|e| format!("clip_store: presign delete: {e}"))?;
     match ureq::delete(&url).call() {
         Ok(_) => Ok(()),
         // Already gone is success — a purge must be safe to retry.
         Err(ureq::Error::Status(404, _)) => Ok(()),
         Err(ureq::Error::Status(code, r)) => {
-            let detail: String = r.into_string().unwrap_or_default().chars().take(200).collect();
+            let detail: String = r
+                .into_string()
+                .unwrap_or_default()
+                .chars()
+                .take(200)
+                .collect();
             Err(format!("clip_store: delete: HTTP {code} {detail}"))
         }
         Err(e) => Err(format!("clip_store: delete: {e}")),
@@ -179,14 +195,9 @@ pub fn purge_tenant(tenant_id: uuid::Uuid, tiers: &[i32]) -> Result<u64, String>
         loop {
             // No delimiter: recurse into `…/{yyyy}/{mm}/` so every clip is seen, not just the
             // year "folders". 1000 keys/page is R2's max.
-            let (page, code) = block_on(b.list_page(
-                prefix.clone(),
-                None,
-                token.clone(),
-                None,
-                Some(1000),
-            ))?
-            .map_err(|e| format!("clip_store: list {prefix}: {e}"))?;
+            let (page, code) =
+                block_on(b.list_page(prefix.clone(), None, token.clone(), None, Some(1000)))?
+                    .map_err(|e| format!("clip_store: list {prefix}: {e}"))?;
             if !(200..300).contains(&code) {
                 return Err(format!("clip_store: list {prefix}: HTTP {code}"));
             }
@@ -238,7 +249,9 @@ pub fn ensure_retention_lifecycle(tiers: &[i32]) -> Result<(), String> {
     for d in &days {
         if !got.contains(&format!("retain-{d}d")) {
             ARMED.store(false, Ordering::Relaxed);
-            return Err(format!("clip_store: lifecycle rule 'retain-{d}d' did not apply"));
+            return Err(format!(
+                "clip_store: lifecycle rule 'retain-{d}d' did not apply"
+            ));
         }
     }
     ARMED.store(true, Ordering::Relaxed);
@@ -259,7 +272,10 @@ fn signed_request(method: &str, subresource: &str, body: &[u8]) -> Result<(u16, 
     let secret = env("R2_SECRET_ACCESS_KEY").ok_or("clip store not configured")?;
     let region = env("R2_REGION").unwrap_or_else(|| "auto".to_string());
 
-    let host = endpoint.trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/');
+    let host = endpoint
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/');
     let now = chrono::Utc::now();
     let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
     let datestamp = now.format("%Y%m%d").to_string();
@@ -296,7 +312,10 @@ fn signed_request(method: &str, subresource: &str, body: &[u8]) -> Result<(u16, 
     let authorization = format!(
         "AWS4-HMAC-SHA256 Credential={access}/{scope}, SignedHeaders={signed_headers}, Signature={signature}"
     );
-    let url = format!("{}/{bucket_name}?{subresource}", endpoint.trim_end_matches('/'));
+    let url = format!(
+        "{}/{bucket_name}?{subresource}",
+        endpoint.trim_end_matches('/')
+    );
 
     let req = ureq::request(method, &url)
         .set("Authorization", &authorization)

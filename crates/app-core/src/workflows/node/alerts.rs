@@ -2,7 +2,7 @@
 //! records an `alert` event, GetLastAlert reads the newest one, DeliverAlert delivers it to
 //! beacons. The nodes are unchanged for users — only the store beneath them moved from the retired
 //! `alerts` table to `events`.
-use super::{PortValue, PortValues, req_text};
+use super::{req_text, PortValue, PortValues};
 use crate::agent::tools::ToolContext;
 use crate::events::{self, AlertLevel, NewEvent};
 use serde_json::Value;
@@ -13,8 +13,14 @@ pub(super) fn run_get_last_alert(sys: &ToolContext) -> Result<PortValues, String
         Some(e) => {
             o.insert("id".into(), PortValue::Num(e.id));
             o.insert("level".into(), PortValue::Text(e.severity.to_uppercase()));
-            o.insert("message".into(), PortValue::Text(e.message.unwrap_or_default()));
-            o.insert("room".into(), PortValue::Text(e.room_name.unwrap_or_default()));
+            o.insert(
+                "message".into(),
+                PortValue::Text(e.message.unwrap_or_default()),
+            );
+            o.insert(
+                "room".into(),
+                PortValue::Text(e.room_name.unwrap_or_default()),
+            );
             o.insert("source".into(), PortValue::Text(e.source));
             o.insert("created_at".into(), PortValue::Text(e.occurred_at));
             o.insert("ok".into(), PortValue::Bool(true));
@@ -50,7 +56,10 @@ pub(super) fn run_create_alert(
     {
         Some(name) => {
             let rooms = crate::map::repo::load(&sys.db, sys.tenant_id);
-            match rooms.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim())) {
+            match rooms
+                .iter()
+                .find(|r| r.name.eq_ignore_ascii_case(name.trim()))
+            {
                 Some(r) => (Some(r.id as i64), Some(r.name.clone())),
                 None => (None, Some(name.to_string())),
             }
@@ -63,7 +72,8 @@ pub(super) fn run_create_alert(
     ev.message = Some(message);
     ev.room_id = room_id;
     ev.room_name = room_name;
-    let id = events::insert_event_returning_sync(&sys.db, ev).ok_or("failed to record alert event")?;
+    let id =
+        events::insert_event_returning_sync(&sys.db, ev).ok_or("failed to record alert event")?;
 
     let mut o = PortValues::new();
     o.insert("id".into(), PortValue::Num(id));
@@ -75,7 +85,10 @@ pub(super) fn run_create_alert(
     Ok(o)
 }
 
-pub(super) fn run_deliver_alert(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+pub(super) fn run_deliver_alert(
+    inputs: &PortValues,
+    sys: &ToolContext,
+) -> Result<PortValues, String> {
     let id = inputs
         .get("id")
         .and_then(PortValue::as_num)

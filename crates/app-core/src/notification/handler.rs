@@ -39,23 +39,34 @@ pub fn resolve_target<'a>(
 ) -> Result<&'a NotificationTarget, String> {
     let live: Vec<&NotificationTarget> = targets.iter().filter(|t| t.enabled).collect();
     if live.is_empty() {
-        return Err("No notification targets are paired. Send the pairing code to the \
+        return Err(
+            "No notification targets are paired. Send the pairing code to the \
                     Telegram bot first."
-            .into());
+                .into(),
+        );
     }
     match target {
         Some(name) => live
             .iter()
             .copied()
             .find(|t| t.label.eq_ignore_ascii_case(name.trim()))
-            .ok_or_else(|| format!("No target named '{}'. Available: {}.", name.trim(), label_list(&live))),
+            .ok_or_else(|| {
+                format!(
+                    "No target named '{}'. Available: {}.",
+                    name.trim(),
+                    label_list(&live)
+                )
+            }),
         None if live.len() == 1 => Ok(live[0]),
         None => Err(format!("Which target? Available: {}.", label_list(&live))),
     }
 }
 
 fn label_list(live: &[&NotificationTarget]) -> String {
-    live.iter().map(|t| t.label.as_str()).collect::<Vec<_>>().join(", ")
+    live.iter()
+        .map(|t| t.label.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The single send entry point used by ALL consumers. Resolves the target, sends
@@ -81,7 +92,11 @@ pub fn dispatch(
         Some(jpeg) => client::send_photo(cfg, chat_id, message, &jpeg)?,
         None => client::send_message(cfg, chat_id, message)?,
     }
-    let what = if message.trim().is_empty() { "snapshot" } else { "message" };
+    let what = if message.trim().is_empty() {
+        "snapshot"
+    } else {
+        "message"
+    };
     Ok(format!("Sent {what} to '{label}'."))
 }
 
@@ -113,7 +128,12 @@ pub fn spawn_pairing_bot(
         // `register_target` as chats pair, so subsequent regular messages route to the right tenant.
         let stores: std::collections::HashMap<uuid::Uuid, NotificationStore> = tenants
             .iter()
-            .map(|(t, _)| (*t, Arc::new(std::sync::Mutex::new(super::repo::load_beacons(&db, *t)))))
+            .map(|(t, _)| {
+                (
+                    *t,
+                    Arc::new(std::sync::Mutex::new(super::repo::load_beacons(&db, *t))),
+                )
+            })
             .collect();
         let mut offset: i64 = 0; // 0 = take the current backlog once
         let mut err_streak: u32 = 0;
@@ -127,7 +147,7 @@ pub fn spawn_pairing_bot(
                     err_streak = 0;
                     for u in &updates {
                         offset = offset.max(u.update_id + 1); // ack
-                        // 1. Pairing: the tenant whose code matches this message claims the chat.
+                                                              // 1. Pairing: the tenant whose code matches this message claims the chat.
                         let paired_tenant = tenants
                             .iter()
                             .find(|(_, code)| parse_pairing_code(&u.text, code))
@@ -164,8 +184,11 @@ pub fn spawn_pairing_bot(
                     // bad token) used to be totally silent. Surface it, but throttle: first
                     // occurrence, then every ~12th retry (~once/minute at the 5s backoff).
                     if err_streak == 0 || err_streak % 12 == 0 {
-                        let tenants_dbg: Vec<uuid::Uuid> = tenants.iter().map(|(t, _)| *t).collect();
-                        log::warn!("pairing getUpdates failing for bot (tenants {tenants_dbg:?}): {e}");
+                        let tenants_dbg: Vec<uuid::Uuid> =
+                            tenants.iter().map(|(t, _)| *t).collect();
+                        log::warn!(
+                            "pairing getUpdates failing for bot (tenants {tenants_dbg:?}): {e}"
+                        );
                     }
                     err_streak = err_streak.saturating_add(1);
                     if stop.load(Ordering::Relaxed) {
@@ -213,17 +236,32 @@ fn enqueue_telegram_message(store: &NotificationStore, db: &Db, tenant_id: uuid:
         "command": command,
         "args": args,
     });
-    crate::work_queue::enqueue_event_blocking(db, tenant_id, "telegram_message", "telegram", &payload);
+    crate::work_queue::enqueue_event_blocking(
+        db,
+        tenant_id,
+        "telegram_message",
+        "telegram",
+        &payload,
+    );
 }
 
 /// Register a paired chat if not already present. Returns true if newly added.
-fn register_target(store: &NotificationStore, db: Option<&Db>, tenant_id: uuid::Uuid, u: &Update) -> bool {
+fn register_target(
+    store: &NotificationStore,
+    db: Option<&Db>,
+    tenant_id: uuid::Uuid,
+    u: &Update,
+) -> bool {
     let mut targets = store.lock().unwrap();
     if targets.iter().any(|t| t.chat_id == u.chat_id) {
         return false; // already paired — idempotent
     }
     let label = dedupe_label(&targets, &u.sender_label);
-    targets.push(NotificationTarget { label, chat_id: u.chat_id, enabled: true });
+    targets.push(NotificationTarget {
+        label,
+        chat_id: u.chat_id,
+        enabled: true,
+    });
     if let Some(db) = db {
         super::repo::save_beacons(db, tenant_id, &targets);
     }
@@ -232,18 +270,30 @@ fn register_target(store: &NotificationStore, db: Option<&Db>, tenant_id: uuid::
 
 /// Keep labels unique so `resolve_target` stays unambiguous: "Dave", "Dave 2", …
 fn dedupe_label(targets: &[NotificationTarget], base: &str) -> String {
-    let base = if base.trim().is_empty() { "operator" } else { base.trim() };
+    let base = if base.trim().is_empty() {
+        "operator"
+    } else {
+        base.trim()
+    };
     if !targets.iter().any(|t| t.label == base) {
         return base.to_string();
     }
-    (2..).map(|n| format!("{base} {n}")).find(|c| !targets.iter().any(|t| &t.label == c)).unwrap()
+    (2..)
+        .map(|n| format!("{base} {n}"))
+        .find(|c| !targets.iter().any(|t| &t.label == c))
+        .unwrap()
 }
 
 // ---- beacon management (drives the web Beacons screen) ----------------------
 
 /// Remove the beacon identified by `chat_id` and persist to `path`. Returns the
 /// removed label, or `None` if no beacon matched.
-pub fn delete_target(store: &NotificationStore, db: Option<&Db>, tenant_id: uuid::Uuid, chat_id: i64) -> Option<String> {
+pub fn delete_target(
+    store: &NotificationStore,
+    db: Option<&Db>,
+    tenant_id: uuid::Uuid,
+    chat_id: i64,
+) -> Option<String> {
     let mut targets = store.lock().unwrap();
     let pos = targets.iter().position(|t| t.chat_id == chat_id)?;
     let removed = targets.remove(pos);
@@ -267,7 +317,10 @@ pub fn rename_target(
         return Err("Name can't be empty.".into());
     }
     let mut targets = store.lock().unwrap();
-    let t = targets.iter_mut().find(|t| t.chat_id == chat_id).ok_or("Beacon not found.")?;
+    let t = targets
+        .iter_mut()
+        .find(|t| t.chat_id == chat_id)
+        .ok_or("Beacon not found.")?;
     t.label = label.clone();
     if let Some(db) = db {
         super::repo::save_beacons(db, tenant_id, &targets);
@@ -300,7 +353,11 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     fn target(label: &str, chat_id: i64, enabled: bool) -> NotificationTarget {
-        NotificationTarget { label: label.into(), chat_id, enabled }
+        NotificationTarget {
+            label: label.into(),
+            chat_id,
+            enabled,
+        }
     }
 
     #[test]
@@ -321,7 +378,10 @@ mod tests {
         assert_eq!(resolve_target(&one, None).unwrap().label, "Dave");
         let many = vec![target("Dave", 1, true), target("Ripley", 2, true)];
         assert!(resolve_target(&many, None).is_err()); // ambiguous
-        assert_eq!(resolve_target(&many, Some("ripley")).unwrap().label, "Ripley"); // case-insens
+        assert_eq!(
+            resolve_target(&many, Some("ripley")).unwrap().label,
+            "Ripley"
+        ); // case-insens
         assert!(resolve_target(&many, Some("nobody")).is_err());
         // disabled targets are excluded
         let off = vec![target("Dave", 1, false)];
@@ -331,9 +391,15 @@ mod tests {
     #[test]
     fn split_command_parses_slash_and_plain() {
         assert_eq!(split_command("/snap cam1"), ("/snap".into(), "cam1".into()));
-        assert_eq!(split_command("  /Snap  cam1 cam2 "), ("/snap".into(), "cam1 cam2".into()));
+        assert_eq!(
+            split_command("  /Snap  cam1 cam2 "),
+            ("/snap".into(), "cam1 cam2".into())
+        );
         assert_eq!(split_command("/status"), ("/status".into(), "".into()));
-        assert_eq!(split_command("hello there"), ("".into(), "hello there".into()));
+        assert_eq!(
+            split_command("hello there"),
+            ("".into(), "hello there".into())
+        );
         assert_eq!(split_command("  "), ("".into(), "".into()));
     }
 
@@ -350,13 +416,21 @@ mod tests {
         // `None` for the DB keeps the test hermetic — exercises the in-memory store
         // semantics (find-by-chat_id, rename, toggle, remove). The Postgres round-trip
         // is covered by the app's live verification, not a unit test.
-        let store: NotificationStore =
-            Arc::new(Mutex::new(vec![target("Dave", 42, true), target("Ripley", 7, true)]));
+        let store: NotificationStore = Arc::new(Mutex::new(vec![
+            target("Dave", 42, true),
+            target("Ripley", 7, true),
+        ]));
 
         let t = uuid::Uuid::nil();
-        assert_eq!(rename_target(&store, None, t, 42, "Phone").unwrap(), "Phone");
+        assert_eq!(
+            rename_target(&store, None, t, 42, "Phone").unwrap(),
+            "Phone"
+        );
         assert!(rename_target(&store, None, t, 42, "  ").is_err());
-        assert_eq!(set_enabled_by_id(&store, None, t, 7, false), Some(("Ripley".into(), false)));
+        assert_eq!(
+            set_enabled_by_id(&store, None, t, 7, false),
+            Some(("Ripley".into(), false))
+        );
         assert_eq!(delete_target(&store, None, t, 42), Some("Phone".into()));
         assert!(delete_target(&store, None, t, 999).is_none());
 

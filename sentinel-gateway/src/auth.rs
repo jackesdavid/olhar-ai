@@ -37,9 +37,13 @@ impl Claims {
 }
 
 fn verify(secret: &str, token: &str) -> Option<Claims> {
-    decode::<Claims>(token, &DecodingKey::from_secret(secret.as_bytes()), &Validation::default())
-        .ok()
-        .map(|d| d.claims)
+    decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default(),
+    )
+    .ok()
+    .map(|d| d.claims)
 }
 
 /// Pull the bearer token from (in order) the `token` query param, the
@@ -55,7 +59,10 @@ fn extract_token(headers: &HeaderMap, query: Option<&str>) -> Option<String> {
             }
         }
     }
-    if let Some(h) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+    if let Some(h) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
         if let Some(t) = h.strip_prefix("Bearer ") {
             return Some(t.to_string());
         }
@@ -73,7 +80,11 @@ fn extract_token(headers: &HeaderMap, query: Option<&str>) -> Option<String> {
 /// Authorize a live request: returns `(token, claims)` iff it carries a valid JWT
 /// granting `live.view`. The token is returned so the gateway can forward it to control
 /// to resolve the tenant's box upstream. `None` → reject (401).
-pub fn authorize_live(secret: &str, headers: &HeaderMap, query: Option<&str>) -> Option<(String, Claims)> {
+pub fn authorize_live(
+    secret: &str,
+    headers: &HeaderMap,
+    query: Option<&str>,
+) -> Option<(String, Claims)> {
     let token = extract_token(headers, query)?;
     let claims = verify(secret, &token)?;
     if claims.may_view_live() {

@@ -1,4 +1,4 @@
-use super::{PortValue, PortValues, device_from_camera, jpeg_dimensions};
+use super::{device_from_camera, jpeg_dimensions, PortValue, PortValues};
 use crate::agent::tools::ToolContext;
 use serde_json::Value;
 
@@ -9,12 +9,18 @@ const FONT_BYTES: &[u8] = include_bytes!("../../../assets/fonts/CascadiaMono-Reg
 fn encode_jpeg(rgb: image::RgbImage) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     image::DynamicImage::ImageRgb8(rgb)
-        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
+        .write_to(
+            &mut std::io::Cursor::new(&mut out),
+            image::ImageFormat::Jpeg,
+        )
         .map_err(|e| format!("could not encode image: {e}"))?;
     Ok(out)
 }
 
-pub(super) fn run_person_detection(inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
+pub(super) fn run_person_detection(
+    inputs: &PortValues,
+    sys: &ToolContext,
+) -> Result<PortValues, String> {
     let bytes = inputs
         .get("image")
         .and_then(PortValue::as_image)
@@ -26,7 +32,10 @@ pub(super) fn run_person_detection(inputs: &PortValues, sys: &ToolContext) -> Re
     let (w, h) = jpeg_dimensions(bytes);
     let mut o = PortValues::new();
     o.insert("count".into(), PortValue::Num(count));
-    o.insert("confidence".into(), PortValue::Num((confidence * 100.0).round() as i64));
+    o.insert(
+        "confidence".into(),
+        PortValue::Num((confidence * 100.0).round() as i64),
+    );
     o.insert("persons".into(), PortValue::List(persons));
     o.insert("width".into(), PortValue::Num(w));
     o.insert("height".into(), PortValue::Num(h));
@@ -52,12 +61,18 @@ pub(super) fn run_object_detection(
         .ok_or_else(|| format!("unknown COCO class: '{class_name}'"))?;
     let detections = sys.vision.detect_objects_detailed(bytes, class_id)?;
     let count = detections.len() as i64;
-    let confidence = detections.iter().map(|d| d.confidence).fold(0.0_f32, f32::max);
+    let confidence = detections
+        .iter()
+        .map(|d| d.confidence)
+        .fold(0.0_f32, f32::max);
     let items: Vec<PortValue> = detections.into_iter().map(PortValue::Person).collect();
     let (w, h) = jpeg_dimensions(bytes);
     let mut o = PortValues::new();
     o.insert("count".into(), PortValue::Num(count));
-    o.insert("confidence".into(), PortValue::Num((confidence * 100.0).round() as i64));
+    o.insert(
+        "confidence".into(),
+        PortValue::Num((confidence * 100.0).round() as i64),
+    );
     o.insert("detections".into(), PortValue::List(items));
     o.insert("width".into(), PortValue::Num(w));
     o.insert("height".into(), PortValue::Num(h));
@@ -88,7 +103,10 @@ pub(super) fn run_break_person_detection(inputs: &PortValues) -> Result<PortValu
         .ok_or("missing required input 'person'")?;
     let mut o = PortValues::new();
     o.insert("bbox".into(), PortValue::Bbox(bbox_from_xyxy(&p.bbox)));
-    o.insert("confidence".into(), PortValue::Num((p.confidence * 100.0).round() as i64));
+    o.insert(
+        "confidence".into(),
+        PortValue::Num((p.confidence * 100.0).round() as i64),
+    );
     Ok(o)
 }
 
@@ -100,7 +118,10 @@ pub(super) fn run_break_detection(inputs: &PortValues) -> Result<PortValues, Str
         .ok_or("missing required input 'detection'")?;
     let mut o = PortValues::new();
     o.insert("bbox".into(), PortValue::Bbox(bbox_from_xyxy(&d.bbox)));
-    o.insert("confidence".into(), PortValue::Num((d.confidence * 100.0).round() as i64));
+    o.insert(
+        "confidence".into(),
+        PortValue::Num((d.confidence * 100.0).round() as i64),
+    );
     Ok(o)
 }
 
@@ -112,7 +133,10 @@ pub(super) fn run_break_face_detection(inputs: &PortValues) -> Result<PortValues
         .ok_or("missing required input 'face'")?;
     let mut o = PortValues::new();
     o.insert("bbox".into(), PortValue::Bbox(bbox_from_xyxy(&f.bbox)));
-    o.insert("confidence".into(), PortValue::Num((f.confidence * 100.0).round() as i64));
+    o.insert(
+        "confidence".into(),
+        PortValue::Num((f.confidence * 100.0).round() as i64),
+    );
     o.insert("landmarks".into(), PortValue::Num(f.landmarks.len() as i64));
     Ok(o)
 }
@@ -128,7 +152,10 @@ pub(super) fn run_recognize_person(
         .ok_or("missing required input 'image'")?;
     let max_distance = config
         .get("max_distance")
-        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+        .and_then(|v| {
+            v.as_f64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+        })
         .unwrap_or(0.4) as f32;
     let embedding = crate::agent::face::embed(&sys.db, sys.tenant_id, bytes)?;
     let matches = sys.recognizer.recognize(&embedding, 5);
@@ -154,7 +181,10 @@ pub(super) fn run_recognize_person(
 fn cfg_f64(config: &Value, k: &str, d: f64) -> f64 {
     config
         .get(k)
-        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+        .and_then(|v| {
+            v.as_f64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+        })
         .unwrap_or(d)
 }
 
@@ -178,14 +208,19 @@ pub(super) fn run_face_embedding(
         .and_then(PortValue::as_bbox)
         .and_then(|b| crop_to_bbox(bytes, b));
     // The edge's YuNet landmarks (source pixels), when the `face_detected` event carried them (#122).
-    let landmarks = inputs.get("kps").and_then(PortValue::as_landmarks).unwrap_or(&[]);
+    let landmarks = inputs
+        .get("kps")
+        .and_then(PortValue::as_landmarks)
+        .unwrap_or(&[]);
     // With a bbox, the edge already localized the face — use the crop-aware embed, which aligns from
     // the edge landmarks (or SCRFD) and falls back to align-free if neither re-detects it (so we
     // never drop a face the edge found). Without a bbox, embed the whole frame ("no face" is real).
     let embedding = match cropped.as_ref() {
         Some((crop, ox, oy)) => {
-            let local: Vec<[f32; 2]> =
-                landmarks.iter().map(|p| [p[0] - *ox as f32, p[1] - *oy as f32]).collect();
+            let local: Vec<[f32; 2]> = landmarks
+                .iter()
+                .map(|p| [p[0] - *ox as f32, p[1] - *oy as f32])
+                .collect();
             crate::agent::face::embed_face_crop_aligned(&sys.db, sys.tenant_id, crop, &local)?
         }
         None => crate::agent::face::embed(&sys.db, sys.tenant_id, bytes)?,
@@ -219,7 +254,9 @@ fn crop_to_bbox(jpeg: &[u8], b: crate::workflows::domain::BBox) -> Option<(Vec<u
 
 /// Cosine distance → a 0..100 confidence percent.
 fn conf_pct(distance: f32) -> i64 {
-    (((1.0 - distance.max(0.0)) * 100.0).round().clamp(0.0, 100.0)) as i64
+    (((1.0 - distance.max(0.0)) * 100.0)
+        .round()
+        .clamp(0.0, 100.0)) as i64
 }
 
 /// kNN-recognize an embedding against the tenant's union gallery (enrolled + stored). Outputs the
@@ -241,9 +278,10 @@ pub(super) fn run_recognize_face(
     let dict: Vec<(String, String)> = matches
         .iter()
         .map(|m| {
-            let key = m.label.clone().unwrap_or_else(|| {
-                format!("unknown:{}", &m.reference[..m.reference.len().min(8)])
-            });
+            let key = m
+                .label
+                .clone()
+                .unwrap_or_else(|| format!("unknown:{}", &m.reference[..m.reference.len().min(8)]));
             (key, conf_pct(m.distance).to_string())
         })
         .collect();
@@ -261,7 +299,10 @@ pub(super) fn run_recognize_face(
         Some(m) => {
             o.insert("found".into(), PortValue::Bool(true));
             o.insert("confidence".into(), PortValue::Num(conf_pct(m.distance)));
-            o.insert("person".into(), PortValue::Text(m.label.clone().unwrap_or_default()));
+            o.insert(
+                "person".into(),
+                PortValue::Text(m.label.clone().unwrap_or_default()),
+            );
             o.insert("person_id".into(), PortValue::Text(m.reference.clone()));
         }
         None => {
@@ -294,9 +335,15 @@ pub(super) fn run_store_face(
 
     // Detection score + face-size (from the face_detected event). StoreFace only STORES them — it
     // makes no quality decision. Deciding WHICH faces to store belongs upstream in the graph
-    // (e.g. When Event → NumGte on face_ratio → Branch → StoreFace).
-    let confidence = inputs.get("confidence").and_then(PortValue::as_num).unwrap_or(0) as f32;
-    let face_ratio = inputs.get("face_ratio").and_then(PortValue::as_num).unwrap_or(0) as f32;
+    // (e.g. When Event → NumGte on face_width → Branch → StoreFace).
+    let confidence = inputs
+        .get("confidence")
+        .and_then(PortValue::as_num)
+        .unwrap_or(0) as f32;
+    let face_width = inputs
+        .get("face_width")
+        .and_then(PortValue::as_num)
+        .unwrap_or(0) as i32;
 
     let dedup = cfg_f64(config, "dedup_distance", 0.15) as f32;
     if dedup > 0.0 {
@@ -329,7 +376,12 @@ pub(super) fn run_store_face(
         .get("camera")
         .and_then(PortValue::as_camera)
         .map(|c| c.id.clone())
-        .or_else(|| inputs.get("camera").and_then(PortValue::as_text).map(str::to_string));
+        .or_else(|| {
+            inputs
+                .get("camera")
+                .and_then(PortValue::as_text)
+                .map(str::to_string)
+        });
     let source = config
         .get("source")
         .and_then(|v| v.as_str())
@@ -346,7 +398,7 @@ pub(super) fn run_store_face(
             camera,
             bbox,
             confidence,
-            face_ratio,
+            face_width,
             source,
             crop_key,
         },
@@ -356,9 +408,18 @@ pub(super) fn run_store_face(
     Ok(o)
 }
 
-pub(super) fn run_motion_detection(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
-    let a = inputs.get("image_a").and_then(PortValue::as_image).ok_or("missing required input 'image_a'")?;
-    let b = inputs.get("image_b").and_then(PortValue::as_image).ok_or("missing required input 'image_b'")?;
+pub(super) fn run_motion_detection(
+    config: &Value,
+    inputs: &PortValues,
+) -> Result<PortValues, String> {
+    let a = inputs
+        .get("image_a")
+        .and_then(PortValue::as_image)
+        .ok_or("missing required input 'image_a'")?;
+    let b = inputs
+        .get("image_b")
+        .and_then(PortValue::as_image)
+        .ok_or("missing required input 'image_b'")?;
     let pixel_threshold = cfg_i64(config, "pixel_threshold", 25).clamp(0, 255) as i16;
     let sensitivity = cfg_i64(config, "sensitivity", 2).clamp(0, 100) as f64;
     let score = motion_score(a, b, pixel_threshold)?;
@@ -371,8 +432,14 @@ pub(super) fn run_motion_detection(config: &Value, inputs: &PortValues) -> Resul
 
 /// Camera-bound motion detector: resolves its own camera, grabs two frames apart, and reports
 /// moved/score. Self-contained per run — drop in a Cron graph to watch a feed continuously.
-pub(super) fn run_motion_watch(config: &Value, inputs: &PortValues, sys: &ToolContext) -> Result<PortValues, String> {
-    let cam = inputs.get("camera").and_then(PortValue::as_camera)
+pub(super) fn run_motion_watch(
+    config: &Value,
+    inputs: &PortValues,
+    sys: &ToolContext,
+) -> Result<PortValues, String> {
+    let cam = inputs
+        .get("camera")
+        .and_then(PortValue::as_camera)
         .ok_or("missing required camera input")?;
     let device = {
         let devices = sys.devices.lock().unwrap();
@@ -393,7 +460,10 @@ pub(super) fn run_motion_watch(config: &Value, inputs: &PortValues, sys: &ToolCo
 }
 
 pub(super) fn run_get_image_size(inputs: &PortValues) -> Result<PortValues, String> {
-    let bytes = inputs.get("image").and_then(PortValue::as_image).ok_or("missing required input 'image'")?;
+    let bytes = inputs
+        .get("image")
+        .and_then(PortValue::as_image)
+        .ok_or("missing required input 'image'")?;
     let (w, h) = jpeg_dimensions(bytes);
     let mut o = PortValues::new();
     o.insert("width".into(), PortValue::Num(w));
@@ -403,20 +473,40 @@ pub(super) fn run_get_image_size(inputs: &PortValues) -> Result<PortValues, Stri
 }
 
 pub(super) fn run_draw_bbox(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
-    let raw = inputs.get("image").and_then(PortValue::as_image).ok_or("missing required input 'image'")?;
-    let b = inputs.get("bbox").and_then(PortValue::as_bbox).ok_or("missing required input 'bbox'")?;
-    let color_str = config.get("color").and_then(|v| v.as_str()).unwrap_or("#00FF00");
+    let raw = inputs
+        .get("image")
+        .and_then(PortValue::as_image)
+        .ok_or("missing required input 'image'")?;
+    let b = inputs
+        .get("bbox")
+        .and_then(PortValue::as_bbox)
+        .ok_or("missing required input 'bbox'")?;
+    let color_str = config
+        .get("color")
+        .and_then(|v| v.as_str())
+        .unwrap_or("#00FF00");
     let color = parse_hex_color(color_str).unwrap_or([0, 255, 0]);
     let thickness = config
         .get("thickness")
-        .and_then(|v| v.as_str().and_then(|s| s.parse::<u32>().ok()).or_else(|| v.as_u64().map(|n| n as u32)))
+        .and_then(|v| {
+            v.as_str()
+                .and_then(|s| s.parse::<u32>().ok())
+                .or_else(|| v.as_u64().map(|n| n as u32))
+        })
         .unwrap_or(2)
         .max(1);
-    let style = config.get("style").and_then(|v| v.as_str()).unwrap_or("box");
+    let style = config
+        .get("style")
+        .and_then(|v| v.as_str())
+        .unwrap_or("box");
     // Optional: grow the box outward by `expand`% of its size on each side (draw fns clamp to image).
     let expand = config
         .get("expand")
-        .and_then(|v| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()).or_else(|| v.as_i64()))
+        .and_then(|v| {
+            v.as_str()
+                .and_then(|s| s.trim().parse::<i64>().ok())
+                .or_else(|| v.as_i64())
+        })
         .unwrap_or(0)
         .max(0);
     let (mut x1, mut y1, mut x2, mut y2) = (b.x1, b.y1, b.x2, b.y2);
@@ -438,7 +528,10 @@ pub(super) fn run_draw_bbox(config: &Value, inputs: &PortValues) -> Result<PortV
     }
     let mut out = Vec::new();
     image::DynamicImage::ImageRgb8(rgb)
-        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
+        .write_to(
+            &mut std::io::Cursor::new(&mut out),
+            image::ImageFormat::Jpeg,
+        )
         .map_err(|e| format!("could not encode image: {e}"))?;
     let w = out.len();
     log::debug!("draw_bbox: drew {thickness}px {style} [{x1},{y1},{x2},{y2}] on {w}-byte JPEG");
@@ -465,14 +558,25 @@ pub(super) fn run_draw_text(config: &Value, inputs: &PortValues) -> Result<PortV
     use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut, text_size};
     use imageproc::rect::Rect;
 
-    let raw = inputs.get("image").and_then(PortValue::as_image).ok_or("missing required input 'image'")?;
-    let b = inputs.get("bbox").and_then(PortValue::as_bbox).ok_or("missing required input 'bbox'")?;
+    let raw = inputs
+        .get("image")
+        .and_then(PortValue::as_image)
+        .ok_or("missing required input 'image'")?;
+    let b = inputs
+        .get("bbox")
+        .and_then(PortValue::as_bbox)
+        .ok_or("missing required input 'bbox'")?;
     // Text: wired input wins, else the config literal.
     let text = inputs
         .get("text")
         .and_then(PortValue::as_text)
         .map(str::to_string)
-        .or_else(|| config.get("text").and_then(|v| v.as_str()).map(str::to_string))
+        .or_else(|| {
+            config
+                .get("text")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
         .unwrap_or_default();
 
     let img = image::load_from_memory(raw).map_err(|e| format!("could not decode image: {e}"))?;
@@ -487,15 +591,37 @@ pub(super) fn run_draw_text(config: &Value, inputs: &PortValues) -> Result<PortV
     }
     let (iw, ih) = (rgb.width() as i64, rgb.height() as i64);
 
-    let position = config.get("position").and_then(|v| v.as_str()).unwrap_or("top-left");
+    let position = config
+        .get("position")
+        .and_then(|v| v.as_str())
+        .unwrap_or("top-left");
     let size = config
         .get("size")
-        .and_then(|v| v.as_str().and_then(|s| s.trim().parse::<f32>().ok()).or_else(|| v.as_f64().map(|n| n as f32)))
+        .and_then(|v| {
+            v.as_str()
+                .and_then(|s| s.trim().parse::<f32>().ok())
+                .or_else(|| v.as_f64().map(|n| n as f32))
+        })
         .unwrap_or(18.0)
         .clamp(6.0, 200.0);
-    let text_color = parse_hex_color(config.get("text_color").and_then(|v| v.as_str()).unwrap_or("#FFFFFF")).unwrap_or([255, 255, 255]);
-    let bg_on = config.get("background").and_then(|v| v.as_bool()).unwrap_or(true);
-    let bg_color = parse_hex_color(config.get("bg_color").and_then(|v| v.as_str()).unwrap_or("#000000")).unwrap_or([0, 0, 0]);
+    let text_color = parse_hex_color(
+        config
+            .get("text_color")
+            .and_then(|v| v.as_str())
+            .unwrap_or("#FFFFFF"),
+    )
+    .unwrap_or([255, 255, 255]);
+    let bg_on = config
+        .get("background")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let bg_color = parse_hex_color(
+        config
+            .get("bg_color")
+            .and_then(|v| v.as_str())
+            .unwrap_or("#000000"),
+    )
+    .unwrap_or([0, 0, 0]);
 
     let font = FontRef::try_from_slice(FONT_BYTES).map_err(|e| format!("font load: {e}"))?;
     let scale = PxScale::from(size);
@@ -519,9 +645,21 @@ pub(super) fn run_draw_text(config: &Value, inputs: &PortValues) -> Result<PortV
         let ry = (ty - pad).max(0) as i32;
         let rw = (tw + pad * 2).max(1) as u32;
         let rh = (th + pad * 2).max(1) as u32;
-        draw_filled_rect_mut(&mut rgb, Rect::at(rx, ry).of_size(rw, rh), image::Rgb(bg_color));
+        draw_filled_rect_mut(
+            &mut rgb,
+            Rect::at(rx, ry).of_size(rw, rh),
+            image::Rgb(bg_color),
+        );
     }
-    draw_text_mut(&mut rgb, image::Rgb(text_color), tx as i32, ty as i32, scale, &font, &text);
+    draw_text_mut(
+        &mut rgb,
+        image::Rgb(text_color),
+        tx as i32,
+        ty as i32,
+        scale,
+        &font,
+        &text,
+    );
 
     let out = encode_jpeg(rgb)?;
     let mut o = PortValues::new();
@@ -530,13 +668,26 @@ pub(super) fn run_draw_text(config: &Value, inputs: &PortValues) -> Result<PortV
     Ok(o)
 }
 
-pub(super) fn run_blur_outside_bbox(config: &Value, inputs: &PortValues) -> Result<PortValues, String> {
-    let raw = inputs.get("image").and_then(PortValue::as_image).ok_or("missing required input 'image'")?;
-    let b = inputs.get("bbox").and_then(PortValue::as_bbox).ok_or("missing required input 'bbox'")?;
+pub(super) fn run_blur_outside_bbox(
+    config: &Value,
+    inputs: &PortValues,
+) -> Result<PortValues, String> {
+    let raw = inputs
+        .get("image")
+        .and_then(PortValue::as_image)
+        .ok_or("missing required input 'image'")?;
+    let b = inputs
+        .get("bbox")
+        .and_then(PortValue::as_bbox)
+        .ok_or("missing required input 'bbox'")?;
     let (x1, y1, x2, y2) = (b.x1, b.y1, b.x2, b.y2);
     let sigma = config
         .get("blur")
-        .and_then(|v| v.as_str().and_then(|s| s.trim().parse::<f32>().ok()).or_else(|| v.as_f64().map(|n| n as f32)))
+        .and_then(|v| {
+            v.as_str()
+                .and_then(|s| s.trim().parse::<f32>().ok())
+                .or_else(|| v.as_f64().map(|n| n as f32))
+        })
         .unwrap_or(12.0)
         .max(0.1);
 
@@ -549,9 +700,15 @@ pub(super) fn run_blur_outside_bbox(config: &Value, inputs: &PortValues) -> Resu
 
     let mut out = Vec::new();
     image::DynamicImage::ImageRgb8(out_img)
-        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
+        .write_to(
+            &mut std::io::Cursor::new(&mut out),
+            image::ImageFormat::Jpeg,
+        )
         .map_err(|e| format!("could not encode image: {e}"))?;
-    log::debug!("blur_outside_bbox: kept [{x1},{y1},{x2},{y2}] sharp, σ={sigma} → {}-byte JPEG", out.len());
+    log::debug!(
+        "blur_outside_bbox: kept [{x1},{y1},{x2},{y2}] sharp, σ={sigma} → {}-byte JPEG",
+        out.len()
+    );
     let mut o = PortValues::new();
     o.insert("image".into(), PortValue::Image(out));
     o.insert("ok".into(), PortValue::Bool(true));
@@ -576,8 +733,12 @@ fn motion_score(a: &[u8], b: &[u8], pixel_threshold: i16) -> Result<f64, String>
     const W: u32 = 320;
     const H: u32 = 240;
     let gray = |raw: &[u8]| -> Result<Vec<u8>, String> {
-        let img = image::load_from_memory(raw).map_err(|e| format!("Could not decode frame: {e}"))?;
-        Ok(img.resize_exact(W, H, image::imageops::FilterType::Triangle).to_luma8().into_raw())
+        let img =
+            image::load_from_memory(raw).map_err(|e| format!("Could not decode frame: {e}"))?;
+        Ok(img
+            .resize_exact(W, H, image::imageops::FilterType::Triangle)
+            .to_luma8()
+            .into_raw())
     };
     let ga = gray(a)?;
     let gb = gray(b)?;
@@ -591,12 +752,20 @@ fn motion_score(a: &[u8], b: &[u8], pixel_threshold: i16) -> Result<f64, String>
 }
 
 fn cfg_i64(config: &Value, k: &str, d: i64) -> i64 {
-    config.get(k).and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).unwrap_or(d)
+    config
+        .get(k)
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+        })
+        .unwrap_or(d)
 }
 
 fn parse_hex_color(s: &str) -> Option<[u8; 3]> {
     let s = s.trim_start_matches('#');
-    if s.len() != 6 { return None; }
+    if s.len() != 6 {
+        return None;
+    }
     let r = u8::from_str_radix(&s[0..2], 16).ok()?;
     let g = u8::from_str_radix(&s[2..4], 16).ok()?;
     let b = u8::from_str_radix(&s[4..6], 16).ok()?;
@@ -620,7 +789,15 @@ fn copy_rect(src: &image::RgbImage, dst: &mut image::RgbImage, x1: i64, y1: i64,
     }
 }
 
-fn draw_rect(img: &mut image::RgbImage, x1: i64, y1: i64, x2: i64, y2: i64, color: [u8; 3], thickness: u32) {
+fn draw_rect(
+    img: &mut image::RgbImage,
+    x1: i64,
+    y1: i64,
+    x2: i64,
+    y2: i64,
+    color: [u8; 3],
+    thickness: u32,
+) {
     let w = img.width() as i64;
     let h = img.height() as i64;
     let px = image::Rgb(color);
@@ -628,14 +805,22 @@ fn draw_rect(img: &mut image::RgbImage, x1: i64, y1: i64, x2: i64, y2: i64, colo
     for d in 0..t {
         for x in x1..=x2 {
             if x >= 0 && x < w {
-                if y1 + d >= 0 && y1 + d < h { img.put_pixel(x as u32, (y1 + d) as u32, px); }
-                if y2 - d >= 0 && y2 - d < h { img.put_pixel(x as u32, (y2 - d) as u32, px); }
+                if y1 + d >= 0 && y1 + d < h {
+                    img.put_pixel(x as u32, (y1 + d) as u32, px);
+                }
+                if y2 - d >= 0 && y2 - d < h {
+                    img.put_pixel(x as u32, (y2 - d) as u32, px);
+                }
             }
         }
         for y in y1..=y2 {
             if y >= 0 && y < h {
-                if x1 + d >= 0 && x1 + d < w { img.put_pixel((x1 + d) as u32, y as u32, px); }
-                if x2 - d >= 0 && x2 - d < w { img.put_pixel((x2 - d) as u32, y as u32, px); }
+                if x1 + d >= 0 && x1 + d < w {
+                    img.put_pixel((x1 + d) as u32, y as u32, px);
+                }
+                if x2 - d >= 0 && x2 - d < w {
+                    img.put_pixel((x2 - d) as u32, y as u32, px);
+                }
             }
         }
     }
@@ -659,7 +844,15 @@ fn fill_block(img: &mut image::RgbImage, ax: i64, ay: i64, bx: i64, by: i64, col
 }
 
 /// HUD style: L-shaped brackets at each corner instead of a full rectangle.
-fn draw_corners(img: &mut image::RgbImage, x1: i64, y1: i64, x2: i64, y2: i64, color: [u8; 3], thickness: u32) {
+fn draw_corners(
+    img: &mut image::RgbImage,
+    x1: i64,
+    y1: i64,
+    x2: i64,
+    y2: i64,
+    color: [u8; 3],
+    thickness: u32,
+) {
     let t = thickness.max(1) as i64;
     // Arm length: a fraction of the shorter side, clamped to a sane range.
     let arm = ((x2 - x1).min(y2 - y1) / 4).clamp(6, 48);
@@ -679,14 +872,30 @@ fn draw_corners(img: &mut image::RgbImage, x1: i64, y1: i64, x2: i64, y2: i64, c
 
 /// HUD style: corner brackets + a centre crosshair with a small square (the
 /// targeting-reticle look). Crosshair arms leave a gap around the centre square.
-fn draw_reticle(img: &mut image::RgbImage, x1: i64, y1: i64, x2: i64, y2: i64, color: [u8; 3], thickness: u32) {
+fn draw_reticle(
+    img: &mut image::RgbImage,
+    x1: i64,
+    y1: i64,
+    x2: i64,
+    y2: i64,
+    color: [u8; 3],
+    thickness: u32,
+) {
     draw_corners(img, x1, y1, x2, y2, color, thickness);
     let t = thickness.max(1) as i64;
     let cx = (x1 + x2) / 2;
     let cy = (y1 + y2) / 2;
     let half = ((x2 - x1).min(y2 - y1) / 12).clamp(4, 16); // centre square half-size
-    // Small centre square outline.
-    draw_rect(img, cx - half, cy - half, cx + half, cy + half, color, thickness);
+                                                           // Small centre square outline.
+    draw_rect(
+        img,
+        cx - half,
+        cy - half,
+        cx + half,
+        cy + half,
+        color,
+        thickness,
+    );
     // Crosshair arms (gap around the square so they don't touch it).
     let gap = half + 4;
     let len = (half * 2).max(8);

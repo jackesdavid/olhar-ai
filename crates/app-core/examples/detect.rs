@@ -20,7 +20,10 @@ fn main() {
     }
 
     let p = app_core::agent::detector::detect_person(&bytes).expect("detect_person");
-    println!("person={} count={} confidence={:.3}", p.person, p.count, p.confidence);
+    println!(
+        "person={} count={} confidence={:.3}",
+        p.person, p.count, p.confidence
+    );
 
     // Warm latency: model + graph are now built, so this is steady-state per-frame cost.
     let t1 = Instant::now();

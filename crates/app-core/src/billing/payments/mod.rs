@@ -18,8 +18,8 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::timeutil::now_rfc3339;
 use crate::db::Db;
+use crate::timeutil::now_rfc3339;
 
 /// The tier being subscribed to, priced in the tenant's currency.
 pub struct PlanRef<'a> {
@@ -77,7 +77,12 @@ pub trait PaymentGateway: Send + Sync {
 
     /// Ensure a provider-side customer exists; return its ref. `tax_id` is the Brazilian
     /// CPF/CNPJ (required by Asaas, optional for Stripe).
-    fn ensure_customer(&self, name: &str, email: &str, tax_id: Option<&str>) -> Result<String, String>;
+    fn ensure_customer(
+        &self,
+        name: &str,
+        email: &str,
+        tax_id: Option<&str>,
+    ) -> Result<String, String>;
 
     /// Start a subscription: create it outright (Asaas) or open a hosted Checkout session
     /// (Stripe). `tenant_id` is echoed back by Checkout-style providers so their webhook
@@ -102,7 +107,9 @@ pub trait PaymentGateway: Send + Sync {
 pub fn active_gateway() -> Option<Box<dyn PaymentGateway>> {
     let provider = std::env::var("PAYMENT_PROVIDER").unwrap_or_else(|_| "stripe".to_string());
     match provider.as_str() {
-        "stripe" => stripe::StripeGateway::from_env().map(|g| Box::new(g) as Box<dyn PaymentGateway>),
+        "stripe" => {
+            stripe::StripeGateway::from_env().map(|g| Box::new(g) as Box<dyn PaymentGateway>)
+        }
         "asaas" => asaas::AsaasGateway::from_env().map(|g| Box::new(g) as Box<dyn PaymentGateway>),
         other => {
             log::warn!("payments: unknown PAYMENT_PROVIDER '{other}'");
@@ -156,7 +163,15 @@ pub fn customer_ref(db: &Db, tenant_id: Uuid, provider: &str) -> Option<String> 
 
 /// Record a provider subscription mapping. `status` starts `pending` until a payment
 /// confirms it (Asaas), or `active` when bound from a completed Checkout (Stripe).
-pub fn record_subscription(db: &Db, tenant_id: Uuid, provider: &str, subscription_ref: &str, plan_id: &str, billing_type: &str, status: &str) {
+pub fn record_subscription(
+    db: &Db,
+    tenant_id: Uuid,
+    provider: &str,
+    subscription_ref: &str,
+    plan_id: &str,
+    billing_type: &str,
+    status: &str,
+) {
     if lookup(db, provider, subscription_ref).is_some() {
         return; // already mapped (a retried webhook)
     }
@@ -263,8 +278,23 @@ pub fn apply_status(db: &Db, provider: &str, subscription_ref: &str, status: &st
 }
 
 /// Bind a Checkout-created subscription to its tenant, then activate the plan.
-pub fn bind_subscription(db: &Db, tenant_id: Uuid, provider: &str, subscription_ref: &str, plan_id: &str, billing_type: &str) {
-    record_subscription(db, tenant_id, provider, subscription_ref, plan_id, billing_type, "active");
+pub fn bind_subscription(
+    db: &Db,
+    tenant_id: Uuid,
+    provider: &str,
+    subscription_ref: &str,
+    plan_id: &str,
+    billing_type: &str,
+) {
+    record_subscription(
+        db,
+        tenant_id,
+        provider,
+        subscription_ref,
+        plan_id,
+        billing_type,
+        "active",
+    );
     apply_status(db, provider, subscription_ref, "active");
 }
 
@@ -295,11 +325,13 @@ fn set_tenant_status(db: &Db, tenant_id: Uuid, status: &str) {
     let status = status.to_string();
     let pool = db.pool();
     let res: Result<_, sqlx::Error> = db.block(async move {
-        sqlx::query("UPDATE tenant_subscriptions SET status = $2 WHERE tenant_id = $1 AND ended_at IS NULL")
-            .bind(tenant_id)
-            .bind(&status)
-            .execute(&pool)
-            .await
+        sqlx::query(
+            "UPDATE tenant_subscriptions SET status = $2 WHERE tenant_id = $1 AND ended_at IS NULL",
+        )
+        .bind(tenant_id)
+        .bind(&status)
+        .execute(&pool)
+        .await
     });
     if let Err(e) = res {
         log::error!("payments::set_tenant_status failed: {e}");

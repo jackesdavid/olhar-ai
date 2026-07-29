@@ -84,7 +84,14 @@ where
         .into_iter()
         .map(|e| match e {
             // sentinel offset → centered on load
-            Entry::Ip(ip) => RoomCamera { ip, dx: -1, dy: -1, rot: 0.0, fov: default_fov(), range: default_range() },
+            Entry::Ip(ip) => RoomCamera {
+                ip,
+                dx: -1,
+                dy: -1,
+                rot: 0.0,
+                fov: default_fov(),
+                range: default_range(),
+            },
             Entry::Full(c) => c,
         })
         .collect())
@@ -104,7 +111,10 @@ fn clamp_cam(cam: &mut RoomCamera, w: i32, h: i32) {
 impl MapRoom {
     /// Centre of the room in grid coords — for label / marker placement.
     pub fn center(&self) -> (f64, f64) {
-        (self.x as f64 + self.w as f64 / 2.0, self.y as f64 + self.h as f64 / 2.0)
+        (
+            self.x as f64 + self.w as f64 / 2.0,
+            self.y as f64 + self.h as f64 / 2.0,
+        )
     }
 }
 

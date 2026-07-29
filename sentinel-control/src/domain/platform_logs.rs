@@ -61,7 +61,10 @@ async fn client_log(
     if let Some(u) = &body.url {
         payload.insert("url".into(), serde_json::json!(u));
     }
-    if let Some(ua) = headers.get(axum::http::header::USER_AGENT).and_then(|v| v.to_str().ok()) {
+    if let Some(ua) = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+    {
         payload.insert("user_agent".into(), serde_json::json!(ua));
     }
     st.log_queue.push(PlatformLog {
@@ -71,7 +74,11 @@ async fn client_log(
         entity_id: None,
         entity_type: Some("client_error"),
         level,
-        message: if body.message.is_empty() { "client error".into() } else { body.message },
+        message: if body.message.is_empty() {
+            "client error".into()
+        } else {
+            body.message
+        },
         payload: Some(serde_json::Value::Object(payload)),
     });
     Ok(StatusCode::NO_CONTENT)
@@ -79,17 +86,17 @@ async fn client_log(
 
 #[derive(Deserialize)]
 struct ListQuery {
-    module:      Option<String>,
-    trace_id:    Option<Uuid>,
+    module: Option<String>,
+    trace_id: Option<Uuid>,
     entity_type: Option<String>,
-    entity_id:   Option<String>,
-    level:       Option<String>,
-    from:        Option<String>,
-    to:          Option<String>,
+    entity_id: Option<String>,
+    level: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
     /// Cursor: return entries with id < after (oldest page boundary, newest-first).
-    after:       Option<i64>,
+    after: Option<i64>,
     #[serde(default)]
-    limit:       Option<i64>,
+    limit: Option<i64>,
 }
 
 async fn list(
@@ -105,19 +112,24 @@ async fn list(
         &st.pool,
         tid,
         LogQuery {
-            module:      q.module,
-            trace_id:    q.trace_id,
+            module: q.module,
+            trace_id: q.trace_id,
             entity_type: q.entity_type,
-            entity_id:   q.entity_id,
-            level:       q.level,
-            from:        q.from,
-            to:          q.to,
-            after:       q.after,
+            entity_id: q.entity_id,
+            level: q.level,
+            from: q.from,
+            to: q.to,
+            after: q.after,
             limit,
         },
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("query failed: {e}")))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("query failed: {e}"),
+        )
+    })?;
 
     let next_cursor = rows.last().map(|r| r.id);
     let count = rows.len();

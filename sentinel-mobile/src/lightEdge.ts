@@ -30,8 +30,8 @@ export type FaceCapture = {
   bbox: [number, number, number, number];
   /** 0..100. */
   confidence: number;
-  /** Face area ÷ frame area, 0..100. */
-  faceRatio: number;
+  /** Face box width in source pixels — the face-size signal the pipeline gates on. */
+  faceWidth: number;
   /** YuNet-order 5 landmarks, flattened `[x0,y0,…]`, source pixels (#122). */
   kps: number[];
   /** The face crop as base64 JPEG (no data: prefix) — becomes `frame_b64`. */
@@ -82,7 +82,7 @@ export async function pushFace(edge: LightEdge, face: FaceCapture): Promise<bool
     camera_ip: edge.cameraIp,
     bbox: face.bbox,
     confidence: face.confidence,
-    face_ratio: face.faceRatio,
+    face_width: face.faceWidth,
     kps: face.kps,
     frame_b64: face.frameB64,
   });

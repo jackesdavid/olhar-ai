@@ -7,7 +7,9 @@ use std::process::Command;
 /// If `TS_AUTHKEY` is set, join the tailnet (`tailscale up`). Idempotent.
 pub fn ensure_up() {
     let Ok(authkey) = std::env::var("TS_AUTHKEY") else {
-        log::info!("TS_AUTHKEY unset — skipping Tailscale (assuming host already on the tailnet / dev)");
+        log::info!(
+            "TS_AUTHKEY unset — skipping Tailscale (assuming host already on the tailnet / dev)"
+        );
         return;
     };
     if authkey.trim().is_empty() {
@@ -15,8 +17,13 @@ pub fn ensure_up() {
     }
     let hostname = std::env::var("TS_HOSTNAME").unwrap_or_else(|_| "sentinel-gateway".to_string());
     let mut up = Command::new("tailscale");
-    up.arg("up").arg(format!("--authkey={authkey}")).arg(format!("--hostname={hostname}"));
-    if let Some(tags) = std::env::var("TS_TAGS").ok().filter(|s| !s.trim().is_empty()) {
+    up.arg("up")
+        .arg(format!("--authkey={authkey}"))
+        .arg(format!("--hostname={hostname}"));
+    if let Some(tags) = std::env::var("TS_TAGS")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    {
         up.arg(format!("--advertise-tags={tags}"));
     }
     match up.status() {

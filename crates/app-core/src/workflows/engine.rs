@@ -145,15 +145,24 @@ pub fn run_subpath_eventful(
 /// against it. A node with no camera scoped (the common case today) matches any camera, same as
 /// before this existed. This is the general "event inputs gate the trigger" mechanism — the place
 /// to extend for the next input that should filter delivery, not a new node kind.
-pub fn on_event_node(graph: &Graph, event: &str, event_camera: Option<&str>, devices: &[crate::devices::Device]) -> Option<u32> {
+pub fn on_event_node(
+    graph: &Graph,
+    event: &str,
+    event_camera: Option<&str>,
+    devices: &[crate::devices::Device],
+) -> Option<u32> {
     graph
         .nodes
         .iter()
         .find(|n| {
-            if n.kind != NodeKind::OnEvent || n.config.get("event").and_then(|v| v.as_str()) != Some(event) {
+            if n.kind != NodeKind::OnEvent
+                || n.config.get("event").and_then(|v| v.as_str()) != Some(event)
+            {
                 return false;
             }
-            let Some(want_ip) = event_camera else { return true }; // event has no camera concept
+            let Some(want_ip) = event_camera else {
+                return true;
+            }; // event has no camera concept
             match graph.resolve_camera_selector(n) {
                 None => true, // node isn't scoped to a camera — matches any
                 Some(sel) => crate::device_actions::resolve_device(devices, &sel)
@@ -302,7 +311,11 @@ fn run_driver(
     // activation order, once per Get (the buffer is already deduped), so a normal single-branch
     // graph is unaffected (its Gets all feed ran nodes → all still logged).
     for (nid, summary, elapsed) in &deferred_get_logs {
-        if graph.edges.iter().any(|e| e.from == *nid && ran.contains(&e.to)) {
+        if graph
+            .edges
+            .iter()
+            .any(|e| e.from == *nid && ran.contains(&e.to))
+        {
             on_log(*nid, summary, *elapsed);
         }
     }
@@ -411,7 +424,8 @@ fn forward_epoch(
             if outputs.contains_key(&n.id) {
                 continue;
             }
-            let Some(stored) = repo::get_node_values(&sys.db, sys.tenant_id, graph.id, n.id, &instance_key)
+            let Some(stored) =
+                repo::get_node_values(&sys.db, sys.tenant_id, graph.id, n.id, &instance_key)
             else {
                 continue;
             };
@@ -636,7 +650,7 @@ fn forward_epoch(
                 graph.id,
                 nid,
                 &instance_key,
-&serde_json::json!({ "is_a": !is_a }),
+                &serde_json::json!({ "is_a": !is_a }),
             );
             live_out.insert((nid, if is_a { "a" } else { "b" }.to_string()));
             let mut o = PortValues::new();
@@ -687,7 +701,7 @@ fn forward_epoch(
                     graph.id,
                     nid,
                     &instance_key,
-&serde_json::json!({ "last_ms": now_ms }),
+                    &serde_json::json!({ "last_ms": now_ms }),
                 );
                 live_out.insert((nid, "exec_out".to_string()));
             }
@@ -767,7 +781,7 @@ fn forward_epoch(
                         graph.id,
                         nid,
                         &instance_key,
-&serde_json::json!({
+                        &serde_json::json!({
                             "state": "armed",
                             "expires_at": chrono::DateTime::from_timestamp(new_expires_ts, 0)
                                 .unwrap_or_else(Utc::now)
@@ -804,7 +818,7 @@ fn forward_epoch(
                 graph.id,
                 nid,
                 &instance_key,
-&serde_json::json!({
+                &serde_json::json!({
                     "state": "armed",
                     "expires_at": chrono::DateTime::from_timestamp(expires_ts, 0)
                         .unwrap_or_else(Utc::now)
@@ -855,7 +869,7 @@ fn forward_epoch(
                 graph.id,
                 nid,
                 &instance_key,
-&serde_json::json!({ "state": "idle" }),
+                &serde_json::json!({ "state": "idle" }),
             );
             if fired {
                 live_out.insert((nid, "out".to_string()));
@@ -921,7 +935,14 @@ fn forward_epoch(
             };
             let expires_at = rfc(now_ts + wait_secs);
 
-            if repo::try_arm_node_state(&sys.db, sys.tenant_id, graph.id, nid, &instance_key, &expires_at) {
+            if repo::try_arm_node_state(
+                &sys.db,
+                sys.tenant_id,
+                graph.id,
+                nid,
+                &instance_key,
+                &expires_at,
+            ) {
                 // Leading edge: this signal opened the window, so it owns the start.
                 live_out.insert((nid, "start".to_string()));
                 crate::work_queue::enqueue_window_stop_blocking(
@@ -933,12 +954,17 @@ fn forward_epoch(
                     &expires_at,
                 );
                 if graph.debug {
-                    on_log(nid, &format!("Delay Trigger: armed for {wait_secs}s → start"), 0);
+                    on_log(
+                        nid,
+                        &format!("Delay Trigger: armed for {wait_secs}s → start"),
+                        0,
+                    );
                 }
             } else {
                 // Already armed: a re-trigger tops the window up, and only when that actually
                 // pushes the deadline out (Time Gate's rule: remaining = max(remaining, extend)).
-                let state = repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid, &instance_key);
+                let state =
+                    repo::get_node_state(&sys.db, sys.tenant_id, graph.id, nid, &instance_key);
                 let expires_ts = state
                     .as_ref()
                     .and_then(|v| v.get("expires_at"))
@@ -1026,7 +1052,7 @@ fn forward_epoch(
                     graph.id,
                     nid,
                     &instance_key,
-&serde_json::json!({
+                    &serde_json::json!({
                         "jpeg_b64": base64::engine::general_purpose::STANDARD.encode(&jpeg),
                         "label": &label,
                     }),
@@ -1114,7 +1140,10 @@ fn forward_epoch(
         } else if n.kind == NodeKind::AiSwitch {
             // run_node classified the message and stored the chosen arm in o["arm"]. Validate it
             // against the configured arms (defence) and fire it, else the "default" branch.
-            let arm = o.get("arm").and_then(PortValue::as_text).unwrap_or("default");
+            let arm = o
+                .get("arm")
+                .and_then(PortValue::as_text)
+                .unwrap_or("default");
             let arms = string_switch_arms(&n.config);
             if arm != "default" && arms.iter().any(|a| a == arm) {
                 live_out.insert((nid, arm.to_string()));
@@ -1291,7 +1320,6 @@ impl WorkflowEngine {
         }
         due
     }
-
 }
 
 #[cfg(test)]
@@ -1841,8 +1869,32 @@ mod tests {
     fn two_test_devices() -> Vec<crate::devices::Device> {
         use crate::devices::Device;
         vec![
-            Device { id: "urn:uuid:aaa".into(), ip: "10.0.0.1".into(), xaddr: "".into(), name: "hall".into(), manufacturer: None, model: None, username: None, password: None, rtsp_url: None, rtsp_sub_url: None, stream_mode: None },
-            Device { id: "".into(), ip: "10.0.0.2".into(), xaddr: "".into(), name: "lobby".into(), manufacturer: None, model: None, username: None, password: None, rtsp_url: None, rtsp_sub_url: None, stream_mode: None },
+            Device {
+                id: "urn:uuid:aaa".into(),
+                ip: "10.0.0.1".into(),
+                xaddr: "".into(),
+                name: "hall".into(),
+                manufacturer: None,
+                model: None,
+                username: None,
+                password: None,
+                rtsp_url: None,
+                rtsp_sub_url: None,
+                stream_mode: None,
+            },
+            Device {
+                id: "".into(),
+                ip: "10.0.0.2".into(),
+                xaddr: "".into(),
+                name: "lobby".into(),
+                manufacturer: None,
+                model: None,
+                username: None,
+                password: None,
+                rtsp_url: None,
+                rtsp_sub_url: None,
+                stream_mode: None,
+            },
         ]
     }
 
@@ -1854,18 +1906,33 @@ mod tests {
         let scoped = g.add_node(NodeKind::OnEvent, 0, 0);
         g.node_mut(scoped).unwrap().config = json!({ "event": "object_entered", "camera": "hall" });
         // Fires for hall's ip, not lobby's.
-        assert_eq!(on_event_node(&g, "object_entered", Some("10.0.0.1"), &devices), Some(scoped));
-        assert_eq!(on_event_node(&g, "object_entered", Some("10.0.0.2"), &devices), None);
+        assert_eq!(
+            on_event_node(&g, "object_entered", Some("10.0.0.1"), &devices),
+            Some(scoped)
+        );
+        assert_eq!(
+            on_event_node(&g, "object_entered", Some("10.0.0.2"), &devices),
+            None
+        );
 
         // Unscoped (no camera set) matches any camera — today's behaviour, unchanged.
         let mut g2 = Graph::new("g2");
         let unscoped = g2.add_node(NodeKind::OnEvent, 0, 0);
         g2.node_mut(unscoped).unwrap().config = json!({ "event": "object_entered" });
-        assert_eq!(on_event_node(&g2, "object_entered", Some("10.0.0.1"), &devices), Some(unscoped));
-        assert_eq!(on_event_node(&g2, "object_entered", Some("10.0.0.2"), &devices), Some(unscoped));
+        assert_eq!(
+            on_event_node(&g2, "object_entered", Some("10.0.0.1"), &devices),
+            Some(unscoped)
+        );
+        assert_eq!(
+            on_event_node(&g2, "object_entered", Some("10.0.0.2"), &devices),
+            Some(unscoped)
+        );
 
         // An event with no camera concept (event_camera=None) never filters, even on a scoped node.
-        assert_eq!(on_event_node(&g, "object_entered", None, &devices), Some(scoped));
+        assert_eq!(
+            on_event_node(&g, "object_entered", None, &devices),
+            Some(scoped)
+        );
     }
 
     #[test]
@@ -1878,8 +1945,15 @@ mod tests {
         g.node_mut(on).unwrap().config = json!({ "event": "object_exited" });
         g.add_edge(cam, "camera", on, "camera").unwrap();
 
-        assert_eq!(on_event_node(&g, "object_exited", Some("10.0.0.2"), &devices), Some(on), "resolves the wired GetCameraByName, not a literal");
-        assert_eq!(on_event_node(&g, "object_exited", Some("10.0.0.1"), &devices), None);
+        assert_eq!(
+            on_event_node(&g, "object_exited", Some("10.0.0.2"), &devices),
+            Some(on),
+            "resolves the wired GetCameraByName, not a literal"
+        );
+        assert_eq!(
+            on_event_node(&g, "object_exited", Some("10.0.0.1"), &devices),
+            None
+        );
     }
 
     #[test]
@@ -1972,7 +2046,11 @@ mod tests {
         let mut e = WorkflowEngine::new();
         let p = ConcurrencyPolicy::SkipIfRunning;
         e.on_spawn(a, uuid::Uuid::from_u128(1));
-        assert_eq!(e.decide(a, uuid::Uuid::from_u128(1), &p), Fire::Skip, "A's graph 1 is running");
+        assert_eq!(
+            e.decide(a, uuid::Uuid::from_u128(1), &p),
+            Fire::Skip,
+            "A's graph 1 is running"
+        );
         assert_eq!(
             e.decide(b, uuid::Uuid::from_u128(1), &p),
             Fire::Spawn,
@@ -1980,9 +2058,19 @@ mod tests {
         );
         let base = Instant::now();
         e.seed_cron_last(a, uuid::Uuid::from_u128(1), base);
-        assert!(!e.cron_due(a, uuid::Uuid::from_u128(1), 30, base + Duration::from_secs(10)));
+        assert!(!e.cron_due(
+            a,
+            uuid::Uuid::from_u128(1),
+            30,
+            base + Duration::from_secs(10)
+        ));
         assert!(
-            e.cron_due(b, uuid::Uuid::from_u128(1), 30, base + Duration::from_secs(10)),
+            e.cron_due(
+                b,
+                uuid::Uuid::from_u128(1),
+                30,
+                base + Duration::from_secs(10)
+            ),
             "B's cron is independent"
         );
     }
@@ -2257,10 +2345,25 @@ mod tests {
         let base = Instant::now();
         e.seed_cron_last(t, uuid::Uuid::from_u128(1), base);
         // 10s after the last fire → not due yet.
-        assert!(!e.cron_due(t, uuid::Uuid::from_u128(1), 30, base + Duration::from_secs(10)));
+        assert!(!e.cron_due(
+            t,
+            uuid::Uuid::from_u128(1),
+            30,
+            base + Duration::from_secs(10)
+        ));
         // 40s after the last fire → due (and re-arms at that instant).
-        assert!(e.cron_due(t, uuid::Uuid::from_u128(1), 30, base + Duration::from_secs(40)));
+        assert!(e.cron_due(
+            t,
+            uuid::Uuid::from_u128(1),
+            30,
+            base + Duration::from_secs(40)
+        ));
         // Just after re-arming → not due again.
-        assert!(!e.cron_due(t, uuid::Uuid::from_u128(1), 30, base + Duration::from_secs(50)));
+        assert!(!e.cron_due(
+            t,
+            uuid::Uuid::from_u128(1),
+            30,
+            base + Duration::from_secs(50)
+        ));
     }
 }

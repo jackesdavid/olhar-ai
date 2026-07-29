@@ -62,7 +62,11 @@ fn sync(state: &Arc<AppState>) {
     let active: HashSet<String> = by_token.keys().cloned().collect();
     {
         let mut stops = state.pairing_stops.lock().unwrap();
-        let removed: Vec<String> = stops.keys().filter(|t| !active.contains(*t)).cloned().collect();
+        let removed: Vec<String> = stops
+            .keys()
+            .filter(|t| !active.contains(*t))
+            .cloned()
+            .collect();
         for token in removed {
             let (_, flag) = stops.remove(&token).unwrap();
             flag.store(true, Ordering::Relaxed);

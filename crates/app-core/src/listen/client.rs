@@ -36,12 +36,19 @@ pub fn transcribe(audio: &[u8], filename: &str, mime: &str) -> Result<String, St
         .map_err(|e| format!("request failed: {e}"))?;
 
     let mut text = String::new();
-    resp.into_reader().read_to_string(&mut text).map_err(|e| format!("read failed: {e}"))?;
+    resp.into_reader()
+        .read_to_string(&mut text)
+        .map_err(|e| format!("read failed: {e}"))?;
 
     // Pull the "text" field out of the JSON response.
     let value: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("bad response: {e}"))?;
-    let transcript = value.get("text").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
+    let transcript = value
+        .get("text")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if transcript.is_empty() {
         return Err("nothing recognized".into());
     }
@@ -60,7 +67,9 @@ fn multipart_body(model_id: &str, audio: &[u8], filename: &str, mime: &str) -> V
     push("\r\n");
 
     push(&format!("--{BOUNDARY}\r\n"));
-    push(&format!("Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n"));
+    push(&format!(
+        "Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n"
+    ));
     push(&format!("Content-Type: {mime}\r\n\r\n"));
     body.extend_from_slice(audio);
     body.extend_from_slice(b"\r\n");

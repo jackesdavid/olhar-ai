@@ -58,12 +58,19 @@ pub fn resolve_stream_uris(
     let main = profiles.iter().max_by_key(|p| p.area()).unwrap();
     let sub = profiles.iter().min_by_key(|p| p.area()).unwrap();
 
-    let main_uri = parse_uri(&get_stream_uri_soap(&media, &main.token, username, password)?)
-        .ok_or_else(|| "Invalid credentials or no stream available".to_string())?;
+    let main_uri = parse_uri(&get_stream_uri_soap(
+        &media,
+        &main.token,
+        username,
+        password,
+    )?)
+    .ok_or_else(|| "Invalid credentials or no stream available".to_string())?;
 
     let sub_uri = if sub.token != main.token {
-        parse_uri(&get_stream_uri_soap(&media, &sub.token, username, password)?)
-            .filter(|u| u != &main_uri)
+        parse_uri(&get_stream_uri_soap(
+            &media, &sub.token, username, password,
+        )?)
+        .filter(|u| u != &main_uri)
     } else {
         None
     };
@@ -123,7 +130,10 @@ fn get_capabilities(xaddr: &str, user: &str, pass: &str) -> Result<String, Strin
 }
 
 fn get_profiles(media_url: &str, user: &str, pass: &str) -> Result<String, String> {
-    soap_post(media_url, &envelope(&wsse_header(user, pass), "<trt:GetProfiles/>"))
+    soap_post(
+        media_url,
+        &envelope(&wsse_header(user, pass), "<trt:GetProfiles/>"),
+    )
 }
 
 fn get_stream_uri_soap(
@@ -318,13 +328,20 @@ pub fn snapshot_from_rtsp(rtsp: &str, user: &str, pass: &str) -> Result<Vec<u8>,
     // proof-frame; the bundled ffmpeg 7.1 lists only `-timeout` for the rtsp demuxer.
     let mut child = Command::new("ffmpeg")
         .args([
-            "-timeout", "8000000", // 8s socket I/O timeout (microseconds)
-            "-rtsp_transport", "tcp",
-            "-i", &url,
-            "-frames:v", "1",
-            "-f", "image2",
-            "-vcodec", "mjpeg",
-            "-loglevel", "error",
+            "-timeout",
+            "8000000", // 8s socket I/O timeout (microseconds)
+            "-rtsp_transport",
+            "tcp",
+            "-i",
+            &url,
+            "-frames:v",
+            "1",
+            "-f",
+            "image2",
+            "-vcodec",
+            "mjpeg",
+            "-loglevel",
+            "error",
             "pipe:1",
         ])
         .stdout(Stdio::piped())
@@ -348,7 +365,10 @@ pub fn snapshot_from_rtsp(rtsp: &str, user: &str, pass: &str) -> Result<Vec<u8>,
 
     let deadline = Instant::now() + FFMPEG_SNAPSHOT_TIMEOUT;
     let status = loop {
-        match child.try_wait().map_err(|e| format!("ffmpeg wait failed: {e}"))? {
+        match child
+            .try_wait()
+            .map_err(|e| format!("ffmpeg wait failed: {e}"))?
+        {
             Some(s) => break s,
             None if Instant::now() >= deadline => {
                 let _ = child.kill();
@@ -365,7 +385,10 @@ pub fn snapshot_from_rtsp(rtsp: &str, user: &str, pass: &str) -> Result<Vec<u8>,
     let stderr = err_h.join().unwrap_or_default();
 
     if !status.success() {
-        return Err(format!("ffmpeg failed: {}", String::from_utf8_lossy(&stderr)));
+        return Err(format!(
+            "ffmpeg failed: {}",
+            String::from_utf8_lossy(&stderr)
+        ));
     }
     if stdout.is_empty() {
         return Err("ffmpeg produced no frame".into());

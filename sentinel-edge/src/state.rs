@@ -440,7 +440,7 @@ pub struct FaceEvent {
     pub camera_ip: String,
     pub bbox: [i32; 4],  // xyxy
     pub confidence: f64, // 0..100
-    pub face_ratio: f64, // face area ÷ frame area, 0..100
+    pub face_width: i64, // face box width in source pixels (face-size signal)
     /// YuNet's 5 landmarks, FLAT `[x0,y0,x1,y1,…]` in source pixels (right/left eye, nose,
     /// right/left mouth). Flat so it survives the cloud's generic event-payload decoder → the
     /// `face_detected` `kps` Landmarks port → ArcFace alignment (#122). Empty if unavailable.

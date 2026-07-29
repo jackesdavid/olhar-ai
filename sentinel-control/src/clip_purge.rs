@@ -19,8 +19,10 @@ use std::time::Duration;
 use sqlx::postgres::PgListener;
 use sqlx::PgPool;
 
+use crate::domain::recordings::{
+    edge_api_base, normalize_host, DELETE_CATEGORY, KIND_CLOUD, KIND_DB, KIND_EDGE,
+};
 use app_core::work_queue::{self, Job};
-use crate::domain::recordings::{edge_api_base, normalize_host, DELETE_CATEGORY, KIND_CLOUD, KIND_DB, KIND_EDGE};
 
 /// Retries before a job is parked `failed`. A `failed` leg is a visible gap in monitoring, not a
 /// blocker on the others — the queue keeps the message and its payload for a later re-run.
@@ -38,9 +40,19 @@ const RELEASE_DELAY_SECS: i64 = 30;
 
 /// Start the three clip-delete consumers, each named for the leg it drains.
 pub fn spawn(pool: PgPool) {
-    spawn_consumer(pool.clone(), "clip-delete-cloud", KIND_CLOUD, delete_from_cloud);
-    spawn_consumer(pool.clone(), "clip-delete-edge",  KIND_EDGE,  delete_from_edge);
-    spawn_consumer(pool,         "clip-delete-db",    KIND_DB,    delete_from_db);
+    spawn_consumer(
+        pool.clone(),
+        "clip-delete-cloud",
+        KIND_CLOUD,
+        delete_from_cloud,
+    );
+    spawn_consumer(
+        pool.clone(),
+        "clip-delete-edge",
+        KIND_EDGE,
+        delete_from_edge,
+    );
+    spawn_consumer(pool, "clip-delete-db", KIND_DB, delete_from_db);
     log::info!("clip-delete consumers started: cloud, edge, db");
 }
 
@@ -74,9 +86,12 @@ where
         loop {
             drain(&pool, name, kind, handler).await;
             match tokio::time::timeout(POLL, listener.recv()).await {
-                Ok(Ok(_)) => {}                    // notified — loop and drain
-                Ok(Err(e)) => { log::warn!("[{name}] listener dropped ({e}); reconnecting"); break; }
-                Err(_) => {}                       // poll timeout — loop and drain
+                Ok(Ok(_)) => {} // notified — loop and drain
+                Ok(Err(e)) => {
+                    log::warn!("[{name}] listener dropped ({e}); reconnecting");
+                    break;
+                }
+                Err(_) => {} // poll timeout — loop and drain
             }
         }
     }
@@ -98,15 +113,22 @@ where
         let jobs = match work_queue::claim(pool, DELETE_CATEGORY, kind, BATCH).await {
             Ok(j) if !j.is_empty() => j,
             Ok(_) => return,
-            Err(e) => { log::warn!("[{name}] claim failed: {e}"); return; }
+            Err(e) => {
+                log::warn!("[{name}] claim failed: {e}");
+                return;
+            }
         };
         for job in jobs {
             let id = job.id;
             match handler(pool.clone(), job).await {
-                Ok(true) => { let _ = work_queue::mark_done(pool, id).await; }
+                Ok(true) => {
+                    let _ = work_queue::mark_done(pool, id).await;
+                }
                 // Not ready (e.g. store offline) — the claim flipped it to `running`, so hand it
                 // back to `pending` explicitly (with a short hold) rather than leave it stuck.
-                Ok(false) => { let _ = work_queue::release(pool, id, RELEASE_DELAY_SECS).await; }
+                Ok(false) => {
+                    let _ = work_queue::release(pool, id, RELEASE_DELAY_SECS).await;
+                }
                 Err(e) => {
                     log::warn!("[{name}] job {id}: {e}");
                     let _ = work_queue::mark_failed(pool, id, &e, MAX_ATTEMPTS).await;
@@ -120,7 +142,12 @@ where
 
 /// Delete the durable copy from R2. Knows only the object store. Idempotent: a 404 is success.
 async fn delete_from_cloud(_pool: PgPool, job: Job) -> Result<bool, String> {
-    let Some(key) = job.payload.get("cloud_key").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) else {
+    let Some(key) = job
+        .payload
+        .get("cloud_key")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    else {
         return Ok(true); // this clip never had a cloud object
     };
     // Store not configured (R2 down / unset): don't burn attempts failing — leave it pending so it
@@ -142,13 +169,18 @@ async fn delete_from_edge(pool: PgPool, job: Job) -> Result<bool, String> {
     let Some(clip_id) = job.payload.get("clip_id").and_then(|v| v.as_str()) else {
         return Ok(true);
     };
-    let Some(host) = crate::store::box_host_for_tenant(&pool, job.tenant_id).await.map_err(|e| e.to_string())? else {
+    let Some(host) = crate::store::box_host_for_tenant(&pool, job.tenant_id)
+        .await
+        .map_err(|e| e.to_string())?
+    else {
         return Ok(true); // no box connected — nothing to delete here
     };
     let base = edge_api_base(&normalize_host(&host));
     let url = format!("{base}/recording/{}", urlencoding::encode(clip_id));
     match reqwest::Client::new().delete(&url).send().await {
-        Ok(r) if r.status().is_success() || r.status() == reqwest::StatusCode::NOT_FOUND => Ok(true),
+        Ok(r) if r.status().is_success() || r.status() == reqwest::StatusCode::NOT_FOUND => {
+            Ok(true)
+        }
         Ok(r) => Err(format!("edge returned {}", r.status())),
         Err(e) => Err(format!("edge unreachable: {e}")),
     }
@@ -158,9 +190,16 @@ async fn delete_from_edge(pool: PgPool, job: Job) -> Result<bool, String> {
 /// row, is the durable pointer, so the row can go while cloud/edge finish on their own.
 /// Idempotent: deleting an already-gone row affects zero rows, still success.
 async fn delete_from_db(pool: PgPool, job: Job) -> Result<bool, String> {
-    let Some(rec_id) = job.payload.get("recording_id").and_then(|v| v.as_str()).and_then(|s| s.parse::<i64>().ok()) else {
+    let Some(rec_id) = job
+        .payload
+        .get("recording_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<i64>().ok())
+    else {
         return Ok(true);
     };
-    crate::store::delete_recording(&pool, job.tenant_id, rec_id).await.map_err(|e| e.to_string())?;
+    crate::store::delete_recording(&pool, job.tenant_id, rec_id)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(true)
 }

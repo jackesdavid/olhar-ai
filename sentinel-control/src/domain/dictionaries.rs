@@ -20,10 +20,7 @@ use crate::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/dictionaries", get(list).post(create))
-        .route(
-            "/dictionaries/:id",
-            get(get_one).put(update).delete(remove),
-        )
+        .route("/dictionaries/:id", get(get_one).put(update).delete(remove))
 }
 
 #[derive(Deserialize)]
@@ -119,9 +116,9 @@ fn referencing_workflows(db: &app_core::db::Db, tid: Uuid, dict_id: Uuid) -> Vec
     workflows::repo::load(db, tid)
         .into_iter()
         .filter(|g| {
-            g.variables.iter().any(|v| {
-                v.ty == PortType::Table && v.default.as_deref() == Some(needle.as_str())
-            })
+            g.variables
+                .iter()
+                .any(|v| v.ty == PortType::Table && v.default.as_deref() == Some(needle.as_str()))
         })
         .map(|g| g.name)
         .collect()

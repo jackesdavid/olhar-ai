@@ -61,7 +61,10 @@ impl NotificationConfig {
             return None;
         }
         let pairing_code = std::env::var("TELEGRAM_PAIRING_CODE").unwrap_or_default();
-        Some(Self { bot_token, pairing_code })
+        Some(Self {
+            bot_token,
+            pairing_code,
+        })
     }
 
     /// Whether inbound pairing can run (needs a non-empty pairing code). The

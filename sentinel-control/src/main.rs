@@ -68,7 +68,12 @@ pub struct AppState {
 impl AppState {
     /// The change-notifier for a tenant (created on first use).
     pub fn notifier(&self, tid: uuid::Uuid) -> Arc<tokio::sync::Notify> {
-        self.notifiers.lock().unwrap().entry(tid).or_default().clone()
+        self.notifiers
+            .lock()
+            .unwrap()
+            .entry(tid)
+            .or_default()
+            .clone()
     }
     /// Wake any edge long-polling this tenant's config (a camera was added/edited).
     pub fn bump(&self, tid: uuid::Uuid) {
@@ -85,20 +90,26 @@ impl AppState {
     }
     /// Queue a restart for a specific box (persisted to DB — survives control restarts).
     pub async fn request_restart(&self, box_id: uuid::Uuid) {
-        if let Err(e) = crate::store::set_box_command(&self.pool, box_id, "pending_restart", true).await {
+        if let Err(e) =
+            crate::store::set_box_command(&self.pool, box_id, "pending_restart", true).await
+        {
             log::warn!("set pending_restart: {e}");
         }
     }
     /// Queue an update for a specific box (persisted to DB — survives control restarts).
     pub async fn request_update(&self, box_id: uuid::Uuid) {
-        if let Err(e) = crate::store::set_box_command(&self.pool, box_id, "pending_update", true).await {
+        if let Err(e) =
+            crate::store::set_box_command(&self.pool, box_id, "pending_update", true).await
+        {
             log::warn!("set pending_update: {e}");
         }
     }
     /// Atomically read and clear both command flags for a box (called on the edge's poll).
     /// Returns (restart, update).
     pub async fn take_box_commands(&self, box_id: uuid::Uuid) -> (bool, bool) {
-        crate::store::take_box_commands(&self.pool, box_id).await.unwrap_or((false, false))
+        crate::store::take_box_commands(&self.pool, box_id)
+            .await
+            .unwrap_or((false, false))
     }
 }
 
@@ -258,7 +269,8 @@ async fn shutdown_signal() {
     };
     #[cfg(unix)]
     let term = async {
-        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
             s.recv().await;
         }
     };

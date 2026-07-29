@@ -27,8 +27,14 @@ pub fn router() -> Router<AppState> {
         .route("/boxes/:id/update", axum::routing::post(update))
         .route("/internal/box-upstream", get(box_upstream))
         .route("/internal/live-start", post(live_start))
-        .route("/boxes/:id/recording-config", axum::routing::patch(patch_recording_config))
-        .route("/boxes/:id/tracking-config", axum::routing::patch(patch_tracking_config))
+        .route(
+            "/boxes/:id/recording-config",
+            axum::routing::patch(patch_recording_config),
+        )
+        .route(
+            "/boxes/:id/tracking-config",
+            axum::routing::patch(patch_tracking_config),
+        )
         .route("/boxes/:id/storage-stats", get(storage_stats))
         .route("/boxes/:id/pairing-code", axum::routing::post(pairing_code))
         .route("/boxes/:id/pairing-status", get(pairing_status))
@@ -110,17 +116,30 @@ async fn pairing_code(
     let tid = tenant_of(&c)?;
 
     // Prove the box is this tenant's before minting anything for it.
-    if store::box_name(&st.pool, id).await.map_err(db_err)?.is_none()
-        || !store::list_boxes(&st.pool, tid).await.map_err(db_err)?.iter().any(|b| b.id == id)
+    if store::box_name(&st.pool, id)
+        .await
+        .map_err(db_err)?
+        .is_none()
+        || !store::list_boxes(&st.pool, tid)
+            .await
+            .map_err(db_err)?
+            .iter()
+            .any(|b| b.id == id)
     {
         return Err(err(StatusCode::NOT_FOUND, "box not found"));
     }
 
     let code = new_pairing_code();
     let expires_at = app_core::timeutil::plus_secs_rfc3339(PAIRING_TTL_SECS);
-    store::create_pairing(&st.pool, tid, id, &hash_token(&normalize_code(&code)), &expires_at)
-        .await
-        .map_err(db_err)?;
+    store::create_pairing(
+        &st.pool,
+        tid,
+        id,
+        &hash_token(&normalize_code(&code)),
+        &expires_at,
+    )
+    .await
+    .map_err(db_err)?;
 
     Ok(Json(PairingResp { code, expires_at }))
 }
@@ -142,10 +161,15 @@ pub fn new_box_token() -> String {
     format!("sbx_{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
-async fn list(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<store::BoxRow>>, ApiErr> {
+async fn list(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<store::BoxRow>>, ApiErr> {
     auth::require(&c, "devices.write")?;
     let tid = tenant_of(&c)?;
-    Ok(Json(store::list_boxes(&st.pool, tid).await.map_err(db_err)?))
+    Ok(Json(
+        store::list_boxes(&st.pool, tid).await.map_err(db_err)?,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -162,7 +186,11 @@ struct CreateResp {
     hostname: String,
 }
 
-async fn create(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): Json<CreateReq>) -> Result<Json<CreateResp>, ApiErr> {
+async fn create(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(b): Json<CreateReq>,
+) -> Result<Json<CreateResp>, ApiErr> {
     auth::require(&c, "devices.write")?;
     let tid = tenant_of(&c)?;
     let name = b.name.trim();
@@ -170,10 +198,16 @@ async fn create(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): 
         return Err(err(StatusCode::BAD_REQUEST, "box name required"));
     }
     let token = new_box_token();
-    let id = store::create_box(&st.pool, tid, name, &hash_token(&token)).await.map_err(db_err)?;
+    let id = store::create_box(&st.pool, tid, name, &hash_token(&token))
+        .await
+        .map_err(db_err)?;
     let hostname = format!("sentinel-{}", &id.to_string()[..8]);
     // No tailnet (card #144) — the edge is outbound-only, so there's no auth key to mint.
-    Ok(Json(CreateResp { id, token, hostname }))
+    Ok(Json(CreateResp {
+        id,
+        token,
+        hostname,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -217,10 +251,18 @@ async fn self_register(
             .map_err(db_err)?;
     // Derived from the box id so it is stable and unique per phone without a second identifier.
     let camera_ip = format!("phone-{}", &box_id.to_string()[..8]);
-    Ok(Json(SelfRegisterResp { box_id, camera_ip, token }))
+    Ok(Json(SelfRegisterResp {
+        box_id,
+        camera_ip,
+        token,
+    }))
 }
 
-async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<Uuid>) -> Result<StatusCode, ApiErr> {
+async fn remove(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "devices.write")?;
     let tid = tenant_of(&c)?;
 
@@ -235,10 +277,25 @@ async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id):
                 AND sse_last_seen::timestamptz > now() - make_interval(secs => 30)
          FROM tenant_boxes WHERE tenant_id = $1 AND id = $2",
     )
-    .bind(tid).bind(id)
-    .fetch_optional(&st.pool).await.ok().flatten().flatten().unwrap_or(false);
+    .bind(tid)
+    .bind(id)
+    .fetch_optional(&st.pool)
+    .await
+    .ok()
+    .flatten()
+    .flatten()
+    .unwrap_or(false);
     if live {
-        if let Ok(cmd_id) = app_core::edge_commands::enqueue(&st.pool, tid, id, "uninstall", serde_json::json!({}), 20).await {
+        if let Ok(cmd_id) = app_core::edge_commands::enqueue(
+            &st.pool,
+            tid,
+            id,
+            "uninstall",
+            serde_json::json!({}),
+            20,
+        )
+        .await
+        {
             let _ = app_core::edge_commands::await_result(&st.pool, cmd_id, 6).await;
         }
     }
@@ -252,10 +309,17 @@ async fn remove(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id):
 
 /// Queue a restart for a box: the edge picks it up on its next poll and exits, so the
 /// service manager relaunches it (re-running `tailscale up` + re-serving go2rtc).
-async fn restart(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<Uuid>) -> Result<StatusCode, ApiErr> {
+async fn restart(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "devices.write")?;
     let tid = tenant_of(&c)?;
-    if !store::box_belongs_to(&st.pool, tid, id).await.map_err(db_err)? {
+    if !store::box_belongs_to(&st.pool, tid, id)
+        .await
+        .map_err(db_err)?
+    {
         return Err(err(StatusCode::NOT_FOUND, "box not found"));
     }
     st.request_restart(id).await;
@@ -264,10 +328,17 @@ async fn restart(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id)
 
 /// Queue an update for a box: the edge exits on its next poll, the service manager
 /// relaunches it, and `maybe_self_update()` at startup downloads + installs the new binary.
-async fn update(UserClaims(c): UserClaims, State(st): State<AppState>, Path(id): Path<Uuid>) -> Result<StatusCode, ApiErr> {
+async fn update(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "devices.write")?;
     let tid = tenant_of(&c)?;
-    if !store::box_belongs_to(&st.pool, tid, id).await.map_err(db_err)? {
+    if !store::box_belongs_to(&st.pool, tid, id)
+        .await
+        .map_err(db_err)?
+    {
         return Err(err(StatusCode::NOT_FOUND, "box not found"));
     }
     st.request_update(id).await;
@@ -282,9 +353,16 @@ struct UpstreamResp {
 
 /// The gateway calls this (forwarding the user's JWT) to resolve the caller's tenant's
 /// live upstream. Any authenticated user with a tenant context may resolve their own.
-async fn box_upstream(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<UpstreamResp>, ApiErr> {
+async fn box_upstream(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<UpstreamResp>, ApiErr> {
     let tid = tenant_of(&c)?;
-    Ok(Json(UpstreamResp { host: store::box_host_for_tenant(&st.pool, tid).await.map_err(db_err)? }))
+    Ok(Json(UpstreamResp {
+        host: store::box_host_for_tenant(&st.pool, tid)
+            .await
+            .map_err(db_err)?,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -307,17 +385,32 @@ struct LiveStartResp {
 /// box on the SSE command stream, we tell that box to dial the gateway back (`start_live`) — live
 /// over the edge's OUTBOUND connection, card #144, so it works with no tailnet. Otherwise we return
 /// the tailnet host and the gateway dials the edge itself, exactly as before.
-async fn live_start(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): Json<LiveStartReq>) -> Result<Json<LiveStartResp>, ApiErr> {
+async fn live_start(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(b): Json<LiveStartReq>,
+) -> Result<Json<LiveStartResp>, ApiErr> {
     let tid = tenant_of(&c)?;
     if let Some(box_id) = app_core::edge_commands::live_box_for_tenant(&st.pool, tid, 30).await {
         let args = serde_json::json!({ "src": b.src, "url": b.callback });
         app_core::edge_commands::enqueue(&st.pool, tid, box_id, "start_live", args, 20)
             .await
-            .map_err(|e| { log::error!("live_start enqueue: {e}"); err(StatusCode::INTERNAL_SERVER_ERROR, "enqueue failed") })?;
-        return Ok(Json(LiveStartResp { mode: "sse".into(), host: None }));
+            .map_err(|e| {
+                log::error!("live_start enqueue: {e}");
+                err(StatusCode::INTERNAL_SERVER_ERROR, "enqueue failed")
+            })?;
+        return Ok(Json(LiveStartResp {
+            mode: "sse".into(),
+            host: None,
+        }));
     }
-    let host = store::box_host_for_tenant(&st.pool, tid).await.map_err(db_err)?;
-    Ok(Json(LiveStartResp { mode: "tailnet".into(), host }))
+    let host = store::box_host_for_tenant(&st.pool, tid)
+        .await
+        .map_err(db_err)?;
+    Ok(Json(LiveStartResp {
+        mode: "tailnet".into(),
+        host,
+    }))
 }
 
 /// Update the ring-buffer + recording config for a box (tenant admin only).
@@ -371,7 +464,7 @@ async fn storage_stats(
     State(st): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl axum::response::IntoResponse, ApiErr> {
-    use crate::domain::recordings::{normalize_host, edge_api_base};
+    use crate::domain::recordings::{edge_api_base, normalize_host};
     auth::require(&c, "recordings.read")?;
     let tid = tenant_of(&c)?;
 
@@ -384,7 +477,7 @@ async fn storage_stats(
         .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "no edge box connected"))?;
 
     let base = edge_api_base(&normalize_host(&edge_host));
-    let url  = format!("{base}/storage/stats");
+    let url = format!("{base}/storage/stats");
 
     let resp = reqwest::get(&url).await.map_err(|e| {
         log::error!("storage stats fetch {url}: {e}");
@@ -392,11 +485,17 @@ async fn storage_stats(
     })?;
 
     if !resp.status().is_success() {
-        return Err(err(StatusCode::BAD_GATEWAY, format!("edge returned {}", resp.status())));
+        return Err(err(
+            StatusCode::BAD_GATEWAY,
+            format!("edge returned {}", resp.status()),
+        ));
     }
 
     let json = resp.json::<serde_json::Value>().await.map_err(|e| {
-        err(StatusCode::BAD_GATEWAY, format!("edge response parse error: {e}"))
+        err(
+            StatusCode::BAD_GATEWAY,
+            format!("edge response parse error: {e}"),
+        )
     })?;
 
     Ok(axum::response::Json(json))
@@ -413,8 +512,18 @@ mod tests {
     #[test]
     fn normalize_forgives_how_humans_retype_a_code() {
         let canonical = normalize_code("ABCDE-FGHJK");
-        for typed in ["abcde-fghjk", "ABCDEFGHJK", " abcde fghjk ", "abcde–fghjk", "ABCDE-fghjk"] {
-            assert_eq!(normalize_code(typed), canonical, "{typed:?} should be the same code");
+        for typed in [
+            "abcde-fghjk",
+            "ABCDEFGHJK",
+            " abcde fghjk ",
+            "abcde–fghjk",
+            "ABCDE-fghjk",
+        ] {
+            assert_eq!(
+                normalize_code(typed),
+                canonical,
+                "{typed:?} should be the same code"
+            );
         }
     }
 
@@ -430,7 +539,11 @@ mod tests {
     #[test]
     fn the_alphabet_excludes_everything_normalize_rewrites() {
         for c in [b'I', b'L', b'O', b'U'] {
-            assert!(!CODE_ALPHABET.contains(&c), "{} must not be mintable", c as char);
+            assert!(
+                !CODE_ALPHABET.contains(&c),
+                "{} must not be mintable",
+                c as char
+            );
         }
     }
 
@@ -444,7 +557,10 @@ mod tests {
             // Minting then normalizing must be idempotent — otherwise the hash we store would never
             // match the hash we look up, and no code would ever redeem.
             assert_eq!(normalize_code(&norm), norm);
-            assert!(norm.bytes().all(|b| CODE_ALPHABET.contains(&b)), "{code} left the alphabet");
+            assert!(
+                norm.bytes().all(|b| CODE_ALPHABET.contains(&b)),
+                "{code} left the alphabet"
+            );
         }
     }
 }

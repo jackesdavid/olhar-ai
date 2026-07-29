@@ -87,17 +87,23 @@ pub fn detect_bgr(bgr: &[u8], w: u32, h: u32) -> Result<Vec<Detection>, String> 
 /// The `(width, height)` of a JPEG/PNG frame in source pixels — for scaling normalized
 /// [`crate::tracking::Line`] coordinates to the same pixel space `Detection::xyxy` is in.
 pub fn dimensions(image_bytes: &[u8]) -> Result<(u32, u32), String> {
-    let img = image::load_from_memory(image_bytes)
-        .map_err(|e| format!("detector: decode frame: {e}"))?;
+    let img =
+        image::load_from_memory(image_bytes).map_err(|e| format!("detector: decode frame: {e}"))?;
     Ok((img.width(), img.height()))
 }
 
 /// Detect people only — `person`/`count`/`confidence` for the PersonDetection node.
 pub fn detect_person(image_bytes: &[u8]) -> Result<PersonResult, String> {
-    let people: Vec<Detection> =
-        detect(image_bytes)?.into_iter().filter(|d| d.class == PERSON_CLASS).collect();
+    let people: Vec<Detection> = detect(image_bytes)?
+        .into_iter()
+        .filter(|d| d.class == PERSON_CLASS)
+        .collect();
     let confidence = people.iter().map(|d| d.score).fold(0.0_f32, f32::max);
-    Ok(PersonResult { person: !people.is_empty(), count: people.len() as i64, confidence })
+    Ok(PersonResult {
+        person: !people.is_empty(),
+        count: people.len() as i64,
+        confidence,
+    })
 }
 
 /// Detect people and return one [`PersonDetection`] per person (box + confidence) — the
@@ -106,28 +112,103 @@ pub fn detect_persons_detailed(image_bytes: &[u8]) -> Result<Vec<PersonDetection
     Ok(detect(image_bytes)?
         .into_iter()
         .filter(|d| d.class == PERSON_CLASS)
-        .map(|d| PersonDetection { bbox: d.xyxy, confidence: d.score })
+        .map(|d| PersonDetection {
+            bbox: d.xyxy,
+            confidence: d.score,
+        })
         .collect())
 }
 
 /// All 80 COCO class names in class-index order (index 0 = "person", etc.).
 pub const COCO_CLASSES: [&str; 80] = [
-    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
-    "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
-    "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack",
-    "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball",
-    "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
-    "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
-    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake",
-    "chair", "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop",
-    "mouse", "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
-    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier",
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "airplane",
+    "bus",
+    "train",
+    "truck",
+    "boat",
+    "traffic light",
+    "fire hydrant",
+    "stop sign",
+    "parking meter",
+    "bench",
+    "bird",
+    "cat",
+    "dog",
+    "horse",
+    "sheep",
+    "cow",
+    "elephant",
+    "bear",
+    "zebra",
+    "giraffe",
+    "backpack",
+    "umbrella",
+    "handbag",
+    "tie",
+    "suitcase",
+    "frisbee",
+    "skis",
+    "snowboard",
+    "sports ball",
+    "kite",
+    "baseball bat",
+    "baseball glove",
+    "skateboard",
+    "surfboard",
+    "tennis racket",
+    "bottle",
+    "wine glass",
+    "cup",
+    "fork",
+    "knife",
+    "spoon",
+    "bowl",
+    "banana",
+    "apple",
+    "sandwich",
+    "orange",
+    "broccoli",
+    "carrot",
+    "hot dog",
+    "pizza",
+    "donut",
+    "cake",
+    "chair",
+    "couch",
+    "potted plant",
+    "bed",
+    "dining table",
+    "toilet",
+    "tv",
+    "laptop",
+    "mouse",
+    "remote",
+    "keyboard",
+    "cell phone",
+    "microwave",
+    "oven",
+    "toaster",
+    "sink",
+    "refrigerator",
+    "book",
+    "clock",
+    "vase",
+    "scissors",
+    "teddy bear",
+    "hair drier",
     "toothbrush",
 ];
 
 /// Resolve a COCO class name (case-insensitive) to its class index, or `None` if unknown.
 pub fn class_id_for_name(name: &str) -> Option<u32> {
-    COCO_CLASSES.iter().position(|&c| c.eq_ignore_ascii_case(name)).map(|i| i as u32)
+    COCO_CLASSES
+        .iter()
+        .position(|&c| c.eq_ignore_ascii_case(name))
+        .map(|i| i as u32)
 }
 
 /// Detect objects of a specific COCO class (by class id) and return one [`PersonDetection`]
@@ -139,7 +220,10 @@ pub fn detect_objects_detailed(
     Ok(detect(image_bytes)?
         .into_iter()
         .filter(|d| d.class == class_id)
-        .map(|d| PersonDetection { bbox: d.xyxy, confidence: d.score })
+        .map(|d| PersonDetection {
+            bbox: d.xyxy,
+            confidence: d.score,
+        })
         .collect())
 }
 
@@ -148,7 +232,10 @@ pub fn detect_objects_detailed(
 /// re-attempting a doomed init. The returned `&Arc` is exactly what `run` wants.
 fn model() -> Result<&'static Arc<TypedRunnableModel>, String> {
     static MODEL_PLAN: OnceLock<Result<Arc<TypedRunnableModel>, String>> = OnceLock::new();
-    MODEL_PLAN.get_or_init(build_model).as_ref().map_err(Clone::clone)
+    MODEL_PLAN
+        .get_or_init(build_model)
+        .as_ref()
+        .map_err(Clone::clone)
 }
 
 fn build_model() -> Result<Arc<TypedRunnableModel>, String> {
@@ -157,7 +244,10 @@ fn build_model() -> Result<Arc<TypedRunnableModel>, String> {
         .model_for_read(&mut cursor)
         .map_err(|e| format!("tract: parse YOLOX ONNX: {e}"))?
         // Pin the input shape so tract can fully optimize the graph.
-        .with_input_fact(0, InferenceFact::dt_shape(f32::datum_type(), tvec!(1, 3, INPUT, INPUT)))
+        .with_input_fact(
+            0,
+            InferenceFact::dt_shape(f32::datum_type(), tvec!(1, 3, INPUT, INPUT)),
+        )
         .map_err(|e| format!("tract: set input fact: {e}"))?
         .into_optimized()
         .map_err(|e| format!("tract: optimize graph: {e}"))?
@@ -182,7 +272,10 @@ fn preprocess_bgr(bgr: &[u8], w: u32, h: u32) -> Result<(Array4<f32>, f32), Stri
         return Err("detector: empty frame".into());
     }
     if bgr.len() < want {
-        return Err(format!("detector: bgr buffer is {} bytes, want {want} for {w}x{h}", bgr.len()));
+        return Err(format!(
+            "detector: bgr buffer is {} bytes, want {want} for {w}x{h}",
+            bgr.len()
+        ));
     }
     // `image` has no BGR8 pixel type, but resizing is channel-agnostic — it filters each of the
     // three channels independently — so we can carry BGR bytes through an `RgbImage` and simply
@@ -232,11 +325,16 @@ fn letterbox(img: &image::RgbImage, order: PixelOrder) -> Result<(Array4<f32>, f
 /// Run the model, returning the flat `[1,3549,85]` output (`3549` anchors × `85`).
 fn infer(input: Array4<f32>) -> Result<Vec<f32>, String> {
     let tensor: Tensor = input.into();
-    let result =
-        model()?.run(tvec!(tensor.into())).map_err(|e| format!("tract: inference: {e}"))?;
-    let view =
-        result[0].to_plain_array_view::<f32>().map_err(|e| format!("tract: read output: {e}"))?;
-    Ok(view.as_slice().map(<[f32]>::to_vec).unwrap_or_else(|| view.iter().copied().collect()))
+    let result = model()?
+        .run(tvec!(tensor.into()))
+        .map_err(|e| format!("tract: inference: {e}"))?;
+    let view = result[0]
+        .to_plain_array_view::<f32>()
+        .map_err(|e| format!("tract: read output: {e}"))?;
+    Ok(view
+        .as_slice()
+        .map(<[f32]>::to_vec)
+        .unwrap_or_else(|| view.iter().copied().collect()))
 }
 
 const STEP: usize = 5 + NUM_CLASSES; // per-anchor: cx,cy,w,h,obj + 80 class scores
@@ -332,7 +430,11 @@ mod tests {
         // Non-square and non-grey: a channel swap or a transposed letterbox has to show up.
         let mut src = image::RgbImage::new(37, 23);
         for (x, y, px) in src.enumerate_pixels_mut() {
-            *px = image::Rgb([(x * 7 % 256) as u8, (y * 11 % 256) as u8, ((x + y) * 3 % 256) as u8]);
+            *px = image::Rgb([
+                (x * 7 % 256) as u8,
+                (y * 11 % 256) as u8,
+                ((x + y) * 3 % 256) as u8,
+            ]);
         }
         let mut encoded = std::io::Cursor::new(Vec::new());
         image::DynamicImage::ImageRgb8(src)
@@ -343,9 +445,14 @@ mod tests {
         // The hub hands the detector packed BGR straight out of OpenCV's `imdecode`. Derive it
         // from the *decoded* JPEG (not the pre-encode original) so both paths see identical
         // source pixels and the tensors must match bit for bit, JPEG's lossiness notwithstanding.
-        let decoded = image::load_from_memory(&jpeg).expect("decode test jpeg").to_rgb8();
+        let decoded = image::load_from_memory(&jpeg)
+            .expect("decode test jpeg")
+            .to_rgb8();
         let (w, h) = (decoded.width(), decoded.height());
-        let bgr: Vec<u8> = decoded.pixels().flat_map(|p| [p.0[2], p.0[1], p.0[0]]).collect();
+        let bgr: Vec<u8> = decoded
+            .pixels()
+            .flat_map(|p| [p.0[2], p.0[1], p.0[0]])
+            .collect();
 
         let (from_jpeg, ratio_jpeg) = preprocess(&jpeg).expect("preprocess jpeg");
         let (from_bgr, ratio_bgr) = preprocess_bgr(&bgr, w, h).expect("preprocess bgr");
@@ -380,9 +487,21 @@ mod tests {
     #[test]
     fn nms_drops_overlapping_same_class() {
         let dets = vec![
-            Detection { class: 0, score: 0.9, xyxy: [0.0, 0.0, 10.0, 10.0] },
-            Detection { class: 0, score: 0.8, xyxy: [1.0, 1.0, 11.0, 11.0] }, // ~0.68 IoU → dropped
-            Detection { class: 0, score: 0.7, xyxy: [50.0, 50.0, 60.0, 60.0] }, // disjoint → kept
+            Detection {
+                class: 0,
+                score: 0.9,
+                xyxy: [0.0, 0.0, 10.0, 10.0],
+            },
+            Detection {
+                class: 0,
+                score: 0.8,
+                xyxy: [1.0, 1.0, 11.0, 11.0],
+            }, // ~0.68 IoU → dropped
+            Detection {
+                class: 0,
+                score: 0.7,
+                xyxy: [50.0, 50.0, 60.0, 60.0],
+            }, // disjoint → kept
         ];
         let kept = nms(dets, IOU_THRESH);
         assert_eq!(kept.len(), 2);
@@ -392,8 +511,16 @@ mod tests {
     #[test]
     fn nms_keeps_overlapping_different_class() {
         let dets = vec![
-            Detection { class: 0, score: 0.9, xyxy: [0.0, 0.0, 10.0, 10.0] },
-            Detection { class: 2, score: 0.8, xyxy: [0.0, 0.0, 10.0, 10.0] }, // same box, other class
+            Detection {
+                class: 0,
+                score: 0.9,
+                xyxy: [0.0, 0.0, 10.0, 10.0],
+            },
+            Detection {
+                class: 2,
+                score: 0.8,
+                xyxy: [0.0, 0.0, 10.0, 10.0],
+            }, // same box, other class
         ];
         assert_eq!(nms(dets, IOU_THRESH).len(), 2);
     }

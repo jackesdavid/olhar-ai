@@ -24,7 +24,11 @@ pub fn router() -> Router<AppState> {
 
 /// Master guard: this console is cross-tenant, so only the SaaS operator sees it.
 fn require_master(c: &crate::auth::Claims) -> Result<(), ApiErr> {
-    if c.master { Ok(()) } else { Err(err(axum::http::StatusCode::FORBIDDEN, "master only")) }
+    if c.master {
+        Ok(())
+    } else {
+        Err(err(axum::http::StatusCode::FORBIDDEN, "master only"))
+    }
 }
 
 /// Default look-back when the client doesn't ask: one day. The panel is about the recent past.
@@ -43,12 +47,18 @@ struct StatsQuery {
 }
 
 /// Job counts by (category, status) within the window — the load overview.
-async fn stats(UserClaims(c): UserClaims, State(st): State<AppState>, Query(qq): Query<StatsQuery>) -> Result<Json<Vec<work_queue::CategoryStat>>, ApiErr> {
+async fn stats(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Query(qq): Query<StatsQuery>,
+) -> Result<Json<Vec<work_queue::CategoryStat>>, ApiErr> {
     require_master(&c)?;
     let db = st.db.clone();
     let tenant = qq.tenant;
     let window = window_of(qq.window);
-    Ok(Json(blocking(move || work_queue::monitor_stats_blocking(&db, tenant, window)).await?))
+    Ok(Json(
+        blocking(move || work_queue::monitor_stats_blocking(&db, tenant, window)).await?,
+    ))
 }
 
 /// Bucket size for the time series: aim for ~120 points, rounded up to a whole minute (min 60s).
@@ -72,18 +82,32 @@ struct SeriesResponse {
     points: Vec<SeriesPoint>,
 }
 #[derive(serde::Serialize)]
-struct SeriesPoint { t: i64, c: i64 }
+struct SeriesPoint {
+    t: i64,
+    c: i64,
+}
 
 /// Jobs created per time bucket within the window — the load-over-time chart.
-async fn series(UserClaims(c): UserClaims, State(st): State<AppState>, Query(qq): Query<StatsQuery>) -> Result<Json<SeriesResponse>, ApiErr> {
+async fn series(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Query(qq): Query<StatsQuery>,
+) -> Result<Json<SeriesResponse>, ApiErr> {
     require_master(&c)?;
     let db = st.db.clone();
     let tenant = qq.tenant;
     let window = window_of(qq.window);
     let bucket = bucket_for(window);
-    let rows = blocking(move || work_queue::monitor_series_blocking(&db, tenant, window, bucket)).await?;
-    let points = rows.into_iter().map(|(t, c)| SeriesPoint { t, c }).collect();
-    Ok(Json(SeriesResponse { bucket_secs: bucket, points }))
+    let rows =
+        blocking(move || work_queue::monitor_series_blocking(&db, tenant, window, bucket)).await?;
+    let points = rows
+        .into_iter()
+        .map(|(t, c)| SeriesPoint { t, c })
+        .collect();
+    Ok(Json(SeriesResponse {
+        bucket_secs: bucket,
+        points,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -103,7 +127,11 @@ struct ListResponse {
 }
 
 /// Recent jobs, filterable by tenant / category / status.
-async fn list(UserClaims(c): UserClaims, State(st): State<AppState>, Query(qq): Query<ListQuery>) -> Result<Json<ListResponse>, ApiErr> {
+async fn list(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Query(qq): Query<ListQuery>,
+) -> Result<Json<ListResponse>, ApiErr> {
     require_master(&c)?;
     let db = st.db.clone();
     let limit = qq.limit.unwrap_or(50).clamp(1, 200);
@@ -111,7 +139,15 @@ async fn list(UserClaims(c): UserClaims, State(st): State<AppState>, Query(qq): 
     let window = window_of(qq.window);
     let (tenant, category, status) = (qq.tenant, qq.category, qq.status);
     let (total, items) = blocking(move || {
-        work_queue::monitor_list_blocking(&db, tenant, category.as_deref(), status.as_deref(), window, limit, offset)
+        work_queue::monitor_list_blocking(
+            &db,
+            tenant,
+            category.as_deref(),
+            status.as_deref(),
+            window,
+            limit,
+            offset,
+        )
     })
     .await?;
     Ok(Json(ListResponse { total, items }))

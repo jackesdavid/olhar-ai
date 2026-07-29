@@ -151,7 +151,10 @@ const DEFAULT_LOW_THRESH: f32 = 0.1;
 /// stores node config fields as strings) — mirrors `vision.rs::run_recognize_person`'s
 /// `max_distance` parsing.
 fn config_num(config: &Value, key: &str) -> Option<f64> {
-    config.get(key).and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+    config.get(key).and_then(|v| {
+        v.as_f64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+    })
 }
 
 /// One (camera, class) job's accumulated config while walking the graphs.
@@ -197,33 +200,61 @@ async fn sync_tracking_config(st: &AppState, tid: Uuid, graphs: &[WfGraph]) {
             if !matches!(event, "object_entered" | "object_exited" | "line_crossed") {
                 continue;
             }
-            let Some(camera) = g.resolve_camera_selector(n) else { continue }; // not (yet) scoped to a camera
-            // The property panel shows "person" as the class dropdown's value before the user
-            // ever touches it (sentinel-app's `class` row: `config[key] ?? "person"`) — mirror
-            // that display-time fallback here so an untouched-but-scoped OnEvent node still
-            // resolves to a real job instead of being silently dropped. An explicitly emptied
-            // value ("") still opts the node out.
-            let class = n.config.get("class").and_then(|v| v.as_str()).unwrap_or("person").trim();
+            let Some(camera) = g.resolve_camera_selector(n) else {
+                continue;
+            }; // not (yet) scoped to a camera
+               // The property panel shows "person" as the class dropdown's value before the user
+               // ever touches it (sentinel-app's `class` row: `config[key] ?? "person"`) — mirror
+               // that display-time fallback here so an untouched-but-scoped OnEvent node still
+               // resolves to a real job instead of being silently dropped. An explicitly emptied
+               // value ("") still opts the node out.
+            let class = n
+                .config
+                .get("class")
+                .and_then(|v| v.as_str())
+                .unwrap_or("person")
+                .trim();
             if class.is_empty() {
                 continue; // explicitly cleared to blank — not scoped to a class
             }
             let acc = jobs.entry((camera.clone(), class.to_string())).or_default();
             // Tuning + debug apply regardless of whether this node has a region wired, so set
             // them before the early-continue below.
-            acc.min_hits = config_num(&n.config, "min_hits").map(|v| v as u32).unwrap_or(DEFAULT_MIN_HITS);
-            acc.max_age = config_num(&n.config, "max_age").map(|v| v as u32).unwrap_or(DEFAULT_MAX_AGE);
-            acc.iou_thresh = config_num(&n.config, "iou_thresh").map(|v| v as f32).unwrap_or(DEFAULT_IOU_THRESH);
-            acc.high_thresh = config_num(&n.config, "high_thresh").map(|v| v as f32).unwrap_or(DEFAULT_HIGH_THRESH);
-            acc.low_thresh = config_num(&n.config, "low_thresh").map(|v| v as f32).unwrap_or(DEFAULT_LOW_THRESH);
+            acc.min_hits = config_num(&n.config, "min_hits")
+                .map(|v| v as u32)
+                .unwrap_or(DEFAULT_MIN_HITS);
+            acc.max_age = config_num(&n.config, "max_age")
+                .map(|v| v as u32)
+                .unwrap_or(DEFAULT_MAX_AGE);
+            acc.iou_thresh = config_num(&n.config, "iou_thresh")
+                .map(|v| v as f32)
+                .unwrap_or(DEFAULT_IOU_THRESH);
+            acc.high_thresh = config_num(&n.config, "high_thresh")
+                .map(|v| v as f32)
+                .unwrap_or(DEFAULT_HIGH_THRESH);
+            acc.low_thresh = config_num(&n.config, "low_thresh")
+                .map(|v| v as f32)
+                .unwrap_or(DEFAULT_LOW_THRESH);
             acc.debug = g.debug;
-            let Some((name, points)) = g.resolve_region(n) else { continue }; // no region wired — whole-frame
+            let Some((name, points)) = g.resolve_region(n) else {
+                continue;
+            }; // no region wired — whole-frame
             if event == "line_crossed" {
                 if points.len() == 2 {
-                    acc.lines.push(json!({ "camera": camera, "name": name, "p1": points[0], "p2": points[1] }));
+                    acc.lines.push(
+                        json!({ "camera": camera, "name": name, "p1": points[0], "p2": points[1] }),
+                    );
                 }
             } else if points.len() >= 3 {
-                let trigger = n.config.get("zone_trigger").and_then(|v| v.as_str()).unwrap_or("intersects");
-                acc.zone = Some((json!({ "camera": camera, "name": name, "points": points }), trigger.to_string()));
+                let trigger = n
+                    .config
+                    .get("zone_trigger")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("intersects");
+                acc.zone = Some((
+                    json!({ "camera": camera, "name": name, "points": points }),
+                    trigger.to_string(),
+                ));
             }
         }
     }
@@ -260,7 +291,9 @@ async fn sync_tracking_config(st: &AppState, tid: Uuid, graphs: &[WfGraph]) {
     for b in boxes {
         // Preserve the box's own enabled/detect_ms (set via the tracking-config API, not the
         // graph editor) — only `trackers` is graph-derived and gets fully replaced.
-        let current = store::tracking_config_by_id(&st.pool, tid, b.id).await.unwrap_or_default();
+        let current = store::tracking_config_by_id(&st.pool, tid, b.id)
+            .await
+            .unwrap_or_default();
         let mut cfg = current.unwrap_or_else(|| json!({}));
         if let Some(obj) = cfg.as_object_mut() {
             obj.entry("enabled").or_insert(json!(false));
@@ -268,7 +301,10 @@ async fn sync_tracking_config(st: &AppState, tid: Uuid, graphs: &[WfGraph]) {
             obj.insert("trackers".to_string(), json!(trackers));
         }
         if let Err(e) = store::set_tracking_config(&st.pool, tid, b.id, cfg).await {
-            log::warn!("sync_tracking_config: set_tracking_config failed for box {}: {e}", b.id);
+            log::warn!(
+                "sync_tracking_config: set_tracking_config failed for box {}: {e}",
+                b.id
+            );
         }
     }
 }
@@ -308,7 +344,11 @@ async fn list(
             .as_deref()
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty());
-        let group = query.group.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let group = query
+            .group
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         graphs
             .into_iter()
             .filter(|g| {
@@ -504,7 +544,13 @@ async fn console_logs(
 ) -> Result<Json<Value>, ApiErr> {
     auth::require(&c, "workflows.read")?;
     let tid = tenant_of(&c)?;
-    let url = format!("{}/graphs/{}/logs?tenant={}&limit={}", flow_base(), id, tid, q.limit.unwrap_or(50));
+    let url = format!(
+        "{}/graphs/{}/logs?tenant={}&limit={}",
+        flow_base(),
+        id,
+        tid,
+        q.limit.unwrap_or(50)
+    );
     Ok(Json(flow_get_json(&url).await))
 }
 
@@ -534,7 +580,8 @@ async fn instances(
     let db = st.db.clone();
     let out = blocking(move || {
         let instances = workflows::repo::list_instances(&db, tid, id);
-        let (run_id, status, updated_at) = match workflows::repo::latest_run_for_graph(&db, tid, id) {
+        let (run_id, status, updated_at) = match workflows::repo::latest_run_for_graph(&db, tid, id)
+        {
             Some((rid, status, started_at)) => {
                 (Some(rid.to_string()), Some(status), Some(started_at))
             }
@@ -965,7 +1012,10 @@ async fn list_templates(
         let mut out: Vec<TemplateSummary> = Vec::new();
         // Own templates first, then globals — own wins on an id clash (a tenant can't shadow a
         // global by id in practice, but de-dup keeps the list clean).
-        for g in workflows::repo::load(&db, tid).iter().filter(|g| g.template) {
+        for g in workflows::repo::load(&db, tid)
+            .iter()
+            .filter(|g| g.template)
+        {
             if seen.insert(g.id) {
                 out.push(to_summary(g));
             }
@@ -1114,7 +1164,9 @@ async fn set_trigger(
                 every_secs: b.every_secs.unwrap_or(60).max(1),
             },
             "schedule" => Trigger::Schedule(
-                b.schedule.clone().ok_or("schedule config is required for a scheduled trigger")?,
+                b.schedule
+                    .clone()
+                    .ok_or("schedule config is required for a scheduled trigger")?,
             ),
             other => return Err(format!("unknown trigger kind '{other}'")),
         };

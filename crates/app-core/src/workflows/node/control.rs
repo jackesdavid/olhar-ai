@@ -14,7 +14,10 @@ pub(super) fn run_if(inputs: &PortValues) -> Result<PortValues, String> {
 pub(super) fn run_wait(config: &Value) -> Result<PortValues, String> {
     let secs = config
         .get("seconds")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+        })
         .unwrap_or(1)
         .clamp(0, 3600);
     std::thread::sleep(std::time::Duration::from_secs(secs as u64));

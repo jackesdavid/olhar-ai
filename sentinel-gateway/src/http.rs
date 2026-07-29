@@ -26,8 +26,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-async fn health(axum::extract::State(state): axum::extract::State<Arc<AppState>>) -> impl IntoResponse {
-    Json(json!({ "status": "ok", "service": "sentinel-gateway", "upstream": state.resolve_upstream() }))
+async fn health(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> impl IntoResponse {
+    Json(
+        json!({ "status": "ok", "service": "sentinel-gateway", "upstream": state.resolve_upstream() }),
+    )
 }
 
 /// Convenience: open go2rtc's player (proxied) forced to MSE for a camera.

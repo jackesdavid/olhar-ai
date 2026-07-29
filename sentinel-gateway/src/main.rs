@@ -58,7 +58,12 @@ async fn main() {
     // (card #144). Unset → outbound live is off and live uses the tailnet path.
     let public_ws_url = std::env::var("GATEWAY_PUBLIC_WS").unwrap_or_default();
 
-    let state = Arc::new(AppState::new(upstream.clone(), control_url.clone(), jwt_secret, public_ws_url.clone()));
+    let state = Arc::new(AppState::new(
+        upstream.clone(),
+        control_url.clone(),
+        jwt_secret,
+        public_ws_url.clone(),
+    ));
     log::info!("sentinel-gateway upstream = {upstream} (fallback), control = {control_url}, public_ws = {}", if public_ws_url.is_empty() { "(unset — outbound live off)" } else { &public_ws_url });
 
     let app = http::router(state);
@@ -71,7 +76,10 @@ async fn main() {
     };
     log::info!("sentinel-gateway listening on http://{bind} (MSE /api/ws, snapshots /api/frame.jpeg, /player)");
 
-    if let Err(e) = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await {
+    if let Err(e) = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+    {
         log::error!("server error: {e}");
         std::process::exit(1);
     }
@@ -84,7 +92,8 @@ async fn shutdown_signal() {
     };
     #[cfg(unix)]
     let term = async {
-        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
             s.recv().await;
         }
     };

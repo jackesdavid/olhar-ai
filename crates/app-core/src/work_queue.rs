@@ -18,8 +18,8 @@ use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::timeutil::now_rfc3339;
 use crate::db::Db;
+use crate::timeutil::now_rfc3339;
 
 /// The `NOTIFY`/`LISTEN` channel every consumer watches. Payload is the job's `category`.
 pub const CHANNEL: &str = "work_jobs";
@@ -31,18 +31,18 @@ const STALE_SECS: i64 = 600;
 /// A claimed job. `payload` is self-contained — the consumer needs nothing else to act.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct Job {
-    pub id:         Uuid,
+    pub id: Uuid,
     pub request_id: Uuid,
-    pub tenant_id:  Uuid,
-    pub category:   String,
-    pub kind:       String,
-    pub payload:    serde_json::Value,
-    pub attempts:   i32,
+    pub tenant_id: Uuid,
+    pub category: String,
+    pub kind: String,
+    pub payload: serde_json::Value,
+    pub attempts: i32,
 }
 
 /// One job to enqueue: its action (`kind`) and self-contained data.
 pub struct NewJob {
-    pub kind:    String,
+    pub kind: String,
     pub payload: serde_json::Value,
 }
 
@@ -68,7 +68,11 @@ pub async fn enqueue(
     }
     // NOTIFY inside the tx so it fires exactly when the rows commit (Postgres holds notifications
     // until commit and drops them on rollback).
-    sqlx::query("SELECT pg_notify($1, $2)").bind(CHANNEL).bind(category).execute(&mut *tx).await?;
+    sqlx::query("SELECT pg_notify($1, $2)")
+        .bind(CHANNEL)
+        .bind(category)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await
 }
 
@@ -100,16 +104,27 @@ pub async fn enqueue_at(
 /// [`release`], but the caller names the time rather than a delay — for a timer whose deadline
 /// moved (a debounce window that got extended).
 pub async fn reschedule(pool: &PgPool, id: Uuid, run_after: &str) -> sqlx::Result<()> {
-    sqlx::query("UPDATE work_jobs SET status = 'pending', run_after = $2, updated_at = $3 WHERE id = $1")
-        .bind(id).bind(run_after).bind(now_rfc3339())
-        .execute(pool).await.map(|_| ())
+    sqlx::query(
+        "UPDATE work_jobs SET status = 'pending', run_after = $2, updated_at = $3 WHERE id = $1",
+    )
+    .bind(id)
+    .bind(run_after)
+    .bind(now_rfc3339())
+    .execute(pool)
+    .await
+    .map(|_| ())
 }
 
 /// Atomically claim up to `limit` jobs of a (category, kind): due `pending` rows, plus stale
 /// `running` rows (reaped), locked with `FOR UPDATE SKIP LOCKED` and flipped to `running` in the
 /// same transaction. Exactly-once handoff — a claimed job is invisible to other consumers until it
 /// is marked terminal or goes stale.
-pub async fn claim(pool: &PgPool, category: &str, kind: &str, limit: i64) -> sqlx::Result<Vec<Job>> {
+pub async fn claim(
+    pool: &PgPool,
+    category: &str,
+    kind: &str,
+    limit: i64,
+) -> sqlx::Result<Vec<Job>> {
     let now = now_rfc3339();
     let stale_before = (chrono::Local::now() - chrono::Duration::seconds(STALE_SECS)).to_rfc3339();
     let mut tx = pool.begin().await?;
@@ -123,8 +138,13 @@ pub async fn claim(pool: &PgPool, category: &str, kind: &str, limit: i64) -> sql
          LIMIT $5
          FOR UPDATE SKIP LOCKED",
     )
-    .bind(category).bind(kind).bind(&now).bind(&stale_before).bind(limit)
-    .fetch_all(&mut *tx).await?;
+    .bind(category)
+    .bind(kind)
+    .bind(&now)
+    .bind(&stale_before)
+    .bind(limit)
+    .fetch_all(&mut *tx)
+    .await?;
 
     if !jobs.is_empty() {
         let ids: Vec<Uuid> = jobs.iter().map(|j| j.id).collect();
@@ -132,24 +152,40 @@ pub async fn claim(pool: &PgPool, category: &str, kind: &str, limit: i64) -> sql
             "UPDATE work_jobs SET status = 'running', attempts = attempts + 1, updated_at = $2
              WHERE id = ANY($1)",
         )
-        .bind(&ids).bind(&now)
-        .execute(&mut *tx).await?;
+        .bind(&ids)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await?;
     // Reflect the attempt bump the UPDATE just made, so a handler sees its real attempt count.
-    Ok(jobs.into_iter().map(|mut j| { j.attempts += 1; j }).collect())
+    Ok(jobs
+        .into_iter()
+        .map(|mut j| {
+            j.attempts += 1;
+            j
+        })
+        .collect())
 }
 
 /// Mark a job done. Terminal.
 pub async fn mark_done(pool: &PgPool, id: Uuid) -> sqlx::Result<()> {
     sqlx::query("UPDATE work_jobs SET status = 'done', updated_at = $2 WHERE id = $1")
-        .bind(id).bind(now_rfc3339())
-        .execute(pool).await.map(|_| ())
+        .bind(id)
+        .bind(now_rfc3339())
+        .execute(pool)
+        .await
+        .map(|_| ())
 }
 
 /// Record a failure: keep it `pending` for retry until `max_attempts`, then park it `failed` so a
 /// poisoned job can't spin forever. `attempts` was already bumped at claim, so compare it directly.
-pub async fn mark_failed(pool: &PgPool, id: Uuid, err: &str, max_attempts: i32) -> sqlx::Result<()> {
+pub async fn mark_failed(
+    pool: &PgPool,
+    id: Uuid,
+    err: &str,
+    max_attempts: i32,
+) -> sqlx::Result<()> {
     sqlx::query(
         "UPDATE work_jobs
          SET last_error = $2,
@@ -157,23 +193,39 @@ pub async fn mark_failed(pool: &PgPool, id: Uuid, err: &str, max_attempts: i32) 
              updated_at = $4
          WHERE id = $1",
     )
-    .bind(id).bind(err).bind(max_attempts).bind(now_rfc3339())
-    .execute(pool).await.map(|_| ())
+    .bind(id)
+    .bind(err)
+    .bind(max_attempts)
+    .bind(now_rfc3339())
+    .execute(pool)
+    .await
+    .map(|_| ())
 }
 
 /// Return a claimed job to `pending` without counting it as a failure — for "not ready yet" (a
 /// dependency offline). `delay_secs` holds it off the claim for a beat so it doesn't busy-loop.
 pub async fn release(pool: &PgPool, id: Uuid, delay_secs: i64) -> sqlx::Result<()> {
     let run_after = (chrono::Local::now() + chrono::Duration::seconds(delay_secs)).to_rfc3339();
-    sqlx::query("UPDATE work_jobs SET status = 'pending', run_after = $2, updated_at = $3 WHERE id = $1")
-        .bind(id).bind(&run_after).bind(now_rfc3339())
-        .execute(pool).await.map(|_| ())
+    sqlx::query(
+        "UPDATE work_jobs SET status = 'pending', run_after = $2, updated_at = $3 WHERE id = $1",
+    )
+    .bind(id)
+    .bind(&run_after)
+    .bind(now_rfc3339())
+    .execute(pool)
+    .await
+    .map(|_| ())
 }
 
 /// Requeue a failed attempt with a backoff delay (records the error). For non-idempotent work that
 /// retries on transient errors — the notification send path (Phase 2). Distinct from `mark_failed`,
 /// which parks permanently; the caller decides when a job is out of retries.
-pub async fn retry_after(pool: &PgPool, id: Uuid, backoff_secs: i64, err: &str) -> sqlx::Result<()> {
+pub async fn retry_after(
+    pool: &PgPool,
+    id: Uuid,
+    backoff_secs: i64,
+    err: &str,
+) -> sqlx::Result<()> {
     let run_after = (chrono::Local::now() + chrono::Duration::seconds(backoff_secs)).to_rfc3339();
     sqlx::query("UPDATE work_jobs SET status = 'pending', run_after = $2, last_error = $3, updated_at = $4 WHERE id = $1")
         .bind(id).bind(&run_after).bind(err).bind(now_rfc3339())
@@ -182,13 +234,17 @@ pub async fn retry_after(pool: &PgPool, id: Uuid, backoff_secs: i64, err: &str) 
 
 /// Summary of a request's jobs by status — the "did this finish?" query. A request is complete
 /// when nothing is left `pending`/`running`; anything `failed` is a leg that needs attention.
-pub async fn request_status(pool: &PgPool, request_id: Uuid) -> sqlx::Result<Vec<(String, String, i64)>> {
+pub async fn request_status(
+    pool: &PgPool,
+    request_id: Uuid,
+) -> sqlx::Result<Vec<(String, String, i64)>> {
     sqlx::query_as::<_, (String, String, i64)>(
         "SELECT kind, status, COUNT(*) FROM work_jobs
          WHERE request_id = $1 GROUP BY kind, status",
     )
     .bind(request_id)
-    .fetch_all(pool).await
+    .fetch_all(pool)
+    .await
 }
 
 /// The `recording_id`s a tenant has an open (non-done) job for — the list marks these clips as
@@ -199,8 +255,12 @@ pub async fn open_recording_ids(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<
          WHERE tenant_id = $1 AND status <> 'done' AND payload ? 'recording_id'",
     )
     .bind(tenant_id)
-    .fetch_all(pool).await?;
-    Ok(ids.into_iter().filter_map(|s| s.parse::<i64>().ok()).collect())
+    .fetch_all(pool)
+    .await?;
+    Ok(ids
+        .into_iter()
+        .filter_map(|s| s.parse::<i64>().ok())
+        .collect())
 }
 
 // ---- blocking wrappers (for std-thread consumers with a `Db`, no PgPool) ----
@@ -208,12 +268,22 @@ pub async fn open_recording_ids(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<
 // thread calls them through its `Db` exactly like it called the old queue modules.
 
 /// Enqueue one job (the common case for single-message categories like `workflow_event`).
-pub fn enqueue_one_blocking(db: &Db, tenant_id: Uuid, category: &str, kind: &str, payload: serde_json::Value) {
+pub fn enqueue_one_blocking(
+    db: &Db,
+    tenant_id: Uuid,
+    category: &str,
+    kind: &str,
+    payload: serde_json::Value,
+) {
     let pool = db.pool();
     let request_id = Uuid::new_v4();
     let category = category.to_string();
-    let jobs = [NewJob { kind: kind.to_string(), payload }];
-    let res = db.block(async move { enqueue(&pool, request_id, tenant_id, &category, &jobs).await });
+    let jobs = [NewJob {
+        kind: kind.to_string(),
+        payload,
+    }];
+    let res =
+        db.block(async move { enqueue(&pool, request_id, tenant_id, &category, &jobs).await });
     if let Err(e) = res {
         log::error!("work_queue::enqueue_one_blocking failed: {e}");
     }
@@ -231,7 +301,10 @@ pub fn enqueue_at_blocking(
     let pool = db.pool();
     let request_id = Uuid::new_v4();
     let category = category.to_string();
-    let job = NewJob { kind: kind.to_string(), payload };
+    let job = NewJob {
+        kind: kind.to_string(),
+        payload,
+    };
     let run_after = run_after.to_string();
     let res = db.block(async move {
         enqueue_at(&pool, request_id, tenant_id, &category, &job, &run_after).await
@@ -274,10 +347,11 @@ pub fn claim_blocking(db: &Db, category: &str, kind: &str, limit: i64) -> Vec<Jo
     let pool = db.pool();
     let category = category.to_string();
     let kind = kind.to_string();
-    db.block(async move { claim(&pool, &category, &kind, limit).await }).unwrap_or_else(|e| {
-        log::error!("work_queue::claim_blocking failed: {e}");
-        Vec::new()
-    })
+    db.block(async move { claim(&pool, &category, &kind, limit).await })
+        .unwrap_or_else(|e| {
+            log::error!("work_queue::claim_blocking failed: {e}");
+            Vec::new()
+        })
 }
 
 // ---- workflow events (migrated from event_queue) ---------------------------
@@ -293,7 +367,13 @@ pub const EVENT_KIND: &str = "fire";
 /// Enqueue a workflow-trigger event. `event` is the name (`motion`, `telegram_message`, …),
 /// `source` the emitter label (`edge`, `telegram`); `fields` is the typed bag the `OnEvent` node
 /// exposes. Replaces `event_queue::enqueue`, durably, on the unified queue.
-pub fn enqueue_event_blocking(db: &Db, tenant_id: Uuid, event: &str, source: &str, fields: &serde_json::Value) {
+pub fn enqueue_event_blocking(
+    db: &Db,
+    tenant_id: Uuid,
+    event: &str,
+    source: &str,
+    fields: &serde_json::Value,
+) {
     let payload = serde_json::json!({ "event": event, "source": source, "fields": fields });
     enqueue_one_blocking(db, tenant_id, EVENT_CATEGORY, EVENT_KIND, payload);
 }
@@ -324,7 +404,14 @@ pub fn enqueue_window_stop_blocking(
     let payload = serde_json::json!({
         "graph": graph_id, "node": node_id, "instance": instance_key, "expires_at": expires_at,
     });
-    enqueue_at_blocking(db, tenant_id, WINDOW_CATEGORY, WINDOW_KIND, payload, expires_at);
+    enqueue_at_blocking(
+        db,
+        tenant_id,
+        WINDOW_CATEGORY,
+        WINDOW_KIND,
+        payload,
+        expires_at,
+    );
 }
 
 // ---- monitoring (master: system-wide async load) ----------------------------
@@ -335,19 +422,19 @@ pub fn enqueue_window_stop_blocking(
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct CategoryStat {
     pub category: String,
-    pub status:   String,
-    pub count:    i64,
+    pub status: String,
+    pub count: i64,
 }
 
 /// A job row for the load panel. Payload is omitted — this is a volume view, not per-job detail.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct MonitorJob {
-    pub id:         Uuid,
-    pub tenant_id:  Uuid,
-    pub category:   String,
-    pub kind:       String,
-    pub status:     String,
-    pub attempts:   i32,
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub category: String,
+    pub kind: String,
+    pub status: String,
+    pub attempts: i32,
     pub created_at: String,
     pub updated_at: String,
     pub last_error: Option<String>,
@@ -356,7 +443,11 @@ pub struct MonitorJob {
 /// Job counts by (category, status) within the last `window_secs`, across all tenants or one.
 /// Scoped to a recent window on purpose — the load view cares about the recent past and live work,
 /// not all-time history. `created_at` is cast to `timestamptz` so the window is offset-correct.
-pub fn monitor_stats_blocking(db: &Db, tenant: Option<Uuid>, window_secs: i64) -> Vec<CategoryStat> {
+pub fn monitor_stats_blocking(
+    db: &Db,
+    tenant: Option<Uuid>,
+    window_secs: i64,
+) -> Vec<CategoryStat> {
     let pool = db.pool();
     db.block(async move {
         sqlx::query_as::<_, CategoryStat>(
@@ -365,15 +456,23 @@ pub fn monitor_stats_blocking(db: &Db, tenant: Option<Uuid>, window_secs: i64) -
                AND created_at::timestamptz >= now() - make_interval(secs => $2::double precision)
              GROUP BY category, status ORDER BY category, status",
         )
-        .bind(tenant).bind(window_secs)
-        .fetch_all(&pool).await.unwrap_or_default()
+        .bind(tenant)
+        .bind(window_secs)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_default()
     })
 }
 
 /// A time series of jobs created per `bucket_secs` bucket within the window — `(bucket_start_epoch,
 /// count)`, oldest first. Only non-empty buckets; the caller zero-fills the axis. Buckets are
 /// floored on the unix epoch so any bucket size (a minute, or coarser for a wide window) lines up.
-pub fn monitor_series_blocking(db: &Db, tenant: Option<Uuid>, window_secs: i64, bucket_secs: i64) -> Vec<(i64, i64)> {
+pub fn monitor_series_blocking(
+    db: &Db,
+    tenant: Option<Uuid>,
+    window_secs: i64,
+    bucket_secs: i64,
+) -> Vec<(i64, i64)> {
     let pool = db.pool();
     db.block(async move {
         sqlx::query_as::<_, (i64, i64)>(
@@ -384,8 +483,12 @@ pub fn monitor_series_blocking(db: &Db, tenant: Option<Uuid>, window_secs: i64, 
                AND created_at::timestamptz >= now() - make_interval(secs => $2::double precision)
              GROUP BY t ORDER BY t",
         )
-        .bind(tenant).bind(window_secs).bind(bucket_secs)
-        .fetch_all(&pool).await.unwrap_or_default()
+        .bind(tenant)
+        .bind(window_secs)
+        .bind(bucket_secs)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_default()
     })
 }
 
@@ -453,7 +556,13 @@ pub fn enqueue_notification_blocking(
         "image_key": image_key,
         "video_key": video_key,
     });
-    enqueue_one_blocking(db, tenant_id, NOTIFICATION_CATEGORY, NOTIFICATION_KIND, payload);
+    enqueue_one_blocking(
+        db,
+        tenant_id,
+        NOTIFICATION_CATEGORY,
+        NOTIFICATION_KIND,
+        payload,
+    );
 }
 
 /// Queue a **mobile push** send (card #139) — same durable queue and retry/backoff as Telegram,
@@ -472,12 +581,18 @@ pub fn enqueue_push_notification_blocking(
         "title": title,
         "message": message,
     });
-    enqueue_one_blocking(db, tenant_id, NOTIFICATION_CATEGORY, NOTIFICATION_KIND, payload);
+    enqueue_one_blocking(
+        db,
+        tenant_id,
+        NOTIFICATION_CATEGORY,
+        NOTIFICATION_KIND,
+        payload,
+    );
 }
 
 /// A terminal notification job whose staged media can be reclaimed.
 pub struct PurgeableMedia {
-    pub id:        Uuid,
+    pub id: Uuid,
     pub image_key: Option<String>,
     pub video_key: Option<String>,
 }
@@ -485,7 +600,11 @@ pub struct PurgeableMedia {
 /// Terminal notification sends past the grace window whose media keys are **not** still referenced
 /// by an in-flight send (one staged object may back several jobs). The object store can then drop
 /// the objects. Mirrors the old `notification::queue::purgeable_media`, reading keys from payload.
-pub fn purgeable_notification_media_blocking(db: &Db, grace_secs: i64, limit: i64) -> Vec<PurgeableMedia> {
+pub fn purgeable_notification_media_blocking(
+    db: &Db,
+    grace_secs: i64,
+    limit: i64,
+) -> Vec<PurgeableMedia> {
     let pool = db.pool();
     db.block(async move {
         sqlx::query_as::<_, (Uuid, Option<String>, Option<String>)>(

@@ -19,12 +19,17 @@ struct Config {
 fn config() -> Option<&'static Config> {
     static C: OnceLock<Option<Config>> = OnceLock::new();
     C.get_or_init(|| {
-        let api_key = std::env::var("DD_API_KEY").ok().filter(|s| !s.trim().is_empty())?;
+        let api_key = std::env::var("DD_API_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())?;
         let site = std::env::var("DD_SITE")
             .ok()
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| "datadoghq.com".to_string());
-        Some(Config { api_key, url: format!("https://http-intake.logs.{site}/api/v2/logs") })
+        Some(Config {
+            api_key,
+            url: format!("https://http-intake.logs.{site}/api/v2/logs"),
+        })
     })
     .as_ref()
 }
@@ -42,7 +47,11 @@ fn queue() -> Option<&'static tokio::sync::mpsc::Sender<Value>> {
     .as_ref()
 }
 
-async fn drain(mut rx: tokio::sync::mpsc::Receiver<Value>, url: &'static str, api_key: &'static str) {
+async fn drain(
+    mut rx: tokio::sync::mpsc::Receiver<Value>,
+    url: &'static str,
+    api_key: &'static str,
+) {
     let client = reqwest::Client::new();
     let mut batch: Vec<Value> = Vec::with_capacity(500);
     loop {
@@ -88,7 +97,8 @@ impl Visit for JsonVisitor {
         self.0.insert(f.name().into(), Value::from(v));
     }
     fn record_debug(&mut self, f: &Field, v: &dyn std::fmt::Debug) {
-        self.0.insert(f.name().into(), Value::from(format!("{v:?}")));
+        self.0
+            .insert(f.name().into(), Value::from(format!("{v:?}")));
     }
 }
 
@@ -102,7 +112,12 @@ impl<S> Layer<S> for DatadogLayer
 where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
-    fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, id: &tracing::span::Id, ctx: Context<'_, S>) {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: Context<'_, S>,
+    ) {
         let mut v = JsonVisitor::default();
         attrs.record(&mut v);
         if let Some(span) = ctx.span(id) {
@@ -124,7 +139,10 @@ where
         }
         let mut ev = JsonVisitor::default();
         event.record(&mut ev);
-        let message = ev.0.remove("message").and_then(|m| m.as_str().map(str::to_string)).unwrap_or_default();
+        let message =
+            ev.0.remove("message")
+                .and_then(|m| m.as_str().map(str::to_string))
+                .unwrap_or_default();
         for (k, val) in ev.0 {
             merged.insert(k, val);
         }
@@ -134,7 +152,10 @@ where
         let mut record = Map::new();
         record.insert("ddsource".into(), Value::from("sentinel"));
         record.insert("service".into(), Value::from("gateway"));
-        record.insert("status".into(), Value::from(meta.level().as_str().to_lowercase()));
+        record.insert(
+            "status".into(),
+            Value::from(meta.level().as_str().to_lowercase()),
+        );
         record.insert("logger.name".into(), Value::from(meta.target()));
         record.insert("ddtags".into(), Value::from(tags));
         record.insert("message".into(), Value::from(message));

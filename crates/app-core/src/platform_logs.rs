@@ -19,14 +19,14 @@ use crate::db::Db;
 
 /// One platform log entry. `created_at` is set by the insert functions (now_rfc3339).
 pub struct PlatformLog {
-    pub tenant_id:   Uuid,
-    pub module:      &'static str,   // "workflow" | "edge" | "presence" | "device"
-    pub trace_id:    Option<Uuid>,   // links entries across modules for one root action
-    pub entity_id:   Option<String>, // graph_id (as text), box_id, device_id, ...
+    pub tenant_id: Uuid,
+    pub module: &'static str, // "workflow" | "edge" | "presence" | "device"
+    pub trace_id: Option<Uuid>, // links entries across modules for one root action
+    pub entity_id: Option<String>, // graph_id (as text), box_id, device_id, ...
     pub entity_type: Option<&'static str>, // "workflow_graph" | "edge_box" | "device" | ...
-    pub level:       &'static str,   // "debug" | "info" | "warn" | "error"
-    pub message:     String,
-    pub payload:     Option<Value>,
+    pub level: &'static str,  // "debug" | "info" | "warn" | "error"
+    pub message: String,
+    pub payload: Option<Value>,
 }
 
 /// A platform log as a Datadog log record (card #145/#146) — the SQL filter columns become `ddtags`
@@ -46,7 +46,11 @@ fn to_dd_record(l: &PlatformLog) -> Value {
     // Promote the edge identity (stamped into the payload by control's relay) to facets.
     if let Some(obj) = l.payload.as_ref().and_then(Value::as_object) {
         for key in ["edge_id", "edge_name"] {
-            if let Some(v) = obj.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            if let Some(v) = obj
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
                 tags.push_str(&format!(",{key}:{v}"));
             }
         }
@@ -237,36 +241,32 @@ async fn flush(batch: &mut Vec<PlatformLog>, pool: &PgPool) {
 /// One row returned from [`list_logs`].
 #[derive(serde::Serialize)]
 pub struct LogRow {
-    pub id:          i64,
-    pub module:      String,
-    pub trace_id:    Option<Uuid>,
-    pub entity_id:   Option<String>,
+    pub id: i64,
+    pub module: String,
+    pub trace_id: Option<Uuid>,
+    pub entity_id: Option<String>,
     pub entity_type: Option<String>,
-    pub level:       String,
-    pub message:     String,
-    pub payload:     Option<Value>,
-    pub created_at:  String,
+    pub level: String,
+    pub message: String,
+    pub payload: Option<Value>,
+    pub created_at: String,
 }
 
 /// Filters + cursor for [`list_logs`].
 pub struct LogQuery {
-    pub module:      Option<String>,
-    pub trace_id:    Option<Uuid>,
+    pub module: Option<String>,
+    pub trace_id: Option<Uuid>,
     pub entity_type: Option<String>,
-    pub entity_id:   Option<String>,
-    pub level:       Option<String>,
-    pub from:        Option<String>,  // RFC3339 lower bound (created_at >=)
-    pub to:          Option<String>,  // RFC3339 upper bound (created_at <=)
-    pub after:       Option<i64>,     // cursor: return rows with id < after (newest-first)
-    pub limit:       i64,
+    pub entity_id: Option<String>,
+    pub level: Option<String>,
+    pub from: Option<String>, // RFC3339 lower bound (created_at >=)
+    pub to: Option<String>,   // RFC3339 upper bound (created_at <=)
+    pub after: Option<i64>,   // cursor: return rows with id < after (newest-first)
+    pub limit: i64,
 }
 
 /// Paginated log query, newest-first. `limit` is clamped to 1–200.
-pub async fn list_logs(
-    pool: &PgPool,
-    tenant_id: Uuid,
-    q: LogQuery,
-) -> sqlx::Result<Vec<LogRow>> {
+pub async fn list_logs(pool: &PgPool, tenant_id: Uuid, q: LogQuery) -> sqlx::Result<Vec<LogRow>> {
     let limit = q.limit.clamp(1, 200);
     let mut qb = sqlx::QueryBuilder::new(
         "SELECT id, module, trace_id, entity_id, entity_type, level, message, payload, created_at \
@@ -299,16 +299,45 @@ pub async fn list_logs(
     }
     qb.push(" ORDER BY id DESC LIMIT ").push_bind(limit);
 
-    type Row = (i64, String, Option<Uuid>, Option<String>, Option<String>, String, String, Option<Value>, String);
-    let rows = qb
-        .build_query_as::<Row>()
-        .fetch_all(pool)
-        .await?;
+    type Row = (
+        i64,
+        String,
+        Option<Uuid>,
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+        Option<Value>,
+        String,
+    );
+    let rows = qb.build_query_as::<Row>().fetch_all(pool).await?;
 
     Ok(rows
         .into_iter()
-        .map(|(id, module, trace_id, entity_id, entity_type, level, message, payload, created_at)| {
-            LogRow { id, module, trace_id, entity_id, entity_type, level, message, payload, created_at }
-        })
+        .map(
+            |(
+                id,
+                module,
+                trace_id,
+                entity_id,
+                entity_type,
+                level,
+                message,
+                payload,
+                created_at,
+            )| {
+                LogRow {
+                    id,
+                    module,
+                    trace_id,
+                    entity_id,
+                    entity_type,
+                    level,
+                    message,
+                    payload,
+                    created_at,
+                }
+            },
+        )
         .collect())
 }

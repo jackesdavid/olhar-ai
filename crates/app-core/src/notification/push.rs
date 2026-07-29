@@ -41,7 +41,11 @@ pub fn register(
     label: &str,
 ) -> Result<Uuid, String> {
     let pool = db.pool();
-    let (token, platform, label) = (device_token.to_string(), platform.to_string(), label.to_string());
+    let (token, platform, label) = (
+        device_token.to_string(),
+        platform.to_string(),
+        label.to_string(),
+    );
     let now = now_rfc3339();
     db.block(async move {
         sqlx::query_as::<_, (Uuid,)>(
@@ -81,14 +85,16 @@ pub fn list(db: &Db, tenant_id: Uuid) -> Vec<PushDevice> {
         .await
         .map(|rows| {
             rows.into_iter()
-                .map(|(id, label, platform, enabled, created_at, last_seen)| PushDevice {
-                    id,
-                    label,
-                    platform,
-                    enabled,
-                    created_at,
-                    last_seen,
-                })
+                .map(
+                    |(id, label, platform, enabled, created_at, last_seen)| PushDevice {
+                        id,
+                        label,
+                        platform,
+                        enabled,
+                        created_at,
+                        last_seen,
+                    },
+                )
                 .collect()
         })
         .unwrap_or_else(|e| {
@@ -155,7 +161,9 @@ pub fn send(tokens: &[String], title: &str, message: &str) -> Result<usize, Stri
     }
     let body: Vec<serde_json::Value> = tokens
         .iter()
-        .map(|t| serde_json::json!({ "to": t, "title": title, "body": message, "sound": "default" }))
+        .map(
+            |t| serde_json::json!({ "to": t, "title": title, "body": message, "sound": "default" }),
+        )
         .collect();
     let agent = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(15))
@@ -169,9 +177,19 @@ pub fn send(tokens: &[String], title: &str, message: &str) -> Result<usize, Stri
         .into_json()
         .map_err(|e| format!("expo push: bad response: {e}"))?;
     // { "data": [ { "status": "ok" | "error", "message": … }, … ] }
-    let items = parsed.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
-    if let Some(err) = items.iter().find(|i| i.get("status").and_then(|s| s.as_str()) == Some("error")) {
-        let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown");
+    let items = parsed
+        .get("data")
+        .and_then(|d| d.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if let Some(err) = items
+        .iter()
+        .find(|i| i.get("status").and_then(|s| s.as_str()) == Some("error"))
+    {
+        let msg = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown");
         return Err(format!("expo push rejected: {msg}"));
     }
     Ok(items.len().max(tokens.len()))

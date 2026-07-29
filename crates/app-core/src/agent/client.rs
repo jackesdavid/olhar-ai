@@ -32,8 +32,17 @@ pub fn ask(
     let cfg = AgentConfig::from_env()?;
 
     // System prompt = dynamic personality + reply-style + tool etiquette.
-    let style = if voice { VOICE_INSTRUCTION } else { CHAT_INSTRUCTION };
-    let system = format!("{}{}{}", super::domain::load_personality(), style, TOOL_HINT);
+    let style = if voice {
+        VOICE_INSTRUCTION
+    } else {
+        CHAT_INSTRUCTION
+    };
+    let system = format!(
+        "{}{}{}",
+        super::domain::load_personality(),
+        style,
+        TOOL_HINT
+    );
     let tools_json = registry.specs_json();
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(60))

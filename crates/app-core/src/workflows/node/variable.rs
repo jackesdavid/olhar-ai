@@ -9,7 +9,12 @@ use serde_json::Value;
 
 /// The variable name selected for this node (`config.variable`).
 fn var_name(config: &Value) -> Result<String, String> {
-    let name = config.get("variable").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let name = config
+        .get("variable")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if name.is_empty() {
         Err("no variable selected".into())
     } else {

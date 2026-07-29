@@ -39,9 +39,8 @@ fn main() {
     // Structured logging → Datadog (card #146): every log ships with service:flow + span context.
     app_core::datadog::init_tracing("flow");
 
-    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        "postgres://sentinel:sentinel@localhost/sentinel".to_string()
-    });
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://sentinel:sentinel@localhost/sentinel".to_string());
     let bind = std::env::var("FLOW_BIND").unwrap_or_else(|_| "0.0.0.0:8787".to_string());
 
     // Boot SYNCHRONOUSLY, before any tokio runtime exists: `Db::connect` drives its
@@ -136,7 +135,8 @@ async fn shutdown_signal() {
     };
     #[cfg(unix)]
     let term = async {
-        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
             s.recv().await;
         }
     };

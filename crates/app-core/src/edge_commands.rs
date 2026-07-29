@@ -37,12 +37,12 @@ const STALE_SECS: i64 = 45;
 /// A command claimed for delivery. `args` is self-contained — the edge needs nothing else to act.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct Command {
-    pub id:        Uuid,
+    pub id: Uuid,
     pub tenant_id: Uuid,
-    pub box_id:    Uuid,
-    pub cmd:       String,
-    pub args:      serde_json::Value,
-    pub attempts:  i32,
+    pub box_id: Uuid,
+    pub cmd: String,
+    pub args: serde_json::Value,
+    pub attempts: i32,
 }
 
 // ---- producer (any pod/service) --------------------------------------------
@@ -70,7 +70,11 @@ pub async fn enqueue(
     .bind(id).bind(tenant_id).bind(box_id).bind(cmd).bind(&args).bind(&now).bind(&expires)
     .execute(&mut *tx).await?;
     // NOTIFY inside the tx so it fires exactly on commit (dropped on rollback). Payload = box_id.
-    sqlx::query("SELECT pg_notify($1, $2)").bind(CHANNEL).bind(box_id.to_string()).execute(&mut *tx).await?;
+    sqlx::query("SELECT pg_notify($1, $2)")
+        .bind(CHANNEL)
+        .bind(box_id.to_string())
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(id)
 }
@@ -95,8 +99,12 @@ pub async fn claim_for_box(pool: &PgPool, box_id: Uuid, limit: i64) -> sqlx::Res
          LIMIT $4
          FOR UPDATE SKIP LOCKED",
     )
-    .bind(box_id).bind(&now).bind(&stale_before).bind(limit)
-    .fetch_all(&mut *tx).await?;
+    .bind(box_id)
+    .bind(&now)
+    .bind(&stale_before)
+    .bind(limit)
+    .fetch_all(&mut *tx)
+    .await?;
 
     if !cmds.is_empty() {
         let ids: Vec<Uuid> = cmds.iter().map(|c| c.id).collect();
@@ -104,20 +112,34 @@ pub async fn claim_for_box(pool: &PgPool, box_id: Uuid, limit: i64) -> sqlx::Res
             "UPDATE edge_commands SET status = 'running', attempts = attempts + 1, updated_at = $2
              WHERE id = ANY($1)",
         )
-        .bind(&ids).bind(&now)
-        .execute(&mut *tx).await?;
+        .bind(&ids)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await?;
-    Ok(cmds.into_iter().map(|mut c| { c.attempts += 1; c }).collect())
+    Ok(cmds
+        .into_iter()
+        .map(|mut c| {
+            c.attempts += 1;
+            c
+        })
+        .collect())
 }
 
 /// Return a claimed command to `ready` (delivery failed — the SSE send errored) so another pass, or
 /// the box's reconnect, redelivers it. A short hold avoids a busy-loop.
 pub async fn release(pool: &PgPool, id: Uuid, delay_secs: i64) -> sqlx::Result<()> {
     let run_after = (chrono::Local::now() + chrono::Duration::seconds(delay_secs)).to_rfc3339();
-    sqlx::query("UPDATE edge_commands SET status = 'ready', run_after = $2, updated_at = $3 WHERE id = $1")
-        .bind(id).bind(&run_after).bind(now_rfc3339())
-        .execute(pool).await.map(|_| ())
+    sqlx::query(
+        "UPDATE edge_commands SET status = 'ready', run_after = $2, updated_at = $3 WHERE id = $1",
+    )
+    .bind(id)
+    .bind(&run_after)
+    .bind(now_rfc3339())
+    .execute(pool)
+    .await
+    .map(|_| ())
 }
 
 /// Record a command's terminal result (from the edge's result POST) and NOTIFY the result channel so
@@ -134,7 +156,11 @@ pub async fn finish(
     sqlx::query("UPDATE edge_commands SET status = $2, result = $3, error = $4, updated_at = $5 WHERE id = $1")
         .bind(id).bind(status).bind(&result).bind(error).bind(now_rfc3339())
         .execute(&mut *tx).await?;
-    sqlx::query("SELECT pg_notify($1, $2)").bind(RESULT_CHANNEL).bind(id.to_string()).execute(&mut *tx).await?;
+    sqlx::query("SELECT pg_notify($1, $2)")
+        .bind(RESULT_CHANNEL)
+        .bind(id.to_string())
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await
 }
 
@@ -144,8 +170,12 @@ pub async fn finish(
 /// caller on any pod can read `sse_last_seen` and route a command over SSE instead of the tailnet.
 pub async fn mark_session(pool: &PgPool, box_id: Uuid, pod: &str) -> sqlx::Result<()> {
     sqlx::query("UPDATE tenant_boxes SET sse_last_seen = $2, sse_pod = $3 WHERE id = $1")
-        .bind(box_id).bind(now_rfc3339()).bind(pod)
-        .execute(pool).await.map(|_| ())
+        .bind(box_id)
+        .bind(now_rfc3339())
+        .bind(pod)
+        .execute(pool)
+        .await
+        .map(|_| ())
 }
 
 /// Clear this box's SSE session on disconnect — but only if it's still ours, so a race where the box
@@ -213,29 +243,47 @@ pub fn decode_http_result(v: &serde_json::Value) -> Result<(u16, Vec<u8>), Strin
 
 /// The tenant's box reachable over SSE right now (fresh `sse_last_seen`), async. Mirrors the
 /// recording node's `sse_box` for control-side (async) callers.
-pub async fn live_box_for_tenant(pool: &PgPool, tenant_id: Uuid, max_age_secs: i64) -> Option<Uuid> {
+pub async fn live_box_for_tenant(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    max_age_secs: i64,
+) -> Option<Uuid> {
     sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM tenant_boxes
          WHERE tenant_id = $1 AND sse_last_seen IS NOT NULL
            AND sse_last_seen::timestamptz > now() - make_interval(secs => $2::double precision)
          ORDER BY sse_last_seen DESC LIMIT 1",
     )
-    .bind(tenant_id).bind(max_age_secs as f64)
-    .fetch_optional(pool).await.ok().flatten()
+    .bind(tenant_id)
+    .bind(max_age_secs as f64)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
 }
 
 /// Await a command's terminal result, async (for control). Polls the row until `done`/`failed` or
 /// `timeout`. Returns the `result` JSON or the `error` string.
-pub async fn await_result(pool: &PgPool, id: Uuid, timeout_secs: u64) -> Result<serde_json::Value, String> {
+pub async fn await_result(
+    pool: &PgPool,
+    id: Uuid,
+    timeout_secs: u64,
+) -> Result<serde_json::Value, String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     loop {
         let row: Option<(String, Option<serde_json::Value>, Option<String>)> =
             sqlx::query_as("SELECT status, result, error FROM edge_commands WHERE id = $1")
-                .bind(id).fetch_optional(pool).await
+                .bind(id)
+                .fetch_optional(pool)
+                .await
                 .map_err(|e| format!("await result: {e}"))?;
         match row {
-            Some((s, result, _)) if s == "done" => return Ok(result.unwrap_or(serde_json::Value::Null)),
-            Some((s, _, error)) if s == "failed" => return Err(error.unwrap_or_else(|| "edge command failed".into())),
+            Some((s, result, _)) if s == "done" => {
+                return Ok(result.unwrap_or(serde_json::Value::Null))
+            }
+            Some((s, _, error)) if s == "failed" => {
+                return Err(error.unwrap_or_else(|| "edge command failed".into()))
+            }
             _ => {}
         }
         if std::time::Instant::now() >= deadline {
@@ -258,12 +306,16 @@ pub async fn edge_http_via_sse(
 ) -> Option<Result<(u16, Vec<u8>), String>> {
     let box_id = live_box_for_tenant(pool, tenant_id, 30).await?;
     let args = serde_json::json!({ "method": method, "path": path, "body": body });
-    Some(async {
-        let id = enqueue(pool, tenant_id, box_id, "http_request", args, 25).await
-            .map_err(|e| format!("enqueue: {e}"))?;
-        let result = await_result(pool, id, timeout_secs).await?;
-        decode_http_result(&result)
-    }.await)
+    Some(
+        async {
+            let id = enqueue(pool, tenant_id, box_id, "http_request", args, 25)
+                .await
+                .map_err(|e| format!("enqueue: {e}"))?;
+            let result = await_result(pool, id, timeout_secs).await?;
+            decode_http_result(&result)
+        }
+        .await,
+    )
 }
 
 /// Proxy a local edge HTTP call over SSE, blocking (flow). Same contract as [`edge_http_via_sse`].
@@ -277,8 +329,14 @@ pub fn edge_http_via_sse_blocking(
 ) -> Option<Result<(u16, Vec<u8>), String>> {
     // A fresh SSE-reachable box is the signal to use SSE; None → caller uses its tailnet path.
     let box_id = tenant_id_box(db, tenant_id)?;
-    let id = enqueue_blocking(db, tenant_id, box_id, "http_request",
-        serde_json::json!({ "method": method, "path": path, "body": body }), 25)?;
+    let id = enqueue_blocking(
+        db,
+        tenant_id,
+        box_id,
+        "http_request",
+        serde_json::json!({ "method": method, "path": path, "body": body }),
+        25,
+    )?;
     Some(await_result_blocking(db, id, timeout_secs).and_then(|v| decode_http_result(&v)))
 }
 
@@ -292,15 +350,23 @@ fn tenant_id_box(db: &Db, tenant_id: Uuid) -> Option<Uuid> {
                AND sse_last_seen::timestamptz > now() - make_interval(secs => 30)
              ORDER BY sse_last_seen DESC LIMIT 1",
         )
-        .bind(tenant_id).fetch_optional(&pool).await
-    }).ok().flatten()
+        .bind(tenant_id)
+        .fetch_optional(&pool)
+        .await
+    })
+    .ok()
+    .flatten()
 }
 
 /// Await a command's terminal result, blocking. Polls the row until `done`/`failed` or `timeout`.
 /// Returns the `result` JSON on success, or the `error` (or "timeout") string. Polling is fine here:
 /// this runs on a flow std thread and the wait is bounded and short; the NOTIFY latency win is on
 /// the *delivery* side, which is what actually needs to be instant.
-pub fn await_result_blocking(db: &Db, id: Uuid, timeout_secs: u64) -> Result<serde_json::Value, String> {
+pub fn await_result_blocking(
+    db: &Db,
+    id: Uuid,
+    timeout_secs: u64,
+) -> Result<serde_json::Value, String> {
     let pool = db.pool();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     loop {

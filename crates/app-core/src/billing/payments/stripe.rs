@@ -40,8 +40,10 @@ impl StripeGateway {
             api_key,
             base,
             webhook_secret: env_nonempty("STRIPE_WEBHOOK_SECRET"),
-            success_url: env_nonempty("STRIPE_SUCCESS_URL").unwrap_or_else(|| "https://app.olharai.com/billing?paid=1".into()),
-            cancel_url: env_nonempty("STRIPE_CANCEL_URL").unwrap_or_else(|| "https://app.olharai.com/billing".into()),
+            success_url: env_nonempty("STRIPE_SUCCESS_URL")
+                .unwrap_or_else(|| "https://app.olharai.com/billing?paid=1".into()),
+            cancel_url: env_nonempty("STRIPE_CANCEL_URL")
+                .unwrap_or_else(|| "https://app.olharai.com/billing".into()),
         })
     }
 
@@ -85,7 +87,10 @@ impl StripeGateway {
 }
 
 fn env_nonempty(key: &str) -> Option<String> {
-    std::env::var(key).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    std::env::var(key)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// The subscription id carried by an Invoice object.
@@ -129,7 +134,12 @@ impl PaymentGateway for StripeGateway {
         "stripe"
     }
 
-    fn ensure_customer(&self, name: &str, email: &str, tax_id: Option<&str>) -> Result<String, String> {
+    fn ensure_customer(
+        &self,
+        name: &str,
+        email: &str,
+        tax_id: Option<&str>,
+    ) -> Result<String, String> {
         let mut form = vec![("name", name.to_string()), ("email", email.to_string())];
         // Brazilian CPF/CNPJ is optional metadata for Stripe (required only for boleto).
         if let Some(doc) = tax_id {
@@ -142,7 +152,13 @@ impl PaymentGateway for StripeGateway {
             .ok_or_else(|| format!("stripe: customer create returned no id: {out}"))
     }
 
-    fn start_subscription(&self, customer_ref: &str, plan: &PlanRef<'_>, billing_type: &str, tenant_id: Uuid) -> Result<StartedSubscription, String> {
+    fn start_subscription(
+        &self,
+        customer_ref: &str,
+        plan: &PlanRef<'_>,
+        billing_type: &str,
+        tenant_id: Uuid,
+    ) -> Result<StartedSubscription, String> {
         // Reuse the tier's Price object, or create one now and hand it back to persist.
         let (price_id, created) = match plan.price_ref {
             Some(p) => (p.to_string(), None),
@@ -159,20 +175,31 @@ impl PaymentGateway for StripeGateway {
                 ("customer", customer_ref.to_string()),
                 ("line_items[0][price]", price_id),
                 ("line_items[0][quantity]", "1".to_string()),
-                ("payment_method_types[0]", payment_method(billing_type).to_string()),
+                (
+                    "payment_method_types[0]",
+                    payment_method(billing_type).to_string(),
+                ),
                 ("success_url", self.success_url.clone()),
                 ("cancel_url", self.cancel_url.clone()),
                 // Echoed back on `checkout.session.completed` so the webhook can bind it.
                 ("client_reference_id", tenant_id.to_string()),
                 ("metadata[plan_id]", plan.plan_id.to_string()),
                 ("metadata[billing_type]", billing_type.to_string()),
-                ("subscription_data[metadata][plan_id]", plan.plan_id.to_string()),
+                (
+                    "subscription_data[metadata][plan_id]",
+                    plan.plan_id.to_string(),
+                ),
             ],
         )?;
 
-        let payment_url = session.get("url").and_then(|v| v.as_str()).map(String::from);
+        let payment_url = session
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         if payment_url.is_none() {
-            return Err(format!("stripe: checkout session returned no url: {session}"));
+            return Err(format!(
+                "stripe: checkout session returned no url: {session}"
+            ));
         }
         Ok(StartedSubscription {
             // Stripe creates the Subscription only after payment — the webhook brings it.
@@ -207,8 +234,12 @@ impl PaymentGateway for StripeGateway {
 
         // `verify_slice` is constant-time. A fresh MAC per candidate (it consumes self).
         signatures.iter().any(|s| {
-            let Ok(expected) = hex::decode(s) else { return false };
-            let Ok(mut mac) = HmacSha256::new_from_slice(secret.as_bytes()) else { return false };
+            let Ok(expected) = hex::decode(s) else {
+                return false;
+            };
+            let Ok(mut mac) = HmacSha256::new_from_slice(secret.as_bytes()) else {
+                return false;
+            };
             mac.update(t.as_bytes());
             mac.update(b".");
             mac.update(raw_body);
@@ -226,15 +257,27 @@ impl PaymentGateway for StripeGateway {
             // The customer paid: Stripe created the Subscription. Bind it to the tenant.
             "checkout.session.completed" => {
                 let subscription_ref = obj.get("subscription")?.as_str()?.to_string();
-                let tenant_id = obj.get("client_reference_id")?.as_str()?.parse::<Uuid>().ok()?;
+                let tenant_id = obj
+                    .get("client_reference_id")?
+                    .as_str()?
+                    .parse::<Uuid>()
+                    .ok()?;
                 let meta = obj.get("metadata");
-                let plan_id = meta.and_then(|m| m.get("plan_id")).and_then(|v| v.as_str())?.to_string();
+                let plan_id = meta
+                    .and_then(|m| m.get("plan_id"))
+                    .and_then(|v| v.as_str())?
+                    .to_string();
                 let billing_type = meta
                     .and_then(|m| m.get("billing_type"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("card")
                     .to_string();
-                EventKind::SubscriptionStarted { subscription_ref, tenant_id, plan_id, billing_type }
+                EventKind::SubscriptionStarted {
+                    subscription_ref,
+                    tenant_id,
+                    plan_id,
+                    billing_type,
+                }
             }
             // Recurring cycles.
             "invoice.paid" | "invoice.payment_succeeded" => EventKind::StatusChanged {

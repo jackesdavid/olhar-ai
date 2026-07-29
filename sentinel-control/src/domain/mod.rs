@@ -57,8 +57,10 @@ pub fn router() -> Router<AppState> {
 /// The tenant this token operates in. The master's own (un-assumed) token carries no
 /// tenant — it must `assume` one first (which mints a tenant-scoped token).
 pub fn tenant_of(c: &Claims) -> Result<Uuid, ApiErr> {
-    c.tenant()
-        .ok_or((StatusCode::BAD_REQUEST, "no tenant context — assume a tenant first".into()))
+    c.tenant().ok_or((
+        StatusCode::BAD_REQUEST,
+        "no tenant context — assume a tenant first".into(),
+    ))
 }
 
 /// Run a blocking (sync repo) closure off the async runtime.
@@ -67,9 +69,12 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("task panicked: {e}")))
+    tokio::task::spawn_blocking(f).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("task panicked: {e}"),
+        )
+    })
 }
 
 /// A short helper for ad-hoc errors.

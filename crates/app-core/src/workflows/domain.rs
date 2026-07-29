@@ -286,7 +286,11 @@ fn tuya_value_port(config: &Value) -> Vec<ResolvedPort> {
         .get("value_type")
         .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())
         .unwrap_or(PortType::Bool);
-    vec![ResolvedPort { name: "value".to_string(), ty, required: false }]
+    vec![ResolvedPort {
+        name: "value".to_string(),
+        ty,
+        required: false,
+    }]
 }
 
 /// `TuyaReadStatus`'s outputs: `value` typed by the selected data point (`value_type`, like the
@@ -298,9 +302,21 @@ fn tuya_read_output_ports(config: &Value) -> Vec<ResolvedPort> {
         .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())
         .unwrap_or(PortType::Text);
     vec![
-        ResolvedPort { name: "value".to_string(), ty, required: false },
-        ResolvedPort { name: "on".to_string(), ty: PortType::Bool, required: false },
-        ResolvedPort { name: "raw".to_string(), ty: PortType::Text, required: false },
+        ResolvedPort {
+            name: "value".to_string(),
+            ty,
+            required: false,
+        },
+        ResolvedPort {
+            name: "on".to_string(),
+            ty: PortType::Bool,
+            required: false,
+        },
+        ResolvedPort {
+            name: "raw".to_string(),
+            ty: PortType::Text,
+            required: false,
+        },
     ]
 }
 
@@ -315,8 +331,16 @@ fn on_event_input_ports(config: &Value) -> Vec<ResolvedPort> {
     let event = config.get("event").and_then(|v| v.as_str()).unwrap_or("");
     if matches!(event, "object_entered" | "object_exited" | "line_crossed") {
         vec![
-            ResolvedPort { name: "camera".to_string(), ty: PortType::Camera, required: false },
-            ResolvedPort { name: "region".to_string(), ty: PortType::Region, required: false },
+            ResolvedPort {
+                name: "camera".to_string(),
+                ty: PortType::Camera,
+                required: false,
+            },
+            ResolvedPort {
+                name: "region".to_string(),
+                ty: PortType::Region,
+                required: false,
+            },
         ]
     } else {
         Vec::new()
@@ -902,20 +926,20 @@ const FACE_EMBEDDING_OUT: [Port; 3] = [
 ];
 const RECOGNIZE_FACE_IN: [Port; 1] = [p("embedding", PortType::Embedding, true)];
 const RECOGNIZE_FACE_OUT: [Port; 5] = [
-    p("person", PortType::Text, false),        // best match's name ("" if none / unknown)
-    p("person_id", PortType::Text, false),     // best match's person id (wire → StoreFace.label)
-    p("confidence", PortType::Num, false),     // percent 0..100 of the best match
+    p("person", PortType::Text, false), // best match's name ("" if none / unknown)
+    p("person_id", PortType::Text, false), // best match's person id (wire → StoreFace.label)
+    p("confidence", PortType::Num, false), // percent 0..100 of the best match
     p("matches", PortType::Dictionary, false), // top-K: person/label → score
-    p("found", PortType::Bool, false),         // a match within max_distance
+    p("found", PortType::Bool, false),  // a match within max_distance
 ];
 const STORE_FACE_IN: [Port; 7] = [
     p("image", PortType::Image, false),
     p("embedding", PortType::Embedding, true),
     p("bbox", PortType::Bbox, false),
-    p("label", PortType::Text, false),  // a person id; empty = unknown
+    p("label", PortType::Text, false), // a person id; empty = unknown
     p("camera", PortType::Camera, false),
     p("confidence", PortType::Num, false), // detection score 0..100 (from face_detected)
-    p("face_ratio", PortType::Num, false), // face area ÷ frame area, 0..100 (far-face signal)
+    p("face_width", PortType::Num, false), // face box width in source px (far-face signal)
 ];
 const STORE_FACE_OUT: [Port; 2] = [
     p("stored", PortType::Bool, false), // false if skipped by dedup
@@ -1406,7 +1430,10 @@ impl NodeKind {
             | NodeKind::GetCurrentFrame
             | NodeKind::GetCameraByName
             | NodeKind::BreakCamera => "Cameras",
-            NodeKind::DescribeImage | NodeKind::AskAi | NodeKind::AiAnswer | NodeKind::AiExtract => "AI",
+            NodeKind::DescribeImage
+            | NodeKind::AskAi
+            | NodeKind::AiAnswer
+            | NodeKind::AiExtract => "AI",
             NodeKind::ReplyToSender | NodeKind::ReplyWithRecording => "Telegram",
             NodeKind::Format => "Text",
             NodeKind::Wait
@@ -1458,7 +1485,11 @@ impl NodeKind {
             // Comment + Reroute are canvas organizers, not debug sinks.
             NodeKind::Comment | NodeKind::Reroute => "Utility",
             // Presentation nodes that render content on the canvas (docs + live values).
-            NodeKind::Title | NodeKind::Paragraph | NodeKind::Markdown | NodeKind::Text | NodeKind::Gauge => "Display",
+            NodeKind::Title
+            | NodeKind::Paragraph
+            | NodeKind::Markdown
+            | NodeKind::Text
+            | NodeKind::Gauge => "Display",
             NodeKind::StartRecording | NodeKind::StopRecording => "Recording",
             NodeKind::GetVariable | NodeKind::SetVariable => "Variables",
             NodeKind::DictRowCount
@@ -1799,8 +1830,12 @@ impl NodeKind {
             NodeKind::BreakFaceDetection => json!({}),
             NodeKind::RecognizePerson => json!({ "max_distance": "0.4", "timeout_secs": "30" }),
             NodeKind::FaceEmbedding => json!({ "timeout_secs": "30" }),
-            NodeKind::RecognizeFace => json!({ "top_k": "5", "max_distance": "0.5", "timeout_secs": "15" }),
-            NodeKind::StoreFace => json!({ "source": "snapshot", "dedup_distance": "0.15", "timeout_secs": "15" }),
+            NodeKind::RecognizeFace => {
+                json!({ "top_k": "5", "max_distance": "0.5", "timeout_secs": "15" })
+            }
+            NodeKind::StoreFace => {
+                json!({ "source": "snapshot", "dedup_distance": "0.15", "timeout_secs": "15" })
+            }
             NodeKind::RecordPresence => {
                 json!({ "category": "person", "room": "", "label": "", "duration_secs": "8" })
             }
@@ -1843,7 +1878,9 @@ impl NodeKind {
                 json!({ "text": "## Heading\n\n- point one\n- point two", "width": 340, "height": 220 })
             }
             // `value` = the literal shown when the input port is unwired (also the port's fallback).
-            NodeKind::Text => json!({ "value": "", "bg_color": "#1f2937", "text_color": "#e5e7eb" }),
+            NodeKind::Text => {
+                json!({ "value": "", "bg_color": "#1f2937", "text_color": "#e5e7eb" })
+            }
             NodeKind::Gauge => {
                 json!({ "value": 0, "min": 0, "max": 100, "label": "", "color": "#22c55e", "size": 160 })
             }
@@ -1870,7 +1907,9 @@ impl NodeKind {
             NodeKind::DictGetCell => json!({ "table": "", "row": "0", "column": "" }),
             NodeKind::DictAddRow => json!({ "table": "", "values": {} }),
             NodeKind::DictSetCell => json!({ "table": "", "row": "0", "column": "", "value": "" }),
-            NodeKind::DictUpdateRow => json!({ "table": "", "column": "", "key": "", "values": {} }),
+            NodeKind::DictUpdateRow => {
+                json!({ "table": "", "column": "", "key": "", "values": {} })
+            }
             NodeKind::DictDeleteRow => json!({ "table": "", "column": "", "key": "" }),
             // Build nodes compose a table in-graph. `columns` = `[{name, type}]` (same shape as a
             // Dictionary's schema); DictSchema/DictMakeRow bake it, DictAppendRow is input-only.
@@ -1879,8 +1918,12 @@ impl NodeKind {
             // `tuya_device` = the device dropdown (stores the stable device id); `tuya_code` =
             // the data point dropdown (e.g. `switch_1`); `value` = the value literal, rendered
             // by an adaptive widget typed to the point.
-            NodeKind::TuyaControl => json!({ "tuya_device": "", "tuya_code": "", "value": "", "value_type": "bool", "timeout_secs": "15" }),
-            NodeKind::TuyaReadStatus => json!({ "tuya_device": "", "tuya_code": "", "value_type": "text", "timeout_secs": "15" }),
+            NodeKind::TuyaControl => {
+                json!({ "tuya_device": "", "tuya_code": "", "value": "", "value_type": "bool", "timeout_secs": "15" })
+            }
+            NodeKind::TuyaReadStatus => {
+                json!({ "tuya_device": "", "tuya_code": "", "value_type": "text", "timeout_secs": "15" })
+            }
         }
     }
 }
@@ -1943,7 +1986,11 @@ impl GraphNode {
             // AI Extract: `value` typed per config.type (like a variable) + a static `found` bool.
             NodeKind::AiExtract => {
                 let mut ports = variable_port(&self.config, false);
-                ports.push(ResolvedPort { name: "found".to_string(), ty: PortType::Bool, required: false });
+                ports.push(ResolvedPort {
+                    name: "found".to_string(),
+                    ty: PortType::Bool,
+                    required: false,
+                });
                 ports
             }
             k => k.output_ports().iter().map(ResolvedPort::from).collect(),
@@ -2350,7 +2397,10 @@ impl Graph {
     /// (`GetCameraByName`, `Region`) is a pure, config-only node, so its value is 100%
     /// determined by the graph alone, without running anything.
     pub fn wired_source(&self, to: u32, to_port: &str) -> Option<&GraphNode> {
-        let edge = self.edges.iter().find(|e| e.to == to && e.to_port == to_port)?;
+        let edge = self
+            .edges
+            .iter()
+            .find(|e| e.to == to && e.to_port == to_port)?;
         self.node(edge.from)
     }
 
@@ -2360,7 +2410,14 @@ impl Graph {
     /// literal — the same wire-overrides-config pattern as `ObjectDetection`'s `class` input.
     /// `None` if neither is set, meaning "unscoped" to callers like `on_event_node`.
     pub fn resolve_camera_selector(&self, node: &GraphNode) -> Option<String> {
-        let cfg_str = |n: &GraphNode| n.config.get("camera").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        let cfg_str = |n: &GraphNode| {
+            n.config
+                .get("camera")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
         self.wired_source(node.id, "camera")
             .filter(|n| n.kind == NodeKind::GetCameraByName)
             .and_then(cfg_str)
@@ -2376,7 +2433,9 @@ impl Graph {
     /// wired into a node scoped to a different camera is on the caller to catch, not silently
     /// cross-applied here.
     pub fn resolve_region(&self, node: &GraphNode) -> Option<(String, Vec<(f32, f32)>)> {
-        let region_node = self.wired_source(node.id, "region").filter(|n| n.kind == NodeKind::Region)?;
+        let region_node = self
+            .wired_source(node.id, "region")
+            .filter(|n| n.kind == NodeKind::Region)?;
         let name = region_node
             .config
             .get("name")
@@ -2509,11 +2568,9 @@ impl Graph {
             return Err(format!("input '{to_port}' is already wired"));
         }
         // The same pin pair twice is a no-op wire the fan-in path would otherwise stack up.
-        if self
-            .edges
-            .iter()
-            .any(|e| e.from == from && e.from_port == from_port && e.to == to && e.to_port == to_port)
-        {
+        if self.edges.iter().any(|e| {
+            e.from == from && e.from_port == from_port && e.to == to && e.to_port == to_port
+        }) {
             return Err("those pins are already wired".into());
         }
         if self.reaches(to, from) && !is_exec {
@@ -2675,7 +2732,10 @@ mod instance_scope_tests {
         // and addresses exactly the state rows it always did.
         let s = InstanceScope::Single;
         assert_eq!(s.key_for(&PortValues::new()), "");
-        assert_eq!(s.key_for(&payload_with_camera(PortValue::Text("10.0.0.9".into()))), "");
+        assert_eq!(
+            s.key_for(&payload_with_camera(PortValue::Text("10.0.0.9".into()))),
+            ""
+        );
         assert_eq!(InstanceScope::default(), InstanceScope::Single);
     }
 
@@ -2695,7 +2755,10 @@ mod instance_scope_tests {
         let s = InstanceScope::PerCamera;
         let first = s.key_for(&payload_with_camera(PortValue::Text("cam-a".into())));
         let again = s.key_for(&payload_with_camera(PortValue::Text("cam-a".into())));
-        assert_eq!(first, again, "a re-trigger must find the same instance or the debounce dies");
+        assert_eq!(
+            first, again,
+            "a re-trigger must find the same instance or the debounce dies"
+        );
     }
 
     #[test]
@@ -2709,7 +2772,10 @@ mod instance_scope_tests {
             ip: "10.0.0.9".into(),
             name: "Hall".into(),
         })));
-        assert_eq!(raw, typed, "Text and CameraEntity must resolve to one instance");
+        assert_eq!(
+            raw, typed,
+            "Text and CameraEntity must resolve to one instance"
+        );
     }
 
     #[test]
@@ -2721,8 +2787,14 @@ mod instance_scope_tests {
 
     #[test]
     fn scope_survives_json_and_old_graphs_have_none() {
-        let g: Graph = serde_json::from_str(r#"{"id":"00000000-0000-0000-0000-000000000000","name":"old"}"#).unwrap();
-        assert_eq!(g.instance_scope, InstanceScope::Single, "a graph saved before instances is Single");
+        let g: Graph =
+            serde_json::from_str(r#"{"id":"00000000-0000-0000-0000-000000000000","name":"old"}"#)
+                .unwrap();
+        assert_eq!(
+            g.instance_scope,
+            InstanceScope::Single,
+            "a graph saved before instances is Single"
+        );
         let mut g2 = Graph::new("g");
         g2.instance_scope = InstanceScope::PerCamera;
         let back: Graph = serde_json::from_str(&serde_json::to_string(&g2).unwrap()).unwrap();

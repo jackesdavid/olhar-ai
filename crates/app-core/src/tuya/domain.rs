@@ -22,12 +22,19 @@ impl TuyaConfig {
             .unwrap_or_else(|| "https://openapi.tuyaus.com".to_string())
             .trim_end_matches('/')
             .to_string();
-        Some(TuyaConfig { access_id, access_key, endpoint })
+        Some(TuyaConfig {
+            access_id,
+            access_key,
+            endpoint,
+        })
     }
 }
 
 fn env_nonempty(key: &str) -> Option<String> {
-    std::env::var(key).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    std::env::var(key)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// One Tuya device linked to a tenant — the credential-free row the editor lists and the

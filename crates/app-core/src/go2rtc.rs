@@ -82,7 +82,11 @@ pub fn config_yaml(devices: &[Device]) -> String {
             .as_deref()
             .filter(|s| !s.trim().is_empty())
             .map(|s| rtsp_url_with_creds(s, user, pass));
-        let preview = if d.is_unified() { &main } else { sub.as_deref().unwrap_or(&main) };
+        let preview = if d.is_unified() {
+            &main
+        } else {
+            sub.as_deref().unwrap_or(&main)
+        };
 
         let name = stream_name(&d.ip);
         out.push_str(&format!("  {name}: {preview}#media=video\n"));
@@ -110,7 +114,9 @@ pub fn stream_name(ip: &str) -> String {
 /// the localhost request fails immediately (connection refused), so callers can fall
 /// back to a from-scratch capture without paying a timeout.
 pub fn frame(ip: &str) -> Result<Vec<u8>, String> {
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(3)).build();
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(3))
+        .build();
     frame_from(&agent, &base(), ip)
 }
 
@@ -130,7 +136,10 @@ pub fn frame_from_hd(agent: &ureq::Agent, base: &str, ip: &str) -> Result<Vec<u8
 
 fn frame_src(agent: &ureq::Agent, base: &str, src: &str) -> Result<Vec<u8>, String> {
     let url = format!("{}/api/frame.jpeg?src={}", base.trim_end_matches('/'), src);
-    let resp = agent.get(&url).call().map_err(|e| format!("go2rtc frame request failed: {e}"))?;
+    let resp = agent
+        .get(&url)
+        .call()
+        .map_err(|e| format!("go2rtc frame request failed: {e}"))?;
     let mut bytes = Vec::new();
     resp.into_reader()
         .read_to_end(&mut bytes)

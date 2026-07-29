@@ -36,5 +36,9 @@ pub fn all_perms() -> Vec<&'static str> {
 
 /// Read-only actions (the default Viewer role) — NO `live.view` (Admin-only by default).
 pub fn viewer_perms() -> Vec<&'static str> {
-    PERMISSIONS.iter().map(|(k, _)| *k).filter(|k| k.ends_with(".read")).collect()
+    PERMISSIONS
+        .iter()
+        .map(|(k, _)| *k)
+        .filter(|k| k.ends_with(".read"))
+        .collect()
 }

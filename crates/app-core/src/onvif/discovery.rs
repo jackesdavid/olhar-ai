@@ -60,7 +60,14 @@ pub fn discover() -> Vec<DiscoveredDevice> {
                     manufacturer = Some(pct_decode(v));
                 }
             }
-            DiscoveredDevice { id, xaddr, ip, name, manufacturer, model }
+            DiscoveredDevice {
+                id,
+                xaddr,
+                ip,
+                name,
+                manufacturer,
+                model,
+            }
         })
         .collect()
 }

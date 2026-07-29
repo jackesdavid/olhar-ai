@@ -24,7 +24,12 @@ pub enum Category {
 impl Category {
     /// Lenient parse from a node input / config string (case + separator insensitive).
     pub fn parse(s: &str) -> Category {
-        match s.trim().to_ascii_lowercase().replace([' ', '-'], "_").as_str() {
+        match s
+            .trim()
+            .to_ascii_lowercase()
+            .replace([' ', '-'], "_")
+            .as_str()
+        {
             "person" | "unknown_person" | "people" => Category::Person,
             "known_person" | "known" => Category::KnownPerson,
             "car" | "vehicle" => Category::Car,
@@ -115,5 +120,17 @@ pub fn create(
         detect_depth,
     )
     .unwrap_or(0);
-    Presence { id, category, label, room_id, room_name, camera, duration_secs, source, created_at, detect_x, detect_depth }
+    Presence {
+        id,
+        category,
+        label,
+        room_id,
+        room_name,
+        camera,
+        duration_secs,
+        source,
+        created_at,
+        detect_x,
+        detect_depth,
+    }
 }

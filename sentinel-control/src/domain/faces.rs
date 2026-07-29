@@ -33,7 +33,10 @@ pub fn router() -> Router<AppState> {
 
 /// One-shot: generate pre-cropped thumbnails for faces stored before crop_key existed. Idempotent;
 /// returns `{ backfilled }` for this batch (call again if it equals the batch cap).
-async fn backfill_crops(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<serde_json::Value>, ApiErr> {
+async fn backfill_crops(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
     auth::require(&c, "persons.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
@@ -43,7 +46,10 @@ async fn backfill_crops(UserClaims(c): UserClaims, State(st): State<AppState>) -
     Ok(Json(json!({ "backfilled": n })))
 }
 
-async fn list(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<Face>>, ApiErr> {
+async fn list(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<Face>>, ApiErr> {
     auth::require(&c, "persons.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
@@ -75,7 +81,9 @@ async fn clusters(
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     let eps = q.eps.unwrap_or(faces::CLUSTER_EPS);
-    Ok(Json(blocking(move || faces::cluster_unlabeled(&db, tid, eps)).await?))
+    Ok(Json(
+        blocking(move || faces::cluster_unlabeled(&db, tid, eps)).await?,
+    ))
 }
 
 /// The 2D canvas layout: unknown faces grouped into islands positioned by similarity (#119 Phase 1).
@@ -97,7 +105,9 @@ async fn layout(
         since: q.since.clone(),
         until: q.until.clone(),
     };
-    Ok(Json(blocking(move || faces::layout_faces(&db, tid, eps, scope, &opts)).await?))
+    Ok(Json(
+        blocking(move || faces::layout_faces(&db, tid, eps, scope, &opts)).await?,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -117,19 +127,21 @@ async fn face_image(
     Path(id): Path<String>,
     Query(q): Query<ImageQuery>,
 ) -> Result<Response, ApiErr> {
-    let claims = auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    let claims =
+        auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
     auth::require(&claims, "persons.read")?;
     let tid = tenant_of(&claims)?;
     let db = st.db.clone();
-    let (image_key, crop_key, bbox) = match blocking(move || faces::crop_info(&db, tid, &id)).await? {
-        Some((Some(k), crop, bb)) => (k, crop, bb),
-        _ => return Ok(StatusCode::NOT_FOUND.into_response()),
-    };
+    let (image_key, crop_key, bbox) =
+        match blocking(move || faces::crop_info(&db, tid, &id)).await? {
+            Some((Some(k), crop, bb)) => (k, crop, bb),
+            _ => return Ok(StatusCode::NOT_FOUND.into_response()),
+        };
     let draw_box = q.show_box.unwrap_or(0) != 0;
     // Default read serves the PRE-CROPPED thumbnail directly (passthrough — no decode/crop). Context
     // (?box=1) needs the full frame. Old faces have no crop_key → fall back to cropping the frame.
     let (key, render) = match (&crop_key, draw_box) {
-        (Some(c), false) => (c.clone(), None),          // passthrough
+        (Some(c), false) => (c.clone(), None), // passthrough
         _ => (image_key, if draw_box { Some(true) } else { Some(false) }), // render frame (box or crop)
     };
     // Retry the object fetch — a canvas view fires dozens of thumbnail requests at once, and a
@@ -192,10 +204,11 @@ async fn face_landmarks(
     auth::require(&c, "persons.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    let (image_key, crop_key, bbox) = match blocking(move || faces::crop_info(&db, tid, &id)).await? {
-        Some((Some(k), crop, bb)) => (k, crop, bb),
-        _ => return Err(err(StatusCode::NOT_FOUND, "face not found")),
-    };
+    let (image_key, crop_key, bbox) =
+        match blocking(move || faces::crop_info(&db, tid, &id)).await? {
+            Some((Some(k), crop, bb)) => (k, crop, bb),
+            _ => return Err(err(StatusCode::NOT_FOUND, "face not found")),
+        };
     // Prefer the pre-crop object; else crop the frame on the fly. Points are relative to this crop.
     let crop_bytes = blocking(move || match crop_key {
         Some(ck) => app_core::media::get(&ck),
@@ -229,7 +242,11 @@ struct LabelReq {
 /// The core bulk action: label a set of faces (a whole cluster) as a person — an existing one, or a
 /// brand-new one created from `new_person_name`. Copies embeddings into `person_embeddings` (approved)
 /// + stamps `faces.person_id`, one transaction. Returns `{ person_id, labeled }`.
-async fn label(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): Json<LabelReq>) -> Result<Json<serde_json::Value>, ApiErr> {
+async fn label(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(b): Json<LabelReq>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
     auth::require(&c, "persons.write")?;
     let tid = tenant_of(&c)?;
     if b.face_ids.is_empty() {
@@ -279,7 +296,11 @@ struct ReassignReq {
 }
 
 /// Move a single mis-clustered face to another person (or back to unknown with `person_id=null`).
-async fn reassign(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): Json<ReassignReq>) -> Result<StatusCode, ApiErr> {
+async fn reassign(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(b): Json<ReassignReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "persons.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
@@ -297,7 +318,11 @@ struct IgnoreReq {
 }
 
 /// Soft-dismiss (or restore) junk crops — they leave the triage queue but the row + crop stay.
-async fn ignore(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): Json<IgnoreReq>) -> Result<StatusCode, ApiErr> {
+async fn ignore(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(b): Json<IgnoreReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "persons.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();

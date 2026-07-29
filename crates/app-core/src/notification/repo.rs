@@ -96,7 +96,10 @@ pub fn load_tenant_notification_state(db: &Db, tenant_id: Uuid) -> (String, Opti
         })
     };
     let global = load_global_telegram(db);
-    let global_token_set = global.as_ref().map(|(t, _)| !t.trim().is_empty()).unwrap_or(false);
+    let global_token_set = global
+        .as_ref()
+        .map(|(t, _)| !t.trim().is_empty())
+        .unwrap_or(false);
     let global_username = global.and_then(|(_, u)| u);
 
     match tenant_row {
@@ -227,12 +230,21 @@ pub fn load_all_telegram(db: &Db) -> Vec<(Uuid, super::NotificationConfig)> {
 
     rows.into_iter()
         .filter_map(|(tenant, own_token, pairing_code)| {
-            let effective_token =
-                if own_token.trim().is_empty() { global_token.clone() } else { own_token };
+            let effective_token = if own_token.trim().is_empty() {
+                global_token.clone()
+            } else {
+                own_token
+            };
             if effective_token.trim().is_empty() {
                 return None; // no bot token anywhere — skip this tenant
             }
-            Some((tenant, super::NotificationConfig { bot_token: effective_token, pairing_code }))
+            Some((
+                tenant,
+                super::NotificationConfig {
+                    bot_token: effective_token,
+                    pairing_code,
+                },
+            ))
         })
         .collect()
 }
@@ -273,11 +285,17 @@ pub fn save_telegram(db: &Db, tenant_id: Uuid, bot_token: &str, pairing_code: &s
 pub fn resolve_effective_telegram(db: &Db, tenant_id: Uuid) -> Option<super::NotificationConfig> {
     let (own_token, pairing_code) = load_telegram(db, tenant_id).unwrap_or_default();
     if !own_token.trim().is_empty() {
-        return Some(super::NotificationConfig { bot_token: own_token, pairing_code });
+        return Some(super::NotificationConfig {
+            bot_token: own_token,
+            pairing_code,
+        });
     }
     if let Some((global_token, _)) = load_global_telegram(db) {
         if !global_token.trim().is_empty() {
-            return Some(super::NotificationConfig { bot_token: global_token, pairing_code });
+            return Some(super::NotificationConfig {
+                bot_token: global_token,
+                pairing_code,
+            });
         }
     }
     super::NotificationConfig::from_env()
@@ -297,21 +315,28 @@ pub fn resolve_effective_telegram(db: &Db, tenant_id: Uuid) -> Option<super::Not
 /// usable token or Telegram couldn't be reached.
 pub fn ensure_bot_username(db: &Db, tenant_id: Uuid) -> Option<String> {
     // The tenant's OWN token takes precedence over the global one (same order delivery uses).
-    let own = load_telegram(db, tenant_id).map(|(token, _)| token).filter(|t| !t.trim().is_empty());
+    let own = load_telegram(db, tenant_id)
+        .map(|(token, _)| token)
+        .filter(|t| !t.trim().is_empty());
     let own_username = {
         let pool = db.pool();
         db.block(async move {
-            sqlx::query_scalar::<_, Option<String>>("SELECT bot_username FROM telegram_config WHERE tenant_id = $1")
-                .bind(tenant_id)
-                .fetch_optional(&pool)
-                .await
-                .ok()
-                .flatten()
-                .flatten()
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT bot_username FROM telegram_config WHERE tenant_id = $1",
+            )
+            .bind(tenant_id)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten()
+            .flatten()
         })
     };
     let global = load_global_telegram(db);
-    let global_token = global.as_ref().map(|(t, _)| t.clone()).filter(|t| !t.trim().is_empty());
+    let global_token = global
+        .as_ref()
+        .map(|(t, _)| t.clone())
+        .filter(|t| !t.trim().is_empty());
     let global_username = global.and_then(|(_, u)| u);
 
     // Pick the effective (token, cached-username, where-to-save) triple.
@@ -325,7 +350,10 @@ pub fn ensure_bot_username(db: &Db, tenant_id: Uuid) -> Option<String> {
     }
 
     // Missing → resolve once and cache.
-    let cfg = super::NotificationConfig { bot_token: token, pairing_code: String::new() };
+    let cfg = super::NotificationConfig {
+        bot_token: token,
+        pairing_code: String::new(),
+    };
     let username = super::client::get_me(&cfg).ok()?;
     if is_own {
         save_telegram_username(db, tenant_id, &username);

@@ -17,11 +17,17 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// Cap below the node watchdog (15s) so a stalled Tuya call fails fast with a clean error.
 fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout(Duration::from_secs(12)).build()
+    ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(12))
+        .build()
 }
 
 fn now_ms() -> String {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0).to_string()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+        .to_string()
 }
 
 fn sha256_hex(body: &str) -> String {
@@ -31,14 +37,21 @@ fn sha256_hex(body: &str) -> String {
 }
 
 fn sign(secret: &str, payload: &str) -> String {
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
     mac.update(payload.as_bytes());
     hex::encode_upper(mac.finalize().into_bytes())
 }
 
 /// One signed request. `path` includes any query string (it is part of the signature).
 /// Tuya returns HTTP 200 even for API errors, so success is read from the `success` field.
-fn call(cfg: &TuyaConfig, method: &str, path: &str, token: Option<&str>, body: Option<&str>) -> Result<Value, String> {
+fn call(
+    cfg: &TuyaConfig,
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+    body: Option<&str>,
+) -> Result<Value, String> {
     let t = now_ms();
     let body_str = body.unwrap_or("");
     let string_to_sign = format!("{method}\n{}\n\n{path}", sha256_hex(body_str));
@@ -49,7 +62,11 @@ fn call(cfg: &TuyaConfig, method: &str, path: &str, token: Option<&str>, body: O
     let signature = sign(&cfg.access_key, &sign_src);
 
     let url = format!("{}{}", cfg.endpoint, path);
-    let mut req = if method == "POST" { agent().post(&url) } else { agent().get(&url) };
+    let mut req = if method == "POST" {
+        agent().post(&url)
+    } else {
+        agent().get(&url)
+    };
     req = req
         .set("client_id", &cfg.access_id)
         .set("sign", &signature)
@@ -60,19 +77,35 @@ fn call(cfg: &TuyaConfig, method: &str, path: &str, token: Option<&str>, body: O
         req = req.set("access_token", tok);
     }
 
-    let resp = if method == "POST" { req.send_string(body_str) } else { req.call() };
+    let resp = if method == "POST" {
+        req.send_string(body_str)
+    } else {
+        req.call()
+    };
     let json: Value = match resp {
-        Ok(r) => r.into_json().map_err(|e| format!("tuya: malformed response: {e}"))?,
+        Ok(r) => r
+            .into_json()
+            .map_err(|e| format!("tuya: malformed response: {e}"))?,
         Err(ureq::Error::Status(code, r)) => {
-            return Err(format!("tuya http {code}: {}", r.into_string().unwrap_or_default()));
+            return Err(format!(
+                "tuya http {code}: {}",
+                r.into_string().unwrap_or_default()
+            ));
         }
         Err(e) => return Err(format!("tuya request failed: {e}")),
     };
-    if json.get("success").and_then(Value::as_bool).unwrap_or(false) {
+    if json
+        .get("success")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
         Ok(json)
     } else {
         let code = json.get("code").and_then(Value::as_i64).unwrap_or(-1);
-        let msg = json.get("msg").and_then(Value::as_str).unwrap_or("unknown error");
+        let msg = json
+            .get("msg")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown error");
         Err(format!("tuya api error {code}: {msg}"))
     }
 }
@@ -86,7 +119,10 @@ pub fn validate(cfg: &TuyaConfig) -> Result<(), String> {
 /// A project token (grant_type=1). Valid ~2h; we fetch per operation (v1 — no cache).
 fn token(cfg: &TuyaConfig) -> Result<String, String> {
     let j = call(cfg, "GET", "/v1.0/token?grant_type=1", None, None)?;
-    j["result"]["access_token"].as_str().map(str::to_string).ok_or_else(|| "tuya: no access_token in response".to_string())
+    j["result"]["access_token"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| "tuya: no access_token in response".to_string())
 }
 
 /// Every device linked to the project's app accounts, with its `functions` (type metadata)
@@ -97,8 +133,17 @@ fn token(cfg: &TuyaConfig) -> Result<String, String> {
 /// linked via the console and has no per-tenant uid mapping).
 pub fn fetch_devices(cfg: &TuyaConfig, allowed_uids: &[String]) -> Result<Vec<TuyaDevice>, String> {
     let tok = token(cfg)?;
-    let listing = call(cfg, "GET", "/v1.0/iot-01/associated-users/devices?size=100", Some(&tok), None)?;
-    let devices = listing["result"]["devices"].as_array().cloned().unwrap_or_default();
+    let listing = call(
+        cfg,
+        "GET",
+        "/v1.0/iot-01/associated-users/devices?size=100",
+        Some(&tok),
+        None,
+    )?;
+    let devices = listing["result"]["devices"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
 
     let mut out = Vec::with_capacity(devices.len());
     for d in devices {
@@ -112,7 +157,13 @@ pub fn fetch_devices(cfg: &TuyaConfig, allowed_uids: &[String]) -> Result<Vec<Tu
                 continue;
             }
         }
-        let functions_json = match call(cfg, "GET", &format!("/v1.0/devices/{device_id}/functions"), Some(&tok), None) {
+        let functions_json = match call(
+            cfg,
+            "GET",
+            &format!("/v1.0/devices/{device_id}/functions"),
+            Some(&tok),
+            None,
+        ) {
             Ok(f) => f["result"]["functions"].to_string(),
             Err(e) => {
                 log::warn!("tuya: functions for {device_id} failed: {e}");
@@ -133,16 +184,33 @@ pub fn fetch_devices(cfg: &TuyaConfig, allowed_uids: &[String]) -> Result<Vec<Tu
 }
 
 /// Send one control command (`{"commands":[{"code","value"}]}`) to a device.
-pub fn send_command(cfg: &TuyaConfig, device_id: &str, code: &str, value: &Value) -> Result<Value, String> {
+pub fn send_command(
+    cfg: &TuyaConfig,
+    device_id: &str,
+    code: &str,
+    value: &Value,
+) -> Result<Value, String> {
     let tok = token(cfg)?;
     let body = json!({ "commands": [ { "code": code, "value": value } ] }).to_string();
-    call(cfg, "POST", &format!("/v1.0/devices/{device_id}/commands"), Some(&tok), Some(&body))
+    call(
+        cfg,
+        "POST",
+        &format!("/v1.0/devices/{device_id}/commands"),
+        Some(&tok),
+        Some(&body),
+    )
 }
 
 /// The device's current status as `(code, value)` pairs.
 pub fn get_status(cfg: &TuyaConfig, device_id: &str) -> Result<Vec<(String, Value)>, String> {
     let tok = token(cfg)?;
-    let j = call(cfg, "GET", &format!("/v1.0/devices/{device_id}/status"), Some(&tok), None)?;
+    let j = call(
+        cfg,
+        "GET",
+        &format!("/v1.0/devices/{device_id}/status"),
+        Some(&tok),
+        None,
+    )?;
     let arr = j["result"].as_array().cloned().unwrap_or_default();
     Ok(arr
         .into_iter()

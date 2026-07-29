@@ -29,7 +29,10 @@ pub fn router() -> Router<AppState> {
 }
 
 /// The tenant's linked Tuya devices (with `functions_json` + `function_labels_json`).
-async fn list(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Vec<TuyaDevice>>, ApiErr> {
+async fn list(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Vec<TuyaDevice>>, ApiErr> {
     auth::require(&c, "tuya.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
@@ -52,7 +55,11 @@ async fn set_labels(
 ) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "tuya.write")?;
     let tid = tenant_of(&c)?;
-    let map: BTreeMap<&String, &String> = b.labels.iter().filter(|(_, v)| !v.trim().is_empty()).collect();
+    let map: BTreeMap<&String, &String> = b
+        .labels
+        .iter()
+        .filter(|(_, v)| !v.trim().is_empty())
+        .collect();
     let labels_json = serde_json::to_string(&map).unwrap_or_else(|_| "{}".to_string());
     let db = st.db.clone();
     blocking(move || tuya::repo::set_function_labels(&db, tid, &device_id, &labels_json))
@@ -72,47 +79,76 @@ struct ConfigReq {
 
 /// Save the tenant's own Tuya project credentials. Validated (fetches a token) before saving, so a
 /// wrong key / data center is caught immediately with a clear message.
-async fn set_config(UserClaims(c): UserClaims, State(st): State<AppState>, Json(b): Json<ConfigReq>) -> Result<StatusCode, ApiErr> {
+async fn set_config(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(b): Json<ConfigReq>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "tuya.write")?;
     let tid = tenant_of(&c)?;
     let access_id = b.access_id.trim().to_string();
     let access_key = b.access_key.trim().to_string();
     let endpoint = {
         let e = b.endpoint.trim().trim_end_matches('/');
-        if e.is_empty() { "https://openapi.tuyaus.com".to_string() } else { e.to_string() }
+        if e.is_empty() {
+            "https://openapi.tuyaus.com".to_string()
+        } else {
+            e.to_string()
+        }
     };
     if access_id.is_empty() || access_key.is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "Access ID and Access Secret are required"));
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Access ID and Access Secret are required",
+        ));
     }
-    let cfg = TuyaConfig { access_id, access_key, endpoint };
+    let cfg = TuyaConfig {
+        access_id,
+        access_key,
+        endpoint,
+    };
     let db = st.db.clone();
     blocking(move || -> Result<(), String> {
         tuya::client::validate(&cfg)?; // wrong keys / data center / unsubscribed API → clear error
         tuya::repo::save_config(&db, tid, &cfg)
     })
     .await?
-    .map_err(|e| err(StatusCode::BAD_REQUEST, format!("Couldn't connect to Tuya: {e}")))?;
+    .map_err(|e| {
+        err(
+            StatusCode::BAD_REQUEST,
+            format!("Couldn't connect to Tuya: {e}"),
+        )
+    })?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// Disconnect the tenant's Tuya account (removes their saved credentials).
-async fn delete_config(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<StatusCode, ApiErr> {
+async fn delete_config(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "tuya.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    blocking(move || tuya::repo::delete_config(&db, tid)).await?.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    blocking(move || tuya::repo::delete_config(&db, tid))
+        .await?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// Pull the tenant's linked devices from the Tuya Cloud and upsert them, using the tenant's own
 /// (or the operator fallback) credentials.
-async fn sync(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Value>, ApiErr> {
+async fn sync(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Value>, ApiErr> {
     auth::require(&c, "tuya.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     let synced = blocking(move || -> Result<usize, String> {
-        let cfg = tuya::repo::resolve_config(&db, tid)
-            .ok_or("Tuya is not connected — add your Tuya project credentials in Settings → Integrations.")?;
+        let cfg = tuya::repo::resolve_config(&db, tid).ok_or(
+            "Tuya is not connected — add your Tuya project credentials in Settings → Integrations.",
+        )?;
         let uids = tuya::repo::linked_uids(&db, tid);
         let devices = tuya::client::fetch_devices(&cfg, &uids)?;
         let n = devices.len();
@@ -127,7 +163,10 @@ async fn sync(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<J
 /// Whether this tenant connected its own Tuya project — drives the UI: `none` shows the
 /// "connect your account" flow, `tenant` shows the device list. Strictly per-tenant (no operator
 /// fallback), so a tenant never sees another's devices.
-async fn provider(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Value>, ApiErr> {
+async fn provider(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Value>, ApiErr> {
     auth::require(&c, "tuya.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();

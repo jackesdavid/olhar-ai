@@ -20,16 +20,16 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Deserialize)]
 struct ListQuery {
-    kind:     Option<String>,
-    source:   Option<String>,
+    kind: Option<String>,
+    source: Option<String>,
     severity: Option<String>,
-    camera:   Option<String>,
-    from:     Option<String>,
-    to:       Option<String>,
+    camera: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
     /// Cursor: return events with id < after (newest-first paging).
-    after:    Option<i64>,
+    after: Option<i64>,
     #[serde(default)]
-    limit:    Option<i64>,
+    limit: Option<i64>,
 }
 
 async fn list(
@@ -41,20 +41,47 @@ async fn list(
     auth::require(&c, "alerts.read")?;
     let tid = tenant_of(&c)?;
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let rows = events::list_events(&st.pool, tid, EventQuery {
-        kind: q.kind, source: q.source, severity: q.severity, camera: q.camera,
-        from: q.from, to: q.to, after: q.after, limit,
-    })
+    let rows = events::list_events(
+        &st.pool,
+        tid,
+        EventQuery {
+            kind: q.kind,
+            source: q.source,
+            severity: q.severity,
+            camera: q.camera,
+            from: q.from,
+            to: q.to,
+            after: q.after,
+            limit,
+        },
+    )
     .await
-    .map_err(|e| { log::error!("list events: {e}"); err(axum::http::StatusCode::INTERNAL_SERVER_ERROR, "database error") })?;
+    .map_err(|e| {
+        log::error!("list events: {e}");
+        err(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "database error",
+        )
+    })?;
     Ok(Json(rows))
 }
 
 #[derive(serde::Serialize)]
-struct KindOption { kind: &'static str, label: &'static str }
+struct KindOption {
+    kind: &'static str,
+    label: &'static str,
+}
 
 /// The kinds the feed can label — drives the filter dropdown from one source of truth.
 async fn kinds(UserClaims(c): UserClaims) -> Result<Json<Vec<KindOption>>, ApiErr> {
     auth::require(&c, "alerts.read")?;
-    Ok(Json(events::catalog().iter().map(|k| KindOption { kind: k.kind, label: k.label }).collect()))
+    Ok(Json(
+        events::catalog()
+            .iter()
+            .map(|k| KindOption {
+                kind: k.kind,
+                label: k.label,
+            })
+            .collect(),
+    ))
 }

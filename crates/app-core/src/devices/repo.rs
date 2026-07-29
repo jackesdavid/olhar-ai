@@ -7,17 +7,22 @@ use crate::db::Db;
 
 use super::Device;
 
-const COLS: &str = "id, ip, xaddr, name, manufacturer, model, username, password, rtsp_url, stream_mode";
+const COLS: &str =
+    "id, ip, xaddr, name, manufacturer, model, username, password, rtsp_url, stream_mode";
 
 /// The tenant's device list, ordered by name. Empty (and logged) on a query error.
 pub fn load(db: &Db, tenant_id: Uuid) -> Vec<Device> {
     let pool = db.pool();
     db.block(async move {
         let sql = format!("SELECT {COLS} FROM devices WHERE tenant_id = $1 ORDER BY name");
-        sqlx::query_as::<_, Device>(&sql).bind(tenant_id).fetch_all(&pool).await.unwrap_or_else(|e| {
-            log::error!("devices::repo::load query failed: {e}");
-            Vec::new()
-        })
+        sqlx::query_as::<_, Device>(&sql)
+            .bind(tenant_id)
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_else(|e| {
+                log::error!("devices::repo::load query failed: {e}");
+                Vec::new()
+            })
     })
 }
 
@@ -61,7 +66,14 @@ pub fn save(db: &Db, tenant_id: Uuid, devices: &[Device]) {
 /// at the new ip/xaddr and carry the `configured_cameras` flag over. If a different row
 /// already occupies `new_ip`, it's dropped first (the moved camera wins the address).
 /// Returns true if a device row was updated. Best-effort.
-pub fn move_ip(db: &Db, tenant_id: Uuid, onvif_id: &str, old_ip: &str, new_ip: &str, xaddr: &str) -> bool {
+pub fn move_ip(
+    db: &Db,
+    tenant_id: Uuid,
+    onvif_id: &str,
+    old_ip: &str,
+    new_ip: &str,
+    xaddr: &str,
+) -> bool {
     if onvif_id.trim().is_empty() || new_ip.trim().is_empty() {
         return false;
     }
@@ -79,13 +91,14 @@ pub fn move_ip(db: &Db, tenant_id: Uuid, onvif_id: &str, old_ip: &str, new_ip: &
             .bind(&onvif_id)
             .execute(&mut *tx)
             .await?;
-        let r = sqlx::query("UPDATE devices SET ip = $2, xaddr = $3 WHERE tenant_id = $1 AND id = $4")
-            .bind(tenant_id)
-            .bind(&new_ip)
-            .bind(&xaddr)
-            .bind(&onvif_id)
-            .execute(&mut *tx)
-            .await?;
+        let r =
+            sqlx::query("UPDATE devices SET ip = $2, xaddr = $3 WHERE tenant_id = $1 AND id = $4")
+                .bind(tenant_id)
+                .bind(&new_ip)
+                .bind(&xaddr)
+                .bind(&onvif_id)
+                .execute(&mut *tx)
+                .await?;
         // Keep the "configured" flag pointing at the new ip (table lives in the same DB).
         sqlx::query("UPDATE configured_cameras SET ip = $2 WHERE tenant_id = $1 AND ip = $3")
             .bind(tenant_id)

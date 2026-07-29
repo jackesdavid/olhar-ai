@@ -54,7 +54,11 @@ impl fmt::Display for ResolveError {
         match self {
             ResolveError::NotFound(q) => write!(f, "No device named '{q}'."),
             ResolveError::Ambiguous(q, names) => {
-                write!(f, "Multiple devices match '{q}': {}. Which one?", names.join(", "))
+                write!(
+                    f,
+                    "Multiple devices match '{q}': {}. Which one?",
+                    names.join(", ")
+                )
             }
         }
     }
@@ -77,7 +81,9 @@ pub fn resolve_device(devices: &[Device], query: &str) -> Result<usize, ResolveE
     let matches: Vec<usize> = devices
         .iter()
         .enumerate()
-        .filter(|(_, d)| (!d.id.is_empty() && d.id == q) || d.ip == q || d.name.eq_ignore_ascii_case(q))
+        .filter(|(_, d)| {
+            (!d.id.is_empty() && d.id == q) || d.ip == q || d.name.eq_ignore_ascii_case(q)
+        })
         .map(|(i, _)| i)
         .collect();
     match matches.len() {
@@ -121,7 +127,10 @@ pub fn delete_by_name(devices: &mut Vec<Device>, name: &str) -> Result<String, S
 /// removed device's name. The caller persists afterward.
 pub fn delete_by_index(devices: &mut Vec<Device>, index: usize) -> Result<String, String> {
     if index == 0 || index > devices.len() {
-        return Err(format!("No device at position {index} (there are {}).", devices.len()));
+        return Err(format!(
+            "No device at position {index} (there are {}).",
+            devices.len()
+        ));
     }
     Ok(devices.remove(index - 1).name)
 }
@@ -148,12 +157,22 @@ mod tests {
 
     #[test]
     fn resolve_first_exact_ip_ambiguous_notfound() {
-        let d = vec![mk("Front", "10.0.0.1", true), mk("Back", "10.0.0.2", false), mk("Front", "10.0.0.3", false)];
+        let d = vec![
+            mk("Front", "10.0.0.1", true),
+            mk("Back", "10.0.0.2", false),
+            mk("Front", "10.0.0.3", false),
+        ];
         assert_eq!(resolve_device(&d, "first").unwrap(), 0);
         assert_eq!(resolve_device(&d, "back").unwrap(), 1); // case-insensitive
         assert_eq!(resolve_device(&d, "10.0.0.3").unwrap(), 2); // by IP
-        assert!(matches!(resolve_device(&d, "Front"), Err(ResolveError::Ambiguous(..))));
-        assert!(matches!(resolve_device(&d, "nope"), Err(ResolveError::NotFound(_))));
+        assert!(matches!(
+            resolve_device(&d, "Front"),
+            Err(ResolveError::Ambiguous(..))
+        ));
+        assert!(matches!(
+            resolve_device(&d, "nope"),
+            Err(ResolveError::NotFound(_))
+        ));
     }
 
     #[test]

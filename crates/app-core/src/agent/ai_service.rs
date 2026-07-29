@@ -25,14 +25,20 @@ impl AiServiceConfig {
     /// (`http://localhost:8000`, `https://api.runpod.ai/v2/<id>`) gets `/runsync`
     /// appended, while a URL already ending in `/runsync` or `/run` is left as-is.
     pub fn from_env() -> Option<Self> {
-        let raw = std::env::var("AI_SERVICE_URL").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())?;
+        let raw = std::env::var("AI_SERVICE_URL")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())?;
         let base = raw.trim_end_matches('/');
         let url = if base.ends_with("/runsync") || base.ends_with("/run") {
             base.to_string()
         } else {
             format!("{base}/runsync")
         };
-        let key = std::env::var("AI_SERVICE_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let key = std::env::var("AI_SERVICE_KEY")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         Some(AiServiceConfig { url, key })
     }
 }
@@ -66,7 +72,8 @@ pub fn call(op: &str, input: Value) -> Result<CallOutcome, String> {
     match &result {
         Ok(o) => log::info!(
             "ai_service: op '{op}' finished in {ms} ms (billed: delay {} + exec {} ms)",
-            o.delay_ms, o.exec_ms
+            o.delay_ms,
+            o.exec_ms
         ),
         Err(e) => log::warn!("ai_service: op '{op}' failed after {ms} ms: {e}"),
     }
@@ -79,9 +86,8 @@ pub fn call(op: &str, input: Value) -> Result<CallOutcome, String> {
 /// `input` should be a JSON object of the op's args (e.g. `{ "image_b64": ... }`);
 /// the `op` field is merged in here.
 fn call_inner(op: &str, mut input: Value) -> Result<CallOutcome, String> {
-    let cfg = AiServiceConfig::from_env().ok_or(
-        "AI service not configured — set AI_SERVICE_URL (and AI_SERVICE_KEY) in .env.",
-    )?;
+    let cfg = AiServiceConfig::from_env()
+        .ok_or("AI service not configured — set AI_SERVICE_URL (and AI_SERVICE_KEY) in .env.")?;
     log::info!("ai_service: op '{op}' → {}", cfg.url);
 
     match input.as_object_mut() {
@@ -91,7 +97,9 @@ fn call_inner(op: &str, mut input: Value) -> Result<CallOutcome, String> {
         None => input = json!({ "op": op }),
     }
 
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(120)).build();
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(120))
+        .build();
     let mut req = agent.post(&cfg.url).set("Content-Type", "application/json");
     if let Some(k) = &cfg.key {
         req = req.set("Authorization", &format!("Bearer {k}"));
@@ -101,25 +109,40 @@ fn call_inner(op: &str, mut input: Value) -> Result<CallOutcome, String> {
         .map_err(|e| format!("AI service request failed: {e}"))?
         .into_string()
         .map_err(|e| format!("AI service: couldn't read response: {e}"))?;
-    let v: Value =
-        serde_json::from_str(&body).map_err(|e| format!("AI service returned invalid JSON: {e}"))?;
+    let v: Value = serde_json::from_str(&body)
+        .map_err(|e| format!("AI service returned invalid JSON: {e}"))?;
 
     let (out, delay_ms, exec_ms) = resolve_output(&cfg, &agent, v)?;
     if let Some(err) = out.get("error").and_then(Value::as_str) {
         return Err(format!("AI op '{op}': {err}"));
     }
-    Ok(CallOutcome { output: out, delay_ms, exec_ms })
+    Ok(CallOutcome {
+        output: out,
+        delay_ms,
+        exec_ms,
+    })
 }
 
 /// Resolve the RunPod envelope to `(output, delay_ms, exec_ms)`, polling `/status/<id>`
 /// while the job is `IN_QUEUE`/`IN_PROGRESS` (cold start). Local `--rp_serve_api` returns
 /// `COMPLETED` synchronously (no timing fields → `0`), so the loop runs zero times there.
-fn resolve_output(cfg: &AiServiceConfig, agent: &ureq::Agent, mut v: Value) -> Result<(Value, u32, u32), String> {
+fn resolve_output(
+    cfg: &AiServiceConfig,
+    agent: &ureq::Agent,
+    mut v: Value,
+) -> Result<(Value, u32, u32), String> {
     // `<base>/runsync` → `<base>/status/<id>` for polling.
-    let base = cfg.url.trim_end_matches("/runsync").trim_end_matches("/run");
+    let base = cfg
+        .url
+        .trim_end_matches("/runsync")
+        .trim_end_matches("/run");
     let mut tries = 0;
     loop {
-        match v.get("status").and_then(Value::as_str).unwrap_or("COMPLETED") {
+        match v
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("COMPLETED")
+        {
             "COMPLETED" => break,
             "IN_QUEUE" | "IN_PROGRESS" => {
                 let id = v

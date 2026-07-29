@@ -21,12 +21,17 @@ struct Config {
 fn config() -> Option<&'static Config> {
     static C: OnceLock<Option<Config>> = OnceLock::new();
     C.get_or_init(|| {
-        let api_key = std::env::var("DD_API_KEY").ok().filter(|s| !s.trim().is_empty())?;
+        let api_key = std::env::var("DD_API_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())?;
         let site = std::env::var("DD_SITE")
             .ok()
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| "datadoghq.com".to_string());
-        Some(Config { api_key, url: format!("https://http-intake.logs.{site}/api/v2/logs") })
+        Some(Config {
+            api_key,
+            url: format!("https://http-intake.logs.{site}/api/v2/logs"),
+        })
     })
     .as_ref()
 }
@@ -132,7 +137,8 @@ mod tracing_layer {
             self.0.insert(f.name().into(), Value::from(v));
         }
         fn record_debug(&mut self, f: &Field, v: &dyn std::fmt::Debug) {
-            self.0.insert(f.name().into(), Value::from(format!("{v:?}")));
+            self.0
+                .insert(f.name().into(), Value::from(format!("{v:?}")));
         }
     }
 
@@ -149,7 +155,12 @@ mod tracing_layer {
     where
         S: tracing::Subscriber + for<'a> LookupSpan<'a>,
     {
-        fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, id: &tracing::span::Id, ctx: Context<'_, S>) {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            id: &tracing::span::Id,
+            ctx: Context<'_, S>,
+        ) {
             let mut v = JsonVisitor::default();
             attrs.record(&mut v);
             if let Some(span) = ctx.span(id) {
@@ -174,27 +185,45 @@ mod tracing_layer {
             }
             let mut ev = JsonVisitor::default();
             event.record(&mut ev);
-            let message = ev.0.remove("message").and_then(|m| m.as_str().map(str::to_string)).unwrap_or_default();
+            let message =
+                ev.0.remove("message")
+                    .and_then(|m| m.as_str().map(str::to_string))
+                    .unwrap_or_default();
             for (k, val) in ev.0 {
                 merged.insert(k, val);
             }
 
             let meta = event.metadata();
             let mut tags = format!("service:{}", self.service);
-            if let Some(t) = merged.get("tenant").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            if let Some(t) = merged
+                .get("tenant")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
                 tags.push_str(&format!(",tenant:{t}"));
             }
-            if let Some(e) = merged.get("edge_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            if let Some(e) = merged
+                .get("edge_id")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
                 tags.push_str(&format!(",edge_id:{e}"));
             }
-            if let Some(n) = merged.get("edge_name").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            if let Some(n) = merged
+                .get("edge_name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
                 tags.push_str(&format!(",edge_name:{n}"));
             }
 
             let mut record = Map::new();
             record.insert("ddsource".into(), Value::from("sentinel"));
             record.insert("service".into(), Value::from(self.service));
-            record.insert("status".into(), Value::from(meta.level().as_str().to_lowercase())); // DD 'status' = level
+            record.insert(
+                "status".into(),
+                Value::from(meta.level().as_str().to_lowercase()),
+            ); // DD 'status' = level
             record.insert("logger.name".into(), Value::from(meta.target()));
             record.insert("ddtags".into(), Value::from(tags));
             record.insert("message".into(), Value::from(message));
