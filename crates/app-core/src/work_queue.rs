@@ -367,6 +367,20 @@ pub const EVENT_KIND: &str = "fire";
 /// Enqueue a workflow-trigger event. `event` is the name (`motion`, `telegram_message`, …),
 /// `source` the emitter label (`edge`, `telegram`); `fields` is the typed bag the `OnEvent` node
 /// exposes. Replaces `event_queue::enqueue`, durably, on the unified queue.
+/// Should a workflow event be persisted? `None` = the listener set could not be determined, so
+/// deliver (fail open); `Some(set)` is authoritative and an EMPTY set legitimately means nobody
+/// listens. Pulled out of [`enqueue_event_blocking`] so the fail-open/no-listener distinction —
+/// the part that is easy to collapse and would silently disable the guard — is directly testable.
+pub fn should_enqueue_event(
+    listened: Option<&std::collections::HashSet<String>>,
+    event: &str,
+) -> bool {
+    match listened {
+        None => true,
+        Some(set) => set.contains(event),
+    }
+}
+
 pub fn enqueue_event_blocking(
     db: &Db,
     tenant_id: Uuid,
@@ -374,6 +388,17 @@ pub fn enqueue_event_blocking(
     source: &str,
     fields: &serde_json::Value,
 ) {
+    // Nothing enabled handles this event → the job could only ever be consumed and discarded.
+    // `fields` can carry the triggering FRAME, so persisting it would cost a multi-MB row for a
+    // run that cannot happen. Checked here, at the single choke point every producer goes through,
+    // rather than in each caller. `listened_events` fails OPEN, so a lookup error still delivers.
+    // `None` = lookup failed → deliver. `Some(set)` is authoritative, INCLUDING an empty set:
+    // "this tenant listens for nothing" is the exact case this guard exists for.
+    let listened = crate::workflows::repo::listened_events(db, tenant_id);
+    if !should_enqueue_event(listened.as_ref(), event) {
+        log::debug!("event '{event}' (tenant {tenant_id}) has no enabled listener — not enqueued");
+        return;
+    }
     let payload = serde_json::json!({ "event": event, "source": source, "fields": fields });
     enqueue_one_blocking(db, tenant_id, EVENT_CATEGORY, EVENT_KIND, payload);
 }
@@ -665,5 +690,39 @@ pub fn mark_failed_blocking(db: &Db, id: Uuid, err: &str, max_attempts: i32) {
     let err = err.to_string();
     if let Err(e) = db.block(async move { mark_failed(&pool, id, &err, max_attempts).await }) {
         log::error!("work_queue::mark_failed_blocking failed: {e}");
+    }
+}
+
+#[cfg(test)]
+mod event_enqueue_guard_tests {
+    use super::should_enqueue_event;
+    use std::collections::HashSet;
+
+    /// The production case: a tenant with every workflow disabled listens for nothing, and its
+    /// motion pushes (which carry the frame inline) must not be persisted. 39,110 such jobs had
+    /// accumulated to 6.5 GB before this guard existed.
+    #[test]
+    fn an_empty_listener_set_skips_the_event() {
+        let none_listening = HashSet::new();
+        assert!(!should_enqueue_event(Some(&none_listening), "motion"));
+        assert!(!should_enqueue_event(
+            Some(&none_listening),
+            "face_detected"
+        ));
+    }
+
+    /// An unknown listener set (query failed) must still deliver — dropping events because the
+    /// database hiccuped would be a far worse failure than the write amplification it prevents.
+    #[test]
+    fn an_unknown_listener_set_delivers() {
+        assert!(should_enqueue_event(None, "motion"));
+    }
+
+    /// Only the events actually handled get through.
+    #[test]
+    fn only_listened_events_are_enqueued() {
+        let listening = HashSet::from(["motion".to_string()]);
+        assert!(should_enqueue_event(Some(&listening), "motion"));
+        assert!(!should_enqueue_event(Some(&listening), "face_detected"));
     }
 }

@@ -140,6 +140,9 @@ pub fn save(db: &Db, tenant_id: Uuid, graphs: &[Graph]) {
     if let Err(e) = res {
         log::error!("workflows::repo::save transaction failed: {e}");
     }
+    // Enabling/disabling a graph changes who listens; drop the cached answer so the next event
+    // is judged against the graphs the user just saved, not the ones from up to a TTL ago.
+    invalidate_listened_events(tenant_id);
 }
 
 // ---- engine state (Phase 0.5) ----------------------------------------------
@@ -1416,6 +1419,119 @@ mod tests {
         assert_eq!(
             out[0].window_expires_at.as_deref(),
             Some("2026-07-18T10:05:00+00:00")
+        );
+    }
+}
+
+// ---- event listener set (write-amplification guard) -------------------------
+// The edge pushes `motion`/`face_detected` with the triggering FRAME inline. Every push was
+// enqueued as a durable job regardless of whether any graph was listening, so a tenant whose
+// workflows were all switched off still paid: frame encoded on the box, uploaded, written into
+// Postgres, read back by flow, matched against nothing, discarded. One production tenant had
+// 39,110 motion jobs totalling 6.5 GB of payload accumulated this way, all of it unreachable.
+//
+// The fix is to ask, before enqueuing, whether ANY enabled graph handles the event. That answer
+// changes only when a workflow is saved or toggled, so it is cached per tenant and invalidated in
+// `save()`; the TTL is a backstop for writes that bypass this process (another replica).
+
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
+
+/// Backstop for cross-replica edits — `save()` invalidates locally and immediately.
+const LISTENERS_TTL: Duration = Duration::from_secs(30);
+
+type ListenerCache = std::collections::HashMap<Uuid, (HashSet<String>, Instant)>;
+
+fn listener_cache() -> &'static std::sync::Mutex<ListenerCache> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<ListenerCache>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(ListenerCache::new()))
+}
+
+/// Drop a tenant's cached listener set — call whenever its graphs change.
+pub fn invalidate_listened_events(tenant_id: Uuid) {
+    listener_cache().lock().unwrap().remove(&tenant_id);
+}
+
+/// Is the cached entry still usable? Split out so the TTL rule is unit-testable without a DB.
+fn cache_entry_fresh(at: Instant, now: Instant, ttl: Duration) -> bool {
+    now.duration_since(at) < ttl
+}
+
+/// Event names that at least one **enabled** graph of this tenant handles via `OnEvent`.
+///
+/// `None` means "could not determine" (query error) and callers must deliver anyway — never
+/// confuse it with `Some(empty)`, which is the authoritative "this tenant listens for nothing"
+/// and is precisely the case worth skipping. Collapsing the two would make the guard a no-op for
+/// the tenant that motivated it.
+pub fn listened_events(db: &Db, tenant_id: Uuid) -> Option<HashSet<String>> {
+    if let Some((set, at)) = listener_cache().lock().unwrap().get(&tenant_id) {
+        if cache_entry_fresh(*at, Instant::now(), LISTENERS_TTL) {
+            return Some(set.clone());
+        }
+    }
+    let pool = db.pool();
+    let rows: Result<Vec<(String,)>, sqlx::Error> = db.block(async move {
+        sqlx::query_as(
+            "SELECT DISTINCT n->'config'->>'event' \
+             FROM workflows w, jsonb_array_elements(w.data->'nodes') n \
+             WHERE w.tenant_id = $1 \
+               AND (w.data->'enabled')::boolean \
+               AND n->>'kind' = 'on_event' \
+               AND n->'config'->>'event' IS NOT NULL",
+        )
+        .bind(tenant_id)
+        .fetch_all(&pool)
+        .await
+    });
+    let set: HashSet<String> = match rows {
+        Ok(r) => r.into_iter().map(|(e,)| e).collect(),
+        Err(e) => {
+            // Fail OPEN: a query error must not silently stop delivering events.
+            log::warn!("listened_events({tenant_id}) failed, allowing the event through: {e}");
+            return None;
+        }
+    };
+    listener_cache()
+        .lock()
+        .unwrap()
+        .insert(tenant_id, (set.clone(), Instant::now()));
+    Some(set)
+}
+
+#[cfg(test)]
+mod listener_cache_tests {
+    use super::*;
+
+    #[test]
+    fn a_fresh_entry_is_reused_and_a_stale_one_is_not() {
+        let now = Instant::now();
+        let ttl = Duration::from_secs(30);
+        assert!(
+            cache_entry_fresh(now, now, ttl),
+            "just-written entry is fresh"
+        );
+        assert!(
+            cache_entry_fresh(now, now + Duration::from_secs(29), ttl),
+            "inside the TTL it is still fresh"
+        );
+        assert!(
+            !cache_entry_fresh(now, now + Duration::from_secs(31), ttl),
+            "past the TTL it must be re-read, so a graph enabled on another replica takes effect"
+        );
+    }
+
+    #[test]
+    fn invalidate_forces_a_re_read() {
+        let t = Uuid::new_v4();
+        listener_cache()
+            .lock()
+            .unwrap()
+            .insert(t, (HashSet::from(["motion".to_string()]), Instant::now()));
+        assert!(listener_cache().lock().unwrap().contains_key(&t));
+        invalidate_listened_events(t);
+        assert!(
+            !listener_cache().lock().unwrap().contains_key(&t),
+            "toggling a workflow must take effect at once, not after the TTL"
         );
     }
 }
