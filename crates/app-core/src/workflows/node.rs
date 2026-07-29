@@ -27,6 +27,8 @@ mod tuya;
 mod variable;
 mod vision;
 
+use base64::Engine as _;
+
 use super::domain::{NodeKind, Port, PortType};
 use crate::agent::tools::ToolContext;
 use crate::device_actions as dev_actions;
@@ -436,6 +438,20 @@ pub fn seed_event_payload(
                     let nums: Vec<i64> = items.iter().filter_map(PortValue::as_num).collect();
                     if let Some(b) = BBox::from_xyxy_slice(&nums) {
                         out.insert(port.name.clone(), PortValue::Bbox(b));
+                    }
+                }
+            }
+            // An Image-typed event field (e.g. `face_detected.frame`) arrives base64-encoded —
+            // JSON has no byte type, so the generic payload decoder makes it a `Text`. Decode it
+            // here or every node that requires an image ("missing required input 'image'") rejects
+            // it, however the graph is wired. A value that isn't valid base64 leaves the port
+            // unfilled rather than handing downstream nodes garbage bytes.
+            PortType::Image => {
+                if let Some(PortValue::Text(s)) = out.get(&port.name).cloned() {
+                    if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(s.trim()) {
+                        if !bytes.is_empty() {
+                            out.insert(port.name.clone(), PortValue::Image(bytes));
+                        }
                     }
                 }
             }
@@ -1344,6 +1360,58 @@ mod tests {
     use super::super::domain::NodeKind;
     use super::*;
     use serde_json::json;
+
+    fn resolved(
+        name: &str,
+        ty: crate::workflows::domain::PortType,
+    ) -> crate::workflows::domain::ResolvedPort {
+        crate::workflows::domain::ResolvedPort {
+            name: name.to_string(),
+            ty,
+            required: false,
+        }
+    }
+
+    /// An Image-typed event field arrives base64 (JSON has no byte type) and must reach the graph
+    /// as real `Image` bytes — otherwise every node requiring an image reports it missing, however
+    /// the graph is wired (#117: `face_detected.frame` → Extract Face Embedding).
+    #[test]
+    fn base64_frame_payload_becomes_image_bytes() {
+        let jpeg = vec![0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg);
+        let mut payload = PortValues::new();
+        payload.insert("frame".to_string(), PortValue::Text(b64));
+
+        let out = seed_event_payload(
+            &payload,
+            &[resolved("frame", crate::workflows::domain::PortType::Image)],
+            &test_ctx(),
+        );
+
+        assert_eq!(
+            out.get("frame").and_then(PortValue::as_image),
+            Some(&jpeg[..])
+        );
+    }
+
+    /// A value that isn't base64 leaves the port unfilled — an honest "missing input" beats
+    /// handing garbage bytes to a decoder.
+    #[test]
+    fn non_base64_frame_payload_is_left_unfilled() {
+        let mut payload = PortValues::new();
+        payload.insert(
+            "frame".to_string(),
+            PortValue::Text("!!not base64!!".into()),
+        );
+
+        let out = seed_event_payload(
+            &payload,
+            &[resolved("frame", crate::workflows::domain::PortType::Image)],
+            &test_ctx(),
+        );
+
+        assert!(out.get("frame").and_then(PortValue::as_image).is_none());
+    }
 
     fn test_ctx() -> ToolContext {
         let (tx, _rx) = std::sync::mpsc::channel();
