@@ -27,10 +27,20 @@ kanban-plugin: board
 - [ ] #10 Update available — reload to get the latest version.
 - [ ] #93 Box health copy leaks internals ("tailnet", "Tailscale") to users
 	  - Plan: [[box-health-copy-no-internals]]
+- [ ] #153 WebAuthn RP ID unset in prod — passkeys live but pointed at localhost
+	  - Plan: [[security-hardening-remainder]]
 
 
 ## ToDo
 
+- [ ] #149 Login rate limiting §1.7 — apply the per-IP throttle at Traefik
+	  - Plan: [[security-hardening-remainder]]
+- [ ] #151 Security plan §1.8 — scoped media tokens, get JWTs out of query strings
+	  - Plan: [[security-hardening-remainder]]
+- [ ] #150 Traefik access logging + container log rotation
+	  - Plan: [[security-hardening-remainder]]
+- [ ] #152 Edge signing §3 P2→P3 — soak, then flip signing_mode to required per box
+	  - Plan: [[security-hardening-remainder]]
 - [ ] #118 Edge detection timing metrics — motion/face detect ms + rate
 	  - Plan: [[edge-detection-metrics]]
 - [ ] #102 Workflow parameterization — input vars, clone, promote, templates
@@ -115,6 +125,8 @@ kanban-plugin: board
 
 ## Review
 
+- [ ] #154 Security hardening PRs 1–5 — landed, pending prod verification
+	  - Plan: [[security-hardening-remainder]]
 - [ ] #83 Windows installer — signed .exe
 	  - Plan: [[edge-windows-installer]]
 
