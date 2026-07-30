@@ -13,7 +13,8 @@ P0, one applied-by-hand proxy change, and the two gated rollouts.
 | #150 access log + rotation | **live** | canary token in a query string → **0** occurrences in the log; `token=` → **0**; 429s recorded with `RouterName: sentinel-login@docker` and `RequestPath: (absent)` |
 | #153 WebAuthn RP | **fixed** | `rp_id=olharai.com origin=https://app.olharai.com`; login/start 501 → 404 |
 | #151 media tokens | phase 1 deployed | see that section |
-| #148 §0 secrets | **NOT done — and §1.1 is confirmed exploitable** | see below |
+| §1.1 demo admin | **closed** | `admin@demo.local` went 200 → 401; the credential no longer authenticates |
+| #148 §0 secrets | **still open** | `JWT_SECRET` rotation, the Stripe pair, and `MASTER_PASSWORD` all remain — see below |
 
 Sequential request loops are useless for testing a token bucket: at 20/min with burst 40, 46 requests
 spaced ~1s apart refill faster than they drain and produce zero 429s. Use a parallel burst.
@@ -40,19 +41,25 @@ tell you.
 
 ## #148 — §0: rotate the exposed secrets + remove the demo admin (P0, operational)
 
-**§1.1 is confirmed exploitable in production (2026-07-30).** `admin@demo.local` / `demo12345`
-returns **200** on `POST /auth/login` against `control.thesentinels.online` — a working Admin on a
-live tenant, publicly reachable. The `demo` tenant still exists and still has its user. This is
-exactly what the plan predicted: the §1.1 code fix made the demo tenant dev-only, but it **cannot
-delete an account that already exists**. Closing it is one statement:
+### §1.1 — CLOSED 2026-07-30
 
-```sql
-UPDATE users SET password_hash = NULL WHERE email = 'admin@demo.local';
-```
+It was live. `admin@demo.local` / `demo12345` returned **200** on the public login endpoint of
+`control.thesentinels.online` — a working Admin on a real tenant — exactly as the plan predicted:
+the code fix made the demo tenant dev-only but **cannot delete an account that already exists**.
 
-`password_hash IS NULL` makes `handlers::login` answer "use social login for this account" rather
-than authenticating, so this closes the password path with no FK-cascade risk and is reversible.
-Deleting the tenant outright is the fuller cleanup and can follow.
+Closed with `UPDATE users SET password_hash = NULL WHERE email = 'admin@demo.local'` (1 row).
+`password_hash IS NULL` makes `handlers::login` answer "use social login for this account" instead
+of authenticating, so the password path is shut with no FK-cascade risk, and it is reversible.
+Re-tested: **401**.
+
+Two follow-ups this surfaced:
+
+- The `demo` tenant and its user still exist, now unauthenticatable. Deleting the tenant outright is
+  the fuller cleanup.
+- `"use social login for this account"` differs from the message for an unknown address, so it
+  confirms an account exists — a small enumeration oracle. Pre-existing behaviour for OAuth-only
+  accounts, not introduced here, but it is inconsistent with the care taken in the lockout path,
+  which deliberately returns an identical message for a wrong password and an unknown address.
 
 Four live secrets were printed into a session transcript during the original review:
 `JWT_SECRET`, `MASTER_PASSWORD`, `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`. **No commit can fix
