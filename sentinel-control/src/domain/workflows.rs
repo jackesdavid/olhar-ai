@@ -471,8 +471,8 @@ async fn run_frame(
     State(st): State<AppState>,
     Query(q): Query<FrameQuery>,
 ) -> Result<axum::response::Response, ApiErr> {
-    let claims =
-        auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    let claims = auth::verify_media(&st.jwt_secret, &q.token)
+        .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
     auth::require(&claims, "workflows.read")?;
     let tid = tenant_of(&claims)?;
     let url = format!(
@@ -504,8 +504,8 @@ async fn node_state(
     State(st): State<AppState>,
     Query(q): Query<FrameQuery>,
 ) -> Result<Json<Value>, ApiErr> {
-    let claims =
-        auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    let claims = auth::verify_media(&st.jwt_secret, &q.token)
+        .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
     auth::require(&claims, "workflows.read")?;
     let tid = tenant_of(&claims)?;
     let url = format!(
@@ -824,8 +824,8 @@ async fn events_stream(
     State(st): State<AppState>,
     Query(q): Query<EventsQuery>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, ApiErr> {
-    let claims =
-        auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    let claims = auth::verify_media(&st.jwt_secret, &q.token)
+        .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
     auth::require(&claims, "workflows.read")?;
     let tid = tenant_of(&claims)?.to_string();
 

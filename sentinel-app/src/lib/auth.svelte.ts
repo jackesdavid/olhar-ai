@@ -22,7 +22,11 @@ const TOKEN_KEY = "sentinel.token";
 /** While the master is "acting as" a tenant, their original token is stashed here. */
 const MASTER_KEY = "sentinel.masterToken";
 
-export const auth = $state<{ token: string | null; me: Me | null; ready: boolean }>({
+export const auth = $state<{
+  token: string | null;
+  me: Me | null;
+  ready: boolean;
+}>({
   token: null,
   me: null,
   ready: false,
@@ -36,9 +40,70 @@ export function loadToken(): void {
 
 export function setToken(t: string | null): void {
   auth.token = t;
+  // The media token is derived from the session, so it never outlives one. Dropping it here is
+  // what makes sign-out and "act as tenant" safe — a stale media token from the previous identity
+  // would otherwise keep working until it expired.
+  media = null;
+  if (t) void primeMediaToken();
   if (typeof localStorage === "undefined") return;
   if (t) localStorage.setItem(TOKEN_KEY, t);
   else localStorage.removeItem(TOKEN_KEY);
+}
+
+// ---- media tokens (security plan §1.8) --------------------------------------
+// `<img src>` and `EventSource` cannot send an Authorization header, so those URLs carry the token
+// in the query string — where it ends up in browser history, `Referer`, and proxy access logs. A
+// media token is the same identity narrowed to `scope: "media"`: control refuses it on every
+// ordinary API endpoint, so one that leaks cannot be used to call anything, and it expires in an
+// hour instead of a day.
+
+let media: { token: string; expiresAt: number } | null = null;
+let mediaInflight: Promise<void> | null = null;
+
+/**
+ * Mint (or re-mint) the media token. Cheap to call often: it no-ops while the current one is still
+ * comfortably fresh, and collapses concurrent callers onto one request.
+ */
+export async function primeMediaToken(): Promise<void> {
+  if (!auth.token) {
+    media = null;
+    return;
+  }
+  // Re-mint with five minutes to spare, so a URL built now is still valid when the image actually
+  // loads. Expiring mid-flight would look like a broken thumbnail, not an auth problem.
+  if (media && media.expiresAt - Date.now() > 5 * 60_000) return;
+  if (mediaInflight) return mediaInflight;
+  mediaInflight = (async () => {
+    try {
+      const r = await fetch(`${API_BASE}/auth/media-token`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${auth.token}` },
+      });
+      if (!r.ok) return;
+      const body = (await r.json()) as { token: string; expires_in: number };
+      media = {
+        token: body.token,
+        expiresAt: Date.now() + body.expires_in * 1000,
+      };
+    } catch {
+      // Deliberately silent: phase 1 of the rollout still accepts session tokens on media
+      // surfaces, so a failed mint degrades to the old behaviour instead of breaking every image.
+    } finally {
+      mediaInflight = null;
+    }
+  })();
+  return mediaInflight;
+}
+
+/**
+ * The token to put in a media URL. Prefers the media token, falling back to the session token when
+ * one hasn't been minted yet (first paint, or a failed mint) — which control still accepts during
+ * phase 1. Synchronous on purpose: these URLs are built inline in `src={...}`.
+ */
+export function mediaToken(): string | null {
+  void primeMediaToken(); // keep it warm; fire-and-forget
+  if (media && media.expiresAt > Date.now()) return media.token;
+  return auth.token;
 }
 
 /** Whether the signed-in user may perform `action`. Action-based — never role names. */
@@ -64,6 +129,9 @@ export async function loadMe(): Promise<boolean> {
       return false;
     }
     auth.me = (await r.json()) as Me;
+    // Warm the media token on boot, so the first thumbnail already has one rather than falling back
+    // to the session token for the first paint.
+    void primeMediaToken();
     return true;
   } catch {
     auth.me = null;
@@ -84,7 +152,11 @@ export async function login(email: string, password: string): Promise<void> {
 }
 
 /** Public signup — creates a new tenant and makes this user its Admin. */
-export async function signup(tenantName: string, email: string, password: string): Promise<void> {
+export async function signup(
+  tenantName: string,
+  email: string,
+  password: string,
+): Promise<void> {
   const r = await fetch(`${API_BASE}/auth/signup`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -120,15 +192,20 @@ export async function registerPasskey(nickname?: string): Promise<void> {
     method: "POST",
     headers: { Authorization: `Bearer ${auth.token}` },
   });
-  if (!start.ok) throw new Error((await start.text()) || "Could not start registration");
+  if (!start.ok)
+    throw new Error((await start.text()) || "Could not start registration");
   const optionsJSON = (await start.json()).publicKey;
   const credential = await startRegistration({ optionsJSON });
   const finish = await fetch(`${API_BASE}/auth/webauthn/register/finish`, {
     method: "POST",
-    headers: { "content-type": "application/json", Authorization: `Bearer ${auth.token}` },
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${auth.token}`,
+    },
     body: JSON.stringify({ credential, nickname: nickname?.trim() || null }),
   });
-  if (!finish.ok) throw new Error((await finish.text()) || "Could not save the passkey");
+  if (!finish.ok)
+    throw new Error((await finish.text()) || "Could not save the passkey");
 }
 
 /** Sign in with a passkey. Returns false when this address has no passkey (fall back to password). */
@@ -139,15 +216,19 @@ export async function loginWithPasskey(email: string): Promise<boolean> {
     body: JSON.stringify({ email }),
   });
   if (start.status === 404) return false;
-  if (!start.ok) throw new Error((await start.text()) || "Passkey login failed");
+  if (!start.ok)
+    throw new Error((await start.text()) || "Passkey login failed");
   const { handle, options } = await start.json();
-  const credential = await startAuthentication({ optionsJSON: options.publicKey });
+  const credential = await startAuthentication({
+    optionsJSON: options.publicKey,
+  });
   const finish = await fetch(`${API_BASE}/auth/webauthn/login/finish`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ handle, credential }),
   });
-  if (!finish.ok) throw new Error((await finish.text()) || "Passkey login failed");
+  if (!finish.ok)
+    throw new Error((await finish.text()) || "Passkey login failed");
   const data = await finish.json();
   setToken(data.token);
   await loadMe();
@@ -183,7 +264,9 @@ export async function deletePasskey(id: string): Promise<void> {
 
 /** Whether the current session is a master acting inside a tenant. */
 export function isAssuming(): boolean {
-  return typeof localStorage !== "undefined" && !!localStorage.getItem(MASTER_KEY);
+  return (
+    typeof localStorage !== "undefined" && !!localStorage.getItem(MASTER_KEY)
+  );
 }
 
 /** Stash the master token and swap to a tenant-scoped one (acts inside `tenantId`). */
@@ -194,7 +277,11 @@ export async function assumeTenant(tenantId: string): Promise<void> {
   });
   if (!r.ok) throw new Error((await r.text()) || "Could not assume tenant");
   const data = await r.json();
-  if (typeof localStorage !== "undefined" && !localStorage.getItem(MASTER_KEY) && auth.token) {
+  if (
+    typeof localStorage !== "undefined" &&
+    !localStorage.getItem(MASTER_KEY) &&
+    auth.token
+  ) {
     localStorage.setItem(MASTER_KEY, auth.token);
   }
   setToken(data.token);

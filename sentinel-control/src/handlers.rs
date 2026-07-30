@@ -20,6 +20,7 @@ pub fn router() -> Router<AppState> {
         .route("/auth/signup", post(signup))
         .route("/auth/login", post(login))
         .route("/auth/me", get(me))
+        .route("/auth/media-token", post(media_token))
         .route("/auth/oauth/google/start", get(crate::oauth::google_start))
         .route(
             "/auth/oauth/google/callback",
@@ -183,6 +184,7 @@ async fn signup(
         act_as: false,
         perms: perms.clone(),
         exp: auth::expiry_24h(),
+        scope: None,
     };
     let token = auth::issue(&st.jwt_secret, &claims)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -301,6 +303,7 @@ async fn login(
         act_as: false,
         perms: perms.clone(),
         exp: auth::expiry_24h(),
+        scope: None,
     };
     let token = auth::issue(&st.jwt_secret, &claims)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -339,6 +342,35 @@ async fn me(UserClaims(c): UserClaims) -> Json<MeResp> {
         act_as: c.act_as,
         perms: c.perms,
     })
+}
+
+#[derive(Serialize)]
+struct MediaTokenResp {
+    token: String,
+    /// Seconds until it expires — so the caller can re-mint before it does rather than discover it
+    /// by failing.
+    expires_in: i64,
+}
+
+/// `POST /auth/media-token` — mint a short-lived, media-scoped token for URLs that cannot carry an
+/// `Authorization` header (`<img src>`, `EventSource`, a WebSocket). Security plan §1.8.
+///
+/// **No `auth::require` here, deliberately.** The token carries the caller's own identity and its
+/// own permissions, just narrowed to `scope: media` and an hour — there is no action being
+/// authorized and nothing to escalate to. Gating it on a permission would only mean some users
+/// could not view media they are already allowed to view.
+///
+/// Note what the `UserClaims` extractor buys here for free: it refuses media tokens, so a media
+/// token cannot mint another one. Their lifetime is bounded by the session that created them.
+async fn media_token(
+    State(st): State<AppState>,
+    UserClaims(c): UserClaims,
+) -> Result<Json<MediaTokenResp>, ApiErr> {
+    let media = c.to_media();
+    let expires_in = media.exp as i64 - chrono::Utc::now().timestamp();
+    let token = auth::issue(&st.jwt_secret, &media)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(MediaTokenResp { token, expires_in }))
 }
 
 // ---- RBAC -------------------------------------------------------------------
@@ -597,6 +629,7 @@ async fn assume_tenant(
         act_as: true,
         perms,
         exp: auth::expiry_24h(),
+        scope: None,
     };
     let token = auth::issue(&st.jwt_secret, &claims)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;

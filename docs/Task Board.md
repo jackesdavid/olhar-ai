@@ -35,8 +35,6 @@ kanban-plugin: board
 
 - [ ] #149 Login rate limiting §1.7 — apply the per-IP throttle at Traefik
 	  - Plan: [[security-hardening-remainder]]
-- [ ] #151 Security plan §1.8 — scoped media tokens, get JWTs out of query strings
-	  - Plan: [[security-hardening-remainder]]
 - [ ] #150 Traefik access logging + container log rotation
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #152 Edge signing §3 P2→P3 — soak, then flip signing_mode to required per box
@@ -118,6 +116,8 @@ kanban-plugin: board
 ## In Progress
 
 - [ ] #148 Security plan §0 — rotate the exposed secrets + remove the demo admin
+	  - Plan: [[security-hardening-remainder]]
+- [ ] #151 Security plan §1.8 — scoped media tokens, get JWTs out of query strings
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #120 Face pipeline on primary (HD) stream — GPU decode + per-tenant selector
 	  - Plan: [[face-pipeline-hd-stream]]

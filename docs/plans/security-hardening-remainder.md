@@ -71,10 +71,41 @@ headers: `sentinel-app/src/lib/data.ts:137` (`/workflows/events?token=`) and the
 `?token=` (`sentinel-gateway/src/auth.rs:55`). Browser history and `Referer` are live vectors
 today; access logs become one the moment #150 lands.
 
-Fix: `#[serde(default)] scope: Option<String>` on `Claims` (backward-compatible), a
-`POST /auth/media-token` minting 120-second `scope:"media"` tokens, required on those handlers.
-Two-phase rollout — accept both, then reject session tokens — because control, gateway and app
-must move together. Free partial mitigation now: `Referrer-Policy: no-referrer`.
+**Phase 1 landed.** `Claims.scope` (`#[serde(default)]` + `skip_serializing_if`, so tokens minted
+before the field existed still decode and session tokens stay byte-identical in shape),
+`POST /auth/media-token`, and `auth::verify_media` on the four control surfaces.
+
+The property that matters is **not** the shorter expiry — it is that `UserClaims` **refuses** a
+media token from day one, so one that leaks via history, `Referer`, or an access log cannot call the
+API at all. `UserClaims` also guards the mint endpoint, which means a media token cannot mint
+another one: their lifetime is bounded by the session that created them. Media surfaces still accept
+session tokens during the overlap (phase 2 removes that), and each such use is logged so phase 2 can
+be scheduled on evidence.
+
+**TTL is one hour, not the 120s the plan proposed** (`MEDIA_TOKEN_TTL_SECS` overrides). 120s is
+right for a one-shot `<img src>` and wrong for this product: dashboards sit open all day, and a
+native `EventSource` retries the *same* URL it was constructed with, so a 2-minute token would force
+a reconnect every 2 minutes for as long as the tab is open. An hour is still 24× tighter than the
+24h session token it replaces.
+
+App side: `mediaToken()` in `auth.svelte.ts` caches one and re-mints with five minutes to spare;
+primed on boot (`loadMe`) and on every `setToken`, and cleared on sign-out and "act as tenant" so a
+stale token from the previous identity cannot outlive it. The three URL builders in `data.ts`
+(`faceImageUrl`, `runFrameUrl`, `nodeStateUrl`) use it, falling back to the session token if a mint
+has not landed yet. `Referrer-Policy: no-referrer` added in `deploy/app/nginx.conf`.
+
+**Deliberately NOT in phase 1 — two surfaces still carry session tokens:**
+
+- **The SSE stream** (`data.ts` `ensureCloudStream`). A media token would work, but only by relying
+  on a 401 → `CLOSED` → 3-second manual retry once an hour, i.e. an hourly gap that does not exist
+  today. Doing it properly means re-minting and reconnecting *before* expiry. Worth doing; not worth
+  smuggling into this change.
+- **The gateway's `?token=`** (`sentinel-gateway/src/auth.rs`, used by the live player). The gateway
+  has its own `Claims` copy and would need the same scope handling; live video is the core product,
+  so it gets its own change with its own verification.
+
+**Phase 2** (refuse session tokens on media surfaces) is gated on the phase-1 log going quiet, and
+on both surfaces above moving first — otherwise it breaks live video and the event stream.
 
 ## #152 — §3 P2→P3: soak, then enforce signing per box
 

@@ -5,7 +5,7 @@
 // throw a clear error via `cloudOnly(...)` — pages don't surface those affordances.
 import { api } from "./api";
 import { API_BASE } from "./config";
-import { auth } from "./auth.svelte";
+import { auth, mediaToken } from "./auth.svelte";
 import {
   DEFAULT_SETTINGS,
   type Alert,
@@ -52,7 +52,11 @@ export type Dictionary = {
   updated_at?: string;
 };
 /** The create/update payload — name + schema + rows (rows conformed to columns server-side). */
-export type DictionaryInput = { name: string; columns: DictColumn[]; rows: DictCell[][] };
+export type DictionaryInput = {
+  name: string;
+  columns: DictColumn[];
+  rows: DictCell[][];
+};
 
 // ---- Graph instances (#95): a live run context + its saved node values ----
 /** One live instance of a graph (a run context with saved state / an armed latent window). */
@@ -70,7 +74,10 @@ export type InstanceNodeValues = {
   values: Record<string, string>;
 };
 /** The full saved value context of one instance. */
-export type InstanceValues = { instance_key: string; nodes: InstanceNodeValues[] };
+export type InstanceValues = {
+  instance_key: string;
+  nodes: InstanceNodeValues[];
+};
 
 /** A camera the tenant's edge found on its LAN (pushed up to the cloud). */
 export type EdgeDiscovered = {
@@ -174,7 +181,10 @@ function closeCloudStreamIfIdle(): void {
 
 /** Subscribe to a backend push event over the relayed SSE stream (control → sentinel-flow).
  * Returns an unsubscribe function. */
-export async function onEvent(name: string, cb: (payload?: unknown) => void): Promise<UnlistenFn> {
+export async function onEvent(
+  name: string,
+  cb: (payload?: unknown) => void,
+): Promise<UnlistenFn> {
   let set = cloudSubs.get(name);
   if (!set) {
     set = new Set();
@@ -193,7 +203,9 @@ export const data = {
   getSettings: async (): Promise<Settings> => {
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
-      return raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : { ...DEFAULT_SETTINGS };
+      return raw
+        ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) }
+        : { ...DEFAULT_SETTINGS };
     } catch {
       return { ...DEFAULT_SETTINGS };
     }
@@ -204,14 +216,25 @@ export const data = {
 
   // ---- Tuya smart home ----------------------------------------------------
   /** Linked Tuya devices for the tenant (drives the node dropdowns + Integrations page). */
-  listTuyaDevices: (): Promise<TuyaDevice[]> => api.get<TuyaDevice[]>("/tuya/devices"),
+  listTuyaDevices: (): Promise<TuyaDevice[]> =>
+    api.get<TuyaDevice[]>("/tuya/devices"),
   /** Pull the project's linked devices from the Tuya Cloud and cache them. */
-  syncTuyaDevices: (): Promise<{ synced: number }> => api.post<{ synced: number }>("/tuya/sync", {}),
+  syncTuyaDevices: (): Promise<{ synced: number }> =>
+    api.post<{ synced: number }>("/tuya/sync", {}),
   /** Whether Tuya is connected for this tenant + via which source (tenant creds / operator / none). */
-  getTuyaProvider: (): Promise<{ configured: boolean; source: "tenant" | "operator" | "none" }> =>
-    api.get<{ configured: boolean; source: "tenant" | "operator" | "none" }>("/tuya/provider"),
+  getTuyaProvider: (): Promise<{
+    configured: boolean;
+    source: "tenant" | "operator" | "none";
+  }> =>
+    api.get<{ configured: boolean; source: "tenant" | "operator" | "none" }>(
+      "/tuya/provider",
+    ),
   /** Save the tenant's own Tuya project credentials (validated server-side before saving). */
-  setTuyaConfig: async (access_id: string, access_key: string, endpoint: string): Promise<void> => {
+  setTuyaConfig: async (
+    access_id: string,
+    access_key: string,
+    endpoint: string,
+  ): Promise<void> => {
     await api.put<void>("/tuya/config", { access_id, access_key, endpoint });
   },
   /** Disconnect the tenant's Tuya account (remove saved credentials). */
@@ -219,8 +242,14 @@ export const data = {
     await api.del<void>("/tuya/config");
   },
   /** Set a device's friendly per-function labels (`{ code: label }`). Survives sync. */
-  setTuyaFunctionLabels: async (deviceId: string, labels: Record<string, string>): Promise<void> => {
-    await api.patch<void>(`/tuya/devices/${encodeURIComponent(deviceId)}/labels`, { labels });
+  setTuyaFunctionLabels: async (
+    deviceId: string,
+    labels: Record<string, string>,
+  ): Promise<void> => {
+    await api.patch<void>(
+      `/tuya/devices/${encodeURIComponent(deviceId)}/labels`,
+      { labels },
+    );
   },
 
   // ---- devices ------------------------------------------------------------
@@ -234,8 +263,15 @@ export const data = {
   },
   /** Relay camera credentials to the tenant's edge. They are NOT stored in the cloud —
    * control holds them in memory until the edge collects them, then discards. */
-  setCredentials: async (ip: string, username: string, password: string): Promise<void> => {
-    await api.post<void>(`/devices/${encodeURIComponent(ip)}/credentials`, { username, password });
+  setCredentials: async (
+    ip: string,
+    username: string,
+    password: string,
+  ): Promise<void> => {
+    await api.post<void>(`/devices/${encodeURIComponent(ip)}/credentials`, {
+      username,
+      password,
+    });
   },
   renameDevice: async (ip: string, name: string): Promise<void> => {
     // No targeted rename endpoint — upsert the device with the new name.
@@ -248,13 +284,16 @@ export const data = {
    * [`listDiscovered`] for cameras the edge has found and pushed up. */
   discoverDevices: (): Promise<never> => cloudOnly("Camera discovery"),
   /** Cameras the tenant's edge found on its LAN and pushed to the cloud. */
-  listDiscovered: (): Promise<EdgeDiscovered[]> => api.get<EdgeDiscovered[]>("/devices/discovered"),
+  listDiscovered: (): Promise<EdgeDiscovered[]> =>
+    api.get<EdgeDiscovered[]>("/devices/discovered"),
   /** IPs of cameras whose credentials have been set/relayed to the edge. */
-  listConfigured: (): Promise<string[]> => api.get<string[]>("/devices/configured"),
+  listConfigured: (): Promise<string[]> =>
+    api.get<string[]>("/devices/configured"),
   /** Cameras the edge currently has a RESOLVED stream for (creds valid + camera reachable) —
    * the precise "online & correct" signal for the status dot, plus the codec the edge probed
    * off each camera's own SDP ("H264"/"H265"), when known. */
-  listStreaming: (): Promise<StreamingCamera[]> => api.get<StreamingCamera[]>("/devices/streaming"),
+  listStreaming: (): Promise<StreamingCamera[]> =>
+    api.get<StreamingCamera[]>("/devices/streaming"),
   /** Ask the tenant's edge box(es) to re-run ONVIF discovery now (e.g. after a camera
    * changed IP). The edge reconciles moves by stable ONVIF id and pushes corrections back. */
   rescan: async (): Promise<void> => {
@@ -271,14 +310,22 @@ export const data = {
    *  consumer cameras — a typo took a working camera offline until it was power-cycled — and
    *  every failure read as "wrong password", so users re-typed correct creds and made it worse.
    *  Hence: one attempt, no retries. Retrying is the bug, not the fix. */
-  probeCredentials: (ip: string, username: string, password: string): Promise<ProbeResult> =>
-    api.post<ProbeResult>(`/devices/${encodeURIComponent(ip)}/probe`, { username, password }),
+  probeCredentials: (
+    ip: string,
+    username: string,
+    password: string,
+  ): Promise<ProbeResult> =>
+    api.post<ProbeResult>(`/devices/${encodeURIComponent(ip)}/probe`, {
+      username,
+      password,
+    }),
   validateDevice: (): Promise<never> => cloudOnly("Credential validation"),
 
   // ---- live / snapshots (edge-owned, via the streaming gateway) ------------
   // Camera-frame capture (e.g. enroll/recognize from a live camera) has no cloud backend
   // yet — callers fall back to file upload. The `ip` arg is kept for call-site compat.
-  captureSnapshot: (_ip?: string): Promise<never> => cloudOnly("Camera capture"),
+  captureSnapshot: (_ip?: string): Promise<never> =>
+    cloudOnly("Camera capture"),
   ensureStreams: (): Promise<never> => cloudOnly("Live streams"),
   /** A live JPEG snapshot of `ip` from the tenant's edge, via control's proxy (`GET
    * /devices/:ip/snapshot`) — for the workflow editor's Region-drawing UI (card: edge
@@ -290,7 +337,10 @@ export const data = {
     // A per-request timeout so a stuck edge/go2rtc can't hang the caller (the credential test polls
     // this in a loop and must keep moving).
     const signal = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
-    const r = await fetch(`${API_BASE}/devices/${encodeURIComponent(ip)}/snapshot`, { headers, signal });
+    const r = await fetch(
+      `${API_BASE}/devices/${encodeURIComponent(ip)}/snapshot`,
+      { headers, signal },
+    );
     if (!r.ok) throw new Error(`Snapshot failed (${r.status})`);
     return r.blob();
   },
@@ -298,17 +348,24 @@ export const data = {
   // ---- alerts -------------------------------------------------------------
   listAlerts: (): Promise<Alert[]> => api.get<Alert[]>("/alerts"),
   alertStats: (): Promise<AlertStats> => api.get<AlertStats>("/alerts/stats"),
-  createAlert: (level: string, message: string, room?: string | null, source?: string | null): Promise<Alert> =>
+  createAlert: (
+    level: string,
+    message: string,
+    room?: string | null,
+    source?: string | null,
+  ): Promise<Alert> =>
     api.post<Alert>("/alerts", { level, message, room, source }),
   deleteAlert: async (id: number): Promise<boolean> => {
     await api.del<void>(`/alerts/${id}`);
     return true;
   },
-  deliverAlert: (id: number): Promise<string> => api.post<string>(`/alerts/${id}/deliver`),
+  deliverAlert: (id: number): Promise<string> =>
+    api.post<string>(`/alerts/${id}/deliver`),
 
   // ---- people -------------------------------------------------------------
   listPeople: (): Promise<Person[]> => api.get<Person[]>("/persons"),
-  personPermissionKinds: (): Promise<string[]> => api.get<string[]>("/persons/permission-kinds"),
+  personPermissionKinds: (): Promise<string[]> =>
+    api.get<string[]>("/persons/permission-kinds"),
   savePerson: async (person: Person): Promise<void> => {
     await api.put<void>("/persons", person);
   },
@@ -316,43 +373,70 @@ export const data = {
     await api.del<void>(`/persons/${encodeURIComponent(id)}`);
     return true;
   },
-  enrollFace: (personId: string, image: string, source: string, approved: boolean): Promise<string> =>
-    api.post<string>(`/persons/${encodeURIComponent(personId)}/embeddings`, { image, source, approved }),
+  enrollFace: (
+    personId: string,
+    image: string,
+    source: string,
+    approved: boolean,
+  ): Promise<string> =>
+    api.post<string>(`/persons/${encodeURIComponent(personId)}/embeddings`, {
+      image,
+      source,
+      approved,
+    }),
   listEmbeddings: (personId: string): Promise<PersonEmbedding[]> =>
-    api.get<PersonEmbedding[]>(`/persons/${encodeURIComponent(personId)}/embeddings`),
+    api.get<PersonEmbedding[]>(
+      `/persons/${encodeURIComponent(personId)}/embeddings`,
+    ),
   approveEmbedding: async (id: string): Promise<void> => {
-    await api.post<void>(`/persons/embeddings/${encodeURIComponent(id)}/approve`);
+    await api.post<void>(
+      `/persons/embeddings/${encodeURIComponent(id)}/approve`,
+    );
   },
   deleteEmbedding: async (id: string): Promise<void> => {
     await api.del<void>(`/persons/embeddings/${encodeURIComponent(id)}`);
   },
-  enrolledPersonIds: (): Promise<string[]> => api.get<string[]>("/persons/enrolled"),
-  recognizeFace: (image: string, maxDistance?: number): Promise<RecognizeDetail> =>
-    api.post<RecognizeDetail>("/persons/recognize", { image, max_distance: maxDistance }),
+  enrolledPersonIds: (): Promise<string[]> =>
+    api.get<string[]>("/persons/enrolled"),
+  recognizeFace: (
+    image: string,
+    maxDistance?: number,
+  ): Promise<RecognizeDetail> =>
+    api.post<RecognizeDetail>("/persons/recognize", {
+      image,
+      max_distance: maxDistance,
+    }),
 
   // ---- Faces view (#119): browse + cluster + bulk-label unknown faces ----
   listFaces: (): Promise<Face[]> => api.get<Face[]>("/faces"),
   listFaceClusters: (eps?: number): Promise<FaceCluster[]> =>
-    api.get<FaceCluster[]>(`/faces/clusters${eps != null ? `?eps=${eps}` : ""}`),
+    api.get<FaceCluster[]>(
+      `/faces/clusters${eps != null ? `?eps=${eps}` : ""}`,
+    ),
   faceDetail: (id: string): Promise<FaceDetail> =>
     api.get<FaceDetail>(`/faces/${encodeURIComponent(id)}/detail`),
   /** On-demand facial landmarks (5 keypoints, in the crop's pixel coords) for the detail overlay. */
   faceLandmarks: (id: string): Promise<{ landmarks: [number, number][] }> =>
-    api.get<{ landmarks: [number, number][] }>(`/faces/${encodeURIComponent(id)}/landmarks`),
-  faceLayout: (opts: {
-    eps?: number;
-    scope?: "unknown" | "known" | "all";
-    maxPerIsland?: number;
-    maxIslands?: number;
-    minSize?: number;
-    spread?: number;
-    since?: string;
-    until?: string;
-  } = {}): Promise<CanvasLayout> => {
+    api.get<{ landmarks: [number, number][] }>(
+      `/faces/${encodeURIComponent(id)}/landmarks`,
+    ),
+  faceLayout: (
+    opts: {
+      eps?: number;
+      scope?: "unknown" | "known" | "all";
+      maxPerIsland?: number;
+      maxIslands?: number;
+      minSize?: number;
+      spread?: number;
+      since?: string;
+      until?: string;
+    } = {},
+  ): Promise<CanvasLayout> => {
     const q = new URLSearchParams();
     if (opts.eps != null) q.set("eps", String(opts.eps));
     if (opts.scope) q.set("scope", opts.scope);
-    if (opts.maxPerIsland != null) q.set("max_per_island", String(opts.maxPerIsland));
+    if (opts.maxPerIsland != null)
+      q.set("max_per_island", String(opts.maxPerIsland));
     if (opts.maxIslands != null) q.set("max_islands", String(opts.maxIslands));
     if (opts.minSize != null) q.set("min_size", String(opts.minSize));
     if (opts.spread != null) q.set("spread", String(opts.spread));
@@ -362,9 +446,13 @@ export const data = {
     return api.get<CanvasLayout>(`/faces/layout${s ? `?${s}` : ""}`);
   },
   /** A displayable crop URL (token-in-query so it works as `<img src>`). `bust` forces a reload. */
-  faceImageUrl: (id: string, opts?: { box?: boolean; bust?: number }): string => {
+  faceImageUrl: (
+    id: string,
+    opts?: { box?: boolean; bust?: number },
+  ): string => {
     const qs = new URLSearchParams();
-    if (auth.token) qs.set("token", auth.token);
+    const mt = mediaToken();
+    if (mt) qs.set("token", mt);
     if (opts?.box) qs.set("box", "1"); // full frame with the detection rectangle (context)
     if (opts?.bust) qs.set("t", String(opts.bust));
     return `${API_BASE}/faces/${encodeURIComponent(id)}/image?${qs.toString()}`;
@@ -380,7 +468,10 @@ export const data = {
       new_person_name: target.newPersonName,
     }),
   reassignFace: async (faceId: string, personId?: string): Promise<void> => {
-    await api.post<void>("/faces/reassign", { face_id: faceId, person_id: personId ?? null });
+    await api.post<void>("/faces/reassign", {
+      face_id: faceId,
+      person_id: personId ?? null,
+    });
   },
   ignoreFaces: async (faceIds: string[], ignored = true): Promise<void> => {
     await api.post<void>("/faces/ignore", { face_ids: faceIds, ignored });
@@ -390,12 +481,15 @@ export const data = {
     api.post<{ deleted: number }>("/faces/delete", { face_ids: faceIds }),
 
   // ---- beacons / telegram -------------------------------------------------
-  listBeacons: (): Promise<NotificationTarget[]> => api.get<NotificationTarget[]>("/beacons"),
+  listBeacons: (): Promise<NotificationTarget[]> =>
+    api.get<NotificationTarget[]>("/beacons"),
   /** Registered mobile push devices (card #139). Each device is its OWN Recipient, so the
    *  workflow recipient pickers merge these with the Telegram beacons. */
-  listPushDevices: <T = { id: string; label: string; platform: string; enabled: boolean }>(): Promise<T[]> =>
-    api.get<T[]>("/push/devices"),
-  getTelegramConfig: (): Promise<TelegramConfigState> => api.get<TelegramConfigState>("/telegram"),
+  listPushDevices: <
+    T = { id: string; label: string; platform: string; enabled: boolean },
+  >(): Promise<T[]> => api.get<T[]>("/push/devices"),
+  getTelegramConfig: (): Promise<TelegramConfigState> =>
+    api.get<TelegramConfigState>("/telegram"),
   setPairingCode: async (pairingCode: string): Promise<void> => {
     await api.put<void>("/telegram", { pairing_code: pairingCode });
   },
@@ -423,7 +517,10 @@ export const data = {
     api.get<Presence[]>(`/map/presence?limit=${limit}`),
 
   // ---- workflows ----------------------------------------------------------
-  loadGraphs: <T = unknown>(opts?: { q?: string; group?: string }): Promise<T[]> => {
+  loadGraphs: <T = unknown>(opts?: {
+    q?: string;
+    group?: string;
+  }): Promise<T[]> => {
     const qs = new URLSearchParams();
     if (opts?.q) qs.set("q", opts.q);
     if (opts?.group) qs.set("group", opts.group);
@@ -432,7 +529,8 @@ export const data = {
   },
   runStates: <T = unknown>(): Promise<T> => api.get<T>("/workflows/runs"),
   nodeCatalog: <T = unknown>(): Promise<T> => api.get<T>("/workflows/catalog"),
-  createGraph: (name: string): Promise<string> => api.post<string>("/workflows", { name }),
+  createGraph: (name: string): Promise<string> =>
+    api.post<string>("/workflows", { name }),
   renameGraph: async (id: string, name: string): Promise<void> => {
     await api.patch<void>(`/workflows/${id}`, { name });
   },
@@ -442,12 +540,15 @@ export const data = {
   setGraphGroup: async (id: string, value: string): Promise<void> => {
     await api.put<void>(`/workflows/${id}/group`, { value });
   },
-  duplicateGraph: (id: string): Promise<string> => api.post<string>(`/workflows/${id}/duplicate`),
+  duplicateGraph: (id: string): Promise<string> =>
+    api.post<string>(`/workflows/${id}/duplicate`),
 
   /** Templates a tenant can start from: its own + every global one (#102). */
-  listTemplates: <T = unknown>(): Promise<T[]> => api.get<T[]>("/workflows/templates"),
+  listTemplates: <T = unknown>(): Promise<T[]> =>
+    api.get<T[]>("/workflows/templates"),
   /** Clone a template into the caller's tenant as a normal, disabled workflow; returns its id. */
-  useTemplate: (id: string): Promise<string> => api.post<string>(`/workflows/templates/${id}/use`),
+  useTemplate: (id: string): Promise<string> =>
+    api.post<string>(`/workflows/templates/${id}/use`),
   /** Mark/unmark a graph as one of the tenant's own templates. */
   setGraphTemplate: async (id: string, value: boolean): Promise<void> => {
     await api.put<void>(`/workflows/${id}/template`, { value });
@@ -458,9 +559,11 @@ export const data = {
   },
   // ---- Dictionaries (#113): named typed-column tables, reusable across workflows ----
   /** All of the tenant's dictionaries (schema + rows), newest first. */
-  listDictionaries: (): Promise<Dictionary[]> => api.get<Dictionary[]>("/dictionaries"),
+  listDictionaries: (): Promise<Dictionary[]> =>
+    api.get<Dictionary[]>("/dictionaries"),
   /** One dictionary by id. */
-  getDictionary: (id: string): Promise<Dictionary> => api.get<Dictionary>(`/dictionaries/${id}`),
+  getDictionary: (id: string): Promise<Dictionary> =>
+    api.get<Dictionary>(`/dictionaries/${id}`),
   /** Create a dictionary from a name + schema + rows; returns its new id. */
   createDictionary: (body: DictionaryInput): Promise<string> =>
     api.post<string>("/dictionaries", body),
@@ -478,15 +581,30 @@ export const data = {
     api.get<WorkflowInstance[]>(`/workflows/${id}/instances`),
   /** The saved per-node value context of one instance (key may be "" for Single-scope graphs). */
   getInstanceValues: (id: string, key: string): Promise<InstanceValues> =>
-    api.get<InstanceValues>(`/workflows/${id}/instance-values?key=${encodeURIComponent(key)}`),
+    api.get<InstanceValues>(
+      `/workflows/${id}/instance-values?key=${encodeURIComponent(key)}`,
+    ),
 
   deleteGraph: async (id: string): Promise<void> => {
     await api.del<void>(`/workflows/${id}`);
   },
-  setGraphTrigger: async (id: string, kind: string, everySecs?: number, schedule?: unknown): Promise<void> => {
-    await api.put<void>(`/workflows/${id}/trigger`, { kind, every_secs: everySecs, schedule });
+  setGraphTrigger: async (
+    id: string,
+    kind: string,
+    everySecs?: number,
+    schedule?: unknown,
+  ): Promise<void> => {
+    await api.put<void>(`/workflows/${id}/trigger`, {
+      kind,
+      every_secs: everySecs,
+      schedule,
+    });
   },
-  setGraphConcurrency: async (id: string, kind: string, max?: number): Promise<void> => {
+  setGraphConcurrency: async (
+    id: string,
+    kind: string,
+    max?: number,
+  ): Promise<void> => {
     await api.put<void>(`/workflows/${id}/concurrency`, { kind, max });
   },
   /** What a graph runs one of (#95): "single" (default) or "per_camera". */
@@ -496,16 +614,27 @@ export const data = {
   setGraphEnabled: async (id: string, enabled: boolean): Promise<void> => {
     await api.put<void>(`/workflows/${id}/enabled`, { value: enabled });
   },
-  setGraphRunOrphans: async (id: string, runOrphans: boolean): Promise<void> => {
+  setGraphRunOrphans: async (
+    id: string,
+    runOrphans: boolean,
+  ): Promise<void> => {
     await api.put<void>(`/workflows/${id}/run-orphans`, { value: runOrphans });
   },
   setGraphDebug: async (id: string, debug: boolean): Promise<void> => {
     await api.put<void>(`/workflows/${id}/debug`, { value: debug });
   },
-  setGraphViewport: async (id: string, x: number, y: number, zoom: number): Promise<void> => {
+  setGraphViewport: async (
+    id: string,
+    x: number,
+    y: number,
+    zoom: number,
+  ): Promise<void> => {
     await api.put<void>(`/workflows/${id}/viewport`, { x, y, zoom });
   },
-  setEdgeVias: async (id: string, vias: Record<string, [number, number][]>): Promise<void> => {
+  setEdgeVias: async (
+    id: string,
+    vias: Record<string, [number, number][]>,
+  ): Promise<void> => {
     await api.put<void>(`/workflows/${id}/edge-vias`, vias);
   },
   setGraphVariables: async (
@@ -524,26 +653,63 @@ export const data = {
    *  viewport/wire-bends) in one call. Metadata (name/trigger/enabled/…) is preserved server-side. */
   saveGraph: async (
     graphId: string,
-    body: { nodes: unknown[]; edges: unknown[]; viewport?: unknown; edge_vias?: unknown; next_id?: number },
+    body: {
+      nodes: unknown[];
+      edges: unknown[];
+      viewport?: unknown;
+      edge_vias?: unknown;
+      next_id?: number;
+    },
   ): Promise<void> => {
     await api.put<void>(`/workflows/${graphId}/graph`, body);
   },
-  addNode: (graphId: string, kind: string, x: number, y: number): Promise<number> =>
+  addNode: (
+    graphId: string,
+    kind: string,
+    x: number,
+    y: number,
+  ): Promise<number> =>
     api.post<number>(`/workflows/${graphId}/nodes`, { kind, x, y }),
   removeNode: async (graphId: string, nodeId: number): Promise<void> => {
     await api.del<void>(`/workflows/${graphId}/nodes/${nodeId}`);
   },
-  moveNode: async (graphId: string, nodeId: number, x: number, y: number): Promise<void> => {
+  moveNode: async (
+    graphId: string,
+    nodeId: number,
+    x: number,
+    y: number,
+  ): Promise<void> => {
     await api.put<void>(`/workflows/${graphId}/nodes/${nodeId}/move`, { x, y });
   },
-  setNodeConfig: async (graphId: string, nodeId: number, config: unknown): Promise<void> => {
+  setNodeConfig: async (
+    graphId: string,
+    nodeId: number,
+    config: unknown,
+  ): Promise<void> => {
     await api.put<void>(`/workflows/${graphId}/nodes/${nodeId}/config`, config);
   },
-  setNodeMemoize: async (graphId: string, nodeId: number, memoize: boolean): Promise<void> => {
-    await api.put<void>(`/workflows/${graphId}/nodes/${nodeId}/memoize`, { memoize });
+  setNodeMemoize: async (
+    graphId: string,
+    nodeId: number,
+    memoize: boolean,
+  ): Promise<void> => {
+    await api.put<void>(`/workflows/${graphId}/nodes/${nodeId}/memoize`, {
+      memoize,
+    });
   },
-  addEdge: async (graphId: string, from: number, fromPort: string, to: number, toPort: string): Promise<void> => {
-    await api.post<void>(`/workflows/${graphId}/edges`, { from, from_port: fromPort, to, to_port: toPort });
+  addEdge: async (
+    graphId: string,
+    from: number,
+    fromPort: string,
+    to: number,
+    toPort: string,
+  ): Promise<void> => {
+    await api.post<void>(`/workflows/${graphId}/edges`, {
+      from,
+      from_port: fromPort,
+      to,
+      to_port: toPort,
+    });
   },
   removeEdge: async (graphId: string, idx: number): Promise<void> => {
     await api.del<void>(`/workflows/${graphId}/edges/${idx}`);
@@ -551,22 +717,34 @@ export const data = {
   /** Manually run a graph. `inputs` (optional) supplies per-launch values for the graph's input
    *  variables (#102), by variable name — they override the stored defaults for this run only. */
   runGraph: (id: string, inputs?: Record<string, string>): Promise<string> =>
-    api.post<string>(`/workflows/${id}/run`, inputs && Object.keys(inputs).length ? { inputs } : undefined),
+    api.post<string>(
+      `/workflows/${id}/run`,
+      inputs && Object.keys(inputs).length ? { inputs } : undefined,
+    ),
 
   // ---- workflow events + run history --------------------------------------
-  listEvents: <T = unknown>(): Promise<T> => api.get<T>("/workflows/event-registry"),
+  listEvents: <T = unknown>(): Promise<T> =>
+    api.get<T>("/workflows/event-registry"),
   createEvent: async (
     name: string,
     category?: string,
     description?: string,
     fields?: { name: string; type: string }[],
   ): Promise<void> => {
-    await api.post<void>("/workflows/event-registry", { name, category, description, fields });
+    await api.post<void>("/workflows/event-registry", {
+      name,
+      category,
+      description,
+      fields,
+    });
   },
   deleteEvent: async (name: string): Promise<void> => {
-    await api.del<void>(`/workflows/event-registry/${encodeURIComponent(name)}`);
+    await api.del<void>(
+      `/workflows/event-registry/${encodeURIComponent(name)}`,
+    );
   },
-  listEventCategories: <T = unknown>(): Promise<T> => api.get<T>("/workflows/event-categories"),
+  listEventCategories: <T = unknown>(): Promise<T> =>
+    api.get<T>("/workflows/event-categories"),
   createEventCategory: async (name: string): Promise<void> => {
     await api.post<void>("/workflows/event-categories", { name });
   },
@@ -583,14 +761,22 @@ export const data = {
    * rides the query so it works as an `<img src>`; pass `bust` (e.g. Date.now()) to force
    * a reload when a new frame arrives. */
   runFrameUrl: (graph: string, node: number, bust?: number): string => {
-    const qs = new URLSearchParams({ graph: String(graph), node: String(node) });
-    if (auth.token) qs.set("token", auth.token);
+    const qs = new URLSearchParams({
+      graph: String(graph),
+      node: String(node),
+    });
+    const mt = mediaToken();
+    if (mt) qs.set("token", mt);
     if (bust != null) qs.set("t", String(bust));
     return `${API_BASE}/workflows/runs/frame?${qs.toString()}`;
   },
   nodeStateUrl: (graph: string, node: number): string => {
-    const qs = new URLSearchParams({ graph: String(graph), node: String(node) });
-    if (auth.token) qs.set("token", auth.token);
+    const qs = new URLSearchParams({
+      graph: String(graph),
+      node: String(node),
+    });
+    const mt = mediaToken();
+    if (mt) qs.set("token", mt);
     return `${API_BASE}/workflows/runs/node-state?${qs.toString()}`;
   },
 };

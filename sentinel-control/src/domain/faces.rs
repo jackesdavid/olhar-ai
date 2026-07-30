@@ -127,8 +127,8 @@ async fn face_image(
     Path(id): Path<String>,
     Query(q): Query<ImageQuery>,
 ) -> Result<Response, ApiErr> {
-    let claims =
-        auth::verify(&st.jwt_secret, &q.token).map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    let claims = auth::verify_media(&st.jwt_secret, &q.token)
+        .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
     auth::require(&claims, "persons.read")?;
     let tid = tenant_of(&claims)?;
     let db = st.db.clone();
