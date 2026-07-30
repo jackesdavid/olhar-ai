@@ -30,7 +30,10 @@ chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 urlencoding = "2"
 # FIDO2 / WebAuthn passkey login (card #147, security plan §2).
-webauthn-rs = "0.5"
+# `conditional-ui` gates the discoverable-credential API (start/identify/finish_discoverable_
+# authentication) — what makes usernameless "sign in with a passkey" possible. webauthn-rs
+# lists it under preview-features, so treat it as a moving target on upgrades.
+webauthn-rs = { version = "0.5", features = ["conditional-ui"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

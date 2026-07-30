@@ -40,6 +40,15 @@ pub fn router() -> Router<AppState> {
             "/auth/webauthn/login/start",
             post(crate::webauthn::login_start),
         )
+        // Usernameless: no address typed, the assertion says who is signing in.
+        .route(
+            "/auth/webauthn/login/discoverable/start",
+            post(crate::webauthn::discoverable_start),
+        )
+        .route(
+            "/auth/webauthn/login/discoverable/finish",
+            post(crate::webauthn::discoverable_finish),
+        )
         .route(
             "/auth/webauthn/login/finish",
             post(crate::webauthn::login_finish),

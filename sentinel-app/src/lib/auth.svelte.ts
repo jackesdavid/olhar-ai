@@ -218,6 +218,47 @@ export async function registerPasskey(nickname?: string): Promise<void> {
 }
 
 /** Sign in with a passkey. Returns false when this address has no passkey (fall back to password). */
+/**
+ * Sign in with a passkey **without typing an address** — the GitHub-style flow.
+ *
+ * The browser offers whatever passkeys it holds for this site and the assertion itself carries the
+ * user handle, so the server learns who is signing in only from a verified signature. That also
+ * removes the account-existence oracle in the email-first path, which has to answer "does this
+ * address have a passkey?" before anyone has authenticated.
+ *
+ * Only *discoverable* credentials appear in that picker. Platform authenticators (Touch ID, Windows
+ * Hello, Android) create them by default, but a key registered on hardware that declined to store a
+ * resident credential will not show up — hence the email-first path stays as the fallback rather
+ * than being replaced.
+ */
+export async function loginWithPasskeyDiscoverable(): Promise<void> {
+  const start = await fetch(
+    `${API_BASE}/auth/webauthn/login/discoverable/start`,
+    { method: "POST" },
+  );
+  if (!start.ok)
+    throw new Error((await start.text()) || "Passkey login failed");
+  const { handle, options } = await start.json();
+  // No `allowCredentials` in these options — that absence is what makes the browser show its own
+  // picker instead of hunting for one specific credential.
+  const credential = await startAuthentication({
+    optionsJSON: options.publicKey,
+  });
+  const finish = await fetch(
+    `${API_BASE}/auth/webauthn/login/discoverable/finish`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ handle, credential }),
+    },
+  );
+  if (!finish.ok)
+    throw new Error((await finish.text()) || "Passkey login failed");
+  const data = await finish.json();
+  setToken(data.token);
+  await loadMe();
+}
+
 export async function loginWithPasskey(email: string): Promise<boolean> {
   const start = await fetch(`${API_BASE}/auth/webauthn/login/start`, {
     method: "POST",

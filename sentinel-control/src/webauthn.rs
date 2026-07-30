@@ -247,11 +247,30 @@ pub async fn login_finish(
         .finish_passkey_authentication(&body.credential, &state)
         .map_err(|_| (StatusCode::UNAUTHORIZED, "assertion failed".into()))?;
 
-    // Bump the stored signature counter on the credential that just asserted (clone-detection).
+    record_assertion(&st, uid, &result).await?;
+
+    let resp = auth::issue_session(&st.pool, &st.jwt_secret, uid)
+        .await
+        .map_err(db)?
+        .ok_or((StatusCode::UNAUTHORIZED, "unknown user".into()))?;
+    Ok(Json(resp))
+}
+
+/// Persist what an accepted assertion tells us: the signature counter (clone detection) and
+/// `last_used_at`.
+///
+/// Shared by both login paths on purpose. Counter handling is the part of WebAuthn that is easy to
+/// quietly get wrong, and a second hand-written copy in the discoverable flow would be a copy that
+/// drifts — which is the same mistake the gateway's duplicated `Claims` made.
+async fn record_assertion(
+    st: &AppState,
+    uid: Uuid,
+    result: &AuthenticationResult,
+) -> Result<(), (StatusCode, String)> {
     if result.needs_update() {
-        for (row_id, mut passkey) in list_passkeys(&st, uid).await.map_err(db)? {
+        for (row_id, mut passkey) in list_passkeys(st, uid).await.map_err(db)? {
             if passkey.cred_id() == result.cred_id() {
-                passkey.update_credential(&result);
+                passkey.update_credential(result);
                 let json = serde_json::to_value(&passkey).map_err(db)?;
                 sqlx::query(
                     "UPDATE user_credentials SET passkey = $1, last_used_at = $2 WHERE id = $3",
@@ -274,6 +293,81 @@ pub async fn login_finish(
             .await
             .map_err(db)?;
     }
+    Ok(())
+}
+
+// ── usernameless login (discoverable credentials) ─────────────────────────────────────────────
+//
+// The GitHub-style flow: click once, the browser offers the passkeys it holds for this site, and
+// the user never types an address. It works because a *discoverable* credential stores the user
+// handle on the authenticator, so the assertion itself says who is signing in — the server does not
+// have to be told first.
+//
+// This is strictly better than the email-first flow for privacy as well as ergonomics:
+// `login/start` has to answer "does this address have a passkey?" before anyone has authenticated,
+// which is an account-existence oracle. This path answers nothing until a real assertion arrives.
+
+/// In-flight discoverable challenges. Separate from [`AUTHN`] because there is no user id to store
+/// yet — that is the whole point — and because the state type differs.
+static DISC: LazyLock<Mutex<HashMap<String, (DiscoverableAuthentication, Instant)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// `POST /auth/webauthn/login/discoverable/start` — a challenge bound to no particular user.
+///
+/// Takes no body at all: asking for an address here would defeat the point.
+pub async fn discoverable_start() -> Result<Json<LoginChallenge>, (StatusCode, String)> {
+    let webauthn = rp().map_err(|c| (c, "webauthn not configured".into()))?;
+    let (rcr, state) = webauthn.start_discoverable_authentication().map_err(bad)?;
+    let handle = Uuid::new_v4().to_string();
+    let mut d = DISC.lock().unwrap();
+    d.retain(|_, (_, t)| !expired(t));
+    d.insert(handle.clone(), (state, Instant::now()));
+    Ok(Json(LoginChallenge {
+        handle,
+        options: rcr,
+    }))
+}
+
+/// `POST /auth/webauthn/login/discoverable/finish` — identify the user *from the assertion*, then
+/// verify it against that user's keys.
+pub async fn discoverable_finish(
+    State(st): State<AppState>,
+    Json(body): Json<LoginFinish>,
+) -> Result<Json<auth::SessionResp>, (StatusCode, String)> {
+    let webauthn = rp().map_err(|c| (c, "webauthn not configured".into()))?;
+
+    let state = {
+        let mut d = DISC.lock().unwrap();
+        d.remove(&body.handle)
+            .filter(|(_, t)| !expired(t))
+            .map(|(s, _)| s)
+            .ok_or((StatusCode::BAD_REQUEST, "no login in progress".into()))?
+    };
+
+    // The user handle rides in the assertion. This only *claims* an identity — nothing is trusted
+    // until `finish_discoverable_authentication` verifies the signature against that user's keys
+    // below, which is why it is safe to look the user up from client-supplied data here.
+    let (uid, _cred_id) = webauthn
+        .identify_discoverable_authentication(&body.credential)
+        .map_err(|_| (StatusCode::UNAUTHORIZED, "assertion failed".into()))?;
+
+    let keys: Vec<DiscoverableKey> = list_passkeys(&st, uid)
+        .await
+        .map_err(db)?
+        .iter()
+        .map(|(_, p)| DiscoverableKey::from(p))
+        .collect();
+    if keys.is_empty() {
+        // Same opaque answer as a failed signature: distinguishing "no such user" here would hand
+        // back the enumeration oracle this flow exists to avoid.
+        return Err((StatusCode::UNAUTHORIZED, "assertion failed".into()));
+    }
+
+    let result = webauthn
+        .finish_discoverable_authentication(&body.credential, state, &keys)
+        .map_err(|_| (StatusCode::UNAUTHORIZED, "assertion failed".into()))?;
+
+    record_assertion(&st, uid, &result).await?;
 
     let resp = auth::issue_session(&st.pool, &st.jwt_secret, uid)
         .await

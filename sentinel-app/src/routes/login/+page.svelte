@@ -12,7 +12,9 @@
   import { Separator } from "$lib/components/ui/separator";
   import SentinelLogo from "$lib/components/sentinel-logo.svelte";
 
-  import { login, signup, loadMe, setToken, googleLoginUrl, loginWithPasskey, passkeysSupported } from "$lib/auth.svelte";
+  import { login, signup, loadMe, setToken, googleLoginUrl, loginWithPasskey, passkeysSupported,
+    loginWithPasskeyDiscoverable,
+  } from "$lib/auth.svelte";
   import { dict, lang } from "$lib/i18n";
 
   const t = $derived(dict[lang()]);
@@ -61,6 +63,14 @@
     if (busy) return;
     busy = true;
     try {
+      // No address typed → let the browser offer whatever passkeys it holds for this site. With an
+      // address, keep the targeted flow: it still works for a credential the authenticator chose
+      // not to store as discoverable, which would never appear in the picker.
+      if (email.trim().length === 0) {
+        await loginWithPasskeyDiscoverable();
+        await goto("/");
+        return;
+      }
       const ok = await loginWithPasskey(email.trim());
       if (!ok) {
         toast.error(t.webauthn.noPasskey);
@@ -126,7 +136,7 @@
 
       <div class="space-y-2">
         {#if mode === "signin" && passkeysSupported()}
-          <Button variant="outline" class="w-full" onclick={passkey} disabled={busy || email.trim().length === 0}>
+          <Button variant="outline" class="w-full" onclick={passkey} disabled={busy}>
             {t.webauthn.passkeyButton}
           </Button>
         {/if}
