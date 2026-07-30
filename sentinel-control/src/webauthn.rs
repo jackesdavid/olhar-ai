@@ -33,11 +33,36 @@ const CHALLENGE_TTL_SECS: u64 = 300;
 /// + `WEBAUTHN_RP_ORIGIN=https://app.olharai.com`; dev falls back to localhost. `None` (unset /
 /// bad config) makes every endpoint answer 501, so the app cleanly degrades to password login.
 static WEBAUTHN: LazyLock<Option<Webauthn>> = LazyLock::new(|| {
-    let rp_id = std::env::var("WEBAUTHN_RP_ID").unwrap_or_else(|_| "localhost".into());
-    let origin =
-        std::env::var("WEBAUTHN_RP_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".into());
+    // A release build must not invent a relying party. The old code fell back to `localhost`, which
+    // does NOT degrade to 501 as the comment above promises — it builds a perfectly valid Webauthn
+    // pointed at the wrong domain, so the browser refuses every assertion with "The RP ID localhost
+    // is invalid for this domain" and passkeys are live-and-broken instead of cleanly off. Observed
+    // in production. Same shape as `resolve_jwt_secret` and the seed password: the dev escape hatch
+    // is a property of the BINARY, so no missing env var can talk a release build into it.
+    let configured = |k: &str| std::env::var(k).ok().filter(|s| !s.trim().is_empty());
+    let (rp_id, origin) = match (
+        configured("WEBAUTHN_RP_ID"),
+        configured("WEBAUTHN_RP_ORIGIN"),
+    ) {
+        (Some(id), Some(o)) => (id, o),
+        // Partial config counts as unset: half a relying party is a misconfiguration, not a default.
+        _ if cfg!(debug_assertions) => {
+            ("localhost".to_string(), "http://localhost:5173".to_string())
+        }
+        _ => {
+            log::error!(
+                "WEBAUTHN_RP_ID / WEBAUTHN_RP_ORIGIN unset — passkey endpoints will answer 501 and \
+                 the app falls back to password login. Set them to the app origin (prod: \
+                 olharai.com + https://app.olharai.com)."
+            );
+            return None;
+        }
+    };
     let url = Url::parse(&origin).ok()?;
     let mut builder = WebauthnBuilder::new(&rp_id, &url).ok()?.rp_name("Olhar AI");
+    // Say which relying party we actually came up as. This bug was invisible precisely because
+    // nothing at boot reported the RP — the failure only showed up in a browser, per-user.
+    log::info!("WebAuthn relying party: rp_id={rp_id} origin={origin}");
     // When RP ID is the apex but the app is on a subdomain, list the subdomain origin too.
     if let Ok(extra) = std::env::var("WEBAUTHN_EXTRA_ORIGIN") {
         if let Ok(u) = Url::parse(&extra) {
