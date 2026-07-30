@@ -20,6 +20,7 @@ pub const PERMISSIONS: &[(&str, &str)] = &[
     ("settings.read", "View settings"),
     ("settings.write", "Change settings"),
     ("users.manage", "Invite and manage users"),
+    ("users.password_reset", "Set another user's password"),
     ("roles.manage", "Manage roles and permissions"),
     ("recordings.read", "View recorded clips"),
     ("recordings.write", "Create or delete recordings"),

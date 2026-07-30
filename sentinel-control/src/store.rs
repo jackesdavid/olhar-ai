@@ -1241,6 +1241,10 @@ pub async fn provision_tenant_with_admin(
     let user_id = create_user(pool, Some(tenant_id), admin_email, password_hash, false).await?;
     grant_role(pool, user_id, admin_role).await?;
 
+    // The account that creates a tenant owns it (migration 0081). Set here rather than in a
+    // caller so every provisioning path gets it — an ownerless tenant is a support ticket.
+    let _ = set_tenant_owner(pool, tenant_id, user_id).await;
+
     Ok((tenant_id, user_id, admin_keys))
 }
 
@@ -1397,4 +1401,63 @@ pub async fn sessions_valid_from(pool: &PgPool, user_id: Uuid) -> sqlx::Result<O
             .fetch_optional(pool)
             .await?;
     Ok(row.and_then(|r| r.0))
+}
+
+// ---- tenant owner + password reset (migration 0081) -------------------------
+
+/// The tenant's owner, or `None` for an ownerless tenant.
+pub async fn tenant_owner(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Option<Uuid>> {
+    let row: Option<(Option<Uuid>,)> =
+        sqlx::query_as("SELECT owner_user_id FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.and_then(|r| r.0))
+}
+
+/// Record the tenant's owner. Used at provisioning; the master console can reassign later.
+pub async fn set_tenant_owner(pool: &PgPool, tenant_id: Uuid, user_id: Uuid) -> sqlx::Result<()> {
+    sqlx::query("UPDATE tenants SET owner_user_id = $2 WHERE id = $1")
+        .bind(tenant_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Set a user's password, clear any lockout, and **revoke their existing sessions** — in ONE
+/// statement so the three cannot diverge.
+///
+/// Revocation is the part that is easy to leave out and dangerous to omit: a JWT already issued
+/// stays valid for its full 24h, so without bumping `sessions_valid_from` (migration 0080) a
+/// password reset would not evict whoever prompted the reset. Resetting the password of an account
+/// you believe is compromised has to end that account's live sessions, or it accomplishes nothing.
+///
+/// Clearing `failed_logins`/`locked_until` too: an owner resetting a password for a locked-out user
+/// means to restore access, and leaving the lockout in place would silently defeat that.
+///
+/// Scoped by tenant in the WHERE clause, not just by the caller's earlier check — a cross-tenant id
+/// must not be writable even if a future caller forgets to look.
+pub async fn set_password_and_revoke(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    password_hash: &str,
+    now_unix: i64,
+) -> sqlx::Result<u64> {
+    let r = sqlx::query(
+        "UPDATE users
+            SET password_hash = $3,
+                failed_logins = 0,
+                locked_until = NULL,
+                sessions_valid_from = $4
+          WHERE id = $2 AND tenant_id = $1 AND is_master = false",
+    )
+    .bind(tenant_id)
+    .bind(user_id)
+    .bind(password_hash)
+    .bind(now_unix)
+    .execute(pool)
+    .await?;
+    Ok(r.rows_affected())
 }

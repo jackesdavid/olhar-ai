@@ -158,6 +158,10 @@ pub fn catalog() -> &'static [KindInfo] {
             kind: "auth.account_locked",
             label: "Account locked",
         },
+        KindInfo {
+            kind: "auth.password_reset",
+            label: "Password reset",
+        },
     ]
 }
 

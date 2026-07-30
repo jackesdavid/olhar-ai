@@ -69,6 +69,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/users", get(list_users).post(invite_user))
         .route("/users/:id/roles", put(set_user_roles))
+        .route("/users/:id/password", post(set_user_password))
         .route("/admin/tenants", get(list_tenants).post(create_tenant))
         .route("/admin/tenants/:id/assume", post(assume_tenant))
 }
@@ -382,6 +383,121 @@ async fn media_token(
     let token = auth::issue(&st.jwt_secret, &media)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(MediaTokenResp { token, expires_in }))
+}
+
+// ---- tenant owner: reset a member's password --------------------------------
+
+#[derive(Deserialize)]
+struct SetPasswordReq {
+    password: String,
+}
+
+/// Whether `claims` may reset passwords in `tid`.
+///
+/// The owner always may, **regardless of role grants**. That is the point of having an owner: an
+/// Admin can edit the Admin role or drop a role assignment, and without this the tenant could end
+/// up with nobody able to restore access to it. Anyone else needs the explicit action.
+async fn may_reset_passwords(
+    st: &AppState,
+    claims: &Claims,
+    tid: Uuid,
+    caller: Uuid,
+) -> Result<bool, ApiErr> {
+    if store::tenant_owner(&st.pool, tid).await.map_err(db_err)? == Some(caller) {
+        return Ok(true);
+    }
+    Ok(claims.allows("users.password_reset"))
+}
+
+/// Whether `caller` may target `target`, given who owns the tenant.
+///
+/// The one rule: **only the owner may reset the owner's password.** Without it, this feature
+/// creates the escalation it is meant to control — any Admin holding `users.password_reset` could
+/// overwrite the owner's password and take the tenant. Everyone else is fair game to a caller who
+/// already passed the permission check.
+fn may_target(caller: Uuid, target: Uuid, owner: Option<Uuid>) -> bool {
+    owner != Some(target) || caller == target
+}
+
+/// `POST /users/:id/password` — set another user's password (owner, or `users.password_reset`).
+///
+/// This is a RESET, not a change: the caller never proves the old password, so it is an account
+/// takeover primitive by design and every guard below exists to bound who can point it at whom.
+async fn set_user_password(
+    State(st): State<AppState>,
+    UserClaims(c): UserClaims,
+    Path(target_id): Path<Uuid>,
+    Json(b): Json<SetPasswordReq>,
+) -> Result<StatusCode, ApiErr> {
+    let tid = tenant_ctx(&c)?;
+    let caller =
+        Uuid::parse_str(&c.sub).map_err(|_| err(StatusCode::UNAUTHORIZED, "bad subject"))?;
+
+    if !may_reset_passwords(&st, &c, tid, caller).await? {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "missing permission: users.password_reset",
+        ));
+    }
+    // Same floor as signup — a reset must not be a way to set a weaker password than the front door
+    // accepts.
+    if b.password.len() < 8 {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "password must be at least 8 characters",
+        ));
+    }
+
+    let target = store::find_user_by_id(&st.pool, target_id)
+        .await
+        .map_err(db_err)?
+        .ok_or(err(StatusCode::NOT_FOUND, "user not found"))?;
+
+    // Cross-tenant is 404, not 403: 403 would confirm the id exists, turning this into a probe for
+    // other tenants' user ids. Checked here AND again in the UPDATE's WHERE clause — the §1.5 bug
+    // was exactly an id that got authenticated and then trusted.
+    if target.tenant_id != Some(tid) {
+        return Err(err(StatusCode::NOT_FOUND, "user not found"));
+    }
+    // A master belongs to no tenant and is not a tenant's to reset.
+    if target.is_master {
+        return Err(err(StatusCode::NOT_FOUND, "user not found"));
+    }
+    // Only the owner may reset the OWNER's password. Without this, any Admin holding the action
+    // could take over the owner's account and with it the tenant — the escalation this whole
+    // feature would otherwise create.
+    let owner = store::tenant_owner(&st.pool, tid).await.map_err(db_err)?;
+    if !may_target(caller, target_id, owner) {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "only the owner can reset the owner's password",
+        ));
+    }
+
+    let hash =
+        auth::hash_password(&b.password).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let now = app_core::signing::now_unix();
+    let n = store::set_password_and_revoke(&st.pool, tid, target_id, &hash, now)
+        .await
+        .map_err(db_err)?;
+    if n == 0 {
+        // The guards above passed, so this means the row moved out from under us (deleted, or
+        // re-tenanted) between the read and the write. Refuse rather than report success.
+        return Err(err(StatusCode::NOT_FOUND, "user not found"));
+    }
+
+    // Audit trail. The password itself is never logged, evented, or returned — only that a reset
+    // happened, by whom, to whom.
+    log::warn!("password reset: user {target_id} by {caller} (tenant {tid})");
+    let mut ev = app_core::events::NewEvent::new(tid, "auth.password_reset", "user");
+    ev.severity = "warn".to_string();
+    ev.title = Some("Password reset".to_string());
+    ev.message = Some(format!("{} had their password reset", target.email));
+    ev.user_id = Some(target_id);
+    ev.data = Some(serde_json::json!({ "by": caller.to_string() }));
+    st.event_queue.push(ev);
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---- RBAC -------------------------------------------------------------------
@@ -807,11 +923,55 @@ mod failed_login_record_tests {
     #[test]
     fn the_auth_kinds_this_module_emits_are_in_the_feed_catalog() {
         let known: Vec<&str> = app_core::events::catalog().iter().map(|k| k.kind).collect();
-        for kind in ["auth.login", "auth.login_failed", "auth.account_locked"] {
+        for kind in [
+            "auth.login",
+            "auth.login_failed",
+            "auth.account_locked",
+            "auth.password_reset",
+        ] {
             assert!(
                 known.contains(&kind),
                 "{kind} is emitted by handlers::login but missing from events::catalog()"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod password_reset_tests {
+    use super::*;
+
+    fn id(n: u8) -> Uuid {
+        Uuid::from_bytes([n; 16])
+    }
+
+    /// The escalation this rule exists to stop: an Admin with the action must not be able to
+    /// overwrite the owner's password and take the tenant.
+    #[test]
+    fn a_non_owner_cannot_target_the_owner() {
+        let (admin, owner) = (id(1), id(2));
+        assert!(!may_target(admin, owner, Some(owner)));
+    }
+
+    /// The owner is not locked out of their own account by that rule.
+    #[test]
+    fn the_owner_can_target_themselves() {
+        let owner = id(2);
+        assert!(may_target(owner, owner, Some(owner)));
+    }
+
+    /// Ordinary members stay resettable by anyone who passed the permission check.
+    #[test]
+    fn anyone_permitted_can_target_an_ordinary_member() {
+        let (admin, member, owner) = (id(1), id(3), id(2));
+        assert!(may_target(admin, member, Some(owner)));
+    }
+
+    /// An ownerless tenant (migration 0081 leaves these NULL rather than guessing) must not become
+    /// un-administrable — with no owner there is no owner to protect.
+    #[test]
+    fn an_ownerless_tenant_has_nobody_to_protect() {
+        assert!(may_target(id(1), id(3), None));
+        assert!(may_target(id(1), id(2), None));
     }
 }
