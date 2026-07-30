@@ -1538,3 +1538,79 @@ pub async fn has_oauth_identity(pool: &PgPool, user_id: Uuid) -> sqlx::Result<bo
         .await?;
     Ok(n > 0)
 }
+
+// ---- camera status (migration 0083) -----------------------------------------
+
+/// One camera's reported status, as the edge sees it.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct CameraStatusIn {
+    pub ip: String,
+    /// `ProbeStatus` snake_case.
+    pub status: String,
+    #[serde(default)]
+    pub detail: String,
+    /// RFC3339, when a frame last arrived — absent if never.
+    #[serde(default)]
+    pub last_frame_at: Option<String>,
+}
+
+/// Persist a camera's reported status. Returns whether the row existed.
+///
+/// Deliberately does NOT try to report the previous value via `RETURNING`: Postgres evaluates
+/// RETURNING **after** the update, so it yields the NEW status, not the old one. That exact trap is
+/// recorded in project memory from a previous incident. The caller reads
+/// [`previous_camera_health`] first and compares.
+pub async fn record_camera_status(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    s: &CameraStatusIn,
+    now_rfc3339: &str,
+) -> sqlx::Result<bool> {
+    let n = sqlx::query(
+        "UPDATE devices
+            SET probe_status = $3,
+                probe_detail = $4,
+                probe_at = $5,
+                last_frame_at = COALESCE($6, last_frame_at)
+          WHERE tenant_id = $1 AND ip = $2",
+    )
+    .bind(tenant_id)
+    .bind(&s.ip)
+    .bind(&s.status)
+    .bind(&s.detail)
+    .bind(now_rfc3339)
+    .bind(s.last_frame_at.as_deref())
+    .execute(pool)
+    .await?;
+    Ok(n.rows_affected() > 0)
+}
+
+/// The camera's health BEFORE a status write. `None` when the camera or its status is unknown
+/// (never probed) — a first-ever report is not a transition and must not fire an event.
+pub async fn previous_camera_health(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    ip: &str,
+) -> sqlx::Result<Option<bool>> {
+    let row: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT probe_status FROM devices WHERE tenant_id = $1 AND ip = $2")
+            .bind(tenant_id)
+            .bind(ip)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.and_then(|r| r.0).map(|s| {
+        matches!(s.as_str(), "ok" | "streaming")
+    }))
+}
+
+/// A camera's friendly name, for event copy. Falls back to the IP at the call site — an event that
+/// says "192.168.0.7 is offline" is worse than "Sala is offline" but far better than none.
+pub async fn device_name(pool: &PgPool, tenant_id: Uuid, ip: &str) -> sqlx::Result<Option<String>> {
+    let row: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT name FROM devices WHERE tenant_id = $1 AND ip = $2")
+            .bind(tenant_id)
+            .bind(ip)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.and_then(|r| r.0).filter(|s| !s.trim().is_empty()))
+}

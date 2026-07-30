@@ -145,9 +145,6 @@ impl AppState {
         write_cache(&self.cache_path, &fresh);
         let n = fresh.len();
         *self.devices.lock().unwrap() = fresh;
-        if self.own_go2rtc {
-            crate::go2rtc::respawn(self);
-        }
         self.push_streaming();
         self.warm_cameras(); // restart any ring that crashed since last poll
         n
@@ -200,9 +197,6 @@ impl AppState {
                 resolve_rtsp(devices.as_mut_slice());
                 write_cache(&self.cache_path, &devices);
             }
-        }
-        if !moves.is_empty() && self.own_go2rtc {
-            crate::go2rtc::respawn(self);
         }
         if !moves.is_empty() {
             self.push_device_moves(&moves);
@@ -278,6 +272,81 @@ impl AppState {
     /// gstreamer-linked pipeline has probed it (`None` on older backends or before the first
     /// probe). Drives the cloud's "online & correct" status dot and the Devices page's codec
     /// badge. Best-effort.
+    /// Report each camera's stage to control, which turns health CHANGES into `camera_offline` /
+    /// `camera_online` events (card #155).
+    ///
+    /// **Derived from the pipeline that is already running — this must NEVER open a second
+    /// connection.** See the ONE-PIPELINE invariant in `capture.rs`: consumer cameras cap concurrent
+    /// RTSP sessions at 2-4, and a status check that dials again is how a WORKING camera goes dark
+    /// with "503 insufficient resource". So:
+    ///
+    ///   - frames arriving  → `streaming` (the only proof that actually proves it)
+    ///   - no credentials   → `no_credentials`, answered without touching the network
+    ///   - otherwise        → cold-probe, but ONLY for a camera with no pipeline to ask
+    ///
+    /// A camera whose pipeline is up but starved is `timeout`, not `unreachable`: we know we reached
+    /// it, because we are connected to it.
+    pub fn push_camera_status(&self) {
+        use app_core::rtsp_probe::ProbeStatus;
+        // Frames within this window count as live. Wider than the capture cadence so a single
+        // dropped frame is not reported as an outage — flapping status is worse than none.
+        const FRESH: Duration = Duration::from_secs(30);
+
+        let devices = self.devices.lock().unwrap().clone();
+        let mut out = Vec::with_capacity(devices.len());
+
+        for d in &devices {
+            let age = crate::capture::last_frame_age(&d.ip);
+            let has_creds = !d.username.as_deref().unwrap_or("").trim().is_empty()
+                || !d.password.as_deref().unwrap_or("").trim().is_empty();
+
+            let (status, detail) = match age {
+                // Proof of life. Nothing else needs asking.
+                Some(a) if a <= FRESH => (ProbeStatus::Streaming, String::new()),
+                // A pipeline exists but has gone quiet — we are connected, so this is the camera
+                // stalling, not the network losing it.
+                Some(a) => (
+                    ProbeStatus::Timeout,
+                    format!("no frame for {}s", a.as_secs()),
+                ),
+                None if !has_creds => (
+                    ProbeStatus::NoCredentials,
+                    "No username or password is set for this camera".to_string(),
+                ),
+                // No pipeline and no frames: this is the one case worth a dial, and the camera has
+                // no session of ours to lose.
+                None => match d.rtsp_url.as_deref().filter(|u| !u.trim().is_empty()) {
+                    Some(url) => {
+                        let p = app_core::rtsp_probe::probe(
+                            url,
+                            d.username.as_deref().unwrap_or(""),
+                            d.password.as_deref().unwrap_or(""),
+                        );
+                        (p.status, p.detail)
+                    }
+                    None => (
+                        ProbeStatus::NotFound,
+                        "No stream URL resolved for this camera".to_string(),
+                    ),
+                },
+            };
+
+            out.push(serde_json::json!({
+                "ip": d.ip,
+                "status": status,
+                "detail": detail,
+                "last_frame_at": age.map(|a| {
+                    app_core::timeutil::now_rfc3339_minus(a.as_secs() as i64)
+                }),
+            }));
+        }
+
+        let url = format!("{}/config/camera-status", self.control_url);
+        if let Err(e) = self.box_agent().send_signed_json(&url, &out) {
+            log::debug!("camera-status push failed: {e}");
+        }
+    }
+
     pub fn push_streaming(&self) {
         let cams: Vec<StreamingCamera> = self
             .devices

@@ -171,6 +171,17 @@ pub fn codec_for(ip: &str) -> Option<&'static str> {
 }
 
 /// The freshest decoded JPEG for `ip` on the given stream slot, only if newer than `max_age` —
+/// How long since a frame last arrived for `ip`, or `None` if one never has.
+///
+/// This — not the RTSP probe — is what distinguishes "Streaming" from merely "Reachable". A camera
+/// can pass DESCRIBE and still deliver nothing (a wedged encoder, a pipeline that never negotiated),
+/// and only the frame hub can tell.
+pub fn last_frame_age(ip: &str) -> Option<Duration> {
+    let cam = cams().lock().unwrap().get(&cam_key(ip, false)).cloned()?;
+    let g = cam.latest.lock().unwrap();
+    g.as_ref().map(|(_, at)| at.elapsed())
+}
+
 /// else `None` so the hub falls back to go2rtc `frame.jpeg`.
 pub fn latest_fresh(ip: &str, hd: bool, max_age: Duration) -> Option<Arc<Vec<u8>>> {
     let cam = cams().lock().unwrap().get(&cam_key(ip, hd)).cloned()?;
@@ -304,17 +315,14 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
         .map(str::to_string)
         .unwrap_or_else(|| stream_url(ip, hd));
 
-    // The RTSP INGEST is platform-specific; everything from `h264parse` on is identical.
+    // ONE ingest, every platform: `rtspsrc` dials the camera directly.
     //
-    // On **Jetson/Tegra**, GStreamer 1.20's `rtspsrc` cannot complete some cameras' RTSP Digest-auth
-    // handshake — it finishes OPTIONS + auth then stalls at SETUP and loops forever, holding a dead
-    // session. Verified against a live Dahua: EVERY `rtspsrc` transport/URL/auth combination = 0
-    // bytes, while `retina` (and VLC/ffmpeg) streamed it fine. The upstream fix, `rtspsrc2`, needs
-    // GStreamer ≥1.22, which L4T can't provide without risking the NVIDIA NVDEC plugins. So on Tegra
-    // we pull with **retina** — the pure-Rust RTSP client the recording ring already uses — and feed
-    // the H264 into the SAME graph via `appsrc` (proven end-to-end on the Orin Nano: NVDEC decode +
-    // mp4mux both work). Every OTHER platform keeps `rtspsrc` untouched.
-    let use_retina = crate::media::is_tegra();
+    // There used to be a Tegra-only fork here that pulled with `retina` and fed `appsrc`, because
+    // GStreamer 1.20's `rtspsrc` stalls at SETUP on some cameras' Digest auth (verified against a
+    // live Dahua on an Orin Nano). It is gone: two ingest paths meant two sets of timing, caps and
+    // failure behaviour to reason about, and the platform that got the LESS-tested path was the one
+    // hardest to debug. Jetson is expected to run this same pipeline; making it do so is tracked
+    // separately rather than papered over with a second code path.
 
     // PROBE the camera's codec from its SDP and build a matching pipeline — H264 or H265 — on
     // EVERY platform, not just Tegra/retina: cameras vary (a Dahua that was H265 vs one switched
@@ -343,16 +351,10 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
     let decode = crate::media::decode_branch();
     let parse = codec.parse_element(); // h264parse / h265parse
     let mux_caps = codec.mux_caps(); // avc / hvc1
-    let source = if use_retina {
-        // Fed by the retina thread below. `do-timestamp` stamps each pushed access unit so `mp4mux`
-        // gets the PTS it needs (retina gives us bare access units, no container timing).
-        "appsrc name=src is-live=true do-timestamp=true format=time".to_string()
-    } else {
-        format!(
-            "rtspsrc location=\"{url}\" protocols=tcp latency=200 ! {}",
-            codec.depay_element()
-        )
-    };
+    let source = format!(
+        "rtspsrc location=\"{url}\" protocols=tcp latency=200 ! {}",
+        codec.depay_element()
+    );
     let desc = format!(
         "{source} ! {parse} name=parse ! tee name=t \
          t. ! queue max-size-buffers=64 leaky=downstream ! {decode} ! videorate \
@@ -426,36 +428,6 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
             .build(),
     );
 
-    // Tegra: spawn the retina feeder that dials the camera and pushes H264 access units into
-    // `appsrc`. It runs a small current-thread tokio runtime (like the recording ring). On any retina
-    // error / stop it ends the appsrc stream so the bus loop below unblocks and `supervise` restarts.
-    let feeder_stop = Arc::new(AtomicBool::new(false));
-    let feeder = if use_retina {
-        let appsrc = pipeline
-            .by_name("src")
-            .ok_or("appsrc missing")?
-            .downcast::<gst_app::AppSrc>()
-            .map_err(|_| "src is not an appsrc".to_string())?;
-        let url_c = url.clone();
-        let ip_c = ip.to_string();
-        let stop_c = Arc::clone(&feeder_stop);
-        Some(std::thread::spawn(move || {
-            match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => {
-                    if let Err(e) = rt.block_on(retina_feed(&url_c, &appsrc, &stop_c, codec)) {
-                        log::warn!("capture-decoder[{ip_c}]: retina ingest: {e}");
-                    }
-                }
-                Err(e) => log::error!("capture-decoder[{ip_c}]: retina runtime: {e}"),
-            }
-            let _ = appsrc.end_of_stream(); // unblock the bus loop → supervise restarts
-        }))
-    } else {
-        None
-    };
 
     pipeline
         .set_state(gst::State::Playing)
@@ -489,11 +461,7 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
             None => {} // 2s tick with no message → re-check the watchdog
         }
     }
-    feeder_stop.store(true, Ordering::Relaxed);
     let _ = pipeline.set_state(gst::State::Null);
-    if let Some(h) = feeder {
-        let _ = h.join();
-    }
     result
 }
 
@@ -585,136 +553,7 @@ fn probe_codec(url: &str) -> Result<VideoCodec, String> {
     })
 }
 
-/// The Tegra RTSP ingest: pull codec-framed access units with `retina` and push them into `appsrc`.
-/// Mirrors the PoC verified on the Orin Nano. `retina` handles the Digest handshake GStreamer's
-/// `rtspsrc` can't; its `demuxed()` gives us access units, and the SDP's `codec_data` goes into the
-/// appsrc caps so the parser negotiates avc/hvc1 without waiting for inline parameter sets. `codec`
-/// (from [`probe_codec`]) selects H264 vs H265.
-async fn retina_feed(
-    url: &str,
-    appsrc: &gstreamer_app::AppSrc,
-    stop: &AtomicBool,
-    codec: VideoCodec,
-) -> Result<(), String> {
-    use futures::StreamExt;
-    use gstreamer as gst;
 
-    let (bare, creds) = crate::recording::split_rtsp_credentials(url);
-    let parsed = bare
-        .parse::<url::Url>()
-        .map_err(|e| format!("bad url: {e}"))?;
-    let opts = match creds {
-        Some((username, password)) => retina::client::SessionOptions::default()
-            .creds(Some(retina::client::Credentials { username, password })),
-        None => retina::client::SessionOptions::default(),
-    };
-    let mut session = retina::client::Session::describe(parsed, opts)
-        .await
-        .map_err(|e| format!("describe: {e}"))?;
-    let vid = session
-        .streams()
-        .iter()
-        .position(|s| {
-            s.media() == "video" && VideoCodec::from_encoding(s.encoding_name()) == Some(codec)
-        })
-        .ok_or_else(|| format!("no {} video stream", codec.label()))?;
-    // codec_data (AVCDecoderConfigurationRecord / HEVCDecoderConfigurationRecord) → caps for the appsrc.
-    let extra: Vec<u8> = match session.streams()[vid].parameters() {
-        Some(retina::codec::ParametersRef::Video(v)) => v.extra_data().to_vec(),
-        _ => Vec::new(),
-    };
-    let mut caps = gst::Caps::builder(codec.caps_media())
-        .field("stream-format", codec.stream_format())
-        .field("alignment", "au");
-    if !extra.is_empty() {
-        caps = caps.field("codec_data", gst::Buffer::from_slice(extra));
-    }
-    appsrc.set_caps(Some(&caps.build()));
-
-    session
-        .setup(vid, retina::client::SetupOptions::default())
-        .await
-        .map_err(|e| format!("setup: {e}"))?;
-    let playing = session
-        .play(retina::client::PlayOptions::default())
-        .await
-        .map_err(|e| format!("play: {e}"))?;
-    let mut demuxed = playing.demuxed().map_err(|e| format!("demuxed: {e}"))?;
-
-    loop {
-        if stop.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-        // A 5s read timeout doubles as a liveness check: a camera that stops sending unblocks us so
-        // the feeder ends and the pipeline restarts (the watchdog would also catch it downstream).
-        match tokio::time::timeout(Duration::from_secs(5), demuxed.next()).await {
-            Ok(Some(Ok(retina::codec::CodecItem::VideoFrame(f)))) => {
-                let data = f.into_data();
-                let key = is_keyframe(&data, codec);
-                let mut buf = gst::Buffer::from_mut_slice(data);
-                // The appsrc's declared caps already match the mux branch's desired output
-                // (avc/hvc1 + alignment=au), so both `{parse}` instances downstream run in
-                // PASSTHROUGH — neither does bitstream analysis, so whatever sync-point flag
-                // we set here is exactly what `mp4mux` sees. Without this, every buffer defaults
-                // to "keyframe" (`DELTA_UNIT` unset on a fresh `Buffer`), which happens to work
-                // by accident for H264, but see the `is_keyframe` doc for why H265 needs it set
-                // explicitly and correctly.
-                if !key {
-                    buf.get_mut()
-                        .expect("buffer uniquely owned right after creation")
-                        .set_flags(gst::BufferFlags::DELTA_UNIT);
-                }
-                if appsrc.push_buffer(buf).is_err() {
-                    return Ok(()); // pipeline gone; not an error worth logging
-                }
-            }
-            Ok(Some(Ok(_))) => {} // RTCP / parameter updates
-            Ok(Some(Err(e))) => return Err(format!("packet: {e}")),
-            Ok(None) => return Err("stream ended".to_string()),
-            Err(_) => return Err("frame read timeout".to_string()),
-        }
-    }
-}
-
-/// Whether `au` (one retina access unit, four-byte-length-prefixed NALs per
-/// `retina::codec::VideoFrame::into_data`) contains an intra random-access-point NAL — i.e.
-/// whether `mp4mux` can start a new fragment here.
-///
-/// Determined by direct NAL-type inspection rather than trusting `retina`'s own
-/// `VideoFrame::is_random_access_point()`: that call only recognizes H.265 IDR (NAL types 19/20)
-/// and misses the BLA/CRA types (16-18, 21-23) many camera encoders use for periodic refresh
-/// instead of IDR (confirmed live on a Dahua substream, and a known upstream gap —
-/// https://github.com/scottlamb/retina/issues/132). Miss every keyframe and `mp4mux`'s
-/// `streamable=true` fragmenting never sees a sync sample to start a fragment on — the pipeline
-/// doesn't error, it just never produces the first fragment, forever (`live-push`/`mse` then log
-/// "produced no fragment within 10s"). H264 IDR (type 5) isn't affected by that particular bug,
-/// but is checked here too — same cost, one fewer place a future codec-detection change could
-/// silently reintroduce this.
-fn is_keyframe(au: &[u8], codec: VideoCodec) -> bool {
-    let mut i = 0usize;
-    while i + 4 <= au.len() {
-        let len = u32::from_be_bytes([au[i], au[i + 1], au[i + 2], au[i + 3]]) as usize;
-        let nal = i + 4;
-        if len == 0 || nal >= au.len() {
-            break;
-        }
-        let header = au[nal];
-        let is_irap = match codec {
-            VideoCodec::H264 => (header & 0x1F) == 5, // IDR
-            // H.265 NAL type is bits 1-6 of the (2-byte) header's first byte. 16-23 is the full
-            // IRAP range (BLA_W_LP..RSV_IRAP_VCL23) — the set `retina` under-recognizes.
-            VideoCodec::H265 => {
-                let nal_type = (header >> 1) & 0x3F;
-                (16..=23).contains(&nal_type)
-            }
-        };
-        if is_irap {
-            return true;
-        }
-        i = (nal + len).min(au.len());
-    }
-    false
-}
 
 /// Consecutive fast (<30s) failures while GPU decode is on before we give up on it for this
 /// camera and fall back to CPU. The synthetic probe in `hwaccel::detect()` (open the hw device

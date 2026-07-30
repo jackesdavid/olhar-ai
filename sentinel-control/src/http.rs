@@ -39,6 +39,7 @@ pub fn router(state: AppState) -> Router {
         .route("/config/discovered", post(discovered_push))
         .route("/config/device-moved", post(device_moved))
         .route("/config/streaming", post(streaming_push))
+        .route("/config/camera-status", post(camera_status_push))
         .route("/config/logs", post(box_logs_push))
         .route("/config/motion", post(motion_push))
         .route("/config/face", post(face_push))
@@ -651,6 +652,81 @@ impl StreamingIn {
 
 /// The edge reports which cameras it currently has a resolved stream for (box token). Drives
 /// the precise "online & correct" status dot + codec badge on the Devices page.
+/// `POST /config/camera-status` — the edge reports each camera's stage, and control turns HEALTH
+/// CHANGES into `camera_offline` / `camera_online` events (card #155).
+///
+/// **Transition-only.** A camera that is down for a day emits ONE event, not one per report: the
+/// previous status is read before the write and compared. A first-ever report is not a transition
+/// and fires nothing — otherwise adding a camera would announce it as "came online", and a control
+/// restart would replay every camera in the tenant.
+async fn camera_status_push(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<Vec<store::CameraStatusIn>>>,
+) -> Response {
+    let tenant = match box_tenant(&st, &headers).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
+        Err(resp) => return resp,
+    };
+    let items = body.map(|Json(v)| v).unwrap_or_default();
+    let now = app_core::timeutil::now_rfc3339();
+
+    for s in &items {
+        let healthy_now = matches!(s.status.as_str(), "ok" | "streaming");
+        // Read BEFORE the write — RETURNING would hand back the new value (see the store helper).
+        let was = match store::previous_camera_health(&st.pool, tenant, &s.ip).await {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("camera-status: previous health for {}: {e}", s.ip);
+                continue;
+            }
+        };
+        if let Err(e) = store::record_camera_status(&st.pool, tenant, s, &now).await {
+            log::error!("camera-status: write for {}: {e}", s.ip);
+            continue;
+        }
+
+        // `None` = never probed before. Not a transition.
+        let Some(was_healthy) = was else { continue };
+        if was_healthy == healthy_now {
+            continue;
+        }
+
+        let name = store::device_name(&st.pool, tenant, &s.ip)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| s.ip.clone());
+
+        let (kind, title, message, data) = if healthy_now {
+            (
+                "camera_online",
+                "Camera back online",
+                format!("{name} is responding again"),
+                serde_json::json!({ "camera": s.ip, "offline_secs": 0 }),
+            )
+        } else {
+            (
+                "camera_offline",
+                "Camera offline",
+                format!("{name}: {}", s.detail),
+                serde_json::json!({ "camera": s.ip, "reason": s.status, "detail": s.detail }),
+            )
+        };
+
+        let mut ev = app_core::events::NewEvent::new(tenant, kind, "system");
+        ev.severity = if healthy_now { "info" } else { "warn" }.to_string();
+        ev.title = Some(title.to_string());
+        ev.message = Some(message);
+        ev.camera = Some(s.ip.clone());
+        ev.data = Some(data);
+        st.event_queue.push(ev);
+        log::info!("camera {} → {} ({})", s.ip, s.status, kind);
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
 async fn streaming_push(
     State(st): State<AppState>,
     headers: HeaderMap,

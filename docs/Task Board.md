@@ -109,6 +109,8 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #155 Camera status — show WHICH stage failed, per camera
+	  - Plan: [[camera-status-visibility]]
 - [ ] #148 Security plan §0 — rotate the exposed secrets + remove the demo admin
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #151 Security plan §1.8 — scoped media tokens, get JWTs out of query strings

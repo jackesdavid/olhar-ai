@@ -51,27 +51,6 @@ impl Backend {
     }
 }
 
-/// The decode half of the ingest pipeline, chosen from what this box's GStreamer registry actually
-/// has (card #138, A1/HW + A4).
-///
-/// **Why probe the registry instead of naming a platform.** The same binary ships to a Mac, a
-/// Jetson, a Linux server and eventually Android and Windows, and each has a different hardware
-/// decoder under a different element name. Asking the registry is both the capability probe (A4,
-/// replacing `ffmpeg -hwaccels`) and the selection — one source of truth, and a box missing its
-/// accelerator degrades to software instead of failing to start.
-///
-/// The Jetson's `nvv4l2decoder` outputs into **NVMM** (GPU) memory, which `videoconvert` cannot
-/// read — it needs `nvvidconv` to reach system memory. Pairing the wrong converter is not a
-/// negotiation error you can miss: the pipeline simply never produces a frame.
-/// Is this a Jetson/Tegra box? Probed from the registry (the NVDEC plugins), matching
-/// [`decode_branch`]. Used to pick the RTSP ingest: Tegra's GStreamer 1.20 `rtspsrc` can't complete
-/// some cameras' Digest handshake, so on Tegra the edge pulls with `retina` and feeds `appsrc`
-/// instead; every other platform keeps `rtspsrc`.
-pub fn is_tegra() -> bool {
-    use gstreamer as gst;
-    gst::ElementFactory::find("nvv4l2decoder").is_some()
-        && gst::ElementFactory::find("nvvidconv").is_some()
-}
 
 pub fn decode_branch() -> &'static str {
     use gstreamer as gst;

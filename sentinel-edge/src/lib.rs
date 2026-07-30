@@ -15,7 +15,6 @@ mod enroll;
 mod envfile;
 mod face;
 mod frames;
-mod go2rtc;
 mod gst_mse;
 mod gst_mux;
 mod http;
@@ -187,16 +186,9 @@ pub fn run() {
     let state = AppState::boot();
 
     // Media path: the in-process linked GStreamer decoder + outbound live dial (cards #138 + #144).
-    // No tailnet, no go2rtc sidecar, no ffmpeg — the edge reaches control outbound over HTTPS and its
-    // cameras over the LAN directly. The `tailscale`/`go2rtc`/`ffmpeg` binaries are retired here.
-    // The legacy EDGE_OWN_GO2RTC opt-in is never set on a GStreamer box; kept only for a bare-binary
-    // dev box that hasn't linked GStreamer yet.
-    if state.own_go2rtc {
-        go2rtc::respawn(&state);
-        log::info!("edge owns go2rtc (legacy EDGE_OWN_GO2RTC path)");
-    } else {
-        log::info!("media: in-process GStreamer — no go2rtc, no ffmpeg, no tailnet");
-    }
+    // No tailnet, no go2rtc sidecar, no ffmpeg — the edge reaches control outbound over HTTPS and
+    // its cameras over the LAN directly. There is no longer an alternative to fall back to.
+    log::info!("media: in-process GStreamer — no go2rtc, no ffmpeg, no tailnet");
     // Report the initially-resolved stream set so the Devices dot is correct from boot.
     state.push_streaming();
     // If cameras_always_warm is enabled, pre-open each camera's go2rtc RTSP session so
@@ -226,6 +218,18 @@ pub fn run() {
             // Start ring buffers for any newly discovered cameras (idempotent per IP).
             disco.warm_cameras();
             std::thread::sleep(std::time::Duration::from_secs(300));
+        });
+    }
+
+    // Camera status → control, which turns health CHANGES into camera_offline / camera_online
+    // events (card #155). Its own loop rather than riding the 25s config long-poll: that loop is
+    // driven by CLOUD edits, so a camera dying while nobody is editing would go unreported until
+    // someone happened to touch the config. 60s is the resolution of "my camera dropped".
+    {
+        let st = std::sync::Arc::clone(&state);
+        std::thread::spawn(move || loop {
+            st.push_camera_status();
+            std::thread::sleep(std::time::Duration::from_secs(60));
         });
     }
 

@@ -40,6 +40,31 @@ pub enum ProbeStatus {
     Timeout,
     /// Anything we couldn't classify.
     Error,
+
+    // ---- states that need no dial -------------------------------------------------------------
+    // Answered before touching the network: cheaper, and each names a DIFFERENT user action that
+    // `Unreachable`/`AuthFailed` would otherwise blur together.
+    /// No credentials are configured for this camera yet.
+    ///
+    /// Distinct from [`AuthFailed`](ProbeStatus::AuthFailed) on purpose. Both used to surface as
+    /// "auth failed", which told a user to FIX a password they had never SET. The action differs —
+    /// "add credentials" vs "correct them" — so the state has to.
+    NoCredentials,
+    /// This box cannot route to the camera's address at all — it is on another network.
+    ///
+    /// Distinct from [`Unreachable`](ProbeStatus::Unreachable), which means "should be reachable
+    /// and isn't" (powered off, firewalled). This means "was never this box's camera to serve" —
+    /// e.g. a 192.168.10.x camera on an appliance while this box lives on 192.168.0.x. Reporting
+    /// that as Unreachable is true and useless: it sends someone to check the power on a camera
+    /// that is working fine, for a different box.
+    NotOnThisBox,
+    /// Frames are actually flowing right now.
+    ///
+    /// NOT produced by [`probe`] — the probe answers "can this stream be DESCRIBED", which
+    /// [`Ok`](ProbeStatus::Ok) already means. A camera can pass DESCRIBE and still deliver nothing
+    /// (a wedged encoder, a pipeline that never negotiated). Only the frame hub knows, so the status
+    /// layer sets this from last-frame age. Kept in the same enum so the UI has ONE vocabulary.
+    Streaming,
 }
 
 impl ProbeStatus {
@@ -47,6 +72,41 @@ impl ProbeStatus {
     /// no's: retrying them is what causes the lockout in the first place.
     pub fn is_retryable(self) -> bool {
         matches!(self, ProbeStatus::Timeout | ProbeStatus::Unreachable)
+    }
+
+    /// Whether this state is the camera's fault to fix, vs ours/the network's. Drives whether the
+    /// UI shows a "check the camera" action or an explanation.
+    pub fn needs_user_action(self) -> bool {
+        matches!(
+            self,
+            ProbeStatus::AuthFailed
+                | ProbeStatus::Locked
+                | ProbeStatus::NotFound
+                | ProbeStatus::NoCredentials
+        )
+    }
+
+    /// Whether the camera is usable right now.
+    pub fn is_healthy(self) -> bool {
+        matches!(self, ProbeStatus::Ok | ProbeStatus::Streaming)
+    }
+
+    /// Short, user-facing summary. Deliberately here rather than in the frontend: the same words
+    /// have to serve the web app, the mobile app and a workflow notification, and three copies of
+    /// this mapping would drift.
+    pub fn summary(self) -> &'static str {
+        match self {
+            ProbeStatus::Streaming => "Streaming",
+            ProbeStatus::Ok => "Reachable, not yet streaming",
+            ProbeStatus::Unreachable => "Can't reach it on the network",
+            ProbeStatus::Timeout => "Not responding",
+            ProbeStatus::AuthFailed => "Credentials rejected",
+            ProbeStatus::NoCredentials => "No credentials set",
+            ProbeStatus::Locked => "Refusing all connections",
+            ProbeStatus::NotFound => "No stream at that path",
+            ProbeStatus::NotOnThisBox => "On a different network from this box",
+            ProbeStatus::Error => "Unrecognised response",
+        }
     }
 }
 
@@ -190,6 +250,16 @@ pub fn probe(url: &str, user: &str, pass: &str) -> Probe {
     let Some(parsed) = parse(url) else {
         return Probe::new(ProbeStatus::Error, format!("Not a valid RTSP URL: {url}"));
     };
+
+    // Answered without dialing. A camera with no credentials will answer 401 and look exactly like
+    // a wrong password — so ask the cheaper question first, and skip a pointless RTSP session
+    // against a camera whose session budget is 2-4.
+    if user.trim().is_empty() && pass.trim().is_empty() {
+        return Probe::new(
+            ProbeStatus::NoCredentials,
+            "No username or password is set for this camera".to_string(),
+        );
+    }
 
     let addr = match (parsed.host, parsed.port).to_socket_addrs() {
         Ok(mut it) => match it.next() {

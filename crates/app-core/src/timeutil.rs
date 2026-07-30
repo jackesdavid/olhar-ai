@@ -24,3 +24,12 @@ pub fn is_today(created_at: &str) -> bool {
         .map(|dt| dt.with_timezone(&chrono::Local).date_naive() == today)
         .unwrap_or(false)
 }
+
+/// An RFC3339 timestamp `secs_ago` seconds in the past.
+///
+/// For reporting when something last happened from an elapsed duration — the frame hub knows "42s
+/// since the last frame", while the stored value has to be an absolute time so it stays meaningful
+/// after the report is written.
+pub fn now_rfc3339_minus(secs_ago: i64) -> String {
+    (chrono::Local::now() - chrono::Duration::seconds(secs_ago)).to_rfc3339()
+}

@@ -1,152 +1,83 @@
 #!/usr/bin/env bash
-# Build the macOS appliance installer: Sentinel-Edge-<version>.pkg  (card #82)
+# Build the macOS **GStreamer** appliance installer for Intel: Sentinel-Edge-<version>-gst-x86_64.pkg
+# (card #138). The media path is a self-contained linked GStreamer runtime — no go2rtc, no ffmpeg.
 #
-#   ./deploy/macos-pkg/build.sh                 # unsigned — Gatekeeper WILL block it (dev only)
-#   ./deploy/macos-pkg/build.sh --sign          # signed + notarized (needs the certs + creds below)
+#   ./deploy/macos-pkg/build-gst.sh            # unsigned (dev — right-click Open, or your own Mac)
+#   ./deploy/macos-pkg/build-gst.sh --sign     # signed + notarized (certs/creds as in build.sh)
 #
-# A .pkg, not a .dmg: a .dmg is a disk image you drag an *app bundle* out of, and the edge is a
-# headless launchd daemon — there is nothing to drag and nothing to open.
-#
-# The package is GENERIC: one file for every customer. It carries no box token; the appliance gets
-# its identity from a pairing code typed into the page the postinstall opens (card #81). That is
-# what makes a signed package possible at all — a per-box installer would have to be re-signed on
-# demand, with Apple's private key sitting on a server.
-#
-# Signing (--sign) expects, in the environment:
-#   MACOS_APP_CERT   "Developer ID Application: <Org> (TEAMID)"   → signs the executables
-#   MACOS_PKG_CERT   "Developer ID Installer: <Org> (TEAMID)"     → signs the package
-#   NOTARY_PROFILE   a `xcrun notarytool store-credentials` profile name
+# Intel-only on purpose: the bundled GStreamer dylibs are per-arch, the only Mac client today is
+# x86_64, and a universal bundle would double the size for an arch nobody runs yet. The signing +
+# notarization contract is identical to build.sh (same certs, same notary profile).
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."   # repo root
 HERE=deploy/macos-pkg
 BUILD=$HERE/build
-PAYLOAD=$BUILD/payload
+PAYLOAD=$BUILD/payload-gst
 PREFIX=$PAYLOAD/opt/sentinel-edge
 
 SIGN=0
 [ "${1:-}" = "--sign" ] && SIGN=1
 
 VERSION=$(grep -m1 '^version' sentinel-edge/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
-OUT="$BUILD/Sentinel-Edge-$VERSION.pkg"
-GO2RTC_BASE=https://github.com/AlexxIT/go2rtc/releases/latest/download
-# Pinned: an installer that silently changes what it ships when an upstream moves is not an
-# installer, it's a surprise. Bump deliberately.
-#
-# ffmpeg-static publishes per-arch macOS ffmpeg AND ffprobe on GitHub releases, with the licence
-# text alongside. (evermeet.cx, the usual answer, serves x86_64 only and downloads at a few hundred
-# KB/s from a personal server — not something a release build should depend on.)
-FFMPEG_TAG=${FFMPEG_TAG:-b6.1.1}
-FFMPEG_BASE=https://github.com/eugeneware/ffmpeg-static/releases/download/$FFMPEG_TAG
+OUT="$BUILD/Sentinel-Edge-$VERSION-gst-x86_64.pkg"
 
-echo "▸ Sentinel Edge $VERSION → macOS .pkg"
-# Clear the payload, but NOT the whole build dir: ffmpeg lives under build/ffmpeg-universal and takes
-# ~20 minutes to compile for two architectures. Wiping it on every run made each iteration of this
-# script cost a coffee break for no reason.
-rm -rf "$PAYLOAD" "$BUILD"/*.pkg
-mkdir -p "$PREFIX/recordings" "$BUILD/cache" "$BUILD/dist"
+echo "▸ Sentinel Edge $VERSION (GStreamer, x86_64) → macOS .pkg"
+rm -rf "$PAYLOAD" "$OUT" "$BUILD/component-gst.pkg"
+mkdir -p "$PREFIX/recordings"
 
-# ---- 1. the edge, universal ------------------------------------------------
-# Both arches from one machine. This is a dividend of card #79: with OpenCV gone the edge links
-# nothing native, so `cargo build --target aarch64-apple-darwin` just works on an Intel Mac (and
-# vice versa) with no cross-toolchain, no vcpkg, no dylibs to match.
-echo "▸ Building sentinel-edge (x86_64 + arm64)…"
-for target in x86_64-apple-darwin aarch64-apple-darwin; do
-  rustup target add "$target" >/dev/null 2>&1 || true
-  ( cd sentinel-edge && cargo build --release --target "$target" )
-done
-lipo -create \
-  sentinel-edge/target/x86_64-apple-darwin/release/sentinel-edge \
-  sentinel-edge/target/aarch64-apple-darwin/release/sentinel-edge \
-  -output "$PREFIX/sentinel-edge"
+# ---- 1. the edge, x86_64, WITH the linked-GStreamer media path ------------
+echo "▸ Building sentinel-edge (x86_64 — GStreamer is linked unconditionally)…"
+rustup target add x86_64-apple-darwin >/dev/null 2>&1 || true
+( cd sentinel-edge && cargo build --release --target x86_64-apple-darwin )
+cp "sentinel-edge/target/x86_64-apple-darwin/release/sentinel-edge" "$PREFIX/sentinel-edge"
 
-# ---- 2. go2rtc, universal --------------------------------------------------
-echo "▸ Fetching go2rtc…"
-for arch in amd64 arm64; do
-  curl -fsSL "$GO2RTC_BASE/go2rtc_mac_$arch.zip" -o "$BUILD/cache/go2rtc_$arch.zip"
-  unzip -qo "$BUILD/cache/go2rtc_$arch.zip" -d "$BUILD/cache/go2rtc_$arch"
-done
-lipo -create "$BUILD/cache/go2rtc_amd64/go2rtc" "$BUILD/cache/go2rtc_arm64/go2rtc" -output "$PREFIX/go2rtc"
+# ---- 2. the self-contained GStreamer runtime ------------------------------
+# Collects the ~13 plugins our pipelines load plus their transitive Homebrew deps and rewrites every
+# path to be bundle-relative — so the appliance carries its own media stack and needs no `brew`.
+"$HERE/bundle-gst.sh" "$PREFIX/sentinel-edge" "$PREFIX"
 
-# ---- 3. ffmpeg + ffprobe ---------------------------------------------------
-# NOT optional, and not just for snapshots: go2rtc shells out to ffmpeg to turn the camera's H264
-# into the JPEG frames the motion + tracking pipeline reads. No ffmpeg, no detection. `ffprobe` is
-# needed too — the edge reads a finished clip's duration with it.
-#
-# Bundling them is the point of the .pkg: the old installer told the customer to `brew install
-# ffmpeg` and gave up if Homebrew wasn't there — a developer's package manager, on an appliance.
-#
-# We build them ourselves (build-ffmpeg.sh) rather than shipping someone's prebuilt static binary,
-# for two reasons discovered the hard way: the popular prebuilt macOS binaries are MALFORMED and
-# `codesign` refuses them ("failed strict validation"), which would make the package impossible to
-# notarize; and building with --disable-gpl gives us LGPL certainty on a binary we redistribute
-# commercially, instead of inheriting whatever a third party's CI configured.
-FF=$HERE/build/ffmpeg-universal
-if [ ! -x "$FF/ffmpeg" ] || [ ! -x "$FF/ffprobe" ]; then
-  echo "  ffmpeg not built yet — running build-ffmpeg.sh (this takes a while, once)"
-  "$HERE/build-ffmpeg.sh"
-fi
-cp "$FF/ffmpeg" "$FF/ffprobe" "$PREFIX/"
-cp "$FF/LICENSE.ffmpeg" "$PREFIX/"
+echo "  edge          $(lipo -archs "$PREFIX/sentinel-edge")"
 
-for bin in sentinel-edge go2rtc ffmpeg ffprobe; do
-  printf "  %-14s %s\n" "$bin" "$(lipo -archs "$PREFIX/$bin")"
-done
-
-# ---- 4. sign the executables ----------------------------------------------
-# Signing the PACKAGE is not enough: notarization inspects what's inside, and every Mach-O has to
-# carry a Developer ID signature with the hardened runtime.
+# ---- 3. sign every Mach-O -------------------------------------------------
+# Notarization inspects the whole payload, so the binary AND every bundled dylib/plugin must carry a
+# Developer ID signature with the hardened runtime — missing one fails notarization, not the build.
 if [ "$SIGN" = 1 ]; then
   : "${MACOS_APP_CERT:?set MACOS_APP_CERT to your 'Developer ID Application: …' identity}"
-  echo "▸ Signing executables…"
-  # ALL FOUR — the same list the verify loop above uses. Missing one (ffprobe was omitted here once)
-  # doesn't fail the build; it fails NOTARIZATION, minutes later, with "not signed with a valid
-  # Developer ID certificate" for exactly the binary left out. Keep this list identical to line ~92.
-  for bin in sentinel-edge go2rtc ffmpeg ffprobe; do
-    codesign --force --options runtime --timestamp -s "$MACOS_APP_CERT" "$PREFIX/$bin"
+  echo "▸ Signing executables + dylibs…"
+  find "$PREFIX/gst" -name '*.dylib' -print0 | while IFS= read -r -d '' lib; do
+    codesign --force --options runtime --timestamp -s "$MACOS_APP_CERT" "$lib"
   done
+  codesign --force --options runtime --timestamp -s "$MACOS_APP_CERT" "$PREFIX/sentinel-edge"
 fi
 
-# ---- 5. build the package --------------------------------------------------
-# Strip what extended attributes we can: pkgbuild preserves them as AppleDouble `._` side-files, so
-# they end up as clutter next to every binary in the payload.
-#
-# `com.apple.provenance` will survive this, and that is not a bug in the script: since macOS Sequoia
-# it is a system-protected attribute that a normal user cannot clear — the OS re-applies it the
-# moment it's removed. The resulting `._` files are inert (they are not executables, the notary
-# ignores them) and this is what Apple's own tooling produces. Left alone deliberately, rather than
-# chased.
+# ---- 4. build the package -------------------------------------------------
 echo "▸ Building the package…"
-xattr -cr "$PAYLOAD" "$HERE/scripts" 2>/dev/null || true
-chmod +x "$HERE/scripts/postinstall"
+xattr -cr "$PAYLOAD" "$HERE/scripts-gst" 2>/dev/null || true
+chmod +x "$HERE/scripts-gst/postinstall"
 pkgbuild \
   --root "$PAYLOAD" \
-  --scripts "$HERE/scripts" \
+  --scripts "$HERE/scripts-gst" \
   --identifier io.sentinel.edge \
   --version "$VERSION" \
   --install-location / \
-  "$BUILD/component.pkg" >/dev/null
+  "$BUILD/component-gst.pkg" >/dev/null
 
 if [ "$SIGN" = 1 ]; then
   : "${MACOS_PKG_CERT:?set MACOS_PKG_CERT to your 'Developer ID Installer: …' identity}"
-  productbuild --package "$BUILD/component.pkg" --sign "$MACOS_PKG_CERT" "$OUT" >/dev/null
+  productbuild --package "$BUILD/component-gst.pkg" --sign "$MACOS_PKG_CERT" "$OUT" >/dev/null
 else
-  productbuild --package "$BUILD/component.pkg" "$OUT" >/dev/null
+  productbuild --package "$BUILD/component-gst.pkg" "$OUT" >/dev/null
 fi
 
-# ---- 6. notarize + staple --------------------------------------------------
-# Without this, Gatekeeper refuses to open the package: "cannot be opened because it is from an
-# unidentified developer." That is a WORSE experience than the `curl | sh` this replaces, which is
-# why an unsigned build is a dev artifact, not a release. Stapling attaches the notarization ticket
-# so the check works on a machine that's offline.
+# ---- 5. notarize + staple -------------------------------------------------
 if [ "$SIGN" = 1 ]; then
   echo "▸ Notarizing (this takes a few minutes)…"
-  # CI passes the Apple-ID creds directly (no keychain profile); a local run uses the stored profile.
   if [ -n "${NOTARY_APPLE_ID:-}" ]; then
     xcrun notarytool submit "$OUT" \
       --apple-id "$NOTARY_APPLE_ID" --password "${NOTARY_APP_PW:?}" --team-id "${NOTARY_TEAM_ID:?}" --wait
   else
-    : "${NOTARY_PROFILE:?set NOTARY_PROFILE (xcrun notarytool store-credentials …) or NOTARY_APPLE_ID/APP_PW/TEAM_ID}"
+    : "${NOTARY_PROFILE:?set NOTARY_PROFILE or NOTARY_APPLE_ID/APP_PW/TEAM_ID}"
     xcrun notarytool submit "$OUT" --keychain-profile "$NOTARY_PROFILE" --wait
   fi
   xcrun stapler staple "$OUT"
@@ -154,11 +85,11 @@ if [ "$SIGN" = 1 ]; then
   spctl -a -vvv -t install "$OUT" || true
 fi
 
-cp "$OUT" "$BUILD/dist/"
 echo ""
 echo "✓ $OUT ($(du -h "$OUT" | cut -f1))"
+# `if`, not `[ … ] && echo` — the latter returns exit 1 in the signed case (its last command), which
+# under `set -e` / a Taskfile step reads as a FAILED build even though the pkg is done. This aborted
+# `task edge-release` right after a successful notarization.
 if [ "$SIGN" = 0 ]; then
-  echo ""
-  echo "  ⚠ UNSIGNED. Gatekeeper will refuse to open this on any Mac but your own"
-  echo "    (right-click → Open bypasses it, for testing). Ship with --sign."
+  echo "  ⚠ UNSIGNED — right-click → Open on your own Mac; ship with --sign."
 fi

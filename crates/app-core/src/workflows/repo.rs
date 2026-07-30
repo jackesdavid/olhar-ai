@@ -499,6 +499,44 @@ pub fn system_events() -> Vec<TenantEvent> {
                 field("frame", PortType::Image),
             ],
         },
+        // Camera reachability, as a first-class event so "tell me when a camera drops" is a graph
+        // the user builds, not a feature we have to anticipate. Emitted on TRANSITION only — a
+        // camera that is offline for a day produces ONE `camera_offline`, not one per probe, or a
+        // flapping camera would bury a tenant's feed and its notification quota.
+        //
+        // `reason` is `rtsp_probe::ProbeStatus` — unreachable | timeout | auth_failed | locked |
+        // not_found | error — so a graph can branch on the CAUSE, not just the fact. "Power-cycle
+        // it" is right for `locked` and wrong for `auth_failed`, and only the reason distinguishes
+        // them.
+        TenantEvent {
+            name: "camera_offline".to_string(),
+            category: "System".to_string(),
+            source: "system".to_string(),
+            description: Some(
+                "A camera stopped responding — the edge can no longer reach or read it".to_string(),
+            ),
+            created_by_graph: None,
+            fields: vec![
+                field("camera", PortType::Camera),
+                field("reason", PortType::Text),
+                field("detail", PortType::Text),
+            ],
+        },
+        TenantEvent {
+            name: "camera_online".to_string(),
+            category: "System".to_string(),
+            source: "system".to_string(),
+            description: Some(
+                "A camera started responding again after being offline".to_string(),
+            ),
+            created_by_graph: None,
+            fields: vec![
+                field("camera", PortType::Camera),
+                // How long it was down, so a graph can stay quiet about a 20-second blip and speak
+                // up about an hour — without every user having to build that logic themselves.
+                field("offline_secs", PortType::Num),
+            ],
+        },
         TenantEvent {
             name: "edge:full-disk".to_string(),
             category: "System".to_string(),
