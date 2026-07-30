@@ -21,6 +21,7 @@ pub const PERMISSIONS: &[(&str, &str)] = &[
     ("settings.write", "Change settings"),
     ("users.manage", "Invite and manage users"),
     ("users.password_reset", "Set another user's password"),
+    ("users.remove", "Remove a user from the tenant"),
     ("roles.manage", "Manage roles and permissions"),
     ("recordings.read", "View recorded clips"),
     ("recordings.write", "Create or delete recordings"),

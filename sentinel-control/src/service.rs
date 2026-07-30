@@ -184,7 +184,11 @@ pub async fn introspect(
 
     let valid_from = match uuid::Uuid::parse_str(&claims.sub) {
         Ok(uid) => match crate::store::sessions_valid_from(&st.pool, uid).await {
-            Ok(v) => v,
+            // A token whose subject no longer exists is dead on arrival, whatever it says.
+            Ok(crate::store::SessionGate::NoSuchUser) => {
+                return Json(IntrospectResp::inactive("user no longer exists"))
+            }
+            Ok(crate::store::SessionGate::Cutoff(v)) => v,
             Err(e) => {
                 // Fail CLOSED. A database blip must not silently un-revoke a session that was
                 // deliberately killed — this is the one place where availability loses to

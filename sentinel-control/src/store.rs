@@ -1394,13 +1394,30 @@ pub async fn clear_failed_logins(pool: &PgPool, user_id: Uuid) {
 ///
 /// Errors are propagated, NOT swallowed: `introspect` fails closed on a lookup failure, because a
 /// database blip must never silently un-revoke a session someone deliberately killed.
-pub async fn sessions_valid_from(pool: &PgPool, user_id: Uuid) -> sqlx::Result<Option<i64>> {
+pub async fn sessions_valid_from(pool: &PgPool, user_id: Uuid) -> sqlx::Result<SessionGate> {
     let row: Option<(Option<i64>,)> =
         sqlx::query_as("SELECT sessions_valid_from FROM users WHERE id = $1")
             .bind(user_id)
             .fetch_optional(pool)
             .await?;
-    Ok(row.and_then(|r| r.0))
+    Ok(match row {
+        None => SessionGate::NoSuchUser,
+        Some((cutoff,)) => SessionGate::Cutoff(cutoff),
+    })
+}
+
+/// What the revocation lookup found.
+///
+/// The two cases MUST stay distinct. Collapsing them to `Option<i64>` — as this first did — makes a
+/// DELETED user indistinguishable from a user with no revocation cutoff, so a removed member's token
+/// reads as perfectly valid until it expires. Removing someone has to end their access now, not in
+/// up to 24 hours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionGate {
+    /// No such user — the account was deleted. Every token naming it is dead.
+    NoSuchUser,
+    /// The user exists; `Some(t)` is their revocation cutoff, `None` means nothing revoked.
+    Cutoff(Option<i64>),
 }
 
 // ---- tenant owner + password reset (migration 0081) -------------------------
@@ -1457,6 +1474,36 @@ pub async fn set_password_and_revoke(
     .bind(user_id)
     .bind(password_hash)
     .bind(now_unix)
+    .execute(pool)
+    .await?;
+    Ok(r.rows_affected())
+}
+
+/// Delete a tenant member outright.
+///
+/// Safe as a hard delete because every FK into `users` is declared for it: `user_roles`,
+/// `user_credentials` (passkeys) and `oauth_identities` CASCADE, `push_devices` SET NULLs. Crucially
+/// `events.user_id` carries NO foreign key, so the audit trail SURVIVES the deletion — the record of
+/// what this person did stays readable after they are gone, which is the whole reason not to reach
+/// for a cascade there.
+///
+/// Guarded in SQL as well as by the caller: tenant-scoped, never a master, and never the tenant's
+/// own owner. The owner clause is belt-and-braces behind the handler check — an owner deleted here
+/// would blank `tenants.owner_user_id` (ON DELETE SET NULL) and leave the tenant unrecoverable.
+pub async fn remove_tenant_user(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    user_id: Uuid,
+) -> sqlx::Result<u64> {
+    let r = sqlx::query(
+        "DELETE FROM users u
+          WHERE u.id = $2
+            AND u.tenant_id = $1
+            AND u.is_master = false
+            AND NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = $1 AND t.owner_user_id = u.id)",
+    )
+    .bind(tenant_id)
+    .bind(user_id)
     .execute(pool)
     .await?;
     Ok(r.rows_affected())

@@ -70,6 +70,7 @@ pub fn router() -> Router<AppState> {
         .route("/users", get(list_users).post(invite_user))
         .route("/users/:id/roles", put(set_user_roles))
         .route("/users/:id/password", post(set_user_password))
+        .route("/users/:id", axum::routing::delete(remove_user))
         .route("/admin/tenants", get(list_tenants).post(create_tenant))
         .route("/admin/tenants/:id/assume", post(assume_tenant))
 }
@@ -493,6 +494,77 @@ async fn set_user_password(
     ev.severity = "warn".to_string();
     ev.title = Some("Password reset".to_string());
     ev.message = Some(format!("{} had their password reset", target.email));
+    ev.user_id = Some(target_id);
+    ev.data = Some(serde_json::json!({ "by": caller.to_string() }));
+    st.event_queue.push(ev);
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `DELETE /users/:id` — remove a member from the tenant (owner, or `users.remove`).
+///
+/// A hard delete. Their role grants, passkeys and Google links go with them (FK CASCADE), their
+/// push devices detach (SET NULL), and their history in the events feed **remains** — `events.user_id`
+/// has no foreign key, so removing someone never erases the record of what they did.
+async fn remove_user(
+    State(st): State<AppState>,
+    UserClaims(c): UserClaims,
+    Path(target_id): Path<Uuid>,
+) -> Result<StatusCode, ApiErr> {
+    let tid = tenant_ctx(&c)?;
+    let caller =
+        Uuid::parse_str(&c.sub).map_err(|_| err(StatusCode::UNAUTHORIZED, "bad subject"))?;
+
+    let owner = store::tenant_owner(&st.pool, tid).await.map_err(db_err)?;
+    let permitted = owner == Some(caller) || c.allows("users.remove");
+    if !permitted {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "missing permission: users.remove",
+        ));
+    }
+
+    // Removing yourself is always a mistake here — it is either a misclick or the last admin
+    // locking the tenant out of its own user management. Leaving is a different feature.
+    if caller == target_id {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "you cannot remove your own account",
+        ));
+    }
+    // The owner cannot be removed by ANYONE, including themselves. `tenants.owner_user_id` is
+    // ON DELETE SET NULL, so deleting an owner would silently leave the tenant ownerless — the
+    // exact unrecoverable state the owner concept exists to prevent. Transfer ownership first.
+    if owner == Some(target_id) {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "the tenant owner cannot be removed — transfer ownership first",
+        ));
+    }
+
+    // Read before delete purely for the audit line; the DELETE re-checks every condition itself.
+    let target = store::find_user_by_id(&st.pool, target_id)
+        .await
+        .map_err(db_err)?
+        .ok_or(err(StatusCode::NOT_FOUND, "user not found"))?;
+    // Cross-tenant and master are 404, not 403 — same reasoning as the password reset: a 403 would
+    // confirm the id exists.
+    if target.tenant_id != Some(tid) || target.is_master {
+        return Err(err(StatusCode::NOT_FOUND, "user not found"));
+    }
+
+    let n = store::remove_tenant_user(&st.pool, tid, target_id)
+        .await
+        .map_err(db_err)?;
+    if n == 0 {
+        return Err(err(StatusCode::NOT_FOUND, "user not found"));
+    }
+
+    log::warn!("user removed: {target_id} by {caller} (tenant {tid})");
+    let mut ev = app_core::events::NewEvent::new(tid, "auth.user_removed", "user");
+    ev.severity = "warn".to_string();
+    ev.title = Some("User removed".to_string());
+    ev.message = Some(format!("{} was removed from the tenant", target.email));
     ev.user_id = Some(target_id);
     ev.data = Some(serde_json::json!({ "by": caller.to_string() }));
     st.event_queue.push(ev);
@@ -928,6 +1000,7 @@ mod failed_login_record_tests {
             "auth.login_failed",
             "auth.account_locked",
             "auth.password_reset",
+            "auth.user_removed",
         ] {
             assert!(
                 known.contains(&kind),
