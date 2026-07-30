@@ -38,6 +38,19 @@ pub struct Device {
     /// (highest-resolution) profile's stream.
     #[serde(default)]
     pub rtsp_url: Option<String>,
+    /// Live status (card #155, migration 0083) — `rtsp_probe::ProbeStatus` snake_case, plus the
+    /// camera's own words and when it was established. NULL until first reported.
+    ///
+    /// These MUST be carried through `repo::save`, which is a delete-all + re-insert: a camera
+    /// rename would otherwise silently wipe every camera's status in the tenant.
+    #[serde(default)]
+    pub probe_status: Option<String>,
+    #[serde(default)]
+    pub probe_detail: Option<String>,
+    #[serde(default)]
+    pub probe_at: Option<String>,
+    #[serde(default)]
+    pub last_frame_at: Option<String>,
     /// RTSP URL of the camera's **substream** (lowest-resolution profile), used for the
     /// low-latency preview feed. `None` for single-profile cameras. Edge-only (resolved
     /// via ONVIF, never persisted in the cloud) — `#[sqlx(default)]` so control's
@@ -75,6 +88,13 @@ impl Device {
             rtsp_url: None,
             rtsp_sub_url: None,
             stream_mode: None,
+            // A just-discovered camera has no status yet, and NULL is the honest answer. It is also
+            // load-bearing: control treats "no previous status" as "not a transition", so a new
+            // camera never announces itself as having "come online".
+            probe_status: None,
+            probe_detail: None,
+            probe_at: None,
+            last_frame_at: None,
         }
     }
 

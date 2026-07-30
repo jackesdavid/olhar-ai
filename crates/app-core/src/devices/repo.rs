@@ -7,8 +7,8 @@ use crate::db::Db;
 
 use super::Device;
 
-const COLS: &str =
-    "id, ip, xaddr, name, manufacturer, model, username, password, rtsp_url, stream_mode";
+const COLS: &str = "id, ip, xaddr, name, manufacturer, model, username, password, rtsp_url, \
+     stream_mode, probe_status, probe_detail, probe_at, last_frame_at";
 
 /// The tenant's device list, ordered by name. Empty (and logged) on a query error.
 pub fn load(db: &Db, tenant_id: Uuid) -> Vec<Device> {
@@ -36,9 +36,12 @@ pub fn save(db: &Db, tenant_id: Uuid, devices: &[Device]) {
         sqlx::query("DELETE FROM devices WHERE tenant_id = $1").bind(tenant_id).execute(&mut *tx).await?;
         for d in &devices {
             sqlx::query(
+                // Status columns are carried through deliberately: this is a delete-all +
+                // re-insert, so omitting them would wipe every camera's status on any device edit.
                 "INSERT INTO devices \
-                 (tenant_id, ip, id, xaddr, name, manufacturer, model, username, password, rtsp_url, stream_mode) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+                 (tenant_id, ip, id, xaddr, name, manufacturer, model, username, password, rtsp_url, stream_mode, \
+                  probe_status, probe_detail, probe_at, last_frame_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
             )
             .bind(tenant_id)
             .bind(&d.ip)
@@ -51,6 +54,10 @@ pub fn save(db: &Db, tenant_id: Uuid, devices: &[Device]) {
             .bind(&d.password)
             .bind(&d.rtsp_url)
             .bind(&d.stream_mode)
+            .bind(&d.probe_status)
+            .bind(&d.probe_detail)
+            .bind(&d.probe_at)
+            .bind(&d.last_frame_at)
             .execute(&mut *tx)
             .await?;
         }

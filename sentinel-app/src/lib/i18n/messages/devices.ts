@@ -2,6 +2,33 @@
 // detail dialog (name + credentials + stream mode + the #88 credential probe) and add-by-hand.
 export const devices = {
   en: {
+    // Camera status (#155) — the stage, in the user's words. Each maps to a DIFFERENT action:
+    // "locked" means power-cycle, "auth_failed" means fix the password. Conflating them is what
+    // had people re-typing correct credentials at a camera that had stopped listening.
+    status: {
+      streaming: "Streaming",
+      ok: "Connected, not yet streaming",
+      unreachable: "Can't reach it on the network",
+      timeout: "Not responding",
+      auth_failed: "Credentials rejected",
+      no_credentials: "No credentials set",
+      locked: "Refusing all connections",
+      not_found: "No stream at that path",
+      not_on_this_box: "On a different network from this box",
+      error: "Unrecognised response",
+      unknown: "Not checked yet",
+    },
+    statusHint: {
+      unreachable: "Check it's powered on and on the same network.",
+      timeout: "It's reachable but stalled — try power-cycling it.",
+      auth_failed: "Update the username and password.",
+      no_credentials: "Add a username and password for this camera.",
+      locked: "It's refusing every client — power-cycle it. Don't retry, that's what locks it.",
+      not_found: "The stream path is wrong for this camera.",
+      not_on_this_box: "Another box in this tenant serves it.",
+    },
+    checkedAt: "checked",
+    never: "never",
     title: "Devices",
     description:
       "Save and manage the cameras your edge appliance finds on its local network.",
@@ -23,6 +50,7 @@ export const devices = {
     colIp: "IP",
     colMakeModel: "Make / Model",
     colCredentials: "Credentials",
+    colStatus: "Status",
     colActions: "Actions",
     colAction: "Action",
     codecTitle: "Video codec this camera is streaming, as detected by the edge",
@@ -131,6 +159,30 @@ export const devices = {
     deleteFailed: "Failed to delete device",
   },
   pt: {
+    status: {
+      streaming: "Transmitindo",
+      ok: "Conectada, ainda sem transmitir",
+      unreachable: "Não é possível alcançá-la na rede",
+      timeout: "Sem resposta",
+      auth_failed: "Credenciais recusadas",
+      no_credentials: "Sem credenciais",
+      locked: "Recusando todas as conexões",
+      not_found: "Nenhum stream nesse caminho",
+      not_on_this_box: "Em outra rede, fora desta box",
+      error: "Resposta não reconhecida",
+      unknown: "Ainda não verificada",
+    },
+    statusHint: {
+      unreachable: "Verifique se está ligada e na mesma rede.",
+      timeout: "Está acessível mas travada — tente reiniciá-la.",
+      auth_failed: "Atualize o usuário e a senha.",
+      no_credentials: "Adicione usuário e senha para esta câmera.",
+      locked: "Está recusando todos os clientes — reinicie. Não tente de novo, é isso que trava.",
+      not_found: "O caminho do stream está errado para esta câmera.",
+      not_on_this_box: "Outra box deste tenant a atende.",
+    },
+    checkedAt: "verificado",
+    never: "nunca",
     title: "Dispositivos",
     description:
       "Salve e gerencie as câmeras que o seu appliance encontra na rede local.",
@@ -152,6 +204,7 @@ export const devices = {
     colIp: "IP",
     colMakeModel: "Marca / Modelo",
     colCredentials: "Credenciais",
+    colStatus: "Status",
     colActions: "Ações",
     colAction: "Ação",
     codecTitle: "Codec de vídeo que esta câmera transmite, detectado pelo appliance",

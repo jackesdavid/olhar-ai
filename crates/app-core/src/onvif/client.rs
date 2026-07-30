@@ -247,6 +247,7 @@ pub fn rtsp_url_with_creds(rtsp: &str, user: &str, pass: &str) -> String {
 ///
 /// Bounded on purpose: an unreachable or wedged camera must never block the caller, so we give the
 /// whole grab a wall-clock deadline and pull a single sample rather than running a live pipeline.
+#[cfg(feature = "gst-linked")]
 fn snapshot_from_rtsp_gst(url: &str) -> Result<Vec<u8>, String> {
     use gstreamer as gst;
     use gstreamer::prelude::*;
@@ -308,9 +309,10 @@ pub fn snapshot_from_rtsp(rtsp: &str, user: &str, pass: &str) -> Result<Vec<u8>,
 
     // Prefer GStreamer where it exists (the edge). A failure here falls through to ffmpeg rather
     // than failing the snapshot — during the migration both must remain viable.
+    #[cfg(feature = "gst-linked")]
     match snapshot_from_rtsp_gst(&url) {
         Ok(bytes) if !bytes.is_empty() => return Ok(bytes),
-        Err(e) => log::debug!("gstreamer cold snapshot failed, falling back to ffmpeg: {e}"),
+        Err(e) => log::debug!("gstreamer cold snapshot failed: {e}"),
         _ => {}
     }
 

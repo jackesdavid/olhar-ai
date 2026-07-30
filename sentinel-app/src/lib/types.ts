@@ -56,7 +56,28 @@ export type Device = {
   rtsp_url?: string | null;
   /** Stream mode (#120): "split" (default) or "unified" (main-only pipeline). */
   stream_mode?: string | null;
+  /** Live status (#155). `rtsp_probe::ProbeStatus` snake_case; null until first reported. */
+  probe_status?: CameraStatus | null;
+  /** The camera's own words — "401 Unauthorized", "Can't reach 192.168.0.7: …". */
+  probe_detail?: string | null;
+  /** RFC3339. When the status was established — a status with no age can't be trusted. */
+  probe_at?: string | null;
+  /** RFC3339. When a frame last arrived. Distinct from `ok`, which only means describable. */
+  last_frame_at?: string | null;
 };
+
+/** Every stage a camera can be in. Mirrors `app_core::rtsp_probe::ProbeStatus`. */
+export type CameraStatus =
+  | "streaming"
+  | "ok"
+  | "unreachable"
+  | "timeout"
+  | "auth_failed"
+  | "no_credentials"
+  | "locked"
+  | "not_found"
+  | "not_on_this_box"
+  | "error";
 
 /** A linked Tuya smart-home device (matches `app_core::tuya::TuyaDevice`). Credential-free. */
 export type TuyaDevice = {

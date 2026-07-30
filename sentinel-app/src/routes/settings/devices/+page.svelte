@@ -19,6 +19,7 @@
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import { Badge } from "$lib/components/ui/badge";
+  import CameraStatus from "$lib/components/camera-status.svelte";
   import Loader from "$lib/components/loader.svelte";
   import Busy from "$lib/components/busy.svelte";
   import Check from "@lucide/svelte/icons/check";
@@ -59,6 +60,11 @@
   //                    or the camera is visible on the LAN but has no credentials yet
   //   offline (gray) = not set up and not visible
   function cameraState(d: Device): "online" | "warn" | "offline" {
+    // Prefer what the edge actually reported (#155). The inference below is a fallback for a box
+    // that hasn't reported yet — it can only guess "is it streaming", never WHY it isn't.
+    if (d.probe_status === "streaming") return "online";
+    if (d.probe_status === "ok") return "warn";
+    if (d.probe_status) return "offline";
     if (streamingIps.has(d.ip)) return "online";
     if (isConfigured(d) || discoveredIps.has(d.ip)) return "warn";
     return "offline";
@@ -455,6 +461,7 @@
               <Table.Head>{t.colIp}</Table.Head>
               <Table.Head>{t.colMakeModel}</Table.Head>
               <Table.Head>{t.colCredentials}</Table.Head>
+              <Table.Head>{t.colStatus}</Table.Head>
               <Table.Head class="text-right">{t.colActions}</Table.Head>
             </Table.Row>
           </Table.Header>
@@ -489,6 +496,14 @@
                   {:else}
                     <Badge variant="outline">{t.setupNeeded}</Badge>
                   {/if}
+                </Table.Cell>
+                <Table.Cell>
+                  <CameraStatus
+                    status={d.probe_status}
+                    detail={d.probe_detail}
+                    checkedAt={d.probe_at}
+                    compact
+                  />
                 </Table.Cell>
                 <Table.Cell class="text-right">
                   <div class="flex justify-end gap-1">

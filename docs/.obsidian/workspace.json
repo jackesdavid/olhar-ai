@@ -4,17 +4,30 @@
     "type": "split",
     "children": [
       {
-        "id": "e769a5a6857baded",
+        "id": "c48c5fbf8b27ca73",
         "type": "tabs",
         "children": [
           {
-            "id": "7b31a9da3902a403",
+            "id": "f7dd7af0b8d4da54",
             "type": "leaf",
             "state": {
-              "type": "empty",
-              "state": {},
-              "icon": "lucide-file",
-              "title": "New tab"
+              "type": "kanban",
+              "state": {
+                "file": "Task Board.md",
+                "kanbanViewState": {
+                  "kanban-plugin": "board",
+                  "list-collapse": [
+                    false,
+                    true,
+                    false,
+                    false,
+                    false,
+                    false
+                  ]
+                }
+              },
+              "icon": "lucide-trello",
+              "title": "Task Board"
             }
           }
         ]
@@ -74,8 +87,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 230.5,
-    "collapsed": true
+    "width": 230.5
   },
   "right": {
     "id": "7890933a22997089",
@@ -182,10 +194,15 @@
       "obsidian-excalidraw-plugin:New drawing": false
     }
   },
-  "active": "7b31a9da3902a403",
+  "active": "f7dd7af0b8d4da54",
   "lastOpenFiles": [
-    "plans/tracking-job-resolution.md",
+    "Task Board.md.tmp.6853.7bdfa62a3cae",
+    "plans/camera-status-visibility.md",
+    "plans/face-pipeline-hd-stream.md",
     "Task Board.md",
+    "plans/security-hardening-remainder.md",
+    "plans/fido2-webauthn.md",
+    "plans/tracking-job-resolution.md",
     "plans/workflow-editor-refactor.md",
     "plans/default-workflow-templates.md",
     "plans/workflow-display-nodes.md",
@@ -210,16 +227,11 @@
     "plans/face-embed-landmark-align.md",
     "plans/retire-local-builds-ci.md",
     "plans/face-pipeline-hd-stream.md.tmp.5186.fea512e40644",
-    "plans/face-pipeline-hd-stream.md",
     "plans/faces-labeling-view.md",
     "plans/edge-detection-metrics.md",
     "plans/face-recognition-pipeline.md",
     "plans/playback-view-fixes.md",
     "plans/get-variable-over-activation.md",
-    "plans/stop-recording-missing-camera.md",
-    "plans/dictionaries-tables.md",
-    "plans/editor-toggles-top-cluster.md",
-    "plans/workflow-schedule-trigger.md",
     "plans/logo-exploration/warm-concepts-overview.png",
     "plans/logo-exploration/concept-5.svg",
     "plans/logo-exploration/concept-4.svg",
