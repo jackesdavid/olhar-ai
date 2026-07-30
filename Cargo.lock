@@ -3181,6 +3181,7 @@ dependencies = [
  "env_logger",
  "futures",
  "hex",
+ "hmac",
  "jsonwebtoken",
  "log",
  "reqwest",

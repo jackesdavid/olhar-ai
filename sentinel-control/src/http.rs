@@ -62,6 +62,8 @@ pub fn router(state: AppState) -> Router {
         .route("/edge/installers", get(installers))
         .route("/enroll", post(enroll))
         .merge(edge_routes)
+        // Central token introspection — service-authenticated (see `service.rs`).
+        .merge(crate::service::router())
         .merge(handlers::router())
         // Soft-lock: a lapsed/unpaid tenant is read-only (402 on writes).
         .merge(

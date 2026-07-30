@@ -228,6 +228,7 @@ async fn resolve_user(st: &AppState, info: &Userinfo) -> sqlx::Result<AuthResp> 
         perms: perms.clone(),
         exp: auth::expiry_24h(),
         scope: None,
+        iat: Some(app_core::signing::now_unix() as usize),
     };
     let token = auth::issue(&st.jwt_secret, &claims).unwrap_or_default();
     Ok(AuthResp {

@@ -185,6 +185,7 @@ async fn signup(
         perms: perms.clone(),
         exp: auth::expiry_24h(),
         scope: None,
+        iat: Some(app_core::signing::now_unix() as usize),
     };
     let token = auth::issue(&st.jwt_secret, &claims)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -304,6 +305,7 @@ async fn login(
         perms: perms.clone(),
         exp: auth::expiry_24h(),
         scope: None,
+        iat: Some(app_core::signing::now_unix() as usize),
     };
     let token = auth::issue(&st.jwt_secret, &claims)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -630,6 +632,7 @@ async fn assume_tenant(
         perms,
         exp: auth::expiry_24h(),
         scope: None,
+        iat: Some(app_core::signing::now_unix() as usize),
     };
     let token = auth::issue(&st.jwt_secret, &claims)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;

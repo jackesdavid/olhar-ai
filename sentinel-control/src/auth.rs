@@ -56,6 +56,15 @@ pub struct Claims {
     /// `skip_serializing_if` so an ordinary session token stays byte-identical in shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    /// Issued-at, unix seconds — what session revocation compares against
+    /// (`users.sessions_valid_from`, migration 0080).
+    ///
+    /// `Option` because tokens minted before this field existed do not carry it. Those decode as
+    /// `None`, and `None` is treated as **revoked** whenever a cutoff is set — which is the
+    /// behaviour you want ("log this user out everywhere" must not be defeated by holding an older
+    /// token), and which harms nobody on deploy because every user starts with no cutoff at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iat: Option<usize>,
 }
 
 impl Claims {
@@ -89,6 +98,7 @@ impl Claims {
             perms: self.perms.clone(),
             exp: expiry_secs(media_ttl_secs()),
             scope: Some(MEDIA_SCOPE.to_string()),
+            iat: Some(app_core::signing::now_unix() as usize),
         }
     }
 }
@@ -180,6 +190,7 @@ pub async fn issue_session(
         perms: perms.clone(),
         exp: expiry_24h(),
         scope: None,
+        iat: Some(app_core::signing::now_unix() as usize),
     };
     let token = issue(jwt_secret, &claims).unwrap_or_default();
     Ok(Some(SessionResp {
@@ -267,6 +278,7 @@ mod media_token_tests {
             perms: vec!["persons.read".into(), "workflows.read".into()],
             exp: expiry_24h(),
             scope: None,
+            iat: Some(app_core::signing::now_unix() as usize),
         }
     }
 

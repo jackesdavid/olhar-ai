@@ -28,6 +28,7 @@ mod oauth;
 mod rbac;
 mod seed;
 mod seed_templates;
+mod service;
 mod store;
 mod webauthn;
 
@@ -38,6 +39,10 @@ pub struct AppState {
     pub db: Db,
     pub pool: PgPool,
     pub jwt_secret: String,
+    /// Shared secret proving a caller is another Sentinel service (see [`service`]). Distinct
+    /// from `jwt_secret` on purpose: a service credential and a user-session key should never
+    /// be the same value, or compromising one hands over the other.
+    pub service_key: String,
     /// Google OAuth config (None when unconfigured — social login disabled).
     pub google: Option<oauth::GoogleOauth>,
     /// In-flight OAuth CSRF states (state → issued-at), pruned on use.
@@ -159,6 +164,15 @@ fn main() {
         }
     };
 
+    let service_key = match service::resolve_service_key(std::env::var("INTERNAL_SERVICE_KEY").ok())
+    {
+        Ok(s) => s,
+        Err(why) => {
+            log::error!("refusing to start: {why}");
+            std::process::exit(1);
+        }
+    };
+
     // Boot synchronously (Db::connect drives its own runtime + runs migrations).
     let db = boot_db(&database_url);
 
@@ -262,7 +276,7 @@ fn main() {
         // `pg_notify('workflow_events', …)` and control's SSE relay LISTENs. No Redis broker.
 
         let state = AppState {
-            db, pool, jwt_secret, google, oauth_states, http, pending_creds, notifiers,
+            db, pool, jwt_secret, service_key, google, oauth_states, http, pending_creds, notifiers,
             pending_rescan, log_queue, event_queue, edge_streams,
         };
         let app = http::router(state);

@@ -1385,3 +1385,16 @@ pub async fn clear_failed_logins(pool: &PgPool, user_id: Uuid) {
         .execute(pool)
         .await;
 }
+
+/// The user's session revocation cutoff (unix seconds), or `None` when nothing is revoked.
+///
+/// Errors are propagated, NOT swallowed: `introspect` fails closed on a lookup failure, because a
+/// database blip must never silently un-revoke a session someone deliberately killed.
+pub async fn sessions_valid_from(pool: &PgPool, user_id: Uuid) -> sqlx::Result<Option<i64>> {
+    let row: Option<(Option<i64>,)> =
+        sqlx::query_as("SELECT sessions_valid_from FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.and_then(|r| r.0))
+}
