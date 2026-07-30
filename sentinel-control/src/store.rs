@@ -39,6 +39,10 @@ pub struct UserListRow {
     pub id: Uuid,
     pub email: String,
     pub is_master: bool,
+    /// The tenant owner (migration 0081). Surfaced so the UI can badge them and hide the actions
+    /// that would be refused anyway — an owner cannot be removed, and only they can reset their own
+    /// password.
+    pub is_owner: bool,
     pub role_ids: Vec<Uuid>,
 }
 
@@ -99,14 +103,18 @@ pub async fn effective_perms(pool: &PgPool, user_id: Uuid) -> sqlx::Result<Vec<S
 
 /// The tenant's members with their assigned role ids.
 pub async fn list_users(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<UserListRow>> {
-    let users: Vec<(Uuid, String, bool)> = sqlx::query_as(
-        "SELECT id, email, is_master FROM users WHERE tenant_id = $1 ORDER BY email",
+    let users: Vec<(Uuid, String, bool, bool)> = sqlx::query_as(
+        "SELECT u.id, u.email, u.is_master, (t.owner_user_id = u.id) AS is_owner
+           FROM users u
+           JOIN tenants t ON t.id = u.tenant_id
+          WHERE u.tenant_id = $1
+          ORDER BY u.email",
     )
     .bind(tenant_id)
     .fetch_all(pool)
     .await?;
     let mut out = Vec::with_capacity(users.len());
-    for (id, email, is_master) in users {
+    for (id, email, is_master, is_owner) in users {
         let roles: Vec<(Uuid,)> =
             sqlx::query_as("SELECT role_id FROM user_roles WHERE user_id = $1")
                 .bind(id)
@@ -116,6 +124,7 @@ pub async fn list_users(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<User
             id,
             email,
             is_master,
+            is_owner,
             role_ids: roles.into_iter().map(|(r,)| r).collect(),
         });
     }
@@ -1516,4 +1525,16 @@ pub async fn remove_tenant_user(
     .execute(pool)
     .await?;
     Ok(r.rows_affected())
+}
+
+/// Whether the user has a linked social identity (Google today).
+///
+/// Used before handing someone a tenant: an account with no password AND no social login has no way
+/// in, and making it the owner would strand the tenant.
+pub async fn has_oauth_identity(pool: &PgPool, user_id: Uuid) -> sqlx::Result<bool> {
+    let (n,): (i64,) = sqlx::query_as("SELECT count(*) FROM oauth_identities WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(n > 0)
 }

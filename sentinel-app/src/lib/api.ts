@@ -55,7 +55,14 @@ export const api = {
 
 export type Permission = { key: string; description: string };
 export type Role = { id: string; name: string; is_system: boolean };
-export type TenantUser = { id: string; email: string; is_master: boolean; role_ids: string[] };
+export type TenantUser = {
+  id: string;
+  email: string;
+  is_master: boolean;
+  /** The tenant owner — cannot be removed, and only they can reset their own password. */
+  is_owner: boolean;
+  role_ids: string[];
+};
 export type Tenant = { id: string; name: string; slug: string; status: string };
 
 export const rbac = {
@@ -68,6 +75,14 @@ export const rbac = {
   inviteUser: (email: string, password: string, roleIds: string[]) =>
     api.post<string>("/users", { email, password, role_ids: roleIds }),
   setUserRoles: (id: string, roleIds: string[]) => api.put<void>(`/users/${id}/roles`, { role_ids: roleIds }),
+  /** Owner (or `users.password_reset`): set another member's password. Ends their active sessions. */
+  setUserPassword: (id: string, password: string) =>
+    api.post<void>(`/users/${id}/password`, { password }),
+  /** Owner (or `users.remove`): delete a member. Their event history is preserved. */
+  removeUser: (id: string) => api.del<void>(`/users/${id}`),
+  /** Owner only, not delegatable: hand the tenant to another member. Takes effect immediately. */
+  transferOwnership: (userId: string) =>
+    api.post<void>("/tenant/transfer-ownership", { user_id: userId }),
 };
 
 export type Box = {

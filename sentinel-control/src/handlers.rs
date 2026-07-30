@@ -71,6 +71,7 @@ pub fn router() -> Router<AppState> {
         .route("/users/:id/roles", put(set_user_roles))
         .route("/users/:id/password", post(set_user_password))
         .route("/users/:id", axum::routing::delete(remove_user))
+        .route("/tenant/transfer-ownership", post(transfer_ownership))
         .route("/admin/tenants", get(list_tenants).post(create_tenant))
         .route("/admin/tenants/:id/assume", post(assume_tenant))
 }
@@ -572,6 +573,82 @@ async fn remove_user(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+struct TransferOwnershipReq {
+    user_id: Uuid,
+}
+
+/// `POST /tenant/transfer-ownership` — hand the tenant to another member.
+///
+/// **Only the current owner may call this, and it is deliberately not delegatable.** Every other
+/// owner power can be granted to a role; this one cannot, because an action that can hand the
+/// tenant away is not something to hold accidentally. It is also the escape hatch the other two
+/// guards point at ("transfer ownership first"), so it must not itself depend on a role grant that
+/// could have been edited away.
+///
+/// Ownership takes effect immediately — the handlers read `tenants.owner_user_id` on every call
+/// rather than trusting the token — so unlike a role change this does not wait for re-login. The
+/// previous owner loses owner powers on their very next request.
+async fn transfer_ownership(
+    State(st): State<AppState>,
+    UserClaims(c): UserClaims,
+    Json(b): Json<TransferOwnershipReq>,
+) -> Result<StatusCode, ApiErr> {
+    let tid = tenant_ctx(&c)?;
+    let caller =
+        Uuid::parse_str(&c.sub).map_err(|_| err(StatusCode::UNAUTHORIZED, "bad subject"))?;
+
+    let owner = store::tenant_owner(&st.pool, tid).await.map_err(db_err)?;
+    if owner != Some(caller) {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "only the current owner can transfer ownership",
+        ));
+    }
+    if b.user_id == caller {
+        return Err(err(StatusCode::BAD_REQUEST, "you already own this tenant"));
+    }
+
+    let target = store::find_user_by_id(&st.pool, b.user_id)
+        .await
+        .map_err(db_err)?
+        .ok_or(err(StatusCode::NOT_FOUND, "user not found"))?;
+    // Same 404-not-403 reasoning as the other two: a 403 would confirm the id exists.
+    if target.tenant_id != Some(tid) || target.is_master {
+        return Err(err(StatusCode::NOT_FOUND, "user not found"));
+    }
+    // A tenant whose owner cannot sign in is a tenant with no recovery path. An OAuth-only account
+    // is fine (it has a way in); an account with neither a password nor a social identity is not.
+    if target.password_hash.is_none()
+        && !store::has_oauth_identity(&st.pool, b.user_id)
+            .await
+            .map_err(db_err)?
+    {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "that account has no way to sign in — set a password for them first",
+        ));
+    }
+
+    store::set_tenant_owner(&st.pool, tid, b.user_id)
+        .await
+        .map_err(db_err)?;
+
+    log::warn!(
+        "ownership transferred: tenant {tid} from {caller} to {}",
+        b.user_id
+    );
+    let mut ev = app_core::events::NewEvent::new(tid, "auth.ownership_transferred", "user");
+    ev.severity = "warn".to_string();
+    ev.title = Some("Ownership transferred".to_string());
+    ev.message = Some(format!("{} is now the tenant owner", target.email));
+    ev.user_id = Some(b.user_id);
+    ev.data = Some(serde_json::json!({ "from": caller.to_string() }));
+    st.event_queue.push(ev);
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // ---- RBAC -------------------------------------------------------------------
 
 async fn list_permissions(
@@ -684,8 +761,15 @@ async fn list_users(
     UserClaims(c): UserClaims,
     State(st): State<AppState>,
 ) -> Result<Json<Vec<store::UserListRow>>, ApiErr> {
-    auth::require(&c, "users.manage")?;
     let tid = tenant_ctx(&c)?;
+    // Owner OR users.manage. The owner's actions all live on this screen, so gating it purely on a
+    // role grant would let a role edit hide the tenant's own recovery path from the one person who
+    // cannot be locked out of it.
+    let caller =
+        Uuid::parse_str(&c.sub).map_err(|_| err(StatusCode::UNAUTHORIZED, "bad subject"))?;
+    if store::tenant_owner(&st.pool, tid).await.map_err(db_err)? != Some(caller) {
+        auth::require(&c, "users.manage")?;
+    }
     Ok(Json(
         store::list_users(&st.pool, tid).await.map_err(db_err)?,
     ))
@@ -1001,6 +1085,7 @@ mod failed_login_record_tests {
             "auth.account_locked",
             "auth.password_reset",
             "auth.user_removed",
+            "auth.ownership_transferred",
         ] {
             assert!(
                 known.contains(&kind),

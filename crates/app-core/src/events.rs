@@ -166,6 +166,10 @@ pub fn catalog() -> &'static [KindInfo] {
             kind: "auth.user_removed",
             label: "User removed",
         },
+        KindInfo {
+            kind: "auth.ownership_transferred",
+            label: "Ownership transferred",
+        },
     ]
 }
 

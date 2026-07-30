@@ -15,7 +15,7 @@
   import Loader from "$lib/components/loader.svelte";
 
   import { rbac, type Role, type TenantUser } from "$lib/api";
-  import { hasPerm } from "$lib/auth.svelte";
+  import { auth, hasPerm } from "$lib/auth.svelte";
   import { dict, lang } from "$lib/i18n";
 
   const t = $derived(dict[lang()].users);
@@ -30,21 +30,117 @@
   let inviteRoles = $state<Set<string>>(new Set());
   let inviting = $state(false);
 
-  const allowed = hasPerm("users.manage");
+  // The owner can always reach this screen: control allows the user list for the owner even
+  // without users.manage, because every owner action lives here.
+  const iAmOwner = $derived(
+    users.some((u) => u.id === auth.me?.user_id && u.is_owner),
+  );
+  // The SERVER decides who may see this screen — it admits the owner even without users.manage.
+  // Deriving that here is circular: ownership is only knowable from the user list, and the list
+  // would only load if we already believed we were allowed. So: always attempt the load, and let
+  // the response settle it.
+  let allowed = $state(true);
+
+  // One row at a time may be mid-action. Inline rather than a modal: a confirm dialog for a
+  // one-click action is heavier than the action itself.
+  let pendingRemove = $state<string | null>(null);
+  let pendingTransfer = $state<string | null>(null);
+  let pwOpenFor = $state<string | null>(null);
+  let newPassword = $state("");
+  let acting = $state(false);
+
+  /** Whether the signed-in user may act on `user` at all. Mirrors the server's guards so the UI
+   *  doesn't offer buttons that would be refused. */
+  function canAct(user: TenantUser): boolean {
+    if (user.is_master) return false;
+    if (user.id === auth.me?.user_id) return false;
+    return iAmOwner || hasPerm("users.password_reset") || hasPerm("users.remove");
+  }
+  function canReset(user: TenantUser): boolean {
+    if (!canAct(user)) return false;
+    if (user.is_owner) return false; // only the owner resets the owner, and that isn't self-service here
+    return iAmOwner || hasPerm("users.password_reset");
+  }
+  function canRemove(user: TenantUser): boolean {
+    if (!canAct(user)) return false;
+    if (user.is_owner) return false; // the owner is never removable — transfer first
+    return iAmOwner || hasPerm("users.remove");
+  }
+  /** Transfer is owner-only and deliberately not delegatable. */
+  function canMakeOwner(user: TenantUser): boolean {
+    return iAmOwner && !user.is_owner && !user.is_master && user.id !== auth.me?.user_id;
+  }
+
+  function closeRowActions() {
+    pendingRemove = null;
+    pendingTransfer = null;
+    pwOpenFor = null;
+    newPassword = "";
+  }
+
+  async function submitPassword(user: TenantUser) {
+    if (newPassword.length < 8 || acting) return;
+    acting = true;
+    try {
+      await rbac.setUserPassword(user.id, newPassword);
+      toast.success(t.resetDone);
+      closeRowActions();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t.resetFailed);
+    } finally {
+      acting = false;
+    }
+  }
+
+  async function confirmRemove(user: TenantUser) {
+    if (acting) return;
+    acting = true;
+    try {
+      await rbac.removeUser(user.id);
+      toast.success(t.removeDone);
+      closeRowActions();
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t.removeFailed);
+    } finally {
+      acting = false;
+    }
+  }
+
+  async function confirmTransfer(user: TenantUser) {
+    if (acting) return;
+    acting = true;
+    try {
+      await rbac.transferOwnership(user.id);
+      toast.success(t.transferDone);
+      closeRowActions();
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t.transferFailed);
+    } finally {
+      acting = false;
+    }
+  }
 
   async function load() {
     loading = true;
     try {
       [users, roles] = await Promise.all([rbac.users(), rbac.roles()]);
+      allowed = true;
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t.loadFailed);
+      // Refused means neither owner nor users.manage — show the not-permitted state rather than an
+      // error toast. With the permission, a failure here is a real error worth surfacing.
+      if (hasPerm("users.manage")) {
+        toast.error(e instanceof Error ? e.message : t.loadFailed);
+      } else {
+        allowed = false;
+      }
     } finally {
       loading = false;
     }
   }
   $effect(() => {
-    if (allowed) load();
-    else loading = false;
+    load();
   });
 
   function roleName(id: string): string {
@@ -122,6 +218,7 @@
               {#each roles as role (role.id)}
                 <th class="px-3 py-2 text-center font-medium">{role.name}</th>
               {/each}
+              <th class="py-2 pl-3 text-right font-medium">{t.actions}</th>
             </tr>
           </thead>
           <tbody>
@@ -131,6 +228,7 @@
                   <div class="flex items-center gap-2">
                     <span>{user.email}</span>
                     {#if user.is_master}<Badge variant="secondary" class="text-[10px]">{t.master}</Badge>{/if}
+                    {#if user.is_owner}<Badge variant="outline" class="text-[10px]" title={t.ownerHint}>{t.ownerBadge}</Badge>{/if}
                     {#if savingUser === user.id}<Busy size={12} class="text-muted-foreground" />{/if}
                   </div>
                 </td>
@@ -145,10 +243,59 @@
                     />
                   </td>
                 {/each}
+                <td class="py-2 pl-3 text-right">
+                  {#if pwOpenFor === user.id}
+                    <div class="flex items-center justify-end gap-1.5">
+                      <Input
+                        type="password"
+                        class="h-7 w-44 text-xs"
+                        placeholder={t.newPassword}
+                        autocomplete="new-password"
+                        bind:value={newPassword}
+                      />
+                      <Button size="sm" variant="default" class="h-7 text-xs" disabled={newPassword.length < 8 || acting} onclick={() => submitPassword(user)}>
+                        {t.resetConfirm}
+                      </Button>
+                      <Button size="sm" variant="ghost" class="h-7 text-xs" onclick={closeRowActions}>{t.cancel}</Button>
+                    </div>
+                  {:else if pendingRemove === user.id}
+                    <div class="flex items-center justify-end gap-1.5">
+                      <Button size="sm" variant="destructive" class="h-7 text-xs" disabled={acting} onclick={() => confirmRemove(user)}>
+                        {t.removeConfirm}
+                      </Button>
+                      <Button size="sm" variant="ghost" class="h-7 text-xs" onclick={closeRowActions}>{t.cancel}</Button>
+                    </div>
+                  {:else if pendingTransfer === user.id}
+                    <div class="flex items-center justify-end gap-1.5">
+                      <Button size="sm" variant="default" class="h-7 text-xs" disabled={acting} onclick={() => confirmTransfer(user)}>
+                        {t.transferConfirm}
+                      </Button>
+                      <Button size="sm" variant="ghost" class="h-7 text-xs" onclick={closeRowActions}>{t.cancel}</Button>
+                    </div>
+                  {:else}
+                    <div class="flex items-center justify-end gap-1">
+                      {#if canReset(user)}
+                        <Button size="sm" variant="ghost" class="h-7 text-xs" onclick={() => { closeRowActions(); pwOpenFor = user.id; }}>
+                          {t.resetPassword}
+                        </Button>
+                      {/if}
+                      {#if canMakeOwner(user)}
+                        <Button size="sm" variant="ghost" class="h-7 text-xs" onclick={() => { closeRowActions(); pendingTransfer = user.id; }}>
+                          {t.makeOwner}
+                        </Button>
+                      {/if}
+                      {#if canRemove(user)}
+                        <Button size="sm" variant="ghost" class="h-7 text-xs text-destructive" onclick={() => { closeRowActions(); pendingRemove = user.id; }}>
+                          {t.remove}
+                        </Button>
+                      {/if}
+                    </div>
+                  {/if}
+                </td>
               </tr>
             {/each}
             {#if users.length === 0}
-              <tr><td colspan={roles.length + 1}>
+              <tr><td colspan={roles.length + 2}>
                 <EmptyState
                   title={t.emptyTitle}
                   description={t.emptyDescription}
