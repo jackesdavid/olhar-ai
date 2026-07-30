@@ -33,6 +33,12 @@ kanban-plugin: board
 
 - [ ] #118 Edge detection timing metrics — motion/face detect ms + rate
 	  - Plan: [[edge-detection-metrics]]
+- [ ] #102 Workflow parameterization — input vars, clone, promote, templates
+	  - Plan: [[workflow-parameterization]]
+- [ ] #94 Unified node value store — one place, media in MinIO
+	  - Plan: [[unified-node-value-store]]
+- [ ] #95 Graph instances — per-run context + live instance view
+	  - Plan: [[workflow-graph-instances]]
 - [ ] #17 Face recognition: DetectFaces node + live-feed triggers
 	  - Plan: [[face-recognition-next-steps]]
 - [ ] #20 GetCameraRoom node — look up room name from a camera entity
@@ -101,20 +107,10 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #95 Graph instances — per-run context + live instance view
-	  - Plan: [[workflow-graph-instances]]
-- [ ] #94 Unified node value store — one place, media in MinIO
-	  - Plan: [[unified-node-value-store]]
-- [ ] #102 Workflow parameterization — input vars, clone, promote, templates
-	  - Plan: [[workflow-parameterization]]
-- [ ] #11 Update button stays loading until update completes
-	  - Plan: [[update-button-loading]]
-- [ ] #119 Faces view — cluster + bulk-label unknown faces → people
-	  - Plan: [[faces-labeling-view]]
+- [ ] #148 Security plan §0 — rotate the exposed secrets + remove the demo admin
+	  - Plan: [[security-hardening-remainder]]
 - [ ] #120 Face pipeline on primary (HD) stream — GPU decode + per-tenant selector
 	  - Plan: [[face-pipeline-hd-stream]]
-- [ ] #129 Tuya integration — provider + workflow nodes to control devices
-	  - Plan: [[tuya-integration]]
 
 
 ## Review
@@ -126,8 +122,14 @@ kanban-plugin: board
 ## Done
 
 **Complete**
+- [x] #119 Faces view — cluster + bulk-label unknown faces → people
+	  - Plan: [[faces-labeling-view]]
 - [x] #130 Workflow node memoize off by default + Variable panel read-only
 	  - Plan: [[workflow-memoize-off-default]]
+- [x] #11 Update button stays loading until update completes
+	  - Plan: [[update-button-loading]]
+- [x] #129 Tuya integration — provider + workflow nodes to control devices
+	  - Plan: [[tuya-integration]]
 - [x] #117 Face recognition pipeline — edge detect → embed → recognize → store
 	  - Plan: [[face-recognition-pipeline]]
 - [x] #115 Get Variable over-activation — fires on branches that don't use it
