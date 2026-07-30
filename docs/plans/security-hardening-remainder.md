@@ -154,18 +154,44 @@ stale token from the previous identity cannot outlive it. The three URL builders
 (`faceImageUrl`, `runFrameUrl`, `nodeStateUrl`) use it, falling back to the session token if a mint
 has not landed yet. `Referrer-Policy: no-referrer` added in `deploy/app/nginx.conf`.
 
-**Deliberately NOT in phase 1 — two surfaces still carry session tokens:**
+**The SSE stream — done.** `ensureCloudStream` now uses `mediaToken()` and schedules a *deliberate*
+reconnect five minutes before expiry (`scheduleCloudRenew`). This matters because a native
+`EventSource` retries the exact URL it was built with: once that token expires, every automatic
+retry 401s and the stream stays dead until the `CLOSED` path notices. Renewing early turns an
+outage into one chosen reopen, and `stream-open` subscribers already re-seed delta-only state —
+which is precisely what that hook exists for. The timer is cleared on idle teardown so it cannot
+fire against a stream nobody is listening to.
 
-- **The SSE stream** (`data.ts` `ensureCloudStream`). A media token would work, but only by relying
-  on a 401 → `CLOSED` → 3-second manual retry once an hour, i.e. an hourly gap that does not exist
-  today. Doing it properly means re-minting and reconnecting *before* expiry. Worth doing; not worth
-  smuggling into this change.
-- **The gateway's `?token=`** (`sentinel-gateway/src/auth.rs`, used by the live player). The gateway
-  has its own `Claims` copy and would need the same scope handling; live video is the core product,
-  so it gets its own change with its own verification.
+### The gateway is blocked on service auth, not on a token swap
 
-**Phase 2** (refuse session tokens on media surfaces) is gated on the phase-1 log going quiet, and
-on both surfaces above moving first — otherwise it breaks live video and the event stream.
+This is deeper than "add scope handling to the gateway's `Claims`", and it is the real content of
+the plan's "control + gateway + app must move together".
+
+`auth::authorize_live` returns the client's token, and `state.rs:127` forwards it —
+`bearer_auth(token)` — to control's `/internal/box-upstream` to resolve which box serves the
+tenant. That endpoint takes `UserClaims`, which now **refuses media tokens**. So sending a media
+token to the gateway does not fail loudly: `box_upstream` 401s, `host` becomes `None`, and
+`unwrap_or_else(|| self.upstream.clone())` **falls back to the default upstream** — live video
+silently misrouted rather than refused. Exactly the failure class §1.8 is trying to remove.
+
+Three ways out, in preference order:
+
+1. **The gateway authenticates as itself.** It is a service making its own backend call; reusing the
+   end user's bearer for it is the actual defect. Needs a service credential (or the existing box/
+   signing machinery) and is the only option that leaves the "media tokens cannot call the API"
+   invariant intact.
+2. Pass `tid` (already decoded from the client's claims) instead of the token, and have
+   `/internal/box-upstream` trust the gateway. Cheaper, but it moves the tenant decision from
+   "derived from a token" to "asserted by a caller", which is what §1.2 just finished removing.
+3. Carve out `box_upstream` to accept media tokens. Cheapest and worst — it re-opens the hole the
+   scope exists to close.
+
+Until one lands, the live player deliberately keeps using the session token.
+
+**Phase 2** (refuse session tokens on media surfaces) is gated on the phase-1 log going quiet and on
+the gateway above. Note the ordering trap: shipping phase 2 while the gateway still forwards session
+tokens would break live video, and shipping the gateway on media tokens without fix 1/2 would
+silently misroute it.
 
 ## #152 — §3 P2→P3: soak, then enforce signing per box
 

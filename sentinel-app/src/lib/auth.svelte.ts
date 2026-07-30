@@ -106,6 +106,15 @@ export function mediaToken(): string | null {
   return auth.token;
 }
 
+/**
+ * When the current media token expires (epoch ms), or `null` if we're on the session-token
+ * fallback. Long-lived consumers (the SSE stream) use this to reconnect *before* expiry rather
+ * than discovering it as a failed request.
+ */
+export function mediaTokenExpiresAt(): number | null {
+  return media && media.expiresAt > Date.now() ? media.expiresAt : null;
+}
+
 /** Whether the signed-in user may perform `action`. Action-based — never role names. */
 export function hasPerm(action: string): boolean {
   const me = auth.me;

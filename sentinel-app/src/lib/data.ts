@@ -5,7 +5,7 @@
 // throw a clear error via `cloudOnly(...)` — pages don't surface those affordances.
 import { api } from "./api";
 import { API_BASE } from "./config";
-import { auth, mediaToken } from "./auth.svelte";
+import { auth, mediaToken, mediaTokenExpiresAt } from "./auth.svelte";
 import {
   DEFAULT_SETTINGS,
   type Alert,
@@ -139,9 +139,41 @@ function cloudOnly(feature: string): never {
 const cloudSubs = new Map<string, Set<(payload?: unknown) => void>>();
 let cloudStream: EventSource | null = null;
 
+/** Pending deliberate reconnect, scheduled just before the media token expires. */
+let cloudRenew: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Reopen the stream shortly BEFORE its token expires.
+ *
+ * A native `EventSource` retries the exact URL it was constructed with, so once the token in that
+ * URL expires every automatic retry 401s — the browser gives up, and the stream only comes back via
+ * the `CLOSED` path below, after a visible gap. Renewing early turns that into one deliberate
+ * reopen at a moment of our choosing; `stream-open` subscribers already re-seed the delta-only
+ * state, which is exactly what that hook exists for.
+ */
+function scheduleCloudRenew(): void {
+  if (cloudRenew) clearTimeout(cloudRenew);
+  cloudRenew = null;
+  const exp = mediaTokenExpiresAt();
+  if (exp == null) return; // session-token fallback: 24h, nothing to renew around
+  // Five minutes of headroom, and never a hot loop if the clock is odd or expiry is close.
+  const delay = Math.max(30_000, exp - Date.now() - 5 * 60_000);
+  cloudRenew = setTimeout(() => {
+    if (!cloudStream) return;
+    cloudStream.close();
+    cloudStream = null;
+    ensureCloudStream();
+  }, delay);
+}
+
 function ensureCloudStream(): void {
   if (cloudStream || typeof EventSource === "undefined" || !auth.token) return;
-  const url = `${API_BASE}/workflows/events?token=${encodeURIComponent(auth.token)}`;
+  // A media token, not the session JWT: this URL is a query string, so it reaches proxy access
+  // logs (see the Traefik RequestPath note) and cannot carry a header. Falls back to the session
+  // token until the first mint lands, which control still accepts during the §1.8 overlap.
+  const tok = mediaToken();
+  if (!tok) return;
+  const url = `${API_BASE}/workflows/events?token=${encodeURIComponent(tok)}`;
   const es = new EventSource(url);
   // Fired on first connect AND on every auto-reconnect. Subscribers to the synthetic
   // "stream-open" event use it to re-seed state that arrives only as deltas (e.g. run
@@ -170,12 +202,16 @@ function ensureCloudStream(): void {
     }
   };
   cloudStream = es;
+  scheduleCloudRenew();
 }
 
 function closeCloudStreamIfIdle(): void {
   if (cloudStream && [...cloudSubs.values()].every((s) => s.size === 0)) {
     cloudStream.close();
     cloudStream = null;
+    // Drop the pending renewal too, or it fires against a stream nobody is listening to.
+    if (cloudRenew) clearTimeout(cloudRenew);
+    cloudRenew = null;
   }
 }
 
