@@ -5,6 +5,22 @@
 **Goal:** finish the security-hardening plan. PRs 1–5 shipped; what remains is one operational
 P0, one applied-by-hand proxy change, and the two gated rollouts.
 
+## Applied to production 2026-07-30
+
+| Card | State | Verified by |
+|---|---|---|
+| #149 per-IP throttle | **live** | 70-request parallel burst → 41×401 then 29×429; `/auth/me` 70 requests → **0** 429s; `/config/cameras` 60 → **0** 429s |
+| #150 access log + rotation | **live** | canary token in a query string → **0** occurrences in the log; `token=` → **0**; 429s recorded with `RouterName: sentinel-login@docker` and `RequestPath: (absent)` |
+| #153 WebAuthn RP | **fixed** | `rp_id=olharai.com origin=https://app.olharai.com`; login/start 501 → 404 |
+| #151 media tokens | phase 1 deployed | see that section |
+| #148 §0 secrets | **NOT done — and §1.1 is confirmed exploitable** | see below |
+
+Sequential request loops are useless for testing a token bucket: at 20/min with burst 40, 46 requests
+spaced ~1s apart refill faster than they drain and produce zero 429s. Use a parallel burst.
+
+The `RequestPath: drop` is load-bearing, not cosmetic — the canary test above is what proves it, and
+it must stay until §1.8 phase 2 lands.
+
 ## Status of the original sequencing
 
 | Step | Scope | State |
@@ -24,9 +40,43 @@ tell you.
 
 ## #148 — §0: rotate the exposed secrets + remove the demo admin (P0, operational)
 
+**§1.1 is confirmed exploitable in production (2026-07-30).** `admin@demo.local` / `demo12345`
+returns **200** on `POST /auth/login` against `control.thesentinels.online` — a working Admin on a
+live tenant, publicly reachable. The `demo` tenant still exists and still has its user. This is
+exactly what the plan predicted: the §1.1 code fix made the demo tenant dev-only, but it **cannot
+delete an account that already exists**. Closing it is one statement:
+
+```sql
+UPDATE users SET password_hash = NULL WHERE email = 'admin@demo.local';
+```
+
+`password_hash IS NULL` makes `handlers::login` answer "use social login for this account" rather
+than authenticating, so this closes the password path with no FK-cascade risk and is reversible.
+Deleting the tenant outright is the fuller cleanup and can follow.
+
 Four live secrets were printed into a session transcript during the original review:
 `JWT_SECRET`, `MASTER_PASSWORD`, `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`. **No commit can fix
 this** — it is a rotation, done on the VPS in `/ibbf/sentinel.env`.
+
+Split by who can actually do each one:
+
+- **`JWT_SECRET`** — rotatable on the box, but it invalidates every session (all users logged out;
+  appliances unaffected). Must be written **once** and both `sentinel-control` and
+  `sentinel-gateway` recreated together, or the gateway silently rejects every live-video token.
+  Generate it server-side and never echo it:
+  ```sh
+  cd /ibbf && cp -n sentinel.env sentinel.env.bak-jwt
+  NEW=$(openssl rand -base64 72 | tr -d '\n')
+  sed -i "s|^JWT_SECRET=.*|JWT_SECRET=${NEW}|" sentinel.env && unset NEW
+  grep -c '^JWT_SECRET=' sentinel.env   # expect 1; do NOT print the value
+  docker compose -f docker-compose.yml -f docker-compose.sentinel.yml up -d sentinel-control sentinel-gateway
+  ```
+- **`STRIPE_API_KEY` / `STRIPE_WEBHOOK_SECRET`** — cannot be rotated from the box at all; they are
+  rolled in the Stripe dashboard, then pasted into `sentinel.env`. §0 is **not closed** until this
+  happens: PR 2 shipped the webhook verification that makes the leaked signing secret meaningful.
+- **`MASTER_PASSWORD`** — deliberately left for the operator. Setting it would require telling them
+  the new value, and writing a live credential into a session transcript is precisely the mistake
+  that created §0 in the first place.
 
 The plan required rotating `JWT_SECRET` and `STRIPE_WEBHOOK_SECRET` **before** shipping §1.3/§1.4.
 Those shipped and are now deployed, so the ordering has already been violated: if rotation has not

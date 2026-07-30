@@ -27,16 +27,10 @@ kanban-plugin: board
 - [ ] #10 Update available — reload to get the latest version.
 - [ ] #93 Box health copy leaks internals ("tailnet", "Tailscale") to users
 	  - Plan: [[box-health-copy-no-internals]]
-- [ ] #153 WebAuthn RP ID unset in prod — passkeys live but pointed at localhost
-	  - Plan: [[security-hardening-remainder]]
 
 
 ## ToDo
 
-- [ ] #149 Login rate limiting §1.7 — apply the per-IP throttle at Traefik
-	  - Plan: [[security-hardening-remainder]]
-- [ ] #150 Traefik access logging + container log rotation
-	  - Plan: [[security-hardening-remainder]]
 - [ ] #152 Edge signing §3 P2→P3 — soak, then flip signing_mode to required per box
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #118 Edge detection timing metrics — motion/face detect ms + rate
@@ -134,6 +128,12 @@ kanban-plugin: board
 ## Done
 
 **Complete**
+- [x] #149 Login rate limiting §1.7 — apply the per-IP throttle at Traefik
+	  - Plan: [[security-hardening-remainder]]
+- [x] #150 Traefik access logging + container log rotation
+	  - Plan: [[security-hardening-remainder]]
+- [x] #153 WebAuthn RP ID unset in prod — passkeys live but pointed at localhost
+	  - Plan: [[security-hardening-remainder]]
 - [x] #119 Faces view — cluster + bulk-label unknown faces → people
 	  - Plan: [[faces-labeling-view]]
 - [x] #130 Workflow node memoize off by default + Variable panel read-only
