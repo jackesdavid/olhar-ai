@@ -1082,14 +1082,23 @@ pub async fn ensure_tenant_roles(pool: &PgPool) -> sqlx::Result<usize> {
 /// `billing.read`) reaches nobody — and the screen that would grant it sits behind
 /// `roles.manage`. A system role has fixed semantics; customise access with a **custom** role,
 /// which this never touches. Returns how many grants were added.
-pub async fn sync_system_roles(pool: &PgPool, viewer_keys: &[&str]) -> sqlx::Result<u64> {
+pub async fn sync_system_roles(
+    pool: &PgPool,
+    viewer_keys: &[&str],
+    owner_only_keys: &[&str],
+) -> sqlx::Result<u64> {
+    // Admin gets every action EXCEPT the owner-only ones. Without the exclusion this runs on every
+    // boot, so deleting such a grant by hand would be undone the next time control started.
+    let excluded: Vec<String> = owner_only_keys.iter().map(|k| (*k).to_string()).collect();
     let admin = sqlx::query(
         "INSERT INTO role_permissions (role_id, permission_key)
          SELECT r.id, p.key
          FROM roles r CROSS JOIN permissions p
          WHERE r.is_system AND r.name = 'Admin'
+           AND p.key <> ALL($1)
          ON CONFLICT DO NOTHING",
     )
+    .bind(&excluded)
     .execute(pool)
     .await?;
 

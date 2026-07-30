@@ -19,7 +19,8 @@ pub async fn run(pool: &PgPool) -> sqlx::Result<()> {
     }
     // A permission added after a tenant existed would otherwise reach nobody: role grants
     // are seeded only at tenant creation, and the grant screen sits behind `roles.manage`.
-    let granted = store::sync_system_roles(pool, &rbac::viewer_perms()).await?;
+    let granted =
+        store::sync_system_roles(pool, &rbac::viewer_perms(), rbac::owner_only_perms()).await?;
     if granted > 0 {
         log::info!("seed: granted {granted} new permission(s) to system roles");
     }

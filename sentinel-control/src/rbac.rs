@@ -44,6 +44,20 @@ pub fn all_perms() -> Vec<&'static str> {
 /// would be a feature removal rather than a security gain. Gating it buys the ability for a tenant
 /// to *revoke* it with a custom role, which is what was missing. Cost control belongs in a
 /// per-tenant quota, not in a permission — an Admin can spend just as much.
+/// Actions that are NEVER auto-granted to the system Admin role.
+///
+/// Everything else in [`PERMISSIONS`] is handed to every tenant's Admin on boot, so that a newly
+/// added action reaches somebody. These two must not be: resetting a password is an account-takeover
+/// primitive and removing a user is irreversible, so they belong to the tenant OWNER by default and
+/// get delegated deliberately, not by a restart.
+///
+/// They stay in `PERMISSIONS` on purpose — an owner can still grant either to a role from the roles
+/// screen. The owner always holds them regardless (see `handlers::may_reset_passwords`), so this
+/// cannot lock a tenant out of its own recovery path.
+pub fn owner_only_perms() -> &'static [&'static str] {
+    &["users.password_reset", "users.remove"]
+}
+
 pub fn viewer_perms() -> Vec<&'static str> {
     PERMISSIONS
         .iter()
