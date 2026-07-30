@@ -47,7 +47,6 @@ struct Cam {
     started: AtomicBool,                            // supervisor spawned?
     /// Live fMP4 for the `/api/ws` viewers, muxed on a `tee` branch of this camera's ONE pipeline
     /// (card #138, G2) — not a second connection to the camera.
-    #[cfg(feature = "gst-linked")]
     mse: Mutex<crate::gst_mse::Feed>,
     /// The codec detected by [`probe_codec`] on the gstreamer-linked path ("H264"/"H265") —
     /// `None` until the pipeline's first (re)start has probed it. Surfaced to the cloud so the
@@ -87,7 +86,6 @@ fn cam_for(ip: &str, hd: bool) -> Arc<Cam> {
             Arc::new(Cam {
                 latest: Mutex::new(None),
                 started: AtomicBool::new(false),
-                #[cfg(feature = "gst-linked")]
                 mse: Mutex::new(crate::gst_mse::Feed::default()),
                 codec: Mutex::new(None),
             })
@@ -113,7 +111,6 @@ pub fn ensure(state: &crate::state::AppState, ip: &str, hd: bool) {
     // `slot` (not the caller's raw `hd`) picks the URL — unified always resolves to main inside
     // `camera_rtsp` via `Device::is_unified`, even when the slot is the preview key.
     let url = match backend {
-        #[cfg(feature = "gst-linked")]
         Backend::GstreamerLinked => state.camera_rtsp(ip, slot),
         _ => None,
     };
@@ -146,7 +143,6 @@ fn ensure_with_url(ip: &str, hd: bool, backend: &str, url: &str) {
 /// What a live viewer needs for `ip` on the given stream slot: the MSE init segment, the MIME for
 /// `addSourceBuffer`, and the live fragments from here on. `None` until that slot's pipeline has
 /// muxed its first fragment. `hd` must match the slot [`ensure`] joined (use [`stream_slot`]).
-#[cfg(feature = "gst-linked")]
 pub fn mse_feed(
     ip: &str,
     hd: bool,
@@ -296,7 +292,6 @@ fn spawn(ip: &str, hd: bool, backend: Backend, use_hwaccel: bool) -> std::io::Re
 /// Jetson the `nvv4l2decoder → NVMM` memory needs `nvvidconv` in place of `videoconvert` — that
 /// swap is the Jetson gate's job. Blocks until the pipeline errors, then returns so `supervise()`
 /// restarts it under the same backoff policy as the ffmpeg path.
-#[cfg(feature = "gst-linked")]
 fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Result<(), String> {
     use gstreamer as gst;
     use gstreamer::prelude::*;
@@ -504,14 +499,12 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
 
 /// The video codec a camera streams. Only the parser + caps differ in the graph — `nvv4l2decoder`
 /// and `mp4mux` handle both. Detected from the SDP ([`probe_codec`]).
-#[cfg(feature = "gst-linked")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum VideoCodec {
     H264,
     H265,
 }
 
-#[cfg(feature = "gst-linked")]
 impl VideoCodec {
     fn from_encoding(enc: &str) -> Option<Self> {
         match enc.to_ascii_lowercase().as_str() {
@@ -565,7 +558,6 @@ impl VideoCodec {
 /// Probe a camera's video codec from its RTSP SDP (a `retina` DESCRIBE, no PLAY) so the pipeline can
 /// be built to match. Cheap; runs once per capture (re)start — a future card caches this per camera
 /// and lets the UI override it.
-#[cfg(feature = "gst-linked")]
 fn probe_codec(url: &str) -> Result<VideoCodec, String> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -598,7 +590,6 @@ fn probe_codec(url: &str) -> Result<VideoCodec, String> {
 /// `rtspsrc` can't; its `demuxed()` gives us access units, and the SDP's `codec_data` goes into the
 /// appsrc caps so the parser negotiates avc/hvc1 without waiting for inline parameter sets. `codec`
 /// (from [`probe_codec`]) selects H264 vs H265.
-#[cfg(feature = "gst-linked")]
 async fn retina_feed(
     url: &str,
     appsrc: &gstreamer_app::AppSrc,
@@ -699,7 +690,6 @@ async fn retina_feed(
 /// "produced no fragment within 10s"). H264 IDR (type 5) isn't affected by that particular bug,
 /// but is checked here too — same cost, one fewer place a future codec-detection change could
 /// silently reintroduce this.
-#[cfg(feature = "gst-linked")]
 fn is_keyframe(au: &[u8], codec: VideoCodec) -> bool {
     let mut i = 0usize;
     while i + 4 <= au.len() {
@@ -750,14 +740,8 @@ fn supervise(ip: &str, hd: bool, cam: Arc<Cam>, backend: Backend, url: Option<St
         // Linked gstreamer-rs path (card #138) runs in-process, not as a Child — handle it before
         // the subprocess spawn below. It shares this loop's backoff/restart policy verbatim.
         if backend == Backend::GstreamerLinked {
-            #[cfg(feature = "gst-linked")]
             if let Err(e) = run_gst_linked(ip, hd, &cam, url.as_deref()) {
                 log::warn!("capture-decoder[{ip}]: gstreamer-linked: {e}");
-            }
-            #[cfg(not(feature = "gst-linked"))]
-            {
-                log::error!("capture-decoder[{ip}]: gstreamer-linked selected but not compiled in");
-                std::thread::sleep(Duration::from_secs(30));
             }
         } else {
             match spawn(ip, hd, backend, use_hwaccel) {

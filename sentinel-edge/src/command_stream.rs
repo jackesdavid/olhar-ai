@@ -17,7 +17,6 @@ use crate::state::AppState;
 
 /// The edge's shared state, stashed so the `start_live` handler can start a camera pipeline. Set
 /// once at boot; only the gst-linked live path reads it.
-#[cfg(feature = "gst-linked")]
 static STATE: std::sync::OnceLock<Arc<AppState>> = std::sync::OnceLock::new();
 
 const RECONNECT_MIN_SECS: u64 = 2;
@@ -30,10 +29,7 @@ const READ_TIMEOUT_SECS: u64 = 60;
 /// edge is enrolled (it needs a box token to authenticate). `local_api` is this edge's own HTTP
 /// base (e.g. `http://127.0.0.1:8788`) — commands are dispatched to it.
 pub fn run(control_url: String, local_api: String, state: Arc<AppState>) {
-    #[cfg(feature = "gst-linked")]
     let _ = STATE.set(state);
-    #[cfg(not(feature = "gst-linked"))]
-    let _ = &state; // only the gst-linked live-push path needs it
     let mut backoff = RECONNECT_MIN_SECS;
     loop {
         match pump(&control_url, &local_api) {
@@ -236,7 +232,6 @@ rm -rf /opt/sentinel-edge /etc/sentinel-edge";
 /// Live-over-outbound (card #144): dial the gateway and push the camera's fMP4 up. `args` = `{src,
 /// url}` — `src` is the go2rtc stream name the browser asked for, `url` the gateway WS to dial. The
 /// stream runs on its own thread+runtime until the gateway closes; this returns an immediate ack.
-#[cfg(feature = "gst-linked")]
 fn start_live(args: &serde_json::Value) -> (bool, Option<serde_json::Value>, Option<String>) {
     let Some(url) = args.get("url").and_then(|u| u.as_str()) else {
         return (false, None, Some("start_live: missing 'url'".into()));
@@ -267,15 +262,6 @@ fn start_live(args: &serde_json::Value) -> (bool, Option<serde_json::Value>, Opt
         rt.block_on(crate::live_push::run(url, ip, hd, state));
     });
     (true, Some(serde_json::json!({ "started": true })), None)
-}
-
-#[cfg(not(feature = "gst-linked"))]
-fn start_live(_args: &serde_json::Value) -> (bool, Option<serde_json::Value>, Option<String>) {
-    (
-        false,
-        None,
-        Some("live requires the GStreamer backend (gst-linked)".into()),
-    )
 }
 
 /// A named POST whose JSON reply is the command result (the recording commands).

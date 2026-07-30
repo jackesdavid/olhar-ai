@@ -542,25 +542,14 @@ pub fn ffmpeg_ok() -> bool {
 /// `install.sh` yet (coexistence phase) — an operator installs it manually to test
 /// (`brew install gstreamer gst-plugins-{base,good,bad,ugly} gst-libav` on macOS).
 pub fn gstreamer_ok() -> bool {
-    // A `gst-linked` build (the iOS edge, #144) compiles GStreamer in-process — there is no
-    // `gst-launch-1.0` CLI to probe, but the whole media path is present and owns frame-grab. Report
-    // it available so control doesn't mistake it for a box with no media backend.
-    #[cfg(feature = "gst-linked")]
-    {
-        true
-    }
-    // Otherwise (appliance builds) GStreamer is the system package; its presence is the CLI on PATH.
-    #[cfg(not(feature = "gst-linked"))]
-    {
-        static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *OK.get_or_init(|| {
-            crate::proc::command("gst-launch-1.0")
-                .arg("--version")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        })
-    }
+    // Always true, and not a lie: GStreamer is LINKED into this binary, so if the process is
+    // running then its media path is present by construction. There is no `gst-launch-1.0` CLI to
+    // probe for and no build that lacks it — the `gst-linked` feature is gone because there is
+    // nothing left to select between.
+    //
+    // Kept as a function rather than deleted because control still reads it off the heartbeat to
+    // tell boxes apart; it now answers "yes" everywhere instead of describing a fork.
+    true
 }
 
 /// A friendly platform string (`OS (arch)`, e.g. `macOS (aarch64)` / `Bazzite (x86_64)`)

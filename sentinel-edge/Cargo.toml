@@ -20,14 +20,16 @@ path = "src/main.rs"
 # edge. Links the same UI-agnostic `app-core` (device repo, go2rtc helpers, ONVIF +
 # snapshot capture) by path.
 [dependencies]
-app-core = { path = "../crates/app-core" }
+# `gst-linked` here is app-core's ONVIF snapshot path. The cloud services deliberately do NOT
+# enable it — they neither have nor want a GStreamer runtime — so it stays a feature there and
+# the edge, which is the only GStreamer-linked binary, turns it on.
+app-core = { path = "../crates/app-core", features = ["gst-linked"] }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 axum = { version = "0.7", features = ["ws"] }
 # Outbound WebSocket client — the edge dials the gateway to push live video up its own connection
-# (card #144, live-over-outbound), so live works with no tailnet. Optional: only the gst-linked live
-# path uses it, so the lean musl release build doesn't pull it. rustls (pure-Rust, musl-friendly).
-tokio-tungstenite = { version = "0.24", optional = true, features = ["rustls-tls-webpki-roots"] }
+# (card #144, live-over-outbound), so live works with no tailnet. rustls (pure-Rust).
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 tower-http = { version = "0.5", features = ["cors"] }
 # Pull the camera config from the control plane (cloud-managed, cached locally).
 ureq = { version = "2", features = ["json"] }
@@ -68,14 +70,15 @@ sysinfo = { version = "0.30", default-features = false }
 # cameras see, without keeping the native dependency that motivated the port.
 opencv = { version = "0.98", optional = true }
 
-# Linked gstreamer-rs for the A1 media path (card #138 pivot). OPTIONAL + off by default — the
-# default release stays the pure-Rust static build (#79). Enabling `gst-linked` links libgstreamer
-# (the only model that ports to Android), so it is opt-in per build target until it becomes the
-# default and ffmpeg is retired.
-gstreamer = { version = "0.23", optional = true }
-gstreamer-app = { version = "0.23", optional = true }
+# Linked gstreamer-rs — THE media path (card #138 complete). Not optional: GStreamer owns capture
+# decode, the recording mux, the cold snapshot and live fMP4 over WebSocket. ffmpeg and go2rtc are
+# gone, so there is no second backend to fall back to and no flag to pick between them.
+gstreamer = "0.23"
+gstreamer-app = "0.23"
 
 [features]
+# `gst-linked` is GONE: GStreamer is the only media path, so a flag to select it selected nothing.
+# It also hid a real trap — deploy/macos-pkg/build.sh built WITHOUT it, so macOS silently took the
+# ffmpeg branch and shipped a binary whose /api/ws route was not even compiled in.
 opencv-parity = ["dep:opencv"]
-gst-linked = ["dep:gstreamer", "dep:gstreamer-app", "dep:tokio-tungstenite", "app-core/gst-linked"]
 

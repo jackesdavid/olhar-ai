@@ -16,13 +16,10 @@ mod envfile;
 mod face;
 mod frames;
 mod go2rtc;
-#[cfg(feature = "gst-linked")]
 mod gst_mse;
-#[cfg(feature = "gst-linked")]
 mod gst_mux;
 mod http;
 mod hwaccel;
-#[cfg(feature = "gst-linked")]
 mod live_push;
 mod logbuf;
 mod media;
@@ -105,7 +102,6 @@ pub fn run() {
     // exit 0/1. The macOS installer bundles its own GStreamer runtime (card #138); this is how the
     // postinstall proves that runtime is complete on THIS machine before trusting the box to it,
     // instead of discovering a missing plugin the first time a camera connects.
-    #[cfg(feature = "gst-linked")]
     if std::env::args().any(|a| a == "gst-selftest") {
         std::process::exit(match media::gst_selftest() {
             Ok(()) => {

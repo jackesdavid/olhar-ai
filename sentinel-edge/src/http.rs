@@ -35,9 +35,8 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(recording_get).delete(recording_delete),
         )
         .layer(CorsLayer::permissive());
-    // The live MSE socket only exists on a GStreamer build — a released edge has no such route, and
-    // the gateway falls back to go2rtc when it 404s.
-    #[cfg(feature = "gst-linked")]
+    // Live fMP4 over WebSocket, served by the edge itself. Always present now — GStreamer is linked
+    // into every build, so there is no longer a release that 404s here and no go2rtc to fall back to.
     let router = router.route("/api/ws", get(mse_ws));
     router.with_state(state)
 }
@@ -502,7 +501,6 @@ async fn storage_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 /// The wire format is not ours to choose: the web player and the mobile WebView player both speak
 /// go2rtc's, so this matches it exactly — the client announces the codecs it can play, we answer
 /// with the MIME it should hand `addSourceBuffer`, and everything after that is fMP4 bytes.
-#[cfg(feature = "gst-linked")]
 async fn mse_ws(
     ws: axum::extract::ws::WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
@@ -521,7 +519,6 @@ async fn mse_ws(
     ws.on_upgrade(move |socket| mse_socket(socket, ip, slot))
 }
 
-#[cfg(feature = "gst-linked")]
 async fn mse_socket(mut socket: axum::extract::ws::WebSocket, ip: String, hd: bool) {
     use axum::extract::ws::Message;
 

@@ -224,18 +224,10 @@ fn default_recordings_path() -> String {
         .into_owned()
 }
 fn default_media_backend() -> String {
-    // Card #138: GStreamer is the first-class backend now. A build that LINKS it (the `gst-linked`
-    // feature — macOS/iOS today, every appliance once the Linux static-musl → glibc move lands)
-    // defaults to it with no config or env needed; a build without it (the Linux musl release, for
-    // now) falls back to ffmpeg so it still has a media path.
-    #[cfg(feature = "gst-linked")]
-    {
-        "gstreamer-linked".to_string()
-    }
-    #[cfg(not(feature = "gst-linked"))]
-    {
-        "ffmpeg".to_string()
-    }
+    // Card #138 COMPLETE: GStreamer is the only media path. ffmpeg and go2rtc are gone, so this is
+    // not a default among options — it is the single answer, kept as a field only because the value
+    // still rides in `RecordingConfig` that boxes have cached on disk.
+    "gstreamer-linked".to_string()
 }
 
 // ---- storage stats ----------------------------------------------------------
@@ -357,7 +349,6 @@ fn note_span(
 /// The running muxer a session owns; `wait()` blocks until the file is finalised.
 enum Muxer {
     Ffmpeg(Child),
-    #[cfg(feature = "gst-linked")]
     Gst(crate::gst_mux::GstMuxer),
 }
 
@@ -367,7 +358,6 @@ impl Muxer {
             Muxer::Ffmpeg(c) => {
                 let _ = c.wait();
             }
-            #[cfg(feature = "gst-linked")]
             Muxer::Gst(m) => m.wait(),
         }
     }
@@ -378,7 +368,6 @@ impl Muxer {
 /// uses it as the buffer PTS — which is the whole reason A2 was blocked until linked bindings.
 enum MuxSink {
     Ffmpeg(std::process::ChildStdin),
-    #[cfg(feature = "gst-linked")]
     Gst(crate::gst_mux::GstSink),
 }
 
@@ -386,7 +375,6 @@ impl MuxSink {
     fn write_frame(&mut self, data: &[u8], _at: std::time::Instant) -> std::io::Result<()> {
         match self {
             MuxSink::Ffmpeg(w) => w.write_all(data),
-            #[cfg(feature = "gst-linked")]
             MuxSink::Gst(s) => s.write_frame(data, _at),
         }
     }
@@ -395,7 +383,6 @@ impl MuxSink {
     fn finish(self) {
         match self {
             MuxSink::Ffmpeg(w) => drop(w),
-            #[cfg(feature = "gst-linked")]
             MuxSink::Gst(s) => s.finish(),
         }
     }
@@ -407,7 +394,6 @@ fn start_muxer(
     output: &std::path::Path,
     _backend: crate::media::Backend,
 ) -> Result<(Muxer, MuxSink), String> {
-    #[cfg(feature = "gst-linked")]
     if _backend == crate::media::Backend::GstreamerLinked {
         let (m, s) = crate::gst_mux::start(output)?;
         return Ok((Muxer::Gst(m), MuxSink::Gst(s)));

@@ -171,17 +171,11 @@ pub async fn health() -> Response {
 /// pipeline element), which on iOS also exercises the static plugin registration (card #144). Serves
 /// even unenrolled; a no-op stub when the build has no GStreamer.
 pub async fn gst_selftest_route() -> Response {
-    #[cfg(feature = "gst-linked")]
     {
         match crate::media::gst_selftest() {
             Ok(()) => axum::Json(serde_json::json!({ "ok": true })).into_response(),
             Err(e) => axum::Json(serde_json::json!({ "ok": false, "error": e })).into_response(),
         }
-    }
-    #[cfg(not(feature = "gst-linked"))]
-    {
-        axum::Json(serde_json::json!({ "ok": false, "error": "build without gst-linked" }))
-            .into_response()
     }
 }
 
@@ -209,7 +203,6 @@ pub async fn dev_record(
     State(control_url): State<String>,
     Query(q): Query<RecordQuery>,
 ) -> Response {
-    #[cfg(feature = "gst-linked")]
     {
         // A writable path on any platform — on iOS this is the app's tmp dir.
         let out = std::env::temp_dir().join("phone-clip.mp4");
@@ -241,12 +234,6 @@ pub async fn dev_record(
             }
             Err(e) => axum::Json(serde_json::json!({ "ok": false, "error": e })).into_response(),
         }
-    }
-    #[cfg(not(feature = "gst-linked"))]
-    {
-        let _ = q;
-        axum::Json(serde_json::json!({ "ok": false, "error": "build without gst-linked" }))
-            .into_response()
     }
 }
 

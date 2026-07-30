@@ -29,12 +29,7 @@ impl Backend {
         // Linked path (card #138). Only available when this build has the `gst-linked` feature;
         // otherwise fall through to ffmpeg so a stale flag never strands a box.
         if config_value.eq_ignore_ascii_case("gstreamer-linked") {
-            #[cfg(feature = "gst-linked")]
             return Backend::GstreamerLinked;
-            #[cfg(not(feature = "gst-linked"))]
-            log::warn!(
-                "media_backend=gstreamer-linked but this build lacks the `gst-linked` feature — using ffmpeg"
-            );
         }
         if config_value.eq_ignore_ascii_case("gstreamer") {
             if crate::state::gstreamer_ok() {
@@ -72,14 +67,12 @@ impl Backend {
 /// [`decode_branch`]. Used to pick the RTSP ingest: Tegra's GStreamer 1.20 `rtspsrc` can't complete
 /// some cameras' Digest handshake, so on Tegra the edge pulls with `retina` and feeds `appsrc`
 /// instead; every other platform keeps `rtspsrc`.
-#[cfg(feature = "gst-linked")]
 pub fn is_tegra() -> bool {
     use gstreamer as gst;
     gst::ElementFactory::find("nvv4l2decoder").is_some()
         && gst::ElementFactory::find("nvvidconv").is_some()
 }
 
-#[cfg(feature = "gst-linked")]
 pub fn decode_branch() -> &'static str {
     use gstreamer as gst;
     let has = |name: &str| gst::ElementFactory::find(name).is_some();
@@ -103,7 +96,6 @@ pub fn decode_branch() -> &'static str {
 
 /// Which hardware decoder this box actually has, for the health report (A4 — the `ffmpeg -hwaccels`
 /// replacement). `"none"` means software decode, which still works, just warmer.
-#[cfg(feature = "gst-linked")]
 pub fn hw_decoder() -> &'static str {
     use gstreamer as gst;
     let has = |name: &str| gst::ElementFactory::find(name).is_some();
@@ -130,7 +122,6 @@ pub fn hw_decoder() -> &'static str {
 /// `videotestsrc`/`x264enc`, which would drag `libx264` (GPL) into a bundle we redistribute. The
 /// macOS installer runs this in its postinstall to reject an incomplete bundle before trusting a box
 /// to it, instead of discovering the gap the first time a camera connects.
-#[cfg(feature = "gst-linked")]
 pub fn gst_selftest() -> Result<(), String> {
     use gstreamer as gst;
     init_gstreamer()?;
@@ -193,7 +184,6 @@ pub fn gst_selftest() -> Result<(), String> {
 /// that `gst_init` scans and loads; **on iOS they are statically linked into one framework**, so
 /// each plugin our pipelines use must be registered by hand — otherwise `gst_init` succeeds but
 /// `rtspsrc`, `mp4mux`, … simply do not exist. Idempotent; call this instead of `gst::init()`.
-#[cfg(feature = "gst-linked")]
 pub fn init_gstreamer() -> Result<(), String> {
     gstreamer::init().map_err(|e| format!("gst init: {e}"))?;
     #[cfg(target_os = "ios")]
@@ -253,7 +243,6 @@ mod ios_static_plugins {
 /// Proves the embedded phone edge can ingest + decode + mux a REAL camera on-device, without any
 /// enrollment/box plumbing. `rtspsrc ! rtph264depay ! h264parse ! mp4mux ! filesink`, then a clean
 /// EOS so mp4mux writes its moov. Returns (bytes, elapsed_secs).
-#[cfg(feature = "gst-linked")]
 pub fn record_camera(url: &str, secs: u64, out: &std::path::Path) -> Result<(u64, u64), String> {
     use gstreamer::prelude::*;
     init_gstreamer()?;
@@ -353,7 +342,6 @@ pub fn record_camera(url: &str, secs: u64, out: &std::path::Path) -> Result<(u64
 /// appliance uses: POST the manifest to control (box token) → get a presigned PUT → send the bytes
 /// straight to R2 (no video crosses the VPS) → confirm. The phone edge is unenrolled, so the box
 /// token is passed in (the app holds it from self-register, #143). No tailnet: all outbound HTTPS.
-#[cfg(feature = "gst-linked")]
 pub fn record_and_upload(
     url: &str,
     secs: u64,
