@@ -26,7 +26,7 @@ it must stay until §1.8 phase 2 lands.
 
 | Step | Scope | State |
 |---|---|---|
-| 1. "Now, no deploy" | rotate the four §0 secrets; change/delete the demo admin | **card #148 — believed NOT done** |
+| 1. "Now, no deploy" | rotate the four §0 secrets; change/delete the demo admin | demo admin **closed**; the three secrets **still open** — card #148 |
 | PR 1 | §1.1 seed, §1.2 live-start, §1.5 command-result, §1.6 RBAC + guard test | landed `a4dbe5e` |
 | PR 2 | §1.3/§1.4 fail-closed, §1.7 account-half lockout | landed `036171e` (deployed only on 2026-07-29 — see below) |
 | PR 3 | §3 P0 — `app_core::signing`, 0077, bootstrap, middleware | landed `602abbf` + `4f80ffc` |
@@ -92,16 +92,16 @@ happened, an exposed `JWT_SECRET` is live and can mint `master: true` sessions f
 - Rotating `JWT_SECRET` logs every user out; **appliances are unaffected** (box tokens are opaque
   bearers hashed against `tenant_boxes`, not JWTs).
 - `sentinel-gateway` must get the identical value or it silently rejects every live-video token.
-- Separately, §1.1's code fix made the demo tenant dev-only, but **it does not delete an account
-  that already exists**. Confirm whether `admin@demo.local` is still a valid login in prod and
-  remove it or change its password.
+  Verified 2026-07-30 that both containers read the same `sentinel.env` and agreed on the value, and
+  that only control and gateway reference `JWT_SECRET` in code — flow and notification inherit the
+  file but never use it, so they do not need recreating.
 
 ## #149 — §1.7 IP half: per-IP throttle at the proxy
 
-Committed in `ca88ad6` as Traefik labels on `sentinel-control` in
-`deploy/vps/docker-compose.sentinel.yml`. **Not live**: deploy never overwrites
-`/ibbf/docker-compose.sentinel.yml` (it holds substituted secrets), so the labels must be added to
-the VPS copy by hand and `sentinel-control` recreated.
+**LIVE as of 2026-07-30.** Committed in `ca88ad6` as Traefik labels on `sentinel-control` in
+`deploy/vps/docker-compose.sentinel.yml`, then applied by hand to `/ibbf/docker-compose.sentinel.yml`
+— deploy never overwrites that file (it holds substituted secrets), so the repo copy is documentation
+of intent and the VPS copy is what runs. Re-applying after any future edit is a manual step.
 
 Shape: a separate router matching only `/auth/login`, `/auth/signup` and
 `/auth/webauthn/login/*`, at 20/min with burst 40, no `ipStrategy` (DNS points straight at the
@@ -111,11 +111,14 @@ would also throttle `/auth/me` and the edge's `/config/*` long-polls. The rule c
 
 ## #150 — Traefik access logging + container log rotation
 
-Traefik currently logs only `level=error`, so the throttle's 429s and every failed-login 401 are
-unrecorded. Blocked on one hard constraint: **Traefik's `RequestPath` includes the query string,
-and #151 is still open**, so logging it would write full 24h session JWTs to disk. Either land
-#151 first, or set `fields.names.RequestPath: drop` — `ClientHost`, `DownstreamStatus`,
-`RouterName` and `StartUTC` are enough to see which address was refused and how often.
+**LIVE as of 2026-07-30**, in `/ibbf/traefik.yml` with `fields.names.RequestPath: drop`.
+
+That one line is the whole safety of this change: **Traefik's `RequestPath` includes the query
+string**, and #151 phase 2 has not landed, so logging it would write full session JWTs to disk.
+Filtering to 4xx/5xx does not help — a 401 on a media or SSE URL is exactly the request carrying a
+token. Proven by sending `?token=CANARY…` and grepping the log: zero occurrences, and zero `token=`
+anywhere. `ClientHost`, `DownstreamStatus`, `RouterName` and `StartUTC` are enough to see who was
+refused and how often. **Do not restore `RequestPath` before #151 phase 2.**
 
 Also add `logging:` options to the `traefik` service — there is no `/etc/docker/daemon.json`, so
 json-file keeps everything. Static config, so it needs a Traefik restart, which briefly affects
