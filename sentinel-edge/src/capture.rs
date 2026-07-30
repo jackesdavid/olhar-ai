@@ -13,6 +13,28 @@
 //! with exponential backoff. The hub always falls back to go2rtc `frame.jpeg` when there's no FRESH
 //! frame ([`latest_fresh`] returns `None`), so capture never stops even while a decoder is restarting.
 
+//! ---------------------------------------------------------------------------------------------
+//! ## INVARIANT: ONE GStreamer pipeline per camera. All consumers hang off `tee` branches.
+//!
+//! **Do not open a second connection to a camera. Ever.** Not for live, not for a snapshot, not for
+//! recording, not for motion, not for face capture. The edge dials each camera exactly ONCE and
+//! every consumer takes a `tee` branch off that single pipeline.
+//!
+//! Why this is a hard rule and not a preference:
+//!
+//! - **The camera is the scarce resource.** Consumer IP cameras cap concurrent RTSP sessions at 2–4.
+//!   A second dial for a snapshot is what produced "503 Service Unavailable — insufficient
+//!   resource" and made a previously-working camera go dark (see `media.rs`). The failure lands on
+//!   the CUSTOMER's camera, not on us, and it looks like their hardware broke.
+//! - **Cost is per-connection, not per-consumer.** Decode is the expensive part; a tee branch is
+//!   nearly free. Two pipelines is 2x CPU and 2x network for the same picture.
+//! - **This box is not a server.** It runs on a Mac mini, a Jetson, and a phone. Head-room is the
+//!   feature.
+//!
+//! If you need frames somewhere new, add a branch — `crate::capture::mse_feed`-style — and never a
+//! new `RtspSource`. If a branch needs a different resolution or codec, transform it after the tee;
+//! do not re-dial.
+//! ---------------------------------------------------------------------------------------------
 use std::collections::HashMap;
 use std::io::Read;
 use std::process::{Child, Stdio};

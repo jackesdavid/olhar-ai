@@ -122,8 +122,11 @@ export type Installer = {
   /** Path under the control host (e.g. "/edge/Sentinel-Edge-0.5.39.pkg"); prefix with API_BASE. */
   url: string;
   size_bytes: number | null;
+  /** This platform's published version. Platforms release independently — macOS is built
+   *  out-of-band — so there is no single "latest" across all of them. */
+  version: string | null;
 };
-export type InstallerManifest = { version: string; installers: Installer[] };
+export type InstallerManifest = { installers: Installer[] };
 
 export type BoxLog = { ts: string; level: string; target: string; message: string };
 

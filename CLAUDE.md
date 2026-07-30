@@ -49,7 +49,8 @@ matches your task:
 - `task dev` — web dev server; `task control` / `task flow` / `task edge` / `task gateway` — run a service
 - `task db-up` — local Postgres (compose); `task build` / `task check` — web build / svelte-check
 - `task cargo` — `cargo check` the workspace; `task fmt`
-- `task cloud-deploy [-- <services>]` — **the deploy path** (see [deploy ref](docs/ref/deploy.md))
+- `task cloud-deploy [-- <services>]` — **legacy local deploy; do NOT use** (see "Ship via GitHub CI"
+  below and the [deploy ref](docs/ref/deploy.md))
 
 Backend is Rust (Axum + sqlx, runtime queries — no compile-checked `query!`, so no live DB
 needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + shadcn-svelte.
@@ -62,8 +63,9 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
 - **Timestamps are RFC3339 `text`**, not `timestamptz` — sqlx is built without the chrono/time
   feature, so it can't decode `timestamptz`. Generate with `app_core::timeutil::now_rfc3339()`.
 - **Migrations**: `crates/app-core/migrations/NNNN_*.sql`, embedded via `sqlx::migrate!`, applied
-  on `Db::connect` (control + flow boot). Additive; next number is **0067** — ALWAYS `ls
-  crates/app-core/migrations/` to find the real next number (this note goes stale). Recent: 0066 =
+  on `Db::connect` (control + flow boot). Additive; **ALWAYS `ls crates/app-core/migrations/` to get
+  the next number** — no number is written here on purpose, because a stale one here once collided
+  with an existing migration and boot-looped control + flow for ~12 minutes. Recent: 0066 =
   `tuya_devices` per-tenant Tuya smart-home catalog, 0060 = node variables, 0061 = faces, 0062 =
   faces labeling, 0063 = faces crop key, 0064 = box hwaccel, 0065 = device stream mode, 0059 = `dictionaries`
   typed-column tables — #113, 0058 = `values_json` on node state, 0050 = generic `work_jobs`
@@ -79,11 +81,13 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
   grants are seeded only at tenant creation and the grant screen sits behind `roles.manage`.
   `Viewer` and custom roles are never auto-granted. Any role-scoped query must join `roles` on
   `tenant_id` — the role id comes from the client.
-- **Workflow nodes**: 87 user-visible nodes in `NodeKind::ALL` (`crates/app-core/src/workflows/domain.rs`);
+- **Workflow nodes**: the user-visible set is `NodeKind::ALL` (`crates/app-core/src/workflows/domain.rs`) —
+  count it there rather than trusting a number here;
   execution in `node.rs` (same folder). Node catalog + port reference: [docs/workflow-nodes.md](docs/workflow-nodes.md).
 - **Versioning**: web app = `sentinel-app/package.json` + the footer in `routes/+layout.svelte`;
   edge = `sentinel-edge/Cargo.toml` (drives `LATEST_EDGE_VERSION` + the `v*` release tag). Bump
-  together for a release. Current: web **0.4.1**, edge **0.5.51**. The edge is **out of the cargo
+  together for a release; read the current numbers from those two files rather than from here. The
+  edge is **out of the cargo
   workspace** and builds **pure-Rust** — motion is a pure-Rust MOG2 port (#79), detectors are
   `tract`; **OpenCV is an optional, test-only dep** (`opencv-parity` feature), NOT linked in the
   release build. **When you bump `sentinel-edge/Cargo.toml`, sync `sentinel-edge/Cargo.lock` too** —

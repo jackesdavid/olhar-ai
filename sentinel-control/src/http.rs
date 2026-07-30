@@ -113,6 +113,44 @@ async fn install_script() -> impl IntoResponse {
     )
 }
 
+/// One platform's published artifact, as recorded in `/edge-dist/manifest.json`.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct PublishedArtifact {
+    pub version: String,
+    pub file: String,
+    #[serde(default)]
+    pub sha256: String,
+}
+
+/// Read the publication manifest: platform key -> artifact.
+///
+/// This is the ONLY source of "what is published". It used to come from `LATEST_EDGE_VERSION`,
+/// which deploy.yml sed'd in from `sentinel-edge/Cargo.toml` on every deploy — i.e. from source, so
+/// it advertised versions that may never have been built. macOS 404'd on those; Linux was worse and
+/// silently re-downloaded a stale unversioned binary.
+///
+/// Missing or unparseable manifest returns empty rather than erroring: an appliance asking "what is
+/// the latest?" should be told "nothing known", never handed a guess.
+fn published() -> std::collections::BTreeMap<String, PublishedArtifact> {
+    let dist = std::env::var("EDGE_DIST_DIR").unwrap_or_else(|_| "/edge-dist".to_string());
+    let path = std::path::Path::new(&dist).join("manifest.json");
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Default::default();
+    };
+    #[derive(serde::Deserialize)]
+    struct Manifest {
+        #[serde(default)]
+        platforms: std::collections::BTreeMap<String, PublishedArtifact>,
+    }
+    match serde_json::from_str::<Manifest>(&raw) {
+        Ok(m) => m.platforms,
+        Err(e) => {
+            log::warn!("edge-dist manifest at {} is unreadable: {e}", path.display());
+            Default::default()
+        }
+    }
+}
+
 /// The per-platform installer download set for the current edge version (card #84).
 ///
 /// The web app renders whatever this returns, so a version bump is a control-only change — the
@@ -121,25 +159,21 @@ async fn install_script() -> impl IntoResponse {
 /// that 404s is worse than an absent one, and this also gracefully covers "Windows isn't published
 /// for this version yet." Linux has no single file — it's the `/install.sh` one-liner, always shown.
 async fn installers() -> impl IntoResponse {
-    let version = std::env::var("LATEST_EDGE_VERSION").unwrap_or_else(|_| "0.1.0".to_string());
     let dist = std::env::var("EDGE_DIST_DIR").unwrap_or_else(|_| "/edge-dist".to_string());
+    let pubs = published();
 
-    // Each downloadable file: (os, label, kind, filename). Built from the version + naming scheme
-    // used by deploy/macos-pkg/build.sh and deploy/windows/build-installer.sh.
-    let files = [
-        (
-            "macos",
-            "macOS (Apple Silicon + Intel)",
-            "pkg",
-            format!("Sentinel-Edge-{version}.pkg"),
-        ),
-        (
-            "windows",
-            "Windows 10/11 (64-bit)",
-            "zip",
-            format!("SentinelEdge-Windows-{version}.zip"),
-        ),
-    ];
+    // Filenames come from the manifest, not from a guessed naming scheme — each platform carries
+    // its OWN version now, because macOS is built out-of-band and legitimately lags Linux.
+    let files: Vec<(&str, &str, &str, String)> = [
+        ("macos", "macOS (Apple Silicon + Intel)", "pkg"),
+        ("windows", "Windows 10/11 (64-bit)", "zip"),
+    ]
+    .iter()
+    .filter_map(|(os, label, kind)| {
+        let a = pubs.get(*os)?;
+        Some((*os, *label, *kind, a.file.clone()))
+    })
+    .collect();
 
     let mut installers: Vec<serde_json::Value> = files
         .iter()
@@ -154,6 +188,8 @@ async fn installers() -> impl IntoResponse {
                 "kind": kind,
                 "url": format!("/edge/{filename}"),
                 "size_bytes": size,
+                // Per-platform: macOS is built out-of-band, so it legitimately differs from Linux.
+                "version": pubs.get(*os).map(|a| a.version.clone()),
             }))
         })
         .collect();
@@ -167,7 +203,9 @@ async fn installers() -> impl IntoResponse {
         "size_bytes": serde_json::Value::Null,
     }));
 
-    Json(json!({ "version": version, "installers": installers }))
+    // No single "version" any more — each installer carries its own, since platforms now
+    // publish independently. Kept as a map so the app can show per-platform versions.
+    Json(json!({ "installers": installers }))
 }
 
 // ---- enrollment by pairing code (card #81) ----------------------------------
@@ -325,9 +363,30 @@ async fn enroll(
 }
 
 /// The latest edge build the operator has published (for the "update available" badge).
-async fn edge_latest() -> impl IntoResponse {
-    let version = std::env::var("LATEST_EDGE_VERSION").unwrap_or_else(|_| "0.1.0".to_string());
-    Json(json!({ "version": version }))
+async fn edge_latest(
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let pubs = published();
+
+    // `?platform=` is the correct call: each platform has its own published version.
+    if let Some(key) = q.get("platform") {
+        return match pubs.get(key.as_str()) {
+            Some(a) => Json(json!({
+                "version": a.version, "file": a.file, "sha256": a.sha256
+            })),
+            // Nothing published for this platform — say so plainly. An appliance that is told
+            // "no update" stays on a working build; one told about a version that was never
+            // built tries to fetch it and fails, which is the bug this replaces.
+            None => Json(json!({ "version": null })),
+        };
+    }
+
+    // No platform given: an appliance running a build from before this endpoint took the
+    // parameter. Answer with the LOWEST published version, so such a box is never pointed at
+    // something its own platform does not have. Conservative on purpose — under-advertising
+    // costs a delayed update, over-advertising costs a failed one on every box that lacks it.
+    let min = pubs.values().map(|a| a.version.as_str()).min();
+    Json(json!({ "version": min }))
 }
 
 async fn health(State(st): State<AppState>) -> impl IntoResponse {

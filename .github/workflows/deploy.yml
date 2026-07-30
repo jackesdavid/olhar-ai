@@ -146,28 +146,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # The VPS copy of the compose file has real secrets substituted into its
-      # placeholders, so we never overwrite it. But LATEST_EDGE_VERSION (drives the
-      # "update available" badge) must track the edge crate, so we read it from
-      # sentinel-edge/Cargo.toml and sed it on the VPS in place — preserving the
-      # filled-in placeholders while keeping the version honest on every deploy.
-      - name: Read edge version
-        id: edgever
-        run: |
-          VER=$(grep -m1 '^version' sentinel-edge/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
-          echo "version=$VER" >> "$GITHUB_OUTPUT"
+      # placeholders, so we never overwrite it. It is also no longer edited here at all:
+      # the published-version signal moved to /ibbf/edge-dist/manifest.json (release.yml).
       - name: Pull + restart on the VPS (only the changed services)
         uses: appleboy/ssh-action@v1
         env:
-          EDGE_VERSION: ${{ steps.edgever.outputs.version }}
           SERVICES: ${{ needs.changes.outputs.services }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASS }}
-          envs: EDGE_VERSION,SERVICES
+          envs: SERVICES
           script: |
             cd /ibbf
-            sed -i -E "s/(LATEST_EDGE_VERSION: ).*/\1\"${EDGE_VERSION}\"/" docker-compose.sentinel.yml
+            # LATEST_EDGE_VERSION is NO LONGER set from sentinel-edge/Cargo.toml here.
+            #
+            # It used to be sed'd in on every deploy, tagged or not — so bumping the crate and
+            # pushing an unrelated change advertised a version that may never have been built.
+            # macOS 404'd on it; Linux silently re-downloaded a stale unversioned binary. Control
+            # now reads /ibbf/edge-dist/manifest.json, which release.yml writes only for artifacts
+            # that actually landed. Deploy must not have an opinion about what is published.
             docker compose -f docker-compose.yml -f docker-compose.sentinel.yml pull $SERVICES
             docker compose -f docker-compose.yml -f docker-compose.sentinel.yml up -d $SERVICES
             docker image prune -f

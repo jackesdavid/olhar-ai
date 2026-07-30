@@ -101,6 +101,28 @@ jobs:
         run: |
           cp sentinel-edge/install.sh dist/install.sh
 
+      # (B) Versioned copies alongside the unversioned names.
+      #
+      # The unversioned `sentinel-edge-linux-<arch>` is what makes a Linux update fail SILENTLY: the
+      # box is told 0.5.66 exists, downloads a filename with no version in it, and gets whatever
+      # happens to be on the server. Versioned names make every platform fail the same honest way
+      # macOS already does. The unversioned copies stay so already-installed boxes running the old
+      # install.sh keep working — they are the compatibility shim, not the contract.
+      - name: Versioned copies + checksums
+        id: art
+        run: |
+          set -euo pipefail
+          VER="$(grep -m1 '^version' sentinel-edge/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          for arch in x86_64 aarch64; do
+            f="dist/sentinel-edge-linux-$arch"
+            [ -f "$f" ] || continue
+            cp "$f" "$f-$VER"
+            echo "sha_$arch=$(shasum -a 256 "$f-$VER" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          done
+          cp deploy/edge-dist/merge-manifest.sh dist/merge-manifest.sh
+          ls -la dist/
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
@@ -120,3 +142,26 @@ jobs:
           source: "dist/*"
           target: "/ibbf/edge-dist"
           strip_components: 1
+
+      # (A) The manifest is the source of truth for "what is published", replacing the version that
+      # deploy.yml used to sed in from Cargo.toml. Written LAST and merged per platform, so a Linux
+      # release never erases the out-of-band macOS entry.
+      - name: Record published artifacts in the manifest
+        uses: appleboy/ssh-action@v1
+        env:
+          VER: ${{ steps.art.outputs.version }}
+          SHA_X86: ${{ steps.art.outputs.sha_x86_64 }}
+          SHA_ARM: ${{ steps.art.outputs.sha_aarch64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASS }}
+          envs: VER,SHA_X86,SHA_ARM
+          script: |
+            set -e
+            cd /ibbf/edge-dist
+            chmod +x merge-manifest.sh
+            [ -n "$SHA_X86" ] && ./merge-manifest.sh linux-x86_64  "$VER" "sentinel-edge-linux-x86_64-$VER"  "$SHA_X86"
+            [ -n "$SHA_ARM" ] && ./merge-manifest.sh linux-aarch64 "$VER" "sentinel-edge-linux-aarch64-$VER" "$SHA_ARM"
+            echo '--- manifest now ---'
+            cat manifest.json
