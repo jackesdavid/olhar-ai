@@ -12,7 +12,7 @@ use axum::Router;
 use serde_json::json;
 use tower_http::cors::CorsLayer;
 
-use app_core::go2rtc;
+use app_core::stream_names;
 
 use crate::state::AppState;
 
@@ -44,7 +44,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let n = state.devices.lock().unwrap().len();
     Json(
-        json!({ "status": "ok", "service": "sentinel-edge", "devices": n, "owns_go2rtc": state.own_go2rtc }),
+        json!({ "status": "ok", "service": "sentinel-edge", "devices": n }),
     )
 }
 
@@ -81,11 +81,10 @@ async fn streams(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 .unwrap_or(false)
         })
         .map(|d| {
-            let name = go2rtc::stream_name(&d.ip);
+            let name = stream_names::stream_name(&d.ip);
             json!({
                 "ip": d.ip,
                 "name": name,
-                "player_url": format!("{}/stream.html?src={name}", go2rtc::BASE),
             })
         })
         .collect();
@@ -509,7 +508,7 @@ async fn mse_ws(
     let src = q.get("src").cloned().unwrap_or_default();
     // The contract's stream name is go2rtc's (`cam_<ip with dots as underscores>[_hd]`); the ingest
     // is keyed by camera, so translate here rather than teaching the pipeline go2rtc's naming.
-    let Some((ip, hd)) = go2rtc_src_to_camera(&src) else {
+    let Some((ip, hd)) = stream_name_to_camera(&src) else {
         return (StatusCode::BAD_REQUEST, "bad src").into_response();
     };
     // Idempotent: starts the shared pipeline if this camera has no consumer yet, joins it otherwise.
@@ -598,14 +597,14 @@ async fn frame_jpeg(
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let src = q.get("src").cloned().unwrap_or_default();
-    let Some((ip, _hd)) = go2rtc_src_to_camera(&src) else {
+    let Some((ip, _hd)) = stream_name_to_camera(&src) else {
         return (StatusCode::BAD_REQUEST, "bad src").into_response();
     };
     snapshot(State(state), Path(ip)).await.into_response()
 }
 
 /// `cam_192_168_0_7` → `("192.168.0.7", false)`, `cam_192_168_0_7_hd` → `(…, true)`.
-pub(crate) fn go2rtc_src_to_camera(src: &str) -> Option<(String, bool)> {
+pub(crate) fn stream_name_to_camera(src: &str) -> Option<(String, bool)> {
     let rest = src.strip_prefix("cam_")?;
     let (octets, hd) = match rest.strip_suffix("_hd") {
         Some(o) => (o, true),
@@ -622,26 +621,26 @@ pub(crate) fn go2rtc_src_to_camera(src: &str) -> Option<(String, bool)> {
 
 #[cfg(test)]
 mod src_name_tests {
-    use super::go2rtc_src_to_camera;
+    use super::stream_name_to_camera;
 
     /// The stream name is go2rtc's, and it is what the gateway forwards verbatim — translating it
     /// wrong means the edge looks up a camera that does not exist.
     #[test]
-    fn maps_the_go2rtc_stream_name_to_a_camera() {
+    fn maps_the_stream_name_to_a_camera() {
         assert_eq!(
-            go2rtc_src_to_camera("cam_192_168_0_7"),
+            stream_name_to_camera("cam_192_168_0_7"),
             Some(("192.168.0.7".into(), false))
         );
         assert_eq!(
-            go2rtc_src_to_camera("cam_192_168_0_7_hd"),
+            stream_name_to_camera("cam_192_168_0_7_hd"),
             Some(("192.168.0.7".into(), true))
         );
     }
 
     #[test]
     fn rejects_anything_that_is_not_a_camera_stream() {
-        assert_eq!(go2rtc_src_to_camera("cam_not_an_ip"), None);
-        assert_eq!(go2rtc_src_to_camera("../etc/passwd"), None);
-        assert_eq!(go2rtc_src_to_camera(""), None);
+        assert_eq!(stream_name_to_camera("cam_not_an_ip"), None);
+        assert_eq!(stream_name_to_camera("../etc/passwd"), None);
+        assert_eq!(stream_name_to_camera(""), None);
     }
 }

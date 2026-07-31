@@ -217,13 +217,10 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
     let frame_gap = params.frame_gap();
     let mut detector = MotionDetector::new(params);
 
-    // Pull the latest decoded frame from the local go2rtc (`/api/frame.jpeg`) — always fresh, with
-    // NO RTSP client buffer that can fall behind live motion (that buffer was why `VideoCapture`
-    // lagged). Reuses go2rtc's authenticated decode; never touches the camera.
-    let base = app_core::go2rtc::base();
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(3))
-        .build();
+    // Frames come from the supervised GStreamer decoder (`capture`), which owns the ONE pipeline
+    // per camera. There is no second source: the old `/api/frame.jpeg` fallback dialled a go2rtc
+    // sidecar on :1984 that is never started, so it could only ever contribute a connection-refused
+    // and the ~3s timeout that went with it.
     let slot = slot_for(ip);
 
     // `MOTION_DEBUG=1` logs the live peak score + measured fps every ~2s (even below the floor /
@@ -254,14 +251,8 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
             .config
             .face_capture_stream
             .eq_ignore_ascii_case("hd");
-    // Warm, continuous frames from the supervised persistent decoder (#120) — no frame.jpeg
-    // cold-start. `grab` is the FALLBACK go2rtc path used only while the decoder has no fresh frame.
+    // Warm, continuous frames from the supervised persistent decoder (#120).
     crate::capture::ensure(state, ip, hd);
-    let grab: fn(&ureq::Agent, &str, &str) -> Result<Vec<u8>, String> = if hd {
-        app_core::go2rtc::frame_from_hd
-    } else {
-        app_core::go2rtc::frame_from
-    };
     log::info!(
         "frame hub[{ip}]: stream mode = {}",
         if unified {
@@ -272,8 +263,8 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
             "split → preview (sub)"
         }
     );
-    // Resource measurement: go2rtc grab vs edge decode, SPLIT + logged every ~10s → the Logs page,
-    // so we can tell which dominates (grab/frame-availability latency vs decode CPU) per preview/HD.
+    // Resource measurement: frame availability vs edge decode, split and logged every ~10s so we
+    // can tell which dominates per preview/HD.
     let mut cap_at = Instant::now();
     let mut grab_us = 0u128;
     let mut dec_us = 0u128;
@@ -283,19 +274,16 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
         let t0 = Instant::now();
         // Transient errors (stream warming, a dropped frame) skip this tick — keep the background
         // model and try again, never tear the source down.
-        // Prefer the warm decoder's freshest frame; fall back to the go2rtc frame.jpeg poll only when
-        // no fresh frame is available (decoder warming/restarting) so capture never stalls.
+        // The decoder is the only source. No fresh frame means it is warming or restarting: skip
+        // this tick and keep the background model rather than tearing the source down.
         let jpeg = match crate::capture::latest_fresh(ip, hd, Duration::from_secs(3)) {
             Some(j) => (*j).clone(),
-            None => match grab(&agent, &base, ip) {
-                Ok(b) => b,
-                Err(_) => {
-                    std::thread::sleep(frame_gap);
-                    continue;
-                }
-            },
+            None => {
+                std::thread::sleep(frame_gap);
+                continue;
+            }
         };
-        let g_us = t0.elapsed().as_micros(); // source cost: ~0 from the decoder, ~490ms on go2rtc fallback
+        let g_us = t0.elapsed().as_micros(); // ~0: a clone from the decoder's latest-frame slot
         let d0 = Instant::now();
         // The one decode. Every consumer of this camera works off the buffer it produces.
         let Some((bgr, w, h)) = decode_bgr(&jpeg) else {

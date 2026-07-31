@@ -5,7 +5,7 @@ use std::process::Command;
 
 /// Build a `Command` that won't flash a console window on Windows — a drop-in for `Command::new`.
 /// Returns an owned `Command`, so it slots straight into the existing chained builders
-/// (`command("ffmpeg").args(…).spawn()`).
+/// (`command("sh").args(…).spawn()`).
 pub fn command(program: impl AsRef<OsStr>) -> Command {
     let mut cmd = Command::new(program);
     no_window(&mut cmd);

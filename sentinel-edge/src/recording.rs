@@ -26,9 +26,7 @@ use futures::StreamExt as _;
 use retina::client::PacketItem;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
-use std::io::Write as _;
 use std::path::PathBuf;
-use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -347,80 +345,45 @@ fn note_span(
 /// can't hand-assign; fixing it needs `gstreamer-rs` bindings, which #79 rules out (the edge
 /// links nothing). See `docs/plans/edge-gstreamer-backend.md` (Phase 2b, blocked).
 /// The running muxer a session owns; `wait()` blocks until the file is finalised.
+/// The clip muxer. One variant, because there is one media path — the ffmpeg arm spawned a binary
+/// that is neither bundled by the installer nor installed by it.
 enum Muxer {
-    Ffmpeg(Child),
     Gst(crate::gst_mux::GstMuxer),
 }
 
 impl Muxer {
     fn wait(&mut self) {
         match self {
-            Muxer::Ffmpeg(c) => {
-                let _ = c.wait();
-            }
             Muxer::Gst(m) => m.wait(),
         }
     }
 }
 
-/// The write end handed to the relay thread. Both backends take **one complete access unit per
-/// call** plus its capture time; ffmpeg ignores the time (it re-derives timing itself), GStreamer
-/// uses it as the buffer PTS — which is the whole reason A2 was blocked until linked bindings.
+/// The write end handed to the relay thread: **one complete access unit per call**, plus its
+/// capture time, which GStreamer uses as the buffer PTS.
 enum MuxSink {
-    Ffmpeg(std::process::ChildStdin),
     Gst(crate::gst_mux::GstSink),
 }
 
 impl MuxSink {
     fn write_frame(&mut self, data: &[u8], _at: std::time::Instant) -> std::io::Result<()> {
         match self {
-            MuxSink::Ffmpeg(w) => w.write_all(data),
             MuxSink::Gst(s) => s.write_frame(data, _at),
         }
     }
 
-    /// Close the stream so the muxer writes its trailer (ffmpeg: stdin EOF; GStreamer: EOS).
+    /// Close the stream so the muxer writes its trailer (GStreamer: EOS).
     fn finish(self) {
         match self {
-            MuxSink::Ffmpeg(w) => drop(w),
             MuxSink::Gst(s) => s.finish(),
         }
     }
 }
 
-/// Start the muxer for a clip. GStreamer only on a box actually running the linked backend;
-/// everything else keeps the ffmpeg path byte-for-byte.
-fn start_muxer(
-    output: &std::path::Path,
-    _backend: crate::media::Backend,
-) -> Result<(Muxer, MuxSink), String> {
-    if _backend == crate::media::Backend::GstreamerLinked {
-        let (m, s) = crate::gst_mux::start(output)?;
-        return Ok((Muxer::Gst(m), MuxSink::Gst(s)));
-    }
-    let mut child = spawn_muxer(output).map_err(|e| format!("mux spawn: {e}"))?;
-    let stdin = child.stdin.take().ok_or("muxer stdin missing")?;
-    Ok((Muxer::Ffmpeg(child), MuxSink::Ffmpeg(stdin)))
-}
-
-fn spawn_muxer(output: &std::path::Path) -> std::io::Result<Child> {
-    crate::proc::command("ffmpeg")
-        .args([
-            "-loglevel",
-            "warning",
-            "-f",
-            "h264",
-            "-i",
-            "pipe:0",
-            "-c:v",
-            "copy",
-            "-movflags",
-            "+faststart",
-            "-y",
-            output.to_str().unwrap_or_default(),
-        ])
-        .stdin(Stdio::piped())
-        .spawn()
+/// Start the muxer for a clip.
+fn start_muxer(output: &std::path::Path) -> Result<(Muxer, MuxSink), String> {
+    let (m, s) = crate::gst_mux::start(output)?;
+    Ok((Muxer::Gst(m), MuxSink::Gst(s)))
 }
 
 // ---- manager ----------------------------------------------------------------
@@ -571,12 +534,8 @@ impl RecordingManager {
         let output = self.dir.join(format!("{clip_id}.mp4"));
         let max_pre = requested_pre_roll_secs.min(self.config.pre_roll_secs);
 
-        // --- Step 1: start the muxer (ffmpeg, or linked GStreamer on a gstreamer-linked box —
-        // card #138 A2) -----------------------------------------------------
-        let (muxer, mut mux_sink) = start_muxer(
-            &output,
-            crate::media::Backend::resolve(&self.config.media_backend),
-        )?;
+        // --- Step 1: start the muxer (linked GStreamer) ---------------------
+        let (muxer, mut mux_sink) = start_muxer(&output)?;
 
         // --- Step 2: snapshot pre-roll + install live sink ATOMICALLY -------
         // Both happen under the one mem_ring lock so the next access unit the
@@ -741,11 +700,12 @@ impl RecordingManager {
         // first and last frame we wrote. That needs no `ffprobe` subprocess, and it is truer than
         // both fallbacks — wall-clock counts the wait for the first IDR and any camera dropout as
         // footage, and re-reading the file only tells us what the muxer already knew.
-        // `ffprobe` remains a last resort for a clip whose span we somehow never recorded.
+        // The `ffprobe` middle rung is gone with the rest of the ffmpeg family — it shipped with
+        // the binary we no longer install, so on a real box it could only fail. Wall-clock remains
+        // the last resort for a clip whose span we somehow never recorded.
         let span = *sess.span.lock().unwrap();
         let duration_secs = span
             .map(|(first, last)| last.saturating_duration_since(first).as_secs() as i32)
-            .or_else(|| probe_duration(&sess.output))
             .unwrap_or_else(|| (chrono::Utc::now() - started).num_seconds().max(0) as i32);
         let friendly_name = generate_friendly_name(started.timestamp());
 
@@ -1017,7 +977,7 @@ async fn rtsp_stream_once(
         .streams()
         .iter()
         .position(|s| s.media() == "video" && s.encoding_name().eq_ignore_ascii_case("h264"))
-        .ok_or_else(|| "no H264 stream in go2rtc RTSP output".to_string())?;
+        .ok_or_else(|| "no H264 stream in the camera's RTSP output".to_string())?;
 
     session
         .setup(video_idx, retina::client::SetupOptions::default())
@@ -1238,29 +1198,6 @@ impl H264Reassembler {
 }
 
 // ---- helpers ----------------------------------------------------------------
-
-/// Clip duration probe (A3). ffmpeg-only — see [`spawn_muxer`] on why card #138's GStreamer path
-/// doesn't apply here (there's no GStreamer-muxed clip to probe).
-fn probe_duration(path: &PathBuf) -> Option<i32> {
-    let out = crate::proc::command("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            path.to_str().unwrap_or_default(),
-        ])
-        .output()
-        .ok()?;
-    std::str::from_utf8(&out.stdout)
-        .ok()?
-        .trim()
-        .parse::<f64>()
-        .ok()
-        .map(|d| d.round() as i32)
-}
 
 // ---- metadata ---------------------------------------------------------------
 

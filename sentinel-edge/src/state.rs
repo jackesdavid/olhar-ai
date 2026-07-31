@@ -3,7 +3,6 @@
 //! and cached to a local file so it survives a control-plane outage / offline boot.
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Child;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -27,11 +26,6 @@ pub struct AppState {
     pub devices: Mutex<Vec<Device>>,
     /// Where the camera list is cached on disk (offline fallback).
     pub cache_path: PathBuf,
-    /// The managed go2rtc child (when the edge owns the sidecar).
-    pub go2rtc: Mutex<Option<Child>>,
-    pub own_go2rtc: bool,
-    pub go2rtc_config: PathBuf,
-    pub go2rtc_bin: PathBuf,
     /// Ring-buffer + clip recording manager.
     pub recording: Arc<crate::recording::RecordingManager>,
     /// Queue of finished clips waiting to be pushed to durable cloud storage. Single consumer —
@@ -108,27 +102,7 @@ impl AppState {
             devices.len()
         );
 
-        let own_go2rtc_env = std::env::var("EDGE_OWN_GO2RTC")
-            .map(|v| !matches!(v.trim(), "0" | "false" | "no"))
-            .unwrap_or(true);
-        let go2rtc_config = std::env::var("GO2RTC_CONFIG")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("go2rtc.yaml"));
-        let go2rtc_bin = std::env::var("GO2RTC_BIN")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("go2rtc"));
-
         let recording = crate::recording::RecordingManager::boot(&control_url);
-        // On a linked-GStreamer box the edge owns the whole media path — it dials the cameras, muxes
-        // the live stream and fills the recording ring itself, so go2rtc has no consumers left and
-        // starting it would only burn a process and a second camera session. Deciding it here rather
-        // than at the spawn covers the config-change respawns too (card #138, G5).
-        let gst_owns_media = crate::media::Backend::resolve(&recording.config.media_backend)
-            == crate::media::Backend::GstreamerLinked;
-        let own_go2rtc = own_go2rtc_env && !gst_owns_media;
-        if gst_owns_media {
-            log::info!("gstreamer owns the media path — go2rtc will not be started");
-        }
         let uploads = crate::clip_upload::spawn(control_url.clone());
 
         Arc::new(AppState {
@@ -136,10 +110,6 @@ impl AppState {
             devices: Mutex::new(devices),
             cache_path,
             probe_memo: Mutex::new(HashMap::new()),
-            go2rtc: Mutex::new(None),
-            own_go2rtc,
-            go2rtc_config,
-            go2rtc_bin,
             recording,
             uploads,
             live_tracks: Mutex::new(HashMap::new()),
@@ -621,11 +591,11 @@ fn pick_camera_rtsp(d: &app_core::devices::Device, hd: bool) -> Option<String> {
             .map(|s| app_core::onvif::client::rtsp_url_with_creds(s, user, pass))
             .unwrap_or(main)
     };
-    Some(strip_go2rtc_fragment(&clean_onvif_params(&url)))
+    Some(strip_stream_fragment(&clean_onvif_params(&url)))
 }
 
 /// Drop go2rtc's `#…` fragment from a stored RTSP URL.
-fn strip_go2rtc_fragment(url: &str) -> String {
+fn strip_stream_fragment(url: &str) -> String {
     url.split('#').next().unwrap_or(url).trim().to_string()
 }
 
@@ -652,22 +622,9 @@ fn clean_onvif_params(url: &str) -> String {
     }
 }
 
-/// Whether `ffmpeg` is on PATH (go2rtc needs it for JPEG frames). Computed once + cached —
-/// presence is effectively static for a process lifetime. Reported to the cloud for the
-/// Boxes health badge.
-pub fn ffmpeg_ok() -> bool {
-    static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *OK.get_or_init(|| {
-        crate::proc::command("ffmpeg")
-            .arg("-version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    })
-}
 
 /// Whether `gst-launch-1.0` is on PATH (card #138 — the GStreamer media backend option for
-/// `capture.rs`'s live decode). Mirrors [`ffmpeg_ok`]: computed once, reported to the cloud so a
+/// `capture.rs`'s live decode). Computed once, reported to the cloud so a
 /// box can be told apart before flipping its `media_backend` to `"gstreamer"`. NOT bundled by
 /// `install.sh` yet (coexistence phase) — an operator installs it manually to test
 /// (`brew install gstreamer gst-plugins-{base,good,bad,ugly} gst-libav` on macOS).
@@ -929,7 +886,7 @@ fn fetch_cameras(control_url: &str, wait: u64) -> Result<Vec<Device>, String> {
         }
     }
     req = req.set("X-Edge-Version", env!("CARGO_PKG_VERSION"));
-    req = with_health(req); // report Tailscale + ffmpeg health on the regular heartbeat
+    req = with_health(req); // report GStreamer + platform + resource metrics on the heartbeat
                             // Signed last, so the `?wait=N` in the URL is covered and cannot be lengthened in flight. The
                             // health headers are deliberately outside the signature: they change every poll and are
                             // advisory display values, so binding them would make the canonical string fragile for nothing.
@@ -1009,9 +966,9 @@ mod camera_rtsp_tests {
     /// `#media=video` is go2rtc's syntax, not RTSP. Left on, `rtspsrc` treats it as part of the path
     /// and the camera 404s — a failure that looks like bad credentials.
     #[test]
-    fn strips_the_go2rtc_fragment() {
+    fn strips_the_stream_fragment() {
         assert_eq!(
-            strip_go2rtc_fragment("rtsp://u:p@10.0.0.2:554/stream2#media=video"),
+            strip_stream_fragment("rtsp://u:p@10.0.0.2:554/stream2#media=video"),
             "rtsp://u:p@10.0.0.2:554/stream2"
         );
     }
@@ -1019,7 +976,7 @@ mod camera_rtsp_tests {
     #[test]
     fn leaves_a_plain_url_alone() {
         assert_eq!(
-            strip_go2rtc_fragment("rtsp://u:p@10.0.0.2:554/stream1"),
+            strip_stream_fragment("rtsp://u:p@10.0.0.2:554/stream1"),
             "rtsp://u:p@10.0.0.2:554/stream1"
         );
     }

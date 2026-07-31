@@ -152,7 +152,7 @@ impl AppState {
         }
         let base = match app_core::tenancy::box_host_for_tenant(&self.db, tenant) {
             Some(host) => https_base(&host),
-            None => app_core::go2rtc::base(),
+            None => app_core::ports::local_base(),
         };
         self.edge_cache
             .lock()

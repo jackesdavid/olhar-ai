@@ -77,11 +77,11 @@ async fn chat(
         // returns every event is already queued on this channel.
         let (tx, rx) = std::sync::mpsc::channel::<ToolUiEvent>();
         let mut ctx = ToolContext::new_local(devices, db.clone(), tid, notif, notif_cfg, tx);
-        // Bind frames to THIS tenant's edge go2rtc (over the tailnet), so camera tools work in
-        // the cloud — falls back to the configured/localhost go2rtc when no box is known yet.
+        // Bind frames to THIS tenant's edge, so camera tools work in the cloud — falls back to a
+        // local edge when no box is known yet.
         let base = match app_core::tenancy::box_host_for_tenant(&db, tid) {
             Some(host) => https_base(&host),
-            None => app_core::go2rtc::base(),
+            None => app_core::ports::local_base(),
         };
         ctx.frames = Arc::new(app_core::ports::EdgeFrameSource::new(base));
 
