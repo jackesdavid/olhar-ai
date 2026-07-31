@@ -19,7 +19,7 @@
 #   VPS_SSH_KEY          — the PRIVATE id_contab_ed25519. Replaces the password auth the GitHub
 #                          pipeline used (it SSHed to production as root with a password).
 
-stages: [build, deploy, release]
+stages: [check, build, deploy, release]
 
 variables:
   # registry.gitlab.com/olharai-grupo/olharai — set by GitLab, not hardcoded, so a fork or a
@@ -33,6 +33,47 @@ variables:
   DOCKER_TLS_CERTDIR: "/certs"
   DOCKER_TLS_VERIFY: 1
   DOCKER_CERT_PATH: "/certs/client"
+
+
+# ---------------------------------------------------------------------------------------------
+# Merge-request gate — cheap checks only
+# ---------------------------------------------------------------------------------------------
+# These are what "Pipelines must succeed" actually enforces. Deliberately NOT the Docker image
+# builds: with main protected, every change arrives by MR, and five image builds per MR would
+# exhaust the 400 free compute-minutes long before the month does. Compiling is what catches the
+# breakage that matters; packaging it is what main is for.
+
+check:rust:
+  stage: check
+  image: rust:1-bookworm
+  interruptible: true
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev pkg-config
+  script:
+    # The workspace (control/flow/gateway + app-core). sqlx runs untyped queries, so this needs no
+    # database — see CLAUDE.md.
+    - cargo check --workspace --all-targets
+    # sentinel-edge is deliberately OUT of the workspace and must be checked separately, or a
+    # break in it reaches a tag unnoticed — which is exactly how Linux stopped shipping for five
+    # versions behind a flag nobody compiled.
+    - cargo check --manifest-path sentinel-edge/Cargo.toml
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+check:web:
+  stage: check
+  image: node:22-bookworm
+  interruptible: true
+  script:
+    - cd sentinel-app
+    - npm ci --no-audit --no-fund
+    - npx svelte-check --threshold error --output human
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: [sentinel-app/**/*]
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes: [sentinel-app/**/*]
 
 # ---------------------------------------------------------------------------------------------
 # Shared bits
@@ -332,7 +373,7 @@ release:publish:
 # ---------------------------------------------------------------------------------------------
 
 verify:edge-lock:
-  stage: build
+  stage: check
   image: rust:1-bookworm
   interruptible: true
   script:
