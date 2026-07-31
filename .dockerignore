@@ -16,3 +16,12 @@ ai
 deploy/macos-pkg/build
 deploy/windows/build
 experiments
+
+# The mobile app: 3.5GB including iOS build products (Xcode DerivedData, .framework bundles).
+# No service image reads any of it, and a local build died writing ExpoModulesCore.framework
+# into a Rust image's context with "no space left on device".
+sentinel-mobile
+sentinel-edge/dist
+# Coral/Edge-TPU build OUTPUT in a tracked directory: 1.7GB that every service image paid to
+# transfer and none of them read a byte of.
+deploy/edge-coral/out

@@ -131,8 +131,59 @@ check:web:
     expire_in: 1 day
 
 # ---------------------------------------------------------------------------------------------
-# Build — one job per service, each with its own change rule
+# Build
 # ---------------------------------------------------------------------------------------------
+
+# One job, three images. Splitting them cost 53 minutes to produce three binaries that share
+# app-core and nearly every dependency — each job recompiled the whole tree. Here the builder
+# stage is computed ONCE and the second and third images are a file copy on top of it.
+build:rust:
+  stage: build
+  interruptible: true
+  image: docker:27
+  services: [docker:27-dind]
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    # buildx, for a registry cache that includes INTERMEDIATE stages. Inline cache only carries
+    # the final image's layers, so the expensive builder was never cached and every pipeline
+    # recompiled from zero on ephemeral SaaS runners.
+    - docker buildx create --use --driver docker-container
+  script:
+    - |
+      set -eu
+      CACHE="$IMAGE_PREFIX/buildcache:rust"
+      for SVC in sentinel-control sentinel-flow sentinel-gateway; do
+        echo "▸ $SVC"
+        docker buildx build \
+          --file Dockerfile \
+          --build-arg PACKAGE="$SVC" \
+          --cache-from "type=registry,ref=$CACHE" \
+          --cache-to   "type=registry,ref=$CACHE,mode=max" \
+          --tag "$IMAGE_PREFIX/$SVC:latest" \
+          --tag "$IMAGE_PREFIX/$SVC:$CI_COMMIT_SHORT_SHA" \
+          --push \
+          .
+        mkdir -p built && echo "$SVC" > "built/$SVC"
+      done
+  artifacts:
+    paths: [built/]
+    expire_in: 1 day
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - sentinel-control/**/*
+        - sentinel-flow/**/*
+        - sentinel-gateway/**/*
+        # Compiled into control via include_str! — a fix here changes control's binary.
+        - sentinel-edge/install.sh
+        - crates/**/*
+        - Cargo.toml
+        - Cargo.lock
+        - Dockerfile
+        - .dockerignore
+        - deploy/vps/**/*
+        - .gitlab-ci.yml
 
 # The three Rust services share crates/** and Cargo.*, so a change there rebuilds all three.
 .rust_changes: &rust_changes
@@ -141,61 +192,8 @@ check:web:
   - Cargo.lock
   - Dockerfile
 
-build:control:
-  extends: .build_service
-  variables:
-    SERVICE: sentinel-control
-    DOCKERFILE: Dockerfile
-    BUILD_ARGS: PACKAGE=sentinel-control
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "web"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      changes:
-        - sentinel-control/**/*
-        # Compiled into control via include_str! — see the header note.
-        - sentinel-edge/install.sh
-        - crates/**/*
-        - Cargo.toml
-        - Cargo.lock
-        - Dockerfile
-        - deploy/vps/**/*
-        - .gitlab-ci.yml
 
-build:flow:
-  extends: .build_service
-  variables:
-    SERVICE: sentinel-flow
-    DOCKERFILE: Dockerfile
-    BUILD_ARGS: PACKAGE=sentinel-flow
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "web"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      changes:
-        - sentinel-flow/**/*
-        - crates/**/*
-        - Cargo.toml
-        - Cargo.lock
-        - Dockerfile
-        - deploy/vps/**/*
-        - .gitlab-ci.yml
 
-build:gateway:
-  extends: .build_service
-  variables:
-    SERVICE: sentinel-gateway
-    DOCKERFILE: Dockerfile
-    BUILD_ARGS: PACKAGE=sentinel-gateway
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "web"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      changes:
-        - sentinel-gateway/**/*
-        - crates/**/*
-        - Cargo.toml
-        - Cargo.lock
-        - Dockerfile
-        - deploy/vps/**/*
-        - .gitlab-ci.yml
 
 build:app:
   extends: .build_service
@@ -237,13 +235,7 @@ deploy:vps:
   resource_group: production
   interruptible: false
   needs:
-    - job: build:control
-      artifacts: true
-      optional: true
-    - job: build:flow
-      artifacts: true
-      optional: true
-    - job: build:gateway
+    - job: build:rust
       artifacts: true
       optional: true
     - job: build:app
