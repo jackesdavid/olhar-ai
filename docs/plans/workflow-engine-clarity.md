@@ -43,8 +43,6 @@ That sentence is the whole afternoon, in one line, at the moment it happens.
   Fixed in #92, but **the comment is why nobody looked there** — audit the file for the same.
 - `#86`'s plan concluded **"No migration"** in bold. Right about `work_jobs`, wrong about the CHECK
   constraint that made the whole feature inert.
-- `snapshot_from_rtsp`'s `-rw_timeout` comment explained a flag ffmpeg 7.x rejects outright — the
-  function had never run on a modern ffmpeg.
 - Sweep for the pattern: a comment asserting a *behaviour* (heals, retries, validates) rather than a
   *constraint*. Each is a claim; check it or cut it.
 

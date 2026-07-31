@@ -17,13 +17,10 @@ testing on a Tapo C100 (2026-07-16) turned a **correct** password into a camera 
 faults:
 
 1. **It saved before it proved.** `saveAndTest` pushed creds to the edge *first*, which rewrote
-   `go2rtc.yaml` and pointed go2rtc's reconnect loop at the camera. A typo didn't just fail the
    test — it overwrote a working camera's config and started an auth storm.
-2. **It hammered on failure.** The poll drove an RTSP connect every 2s for 25s, on top of go2rtc's
    own reconnects, and retried *unconditionally* — including on hard auth failure, which is exactly
    when you must stop. Consumer cameras (Tapo, Reolink, Wyze) lock their RTSP server after such a
    burst. **The lock outlives the app and clears only on a power cycle.**
-3. **It blamed the password for everything.** Any failure — cloud path, tailnet, slow go2rtc, locked
    camera — surfaced as "check your credentials". So the user re-typed *correct* creds, which
    re-armed the storm, which deepened the lock. That feedback loop is the whole bug.
 
@@ -46,7 +43,6 @@ wrong fix (retry) is what causes the damage.
   **One connection, at most two requests, never a retry** — `ProbeStatus::is_retryable()` exists to
   make "don't retry a rejection" enforceable rather than a comment.
 - **Edge `POST /probe/:ip`** (`sentinel-edge/src/http.rs`) — probes with the supplied creds,
-  **persisting nothing**: no cache write, no `go2rtc.yaml`, no respawn. On `ok` only, pulls one frame
   via `snapshot_from_rtsp` as visual proof (base64 inline). A camera with no cached RTSP URL yet is
   resolved over ONVIF first, whose rejection is itself an `auth_failed` verdict.
 - **Control `POST /devices/:ip/probe`** (`sentinel-control/src/domain/devices.rs`) — proxies to the

@@ -2,7 +2,6 @@
 
 **Board card:** Retire local builds — full CI/CD (ToDo)
 **Goal:** Move every build/release off the Mac into GitHub Actions so the Mac is **coding-only**. No
-more `task cloud-deploy`, `task edge-publish`, `task edge-pkg-signed`, or the local ffmpeg-universal
 build. Commit → services deploy; tag → edge binaries + installers build, host on GitHub + VPS.
 
 ## HARD BLOCKER (everything waits on this)
@@ -55,7 +54,6 @@ if Windows boxes are ever a thing.
 
 ## Mac cleanup (safe to delete ONCE CI is verified for each area)
 - `cargo clean` (workspace + `sentinel-edge/`), `sentinel-edge/dist/`, `deploy/macos-pkg/build/` (the
-  ~20-min ffmpeg-universal artifact) — all regenerable. (`task clean-space` does most.)
 - KEEP: `~/apple-signing` certs until they're in GH secrets AND a signed `.pkg` CI run succeeds — then the
   Mac no longer needs them.
 - KEEP: the repo + toolchain for coding.

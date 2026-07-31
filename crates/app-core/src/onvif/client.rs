@@ -14,9 +14,8 @@ use super::xml::{
 };
 
 const SOAP_TIMEOUT: Duration = Duration::from_secs(5);
-/// Hard wall-clock cap on the ffmpeg RTSP snapshot fallback — a stalled camera/RTSP pull
 /// is killed rather than allowed to hang the caller (the engine also bounds the node).
-const FFMPEG_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Validate `username`/`password` against the camera at `xaddr`. On success
 /// returns the RTSP stream URI (proof the credentials work). On failure returns
@@ -38,7 +37,6 @@ pub fn test_credentials(xaddr: &str, username: &str, password: &str) -> Result<S
 /// stream backs the HD toggle. Cameras with a single profile return `(main, None)`.
 ///
 /// Edge-only: these URIs embed nothing the cloud needs (they live on the LAN and the edge
-/// injects credentials into them for go2rtc), so they're never reported to control.
 pub fn resolve_stream_uris(
     xaddr: &str,
     username: &str,
@@ -79,7 +77,6 @@ pub fn resolve_stream_uris(
 }
 
 /// Fetch a JPEG snapshot. Tries ONVIF `GetSnapshotUri` + HTTP Basic GET; falls
-/// back to a single RTSP frame via `ffmpeg` if the camera doesn't support it.
 pub fn snapshot(
     xaddr: &str,
     username: &str,
@@ -223,7 +220,6 @@ fn envelope(header: &str, body: &str) -> String {
     )
 }
 
-// ---- RTSP frame grab via ffmpeg --------------------------------------------
 
 /// Insert `user:pass@` into an `rtsp://` URL unless it already carries creds.
 /// Shared by the snapshot path and the live-stream path.
@@ -241,9 +237,7 @@ pub fn rtsp_url_with_creds(rtsp: &str, user: &str, pass: &str) -> String {
     }
 }
 
-/// One-shot RTSP → JPEG via **linked GStreamer** (card #138, touchpoint A5) — the ffmpeg
 /// replacement for the cold snapshot. Only compiled where a GStreamer runtime exists (the edge
-/// forwards its `gst-linked` feature); the cloud services keep the ffmpeg path below.
 ///
 /// Bounded on purpose: an unreachable or wedged camera must never block the caller, so we give the
 /// whole grab a wall-clock deadline and pull a single sample rather than running a live pipeline.
@@ -307,7 +301,6 @@ pub fn snapshot_from_rtsp(rtsp: &str, user: &str, pass: &str) -> Result<Vec<u8>,
     }
     let url = rtsp_url_with_creds(rtsp, user, pass);
 
-    // Prefer GStreamer where it exists (the edge). A failure here falls through to ffmpeg rather
     // than failing the snapshot — during the migration both must remain viable.
     #[cfg(feature = "gst-linked")]
     match snapshot_from_rtsp_gst(&url) {
@@ -316,7 +309,6 @@ pub fn snapshot_from_rtsp(rtsp: &str, user: &str, pass: &str) -> Result<Vec<u8>,
         _ => {}
     }
 
-    // No ffmpeg fallback. It spawned a binary that is neither bundled by the installer nor
     // installed by it, so on every real box the "fallback" could only fail — after paying its
     // 10s wall-clock deadline first. An error that says what is wrong beats a slow one that
     // blames a missing tool nobody intended to have.

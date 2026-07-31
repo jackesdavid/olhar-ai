@@ -172,10 +172,10 @@
   function hwLabel(m: string): string {
     return { vaapi: "VAAPI", qsv: "QuickSync", cuda: "CUDA", videotoolbox: "VideoToolbox", v4l2m2m: "V4L2" }[m] ?? m;
   }
-  // The box has no working media backend at all — GStreamer absent (and, on a legacy box, ffmpeg too).
-  // The edge links GStreamer now (#138); a box reporting it healthy needs nothing else.
+  // The box has no working media backend. GStreamer is linked into the edge, so a box reporting
+  // it healthy needs nothing else; `null` means "not reported yet", which is not a failure.
   function mediaMissing(b: Box): boolean {
-    return !b.gstreamer_ok && b.ffmpeg_ok === false;
+    return b.gstreamer_ok === false;
   }
   // Boxes whose media path can't work. The edge reaches the cloud outbound-only now (#144 — SSE
   // commands + live over its own outbound connection), so there is no tailnet to be "offline" on.

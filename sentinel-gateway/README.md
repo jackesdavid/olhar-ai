@@ -5,17 +5,14 @@ architecture: `docs/plans/multi-tenant-gateway-edge.md`).
 
 End-user browsers connect here; the gateway proxies **live video (MSE over
 WebSocket)** and **JPEG snapshots** through to a client's on-prem `sentinel-edge`
-go2rtc, over the **Tailscale tailnet**. The edge's go2rtc is localhost-only +
 `tailscale serve`'d, so it's never exposed directly.
 
 ```
-browser ──HTTPS/WSS──▶ sentinel-gateway ──tailnet──▶ edge go2rtc (127.0.0.1:1984)
 ```
 
 It's a thin **scoped reverse proxy** — no `app-core`, no DB, no domain types:
 - `GET /api/ws` → **WebSocket bridge** to `{upstream}/api/ws` (MSE fMP4 both ways).
 - everything else GET → **streamed passthrough** to the upstream (`/api/frame.jpeg`,
-  `/api/streams`, and go2rtc's own `/stream.html` + player assets).
 - `GET /player?src=cam_<ip>` → redirects to the proxied player forced to MSE.
 
 **Single-tenant for now:** one configured upstream (`EDGE_UPSTREAM`). The per-tenant
@@ -33,7 +30,6 @@ cargo run -p sentinel-gateway
 | Env | Default | Purpose |
 |---|---|---|
 | `GATEWAY_BIND` | `0.0.0.0:8789` | listen address |
-| `EDGE_UPSTREAM` | `http://127.0.0.1:1984` | edge go2rtc base (dev) or `https://<host>.<tailnet>.ts.net` (prod) |
 | `TS_AUTHKEY` / `TS_HOSTNAME` / `TS_TAGS` | — | join the tailnet at startup (opt-in) |
 
 ## Verify

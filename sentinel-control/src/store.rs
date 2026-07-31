@@ -152,7 +152,6 @@ pub struct BoxRow {
     pub created_at: chrono::DateTime<chrono::Utc>,
     /// Edge health (reported on the heartbeat): serving | up | offline | disabled.
     pub tailscale_state: Option<String>,
-    pub ffmpeg_ok: Option<bool>,
     /// Whether `gst-launch-1.0` is on PATH (card #138) — NULL until an updated edge reports it.
     pub gstreamer_ok: Option<bool>,
     pub health_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -225,7 +224,7 @@ pub async fn create_box(
 
 pub async fn list_boxes(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<BoxRow>> {
     sqlx::query_as::<_, BoxRow>(
-        "SELECT id, name, magicdns_host, version, last_seen, created_at, tailscale_state, ffmpeg_ok, gstreamer_ok, health_at, recording_config, platform, hwaccel, \
+        "SELECT id, name, magicdns_host, version, last_seen, created_at, tailscale_state, gstreamer_ok, health_at, recording_config, platform, hwaccel, \
                 cpu_pct, mem_pct, disk_pct, gpu_pct, gpu_mem_pct, metrics_at \
          FROM tenant_boxes WHERE tenant_id = $1 ORDER BY name",
     )
@@ -251,7 +250,6 @@ pub async fn touch_box_by_token(
     host: Option<&str>,
     version: Option<&str>,
     tailscale: Option<&str>,
-    ffmpeg: Option<bool>,
     gstreamer: Option<bool>,
     platform: Option<&str>,
     hwaccel: Option<&str>,
@@ -274,7 +272,6 @@ pub async fn touch_box_by_token(
                 magicdns_host = COALESCE($2, magicdns_host),
                 version = COALESCE($3, version),
                 tailscale_state = COALESCE($4, tailscale_state),
-                ffmpeg_ok = COALESCE($5, ffmpeg_ok),
                 gstreamer_ok = COALESCE($6, gstreamer_ok),
                 platform = COALESCE($7, platform),
                 health_at = CASE WHEN $4 IS NOT NULL THEN now() ELSE health_at END,
@@ -292,7 +289,6 @@ pub async fn touch_box_by_token(
     .bind(host)
     .bind(version)
     .bind(tailscale)
-    .bind(ffmpeg)
     .bind(gstreamer)
     .bind(platform)
     .bind(cpu)
@@ -314,7 +310,6 @@ pub async fn touch_box_identity(
     host: Option<&str>,
     version: Option<&str>,
     tailscale: Option<&str>,
-    ffmpeg: Option<bool>,
     gstreamer: Option<bool>,
     platform: Option<&str>,
     hwaccel: Option<&str>,
@@ -325,7 +320,6 @@ pub async fn touch_box_identity(
                 magicdns_host = COALESCE($2, magicdns_host),
                 version = COALESCE($3, version),
                 tailscale_state = COALESCE($4, tailscale_state),
-                ffmpeg_ok = COALESCE($5, ffmpeg_ok),
                 gstreamer_ok = COALESCE($6, gstreamer_ok),
                 platform = COALESCE($7, platform),
                 hwaccel = COALESCE($8, hwaccel),
@@ -337,7 +331,6 @@ pub async fn touch_box_identity(
     .bind(host)
     .bind(version)
     .bind(tailscale)
-    .bind(ffmpeg)
     .bind(gstreamer)
     .bind(platform)
     .bind(hwaccel)
@@ -462,7 +455,6 @@ pub async fn list_configured(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec
 
 /// Replace the tenant's "streaming" set — the (ip, codec) pairs the edge currently has a
 /// resolved stream for (the edge pushes its full current set on each reload/rediscover).
-/// `codec` is `None` when the edge hasn't probed it (older build, or ffmpeg/subprocess-gstreamer
 /// backend). Best-effort.
 pub async fn upsert_streaming(
     pool: &PgPool,

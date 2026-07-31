@@ -17,7 +17,6 @@ today, none of which is storage:
 
 | Load | Cadence | Cost (per camera, modern x86 core) |
 |---|---|---|
-| go2rtc/ffmpeg decodes the substream → `frame.jpeg` | 6 fps | ~5-10% of a core |
 | Motion: JPEG decode → resize 480×270 → MOG2 → contours | 6 fps | ~5% of a core |
 | **YOLOX-Nano 416×416 (tract, CPU), one thread per job×camera** | **2.5 fps, ungated** | **~30-60% of a core** |
 
@@ -33,7 +32,6 @@ product *does* — only what it costs to do it.
 ## What's true today (grounding)
 
 - `sentinel-edge/src/motion.rs:60` — manager spawns **one watcher thread per camera** with a
-  stream. Always on, no gate. Loop at `MOTION_FPS`=6 (`motion.rs:46`): `go2rtc::frame_from` →
   `imgcodecs::imdecode` (`motion.rs:166`) → resize → MOG2 → `find_contours`.
 - `motion.rs:235` — `qualifies` (the raw per-frame verdict) is computed every tick, but an event
   is only POSTed once per `MOTION_MIN_INTERVAL_SECS` (4s, `motion.rs:48`). **The throttle is on
@@ -167,7 +165,6 @@ thought of.
 
 ## Out of scope (v1)
 
-- VAAPI/QuickSync offload of go2rtc's H264 decode + JPEG encode (the next lever if CPU is still
   tight on the N100 — worth a card of its own once we have real numbers from #62).
 - Replacing tract with a quantized/NPU backend.
 - Any change to what the edge emits: motion events, track events and their payloads stay identical.

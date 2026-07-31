@@ -230,7 +230,6 @@ rm -rf /opt/sentinel-edge /etc/sentinel-edge";
 }
 
 /// Live-over-outbound (card #144): dial the gateway and push the camera's fMP4 up. `args` = `{src,
-/// url}` — `src` is the go2rtc stream name the browser asked for, `url` the gateway WS to dial. The
 /// stream runs on its own thread+runtime until the gateway closes; this returns an immediate ack.
 fn start_live(args: &serde_json::Value) -> (bool, Option<serde_json::Value>, Option<String>) {
     let Some(url) = args.get("url").and_then(|u| u.as_str()) else {

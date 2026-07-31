@@ -1,11 +1,9 @@
 //! On-demand clip recording with an in-memory H264 pre-roll ring buffer.
 //!
 //! **Ring buffer** (`start_ring`)
-//!   A background thread per camera opens an RTSP connection to go2rtc's local
 //!   re-server (`rtsp://127.0.0.1:8554/cam_{ip_key}`). We use the `retina` crate
 //!   ONLY for RTSP transport + RTP ordering (`PacketItem::Rtp`) and do our own
 //!   lenient H264 depacketization (`H264Reassembler`) — retina's built-in codec
-//!   layer rejects go2rtc's repackaged NALs with "forbidden sequence 00 00 00".
 //!   Reassembled Annex-B access units are kept in a `VecDeque<H264Frame>` in
 //!   memory (the *mem-ring*). No segments are written to disk between recordings.
 //!
@@ -13,14 +11,11 @@
 //!   `start()` snapshots the mem-ring from the last IDR frame (guarantees a clean
 //!   keyframe — no black frames) and installs the live sink under the SAME ring
 //!   lock, so no frame is dropped or duplicated at the boundary. It starts a muxer
-//!   ([`start_muxer`] — ffmpeg, or the linked GStreamer one on a `gstreamer-linked`
 //!   box, card #138 A2), writes the pre-roll FRAMES, then a relay thread feeds
 //!   subsequent live frames to it. Frames carry their capture time so the GStreamer
 //!   muxer can stamp a real PTS per buffer.
 //!
 //!   `stop()` clears the live sink → channel closes → relay drains → the sink closes
-//!   (ffmpeg stdin EOF / appsrc EOS) → the muxer writes the trailer. No concat step.
-//!   The clip's duration comes from the captured frame span, not `ffprobe` (A3).
 
 use futures::StreamExt as _;
 use retina::client::PacketItem;
@@ -146,12 +141,10 @@ pub struct RecordingConfig {
     /// off for a tenant whose plan sells no cloud recording, where the local file is the ONLY copy.
     #[serde(default)]
     pub delete_local_after_upload: bool,
-    /// Which media tool the edge shells out to for camera decode (card #138): `"ffmpeg"` (default)
     /// or `"gstreamer"`. A coexistence flag, NOT a permanent fork — see
     /// `docs/plans/edge-gstreamer-backend.md`. `"gstreamer-linked"` (linked bindings, the
     /// successor) additionally drives the recording mux (A2) and the cold snapshot (A5); plain
     /// `"gstreamer"` is the older subprocess path and still only affects `capture.rs`'s A1 decode.
-    /// Falls back to ffmpeg at read time if `gst-launch-1.0` isn't actually on this box's PATH
     /// (`state::gstreamer_ok()`), so a stale/mistaken flag never breaks capture.
     #[serde(default = "default_media_backend")]
     pub media_backend: String,
@@ -222,7 +215,6 @@ fn default_recordings_path() -> String {
         .into_owned()
 }
 fn default_media_backend() -> String {
-    // Card #138 COMPLETE: GStreamer is the only media path. ffmpeg and go2rtc are gone, so this is
     // not a default among options — it is the single answer, kept as a field only because the value
     // still rides in `RecordingConfig` that boxes have cached on disk.
     "gstreamer-linked".to_string()
@@ -298,7 +290,6 @@ struct MemRing {
 
 /// Per-camera ring state. The collector thread owns the RTSP connection and
 /// writes reassembled access units into `mem_ring`. During a recording it also
-/// forwards frames via `mem_ring.live_sink` so they reach the active ffmpeg.
 struct RingSession {
     #[allow(dead_code)]
     stop_tx: std::sync::mpsc::SyncSender<()>,
@@ -315,7 +306,6 @@ struct Session {
     relay_thread: Option<std::thread::JoinHandle<()>>,
     muxer: Muxer,
     /// First and last frame capture times actually written to this clip (card #138 A3). The clip's
-    /// duration is `last - first` — the real footage span — which needs no `ffprobe` and beats the
     /// wall-clock fallback (that one counts time the recorder spent waiting for an IDR, and any
     /// gap where the camera dropped out, as if it were footage).
     span: Arc<Mutex<Option<(std::time::Instant, std::time::Instant)>>>,
@@ -334,9 +324,7 @@ fn note_span(
 }
 
 /// Spawn the mp4 muxer for a recording (A2): reads raw Annex-B H264 from stdin, remuxes
-/// (no re-encode — same as ffmpeg's `-c:v copy`) into `output`.
 ///
-/// **ffmpeg-only for now, even when `media_backend=gstreamer`** — card #138's GStreamer path was
 /// tried and rejected here: `fdsrc fd=0 ! h264parse ! mp4mux ! filesink` fails with "Buffer has no
 /// PTS" for a raw elementary stream fed over stdin, on both `filesrc` (a real file, ruling out a
 /// pipe-specific issue) and `fdsrc` (with `do-timestamp=true`, tried with/without an explicit
@@ -345,7 +333,6 @@ fn note_span(
 /// can't hand-assign; fixing it needs `gstreamer-rs` bindings, which #79 rules out (the edge
 /// links nothing). See `docs/plans/edge-gstreamer-backend.md` (Phase 2b, blocked).
 /// The running muxer a session owns; `wait()` blocks until the file is finalised.
-/// The clip muxer. One variant, because there is one media path — the ffmpeg arm spawned a binary
 /// that is neither bundled by the installer nor installed by it.
 enum Muxer {
     Gst(crate::gst_mux::GstMuxer),
@@ -395,7 +382,6 @@ pub struct RecordingManager {
     ring_sessions: Arc<Mutex<HashMap<String, RingSession>>>,
     /// camera ip → the RTSP URL to dial for its ring (card #138, G5). Published by
     /// [`crate::state::AppState`], which is what holds the devices and their credentials; empty for
-    /// a camera we cannot dial ourselves, and then the ring falls back to go2rtc's re-serve.
     dials: Mutex<HashMap<String, String>>,
 }
 
@@ -546,7 +532,6 @@ impl RecordingManager {
         // were already evicted by the collector; this just picks the decodable start inside it.
         let window = Duration::from_secs(max_pre.max(1) as u64);
         // Pre-roll as individual frames (bytes + capture time), not one flattened blob: the mp4
-        // muxer assigns a PTS per frame (card #138 A2). The ffmpeg path writes them back-to-back,
         // which is byte-identical to the old concatenation.
         type PreRoll = Vec<(Vec<u8>, std::time::Instant)>;
         let (pre_roll, live_rx): (
@@ -606,7 +591,6 @@ impl RecordingManager {
         };
 
         // --- Step 3: write pre-roll, then hand the sink to the relay thread --
-        // Frame-by-frame (not one blob) so each carries its capture time; for ffmpeg the bytes land
         // back-to-back exactly as the old concatenation did.
         let span: Arc<Mutex<Option<(std::time::Instant, std::time::Instant)>>> =
             Arc::new(Mutex::new(None));
@@ -641,7 +625,6 @@ impl RecordingManager {
                 }
                 note_span(&span_relay, at);
             }
-            // EOF (ffmpeg stdin drop) / EOS (appsrc) → the muxer finalises the file.
             mux_sink.finish();
             // stdin drops here → the muxer gets EOF → finishes the MP4
         });
@@ -670,7 +653,6 @@ impl RecordingManager {
                 .ok_or_else(|| format!("no active session for {clip_id}"))?
         };
 
-        // Clearing live_sink → channel closes → relay thread drains → stdin drops → ffmpeg EOF
         {
             let rings = self.ring_sessions.lock().unwrap();
             if let Some(rs) = rings.get(&sess.camera_ip) {
@@ -697,10 +679,8 @@ impl RecordingManager {
             .map(|t| t.with_timezone(&chrono::Utc))
             .unwrap_or_else(|_| chrono::Utc::now());
         // Duration from the FOOTAGE the clip actually contains (card #138 A3): the span between the
-        // first and last frame we wrote. That needs no `ffprobe` subprocess, and it is truer than
         // both fallbacks — wall-clock counts the wait for the first IDR and any camera dropout as
         // footage, and re-reading the file only tells us what the muxer already knew.
-        // The `ffprobe` middle rung is gone with the rest of the ffmpeg family — it shipped with
         // the binary we no longer install, so on a real box it could only fail. Wall-clock remains
         // the last resort for a clip whose span we somehow never recorded.
         let span = *sess.span.lock().unwrap();
@@ -874,7 +854,6 @@ impl RecordingManager {
 
 // ---- RTSP ring collector (raw RTP) ------------------------------------------
 
-/// Async task: opens an RTSP connection to go2rtc's local re-server for `camera_ip`,
 /// reassembles raw RTP into H264 Annex-B access units, and maintains the in-memory
 /// ring. Reconnects automatically on error. Exits when the stop signal fires.
 async fn run_rtsp_collector(
@@ -884,7 +863,6 @@ async fn run_rtsp_collector(
     mem_ring: Arc<Mutex<MemRing>>,
     stop_rx: std::sync::mpsc::Receiver<()>,
 ) {
-    // The camera itself when we can dial it, go2rtc's re-serve only as the fallback for a camera
     // whose credentials never resolved — the last consumer to leave the sidecar.
     let rtsp_url = dial.unwrap_or_else(|| {
         let ip_key = camera_ip.replace('.', "_");
@@ -956,7 +934,6 @@ async fn rtsp_stream_once(
     const GAP_RESET: Duration = Duration::from_secs(2);
     let window = Duration::from_secs(pre_roll_secs.max(1) as u64);
     // `retina` REFUSES a URL with inline credentials ("URL must not contain credentials") — they
-    // have to be handed over as session options instead. go2rtc's re-serve needed none, so this only
     // showed up once the ring started dialling the camera directly.
     let (bare, creds) = split_rtsp_credentials(rtsp_url);
     let url = bare
@@ -984,7 +961,6 @@ async fn rtsp_stream_once(
         .await
         .map_err(|e| format!("setup: {e}"))?;
 
-    // Raw RTP stream — NO .demuxed(): retina's codec layer rejects go2rtc's
     // repackaged NALs. We depacketize ourselves below.
     let mut playing = session
         .play(retina::client::PlayOptions::default())
@@ -1059,7 +1035,6 @@ async fn rtsp_stream_once(
 /// most recent SPS/PPS and prepends them to keyframe access units that lack
 /// inline parameter sets, so every keyframe in the ring is independently
 /// decodable. Deliberately lenient — unlike retina's codec layer, it does not
-/// reject NALs for spec-purity reasons; ffmpeg copes fine.
 #[derive(Default)]
 struct H264Reassembler {
     fu_buf: Vec<u8>, // in-progress FU-A NAL (incl. reconstructed header)
@@ -1244,7 +1219,6 @@ mod rtsp_credentials_tests {
         assert_eq!(creds, Some(("bob".into(), "s3cret".into())));
     }
 
-    /// go2rtc's re-serve carries no credentials — that path must stay byte-identical.
     #[test]
     fn leaves_a_credential_less_url_untouched() {
         let (url, creds) = split_rtsp_credentials("rtsp://127.0.0.1:8554/cam_10_0_0_2");

@@ -9,7 +9,6 @@
 
 | Layer | What lives here |
 |---|---|
-| Edge (always-on, outside workflows) | 5-second ring buffer per camera (ffmpeg segment muxer), clip storage, file-serving HTTP routes |
 | Workflow node (`RecordStream`) | Trigger: POSTs to edge to start/extend a recording; edge owns the cooldown and finalization |
 | Control + DB | `recordings` metadata table, clip manifest push from edge, proxy endpoint for web download |
 | Web UI | Recordings list page, `<video>` player |
@@ -22,7 +21,6 @@
 
 - On startup, spawn one **ring-buffer process per camera** (skips cameras with no active stream):
   ```
-  ffmpeg -rtsp_transport tcp -i rtsp://127.0.0.1:8554/cam_<ip>
          -f segment -segment_time 1 -reset_timestamps 1
          -segment_wrap 10
          /var/lib/sentinel/ring/<ip_slug>/%05d.ts
@@ -31,20 +29,15 @@
 
 - **Per-camera recording state machine**: `IDLE → RECORDING → IDLE`
 
-  - `start(ip)` — if IDLE: select the 5 newest ring segments + spawn ffmpeg concat → MP4 and move to RECORDING; if already RECORDING: no-op, return active `clip_id`.
-  - `stop(ip)` — send SIGTERM to the ffmpeg process, await exit, compute duration+size, push metadata to control, return to IDLE.
   - Clip naming: `<ip_slug>_<RFC3339_start>.mp4` in `EDGE_RECORDINGS_DIR` (env default: `/var/lib/sentinel/recordings/`).
   - No cooldown timer on the edge — the workflow is responsible for calling `stop` at the right moment.
 
-- **ffmpeg concat recipe** (ring segments + live tail):
   ```
-  ffmpeg -f concat -safe 0 -i ring_concat.txt
          -i rtsp://127.0.0.1:8554/cam_<ip>
          -filter_complex "[0:v][1:v]concat=n=2:v=1[out]"
          -map "[out]" -c:v libx264 -preset ultrafast
          <output.mp4>
   ```
-  The concat file lists the 5 selected TS segments; the second input streams live until ffmpeg is signalled.
 
 - **Rotation**: when total size in `EDGE_RECORDINGS_DIR` exceeds `EDGE_RECORDINGS_MAX_MB` (default: 1000 MB), delete oldest clips first.
 
@@ -197,7 +190,6 @@ OnTelegramMessage("stop")  → StopRecording(camera)
 
 4. **Separate tmpdir for ring buffer** → **Yes.** `EDGE_RING_TMPDIR` (default: `/tmp/sentinel_ring`) for the rolling TS segments — fast local tmpfs, lost on reboot (acceptable; ring is ephemeral). `EDGE_RECORDINGS_DIR` (default: `/var/lib/sentinel/recordings`) for finalized MP4 clips — persistent across restarts.
 
-5. **Ring buffer on camera re-discovery** → **Restart the buffer.** The camera reload cycle (triggered by `POST /reload` or the 25-second config poll) diffs the new IP list against the running `HashMap<ip, RingHandle>`. Removed IPs: kill ffmpeg + drop handle. Added IPs: spawn new ring process. Unchanged IPs: leave running. This is the same diff pattern as go2rtc config regeneration.
 
 ---
 

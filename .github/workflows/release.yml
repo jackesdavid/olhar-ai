@@ -22,7 +22,6 @@ jobs:
   build:
     name: build ${{ matrix.asset }}
     runs-on: ${{ matrix.os }}
-    # The edge now LINKS GStreamer (card #138 — the sole media backend; go2rtc + ffmpeg retired) and
     # is outbound-only (card #144 — SSE commands + live over the outbound connection; no tailnet). So
     # every target is a NATIVE build with GStreamer dev present — no more static-musl `cross` build
     # (GStreamer is glib + dynamic plugins and cannot statically link into musl). Linux is glibc; the

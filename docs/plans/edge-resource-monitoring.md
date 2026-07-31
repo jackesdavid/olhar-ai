@@ -11,14 +11,12 @@ SSHing in.
 The edge already reports health on the ~25s config long-poll; resource metrics ride the same rails:
 
 - **Edge → header build:** `with_health(req)` (`sentinel-edge/src/state.rs:422`) stamps
-  `X-Edge-Tailscale` / `X-Edge-Ffmpeg` / `X-Edge-Platform`; `X-Edge-Version` in the `BoxReq` auth
   builder (`state.rs:452`). Headers **must be ASCII** (`state.rs:394` note).
 - **Control → receiver:** `read_health_headers` (`sentinel-control/src/http.rs:93`) parses the
   `x-edge-*` headers; `touch_box_by_token` / `touch_box_identity`
   (`sentinel-control/src/store.rs:184` / `:218`) do a `COALESCE` UPDATE onto `tenant_boxes`,
   stamping `health_at` when health is present.
 - **Storage:** `tenant_boxes` holds a **latest snapshot** (health columns added in
-  `0018_box_health.sql`: `tailscale_state`, `ffmpeg_ok`, `health_at`; `platform` in `0034`). No
   time-series table today.
 - **UI:** the Boxes page `sentinel-app/src/routes/settings/boxes/+page.svelte` renders per-box
   badges; box list is `GET /boxes` → `store::BoxRow` (`sentinel-control/src/domain/boxes.rs:53`,
@@ -83,7 +81,6 @@ never touches the cloud image build.
 - `settings/boxes/+page.svelte`: the **Health cell** (lines ~249–265, alongside the `tsClass()`/
   `tsLabel()` badges) is where compact **CPU / Memory / Disk** bar gauges go per box (+ **GPU** only
   when `gpu_pct` is non-null). Monochrome ink theme + `.status-live` — no brand hue; convey level by
-  fill, and switch to the existing **warning** treatment (the offline / ffmpeg-missing badge style)
   when a metric is sustained-high (≥ ~85%). Show `metrics_at` freshness (stale if older than a
   couple of heartbeats).
 - The page uses **`$lib/api`** (`import { boxes as boxApi, type Box }` — NOT `lib/data.ts`); add the

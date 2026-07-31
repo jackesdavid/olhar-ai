@@ -94,7 +94,6 @@ export type Box = {
   created_at: string;
   /** Edge health (reported on the heartbeat): serving | up | offline | disabled. */
   tailscale_state: string | null;
-  ffmpeg_ok: boolean | null;
   /** Whether gst-launch-1.0 is on PATH (card #138) — null until an updated edge reports it. */
   gstreamer_ok: boolean | null;
   health_at: string | null;
@@ -134,7 +133,7 @@ export const boxes = {
   list: () => api.get<Box[]>("/boxes"),
   create: (name: string) => api.post<NewBox>("/boxes", { name }),
   del: (id: string) => api.del<void>(`/boxes/${id}`),
-  /** Queue a restart for a box (it relaunches → reconnects tailnet + re-serves go2rtc). */
+  /** Queue a restart for a box (it relaunches and reconnects to control). */
   restart: (id: string) => api.post<void>(`/boxes/${id}/restart`),
   /** Queue an update for a box (it runs install.sh --update → service manager restarts with new binary). */
   update: (id: string) => api.post<void>(`/boxes/${id}/update`),
@@ -163,7 +162,7 @@ export const boxes = {
   // Box logs are shipped to Datadog now (card #145) — no in-app logs view.
   // Partial, not RecordingConfig: the edge fills in any missing key with its own default
   // (serde `#[serde(default)]` per field), so a caller that only wants to change ONE knob (e.g.
-  // media_backend, card #138) can spread the box's existing `recording_config` and override just
+  // can spread the box's existing `recording_config` and override just
   // that key, without having to reconstruct the full shape.
   patchRecordingConfig: (id: string, config: Partial<RecordingConfig>) =>
     api.patch<RecordingConfig>(`/boxes/${id}/recording-config`, config),
@@ -189,10 +188,6 @@ export type RecordingConfig = {
   motion_history?: number;
   /** Drop a clip's local file once the cloud confirms it's durable (the box becomes a spool). */
   delete_local_after_upload?: boolean;
-  /** Which media tool this box shells out to for decode/mux (card #138): "ffmpeg" (default) or
-   *  "gstreamer" — a per-box coexistence/measurement flag, not a permanent switch. See
-   *  docs/plans/edge-gstreamer-backend.md. */
-  media_backend?: "ffmpeg" | "gstreamer";
 };
 
 export type StorageStats = {

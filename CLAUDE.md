@@ -13,7 +13,6 @@ matches your task:
 - **[Deploy & ops](docs/ref/deploy.md)** — how to ship: local build → GHCR → VPS (`task
   cloud-deploy`), the GitHub Actions billing block, the VPS, migrations, versioning, and how
   the edge installer + binary are served.
-- **[Edge appliance](docs/ref/edge.md)** — `sentinel-edge`: Tailscale, ffmpeg, go2rtc,
   discovery + IP auto-reconcile, health reporting, the restart command, and `install.sh`.
 - **[Workflows engine](docs/ref/workflows.md)** — `sentinel-flow`: graph execution, loops,
   cross-graph events, run history, camera binding. (Node catalog: [docs/workflow-nodes.md](docs/workflow-nodes.md).)
@@ -34,11 +33,8 @@ matches your task:
 |---|---|
 | `sentinel-control/` | Control plane / SaaS backend (Axum, :8790) — auth/RBAC/JWT, tenants, the camera config the edge pulls, box registry, workflow CRUD, event registry, run history + box-log relay |
 | `sentinel-flow/` | Always-on workflow engine (Axum + SSE, :8787) — runs graphs, cross-graph events, run history. Multi-tenant (one pod, all tenants) |
-| `sentinel-gateway/` | Public streaming bridge (:8789) — relays live video (MSE/WS) + snapshots to the tenant's edge go2rtc over the tailnet |
-| `sentinel-edge/` | On-prem appliance (:8788, localhost) — ONLY thing touching cameras: ONVIF discovery, go2rtc sidecar, snapshots, tailnet. Standalone crate (not in a workspace) |
 | `sentinel-app/` | The web UI (SvelteKit / Svelte 5). Talks to control (API) + gateway (live) |
 | `sentinel-landing/`, `landing/` | Marketing landing site |
-| `crates/app-core/` | Shared domain lib: devices, workflows, alerts, ONVIF, go2rtc, agent/vision, ports, `db` + **migrations** |
 | `ai/sidecar/` | Face recognition GPU/CPU sidecar (RunPod) |
 | `deploy/` | Dockerfiles (`app/`, `landing/`) + `push-local.sh` (local deploy) |
 | `legacy/` | Dead Tauri-era code — ignore |

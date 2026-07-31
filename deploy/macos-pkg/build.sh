@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Build the macOS **GStreamer** appliance installer for Intel: Sentinel-Edge-<version>-gst-x86_64.pkg
-# (card #138). The media path is a self-contained linked GStreamer runtime — no go2rtc, no ffmpeg.
 #
 #   ./deploy/macos-pkg/build-gst.sh            # unsigned (dev — right-click Open, or your own Mac)
 #   ./deploy/macos-pkg/build-gst.sh --sign     # signed + notarized (certs/creds as in build.sh)

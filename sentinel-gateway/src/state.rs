@@ -1,4 +1,3 @@
-//! Gateway shared state. The upstream go2rtc is resolved per request from the JWT's
 //! tenant: the gateway asks control (`/internal/box-upstream`, forwarding the token)
 //! for that tenant's reported box host, cached briefly. `EDGE_UPSTREAM` is the static
 //! fallback (single-tenant / dev, and for the identical player UI assets).
@@ -23,7 +22,6 @@ pub enum LiveStart {
 
 /// Shared across handlers (always behind an `Arc`).
 pub struct AppState {
-    /// The fallback edge go2rtc base URL (`EDGE_UPSTREAM`), e.g.
     /// `https://tenant-001.<tailnet>.ts.net` (tailnet) or `http://127.0.0.1:1984` (dev).
     pub upstream: String,
     /// Control plane base (`CONTROL_URL`) for the per-tenant box-host lookup.
@@ -112,7 +110,6 @@ impl AppState {
         &self.upstream
     }
 
-    /// The live go2rtc base URL for a tenant. Resolves the tenant's box host via control
     /// (cached `CACHE_TTL`), forwarding `token`; falls back to the static upstream when
     /// there's no tenant context or no box has reported a host.
     pub async fn upstream_for(&self, tid: Option<&str>, token: &str) -> String {
@@ -160,10 +157,8 @@ impl AppState {
         }
     }
 
-    /// The WebSocket origin of the **edge's own** MSE server, derived from the go2rtc base the box
     /// reported — the edge serves its API on `:8080` over the tailnet (`tailscale serve --https=8080
     /// 8788`) and on `:8788` locally. `None` when the base is a shape we cannot map, in which case
-    /// the caller just uses go2rtc.
     ///
     /// Mirrors `app_core::ports`'s derivation for the warm-snapshot path, which resolves the same
     /// two endpoints on the same box.
@@ -224,7 +219,6 @@ mod live_edge_ws_tests {
         )
     }
 
-    /// The tailnet shape: the box reports its MagicDNS host, go2rtc answers on 443 and the edge's
     /// own API on 8080 (`tailscale serve --https=8080 8788`).
     #[test]
     fn maps_a_tailnet_host_to_the_edge_api_port() {
@@ -235,7 +229,7 @@ mod live_edge_ws_tests {
     }
 
     #[test]
-    fn maps_the_local_go2rtc_port_to_the_local_edge_port() {
+    fn maps_the_legacy_local_port_to_the_local_edge_port() {
         assert_eq!(
             state().live_edge_ws("http://127.0.0.1:1984"),
             Some("ws://127.0.0.1:8788".into())

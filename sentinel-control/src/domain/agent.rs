@@ -2,7 +2,6 @@
 //! text-to-speech, and speech-to-text. All three are JWT-authenticated and tenant-scoped —
 //! the tool loop only ever touches the caller's tenant (the [`ToolContext`] is built from
 //! `claims.tid`, never the client). The agent reaches the tenant's cameras through an
-//! [`EdgeFrameSource`] bound to that tenant's edge go2rtc over the tailnet, exactly like a
 //! workflow run does (see `sentinel-flow` `build_run_context`).
 use std::sync::Arc;
 

@@ -1,4 +1,3 @@
-//! Shared edge state + go2rtc lifecycle. The edge is **config-light**: it has no
 //! local database. Its camera list is pulled from the control plane (`CONTROL_URL`)
 //! and cached to a local file so it survives a control-plane outage / offline boot.
 use std::collections::HashMap;
@@ -17,7 +16,6 @@ pub struct StreamingCamera {
     pub codec: Option<&'static str>,
 }
 
-/// Everything the HTTP handlers + go2rtc manager share.
 pub struct AppState {
     /// The control-plane base URL the camera list is pulled from.
     pub control_url: String,
@@ -126,7 +124,6 @@ impl AppState {
             .cloned()
     }
 
-    /// Re-pull the camera list (and restart go2rtc if owned). `wait` long-polls control:
     /// 0 returns immediately (manual reload), >0 blocks up to `wait`s until the web
     /// changes a camera — so edits apply in ~1s without a busy timer.
     pub fn reload(&self, wait: u64) -> usize {
@@ -142,7 +139,6 @@ impl AppState {
 
     /// Re-run discovery AND reconcile cameras that changed IP (e.g. after a DHCP lease
     /// flip on reboot): for any cached camera whose stable ONVIF `id` is now seen at a
-    /// different IP, repoint it, re-resolve its RTSP, regenerate go2rtc (`cam_<newip>`),
     /// and push the correction up so the cloud device row + Live page follow the move.
     /// Then push the full sweep to control's discovered list. Best-effort throughout.
     pub fn rediscover(&self) {
@@ -553,9 +549,7 @@ pub struct FaceEvent {
 
 impl AppState {
     /// The camera's **own** RTSP URL for the requested quality — what the edge dials now that it owns
-    /// the ingest instead of proxying go2rtc's re-serve (card #138, G1/G5).
     ///
-    /// Mirrors `go2rtc::config_yaml`'s stream choice exactly, because the ingest must land on the
     /// same stream the sidecar would have: substream for preview, main for HD, and main for both in
     /// unified mode (#120). Credentials are **not** stored in the URL — they live on the device and
     /// are injected here, the same way the sidecar config does it.
@@ -594,7 +588,6 @@ fn pick_camera_rtsp(d: &app_core::devices::Device, hd: bool) -> Option<String> {
     Some(strip_stream_fragment(&clean_onvif_params(&url)))
 }
 
-/// Drop go2rtc's `#…` fragment from a stored RTSP URL.
 fn strip_stream_fragment(url: &str) -> String {
     url.split('#').next().unwrap_or(url).trim().to_string()
 }
@@ -602,7 +595,6 @@ fn strip_stream_fragment(url: &str) -> String {
 /// Strip the ONVIF stream-setup hint params (`unicast`, `proto`) that ONVIF `GetStreamUri` appends
 /// (`…?channel=1&subtype=0&unicast=true&proto=Onvif`). GStreamer's `rtspsrc` chokes on them — it
 /// completes OPTIONS/auth then stalls at SETUP and loops — whereas the plain native path
-/// (`…?channel=1&subtype=0`) that VLC/go2rtc use streams fine. Keep every other query param; only
 /// the known ONVIF hints are removed. Query-less URLs pass through untouched.
 fn clean_onvif_params(url: &str) -> String {
     let Some((base, query)) = url.split_once('?') else {
@@ -673,7 +665,6 @@ fn linux_distro() -> Option<String> {
 
 /// Stamp the box's health (GStreamer presence + hwaccel + platform) onto a request so control can
 /// surface it on the Boxes page. Used on the ~25s config poll (not the pushes). No more Tailscale or
-/// ffmpeg probes — those binaries are retired, and running them every poll was wasted work + noise.
 fn with_health(req: ureq::Request) -> ureq::Request {
     req.set("X-Edge-Gstreamer", if gstreamer_ok() { "1" } else { "0" })
         .set("X-Edge-Platform", platform())
@@ -749,7 +740,6 @@ fn load_cameras(control_url: &str, cache_path: &PathBuf, wait: u64) -> Vec<Devic
             // Resilience: the cache is the DURABLE, only home for camera credentials (control
             // hands them over once). Never let an empty pull wipe a populated cache — a transient
             // empty/misrouted 200 response (box-token hiccup, race) would otherwise destroy the
-            // sole copy of the creds and leave the camera credential-less (→ go2rtc auth-lockout).
             // A real "all cameras removed" is rare and recoverable; losing creds is neither.
             if devices.is_empty() && !cached.is_empty() {
                 log::warn!(
@@ -810,7 +800,6 @@ fn write_cache(cache_path: &PathBuf, devices: &[Device]) {
 }
 
 /// For any camera that has credentials but no RTSP URL yet, resolve both the main and
-/// substream RTSP URLs via ONVIF so go2rtc can serve an HD + a low-latency preview feed.
 /// The URLs are **kept on the edge only** (a LAN concern, and they embed credentials) —
 /// never reported to the cloud. Best-effort.
 fn resolve_rtsp(devices: &mut [Device]) {
@@ -899,7 +888,7 @@ fn fetch_cameras(control_url: &str, wait: u64) -> Result<Vec<Device>, String> {
 
 #[cfg(test)]
 mod camera_rtsp_tests {
-    use super::{pick_camera_rtsp, strip_go2rtc_fragment};
+    use super::{pick_camera_rtsp, strip_stream_fragment};
     use app_core::devices::Device;
 
     fn cam(sub: Option<&str>, creds: bool) -> Device {
@@ -963,7 +952,6 @@ mod camera_rtsp_tests {
         assert_eq!(pick_camera_rtsp(&cam(None, false), false), None);
     }
 
-    /// `#media=video` is go2rtc's syntax, not RTSP. Left on, `rtspsrc` treats it as part of the path
     /// and the camera 404s — a failure that looks like bad credentials.
     #[test]
     fn strips_the_stream_fragment() {

@@ -175,7 +175,6 @@ fn resolve_edge_base(sys: &ToolContext) -> Result<String, String> {
 }
 
 /// Returns the edge API base URL (port 8080 via tailscale serve).
-/// go2rtc occupies port 443; the edge API is served separately on 8080.
 pub(super) fn resolve_edge_api_base(sys: &ToolContext) -> Result<String, String> {
     let base = resolve_edge_base(sys)?;
     let bare = base

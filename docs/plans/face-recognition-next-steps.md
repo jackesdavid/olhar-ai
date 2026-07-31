@@ -88,7 +88,6 @@ Move inference from CPU-on-VPS to the LAN RTX 2060 box over the tailnet.
 ## Open decisions
 
 1. **Fallback strategy** — should `AI_SERVICE_FALLBACK_URL` be a first-class env var in `ai_service.rs`, or just an ops-level redirect (HAProxy/Nginx in front of sidecar)? The former is more explicit; the latter is invisible to the app.
-2. **Frame source for live recognition** — use the existing `Snapshot` node (JPEG, ~1/s) or add a `CameraFrame` node that taps go2rtc at a configurable interval? The `Snapshot` node is already wired and simpler.
 3. **Attendance integration** — should `RecognizePerson → RecordPresence` happen via a user-built workflow (flexible) or a first-class "Auto-Attendance" node that bundles both (simpler for non-technical users)?
 
 ---

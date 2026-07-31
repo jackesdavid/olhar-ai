@@ -33,7 +33,6 @@
   let selectedIp = $state<string>("");
   let hd = $state(false); // cloud: SD substream (default) vs HD main stream
 
-  // Desktop: a camera is playable once go2rtc has a validated stream. Cloud: credentials
   // live on the edge (never in the cloud), so we list all cameras — the frame loads if
   // the edge is serving it, blank if its credentials aren't set yet.
   const streamByIp = $derived(new Map(streams.map((s) => [s.ip, s])));
@@ -44,7 +43,6 @@
   const selectedStream = $derived(selectedIp ? streamByIp.get(selectedIp) ?? null : null);
   const selectedLabel = $derived(selected ? selected.name : t.selectCamera);
 
-  // go2rtc stream name for an IP (matches the edge: cam_<ip with dots→underscores>).
   // The edge serves a low-latency substream by default and an `_hd` main variant.
   function streamName(ip: string): string {
     return "cam_" + ip.replaceAll(".", "_") + (hd ? "_hd" : "");
@@ -52,7 +50,6 @@
 
   // ---- Cloud live video: MSE over the gateway WebSocket (smooth H.264) -----------
   // The token rides the WS query (browsers can't set headers on a WebSocket, and this
-  // also avoids third-party cookies). go2rtc speaks fMP4-over-WS; we feed MediaSource.
   let videoEl = $state<HTMLVideoElement>();
   let ws: WebSocket | null = null;
   let mediaSource: MediaSource | null = null;
@@ -171,7 +168,6 @@
     }
   }
 
-  // After each append: go2rtc's fMP4 timestamps aren't zero-based, so the playhead
   // starts OUTSIDE the buffered range (→ black). Seek into the range / to the live edge,
   // trim old data, and start playback.
   function onUpdateEnd() {

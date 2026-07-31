@@ -7,9 +7,7 @@ in a workspace) so it ships independently; links `app-core` by path.
 ## Boot + loops (`src/main.rs`)
 
 1. `logbuf::init()` — capturing logger (tees to stderr + a bounded ring; see Logs below).
-2. `tailscale::ensure_up()` — join the tailnet + `serve` go2rtc (see Tailscale below).
 3. `AppState::boot()` — pull cameras from control (cache fallback), resolve RTSP, write cache.
-4. ffmpeg check (`state::ffmpeg_ok()`), go2rtc respawn, initial `push_streaming()`.
 5. `motion::spawn()` — the continuous motion watcher manager (see Motion below).
 6. Threads: **discovery loop** (every 5 min: `rediscover()` + re-assert `tailscale serve`);
    **config long-poll** (`reload(25)`, then drain `check_commands()` → rescan/restart);
@@ -17,10 +15,7 @@ in a workspace) so it ships independently; links `app-core` by path.
 
 ## Tailscale (the Live dependency)
 
-go2rtc is localhost-only; the gateway reaches it via `tailscale serve --bg 1984` over the
-tailnet. `tailscale::ensure_up()` runs `tailscale up --authkey …` then `serve_go2rtc()` —
 and **always attempts serve even if `up` fails** (a macOS GUI-app daemon makes `up` exit
-non-zero though the node is up). `serve_go2rtc()` is idempotent + re-asserted every 5 min.
 
 **Enrollment key (per box):** control mints the `--authkey` when a box is created
 (`sentinel-control/src/tailscale.rs`, OAuth client → Tailscale API). The key is
@@ -38,37 +33,26 @@ first reboot.) Re-keying an existing box = recreate it in Settings → Boxes and
 
 **`tailscale up` exit codes seen:** `1` = up failed (e.g., GUI app not connected); `127` =
 the `tailscale` CLI isn't installed/working. Either way the box is off-tailnet → Live fails
-while localhost go2rtc still serves. The box's state is reported as health (below).
 
-## ffmpeg
 
-go2rtc shells out to `ffmpeg` to produce JPEG frames — so **snapshots + the `GetCurrentFrame`
-node fail without it** (`exec: "ffmpeg": executable file not found`) even though MSE/WebRTC
 (Live video) plays. `install.sh` provisions it (apt/dnf/yum/apk; macOS brew) and bakes a
-`PATH` into the service env so the launchd/systemd daemon (and the go2rtc child) find it.
 
 ## Discovery + IP auto-reconcile
 
 ONVIF WS-Discovery (`app_core::onvif::discovery::discover()`) every 5 min. `rediscover()`
 matches the sweep to cached devices by **stable ONVIF id**; for a camera whose IP changed it
-repoints ip/xaddr, re-resolves RTSP, regenerates the `cam_<ip>` go2rtc streams, and pushes
 `POST /config/device-moved` so the cloud device row + Live follow the move. A UI **Rescan**
 (Devices page) sets a tenant command the edge runs immediately on its next poll.
 
-go2rtc streams are named `cam_<ip-with-underscores>` (preview/substream) + `cam_<ip>_hd`
-(main). `crates/app-core/src/go2rtc.rs` is the single source of truth for naming + config.
 
 ## Recording + pre-roll ring (`src/recording.rs`)
 
 On-demand clip recording with an **in-memory H264 pre-roll ring** — no per-camera
-ffmpeg ring process, no segment files on disk between recordings.
 
 - **Ring** (`start_ring`): a background thread per camera opens an RTSP connection to
-  go2rtc's local re-server (`rtsp://127.0.0.1:8554/cam_<ip>`). We use the `retina` crate
   **only for RTSP transport + RTP ordering** (raw `PacketItem::Rtp`, *not* `.demuxed()`)
   and do our own lenient H264 depacketization (`H264Reassembler`: single-NAL / STAP-A /
   FU-A → Annex-B access units, caches SPS/PPS and prepends them to keyframes). retina's
-  built-in codec layer rejects go2rtc's repackaged NALs with `forbidden sequence 00 00 00`,
   which is why we bypass it. Access units live in a `VecDeque<H264Frame>` capped at
   ~`pre_roll_secs` of frames.
 - **Cloud + eviction** (`src/clip_upload.rs`): on `stop`, the edge pushes the clip manifest to
@@ -83,20 +67,16 @@ ffmpeg ring process, no segment files on disk between recordings.
   both prefer the cloud for an `uploaded` clip, so an evicted local file is never missed.
 - **Record** (`start`/`stop`): `start()` snapshots the ring from the last IDR (clean
   keyframe → no black frames) **and** installs the live sink under the same `MemRing` lock,
-  so the boundary has no gap/overlap. One `ffmpeg -f h264 -i pipe:0 -c:v copy out.mp4`:
   pre-roll bytes are written first, then a relay thread feeds live frames to its stdin.
-  `stop()` clears the live sink → channel closes → relay drains → ffmpeg gets EOF and
   finalises the MP4. No concat step. Sidecar `<clip>.json` holds friendly name + metadata.
 
 ## The frame hub — `src/frames.rs` (one fetch, one decode, per camera)
 
 Motion and every object-tracking job want the same thing: the latest frame of a camera. They
-used to each poll go2rtc's `/api/frame.jpeg` and decode the JPEG themselves, so a tracked camera
 decoded one frame **up to three times** per cycle (motion's `imdecode`, the detector's internal
 decode, and `detector::dimensions`'s second decode when the job had lines/zones).
 
 Now a manager thread reconciles **one source thread per camera** (every 30s, against the live
-device list). Each source pulls the latest frame from the local go2rtc `/api/frame.jpeg` (always
 fresh — no RTSP client buffer to fall behind live motion, which is why `VideoCapture` was dropped),
 **decodes it once**, runs that camera's MOG2 pass, and publishes a `Frame` to whoever subscribed.
 A camera with four tracking jobs costs one decode, not five.
@@ -195,17 +175,14 @@ major must match the build host's — build on the distro you run.
 `opencv 0.93` builds against it fine). `task edge-linux-publish` ships it to the VPS dist
 server. Because the binary is OpenCV-soname-coupled and the target appliance is **Bazzite**
 (immutable Fedora, no host `dnf install`), the edge there runs as a **self-contained container**
-(`--target runtime` bakes matching OpenCV + ffmpeg + go2rtc + tailscale; run recipe in
 `deploy/edge-linux/entrypoint.sh`). See [deploy ref](deploy.md) for the full build/publish path.
 
 ## Health reporting + Restart
 
 On the heartbeat (the ~25s config poll) the edge sends `X-Edge-Tailscale`
-(`serving|up|offline|disabled`, from `tailscale_state()`), `X-Edge-Ffmpeg`, and
 `X-Edge-Platform` (`OS (arch)`, ASCII-only, e.g. `macOS (aarch64)` / `Bazzite (x86_64)`, from
 `state::platform()` — distro name via `/etc/os-release`) → stamped on `tenant_boxes`
 (`platform` col added in migration 0034) → the **Boxes page** shows per-box badges (platform,
-tailnet state, ffmpeg) + a warning banner when offline / not-serving / ffmpeg-missing.
 
 The edge also prints its version + platform in the first boot log line, and supports
 `sentinel-edge --version`. `install.sh` echoes the version it's installing (from control's
@@ -218,8 +195,6 @@ the launchd `KeepAlive` / systemd `Restart=always` supervisor relaunches it (re-
 
 ## Logs (in-UI)
 
-`src/logbuf.rs` is a process-global bounded ring fed by the custom logger AND the go2rtc
-child's stdout/stderr (target `go2rtc`). The push loop ships new lines to control
 `/config/logs` → `box_logs` table + a `log_bus` broadcast → the web **/logs** page (full live
 tail with device/level/text filters; deep-linkable `?device=<ip>` / `?box=<id>`).
 
@@ -262,11 +237,8 @@ already-set variable wins over the file, so a dev override still works.
 ## Install / env
 
 `install.sh` (served at `control/edge/install.sh`, embedded in the control binary via
-`include_str!`) installs Tailscale + ffmpeg + **OpenCV** (motion watcher runtime) + the edge
-binary + go2rtc, writes `/etc/sentinel-edge/edge.env`, and registers a service (systemd on
 Linux, launchd on macOS — bootout-before-bootstrap so a fresh install over an old one doesn't
 fail with `Load failed: 5`). Key env: `CONTROL_URL`, `BOX_TOKEN` (binds the box to its
-tenant), `EDGE_PUBLIC_HOST`, `EDGE_OWN_GO2RTC=1`, `GO2RTC_BIN/CONFIG`, `EDGE_CACHE`,
 `TS_AUTHKEY/TS_HOSTNAME/TS_TAGS`, and a baked `PATH`. `--update` swaps just the binary.
 
 > The macOS edge is a **test box**; real appliances are Linux (where `install.sh` is fully

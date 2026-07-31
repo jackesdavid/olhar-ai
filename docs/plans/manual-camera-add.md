@@ -19,7 +19,6 @@ gates on **creds + a target**, nothing else:
 
 ```rust
 let target = if d.xaddr.trim().is_empty() { d.ip.clone() } else { d.xaddr.clone() };
-resolve_stream_uris(&target, &user, &pass)   // ONVIF → RTSP main+sub → go2rtc
 ```
 
 And `upsert` (`sentinel-control/src/domain/devices.rs`) accepts any `Device` — discovery is not a

@@ -1,16 +1,12 @@
 //! Persistent per-camera frame decoder (#120). One **supervised**, long-lived decoder process reads
-//! go2rtc's WARM RTSP re-serve (`rtsp://127.0.0.1:8554/cam_<ip>[_hd]`) → a continuous MJPEG stream, so
 //! the frame hub reads the freshest decoded frame with **no per-request `frame.jpeg` cold-start**
-//! (which measured ~490 ms/grab). The consumer keeps go2rtc's producer warm on its own.
 //!
-//! **Two interchangeable [`Backend`]s** (card #138, `docs/plans/edge-gstreamer-backend.md`): `ffmpeg`
 //! (default) or `gstreamer`, picked per box via `RecordingConfig.media_backend`. Both emit the SAME
 //! wire format — concatenated JPEG images on stdout — so [`read_mjpeg`] doesn't care which produced
 //! them. This is a coexistence/measurement phase, not a permanent fork; see the plan doc.
 //!
 //! **Resilient by design:** the decoder exits (stream drop) OR wedges (alive but no frames) are both
 //! detected — a watchdog kills a stalled process so the read unblocks, and the supervisor respawns
-//! with exponential backoff. The hub always falls back to go2rtc `frame.jpeg` when there's no FRESH
 //! frame ([`latest_fresh`] returns `None`), so capture never stops even while a decoder is restarting.
 
 //! ---------------------------------------------------------------------------------------------
@@ -95,7 +91,6 @@ fn cam_for(ip: &str, hd: bool) -> Arc<Cam> {
 
 /// Ensure a supervised decoder is running for `ip` on the requested stream. Idempotent **per
 /// slot** — Split mode can run preview (sub) and HD (main) at once; Unified keeps a single
-/// main-only slot. `media_backend` is the box's `RecordingConfig.media_backend` ("ffmpeg" or
 /// "gstreamer", card #138).
 pub fn ensure(state: &crate::state::AppState, ip: &str, hd: bool) {
     let slot = stream_slot(state, ip, hd);
@@ -169,7 +164,6 @@ pub fn last_frame_age(ip: &str) -> Option<Duration> {
     g.as_ref().map(|(_, at)| at.elapsed())
 }
 
-/// else `None` so the hub falls back to go2rtc `frame.jpeg`.
 pub fn latest_fresh(ip: &str, hd: bool, max_age: Duration) -> Option<Arc<Vec<u8>>> {
     let cam = cams().lock().unwrap().get(&cam_key(ip, hd)).cloned()?;
     let g = cam.latest.lock().unwrap();
@@ -185,24 +179,20 @@ fn stream_url(ip: &str, hd: bool) -> String {
     } else {
         app_core::stream_names::stream_name(ip)
     };
-    // go2rtc's LOCAL RTSP re-serve (creds already injected) — localhost, warm passthrough.
     format!("rtsp://127.0.0.1:8554/{name}")
 }
 
-/// The linked `gstreamer-rs` A1 path (card #138) — the ffmpeg replacement. Runs the decode pipeline
 /// **in-process** (no subprocess), publishing each JPEG to `cam.latest` via `appsink`, keeping the
 /// exact MJPEG output contract so every downstream consumer (snapshot, detector, hub) is unchanged.
 /// `decodebin` autoplugs the platform HW decoder for a real camera stream (`vtdec` on Mac); on the
 /// Jetson the `nvv4l2decoder → NVMM` memory needs `nvvidconv` in place of `videoconvert` — that
 /// swap is the Jetson gate's job. Blocks until the pipeline errors, then returns so `supervise()`
-/// restarts it under the same backoff policy as the ffmpeg path.
 fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Result<(), String> {
     use gstreamer as gst;
     use gstreamer::prelude::*;
     use gstreamer_app as gst_app;
 
     crate::media::init_gstreamer()?; // init + iOS static plugin registration
-                                     // The camera's own URL when we have it; go2rtc's re-serve only as a fallback for a device whose
                                      // RTSP never resolved. Owning the dial is what lets the sidecar go away.
     let url = url
         .map(str::to_string)
@@ -459,8 +449,6 @@ fn supervise(ip: &str, hd: bool, cam: Arc<Cam>, url: Option<String>) {
         let ran_from = Instant::now();
 
         // ONE in-process GStreamer pipeline per camera (see the module invariant). There is no
-        // subprocess branch left to choose between: the ffmpeg and `gst-launch` spawners are gone
-        // along with the GPU-decode fallback bookkeeping, which only ever applied to ffmpeg —
         // GStreamer picks its own decoder in `media::decode_branch()`.
         if let Err(e) = run_gst_linked(ip, hd, &cam, url.as_deref()) {
             log::warn!("capture-decoder[{ip}]: {e}");
@@ -487,7 +475,6 @@ fn supervise(ip: &str, hd: bool, cam: Arc<Cam>, url: Option<String>) {
     }
 }
 
-/// Read concatenated MJPEG (SOI `FF D8` … EOI `FF D9`) from ffmpeg's stdout, publishing each complete
 /// frame as the camera's latest. Returns on EOF/error (→ supervisor respawns).
 fn read_mjpeg(mut stdout: std::process::ChildStdout, cam: &Arc<Cam>) {
     let mut buf: Vec<u8> = Vec::with_capacity(256 * 1024);

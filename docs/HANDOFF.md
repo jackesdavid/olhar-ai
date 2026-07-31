@@ -190,7 +190,6 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
   - **#81 pairing** — enroll by short code (migration 0055 `box_pairings`, `POST /enroll`), edge serves
     a pairing page when unenrolled (`src/enroll.rs`), reads its own `edge.env` (`src/envfile.rs`).
     Hardened `/config/cameras` no-token fallback behind `cfg!(debug_assertions)`. **Validated e2e vs prod.**
-  - **#82 macOS .pkg** — signed + notarized, **Gatekeeper-accepted even quarantined**. Built ffmpeg
     ourselves (LGPL, universal, signable). `deploy/macos-pkg/`. **DONE.** See [[apple-signing-82]] memory.
   - **#80 Windows edge** — cross-compiles from macOS with **zero code changes** (mingw-gnu target,
     `task edge-windows-build`); runtime-aware (`src/paths.rs` %ProgramData%, CREATE_NO_WINDOW on all
@@ -203,7 +202,6 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
   validated on real hardware end-to-end (pairing → token/key minted → cameras pulled → online).
 - **Pending / next:** ⏳ **User tests the Windows installer TONIGHT on their box (RTX 2060 Super).**
   Watch for: service reaches `Running` (WinSW), box goes online after pairing (the exit-1 relaunch
-  contract), bundled go2rtc/ffmpeg produce frames. Log: `C:\ProgramData\Sentinel\SentinelEdge.out.log`.
   Then: an Inno Setup **.exe GUI wrapper** + **code-signing cert** (deferred, needs user $) close #83;
   a **per-platform download button** in the app (serve .pkg + .zip) closes the "customer downloads it"
   journey; and an **enrollment-UX** intermediate "Code accepted — waiting for the appliance…" state.
@@ -284,7 +282,6 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
   - DB migration 0030: `tenant_boxes.recording_config` JSONB + `recordings` table (RFC3339 TEXT timestamps)
   - sentinel-control: `recordings.read/write` permissions; `GET /recordings`, `POST /recordings`, `DELETE /recordings/:id`, `GET /recordings/:id/download` (proxies bytes from edge over tailnet); `PATCH /boxes/:id/recording-config`; edge-authenticated `GET /config/recording` + `POST /config/recordings/clip`
   - app-core: `StartRecording` + `StopRecording` NodeKind (ALL 48→50); edge host resolved from `tenant_boxes` via `sys.db`; ureq json feature enabled for `into_json`
-  - sentinel-edge: `recording.rs` (RecordingManager — per-camera ffmpeg clip sessions, boot from /config/recording); `/recording/start|stop|:clip_id` routes; `AppState.recording` field; chrono added to Cargo.toml
   - sentinel-app: `Recording` type + `recordings` API (list/del/downloadUrl); `RecordingConfig` type + `boxes.patchRecordingConfig`; Recordings nav item (Clapperboard); `/recordings` page (table, empty state, download link, delete button); `recordings.read` NAV_PERM gate
   - E2E: `e2e/recordings.spec.ts` — empty-state check, seeded rows appear, delete removes row; seeds via `POST /recordings` (JWT with recordings.write)
 - **State:** `task cargo` clean, `task check` no new errors (9 pre-existing), `task build` clean; deployed sentinel-app + sentinel-control (commit 5d32d0b)

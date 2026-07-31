@@ -62,7 +62,6 @@ Threlte (`@threlte/extras` released Jun 2026; GLTF/OrbitControls/interactivity/p
 | **Snapshots (HTTP JPEG) + ONVIF (SOAP/WS-Discovery)** | 🟢 Green | Stay in Rust backend; copy-paste. WS-Discovery is UDP multicast → emit results via a Tauri **channel** as devices reply. |
 | **Outbound APIs (Claude/ElevenLabs/Telegram)** | 🟢 Green | Keep in Rust commands — avoids CORS, keeps keys out of webview JS. |
 | **Mic/STT (`cpal`) & audio/TTS (`rodio`)** | 🟢 Green | Keep both native in the backend → sidesteps the webview `getUserMedia`/codec minefield. |
-| **Live RTSP streams** | 🟡 Yellow | Browsers can't speak RTSP → bundle a **go2rtc/mediamtx sidecar** (RTSP→WebRTC passthrough, <0.5s); webview is a receive-only `<video>`. [go2rtc](https://github.com/AlexxIT/go2rtc) |
 | **Cross-platform webview media (#1 risk)** | 🟡 Yellow | Linux WebKitGTK WebRTC **off by default**; Windows WebView2 lacks proprietary H.264/AAC by default. **Framework-independent** — same for Svelte or Leptos. [#8426](https://github.com/orgs/tauri-apps/discussions/8426) · [WebView2 #2997](https://github.com/MicrosoftEdge/WebView2Feedback/issues/2997) |
 
 ---
@@ -77,7 +76,6 @@ bishop/                          (cargo workspace + a SvelteKit app)
 ├── src-tauri/                   ← thin Tauri shell (Rust)
 │   commands.rs  #[tauri::command] → crates/core
 │   channels/events: scan results, run logs, alert deltas, stream status
-│   sidecar: go2rtc/mediamtx (externalBin) for live RTSP
 ├── src/                         ← SvelteKit frontend (CSR/SPA, TypeScript)
 │   routes/+layout.ts            export const ssr=false; prerender=false
 │   lib/components/ui/           shadcn-svelte components (copied-in, MIT)
@@ -106,7 +104,6 @@ risk regardless of frontend.
 | `workflows/{handler,view}` | **frontend (Svelte)** | Node-graph editor in Svelte (SVG/canvas, e.g. Svelte Flow); the shipped ratatui editor is the UX spec. |
 | `map/{domain}` | **backend** | Room/camera data. |
 | `map/{handler,view}` | **frontend (Threlte)** | 3D scene: room/camera GLTF objects + click-to-select. |
-| `stream/` (ffmpeg RTSP) | **backend + sidecar** | go2rtc→WebRTC; keep ffmpeg snapshot path as fallback. |
 | `boot/`, `splash/`, `menu/`, `chat/`, `about/` | **frontend (shadcn-svelte)** | Straight components. |
 | `ui/{theme,chrome,image,wireframe}`, `crt/` | **dropped / re-styled** | Replaced by shadcn theme. CRT becomes an *optional* Threlte post-effect, not core. |
 | `main.rs` (terminal/CRT routing) | **replaced** | Tauri `Builder` + Vite entry. |
@@ -141,7 +138,6 @@ the franchise dressing or the "BISHOP/MU-TH-UR" naming.)
 - **Phase 0 — Spikes (gate the decision). ~2–4 days.**
   - **0a** Tauri 2 + SvelteKit-static shell; extract a `crates/core` slice (e.g. alerts); call one
     command from a shadcn-svelte button. Proves the stack + IPC + reuse.
-  - **0b** One live camera via a go2rtc sidecar (WebRTC `<video>`), run on **Linux + clean
     Windows**. The make-or-break test.
   - **0c** A Threlte scene loading a GLB room with OrbitControls + click-to-select. Proves 3D.
 - **Phase 1 — Extract `crates/core`** (keep ratatui building against it during migration). ~days.
@@ -177,5 +173,4 @@ Tauri+SvelteKit: https://v2.tauri.app/start/frontend/sveltekit/ · create-tauri-
 shadcn-svelte: https://www.shadcn-svelte.com/docs/components · https://www.shadcn-svelte.com/docs/migration/svelte-5 ·
 Threlte: https://threlte.xyz/ · https://github.com/threlte/threlte ·
 Tauri arch/IPC: https://v2.tauri.app/concept/architecture/ · async: https://dev.to/hiyoyok/rust-async-in-tauri-v2-what-tripped-me-up-and-how-i-fixed-it-1662 ·
-Media/webview: https://github.com/orgs/tauri-apps/discussions/8426 · https://github.com/tauri-apps/tauri/issues/10311 · https://github.com/MicrosoftEdge/WebView2Feedback/issues/2997 · https://github.com/AlexxIT/go2rtc ·
 Branding/IP: https://www.space.com/alien-movies-history-of-weyland-yutani-corporation

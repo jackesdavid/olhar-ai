@@ -85,7 +85,6 @@ and visualise each enrollment **without ever storing the photo** (LGPD).
   `persons.consent`** — a person is "enrolled" when they have ≥1 **approved** embedding (derive it,
   don't duplicate a person-level flag).
 - Backend: `enroll_face` **inserts** a `person_embeddings` row (uuid generated server-side, `approved` per the consent toggle at capture), not an overwrite; add `list_embeddings(person_id)`, `approve_embedding(id)`, `delete_embedding(id)`; `db` gains the per-row CRUD. Multiple rows make the recognition query a single kNN over the whole table.
-- Camera capture (primary): the enrollment window has a **camera picker** — choose which **saved camera** (from the `DeviceStore`, defaulting to the last-used one) to enroll from; grab a go2rtc frame from that device (reuse `core::go2rtc` / `capture_snapshot`) → detect the largest face → embed → enroll. **Saved cameras only** (no local webcam). Photo upload stays as the secondary path.
 - **Per-enrollment visualisation — a "point-cloud avatar" derived from the embedding**, not the
   photo. Each `person_embeddings` row renders as a deterministic dot-field glyph (project the 512-d
   vector to 2D/3D points; dot position/size/colour seeded by the vector), so every sample is shown

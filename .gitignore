@@ -23,7 +23,6 @@ mapview.json
 alerts.json
 workflows.json
 
-# Local go2rtc binary fetched by 'task fetch-go2rtc'
 /bin/
 
 .env*.claude/worktrees/
@@ -34,7 +33,6 @@ workflows.json
 # It is written wherever the edge runs, including a dev checkout. Never track it.
 cameras-cache.json
 
-# macOS installer build artifacts (ffmpeg source tree + ~200 MB of binaries + the .pkg).
 deploy/macos-pkg/build/
 
 # Windows installer build artifacts (payload + downloaded binaries + the zip).

@@ -308,7 +308,6 @@ async fn remove(
 }
 
 /// Queue a restart for a box: the edge picks it up on its next poll and exits, so the
-/// service manager relaunches it (re-running `tailscale up` + re-serving go2rtc).
 async fn restart(
     UserClaims(c): UserClaims,
     State(st): State<AppState>,
@@ -347,7 +346,6 @@ async fn update(
 
 #[derive(Serialize)]
 struct UpstreamResp {
-    /// The tenant's live go2rtc host (tailnet MagicDNS), or null if no box reported one.
     host: Option<String>,
 }
 
@@ -371,7 +369,6 @@ async fn box_upstream(
 
 #[derive(Deserialize)]
 struct LiveStartReq {
-    /// The go2rtc stream name the browser asked for (`cam_<ip>[_hd]`).
     src: String,
     /// The gateway WebSocket the edge should dial to push the stream up (`wss://…/edge/live/<id>`).
     callback: String,

@@ -23,7 +23,6 @@ pub struct Settings {
     /// RTSP transport for live camera feeds (used by the stream sidecar later).
     #[serde(default)]
     pub transport: Transport,
-    /// Keep every camera's go2rtc feed continuously warm so snapshots are instant
     /// even after an idle period (costs continuous decode/bandwidth per camera).
     /// Off by default — feeds warm up on demand during live viewing / active graphs.
     #[serde(default)]

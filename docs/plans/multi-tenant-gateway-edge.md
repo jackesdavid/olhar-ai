@@ -6,7 +6,6 @@
 
 ## Overview
 
-Multi-tenant surveillance/streaming. Each client runs **one** on-prem edge box (go2rtc
 ingesting RTSP cameras). A central **Axum gateway** bridges public end-users to the
 private edge boxes over a **Tailscale** tailnet. A web app lets each client’s users
 view only their own streams.
@@ -14,7 +13,6 @@ view only their own streams.
 ## Topology
 
 ```
-client browser/app  ──public HTTPS/WSS──▶  Axum gateway  ──tailnet──▶  client's go2rtc edge box
 ```
 
 - **Private tailnet:** only the central gateway + client edge boxes. One device (tagged resource) per client.
@@ -31,7 +29,6 @@ client browser/app  ──public HTTPS/WSS──▶  Axum gateway  ──tailnet
 - WebRTC reserved for later only if sub-second latency justifies running TURN.
 
 ### Fan-out
-- **Per-viewer passthrough** (stateless proxy); go2rtc handles source fan-out on the box.
 - Ship this first. Instrument concurrent-viewers-per-camera and per-site upstream bandwidth.
 - Add gateway multiplexing **only** if a camera draws many simultaneous viewers **or** client uplink is constrained (multiplexing requires MSE init-segment caching — avoid until measured need).
 
@@ -51,9 +48,7 @@ client browser/app  ──public HTTPS/WSS──▶  Axum gateway  ──tailnet
 - Rules: DNS-safe slug (lowercase, alphanumeric + hyphens, no underscores, ≤63 chars); unique per box; **delete-then-replace** on swap to keep the name stable.
 - Tailnet DNS settings: enable **MagicDNS** + **HTTPS certificates** (the `serve` cert is issued for the MagicDNS name).
 
-### Edge — go2rtc exposure
 ```yaml
-# go2rtc.yaml
 api:
   listen: "127.0.0.1:1984"   # localhost only — never LAN/public
 ```
@@ -62,7 +57,6 @@ api:
 tailscale up --auth-key=<brokered> --advertise-tags=tag:tenant-123 --hostname=tenant-123
 tailscale serve --bg 1984
 ```
-go2rtc is reachable **only** through the tailnet at `https://tenant-123.<tailnet>.ts.net`.
 
 ### Gateway — Axum
 Registry: Postgres `tenant_boxes(tenant_id, magicdns_host, online, tag, ...)`; `online` driven by edge heartbeat.
@@ -119,7 +113,6 @@ async fn stream_http(
 
 ## How this fits the existing decomposition
 
-- **sentinel-edge** (this repo, on-prem box): owns go2rtc (RTSP cameras, `127.0.0.1:1984`),
   enrolls into the tailnet via the broker, runs `tailscale serve 1984`, heartbeats the
   gateway. Also keeps the **local** snapshot REST (`GET /snapshot/<ip>`) that
   `sentinel-flow`'s `FrameSource` uses on the LAN. It is a full on-prem Sentinel install

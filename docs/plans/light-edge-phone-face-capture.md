@@ -10,7 +10,6 @@ feeds them straight into the existing embed → recognize → StoreFace pipeline
 The phone-as-24/7-edge is an **Android** story (GStreamer, RTSP ingest of *other* cameras — card
 #138). This is a **different product**: the phone captures faces from its **own** front camera, on
 demand, while the user is looking at it. iOS fully allows foreground camera + compute; it only kills
-*background* work. So the whole GStreamer/go2rtc/RTSP machinery is **not needed here** — the phone
 already has the frame, and iOS **Vision** (`VNDetectFaceLandmarksRequest`) does face detection +
 5-landmark output natively, better than porting YuNet.
 

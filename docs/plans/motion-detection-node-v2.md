@@ -22,7 +22,6 @@ Implemented the camera-bound detector (the headline ask) on existing rails, **no
 
 Today execution is **one-shot**: a graph is triggered (Manual/Cron), runs its DAG to completion (≤ `WF_MAX_RUNTIME` 60 s, ≤ `WF_MAX_STEPS` 10k — `sentinel-flow .../engine.rs:20-22`), and stops. **There is no always-on / streaming node** (confirmed: no continuous pattern in the workflow module). So "read the stream continuously and emit" doesn't fit the model as-is. Two routes — **this is the decision to make before building** (see Open decisions):
 
-- **Route A — Always-on watcher subsystem (the "proper" version).** A per-`(tenant, camera, node)` background loop in `sentinel-flow` that grabs frames from go2rtc (`go2rtc::frame_from`, `current()` in `ports.rs`), runs the v1 diff, and calls `fire_event` when motion clears the threshold + throttle. Lives outside the triggered-run model — like the cron poller but frame-driven. Biggest change; matches the user's intent literally.
 - **Route B — Cron-sampled stateful node (pragmatic, ships on existing rails).** The graph is `Cron { every_secs }`-triggered; the motion node grabs the **current** frame, compares to the **previous frame it persisted** (node keeps last-frame state across runs, keyed by `(tenant, graph, node)` — same shape as the new `node_frames` cache), emits when moved + throttle satisfied. "Continuous" becomes "sampled at the cron rate." No new execution model.
 
 Recommendation: **B for v1** (delivers the camera-bound emitter + throttle on current infra), with A noted as the eventual "true continuous" upgrade.

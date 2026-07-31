@@ -1,6 +1,4 @@
 //! GStreamer pipeline construction. There is no backend SELECTION any more — card #138 is
-//! complete and linked GStreamer is the only media path. The `Backend` enum, its `Ffmpeg` and
-//! spawned-`gst-launch` variants, and `resolve()` are gone: `resolve` defaulted to `Ffmpeg` for
 //! any unrecognised config value, so a stale flag could still route a box to a binary that is
 //! neither bundled nor installed.
 
@@ -13,7 +11,6 @@ pub fn decode_branch() -> &'static str {
         // output in NVMM (`memory:NVMM`), the downstream system-memory elements (videorate/jpegenc)
         // never negotiate, and the pipeline sits in PLAYING producing ZERO frames. With no error
         // posted, the source's read eventually fails and it surfaces as "Could not read from
-        // resource" — a previously-working camera going dark after the go2rtc→direct-dial switch.
         "nvv4l2decoder ! nvvidconv ! video/x-raw,format=I420"
     } else if has("amcviddec-omxh264dec") || has("amcviddec-c2avcdecoder") {
         // Android MediaCodec — `decodebin` picks it, but say so explicitly for the log.
@@ -25,7 +22,6 @@ pub fn decode_branch() -> &'static str {
     }
 }
 
-/// Which hardware decoder this box actually has, for the health report (A4 — the `ffmpeg -hwaccels`
 /// replacement). `"none"` means software decode, which still works, just warmer.
 pub fn hw_decoder() -> &'static str {
     use gstreamer as gst;

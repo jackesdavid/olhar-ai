@@ -3,7 +3,6 @@
 **Board card:** #80 Windows edge — installer, service, self-update (In Progress)
 **Goal:** Ship `sentinel-edge` on Windows, so a customer can turn a PC they already own into the
 appliance — no Linux box, no reflash. Same binary contract as everywhere else: ONVIF discovery,
-go2rtc, motion, tracking, recording, tailnet.
 
 **Depends on [[edge-pure-rust-motion]] (#79)** — see "The gate" below. Related:
 [[edge-frame-hub]] (#77).
@@ -35,7 +34,6 @@ native, no MSVC SDK or vcpkg. `task edge-windows-build` produces `sentinel-edge.
   updates are installer-managed (Windows can't overwrite a running `.exe` — the rename dance is #83).
 
 **Still to do (this card + spilling into #83):**
-- **Process children**: ffmpeg/ffprobe/go2rtc resolve by name on PATH (installer puts them there),
   but each spawn needs `CREATE_NO_WINDOW` or a console flashes on every clip. See Phase 1.
 - **Tailscale on Windows** (Phase 2), **the service + failure-restart** and **the self-update rename
   dance** (Phase 3–4, largely #83), and a real end-to-end run on Windows hardware (the user has a
@@ -74,15 +72,11 @@ Everything below assumes that. If #79 is rejected, this card gets 3× bigger and
     than sprinkling `#[cfg(windows)]`.
   - **`state::platform()`** reads `/etc/os-release` → add a Windows branch (`Windows 11 (x86_64)`),
     since it feeds the Boxes page badge.
-  - **Process spawning**: go2rtc (`go2rtc.rs`) and the `ffmpeg`/`ffprobe` children
     (`recording.rs:301`, `:787`) — `.exe` suffixes, and no console window
     (`CREATE_NO_WINDOW`) or every clip pops a black box on the user's screen.
-  - `ffmpeg_ok()`'s PATH probe.
 
 ## Phase 2 — the dependencies
 
-- **go2rtc**: ships an official `go2rtc_win64.zip`. Same config, same localhost binds.
-- **ffmpeg**: bundle a static `ffmpeg.exe` + `ffprobe.exe` (gyan.dev / BtbN builds) next to the edge
   rather than asking the user to install anything.
 - **Tailscale**: the Windows installer + `tailscale.exe up --authkey …`. It runs as a service
   already; `tailscale serve --bg 1984` works the same. Note `install.sh`'s existing lesson — treat a
@@ -95,7 +89,6 @@ Everything below assumes that. If #79 is rejected, this card gets 3× bigger and
 - **`install.ps1`**, served by control the same way (`sentinel-control/src/http.rs:27` routes
   `/install.sh`, embedded with `include_str!`) → add `/install.ps1`, embedding
   `sentinel-edge/install.ps1`. One-liner install: `irm https://…/install.ps1 | iex`.
-- It must: download the binary + go2rtc + ffmpeg, write the env file, install Tailscale, register
   the service, start it.
 - **Service**: a real Windows service (the `windows-service` crate) or `sc.exe create` +
   **failure actions** (`sc failure … reset= 0 actions= restart/5000`). The restart command
@@ -127,7 +120,6 @@ Do this in an `install.ps1 --update` so the logic lives with the installer, mirr
 ## Verification
 
 - Fresh Windows 11 machine, no dev tools: `irm …/install.ps1 | iex` → the box appears in the Boxes
-  page with the right platform badge, tailnet `serving`, ffmpeg ok.
 - Discovery finds an ONVIF camera on the LAN; Live plays; a snapshot returns.
 - Motion + tracking events reach the cloud (this is the #79 detector on a new OS — re-run its
   golden-frames check here).
@@ -139,13 +131,11 @@ Do this in an `install.ps1 --update` so the logic lives with the installer, mirr
 
 1. **Service or Scheduled Task?** A real service is the right answer for an appliance (starts before
    login, survives logout). It's also more code. Leaning service, with `sc.exe` failure actions.
-2. **Bundle ffmpeg/go2rtc, or fetch them at install time?** Bundling makes the installer big but
    hermetic and offline-installable; fetching keeps it small but adds failure modes on a customer's
    network. Leaning bundle.
 3. **Signed installer?** Unsigned, Windows SmartScreen will scare every customer we're trying to
    make comfortable. A code-signing cert is ~US$100–400/yr. Probably required for a real product —
    decide before, not after, the first customer sees the warning.
-4. **Windows Defender / firewall**: the edge binds localhost and go2rtc pulls RTSP from the LAN;
    the installer likely needs a firewall rule. Confirm on a clean machine.
 5. **Do we support Windows at all as a *sold* appliance, or only as a "try it on your own PC" tier?**
    That answer changes how much we invest in signing + support.

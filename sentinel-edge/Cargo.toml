@@ -53,9 +53,7 @@ tracing-log = "0.2"
 # (It used to link OpenCV for exactly this; see card #79.)
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 imageproc = { version = "0.25", default-features = false }
-# RTSP ring buffer: connects to go2rtc's re-server (rtsp://127.0.0.1:8554/) for an
 # in-memory pre-roll ring. We use retina only for RTSP transport + RTP ordering and
-# do our OWN lenient H264 depacketization (retina's codec layer rejects go2rtc's
 # repackaged NALs with "forbidden sequence 00 00 00").
 retina = "0.4"
 futures = "0.3"
@@ -71,7 +69,6 @@ sysinfo = { version = "0.30", default-features = false }
 opencv = { version = "0.98", optional = true }
 
 # Linked gstreamer-rs — THE media path (card #138 complete). Not optional: GStreamer owns capture
-# decode, the recording mux, the cold snapshot and live fMP4 over WebSocket. ffmpeg and go2rtc are
 # gone, so there is no second backend to fall back to and no flag to pick between them.
 gstreamer = "0.23"
 gstreamer-app = "0.23"
@@ -79,6 +76,5 @@ gstreamer-app = "0.23"
 [features]
 # `gst-linked` is GONE: GStreamer is the only media path, so a flag to select it selected nothing.
 # It also hid a real trap — deploy/macos-pkg/build.sh built WITHOUT it, so macOS silently took the
-# ffmpeg branch and shipped a binary whose /api/ws route was not even compiled in.
 opencv-parity = ["dep:opencv"]
 

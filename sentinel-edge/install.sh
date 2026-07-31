@@ -201,10 +201,8 @@ mkdir -p "$PREFIX" "$PREFIX/recordings" "$ENV_DIR"
 # Tailscale to install or join — one fewer dependency and zero inbound surface.
 
 # ---- runtime dep: GStreamer -------------------------------------------------
-# The edge LINKS GStreamer now (card #138) — it is the SOLE media backend; go2rtc and ffmpeg are
 # retired. Install the GStreamer runtime + plugins so the linked pipeline finds its elements (decode
 # incl. HW where available, mux, appsink). The edge is outbound-only (card #144: SSE commands + live
-# over its own outbound connection) — no tailnet, no go2rtc, no ffmpeg. On an immutable OS the
 # plugins layer via rpm-ostree; the plugin list was proven on the Jetson test box (`-libav` is
 # load-bearing — some boxes ship no software H264/H265 decoder without it).
 if ! command -v gst-inspect-1.0 >/dev/null 2>&1; then
@@ -262,7 +260,6 @@ if ver="$("$PREFIX/sentinel-edge" --version 2>/dev/null)"; then
   echo "✓ Installed $ver"
 fi
 
-# go2rtc is retired (card #138) — GStreamer, linked into the edge, is the sole media path. Nothing
 # to download; the GStreamer runtime installed above provides the elements the edge uses in-process.
 
 # ---- 3. config --------------------------------------------------------------
@@ -281,7 +278,6 @@ PATH=$EDGE_PATH
 EOF
 chmod 600 "$ENV_DIR/edge.env"   # contains the box token
 
-# No go2rtc (EDGE_OWN_GO2RTC / GO2RTC_*), no tailnet (TS_*), no media-backend flag — the gst-linked
 # edge defaults to GStreamer and reaches the cloud outbound-only (card #144).
 
 # ---- 4. service ------------------------------------------------------------

@@ -784,7 +784,6 @@ fn decrement_event_run(
 
 /// Build a [`ToolContext`] for one run of `tenant`, wired to the in-process ports, with
 /// stores freshly loaded from Postgres (devices + beacons + alerts can change between
-/// runs). The frame source is bound to THIS tenant's edge go2rtc (warm via the run's
 /// keep-alive agent), so concurrent runs of different tenants never collide. The returned
 /// `JoinHandle` is the thread draining UI side-effects to the SSE bus; it ends when the
 /// context (and its `Sender`) is dropped.
@@ -822,7 +821,6 @@ fn build_run_context(
     });
 
     let mut ctx = ToolContext::new_local(devices, state.db.clone(), tenant, notif, notif_cfg, tx);
-    // Bind the frame source to THIS tenant's edge go2rtc. The per-run keep-alive agent
     // keeps the connection warm across every `GetFrame`/`Snapshot` in the run, so a
     // `memoize=false` node in a loop re-grabs a fresh frame without re-handshaking.
     ctx.frames = Arc::new(app_core::ports::EdgeFrameSource::new(

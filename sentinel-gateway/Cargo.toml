@@ -2,14 +2,13 @@
 name = "sentinel-gateway"
 version = "0.1.0"
 edition = "2021"
-description = "The public streaming bridge. End-user browsers connect here; it proxies live video (MSE over WebSocket) and JPEG snapshots through to a client's on-prem sentinel-edge go2rtc over the Tailscale tailnet. Single-tenant for now (one configured upstream); the per-tenant registry + JWT slot into resolve_upstream later."
+description = "The public streaming bridge. End-user browsers connect here; it proxies live video (MSE over WebSocket) and JPEG snapshots through to a client's on-prem sentinel-edge."
 
 # Standalone crate (NOT in the app/ workspace). No app-core dependency — the gateway
 # is a thin reverse proxy and never touches cameras, the DB, or domain types.
 [dependencies]
 axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
-# WS client to the upstream go2rtc (MSE). rustls + webpki roots so the tailnet
 # MagicDNS TLS cert validates (it chains to a public root); no OpenSSL.
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 # HTTP passthrough (snapshots, stream list, player assets) with streaming bodies.

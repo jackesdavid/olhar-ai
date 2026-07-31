@@ -13,12 +13,9 @@ identity. Sibling: [[edge-windows-installer]] (#83).
 
 Everything except the signature is **built, committed, and validated end-to-end against production**:
 
-- `task edge-pkg` produces `Sentinel-Edge-<ver>.pkg` — edge + go2rtc + ffmpeg + ffprobe, all
   universal (x86_64 + arm64), plus the launchd daemon. Scripts under `deploy/macos-pkg/`.
-- We **build ffmpeg ourselves** (`build-ffmpeg.sh`): the prebuilt static macOS binaries can't be
   codesigned (malformed Mach-O → unnotarizable), and `--disable-gpl` gives LGPL certainty +
   `--disable-autodetect` keeps it free of the build host's Homebrew dylibs. See Open decisions #3.
-- Verified on a real Mac: the package installs, the **bundled ffmpeg/ffprobe run** (where prebuilt
   ones were killed by Gatekeeper), the unenrolled edge serves the pairing page, a code redeems into
   a real box token + Tailscale key written to `edge.env`, and the re-launched edge pulls the
   tenant's cameras and reports online.
@@ -64,11 +61,8 @@ presentation; it just adds a step. Skip it.)
 
 ## What it fixes beyond the double-click
 
-`install.sh` currently provisions ffmpeg through **Homebrew**, and gives up with *"Install ffmpeg
-first: brew install ffmpeg"* if it isn't there (`sentinel-edge/install.sh`). That is a real failure
 mode on a clean Mac — a customer appliance should not require a package manager for developers.
 
-The `.pkg` **bundles the payload**: the edge binary, `go2rtc`, and a static `ffmpeg`. Nothing is
 fetched, nothing is compiled, and it works on a machine with no developer tooling and no network
 beyond reaching control. This is only possible now: since [[edge-pure-rust-motion]] (#79) the edge
 links nothing native, so there are no OpenCV dylibs to ship or match.
@@ -77,7 +71,6 @@ links nothing native, so there are no OpenCV dylibs to ship or match.
 
 All CLI, no Xcode project:
 
-- Payload root: `/opt/sentinel-edge/{sentinel-edge,go2rtc,ffmpeg}` + `/Library/LaunchDaemons/io.sentinel.edge.plist`.
 - `pkgbuild --root <payload> --scripts <scripts> --identifier io.sentinel.edge --version <edge version>`
 - `productbuild --package … --distribution …` for the outer product archive.
 - **postinstall**: `launchctl bootout` the old instance (the `Load failed: 5` lesson already learned
@@ -100,7 +93,6 @@ Needs, in order:
    number and takes days-to-weeks; a sole-proprietor enrollment is faster). *This is the long pole —
    start it before the code.*
 2. **Developer ID Application** cert → sign the binaries inside the payload:
-   `codesign --force --options runtime --timestamp -s "Developer ID Application: …" sentinel-edge go2rtc ffmpeg`
    (hardened runtime is required for notarization).
 3. **Developer ID Installer** cert → sign the package:
    `productbuild --sign "Developer ID Installer: …"`.
@@ -114,7 +106,6 @@ a CI runner (GitHub Actions is billing-blocked anyway — see [deploy ref](../re
 
 - On a **clean** Mac (a fresh VM, no Homebrew, no Xcode): download → double-click → installs →
   browser opens the enrollment page → paste code → the box appears in the Boxes page with tailnet
-  `serving` and `ffmpeg ✓`.
 - Reboot the Mac → the daemon comes back by itself.
 - `spctl -a -vvv -t install Sentinel-Edge-*.pkg` → "accepted, source=Notarized Developer ID".
 - Install over an existing install (the upgrade path) → no `Load failed: 5`, config preserved.
@@ -131,23 +122,15 @@ a CI runner (GitHub Actions is billing-blocked anyway — see [deploy ref](../re
    through a signed package. Simplest coexistence: keep binary self-update (the swapped binary is
    still individually signed, so the hardened runtime is satisfied), and use the `.pkg` for
    first install only. Confirm the swapped binary keeps its signature.
-3. ~~**Bundle ffmpeg — which build, and its licence?**~~ **Resolved by trying it.** We build ffmpeg
-   ourselves (`deploy/macos-pkg/build-ffmpeg.sh`), because the prebuilt option turned out to be
    impossible, not merely unattractive:
-   - **`codesign` rejects 3 of the 4 macOS binaries `ffmpeg-static` publishes** — *"main executable
      failed strict validation"* (malformed Mach-O). Notarization requires **every** executable
-     inside the package to carry a Developer ID signature, so an unsignable ffmpeg means an
      unnotarizable installer, which means Gatekeeper blocks the download. Dead end.
    - evermeet.cx's builds are well-formed but **Intel-only**, and download at a crawl from a
      personal server — not a dependency a release build should have.
    - Building with `--disable-gpl --disable-nonfree` also settles the licence: **LGPL v2.1+**,
      verified, on a binary we redistribute commercially — instead of inheriting whatever a third
-     party's CI configured (most prebuilt macOS ffmpegs are GPL). It ships as a separate executable
-     that go2rtc *spawns*; we never link it.
-   - `ffprobe` is bundled too — the edge reads a finished clip's duration with it.
 4. ~~**Universal binary (arm64 + x86_64) or two packages?**~~ **Universal**, and it was nearly free:
    since #79 the edge links nothing native, so both Mac architectures build from one machine with no
-   cross-toolchain. go2rtc ships both; ffmpeg we build for both; `lipo` fuses each. One file, one
    download, no choice for the customer to get wrong.
 
 ## Out of scope (v1)

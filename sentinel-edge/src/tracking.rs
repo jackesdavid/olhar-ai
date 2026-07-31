@@ -5,7 +5,6 @@
 //! `line_crossed` lifecycle events to control (→ durable event_queue → `OnEvent`).
 //!
 //! Mirrors [`crate::motion`]'s reconciler + supervised-worker shape, but needs **no OpenCV**: the
-//! detector + tracker work directly on the JPEG frames the edge already serves via go2rtc.
 //!
 //! **Jobs, not cameras, are the unit of work**: the same camera can be tracked for several
 //! classes at once (person + car), each from its own `OnEvent` node in the graph editor (camera +

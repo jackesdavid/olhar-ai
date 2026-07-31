@@ -1,6 +1,5 @@
 //! Canonical per-camera stream names: `cam_<ip>` for the preview/substream, `cam_<ip>_hd` for main.
 //!
-//! These originated as go2rtc stream keys and OUTLIVED it: the gateway, the edge's MSE endpoint and
 //! `capture` all address a camera by this name, so it is the live wire contract between them. The
 //! sidecar is gone; the naming stays, under a name that says what it is.
 

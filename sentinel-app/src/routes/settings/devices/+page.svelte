@@ -293,7 +293,6 @@
   // Test the credentials, and save them ONLY once the camera has proven them (card #88).
   //
   // The order matters more than it looks. Saving first hands unproven creds to the edge, which
-  // writes them into go2rtc's config and points a reconnect loop at the camera — so a typo didn't
   // just fail, it overwrote a working camera's config and started an auth storm. Consumer cameras
   // (Tapo, Reolink) lock their RTSP server after such a burst and then refuse *everyone* until
   // they're power-cycled. Probe first, once; persist only on `ok`.
@@ -362,7 +361,6 @@
   // the probe infra failed, e.g. no box online over the tailnet, or the only edge is on-device and
   // localhost-bound). NOT when the camera itself answered and rejected the creds (auth_failed/locked)
   // — bypassing those would hand a bad password to the edge and risk the very auth-lockout the
-  // test-first flow exists to avoid. A localhost box (on-device edge) has no go2rtc, so that risk
   // doesn't apply to it; it just collects the creds on its next direct poll.
   function canSaveUntested(): boolean {
     return testState === "failed" && !verdict;

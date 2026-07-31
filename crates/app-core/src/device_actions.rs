@@ -99,7 +99,6 @@ pub fn resolve_device(devices: &[Device], query: &str) -> Result<usize, ResolveE
 /// Capture a snapshot from a camera and return the raw encoded JPEG bytes. The web
 /// app base64-encodes these for an `<img>` data URL.
 ///
-/// ONVIF capture. The old fast path polled a go2rtc sidecar on :1984 for a cached frame; the
 /// sidecar no longer exists, so that call could only ever return connection-refused after its
 /// timeout — a guaranteed delay in front of the path that actually works.
 pub fn capture_snapshot_bytes(d: &Device) -> Result<Vec<u8>, String> {

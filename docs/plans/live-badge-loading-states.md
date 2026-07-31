@@ -11,7 +11,6 @@ Live-camera bug **C**. Sibling: [[camera-credential-wizard]] (#88, bug B). Same 
 
 ## Why (the gap today)
 
-`sentinel-app/src/routes/live/+page.svelte` plays MSE-over-WebSocket (go2rtc `api/ws`, fed to a
 `MediaSource`). Two problems:
 
 - **The "LIVE" badge is cosmetic.** It renders `<StatusDot state="online"/> LIVE` whenever a camera
@@ -60,15 +59,12 @@ Drive the UI from a real per-stream state, derived from those events:
 
 ## Phase 3 — tie into box health (operator side)
 
-- The silent black screen also hid an *operator* problem (bug A: go2rtc not reachable over the
-  tailnet). Surface a coarse signal: if the gateway can't reach the box's go2rtc, the error copy
   should hint "the appliance's live video isn't reachable" and link to the Boxes page, rather than
   implying the camera is at fault. (The box already reports `tailscale_state` serving/up/offline.)
 
 ## Verification
 
 - Working camera → loader briefly, then video + LIVE badge. No green LIVE over black.
-- Kill the stream (stop go2rtc / wrong stream name) → loader → after the watchdog, a clear error +
   Retry, badge NOT green.
 - HEVC-only camera in a browser without `hvc1` MSE → the codec-specific message, with "try SD".
 - Switch cameras rapidly → state resets cleanly, no stuck loader/leaked WS.
@@ -86,6 +82,5 @@ Drive the UI from a real per-stream state, derived from those events:
 
 ## Out of scope (v1)
 
-- WebRTC fallback for browsers/codecs where MSE fails (go2rtc's stream.html does this; the app is
   MSE-only in cloud mode). A real fix but a bigger one — note it, don't build it here.
 - Multi-camera grid health at a glance (this is the single-stream view).

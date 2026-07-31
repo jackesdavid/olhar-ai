@@ -14,7 +14,6 @@ pub fn command(program: impl AsRef<OsStr>) -> Command {
 
 /// Stop Windows from flashing a console window for a child process.
 ///
-/// The edge spawns ffmpeg (once per clip, and for snapshots), go2rtc, ffprobe, tailscale and
 /// nvidia-smi. On Windows a GUI/service parent with no console makes each of those pop a black
 /// console window — a jarring flicker on a customer's screen every time a clip records. The
 /// `CREATE_NO_WINDOW` creation flag suppresses it. No-op on Unix, which has no such window.

@@ -20,7 +20,6 @@ Found while verifying [[camera-credential-wizard]] (#88) on the Mac test box, 20
 the box "heals ITSELF within minutes with no restart and no terminal… what makes the live path
 self-recover for a real customer."
 
-It doesn't. It re-runs `serve_go2rtc()` + `serve_edge_api()` and re-reports the MagicDNS host — but
 it **never re-runs `tailscale up`**. `up --reset --authkey=…` happens *only* in `ensure_up()`, called
 once at boot/enrollment. And `serve` on a node that isn't `Running` just fails.
 

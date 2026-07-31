@@ -1,7 +1,6 @@
 //! The per-camera **frame hub** — one fetch, one decode, shared by every consumer.
 //!
 //! Motion ([`crate::motion`]) and each object-tracking job ([`crate::tracking`]) all want the same
-//! thing: the latest frame of a camera. They used to each poll go2rtc's `/api/frame.jpeg` and
 //! decode the JPEG themselves, so a tracked camera decoded one frame up to **three** times per
 //! cycle (motion's `imdecode`, the detector's internal decode, and `detector::dimensions`'s second
 //! decode when the job had lines or a zone). On the little x86 appliance we ship, that was the
@@ -144,8 +143,6 @@ pub fn spawn(state: &Arc<AppState>) {
     });
 }
 
-/// True when go2rtc is serving this camera (its RTSP resolved) — the hub reads frames from the
-/// LOCAL go2rtc, never the camera directly, so a resolved stream is the gate.
 fn has_stream(d: &app_core::devices::Device) -> bool {
     d.rtsp_url
         .as_deref()
@@ -218,7 +215,6 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
     let mut detector = MotionDetector::new(params);
 
     // Frames come from the supervised GStreamer decoder (`capture`), which owns the ONE pipeline
-    // per camera. There is no second source: the old `/api/frame.jpeg` fallback dialled a go2rtc
     // sidecar on :1984 that is never started, so it could only ever contribute a connection-refused
     // and the ~3s timeout that went with it.
     let slot = slot_for(ip);
@@ -237,7 +233,6 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
     let mut last_emit: Option<Instant> = None;
 
     // #120 stream mode. A UNIFIED camera runs the whole pipeline off the main stream — and in
-    // unified mode `cam_<ip>` already IS main (see go2rtc::config_yaml), so the hub pulls the plain
     // (non-`_hd`) stream and gets full-res frames for both motion (downscaled internally) and face
     // crops. SPLIT keeps the box-wide face_capture_stream choice (preview sub, or an explicit `_hd`
     // pull — the latter is what caused dual-stream contention on single-profile cameras).
@@ -290,7 +285,6 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
             std::thread::sleep(frame_gap);
             continue;
         };
-        // Measurement: split the go2rtc grab from the edge JPEG→BGR decode so we see which dominates.
         grab_us += g_us;
         dec_us += d0.elapsed().as_micros();
         cap_n += 1;

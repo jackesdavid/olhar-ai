@@ -1,4 +1,3 @@
-//! Linked-GStreamer mp4 muxer for recordings (card #138, touchpoint A2) — the ffmpeg replacement.
 //!
 //! **Why this exists only now.** The earlier attempt (Phase 2b) used a `gst-launch` subprocess:
 //! `fdsrc ! h264parse ! mp4mux` and it failed with *"Buffer has no PTS"*, because `h264parse` cannot
@@ -33,7 +32,6 @@ pub fn start(output: &std::path::Path) -> Result<(GstMuxer, GstSink), String> {
     crate::media::init_gstreamer()?;
     let path = output.to_string_lossy();
     // `format=time` is what lets our per-buffer PTS be honoured; faststart puts the moov up front so
-    // the clip is seekable/streamable, matching the ffmpeg `+faststart` behaviour it replaces.
     let desc = format!(
         "appsrc name=src is-live=false format=time \
          ! h264parse ! mp4mux faststart=true ! filesink location=\"{path}\""
@@ -79,7 +77,6 @@ impl GstSink {
             .map_err(|e| std::io::Error::other(format!("appsrc push: {e:?}")))
     }
 
-    /// Signal end-of-stream so the muxer can finalise. Mirrors "drop ffmpeg's stdin → EOF".
     pub fn finish(self) {
         let _ = self.src.end_of_stream();
     }

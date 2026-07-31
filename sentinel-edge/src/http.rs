@@ -36,7 +36,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .layer(CorsLayer::permissive());
     // Live fMP4 over WebSocket, served by the edge itself. Always present now — GStreamer is linked
-    // into every build, so there is no longer a release that 404s here and no go2rtc to fall back to.
     let router = router.route("/api/ws", get(mse_ws));
     router.with_state(state)
 }
@@ -67,7 +66,6 @@ async fn devices(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Json(list)
 }
 
-/// Playable go2rtc stream descriptors for the Live screen (player URLs).
 async fn streams(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let list: Vec<_> = state
         .devices
@@ -100,7 +98,6 @@ struct ProbeReq {
 /// Prove a camera's credentials **without persisting them** (card #88).
 ///
 /// The old wizard saved first and then polled for a snapshot until one appeared. That inverted
-/// the order — unproven creds landed in `go2rtc.yaml`, aiming a reconnect loop at the camera —
 /// and the poll retried hard enough to trip a Tapo's RTSP lockout, so a single typo could take
 /// a *working* camera offline until someone power-cycled it. Worse, every failure surfaced as
 /// "wrong password", which sent users re-typing correct creds and deepening the lock.
@@ -202,9 +199,7 @@ fn probe_device(device: &app_core::devices::Device, user: &str, pass: &str) -> s
 /// hub see. If the camera has no decoder yet we start one and wait briefly for its first frame,
 /// after which it stays warm and subsequent snapshots are free.
 ///
-/// There are deliberately **no fallbacks** here anymore. The old chain (go2rtc `/api/frame.jpeg` →
 /// ONVIF `GetSnapshotUri` → a one-shot RTSP grab) meant four ways to answer one question, two of
-/// them spawning **ffmpeg** — go2rtc does so internally for `frame.jpeg` (~490 ms/grab). Collapsing
 /// to the warm buffer removes that duplication, and if the decoder cannot produce a frame the camera
 /// is unusable for live/recording/detection anyway, so reporting the failure is the honest answer.
 ///
@@ -268,7 +263,6 @@ async fn tracks(State(state): State<Arc<AppState>>, Path(ip): Path<String>) -> i
     Json(out)
 }
 
-/// Re-read the device list from Postgres (and restart go2rtc if owned).
 async fn reload(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let n = state.reload(0);
     log::info!("devices reloaded on request — {n} device(s)");
@@ -495,10 +489,8 @@ async fn storage_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse 
     }
 }
 
-/// Live fMP4 over WebSocket — go2rtc's `/api/ws` contract, served by the edge itself (card #138, G2).
 ///
 /// The wire format is not ours to choose: the web player and the mobile WebView player both speak
-/// go2rtc's, so this matches it exactly — the client announces the codecs it can play, we answer
 /// with the MIME it should hand `addSourceBuffer`, and everything after that is fMP4 bytes.
 async fn mse_ws(
     ws: axum::extract::ws::WebSocketUpgrade,
@@ -506,8 +498,6 @@ async fn mse_ws(
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let src = q.get("src").cloned().unwrap_or_default();
-    // The contract's stream name is go2rtc's (`cam_<ip with dots as underscores>[_hd]`); the ingest
-    // is keyed by camera, so translate here rather than teaching the pipeline go2rtc's naming.
     let Some((ip, hd)) = stream_name_to_camera(&src) else {
         return (StatusCode::BAD_REQUEST, "bad src").into_response();
     };
@@ -587,11 +577,8 @@ async fn mse_socket(mut socket: axum::extract::ws::WebSocket, ip: String, hd: bo
     }
 }
 
-/// go2rtc's snapshot endpoint, served by the edge (card #138, G4/G6).
 ///
-/// Once the tailnet's `:443` points here instead of go2rtc, the **deployed** gateway passes this
 /// path straight through — so answering it is what lets the sidecar go away without touching the
-/// cloud. Same warm frame as `/snapshot/:ip`; only the go2rtc-shaped `?src=cam_<ip>` differs.
 async fn frame_jpeg(
     State(state): State<Arc<AppState>>,
     Query(q): Query<std::collections::HashMap<String, String>>,
@@ -623,7 +610,6 @@ pub(crate) fn stream_name_to_camera(src: &str) -> Option<(String, bool)> {
 mod src_name_tests {
     use super::stream_name_to_camera;
 
-    /// The stream name is go2rtc's, and it is what the gateway forwards verbatim — translating it
     /// wrong means the edge looks up a camera that does not exist.
     #[test]
     fn maps_the_stream_name_to_a_camera() {

@@ -6,7 +6,6 @@ sentinel-app/build
 sentinel-app/.svelte-kit
 sentinel-app/dist
 **/cameras-cache.json
-**/go2rtc.yaml
 docs
 legacy
 .devtool

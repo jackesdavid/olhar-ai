@@ -7,10 +7,8 @@
 > no /dev shortcuts. Enrolled edge fixes: iOS sandbox paths (cache/env/recordings), skip
 > self-update+tailscale, bind 127.0.0.1, `gstreamer_ok` for gst-linked builds. Support fixes:
 > Devices "Save without testing" (a localhost-only box can't be tailnet-probed, so its creds couldn't
-> be staged); Boxes treats a GStreamer box as healthy without ffmpeg.
 >
 > **NEXT — the one-connection media path (user's hard rule):** a single GStreamer `rtspsrc ! tee` per
-> camera feeding frame-hub(motion/faces)+recording+live+snapshots, so the phone (no go2rtc to fan
 > out) never opens N direct dials to a ~1-session camera. Then: live to the gateway (blocked today —
 > no tailnet on the phone), snapshots on gstreamer-linked, Android (same recipe). Phone is
 > foreground-only (iOS suspends background) — an on-demand edge, not 24/7.
@@ -140,7 +138,6 @@ the `.a` and bundles the GStreamer framework — and repeating the link for Andr
 
 The edge assumes an appliance; on a phone several must be revisited (name real code):
 - **Paths** (`sentinel-edge/src/paths.rs`) — the phone's app sandbox, not `/opt/sentinel-edge`.
-- **go2rtc/ffmpeg** — already gone on the GStreamer path (#138), so nothing to bundle there. ✅
 - **Tailscale** (`tailscale.rs`) — a phone edge on the same LAN as its cameras may not need the
   tailnet at all (cameras are directly reachable); the cloud reaches it only for config, which it can
   poll outbound. Decide: no-tailnet phone edge vs. Tailscale iOS/Android.
