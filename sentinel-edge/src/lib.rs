@@ -72,6 +72,15 @@ fn is_newer(latest: &str, current: &str) -> bool {
 
 fn maybe_self_update(control_url: &str) {
     let current = env!("CARGO_PKG_VERSION");
+    // An explicit request from the UI bypasses the version check: the user asked for the published
+    // build, so install it whatever we think we are running. Consume the marker FIRST — if the
+    // install then fails we must not retry forever on every relaunch.
+    let marker = crate::paths::update_marker();
+    let forced = marker.exists();
+    if forced {
+        let _ = std::fs::remove_file(&marker);
+        log::warn!("update was requested from the UI — installing the published build");
+    }
     // ALWAYS send the platform: the no-platform answer is the LOWEST version across all platforms.
     let url = format!("{control_url}/edge-latest?platform={}", manifest_key());
     let resp = match ureq::get(&url)
@@ -93,8 +102,8 @@ fn maybe_self_update(control_url: &str) {
                 .map(str::to_string)
         })
         .unwrap_or_default();
-    if latest.is_empty() || !is_newer(&latest, current) {
-        log::debug!("edge {current} is up to date (published={latest})");
+    if latest.is_empty() || (!forced && !is_newer(&latest, current)) {
+        log::debug!("edge {current} is up to date (published={latest}, forced={forced})");
         return;
     }
     // The Unix path: shell out to install.sh, which stops the service, swaps the binary, and
@@ -282,10 +291,18 @@ pub fn run() {
                 std::process::exit(0);
             }
             if cmd.update {
-                // Exit so the service manager relaunches us. `maybe_self_update()` runs at
-                // startup and handles the actual binary swap — no need to spawn install.sh
-                // from inside the running process (launchd's SIGKILL would kill it anyway).
-                log::warn!("update requested from the cloud — exiting for service manager to relaunch + auto-update");
+                // Exit so the service manager relaunches us; `maybe_self_update()` does the swap at
+                // startup (spawning the installer from here is pointless — the service manager kills
+                // our process group when the service stops, taking the installer with it).
+                //
+                // Drop a marker first so startup knows this was an EXPLICIT request and skips the
+                // version check. Without it the button silently did nothing on any box whose check
+                // was wrong, which is exactly how a box got stranded: it exited, relaunched, decided
+                // it was already current, and came back on the same build every time.
+                if let Err(e) = std::fs::write(crate::paths::update_marker(), "") {
+                    log::warn!("could not write the update marker: {e} — falling back to the version check");
+                }
+                log::warn!("update requested from the cloud — exiting for service manager to relaunch + install");
                 std::process::exit(0);
             }
         });

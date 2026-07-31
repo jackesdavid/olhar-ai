@@ -67,6 +67,32 @@ pub fn cache_file() -> PathBuf {
     }
 }
 
+/// Marker written when the cloud asks for an update, read once at the next startup.
+///
+/// The update command works by exiting so the service manager relaunches us — the swap cannot be
+/// done from inside the running process (the service manager kills our process group when the
+/// service stops, taking any installer we spawned with it). The startup path then has to know the
+/// difference between "relaunched because someone asked for an update" and any other restart.
+///
+/// Without this, the button depended on the startup VERSION CHECK agreeing that an update was due.
+/// A box whose check was wrong — 0.5.65 asked without a platform, was told its own version back,
+/// and concluded it was current — exited, relaunched, decided there was nothing to do, and came
+/// back on the same build. The button appeared to do nothing, forever, and the fix could never
+/// arrive because the broken check was the thing gating the download.
+///
+/// An explicit request must therefore bypass the version check entirely: the user asked for the
+/// published build, so install the published build.
+pub fn update_marker() -> PathBuf {
+    #[cfg(windows)]
+    {
+        base().join("update-requested")
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("/opt/sentinel-edge/.update-requested")
+    }
+}
+
 /// The recordings directory: `%ProgramData%\Sentinel\recordings` on Windows,
 /// `/opt/sentinel-edge/recordings` on Unix.
 pub fn recordings_dir() -> PathBuf {
