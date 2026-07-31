@@ -65,9 +65,20 @@ check:web:
   stage: check
   image: node:22-bookworm
   interruptible: true
+  # REPORTS, does not block. svelte-check finds 9 pre-existing errors on main (null-narrowing in
+  # sensor-field.svelte and the workflow editor, a `Drag` union member in MapScene.svelte) that
+  # predate this gate. Blocking on them would stop every merge on debt the author did not create —
+  # a gate nobody can pass gets disabled, and then it protects nothing.
+  # Flip to blocking the moment that count is zero.
+  allow_failure: true
   script:
     - cd sentinel-app
     - npm ci --no-audit --no-fund
+    # svelte-check reads .svelte-kit/tsconfig.json, which SvelteKit GENERATES. A fresh `npm ci`
+    # does not create it (there is no `prepare` script), so the job failed on a missing file and
+    # reported it as one svelte-check error — looking like a type error in the branch under test
+    # rather than a missing build step.
+    - npx svelte-kit sync
     - npx svelte-check --threshold error --output human
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"

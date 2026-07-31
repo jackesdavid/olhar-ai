@@ -274,8 +274,6 @@ kanban-plugin: board
 - [x] #48 Add 3-second minimum splash screen
 - [x] #49 Show Image debug node: inline render + fullscreen modal
 - [x] #50 Vision detector: local person detection via tract + YOLOX
-- [x] #51 Document camera onboarding flow (ONVIF discovery → go2rtc feed)
-- [x] #52 Snapshots grabbed from shared go2rtc feed (fast path)
 - [x] #53 RunPod `/status` polling on cold-start (IN_QUEUE/IN_PROGRESS)
 - [x] #54 CPU-only torch in the AI Docker image
 - [x] #55 Workflow nodes — rename, categorize & split into files

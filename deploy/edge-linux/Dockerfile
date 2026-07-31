@@ -17,7 +17,6 @@ ARG FEDORA=42
 FROM fedora:${FEDORA} AS build
 
 # Rust toolchain + GStreamer dev libs. The edge is `gst-linked` now (card #138): GStreamer is the
-# SOLE media backend (go2rtc + ffmpeg retired), so the build links libgstreamer/libgstapp and needs
 # their -devel + pkg-config at compile time. The RUNTIME libs + plugins are installed on the target
 # by install.sh (gstreamer1-plugins-{base,good,bad,ugly,libav}); this image only needs the -devel.
 RUN dnf install -y --setopt=install_weak_deps=False \
@@ -42,31 +41,28 @@ COPY --from=build /src/sentinel-edge/target/release/sentinel-edge /out/sentinel-
 
 # ---------------------------------------------------------------------------
 # Self-contained runtime image — appliance packaging for an IMMUTABLE host (Bazzite / Silverblue),
-# where layering packages on the host means a reboot. It bakes ffmpeg + go2rtc + tailscale so the
 # edge just runs.
 #
 # Its original reason is gone: it existed to guarantee a matching OpenCV soname on a host where you
-# can't dnf-install OpenCV. The edge links nothing now, so a bare binary + ffmpeg on the host works
 # too — this image is now a convenience, not a requirement.
 #
 # Build: docker build -f deploy/edge-linux/Dockerfile --target runtime -t sentinel-edge .
 # Run recipe: see deploy/edge-linux/entrypoint.sh.
 FROM fedora:${FEDORA} AS runtime
-ARG GO2RTC_URL=https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_amd64
+# The GStreamer RUNTIME (the build stage installs only -devel): rtspsrc + rtph264depay come from
+# plugins-good, h264parse from plugins-bad, mp4mux from the isomp4 set. Without these the binary
+# links fine and then finds no elements at run time — a failure that looks like a broken camera.
 RUN dnf install -y --setopt=install_weak_deps=False \
-      ffmpeg-free iproute procps-ng ca-certificates \
+      iproute procps-ng ca-certificates \
+      gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free \
  && dnf install -y 'dnf-command(config-manager)' \
  && dnf config-manager addrepo --from-repofile=https://pkgs.tailscale.com/stable/fedora/tailscale.repo \
  && dnf install -y tailscale \
  && dnf clean all
 COPY --from=build /src/sentinel-edge/target/release/sentinel-edge /usr/local/bin/sentinel-edge
-ADD ${GO2RTC_URL} /usr/local/bin/go2rtc
 COPY deploy/edge-linux/entrypoint.sh /entrypoint.sh
-RUN chmod +x /usr/local/bin/go2rtc /entrypoint.sh
-# The edge owns go2rtc + writes its cache/recordings under the prefix; point env at it.
-ENV EDGE_OWN_GO2RTC=1 \
-    GO2RTC_BIN=/usr/local/bin/go2rtc \
-    GO2RTC_CONFIG=/opt/sentinel-edge/go2rtc.yaml \
+RUN chmod +x /entrypoint.sh
+ENV EDGE_BIND=0.0.0.0:8788 \
     EDGE_CACHE=/opt/sentinel-edge/cameras-cache.json \
     PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 RUN mkdir -p /opt/sentinel-edge/recordings

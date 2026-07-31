@@ -1,6 +1,4 @@
-//! Live **fMP4 over WebSocket** (card #138, touchpoint G2) — the go2rtc `/api/ws` replacement.
 //!
-//! This is the piece that lets the edge serve live video itself. It keeps go2rtc's wire contract
 //! **byte for byte**, so the gateway proxy, the web player and the mobile WebView player are all
 //! untouched: client sends `{"type":"mse","value":"<codecs it supports>"}`, we answer
 //! `{"type":"mse","value":"video/mp4; codecs=\"…\""}` (fed straight to `addSourceBuffer`), then the
@@ -13,9 +11,7 @@
 //! **Why `mp4mux` and not `cmafmux`.** `cmafmux` (gst-plugins-rs) was the obvious pick and it does
 //! produce valid fMP4 — but it closes a fragment only on a **keyframe**, so its cadence is the
 //! camera's GOP no matter what `fragment-duration` says. Measured against this camera: one fragment
-//! every **2.0s**, first frame after 5.6s, where go2rtc delivers one every **0.07s** starting at
 //! 0.22s. That is a latency regression a viewer would feel. `mp4mux fragment-duration` fragments on
-//! a timer instead — measured at **17 fragments/s**, matching go2rtc. It also settles the
 //! portability question the Jetson raised: `cmafmux` is **absent** from the JetPack 6 GStreamer
 //! (1.20.3) and would have to be built and shipped for aarch64 and Android, while `mp4mux` is in
 //! gst-plugins-good and present everywhere we deploy. And it wants no DTS, which `cmafmux` did.
@@ -25,7 +21,6 @@ use tokio::sync::broadcast;
 
 /// How much video each fragment holds, in **milliseconds** (`mp4mux`'s unit). The browser cannot
 /// play what the muxer has not closed yet, so this is the latency floor: at 100ms the muxer closes
-/// a fragment per frame at any sane framerate, which is what go2rtc does today.
 pub(crate) const FRAGMENT_MS: u32 = 100;
 
 /// Assembles the MSE init segment out of the leading boxes `mp4mux` emits one per buffer.
@@ -62,7 +57,6 @@ impl InitSegment {
 /// WebSocket message per fragment** instead of three.
 ///
 /// `mp4mux` emits `moof`, then the 8-byte `mdat` header, then the payload — measured at 3 messages
-/// per fragment against go2rtc's 1, i.e. ~150 frames/s on the socket, each one an `onmessage` and an
 /// `appendBuffer` in the player. That overhead lands hardest on the mobile WebView.
 ///
 /// The `mdat` header declares the box's total size, so we know exactly where the fragment ends and

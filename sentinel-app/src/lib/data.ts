@@ -341,7 +341,6 @@ export const data = {
    *  on a verified `ok`. The edge speaks RTSP to the camera once and reports what actually
    *  happened, so the UI can tell "wrong password" apart from "camera locked" or "unreachable".
    *
-   *  It replaced a save-then-poll loop that saved unproven creds (pointing go2rtc's reconnect
    *  loop at the camera) and retried every 2s for 25s. That burst trips the RTSP lockout on
    *  consumer cameras — a typo took a working camera offline until it was power-cycled — and
    *  every failure read as "wrong password", so users re-typed correct creds and made it worse.
@@ -370,7 +369,6 @@ export const data = {
   snapshotBlob: async (ip: string, timeoutMs?: number): Promise<Blob> => {
     const headers: Record<string, string> = {};
     if (auth.token) headers.Authorization = `Bearer ${auth.token}`;
-    // A per-request timeout so a stuck edge/go2rtc can't hang the caller (the credential test polls
     // this in a loop and must keep moving).
     const signal = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
     const r = await fetch(

@@ -18,18 +18,13 @@ end-of-session PUT.
 Segmentation is an **edge + storage + playback** concern, orthogonal to the node: the node governs the
 *logical* session (start on first motion, stop after quiet); the edge silently rolls segments *inside* it.
 
-## Approach — ffmpeg segment muxer (keyframe-aligned, lossless)
 
-Keep the single continuous ffmpeg process and `-c:v copy`, but swap the output from one `output.mp4` to the
 **segment muxer**:
 ```
 -f segment -segment_time <segment_secs> -reset_timestamps 1
 -segment_format mp4 -segment_format_options movflags=+faststart
 {session_id}_%05d.mp4
 ```
-- One continuous ffmpeg, one continuous pipe from our relay → **zero frame loss, no boundary gap**; the
-  split is internal to ffmpeg.
-- With `-c copy`, ffmpeg cuts at the next **keyframe** ≥ `segment_secs`, so boundaries snap to the camera's
   GOP. Each segment begins on an IDR → independently decodable (our reassembler already prepends SPS/PPS to
   keyframes; `H264Frame.is_keyframe`).
 - Each finished segment gets its moov on rollover → crash only risks the in-progress segment.
@@ -38,7 +33,6 @@ Keep the single continuous ffmpeg process and `-c:v copy`, but swap the output f
   This drives the per-segment manifest push + R2 upload enqueue. Edits localized to
   `sentinel-edge/src/recording.rs` `RecordingManager::start`/`stop` (args at `recording.rs:307-319`) and the
   relay/finalize path.
-- Self-rolled keyframe rotation (size-based) was considered and rejected for v1 — more code (dual ffmpeg +
   finalizer thread) to reimplement what the muxer already does. Revisit only if size-based caps are needed.
 
 ## Per-tenant configurable segment length

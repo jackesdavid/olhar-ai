@@ -14,7 +14,6 @@ pub const DEFAULT_TENANT_ID: Uuid = Uuid::from_u128(0x1111_1111_1111_1111_1111_1
 
 /// The tenant's most-recently-seen edge box host (MagicDNS), or `None`. Mirrors the
 /// gateway/control live-upstream lookup over `tenant_boxes.magicdns_host`. Used by
-/// `sentinel-flow` to bind a run's frame source to that tenant's own edge go2rtc.
 pub fn box_host_for_tenant(db: &Db, tenant_id: Uuid) -> Option<String> {
     let pool = db.pool();
     db.block(async move {

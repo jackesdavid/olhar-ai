@@ -1,7 +1,6 @@
 // The live player, as a self-contained HTML document hosted in a WebView.
 //
 // React Native has no `MediaSource`, and the gateway speaks fragmented MP4 over a WebSocket
-// (go2rtc's MSE protocol) — not HLS or a plain URL a native player could open. So the phone reuses
 // the *browser* engine it already ships: the same MSE state machine the web Live tab runs
 // (`sentinel-app/src/routes/live/+page.svelte`), inside a WebView.
 //
@@ -45,7 +44,6 @@ export function playerHtml({ wsBase, stream, token }: PlayerConfig): string {
   // debug again.
   function log(m) { /* no-op */ }
 
-  // Offer only codecs this engine can actually decode; go2rtc picks a matching track (and
   // transcodes when it must). Sending an unsupported codec yields a black, silent stream.
   // iPhone does NOT expose plain MediaSource. Apple ships ManagedMediaSource instead (iOS 17.1+),
   // a variant that lets the system throttle buffering on cellular. Same API surface for our use,
@@ -81,7 +79,6 @@ export function playerHtml({ wsBase, stream, token }: PlayerConfig): string {
     try { sb.appendBuffer(queue.shift()); } catch (e) { queue = []; }
   }
 
-  // go2rtc's fMP4 timestamps are not zero-based, so the playhead starts OUTSIDE the buffered
   // range and the picture stays black. Jump into the range, and keep near the live edge.
   function seekToLive() {
     try {

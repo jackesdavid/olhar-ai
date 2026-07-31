@@ -1,8 +1,5 @@
 //! The proxy core: a WebSocket bridge (MSE) and an HTTP passthrough (snapshots,
-//! stream list, go2rtc's player assets).
 //!
-//! The passthrough still targets the resolved upstream go2rtc. The **MSE bridge prefers the edge's
-//! own GStreamer server** (card #138, G2) and falls back to go2rtc, which is what makes the
 //! migration shippable: the wire contract is identical, so a box serving either one is
 //! indistinguishable to the player.
 use axum::body::Body;
@@ -21,9 +18,7 @@ use crate::state::AppState;
 // ---- MSE: WebSocket bridge --------------------------------------------------
 
 /// Upgrade the client WS and bridge it to the box's MSE WebSocket (`.../api/ws?<query>`), piping
-/// both directions until either side closes. Tries the edge's own server first, then go2rtc.
 /// Gated by `live.view` — browsers can't set WS headers, so the token rides the query
-/// (`?token=<jwt>`); the upstream never sees it (we forward only go2rtc's own params).
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
@@ -60,7 +55,6 @@ pub async fn ws_handler(
     }
 
     // Tailnet path (existing): the gateway dials the edge's MSE server (its own GStreamer one first,
-    // then the go2rtc it replaces).
     let base = state.upstream_for(claims.tid.as_deref(), &token).await;
     let mut candidates = Vec::new();
     if let Some(edge) = state.live_edge_ws(&base) {
@@ -144,7 +138,6 @@ async fn bridge_two_ws(a: WebSocket, b: WebSocket) {
     tokio::select! { _ = a2b => {}, _ = b2a => {} }
 }
 
-/// Drop our `token` query param so it's never forwarded to the upstream go2rtc.
 fn strip_token(query: &str) -> String {
     query
         .split('&')
@@ -153,7 +146,6 @@ fn strip_token(query: &str) -> String {
         .join("&")
 }
 
-/// Connect to the upstream go2rtc WS and pipe frames both ways. Best-effort: any
 /// error (connect timeout, upstream close) ends the bridge and closes the client.
 async fn bridge_ws(client: WebSocket, state: Arc<AppState>, candidates: Vec<String>) {
     let last = candidates.len().saturating_sub(1);
@@ -239,7 +231,6 @@ async fn bridge_ws(client: WebSocket, state: Arc<AppState>, candidates: Vec<Stri
 
 // ---- HTTP passthrough -------------------------------------------------------
 
-/// go2rtc API paths that must NEVER be exposed publicly: they leak the camera RTSP
 /// credentials / full config, or allow inspecting the box. The gateway is a public
 /// edge, so we block these even though the gateway only forwards GET. The player needs
 /// only `/api/frame.jpeg`, `/api/ws` (its own route), and the static UI — all allowed.
@@ -247,7 +238,6 @@ async fn bridge_ws(client: WebSocket, state: Arc<AppState>, candidates: Vec<Stri
 ///
 /// This is a public, internet-facing proxy: it is scanned continuously for `/.env`, `/.git/config`,
 /// `phpinfo.php` and friends. It previously forwarded *every* unmatched path upstream and only
-/// refused four go2rtc endpoints, so anything not on that short list reached the edge host
 /// unauthenticated. Nothing was exposed only because the upstream happened to be unreachable —
 /// security by broken config. Inverting it means a path has to be named here to leave the gateway.
 ///
@@ -255,7 +245,6 @@ async fn bridge_ws(client: WebSocket, state: Arc<AppState>, candidates: Vec<Stri
 /// assets carry no video, so they pass ungated but still only if they match.
 fn is_allowed(path: &str) -> bool {
     // Refused FIRST, before the live-media prefix below. `is_live_media` matches the prefix
-    // `/api/stream`, which also swallows `/api/streams` — go2rtc's stream listing, whose JSON
     // contains the RTSP URLs *including camera credentials*. The old denylist happened to catch
     // it because it ran before that prefix test; keeping it explicit means the ordering is stated,
     // not accidental.
@@ -271,7 +260,6 @@ fn is_allowed(path: &str) -> bool {
     if is_live_media(path) {
         return true;
     }
-    // go2rtc's player page + its static assets (no video, safe ungated).
     if path == "/stream.html" || path == "/webrtc.html" {
         return true;
     }
@@ -290,9 +278,7 @@ fn is_live_media(path: &str) -> bool {
     path == "/api/frame.jpeg" || path == "/api/frame.mp4" || path.starts_with("/api/stream")
 }
 
-/// Stream any other GET through to the upstream go2rtc, preserving path + query
 /// (snapshots `/api/frame.jpeg`, the player `/stream.html` + assets). No buffering.
-/// Credential-leaking go2rtc endpoints are blocked (see [`is_blocked`]); live media is
 /// gated by `live.view` (see [`is_live_media`]).
 pub async fn passthrough(
     State(state): State<Arc<AppState>>,
@@ -380,9 +366,8 @@ mod allowlist_tests {
         }
     }
 
-    /// The go2rtc endpoints that previously had to be denied explicitly are now simply not allowed.
     #[test]
-    fn credential_leaking_go2rtc_endpoints_are_refused() {
+    fn credential_leaking_endpoints_are_refused() {
         for p in [
             "/api",
             "/api/",

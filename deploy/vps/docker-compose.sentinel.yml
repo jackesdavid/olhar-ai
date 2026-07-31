@@ -178,7 +178,6 @@ services:
       - sentinel.env   # JWT_SECRET (shared with control — verifies live.view)
     environment:
       GATEWAY_BIND: 0.0.0.0:8789
-      # The edge's go2rtc over the tailnet (TLS via the edge's MagicDNS cert).
       EDGE_UPSTREAM: https://__EDGE_HOST__
       # Internal control lookup for the tenant's box upstream (/internal/box-upstream).
       CONTROL_URL: http://sentinel-control:8790
@@ -194,7 +193,6 @@ services:
   sentinel-flow:
     # The always-on, MULTI-TENANT workflow engine + trigger poller. Internal only (no
     # Traefik — its REST is unauthenticated; the poller fires Cron/OnNewAlert + event
-    # workflows for every tenant on its own). Each run resolves its tenant's edge go2rtc
     # from the box registry (tenant_boxes.magicdns_host) and grabs frames bound to that
     # edge; face recognition uses the in-cluster CPU sidecar.
     #
@@ -219,10 +217,8 @@ services:
       S3_KEY: ${S3_KEY:-sentinel}
       S3_SECRET: ${S3_SECRET}
       AI_SERVICE_URL: http://sentinel-ai:8000/runsync
-      # FALLBACK go2rtc base for a tenant with no resolved box host. Per-tenant edges are
       # resolved from the registry at run time; reaching ARBITRARY tenant edges needs the
       # pod on the tailnet (deferred) — until then the single edge below is reachable.
-      GO2RTC_URL: https://__EDGE_HOST__
     extra_hosts:
       - "__EDGE_HOST__:__EDGE_TS_IP__"
     depends_on:

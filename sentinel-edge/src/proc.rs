@@ -5,7 +5,7 @@ use std::process::Command;
 
 /// Build a `Command` that won't flash a console window on Windows — a drop-in for `Command::new`.
 /// Returns an owned `Command`, so it slots straight into the existing chained builders
-/// (`command("ffmpeg").args(…).spawn()`).
+/// (`command("sh").args(…).spawn()`).
 pub fn command(program: impl AsRef<OsStr>) -> Command {
     let mut cmd = Command::new(program);
     no_window(&mut cmd);
@@ -14,7 +14,6 @@ pub fn command(program: impl AsRef<OsStr>) -> Command {
 
 /// Stop Windows from flashing a console window for a child process.
 ///
-/// The edge spawns ffmpeg (once per clip, and for snapshots), go2rtc, ffprobe, tailscale and
 /// nvidia-smi. On Windows a GUI/service parent with no console makes each of those pop a black
 /// console window — a jarring flicker on a customer's screen every time a clip records. The
 /// `CREATE_NO_WINDOW` creation flag suppresses it. No-op on Unix, which has no such window.

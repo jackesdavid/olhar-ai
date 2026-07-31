@@ -65,7 +65,6 @@ pub struct AppState {
     /// `GET /runs/frame` (raw bytes never go on the SSE stream — see [`crate::events`]).
     /// One small entry per debug node, overwritten on each run; bounded by node count.
     pub node_frames: NodeFrames,
-    /// Resolved tenant → edge go2rtc base (`https://<host>`) with a short TTL, so each
     /// run's `EdgeFrameSource` targets that tenant's own edge without a DB hit per frame.
     pub edge_cache: Arc<Mutex<HashMap<Uuid, (String, Instant)>>>,
     /// In-flight event handler counts, keyed `(tenant, graph_id, event_name)`. Tracks how
@@ -140,9 +139,7 @@ impl AppState {
         crate::schedule_consumer::reconcile(self);
     }
 
-    /// This tenant's go2rtc base for frame grabs (`https://<edge-host>`), cached for
     /// [`EDGE_TTL`]. Resolves the tenant's most-recent box host from the registry; falls
-    /// back to the configured `GO2RTC_URL` / localhost (see [`app_core::go2rtc::base`])
     /// when the tenant has no known box yet.
     pub fn edge_base(&self, tenant: Uuid) -> String {
         if let Some((base, at)) = self.edge_cache.lock().unwrap().get(&tenant) {
@@ -152,7 +149,7 @@ impl AppState {
         }
         let base = match app_core::tenancy::box_host_for_tenant(&self.db, tenant) {
             Some(host) => https_base(&host),
-            None => app_core::go2rtc::base(),
+            None => app_core::ports::local_base(),
         };
         self.edge_cache
             .lock()

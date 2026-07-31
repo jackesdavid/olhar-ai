@@ -1,6 +1,4 @@
-//! The gateway router. A scoped reverse proxy to the upstream go2rtc: `/api/ws` is
 //! bridged (MSE over WebSocket); everything else GET is streamed through (snapshots,
-//! stream list, and go2rtc's own player assets), so the bundled MSE player works
 //! through the gateway with minimal code.
 use std::sync::Arc;
 
@@ -34,7 +32,6 @@ async fn health() -> impl IntoResponse {
     Json(json!({ "status": "ok", "service": "sentinel-gateway" }))
 }
 
-/// Convenience: open go2rtc's player (proxied) forced to MSE for a camera.
 /// `GET /player?src=cam_<ip>` → `/stream.html?src=cam_<ip>&mode=mse`.
 async fn player(RawQuery(query): RawQuery) -> impl IntoResponse {
     let q = query.unwrap_or_default();

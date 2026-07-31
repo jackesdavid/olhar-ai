@@ -88,7 +88,6 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 
 | Node | Inputs | Outputs | Config | Behavior | Sample usage |
 |---|---|---|---|---|---|
-| **Camera snapshot** | `camera*` | `image`, `result`, `ok` | `camera` (name/ip/"first") | On-demand still from the warm go2rtc feed (ONVIF/ffmpeg fallback). Best quality; may wake a cold camera. | `Camera snapshot(camera="Front") → Describe image` |
 | **Get current frame** | `camera*` | `image`, `age_ms`, `ok` | `camera`, `max_age_ms` (2000) | Most-recent frame from a warm in-memory grabber (~0 latency); falls back to a snapshot until warm. | `Cron 1s → Get current frame (memoize off) → Person detection` |
 
 ### Vision / AI

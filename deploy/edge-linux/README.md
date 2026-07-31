@@ -24,14 +24,12 @@ task edge-linux-build              # Fedora 42 → sentinel-edge-linux-x86_64
 task edge-linux-build-ubuntu       # Ubuntu 24.04 → sentinel-edge-linux-x86_64-gnu
 task edge-linux-publish            # build (Fedora) + scp to the VPS dist server + redeploy control
 
-# Or the self-contained runtime image (ffmpeg + go2rtc + tailscale baked in):
 docker build --platform linux/amd64 -f deploy/edge-linux/Dockerfile --target runtime \
   -t ghcr.io/olharai/sentinel-edge:latest .
 ```
 
 ## Run on a MUTABLE Linux box (Debian/Ubuntu/regular Fedora)
 
-The normal installer works — it installs OpenCV + ffmpeg + tailscale and a systemd unit:
 
 ```sh
 curl -fsSL https://control.thesentinels.online/edge/install.sh | sudo sh -s -- \
@@ -41,10 +39,8 @@ curl -fsSL https://control.thesentinels.online/edge/install.sh | sudo sh -s -- \
 ## Run on Bazzite / Silverblue (IMMUTABLE)
 
 `install.sh` now works here too — the edge links nothing, so it starts immediately instead of
-waiting for a reboot; only `ffmpeg` is layered via `rpm-ostree` (and until you reboot, just
 snapshots are affected, not live video/motion/tracking/recording).
 
-The self-contained container below is still the tidier packaging (it carries ffmpeg + go2rtc +
 tailscale, so nothing touches the host). It runs `tailscaled` inside, so it needs host networking +
 the tun device + NET_ADMIN. The `--env-file` is the same `edge.env` the installer writes
 (CONTROL_URL, BOX_TOKEN, TS_AUTHKEY, TS_HOSTNAME, …):
@@ -64,7 +60,6 @@ podman run -d --name sentinel-edge --restart=always \
   ghcr.io/olharai/sentinel-edge:latest
 ```
 
-`--network=host` is required: ONVIF WS-Discovery uses LAN UDP multicast, and go2rtc binds
 localhost. For boot persistence, generate a quadlet/systemd unit: `podman generate systemd
 --new --name sentinel-edge` (or a `~/.config/containers/systemd/sentinel-edge.container`).
 
@@ -73,7 +68,5 @@ localhost. For boot persistence, generate a quadlet/systemd unit: `podman genera
 ```sh
 distrobox create --name sentinel-edge --image fedora:42 \
   --additional-flags "--cap-add=NET_ADMIN --device=/dev/net/tun"
-distrobox enter sentinel-edge -- sudo dnf install -y ffmpeg-free tailscale
-# then run the binary + go2rtc inside (tailscaled must run in the box or on the host).
 ```
 The container image is simpler and self-contained; prefer it unless you need an interactive box.

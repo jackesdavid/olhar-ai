@@ -1,6 +1,4 @@
 //! In-memory log capture for the edge. A bounded ring buffer fed by a `tracing` layer (which also
-//! tees to stderr) and by the go2rtc child reader, so the box's recent logs can be pushed up to the
-//! cloud — the edge is no longer a black box. The buffer is process-global so the layer, the go2rtc
 //! readers, and the push loop all share one source.
 //!
 //! **Card #146 — structured fields.** Each line carries a `fields` map: telemetry sites emit typed
@@ -24,7 +22,6 @@ pub struct LogLine {
     pub target: String,
     pub message: String,
     /// Structured fields of the event (card #146). Empty for plaintext (`log::*`) lines and the
-    /// go2rtc child reader; skipped on the wire when empty so old lines stay compact.
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub fields: Map<String, Value>,
 }
@@ -53,7 +50,6 @@ impl LogBuf {
         .clone()
     }
 
-    /// Append a plaintext line with no structured fields (the go2rtc child reader).
     pub fn push(&self, level: &str, target: &str, message: String) {
         self.push_fields(level, target, message, Map::new());
     }

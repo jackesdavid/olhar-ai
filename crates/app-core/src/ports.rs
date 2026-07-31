@@ -19,7 +19,6 @@ use crate::notification::{NotificationConfig, NotificationStore};
 use crate::persons::RecognitionMatch;
 
 /// Capture a still frame from a camera. The local impl grabs from the shared
-/// go2rtc feed (fast) and falls back to ONVIF/ffmpeg.
 pub trait FrameSource: Send + Sync {
     /// On-demand still capture — best freshness/quality; may connect a cold camera.
     fn snapshot(&self, device: &Device) -> Result<Vec<u8>, String>;
@@ -97,9 +96,7 @@ pub trait Notifier: Send + Sync {
 
 // ---- local (in-process) implementations — today's behavior ------------------
 
-/// Frames from the local go2rtc feed / ONVIF fallback (localhost). Snapshot-only:
 /// `current()` uses the trait default (a fresh snapshot). The default for the desktop shell
-/// and tests, where go2rtc runs on `127.0.0.1`.
 pub struct LocalFrameSource;
 impl FrameSource for LocalFrameSource {
     fn snapshot(&self, device: &Device) -> Result<Vec<u8>, String> {
@@ -107,7 +104,6 @@ impl FrameSource for LocalFrameSource {
     }
 }
 
-/// Frames from a SPECIFIC go2rtc `base` (a tenant's edge), with a per-instance keep-alive
 /// agent. Built once per workflow run and held in that run's `ToolContext.frames`, so every
 /// `GetFrame` / `Snapshot` call in the run reuses the **warm** connection and gets a **fresh**
 /// frame each call (a `memoize=false` node in a loop re-grabs without re-setup). Nothing is
@@ -117,6 +113,11 @@ pub struct EdgeFrameSource {
     base: String,
     agent: ureq::Agent,
 }
+/// The edge's own HTTP base on this machine — the fallback when no box is registered for a tenant.
+pub fn local_base() -> String {
+    std::env::var("EDGE_LOCAL_BASE").unwrap_or_else(|_| "http://127.0.0.1:8788".to_string())
+}
+
 impl EdgeFrameSource {
     pub fn new(base: impl Into<String>) -> Self {
         EdgeFrameSource {
@@ -136,11 +137,11 @@ fn edge_api_dead() -> &'static std::sync::Mutex<std::collections::HashSet<String
 }
 
 impl EdgeFrameSource {
-    /// The edge's OWN API base, derived from the go2rtc base. The edge publishes its HTTP (8788) on
-    /// the tailnet as `--https=8080` (`tailscale::serve_edge_api`), while go2rtc owns 443 — so the
-    /// tailnet base `https://host` maps to `https://host:8080`. The localhost fallback base
-    /// (`http://127.0.0.1:1984`, used when no box is registered) maps to the edge's direct
-    /// `http://127.0.0.1:8788`.
+    /// The edge's OWN API base. A tailnet base `https://host` maps to `https://host:8080`, where
+    /// the edge publishes its HTTP (8788).
+    ///
+    /// port, and the sidecar is gone. It stays only so a caller still holding an old base does not
+    /// silently address nothing; [`local_base`] is what new callers should pass.
     fn edge_api_base(&self) -> Option<String> {
         let base = self.base.trim_end_matches('/');
         if let Some(rest) = base.strip_prefix("https://") {
@@ -149,7 +150,6 @@ impl EdgeFrameSource {
             }
             return Some(format!("https://{rest}:8080"));
         }
-        // Local/dev go2rtc → the edge's own HTTP port.
         base.replace(":1984", ":8788").into()
     }
 
@@ -191,16 +191,10 @@ impl EdgeFrameSource {
 }
 
 impl FrameSource for EdgeFrameSource {
-    /// **Warm-first (card #138, Stage 2).** Ask the edge for its continuously-decoded frame before
-    /// falling back to go2rtc's `/api/frame.jpeg` — go2rtc spawns **ffmpeg internally** for that
-    /// (touchpoint B3, ~490 ms per grab), which is exactly what the migration is retiring. The
-    /// fallback keeps every existing box working, including edges too old to serve their API on the
-    /// tailnet; those are remembered as unreachable so they only pay the probe once per process.
+    /// fallback to a sidecar that is never started can only add a connection-refused and its
+    /// timeout to every miss.
     fn snapshot(&self, device: &Device) -> Result<Vec<u8>, String> {
-        if let Ok(bytes) = self.warm_snapshot(&device.ip) {
-            return Ok(bytes);
-        }
-        crate::go2rtc::frame_from(&self.agent, &self.base, &device.ip)
+        self.warm_snapshot(&device.ip)
     }
     fn current(&self, device: &Device, _max_age_ms: u64) -> Result<(Vec<u8>, u64), String> {
         Ok((self.snapshot(device)?, 0))
@@ -410,7 +404,6 @@ impl Notifier for RemoteNotifier {
 mod edge_api_base_tests {
     use super::EdgeFrameSource;
 
-    /// The tailnet shape: go2rtc owns 443, the edge API is served on 8080
     /// (`tailscale serve --https=8080 8788`).
     #[test]
     fn tailnet_https_base_maps_to_8080() {
@@ -431,15 +424,14 @@ mod edge_api_base_tests {
         );
     }
 
-    /// The local/dev fallback base (go2rtc on 1984) maps to the edge's own HTTP port.
+    /// A legacy local base (the old sidecar port) still maps to the edge's own HTTP port.
     #[test]
-    fn localhost_go2rtc_maps_to_edge_http() {
+    fn legacy_localhost_base_maps_to_edge_http() {
         let s = EdgeFrameSource::new("http://127.0.0.1:1984");
         assert_eq!(s.edge_api_base().as_deref(), Some("http://127.0.0.1:8788"));
     }
 
     /// An https base that already carries an explicit port isn't a shape we can map — better to
-    /// decline (and use the go2rtc path) than to guess and silently hit the wrong service.
     #[test]
     fn explicit_https_port_declines() {
         let s = EdgeFrameSource::new("https://box.ts.net:9443");

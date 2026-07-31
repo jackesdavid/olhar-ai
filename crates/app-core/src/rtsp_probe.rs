@@ -9,7 +9,6 @@
 //!    lock their RTSP server after a burst of failed auth. A probe that polls turns a wrong
 //!    password into a camera that refuses *everyone*, including the streams that were working
 //!    a minute ago. The lock outlives the app and clears only on a power cycle.
-//! 2. **Probe before persisting.** Writing unproven creds into go2rtc's config points a
 //!    reconnect loop at the camera, which is the same auth storm by another route.
 //!
 //! A locked camera answers even an unauthenticated `OPTIONS` with `400 Server is locked`,

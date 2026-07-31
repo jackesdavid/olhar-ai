@@ -76,11 +76,8 @@ task edge-linux-publish     # build + scp to /ibbf/edge-dist + redeploy control 
 The binary links OpenCV **dynamically**, so the run host's OpenCV major must match the build's
 Fedora major. `install.sh` **auto-detects the OS**: macOS (launchd) / mutable Linux (`dnf`/`apt` installs
 OpenCV + systemd unit) / **immutable Linux** (Bazzite / Silverblue — detected via
-`/run/ostree-booted`). On an immutable host it layers `opencv opencv-video ffmpeg` via
 `rpm-ostree` and prints a **reboot instruction** (the layered libs activate on next boot; the
 service is enabled but not started until then). It also echoes the edge version it's installing
-(from `/edge-latest`). A **self-contained container** (`--target runtime` bakes OpenCV + ffmpeg
-+ go2rtc + tailscale; recipe in `deploy/edge-linux/entrypoint.sh`) remains an alternative that
 avoids the reboot. `release.yml` still assumes `-musl` + `cross`; it needs a
 Fedora-container job before CI can build Linux edges (CI is billing-blocked anyway).
 

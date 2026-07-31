@@ -1,10 +1,8 @@
 #!/bin/sh
-# postinstall (GStreamer edge, card #138) — make the laid-down payload a running, pairable appliance.
+# postinstall — make the laid-down payload a running, pairable appliance.
 #
-# The difference from the go2rtc build: this box's media path is the linked GStreamer runtime bundled
-# under $PREFIX/gst, so there is no go2rtc and no ffmpeg to point at — the plist instead tells the
-# edge to use the gstreamer backend and where its private plugin set lives. Idempotent: a fresh
-# install and an upgrade over an enrolled box run the same, and neither costs the customer identity.
+# The plist tells the edge where its private GStreamer plugin set lives. Idempotent: a fresh install
+# and an upgrade over an enrolled box run the same, and neither costs the customer identity.
 set -e
 
 PREFIX=/opt/sentinel-edge
@@ -35,9 +33,8 @@ if ! GST_PLUGIN_SYSTEM_PATH_1_0="" GST_PLUGIN_PATH_1_0="$PREFIX/gst/plugins" \
   echo "sentinel-edge: gst-selftest FAILED — see /tmp/sentinel-gst-selftest.log; live/recording may not work" >&2
 fi
 
-# The plist carries what the edge.env file cannot know: that the media path is GStreamer, and where
-# its self-contained plugin set + writable registry live. No GO2RTC_* — with the gstreamer backend
-# the edge never starts a sidecar (it owns the ingest itself), so there is nothing to point at.
+# The plist carries what edge.env cannot know: where the bundled GStreamer runtime and its writable
+# registry live.
 cat > "$PLIST" <<PLISTEOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

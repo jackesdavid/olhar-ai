@@ -18,11 +18,10 @@ tasks:
     silent: true
 
   setup:
-    desc: One-shot — fetch & install ALL deps (npm + Rust crates + go2rtc sidecar)
+    desc: One-shot — fetch & install ALL deps (npm + Rust crates)
     cmds:
       - task: install
       - cargo fetch
-      - task: fetch-go2rtc
       - cmd: echo "✅ Setup complete. Run 'task doctor' to check system tools, then 'task dev'."
         silent: true
 
@@ -32,47 +31,7 @@ tasks:
     cmds:
       - npm install
 
-  fetch-go2rtc:
-    desc: Download the go2rtc live-video sidecar into ./bin (for local `task edge`; skips if present)
-    status:
-      - test -x bin/go2rtc
-    cmds:
-      - |
-        set -e
-        mkdir -p bin
-        os=$(uname -s); arch=$(uname -m)
-        # NOTE: macOS assets are .zip (extract the binary); Linux assets are bare.
-        case "$os-$arch" in
-          Darwin-arm64)               asset=go2rtc_mac_arm64.zip ;;
-          Darwin-x86_64)              asset=go2rtc_mac_amd64.zip ;;
-          Linux-x86_64)               asset=go2rtc_linux_amd64 ;;
-          Linux-aarch64|Linux-arm64)  asset=go2rtc_linux_arm64 ;;
-          *) echo "Unsupported $os-$arch — fetch go2rtc manually"; exit 1 ;;
-        esac
-        url="https://github.com/AlexxIT/go2rtc/releases/latest/download/$asset"
-        echo "Fetching $asset (latest)…"
-        case "$asset" in
-          *.zip)
-            tmp=$(mktemp -d)
-            curl -fL -o "$tmp/go2rtc.zip" "$url"
-            unzip -o "$tmp/go2rtc.zip" -d "$tmp" >/dev/null
-            bin=$(find "$tmp" -type f ! -name '*.zip' | head -1)
-            mv "$bin" bin/go2rtc
-            rm -rf "$tmp"
-            ;;
-          *)
-            curl -fL -o bin/go2rtc "$url"
-            ;;
-        esac
-        chmod +x bin/go2rtc
-        echo "✓ go2rtc → bin/go2rtc"
 
-  go2rtc:
-    desc: Run the go2rtc sidecar standalone for debugging (web UI at http://localhost:1984)
-    cmds:
-      - cmd: test -x bin/go2rtc || (echo "go2rtc missing — run 'task fetch-go2rtc'"; exit 1)
-        silent: true
-      - ./bin/go2rtc
 
   ai:
     desc: Run the AI vision sidecar locally (ai/sidecar) on :8000 — same contract as RunPod
@@ -148,12 +107,12 @@ tasks:
         silent: true
 
   doctor:
-    desc: Check required system tools are installed (node, npm, cargo, ffmpeg)
+    desc: Check required system tools are installed (node, npm, cargo)
     silent: true
     cmds:
       - |
         missing=0
-        for t in node npm cargo ffmpeg; do
+        for t in node npm cargo; do
           if command -v "$t" >/dev/null 2>&1; then
             echo "✓ $t  ($(command -v "$t"))"
           else
@@ -163,7 +122,7 @@ tasks:
         done
         if [ "$missing" -ne 0 ]; then
           echo ""
-          echo "Install on macOS:  brew install node rust ffmpeg"
+          echo "Install on macOS:  brew install node rust"
           exit 1
         fi
 
@@ -232,13 +191,11 @@ tasks:
       - cargo run
 
   edge:
-    desc: Run sentinel-edge — the on-prem camera gateway (config-light; go2rtc + snapshots on :8788)
+    desc: Run sentinel-edge — the on-prem camera gateway (config-light; GStreamer + snapshots on :8788)
     dir: sentinel-edge
     env:
       EDGE_BIND: '{{.EDGE_BIND | default "127.0.0.1:8788"}}'
       CONTROL_URL: '{{.CONTROL_URL | default "http://127.0.0.1:8790"}}'
-      # The edge owns go2rtc; point it at the binary `task fetch-go2rtc` drops in ./bin.
-      GO2RTC_BIN: '{{.GO2RTC_BIN | default "../bin/go2rtc"}}'
     cmds:
       - cargo run
 
@@ -262,7 +219,7 @@ tasks:
       - CLEAN=1 ./deploy/push-local.sh {{.CLI_ARGS}}
 
   clean-space:
-    desc: "Reclaim disk space — cargo clean (edge crate + workspace), drop the installer build dirs, prune Docker. Everything removed is a regenerable build artifact (the ffmpeg-universal build under deploy/macos-pkg/build takes ~20 min to rebuild)."
+    desc: "Reclaim disk space — cargo clean (edge crate + workspace), drop the installer build dirs, prune Docker. Everything removed is a regenerable build artifact."
     cmds:
       # Rust target dirs are by far the biggest: the edge is a standalone crate (its own target/,
       # incl. the windows-gnu/linux cross builds), the rest is the workspace.
@@ -474,7 +431,7 @@ tasks:
         DIST=root@85.239.248.86:/ibbf/edge-dist
         echo "▸ publishing edge v$VER → /ibbf/edge-dist …"
         # The GStreamer bundle IS the macOS edge now — publish it under the canonical pkg name the
-        # installers endpoint serves (Sentinel-Edge-<ver>.pkg), retiring the old go2rtc/ffmpeg pkg.
+        # installers endpoint serves (Sentinel-Edge-<ver>.pkg).
         $SCP "deploy/macos-pkg/build/Sentinel-Edge-${VER}-gst-x86_64.pkg" "$DIST/Sentinel-Edge-${VER}.pkg"
         # Linux x86_64 skipped for now — only macOS + Jetson aarch64 this build.
         $SCP sentinel-edge/dist/sentinel-edge-linux-aarch64 "$DIST/sentinel-edge-linux-aarch64"

@@ -3,7 +3,7 @@
 #
 # A client runs this ONCE on their on-prem box. It:
 #   1. installs the GStreamer runtime,
-#   2. downloads the sentinel-edge + go2rtc binaries,
+#   2. downloads the sentinel-edge binary,
 #   3. writes the config,
 #   4. installs a service (systemd / launchd) so it runs 24/7 and on boot,
 #   5. starts it.
@@ -28,11 +28,8 @@ PUBLIC_HOST="${SENTINEL_PUBLIC_HOST:-}"
 # Where to fetch the sentinel-edge binary. Defaults to the control plane (the repo is
 # private, so control serves the binaries at /edge/<asset>); override if self-hosting.
 RELEASE_BASE="${SENTINEL_RELEASE_BASE:-}"
-GO2RTC_BASE="${SENTINEL_GO2RTC_BASE:-https://github.com/AlexxIT/go2rtc/releases/latest/download}"
 PREFIX="${SENTINEL_PREFIX:-/opt/sentinel-edge}"
 ENV_DIR="${SENTINEL_ENV_DIR:-/etc/sentinel-edge}"
-# card #138: "ffmpeg" (default) or "gstreamer" — opt-in only, a coexistence/measurement flag, not
-# a permanent switch. See docs/plans/edge-gstreamer-backend.md.
 UPDATE=0   # --update: refresh the payload + restart, keeping env / service / enrollment
 FORCE=0    # --force: install the published build even if it is not newer (explicit user request)
 
@@ -81,9 +78,7 @@ esac
 
 # Immutable/ostree host (Bazzite, Silverblue, Kinoite): the base OS is read-only, so package
 # installs go through `rpm-ostree` and only take effect on the NEXT boot. We detect it so the
-# ffmpeg install uses rpm-ostree. Since #79 the edge itself links nothing, so it starts and runs
-# BEFORE any reboot — a reboot is only needed to make a freshly-layered ffmpeg visible, which
-# costs snapshots, not the box.
+# GStreamer runtime install uses rpm-ostree.
 IMMUTABLE=0
 REBOOT_REQUIRED=0
 if [ "$os" = "Linux" ] && [ -f /run/ostree-booted ]; then IMMUTABLE=1; fi
@@ -206,10 +201,8 @@ mkdir -p "$PREFIX" "$PREFIX/recordings" "$ENV_DIR"
 # Tailscale to install or join — one fewer dependency and zero inbound surface.
 
 # ---- runtime dep: GStreamer -------------------------------------------------
-# The edge LINKS GStreamer now (card #138) — it is the SOLE media backend; go2rtc and ffmpeg are
 # retired. Install the GStreamer runtime + plugins so the linked pipeline finds its elements (decode
 # incl. HW where available, mux, appsink). The edge is outbound-only (card #144: SSE commands + live
-# over its own outbound connection) — no tailnet, no go2rtc, no ffmpeg. On an immutable OS the
 # plugins layer via rpm-ostree; the plugin list was proven on the Jetson test box (`-libav` is
 # load-bearing — some boxes ship no software H264/H265 decoder without it).
 if ! command -v gst-inspect-1.0 >/dev/null 2>&1; then
@@ -238,7 +231,7 @@ if ! command -v gst-inspect-1.0 >/dev/null 2>&1; then
       echo "  No supported package manager found — install GStreamer manually, then re-run." >&2
     fi
   else
-    # macOS (the plan's first test box): Homebrew, same non-root pattern as ffmpeg above.
+    # macOS: Homebrew, same non-root pattern as the Linux package install above.
     if [ -n "${SUDO_USER:-}" ] && command -v sudo >/dev/null 2>&1 && sudo -u "$SUDO_USER" command -v brew >/dev/null 2>&1; then
       sudo -u "$SUDO_USER" brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav || true
     elif command -v brew >/dev/null 2>&1; then
@@ -267,15 +260,12 @@ if ver="$("$PREFIX/sentinel-edge" --version 2>/dev/null)"; then
   echo "✓ Installed $ver"
 fi
 
-# go2rtc is retired (card #138) — GStreamer, linked into the edge, is the sole media path. Nothing
 # to download; the GStreamer runtime installed above provides the elements the edge uses in-process.
 
 # ---- 3. config --------------------------------------------------------------
 # Bake a PATH so the service can find its runtime deps
 # even under a minimal systemd/launchd PATH (Homebrew dirs are NOT on a daemon's default).
 EDGE_PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-FFMPEG_BIN="$(command -v ffmpeg 2>/dev/null || true)"
-[ -n "$FFMPEG_BIN" ] && EDGE_PATH="$(dirname "$FFMPEG_BIN"):$EDGE_PATH"
 
 echo "▸ Writing $ENV_DIR/edge.env"
 cat > "$ENV_DIR/edge.env" <<EOF
@@ -288,7 +278,6 @@ PATH=$EDGE_PATH
 EOF
 chmod 600 "$ENV_DIR/edge.env"   # contains the box token
 
-# No go2rtc (EDGE_OWN_GO2RTC / GO2RTC_*), no tailnet (TS_*), no media-backend flag — the gst-linked
 # edge defaults to GStreamer and reaches the cloud outbound-only (card #144).
 
 # ---- 4. service ------------------------------------------------------------
@@ -349,7 +338,7 @@ fi
 echo "✓ sentinel-edge is up. It joined the tailnet as '$HOSTNAME_' and pulls cameras from $CONTROL_URL."
 if [ "$REBOOT_REQUIRED" = 1 ]; then
   echo ""
-  echo "ℹ  ffmpeg was layered via rpm-ostree and activates on next boot. The edge is already"
+  echo "ℹ  GStreamer was layered via rpm-ostree and activates on next boot. The edge is already"
   echo "   running (it links nothing); until you reboot, only snapshots + GetCurrentFrame will"
   echo "   fail — live video, motion, tracking and recording all work.  sudo systemctl reboot"
 fi

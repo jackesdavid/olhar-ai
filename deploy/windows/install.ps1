@@ -1,6 +1,5 @@
 # Sentinel Edge — Windows installer (card #83, unsigned v1).
 #
-# Turns a Windows PC into a Sentinel appliance: installs the edge + go2rtc + ffmpeg as a Windows
 # SERVICE (auto-start at boot, restart on failure), then opens the pairing page so the person at
 # the machine types a code (card #81) — no box token on any command line.
 #
@@ -29,7 +28,6 @@ foreach ($f in "sentinel-edge.exe","WinSW.exe") {
 }
 
 # --- 1b. GStreamer runtime (card #138) --------------------------------------
-# The edge LINKS GStreamer — it's the sole media backend now (go2rtc + ffmpeg retired). Install the
 # official MSVC runtime so the linked pipeline finds its elements (D3D11/MediaFoundation decode, mux,
 # appsink). Idempotent: skip if already present.
 $GstRoot = "C:\gstreamer\1.0\msvc_x86_64"
@@ -73,7 +71,6 @@ $winswXml = @"
   <env name="EDGE_RECORDING_DIR" value="$Base\recordings"/>
 </service>
 "@
-# No go2rtc/ffmpeg env and no tailnet: the gst-linked edge defaults to GStreamer and reaches the
 # cloud outbound-only (SSE commands + live over its own outbound connection, card #144).
 $winswXml | Out-File -Encoding utf8 (Join-Path $Base "$ServiceId.xml")
 
@@ -89,7 +86,6 @@ try {
 } finally { Pop-Location }
 
 # --- 3. firewall: allow the LAN to reach nothing extra ----------------------
-# The edge + go2rtc bind localhost; ONVIF discovery is OUTBOUND multicast, which needs no inbound
 # rule. So there's deliberately no firewall change here — add one only if a real need shows up on
 # a clean machine (noted in the card).
 

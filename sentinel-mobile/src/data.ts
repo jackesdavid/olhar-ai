@@ -36,7 +36,7 @@ export const listRecordings = (limit = 50) =>
 /** Presigned R2 URL, valid for an hour. 409 when the clip is still edge-only. */
 export const recordingUrl = (id: number) => api<{ url: string }>(`/recordings/${id}/url`);
 
-/** go2rtc stream name for an IP — must match the edge (`app_core::go2rtc::stream_name`):
+/** Stream name for an IP — must match the edge (`app_core::stream_names::stream_name`):
  *  `cam_<ip with dots→underscores>`, plus `_hd` for the main (high-definition) variant. */
 export function streamName(ip: string, hd: boolean): string {
   return "cam_" + ip.replaceAll(".", "_") + (hd ? "_hd" : "");

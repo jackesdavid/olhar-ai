@@ -2,7 +2,6 @@
 //!
 //! Phase 2 of the cloud decomposition. End-user browsers connect here; the gateway
 //! proxies live video (MSE over WebSocket) and JPEG snapshots through to a client's
-//! on-prem `sentinel-edge` go2rtc over the Tailscale tailnet. The edge's go2rtc is
 //! localhost-only + `tailscale serve`'d, so it's never exposed directly.
 //!
 //! Single-tenant for now: one configured upstream (`EDGE_UPSTREAM`). The per-tenant

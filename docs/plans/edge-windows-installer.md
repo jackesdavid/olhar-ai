@@ -16,7 +16,6 @@ This card is third, and trying to pull it forward will just stall:
 1. **#79 (done)** — the edge links no native library, so a Windows build is a plain
    `cargo build --target x86_64-pc-windows-msvc` instead of a vcpkg/OpenCV-DLL project.
 2. **#80** — the binary itself: paths (`%ProgramData%`), the Windows service, the self-update
-   rename dance (Windows cannot overwrite a running `.exe`), `CREATE_NO_WINDOW` on the ffmpeg/go2rtc
    children.
 3. **#81** — pairing, so the installer has something to ask for.
 4. **This card** — the packaging around all of it.
@@ -27,12 +26,10 @@ This card is third, and trying to pull it forward will just stall:
 firewall rule), and it produces exactly the single `.exe` a customer expects. MSI buys us
 enterprise/GPO deployment we have no customer for yet.
 
-- Payload: `sentinel-edge.exe`, `go2rtc.exe`, a static `ffmpeg.exe` (bundled — same reasoning as the
   macOS `.pkg`: no customer should need a package manager).
 - Register the Windows **service** with failure-actions restart (`sc failure … actions= restart/5000`)
   — the Boxes-page Restart button works by the edge calling `exit(0)` and trusting the supervisor to
   bring it back, so that contract must hold here or Restart silently kills boxes.
-- A firewall rule if one is needed (go2rtc binds localhost; ONVIF discovery is outbound multicast —
   confirm on a clean machine rather than adding a rule by reflex).
 - Finish by launching `http://localhost:8788` — the edge's enrollment page (#81).
 
@@ -52,7 +49,6 @@ info*. For a security product being sold to a business, that is a conversion kil
 
 - Clean Windows 11 VM, no dev tools: download → run → install → browser opens the enrollment page →
   paste the code → the box appears in Boxes with the right platform badge, tailnet `serving`,
-  ffmpeg ✓.
 - Reboot → the service comes back on its own. Boxes-page Restart → it comes back.
 - ONVIF discovery finds a LAN camera; Live plays; motion + tracking events reach the cloud.
 - SmartScreen shows no warning on a machine that has never seen the binary.

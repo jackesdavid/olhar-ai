@@ -2,7 +2,7 @@
 name = "sentinel-edge"
 version = "0.5.70"
 edition = "2021"
-description = "The edge gateway — the ONLY thing that touches cameras. Wraps go2rtc (sentinel-rtc) + ONVIF and serves on-demand JPEG snapshots over REST so out-of-process services (sentinel-flow, the UI) reach the LAN-bound cameras without speaking RTSP/ONVIF themselves. Cameras are LAN-bound, so this tier is mandatory however cloud the rest becomes."
+description = "The edge gateway — the ONLY thing that touches cameras. Ingests RTSP with in-process GStreamer and serves live video, snapshots and ONVIF over REST, so out-of-process services (sentinel-flow, the UI) reach LAN-bound cameras without speaking RTSP/ONVIF themselves."
 
 # The edge is a lib + a thin bin: the appliance runs the bin, while iOS/Android link the
 # `staticlib` and drive it through the C ABI (`start_edge`/`stop_edge`) — card #144. `rlib` lets the
@@ -17,7 +17,7 @@ name = "sentinel-edge"
 path = "src/main.rs"
 
 # Standalone crate (NOT in the app/ workspace) so it ships/runs independently at the
-# edge. Links the same UI-agnostic `app-core` (device repo, go2rtc helpers, ONVIF +
+# edge. Links the same UI-agnostic `app-core` (device repo, stream naming, ONVIF +
 # snapshot capture) by path.
 [dependencies]
 # `gst-linked` here is app-core's ONVIF snapshot path. The cloud services deliberately do NOT
@@ -53,9 +53,7 @@ tracing-log = "0.2"
 # (It used to link OpenCV for exactly this; see card #79.)
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 imageproc = { version = "0.25", default-features = false }
-# RTSP ring buffer: connects to go2rtc's re-server (rtsp://127.0.0.1:8554/) for an
 # in-memory pre-roll ring. We use retina only for RTSP transport + RTP ordering and
-# do our OWN lenient H264 depacketization (retina's codec layer rejects go2rtc's
 # repackaged NALs with "forbidden sequence 00 00 00").
 retina = "0.4"
 futures = "0.3"
@@ -71,7 +69,6 @@ sysinfo = { version = "0.30", default-features = false }
 opencv = { version = "0.98", optional = true }
 
 # Linked gstreamer-rs — THE media path (card #138 complete). Not optional: GStreamer owns capture
-# decode, the recording mux, the cold snapshot and live fMP4 over WebSocket. ffmpeg and go2rtc are
 # gone, so there is no second backend to fall back to and no flag to pick between them.
 gstreamer = "0.23"
 gstreamer-app = "0.23"
@@ -79,6 +76,5 @@ gstreamer-app = "0.23"
 [features]
 # `gst-linked` is GONE: GStreamer is the only media path, so a flag to select it selected nothing.
 # It also hid a real trap — deploy/macos-pkg/build.sh built WITHOUT it, so macOS silently took the
-# ffmpeg branch and shipped a binary whose /api/ws route was not even compiled in.
 opencv-parity = ["dep:opencv"]
 

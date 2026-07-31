@@ -6,7 +6,6 @@ and deliver alerts, lay out a 3D floor plan, and automate it all with graph-base
 workflows.
 
 Built with **SvelteKit (Svelte 5) + Rust**. UI: shadcn-svelte + Threlte (Three.js).
-AI: Claude (Anthropic). Live video via go2rtc on the edge (RTSP → WebRTC/MSE),
 bridged to the browser by the streaming gateway.
 
 ## Repository layout
@@ -24,9 +23,7 @@ bridged to the browser by the streaming gateway.
 ## Run
 
 ```sh
-brew install go-task node rust ffmpeg   # prerequisites
 cp .env.example .env                     # then fill in API keys (see below)
-task setup                               # npm install + cargo fetch + go2rtc
 task dev                                 # launch the desktop app (hot reload)
 ```
 

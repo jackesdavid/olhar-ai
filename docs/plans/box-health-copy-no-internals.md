@@ -41,8 +41,6 @@ straight through to the user.
 - **Operator-facing detail** (`tailscale_state`, the MagicDNS host, `last_seen`) stays available for
   us — behind a "Technical details" disclosure, in the box log viewer, or admin-only. Don't delete
   it, just stop leading with it.
-- Audit for siblings: grep the app for `tailnet`, `Tailscale`, `magicdns`, `go2rtc`, `RTSP`, `ONVIF`
-  in user-visible strings. `go2rtc`/`ONVIF` are the same class of leak. (#89's error copy took care
   on the Live path — match that bar here.)
 
 ## Open decisions

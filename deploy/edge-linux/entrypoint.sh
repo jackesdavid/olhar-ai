@@ -2,7 +2,6 @@
 # Container entrypoint for the sentinel-edge appliance on an immutable host (Bazzite /
 # Fedora Silverblue / any rpm-ostree box), where layering packages means a reboot.
 #
-# Everything the edge needs is baked into the image (ffmpeg + go2rtc + tailscale). The edge binary
 # itself links nothing (card #79 — motion is pure Rust), so this container is now a convenience,
 # not a requirement. We run tailscaled INSIDE the container, so it needs host networking + the tun
 # device + NET_ADMIN:
@@ -33,5 +32,4 @@ if command -v tailscaled >/dev/null 2>&1; then
   for _ in $(seq 1 10); do tailscale status >/dev/null 2>&1 && break; sleep 1; done
 fi
 
-# The edge owns go2rtc (EDGE_OWN_GO2RTC=1) and re-asserts tailscale on boot via ensure_up().
 exec /usr/local/bin/sentinel-edge

@@ -14,9 +14,8 @@ use super::xml::{
 };
 
 const SOAP_TIMEOUT: Duration = Duration::from_secs(5);
-/// Hard wall-clock cap on the ffmpeg RTSP snapshot fallback — a stalled camera/RTSP pull
 /// is killed rather than allowed to hang the caller (the engine also bounds the node).
-const FFMPEG_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Validate `username`/`password` against the camera at `xaddr`. On success
 /// returns the RTSP stream URI (proof the credentials work). On failure returns
@@ -38,7 +37,6 @@ pub fn test_credentials(xaddr: &str, username: &str, password: &str) -> Result<S
 /// stream backs the HD toggle. Cameras with a single profile return `(main, None)`.
 ///
 /// Edge-only: these URIs embed nothing the cloud needs (they live on the LAN and the edge
-/// injects credentials into them for go2rtc), so they're never reported to control.
 pub fn resolve_stream_uris(
     xaddr: &str,
     username: &str,
@@ -79,7 +77,6 @@ pub fn resolve_stream_uris(
 }
 
 /// Fetch a JPEG snapshot. Tries ONVIF `GetSnapshotUri` + HTTP Basic GET; falls
-/// back to a single RTSP frame via `ffmpeg` if the camera doesn't support it.
 pub fn snapshot(
     xaddr: &str,
     username: &str,
@@ -223,7 +220,6 @@ fn envelope(header: &str, body: &str) -> String {
     )
 }
 
-// ---- RTSP frame grab via ffmpeg --------------------------------------------
 
 /// Insert `user:pass@` into an `rtsp://` URL unless it already carries creds.
 /// Shared by the snapshot path and the live-stream path.
@@ -241,9 +237,7 @@ pub fn rtsp_url_with_creds(rtsp: &str, user: &str, pass: &str) -> String {
     }
 }
 
-/// One-shot RTSP → JPEG via **linked GStreamer** (card #138, touchpoint A5) — the ffmpeg
 /// replacement for the cold snapshot. Only compiled where a GStreamer runtime exists (the edge
-/// forwards its `gst-linked` feature); the cloud services keep the ffmpeg path below.
 ///
 /// Bounded on purpose: an unreachable or wedged camera must never block the caller, so we give the
 /// whole grab a wall-clock deadline and pull a single sample rather than running a live pipeline.
@@ -307,7 +301,6 @@ pub fn snapshot_from_rtsp(rtsp: &str, user: &str, pass: &str) -> Result<Vec<u8>,
     }
     let url = rtsp_url_with_creds(rtsp, user, pass);
 
-    // Prefer GStreamer where it exists (the edge). A failure here falls through to ffmpeg rather
     // than failing the snapshot — during the migration both must remain viable.
     #[cfg(feature = "gst-linked")]
     match snapshot_from_rtsp_gst(&url) {
@@ -316,84 +309,20 @@ pub fn snapshot_from_rtsp(rtsp: &str, user: &str, pass: &str) -> Result<Vec<u8>,
         _ => {}
     }
 
-    // `-timeout` (µs) makes ffmpeg abort a stalled RTSP socket read on its own; the
-    // wall-clock kill below is a belt-and-suspenders guard in case the handshake itself
-    // wedges, so an unreachable/hung camera can never block the caller forever.
-    //
-    // It MUST be `-timeout`, not `-rw_timeout`: the latter is an AVIO/protocol option that the
-    // RTSP demuxer doesn't have, so ffmpeg 7.x dies with "Option rw_timeout not found" before it
-    // ever dials the camera. That killed this whole function on every box with a modern ffmpeg —
-    // silently, because it's only the fallback behind go2rtc's frame.jpeg, and its error surfaces
-    // as a generic "couldn't get a snapshot". Found when the #88 probe returned verified-but-no-
-    // proof-frame; the bundled ffmpeg 7.1 lists only `-timeout` for the rtsp demuxer.
-    let mut child = Command::new("ffmpeg")
-        .args([
-            "-timeout",
-            "8000000", // 8s socket I/O timeout (microseconds)
-            "-rtsp_transport",
-            "tcp",
-            "-i",
-            &url,
-            "-frames:v",
-            "1",
-            "-f",
-            "image2",
-            "-vcodec",
-            "mjpeg",
-            "-loglevel",
-            "error",
-            "pipe:1",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("ffmpeg not available: {e}"))?;
-
-    // Drain stdout/stderr on threads so a full pipe buffer can't deadlock the wait.
-    let mut child_out = child.stdout.take().expect("piped stdout");
-    let mut child_err = child.stderr.take().expect("piped stderr");
-    let out_h = std::thread::spawn(move || {
-        let mut b = Vec::new();
-        let _ = child_out.read_to_end(&mut b);
-        b
-    });
-    let err_h = std::thread::spawn(move || {
-        let mut b = Vec::new();
-        let _ = child_err.read_to_end(&mut b);
-        b
-    });
-
-    let deadline = Instant::now() + FFMPEG_SNAPSHOT_TIMEOUT;
-    let status = loop {
-        match child
-            .try_wait()
-            .map_err(|e| format!("ffmpeg wait failed: {e}"))?
-        {
-            Some(s) => break s,
-            None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "ffmpeg snapshot timed out after {}s",
-                    FFMPEG_SNAPSHOT_TIMEOUT.as_secs()
-                ));
-            }
-            None => std::thread::sleep(Duration::from_millis(50)),
-        }
-    };
-    let stdout = out_h.join().unwrap_or_default();
-    let stderr = err_h.join().unwrap_or_default();
-
-    if !status.success() {
-        return Err(format!(
-            "ffmpeg failed: {}",
-            String::from_utf8_lossy(&stderr)
-        ));
+    // installed by it, so on every real box the "fallback" could only fail — after paying its
+    // 10s wall-clock deadline first. An error that says what is wrong beats a slow one that
+    // blames a missing tool nobody intended to have.
+    #[cfg(feature = "gst-linked")]
+    {
+        Err("Could not grab a frame from the camera's RTSP stream.".into())
     }
-    if stdout.is_empty() {
-        return Err("ffmpeg produced no frame".into());
+    #[cfg(not(feature = "gst-linked"))]
+    {
+        let _ = url;
+        // Cloud services do not reach cameras — the edge does. Reaching here means a snapshot was
+        // requested somewhere that has no media stack at all.
+        Err("This service cannot capture from a camera; only the edge can.".into())
     }
-    Ok(stdout)
 }
 
 #[cfg(test)]

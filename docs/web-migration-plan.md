@@ -28,7 +28,6 @@ app/                              # the new desktop app (parallel to src/)
 ├── src-tauri/                    # Tauri shell
 │   commands/                     # #[tauri::command] thin wrappers → crates/core
 │   channels: scan results, run logs, alert/stream status, chat stream
-│   sidecar: go2rtc (live RTSP)
 ├── src/                          # SvelteKit (CSR/SPA, Svelte 5, TS)
 │   lib/ui/                       # shadcn-svelte components (copied-in, MIT)
 │   lib/ipc/                      # typed invoke() wrappers
@@ -46,7 +45,6 @@ app/                              # the new desktop app (parallel to src/)
 |---|---|---|---|---|---|
 | **M0** | **Foundation / shell** | `config` | `get/set_settings` | sidebar nav, header, theme, settings | shadcn + Tailwind v4 setup; rebrand; IPC layer; the `app/` workspace + `crates/core` skeleton |
 | **014** | **Devices & discovery** | `scan`, `onvif`, `device` | `list/discover/save/delete/rename_device`, `capture_snapshot`, `test_credentials` | Devices list + Device detail (snapshot) | foundational — most features need cameras. WS-Discovery → channel |
-| **015** | **Live video** | `stream` → **go2rtc sidecar** | `start/stop_stream` (per device) | Live view (WebRTC `<video>`) | productionize the 0b harness as a bundled externalBin sidecar; the cross-OS test gates this |
 | **016** | **Alerts** | `alerts` | `list/create/deliver/delete_alert`, `alert_stats` | Alerts dashboard (shadcn table/cards) | already spiked (0a) — lift + polish |
 | **017** | **Notifications / Beacons** | `notification` | `list/pair/test/toggle/rename_beacon`, pairing poll → channel | Beacons screen | Telegram dispatch stays in backend |
 | **018** | **Map (3D)** | `map::domain` | `load/save_map`, `assign_camera` | 3D floor-plan editor (Threlte) | productionize 0c: rooms + camera placement + camera→live link |

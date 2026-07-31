@@ -13,7 +13,4 @@ node_modules
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
-# go2rtc sidecar binary — third-party, dropped in locally, never committed
 # (see app/src-tauri/binaries/DOWNLOAD.md)
-src-tauri/binaries/go2rtc
-src-tauri/binaries/go2rtc.exe

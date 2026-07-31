@@ -1,7 +1,6 @@
 //! `sentinel-edge` — the edge gateway. The **only** thing that touches cameras.
 //!
 //! It ingests each camera's RTSP over the LAN and decodes it **in-process with linked GStreamer**
-//! (card #138) — no go2rtc sidecar, no ffmpeg, no tailnet. Live video is pushed up the edge's own
 //! OUTBOUND connection to the gateway (card #144), and cloud→edge commands ride an outbound SSE
 //! stream, so the edge needs no inbound reachability. It reaches control outbound over HTTPS and its
 //! cameras over the LAN directly.
@@ -18,7 +17,6 @@ mod frames;
 mod gst_mse;
 mod gst_mux;
 mod http;
-mod hwaccel;
 mod live_push;
 mod logbuf;
 mod media;
@@ -34,12 +32,6 @@ mod tracking;
 
 use state::AppState;
 
-/// Check control for the latest published edge version. If it differs from our own,
-/// spawn install.sh --update in the background — the script stops the service, swaps
-/// the binary, and restarts it, so the service manager relaunches us on the new build.
-/// This means the UI Restart button doubles as an update trigger: restart → startup →
-/// version check → auto-update. No more bootstrapping problem between releases.
-#[cfg(not(target_os = "ios"))] // the embedded iOS edge is updated with the app, not self-updated
 /// Manifest key for the platform this binary was built for. Must match `platform_key` in control
 /// and the `case` in install.sh — the manifest is keyed per OS+arch because each is built and
 /// published independently.
@@ -70,6 +62,11 @@ fn is_newer(latest: &str, current: &str) -> bool {
     false
 }
 
+/// Check control for the latest published edge version. If it is newer than ours, spawn
+/// install.sh --update in the background — the script stops the service, swaps the binary, and
+/// restarts it, so the service manager relaunches us on the new build. The UI Restart button
+/// therefore doubles as an update trigger: restart → startup → version check → update.
+#[cfg(not(target_os = "ios"))] // the embedded iOS edge is updated with the app, not self-updated
 fn maybe_self_update(control_url: &str) {
     let current = env!("CARGO_PKG_VERSION");
     // An explicit request from the UI bypasses the version check: the user asked for the published
@@ -229,12 +226,10 @@ pub fn run() {
     let state = AppState::boot();
 
     // Media path: the in-process linked GStreamer decoder + outbound live dial (cards #138 + #144).
-    // No tailnet, no go2rtc sidecar, no ffmpeg — the edge reaches control outbound over HTTPS and
     // its cameras over the LAN directly. There is no longer an alternative to fall back to.
-    log::info!("media: in-process GStreamer — no go2rtc, no ffmpeg, no tailnet");
+    log::info!("media: in-process GStreamer (the only media path); no tailnet");
     // Report the initially-resolved stream set so the Devices dot is correct from boot.
     state.push_streaming();
-    // If cameras_always_warm is enabled, pre-open each camera's go2rtc RTSP session so
     // recordings start instantly without a cold-start delay.
     state.warm_cameras();
 
@@ -311,7 +306,6 @@ pub fn run() {
         });
     }
 
-    // Log push loop: ship new log lines (edge + go2rtc) up to control every few seconds so
     // the cloud log viewer shows a near-live tail. Best-effort; stdout remains the source.
     {
         let logs_state = std::sync::Arc::clone(&state);
@@ -473,7 +467,6 @@ pub unsafe extern "C" fn start_edge(
     if let Some(u) = cstr(control_url) {
         std::env::set_var("CONTROL_URL", u.trim_end_matches('/'));
     }
-    // The phone always runs the linked-GStreamer media path (no go2rtc/ffmpeg to spawn on iOS).
     std::env::set_var("EDGE_MEDIA_BACKEND", "gstreamer-linked");
 
     std::thread::spawn(|| {

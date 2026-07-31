@@ -5,7 +5,7 @@ export const live = {
     descriptionCloud:
       "Live camera feeds over your private edge link — never a public stream.",
     descriptionLocal:
-      "Real-time camera video over WebRTC, served by the bundled go2rtc sidecar.",
+      "Real-time camera video, streamed straight from your box.",
     refresh: "Refresh",
     refreshing: "Refreshing…",
     loadingStreams: "Loading streams…",
@@ -49,7 +49,7 @@ export const live = {
     descriptionCloud:
       "Câmeras ao vivo pelo seu link privado com o appliance — nunca um stream público.",
     descriptionLocal:
-      "Vídeo em tempo real via WebRTC, servido pelo sidecar go2rtc embutido.",
+      "Vídeo em tempo real, transmitido direto do seu box.",
     refresh: "Atualizar",
     refreshing: "Atualizando…",
     loadingStreams: "Carregando transmissões…",

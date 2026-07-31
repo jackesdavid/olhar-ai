@@ -67,6 +67,5 @@ timestamp this card adds also lets #98's reconcile spot a ring that's gone silen
 
 ## Out of scope
 
-- Re-encoding / re-timestamping the muxed output (ffmpeg `-copy` stays). This is purely which frames
   enter the pipe.
 - The orphaned-ring lifecycle (#98) — sibling, do together, but tracked there.

@@ -199,7 +199,6 @@ services:
       S3_KEY: ${S3_KEY:-sentinel}
       S3_SECRET: ${S3_SECRET}
       AI_SERVICE_URL: http://sentinel-ai:8000/runsync
-      GO2RTC_URL: https://__EDGE_HOST__
     extra_hosts:
       - "__EDGE_HOST__:__EDGE_TS_IP__"
     depends_on:
