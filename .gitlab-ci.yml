@@ -35,9 +35,19 @@ variables:
   - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
 
 .ssh_setup: &ssh_setup
-  # Key-based, not password. The key is already in the VPS authorized_keys.
+  # Key-based, not password. The public half is in the VPS authorized_keys.
+  #
+  # VPS_SSH_KEY must be a FILE-type variable: GitLab refuses to mask multi-line values, and an
+  # unmasked private key would be printable from any job. A File variable expands to a PATH, not
+  # its contents — so handle both, otherwise the "obvious" read writes the literal string
+  # "/builds/tmp/xyz" into id_deploy and every deploy fails with an unhelpful invalid-format error.
   - install -m 700 -d ~/.ssh
-  - printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+  - |
+    if [ -f "$VPS_SSH_KEY" ]; then
+      cp "$VPS_SSH_KEY" ~/.ssh/id_deploy          # File-type variable (expected)
+    else
+      printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_deploy   # plain Variable fallback
+    fi
   - chmod 600 ~/.ssh/id_deploy
   - ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
