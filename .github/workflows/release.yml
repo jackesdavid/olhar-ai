@@ -64,8 +64,12 @@ jobs:
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
 
       # sentinel-edge is a STANDALONE crate (not in the root workspace), so build via its own manifest.
-      - name: Build (gst-linked)
-        run: cargo build --release --locked --features gst-linked --manifest-path sentinel-edge/Cargo.toml --target ${{ matrix.target }}
+      # No --features gst-linked: the flag was DELETED in 277f079 when GStreamer became the only
+      # media path. Passing a feature a crate does not declare is a hard cargo error, and because
+      # release.yml only runs on a tag, it stayed invisible until the next one — Linux silently
+      # stopped shipping at 0.5.65 while macOS advanced out-of-band to 0.5.70.
+      - name: Build
+        run: cargo build --release --locked --manifest-path sentinel-edge/Cargo.toml --target ${{ matrix.target }}
 
       - name: Stage asset
         run: |
