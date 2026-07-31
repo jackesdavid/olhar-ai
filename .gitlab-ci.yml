@@ -22,10 +22,17 @@
 stages: [build, deploy, release]
 
 variables:
-  # registry.gitlab.com/olharai-grupo/sentinels — set by GitLab, not hardcoded, so a fork or a
+  # registry.gitlab.com/olharai-grupo/olharai — set by GitLab, not hardcoded, so a fork or a
   # renamed project cannot push images into the original project's registry.
   IMAGE_PREFIX: $CI_REGISTRY_IMAGE
   DOCKER_BUILDKIT: "1"
+  # Docker-in-Docker on GitLab.com SaaS runners. Without DOCKER_HOST the client looks for a local
+  # socket that does not exist in the job container and fails with "Cannot connect to the Docker
+  # daemon" — which reads like the daemon crashed rather than "you never told the client where it is".
+  DOCKER_HOST: tcp://docker:2376
+  DOCKER_TLS_CERTDIR: "/certs"
+  DOCKER_TLS_VERIFY: 1
+  DOCKER_CERT_PATH: "/certs/client"
 
 # ---------------------------------------------------------------------------------------------
 # Shared bits
@@ -53,7 +60,6 @@ variables:
 
 .build_service:
   stage: build
-  tags: [sentinel]
   # A newer push supersedes an in-flight build rather than racing it to the VPS.
   interruptible: true
   image: docker:27
@@ -185,7 +191,6 @@ build:landing:
 
 deploy:vps:
   stage: deploy
-  tags: [sentinel]
   image: alpine:3.20
   # Serialize: two pipelines must never race on the VPS docker compose.
   resource_group: production
@@ -233,7 +238,6 @@ deploy:vps:
 
 .edge_build:
   stage: release
-  tags: [sentinel]
   image: rust:1-bookworm
   before_script:
     # GStreamer is the ONLY media path (card #138) — the binary links it, so the dev packages are
@@ -276,7 +280,6 @@ release:edge-aarch64:
 
 release:publish:
   stage: release
-  tags: [sentinel]
   image: alpine:3.20
   needs: [release:edge-x86_64, release:edge-aarch64]
   before_script:
@@ -314,7 +317,6 @@ release:publish:
 
 verify:edge-lock:
   stage: build
-  tags: [sentinel]
   image: rust:1-bookworm
   interruptible: true
   script:
