@@ -75,6 +75,37 @@ camera this box cannot serve should say so rather than appearing broken.
    recording quota, not free space — so it stays silent exactly when the disk fills from anything
    else.
 
+## Verified in production — 2026-07-31
+
+Cloud half is live (commits `efb8509`, `36afa67`, `de62071`; edge `0.5.67` published):
+
+- migration 0083 applied; all four columns present on `devices`
+- all five cameras start `NULL` → the UI reads "Not checked yet", and **zero** `camera_*` events
+  fired on first deploy. This is the transition guard working: `None` previous status is not a
+  transition, so a fresh deploy does not announce every camera as having "come online".
+- `camera_offline` / `camera_online` present in the deployed control binary
+- `/edge-latest?platform=macos` → `0.5.67` with a sha256 matching the uploaded package; the
+  no-platform form answers `0.5.65`, the conservative minimum across platforms
+- all 10 status labels present in both locales
+
+Not verifiable from the cloud: a camera reading `unreachable`, and the offline→online flip. Both
+need the box on `0.5.67` — until then every camera reads "Not checked yet".
+
+### Gap found while verifying: `NotOnThisBox` is never produced
+
+`ProbeStatus::NotOnThisBox` is declared and has a label ("On a different network from this box"),
+but **nothing constructs it** — the edge derives status from its own pipelines only
+(`state.rs` `push_camera_status`: Streaming / Timeout / NoCredentials / NotFound, plus whatever
+`rtsp_probe::probe()` returns), and control never synthesizes it either.
+
+Consequence for the four `192.168.10.x` cameras, which belong to a different appliance: they do not
+get the designed answer. Either they stay "Not checked yet" forever, or — if they are in this box's
+config — the edge cold-probes them every cycle and reports "Can't reach it on the network", paying a
+connect timeout each time to a subnet that cannot answer.
+
+The status this card exists to give ("this camera isn't mine to serve") is the one case still
+missing. Deciding it needs the box→camera assignment, which control holds, not the edge.
+
 ## Out of scope (v1)
 
 - Fixing the log relay (1) — its own card; this one must not depend on it.
