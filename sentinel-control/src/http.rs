@@ -363,15 +363,52 @@ async fn enroll(
     .into_response()
 }
 
+/// Map what a box REPORTS about itself onto a manifest key.
+///
+/// The two vocabularies were never the same and nothing bridged them: a box reports
+/// `"macOS (x86_64)"` or `"Ubuntu (x86_64)"` (built for display), while the manifest is keyed
+/// `macos` / `linux-x86_64` / `linux-aarch64`. Callers holding a box row could therefore not ask
+/// about that box, and fell back to the no-platform answer — the lowest version across all
+/// platforms — which is how a macOS box on 0.5.66 got told the latest was Linux's 0.5.65.
+///
+/// Accepts a manifest key unchanged, so `?platform=macos` keeps working.
+fn platform_key(reported: &str) -> Option<&'static str> {
+    let s = reported.to_ascii_lowercase();
+    if s.contains("mac") || s.contains("darwin") || s.contains("os x") {
+        return Some("macos");
+    }
+    if s.contains("windows") || s.contains("win32") {
+        return Some("windows");
+    }
+    // Everything else that names an arch we publish for is treated as Linux — the distro varies
+    // (Ubuntu, Fedora, Bazzite, JetPack) but the binary is per-arch, not per-distro.
+    let arm = s.contains("aarch64") || s.contains("arm64");
+    let x86 = s.contains("x86_64") || s.contains("amd64");
+    if arm {
+        return Some("linux-aarch64");
+    }
+    if x86 {
+        return Some("linux-x86_64");
+    }
+    None
+}
+
 /// The latest edge build the operator has published (for the "update available" badge).
 async fn edge_latest(
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let pubs = published();
 
-    // `?platform=` is the correct call: each platform has its own published version.
-    if let Some(key) = q.get("platform") {
-        return match pubs.get(key.as_str()) {
+    // `?platform=` is the correct call: each platform has its own published version. The value may
+    // be a manifest key or the string the box reports about itself — both resolve here, so a caller
+    // holding a box row can pass `box.platform` straight through.
+    if let Some(raw) = q.get("platform") {
+        let key = if pubs.contains_key(raw.as_str()) {
+            raw.as_str()
+        } else {
+            platform_key(raw).unwrap_or(raw.as_str())
+        };
+        return match pubs.get(key) {
             Some(a) => Json(json!({
                 "version": a.version, "file": a.file, "sha256": a.sha256
             })),

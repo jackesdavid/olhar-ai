@@ -44,19 +44,50 @@
   let deleteTarget = $state<Box | null>(null);
   let deleting = $state(false);
 
-  // Edge versioning
-  let latest = $state<string>("");
+  // Edge versioning — PER PLATFORM. macOS and Linux are published independently and are routinely
+  // on different versions, so one shared "latest" is wrong for at least one box whenever they differ.
+  let latestBy = $state<Record<string, string>>({});
+
+  /** The published version for this box's platform, or "" when nothing is published for it. */
+  function latestFor(b: Box): string {
+    return (b.platform && latestBy[b.platform]) || "";
+  }
+
+  /** Compare dotted versions numerically. `!==` was the bug: a box AHEAD of the advertised version
+   *  counted as outdated, so the UI offered a downgrade — which is what a box on 0.5.66 saw when
+   *  the shared "latest" was Linux's 0.5.65. Only strictly-older is an update. */
+  function isOlder(a: string, b: string): boolean {
+    const pa = a.split(".").map(Number);
+    const pb = b.split(".").map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const x = pa[i] ?? 0;
+      const y = pb[i] ?? 0;
+      if (Number.isNaN(x) || Number.isNaN(y)) return false; // unparseable → never offer an update
+      if (x !== y) return x < y;
+    }
+    return false;
+  }
+
   function outdated(b: Box): boolean {
-    return !!b.version && !!latest && b.version !== latest;
+    const target = latestFor(b);
+    return !!b.version && !!target && isOlder(b.version, target);
   }
 
   async function load(silent = false) {
     if (!silent) loading = true;
     try {
-      [list, latest] = await Promise.all([
-        boxApi.list(),
-        boxApi.latestVersion().then((r) => r.version).catch(() => ""),
-      ]);
+      list = await boxApi.list();
+      // One request per DISTINCT platform, not per box.
+      const platforms = [...new Set(list.map((b) => b.platform).filter(Boolean))] as string[];
+      const versions = await Promise.all(
+        platforms.map((p) =>
+          boxApi
+            .latestVersion(p)
+            .then((r) => r.version ?? "")
+            .catch(() => ""),
+        ),
+      );
+      latestBy = Object.fromEntries(platforms.map((p, i) => [p, versions[i]]));
     } catch (e) {
       if (!silent) toast.error(e instanceof Error ? e.message : t.loadFailed);
     } finally {
@@ -221,7 +252,9 @@
 
   async function updateBox(b: Box) {
     updatingId = b.id;
-    const target = latest;
+    // This box's platform, not a shared value — the poll below waits for the box to report exactly
+    // this version, so a target from another platform would hang until the 3-minute cap.
+    const target = latestFor(b);
     try {
       await boxApi.update(b.id);
       toast.info(t.updateStarted(b.name, target));
@@ -290,14 +323,14 @@
                     {#if outdated(b)}
                       <button
                         class="interactive ml-2 inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400 disabled:opacity-50"
-                        title={t.updateTo(latest)}
+                        title={t.updateTo(latestFor(b))}
                         disabled={updatingId === b.id}
                         onclick={() => updateBox(b)}
                       >
                         {#if updatingId === b.id}
                           <Busy size={12} /> {t.updating}
                         {:else}
-                          <ArrowUpCircle class="size-3" /> {t.updateArrow(latest)}
+                          <ArrowUpCircle class="size-3" /> {t.updateArrow(latestFor(b))}
                         {/if}
                       </button>
                     {/if}

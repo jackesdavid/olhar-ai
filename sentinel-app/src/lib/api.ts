@@ -138,8 +138,16 @@ export const boxes = {
   restart: (id: string) => api.post<void>(`/boxes/${id}/restart`),
   /** Queue an update for a box (it runs install.sh --update → service manager restarts with new binary). */
   update: (id: string) => api.post<void>(`/boxes/${id}/update`),
-  /** The latest edge build the operator has published (for "update available"). */
-  latestVersion: () => api.get<{ version: string }>("/edge-latest"),
+  /** The latest edge build the operator has published for a given box's platform.
+   *
+   *  ALWAYS pass the box's reported `platform`. Each platform is published independently, so the
+   *  no-argument form answers with the LOWEST version across all of them — which told a macOS box
+   *  on 0.5.66 that the latest was Linux's 0.5.65, and offered it as an update. Control accepts the
+   *  reported string ("macOS (x86_64)") as well as a manifest key. */
+  latestVersion: (platform?: string) =>
+    api.get<{ version: string | null }>(
+      platform ? `/edge-latest?platform=${encodeURIComponent(platform)}` : "/edge-latest",
+    ),
   /** Per-platform installer downloads for the current edge version (card #84). Only lists files
    *  that actually exist on the dist server, so a button never 404s. */
   installers: () => api.get<InstallerManifest>("/edge/installers"),
