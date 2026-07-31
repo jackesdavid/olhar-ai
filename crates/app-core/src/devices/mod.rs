@@ -17,7 +17,11 @@ pub type DeviceStore = Arc<Mutex<Vec<Device>>>;
 
 /// A camera the operator has scanned (and optionally saved credentials for).
 /// Persisted to Postgres (the `devices` table) so it survives restarts.
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+// `Default` exists for TEST FIXTURES: they construct a Device with the two or three fields the
+// case is about and `..Default::default()` for the rest. Without it every fixture lists every
+// field, so adding one — as #155 did with the four probe_* columns — breaks unrelated tests in
+// files that have nothing to do with the change.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Device {
     /// Stable ONVIF device id (WS-Addressing `EndpointReference`, e.g.
     /// `urn:uuid:…`). The reconciler keys on this so a camera that changes IP
