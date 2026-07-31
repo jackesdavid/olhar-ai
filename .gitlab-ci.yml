@@ -1,0 +1,317 @@
+# Sentinel CI — build the cloud services, push to the GitLab Container Registry, then tell the VPS
+# to pull + restart. The VPS never builds.
+#
+# Ported from .github/workflows/{deploy,release}.yml. Two behaviours are load-bearing and were kept
+# deliberately:
+#
+#  1. SELECTIVE builds. Only services whose files changed are rebuilt and redeployed. The Rust
+#     services share crates/** (they all link app-core), so a change there rebuilds all three.
+#  2. install.sh is compiled INTO control via include_str!, so a change to it must rebuild control.
+#     On GitHub this was missing at first: the file lived outside sentinel-control/, changed
+#     control's binary, and deployed nothing — the repo looked fixed while every box fetched the
+#     old script. Keep sentinel-edge/install.sh in the control rule.
+#
+# Registry auth uses the built-in CI_JOB_TOKEN — no PAT anywhere, which is the point of moving off
+# GHCR (that needed a classic PAT with write:packages because org packages 403'd the job token).
+#
+# Required CI/CD variables (Settings → CI/CD → Variables), all Masked + Protected:
+#   VPS_HOST, VPS_USER   — same values as the GitHub secrets
+#   VPS_SSH_KEY          — the PRIVATE id_contab_ed25519. Replaces the password auth the GitHub
+#                          pipeline used (it SSHed to production as root with a password).
+
+stages: [build, deploy, release]
+
+variables:
+  # registry.gitlab.com/olharai-grupo/sentinels — set by GitLab, not hardcoded, so a fork or a
+  # renamed project cannot push images into the original project's registry.
+  IMAGE_PREFIX: $CI_REGISTRY_IMAGE
+  DOCKER_BUILDKIT: "1"
+
+# ---------------------------------------------------------------------------------------------
+# Shared bits
+# ---------------------------------------------------------------------------------------------
+
+.registry_login: &registry_login
+  - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+
+.ssh_setup: &ssh_setup
+  # Key-based, not password. The key is already in the VPS authorized_keys.
+  - install -m 700 -d ~/.ssh
+  - printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+  - chmod 600 ~/.ssh/id_deploy
+  - ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+.build_service:
+  stage: build
+  tags: [sentinel]
+  # A newer push supersedes an in-flight build rather than racing it to the VPS.
+  interruptible: true
+  image: docker:27
+  services: [docker:27-dind]
+  before_script:
+    - *registry_login
+  script:
+    - |
+      set -eu
+      echo "▸ building $SERVICE from $DOCKERFILE"
+      # shellcheck disable=SC2086
+      docker build \
+        --file "$DOCKERFILE" \
+        ${BUILD_ARGS:+--build-arg $BUILD_ARGS} \
+        --cache-from "$IMAGE_PREFIX/$SERVICE:latest" \
+        --build-arg BUILDKIT_INLINE_CACHE=1 \
+        --tag "$IMAGE_PREFIX/$SERVICE:latest" \
+        --tag "$IMAGE_PREFIX/$SERVICE:$CI_COMMIT_SHORT_SHA" \
+        .
+      docker push "$IMAGE_PREFIX/$SERVICE:latest"
+      docker push "$IMAGE_PREFIX/$SERVICE:$CI_COMMIT_SHORT_SHA"
+      # Tell the deploy job this service was actually built. A file per service rather than a
+      # dotenv key: deploy must restart exactly the set that was rebuilt, and an artifact
+      # directory makes that set explicit instead of reconstructed.
+      mkdir -p built && echo "$SERVICE" > "built/$SERVICE"
+  artifacts:
+    paths: [built/]
+    expire_in: 1 day
+
+# ---------------------------------------------------------------------------------------------
+# Build — one job per service, each with its own change rule
+# ---------------------------------------------------------------------------------------------
+
+# The three Rust services share crates/** and Cargo.*, so a change there rebuilds all three.
+.rust_changes: &rust_changes
+  - crates/**/*
+  - Cargo.toml
+  - Cargo.lock
+  - Dockerfile
+
+build:control:
+  extends: .build_service
+  variables:
+    SERVICE: sentinel-control
+    DOCKERFILE: Dockerfile
+    BUILD_ARGS: PACKAGE=sentinel-control
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - sentinel-control/**/*
+        # Compiled into control via include_str! — see the header note.
+        - sentinel-edge/install.sh
+        - crates/**/*
+        - Cargo.toml
+        - Cargo.lock
+        - Dockerfile
+        - deploy/vps/**/*
+        - .gitlab-ci.yml
+
+build:flow:
+  extends: .build_service
+  variables:
+    SERVICE: sentinel-flow
+    DOCKERFILE: Dockerfile
+    BUILD_ARGS: PACKAGE=sentinel-flow
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - sentinel-flow/**/*
+        - crates/**/*
+        - Cargo.toml
+        - Cargo.lock
+        - Dockerfile
+        - deploy/vps/**/*
+        - .gitlab-ci.yml
+
+build:gateway:
+  extends: .build_service
+  variables:
+    SERVICE: sentinel-gateway
+    DOCKERFILE: Dockerfile
+    BUILD_ARGS: PACKAGE=sentinel-gateway
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - sentinel-gateway/**/*
+        - crates/**/*
+        - Cargo.toml
+        - Cargo.lock
+        - Dockerfile
+        - deploy/vps/**/*
+        - .gitlab-ci.yml
+
+build:app:
+  extends: .build_service
+  variables:
+    SERVICE: sentinel-app
+    DOCKERFILE: deploy/app/Dockerfile
+    BUILD_ARGS: VITE_COMMIT=$CI_COMMIT_SHA
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - sentinel-app/**/*
+        - deploy/app/**/*
+        - deploy/vps/**/*
+        - .gitlab-ci.yml
+
+build:landing:
+  extends: .build_service
+  variables:
+    SERVICE: sentinel-landing
+    DOCKERFILE: deploy/landing/Dockerfile
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - landing/**/*
+        - deploy/landing/**/*
+        - deploy/vps/**/*
+        - .gitlab-ci.yml
+
+# ---------------------------------------------------------------------------------------------
+# Deploy — pull + restart ONLY what was rebuilt
+# ---------------------------------------------------------------------------------------------
+
+deploy:vps:
+  stage: deploy
+  tags: [sentinel]
+  image: alpine:3.20
+  # Serialize: two pipelines must never race on the VPS docker compose.
+  resource_group: production
+  interruptible: false
+  needs:
+    - job: build:control
+      artifacts: true
+      optional: true
+    - job: build:flow
+      artifacts: true
+      optional: true
+    - job: build:gateway
+      artifacts: true
+      optional: true
+    - job: build:app
+      artifacts: true
+      optional: true
+    - job: build:landing
+      artifacts: true
+      optional: true
+  before_script:
+    - apk add --no-cache openssh-client
+    - *ssh_setup
+  script:
+    - |
+      set -eu
+      SERVICES="$(ls built/ 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+      if [ -z "$SERVICES" ]; then
+        echo "nothing was rebuilt — not touching the VPS"
+        exit 0
+      fi
+      echo "▸ deploying: $SERVICES"
+      ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+        "cd /ibbf && \
+         docker compose -f docker-compose.yml -f docker-compose.sentinel.yml pull $SERVICES && \
+         docker compose -f docker-compose.yml -f docker-compose.sentinel.yml up -d $SERVICES && \
+         docker image prune -f"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ---------------------------------------------------------------------------------------------
+# Release — tag v* builds the edge binaries and publishes them
+# ---------------------------------------------------------------------------------------------
+
+.edge_build:
+  stage: release
+  tags: [sentinel]
+  image: rust:1-bookworm
+  before_script:
+    # GStreamer is the ONLY media path (card #138) — the binary links it, so the dev packages are
+    # required. There is no --features flag: `gst-linked` was deleted in 277f079, and release.yml
+    # kept passing it, which failed every tagged Linux build silently for five versions.
+    - apt-get update -qq
+    - apt-get install -y -qq libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev pkg-config
+  script:
+    - rustup target add "$TARGET"
+    - cargo build --release --locked --manifest-path sentinel-edge/Cargo.toml --target "$TARGET"
+    - mkdir -p dist
+    - cp "sentinel-edge/target/$TARGET/release/sentinel-edge" "dist/$ASSET"
+  artifacts:
+    paths: [dist/]
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+
+release:edge-x86_64:
+  extends: .edge_build
+  variables:
+    TARGET: x86_64-unknown-linux-gnu
+    ASSET: sentinel-edge-linux-x86_64
+
+release:edge-aarch64:
+  extends: .edge_build
+  variables:
+    TARGET: aarch64-unknown-linux-gnu
+    ASSET: sentinel-edge-linux-aarch64
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+    PKG_CONFIG_ALLOW_CROSS: "1"
+    PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
+  before_script:
+    - dpkg --add-architecture arm64
+    - apt-get update -qq
+    - apt-get install -y -qq gcc-aarch64-linux-gnu pkg-config
+    # The GStreamer dev headers must be the ARM64 ones — the host x86 packages would satisfy
+    # pkg-config and then fail at link time against a foreign-architecture object.
+    - apt-get install -y -qq libgstreamer1.0-dev:arm64 libgstreamer-plugins-base1.0-dev:arm64
+
+release:publish:
+  stage: release
+  tags: [sentinel]
+  image: alpine:3.20
+  needs: [release:edge-x86_64, release:edge-aarch64]
+  before_script:
+    - apk add --no-cache openssh-client
+    - *ssh_setup
+  script:
+    - |
+      set -eu
+      VER="${CI_COMMIT_TAG#v}"
+      cp sentinel-edge/install.sh dist/install.sh
+      cp deploy/edge-dist/merge-manifest.sh dist/merge-manifest.sh
+      # Versioned filenames. The unversioned name is what made a failed Linux release INVISIBLE:
+      # the box re-downloaded whatever was already sitting there and reported success.
+      for a in sentinel-edge-linux-x86_64 sentinel-edge-linux-aarch64; do
+        [ -f "dist/$a" ] || continue
+        cp "dist/$a" "dist/$a-$VER"
+        sha256sum "dist/$a-$VER" | cut -d' ' -f1 > "dist/$a-$VER.sha256"
+      done
+      scp -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes dist/* "$VPS_USER@$VPS_HOST:/ibbf/edge-dist/"
+      # Record ONLY what actually landed. The manifest is the published truth: control reads it to
+      # answer /edge-latest, so a version that never built must never appear in it.
+      SHA_X86="$(cat dist/sentinel-edge-linux-x86_64-$VER.sha256 2>/dev/null || true)"
+      SHA_ARM="$(cat dist/sentinel-edge-linux-aarch64-$VER.sha256 2>/dev/null || true)"
+      ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+        "cd /ibbf/edge-dist && chmod +x merge-manifest.sh && \
+         { [ -n '$SHA_X86' ] && ./merge-manifest.sh linux-x86_64  '$VER' 'sentinel-edge-linux-x86_64-$VER'  '$SHA_X86'; } ; \
+         { [ -n '$SHA_ARM' ] && ./merge-manifest.sh linux-aarch64 '$VER' 'sentinel-edge-linux-aarch64-$VER' '$SHA_ARM'; } ; \
+         cat manifest.json"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+
+# ---------------------------------------------------------------------------------------------
+# Guard — the edge lockfile must match its Cargo.toml
+# ---------------------------------------------------------------------------------------------
+
+verify:edge-lock:
+  stage: build
+  tags: [sentinel]
+  image: rust:1-bookworm
+  interruptible: true
+  script:
+    # release builds --locked, so a stale lock fails the release rather than this cheap job.
+    - cargo metadata --locked --format-version 1 --manifest-path sentinel-edge/Cargo.toml > /dev/null
+    - echo "✓ sentinel-edge Cargo.lock is in sync"
+  rules:
+    - changes:
+        - sentinel-edge/Cargo.toml
+        - sentinel-edge/Cargo.lock
