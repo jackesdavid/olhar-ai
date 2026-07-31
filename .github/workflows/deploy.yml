@@ -15,6 +15,13 @@ on:
     branches: [main]
     paths:
       - "sentinel-control/**"
+      # NOT part of sentinel-control, but compiled INTO it: http.rs serves the installer via
+      # `include_str!("../../sentinel-edge/install.sh")`. Without this line a fix to the installer
+      # changes control's binary and never deploys — the script boxes actually fetch stays stale
+      # while the repo looks fixed. This is the only file control embeds from outside its own tree;
+      # `sentinel-edge/**` is deliberately NOT used, since the rest of the crate is released by
+      # release.yml on a tag and must not rebuild control.
+      - "sentinel-edge/install.sh"
       - "sentinel-gateway/**"
       - "sentinel-flow/**"
       - "sentinel-app/**"
@@ -56,6 +63,8 @@ jobs:
           filters: |
             control:
               - 'sentinel-control/**'
+              # Embedded in control via include_str! — see the note on the trigger paths above.
+              - 'sentinel-edge/install.sh'
               - 'crates/**'
               - 'Cargo.*'
               - 'Dockerfile'
