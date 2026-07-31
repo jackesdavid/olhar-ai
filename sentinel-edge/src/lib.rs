@@ -40,9 +40,40 @@ use state::AppState;
 /// This means the UI Restart button doubles as an update trigger: restart → startup →
 /// version check → auto-update. No more bootstrapping problem between releases.
 #[cfg(not(target_os = "ios"))] // the embedded iOS edge is updated with the app, not self-updated
+/// Manifest key for the platform this binary was built for. Must match `platform_key` in control
+/// and the `case` in install.sh — the manifest is keyed per OS+arch because each is built and
+/// published independently.
+fn manifest_key() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_arch = "aarch64") {
+        "linux-aarch64"
+    } else {
+        "linux-x86_64"
+    }
+}
+
+/// True when `latest` is strictly newer than `current`, comparing numerically.
+///
+/// The old check was `latest != current`, which treats "behind" and "ahead" alike: a box on 0.5.66
+/// asked for the latest, got 0.5.65 (the cross-platform minimum, because the platform was not sent),
+/// saw a difference, and DOWNGRADED itself on boot. An update must only ever go forwards.
+fn is_newer(latest: &str, current: &str) -> bool {
+    let parse = |v: &str| -> Vec<u64> { v.split('.').map(|p| p.parse().unwrap_or(0)).collect() };
+    let (a, b) = (parse(latest), parse(current));
+    for i in 0..a.len().max(b.len()) {
+        let (x, y) = (a.get(i).copied().unwrap_or(0), b.get(i).copied().unwrap_or(0));
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
 fn maybe_self_update(control_url: &str) {
     let current = env!("CARGO_PKG_VERSION");
-    let url = format!("{control_url}/edge-latest");
+    // ALWAYS send the platform: the no-platform answer is the LOWEST version across all platforms.
+    let url = format!("{control_url}/edge-latest?platform={}", manifest_key());
     let resp = match ureq::get(&url)
         .timeout(std::time::Duration::from_secs(8))
         .call()
@@ -62,8 +93,8 @@ fn maybe_self_update(control_url: &str) {
                 .map(str::to_string)
         })
         .unwrap_or_default();
-    if latest.is_empty() || latest == current {
-        log::debug!("edge {current} is up to date (latest={latest})");
+    if latest.is_empty() || !is_newer(&latest, current) {
+        log::debug!("edge {current} is up to date (published={latest})");
         return;
     }
     // The Unix path: shell out to install.sh, which stops the service, swaps the binary, and

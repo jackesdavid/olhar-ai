@@ -70,11 +70,9 @@ case "$os" in
   Darwin) EDGE_ASSET="sentinel-edge-macos-$arch" ;;
   *) echo "Unsupported OS: $os" >&2; exit 1 ;;
 esac
+# Reject a platform we do not build for, before anything is downloaded.
 case "$os-$arch" in
-  Linux-x86_64)   GO2RTC_ASSET="go2rtc_linux_amd64" ;;
-  Linux-aarch64)  GO2RTC_ASSET="go2rtc_linux_arm64" ;;
-  Darwin-arm64)   GO2RTC_ASSET="go2rtc_mac_arm64.zip" ;;
-  Darwin-x86_64)  GO2RTC_ASSET="go2rtc_mac_amd64.zip" ;;
+  Linux-x86_64|Linux-aarch64|Darwin-arm64|Darwin-x86_64) ;;
   *) echo "Unsupported platform: $os-$arch" >&2; exit 1 ;;
 esac
 
@@ -96,12 +94,32 @@ elif [ "$os" = "Darwin" ]; then
 fi
 echo "▸ Platform: $PLATFORM$( [ "$IMMUTABLE" = 1 ] && echo ' (immutable / rpm-ostree)')"
 
-# Show which edge build we're installing (control publishes the latest version at /edge-latest).
-EDGE_VERSION="$(curl -fsSL "$CONTROL_URL/edge-latest" 2>/dev/null | sed -n 's/.*"version"[^"]*"\([^"]*\)".*/\1/p')"
+# ---- what is published FOR THIS PLATFORM ------------------------------------
+# ALWAYS pass ?platform=. Without it /edge-latest answers with the LOWEST version across every
+# platform — which is how a macOS box on 0.5.66 asked for "latest", was told Linux's 0.5.65, and
+# DOWNGRADED itself. Each platform is published independently; only its own entry is meaningful.
+case "$os-$arch" in
+  Darwin-*)       MANIFEST_KEY="macos" ;;
+  Linux-x86_64)   MANIFEST_KEY="linux-x86_64" ;;
+  Linux-aarch64)  MANIFEST_KEY="linux-aarch64" ;;
+  *)              MANIFEST_KEY="$os-$arch" ;;
+esac
+
+# One field out of the /edge-latest JSON.  json_field <json> <name>
+json_field() {
+  printf '%s' "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p"
+}
+
+LATEST_JSON="$(curl -fsSL "$CONTROL_URL/edge-latest?platform=$MANIFEST_KEY" 2>/dev/null || true)"
+EDGE_VERSION="$(json_field "$LATEST_JSON" version)"
+# The published FILENAME, taken from the manifest rather than reconstructed. Naming has changed
+# across releases (`Sentinel-Edge-0.5.65.pkg` vs `Sentinel-Edge-0.5.67-gst-x86_64.pkg`), so a name
+# built by convention here 404s the moment the convention moves. The manifest is the only authority.
+EDGE_FILE="$(json_field "$LATEST_JSON" file)"
 if [ -n "$EDGE_VERSION" ]; then
-  echo "▸ sentinel-edge version: v$EDGE_VERSION"
+  echo "▸ sentinel-edge version: v$EDGE_VERSION ($MANIFEST_KEY)"
 else
-  echo "▸ sentinel-edge version: (could not reach $CONTROL_URL/edge-latest)"
+  echo "▸ sentinel-edge version: (nothing published for $MANIFEST_KEY at $CONTROL_URL)"
 fi
 
 # ---- update mode: keep env / service / enrollment; swap the payload ----------
@@ -114,22 +132,26 @@ fi
 #             makes the in-app "Update" button work on macOS.
 if [ "$UPDATE" = "1" ]; then
   [ -x "$PREFIX/sentinel-edge" ] || { echo "Not installed at $PREFIX — run the full installer first." >&2; exit 1; }
+  # Resolved once above, FOR THIS PLATFORM, from the manifest. Refuse rather than guess: an update
+  # that cannot name what it is installing is how a box ends up on someone else's build.
+  [ -n "$EDGE_VERSION" ] && [ -n "$EDGE_FILE" ] || {
+    echo "could not resolve a published build for $MANIFEST_KEY from $CONTROL_URL/edge-latest" >&2
+    exit 1
+  }
   if [ "$os" = "Linux" ]; then
-    echo "▸ Updating sentinel-edge ($os-$arch) from ${RELEASE_BASE}…"
-    curl -fSL "$RELEASE_BASE/$EDGE_ASSET" -o "$PREFIX/sentinel-edge.new"
+    echo "▸ Updating sentinel-edge ($MANIFEST_KEY) → v${EDGE_VERSION} from ${RELEASE_BASE}…"
+    curl -fSL "$RELEASE_BASE/$EDGE_FILE" -o "$PREFIX/sentinel-edge.new"
     chmod +x "$PREFIX/sentinel-edge.new"
     mv "$PREFIX/sentinel-edge.new" "$PREFIX/sentinel-edge"
     systemctl restart sentinel-edge
-    echo "✓ Updated. Status: systemctl status sentinel-edge"
+    echo "✓ Updated to v${EDGE_VERSION}. Status: systemctl status sentinel-edge"
   else
-    ver="$(curl -fsSL "$CONTROL_URL/edge-latest" | sed -n 's/.*"version"[^"]*"\([^"]*\)".*/\1/p')"
-    [ -n "$ver" ] || { echo "could not resolve latest edge version from $CONTROL_URL/edge-latest" >&2; exit 1; }
-    pkg="$(mktemp -d)/Sentinel-Edge-${ver}.pkg"
-    echo "▸ Updating sentinel-edge (macOS) → v${ver} via signed .pkg reinstall…"
-    curl -fSL "$RELEASE_BASE/Sentinel-Edge-${ver}.pkg" -o "$pkg"
+    pkg="$(mktemp -d)/$EDGE_FILE"
+    echo "▸ Updating sentinel-edge (macOS) → v${EDGE_VERSION} via signed .pkg reinstall…"
+    curl -fSL "$RELEASE_BASE/$EDGE_FILE" -o "$pkg"
     installer -pkg "$pkg" -target /   # replaces binary + gst runtime, reruns postinstall (keeps identity)
     rm -f "$pkg"
-    echo "✓ Updated to v${ver}."
+    echo "✓ Updated to v${EDGE_VERSION}."
   fi
   exit 0
 fi
@@ -192,8 +214,11 @@ else
 fi
 
 # ---- 2. binaries ------------------------------------------------------------
-echo "▸ Downloading sentinel-edge…"
-curl -fSL "$RELEASE_BASE/$EDGE_ASSET" -o "$PREFIX/sentinel-edge"
+# Prefer the manifest's filename; fall back to the conventional name only when nothing is published
+# for this platform (a box installing against a control that predates the manifest).
+DOWNLOAD_AS="${EDGE_FILE:-$EDGE_ASSET}"
+echo "▸ Downloading sentinel-edge ($DOWNLOAD_AS)…"
+curl -fSL "$RELEASE_BASE/$DOWNLOAD_AS" -o "$PREFIX/sentinel-edge"
 chmod +x "$PREFIX/sentinel-edge"
 # Confirm the installed build's version. The binary has no native dependencies (#79), so this
 # always runs — on any host, immutable or not, before any reboot.
