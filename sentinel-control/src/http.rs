@@ -419,12 +419,22 @@ async fn edge_latest(
         };
     }
 
-    // No platform given: an appliance running a build from before this endpoint took the
-    // parameter. Answer with the LOWEST published version, so such a box is never pointed at
-    // something its own platform does not have. Conservative on purpose — under-advertising
-    // costs a delayed update, over-advertising costs a failed one on every box that lacks it.
-    let min = pubs.values().map(|a| a.version.as_str()).min();
-    Json(json!({ "version": min }))
+    // No platform given: an appliance built before this endpoint took the parameter. Such a box
+    // uses this answer for ONE decision — "is there anything newer than me?" — and then hands the
+    // real work to `install.sh`, which resolves the correct per-platform build and refuses to move
+    // backwards. So this value is a TRIGGER TO GO LOOK, not an install target.
+    //
+    // It used to answer with the LOWEST version across platforms, meaning to be conservative. That
+    // was actively harmful: a box on the newest macOS build was told the oldest Linux one, matched
+    // its own version, and concluded it was current — so it never fetched install.sh, and the fix
+    // for its own updater could never arrive. The conservatism protected against pointing a box at
+    // a build its platform lacks, which install.sh now handles properly at the only layer that can
+    // actually see the platform.
+    //
+    // MAX is therefore the correct trigger: if anything anywhere is newer, go and find out. A box
+    // already current for its platform learns that from install.sh and does nothing.
+    let max = pubs.values().map(|a| a.version.as_str()).max();
+    Json(json!({ "version": max }))
 }
 
 async fn health(State(st): State<AppState>) -> impl IntoResponse {

@@ -33,8 +33,8 @@ PREFIX="${SENTINEL_PREFIX:-/opt/sentinel-edge}"
 ENV_DIR="${SENTINEL_ENV_DIR:-/etc/sentinel-edge}"
 # card #138: "ffmpeg" (default) or "gstreamer" — opt-in only, a coexistence/measurement flag, not
 # a permanent switch. See docs/plans/edge-gstreamer-backend.md.
-MEDIA_BACKEND="${SENTINEL_MEDIA_BACKEND:-ffmpeg}"
 UPDATE=0   # --update: refresh the payload + restart, keeping env / service / enrollment
+FORCE=0    # --force: install the published build even if it is not newer (explicit user request)
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -43,8 +43,11 @@ while [ $# -gt 0 ]; do
     --box-token) BOX_TOKEN="$2"; shift 2 ;;
     --public-host) PUBLIC_HOST="$2"; shift 2 ;;
     --release-base) RELEASE_BASE="$2"; shift 2 ;;
-    --media-backend) MEDIA_BACKEND="$2"; shift 2 ;;
+    # Accepted and ignored: GStreamer is the only media path now (card #138). Kept so an older
+    # copy-pasted install command does not die on "unknown flag".
+    --media-backend) shift 2 ;;
     --update) UPDATE=1; shift ;;
+    --force) FORCE=1; shift ;;
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
 done
@@ -138,6 +141,33 @@ if [ "$UPDATE" = "1" ]; then
     echo "could not resolve a published build for $MANIFEST_KEY from $CONTROL_URL/edge-latest" >&2
     exit 1
   }
+
+  # ---- the safety gate that reaches EVERY box ---------------------------------
+  # This script is fetched fresh from control on every update, so the decision made here applies
+  # even to boxes whose own binary has broken update logic. That makes this — not the binary — the
+  # right place to enforce "only ever move forward".
+  #
+  # Two failures it prevents:
+  #  • DOWNGRADE. A box asking without a platform is told the highest version published anywhere,
+  #    which may be another platform's. Without this gate it would install its own platform's older
+  #    build and go backwards.
+  #  • RESTART LOOP. That same box, already current for its platform, would reinstall the identical
+  #    version and restart — then decide again on the next boot, forever.
+  INSTALLED=""
+  if [ -x "$PREFIX/sentinel-edge" ]; then
+    INSTALLED="$("$PREFIX/sentinel-edge" --version 2>/dev/null | tr -d 'a-zA-Z -')"
+  fi
+  # dotted version → comparable integer (each component assumed < 1000)
+  ver_num() {
+    oldIFS=$IFS; IFS=.; set -- $1; IFS=$oldIFS
+    printf '%d' $(( ${1:-0} * 1000000 + ${2:-0} * 1000 + ${3:-0} ))
+  }
+  if [ "$FORCE" != "1" ] && [ -n "$INSTALLED" ]; then
+    if [ "$(ver_num "$EDGE_VERSION")" -le "$(ver_num "$INSTALLED")" ]; then
+      echo "✓ Already on v$INSTALLED; published for $MANIFEST_KEY is v$EDGE_VERSION — nothing to do."
+      exit 0
+    fi
+  fi
   if [ "$os" = "Linux" ]; then
     echo "▸ Updating sentinel-edge ($MANIFEST_KEY) → v${EDGE_VERSION} from ${RELEASE_BASE}…"
     curl -fSL "$RELEASE_BASE/$EDGE_FILE" -o "$PREFIX/sentinel-edge.new"

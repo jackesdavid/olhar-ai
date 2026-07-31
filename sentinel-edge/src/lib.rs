@@ -114,8 +114,11 @@ fn maybe_self_update(control_url: &str) {
     #[cfg(unix)]
     {
         log::warn!("auto-update: {current} → {latest} — spawning install.sh --update");
+        // `--force` only when the user explicitly asked: install.sh otherwise refuses to install a
+        // build that is not newer, which is what stops a same-version reinstall/restart loop.
+        let force = if forced { " --force" } else { "" };
         let script = format!(
-            "curl -fsSL {control_url}/install.sh | sh -s -- --update --control {control_url}"
+            "curl -fsSL {control_url}/install.sh | sh -s -- --update --control {control_url}{force}"
         );
         let _ = std::process::Command::new("sh")
             .arg("-c")
