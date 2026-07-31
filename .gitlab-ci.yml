@@ -278,7 +278,14 @@ deploy:vps:
   script:
     - |
       set -eu
-      SERVICES="$(ls built/ 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+      # `ls built/` fails when no build job produced artifacts, and under `set -e` a variable
+      # assignment whose command substitution fails exits IMMEDIATELY — so the "nothing was
+      # rebuilt" guard below never ran, and the job died with exit 1 and no message at all.
+      # The guard has to survive the condition it exists to report.
+      SERVICES=""
+      if [ -d built ]; then
+        SERVICES="$(ls built/ | tr '\n' ' ' | sed 's/ *$//')"
+      fi
       if [ -z "$SERVICES" ]; then
         echo "nothing was rebuilt — not touching the VPS"
         exit 0
