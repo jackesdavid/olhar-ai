@@ -152,6 +152,7 @@ mod tests {
             rtsp_url: None,
             rtsp_sub_url: None,
             stream_mode: None,
+            ..Default::default()
         }
     }
 

@@ -1433,6 +1433,8 @@ mod tests {
             rtsp_url: None,
             rtsp_sub_url: None,
             stream_mode: None,
+        
+            ..Default::default()
         };
         let (tx, _rx) = std::sync::mpsc::channel();
         let ctx = ToolContext::new_local(
@@ -2006,6 +2008,7 @@ mod tests {
                 rtsp_url: None,
                 rtsp_sub_url: None,
                 stream_mode: None,
+                ..Default::default()
             },
             Device {
                 id: "".into(),
@@ -2019,6 +2022,7 @@ mod tests {
                 rtsp_url: None,
                 rtsp_sub_url: None,
                 stream_mode: None,
+                ..Default::default()
             },
         ]
     }
@@ -2355,6 +2359,8 @@ mod tests {
             rtsp_url: None,
             rtsp_sub_url: None,
             stream_mode: None,
+        
+            ..Default::default()
         };
         let cam_b = Device {
             id: "".into(),
@@ -2368,6 +2374,8 @@ mod tests {
             rtsp_url: None,
             rtsp_sub_url: None,
             stream_mode: None,
+        
+            ..Default::default()
         };
         let (tx, _rx) = std::sync::mpsc::channel();
         ToolContext::new_local(
