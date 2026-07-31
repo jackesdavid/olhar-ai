@@ -1585,21 +1585,30 @@ pub async fn record_camera_status(
     Ok(n.rows_affected() > 0)
 }
 
-/// The camera's health BEFORE a status write. `None` when the camera or its status is unknown
-/// (never probed) — a first-ever report is not a transition and must not fire an event.
-pub async fn previous_camera_health(
+/// The camera's state BEFORE a status write: `(was_healthy, last_frame_at)`.
+///
+/// `None` when the camera or its status is unknown (never probed) — a first-ever report is not a
+/// transition and must not fire an event.
+///
+/// `last_frame_at` rides along because it is the only honest basis for `camera_online.offline_secs`:
+/// read AFTER the write it would be the new value, and `probe_at` is useless here — it is refreshed
+/// on every report, so while a camera is down it tracks "when we last checked", not "when it went
+/// down". The last frame is the last moment the camera actually delivered video, which is what a
+/// person means by "how long was it out".
+pub async fn previous_camera_state(
     pool: &PgPool,
     tenant_id: Uuid,
     ip: &str,
-) -> sqlx::Result<Option<bool>> {
-    let row: Option<(Option<String>,)> =
-        sqlx::query_as("SELECT probe_status FROM devices WHERE tenant_id = $1 AND ip = $2")
-            .bind(tenant_id)
-            .bind(ip)
-            .fetch_optional(pool)
-            .await?;
-    Ok(row.and_then(|r| r.0).map(|s| {
-        matches!(s.as_str(), "ok" | "streaming")
+) -> sqlx::Result<Option<(bool, Option<String>)>> {
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT probe_status, last_frame_at FROM devices WHERE tenant_id = $1 AND ip = $2",
+    )
+    .bind(tenant_id)
+    .bind(ip)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.and_then(|(status, last_frame)| {
+        status.map(|s| (matches!(s.as_str(), "ok" | "streaming"), last_frame))
     }))
 }
 

@@ -534,6 +534,9 @@ pub fn system_events() -> Vec<TenantEvent> {
                 field("camera", PortType::Camera),
                 // How long it was down, so a graph can stay quiet about a 20-second blip and speak
                 // up about an hour — without every user having to build that logic themselves.
+                // Measured from the camera's last delivered frame, and ABSENT when it has never
+                // delivered one; a graph that gates on it should handle the missing case rather
+                // than assume 0, which would read as "no outage" for a camera that never worked.
                 field("offline_secs", PortType::Num),
             ],
         },

@@ -25,6 +25,18 @@ pub fn is_today(created_at: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Whole seconds from `from` to `to`, both RFC3339. `None` if either fails to parse.
+///
+/// Parses rather than comparing text: elapsed time is arithmetic, and the text-comparison shortcut
+/// the rest of this module relies on only answers "which is later". Negative results are clamped to
+/// zero — a clock adjustment between two writes should read as "just now", never as a negative
+/// duration that a downstream `>` comparison would silently pass.
+pub fn secs_between(from: &str, to: &str) -> Option<i64> {
+    let a = chrono::DateTime::parse_from_rfc3339(from).ok()?;
+    let b = chrono::DateTime::parse_from_rfc3339(to).ok()?;
+    Some((b - a).num_seconds().max(0))
+}
+
 /// An RFC3339 timestamp `secs_ago` seconds in the past.
 ///
 /// For reporting when something last happened from an elapsed duration — the frame hub knows "42s

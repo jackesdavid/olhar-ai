@@ -650,6 +650,26 @@ impl StreamingIn {
     }
 }
 
+/// How long a camera was out, from the last frame it delivered to now. `None` when it has never
+/// delivered one (a camera that has been broken since it was added was never "online" to time).
+fn offline_seconds(last_frame_at: Option<&str>, now: &str) -> Option<i64> {
+    app_core::timeutil::secs_between(last_frame_at?, now)
+}
+
+/// "4m" / "2h" — for event copy only; the machine-readable value is `offline_secs`.
+fn human_dur(secs: i64) -> String {
+    if secs < 60 {
+        return format!("{secs}s");
+    }
+    if secs < 3600 {
+        return format!("{}m", secs / 60);
+    }
+    if secs < 86_400 {
+        return format!("{}h", secs / 3600);
+    }
+    format!("{}d", secs / 86_400)
+}
+
 /// The edge reports which cameras it currently has a resolved stream for (box token). Drives
 /// the precise "online & correct" status dot + codec badge on the Devices page.
 /// `POST /config/camera-status` — the edge reports each camera's stage, and control turns HEALTH
@@ -675,7 +695,7 @@ async fn camera_status_push(
     for s in &items {
         let healthy_now = matches!(s.status.as_str(), "ok" | "streaming");
         // Read BEFORE the write — RETURNING would hand back the new value (see the store helper).
-        let was = match store::previous_camera_health(&st.pool, tenant, &s.ip).await {
+        let was = match store::previous_camera_state(&st.pool, tenant, &s.ip).await {
             Ok(v) => v,
             Err(e) => {
                 log::error!("camera-status: previous health for {}: {e}", s.ip);
@@ -688,7 +708,9 @@ async fn camera_status_push(
         }
 
         // `None` = never probed before. Not a transition.
-        let Some(was_healthy) = was else { continue };
+        let Some((was_healthy, was_last_frame)) = was else {
+            continue;
+        };
         if was_healthy == healthy_now {
             continue;
         }
@@ -700,11 +722,19 @@ async fn camera_status_push(
             .unwrap_or_else(|| s.ip.clone());
 
         let (kind, title, message, data) = if healthy_now {
+            // How long it was actually out, measured from the last frame that arrived. `null` when
+            // the camera has never delivered one — an honest gap beats a confident `0`, which would
+            // make "notify only if it was down over 5 minutes" silently never fire.
+            let offline_secs = offline_seconds(was_last_frame.as_deref(), &now);
+            let human = match offline_secs {
+                Some(secs) => format!("{name} is responding again (out for {})", human_dur(secs)),
+                None => format!("{name} is responding again"),
+            };
             (
                 "camera_online",
                 "Camera back online",
-                format!("{name} is responding again"),
-                serde_json::json!({ "camera": s.ip, "offline_secs": 0 }),
+                human,
+                serde_json::json!({ "camera": s.ip, "offline_secs": offline_secs }),
             )
         } else {
             (
