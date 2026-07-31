@@ -147,7 +147,12 @@ build:rust:
     # buildx, for a registry cache that includes INTERMEDIATE stages. Inline cache only carries
     # the final image's layers, so the expensive builder was never cached and every pipeline
     # recompiled from zero on ephemeral SaaS runners.
-    - docker buildx create --use --driver docker-container
+    #
+    # The docker-container driver refuses to start when TLS comes from the environment (which is
+    # how DinD is wired here) — it wants a named context instead, and says so in an error that
+    # names neither DOCKER_HOST nor the variables involved. Create the context explicitly.
+    - docker context create ci-dind
+    - docker buildx create --use --driver docker-container ci-dind
   script:
     - |
       set -eu
