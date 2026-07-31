@@ -60,15 +60,15 @@ action. "Can't reach 192.168.0.7 on the network — check it's powered on and on
 ## Test fixture, available now
 
 Camera `192.168.0.7` ("Sala", Tapo C100) is physically disconnected — ground truth is known. It
-must read **Unreachable**, not "streaming", and not a blank. The four `192.168.10.x` cameras are on
-a different subnet from the Jack Mac box and belong to another appliance — a second real case: a
-camera this box cannot serve should say so rather than appearing broken.
+must read **Unreachable**, not "streaming", and not a blank. It is the ONLY device in this tenant;
+the `192.168.10.x` cameras belong to a different tenant and appliance entirely.
 
 ## Related gaps found the same day (same root cause: no telemetry)
 
-1. **Edge logs stopped 2026-07-26** and did NOT resume after the disk was freed OR after the 0.5.66
-   update. Still zero rows in `platform_logs`. Unexplained, and it is why none of the above could be
-   diagnosed remotely.
+1. **Edge logs stopped landing in Postgres on 2026-07-26** — RESOLVED, and never a fault: that is
+   when Datadog was enabled, and the queue ships there and returns before the Postgres insert. The
+   real problem was the VIEWER, which kept reading the table and served five-day-old data with
+   nothing marking it stale. Reader removed; the write path and its Postgres fallback stay.
 2. **`disk_pct()` measures the wrong volume on macOS** — it picks `/`, which is the sealed read-only
    system volume. The box reported `disk=0%` while `/System/Volumes/Data` was 100% full.
 3. **`edge:full-disk` has never fired**, including on a box genuinely at 99%. It watches the
@@ -80,7 +80,7 @@ camera this box cannot serve should say so rather than appearing broken.
 Cloud half is live (commits `efb8509`, `36afa67`, `de62071`; edge `0.5.67` published):
 
 - migration 0083 applied; all four columns present on `devices`
-- all five cameras start `NULL` → the UI reads "Not checked yet", and **zero** `camera_*` events
+- the tenant's camera starts `NULL` → the UI reads "Not checked yet", and **zero** `camera_*` events
   fired on first deploy. This is the transition guard working: `None` previous status is not a
   transition, so a fresh deploy does not announce every camera as having "come online".
 - `camera_offline` / `camera_online` present in the deployed control binary
@@ -91,20 +91,21 @@ Cloud half is live (commits `efb8509`, `36afa67`, `de62071`; edge `0.5.67` publi
 Not verifiable from the cloud: a camera reading `unreachable`, and the offline→online flip. Both
 need the box on `0.5.67` — until then every camera reads "Not checked yet".
 
-### Gap found while verifying: `NotOnThisBox` is never produced
+### `NotOnThisBox` is declared but never produced
 
-`ProbeStatus::NotOnThisBox` is declared and has a label ("On a different network from this box"),
-but **nothing constructs it** — the edge derives status from its own pipelines only
-(`state.rs` `push_camera_status`: Streaming / Timeout / NoCredentials / NotFound, plus whatever
-`rtsp_probe::probe()` returns), and control never synthesizes it either.
+`ProbeStatus::NotOnThisBox` exists with a label ("On a different network from this box"), and
+nothing constructs it. The edge derives status only from its OWN pipelines, and control never
+synthesizes it either — so the variant is dead.
 
-Consequence for the four `192.168.10.x` cameras, which belong to a different appliance: they do not
-get the designed answer. Either they stay "Not checked yet" forever, or — if they are in this box's
-config — the edge cold-probes them every cycle and reports "Can't reach it on the network", paying a
-connect timeout each time to a subnet that cannot answer.
+It is dead rather than urgent. An earlier draft of this note claimed the four `192.168.10.x`
+cameras proved the gap by sitting at "Not checked yet" forever. They do not: they belong to a
+DIFFERENT TENANT (`luciusbsd`) and a different appliance, so they are correctly invisible to this
+box and this tenant. That claim came from a `SELECT ... FROM devices` with no tenant filter — the
+one mistake multi-tenant code exists to prevent, made while reasoning about it.
 
-The status this card exists to give ("this camera isn't mine to serve") is the one case still
-missing. Deciding it needs the box→camera assignment, which control holds, not the edge.
+Whether the variant is worth keeping is now an open question rather than a known hole: a camera
+that is genuinely in a tenant but assigned to another of that tenant's boxes is the only case it
+would serve, and no such case has been observed.
 
 ## Out of scope (v1)
 
