@@ -266,17 +266,23 @@ impl AppState {
     /// RTSP sessions at 2-4, and a status check that dials again is how a WORKING camera goes dark
     /// with "503 insufficient resource". So:
     ///
-    ///   - frames arriving  → `streaming` (the only proof that actually proves it)
-    ///   - no credentials   → `no_credentials`, answered without touching the network
-    ///   - otherwise        → cold-probe, but ONLY for a camera with no pipeline to ask
-    ///
-    /// A camera whose pipeline is up but starved is `timeout`, not `unreachable`: we know we reached
-    /// it, because we are connected to it.
+    ///   - frames arriving        → `streaming` (the only proof that actually proves it)
+    ///   - frames stopped recently → `timeout`; we were connected moments ago
+    ///   - frames stopped for long → cold-probe: the inference has expired, go and measure
+    ///   - no credentials          → `no_credentials`, answered without touching the network
     pub fn push_camera_status(&self) {
         use app_core::rtsp_probe::ProbeStatus;
         // Frames within this window count as live. Wider than the capture cadence so a single
         // dropped frame is not reported as an outage — flapping status is worse than none.
         const FRESH: Duration = Duration::from_secs(30);
+        // How long a starved pipeline stays `timeout` before we stop inferring and go and look.
+        //
+        // `timeout` claims "we are connected, the camera stalled". For the first minutes that is a
+        // fair reading of a dropped frame or a reconnecting pipeline. It stops being fair once the
+        // last frame is hours old: the cached frame is the ONLY reason we take this branch, so a
+        // camera that was unplugged reports "camera stalling" forever and never gets re-checked —
+        // a confident answer nobody measured. Found in the field at "no frame for 9883s".
+        const STALE: Duration = Duration::from_secs(5 * 60);
 
         let devices = self.devices.lock().unwrap().clone();
         let mut out = Vec::with_capacity(devices.len());
@@ -288,11 +294,17 @@ impl AppState {
             let has_creds = !d.username.as_deref().unwrap_or("").trim().is_empty()
                 || !d.password.as_deref().unwrap_or("").trim().is_empty();
 
+            // A frame old enough to be meaningless is treated as no frame at all, so the cold-probe
+            // arm below runs and answers with something measured.
+            let age = match age {
+                Some(a) if a > STALE => None,
+                other => other,
+            };
             let (status, detail) = match age {
                 // Proof of life. Nothing else needs asking.
                 Some(a) if a <= FRESH => (ProbeStatus::Streaming, String::new()),
-                // A pipeline exists but has gone quiet — we are connected, so this is the camera
-                // stalling, not the network losing it.
+                // A pipeline exists and has gone briefly quiet — we are connected, so this is the
+                // camera stalling, not the network losing it. Only within STALE; past that we look.
                 Some(a) => (
                     ProbeStatus::Timeout,
                     format!("no frame for {}s", a.as_secs()),
