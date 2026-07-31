@@ -261,6 +261,10 @@ deploy:vps:
       else
         printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_deploy
       fi
+    # OpenSSH REQUIRES a trailing newline on a private key. A File-type CI variable is stored
+    # byte-for-byte, so a paste that did not end in one produces "error in libcrypto" — which names
+    # neither the key nor the newline, and reads like a corrupt or wrong-format key.
+    - if [ -n "$(tail -c 1 ~/.ssh/id_deploy)" ]; then echo >> ~/.ssh/id_deploy; fi
     - chmod 600 ~/.ssh/id_deploy
     - ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
   script:
@@ -340,6 +344,10 @@ release:publish:
       else
         printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_deploy
       fi
+    # OpenSSH REQUIRES a trailing newline on a private key. A File-type CI variable is stored
+    # byte-for-byte, so a paste that did not end in one produces "error in libcrypto" — which names
+    # neither the key nor the newline, and reads like a corrupt or wrong-format key.
+    - if [ -n "$(tail -c 1 ~/.ssh/id_deploy)" ]; then echo >> ~/.ssh/id_deploy; fi
     - chmod 600 ~/.ssh/id_deploy
     - ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
   script:
