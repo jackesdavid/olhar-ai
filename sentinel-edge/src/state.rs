@@ -48,7 +48,19 @@ pub struct AppState {
     /// `Locked` and `AuthFailed` are states that repeated connection attempts CAUSE — so a status
     /// check that re-dials every 60s does not observe the lockout, it sustains it. See
     /// `ProbeStatus::is_retryable`.
-    pub probe_memo: Mutex<HashMap<String, (app_core::rtsp_probe::ProbeStatus, String, Instant)>>,
+    pub probe_memo: Mutex<HashMap<String, ProbeMemo>>,
+}
+
+/// A remembered cold-probe result: what the camera said, and WHEN it said it.
+///
+/// `at` is monotonic and drives the cooldown; `checked_at` is wall-clock and is what the cloud
+/// shows as the status age. They are separate because `Instant` cannot be turned into a date, and
+/// the age is the part the user reads.
+pub struct ProbeMemo {
+    pub status: app_core::rtsp_probe::ProbeStatus,
+    pub detail: String,
+    pub at: Instant,
+    pub checked_at: String,
 }
 
 /// One currently-tracked entity, as reported by `GET /tracks/:ip` — mirrors
@@ -305,6 +317,8 @@ impl AppState {
 
         for d in &devices {
             let age = crate::capture::last_frame_age(&d.ip);
+            // Set only when a status is RE-REPORTED from memory rather than freshly established.
+            let mut established_at: Option<String> = None;
             let has_creds = !d.username.as_deref().unwrap_or("").trim().is_empty()
                 || !d.password.as_deref().unwrap_or("").trim().is_empty();
 
@@ -338,13 +352,17 @@ impl AppState {
                         const LOCKED_COOLDOWN: Duration = Duration::from_secs(15 * 60);
                         let remembered = {
                             let memo = self.probe_memo.lock().unwrap();
-                            memo.get(&d.ip).and_then(|(s, detail, at)| {
+                            memo.get(&d.ip).and_then(|m| {
                                 let cooling =
-                                    !s.is_retryable() && at.elapsed() < LOCKED_COOLDOWN;
-                                cooling.then(|| (*s, detail.clone()))
+                                    !m.status.is_retryable() && m.at.elapsed() < LOCKED_COOLDOWN;
+                                cooling.then(|| (m.status, m.detail.clone(), m.checked_at.clone()))
                             })
                         };
-                        if let Some((status, detail)) = remembered {
+                        if let Some((status, detail, checked_at)) = remembered {
+                            // Carry the ORIGINAL check time up: this status is being re-reported,
+                            // not re-established, and dating it "now" would claim a freshness the
+                            // cooldown deliberately gave up.
+                            established_at = Some(checked_at);
                             (status, detail)
                         } else {
                             let p = app_core::rtsp_probe::probe(
@@ -352,9 +370,15 @@ impl AppState {
                                 d.username.as_deref().unwrap_or(""),
                                 d.password.as_deref().unwrap_or(""),
                             );
+                            let checked_at = app_core::timeutil::now_rfc3339();
                             self.probe_memo.lock().unwrap().insert(
                                 d.ip.clone(),
-                                (p.status, p.detail.clone(), Instant::now()),
+                                ProbeMemo {
+                                    status: p.status,
+                                    detail: p.detail.clone(),
+                                    at: Instant::now(),
+                                    checked_at,
+                                },
                             );
                             (p.status, p.detail)
                         }
@@ -373,6 +397,8 @@ impl AppState {
                 "last_frame_at": age.map(|a| {
                     app_core::timeutil::now_rfc3339_minus(a.as_secs() as i64)
                 }),
+                // Absent = established now (the common case: derived from the live pipeline).
+                "checked_at": established_at,
             }));
         }
 

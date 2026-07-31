@@ -1552,6 +1552,15 @@ pub struct CameraStatusIn {
     /// RFC3339, when a frame last arrived — absent if never.
     #[serde(default)]
     pub last_frame_at: Option<String>,
+    /// RFC3339, when this status was actually ESTABLISHED — which is not when it was reported.
+    ///
+    /// The edge re-reports every 60s but does not re-probe a camera that is refusing clients (that
+    /// is what sustains a lockout), so a remembered status can be minutes old while the report is
+    /// seconds old. Stamping the arrival time would tell the user "checked 6s ago" about a check
+    /// that has not run in a quarter of an hour — a confident wrong answer, and the age is the only
+    /// thing that makes a status trustworthy. Absent from older edges; falls back to arrival time.
+    #[serde(default)]
+    pub checked_at: Option<String>,
 }
 
 /// Persist a camera's reported status. Returns whether the row existed.
@@ -1578,7 +1587,8 @@ pub async fn record_camera_status(
     .bind(&s.ip)
     .bind(&s.status)
     .bind(&s.detail)
-    .bind(now_rfc3339)
+    // When the status was ESTABLISHED, not when it arrived — see `CameraStatusIn::checked_at`.
+    .bind(s.checked_at.as_deref().unwrap_or(now_rfc3339))
     .bind(s.last_frame_at.as_deref())
     .execute(pool)
     .await?;
