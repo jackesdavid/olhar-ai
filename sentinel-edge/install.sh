@@ -157,10 +157,21 @@ if [ "$UPDATE" = "1" ]; then
   if [ -x "$PREFIX/sentinel-edge" ]; then
     INSTALLED="$("$PREFIX/sentinel-edge" --version 2>/dev/null | tr -d 'a-zA-Z -')"
   fi
-  # dotted version → comparable integer (each component assumed < 1000)
+  # dotted version → comparable integer (each component assumed < 1000).
+  #
+  # Uses parameter expansion rather than `IFS=. ; set -- $v`: that idiom relies on word-splitting an
+  # unquoted expansion, which zsh does NOT do by default. Under zsh the split silently yields one
+  # field, the arithmetic sees "0.5.68", and the function errors out — and an errored comparison here
+  # reads as "not newer", i.e. a silently skipped update. Too quiet a failure for this path.
+  # Non-numeric components degrade to 0 instead of aborting.
   ver_num() {
-    oldIFS=$IFS; IFS=.; set -- $1; IFS=$oldIFS
-    printf '%d' $(( ${1:-0} * 1000000 + ${2:-0} * 1000 + ${3:-0} ))
+    _v="$1"
+    _a="${_v%%.*}"; _r="${_v#*.}"
+    _b="${_r%%.*}"; _c="${_r#*.}"; _c="${_c%%.*}"
+    case "$_a" in ''|*[!0-9]*) _a=0 ;; esac
+    case "$_b" in ''|*[!0-9]*) _b=0 ;; esac
+    case "$_c" in ''|*[!0-9]*) _c=0 ;; esac
+    printf '%d' $(( _a * 1000000 + _b * 1000 + _c ))
   }
   if [ "$FORCE" != "1" ] && [ -n "$INSTALLED" ]; then
     if [ "$(ver_num "$EDGE_VERSION")" -le "$(ver_num "$INSTALLED")" ]; then
