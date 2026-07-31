@@ -11,7 +11,8 @@ PREFIX=/opt/sentinel-edge
 ENV_DIR=/etc/sentinel-edge
 PLIST=/Library/LaunchDaemons/io.sentinel.edge.plist
 LABEL=io.sentinel.edge
-CONTROL_URL="${SENTINEL_CONTROL_URL:-https://control.thesentinels.online}"
+# Only used for a box with no edge.env yet — an existing file is preserved, identity and all.
+CONTROL_URL="${SENTINEL_CONTROL_URL:-https://control.olharai.com}"
 
 mkdir -p "$PREFIX/recordings" "$ENV_DIR"
 
@@ -71,9 +72,22 @@ start_daemon() {
 }
 start_daemon || echo "sentinel-edge: not started now — it will come up on the next boot" >&2
 
-USER_UID=$(stat -f %u /dev/console)
-if [ -n "$USER_UID" ] && [ "$USER_UID" != "0" ]; then
-  ( sleep 2; launchctl asuser "$USER_UID" open "http://localhost:8788" ) &
+# Open the pairing page ONLY on a box that has no identity yet.
+#
+# `http://localhost:8788/` is served by the enrollment router, which — by design — is the ONLY
+# thing an UNENROLLED box serves (see enroll.rs). Once a box has a BOX_TOKEN the main router takes
+# over and has no `/` route at all, so opening this on an upgrade greeted the customer with a BLANK
+# BROWSER TAB after every single update: an alarming non-answer at the exact moment they are
+# wondering whether the update worked.
+#
+# BOX_TOKEN is the whole of a box's identity, so its presence is the right question to ask.
+if ! grep -qE '^BOX_TOKEN=[^[:space:]]+' "$ENV_DIR/edge.env" 2>/dev/null; then
+  USER_UID=$(stat -f %u /dev/console)
+  if [ -n "$USER_UID" ] && [ "$USER_UID" != "0" ]; then
+    ( sleep 2; launchctl asuser "$USER_UID" open "http://localhost:8788" ) &
+  fi
+else
+  echo "sentinel-edge: already enrolled — skipping the pairing page."
 fi
 
 exit 0
