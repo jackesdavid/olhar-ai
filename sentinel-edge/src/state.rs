@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use app_core::devices::Device;
 
@@ -42,6 +42,13 @@ pub struct AppState {
     /// can answer "what's tracked right now" without a per-request round trip to the tracker
     /// itself. Card: edge tracking — the `GetTrackedObjects` node's backing store.
     pub live_tracks: Mutex<HashMap<(String, String), Vec<LiveTrackOut>>>,
+    /// Last cold-probe result per camera IP: `(status, detail, when)`.
+    ///
+    /// Exists to stop the status loop re-dialing a camera that has told us it is refusing clients.
+    /// `Locked` and `AuthFailed` are states that repeated connection attempts CAUSE — so a status
+    /// check that re-dials every 60s does not observe the lockout, it sustains it. See
+    /// `ProbeStatus::is_retryable`.
+    pub probe_memo: Mutex<HashMap<String, (app_core::rtsp_probe::ProbeStatus, String, Instant)>>,
 }
 
 /// One currently-tracked entity, as reported by `GET /tracks/:ip` — mirrors
@@ -116,6 +123,7 @@ impl AppState {
             control_url,
             devices: Mutex::new(devices),
             cache_path,
+            probe_memo: Mutex::new(HashMap::new()),
             go2rtc: Mutex::new(None),
             own_go2rtc,
             go2rtc_config,
@@ -317,12 +325,39 @@ impl AppState {
                 // no session of ours to lose.
                 None => match d.rtsp_url.as_deref().filter(|u| !u.trim().is_empty()) {
                     Some(url) => {
-                        let p = app_core::rtsp_probe::probe(
-                            url,
-                            d.username.as_deref().unwrap_or(""),
-                            d.password.as_deref().unwrap_or(""),
-                        );
-                        (p.status, p.detail)
+                        // A camera that answered `Locked` or `AuthFailed` must NOT be dialled again
+                        // on the next 60s tick. Those states are produced BY repeated attempts:
+                        // re-dialling does not observe the lockout, it renews it, and the camera can
+                        // never age out of it while we keep knocking. Consumer cameras (Tapo, and
+                        // most of the cheap ONVIF ones) hold the lock for minutes after the last
+                        // attempt, so continuous probing is an indefinite outage we inflict.
+                        //
+                        // Not "never re-check": that would leave a power-cycled camera looking dead
+                        // forever. Re-check on a long cooldown instead — slow enough to let the lock
+                        // expire, quick enough that a fixed camera comes back on its own.
+                        const LOCKED_COOLDOWN: Duration = Duration::from_secs(15 * 60);
+                        let remembered = {
+                            let memo = self.probe_memo.lock().unwrap();
+                            memo.get(&d.ip).and_then(|(s, detail, at)| {
+                                let cooling =
+                                    !s.is_retryable() && at.elapsed() < LOCKED_COOLDOWN;
+                                cooling.then(|| (*s, detail.clone()))
+                            })
+                        };
+                        if let Some((status, detail)) = remembered {
+                            (status, detail)
+                        } else {
+                            let p = app_core::rtsp_probe::probe(
+                                url,
+                                d.username.as_deref().unwrap_or(""),
+                                d.password.as_deref().unwrap_or(""),
+                            );
+                            self.probe_memo.lock().unwrap().insert(
+                                d.ip.clone(),
+                                (p.status, p.detail.clone(), Instant::now()),
+                            );
+                            (p.status, p.detail)
+                        }
                     }
                     None => (
                         ProbeStatus::NotFound,
