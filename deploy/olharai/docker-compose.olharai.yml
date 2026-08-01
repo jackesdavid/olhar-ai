@@ -46,7 +46,7 @@ services:
   sentinel-postgres:
     # Postgres 17 + pgvector + pg_cron (deploy/postgres/Dockerfile). Deploy BEFORE control:
     # migration 0046 hard-requires the scheduler. Single instance (operator: normal for now).
-    image: ghcr.io/olharai/sentinel-postgres:latest
+    image: registry.gitlab.com/olharai-grupo/olharai/sentinel-postgres:latest
     container_name: sentinel-postgres
     restart: unless-stopped
     command:
@@ -83,7 +83,7 @@ services:
   sentinel-control:
     # 2 replicas. No container_name (a name is unique; replicas can't share it). No published
     # host port — Traefik reaches the container port directly and load-balances across replicas.
-    image: ghcr.io/olharai/sentinel-control:latest
+    image: registry.gitlab.com/olharai-grupo/olharai/sentinel-control:latest
     restart: always
     env_file:
       - sentinel.env
@@ -123,22 +123,13 @@ services:
   sentinel-ai:
     # CPU face-only vision sidecar (SCRFD + ArcFace), /runsync contract. Internal only.
     # Heavy compute — left at 1 replica unless the box has headroom (open decision #5).
-    image: ghcr.io/olharai/sentinel-ai:cpu
+    image: registry.gitlab.com/olharai-grupo/olharai/sentinel-ai:cpu
     container_name: sentinel-ai
     restart: always
     command: ["python", "-u", "handler.py", "--rp_serve_api", "--rp_api_host", "0.0.0.0", "--rp_api_port", "8000"]
 
-  sentinel-ai-dlib:
-    # A/B experiment variant (128-d, NOT pgvector-compatible). Behind the "experiment" profile,
-    # never started by a normal up/deploy.
-    profiles: ["experiment"]
-    image: ghcr.io/olharai/sentinel-ai:dlib
-    container_name: sentinel-ai-dlib
-    restart: unless-stopped
-    command: ["python", "-u", "handler_dlib.py", "--rp_serve_api", "--rp_api_host", "0.0.0.0", "--rp_api_port", "8000"]
-
   sentinel-app:
-    image: ghcr.io/olharai/sentinel-app:latest
+    image: registry.gitlab.com/olharai-grupo/olharai/sentinel-app:latest
     restart: always
     labels:
       - "traefik.enable=true"
@@ -150,7 +141,7 @@ services:
       replicas: 2
 
   sentinel-landing:
-    image: ghcr.io/olharai/sentinel-landing:latest
+    image: registry.gitlab.com/olharai-grupo/olharai/sentinel-landing:latest
     restart: always
     labels:
       - "traefik.enable=true"
@@ -162,7 +153,7 @@ services:
       replicas: 2
 
   sentinel-gateway:
-    image: ghcr.io/olharai/sentinel-gateway:latest
+    image: registry.gitlab.com/olharai-grupo/olharai/sentinel-gateway:latest
     restart: always
     env_file:
       - sentinel.env   # JWT_SECRET (shared with control — verifies live.view)
@@ -185,7 +176,7 @@ services:
     # Always-on MULTI-TENANT workflow engine + trigger poller. Internal only. Already multi-pod:
     # no container_name, Docker-assigned hostname → pod_name, Docker DNS round-robins; work_jobs
     # claims atomically (FOR UPDATE SKIP LOCKED) so concurrent replicas are safe.
-    image: ghcr.io/olharai/sentinel-flow:latest
+    image: registry.gitlab.com/olharai-grupo/olharai/sentinel-flow:latest
     restart: always
     env_file:
       - sentinel.env
@@ -214,7 +205,7 @@ services:
   sentinel-notification:
     # Consumes the durable notification_queue (atomic claim) and sends to recipients (Telegram +
     # push). Internal only. Safe at N replicas — the queue hands each job to exactly one consumer.
-    image: ghcr.io/olharai/sentinel-notification:latest
+    image: registry.gitlab.com/olharai-grupo/olharai/sentinel-notification:latest
     restart: always
     env_file:
       - sentinel.env

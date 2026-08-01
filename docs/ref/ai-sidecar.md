@@ -19,7 +19,6 @@ ai/sidecar/
 ├── compose.gpu.yml       — local GPU box: podman/docker run on port 8000
 ├── requirements.txt      — GPU deps: ultralytics, insightface, onnxruntime-gpu>=1.17
 ├── requirements.cpu.txt  — CPU deps: insightface, onnxruntime (CPU), no torch
-└── bench.py              — latency A/B benchmark (InsightFace vs dlib)
 ```
 
 ## Ops exposed

@@ -94,7 +94,6 @@ Postgres/Redis/MinIO):
 
 **Datastores stay single** — `sentinel-postgres` (operator: leave normal for now),
 `sentinel-redis` (a 2nd naive instance splits pub/sub brain), `sentinel-minio` (2 on one volume
-corrupts). `sentinel-ai`/`sentinel-ai-dlib` are heavy compute backends — leave at 1 unless the box
 has headroom (stateless `runsync`, so scalable later if wanted).
 
 **Honest scope of "2 pods":** this makes the **app tier** HA — zero-downtime rolling restarts on

@@ -241,6 +241,78 @@ build:landing:
         - deploy/vps/**/*
         - .gitlab-ci.yml
 
+
+# ---------------------------------------------------------------------------------------------
+# The images that are NOT Rust services
+# ---------------------------------------------------------------------------------------------
+# These existed in the compose file and in NO build job. They were produced by hand with
+# push-local.sh, so production ran whatever someone last happened to build.
+#
+# That is not a hypothetical. sentinel-notification had the same gap and drifted for weeks: it kept
+# working only because its container was already RUNNING and never re-read the schema. A restart
+# during the registry cutover surfaced it —
+#     migration 74 was previously applied but is missing in the resolved migrations
+# — and notifications were down for two hours.
+#
+# sentinel-postgres is the same trap and it is the DATABASE. It bundles pg_cron, so stock Postgres
+# is not a substitute, and GHCR is frozen now that GitHub is archived.
+#
+# Rule: anything the compose file names must be rebuildable from source by CI. If CI cannot rebuild
+# it, it is not deployed — it is stranded.
+
+.build_image:
+  stage: build
+  interruptible: true
+  image: docker:27
+  services: [docker:27-dind]
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - docker context create ci-dind-img
+    - docker buildx create --use --driver docker-container ci-dind-img
+  script:
+    - |
+      set -eu
+      echo "▸ $IMAGE:$TAG  ($DOCKERFILE)"
+      docker buildx build \
+        --file "$DOCKERFILE" \
+        --cache-from "type=registry,ref=$IMAGE_PREFIX/buildcache:$IMAGE-$TAG" \
+        --cache-to   "type=registry,ref=$IMAGE_PREFIX/buildcache:$IMAGE-$TAG,mode=max" \
+        --tag "$IMAGE_PREFIX/$IMAGE:$TAG" \
+        --push \
+        "$CONTEXT"
+      # The marker is the compose SERVICE name, which is not necessarily the image name. deploy
+      # restarts by service, so a mismatch here restarts the wrong container.
+      mkdir -p built && echo "$SERVICE" > "built/$SERVICE"
+  artifacts:
+    paths: [built/]
+    expire_in: 1 day
+
+build:postgres:
+  extends: .build_image
+  variables:
+    IMAGE: sentinel-postgres
+    TAG: latest
+    SERVICE: sentinel-postgres
+    DOCKERFILE: deploy/postgres/Dockerfile
+    CONTEXT: deploy/postgres
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes: [deploy/postgres/**/*, .gitlab-ci.yml]
+
+build:ai-cpu:
+  extends: .build_image
+  variables:
+    IMAGE: sentinel-ai
+    TAG: cpu
+    SERVICE: sentinel-ai
+    DOCKERFILE: ai/sidecar/Dockerfile.cpu
+    CONTEXT: ai/sidecar
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes: [ai/sidecar/**/*, .gitlab-ci.yml]
+
 # ---------------------------------------------------------------------------------------------
 # Deploy — pull + restart ONLY what was rebuilt
 # ---------------------------------------------------------------------------------------------
@@ -259,6 +331,12 @@ deploy:vps:
       artifacts: true
       optional: true
     - job: build:landing
+      artifacts: true
+      optional: true
+    - job: build:postgres
+      artifacts: true
+      optional: true
+    - job: build:ai-cpu
       artifacts: true
       optional: true
   before_script:

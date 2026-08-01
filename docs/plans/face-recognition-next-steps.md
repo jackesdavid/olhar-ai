@@ -95,5 +95,4 @@ Move inference from CPU-on-VPS to the LAN RTX 2060 box over the tailnet.
 ## Out of scope (next phases)
 
 - Vector quantization (8-bit pgvector) — not needed until embedding count is in the thousands
-- Multi-model ensemble (buffalo_l + dlib) — the A/B bench showed no accuracy gain worth the complexity
 - Photo storage (cropped face thumbnails) — privacy-sensitive; deliberate omission (only vectors kept)

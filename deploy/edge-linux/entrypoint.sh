@@ -11,7 +11,7 @@
 #     -v sentinel-edge-tailscale:/var/lib/tailscale \
 #     -v sentinel-edge-data:/opt/sentinel-edge \
 #     --env-file /etc/sentinel-edge/edge.env \
-#     ghcr.io/olharai/sentinel-edge:latest
+#     registry.gitlab.com/olharai-grupo/olharai/sentinel-edge:latest
 #
 # The env file is the SAME one install.sh writes (CONTROL_URL, BOX_TOKEN, TS_AUTHKEY, …).
 set -eu
