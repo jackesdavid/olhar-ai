@@ -94,11 +94,17 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
   `vX.Y.Z` → the release stage builds the edge Linux binaries and ships them to the VPS
   `/ibbf/edge-dist`. Images live in `registry.gitlab.com/olharai-grupo/olharai/*`. Do NOT use
   `task cloud-deploy`/`edge-publish` (see [deploy ref](docs/ref/deploy.md)).
-- **The macOS edge package is built OUT-OF-BAND**, locally, signed + notarized, then scp'd to the
-  VPS and recorded with `merge-manifest.sh`. CI has no macOS runner. So platforms release
-  independently and legitimately sit on different versions — `/edge-latest` is answered PER
-  PLATFORM from `/ibbf/edge-dist/manifest.json`, which records only what actually got built. The
-  no-platform form is a "something newer exists" trigger, never an install target.
+- **NOTHING IS BUILT LOCALLY. Every build happens in CI/CD.** No `docker build` on a laptop, no
+  local `cargo build --release` that ships, no hand-built image pushed to the registry. A build a
+  machine can do but CI cannot is a build nobody can reproduce — that is how `sentinel-notification`
+  drifted for weeks and took notifications down when a restart finally exercised it, and how the
+  repo and production came to disagree about which registry they used.
+- **The macOS edge package is the one remaining violation** (card #163): CI has no macOS runner, so
+  the signed + notarized `.pkg` is still produced by hand, scp'd to the VPS and recorded with
+  `merge-manifest.sh`. Until a runner exists, platforms release independently and legitimately sit
+  on different versions — `/edge-latest` is answered PER PLATFORM from
+  `/ibbf/edge-dist/manifest.json`, which records only what actually got built. The no-platform form
+  is a "something newer exists" trigger, never an install target.
 - **GStreamer, linked in-process, is the ONLY media path.** No sidecar, no external decoder, no
   backend flag. `sentinel-edge/src/capture.rs` holds the ONE-PIPELINE-per-camera invariant: a
   consumer camera caps concurrent RTSP sessions at 2–4, so a second connection is how a working
