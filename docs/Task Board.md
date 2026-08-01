@@ -31,10 +31,6 @@ kanban-plugin: board
 
 ## ToDo
 
-- [ ] #156 Build every production image in CI — sentinel-postgres + sentinel-ai
-	  - Plan: [[architecture-weaknesses]]
-- [ ] #157 PREPARE every sqlx statement in CI — catch placeholder/bind drift
-	  - Plan: [[architecture-weaknesses]]
 - [ ] #158 Deploy must assert what it deployed — compare running digests
 	  - Plan: [[architecture-weaknesses]]
 - [ ] #159 Media pipeline smoke test in CI — frames, clip, snapshot
@@ -125,6 +121,8 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #157 PREPARE every sqlx statement in CI — catch placeholder/bind drift
+	  - Plan: [[sql-prepare-ci]]
 - [ ] #148 Security plan §0 — rotate the exposed secrets + remove the demo admin
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #151 Security plan §1.8 — scoped media tokens, get JWTs out of query strings
@@ -147,6 +145,8 @@ kanban-plugin: board
 
 **Complete**
 
+- [x] #156 Build every production image in CI — sentinel-postgres + sentinel-ai
+	  - Plan: [[architecture-weaknesses]]
 - [x] #121 Retire local builds — full CI/CD
 	  - Plan: [[retire-local-builds-ci]]
 - [x] #99 Domain cutover — olharai.com live, transitional dual-domain serving

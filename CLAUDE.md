@@ -114,9 +114,12 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
   tracks. A direct HTTP call to a box from a cloud service reaches nothing.
 - **No Claude attribution** in commits/PRs (no `Co-Authored-By: Claude`, no "Generated with").
 - **sqlx queries are runtime strings** — `cargo check` does NOT validate them. Renumbering or
-  removing a bind is invisible to the compiler and to every test. Validate a changed statement by
-  `PREPARE`ing it against the live database before shipping; a placeholder/bind mismatch took box
-  authentication down on 2026-08-01.
+  removing a bind is invisible to the compiler; a placeholder/bind mismatch took box authentication
+  down on 2026-08-01. **CI now catches this**: `check:sql` runs
+  `crates/app-core/tests/sql_prepare.rs`, which `PREPARE`s every extracted statement against a
+  freshly migrated `sentinel-postgres` and asserts each site's `.bind()` count matches the
+  statement's parameter count. It sees only literal SQL — the dynamic-SQL and `QueryBuilder` sites
+  it lists as uncovered still need a hand `PREPARE` before shipping.
 - UI house style: keep markup logic out of templates (named helpers returning bool/string), no
   nested ternaries; monochrome ink theme (Clean White / Sentinel Noir — no brand hue,
   branding carried by the dot-field form); web-only (no Tauri `prompt`/`confirm`).
