@@ -35,7 +35,8 @@ COPY . .
 RUN cargo build --release \
       -p sentinel-control \
       -p sentinel-flow \
-      -p sentinel-gateway
+      -p sentinel-gateway \
+      -p sentinel-notification
 
 FROM debian:bookworm-slim AS runtime
 ARG PACKAGE
