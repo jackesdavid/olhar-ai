@@ -198,52 +198,9 @@ export type StorageStats = {
   pct: number;
 };
 
-export type PlatformLog = {
-  id: number;
-  module: string;
-  trace_id: string | null;
-  entity_id: string | null;
-  entity_type: string | null;
-  level: string;
-  message: string;
-  payload: Record<string, unknown> | null;
-  created_at: string;
-};
 
-export type PlatformLogsPage = {
-  items: PlatformLog[];
-  next_cursor: number | null;
-  total_in_page: number;
-};
 
-export type PlatformLogsFilter = {
-  module?: string;
-  trace_id?: string;
-  entity_type?: string;
-  entity_id?: string;
-  level?: string;
-  from?: string;
-  to?: string;
-  after?: number;
-  limit?: number;
-};
 
-export const platformLogs = {
-  list: (f: PlatformLogsFilter = {}) => {
-    const p = new URLSearchParams();
-    if (f.module)      p.set("module",      f.module);
-    if (f.trace_id)    p.set("trace_id",    f.trace_id);
-    if (f.entity_type) p.set("entity_type", f.entity_type);
-    if (f.entity_id)   p.set("entity_id",   f.entity_id);
-    if (f.level)       p.set("level",       f.level);
-    if (f.from)        p.set("from",        f.from);
-    if (f.to)          p.set("to",          f.to);
-    if (f.after != null) p.set("after",     String(f.after));
-    if (f.limit != null) p.set("limit",     String(f.limit));
-    const qs = p.toString();
-    return api.get<PlatformLogsPage>(`/platform-logs${qs ? `?${qs}` : ""}`);
-  },
-};
 
 // ---- Workflow node logs (live, from workflow_run_logs — NOT the frozen platform_logs mirror) ----
 

@@ -22,7 +22,6 @@ mod faces;
 mod jobs;
 mod map;
 mod persons;
-mod platform_logs;
 mod push_devices;
 pub(crate) mod recordings;
 mod tuya;
@@ -47,7 +46,6 @@ pub fn router() -> Router<AppState> {
         .merge(workflows::router())
         .merge(boxes::router())
         .merge(admin_providers::router())
-        .merge(platform_logs::router())
         .merge(recordings::router())
         .merge(jobs::router())
         .merge(events::router())
@@ -107,7 +105,6 @@ mod authz_guard {
         ("jobs.rs", include_str!("jobs.rs")),
         ("map.rs", include_str!("map.rs")),
         ("persons.rs", include_str!("persons.rs")),
-        ("platform_logs.rs", include_str!("platform_logs.rs")),
         ("push_devices.rs", include_str!("push_devices.rs")),
         ("recordings.rs", include_str!("recordings.rs")),
         ("tuya.rs", include_str!("tuya.rs")),
