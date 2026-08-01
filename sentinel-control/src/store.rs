@@ -272,16 +272,16 @@ pub async fn touch_box_by_token(
                 magicdns_host = COALESCE($2, magicdns_host),
                 version = COALESCE($3, version),
                 tailscale_state = COALESCE($4, tailscale_state),
-                gstreamer_ok = COALESCE($6, gstreamer_ok),
-                platform = COALESCE($7, platform),
+                gstreamer_ok = COALESCE($5, gstreamer_ok),
+                platform = COALESCE($6, platform),
                 health_at = CASE WHEN $4 IS NOT NULL THEN now() ELSE health_at END,
-                cpu_pct = COALESCE($8, cpu_pct),
-                mem_pct = COALESCE($9, mem_pct),
-                disk_pct = COALESCE($10, disk_pct),
-                gpu_pct = COALESCE($11, gpu_pct),
-                gpu_mem_pct = COALESCE($12, gpu_mem_pct),
-                hwaccel = COALESCE($13, hwaccel),
-                metrics_at = CASE WHEN $8 IS NOT NULL THEN now() ELSE metrics_at END
+                cpu_pct = COALESCE($7, cpu_pct),
+                mem_pct = COALESCE($8, mem_pct),
+                disk_pct = COALESCE($9, disk_pct),
+                gpu_pct = COALESCE($10, gpu_pct),
+                gpu_mem_pct = COALESCE($11, gpu_mem_pct),
+                hwaccel = COALESCE($12, hwaccel),
+                metrics_at = CASE WHEN $7 IS NOT NULL THEN now() ELSE metrics_at END
           WHERE token_hash = $1
         RETURNING tenant_id",
     )
@@ -320,9 +320,9 @@ pub async fn touch_box_identity(
                 magicdns_host = COALESCE($2, magicdns_host),
                 version = COALESCE($3, version),
                 tailscale_state = COALESCE($4, tailscale_state),
-                gstreamer_ok = COALESCE($6, gstreamer_ok),
-                platform = COALESCE($7, platform),
-                hwaccel = COALESCE($8, hwaccel),
+                gstreamer_ok = COALESCE($5, gstreamer_ok),
+                platform = COALESCE($6, platform),
+                hwaccel = COALESCE($7, hwaccel),
                 health_at = CASE WHEN $4 IS NOT NULL THEN now() ELSE health_at END
           WHERE token_hash = $1
         RETURNING tenant_id, id",
