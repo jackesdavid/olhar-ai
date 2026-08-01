@@ -31,6 +31,21 @@ kanban-plugin: board
 
 ## ToDo
 
+- [ ] #156 Build every production image in CI — sentinel-postgres + sentinel-ai
+	  - Plan: [[architecture-weaknesses]]
+- [ ] #157 PREPARE every sqlx statement in CI — catch placeholder/bind drift
+	  - Plan: [[architecture-weaknesses]]
+- [ ] #158 Deploy must assert what it deployed — compare running digests
+	  - Plan: [[architecture-weaknesses]]
+- [ ] #159 Media pipeline smoke test in CI — frames, clip, snapshot
+	  - Plan: [[architecture-weaknesses]]
+- [ ] #160 Tenant isolation by construction — row-level security
+	  - Plan: [[architecture-weaknesses]]
+- [ ] #161 Retire the tailnet remnants — drop magicdns_host + tailscale_state (readers first)
+	  - Plan: [[architecture-weaknesses]]
+- [ ] #162 edge:full-disk must watch FREE SPACE, not the recording quota
+	  - Plan: [[architecture-weaknesses]]
+
 - [ ] #152 Edge signing §3 P2→P3 — soak, then flip signing_mode to required per box
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #118 Edge detection timing metrics — motion/face detect ms + rate
@@ -109,8 +124,6 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #155 Camera status — show WHICH stage failed, per camera
-	  - Plan: [[camera-status-visibility]]
 - [ ] #148 Security plan §0 — rotate the exposed secrets + remove the demo admin
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #151 Security plan §1.8 — scoped media tokens, get JWTs out of query strings
@@ -121,6 +134,8 @@ kanban-plugin: board
 
 ## Review
 
+- [ ] #155 Camera status — show WHICH stage failed, per camera
+	  - Plan: [[camera-status-visibility]]
 - [ ] #154 Security hardening PRs 1–5 — landed, pending prod verification
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #83 Windows installer — signed .exe
@@ -130,6 +145,10 @@ kanban-plugin: board
 ## Done
 
 **Complete**
+
+- [x] #121 Retire local builds — full CI/CD
+	  - Plan: [[retire-local-builds-ci]]
+- [x] #99 Domain cutover — olharai.com live, transitional dual-domain serving
 - [x] #149 Login rate limiting §1.7 — apply the per-IP throttle at Traefik
 	  - Plan: [[security-hardening-remainder]]
 - [x] #150 Traefik access logging + container log rotation

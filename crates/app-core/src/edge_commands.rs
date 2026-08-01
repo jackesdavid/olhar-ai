@@ -1,10 +1,8 @@
 //! Cloud→edge command channel (card #144) — the durable half of the SSE command transport.
 //!
-//! **Why this exists.** The tailnet let the cloud reach *into* a LAN edge to command it (record,
-//! snapshot, probe). An on-device edge (phone/Android) is outbound-only — it can reach the cloud
-//! but the cloud cannot reach it — and the plan is to retire the tailnet for *every* edge. So the
-//! edge holds one outbound SSE stream to control and commands ride *down* it; this module is the
-//! durable queue behind that stream.
+//! **Why this exists.** An edge is outbound-only: it can reach the cloud, the cloud cannot reach
+//! it. So the edge holds one outbound SSE stream to control and commands (record, snapshot, probe)
+//! ride *down* it; this module is the durable queue behind that stream.
 //!
 //! **Shape.** A caller (the workflow RecordClip node, on any pod/service) [`enqueue`]s a command
 //! for a box and NOTIFYs. The control pod that holds that box's SSE stream (and only it) claims the
@@ -185,7 +183,7 @@ pub async fn finish(
 // ---- session tracking (which boxes are reachable over SSE) ------------------
 
 /// Mark this box's SSE stream live on `pod` — called on connect and on a periodic heartbeat so a
-/// caller on any pod can read `sse_last_seen` and route a command over SSE instead of the tailnet.
+/// caller on any pod can read `sse_last_seen` and know this box is reachable.
 pub async fn mark_session(pool: &PgPool, box_id: Uuid, pod: &str) -> sqlx::Result<()> {
     sqlx::query("UPDATE tenant_boxes SET sse_last_seen = $2, sse_pod = $3 WHERE id = $1")
         .bind(box_id)
@@ -223,7 +221,7 @@ pub fn enqueue_blocking(
 }
 
 /// Whether the box has a live SSE session (its `sse_last_seen` is within `max_age_secs`). Drives the
-/// caller's SSE-vs-tailnet choice. Compared in SQL against `now()` so it's offset-correct.
+/// decision to route a command at all. Compared in SQL against `now()` so it's offset-correct.
 pub fn has_live_session_blocking(db: &Db, box_id: Uuid, max_age_secs: i64) -> bool {
     let pool = db.pool();
     db.block(async move {
@@ -245,8 +243,8 @@ pub fn has_live_session_blocking(db: &Db, box_id: Uuid, max_age_secs: i64) -> bo
 // Every discrete cloud→edge HTTP call (probe, snapshot, tracks, get-frame, clip-delete…) can ride
 // the SSE channel via one `http_request` command: the edge performs the call against its own local
 // API and returns `{status, content_type, body_b64}`. These helpers hide that behind a
-// tailnet-or-SSE choice — they return `None` when the box has no live SSE session, so the caller
-// falls back to its existing tailnet path unchanged.
+// transport — they return `None` when the box has no live SSE session, which means the box is
+// simply not reachable right now.
 
 /// Decode an `http_request` command result (`{status, body_b64}`) into `(status, body_bytes)`.
 pub fn decode_http_result(v: &serde_json::Value) -> Result<(u16, Vec<u8>), String> {
@@ -311,8 +309,8 @@ pub async fn await_result(
     }
 }
 
-/// Proxy a local edge HTTP call over SSE, async (control). `None` → no live SSE session (caller
-/// should use its tailnet path); `Some(Ok((status, body)))` → the edge's response; `Some(Err)` →
+/// Proxy a local edge HTTP call over SSE, async (control). `None` → no live SSE session, so the
+/// box is unreachable; `Some(Ok((status, body)))` → the edge's response; `Some(Err)` →
 /// delivered but the round-trip failed (timeout/transport).
 pub async fn edge_http_via_sse(
     pool: &PgPool,

@@ -88,10 +88,29 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
   `tract`; **OpenCV is an optional, test-only dep** (`opencv-parity` feature), NOT linked in the
   release build. **When you bump `sentinel-edge/Cargo.toml`, sync `sentinel-edge/Cargo.lock` too** —
   `release.yml` builds `--locked` and fails on a stale lock (the `edge-lock-check` CI guard catches it).
-- **Ship via GitHub CI** — push/merge to `main` → `deploy.yml` (services); tag `vX.Y.Z` → `release.yml`
-  (edge binaries → Release + VPS `/ibbf/edge-dist`). Do NOT use `task cloud-deploy`/`edge-publish`
-  (see [deploy ref](docs/ref/deploy.md)).
+- **Ship via GitLab CI** — the repo is `gitlab.com/olharai-grupo/OlharAI`; GitHub is archived
+  (read-only). `main` is PROTECTED: no direct pushes, everything arrives by merge request, and
+  `check:rust` must pass. Merge to `main` → `.gitlab-ci.yml` builds and deploys the services; tag
+  `vX.Y.Z` → the release stage builds the edge Linux binaries and ships them to the VPS
+  `/ibbf/edge-dist`. Images live in `registry.gitlab.com/olharai-grupo/olharai/*`. Do NOT use
+  `task cloud-deploy`/`edge-publish` (see [deploy ref](docs/ref/deploy.md)).
+- **The macOS edge package is built OUT-OF-BAND**, locally, signed + notarized, then scp'd to the
+  VPS and recorded with `merge-manifest.sh`. CI has no macOS runner. So platforms release
+  independently and legitimately sit on different versions — `/edge-latest` is answered PER
+  PLATFORM from `/ibbf/edge-dist/manifest.json`, which records only what actually got built. The
+  no-platform form is a "something newer exists" trigger, never an install target.
+- **GStreamer, linked in-process, is the ONLY media path.** No sidecar, no external decoder, no
+  backend flag. `sentinel-edge/src/capture.rs` holds the ONE-PIPELINE-per-camera invariant: a
+  consumer camera caps concurrent RTSP sessions at 2–4, so a second connection is how a working
+  camera goes dark. Everything else hangs off `tee` branches.
+- **The edge is outbound-only** (card #144). No tailnet. Cloud→edge calls go over the SSE command
+  channel (`app_core::edge_commands::edge_http_via_sse{,_blocking}`) — frames, probes, recordings,
+  tracks. A direct HTTP call to a box from a cloud service reaches nothing.
 - **No Claude attribution** in commits/PRs (no `Co-Authored-By: Claude`, no "Generated with").
+- **sqlx queries are runtime strings** — `cargo check` does NOT validate them. Renumbering or
+  removing a bind is invisible to the compiler and to every test. Validate a changed statement by
+  `PREPARE`ing it against the live database before shipping; a placeholder/bind mismatch took box
+  authentication down on 2026-08-01.
 - UI house style: keep markup logic out of templates (named helpers returning bool/string), no
   nested ternaries; monochrome ink theme (Clean White / Sentinel Noir — no brand hue,
   branding carried by the dot-field form); web-only (no Tauri `prompt`/`confirm`).

@@ -17,7 +17,6 @@ mod datadog;
 mod http;
 mod proxy;
 mod state;
-mod tailscale;
 
 use std::sync::Arc;
 
@@ -68,7 +67,6 @@ async fn main() {
     };
 
     // Join the tailnet if configured (so MagicDNS upstreams resolve over the VPN).
-    tailscale::ensure_up();
 
     // This gateway's public WS base — the address an edge dials back for live-over-outbound
     // (card #144). Unset → outbound live is off and live uses the tailnet path.
