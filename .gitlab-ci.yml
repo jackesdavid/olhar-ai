@@ -61,6 +61,38 @@ check:rust:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
+check:sql:
+  stage: check
+  image: rust:1-bookworm
+  interruptible: true
+  # Card #157. `check:rust` proves the 320 sqlx statements COMPILE, which for runtime queries means
+  # nothing: they are strings the compiler never reads. On 2026-08-01 a removed bind shifted every
+  # later placeholder one argument right, `gstreamer_ok` (boolean) got `platform` (text), and every
+  # box token lookup failed — with cargo check green and all 296 tests passing.
+  #
+  # This job runs the statements against a real migrated schema and compares each site's `.bind()`
+  # count to the statement's parameter count. See crates/app-core/tests/sql_prepare.rs.
+  #
+  # The service is OUR postgres image, not `postgres:17`: the migrations need pg_cron, and stock
+  # Postgres cannot even install it (see deploy/postgres/Dockerfile). CI can only use it as a
+  # service because CI now builds it — #156 is what makes #157 possible.
+  services:
+    - name: $CI_REGISTRY_IMAGE/sentinel-postgres:latest
+      alias: sentinel-db
+      command: ["postgres", "-c", "shared_preload_libraries=pg_cron", "-c", "cron.database_name=sentinel"]
+  variables:
+    POSTGRES_DB: sentinel
+    POSTGRES_USER: sentinel
+    POSTGRES_PASSWORD: sentinel
+    TEST_DATABASE_URL: postgres://sentinel:sentinel@sentinel-db:5432/sentinel
+  script:
+    # No apt packages: app-core's gstreamer dep is optional and off by default, so unlike
+    # `check:rust` this compiles nothing native.
+    - cargo test -p app-core --test sql_prepare -- --nocapture
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
 check:web:
   stage: check
   image: node:22-bookworm

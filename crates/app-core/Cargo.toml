@@ -67,3 +67,17 @@ gstreamer-app = { version = "0.23", optional = true }
 
 [features]
 gst-linked = ["dep:gstreamer", "dep:gstreamer-app"]
+
+# The sql_prepare test (card #157) connects to Postgres itself. An integration test in tests/ sees
+# only the crate's public API and its DEV-dependencies — never the crate's own dependencies — so
+# sqlx and tokio are declared again here. Identical feature sets, so cargo reuses the same builds.
+[dev-dependencies]
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "macros",
+    "migrate",
+    "uuid",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
