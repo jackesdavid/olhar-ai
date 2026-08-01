@@ -45,7 +45,8 @@ kanban-plugin: board
 	  - Plan: [[architecture-weaknesses]]
 - [ ] #162 edge:full-disk must watch FREE SPACE, not the recording quota
 	  - Plan: [[architecture-weaknesses]]
-
+- [ ] #163 macOS CI runner — stop building the edge .pkg by hand (the last local build)
+	  - Plan: [[architecture-weaknesses]]
 - [ ] #152 Edge signing §3 P2→P3 — soak, then flip signing_mode to required per box
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #118 Edge detection timing metrics — motion/face detect ms + rate

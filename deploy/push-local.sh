@@ -11,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."  # repo root
 
-REPO="ghcr.io/olharai"
+REPO="registry.gitlab.com/olharai-grupo/olharai"
 GH_USER="jackesdavid"
 VPS_SSH="${VPS_SSH:-root@85.239.248.86}"
 VPS_KEY="${VPS_KEY:-$HOME/.ssh/id_contab_ed25519}"
@@ -66,9 +66,9 @@ ssh -i "${VPS_KEY}" -o IdentitiesOnly=yes "${VPS_SSH}" "set -e; cd /ibbf
 
   if [ -n '${PATCH_PG}' ]; then
     cp docker-compose.sentinel.yml \"docker-compose.sentinel.yml.bak.\$(date +%s)\"
-    sed -i 's|image: pgvector/pgvector:pg17|image: ghcr.io/olharai/sentinel-postgres:latest|' docker-compose.sentinel.yml
+    sed -i 's|image: pgvector/pgvector:pg17|image: registry.gitlab.com/olharai-grupo/olharai/sentinel-postgres:latest|' docker-compose.sentinel.yml
     grep -q 'cron.database_name' docker-compose.sentinel.yml || \
-      sed -i '\\|image: ghcr.io/olharai/sentinel-postgres:latest|a\\    command: [\"postgres\", \"-c\", \"shared_preload_libraries=pg_cron\", \"-c\", \"cron.database_name=sentinel\"]' docker-compose.sentinel.yml
+      sed -i '\\|image: registry.gitlab.com/olharai-grupo/olharai/sentinel-postgres:latest|a\\    command: [\"postgres\", \"-c\", \"shared_preload_libraries=pg_cron\", \"-c\", \"cron.database_name=sentinel\"]' docker-compose.sentinel.yml
     echo '>> patched compose for pg_cron'
   fi
 
