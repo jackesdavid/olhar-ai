@@ -112,6 +112,12 @@ impl FrameSource for LocalFrameSource {
 pub struct EdgeFrameSource {
     base: String,
     agent: ureq::Agent,
+    /// The SSE route to the box: `(db, tenant)`. The edge is OUTBOUND-ONLY since card #144 — there
+    /// is no tailnet and `magicdns_host` is NULL — so a direct HTTP call to `base` can only reach
+    /// something on the CLOUD host, which is never the edge. Every other edge caller (the probe,
+    /// recordings, the tracks node) was moved to the SSE channel; this one was missed, and asked
+    /// 127.0.0.1 for a frame that lives on a box across the internet.
+    sse: Option<(crate::db::Db, uuid::Uuid)>,
 }
 /// The edge's own HTTP base on this machine — the fallback when no box is registered for a tenant.
 pub fn local_base() -> String {
@@ -125,16 +131,45 @@ impl EdgeFrameSource {
             agent: ureq::AgentBuilder::new()
                 .timeout(std::time::Duration::from_secs(5))
                 .build(),
+            sse: None,
         }
+    }
+
+    /// Route frame grabs over the SSE command channel — the only path to an outbound-only box.
+    /// Callers that hold a db handle and a tenant should ALWAYS use this; `new` alone can reach
+    /// only a box that shares a host with the caller.
+    pub fn with_sse(base: impl Into<String>, db: crate::db::Db, tenant_id: uuid::Uuid) -> Self {
+        let mut s = Self::new(base);
+        s.sse = Some((db, tenant_id));
+        s
+    }
+
+    /// Ask the box for `ip`'s newest decoded frame over SSE. `None` = no SSE-reachable box, so the
+    /// caller falls through to the direct path.
+    fn sse_snapshot(&self, ip: &str) -> Option<Result<Vec<u8>, String>> {
+        let (db, tenant) = self.sse.as_ref()?;
+        let path = format!("/snapshot/{ip}");
+        let res = crate::edge_commands::edge_http_via_sse_blocking(db, *tenant, "GET", &path, None, 15)?;
+        Some(match res {
+            Ok((status, body)) if (200..300).contains(&status) => Ok(body),
+            Ok((status, _)) => Err(format!("edge snapshot returned {status}")),
+            Err(e) => Err(e),
+        })
     }
 }
 /// Bases whose edge API (`:8080/snapshot`) we've already found unreachable — so a box without the
 /// tailnet serve (older edge) pays the probe timeout **once per process**, not on every frame grab.
-fn edge_api_dead() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
-    static D: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+fn edge_api_dead() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> {
+    static D: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>> =
         std::sync::OnceLock::new();
     D.get_or_init(Default::default)
 }
+
+/// How long a base stays written off. It used to be forever: a HashSet with no expiry, so ONE
+/// timeout — a box rebooting, a blip — disabled frame grabs for the whole process lifetime, and
+/// the only cure was restarting the service. The point is to avoid paying the timeout on every
+/// grab, which a short cooldown achieves just as well.
+const DEAD_FOR: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl EdgeFrameSource {
     /// The edge's OWN API base. A tailnet base `https://host` maps to `https://host:8080`, where
@@ -156,13 +191,17 @@ impl EdgeFrameSource {
     /// Grab the warm frame from the edge's own `/snapshot/:ip`. Short timeout: this is a fast path,
     /// and when it isn't available we must fall back quickly rather than stall the workflow node.
     fn warm_snapshot(&self, ip: &str) -> Result<Vec<u8>, String> {
+        // SSE first: the box is outbound-only, so this is the ONLY route that reaches it.
+        if let Some(res) = self.sse_snapshot(ip) {
+            return res;
+        }
         let base = self.edge_api_base().ok_or("no edge api base")?;
         if edge_api_dead()
             .lock()
-            .map(|d| d.contains(&base))
+            .map(|d| d.get(&base).is_some_and(|at| at.elapsed() < DEAD_FOR))
             .unwrap_or(false)
         {
-            return Err("edge api known-unreachable".into());
+            return Err("edge api unreachable (retrying shortly)".into());
         }
         let agent = ureq::AgentBuilder::new()
             .timeout(std::time::Duration::from_secs(2))
@@ -183,7 +222,7 @@ impl EdgeFrameSource {
         })();
         if res.is_err() {
             if let Ok(mut d) = edge_api_dead().lock() {
-                d.insert(base);
+                d.insert(base, std::time::Instant::now());
             }
         }
         res

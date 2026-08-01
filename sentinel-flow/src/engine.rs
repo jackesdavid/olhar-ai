@@ -823,8 +823,10 @@ fn build_run_context(
     let mut ctx = ToolContext::new_local(devices, state.db.clone(), tenant, notif, notif_cfg, tx);
     // keeps the connection warm across every `GetFrame`/`Snapshot` in the run, so a
     // `memoize=false` node in a loop re-grabs a fresh frame without re-handshaking.
-    ctx.frames = Arc::new(app_core::ports::EdgeFrameSource::new(
+    ctx.frames = Arc::new(app_core::ports::EdgeFrameSource::with_sse(
         state.edge_base(tenant),
+        state.db.clone(),
+        tenant,
     ));
     // Notifications go through the durable queue — this run only ENQUEUEs; the
     // sentinel-notification service consumes + sends (card #57). Image-bearing sends are

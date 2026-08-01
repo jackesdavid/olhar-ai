@@ -82,7 +82,7 @@ async fn chat(
             Some(host) => https_base(&host),
             None => app_core::ports::local_base(),
         };
-        ctx.frames = Arc::new(app_core::ports::EdgeFrameSource::new(base));
+        ctx.frames = Arc::new(app_core::ports::EdgeFrameSource::with_sse(base, db.clone(), tid));
 
         let history: Vec<Message> = req
             .history
