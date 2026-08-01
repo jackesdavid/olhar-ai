@@ -168,7 +168,7 @@ build:rust:
     - |
       set -eu
       CACHE="$IMAGE_PREFIX/buildcache:rust"
-      for SVC in sentinel-control sentinel-flow sentinel-gateway; do
+      for SVC in sentinel-control sentinel-flow sentinel-gateway sentinel-notification; do
         echo "▸ $SVC"
         docker buildx build \
           --file Dockerfile \
@@ -191,6 +191,7 @@ build:rust:
         - sentinel-control/**/*
         - sentinel-flow/**/*
         - sentinel-gateway/**/*
+        - sentinel-notification/**/*
         # Compiled into control via include_str! — a fix here changes control's binary.
         - sentinel-edge/install.sh
         - crates/**/*
