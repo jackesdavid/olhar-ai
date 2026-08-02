@@ -31,8 +31,6 @@ kanban-plugin: board
 
 ## ToDo
 
-- [ ] #158 Deploy must assert what it deployed — compare running digests
-	  - Plan: [[architecture-weaknesses]]
 - [ ] #159 Media pipeline smoke test in CI — frames, clip, snapshot
 	  - Plan: [[architecture-weaknesses]]
 - [ ] #160 Tenant isolation by construction — row-level security
@@ -121,8 +119,8 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #157 PREPARE every sqlx statement in CI — catch placeholder/bind drift
-	  - Plan: [[sql-prepare-ci]]
+- [ ] #158 Deploy must assert what it deployed — compare running digests
+	  - Plan: [[deploy-assert-digests]]
 - [ ] #148 Security plan §0 — rotate the exposed secrets + remove the demo admin
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #151 Security plan §1.8 — scoped media tokens, get JWTs out of query strings
@@ -133,6 +131,8 @@ kanban-plugin: board
 
 ## Review
 
+- [ ] #157 PREPARE every sqlx statement in CI — catch placeholder/bind drift
+	  - Plan: [[sql-prepare-ci]]
 - [ ] #155 Camera status — show WHICH stage failed, per camera
 	  - Plan: [[camera-status-visibility]]
 - [ ] #154 Security hardening PRs 1–5 — landed, pending prod verification

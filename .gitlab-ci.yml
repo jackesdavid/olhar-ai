@@ -163,12 +163,17 @@ check:web:
         --tag "$IMAGE_PREFIX/$SERVICE:latest" \
         --tag "$IMAGE_PREFIX/$SERVICE:$CI_COMMIT_SHORT_SHA" \
         .
-      docker push "$IMAGE_PREFIX/$SERVICE:latest"
-      docker push "$IMAGE_PREFIX/$SERVICE:$CI_COMMIT_SHORT_SHA"
+      docker push "$IMAGE_PREFIX/$SERVICE:latest" | tee /tmp/push.log
+      docker push "$IMAGE_PREFIX/$SERVICE:$CI_COMMIT_SHORT_SHA" > /dev/null
+      # The digest the registry assigned to what we just pushed (card #158). deploy asserts the
+      # VPS is running exactly this — without it, "deploy succeeded" only means ssh returned 0.
+      DIGEST="$(sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' /tmp/push.log | tail -1)"
+      if [ -z "$DIGEST" ]; then echo "could not read the pushed digest from docker push"; exit 1; fi
       # Tell the deploy job this service was actually built. A file per service rather than a
       # dotenv key: deploy must restart exactly the set that was rebuilt, and an artifact
-      # directory makes that set explicit instead of reconstructed.
-      mkdir -p built && echo "$SERVICE" > "built/$SERVICE"
+      # directory makes that set explicit instead of reconstructed. The contents are the image
+      # reference and its digest, which is what makes the deploy assertion possible.
+      mkdir -p built && printf '%s %s\n' "$IMAGE_PREFIX/$SERVICE:latest" "$DIGEST" > "built/$SERVICE"
   artifacts:
     paths: [built/]
     expire_in: 1 day
@@ -209,9 +214,13 @@ build:rust:
           --cache-to   "type=registry,ref=$CACHE,mode=max" \
           --tag "$IMAGE_PREFIX/$SVC:latest" \
           --tag "$IMAGE_PREFIX/$SVC:$CI_COMMIT_SHORT_SHA" \
+          --metadata-file "/tmp/meta-$SVC.json" \
           --push \
           .
-        mkdir -p built && echo "$SVC" > "built/$SVC"
+        # buildx reports the digest the registry assigned; deploy asserts the VPS runs it (#158).
+        DIGEST="$(sed -n 's/.*"containerimage.digest": *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' "/tmp/meta-$SVC.json")"
+        if [ -z "$DIGEST" ]; then echo "no digest in /tmp/meta-$SVC.json"; exit 1; fi
+        mkdir -p built && printf '%s %s\n' "$IMAGE_PREFIX/$SVC:latest" "$DIGEST" > "built/$SVC"
       done
   artifacts:
     paths: [built/]
@@ -310,11 +319,15 @@ build:landing:
         --cache-from "type=registry,ref=$IMAGE_PREFIX/buildcache:$IMAGE-$TAG" \
         --cache-to   "type=registry,ref=$IMAGE_PREFIX/buildcache:$IMAGE-$TAG,mode=max" \
         --tag "$IMAGE_PREFIX/$IMAGE:$TAG" \
+        --metadata-file /tmp/meta.json \
         --push \
         "$CONTEXT"
+      DIGEST="$(sed -n 's/.*"containerimage.digest": *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' /tmp/meta.json)"
+      if [ -z "$DIGEST" ]; then echo "no digest in /tmp/meta.json"; exit 1; fi
       # The marker is the compose SERVICE name, which is not necessarily the image name. deploy
-      # restarts by service, so a mismatch here restarts the wrong container.
-      mkdir -p built && echo "$SERVICE" > "built/$SERVICE"
+      # restarts by service, so a mismatch here restarts the wrong container. Its contents are the
+      # image reference (which IS the image name) and the pushed digest, for the #158 assertion.
+      mkdir -p built && printf '%s %s\n' "$IMAGE_PREFIX/$IMAGE:$TAG" "$DIGEST" > "built/$SERVICE"
   artifacts:
     paths: [built/]
     expire_in: 1 day
@@ -402,11 +415,56 @@ deploy:vps:
         exit 0
       fi
       echo "▸ deploying: $SERVICES"
+      # What the build stage actually pushed: one "<service> <image-ref> <digest>" line each. This
+      # is the CLAIM; the remote script below is what tests it.
+      EXPECTED="$(for s in $SERVICES; do printf '%s %s\n' "$s" "$(cat "built/$s")"; done)"
+      echo "$EXPECTED"
+      # Card #158. `pull` + `up -d` + exit 0 says nothing about what is running: for the whole
+      # GitLab migration this job "succeeded" while production stayed frozen on the previous
+      # images, because the compose file still pointed at the old registry. Nine merges were
+      # built, stored and not running, and the pipeline was green throughout. So the deploy now
+      # ends by comparing each running container's repo digest to the digest just pushed, and
+      # FAILS on a mismatch. A deploy that cannot tell you what it deployed is a notification.
       ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
-        "cd /ibbf && \
-         docker compose -f docker-compose.yml -f docker-compose.sentinel.yml pull $SERVICES && \
-         docker compose -f docker-compose.yml -f docker-compose.sentinel.yml up -d $SERVICES && \
-         docker image prune -f"
+        "SERVICES='$SERVICES' EXPECTED='$EXPECTED' sh -s" <<'REMOTE'
+      set -eu
+      cd /ibbf
+      COMPOSE="docker compose -f docker-compose.yml -f docker-compose.sentinel.yml"
+      # shellcheck disable=SC2086
+      $COMPOSE pull $SERVICES
+      # shellcheck disable=SC2086
+      $COMPOSE up -d $SERVICES
+
+      # State goes through files, not shell variables: `while read` runs in a subshell, so a
+      # failure counter incremented inside the loop would be discarded at the loop's end — and the
+      # assertion would pass by losing its own findings.
+      printf '%s\n' "$EXPECTED" > /tmp/deploy-expected.txt
+      : > /tmp/deploy-failed.txt
+      while read -r svc image want; do
+        [ -n "$svc" ] || continue
+        cid="$($COMPOSE ps -q "$svc" 2>/dev/null || true)"
+        if [ -z "$cid" ]; then
+          echo "$svc: expected $image@$want, but no container is running" >> /tmp/deploy-failed.txt
+          continue
+        fi
+        # The container reports its image ID; the repo digest lives on the image. That digest is
+        # what the registry assigned on push, so it is comparable to what the build job recorded.
+        imgid="$(docker inspect -f '{{.Image}}' "$cid")"
+        got="$(docker image inspect -f '{{join .RepoDigests " "}}' "$imgid" 2>/dev/null || true)"
+        case " $got " in
+          *"@$want"*) echo "✓ $svc is running $want" ;;
+          *) echo "$svc: expected $image@$want, running ${got:-<no repo digest>}" >> /tmp/deploy-failed.txt ;;
+        esac
+      done < /tmp/deploy-expected.txt
+
+      if [ -s /tmp/deploy-failed.txt ]; then
+        echo "✗ the deploy did not take:"
+        cat /tmp/deploy-failed.txt
+        exit 1
+      fi
+      echo "✓ every rebuilt service is running the image this pipeline pushed"
+      docker image prune -f
+      REMOTE
   rules:
     - if: $CI_PIPELINE_SOURCE == "web"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
