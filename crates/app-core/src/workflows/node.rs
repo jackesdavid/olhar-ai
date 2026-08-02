@@ -811,7 +811,11 @@ pub fn debug_summary(
             }
         }
         NodeKind::GetCurrentFrame => {
-            let kb = inputs
+            // The image is this node's OUTPUT. Its only INPUT is `camera` (GET_CURRENT_FRAME_IN),
+            // so reading `inputs["image"]` made the size structurally always "0 KB" — the run log
+            // reported an empty frame on every successful grab. `age_ms` was right all along:
+            // it is a real output port where 0 legitimately means a fresh capture.
+            let kb = outputs
                 .get("image")
                 .and_then(PortValue::as_image)
                 .map_or(0, <[u8]>::len)
@@ -1743,5 +1747,25 @@ mod tests {
             node_timeout(NodeKind::AskAi, &json!({})),
             Some(std::time::Duration::from_secs(65))
         );
+    }
+
+    /// Regression: the Current Frame run-log line reported "0 KB" on every successful grab.
+    /// The summary read `inputs["image"]`, but this node's only input is `camera` — the image is
+    /// an OUTPUT. The functionality was fine; the log lied about it.
+    #[test]
+    fn current_frame_summary_reports_the_size_it_actually_returned() {
+        let mut outputs = PortValues::new();
+        outputs.insert(
+            "image".to_string(),
+            PortValue::Image(vec![0u8; 40 * 1024]),
+        );
+        outputs.insert("age_ms".to_string(), PortValue::Num(0));
+        let s = debug_summary(
+            NodeKind::GetCurrentFrame,
+            &json!({}),
+            &PortValues::new(), // inputs carry only `camera`, never the image
+            &outputs,
+        );
+        assert_eq!(s, "current frame (40 KB, 0 ms old)");
     }
 }
