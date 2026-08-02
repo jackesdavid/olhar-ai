@@ -37,8 +37,10 @@ kanban-plugin: board
 	  - Plan: [[launch-readiness-selfserve]]
 - [ ] #167 Terms of Service + Privacy Policy + consent at signup
 	  - Plan: [[launch-readiness-selfserve]]
-- [ ] #168 CI compute budget — quota exhausted, nothing can merge or deploy
-	  - Plan: [[launch-readiness-selfserve]]
+- [ ] #168 Self-hosted runners — build on our own hardware, no shared minutes
+	  - Plan: [[self-hosted-runners]]
+- [ ] #169 Windows self-hosted runner + release:edge-windows
+	  - Plan: [[self-hosted-runners]]
 - [ ] #160 Tenant isolation by construction — row-level security
 	  - Plan: [[architecture-weaknesses]]
 - [ ] #161 Retire the tailnet remnants — drop magicdns_host + tailscale_state (readers first)
