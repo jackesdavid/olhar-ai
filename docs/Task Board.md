@@ -119,8 +119,6 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #158 Deploy must assert what it deployed — compare running digests
-	  - Plan: [[deploy-assert-digests]]
 - [ ] #148 Security plan §0 — rotate the exposed secrets + remove the demo admin
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #151 Security plan §1.8 — scoped media tokens, get JWTs out of query strings
@@ -131,8 +129,6 @@ kanban-plugin: board
 
 ## Review
 
-- [ ] #157 PREPARE every sqlx statement in CI — catch placeholder/bind drift
-	  - Plan: [[sql-prepare-ci]]
 - [ ] #155 Camera status — show WHICH stage failed, per camera
 	  - Plan: [[camera-status-visibility]]
 - [ ] #154 Security hardening PRs 1–5 — landed, pending prod verification
@@ -145,6 +141,10 @@ kanban-plugin: board
 
 **Complete**
 
+- [x] #158 Deploy must assert what it deployed — compare running digests
+	  - Plan: [[deploy-assert-digests]]
+- [x] #157 PREPARE every sqlx statement in CI — catch placeholder/bind drift
+	  - Plan: [[sql-prepare-ci]]
 - [x] #156 Build every production image in CI — sentinel-postgres + sentinel-ai
 	  - Plan: [[architecture-weaknesses]]
 - [x] #121 Retire local builds — full CI/CD
