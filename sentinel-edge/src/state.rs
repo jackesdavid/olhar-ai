@@ -459,15 +459,25 @@ impl AppState {
         self.box_agent().send_signed_json(&url, lines).is_ok()
     }
 
-    /// Notify control that disk usage has crossed the warning threshold.
+    /// Notify control that storage has crossed the warning threshold.
     /// Control publishes this as an `edge:full-disk` system event so tenant workflows can react.
-    pub fn push_disk_alert(&self, used_bytes: u64, max_bytes: u64, pct: u8, path: &str) {
+    ///
+    /// `pct` is the percentage that FIRED (disk or quota, whichever crossed) and `reason` says
+    /// which — a graph reading `pct` alone still behaves sensibly, and one that cares about the
+    /// difference can branch on `reason` (card #162).
+    pub fn push_disk_alert(&self, stats: &crate::recording::StorageStats, pct: u8, reason: &str) {
         let url = format!("{}/config/disk-alert", self.control_url);
         let body = serde_json::json!({
-            "used_bytes": used_bytes,
-            "max_bytes":  max_bytes,
-            "pct":        pct,
-            "path":       path,
+            "used_bytes":       stats.used_bytes,
+            "max_bytes":        stats.max_bytes,
+            "pct":              pct,
+            "path":             stats.path,
+            "reason":           reason,
+            "quota_pct":        stats.pct,
+            "disk_pct":         stats.disk_pct,
+            "disk_free_bytes":  stats.disk_free_bytes,
+            "disk_total_bytes": stats.disk_total_bytes,
+            "mount":            stats.mount,
         });
         if let Err(e) = self.box_agent().send_signed_json(&url, &body) {
             log::debug!("disk alert push failed: {e}");
@@ -916,6 +926,14 @@ mod camera_rtsp_tests {
             rtsp_url: Some("rtsp://10.0.0.2:554/stream1".into()),
             rtsp_sub_url: None,
             stream_mode: None,
+            // Card #155 / migration 0083 added these; this fixture was never updated, so the edge's
+            // whole `--lib` test binary stopped compiling and nobody saw it — CI runs `cargo check`
+            // for the edge WITHOUT `--all-targets`, which never builds tests. Fixed in the same
+            // commit that adds `--all-targets`.
+            probe_status: None,
+            probe_detail: None,
+            probe_at: None,
+            last_frame_at: None,
         };
         d.rtsp_sub_url = sub.map(str::to_string);
         if creds {

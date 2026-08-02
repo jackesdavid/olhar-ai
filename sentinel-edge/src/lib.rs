@@ -244,6 +244,9 @@ pub fn run() {
     tracking::spawn(&state);
     // Resource-usage sampler (CPU / memory / disk / GPU) — the latest snapshot rides the
     // heartbeat as the X-Edge-Metrics header so the Boxes page can show if the box is healthy.
+    // Register the recordings volume FIRST: without it the disk gauge measures `/`, which on macOS
+    // is the sealed read-only system volume — a box reported 0% while its data volume was full.
+    metrics::set_data_dir(state.recording.dir().to_path_buf());
     metrics::spawn();
 
     // Discovery loop: sweep the LAN for ONVIF cameras every 5 min — reconciling any camera
@@ -337,24 +340,38 @@ pub fn run() {
                     log::info!("storage: evicted {evicted} clip(s) to stay under limit");
                 }
                 let stats = mgr.storage_stats();
-                // Fire alert when >90% full — rate-limited to once per alert_interval.
-                if stats.pct >= 90 {
+                // Card #162. This used to fire on the QUOTA percentage alone, which is a number
+                // the box actively keeps low: `evict_if_over_limit` drops clips until usage is
+                // back under 80% of the quota, so >=90% is a state the system exists to remove.
+                // Meanwhile the volume itself could be at 99% from logs, images or anything else
+                // sharing it, and the alarm stayed silent. Free space is the resource a user would
+                // look at, so that is what triggers now — the quota check stays because being out
+                // of quota is still worth saying, just no longer the only way to be full.
+                let disk_pct = stats.disk_pct.unwrap_or(0);
+                let reason = if disk_pct >= 90 {
+                    Some("disk")
+                } else if stats.pct >= 90 {
+                    Some("quota")
+                } else {
+                    None
+                };
+                if let Some(reason) = reason {
+                    // The percentage that fired — so a graph gating on `pct` reacts to whichever
+                    // limit was actually hit, rather than reading the quota and seeing 12%.
+                    let pct = disk_pct.max(stats.pct);
                     let should_alert = last_alert
                         .map(|t| t.elapsed() >= alert_interval)
                         .unwrap_or(true);
                     if should_alert {
                         log::warn!(
-                            "storage: {}% full ({}/{} bytes) — pushing edge:full-disk alert",
-                            stats.pct,
-                            stats.used_bytes,
-                            stats.max_bytes
-                        );
-                        evict_state.push_disk_alert(
+                            "storage: {reason} at {pct}% — quota {}/{} bytes, disk {} free of {} on {} — pushing edge:full-disk alert",
                             stats.used_bytes,
                             stats.max_bytes,
-                            stats.pct,
-                            &stats.path,
+                            stats.disk_free_bytes.unwrap_or(0),
+                            stats.disk_total_bytes.unwrap_or(0),
+                            stats.mount.as_deref().unwrap_or("<unresolved>")
                         );
+                        evict_state.push_disk_alert(&stats, pct, reason);
                         last_alert = Some(std::time::Instant::now());
                     }
                 }

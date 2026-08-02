@@ -57,7 +57,7 @@ export const settings = {
     maxStorageHint:
       "Old clips are auto-deleted (oldest first) when total recording size exceeds this limit.",
     fullDiskBefore: "A workflow event ",
-    fullDiskAfter: " fires when usage reaches 90%.",
+    fullDiskAfter: " fires when the disk is 90% full, or recordings reach their limit.",
     recordingsFolder: "Recordings folder",
     recordingsFolderHint:
       "Directory on the edge appliance where .mp4 clips are stored. Takes effect after the edge restarts.",
@@ -156,7 +156,7 @@ export const settings = {
     maxStorageHint:
       "Clipes antigos são excluídos automaticamente (do mais antigo) quando o total de gravações passa deste limite.",
     fullDiskBefore: "Um evento de fluxo ",
-    fullDiskAfter: " dispara quando o uso chega a 90%.",
+    fullDiskAfter: " dispara quando o disco está 90% cheio, ou as gravações atingem o limite.",
     recordingsFolder: "Pasta de gravações",
     recordingsFolderHint:
       "Diretório no appliance onde os clipes .mp4 são guardados. Entra em vigor depois que o appliance reinicia.",
