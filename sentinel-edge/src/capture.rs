@@ -324,10 +324,8 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
     let started = Instant::now();
     let mut result = Ok(());
     loop {
-        let stalled = match &*cam.latest.lock().unwrap() {
-            Some((_, at)) => at.elapsed() > Duration::from_secs(12),
-            None => started.elapsed() > Duration::from_secs(20),
-        };
+        let last_frame = cam.latest.lock().unwrap().as_ref().map(|(_, at)| *at);
+        let stalled = is_stalled(last_frame, started, Instant::now());
         if stalled {
             result = Err("no frames within watchdog window — restarting".to_string());
             break;
@@ -346,6 +344,36 @@ fn run_gst_linked(ip: &str, hd: bool, cam: &Arc<Cam>, url: Option<&str>) -> Resu
     }
     let _ = pipeline.set_state(gst::State::Null);
     result
+}
+
+/// Has THIS pipeline run gone too long without a frame?
+///
+/// `last_frame` is `cam.latest`'s timestamp, which lives on the shared `Cam` and is deliberately
+/// **never cleared** — viewers keep seeing the last image while a decoder restarts (see the module
+/// docs). That made it the wrong clock to judge a fresh pipeline by, and the bug was severe:
+///
+/// The old test was `at.elapsed() > 12s` for any `Some`. Once a camera had ever delivered a frame,
+/// `latest` stayed `Some` forever, so after a stall longer than 12s EVERY subsequent run was
+/// declared stalled on its first loop iteration — before the new pipeline could produce anything.
+/// The 20s warm-up grace was reachable only by a camera that had never worked at all. The
+/// supervisor then restarted, the new run died instantly, and the camera stayed dark: the recovery
+/// mechanism was what prevented recovery. Worse, each restart dials a fresh RTSP session, and a
+/// consumer camera caps concurrent sessions at 2–4 (the ONE-PIPELINE invariant at the top of this
+/// module) — so the restart storm exhausts the very slots it needs to recover through.
+///
+/// A frame older than this run therefore does not count: the run gets the same warm-up grace as a
+/// camera being seen for the first time.
+fn is_stalled(last_frame: Option<Instant>, run_started: Instant, now: Instant) -> bool {
+    /// No frame for this long **within a run** → the pipeline is wedged in PLAYING.
+    const STALL_AFTER: Duration = Duration::from_secs(12);
+    /// How long a fresh pipeline may take to produce its first frame before we give up on it.
+    const WARMUP: Duration = Duration::from_secs(20);
+
+    match last_frame {
+        Some(at) if at >= run_started => now.duration_since(at) > STALL_AFTER,
+        // Either no frame ever, or the newest one predates this run — same thing here.
+        _ => now.duration_since(run_started) > WARMUP,
+    }
 }
 
 /// The video codec a camera streams. Only the parser + caps differ in the graph — `nvv4l2decoder`
@@ -635,5 +663,59 @@ mod gst_linked_it {
             rx.blocking_recv().expect("fragment channel closed");
             got += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod watchdog_tests {
+    use super::is_stalled;
+    use std::time::{Duration, Instant};
+
+    /// The bug (2026-08-02): `cam.latest` is never cleared, so after a stall the NEXT run saw a
+    /// frame from the previous session, called itself stalled on its first check, and died before
+    /// it could produce anything. The camera then never came back on its own.
+    #[test]
+    fn a_frame_from_the_previous_run_does_not_condemn_a_fresh_pipeline() {
+        let now = Instant::now();
+        let run_started = now - Duration::from_secs(1);
+        let last_frame = now - Duration::from_secs(600); // 10 min old, previous session
+        assert!(
+            !is_stalled(Some(last_frame), run_started, now),
+            "a new pipeline must get its warm-up grace, not inherit the old run's staleness"
+        );
+    }
+
+    #[test]
+    fn a_fresh_pipeline_still_gives_up_if_it_never_produces() {
+        let now = Instant::now();
+        let run_started = now - Duration::from_secs(21);
+        let last_frame = now - Duration::from_secs(600);
+        assert!(
+            is_stalled(Some(last_frame), run_started, now),
+            "past the warm-up window with nothing from this run, it is wedged"
+        );
+    }
+
+    #[test]
+    fn a_running_pipeline_that_goes_quiet_is_stalled() {
+        let now = Instant::now();
+        let run_started = now - Duration::from_secs(300);
+        let last_frame = now - Duration::from_secs(13);
+        assert!(is_stalled(Some(last_frame), run_started, now));
+    }
+
+    #[test]
+    fn a_healthy_pipeline_is_not_stalled() {
+        let now = Instant::now();
+        let run_started = now - Duration::from_secs(300);
+        let last_frame = now - Duration::from_secs(2);
+        assert!(!is_stalled(Some(last_frame), run_started, now));
+    }
+
+    #[test]
+    fn a_camera_that_has_never_delivered_gets_the_warmup_then_gives_up() {
+        let now = Instant::now();
+        assert!(!is_stalled(None, now - Duration::from_secs(19), now));
+        assert!(is_stalled(None, now - Duration::from_secs(21), now));
     }
 }
