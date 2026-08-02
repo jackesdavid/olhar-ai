@@ -117,10 +117,6 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #164 Capture watchdog kills each fresh pipeline — cameras never recover
-	  - Plan: [[capture-watchdog-stale-frame]]
-- [ ] #162 edge:full-disk must watch FREE SPACE, not the recording quota
-	  - Plan: [[edge-full-disk-free-space]]
 - [ ] #148 Security plan §0 — rotate the exposed secrets + remove the demo admin
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #151 Security plan §1.8 — scoped media tokens, get JWTs out of query strings
@@ -143,6 +139,10 @@ kanban-plugin: board
 
 **Complete**
 
+- [x] #164 Capture watchdog kills each fresh pipeline — cameras never recover
+	  - Plan: [[capture-watchdog-stale-frame]]
+- [x] #162 edge:full-disk must watch FREE SPACE, not the recording quota
+	  - Plan: [[edge-full-disk-free-space]]
 - [x] #158 Deploy must assert what it deployed — compare running digests
 	  - Plan: [[deploy-assert-digests]]
 - [x] #157 PREPARE every sqlx statement in CI — catch placeholder/bind drift
