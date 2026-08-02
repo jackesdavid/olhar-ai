@@ -228,7 +228,54 @@ pub struct StorageStats {
     pub max_bytes: u64,
     pub clip_count: usize,
     pub path: String,
+    /// Clip bytes as a percentage of the CONFIGURED QUOTA. This is what the Settings page shows,
+    /// and it is NOT a measure of how full the disk is — eviction actively holds it under 80%.
     pub pct: u8,
+    /// The filesystem actually holding `path`. `disk_pct` is the number a user would recognise
+    /// from `df`, and the one worth alarming on (card #162): the quota can be comfortable while
+    /// the volume is at 99% because of logs, images, or anything else sharing it.
+    /// All four are `None` when the mount could not be resolved — never silently zero, because a
+    /// zero here would read as "plenty of room" and is exactly how a full box stays quiet.
+    pub mount: Option<String>,
+    pub disk_total_bytes: Option<u64>,
+    pub disk_free_bytes: Option<u64>,
+    pub disk_pct: Option<u8>,
+}
+
+/// Total and available bytes of the filesystem holding `dir`, with its mount point.
+///
+/// Picks the LONGEST matching mount point, which is load-bearing: `/` is a prefix of every path,
+/// so a first-match search reports the root volume for a box whose recordings live on a separate
+/// `/data` disk — the wrong volume, and wrong in the direction that hides a full one.
+fn filesystem_usage(dir: &std::path::Path) -> Option<(String, u64, u64)> {
+    let target = fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    let mounts: Vec<(std::path::PathBuf, u64, u64)> = disks
+        .iter()
+        .map(|d| {
+            (
+                d.mount_point().to_path_buf(),
+                d.total_space(),
+                d.available_space(),
+            )
+        })
+        .collect();
+    pick_mount(&target, &mounts)
+        .map(|(m, total, free)| (m.to_string_lossy().into_owned(), *total, *free))
+}
+
+/// The mount that actually holds `target`: the longest mount point that is a prefix of it.
+///
+/// Split out from `filesystem_usage` so this rule is testable without a real mount table — it is
+/// the part that decides whether a full `/data` volume is seen or hidden behind `/`.
+fn pick_mount<'a>(
+    target: &std::path::Path,
+    mounts: &'a [(std::path::PathBuf, u64, u64)],
+) -> Option<&'a (std::path::PathBuf, u64, u64)> {
+    mounts
+        .iter()
+        .filter(|(m, _, _)| target.starts_with(m))
+        .max_by_key(|(m, _, _)| m.as_os_str().len())
 }
 
 impl StorageStats {
@@ -254,12 +301,38 @@ impl StorageStats {
         } else {
             ((used_bytes * 100) / max_bytes).min(100) as u8
         };
+        let fs_usage = filesystem_usage(dir);
+        if fs_usage.is_none() {
+            // Say so. A box whose mount cannot be resolved has NO disk alarm, and the whole point
+            // of #162 is that a silent full disk is the failure.
+            log::warn!(
+                "storage: could not resolve the filesystem for {} — the free-space alarm is blind on this box",
+                dir.display()
+            );
+        }
+        let (mount, disk_total_bytes, disk_free_bytes) = match fs_usage {
+            Some((m, total, free)) => (Some(m), Some(total), Some(free)),
+            None => (None, None, None),
+        };
+        // Used as a share of the whole volume. `available_space()` excludes filesystem-reserved
+        // blocks, so this reads a few points higher than `df`'s Use% on ext4 — it alarms slightly
+        // early, which is the right direction for a warning.
+        let disk_pct = match (disk_total_bytes, disk_free_bytes) {
+            (Some(total), Some(free)) if total > 0 => {
+                Some((((total - free.min(total)) * 100) / total).min(100) as u8)
+            }
+            _ => None,
+        };
         StorageStats {
             used_bytes,
             max_bytes,
             clip_count,
             path: dir.to_string_lossy().into_owned(),
             pct,
+            mount,
+            disk_total_bytes,
+            disk_free_bytes,
+            disk_pct,
         }
     }
 }
@@ -778,6 +851,11 @@ impl RecordingManager {
         }
     }
 
+    /// Where clips are written — the volume whose free space is the one that matters (#162).
+    pub fn dir(&self) -> &std::path::Path {
+        &self.dir
+    }
+
     pub fn storage_stats(&self) -> StorageStats {
         StorageStats::compute(&self.dir, self.config.max_storage_mb)
     }
@@ -1233,5 +1311,65 @@ mod rtsp_credentials_tests {
         let (url, creds) = split_rtsp_credentials("rtsp://bob:p@ss@10.0.0.2:554/s");
         assert_eq!(url, "rtsp://10.0.0.2:554/s");
         assert_eq!(creds, Some(("bob".into(), "p@ss".into())));
+    }
+
+}
+
+#[cfg(test)]
+mod disk_tests {
+    use super::{pick_mount, StorageStats};
+
+
+    fn mounts() -> Vec<(std::path::PathBuf, u64, u64)> {
+        vec![
+            ("/".into(), 100, 90),          // root: nearly empty
+            ("/data".into(), 500, 5),       // the recordings volume: nearly FULL
+            ("/data/other".into(), 800, 800),
+            ("/boot".into(), 10, 1),
+        ]
+    }
+
+    #[test]
+    fn pick_mount_prefers_the_longest_match() {
+        // The whole point: `/` is a prefix of every path, so a first-match search would report the
+        // 90%-free root and leave a full /data silent.
+        let ms = mounts();
+        let m = pick_mount(std::path::Path::new("/data/recordings"), &ms).unwrap();
+        assert_eq!(m.0, std::path::PathBuf::from("/data"));
+        assert_eq!(m.2, 5, "must report the free space of /data, not of /");
+    }
+
+    #[test]
+    fn pick_mount_falls_back_to_root() {
+        let ms = mounts();
+        let m = pick_mount(std::path::Path::new("/var/lib/sentinel"), &ms).unwrap();
+        assert_eq!(m.0, std::path::PathBuf::from("/"));
+    }
+
+    #[test]
+    fn pick_mount_is_not_fooled_by_a_shared_prefix() {
+        // "/data-old" starts with the STRING "/data" but is not under that mount. Path-component
+        // matching, not string matching.
+        let ms = mounts();
+        let m = pick_mount(std::path::Path::new("/data-old/clips"), &ms).unwrap();
+        assert_eq!(m.0, std::path::PathBuf::from("/"));
+    }
+
+    #[test]
+    fn pick_mount_returns_none_when_nothing_matches() {
+        let m = pick_mount(std::path::Path::new("/data/x"), &[]);
+        assert!(m.is_none(), "no mount table must stay None, never a silent 0% full");
+    }
+
+    #[test]
+    fn storage_stats_reports_the_real_filesystem() {
+        // The quota percentage and the disk percentage are different numbers and must both be
+        // present: reporting only the quota is the bug #162 fixes.
+        let dir = std::env::temp_dir();
+        let s = StorageStats::compute(&dir, 1024);
+        assert!(s.mount.is_some(), "the temp dir must resolve to a mount");
+        assert!(s.disk_total_bytes.unwrap_or(0) > 0);
+        let pct = s.disk_pct.expect("disk_pct");
+        assert!(pct <= 100);
     }
 }

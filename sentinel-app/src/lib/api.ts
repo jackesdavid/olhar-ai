@@ -195,7 +195,13 @@ export type StorageStats = {
   max_bytes: number;
   clip_count: number;
   path: string;
+  /** Clip bytes against the configured quota — not how full the disk is. */
   pct: number;
+  /** The volume holding the recordings folder. Null when the box could not resolve its mount. */
+  mount?: string | null;
+  disk_total_bytes?: number | null;
+  disk_free_bytes?: number | null;
+  disk_pct?: number | null;
 };
 
 

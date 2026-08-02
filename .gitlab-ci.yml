@@ -56,7 +56,12 @@ check:rust:
     # sentinel-edge is deliberately OUT of the workspace and must be checked separately, or a
     # break in it reaches a tag unnoticed — which is exactly how Linux stopped shipping for five
     # versions behind a flag nobody compiled.
-    - cargo check --manifest-path sentinel-edge/Cargo.toml
+    #
+    # --all-targets, like the workspace line above: without it `cargo check` never builds the test
+    # targets, and the edge's `--lib` tests sat UNCOMPILABLE from migration 0083 (a `Device`
+    # fixture missing four new fields) until #162 tried to add a test next to them. A suite that
+    # cannot build is indistinguishable from a suite that passes.
+    - cargo check --manifest-path sentinel-edge/Cargo.toml --all-targets
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

@@ -37,8 +37,6 @@ kanban-plugin: board
 	  - Plan: [[architecture-weaknesses]]
 - [ ] #161 Retire the tailnet remnants — drop magicdns_host + tailscale_state (readers first)
 	  - Plan: [[architecture-weaknesses]]
-- [ ] #162 edge:full-disk must watch FREE SPACE, not the recording quota
-	  - Plan: [[architecture-weaknesses]]
 - [ ] #163 macOS CI runner — stop building the edge .pkg by hand (the last local build)
 	  - Plan: [[architecture-weaknesses]]
 - [ ] #152 Edge signing §3 P2→P3 — soak, then flip signing_mode to required per box
@@ -119,6 +117,8 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #162 edge:full-disk must watch FREE SPACE, not the recording quota
+	  - Plan: [[edge-full-disk-free-space]]
 - [ ] #148 Security plan §0 — rotate the exposed secrets + remove the demo admin
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #151 Security plan §1.8 — scoped media tokens, get JWTs out of query strings

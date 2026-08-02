@@ -545,14 +545,25 @@ pub fn system_events() -> Vec<TenantEvent> {
             category: "System".to_string(),
             source: "system".to_string(),
             description: Some(
-                "Edge recording storage is near or over the configured limit".to_string(),
+                "Edge storage is running out — the disk is nearly full, or recordings are at their limit"
+                    .to_string(),
             ),
             created_by_graph: None,
+            // `pct` is the percentage that FIRED — disk or quota, whichever crossed 90% — so a
+            // graph can gate on it without knowing which limit was hit. `reason` ("disk" |
+            // "quota") is there for one that does. Before #162 this event only ever described the
+            // quota, and a box whose volume was 99% full said nothing at all.
             fields: vec![
                 field("used_bytes", PortType::Num),
                 field("max_bytes", PortType::Num),
                 field("pct", PortType::Num),
                 field("path", PortType::Text),
+                field("reason", PortType::Text),
+                field("quota_pct", PortType::Num),
+                field("disk_pct", PortType::Num),
+                field("disk_free_bytes", PortType::Num),
+                field("disk_total_bytes", PortType::Num),
+                field("mount", PortType::Text),
             ],
         },
         // A paired Telegram user sent a message. The notification service enqueues this from its

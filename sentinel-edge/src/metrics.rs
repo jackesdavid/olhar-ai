@@ -73,21 +73,51 @@ fn sample(sys: &mut System) -> EdgeMetrics {
     }
 }
 
-/// Used-percent of the system/root filesystem. Picks the disk mounted at `/` (the OS/data
-/// volume on the Linux appliance), falling back to the largest-capacity disk.
+/// Used-percent of the volume that actually holds the recordings (card #162).
+///
+/// This used to pin to `/` and fall back to the largest disk. On macOS `/` is the SEALED,
+/// READ-ONLY system volume, so a box reported `disk=0%` while `/System/Volumes/Data` was 100%
+/// full — the health gauge said healthy about a box that could not write a clip. Resolving the
+/// recordings directory to its own mount fixes that case and the Linux separate-`/data`-disk case
+/// with the same rule.
+///
+/// Falls back to `/` only when the recordings path has not been registered yet (before
+/// [`set_data_dir`] runs at boot).
 fn disk_pct() -> u8 {
+    let dir = data_dir()
+        .read()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(|| std::path::PathBuf::from("/"));
+    let target = std::fs::canonicalize(&dir).unwrap_or(dir);
     let disks = Disks::new_with_refreshed_list();
-    let root = disks
+    // Longest matching mount point: `/` is a prefix of every path, so a first-match search reports
+    // the wrong volume for anything on a separate disk — and reports it as healthy.
+    let holding = disks
         .iter()
-        .find(|d| d.mount_point() == std::path::Path::new("/"))
+        .filter(|d| target.starts_with(d.mount_point()))
+        .max_by_key(|d| d.mount_point().as_os_str().len())
         .or_else(|| disks.iter().max_by_key(|d| d.total_space()));
-    match root {
+    match holding {
         Some(d) if d.total_space() > 0 => {
             let used = d.total_space().saturating_sub(d.available_space());
             ((used.saturating_mul(100)) / d.total_space()).min(100) as u8
         }
         _ => 0,
     }
+}
+
+/// The recordings directory, registered at boot so `disk_pct` measures the volume the box actually
+/// writes to rather than whatever is mounted at `/`.
+fn data_dir() -> &'static std::sync::RwLock<Option<std::path::PathBuf>> {
+    static DIR: std::sync::OnceLock<std::sync::RwLock<Option<std::path::PathBuf>>> =
+        std::sync::OnceLock::new();
+    DIR.get_or_init(|| std::sync::RwLock::new(None))
+}
+
+/// Tell the sampler which volume matters. Call before [`spawn`].
+pub fn set_data_dir(dir: std::path::PathBuf) {
+    *data_dir().write().unwrap() = Some(dir);
 }
 
 /// GPU utilization + memory-used percent via `nvidia-smi`. `(None, None)` when no NVIDIA GPU
