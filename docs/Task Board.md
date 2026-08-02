@@ -117,6 +117,8 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #164 Capture watchdog kills each fresh pipeline — cameras never recover
+	  - Plan: [[capture-watchdog-stale-frame]]
 - [ ] #162 edge:full-disk must watch FREE SPACE, not the recording quota
 	  - Plan: [[edge-full-disk-free-space]]
 - [ ] #148 Security plan §0 — rotate the exposed secrets + remove the demo admin
