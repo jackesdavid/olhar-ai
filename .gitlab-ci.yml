@@ -98,6 +98,56 @@ check:sql:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
+check:media:
+  stage: check
+  image: rust:1-bookworm
+  interruptible: true
+  # Card #159. `check:rust` proves the media pipeline COMPILES. Nothing proved a camera still
+  # produces frames — and that gap shipped #164 to a customer box, where a watchdog that killed
+  # every pipeline restart survived several releases and surfaced only when a human noticed their
+  # camera was dark.
+  #
+  # This builds the REAL ingest pipeline against a synthetic RTSP source and asserts what a camera
+  # is for: a JPEG out of the decode branch (which is also the snapshot path), fMP4 init + live
+  # fragments off the SAME connection, and a finalised .mp4 clip with ftyp+moov.
+  services:
+    - name: bluenviron/mediamtx:latest-ffmpeg
+      alias: rtsp
+  variables:
+    # mediamtx serves this path on demand, publishing an H264 test pattern into itself. `-g 15`
+    # keeps keyframes frequent so the muxer has an IDR to start a clip on quickly.
+    MTX_PATHS_TEST_RUNONDEMAND: "ffmpeg -re -f lavfi -i testsrc=size=640x480:rate=15 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -g 15 -an -f rtsp rtsp://localhost:8554/test"
+    MEDIA_SMOKE_RTSP: "rtsp://rtsp:8554/test"
+  before_script:
+    # Dev headers to build, and the actual runtime plugins to RUN: rtspsrc (good), h264parse (bad),
+    # jpegenc/mp4mux (good), decodebin (base), software H264 decode (libav).
+    - apt-get update -qq
+    - apt-get install -y -qq libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev pkg-config
+        gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
+  script:
+    - |
+      set -eu
+      cargo test --manifest-path sentinel-edge/Cargo.toml --lib media_smoke -- --nocapture \
+        2>&1 | tee /tmp/media.log
+      # The test SKIPS when MEDIA_SMOKE_RTSP is unset, and a skip exits 0. Requiring the marker is
+      # what stops "no RTSP source reachable" from reading as "the media path works" — the exact
+      # shape of failure this job exists to catch.
+      if ! grep -q "media_smoke: RAN" /tmp/media.log; then
+        echo "media_smoke did not run — the RTSP service was unreachable or the test was skipped"
+        exit 1
+      fi
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: &media_paths
+        - sentinel-edge/src/capture.rs
+        - sentinel-edge/src/recording.rs
+        - sentinel-edge/src/media.rs
+        - sentinel-edge/src/gst_mse.rs
+        - sentinel-edge/Cargo.toml
+        - .gitlab-ci.yml
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes: *media_paths
+
 check:web:
   stage: check
   image: node:22-bookworm

@@ -612,24 +612,40 @@ mod is_keyframe_tests {
     }
 }
 
-#[cfg(all(test, feature = "gst-linked"))]
-mod gst_linked_it {
-    //! Integration test for the shared ingest (card #138, G1/A1/G2): ONE camera connection, `tee`'d
-    //! to the decode branch (JPEG for motion + detectors) and the mux branch (fMP4 for live
-    //! viewers). Both must come out of the same pipeline — that is the whole point, so both are
-    //! asserted here. Environment-specific, so `#[ignore]`d:
-    //!   GST_IT_CAM_URL='rtsp://user:pass@host/streamN' cargo test --features gst-linked -- --ignored gst_linked
+#[cfg(test)]
+mod media_smoke {
+    //! Card #159 — the media path, end to end, against a synthetic RTSP source.
+    //!
+    //! `check:rust` proves the pipeline COMPILES. Nothing proved a camera still produces frames,
+    //! and that gap is not theoretical: the capture watchdog shipped a bug (#164) that killed every
+    //! pipeline restart, reached a customer box, survived several releases, and surfaced only when
+    //! a human noticed their camera was dark.
+    //!
+    //! This replaces a test that was worse than nothing. It was gated on `feature = "gst-linked"`,
+    //! a feature deleted in 277f079, and called `ensure_with_url` with four arguments when it takes
+    //! three — so it had never compiled, let alone run, while reading like coverage.
+    //!
+    //! Runs only when `MEDIA_SMOKE_RTSP` names a reachable RTSP URL; `check:media` in
+    //! .gitlab-ci.yml sets it to a mediamtx-served test pattern. Unset, it SKIPS LOUDLY — and the
+    //! CI job greps for the ran-marker, so a skip cannot masquerade as a pass.
+    use std::collections::HashMap;
     use std::time::Duration;
 
-    #[test]
-    #[ignore = "needs a live camera"]
-    fn one_connection_feeds_both_the_decoder_and_the_live_muxer() {
-        let url =
-            std::env::var("GST_IT_CAM_URL").expect("set GST_IT_CAM_URL to a live camera RTSP URL");
-        let ip = "10.255.255.1"; // a key, not a dial — the URL above is what gets connected
-        super::ensure_with_url(ip, false, "gstreamer-linked", &url);
+    const RAN_MARKER: &str = "media_smoke: RAN";
 
-        // Decode branch: a fresh JPEG lands in the slot every consumer reads.
+    #[test]
+    fn one_connection_yields_frames_live_fragments_and_a_clip() {
+        let Ok(url) = std::env::var("MEDIA_SMOKE_RTSP") else {
+            eprintln!("media_smoke: SKIPPED — set MEDIA_SMOKE_RTSP to an RTSP URL to run it.");
+            return;
+        };
+        // A key, not a dial: the URL above is what actually gets connected.
+        let ip = "10.255.255.1";
+        super::ensure_with_url(ip, false, &url);
+
+        // ---- 1. frames out ---------------------------------------------------------------
+        // This is also THE SNAPSHOT PATH: `GET /snapshot/:ip` is `capture::ensure` +
+        // `capture::latest_fresh`, so a fresh JPEG here is the snapshot working.
         let mut jpeg = None;
         for _ in 0..60 {
             if let Some(j) = super::latest_fresh(ip, false, Duration::from_secs(5)) {
@@ -644,10 +660,10 @@ mod gst_linked_it {
             "not a JPEG: {:02x?}",
             &jpeg[..4.min(jpeg.len())]
         );
+        assert!(jpeg.len() > 1024, "JPEG suspiciously small: {} B", jpeg.len());
 
-        // Mux branch: an init segment a browser can start on, then live fragments.
-        let feed = super::mse_feed(ip, false).expect("mux branch produced no feed");
-        let (init, mime, mut rx) = feed;
+        // ---- 2. the live mux branch, off the SAME connection ------------------------------
+        let (init, mime, mut rx) = super::mse_feed(ip, false).expect("mux branch produced no feed");
         assert_eq!(&init[4..8], b"ftyp", "init segment must open with ftyp");
         assert!(
             init.windows(4).any(|w| w == b"moov"),
@@ -657,12 +673,39 @@ mod gst_linked_it {
             mime.starts_with("video/mp4; codecs=\"avc1."),
             "unexpected mime: {mime}"
         );
-
-        let mut got = 0;
-        while got < 3 {
+        for _ in 0..3 {
             rx.blocking_recv().expect("fragment channel closed");
-            got += 1;
         }
+
+        // ---- 3. a clip is muxed to a playable file ----------------------------------------
+        let dir = std::env::temp_dir().join("media-smoke-clips");
+        let _ = std::fs::create_dir_all(&dir);
+        std::env::set_var("EDGE_RECORDING_DIR", &dir);
+        // Unreachable control on purpose: `boot` falls back to RecordingConfig::default().
+        let mgr = crate::recording::RecordingManager::boot("http://127.0.0.1:1");
+        mgr.set_dials(HashMap::from([(ip.to_string(), url.clone())]));
+        let (clip_id, started) = mgr.start(ip, 0).expect("recording did not start");
+        assert!(started, "expected a NEW recording session");
+        std::thread::sleep(Duration::from_secs(4));
+        let meta = mgr.stop(&clip_id).expect("recording did not stop cleanly");
+
+        let mp4 = dir.join(format!("{clip_id}.mp4"));
+        let bytes = std::fs::read(&mp4).unwrap_or_else(|e| panic!("clip {mp4:?} unreadable: {e}"));
+        assert!(
+            bytes.len() > 8 * 1024,
+            "clip is {} B — a header with no video is not a recording",
+            bytes.len()
+        );
+        assert_eq!(&bytes[4..8], b"ftyp", "clip must open with ftyp");
+        assert!(
+            bytes.windows(4).any(|w| w == b"moov"),
+            "clip must carry moov — an unfinalised mp4 will not play"
+        );
+        assert!(meta.size_bytes > 0, "clip metadata reports zero bytes");
+
+        let _ = std::fs::remove_file(&mp4);
+        // The CI job greps for this: a silent skip must never read as a pass.
+        println!("{RAN_MARKER} frames={} B, clip={} B", jpeg.len(), bytes.len());
     }
 }
 

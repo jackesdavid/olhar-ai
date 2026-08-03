@@ -31,8 +31,16 @@ kanban-plugin: board
 
 ## ToDo
 
-- [ ] #159 Media pipeline smoke test in CI — frames, clip, snapshot
-	  - Plan: [[architecture-weaknesses]]
+- [ ] #165 Email delivery foundation — a provider wired as a notification channel
+	  - Plan: [[launch-readiness-selfserve]]
+- [ ] #166 Self-service password reset — a locked-out customer has no way back in
+	  - Plan: [[launch-readiness-selfserve]]
+- [ ] #167 Terms of Service + Privacy Policy + consent at signup
+	  - Plan: [[launch-readiness-selfserve]]
+- [ ] #168 Self-hosted runners — build on our own hardware, no shared minutes
+	  - Plan: [[self-hosted-runners]]
+- [ ] #169 Windows self-hosted runner + release:edge-windows
+	  - Plan: [[self-hosted-runners]]
 - [ ] #160 Tenant isolation by construction — row-level security
 	  - Plan: [[architecture-weaknesses]]
 - [ ] #161 Retire the tailnet remnants — drop magicdns_host + tailscale_state (readers first)
@@ -117,6 +125,8 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #159 Media pipeline smoke test in CI — frames, clip, snapshot
+	  - Plan: [[media-smoke-test-ci]]
 - [ ] #148 Security plan §0 — rotate the exposed secrets + remove the demo admin
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #151 Security plan §1.8 — scoped media tokens, get JWTs out of query strings
@@ -127,8 +137,6 @@ kanban-plugin: board
 
 ## Review
 
-- [ ] #155 Camera status — show WHICH stage failed, per camera
-	  - Plan: [[camera-status-visibility]]
 - [ ] #154 Security hardening PRs 1–5 — landed, pending prod verification
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #83 Windows installer — signed .exe
@@ -139,6 +147,8 @@ kanban-plugin: board
 
 **Complete**
 
+- [x] #155 Camera status — show WHICH stage failed, per camera
+	  - Plan: [[camera-status-visibility]]
 - [x] #164 Capture watchdog kills each fresh pipeline — cameras never recover
 	  - Plan: [[capture-watchdog-stale-frame]]
 - [x] #162 edge:full-disk must watch FREE SPACE, not the recording quota
