@@ -31,6 +31,8 @@ kanban-plugin: board
 
 ## ToDo
 
+- [ ] #170 Runner hangs pulling any image it does not already have
+	  - Plan: [[self-hosted-runners]]
 - [ ] #165 Email delivery foundation — a provider wired as a notification channel
 	  - Plan: [[launch-readiness-selfserve]]
 - [ ] #166 Self-service password reset — a locked-out customer has no way back in
@@ -44,8 +46,6 @@ kanban-plugin: board
 - [ ] #160 Tenant isolation by construction — row-level security
 	  - Plan: [[architecture-weaknesses]]
 - [ ] #161 Retire the tailnet remnants — drop magicdns_host + tailscale_state (readers first)
-	  - Plan: [[architecture-weaknesses]]
-- [ ] #163 macOS CI runner — stop building the edge .pkg by hand (the last local build)
 	  - Plan: [[architecture-weaknesses]]
 - [ ] #152 Edge signing §3 P2→P3 — soak, then flip signing_mode to required per box
 	  - Plan: [[security-hardening-remainder]]
@@ -125,6 +125,8 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #163 macOS CI runner — stop building the edge .pkg by hand (the last local build)
+	  - Plan: [[self-hosted-runners]]
 - [ ] #159 Media pipeline smoke test in CI — frames, clip, snapshot
 	  - Plan: [[media-smoke-test-ci]]
 - [ ] #148 Security plan §0 — rotate the exposed secrets + remove the demo admin

@@ -119,6 +119,30 @@ offered a job.
 **OrbStack must be running.** It was down at the start of this session and the runner had no daemon
 at all. Set it to launch at login, or CI silently has zero capacity.
 
+
+## #170 — the pull hang is worked around, not fixed
+
+Four jobs hung on four different images (`rust:1-bookworm`, the runner helper, the private
+`sentinel-postgres`, and `registry.gitlab.com/security-products/secrets:7`). Each was cured by
+pulling that image **by hand** on the host first. `secret-detection` went from hanging indefinitely
+to **23 seconds** purely from having the image cached.
+
+So the rule today is: **any image not already local hangs the first time the runner pulls it**,
+while `docker pull` of the same reference from a shell takes 10–25 s. Root cause unknown — most
+likely how the runner's Docker API client consumes the pull-progress stream against OrbStack.
+
+**Consequence to remember:** adding any new `image:` or `services:` entry to `.gitlab-ci.yml` will
+hang its first job, with a frozen log and no container as the only symptom. Pre-pull it on the host
+until #170 is understood.
+
+## The macOS release job (#163)
+
+`release:edge-macos` runs on the `macos` tag (the shell executor), calls the same
+`deploy/macos-pkg/build.sh --sign` that has always worked by hand, asserts `spctl` accepts the
+result, and hands the `.pkg` to `release:publish` as an artifact. `allow_failure: true` — a sleeping
+Mac must not fail a release Linux can still complete, and `release:publish` prints an explicit NOTE
+when no package arrived rather than publishing a Linux-only release in silence.
+
 ## Success test
 
 A `v*` tag produces **all three platforms in one pipeline** — Linux x86_64, Linux aarch64, and a

@@ -570,10 +570,54 @@ release:edge-aarch64:
     # pkg-config and then fail at link time against a foreign-architecture object.
     - apt-get install -y -qq libgstreamer1.0-dev:arm64 libgstreamer-plugins-base1.0-dev:arm64
 
+# Card #163 — the last local build, finally in CI.
+#
+# Runs on OUR Mac (the `macos` tag → jack-mac-shell, a SHELL executor). That machine already holds
+# the Developer ID certs and the `sentinel-notary` keychain profile, so **no certificate material is
+# stored in GitLab** — strictly better than a hosted macOS runner, which would have required
+# exporting .p12 files into CI variables.
+#
+# The shell executor runs as the logged-in user, which is exactly what codesign + notarytool need:
+# the LOGIN keychain is unreachable from a root daemon.
+release:edge-macos:
+  stage: release
+  tags: [macos]
+  # A Mac that is asleep or has no signing identity must not fail the whole release — Linux still
+  # ships, and the manifest records only what actually built. release:publish says so out loud.
+  allow_failure: true
+  variables:
+    MACOS_APP_CERT: "Developer ID Application: Jackes Lemos (3A4H2Y6ZVM)"
+    MACOS_PKG_CERT: "Developer ID Installer: Jackes Lemos (3A4H2Y6ZVM)"
+    NOTARY_PROFILE: sentinel-notary
+  script:
+    - |
+      set -eu
+      # rustup lives in the user's home; a LaunchAgent's PATH does not include it.
+      export PATH="$HOME/.cargo/bin:$PATH"
+      ./deploy/macos-pkg/build.sh --sign
+      VER="${CI_COMMIT_TAG#v}"
+      PKG="deploy/macos-pkg/build/Sentinel-Edge-$VER-gst-x86_64.pkg"
+      test -f "$PKG"
+      # Notarization is the gate that matters: an unstapled .pkg installs on the build machine and
+      # is refused on every customer's. Assert Gatekeeper accepts it before it can be published.
+      spctl -a -vvv -t install "$PKG"
+      mkdir -p dist && cp "$PKG" dist/
+  artifacts:
+    paths: [dist/]
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+
 release:publish:
   stage: release
   image: alpine:3.20
-  needs: [release:edge-x86_64, release:edge-aarch64]
+  needs:
+    - release:edge-x86_64
+    - release:edge-aarch64
+    # Optional: a release without the Mac still publishes Linux.
+    - job: release:edge-macos
+      artifacts: true
+      optional: true
   before_script:
     - apk add --no-cache openssh-client
     - install -m 700 -d ~/.ssh
@@ -607,10 +651,23 @@ release:publish:
       # answer /edge-latest, so a version that never built must never appear in it.
       SHA_X86="$(cat dist/sentinel-edge-linux-x86_64-$VER.sha256 2>/dev/null || true)"
       SHA_ARM="$(cat dist/sentinel-edge-linux-aarch64-$VER.sha256 2>/dev/null || true)"
+      # macOS arrives as an artifact from release:edge-macos (#163). Its filename already carries
+      # the version, so it needs no rename — only its digest.
+      PKG="Sentinel-Edge-$VER-gst-x86_64.pkg"
+      SHA_MAC=""
+      if [ -f "dist/$PKG" ]; then
+        SHA_MAC="$(sha256sum "dist/$PKG" | cut -d' ' -f1)"
+        echo "$SHA_MAC" > "dist/$PKG.sha256"
+      else
+        # Never silent: a release missing a platform must SAY which, or "shipped" reads as "shipped
+        # everywhere" — the exact failure the per-platform manifest exists to prevent.
+        echo "▸ NOTE: no macOS package in this release — the Mac runner did not produce one."
+      fi
       ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
         "cd /ibbf/edge-dist && chmod +x merge-manifest.sh && \
          { [ -n '$SHA_X86' ] && ./merge-manifest.sh linux-x86_64  '$VER' 'sentinel-edge-linux-x86_64-$VER'  '$SHA_X86'; } ; \
          { [ -n '$SHA_ARM' ] && ./merge-manifest.sh linux-aarch64 '$VER' 'sentinel-edge-linux-aarch64-$VER' '$SHA_ARM'; } ; \
+         { [ -n '$SHA_MAC' ] && ./merge-manifest.sh macos         '$VER' '$PKG'                            '$SHA_MAC'; } ; \
          cat manifest.json"
   rules:
     - if: $CI_COMMIT_TAG =~ /^v/
