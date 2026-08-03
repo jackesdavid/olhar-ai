@@ -79,6 +79,46 @@ a `tags:` line. The Mac runs Linux containers through OrbStack, so `image: rust:
 - **Job logs are visible to project members**, and the shell executor runs as your user in your home
   directory. Keep the shell runner's jobs limited to the tagged macOS build.
 
+
+## Three config traps — every one presents identically (2026-08-03)
+
+A job sits at `running` forever, its log frozen at *"Preparing the docker executor"*, and **no
+container is ever created**. That single signature had three distinct causes. Recognise it and check
+all three, because the next runner (Windows, #169) will hit them too.
+
+| Trap | Symptom | Fix |
+|---|---|---|
+| OrbStack has **no** `/var/run/docker.sock` | Runner defaults to the missing path and hangs silently | `host = "unix:///Users/<you>/.orbstack/run/docker.sock"` |
+| `pull_policy` defaults to **`always`** | Re-pulls every image every job and hangs on this daemon, while a manual `docker pull` of the same image takes 11s | `pull_policy = ["if-not-present"]` |
+| **Private** registry service images | `check:sql`'s `sentinel-postgres` is in our private registry; the runner has no credentials and sat 59 minutes on the pull | `docker login registry.gitlab.com` on the host, and pre-pull the image |
+
+The final config additions under `[runners.docker]`:
+
+```toml
+host = "unix:///Users/jackesdavid/.orbstack/run/docker.sock"
+pull_policy = ["if-not-present"]
+```
+
+**Diagnosis note.** Two wrong theories cost real time here: "42 minutes is plausible for three cold
+Rust builds" (it was hung, not slow) and "the LaunchAgent environment differs from a shell" (it does
+not — the config was wrong for both). The thing that actually settled it every time was the *job log
+tail* and `docker ps`, not reasoning about what ought to be true.
+
+## Verified working (2026-08-03)
+
+All three jobs green on `jack-mac-docker`, and each proved it did real work rather than skipping:
+
+- `check:rust` — 289 s
+- `check:sql` — `sql_prepare: 299 statements extracted, 297 prepared, 297 bind-count checked`
+- `check:media` — `media_smoke: RAN frames=7368 B, clip=120368 B`
+
+Then re-verified under the `brew services` LaunchAgent (not a foreground process), so it survives a
+reboot. **Shared runners are now disabled for the project** — the exhausted quota can no longer be
+offered a job.
+
+**OrbStack must be running.** It was down at the start of this session and the runner had no daemon
+at all. Set it to launch at login, or CI silently has zero capacity.
+
 ## Success test
 
 A `v*` tag produces **all three platforms in one pipeline** — Linux x86_64, Linux aarch64, and a
