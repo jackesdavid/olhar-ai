@@ -684,7 +684,13 @@ verify:edge-lock:
     # release builds --locked, so a stale lock fails the release rather than this cheap job.
     - cargo metadata --locked --format-version 1 --manifest-path sentinel-edge/Cargo.toml > /dev/null
     - echo "✓ sentinel-edge Cargo.lock is in sync"
+  # NO `changes:` filter, deliberately. This guard used to run only when sentinel-edge's OWN
+  # manifest changed — and that is not the only way to invalidate its lock. `sentinel-edge` depends
+  # on `crates/app-core` by PATH, so adding a dependency THERE (lettre, #165) puts a new package in
+  # sentinel-edge/Cargo.lock without touching a single file under sentinel-edge/. The guard was
+  # skipped on the MR that broke it, and the stale lock reached `main`, where the next `v*` tag
+  # would have failed the release build — exactly the failure this job exists to make cheap.
+  # It takes ~26 s. That is far less than a filter that is wrong in a way nobody notices.
   rules:
-    - changes:
-        - sentinel-edge/Cargo.toml
-        - sentinel-edge/Cargo.lock
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
