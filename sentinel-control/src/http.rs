@@ -890,6 +890,17 @@ struct FaceIn {
     face_width: i64, // face box width in source pixels (face-size signal)
     #[serde(default)]
     kps: Vec<i32>, // YuNet 5 landmarks, flat [x0,y0,…] source px (#122)
+    // Quality signals (#126). `Option` rather than `#[serde(default)]`, because for these the
+    // difference between "reported as zero" and "not reported at all" decides whether a gate
+    // should fire — an edge older than #126 sends neither, and 0 is a real, meaningful blur value.
+    #[serde(default)]
+    blur: Option<f64>,
+    #[serde(default)]
+    yaw: Option<f64>,
+    #[serde(default)]
+    pitch: Option<f64>,
+    #[serde(default)]
+    roll: Option<f64>,
     #[allow(dead_code)]
     #[serde(default)]
     at: String,
@@ -913,12 +924,22 @@ async fn face_push(
     let Some(Json(ev)) = body else {
         return (StatusCode::BAD_REQUEST, "face body required").into_response();
     };
+    // Quality ports (#126). A box that predates them reports nothing, and a gate built on a
+    // missing `blur` would fail CLOSED (`run_num_cmp` resolves an absent input to 0), silently
+    // killing that tenant's whole face pipeline until every box updated. So an unreported
+    // sharpness becomes an explicit fail-open sentinel; pose defaults to 0, which already passes
+    // the `NumLte(|angle|)` direction a pose gate is written in.
+    let blur = ev.blur.unwrap_or(app_core::agent::face_quality::BLUR_UNKNOWN);
     let mut payload = serde_json::json!({
         "camera": ev.camera_ip,
         "bbox": ev.bbox, // already xyxy
         "confidence": ev.confidence.round() as i64,
         "face_width": ev.face_width,
         "kps": ev.kps, // flat [x0,y0,…] → face_detected Landmarks port → ArcFace align (#122)
+        "blur": blur.round() as i64,
+        "yaw": ev.yaw.unwrap_or(0.0).round() as i64,
+        "pitch": ev.pitch.unwrap_or(0.0).round() as i64,
+        "roll": ev.roll.unwrap_or(0.0).round() as i64,
     });
     if let (Some(obj), Some(f)) = (payload.as_object_mut(), ev.frame_b64) {
         obj.insert("frame".to_string(), serde_json::Value::String(f));

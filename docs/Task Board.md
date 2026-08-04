@@ -39,8 +39,6 @@ kanban-plugin: board
 	  - Plan: [[launch-readiness-selfserve]]
 - [ ] #167 Terms of Service + Privacy Policy + consent at signup
 	  - Plan: [[launch-readiness-selfserve]]
-- [ ] #168 Self-hosted runners — build on our own hardware, no shared minutes
-	  - Plan: [[self-hosted-runners]]
 - [ ] #169 Windows self-hosted runner + release:edge-windows
 	  - Plan: [[self-hosted-runners]]
 - [ ] #160 Tenant isolation by construction — row-level security
@@ -111,10 +109,6 @@ kanban-plugin: board
 	  - Plan: [[workflow-schedule-trigger]]
 - [ ] #121 Retire local builds — full CI/CD (build + host on GitHub)
 	  - Plan: [[retire-local-builds-ci]]
-- [ ] #126 Face quality gate — blur + pose before embed
-	  - Plan: [[face-quality-gate-upstream]]
-- [ ] #127 pgvector face kNN — HNSW index + retrieve-then-rerank
-	  - Plan: [[face-knn-hnsw-rerank]]
 - [ ] #123 Recognition scoring — per-person template + margin test
 	  - Plan: [[face-recognition-per-person-scoring]]
 - [ ] #124 Face clustering — kill single-link chaining
@@ -125,10 +119,6 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #163 macOS CI runner — stop building the edge .pkg by hand (the last local build)
-	  - Plan: [[self-hosted-runners]]
-- [ ] #159 Media pipeline smoke test in CI — frames, clip, snapshot
-	  - Plan: [[media-smoke-test-ci]]
 - [ ] #148 Security plan §0 — rotate the exposed secrets + remove the demo admin
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #151 Security plan §1.8 — scoped media tokens, get JWTs out of query strings
@@ -139,6 +129,10 @@ kanban-plugin: board
 
 ## Review
 
+- [ ] #126 Face quality gate — blur + pose before embed
+	  - Plan: [[face-quality-gate-upstream]]
+- [ ] #127 pgvector face kNN — HNSW index + retrieve-then-rerank
+	  - Plan: [[face-knn-hnsw-rerank]]
 - [ ] #154 Security hardening PRs 1–5 — landed, pending prod verification
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #83 Windows installer — signed .exe
@@ -149,6 +143,12 @@ kanban-plugin: board
 
 **Complete**
 
+- [x] #163 macOS CI runner — stop building the edge .pkg by hand (the last local build)
+	  - Plan: [[self-hosted-runners]]
+- [x] #159 Media pipeline smoke test in CI — frames, clip, snapshot
+	  - Plan: [[media-smoke-test-ci]]
+- [x] #168 Self-hosted runners — build on our own hardware, no shared minutes
+	  - Plan: [[self-hosted-runners]]
 - [x] #155 Camera status — show WHICH stage failed, per camera
 	  - Plan: [[camera-status-visibility]]
 - [x] #164 Capture watchdog kills each fresh pipeline — cameras never recover

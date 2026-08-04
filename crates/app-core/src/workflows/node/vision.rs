@@ -345,6 +345,16 @@ pub(super) fn run_store_face(
         .and_then(PortValue::as_num)
         .unwrap_or(0) as i32;
 
+    // Quality signals (#126) — recorded, not judged. An unwired port stays NULL rather than 0:
+    // "not measured" and "measured as zero" are different facts, and only the first should be
+    // invisible to threshold calibration (#128). The fail-open sentinel control substitutes for an
+    // edge too old to measure sharpness is mapped back to NULL here for the same reason — it means
+    // "unknown", and must not enter the data as an excellent score.
+    let quality = |name: &str| inputs.get(name).and_then(PortValue::as_num).map(|v| v as f32);
+    let blur = quality("blur")
+        .filter(|b| (*b as f64) < crate::agent::face_quality::BLUR_UNKNOWN);
+    let (yaw, pitch, roll) = (quality("yaw"), quality("pitch"), quality("roll"));
+
     let dedup = cfg_f64(config, "dedup_distance", 0.15) as f32;
     if dedup > 0.0 {
         if let Some(d) = crate::faces::nearest_stored_distance(&sys.db, sys.tenant_id, &embedding) {
@@ -401,6 +411,10 @@ pub(super) fn run_store_face(
             face_width,
             source,
             crop_key,
+            blur,
+            yaw,
+            pitch,
+            roll,
         },
     )?;
     o.insert("stored".into(), PortValue::Bool(true));

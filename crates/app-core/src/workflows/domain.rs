@@ -932,7 +932,7 @@ const RECOGNIZE_FACE_OUT: [Port; 5] = [
     p("matches", PortType::Dictionary, false), // top-K: person/label → score
     p("found", PortType::Bool, false),  // a match within max_distance
 ];
-const STORE_FACE_IN: [Port; 7] = [
+const STORE_FACE_IN: [Port; 11] = [
     p("image", PortType::Image, false),
     p("embedding", PortType::Embedding, true),
     p("bbox", PortType::Bbox, false),
@@ -940,6 +940,12 @@ const STORE_FACE_IN: [Port; 7] = [
     p("camera", PortType::Camera, false),
     p("confidence", PortType::Num, false), // detection score 0..100 (from face_detected)
     p("face_width", PortType::Num, false), // face box width in source px (far-face signal)
+    // Quality signals (#126), carried through from `face_detected` so the stored capture records
+    // what it was measured at. STORED, never judged — the gate that used them ran upstream.
+    p("blur", PortType::Num, false),  // sharpness; higher = sharper
+    p("yaw", PortType::Num, false),   // degrees
+    p("pitch", PortType::Num, false), // degrees
+    p("roll", PortType::Num, false),  // degrees
 ];
 const STORE_FACE_OUT: [Port; 2] = [
     p("stored", PortType::Bool, false), // false if skipped by dedup

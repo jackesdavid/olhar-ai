@@ -19,6 +19,7 @@ pub mod detector;
 pub mod domain;
 pub mod face;
 pub mod face_detector;
+pub mod face_quality;
 pub mod tools;
 pub mod vision;
 

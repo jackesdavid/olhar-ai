@@ -23,6 +23,12 @@ pub struct NewFace {
     pub source: String,
     /// Pre-cropped face thumbnail key (the proxy serves it as a passthrough); `None` = crop on read.
     pub crop_key: Option<String>,
+    /// Quality signals (#126). `None` = the edge did not report it (a box older than #126), which
+    /// is deliberately distinct from a measured zero — see migration `0086_face_quality.sql`.
+    pub blur: Option<f32>,
+    pub yaw: Option<f32>,
+    pub pitch: Option<f32>,
+    pub roll: Option<f32>,
 }
 
 /// A stored face as returned (no embedding — that stays server-side).
@@ -93,8 +99,10 @@ pub fn insert(db: &Db, tenant_id: Uuid, f: NewFace) -> Result<String, String> {
     db.block(async move {
         let row: (String,) = sqlx::query_as(
             "INSERT INTO faces (tenant_id, person_id, embedding, image_key, camera, bbox, \
-                                confidence, face_width, source, created_at, crop_key) \
-             VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id::text",
+                                confidence, face_width, source, created_at, crop_key, \
+                                blur, yaw, pitch, roll) \
+             VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+             RETURNING id::text",
         )
         .bind(tenant_id)
         .bind(&f.person_id)
@@ -107,6 +115,10 @@ pub fn insert(db: &Db, tenant_id: Uuid, f: NewFace) -> Result<String, String> {
         .bind(&f.source)
         .bind(&now)
         .bind(&f.crop_key)
+        .bind(f.blur)
+        .bind(f.yaw)
+        .bind(f.pitch)
+        .bind(f.roll)
         .fetch_one(&pool)
         .await
         .map_err(|e| format!("faces::insert: {e}"))?;
@@ -114,35 +126,78 @@ pub fn insert(db: &Db, tenant_id: Uuid, f: NewFace) -> Result<String, String> {
     })
 }
 
+/// How many candidates to pull from EACH gallery before the exact re-rank (#127).
+///
+/// ANN retrieval is approximate, so asking the index for exactly `k` and returning it would inherit
+/// the index's recall as the answer's recall. Over-fetching and re-ranking the candidates exactly
+/// buys back the accuracy at negligible cost — the re-rank sorts a few dozen rows, not the gallery.
+/// The floor matters more than the multiplier: at `k = 1` a 10× fetch is still only 10 candidates,
+/// which is where HNSW recall is worst.
+fn candidate_pool(k: i64) -> i64 {
+    (k * 10).clamp(50, 500)
+}
+
 /// kNN over the UNION of enrolled (`person_embeddings`, approved) + stored (`faces`) galleries,
 /// closest first (≤ `k` rows). Each hit is tagged `source`. Empty on error.
+///
+/// **Retrieve-then-rerank (#127).** Each gallery is queried separately as
+/// `ORDER BY embedding <=> $1 LIMIT n` — the only shape pgvector will serve from an HNSW index —
+/// and the two candidate sets are then merged and re-sorted EXACTLY. Two details are load-bearing
+/// and easy to undo by accident:
+///
+/// * The `ORDER BY` uses the **uncast** `<=>` expression. `<=>` returns float8; wrapping it in
+///   `::float4` (as this query used to, via the output alias) makes the sort expression stop
+///   matching the index's ordering operator, and the planner silently falls back to a sequential
+///   scan even with the index in place. The cast survives in the select list only, where it is free.
+/// * The per-gallery `LIMIT` lives INSIDE each branch. Sorting the union instead — the old shape —
+///   gives the planner no single table to attach an index-ordered scan to.
+///
+/// `hnsw.iterative_scan` is what makes the `tenant_id` filter safe: HNSW post-filters, so a tenant
+/// holding few rows in a large shared table could otherwise get back fewer than `k` matches (or
+/// none) while correct answers existed. `relaxed_order` is fine precisely because of the exact
+/// re-rank below it. Requires pgvector ≥ 0.8; on older servers the `SET` is accepted as an inert
+/// placeholder, so this degrades to plain post-filtering rather than failing.
+///
+/// Faces the user dismissed as junk (`ignored`) are excluded. They always were from `list` and the
+/// clustering views, but NOT from recognition — so dismissing a bad crop in the UI left it
+/// competing for matches, and, via `nearest_stored_distance`, still suppressing new captures as
+/// duplicates.
 pub fn recognize(db: &Db, tenant_id: Uuid, embedding: &[f32], k: i64) -> Vec<FaceMatch> {
     let pool = db.pool();
     let literal = vector_literal(embedding);
+    let candidates = candidate_pool(k);
     db.block(async move {
         let result: Result<Vec<FaceMatch>, sqlx::Error> = async {
             let mut tx = pool.begin().await?;
             sqlx::query("SET LOCAL statement_timeout = 15000")
                 .execute(&mut *tx)
                 .await?;
+            tune_hnsw(&mut tx, candidates).await;
             let rows = sqlx::query_as::<_, FaceMatch>(
-                "SELECT reference, label, distance, source FROM ( \
-                   SELECT pe.person_id AS reference, p.name AS label, \
-                          (pe.embedding <=> $1::vector)::float4 AS distance, 'enrolled' AS source \
-                     FROM person_embeddings pe \
-                     JOIN persons p ON p.id = pe.person_id AND p.tenant_id = pe.tenant_id \
-                     WHERE pe.approved AND pe.tenant_id = $2 \
+                "WITH cand AS ( \
+                   ( SELECT pe.person_id AS reference, pe.embedding AS emb, 'enrolled' AS source \
+                       FROM person_embeddings pe \
+                      WHERE pe.approved AND pe.tenant_id = $2 \
+                      ORDER BY pe.embedding <=> $1::vector \
+                      LIMIT $4 ) \
                    UNION ALL \
-                   SELECT COALESCE(f.person_id, f.id::text) AS reference, p2.name AS label, \
-                          (f.embedding <=> $1::vector)::float4 AS distance, 'stored' AS source \
-                     FROM faces f \
-                     LEFT JOIN persons p2 ON p2.id = f.person_id AND p2.tenant_id = f.tenant_id \
-                     WHERE f.tenant_id = $2 \
-                 ) u ORDER BY distance LIMIT $3",
+                   ( SELECT COALESCE(f.person_id, f.id::text) AS reference, f.embedding AS emb, \
+                            'stored' AS source \
+                       FROM faces f \
+                      WHERE f.tenant_id = $2 AND NOT f.ignored \
+                      ORDER BY f.embedding <=> $1::vector \
+                      LIMIT $4 ) \
+                 ) \
+                 SELECT c.reference, p.name AS label, \
+                        (c.emb <=> $1::vector)::float4 AS distance, c.source \
+                   FROM cand c \
+                   LEFT JOIN persons p ON p.tenant_id = $2 AND p.id = c.reference \
+                  ORDER BY c.emb <=> $1::vector LIMIT $3",
             )
             .bind(&literal)
             .bind(tenant_id)
             .bind(k)
+            .bind(candidates)
             .fetch_all(&mut *tx)
             .await?;
             tx.commit().await?;
@@ -156,22 +211,56 @@ pub fn recognize(db: &Db, tenant_id: Uuid, embedding: &[f32], k: i64) -> Vec<Fac
     })
 }
 
+/// Ask HNSW to keep searching until the post-filter has enough rows, and widen the candidate list
+/// to at least what the caller will fetch (`ef_search` below the `LIMIT` caps recall at the wrong
+/// number regardless of how much we over-fetch).
+///
+/// Best-effort by design: these are pgvector GUCs, absent on a server without the extension loaded.
+/// Postgres accepts a dotted name as a placeholder either way, so a failure here means "this server
+/// cannot tune it", which is a slower correct query — never a wrong one. Not bound parameters
+/// because `SET` takes none; `ef_search` is an i64 we computed, so there is no injection surface.
+async fn tune_hnsw(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, candidates: i64) {
+    let ef = candidates.clamp(40, 1000);
+    if let Err(e) = sqlx::query("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
+        .execute(&mut **tx)
+        .await
+    {
+        log::debug!("faces: hnsw.iterative_scan unavailable ({e}) — falling back to post-filtering");
+    }
+    if let Err(e) = sqlx::query(&format!("SET LOCAL hnsw.ef_search = {ef}"))
+        .execute(&mut **tx)
+        .await
+    {
+        log::debug!("faces: hnsw.ef_search unavailable ({e})");
+    }
+}
+
 /// Nearest cosine distance to any already-stored face (for `StoreFace` dedup). `None` on empty/error.
+///
+/// Runs on EVERY `StoreFace`, so it was the hottest of the two scans. `ORDER BY` is the uncast
+/// `<=>` expression for the reason spelled out on [`recognize`]: ordering by the `::float4`-cast
+/// alias (what this used to do) is enough on its own to lose the HNSW index. `ignored` faces are
+/// excluded — a crop the user dismissed as junk must not go on suppressing new captures as
+/// duplicates of itself.
 pub fn nearest_stored_distance(db: &Db, tenant_id: Uuid, embedding: &[f32]) -> Option<f32> {
     let pool = db.pool();
     let literal = vector_literal(embedding);
     db.block(async move {
-        sqlx::query_as::<_, (f32,)>(
+        let mut tx = pool.begin().await.ok()?;
+        tune_hnsw(&mut tx, 50).await;
+        let row = sqlx::query_as::<_, (f32,)>(
             "SELECT (embedding <=> $1::vector)::float4 AS distance \
-             FROM faces WHERE tenant_id = $2 ORDER BY distance LIMIT 1",
+             FROM faces WHERE tenant_id = $2 AND NOT ignored \
+             ORDER BY embedding <=> $1::vector LIMIT 1",
         )
         .bind(&literal)
         .bind(tenant_id)
-        .fetch_optional(&pool)
+        .fetch_optional(&mut *tx)
         .await
         .ok()
-        .flatten()
-        .map(|(d,)| d)
+        .flatten();
+        let _ = tx.commit().await;
+        row.map(|(d,)| d)
     })
 }
 
