@@ -149,3 +149,26 @@ A `v*` tag produces **all three platforms in one pipeline** — Linux x86_64, Li
 signed, notarized macOS `.pkg` — with `manifest.json` showing one version across the board, and zero
 shared minutes consumed. At that point #163 is closed and "nothing is built locally" is finally true
 without an exception.
+
+## Success test — PASSED (v0.5.73, 2026-08-03)
+
+One tag, one pipeline, three platforms, zero shared minutes:
+
+```
+macos          0.5.73  Sentinel-Edge-0.5.73-gst-x86_64.pkg
+linux-x86_64   0.5.73  sentinel-edge-linux-x86_64-0.5.73
+linux-aarch64  0.5.73  sentinel-edge-linux-aarch64-0.5.73
+```
+
+All three answer 200 from `/edge/`. `release:edge-macos` succeeded on its FIRST run — both
+first-run risks (the shell executor's `PATH` finding cargo, and an unlocked login keychain) turned
+out fine — and its `spctl` assertion passed: `accepted / source=Notarized Developer ID`.
+
+**"Nothing is built locally" is now true without an exception.** The `.pkg` hand-built since card
+#82 is a pipeline job: same physical Mac, but reproducible, logged, and triggered by a tag rather
+than by someone remembering the steps.
+
+Prerequisite that bit twice: **OrbStack was down at the start of BOTH sessions**, and the runner
+stays "online" to GitLab regardless — so CI had silently zero capacity while looking healthy. Set it
+to launch at login. `caffeinate -dimsu` during a release is worth it too; a sleeping Mac queues
+forever rather than failing.
