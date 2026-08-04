@@ -111,10 +111,6 @@ kanban-plugin: board
 	  - Plan: [[workflow-schedule-trigger]]
 - [ ] #121 Retire local builds — full CI/CD (build + host on GitHub)
 	  - Plan: [[retire-local-builds-ci]]
-- [ ] #126 Face quality gate — blur + pose before embed
-	  - Plan: [[face-quality-gate-upstream]]
-- [ ] #127 pgvector face kNN — HNSW index + retrieve-then-rerank
-	  - Plan: [[face-knn-hnsw-rerank]]
 - [ ] #123 Recognition scoring — per-person template + margin test
 	  - Plan: [[face-recognition-per-person-scoring]]
 - [ ] #124 Face clustering — kill single-link chaining
@@ -139,6 +135,10 @@ kanban-plugin: board
 
 ## Review
 
+- [ ] #126 Face quality gate — blur + pose before embed
+	  - Plan: [[face-quality-gate-upstream]]
+- [ ] #127 pgvector face kNN — HNSW index + retrieve-then-rerank
+	  - Plan: [[face-knn-hnsw-rerank]]
 - [ ] #154 Security hardening PRs 1–5 — landed, pending prod verification
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #83 Windows installer — signed .exe
