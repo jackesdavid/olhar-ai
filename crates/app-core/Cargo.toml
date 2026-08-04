@@ -55,6 +55,15 @@ log = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-log = "0.2"
+# Transactional email over SMTP (card #165). Provider-neutral on purpose: Resend, SES, Postmark
+# and Mailgun all speak SMTP, so the deployment picks one with four env vars and no code changes.
+# rustls, NOT native-tls — the whole workspace is pure-Rust with no OpenSSL to compile or bundle.
+lettre = { version = "0.11", default-features = false, features = [
+    "smtp-transport",
+    "rustls-tls",
+    "builder",
+    "hostname",
+] }
 # S3-compatible object store (minio) for notification media (snapshot JPEGs, recording mp4s).
 # Blocking API + rustls (pure-Rust, no OpenSSL) — called from the sync enqueue/consumer paths.
 rust-s3 = { version = "0.35", default-features = false, features = ["blocking", "tokio-rustls-tls"] }

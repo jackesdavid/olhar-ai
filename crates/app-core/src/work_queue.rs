@@ -615,6 +615,39 @@ pub fn enqueue_push_notification_blocking(
     );
 }
 
+/// Queue a **transactional email** (card #165) — the account-level messages a self-serve product
+/// needs: password reset, address confirmation, receipts, trial expiry.
+///
+/// Same durable queue, retry and backoff as Telegram and push, distinguished only by `channel`.
+/// That is the point of putting email here rather than in its own path: a provider outage becomes
+/// a retry instead of a lost password reset, and every send is visible in the same queue view.
+///
+/// `to` is an email address, not a beacon label — these messages go to ONE person about THEIR
+/// account and must work for a user with no tenant configuration at all.
+pub fn enqueue_email_blocking(
+    db: &Db,
+    tenant_id: Uuid,
+    to: &str,
+    subject: &str,
+    body: &str,
+    html: Option<&str>,
+) {
+    let payload = serde_json::json!({
+        "channel": "email",
+        "to": to,
+        "subject": subject,
+        "message": body,
+        "html": html,
+    });
+    enqueue_one_blocking(
+        db,
+        tenant_id,
+        NOTIFICATION_CATEGORY,
+        NOTIFICATION_KIND,
+        payload,
+    );
+}
+
 /// A terminal notification job whose staged media can be reclaimed.
 pub struct PurgeableMedia {
     pub id: Uuid,

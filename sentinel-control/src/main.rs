@@ -25,6 +25,7 @@ mod edge_stream;
 mod handlers;
 mod http;
 mod oauth;
+mod password_reset;
 mod rbac;
 mod seed;
 mod seed_templates;

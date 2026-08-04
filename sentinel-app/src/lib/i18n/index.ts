@@ -10,6 +10,7 @@ import { common } from "./messages/common";
 import { nav } from "./messages/nav";
 import { shell } from "./messages/shell";
 import { login } from "./messages/login";
+import { reset } from "./messages/reset";
 import { dashboard } from "./messages/dashboard";
 import { live } from "./messages/live";
 import { events } from "./messages/events";
@@ -54,6 +55,7 @@ const modules = {
   nav: domain(nav),
   shell: domain(shell),
   login: domain(login),
+  reset: domain(reset),
   dashboard: domain(dashboard),
   live: domain(live),
   events: domain(events),

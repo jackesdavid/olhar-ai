@@ -19,6 +19,16 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/auth/signup", post(signup))
         .route("/auth/login", post(login))
+        // Self-service password reset (card #166). Both are PUBLIC: a locked-out user has no
+        // session to authenticate with, which is the entire point.
+        .route(
+            "/auth/password-reset/request",
+            post(crate::password_reset::request),
+        )
+        .route(
+            "/auth/password-reset/confirm",
+            post(crate::password_reset::confirm),
+        )
         .route("/auth/me", get(me))
         .route("/auth/media-token", post(media_token))
         .route("/auth/oauth/google/start", get(crate::oauth::google_start))

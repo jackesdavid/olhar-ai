@@ -13,11 +13,16 @@
 //! the Beacons screen from Svelte.
 pub mod client;
 pub mod domain;
+/// Transactional email — password reset, address confirmation, receipts (card #165). A delivery
+/// channel alongside Telegram and push, not a separate subsystem.
+pub mod email;
 pub mod handler;
 /// Mobile push — a Recipient channel parallel to Telegram (card #139).
 pub mod push;
 pub mod queue;
 pub mod repo;
+/// The transactional messages themselves — welcome, password reset, password changed (#165).
+pub mod templates;
 
 pub use domain::{load_targets, NotificationConfig, NotificationStore, NotificationTarget};
 pub use handler::{delete_target, dispatch, rename_target, set_enabled_by_id, spawn_pairing_bot};
