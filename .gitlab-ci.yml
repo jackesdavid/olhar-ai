@@ -280,33 +280,10 @@ build:rust:
   artifacts:
     paths: [built/]
     expire_in: 1 day
+  # NO `changes:` on the default branch — card #171. See the note above `deploy:vps`.
   rules:
     - if: $CI_PIPELINE_SOURCE == "web"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      changes:
-        - sentinel-control/**/*
-        - sentinel-flow/**/*
-        - sentinel-gateway/**/*
-        - sentinel-notification/**/*
-        # Compiled into control via include_str! — a fix here changes control's binary.
-        - sentinel-edge/install.sh
-        - crates/**/*
-        - Cargo.toml
-        - Cargo.lock
-        - Dockerfile
-        - .dockerignore
-        - deploy/vps/**/*
-        - .gitlab-ci.yml
-
-# The three Rust services share crates/** and Cargo.*, so a change there rebuilds all three.
-.rust_changes: &rust_changes
-  - crates/**/*
-  - Cargo.toml
-  - Cargo.lock
-  - Dockerfile
-
-
-
 
 build:app:
   extends: .build_service
@@ -314,28 +291,20 @@ build:app:
     SERVICE: sentinel-app
     DOCKERFILE: deploy/app/Dockerfile
     BUILD_ARGS: VITE_COMMIT=$CI_COMMIT_SHA
+  # NO `changes:` on the default branch — card #171.
   rules:
     - if: $CI_PIPELINE_SOURCE == "web"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      changes:
-        - sentinel-app/**/*
-        - deploy/app/**/*
-        - deploy/vps/**/*
-        - .gitlab-ci.yml
 
 build:landing:
   extends: .build_service
   variables:
     SERVICE: sentinel-landing
     DOCKERFILE: deploy/landing/Dockerfile
+  # NO `changes:` on the default branch — card #171.
   rules:
     - if: $CI_PIPELINE_SOURCE == "web"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      changes:
-        - landing/**/*
-        - deploy/landing/**/*
-        - deploy/vps/**/*
-        - .gitlab-ci.yml
 
 
 # ---------------------------------------------------------------------------------------------
@@ -398,7 +367,7 @@ build:postgres:
   rules:
     - if: $CI_PIPELINE_SOURCE == "web"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      changes: [deploy/postgres/**/*, .gitlab-ci.yml]
+      # NO `changes:` on the default branch — card #171.
 
 build:ai-cpu:
   extends: .build_image
@@ -411,7 +380,7 @@ build:ai-cpu:
   rules:
     - if: $CI_PIPELINE_SOURCE == "web"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      changes: [ai/sidecar/**/*, .gitlab-ci.yml]
+      # NO `changes:` on the default branch — card #171.
 
 # ---------------------------------------------------------------------------------------------
 # Deploy — pull + restart ONLY what was rebuilt
@@ -464,6 +433,16 @@ deploy:vps:
       SERVICES=""
       if [ -d built ]; then
         SERVICES="$(ls built/ | tr '\n' ' ' | sed 's/ *$//')"
+      fi
+      # Card #171. On `main` this branch should now be UNREACHABLE: every build job runs on the
+      # default branch unconditionally, so an empty `built/` means a build produced no artifact
+      # rather than "no build was needed". Say so loudly instead of exiting 0 into a green
+      # pipeline — that silence is what let #126/#127 merge and never reach production.
+      if [ -z "$SERVICES" ] && [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
+        echo "✗ nothing was rebuilt on $CI_DEFAULT_BRANCH — the build stage produced no artifacts."
+        echo "  Every build job is unconditional here, so this means a build job was skipped or"
+        echo "  failed to upload. Deploying nothing while reporting success is the #171 failure."
+        exit 1
       fi
       if [ -z "$SERVICES" ]; then
         echo "nothing was rebuilt — not touching the VPS"
