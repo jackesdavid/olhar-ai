@@ -144,6 +144,33 @@ fn process(state: &AppState, job: work_queue::Job) {
         return;
     }
 
+    // Transactional email (card #165) — password reset, address confirmation, receipts. Addressed
+    // by email address rather than by beacon, because these are about ONE person's account and must
+    // work for a user who has no tenant configuration at all.
+    if p.get("channel").and_then(|v| v.as_str()) == Some("email") {
+        let to = p.get("to").and_then(|v| v.as_str()).unwrap_or_default();
+        let subject = p.get("subject").and_then(|v| v.as_str()).unwrap_or("");
+        let html = p.get("html").and_then(|v| v.as_str());
+        if to.trim().is_empty() {
+            fail(state, "email job has no recipient");
+            return;
+        }
+        let mut mail = app_core::notification::email::Email::new(to, subject, &message);
+        if let Some(h) = html {
+            mail = mail.with_html(h);
+        }
+        match app_core::notification::email::send(&mail) {
+            Ok(()) => {
+                log::info!("email delivered to {to} (tenant {})", job.tenant_id);
+                work_queue::mark_done_blocking(&state.db, job.id);
+            }
+            // NotConfigured retries like any other failure rather than being dropped: the fix is a
+            // deployment change, and the queue is what makes the send survive until it lands.
+            Err(e) => fail(state, &e.to_string()),
+        }
+        return;
+    }
+
     let Some(cfg) = resolve_config(&state.db, job.tenant_id) else {
         fail(state, "no Telegram configuration for this tenant");
         return;
