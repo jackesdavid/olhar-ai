@@ -21,6 +21,8 @@ pub mod handler;
 pub mod push;
 pub mod queue;
 pub mod repo;
+/// The transactional messages themselves — welcome, password reset, password changed (#165).
+pub mod templates;
 
 pub use domain::{load_targets, NotificationConfig, NotificationStore, NotificationTarget};
 pub use handler::{delete_target, dispatch, rename_target, set_enabled_by_id, spawn_pairing_bot};
