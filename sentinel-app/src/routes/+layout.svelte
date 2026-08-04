@@ -65,6 +65,15 @@
   const MIN_SPLASH_MS = 3000;
   const SPLASH_FADE_MS = 500; // matches the splash's transition-opacity duration
 
+  // Routes reachable WITHOUT a session. `/reset` is the load-bearing one: a locked-out user has no
+  // token by definition, so bouncing them to /login makes the password-reset link they were just
+  // emailed impossible to open — the boot guard silently defeating the whole feature (#166). The
+  // reset page already expects to be entered from outside the app carrying a token; this is the
+  // other half of that contract.
+  const PUBLIC_PATHS = ["/login", "/reset"];
+  const isPublicPath = (p: string) =>
+    PUBLIC_PATHS.some((q) => p === q || p.startsWith(q + "/"));
+
   // ---- boot: require a valid JWT session ----------------------------------
   async function cloudBoot() {
     const bootStart = Date.now();
@@ -83,7 +92,7 @@
     if (!auth.token) {
       auth.ready = true;
       finish();
-      if (path !== "/login") await goto("/login");
+      if (!isPublicPath(path)) await goto("/login");
       return;
     }
     const ok = await loadMe();
@@ -91,7 +100,7 @@
     if (!ok) {
       logout();
       finish();
-      if (path !== "/login") await goto("/login");
+      if (!isPublicPath(path)) await goto("/login");
       return;
     }
     finish();
