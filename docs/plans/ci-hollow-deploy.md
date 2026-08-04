@@ -13,12 +13,19 @@ MR !27 merged #126 + #127 into `main` — a change touching `crates/**`, `sentin
 ```
 check   check:rust    success
 check   check:sql     success
-deploy  deploy:vps    success   30s     ← redeployed the EXISTING images
+deploy  deploy:vps    success   30s     ← deployed NOTHING
 ```
 
-**No build stage ran at all.** Not `build:rust`, not `build:app` — the jobs were never created. The
-deploy pulled and restarted whatever was already in the registry, asserted those digests, and went
-green in 30 seconds.
+**No build stage ran at all.** Not `build:rust`, not `build:app` — the jobs were never created.
+
+`deploy:vps` then behaved correctly and said so:
+
+```
+nothing was rebuilt — not touching the VPS
+```
+
+…and exited 0. The #158 digest assertion was never reached, because there was nothing to assert.
+Production was left untouched on the previous images.
 
 The only reason it was caught is that 30 seconds is visibly too short to build Rust. Manually
 triggering a pipeline on the same commit
@@ -49,24 +56,27 @@ true.
 
 ## Why it is dangerous, not just wasteful
 
-Migrations are **embedded in the service binaries** (`sqlx::migrate!`, applied on `Db::connect` at
-boot). A hollow deploy therefore does not merely ship stale code — it ships stale code *and* skips
-the schema change that the merged code assumes exists. Code and database silently disagree, and the
-pipeline says success.
+The danger is **silent non-delivery**, not corruption. Nothing half-applied: no image was built, so
+no migration ran and no code changed. Running code and schema stayed consistent at the previous
+version. What was lost is the merge itself — #126 and #127 sat in `main`, believed shipped, running
+nowhere, until someone noticed 30 seconds was too short to build Rust.
 
-Card #158 already made the deploy assert what it deployed, and that assertion **passed** here: every
-running service genuinely matched the image in the registry. The assertion answers "is the registry
-image running?" — not "was the registry image built from this commit?". That is the gap.
+That is the whole failure: **a green pipeline that means "I did nothing".** `deploy:vps` reports
+`nothing was rebuilt` and exits 0, which is right when a docs-only merge genuinely needs no build
+and wrong when five build jobs were skipped by a filter that misfired. The message is identical in
+both cases, and it scrolls past inside a green job.
+
+Card #158's digest assertion cannot catch this: it compares running containers against
+`built/`, and `built/` is empty, so the loop has nothing to iterate. It answers "is what we pushed
+running?" — never "should we have pushed something?".
 
 ## Phases
 
-### Phase 1 — Make the failure visible (cheap, do first)
-Have `deploy:vps` compare the deployed image's source revision against `CI_COMMIT_SHA` and **fail**
-when a service that *should* have been rebuilt was not. The images already carry a revision label
-(or one can be added via `--label org.opencontainers.image.revision=$CI_COMMIT_SHA`); the deploy
-already reads digests, so this is an extra assertion in the same script, not new machinery.
-
-This alone converts a silent wrong outcome into a loud one.
+### Phase 1 — Make the failure visible ✅ done
+`deploy:vps` now FAILS when `built/` is empty on the default branch, instead of exiting 0 with
+`nothing was rebuilt`. With Phase 2 in place every build job runs unconditionally on `main`, so an
+empty `built/` can only mean a build job was skipped or failed to upload — which is a broken
+pipeline, not a no-op. The permissive `exit 0` is kept for every other ref.
 
 ### Phase 2 — Stop skipping builds on `main`
 Pick one:
@@ -81,7 +91,14 @@ Pick one:
 **Recommend option 1** on `main` only, keeping `changes:` on merge-request pipelines where the
 saving actually matters and a wrong skip is harmless.
 
-### Phase 3 — A test that would have caught it
+**✅ Done** — the `changes:` block was removed from the default-branch rule of all five build jobs
+(`build:rust`, `build:app`, `build:landing`, `build:postgres`, `build:ai-cpu`). Note these jobs
+never ran on MRs to begin with (their rules are only `web` and `main`), so this changes merge
+pipelines only. Cost: every merge to `main` now rebuilds all five images (~35 min wall-clock,
+dominated by `build:rust`). On our own runners (#168) that is time, not money — and it is the price
+of a merge that is actually deployed.
+
+### Phase 3 — A test that would have caught it (NOT done)
 Assert the *pipeline shape*, not just the job outcomes: on `main`, a commit touching `crates/**` must
 produce a `build:rust` job. This can be a small job that queries its own pipeline via the API and
 fails when a build job it expected is absent. Without this, Phase 2 is a fix nobody can prove stayed
