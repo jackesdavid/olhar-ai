@@ -1,6 +1,6 @@
 [package]
 name = "sentinel-edge"
-version = "0.5.72"
+version = "0.5.73"
 edition = "2021"
 description = "The edge gateway — the ONLY thing that touches cameras. Ingests RTSP with in-process GStreamer and serves live video, snapshots and ONVIF over REST, so out-of-process services (sentinel-flow, the UI) reach LAN-bound cameras without speaking RTSP/ONVIF themselves."
 
