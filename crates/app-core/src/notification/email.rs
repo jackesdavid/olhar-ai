@@ -24,7 +24,7 @@ use std::time::Duration;
 ///   SMTP_HOST — e.g. `smtp.resend.com`, `email-smtp.eu-west-1.amazonaws.com`
 ///   SMTP_PORT — defaults to 587 (STARTTLS). 465 selects implicit TLS.
 ///   SMTP_USER / SMTP_PASSWORD — the provider's credentials
-///   MAIL_FROM — the envelope sender, e.g. `Sentinel <no-reply@olharai.com>`
+///   MAIL_FROM — the envelope sender, e.g. `Olhar AI <no-reply@olharai.com>`
 #[derive(Debug, Clone)]
 pub struct EmailConfig {
     pub host: String,
@@ -42,7 +42,7 @@ impl EmailConfig {
         let user = std::env::var("SMTP_USER").unwrap_or_default();
         let password = std::env::var("SMTP_PASSWORD").unwrap_or_default();
         let from = non_empty(std::env::var("MAIL_FROM").ok())
-            .unwrap_or_else(|| "Sentinel <no-reply@olharai.com>".to_string());
+            .unwrap_or_else(|| "Olhar AI <no-reply@olharai.com>".to_string());
         // An unparseable port is a typo in the deployment, not a reason to silently use 587 and
         // deliver nothing on a provider that needs 465.
         let port = match std::env::var("SMTP_PORT") {
@@ -241,14 +241,14 @@ mod tests {
                 ("SMTP_PORT", None),
                 ("SMTP_USER", Some("resend")),
                 ("SMTP_PASSWORD", Some("secret")),
-                ("MAIL_FROM", Some("Sentinel <no-reply@olharai.com>")),
+                ("MAIL_FROM", Some("Olhar AI <no-reply@olharai.com>")),
             ],
             || {
                 let c = EmailConfig::from_env().expect("configured");
                 assert_eq!(c.host, "smtp.resend.com");
                 assert_eq!(c.port, 587, "default is STARTTLS submission");
                 assert!(!c.implicit_tls());
-                assert_eq!(c.from, "Sentinel <no-reply@olharai.com>");
+                assert_eq!(c.from, "Olhar AI <no-reply@olharai.com>");
             },
         );
     }
@@ -277,7 +277,7 @@ mod tests {
             port: 587,
             user: String::new(),
             password: String::new(),
-            from: "Sentinel <no-reply@olharai.com>".into(),
+            from: "Olhar AI <no-reply@olharai.com>".into(),
         };
         // "not-an-address" cannot parse, so this must fail as Invalid — NOT by dialling a server
         // and timing out, which is how a config typo turns into a 20-second request.

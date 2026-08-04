@@ -21,9 +21,10 @@
 //! No external stylesheet, no `<style>` block, no web fonts, no images. Every rule is inline.
 use super::email::Email;
 
-/// The product name as it appears to customers. One constant so the #76 Olhar AI rebrand is a
-/// one-line change rather than a hunt through string literals.
-const PRODUCT: &str = "Sentinel";
+/// The product name **as customers see it**. The codebase, services and repo stay "Sentinel";
+/// only the copy is Olhar AI (card #76). One constant, so the two never drift apart in a string
+/// literal someone forgot.
+const PRODUCT: &str = "Olhar AI";
 
 /// Ink theme, resolved to literals because email has no custom properties.
 const INK: &str = "#18181b"; // --primary / --foreground (near-black)
