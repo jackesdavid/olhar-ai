@@ -143,7 +143,43 @@ result, and hands the `.pkg` to `release:publish` as an artifact. `allow_failure
 Mac must not fail a release Linux can still complete, and `release:publish` prints an explicit NOTE
 when no package arrived rather than publishing a Linux-only release in silence.
 
-## Success test
+
+## Success test — PASSED on v0.5.73 (2026-08-03)
+
+One tag, five jobs, all on our own hardware, zero shared minutes:
+
+```
+verify:edge-lock      success   24 s
+release:edge-x86_64   success             jack-mac-docker
+release:edge-aarch64  success             jack-mac-docker  (cross-compiled)
+release:edge-macos    success             jack-mac-shell   ← first ever run
+release:publish       success
+```
+
+The macOS job's own log, from the runner:
+
+```
+The staple and validate action worked!
+Sentinel-Edge-0.5.73-gst-x86_64.pkg: accepted
+source=Notarized Developer ID
+```
+
+And the manifest agrees across the board — **all three platforms at 0.5.73**, all downloadable
+(HTTP 200):
+
+| platform | file | version |
+|---|---|---|
+| macos | `Sentinel-Edge-0.5.73-gst-x86_64.pkg` | 0.5.73 |
+| linux-x86_64 | `sentinel-edge-linux-x86_64-0.5.73` | 0.5.73 |
+| linux-aarch64 | `sentinel-edge-linux-aarch64-0.5.73` | 0.5.73 |
+
+Both first-run risks cleared: the shell executor found `cargo` (the `PATH` export works from a
+LaunchAgent) and `codesign`/`notarytool` reached the **login keychain** — which is exactly why the
+runner is a user agent and not a root daemon.
+
+**#163 is closed and "nothing is built locally" is now true without an exception.**
+
+## Original success test (for reference)
 
 A `v*` tag produces **all three platforms in one pipeline** — Linux x86_64, Linux aarch64, and a
 signed, notarized macOS `.pkg` — with `manifest.json` showing one version across the board, and zero

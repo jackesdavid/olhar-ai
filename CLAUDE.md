@@ -99,12 +99,18 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
   machine can do but CI cannot is a build nobody can reproduce — that is how `sentinel-notification`
   drifted for weeks and took notifications down when a restart finally exercised it, and how the
   repo and production came to disagree about which registry they used.
-- **The macOS edge package is the one remaining violation** (card #163): CI has no macOS runner, so
-  the signed + notarized `.pkg` is still produced by hand, scp'd to the VPS and recorded with
-  `merge-manifest.sh`. Until a runner exists, platforms release independently and legitimately sit
-  on different versions — `/edge-latest` is answered PER PLATFORM from
-  `/ibbf/edge-dist/manifest.json`, which records only what actually got built. The no-platform form
-  is a "something newer exists" trigger, never an install target.
+- **The rule now has NO exceptions** (card #163, closed 2026-08-03). The macOS `.pkg` used to be the
+  one hand-built artifact; `release:edge-macos` builds, signs and notarizes it in CI on our own
+  Mac (the `macos`-tagged shell runner), and `release:publish` records all three platforms in one
+  place. Proven by `v0.5.73`: one tag → Linux x86_64 + aarch64 + a Gatekeeper-accepted `.pkg`, all
+  at the same version. **CI runs on SELF-HOSTED runners** (GitLab's shared minutes are exhausted and
+  are not being bought) — see [self-hosted runners](docs/plans/self-hosted-runners.md), which also
+  records the traps: a job stuck at "Preparing the docker executor" with no container means OrbStack
+  is down, or the image is not local yet (#170).
+- `/edge-latest` is still answered PER PLATFORM from `/ibbf/edge-dist/manifest.json`, which records
+  only what actually got built — a platform whose build failed publishes nothing rather than a
+  version that does not exist. The no-platform form returns the MAX version: a "something newer
+  exists" trigger, never an install target.
 - **GStreamer, linked in-process, is the ONLY media path.** No sidecar, no external decoder, no
   backend flag. `sentinel-edge/src/capture.rs` holds the ONE-PIPELINE-per-camera invariant: a
   consumer camera caps concurrent RTSP sessions at 2–4, so a second connection is how a working
