@@ -128,3 +128,35 @@ event section) and to [[face-pipeline-architecture]].
 ## Related
 [[storeface-pure-sink]] · [[faces-workspace]] · [[face-embed-landmark-align]] ·
 [[face-pipeline-architecture]] · [[face-knn-hnsw-rerank]] · [[face-threshold-calibration]]
+
+---
+
+## Outcome (shipped 2026-08-03, commit `ad08d32`)
+
+Metrics live in `crates/app-core/src/agent/face_quality.rs` (shared by edge + cloud), computed on
+the edge inside the existing detect loop. Ports registered on `face_detected`; `Store Face` records
+them via migration `0086_face_quality.sql`, columns NULLABLE so "not measured" stays distinct from
+"measured as zero".
+
+**Open decision 1 (blur normalization) → resolved as fixed-size resample**, to the embedder's
+112×112 input rather than divide-by-area: what matters is the detail surviving into the vector, and
+it makes thresholds transfer across cameras of different resolutions (asserted by a test).
+**Open decision 3 (integer unit) → no scaling needed**; raw sharpness is already in the hundreds to
+tens of thousands, so it rides `PortType::Num` directly.
+
+**Open decision 4 (old edges) → confirmed as a real trap, then fixed.** `run_num_cmp` resolves a
+missing input to `0`, so a `NumGte(blur)` gate would have failed CLOSED and silently dropped the
+entire face pipeline of any box predating this card. Control substitutes
+`face_quality::BLUR_UNKNOWN`, an explicit fail-open sentinel, which `StoreFace` maps back to NULL so
+"unknown" never enters calibration data as "excellent".
+
+11 unit tests prove the metrics rather than exercise them: sharpness falls monotonically under
+successive blur (49218 → 52 over 8 passes), is resolution-invariant, and is ~0 on a flat patch; roll
+is recovered exactly; yaw survives ±25% anthropometric variation and stays monotonic and correctly
+signed. The pose tests generate landmarks from a 3-D model with deliberately perturbed proportions,
+so they measure robustness rather than replaying the estimator's own algebra.
+
+**Still open — Phase 5 was deliberately NOT done.** The gate is not wired into the seeded template
+and no default thresholds ship. Thresholds must be measured off real captures, and inventing them
+would be worse than shipping none. That work belongs with [[face-threshold-calibration]], which now
+has the columns to fit against.

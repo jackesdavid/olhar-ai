@@ -183,3 +183,33 @@ scale. Helper only here; the clustering rewrite is that card.
 [[face-recognition-per-person-scoring]] · [[face-clustering-chaining-fix]] ·
 [[face-embedding-l2-normalization]] · [[face-pipeline-architecture]] ·
 [[validate-migrations-live-db]] · [[postgres-performance-tuning]]
+
+---
+
+## Outcome (shipped 2026-08-03, commit `ad08d32`)
+
+All three traps were real. Resolved as planned, with the answers the plan left open:
+
+- **pgvector version is 0.8.4** (Trap 3) → `hnsw.iterative_scan = 'relaxed_order'` is available and
+  is now set per query, so the `tenant_id` post-filter cannot under-return.
+- **Trap 2 confirmed as a controlled experiment.** Same table, same index, same data, only the cast
+  differs: uncast `ORDER BY` → `hnsw=true, seq_scan=false`; `::float4` in the `ORDER BY` →
+  `hnsw=false, seq_scan=true`. `crates/app-core/tests/face_knn_bench.rs` asserts on it permanently.
+- **Migration `0085_face_embedding_hnsw.sql`**; queries rewritten in `crates/app-core/src/faces.rs`.
+- **The `NOT ignored` fix shipped in the same commit** (open decision 2 chose "own commit"; it ended
+  up bundled, but it is called out in the commit message and covered by its own regression test).
+
+Measured against a frozen copy of the pre-rewrite SQL, in the same run, with an exact brute-force
+oracle computed in Rust outside Postgres:
+
+| gallery | before | after | speedup | recall@5 |
+|---|---|---|---|---|
+| 5 200 | 134.78 ms | 32.48 ms | 2.35× | 1.000 |
+| 20 500 | 118.20 ms | 24.66 ms | 4.79× | 1.000 |
+
+p95 231 ms → 98 ms. The speedup grows with gallery size, and recall is unchanged — so this is not a
+speed-for-accuracy trade.
+
+**Still open:** Phase 6 (the `neighbors()` helper for [[face-clustering-chaining-fix]]) was NOT
+implemented — the clustering rewrite is that card, and there was no caller to shape the helper
+against.
