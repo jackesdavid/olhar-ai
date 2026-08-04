@@ -41,6 +41,12 @@ pub fn detect_and_push(
             .iter()
             .flat_map(|&[x, y]| [x.round() as i32, y.round() as i32])
             .collect();
+        // Quality signals (#126). Computed HERE because this is the only place that still holds the
+        // decoded frame — the cloud receives a JPEG that has already been through a lossy encode,
+        // which is exactly the kind of detail loss a sharpness metric would misread. Both are pure
+        // arithmetic over data already in hand: no model, no second decode, no round-trip.
+        let blur = app_core::agent::face_quality::sharpness_bgr(bgr, fw, fh, face.xyxy);
+        let pose = app_core::agent::face_quality::pose_from_kps(&face.kps);
         let ev = FaceEvent {
             camera_ip: ip.to_string(),
             bbox: [
@@ -52,6 +58,10 @@ pub fn detect_and_push(
             confidence: (face.score * 100.0).clamp(0.0, 100.0) as f64,
             face_width: face.width().round() as i64,
             kps,
+            blur: blur as f64,
+            yaw: pose.yaw as f64,
+            pitch: pose.pitch as f64,
+            roll: pose.roll as f64,
             at: app_core::timeutil::now_rfc3339(),
             frame_b64: Some(frame_b64.clone()),
         };

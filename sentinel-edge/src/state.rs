@@ -564,6 +564,15 @@ pub struct FaceEvent {
     /// `face_detected` `kps` Landmarks port → ArcFace alignment (#122). Empty if unavailable.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub kps: Vec<i32>,
+    /// Sharpness of the face crop — variance of the Laplacian measured at the embedder's input
+    /// size (#126). Higher is sharper; no physical unit, it is a monotone focus score for a
+    /// `NumGte` gate. Computed on the edge because only the edge still has the decoded frame.
+    pub blur: f64,
+    /// Head pose in degrees from the 5 landmarks (#126). `yaw` > 0 = nose toward the right of the
+    /// image, `pitch` > 0 = tilted down, `roll` > 0 = clockwise in the image plane.
+    pub yaw: f64,
+    pub pitch: f64,
+    pub roll: f64,
     pub at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame_b64: Option<String>,

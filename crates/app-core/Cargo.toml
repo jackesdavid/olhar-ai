@@ -71,7 +71,9 @@ gst-linked = ["dep:gstreamer", "dep:gstreamer-app"]
 # The sql_prepare test (card #157) connects to Postgres itself. An integration test in tests/ sees
 # only the crate's public API and its DEV-dependencies — never the crate's own dependencies — so
 # sqlx and tokio are declared again here. Identical feature sets, so cargo reuses the same builds.
+# `uuid` joins them for face_knn_bench (card #127), which seeds its own throwaway tenant.
 [dev-dependencies]
+uuid = { version = "1", features = ["v4", "serde"] }
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio",
     "tls-rustls",

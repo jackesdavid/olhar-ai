@@ -496,6 +496,14 @@ pub fn system_events() -> Vec<TenantEvent> {
                 field("confidence", PortType::Num), // 0..100
                 field("face_width", PortType::Num), // face box width in source pixels
                 field("kps", PortType::Landmarks), // 5 YuNet landmarks, source px (#122; empty until edge emits)
+                // Quality signals (#126) — the inputs a graph composes a gate from
+                // (`NumGte(blur) + NumLte(|yaw|) → And → Branch`). Exposed as ports rather than
+                // enforced in a node, for the same reason StoreFace only stores: the platform
+                // supplies the measurement, the tenant decides the threshold.
+                field("blur", PortType::Num), // sharpness at the embedder's input size; higher = sharper
+                field("yaw", PortType::Num),  // degrees; >0 = nose toward image right
+                field("pitch", PortType::Num), // degrees; >0 = tilted down
+                field("roll", PortType::Num), // degrees; >0 = clockwise in the image plane
                 field("frame", PortType::Image),
             ],
         },

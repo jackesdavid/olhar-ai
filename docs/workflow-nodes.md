@@ -63,6 +63,36 @@ available yet). Every `Emit event` also records a `workflow.custom` occurrence o
 event stream (card #66) — so it doubles as the "push a custom event to the timeline" node; the
 event name + payload land in the feed with the emitting graph as `source`.
 
+### The face quality gate (#126)
+`On event("face_detected")` carries the signals a gate is built from, so filtering low-quality faces
+is something you **compose**, not something a node decides for you:
+
+| Port | Meaning |
+|---|---|
+| `confidence` | detector score, 0..100 |
+| `face_width` | face box width in source pixels — the far-face signal |
+| `blur` | sharpness (variance of Laplacian) measured at the embedder's 112×112 input, so it is comparable across cameras of different resolutions. **Higher = sharper**, no physical unit |
+| `yaw` / `pitch` / `roll` | head pose in degrees from the 5 landmarks. `yaw` > 0 = nose toward image right, `pitch` > 0 = tilted down, `roll` > 0 = clockwise |
+| `kps` | the 5 landmarks themselves (Landmarks) |
+
+The recipe — gate BEFORE embedding, because every downstream threshold inherits whatever gets in:
+
+```
+On event(face_detected)
+  ├─ face_width → Greater Than or Equal(min_width) ─┐
+  ├─ confidence → Greater Than or Equal(min_conf)  ─┼→ And → Branch(true) → Extract Face Embedding → …
+  └─ blur       → Greater Than or Equal(min_blur)  ─┘
+```
+
+Thresholds are camera-specific and must be **measured, not guessed** (#128) — read the distribution
+off your own captures first. `Store Face` records `blur`/`yaw`/`pitch`/`roll` alongside the capture
+so that data exists to read; it still makes no quality decision itself.
+
+> A box older than #126 reports no sharpness. Control substitutes a fail-open sentinel, because a
+> missing port resolves to `0` and would make `Greater Than or Equal(blur)` reject **every** face
+> from that box. Such captures store `blur = NULL`, not the sentinel — "unknown" must not enter
+> calibration data as "excellent".
+
 ### Triggers (graph-level, not nodes)
 How a whole graph starts a run (set in the graph header, not a node):
 - **Manual** — only via Run-now.
@@ -101,8 +131,8 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 | **Break face detection** | `face` (Face) | `bbox` (Bbox), `confidence` %, `landmarks` (count) | — | Destructures a `FaceDetection` element into its fields. | `For each(faces) → item → Break face detection` |
 | **Recognize person** | `image*` | `person`, `person_id`, `confidence` %, `ok` | `max_distance` (0.4) | Embeds the largest face (AI sidecar) + kNN over enrolled people (pgvector). `ok` = match within threshold. All-in-one; the pipeline nodes below split it for storing unknowns + top-K. | `Camera snapshot → Recognize person → If(ok) → Notify recipient` |
 | **Extract Face Embedding** | `image*` (Image), `bbox` (Bbox, optional) | `embedding` (**Embedding**), `dim` (Num), `ok` | `timeout_secs` (30) | Face recognition pipeline (#117) — the ONLY node that takes the frame: extracts a 512-d ArcFace embedding via the AI sidecar (model/dim abstraction). `bbox` reserved for a future crop-to-face; v1 embeds the most prominent face. | `On event("face_detected") → (frame) Extract Face Embedding → (embedding) → …` |
-| **Recognize Face** | `embedding*` (**Embedding**) | `person`, `person_id`, `confidence` %, `matches` (**Dictionary** label→score), `found` | `top_k` (5), `max_distance` (0.5) | kNN over the **union gallery** — enrolled `person_embeddings` + all stored `faces` (labeled + unknown), each hit tagged by source. Takes the **embedding, not the image**. `matches` is the top-K as a Dictionary; `person_id` wires into Store Face's `label`. | `Extract Face Embedding → (embedding) Recognize Face(top_k=5) → If(found) → …` |
-| **Store Face** | exec, `embedding*` (**Embedding**), `image` (Image), `bbox` (Bbox), `label` (Text — person id, empty=unknown), `camera` (Camera) | `stored` (Bool — false if deduped), `face_id` (Text) | `source`, `dedup_distance` (0.15) | Persists a face to the tenant store: image → MinIO, embedding + metadata → the `faces` table. Labeled (wire `Recognize Face.person_id` into `label`) or **unknown** (empty `label`). Skips near-duplicate embeddings (cosine ≤ `dedup_distance`). | `Recognize Face →(person_id) Store Face(label=person_id)` · unknown: `Store Face(label="")` |
+| **Recognize Face** | `embedding*` (**Embedding**) | `person`, `person_id`, `confidence` %, `matches` (**Dictionary** label→score), `found` | `top_k` (5), `max_distance` (0.5) | kNN over the **union gallery** — enrolled `person_embeddings` + all stored `faces` (labeled + unknown), each hit tagged by source. Takes the **embedding, not the image**. `matches` is the top-K as a Dictionary; `person_id` wires into Store Face's `label`. Served from an HNSW index with an exact re-rank (#127); faces you dismissed as junk are excluded. | `Extract Face Embedding → (embedding) Recognize Face(top_k=5) → If(found) → …` |
+| **Store Face** | exec, `embedding*` (**Embedding**), `image` (Image), `bbox` (Bbox), `label` (Text — person id, empty=unknown), `camera` (Camera), `confidence`, `face_width`, `blur`, `yaw`, `pitch`, `roll` (Num) | `stored` (Bool — false if deduped), `face_id` (Text) | `source`, `dedup_distance` (0.15) | Persists a face to the tenant store: image → MinIO, embedding + metadata → the `faces` table. Labeled (wire `Recognize Face.person_id` into `label`) or **unknown** (empty `label`). Skips near-duplicate embeddings (cosine ≤ `dedup_distance`). The quality inputs are **recorded, never judged** — gate upstream (see "The face quality gate"); an unwired quality port stores NULL, not 0. | `Recognize Face →(person_id) Store Face(label=person_id)` · unknown: `Store Face(label="")` |
 | **Describe image** | `image*`, `question` (Text, optional) | `description`, `ok` | `label`, `question` | Natural-language caption of the frame via the vision model. Wire/set an optional `question` and the answer addresses it about the frame (e.g. "how many people?", "is the door open?") instead of a generic caption. | `Camera snapshot → Describe image(question="Is anyone at the door?") → Notify(message=description)` |
 | **Motion detection** | `image_a*`, `image_b*` | `moved` (bool), `score` %, `ok` | `sensitivity`, `pixel_threshold` | Compares two frames; reports whether/how much they differ. | `snapshot A + snapshot B → Motion detection → If(moved)` |
 | **Draw BBox** | `image*` (Image), `bbox*` (Bbox) | `image` (Image), `bbox` (the drawn/expanded box), `ok` | `color` (#RRGGBB, default `#00FF00`), `thickness` (px, default `2`), `style` (`box`/`corners`/`reticle`, default `box`), `expand` (% grow per side, default `0`) | Draws a bounding box on the image → annotated JPEG. `expand` grows the box outward by N% on each side (the grown box is also emitted on the `bbox` output for downstream reuse). `style`: `box` = full rectangle, `corners` = HUD L-brackets, `reticle` = brackets + centre crosshair (targeting look). Takes a typed `Bbox` (canonical xyxy) from any Break* node or `OnEvent("motion")` — no format toggle needed. | `Person detection → For each → Break person detection → (bbox) Draw BBox(style=reticle) → Show image` |
