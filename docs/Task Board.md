@@ -33,8 +33,6 @@ kanban-plugin: board
 
 - [ ] #170 Runner hangs pulling any image it does not already have
 	  - Plan: [[self-hosted-runners]]
-- [ ] #166 Self-service password reset — a locked-out customer has no way back in
-	  - Plan: [[launch-readiness-selfserve]]
 - [ ] #167 Terms of Service + Privacy Policy + consent at signup
 	  - Plan: [[launch-readiness-selfserve]]
 - [ ] #169 Windows self-hosted runner + release:edge-windows
@@ -117,6 +115,8 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #166 Self-service password reset — a locked-out customer has no way back in
+	  - Plan: [[launch-readiness-selfserve]]
 - [ ] #165 Email delivery foundation — a provider wired as a notification channel
 	  - Plan: [[email-delivery-foundation]]
 - [ ] #148 Security plan §0 — rotate the exposed secrets + remove the demo admin

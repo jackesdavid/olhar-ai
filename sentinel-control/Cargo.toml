@@ -40,6 +40,8 @@ serde_json = "1"
 # Decode base64 face images posted to the enrollment / recognize endpoints.
 base64 = "0.22"
 # Hash box tokens (sha256) for deterministic lookup; never store the plaintext.
+# Password-reset tokens (#166): 32 bytes of randomness, hex-encoded.
+rand = "0.8"
 sha2 = "0.10"
 hex = "0.4"
 log = "0.4"

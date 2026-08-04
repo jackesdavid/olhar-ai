@@ -161,6 +161,28 @@ export async function login(email: string, password: string): Promise<void> {
 }
 
 /** Public signup — creates a new tenant and makes this user its Admin. */
+/// Ask for a reset link (card #166). ALWAYS resolves — the server answers the same whether or not
+/// the address has an account, and the UI must not leak the difference either by showing a
+/// different message or by failing.
+export async function requestPasswordReset(email: string): Promise<void> {
+  await fetch(`${API_BASE}/auth/password-reset/request`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email }),
+  }).catch(() => {});
+}
+
+/// Spend a reset token and set the new password. This one DOES surface failure: the user is
+/// holding a link they believe in, and "expired, ask for another" is what lets them recover.
+export async function confirmPasswordReset(token: string, password: string): Promise<void> {
+  const r = await fetch(`${API_BASE}/auth/password-reset/confirm`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token, password }),
+  });
+  if (!r.ok) throw new Error((await r.text()) || "Could not reset the password");
+}
+
 export async function signup(
   tenantName: string,
   email: string,
