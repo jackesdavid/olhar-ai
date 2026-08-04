@@ -25,6 +25,8 @@ kanban-plugin: board
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
 - [ ] #9 We should encrypt the passwords in the db column level too
 - [ ] #10 Update available — reload to get the latest version.
+- [ ] #171 Hollow deploy — a merge can skip every build job and still report success
+	  - Plan: [[ci-hollow-deploy]]
 - [ ] #93 Box health copy leaks internals ("tailnet", "Tailscale") to users
 	  - Plan: [[box-health-copy-no-internals]]
 
@@ -109,6 +111,8 @@ kanban-plugin: board
 	  - Plan: [[workflow-schedule-trigger]]
 - [ ] #121 Retire local builds — full CI/CD (build + host on GitHub)
 	  - Plan: [[retire-local-builds-ci]]
+- [ ] #172 Default face quality gate — wire into the seeded template + measured thresholds
+	  - Plan: [[face-quality-gate-upstream]]
 - [ ] #123 Recognition scoring — per-person template + margin test
 	  - Plan: [[face-recognition-per-person-scoring]]
 - [ ] #124 Face clustering — kill single-link chaining
@@ -129,10 +133,6 @@ kanban-plugin: board
 
 ## Review
 
-- [ ] #126 Face quality gate — blur + pose before embed
-	  - Plan: [[face-quality-gate-upstream]]
-- [ ] #127 pgvector face kNN — HNSW index + retrieve-then-rerank
-	  - Plan: [[face-knn-hnsw-rerank]]
 - [ ] #154 Security hardening PRs 1–5 — landed, pending prod verification
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #83 Windows installer — signed .exe
@@ -143,6 +143,10 @@ kanban-plugin: board
 
 **Complete**
 
+- [x] #127 pgvector face kNN — HNSW index + retrieve-then-rerank
+	  - Plan: [[face-knn-hnsw-rerank]]
+- [x] #126 Face quality gate — blur + pose signals as composable ports
+	  - Plan: [[face-quality-gate-upstream]]
 - [x] #163 macOS CI runner — stop building the edge .pkg by hand (the last local build)
 	  - Plan: [[self-hosted-runners]]
 - [x] #159 Media pipeline smoke test in CI — frames, clip, snapshot

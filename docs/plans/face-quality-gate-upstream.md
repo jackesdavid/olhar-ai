@@ -156,7 +156,7 @@ is recovered exactly; yaw survives ±25% anthropometric variation and stays mono
 signed. The pose tests generate landmarks from a 3-D model with deliberately perturbed proportions,
 so they measure robustness rather than replaying the estimator's own algebra.
 
-**Still open — Phase 5 was deliberately NOT done.** The gate is not wired into the seeded template
+**Still open — Phase 5 was deliberately NOT done (carved out as card #172).** The gate is not wired into the seeded template
 and no default thresholds ship. Thresholds must be measured off real captures, and inventing them
 would be worse than shipping none. That work belongs with [[face-threshold-calibration]], which now
 has the columns to fit against.
