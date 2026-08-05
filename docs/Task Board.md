@@ -129,10 +129,6 @@ kanban-plugin: board
 
 ## Review
 
-- [ ] #166 Self-service password reset — a locked-out customer has no way back in
-	  - Plan: [[launch-readiness-selfserve]]
-- [ ] #165 Email delivery foundation — a provider wired as a notification channel
-	  - Plan: [[email-delivery-foundation]]
 - [ ] #154 Security hardening PRs 1–5 — landed, pending prod verification
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #83 Windows installer — signed .exe
@@ -143,6 +139,10 @@ kanban-plugin: board
 
 **Complete**
 
+- [x] #166 Self-service password reset — a locked-out customer has no way back in
+	  - Plan: [[launch-readiness-selfserve]]
+- [x] #165 Email delivery foundation — a provider wired as a notification channel
+	  - Plan: [[email-delivery-foundation]]
 - [x] #127 pgvector face kNN — HNSW index + retrieve-then-rerank
 	  - Plan: [[face-knn-hnsw-rerank]]
 - [x] #126 Face quality gate — blur + pose signals as composable ports
