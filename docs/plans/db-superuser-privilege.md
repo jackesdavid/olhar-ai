@@ -80,19 +80,59 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS pg_cron;
-GRANT USAGE ON SCHEMA cron TO sentinel;
 ```
+(The `cron` grant moved to Phase 2 — it belongs to the app role, not to `sentinel`.)
 This must live somewhere durable — `deploy/postgres/` initdb, or a documented runbook step — or the
 next fresh deployment fails at migration 1 with an error that reads like a broken migration rather
 than a missing bootstrap.
 
-### Phase 2 — Drop the privileges
-```sql
-ALTER ROLE sentinel NOSUPERUSER NOBYPASSRLS;
+### Phase 2 — A NEW role. `sentinel` cannot be demoted.
+
+The previous draft of this plan said the fix was `ALTER ROLE sentinel NOSUPERUSER NOBYPASSRLS` —
+one statement. **That is impossible.** Postgres rejects it:
+
 ```
-One statement. Ownership, DDL and migrations are unaffected. **Rehearse against a restored copy of
-production first** — this is the step that turns a working service into one that boots and then fails
-its first query if anything above was missed.
+DETAIL:  The bootstrap superuser must have the SUPERUSER attribute.
+```
+
+`sentinel` is the bootstrap superuser (the role `POSTGRES_USER` creates at initdb). Its SUPERUSER
+attribute cannot be removed, ever. Worse, it is the **only** superuser on both local and production —
+so had the statement succeeded, it would have left the database with no superuser at all, recoverable
+only by stopping Postgres and booting single-user. The one-line fix was both impossible and, if it
+had worked, an outage.
+
+The real fix is a **second role** that the services connect as:
+
+```sql
+CREATE ROLE sentinel_app LOGIN PASSWORD '<generated>' NOSUPERUSER NOBYPASSRLS;
+GRANT ALL   ON SCHEMA public TO sentinel_app;
+GRANT USAGE ON SCHEMA cron   TO sentinel_app;   -- future migrations calling cron.schedule()
+
+-- The app role must OWN what it migrates. REASSIGN OWNED is a silent no-op here
+-- (it transferred 0 of 62 tables); ALTER … OWNER TO per object is what works.
+DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT tablename FROM pg_tables WHERE schemaname='public' AND tableowner='sentinel' LOOP
+    EXECUTE format('ALTER TABLE public.%I OWNER TO sentinel_app', r.tablename);
+  END LOOP;
+  FOR r IN SELECT sequencename FROM pg_sequences WHERE schemaname='public' LOOP
+    EXECUTE format('ALTER SEQUENCE public.%I OWNER TO sentinel_app', r.sequencename);
+  END LOOP;
+END $$;
+```
+
+Then point every service's `DATABASE_URL` at `sentinel_app` and restart.
+
+`sentinel` stays exactly as it is — the break-glass superuser, no longer used by any service. That is
+the recovery path, and it is why no separate break-glass role needs creating.
+
+**Rehearsed locally against the real migrated schema, 2026-08-05:** `sql_prepare` (which runs every
+migration as the connecting role) passes, and all 7 `tenant_isolation` tests pass with
+`superuser=false bypassrls=false`. DDL works because the role owns the objects.
+
+**Rollback:** revert `DATABASE_URL` to `sentinel` and restart. Ownership can stay transferred —
+`sentinel` is a superuser and is unaffected by it.
 
 ### Phase 3 — Prove it
 Invert `baseline_the_database_enforces_no_isolation_of_its_own` in
