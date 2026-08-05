@@ -22,8 +22,6 @@ kanban-plugin: board
 
 ## Bugs
 
-- [ ] #173 Services connect to Postgres as a superuser (RCE reach on the DB host)
-	  - Plan: [[db-superuser-privilege]]
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
 - [ ] #9 We should encrypt the passwords in the db column level too
 - [ ] #10 Update available — reload to get the latest version.
@@ -139,6 +137,8 @@ kanban-plugin: board
 
 **Complete**
 
+- [x] #173 Services connect to Postgres as a superuser (RCE reach on the DB host)
+	  - Plan: [[db-superuser-privilege]]
 - [x] #171 Hollow deploy — a merge can skip every build job and still report success
 	  - Plan: [[ci-hollow-deploy]]
 - [x] #166 Self-service password reset — a locked-out customer has no way back in

@@ -80,19 +80,59 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS pg_cron;
-GRANT USAGE ON SCHEMA cron TO sentinel;
 ```
+(The `cron` grant moved to Phase 2 — it belongs to the app role, not to `sentinel`.)
 This must live somewhere durable — `deploy/postgres/` initdb, or a documented runbook step — or the
 next fresh deployment fails at migration 1 with an error that reads like a broken migration rather
 than a missing bootstrap.
 
-### Phase 2 — Drop the privileges
-```sql
-ALTER ROLE sentinel NOSUPERUSER NOBYPASSRLS;
+### Phase 2 — A NEW role. `sentinel` cannot be demoted.
+
+The previous draft of this plan said the fix was `ALTER ROLE sentinel NOSUPERUSER NOBYPASSRLS` —
+one statement. **That is impossible.** Postgres rejects it:
+
 ```
-One statement. Ownership, DDL and migrations are unaffected. **Rehearse against a restored copy of
-production first** — this is the step that turns a working service into one that boots and then fails
-its first query if anything above was missed.
+DETAIL:  The bootstrap superuser must have the SUPERUSER attribute.
+```
+
+`sentinel` is the bootstrap superuser (the role `POSTGRES_USER` creates at initdb). Its SUPERUSER
+attribute cannot be removed, ever. Worse, it is the **only** superuser on both local and production —
+so had the statement succeeded, it would have left the database with no superuser at all, recoverable
+only by stopping Postgres and booting single-user. The one-line fix was both impossible and, if it
+had worked, an outage.
+
+The real fix is a **second role** that the services connect as:
+
+```sql
+CREATE ROLE sentinel_app LOGIN PASSWORD '<generated>' NOSUPERUSER NOBYPASSRLS;
+GRANT ALL   ON SCHEMA public TO sentinel_app;
+GRANT USAGE ON SCHEMA cron   TO sentinel_app;   -- future migrations calling cron.schedule()
+
+-- The app role must OWN what it migrates. REASSIGN OWNED is a silent no-op here
+-- (it transferred 0 of 62 tables); ALTER … OWNER TO per object is what works.
+DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT tablename FROM pg_tables WHERE schemaname='public' AND tableowner='sentinel' LOOP
+    EXECUTE format('ALTER TABLE public.%I OWNER TO sentinel_app', r.tablename);
+  END LOOP;
+  FOR r IN SELECT sequencename FROM pg_sequences WHERE schemaname='public' LOOP
+    EXECUTE format('ALTER SEQUENCE public.%I OWNER TO sentinel_app', r.sequencename);
+  END LOOP;
+END $$;
+```
+
+Then point every service's `DATABASE_URL` at `sentinel_app` and restart.
+
+`sentinel` stays exactly as it is — the break-glass superuser, no longer used by any service. That is
+the recovery path, and it is why no separate break-glass role needs creating.
+
+**Rehearsed locally against the real migrated schema, 2026-08-05:** `sql_prepare` (which runs every
+migration as the connecting role) passes, and all 7 `tenant_isolation` tests pass with
+`superuser=false bypassrls=false`. DDL works because the role owns the objects.
+
+**Rollback:** revert `DATABASE_URL` to `sentinel` and restart. Ownership can stay transferred —
+`sentinel` is a superuser and is unaffected by it.
 
 ### Phase 3 — Prove it
 Invert `baseline_the_database_enforces_no_isolation_of_its_own` in
@@ -124,3 +164,39 @@ fix.
 ## Related
 [[tenant-isolation-rls]] (#160 is blocked on this) · [[security-hardening-remainder]] ·
 [[vps-db-troubleshooting]]
+
+---
+
+## Applied to production 2026-08-05 ✅
+
+Ran as scripted. `sentinel_app` created (`NOSUPERUSER NOBYPASSRLS`), all 62 tables and their
+sequences transferred to it, `DATABASE_URL` repointed, services restarted.
+
+**Verified after the cutover:**
+
+| check | result |
+|---|---|
+| `COPY … TO PROGRAM 'id > /tmp/pwned'` | `ERROR: permission denied` — and no file created |
+| `pg_read_file('/etc/passwd')` | `ERROR: permission denied for function` |
+| migrations | 89 applied, all successful |
+| connections | all three DB-using services on `sentinel_app`; the only `sentinel` session was the psql running the check |
+| writes | 15 events inserted in 30 min; `work_jobs` draining |
+| service logs | **0** permission-denied / must-be-superuser errors |
+| control `/health`, app | HTTP 200 |
+
+**Only three `DATABASE_URL` lines existed, not four.** `sentinel-gateway` has none — it reaches
+Postgres not at all and talks to control over HTTP. That answers open decision 3 outright: the
+public-facing service already has zero database reach, which is better than the scoped role this
+plan was going to give it.
+
+**Rollback**, still one step and still valid: restore
+`/ibbf/docker-compose.sentinel.yml.bak.*` and `up -d`. Ownership can stay with `sentinel_app` —
+`sentinel` is a superuser and unaffected.
+
+The app password lives at `/ibbf/.sentinel_app_pw` (root-only, 0600).
+
+## What this unblocks
+
+#160 Phase 2 is now possible: with `BYPASSRLS` gone and the role a non-superuser owner,
+`ENABLE` + `FORCE ROW LEVEL SECURITY` will take effect. `baseline_the_database_enforces_no_isolation_of_its_own`
+in `crates/app-core/tests/tenant_isolation.rs` is ready to be inverted.
