@@ -2,6 +2,7 @@
 // the master "navigate as tenant" swap. Authorization is **action-based** — `hasPerm`
 // mirrors the control plane's `Claims::allows` (the master bypasses everything except
 // the tenant-private `live.view`).
+import { lang } from "$lib/i18n";
 import { API_BASE } from "./config";
 import {
   startRegistration,
@@ -197,6 +198,8 @@ export async function signup(
       email,
       password,
       accepted_terms: acceptedTerms,
+      // So later account emails are written in the language they signed up in.
+      locale: lang(),
     }),
   });
   if (!r.ok) throw new Error((await r.text()) || "Sign up failed");
