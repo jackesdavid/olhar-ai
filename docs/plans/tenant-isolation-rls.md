@@ -31,19 +31,29 @@ Taken against `main` and production, 2026-08-05:
 | Total sqlx call sites | **330** | the surface to convert |
 | Executed directly on the pool, no transaction | **178** | `SET LOCAL` cannot reach these |
 | Executed inside a transaction | **62** | these can carry a tenant today |
-| Tables owned by the connecting DB user (`sentinel`) | **62 of 62** | **RLS would be a silent no-op** |
+| Tables owned by the connecting DB user (`sentinel`) | **62 of 62** | owners bypass RLS unless `FORCE`d |
+| Connecting role is a **superuser** with `BYPASSRLS` | **yes, in production** | **RLS cannot work at all** |
 
 ### The trap that makes this card dangerous to do naively
 
-**Postgres table owners bypass row-level security.** Policies are simply not applied to them unless
-the table is additionally marked `FORCE ROW LEVEL SECURITY`. The application connects as `sentinel`,
-which owns every table.
+Demonstrated against the local database rather than reasoned about, because the first version of
+this section was **wrong**:
 
-So the obvious first commit — `ALTER TABLE … ENABLE ROW LEVEL SECURITY` plus a policy — would
-deploy clean, pass every test, and **change nothing at all**. That is the same shape as two failures
-already found this month: the HNSW index that was never used because of a cast, and the `changes:`
-filter that skipped every build while the pipeline stayed green. Assume this one will hide the same
-way, and design the proof first.
+1. **Table owners bypass RLS.** Enabling RLS and adding a policy changed nothing — the owner still
+   saw both tenants. The documented fix is `FORCE ROW LEVEL SECURITY`.
+2. **`FORCE` did not help either.** Both tenants were still visible, and an unqualified
+   `UPDATE … SET note = 'HACKED'` rewrote **both** rows. The reason: the connecting role is a
+   **superuser** (`superuser=true bypassrls=true`, in production too). Superusers bypass RLS
+   *unconditionally*; `FORCE` only makes policies apply to the table OWNER.
+3. **As a plain non-owner role it works exactly as advertised.** `SELECT` with no `WHERE` returned
+   one tenant's row; `UPDATE` with no `WHERE` rewrote only that tenant's row; switching the session
+   variable switched the visible tenant; and a forgotten `SET LOCAL` failed closed with an error.
+
+So the obvious first commit — `ALTER TABLE … ENABLE ROW LEVEL SECURITY` plus a policy — would deploy
+clean, pass every test, and **change nothing at all**. That is the same shape as two failures already
+found this month: the HNSW index never used because of a cast, and the `changes:` filter that skipped
+every build while the pipeline stayed green. Assume this one will hide the same way, and design the
+proof first.
 
 ## The two available strategies
 
@@ -79,6 +89,12 @@ Mirroring `face_knn_bench.rs`: measure the property, do not assert the fix.
 Without the negative control this test will pass forever regardless of whether isolation works.
 
 ### Phase 2 — Make RLS possible at all
+
+> **Blocked on #173.** Measured on production: the connecting role is `superuser=true
+> bypassrls=true`. Superusers bypass RLS *unconditionally*, and `FORCE ROW LEVEL SECURITY` only
+> makes policies apply to the table OWNER — it does nothing for a superuser. So the role change is a
+> hard prerequisite, not an optimisation, and it is large enough to be its own card
+> ([[db-superuser-privilege]]).
 1. A non-owner role for the application (`sentinel_app`): `GRANT SELECT/INSERT/UPDATE/DELETE` on the
    47 tenant tables, owning nothing. Migrations keep running as `sentinel`.
 2. `ALTER TABLE … ENABLE ROW LEVEL SECURITY` **and** `FORCE ROW LEVEL SECURITY` on those tables.

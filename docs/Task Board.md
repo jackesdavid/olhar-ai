@@ -22,6 +22,8 @@ kanban-plugin: board
 
 ## Bugs
 
+- [ ] #173 Services connect to Postgres as a superuser (RCE reach on the DB host)
+	  - Plan: [[db-superuser-privilege]]
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
 - [ ] #9 We should encrypt the passwords in the db column level too
 - [ ] #10 Update available — reload to get the latest version.
