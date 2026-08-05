@@ -98,6 +98,78 @@ check:sql:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
+check:pipeline-shape:
+  stage: check
+  image: python:3-alpine
+  interruptible: true
+  # Card #171 Phase 3. #171 was a merge that produced a pipeline with ZERO build jobs and still
+  # reported `deploy:vps success` — a green pipeline that shipped nothing. The fix removed the
+  # `changes:` filters from the build jobs on the default branch. Nothing stopped someone adding one
+  # back, and the failure is invisible: green either way.
+  #
+  # Checking the CONFIG rather than querying the running pipeline is deliberate: the API route needs
+  # a token CI_JOB_TOKEN does not grant, and it could only fail AFTER a bad merge. This catches it on
+  # the merge request, needs no credentials, and is deterministic.
+  #
+  # It asserts the PROPERTY, so new build jobs are covered automatically. The first version read
+  # `job['stage']` directly and saw only 1 of 5 build jobs — the other four inherit their stage from
+  # `.build_service` via `extends` — and it reported SUCCESS on a config with a reintroduced filter.
+  # Hence `stage_of()` and the `len(builds) < 2` tripwire: a guard that stops seeing its subject must
+  # fail, not pass.
+  script:
+    - pip install --quiet --disable-pip-version-check pyyaml
+    - |
+      python3 - <<'SHAPE'
+      import sys, yaml
+
+      cfg = yaml.safe_load(open('.gitlab-ci.yml'))
+
+      def stage_of(job, seen=()):
+          """Resolve `stage`, following `extends`. Four of the five build jobs inherit their stage from
+          `.build_service`, so reading job['stage'] alone silently sees only the explicit ones — which is
+          how the first version of this guard reported 3 build jobs and missed a reintroduced filter."""
+          if not isinstance(job, dict):
+              return None
+          if 'stage' in job:
+              return job['stage']
+          ext = job.get('extends')
+          for parent in ([ext] if isinstance(ext, str) else (ext or [])):
+              if parent in seen:
+                  continue
+              s = stage_of(cfg.get(parent), seen + (parent,))
+              if s:
+                  return s
+          return None
+
+      builds, bad = [], []
+      for name, job in cfg.items():
+          if not isinstance(job, dict) or name.startswith('.'):
+              continue                      # `.`-prefixed entries are templates, not jobs
+          if stage_of(job) != 'build':
+              continue
+          builds.append(name)
+          for rule in job.get('rules') or []:
+              if isinstance(rule, dict) and 'CI_DEFAULT_BRANCH' in rule.get('if', '') and 'changes' in rule:
+                  bad.append(name)
+
+      if len(builds) < 2:
+          print(f"FAIL: found {len(builds)} build jobs — this guard is not seeing what it thinks it is.")
+          print("      `extends` resolution is probably broken; it must find every job in the build stage.")
+          sys.exit(1)
+      if bad:
+          print("These build jobs carry a `changes:` filter on the default branch:")
+          for n in sorted(set(bad)):
+              print(f"  - {n}")
+          print("\nThat is card #171: on a merge commit whose diff against the source branch tip is")
+          print("empty, GitLab matches nothing, every build job is skipped, and deploy:vps reports")
+          print("success having shipped nothing. Build unconditionally on the default branch.")
+          sys.exit(1)
+      print(f"OK: {len(builds)} build jobs ({', '.join(sorted(builds))}), none filtered on the default branch")
+      SHAPE
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
 check:media:
   stage: check
   image: rust:1-bookworm
@@ -136,17 +208,21 @@ check:media:
         echo "media_smoke did not run — the RTSP service was unreachable or the test was skipped"
         exit 1
       fi
+  # NO `changes:` filter — card #171's lesson, third instance.
+  #
+  # This used to list sentinel-edge/src/{capture,recording,media,gst_mse}.rs. But the media path
+  # runs through `crates/app-core` too, and a `changes:` filter that names only one crate's files
+  # misses breakage arriving through the other — which is exactly how adding `lettre` to app-core
+  # invalidated sentinel-edge/Cargo.lock without touching a single file under sentinel-edge/, and
+  # how `verify:edge-lock` was skipped on the very MR that broke it.
+  #
+  # The job takes ~9 min against a synthetic RTSP source. That is more than the others here, but
+  # #164 shipped a watchdog that killed every pipeline restart to a customer box and survived
+  # several releases precisely because nothing watched a camera produce a frame. A filter that is
+  # wrong in a way nobody notices costs more than the minutes.
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      changes: &media_paths
-        - sentinel-edge/src/capture.rs
-        - sentinel-edge/src/recording.rs
-        - sentinel-edge/src/media.rs
-        - sentinel-edge/src/gst_mse.rs
-        - sentinel-edge/Cargo.toml
-        - .gitlab-ci.yml
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      changes: *media_paths
 
 check:web:
   stage: check
