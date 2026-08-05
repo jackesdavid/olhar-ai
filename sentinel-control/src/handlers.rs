@@ -149,6 +149,10 @@ struct SignupReq {
     /// the only safe direction for a legal record.
     #[serde(default)]
     accepted_terms: bool,
+    /// UI language at signup (`en` / `pt`), so later emails are written in it. Absent = English,
+    /// which is what `Lang::default()` resolves to.
+    #[serde(default)]
+    locale: Option<String>,
 }
 
 /// Public signup: creates a tenant and makes the caller its Admin.
@@ -202,6 +206,21 @@ async fn signup(
     )
     .await
     .map_err(db_err)?;
+
+    // Remember the language to write to this customer in. A separate UPDATE rather than a new
+    // parameter on `provision_tenant_with_admin`, which is shared with the invite and master paths
+    // that have no browser to ask. Best-effort: an unset locale falls back to English, and failing
+    // a signup over it would be absurd.
+    if let Some(tag) = b.locale.as_deref().map(app_core::notification::templates::Lang::from_tag) {
+        if let Err(e) = sqlx::query("UPDATE users SET locale = $1 WHERE id = $2")
+            .bind(tag.as_tag())
+            .bind(user_id)
+            .execute(&st.pool)
+            .await
+        {
+            log::warn!("signup: could not store locale for {user_id}: {e}");
+        }
+    }
 
     // #167 — evidence of acceptance, recorded against the account that now exists. Runs on the
     // blocking pool like the trial below: `legal::record` drives the Db's own runtime, and calling

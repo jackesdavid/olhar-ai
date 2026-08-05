@@ -40,6 +40,19 @@ fn app_origin() -> String {
         .unwrap_or_else(|| "http://localhost:5173".to_string())
 }
 
+/// The language to write to a user in — `users.locale`, English when unset (every account created
+/// before the column existed). A failed lookup is English too: an email in a plausible language
+/// always beats no email, and this is the locked-out path.
+async fn user_lang(pool: &sqlx::PgPool, user_id: uuid::Uuid) -> app_core::notification::templates::Lang {
+    let tag: Option<String> = sqlx::query_scalar("SELECT locale FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+    app_core::notification::templates::Lang::from_opt_tag(tag.as_deref())
+}
+
 fn hash_token(raw: &str) -> String {
     hex::encode(Sha256::digest(raw.as_bytes()))
 }
@@ -111,7 +124,9 @@ pub async fn request(State(st): State<AppState>, Json(b): Json<RequestReq>) -> S
     }
 
     let url = format!("{}/reset?t={raw}", app_origin());
-    let mail = app_core::notification::templates::password_reset(&email, "", &url, VALID_MINUTES);
+    let lang = user_lang(&st.pool, user.id).await;
+    let mail =
+        app_core::notification::templates::password_reset(&email, "", &url, VALID_MINUTES, lang);
     app_core::work_queue::enqueue_email_blocking(
         &st.db,
         tenant_id,
@@ -209,11 +224,13 @@ pub async fn confirm(
     // account was just taken — and is worth sending even though everyone else deletes it.
     if let Ok(Some(user)) = store::find_user_by_id(&st.pool, user_id).await {
         let when = chrono::Utc::now().format("%e %B %Y at %H:%M UTC").to_string();
+        let lang = user_lang(&st.pool, user_id).await;
         let mail = app_core::notification::templates::password_changed(
             &user.email,
             "",
             when.trim(),
             &format!("{}/login", app_origin()),
+            lang,
         );
         app_core::work_queue::enqueue_email_blocking(
             &st.db,

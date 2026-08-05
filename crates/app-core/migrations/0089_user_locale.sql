@@ -1,0 +1,14 @@
+-- #167 follow-up: remember which language to write to a customer in.
+--
+-- The transactional emails were English-only. The product sells in Brazil, and a Portuguese-speaking
+-- customer receiving an English password reset at the moment they are locked out is the worst
+-- possible time to be spoken to in the wrong language.
+--
+-- Stored on the USER rather than taken from the request, because the emails that matter most later
+-- — trial expiry, receipts, dunning — are sent by a scheduler with no browser anywhere near them.
+-- A request-scoped language would work for password reset and silently fail for every one of those.
+--
+-- NULL = never captured (every account that existed before this migration). Readers fall back to
+-- English, which is `Lang::default()` — an unknown locale must produce a real email in a plausible
+-- language, never no email.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS locale text;

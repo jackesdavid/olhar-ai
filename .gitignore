@@ -49,4 +49,4 @@ dist/
 deploy/olharai/sentinel.env
 experiments/gst-spike/target/
 experiments/gst-spike/Cargo.lock
-.fingerprint
+.fingerprint.email-preview/

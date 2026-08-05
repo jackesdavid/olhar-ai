@@ -13,23 +13,39 @@ fn main() {
     std::fs::create_dir_all(&dir).expect("create output dir");
 
     let app = "https://app.olharai.com";
-    let samples = [
-        ("welcome", templates::welcome("jo@example.com", "Jo", app)),
-        (
-            "password-reset",
-            templates::password_reset("jo@example.com", "Jo", &format!("{app}/reset?t=8f3c1a"), 30),
-        ),
-        (
-            "password-changed",
-            templates::password_changed("jo@example.com", "Jo", "3 August 2026 at 21:04", &format!("{app}/help")),
-        ),
-    ];
-
-    for (name, email) in samples {
-        let path = format!("{dir}/{name}.html");
-        let html = email.html.clone().unwrap_or_default();
-        std::fs::write(&path, &html).expect("write html");
-        std::fs::write(format!("{dir}/{name}.txt"), &email.text).expect("write text");
-        println!("{path}  —  subject: {}", email.subject);
+    // Both languages, side by side. Rendering only English is how the Portuguese half of a
+    // bilingual product ships unlooked-at.
+    for lang in [templates::Lang::En, templates::Lang::Pt] {
+        let tag = lang.as_tag();
+        let samples = [
+            ("welcome", templates::welcome("jo@example.com", "Jo", app, lang)),
+            (
+                "password-reset",
+                templates::password_reset(
+                    "jo@example.com",
+                    "Jo",
+                    &format!("{app}/reset?t=8f3c1a"),
+                    30,
+                    lang,
+                ),
+            ),
+            (
+                "password-changed",
+                templates::password_changed(
+                    "jo@example.com",
+                    "Jo",
+                    "3 August 2026 at 21:04",
+                    &format!("{app}/help"),
+                    lang,
+                ),
+            ),
+        ];
+        for (name, email) in samples {
+            let path = format!("{dir}/{name}.{tag}.html");
+            let html = email.html.clone().unwrap_or_default();
+            std::fs::write(&path, &html).expect("write html");
+            std::fs::write(format!("{dir}/{name}.{tag}.txt"), &email.text).expect("write text");
+            println!("{path}  —  subject: {}", email.subject);
+        }
     }
 }

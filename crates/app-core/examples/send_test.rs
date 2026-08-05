@@ -18,6 +18,7 @@ fn main() {
         "",
         "https://app.olharai.com/reset?t=TEST-NOT-A-REAL-TOKEN",
         30,
+        templates::Lang::En,
     );
     match email::send(&mail) {
         Ok(()) => println!("accepted by the provider → {to} | subject: {}", mail.subject),
