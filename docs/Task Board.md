@@ -25,8 +25,6 @@ kanban-plugin: board
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
 - [ ] #9 We should encrypt the passwords in the db column level too
 - [ ] #10 Update available — reload to get the latest version.
-- [ ] #171 Hollow deploy — a merge can skip every build job and still report success
-	  - Plan: [[ci-hollow-deploy]]
 - [ ] #93 Box health copy leaks internals ("tailnet", "Tailscale") to users
 	  - Plan: [[box-health-copy-no-internals]]
 
@@ -37,8 +35,6 @@ kanban-plugin: board
 	  - Plan: [[self-hosted-runners]]
 - [ ] #169 Windows self-hosted runner + release:edge-windows
 	  - Plan: [[self-hosted-runners]]
-- [ ] #160 Tenant isolation by construction — row-level security
-	  - Plan: [[architecture-weaknesses]]
 - [ ] #161 Retire the tailnet remnants — drop magicdns_host + tailscale_state (readers first)
 	  - Plan: [[architecture-weaknesses]]
 - [ ] #152 Edge signing §3 P2→P3 — soak, then flip signing_mode to required per box
@@ -117,6 +113,8 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #160 Tenant isolation by construction — row-level security
+	  - Plan: [[tenant-isolation-rls]]
 - [ ] #167 Terms of Service + Privacy Policy + consent at signup
 	  - Plan: [[launch-readiness-selfserve]]
 - [ ] #148 Security plan §0 — rotate the exposed secrets + remove the demo admin
@@ -139,6 +137,8 @@ kanban-plugin: board
 
 **Complete**
 
+- [x] #171 Hollow deploy — a merge can skip every build job and still report success
+	  - Plan: [[ci-hollow-deploy]]
 - [x] #166 Self-service password reset — a locked-out customer has no way back in
 	  - Plan: [[launch-readiness-selfserve]]
 - [x] #165 Email delivery foundation — a provider wired as a notification channel
