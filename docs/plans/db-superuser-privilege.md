@@ -164,3 +164,39 @@ fix.
 ## Related
 [[tenant-isolation-rls]] (#160 is blocked on this) · [[security-hardening-remainder]] ·
 [[vps-db-troubleshooting]]
+
+---
+
+## Applied to production 2026-08-05 ✅
+
+Ran as scripted. `sentinel_app` created (`NOSUPERUSER NOBYPASSRLS`), all 62 tables and their
+sequences transferred to it, `DATABASE_URL` repointed, services restarted.
+
+**Verified after the cutover:**
+
+| check | result |
+|---|---|
+| `COPY … TO PROGRAM 'id > /tmp/pwned'` | `ERROR: permission denied` — and no file created |
+| `pg_read_file('/etc/passwd')` | `ERROR: permission denied for function` |
+| migrations | 89 applied, all successful |
+| connections | all three DB-using services on `sentinel_app`; the only `sentinel` session was the psql running the check |
+| writes | 15 events inserted in 30 min; `work_jobs` draining |
+| service logs | **0** permission-denied / must-be-superuser errors |
+| control `/health`, app | HTTP 200 |
+
+**Only three `DATABASE_URL` lines existed, not four.** `sentinel-gateway` has none — it reaches
+Postgres not at all and talks to control over HTTP. That answers open decision 3 outright: the
+public-facing service already has zero database reach, which is better than the scoped role this
+plan was going to give it.
+
+**Rollback**, still one step and still valid: restore
+`/ibbf/docker-compose.sentinel.yml.bak.*` and `up -d`. Ownership can stay with `sentinel_app` —
+`sentinel` is a superuser and unaffected.
+
+The app password lives at `/ibbf/.sentinel_app_pw` (root-only, 0600).
+
+## What this unblocks
+
+#160 Phase 2 is now possible: with `BYPASSRLS` gone and the role a non-superuser owner,
+`ENABLE` + `FORCE ROW LEVEL SECURITY` will take effect. `baseline_the_database_enforces_no_isolation_of_its_own`
+in `crates/app-core/tests/tenant_isolation.rs` is ready to be inverted.
