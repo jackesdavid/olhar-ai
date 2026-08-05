@@ -222,6 +222,8 @@
   },
   "active": "b0c2853a209ba4bb",
   "lastOpenFiles": [
+    "plans/db-superuser-privilege.md",
+    "plans/tenant-isolation-rls.md",
     "legal/README.md",
     "legal",
     "plans/ci-hollow-deploy.md",
@@ -256,8 +258,6 @@
     "plans/face-recognition-per-person-scoring.md",
     "plans/face-embed-landmark-align.md",
     "plans/retire-local-builds-ci.md",
-    "plans/faces-labeling-view.md",
-    "plans/edge-detection-metrics.md",
     "plans/logo-exploration/warm-concepts-overview.png",
     "plans/logo-exploration/concept-5.svg",
     "plans/logo-exploration/concept-4.svg",
