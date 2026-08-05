@@ -20,6 +20,8 @@
   const t = $derived(dict[lang()]);
 
   let mode = $state<"signin" | "signup" | "forgot">("signin");
+  // #167 — must be ticked to create a workspace; the API refuses without it.
+  let acceptedTerms = $state(false);
   // The confirmation state after asking for a link. Deliberately says nothing about whether
   // the address exists — the UI must not leak what the endpoint refuses to.
   let resetSent = $state(false);
@@ -57,7 +59,7 @@
       if (mode === "signin") {
         await login(email.trim(), password);
       } else {
-        await signup(tenantName.trim(), email.trim(), password);
+        await signup(tenantName.trim(), email.trim(), password, acceptedTerms);
       }
       await goto("/");
     } catch (err) {
@@ -95,7 +97,12 @@
   function canSubmitFor(m: typeof mode): boolean {
     if (m === "forgot") return email.trim().length > 0;
     if (m === "signin") return email.trim().length > 0 && password.length > 0;
-    return tenantName.trim().length > 0 && email.trim().length > 0 && password.length >= 8;
+    return (
+      tenantName.trim().length > 0 &&
+      email.trim().length > 0 &&
+      password.length >= 8 &&
+      acceptedTerms
+    );
   }
   const canSubmit = $derived(canSubmitFor(mode));
 
@@ -161,6 +168,28 @@
             autocomplete={mode === "signin" ? "current-password" : "new-password"}
           />
         </div>
+        {/if}
+        {#if mode === "signup"}
+          <!-- #167. Deliberately unticked by default: a pre-ticked box is not consent, and both
+               the GDPR and the LGPD treat it as invalid. The API refuses without the flag too, so
+               this is the honest affordance rather than the enforcement. -->
+          <label class="flex items-start gap-2.5 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              bind:checked={acceptedTerms}
+              class="mt-0.5 size-4 shrink-0 rounded border-input accent-foreground"
+            />
+            <span>
+              {t.login.consentPrefix}
+              <a href="/terms" target="_blank" rel="noopener" class="underline hover:text-foreground">
+                {t.login.termsLink}
+              </a>
+              {t.login.consentJoin}
+              <a href="/privacy" target="_blank" rel="noopener" class="underline hover:text-foreground">
+                {t.login.privacyLink}
+              </a>.
+            </span>
+          </label>
         {/if}
         <Button type="submit" class="w-full" disabled={!canSubmit || busy}>
           {#if busy}<Busy />{/if}

@@ -22,6 +22,7 @@ pub mod event_queue;
 pub mod events;
 pub mod faces;
 pub mod stream_names;
+pub mod legal;
 pub mod listen;
 pub mod map;
 pub mod media;

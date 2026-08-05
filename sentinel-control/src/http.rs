@@ -248,7 +248,7 @@ fn enroll_limiter() -> &'static std::sync::Mutex<HashMap<String, (u32, std::time
 /// single-valued and unambiguous.
 ///
 /// An absent header collapses everyone into one shared bucket, which fails *closed* (stricter).
-fn enroll_client(headers: &HeaderMap) -> String {
+pub(crate) fn enroll_client(headers: &HeaderMap) -> String {
     let real_ip = headers
         .get("x-real-ip")
         .and_then(|v| v.to_str().ok())

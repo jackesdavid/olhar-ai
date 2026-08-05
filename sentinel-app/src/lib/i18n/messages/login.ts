@@ -3,6 +3,10 @@ export const login = {
   en: {
     signinDesc: "Sign in to your workspace",
     signupDesc: "Create a new workspace",
+    consentPrefix: "I agree to the",
+    termsLink: "Terms of Service",
+    consentJoin: "and the",
+    privacyLink: "Privacy Policy",
     workspaceName: "Workspace name",
     workspacePlaceholder: "Acme Security",
     email: "Email",
@@ -31,6 +35,10 @@ export const login = {
   pt: {
     signinDesc: "Entre no seu workspace",
     signupDesc: "Crie um novo workspace",
+    consentPrefix: "Concordo com os",
+    termsLink: "Termos de Serviço",
+    consentJoin: "e com a",
+    privacyLink: "Política de Privacidade",
     workspaceName: "Nome do workspace",
     workspacePlaceholder: "Acme Segurança",
     email: "Email",

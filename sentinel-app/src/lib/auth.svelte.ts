@@ -187,11 +187,17 @@ export async function signup(
   tenantName: string,
   email: string,
   password: string,
+  acceptedTerms: boolean,
 ): Promise<void> {
   const r = await fetch(`${API_BASE}/auth/signup`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ tenant_name: tenantName, email, password }),
+    body: JSON.stringify({
+      tenant_name: tenantName,
+      email,
+      password,
+      accepted_terms: acceptedTerms,
+    }),
   });
   if (!r.ok) throw new Error((await r.text()) || "Sign up failed");
   const data = await r.json();

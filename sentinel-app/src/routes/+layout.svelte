@@ -70,7 +70,7 @@
   // emailed impossible to open — the boot guard silently defeating the whole feature (#166). The
   // reset page already expects to be entered from outside the app carrying a token; this is the
   // other half of that contract.
-  const PUBLIC_PATHS = ["/login", "/reset"];
+  const PUBLIC_PATHS = ["/login", "/reset", "/terms", "/privacy"];
   const isPublicPath = (p: string) =>
     PUBLIC_PATHS.some((q) => p === q || p.startsWith(q + "/"));
 

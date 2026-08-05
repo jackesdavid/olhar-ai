@@ -2,7 +2,7 @@
 //! master console (tenants + navigate-as-tenant). Every guard is action-based via
 //! `auth::require`; the only role-ish gate is the `master` flag.
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Json;
 use axum::routing::{get, post, put};
 use axum::Router;
@@ -142,13 +142,30 @@ struct SignupReq {
     tenant_name: String,
     email: String,
     password: String,
+    /// #167 — the user ticked "I agree to the Terms and Privacy Policy".
+    ///
+    /// `#[serde(default)]` makes a MISSING field `false`, so an older client that does not know
+    /// about consent is refused rather than silently recorded as having agreed. Failing closed is
+    /// the only safe direction for a legal record.
+    #[serde(default)]
+    accepted_terms: bool,
 }
 
 /// Public signup: creates a tenant and makes the caller its Admin.
 async fn signup(
     State(st): State<AppState>,
+    headers: HeaderMap,
     Json(b): Json<SignupReq>,
 ) -> Result<Json<AuthResp>, ApiErr> {
+    // #167. Refuse before touching the database: an account that exists without a recorded
+    // acceptance is exactly the state this card was opened to prevent, and it is far easier to
+    // never create it than to reconcile it later.
+    if !b.accepted_terms {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "you must accept the Terms of Service and Privacy Policy",
+        ));
+    }
     let email = b.email.trim().to_lowercase();
     if email.is_empty() || !email.contains('@') {
         return Err(err(StatusCode::BAD_REQUEST, "valid email required"));
@@ -185,6 +202,28 @@ async fn signup(
     )
     .await
     .map_err(db_err)?;
+
+    // #167 — evidence of acceptance, recorded against the account that now exists. Runs on the
+    // blocking pool like the trial below: `legal::record` drives the Db's own runtime, and calling
+    // it directly from this async context would block a Tokio worker.
+    {
+        let db = st.db.clone();
+        let ip = crate::http::enroll_client(&headers);
+        let ua = headers
+            .get(axum::http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let _ = tokio::task::spawn_blocking(move || {
+            app_core::legal::record_signup_consent(
+                &db,
+                user_id,
+                Some(tenant_id),
+                Some(ip.as_str()),
+                ua.as_deref(),
+            )
+        })
+        .await;
+    }
 
     // Self-service signup starts the 30-day Beta trial (2 cameras). Best-effort: a failure
     // here must not fail the signup — the master can grant a trial later.

@@ -34,12 +34,23 @@
             "id": "b0c2853a209ba4bb",
             "type": "leaf",
             "state": {
-              "type": "release-notes",
+              "type": "kanban",
               "state": {
-                "currentVersion": "1.13.4"
+                "file": "Task Board.md",
+                "kanbanViewState": {
+                  "kanban-plugin": "board",
+                  "list-collapse": [
+                    false,
+                    true,
+                    false,
+                    false,
+                    false,
+                    false
+                  ]
+                }
               },
-              "icon": "lucide-book-up",
-              "title": "Release Notes 1.13.4"
+              "icon": "lucide-trello",
+              "title": "Task Board"
             }
           }
         ],
@@ -211,6 +222,13 @@
   },
   "active": "b0c2853a209ba4bb",
   "lastOpenFiles": [
+    "legal/README.md",
+    "legal",
+    "plans/ci-hollow-deploy.md",
+    "plans/email-delivery-foundation.md",
+    "Task Board.md.tmp.20301.6d8cf89fd390",
+    "Task Board.md.tmp.20301.d1d00185956d",
+    "Task Board.md.tmp.20301.5b8b6456152c",
     "plans/architecture-weaknesses.md",
     "Task Board.md.tmp.6853.7bdfa62a3cae",
     "plans/camera-status-visibility.md",
@@ -231,22 +249,15 @@
     "Task Board.md.tmp.68407.66125e8afc6a",
     "Task Board.md.tmp.68407.9e4979f0f4dc",
     "plans/face-threshold-calibration.md",
-    "plans/face-threshold-calibration.md.tmp.68407.1ba9f4716d98",
     "plans/face-knn-hnsw-rerank.md",
     "plans/face-quality-gate-upstream.md",
-    "plans/face-quality-gate-upstream.md.tmp.68407.6c43a240209a",
     "plans/face-embedding-l2-normalization.md",
-    "plans/face-embedding-l2-normalization.md.tmp.68407.16cac6593b95",
     "plans/face-clustering-chaining-fix.md",
-    "plans/face-clustering-chaining-fix.md.tmp.68407.edcaa68e9aba",
     "plans/face-recognition-per-person-scoring.md",
     "plans/face-embed-landmark-align.md",
     "plans/retire-local-builds-ci.md",
     "plans/faces-labeling-view.md",
     "plans/edge-detection-metrics.md",
-    "plans/face-recognition-pipeline.md",
-    "plans/playback-view-fixes.md",
-    "plans/get-variable-over-activation.md",
     "plans/logo-exploration/warm-concepts-overview.png",
     "plans/logo-exploration/concept-5.svg",
     "plans/logo-exploration/concept-4.svg",
