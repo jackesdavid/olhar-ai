@@ -33,6 +33,16 @@ use super::email::Email;
 /// only the copy is Olhar AI (card #76). One constant, so the two never drift apart in a string
 /// literal someone forgot.
 const PRODUCT: &str = "Olhar AI";
+/// Origin for images referenced by email. Overridable so a staging deployment does not hotlink
+/// production, and so the mark follows the app if the domain moves.
+fn asset_base() -> String {
+    std::env::var("APP_ORIGIN")
+        .or_else(|_| std::env::var("WEBAUTHN_RP_ORIGIN"))
+        .ok()
+        .map(|s| s.trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "https://app.olharai.com".to_string())
+}
 
 /// Which language an account email is written in (#167 follow-up).
 ///
@@ -94,41 +104,36 @@ const DANGER: &str = "#b42318"; // --destructive, state only
 
 /// The dot-field mark: one bright focal dot with a ring of six, in hexagonal packing.
 ///
-/// The brand mark — the **eclipse-eye in orbit**, built from HTML boxes.
+/// The brand mark — the real asset, served over HTTPS.
 ///
-/// Email cannot use the `OlharMark` component and cannot use inline SVG: Gmail strips `<svg>`
-/// outright and Outlook's Word engine will not render it. A hosted PNG is worse still — images are
-/// blocked by default in most clients, so the logo would arrive as a broken box in the one position
-/// where the brand should be. So the mark is nested `<div>`s with `border-radius`.
+/// **Why an image, after trying not to.** The first version of this drew the mark from nested
+/// `<div>`s with `border-radius` and absolute positioning, to survive the image blocking most
+/// clients apply by default. It did not survive: clients strip `position:absolute`, so the five
+/// layers that were supposed to overlap stacked vertically instead and arrived as a column of
+/// grey blobs. No arrangement of CSS boxes renders an eclipsed crescent with a pupil and an
+/// orbiting moon — the shape needs real vector art, and inline `<svg>` is stripped by Gmail and
+/// ignored by Outlook's Word engine.
 ///
-/// Geometry is `assets/BRAND.md` scaled from its 120-unit viewBox to 56px (×0.467): orbit r=50
-/// dotted at 30% opacity, moon r=4 on the ring at 45°, disc r=31, eclipsed by a card-coloured
-/// circle r=27 centred at (71,49), pupil r=6 at that same centre.
-///
-/// In Outlook's Word engine `border-radius` is ignored and this degrades to squares in the right
-/// places at the right sizes — still the composition, still monochrome. That is the trade the
-/// previous dot-field mark made too; what changed is that this is the CURRENT identity. The old
-/// seven-dot hexagon was the retired one, and the mark is the first thing a customer sees.
+/// So: the canonical app icon, by URL. That is what every transactional provider does, and it is
+/// the only way the mark in the mail is the SAME artwork as the mark in the product rather than an
+/// approximation that drifts. `alt` carries the brand when images are blocked, and the wordmark
+/// below is real text, so a blocked-image reader still sees OLHAR AI.
 fn brand_mark() -> String {
-    // Absolute positions, in px, inside a 56x56 box. Derived once here rather than inline so the
-    // relationship to the spec stays legible: value = spec_units * 56 / 120.
+    let base = asset_base();
     format!(
-        r#"    <div style="width:56px;height:56px;position:relative;margin:0 auto 14px;">
-      <div style="position:absolute;left:4px;top:4px;width:43px;height:43px;border:2px dotted {INK};border-radius:50%;opacity:0.30;"></div>
-      <div style="position:absolute;left:42px;top:10px;width:4px;height:4px;background:{INK};border-radius:50%;"></div>
-      <div style="position:absolute;left:14px;top:14px;width:29px;height:29px;background:{INK};border-radius:50%;"></div>
-      <div style="position:absolute;left:20px;top:11px;width:25px;height:25px;background:#ffffff;border-radius:50%;"></div>
-      <div style="position:absolute;left:30px;top:20px;width:6px;height:6px;background:{INK};border-radius:50%;"></div>
+        r#"    <div style="text-align:center;margin:0 0 14px;">
+      <img src="{base}/icon-192.png" width="56" height="56" alt="Olhar AI"
+           style="width:56px;height:56px;border-radius:13px;display:inline-block;border:0;outline:none;text-decoration:none;" />
     </div>"#
     )
 }
 
 /// The wordmark: **OLHAR AI**, Sora 600, uppercase, 0.16em tracking (`assets/BRAND.md` § Typography).
 ///
-/// Text, never an image — it renders in every client including the ones that block images, and the
-/// letterforms are the part of the lockup that survives. Sora is named first for the clients that
-/// honour web fonts; everywhere else the uppercase + tracking still reads as the wordmark rather
-/// than as body copy, which is why the treatment matters more than the face.
+/// Text, never an image — it renders in every client including the ones that block images, and it
+/// is what keeps the header legible when the mark above does not load. Sora is named first for the
+/// clients that honour web fonts; everywhere else the uppercase + tracking still reads as the
+/// wordmark rather than as body copy, which is why the treatment matters more than the face.
 fn wordmark() -> String {
     format!(
         r#"    <div style="text-align:center;font-family:'Sora','Helvetica Neue',Helvetica,Arial,sans-serif;font-weight:600;font-size:15px;letter-spacing:0.16em;text-transform:uppercase;color:{INK};margin:0 0 30px;">OLHAR AI</div>"#
@@ -448,42 +453,55 @@ mod tests {
         }
     }
 
-    /// Email blocks images and drops `<style>`. Anything external is a broken box in the reader's
-    /// client, so the rule is enforced rather than remembered.
+    /// Email HTML gets ONE external asset — the logo — and nothing else.
+    ///
+    /// `<style>`, `<link>`, `background-image` and `@font-face` are still banned outright: clients
+    /// strip them, and anything that depends on them is broken before it is read. The logo is the
+    /// deliberate exception, because the mark cannot be drawn in CSS boxes (an earlier attempt
+    /// arrived as a column of grey blobs when the client stripped `position:absolute`) and inline
+    /// `<svg>` is removed by Gmail. It is allowed exactly once, over HTTPS, with `alt` text.
     #[test]
-    fn no_external_assets_and_no_style_block() {
+    fn the_only_external_asset_is_the_logo() {
         for e in all() {
-            let html = e.html.unwrap_or_default();
-            for banned in ["<img", "src=", "<style", "<link", "background-image", "@font-face"] {
+            let html = e.html.clone().unwrap_or_default();
+            for banned in ["<style", "<link", "background-image", "@font-face"] {
                 assert!(!html.contains(banned), "{banned:?} must not appear in email html");
             }
+            assert_eq!(
+                html.matches("<img").count(),
+                1,
+                "exactly one image — the logo — is allowed"
+            );
+            assert_eq!(html.matches("src=").count(), 1, "no other external source");
+            assert!(
+                html.contains("src=\"https://"),
+                "the logo must load over HTTPS"
+            );
+            assert!(
+                html.contains("alt=\"Olhar AI\""),
+                "a blocked image must still say who sent this"
+            );
         }
     }
 
-    /// The identity has to survive a medium with no components. Asserts the CURRENT mark (the
-    /// eclipse-eye), not the retired dot-field — this test previously passed against seven dots
-    /// long after the brand had moved on, which is exactly how a stale logo reaches customers.
+    /// The mark must be the REAL artwork, not an approximation.
+    ///
+    /// Two previous versions of this test passed against the wrong logo: one asserted seven dots
+    /// long after the dot-field was retired, and one asserted a CSS construction that rendered as
+    /// grey blobs in a real client. Both were green. So this asserts the thing that cannot drift —
+    /// that the mail points at the same file the product ships as its icon.
     #[test]
-    fn the_eclipse_eye_lockup_is_present() {
+    fn the_mark_is_the_shipped_app_icon() {
         for e in all() {
-            let html = e.html.unwrap_or_default();
-            // orbit + moon + disc + eclipse cut + pupil
-            assert_eq!(
-                html.matches("border-radius:50%").count(),
-                5,
-                "the mark is orbit, moon, disc, eclipse cut and pupil"
+            let html = e.html.clone().unwrap_or_default();
+            assert!(
+                html.contains("/icon-192.png"),
+                "the mark must be the app icon the product actually ships"
             );
             assert!(
-                html.contains("border:2px dotted"),
-                "the orbit ring must be dotted"
-            );
-            assert!(
-                html.contains("opacity:0.30"),
-                "the orbit sits at 30% opacity per BRAND.md"
-            );
-            assert!(
-                html.contains("background:#ffffff;border-radius:50%"),
-                "the eclipse is cut with a card-coloured circle, not a gradient"
+                html.contains("width=\"56\"") && html.contains("height=\"56\""),
+                "width/height attributes are required — Outlook ignores CSS sizing and will \
+                 otherwise render the source at 192px"
             );
         }
     }
