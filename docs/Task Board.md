@@ -35,8 +35,6 @@ kanban-plugin: board
 
 - [ ] #170 Runner hangs pulling any image it does not already have
 	  - Plan: [[self-hosted-runners]]
-- [ ] #167 Terms of Service + Privacy Policy + consent at signup
-	  - Plan: [[launch-readiness-selfserve]]
 - [ ] #169 Windows self-hosted runner + release:edge-windows
 	  - Plan: [[self-hosted-runners]]
 - [ ] #160 Tenant isolation by construction — row-level security
@@ -119,6 +117,8 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #167 Terms of Service + Privacy Policy + consent at signup
+	  - Plan: [[launch-readiness-selfserve]]
 - [ ] #148 Security plan §0 — rotate the exposed secrets + remove the demo admin
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #151 Security plan §1.8 — scoped media tokens, get JWTs out of query strings
