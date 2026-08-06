@@ -47,8 +47,6 @@ kanban-plugin: board
 	  - Plan: [[unified-node-value-store]]
 - [ ] #95 Graph instances — per-run context + live instance view
 	  - Plan: [[workflow-graph-instances]]
-- [ ] #17 Face recognition: DetectFaces node + live-feed triggers
-	  - Plan: [[face-recognition-next-steps]]
 - [ ] #20 GetCameraRoom node — look up room name from a camera entity
 	  - Plan: [[get-camera-room]]
 - [ ] #80 Windows edge — installer, service, self-update
@@ -101,18 +99,12 @@ kanban-plugin: board
 	  - Plan: [[workflow-schedule-trigger]]
 - [ ] #121 Retire local builds — full CI/CD (build + host on GitHub)
 	  - Plan: [[retire-local-builds-ci]]
-- [ ] #172 Default face quality gate — wire into the seeded template + measured thresholds
-	  - Plan: [[face-quality-gate-upstream]]
-- [ ] #123 Recognition scoring — per-person template + margin test
-	  - Plan: [[face-recognition-per-person-scoring]]
-- [ ] #128 Similarity thresholds — per-tenant/camera calibration
-	  - Plan: [[face-threshold-calibration]]
 
 
 ## In Progress
 
-- [ ] #124 Face clustering — kill single-link chaining
-	  - Plan: [[face-clustering-chaining-fix]]
+- [ ] #174 Faces — complete the pipeline
+	  - Plan: [[faces-completion]]
 - [ ] #160 Tenant isolation by construction — row-level security
 	  - Plan: [[tenant-isolation-rls]]
 - [ ] #167 Terms of Service + Privacy Policy + consent at signup
@@ -121,12 +113,12 @@ kanban-plugin: board
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #151 Security plan §1.8 — scoped media tokens, get JWTs out of query strings
 	  - Plan: [[security-hardening-remainder]]
-- [ ] #120 Face pipeline on primary (HD) stream — GPU decode + per-tenant selector
-	  - Plan: [[face-pipeline-hd-stream]]
 
 
 ## Review
 
+- [ ] #123 Recognition scoring — per-person template + margin test
+	  - Plan: [[face-recognition-per-person-scoring]]
 - [ ] #154 Security hardening PRs 1–5 — landed, pending prod verification
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #83 Windows installer — signed .exe
@@ -137,6 +129,8 @@ kanban-plugin: board
 
 **Complete**
 
+- [x] #124 Face clustering — kill single-link chaining
+	  - Plan: [[face-clustering-chaining-fix]]
 - [x] #173 Services connect to Postgres as a superuser (RCE reach on the DB host)
 	  - Plan: [[db-superuser-privilege]]
 - [x] #171 Hollow deploy — a merge can skip every build job and still report success
