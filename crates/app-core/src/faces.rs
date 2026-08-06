@@ -433,9 +433,55 @@ fn load_faces(
     .collect()
 }
 
-/// Single-link connected components (union-find) over faces within cosine distance `eps`.
+/// How many nearest neighbours each face considers when deciding who it is connected to (#124).
+const KNN_K: usize = 10;
+/// How many neighbours two faces must have IN COMMON before they are linked (#124).
+const MIN_SHARED: usize = 3;
+/// What fraction of a face's neighbour PAIRS must themselves be within `eps` for that face to be
+/// allowed to connect others (#124).
+///
+/// This is the anti-chaining test. A face inside one identity has a neighbourhood that is mutually
+/// close — everyone there looks like everyone else. A face sitting between two people has a
+/// neighbourhood containing members of both, and those members are far from *each other*. Below
+/// this fraction the face is treated as ambiguous: it can still be clustered, but it may not act as
+/// a bridge.
+const MIN_COHERENCE: f32 = 0.5;
+
+/// Group faces into identities using **shared-nearest-neighbour linking with a coherence gate**
+/// (#124).
+///
+/// ## Why not single-link
+///
+/// Plain single-link connects any two faces within `eps` and takes connected components, so one
+/// ambiguous face touching two people merges both. The merge is transitive, so a chain of faces
+/// each within `eps` of the next drags together identities that are nowhere near each other.
+/// Changing `eps` cannot fix it — the problem is the linkage rule, not the threshold.
+///
+/// ## The rule
+///
+/// Two faces are linked when all four hold:
+///
+/// 1. they are within `eps`;
+/// 2. each is in the other's `KNN_K` nearest — **mutual**, so a hub does not point back at
+///    everything;
+/// 3. their neighbour sets overlap by at least `MIN_SHARED` — two faces of one person keep the same
+///    company;
+/// 4. **both are coherent** — each one's own neighbourhood is mutually close (`MIN_COHERENCE`).
+///
+/// Rule 4 is what actually stops chaining, and rules 2–3 alone do not: a bridge's neighbour list
+/// contains a whole identity, so it *shares* plenty of neighbours with that side and links happily.
+/// What distinguishes it is that its neighbours are far from each other. Requiring coherence at
+/// **both** ends isolates the bridge rather than letting it weld two people together.
+///
+/// Still O(n²) in distance computations, bounded by [`MAX_CLUSTER_N`]. Sourcing neighbours from the
+/// HNSW index — which is what removes that cap — is the remaining half of #124 and is not done
+/// here; this is about the linkage rule being correct, not about scale.
 fn build_groups(items: &[(Face, Vec<f32>)], eps: f32) -> Vec<Vec<usize>> {
     let n = items.len();
+    let neighbours = knn_within(items, eps, KNN_K);
+    let coherent: Vec<bool> = (0..n)
+        .map(|i| coherence(items, &neighbours[i], eps) >= MIN_COHERENCE)
+        .collect();
     let mut parent: Vec<usize> = (0..n).collect();
     fn find(parent: &mut [usize], mut i: usize) -> usize {
         while parent[i] != i {
@@ -445,12 +491,22 @@ fn build_groups(items: &[(Face, Vec<f32>)], eps: f32) -> Vec<Vec<usize>> {
         i
     }
     for i in 0..n {
-        for j in (i + 1)..n {
-            if cosine_distance(&items[i].1, &items[j].1) <= eps {
-                let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
-                if ri != rj {
-                    parent[ri] = rj;
-                }
+        if !coherent[i] {
+            continue;
+        }
+        for &j in &neighbours[i] {
+            if j <= i || !coherent[j] {
+                continue;
+            }
+            if !neighbours[j].contains(&i) {
+                continue; // not mutual
+            }
+            if shared_count(&neighbours[i], &neighbours[j]) < MIN_SHARED {
+                continue; // close, but keeps different company
+            }
+            let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
+            if ri != rj {
+                parent[ri] = rj;
             }
         }
     }
@@ -460,6 +516,47 @@ fn build_groups(items: &[(Face, Vec<f32>)], eps: f32) -> Vec<Vec<usize>> {
         groups.entry(r).or_default().push(i);
     }
     groups.into_values().collect()
+}
+
+/// Fraction of a neighbourhood's own pairs that are within `eps` of each other. 1.0 when everyone
+/// in it looks like everyone else; low when it spans two unrelated groups. Fewer than two
+/// neighbours has no pairs to judge, so it counts as coherent.
+fn coherence(items: &[(Face, Vec<f32>)], nb: &[usize], eps: f32) -> f32 {
+    if nb.len() < 2 {
+        return 1.0;
+    }
+    let (mut close, mut total) = (0usize, 0usize);
+    for a in 0..nb.len() {
+        for b in (a + 1)..nb.len() {
+            total += 1;
+            if cosine_distance(&items[nb[a]].1, &items[nb[b]].1) <= eps {
+                close += 1;
+            }
+        }
+    }
+    close as f32 / total as f32
+}
+
+/// Each face's `k` nearest neighbours that are also within `eps`, nearest first.
+fn knn_within(items: &[(Face, Vec<f32>)], eps: f32, k: usize) -> Vec<Vec<usize>> {
+    let n = items.len();
+    (0..n)
+        .map(|i| {
+            let mut d: Vec<(f32, usize)> = (0..n)
+                .filter(|&j| j != i)
+                .map(|j| (cosine_distance(&items[i].1, &items[j].1), j))
+                .filter(|(dist, _)| *dist <= eps)
+                .collect();
+            d.sort_by(|a, b| a.0.total_cmp(&b.0));
+            d.truncate(k);
+            d.into_iter().map(|(_, j)| j).collect()
+        })
+        .collect()
+}
+
+/// How many entries two neighbour lists have in common.
+fn shared_count(a: &[usize], b: &[usize]) -> usize {
+    a.iter().filter(|x| b.contains(x)).count()
 }
 
 /// Turn index-groups into cluster cores (representative, centroid, suggestion), largest first.
@@ -1143,4 +1240,113 @@ pub fn delete(db: &Db, tenant_id: Uuid, ids: &[String]) -> Result<Vec<String>, S
             .flatten()
             .collect())
     })
+}
+
+#[cfg(test)]
+mod clustering_tests {
+    use super::*;
+
+    fn face(id: &str) -> Face {
+        Face {
+            id: id.to_string(),
+            person_id: None,
+            image_key: None,
+            camera: None,
+            confidence: 90.0,
+            face_width: 100,
+            source: "test".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    /// A unit vector in the plane spanned by two axes, at `deg` degrees. Lets a test place faces at
+    /// controlled cosine distances: distance = 1 - cos(angle between them).
+    fn at(deg: f32) -> Vec<f32> {
+        let r = deg.to_radians();
+        let mut v = vec![0.0f32; 8];
+        v[0] = r.cos();
+        v[1] = r.sin();
+        v
+    }
+
+    fn items(spec: &[(&str, f32)]) -> Vec<(Face, Vec<f32>)> {
+        spec.iter().map(|(id, d)| (face(id), at(*d))).collect()
+    }
+
+    fn group_of<'a>(groups: &'a [Vec<usize>], idx: usize) -> &'a Vec<usize> {
+        groups.iter().find(|g| g.contains(&idx)).expect("indexed face is in some group")
+    }
+
+    /// The bug this card exists for. Two identities that are genuinely far apart, plus ONE
+    /// ambiguous face sitting between them and within `eps` of both.
+    ///
+    /// Geometry matters here and is easy to get wrong: cosine distance is `1 - cos(theta)`, so at
+    /// `eps = 0.55` two faces are only "far apart" beyond ~63 degrees. A first version of this test
+    /// placed the identities 40 degrees apart — 0.234 cosine — so they linked DIRECTLY and the
+    /// bridge proved nothing. A at 0 degrees and B at 90 (distance 1.0) are properly separate; the
+    /// bridge at 45 is 0.29 from each, so it can reach both.
+    #[test]
+    fn a_bridge_face_does_not_weld_two_identities_together() {
+        let mut spec: Vec<(String, f32)> = Vec::new();
+        for i in 0..6 {
+            spec.push((format!("A{i}"), i as f32 * 0.5)); // identity A, tight around 0 degrees
+        }
+        for i in 0..6 {
+            spec.push((format!("B{i}"), 90.0 + i as f32 * 0.5)); // identity B, tight around 90
+        }
+        spec.push(("BRIDGE".into(), 45.0)); // within eps of BOTH sides
+        let spec_refs: Vec<(&str, f32)> = spec.iter().map(|(a, b)| (a.as_str(), *b)).collect();
+        let it = items(&spec_refs);
+
+        // Sanity: the setup really is the chaining case — the bridge reaches both sides, and the
+        // sides do not reach each other. Without this the test could pass for the wrong reason.
+        let d = |i: usize, j: usize| cosine_distance(&it[i].1, &it[j].1);
+        assert!(d(12, 0) <= 0.55 && d(12, 6) <= 0.55, "bridge must reach both identities");
+        assert!(d(0, 6) > 0.55, "the two identities must not be directly linked");
+
+        let groups = build_groups(&it, 0.55);
+        assert!(
+            !group_of(&groups, 0).contains(&6),
+            "identities A and B were merged — the bridge still welds them: {groups:?}"
+        );
+    }
+
+    /// The other half: a real identity must still cluster. A fix that splits everything would pass
+    /// the test above and be useless.
+    #[test]
+    fn one_identity_still_clusters_together() {
+        let spec: Vec<(String, f32)> = (0..8).map(|i| (format!("A{i}"), i as f32 * 0.4)).collect();
+        let spec_refs: Vec<(&str, f32)> = spec.iter().map(|(a, b)| (a.as_str(), *b)).collect();
+        let it = items(&spec_refs);
+        let groups = build_groups(&it, 0.55);
+        assert_eq!(
+            group_of(&groups, 0).len(),
+            8,
+            "a single tight identity was fragmented: {groups:?}"
+        );
+    }
+
+    /// Two identities far apart must stay apart with no bridge present either.
+    #[test]
+    fn distant_identities_stay_separate() {
+        let mut spec: Vec<(String, f32)> = Vec::new();
+        for i in 0..5 { spec.push((format!("A{i}"), i as f32 * 0.4)); }
+        for i in 0..5 { spec.push((format!("B{i}"), 80.0 + i as f32 * 0.4)); }
+        let spec_refs: Vec<(&str, f32)> = spec.iter().map(|(a, b)| (a.as_str(), *b)).collect();
+        let groups = build_groups(&items(&spec_refs), 0.55);
+        assert!(!group_of(&groups, 0).contains(&5), "distant identities merged: {groups:?}");
+    }
+
+    /// A lone face is its own cluster, not lost.
+    #[test]
+    fn a_singleton_survives_as_its_own_group() {
+        let groups = build_groups(&items(&[("only", 0.0)]), 0.55);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0], vec![0]);
+    }
+
+    #[test]
+    fn empty_input_yields_no_groups() {
+        assert!(build_groups(&[], 0.55).is_empty());
+    }
 }

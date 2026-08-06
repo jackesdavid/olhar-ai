@@ -105,14 +105,14 @@ kanban-plugin: board
 	  - Plan: [[face-quality-gate-upstream]]
 - [ ] #123 Recognition scoring — per-person template + margin test
 	  - Plan: [[face-recognition-per-person-scoring]]
-- [ ] #124 Face clustering — kill single-link chaining
-	  - Plan: [[face-clustering-chaining-fix]]
 - [ ] #128 Similarity thresholds — per-tenant/camera calibration
 	  - Plan: [[face-threshold-calibration]]
 
 
 ## In Progress
 
+- [ ] #124 Face clustering — kill single-link chaining
+	  - Plan: [[face-clustering-chaining-fix]]
 - [ ] #160 Tenant isolation by construction — row-level security
 	  - Plan: [[tenant-isolation-rls]]
 - [ ] #167 Terms of Service + Privacy Policy + consent at signup
