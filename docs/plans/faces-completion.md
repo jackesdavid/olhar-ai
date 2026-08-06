@@ -93,6 +93,19 @@ sidecar upgrade that contradicts [[face-compute-stays-cpu]] the same way step 1 
 **Read it against the shipped code before doing anything.** Most of it may already exist. Whatever
 genuinely remains is probably small.
 
+## Step 6.5 — One Settings tab for everything face-related
+
+The face knobs are accumulating in different places: the per-tenant capture stream (step 1), the
+gate thresholds (step 4), the similarity/clustering thresholds (step 5). Scattered across Settings
+they read as unrelated switches, and nobody finds the one they need.
+
+**All of them under a single "Faces" tab** in Settings: capture stream, quality gate, similarity and
+clustering thresholds, and a link through to the enrolled people. One place a customer goes to tune
+recognition.
+
+The backend already supports it — `GET/PUT /settings` from step 1 is a merging JSONB blob, so each
+new knob is a key, not a new endpoint or a new table.
+
 ## Step 7 — Write the reference
 
 `docs/ref/face-recognition.md`: one source-of-truth document — detection, quality signals, the gate,
