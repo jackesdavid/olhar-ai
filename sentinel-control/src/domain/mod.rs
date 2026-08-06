@@ -24,6 +24,7 @@ mod map;
 mod persons;
 mod push_devices;
 pub(crate) mod recordings;
+mod settings;
 mod tuya;
 mod workflows;
 
@@ -49,6 +50,7 @@ pub fn router() -> Router<AppState> {
         .merge(recordings::router())
         .merge(jobs::router())
         .merge(events::router())
+        .merge(settings::router())
         .merge(tuya::router())
 }
 

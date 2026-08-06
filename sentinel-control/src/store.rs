@@ -510,16 +510,78 @@ pub async fn box_host_for_tenant(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result
 // ---- recording config (per box) --------------------------------------------
 
 /// The recording_config jsonb for a specific box, resolved by its token hash.
+/// The recording config an edge box should run with, **with the tenant's preferences applied**.
+///
+/// `recording_config` is per box, which is right for things a box owns (its disk quota, its
+/// cameras). `face_capture_stream` is not one of those: it is a product choice the customer makes
+/// once and expects to hold across every appliance they install (#174 step 1).
+///
+/// So the tenant value is overlaid here, server-side. **The edge is unchanged** — it keeps reading
+/// `face_capture_stream` out of the same JSON; only who decides it moved. Doing it in the edge
+/// instead would gate a UI preference on an appliance release reaching every box in the field.
+///
+/// A tenant that has never set it keeps whatever the box already had, so this cannot change
+/// behaviour for anyone until they choose.
 pub async fn recording_config_by_token(
     pool: &PgPool,
     token_hash: &str,
 ) -> sqlx::Result<Option<serde_json::Value>> {
+    let row: Option<(serde_json::Value, Option<serde_json::Value>)> = sqlx::query_as(
+        "SELECT b.recording_config, ts.settings \
+           FROM tenant_boxes b \
+           LEFT JOIN tenant_settings ts ON ts.tenant_id = b.tenant_id \
+          WHERE b.token_hash = $1",
+    )
+    .bind(token_hash)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(mut cfg, settings)| {
+        let choice = settings
+            .as_ref()
+            .and_then(|s| s.get("face_capture_stream"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        if let (Some(choice), Some(obj)) = (choice, cfg.as_object_mut()) {
+            obj.insert(
+                "face_capture_stream".to_string(),
+                serde_json::Value::String(choice),
+            );
+        }
+        cfg
+    }))
+}
+
+/// Read a tenant's settings blob. `{}` when it has never set any — callers treat absent keys as
+/// "not chosen", never as a default value, so an unset tenant keeps existing behaviour.
+pub async fn tenant_settings(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<serde_json::Value> {
     let row: Option<(serde_json::Value,)> =
-        sqlx::query_as("SELECT recording_config FROM tenant_boxes WHERE token_hash = $1")
-            .bind(token_hash)
+        sqlx::query_as("SELECT settings FROM tenant_settings WHERE tenant_id = $1")
+            .bind(tenant_id)
             .fetch_optional(pool)
             .await?;
-    Ok(row.map(|(v,)| v))
+    Ok(row.map(|(v,)| v).unwrap_or_else(|| serde_json::json!({})))
+}
+
+/// Merge `patch` into a tenant's settings, creating the row if needed. Merge rather than replace so
+/// two independent preferences cannot clobber each other on concurrent writes.
+pub async fn set_tenant_settings(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    patch: serde_json::Value,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO tenant_settings (tenant_id, settings, updated_at) \
+         VALUES ($1, $2, $3) \
+         ON CONFLICT (tenant_id) DO UPDATE \
+            SET settings = tenant_settings.settings || EXCLUDED.settings, \
+                updated_at = EXCLUDED.updated_at",
+    )
+    .bind(tenant_id)
+    .bind(patch)
+    .bind(app_core::timeutil::now_rfc3339())
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 pub async fn set_recording_config(
