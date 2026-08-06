@@ -235,6 +235,71 @@ async fn tune_hnsw(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, candidates: i
     }
 }
 
+/// One identity scored across ALL of its embeddings in the candidate set (#123).
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct PersonScore {
+    /// Person id for a labeled identity, else the stored face's id (an unknown).
+    pub reference: String,
+    /// Display name, or `None` for an unknown stored face.
+    pub label: Option<String>,
+    /// Closest single embedding of this identity. The old behaviour, kept as one signal.
+    pub best: f32,
+    /// Mean of this identity's three nearest embeddings — or fewer if it has fewer.
+    ///
+    /// The reason to carry both: `best` is what one lucky crop produces, `mean_top3` is what a
+    /// consistent identity produces. A person who is genuinely present usually has several close
+    /// embeddings; a false accept usually has exactly one.
+    pub mean_top3: f32,
+    /// How many of this identity's embeddings landed in the candidate set.
+    pub n: i32,
+    /// `"enrolled"` or `"stored"`, taken from this identity's closest embedding.
+    pub source: String,
+}
+
+/// Score each IDENTITY across all of its embeddings, closest identity first (≤ `top_n`) (#123).
+///
+/// **Why this exists.** [`recognize`] returns the nearest *rows*, so the decision is made by a
+/// single embedding: a person with many enrolled crops can win on one outlier, and one bad
+/// enrollment crop can make a true person lose. Aggregating per identity means a match has to be
+/// consistently close, not luckily close once.
+///
+/// Built directly on #127's shape: the two per-gallery CTEs are already an index-served,
+/// over-fetched candidate set, and this groups over exactly that set. Before #127 there was no
+/// candidate set to group over — the query returned a flat top-k — which is why this card waited.
+///
+/// `row_number()` ranks each identity's own embeddings so `mean_top3` averages its three nearest
+/// rather than everything that happened to be retrieved. Empty on error.
+pub fn recognize_people(db: &Db, tenant_id: Uuid, embedding: &[f32], top_n: i64) -> Vec<PersonScore> {
+    let pool = db.pool();
+    let literal = vector_literal(embedding);
+    let candidates = candidate_pool(top_n);
+    db.block(async move {
+        let result: Result<Vec<PersonScore>, sqlx::Error> = async {
+            let mut tx = pool.begin().await?;
+            sqlx::query("SET LOCAL statement_timeout = 15000")
+                .execute(&mut *tx)
+                .await?;
+            tune_hnsw(&mut tx, candidates).await;
+            let rows = sqlx::query_as::<_, PersonScore>(
+                "WITH cand AS (                    ( SELECT pe.person_id AS reference, pe.embedding AS emb, 'enrolled' AS source                        FROM person_embeddings pe                       WHERE pe.approved AND pe.tenant_id = $2                       ORDER BY pe.embedding <=> $1::vector                       LIMIT $4 )                    UNION ALL                    ( SELECT COALESCE(f.person_id, f.id::text) AS reference, f.embedding AS emb,                             'stored' AS source                        FROM faces f                       WHERE f.tenant_id = $2 AND NOT f.ignored                       ORDER BY f.embedding <=> $1::vector                       LIMIT $4 )                  ), scored AS (                    SELECT reference, source, (emb <=> $1::vector)::float4 AS distance,                           row_number() OVER (PARTITION BY reference ORDER BY emb <=> $1::vector) AS rn                      FROM cand                  )                  SELECT s.reference, p.name AS label,                         MIN(s.distance)::float4 AS best,                         (AVG(s.distance) FILTER (WHERE s.rn <= 3))::float4 AS mean_top3,                         COUNT(*)::int4 AS n,                         (ARRAY_AGG(s.source ORDER BY s.distance))[1] AS source                    FROM scored s                    LEFT JOIN persons p ON p.tenant_id = $2 AND p.id = s.reference                   GROUP BY s.reference, p.name                   ORDER BY MIN(s.distance)                   LIMIT $3",
+            )
+            .bind(&literal)
+            .bind(tenant_id)
+            .bind(top_n)
+            .bind(candidates)
+            .fetch_all(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            Ok(rows)
+        }
+        .await;
+        result.unwrap_or_else(|e| {
+            log::error!("faces::recognize_people query failed: {e}");
+            Vec::new()
+        })
+    })
+}
+
 /// Nearest cosine distance to any already-stored face (for `StoreFace` dedup). `None` on empty/error.
 ///
 /// Runs on EVERY `StoreFace`, so it was the hottest of the two scans. `ORDER BY` is the uncast

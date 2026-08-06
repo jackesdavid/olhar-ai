@@ -925,12 +925,18 @@ const FACE_EMBEDDING_OUT: [Port; 3] = [
     p("ok", PortType::Bool, false),
 ];
 const RECOGNIZE_FACE_IN: [Port; 1] = [p("embedding", PortType::Embedding, true)];
-const RECOGNIZE_FACE_OUT: [Port; 5] = [
+const RECOGNIZE_FACE_OUT: [Port; 9] = [
     p("person", PortType::Text, false), // best match's name ("" if none / unknown)
     p("person_id", PortType::Text, false), // best match's person id (wire → StoreFace.label)
-    p("confidence", PortType::Num, false), // percent 0..100 of the best match
-    p("matches", PortType::Dictionary, false), // top-K: person/label → score
-    p("found", PortType::Bool, false),  // a match within max_distance
+    p("confidence", PortType::Num, false), // percent 0..100 of the best single embedding
+    p("matches", PortType::Dictionary, false), // top-K identities: person/label → score
+    p("found", PortType::Bool, false),  // a labeled match within max_distance AND unambiguous
+    // #123 — per-identity scoring, so a graph can branch on HOW the match was won, not just that
+    // it was. `confidence` is one lucky crop; `consistency` is the whole identity agreeing.
+    p("consistency", PortType::Num, false), // percent from the mean of the identity's 3 nearest
+    p("samples", PortType::Num, false), // how many of that identity's embeddings were candidates
+    p("margin", PortType::Num, false),  // percentage points clear of the next DIFFERENT identity
+    p("ambiguous", PortType::Bool, false), // runner-up within `margin` — found is forced false
 ];
 const STORE_FACE_IN: [Port; 11] = [
     p("image", PortType::Image, false),
