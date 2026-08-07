@@ -52,8 +52,15 @@ pub struct AppState {
     pub http: reqwest::Client,
     /// Camera credentials in transit: the web sets them, the edge collects them on its
     /// next config pull, then they're discarded. Keyed by (tenant_id, camera ip) →
-    /// (username, password, set-at). **Never persisted** — camera creds never touch the DB.
-    pub pending_creds: Arc<Mutex<HashMap<(uuid::Uuid, String), (String, String, Instant)>>>,
+    /// (username, password, explicit RTSP URL, set-at). **Never persisted** — neither camera
+    /// credentials nor RTSP URLs touch the cloud DB.
+    ///
+    /// The URL is `Some` only for a camera the user configured BY HAND (#175): a source that does
+    /// not speak ONVIF, so the edge has nothing to resolve from. It rides the same one-shot,
+    /// memory-only channel as the password for the same reason — an RTSP URL routinely embeds
+    /// credentials, so persisting it would persist them.
+    pub pending_creds:
+        Arc<Mutex<HashMap<(uuid::Uuid, String), (String, String, Option<String>, Instant)>>>,
     /// Per-tenant config-change notifiers — the edge long-polls /config/cameras and is
     /// woken the instant the web changes a camera (so edits apply in ~1s, not on a timer).
     pub notifiers: Arc<Mutex<HashMap<uuid::Uuid, Arc<tokio::sync::Notify>>>>,

@@ -94,6 +94,11 @@ async fn streaming(
 struct CredsReq {
     username: String,
     password: String,
+    /// Explicit RTSP URL for a source that does not speak ONVIF (#175) — a phone running an
+    /// RTSP app, or a camera whose ONVIF is broken. Absent for the normal discovered path, where
+    /// the edge resolves the URL itself.
+    #[serde(default)]
+    rtsp_url: Option<String>,
 }
 
 /// Stage camera credentials for the tenant's edge to collect on its next config pull.
@@ -106,9 +111,13 @@ async fn set_credentials(
 ) -> Result<StatusCode, ApiErr> {
     auth::require(&c, "devices.write")?;
     let tid = tenant_of(&c)?;
+    let rtsp_url = b
+        .rtsp_url
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty());
     st.pending_creds.lock().unwrap().insert(
         (tid, ip.clone()),
-        (b.username, b.password, std::time::Instant::now()),
+        (b.username, b.password, rtsp_url, std::time::Instant::now()),
     );
     // Mark configured (non-sensitive flag for the UI) + wake the edge's long-poll now.
     let _ = store::mark_configured(&st.pool, tid, &ip).await;
