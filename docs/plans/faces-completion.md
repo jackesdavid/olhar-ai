@@ -99,13 +99,44 @@ layout, or to compute it as a `work_jobs` job. Not decided here.
 
 ## Step 3 — Capture volume (the precondition for steps 4 and 5)
 
-**This is the real blocker, and it is not code.** Production holds ~132 faces, and the quality
-columns are populated only for captures since migration 0086 — fewer still.
+**This is the real blocker, and it is not code.** Production now holds **0** faces (deleted
+deliberately, so the sample starts clean) and the enrolled gallery of 91 embeddings.
 
-Steps 4 and 5 are measurement work. Fitting thresholds on that sample means inventing numbers and
+Steps 4 and 5 are measurement work. Fitting thresholds on a thin sample means inventing numbers and
 calling them measured, which is exactly what #126 refused to do.
 
-Options, in preference order:
+### Two prerequisites found by inspecting production, not by planning
+
+Enabling a graph was assumed to be the whole of it. It is not.
+
+**1. The box must be on edge 0.5.73 — it is on 0.5.72.** `blur`, `yaw` and `pitch` are computed ON
+THE EDGE (`sentinel-edge/src/face.rs`), because that is the only place still holding the decoded
+frame; the cloud receives a JPEG that has already been through a lossy encode, which is precisely
+the detail loss a sharpness metric misreads. `git show v0.5.72:sentinel-edge/src/face.rs` contains
+**zero** references to `face_quality` — those shipped in 0.5.73.
+
+So capturing on 0.5.72 produces faces with NULL quality columns. Days of capture, then the discovery
+that none of it can calibrate anything. **Update the box before starting the capture period.**
+
+**2. Face detection emits nothing, and fails silently.** Observed on a live box:
+
+| | |
+|---|---|
+| box | online, seen minutes ago |
+| camera `192.168.0.7` | `probe=streaming`, frame minutes old |
+| motion | 1584 presence events in 24 h |
+| `face_detected` | **0** |
+
+Motion and person detection work abundantly; only faces produce nothing. `face.rs` swallows a
+detector failure into `log::debug!` and returns, so a YuNet model that fails to load is invisible at
+the default level. It could not be diagnosed from the cloud either: `platform_logs` is **empty** —
+the box is not relaying logs at all, which is its own gap.
+
+Whether the 0.5.73 update also fixes this is unknown. Update first, then re-check, and if it is
+still silent, that `log::debug!` should become a warning — a detector that never runs is not a
+debug-level fact.
+
+Options for the capture period itself, in preference order:
 1. run a deliberate capture period on a real camera to build a sample worth fitting against
 2. ship step 4 with a **stated provisional** default, labelled as such, and revisit
 3. do not do steps 4 and 5 yet

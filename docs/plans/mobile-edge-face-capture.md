@@ -43,10 +43,35 @@ Two distinct pieces:
 Capture the same person from a wall camera and from a phone, store both, and compare `blur`,
 `face_width`, `yaw`, `pitch`. If the phone is not clearly better, the rest of this card is optional.
 
+### Phase 0.5 — Stream URL as a source — **SHIPPED** (MR !50)
+
+Phase 0 needs phone captures to compare against, and there is a way to get them that does not
+require Phase 1 at all: **let a camera be added by RTSP URL** instead of by ONVIF discovery. A phone
+running any RTSP app then becomes an ordinary camera, and every metric Phase 0 wants is recorded by
+the same pipeline that records the wall camera's — same detector, same alignment, same columns.
+
+The edge needed **no change**, which is why this was hours rather than weeks:
+
+- `resolve_rtsp` already skips ONVIF when `rtsp_url` is non-empty
+- `probe_device` already prefers a cached URL over resolving one
+- the config-pull carry-forward already preserves a cached URL
+- the IP-change reconcile only touches cameras with an ONVIF id, so a hand-added source is never
+  reset by it
+
+The only missing piece was a way to DELIVER the URL. It rides the existing one-shot, memory-only
+credential channel rather than a new one, because an RTSP URL routinely embeds credentials.
+
+This also works for the edge running ON the phone (#144): it can consume `rtsp://127.0.0.1/…` from
+an app on the same device, with no network hop at all.
+
 ### Phase 1 — Device camera as a source
 Feed `AVFoundation` frames into the existing frame hub. Everything downstream (motion gate, YuNet,
 `face_quality`, the `face_detected` event) should need no change — that is the test of whether the
 integration is in the right place.
+
+Phase 0.5 makes this **optional rather than blocking**. It is still the better product — no second
+app, no URL to copy, no RTSP server draining the battery — but the measurement no longer waits on
+it, so Phase 1 can be judged on product merit instead of urgency.
 
 ### Phase 2 — Enrollment flow
 The obvious first product use: **enroll a person by pointing the phone at them**. Better than
