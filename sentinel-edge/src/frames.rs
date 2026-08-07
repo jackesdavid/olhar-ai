@@ -104,7 +104,7 @@ impl Sub {
     }
 }
 
-/// Spawn the hub manager: every 30s reconcile one source thread per camera that has a resolvable
+/// Spawn the hub manager: every 5s reconcile one source thread per camera that has a resolvable
 /// stream URL, starting new ones and stopping sources whose camera vanished. (Same reconciler shape
 /// the motion watcher had — this replaces `motion::spawn`.)
 pub fn spawn(state: &Arc<AppState>) {
@@ -138,7 +138,14 @@ pub fn spawn(state: &Arc<AppState>) {
                     std::thread::spawn(move || source(st, ip2, stop));
                 }
             }
-            std::thread::sleep(Duration::from_secs(30));
+            // 5s, not 30. The body is a lock and a set comparison — nothing that justifies half a
+            // minute — and the delay is how long a NEWLY ADDED camera waits before anything reads
+            // it. That is invisible on a wall camera and fatal on a phone (#175): the user adds the
+            // device camera, starts capture, watches for ten seconds and sees nothing, because the
+            // hub has not started yet. Worse, it looks healthy while it happens — `last_frame_at`
+            // and the streaming list both read the capture SLOT, which the host app is filling, so
+            // they go green with no hub behind them.
+            std::thread::sleep(Duration::from_secs(5));
         }
     });
 }
@@ -246,6 +253,12 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
             .config
             .face_capture_stream
             .eq_ignore_ascii_case("hd");
+    // Resolve the slot ONCE and read from that same slot below. `ensure` resolves it internally via
+    // `stream_slot`, so passing the raw `hd` to `latest_fresh` was reading a different key than the
+    // one being filled whenever the two disagree — silently, since a missing frame is a skipped
+    // tick, not an error. For a device camera (#175) they disagree exactly when
+    // `face_capture_stream` is "hd": the app fills `ip`, the hub would poll `ip/hd` forever.
+    let read_slot = crate::capture::stream_slot(state, ip, hd);
     // Warm, continuous frames from the supervised persistent decoder (#120).
     crate::capture::ensure(state, ip, hd);
     log::info!(
@@ -271,7 +284,7 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
         // model and try again, never tear the source down.
         // The decoder is the only source. No fresh frame means it is warming or restarting: skip
         // this tick and keep the background model rather than tearing the source down.
-        let jpeg = match crate::capture::latest_fresh(ip, hd, Duration::from_secs(3)) {
+        let jpeg = match crate::capture::latest_fresh(ip, read_slot, Duration::from_secs(3)) {
             Some(j) => (*j).clone(),
             None => {
                 std::thread::sleep(frame_gap);
