@@ -943,6 +943,7 @@ mod camera_rtsp_tests {
             probe_detail: None,
             probe_at: None,
             last_frame_at: None,
+            box_id: None,
         };
         d.rtsp_sub_url = sub.map(str::to_string);
         if creds {

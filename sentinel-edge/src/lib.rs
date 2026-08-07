@@ -14,6 +14,7 @@ mod enroll;
 mod envfile;
 mod face;
 mod frames;
+mod gst_encode;
 mod gst_mse;
 mod gst_mux;
 mod http;

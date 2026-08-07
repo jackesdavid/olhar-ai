@@ -99,9 +99,15 @@ pub fn is_device_camera(state: &crate::state::AppState, ip: &str) -> bool {
 /// source, so sharpness and pose are measured on the same kind of buffer the wall camera's are —
 /// which is what makes a phone-vs-camera comparison mean anything.
 pub fn push_device_frame(ip: &str, jpeg: Vec<u8>) {
+    let at = Instant::now();
+    // Recording first, and only while a ring is actually running (#175). A device camera has no
+    // H264 of its own, so its ring is fed by re-encoding these JPEGs; with no ring there is no
+    // encoder and this is a map lookup, so a phone that is not recording pays nothing.
+    crate::recording::feed_device_frame(ip, &jpeg, at);
+
     let cam = cam_for(ip, false);
     cam.started.store(true, Ordering::SeqCst);
-    *cam.latest.lock().unwrap() = Some((Arc::new(jpeg), Instant::now()));
+    *cam.latest.lock().unwrap() = Some((Arc::new(jpeg), at));
 }
 
 /// Which decoder slot a request should join. Unified never opens a second main-stream session.

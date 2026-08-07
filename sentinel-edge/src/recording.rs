@@ -458,6 +458,66 @@ pub struct RecordingManager {
     dials: Mutex<HashMap<String, String>>,
 }
 
+// ---- device-camera ring (#175) ----------------------------------------------
+//
+// A device camera has no H264 of its own — the host app pushes JPEG, because that is what the frame
+// hub consumes. Recording stores Annex-B access units, so for these cameras the ring is fed by
+// encoding those JPEGs (`gst_encode`), hardware-accelerated where the platform has it.
+//
+// This is the ONLY re-encode in the edge. A wall camera's bytes still reach the file untouched.
+
+fn device_encoders() -> &'static Mutex<HashMap<String, Arc<crate::gst_encode::JpegEncoder>>> {
+    static E: std::sync::OnceLock<Mutex<HashMap<String, Arc<crate::gst_encode::JpegEncoder>>>> =
+        std::sync::OnceLock::new();
+    E.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Hand a device camera's JPEG to its recording encoder, if one is running.
+///
+/// Called from `capture::push_device_frame` on every pushed frame. When no clip and no ring are
+/// active there is no encoder and this is a map lookup — the phone does not pay for an encode it is
+/// not recording.
+pub fn feed_device_frame(ip: &str, jpeg: &[u8], at: std::time::Instant) {
+    let enc = device_encoders().lock().unwrap().get(ip).cloned();
+    if let Some(enc) = enc {
+        enc.push(jpeg, at);
+    }
+}
+
+/// Does this Annex-B access unit contain an IDR slice (H264 nal_unit_type 5)?
+///
+/// The ring needs it to pick a decodable start for pre-roll: beginning a clip on a non-keyframe
+/// produces the black or smeared opening this ring exists to avoid.
+///
+/// Scans for start codes rather than assuming one NAL per buffer — a real AU carries SPS + PPS +
+/// slice concatenated, and the slice is what decides.
+fn annexb_has_idr(data: &[u8]) -> bool {
+    let mut i = 0;
+    while i + 3 < data.len() {
+        let (is_start, hdr) = if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
+            (true, i + 3)
+        } else if i + 4 < data.len()
+            && data[i] == 0
+            && data[i + 1] == 0
+            && data[i + 2] == 0
+            && data[i + 3] == 1
+        {
+            (true, i + 4)
+        } else {
+            (false, 0)
+        };
+        if is_start && hdr < data.len() {
+            if data[hdr] & 0x1f == 5 {
+                return true;
+            }
+            i = hdr;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
 /// Smallest file that can hold actual video. An empty fMP4 — `ftyp` plus a `moov` describing a
 /// track with no samples — measures about 587 bytes, so anything at or below this is a container
 /// with nothing in it, never a short clip.
@@ -520,6 +580,46 @@ impl RecordingManager {
         let mem_ring_t = Arc::clone(&mem_ring);
         let dial = self.dials.lock().unwrap().get(camera_ip).cloned();
 
+        // A device camera (#175) has nothing to dial: the host app pushes JPEG and the encoder
+        // turns it into the Annex-B this ring stores. Same ring, same eviction, same muxer — only
+        // the source of the access units differs, so recording, pre-roll and clip finalisation all
+        // behave exactly as they do for a wall camera.
+        if dial.as_deref().map(crate::capture::is_device_url).unwrap_or(false) {
+            let window = Duration::from_secs(pre_roll_secs.max(1) as u64);
+            let max_frames = (pre_roll_secs as usize) * 33;
+            let ring_for_enc = Arc::clone(&mem_ring);
+            let ip_for_enc = camera_ip.to_string();
+            match crate::gst_encode::JpegEncoder::start(camera_ip, move |f| {
+                push_into_ring(
+                    &ring_for_enc,
+                    &ip_for_enc,
+                    H264Frame {
+                        is_keyframe: annexb_has_idr(&f.bytes),
+                        data: f.bytes,
+                        at: f.at,
+                    },
+                    window,
+                    max_frames,
+                );
+            }) {
+                Ok(enc) => {
+                    device_encoders()
+                        .lock()
+                        .unwrap()
+                        .insert(camera_ip.to_string(), Arc::new(enc));
+                    self.ring_sessions
+                        .lock()
+                        .unwrap()
+                        .insert(camera_ip.to_string(), RingSession { stop_tx, mem_ring });
+                    log::info!(
+                        "ring[{camera_ip}]: started (device camera — JPEG re-encoded to H264, {pre_roll_secs}s pre-roll)"
+                    );
+                }
+                Err(e) => log::error!("ring[{camera_ip}]: no encoder for device camera: {e}"),
+            }
+            return;
+        }
+
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -549,6 +649,10 @@ impl RecordingManager {
         if let Some(rs) = self.ring_sessions.lock().unwrap().remove(camera_ip) {
             let _ = rs.stop_tx.try_send(());
         }
+        // Drop the device-camera encoder with the ring. Its `Drop` tears the GStreamer pipeline
+        // down; leaving it registered would keep a hardware encoder alive on a phone for a camera
+        // nobody is recording, which is battery spent on nothing.
+        device_encoders().lock().unwrap().remove(camera_ip);
     }
 
     /// Stop every ring whose camera is no longer in `keep` — the fix for rings that outlive their
@@ -578,26 +682,6 @@ impl RecordingManager {
         camera_ip: &str,
         requested_pre_roll_secs: u32,
     ) -> Result<(String, bool), String> {
-        // A device camera (#175) has no H264 ANYWHERE. The host app pushes JPEG frames into the
-        // capture slot, while recording collects H264 by dialling the camera over RTSP — there is
-        // nothing here to dial, and `device:front` is not a URL retina can parse.
-        //
-        // Left alone, that failure is silent and produces something worse than an error: the ring
-        // stays empty, the muxer writes ftyp+moov with no samples, and a 587-byte file lands in the
-        // recordings list looking like a clip whose video was lost. Refusing says what is true.
-        //
-        // Making this work means encoding the pushed frames to H264 (GStreamer is linked, so an
-        // appsrc → jpegdec → encoder chain is the shape) or having the host deliver H264 instead of
-        // JPEG. Both are real work and neither is this guard.
-        if let Some(dial) = self.dials.lock().unwrap().get(camera_ip) {
-            if crate::capture::is_device_url(dial) {
-                return Err(format!(
-                    "{camera_ip} is a device camera: it streams JPEG frames from the app, and \
-                     recording needs H264. Recording it is not supported yet."
-                ));
-            }
-        }
-
         {
             let sessions = self.sessions.lock().unwrap();
             if let Some((id, _)) = sessions.iter().find(|(_, s)| s.camera_ip == camera_ip) {
@@ -1042,11 +1126,6 @@ async fn rtsp_stream_once(
     mem_ring: &Arc<Mutex<MemRing>>,
     stop_rx: &std::sync::mpsc::Receiver<()>,
 ) -> Result<(), String> {
-    // A gap larger than this between consecutive frames is a discontinuity (reconnect, freeze),
-    // not a slow stream: at 30fps frames are ~33ms apart, so 2s is ~60 missing frames. On a gap the
-    // ring is stale by definition and gets cleared, so a clip started right after a reconnect never
-    // inherits pre-gap footage.
-    const GAP_RESET: Duration = Duration::from_secs(2);
     let window = Duration::from_secs(pre_roll_secs.max(1) as u64);
     // `retina` REFUSES a URL with inline credentials ("URL must not contain credentials") — they
     // showed up once the ring started dialling the camera directly.
@@ -1108,38 +1187,63 @@ async fn rtsp_stream_once(
             if frame.data.is_empty() {
                 continue;
             }
-            let mut ring = mem_ring.lock().unwrap();
-            // Discontinuity? Everything already in the ring predates a gap — drop it, so pre-roll
-            // can never splice pre-gap frames onto what comes next (#101).
-            if let Some(last) = ring.frames.back() {
-                if frame.at.duration_since(last.at) > GAP_RESET {
-                    log::info!(
-                        "ring-rtsp[{camera_ip}]: {:?} gap — clearing stale pre-roll",
-                        frame.at.duration_since(last.at)
-                    );
-                    ring.frames.clear();
-                }
-            }
-            // Forward to an active recording first (clone), then store in ring.
-            if let Some(tx) = ring.live_sink.as_ref() {
-                let _ = tx.try_send((frame.data.clone(), frame.at)); // non-blocking; drop on full
-            }
-            let now = frame.at;
-            ring.frames.push_back(frame);
-            // Evict by AGE — the ring holds only the last `window` of real footage. A count cap
-            // stays as a hard memory backstop (a high-fps camera can't balloon it).
-            while ring
-                .frames
-                .front()
-                .map(|f| now.duration_since(f.at) > window)
-                .unwrap_or(false)
-            {
-                ring.frames.pop_front();
-            }
-            while ring.frames.len() > max_frames {
-                ring.frames.pop_front();
-            }
+            push_into_ring(&mem_ring, camera_ip, frame, window, max_frames);
         }
+    }
+}
+
+/// Store one access unit in a camera's ring, forwarding it to an active recording first.
+///
+/// Shared verbatim by the RTSP collector and the device-camera encoder (#175). Extracted rather
+/// than duplicated on purpose: the gap reset, the live-sink hand-off and the age eviction are the
+/// rules that make pre-roll correct (#101, #138), and a second copy of them is a second place to
+/// get them subtly wrong.
+/// A gap larger than this between consecutive frames is a discontinuity (reconnect, freeze), not a
+/// slow stream: at 30fps frames are ~33ms apart, so 2s is ~60 missing frames. On a gap the ring is
+/// stale by definition and gets cleared, so a clip started right after a reconnect never inherits
+/// pre-gap footage.
+///
+/// Module scope because both ring producers — the RTSP collector and the device-camera encoder —
+/// must apply the same rule; it lived inside the collector while that was the only one.
+const GAP_RESET: Duration = Duration::from_secs(2);
+
+fn push_into_ring(
+    mem_ring: &Arc<Mutex<MemRing>>,
+    camera_ip: &str,
+    frame: H264Frame,
+    window: Duration,
+    max_frames: usize,
+) {
+    let mut ring = mem_ring.lock().unwrap();
+    // Discontinuity? Everything already in the ring predates a gap — drop it, so pre-roll can never
+    // splice pre-gap frames onto what comes next (#101).
+    if let Some(last) = ring.frames.back() {
+        if frame.at.duration_since(last.at) > GAP_RESET {
+            log::info!(
+                "ring[{camera_ip}]: {:?} gap — clearing stale pre-roll",
+                frame.at.duration_since(last.at)
+            );
+            ring.frames.clear();
+        }
+    }
+    // Forward to an active recording first (clone), then store in ring.
+    if let Some(tx) = ring.live_sink.as_ref() {
+        let _ = tx.try_send((frame.data.clone(), frame.at)); // non-blocking; drop on full
+    }
+    let now = frame.at;
+    ring.frames.push_back(frame);
+    // Evict by AGE — the ring holds only the last `window` of real footage. A count cap stays as a
+    // hard memory backstop (a high-fps camera can't balloon it).
+    while ring
+        .frames
+        .front()
+        .map(|f| now.duration_since(f.at) > window)
+        .unwrap_or(false)
+    {
+        ring.frames.pop_front();
+    }
+    while ring.frames.len() > max_frames {
+        ring.frames.pop_front();
     }
 }
 
