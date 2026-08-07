@@ -97,7 +97,14 @@
   // For when discovery can't reach the camera — most often because the network drops the
   // WS-Discovery multicast, even though the camera itself is perfectly reachable. The user supplies
   // what discovery normally fills in (IP + ONVIF endpoint); the edge resolves the stream identically.
+  //
+  // Two source modes (#175). ONVIF is the normal path: the edge asks the camera where its stream
+  // is. "rtsp" is for a source that has no ONVIF at all — a phone running an RTSP app is the case
+  // that motivated it — where the user supplies the stream URL and there is nothing to resolve.
+  type SourceMode = "onvif" | "rtsp";
   let manualOpen = $state(false);
+  let manualMode = $state<SourceMode>("onvif");
+  let manualRtspUrl = $state("");
   let manualName = $state("");
   let manualIp = $state("");
   let manualPort = $state("2020");
@@ -109,6 +116,8 @@
   let savingManual = $state(false);
 
   function openManual() {
+    manualMode = "onvif";
+    manualRtspUrl = "";
     manualName = "";
     manualIp = "";
     manualPort = "2020";
@@ -120,9 +129,44 @@
     manualOpen = true;
   }
 
-  const manualValid = $derived(
-    manualIp.trim().length > 0 && manualPort.trim().length > 0 && manualUser.trim().length > 0,
-  );
+  /** Host of an `rtsp://` URL, or "" when it is not one. The host doubles as the device key, so a
+   *  stream URL is enough to add a source — the user never types the address twice. */
+  function hostFromRtsp(url: string): string {
+    const raw = url.trim();
+    if (!raw.toLowerCase().startsWith("rtsp://")) return "";
+    try {
+      return new URL(raw).hostname;
+    } catch {
+      return "";
+    }
+  }
+
+  const manualRtspHost = $derived(hostFromRtsp(manualRtspUrl));
+  const isRtspMode = $derived(manualMode === "rtsp");
+
+  function onvifFieldsValid(): boolean {
+    return manualIp.trim().length > 0 && manualPort.trim().length > 0 && manualUser.trim().length > 0;
+  }
+
+  const manualValid = $derived(isRtspMode ? manualRtspHost.length > 0 : onvifFieldsValid());
+  /** What to call the source in progress/proof copy — the typed IP, or the URL's host. */
+  const manualTarget = $derived(isRtspMode ? manualRtspHost : manualIp.trim());
+
+  /** Probe a stream-URL source, allowing for the edge not having collected the URL yet.
+   *
+   *  Staging the URL wakes the edge's config long-poll, so it normally lands in about a second —
+   *  but "normally" is not "always", and a single probe against a box that has not pulled yet fails
+   *  as `unreachable`, which reads to the user as a wrong URL. Retry a few times before believing
+   *  the verdict. */
+  async function probeAfterEdgePull(ip: string): Promise<ProbeResult> {
+    let last: ProbeResult = { status: "unreachable", detail: "", snapshot: null };
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await new Promise((r) => setTimeout(r, attempt === 0 ? 800 : 1500));
+      last = await data.probeCredentials(ip, manualUser, manualPass);
+      if (last.status === "ok" || last.status === "auth_failed") return last;
+    }
+    return last;
+  }
 
   // Add-by-hand converges with the discovered path at saveDevice + the #88 probe: the probe resolves
   // the stream over ONVIF from the xaddr we build, so it validates the port, the creds, and returns a
@@ -134,25 +178,40 @@
     manualVerdict = null;
     manualSnapshotUrl = null;
     try {
-      const ip = manualIp.trim();
+      const rtsp = isRtspMode ? manualRtspUrl.trim() : "";
+      const ip = isRtspMode ? manualRtspHost : manualIp.trim();
       const port = manualPort.trim();
       const device: Device = {
         id: "", // backfilled by ONVIF id on the next successful discovery (IP match)
         ip,
-        xaddr: `http://${ip}:${port}/onvif/device_service`,
+        // No ONVIF endpoint in stream-URL mode — there is nothing at the other end to ask.
+        xaddr: isRtspMode ? "" : `http://${ip}:${port}/onvif/device_service`,
         name: manualName.trim() || `Camera ${ip}`,
         username: null,
         password: null,
       };
       await data.saveDevice(device);
-      const res = await data.probeCredentials(ip, manualUser, manualPass);
+
+      // Order differs by mode, and it matters. ONVIF proves the camera first and saves the
+      // credentials only once proven (card #88). Stream-URL mode CANNOT: the probe reaches the
+      // camera by way of the URL, so the URL has to be on the edge before the probe runs. Staging
+      // it wakes the edge's config long-poll immediately, so the wait is short — but it is a race,
+      // hence the retry rather than a single attempt against a box that has not pulled yet.
+      if (isRtspMode) {
+        await data.setCredentials(ip, manualUser, manualPass, rtsp);
+      }
+      const res = isRtspMode
+        ? await probeAfterEdgePull(ip)
+        : await data.probeCredentials(ip, manualUser, manualPass);
       manualVerdict = res;
       if (res.status !== "ok") {
         manualState = "failed";
         return;
       }
       if (res.snapshot) manualSnapshotUrl = `data:image/jpeg;base64,${res.snapshot}`;
-      await data.setCredentials(ip, manualUser, manualPass);
+      if (!isRtspMode) {
+        await data.setCredentials(ip, manualUser, manualPass);
+      }
       manualState = "verified";
       await loadDevices();
       await loadEdgeFound();
@@ -719,16 +778,57 @@
         <Label for="m-name">{t.colName}</Label>
         <Input id="m-name" bind:value={manualName} placeholder={t.namePlaceholder} />
       </div>
-      <div class="grid grid-cols-[1fr_auto] gap-3">
-        <div class="space-y-2">
-          <Label for="m-ip">{t.ipAddress}</Label>
-          <Input id="m-ip" bind:value={manualIp} placeholder="192.168.1.187" />
+
+      <div class="space-y-2">
+        <Label>{t.sourceMode}</Label>
+        <div class="grid grid-cols-2 gap-2">
+          <Button
+            type="button"
+            variant={isRtspMode ? "outline" : "default"}
+            onclick={() => (manualMode = "onvif")}
+          >
+            {t.sourceOnvif}
+          </Button>
+          <Button
+            type="button"
+            variant={isRtspMode ? "default" : "outline"}
+            onclick={() => (manualMode = "rtsp")}
+          >
+            {t.sourceRtsp}
+          </Button>
         </div>
-        <div class="space-y-2">
-          <Label for="m-port">{t.onvifPort}</Label>
-          <Input id="m-port" bind:value={manualPort} placeholder="2020" class="w-28" />
-        </div>
+        <p class="text-xs text-muted-foreground">
+          {isRtspMode ? t.sourceRtspHint : t.sourceOnvifHint}
+        </p>
       </div>
+
+      {#if isRtspMode}
+        <div class="space-y-2">
+          <Label for="m-rtsp">{t.rtspUrl}</Label>
+          <Input
+            id="m-rtsp"
+            bind:value={manualRtspUrl}
+            placeholder={t.rtspUrlPlaceholder}
+            autocomplete="off"
+            spellcheck="false"
+          />
+          {#if manualRtspUrl.trim().length > 0 && manualRtspHost.length === 0}
+            <p class="text-xs text-destructive">{t.rtspUrlInvalid}</p>
+          {/if}
+        </div>
+      {:else}
+        <div class="grid grid-cols-[1fr_auto] gap-3">
+          <div class="space-y-2">
+            <Label for="m-ip">{t.ipAddress}</Label>
+            <Input id="m-ip" bind:value={manualIp} placeholder="192.168.1.187" />
+          </div>
+          <div class="space-y-2">
+            <Label for="m-port">{t.onvifPort}</Label>
+            <Input id="m-port" bind:value={manualPort} placeholder="2020" class="w-28" />
+          </div>
+        </div>
+      {/if}
+
       <div class="grid grid-cols-2 gap-3">
         <div class="space-y-2">
           <Label for="m-user">{t.username}</Label>
@@ -739,18 +839,23 @@
           <Input id="m-pass" type="password" bind:value={manualPass} placeholder="••••••" autocomplete="off" />
         </div>
       </div>
-      <p class="text-xs text-muted-foreground">
-        {t.portHintBefore}<span class="font-medium">2020</span>{t.portHintMiddle}<span
-          class="font-medium">80</span
-        >{t.portHintAfter}
-      </p>
+
+      {#if isRtspMode}
+        <p class="text-xs text-muted-foreground">{t.rtspUrlHint}</p>
+      {:else}
+        <p class="text-xs text-muted-foreground">
+          {t.portHintBefore}<span class="font-medium">2020</span>{t.portHintMiddle}<span
+            class="font-medium">80</span
+          >{t.portHintAfter}
+        </p>
+      {/if}
 
       {#if manualState !== "idle"}
         <div class="rounded-lg border border-border bg-well p-3">
           {#if manualState === "testing"}
             <div class="flex items-center gap-3 text-sm text-muted-foreground">
               <Busy />
-              {t.provingDetails(manualIp)}
+              {t.provingDetails(manualTarget)}
             </div>
           {:else if manualState === "verified"}
             <div class="space-y-2">
@@ -758,7 +863,7 @@
                 <Check class="size-4" /> {verdictTitle(manualVerdict)}
               </p>
               {#if manualSnapshotUrl}
-                <img src={manualSnapshotUrl} alt={t.liveFrameAlt(manualIp)} class="w-full rounded-md border border-border" />
+                <img src={manualSnapshotUrl} alt={t.liveFrameAlt(manualTarget)} class="w-full rounded-md border border-border" />
               {/if}
             </div>
           {:else if manualState === "failed"}

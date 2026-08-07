@@ -563,11 +563,19 @@ async fn cameras(
     // discard them. Camera credentials are never persisted in the control DB.
     {
         let mut pend = st.pending_creds.lock().unwrap();
-        pend.retain(|_, (_, _, t)| t.elapsed() < Duration::from_secs(1800)); // drop stale
+        pend.retain(|_, (_, _, _, t)| t.elapsed() < Duration::from_secs(1800)); // drop stale
         for d in list.iter_mut() {
-            if let Some((u, p, _)) = pend.remove(&(tenant, d.ip.clone())) {
+            if let Some((u, p, url, _)) = pend.remove(&(tenant, d.ip.clone())) {
                 d.username = Some(u);
                 d.password = Some(p);
+                // A hand-configured source (#175) ships its stream URL with the credentials,
+                // because there is no ONVIF endpoint for the edge to resolve one from. The edge
+                // needs no change to accept it: `resolve_rtsp` already skips ONVIF when the URL is
+                // present, the probe already prefers a cached URL over resolving, and the cached
+                // value is carried forward across config pulls.
+                if url.is_some() {
+                    d.rtsp_url = url;
+                }
             }
         }
     }

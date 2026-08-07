@@ -136,6 +136,19 @@ export const devices = {
     namePlaceholder: "e.g. Hall",
     ipAddress: "IP address",
     onvifPort: "ONVIF port",
+    // source mode — ONVIF discovery vs a stream URL typed by hand
+    sourceMode: "How your box reaches it",
+    sourceOnvif: "ONVIF",
+    sourceRtsp: "Stream URL",
+    sourceOnvifHint:
+      "The normal path. Your box asks the camera where its stream is, so you only supply the address.",
+    sourceRtspHint:
+      "For a source with no ONVIF at all — a phone running an RTSP app, or a camera whose ONVIF is broken. You supply the stream URL directly.",
+    rtspUrl: "RTSP URL",
+    rtspUrlPlaceholder: "rtsp://192.168.1.50:8554/live",
+    rtspUrlHint:
+      "Copy it from the app that is streaming. Any credentials it needs can be embedded in the URL (rtsp://user:pass@host/…); like the password, it is relayed to your box and never stored in the cloud.",
+    rtspUrlInvalid: "Enter a URL starting with rtsp:// that includes a host.",
     portHintBefore: "The ONVIF port is the camera's control port — Tapo uses ",
     portHintMiddle: ", many others use ",
     portHintAfter:
@@ -291,6 +304,19 @@ export const devices = {
     namePlaceholder: "ex.: Corredor",
     ipAddress: "Endereço IP",
     onvifPort: "Porta ONVIF",
+    // modo da fonte — descoberta ONVIF ou URL de transmissão digitada
+    sourceMode: "Como o appliance chega nela",
+    sourceOnvif: "ONVIF",
+    sourceRtsp: "URL de transmissão",
+    sourceOnvifHint:
+      "O caminho normal. O appliance pergunta à câmera onde está a transmissão, então você informa só o endereço.",
+    sourceRtspHint:
+      "Para uma fonte sem ONVIF nenhum — um celular rodando um app de RTSP, ou uma câmera com ONVIF quebrado. Você informa a URL da transmissão direto.",
+    rtspUrl: "URL RTSP",
+    rtspUrlPlaceholder: "rtsp://192.168.1.50:8554/live",
+    rtspUrlHint:
+      "Copie do app que está transmitindo. Se precisar de credenciais, elas podem ir na própria URL (rtsp://usuario:senha@host/…); como a senha, ela é repassada ao appliance e nunca fica guardada na nuvem.",
+    rtspUrlInvalid: "Informe uma URL começando com rtsp:// e que inclua um host.",
     portHintBefore: "A porta ONVIF é a porta de controle da câmera — a Tapo usa ",
     portHintMiddle: ", muitas outras usam ",
     portHintAfter:

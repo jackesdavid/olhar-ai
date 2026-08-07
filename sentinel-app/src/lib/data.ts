@@ -298,15 +298,22 @@ export const data = {
     return true;
   },
   /** Relay camera credentials to the tenant's edge. They are NOT stored in the cloud —
-   * control holds them in memory until the edge collects them, then discards. */
+   * control holds them in memory until the edge collects them, then discards.
+   *
+   * `rtspUrl` is for a source that does not speak ONVIF (#175) — a phone running an RTSP app, or a
+   * camera whose ONVIF is broken. It travels the same memory-only channel as the password, because
+   * an RTSP URL routinely embeds credentials. Omit it for discovered cameras: the edge resolves
+   * their URL itself, and sending one would override that. */
   setCredentials: async (
     ip: string,
     username: string,
     password: string,
+    rtspUrl?: string,
   ): Promise<void> => {
     await api.post<void>(`/devices/${encodeURIComponent(ip)}/credentials`, {
       username,
       password,
+      ...(rtspUrl ? { rtsp_url: rtspUrl } : {}),
     });
   },
   renameDevice: async (ip: string, name: string): Promise<void> => {
