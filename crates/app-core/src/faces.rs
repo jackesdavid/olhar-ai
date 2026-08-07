@@ -410,8 +410,21 @@ impl FaceEmbRow {
 /// and every face is its own cluster; 0.55 groups same-person captures while staying below the
 /// cross-identity range. (Tunable later per-tenant if faces get higher-res.)
 pub const CLUSTER_EPS: f32 = 0.55;
-/// Cap the O(n²) clustering pass — beyond this the unknown pile is degenerate; a flat list is served.
-const MAX_CLUSTER_N: i64 = 2000;
+/// Cap on how many faces one clustering pass considers.
+///
+/// This used to bound an O(n²) distance pass in Rust and sat at 2000. Neighbours now come from the
+/// HNSW index ([`knn_neighbours`]), so the quadratic term is gone and the binding constraint is
+/// **memory**: every face's 512-d embedding is held in Rust for the coherence gate and the cluster
+/// centroids, at ~2 KB each. This number is therefore a memory budget (~40 MB of embeddings), not a
+/// CPU one — see the note on [`build_groups`] for why coherence was kept in memory.
+///
+/// It is not free at the top end: a full pass over 20 000 faces measured **49.6 s** in release
+/// (47.7 s of that the neighbour query), against 6.6 s at 5000. Cluster QUALITY does not degrade at
+/// that size — the same pass recovered 24.8 of 25 faces per identity with zero identities split — so
+/// this is a latency ceiling on an on-demand screen, not a correctness one. The old value of 2000
+/// was the point where the in-memory scan stopped finishing; faces past it were silently dropped
+/// from clustering, which is the behaviour this replaces.
+const MAX_CLUSTER_N: i64 = 20_000;
 
 /// Cosine distance of two L2-normalized ArcFace vectors (`1 - dot`).
 fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
@@ -511,6 +524,15 @@ const MIN_SHARED: usize = 3;
 /// this fraction the face is treated as ambiguous: it can still be clustered, but it may not act as
 /// a bridge.
 const MIN_COHERENCE: f32 = 0.5;
+/// How many candidates the index-backed neighbour query fetches per face before the `eps` filter
+/// runs — see the over-fetch note on [`knn_neighbours`] for why this is not just `KNN_K`.
+const KNN_CANDIDATES: i64 = (KNN_K as i64) * 4;
+/// Largest set the in-memory O(n²) neighbour scan may be used as a fallback for.
+///
+/// The old [`MAX_CLUSTER_N`], and for the same reason: it is roughly where that scan still finishes
+/// in a few seconds (measured 0.95 s at 1000, 18.6 s at 5000, 281 s at 20 000). Past it the
+/// "fallback" is slower than the outage.
+const IN_MEMORY_KNN_MAX: usize = 2000;
 
 /// Group faces into identities using **shared-nearest-neighbour linking with a coherence gate**
 /// (#124).
@@ -538,12 +560,20 @@ const MIN_COHERENCE: f32 = 0.5;
 /// What distinguishes it is that its neighbours are far from each other. Requiring coherence at
 /// **both** ends isolates the bridge rather than letting it weld two people together.
 ///
-/// Still O(n²) in distance computations, bounded by [`MAX_CLUSTER_N`]. Sourcing neighbours from the
-/// HNSW index — which is what removes that cap — is the remaining half of #124 and is not done
-/// here; this is about the linkage rule being correct, not about scale.
-fn build_groups(items: &[(Face, Vec<f32>)], eps: f32) -> Vec<Vec<usize>> {
+/// ## Where the work happens
+///
+/// `neighbours` is the k-nearest list per face, sourced from the HNSW index by [`knn_neighbours`]
+/// rather than from an all-pairs scan — that is what removed the quadratic term and the old 2000-face
+/// cap (#174).
+///
+/// What stays in Rust is the **coherence gate**, because it was measured rather than assumed: it
+/// needs the ~45 pairwise distances inside each face's own neighbourhood, and computing those in SQL
+/// (self-join on the edge list, embeddings carried inline to avoid re-fetching) measured **5959 ms
+/// for 1000 faces** against roughly 5 ms in Rust. The cost is not the arithmetic — it is a hash join
+/// emitting 45k rows that each carry two 2 KB vectors. So coherence is in memory for speed, and the
+/// price is the embedding footprint bounded by [`MAX_CLUSTER_N`].
+fn build_groups(items: &[(Face, Vec<f32>)], neighbours: &[Vec<usize>], eps: f32) -> Vec<Vec<usize>> {
     let n = items.len();
-    let neighbours = knn_within(items, eps, KNN_K);
     let coherent: Vec<bool> = (0..n)
         .map(|i| coherence(items, &neighbours[i], eps) >= MIN_COHERENCE)
         .collect();
@@ -602,7 +632,156 @@ fn coherence(items: &[(Face, Vec<f32>)], nb: &[usize], eps: f32) -> f32 {
     close as f32 / total as f32
 }
 
+/// Each face's `KNN_K` nearest neighbours within `eps`, **from the HNSW index** — the edge list the
+/// linkage rule in [`build_groups`] runs on (#174).
+///
+/// One `CROSS JOIN LATERAL` gives Postgres N independent top-k probes, each an index scan, instead
+/// of the N² distance computations [`knn_within`] does in Rust. That is the whole point: the cost
+/// goes from quadratic to N·log N, which is what let [`MAX_CLUSTER_N`] rise.
+///
+/// The candidate set inside the LATERAL repeats the caller's predicate rather than joining back to
+/// `scoped`: a join would make the ordering expression non-constant per row and lose the index. Any
+/// neighbour outside the loaded window (the `LIMIT`) is simply dropped when ids are mapped to
+/// indices, which is the correct behaviour — a face we are not clustering cannot be a member.
+///
+/// Distances come back with the rows and are sorted in Rust: LATERAL emits nearest-first, but
+/// nothing in SQL *guarantees* that order survives to the client without an `ORDER BY`, and the
+/// mutual/shared tests depend on the list being the true top-k.
+///
+/// ## Why it over-fetches
+///
+/// [`knn_within`] means "the `k` nearest that are ALSO within `eps`" — it filters by `eps` and then
+/// truncates. `LIMIT k` inside the LATERAL does the opposite: it truncates and then the `eps`
+/// filter removes some, so a face whose 10th-nearest sits past `eps` comes back with 8 neighbours
+/// where the in-memory path would give 10.
+///
+/// That is not cosmetic. Fewer neighbours means less overlap, so `MIN_SHARED` fails on pairs that
+/// should link, and identities fragment. Measured on a 200-identity × 25 gallery, same rule and
+/// same data, only the neighbour list differing:
+///
+/// | inner LIMIT | clusters (200 ideal) | mean recovered of 25 | identities split |
+/// |---|---|---|---|
+/// | `KNN_K` (10)         | 1588 | 17.9 | 53 |
+/// | `KNN_CANDIDATES` (40) | 232 | 24.8 | 0  |
+///
+/// So fetch a wider candidate list, filter by `eps`, then truncate to `KNN_K` in Rust.
+///
+/// ## Why the index is worth it, and where the fallback stops being safe
+///
+/// Measured in release on this schema — the in-memory scan against the LATERAL's own
+/// `EXPLAIN ANALYZE` execution time, same machine, same vectors:
+///
+/// | faces | in-memory O(n²) | index-backed | speedup |
+/// |---|---|---|---|
+/// | 1 000  | 0.95 s  | —      | —    |
+/// | 5 000  | 18.6 s  | 5.5 s  | 3.4× |
+/// | 20 000 | 281.1 s | 47.7 s | 5.9× |
+///
+/// The gap widens with N, which is the whole argument. It also means the in-memory FALLBACK is only
+/// a rescue at small N: at 20 000 faces it would take 281 s, five times worse than the failure it is
+/// covering for. So it is size-guarded by [`IN_MEMORY_KNN_MAX`]. Above that the caller gets `None`
+/// and clusters nothing rather than freezing the workspace for five minutes.
+///
+/// `None` on query failure, so the caller can decide, rather than silently clustering on an empty
+/// graph (which would return every face as its own singleton — a plausible looking, completely
+/// wrong answer).
+fn knn_neighbours(
+    db: &Db,
+    tenant_id: Uuid,
+    items: &[(Face, Vec<f32>)],
+    eps: f32,
+    since: Option<String>,
+    until: Option<String>,
+) -> Option<Vec<Vec<usize>>> {
+    if items.is_empty() {
+        return Some(Vec::new());
+    }
+    let index_of: std::collections::HashMap<&str, usize> = items
+        .iter()
+        .enumerate()
+        .map(|(i, (f, _))| (f.id.as_str(), i))
+        .collect();
+    let pool = db.pool();
+    // Unknown-scope predicate: build_cores only ever clusters unlabeled faces (layout_faces
+    // partitions the labeled ones off and groups them by person id instead).
+    //
+    // `scoped` therefore takes the newest MAX_CLUSTER_N *unlabeled* faces, while `items` under
+    // FaceScope::All is the unlabeled slice of the newest MAX_CLUSTER_N of ALL faces — a subset.
+    // That direction is the safe one: every face being clustered is covered by the edge list. The
+    // reverse would silently leave the tail of `items` with no neighbours at all.
+    let sql = "WITH scoped AS ( \
+                 SELECT id, embedding FROM faces \
+                  WHERE tenant_id = $1 AND person_id IS NULL AND NOT ignored \
+                    AND ($3::text IS NULL OR created_at >= $3) \
+                    AND ($4::text IS NULL OR created_at <= $4) \
+                  ORDER BY created_at DESC LIMIT $2 ) \
+               SELECT s.id::text AS src, n.id::text AS dst, n.d::float4 AS distance \
+                 FROM scoped s CROSS JOIN LATERAL ( \
+                   SELECT x.id, x.embedding <=> s.embedding AS d \
+                     FROM faces x \
+                    WHERE x.tenant_id = $1 AND x.person_id IS NULL AND NOT x.ignored \
+                      AND x.id <> s.id \
+                      AND ($3::text IS NULL OR x.created_at >= $3) \
+                      AND ($4::text IS NULL OR x.created_at <= $4) \
+                    ORDER BY x.embedding <=> s.embedding LIMIT $5 ) n \
+                WHERE n.d <= $6";
+    let rows: Vec<(String, String, f32)> = db.block(async move {
+        let result: Result<Vec<(String, String, f32)>, sqlx::Error> = async {
+            let mut tx = pool.begin().await?;
+            // Headroom, not a guess: the LATERAL measured 47.7 s at MAX_CLUSTER_N = 20 000, so a
+            // 60 s ceiling would trip on a slightly busier server — and tripping is expensive here,
+            // because the fallback is unavailable at that size.
+            sqlx::query("SET LOCAL statement_timeout = 180000")
+                .execute(&mut *tx)
+                .await?;
+            tune_hnsw(&mut tx, KNN_CANDIDATES).await;
+            let rows = sqlx::query_as::<_, (String, String, f32)>(sql)
+                .bind(tenant_id)
+                .bind(MAX_CLUSTER_N)
+                .bind(since)
+                .bind(until)
+                .bind(KNN_CANDIDATES)
+                .bind(eps)
+                .fetch_all(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            Ok(rows)
+        }
+        .await;
+        match result {
+            Ok(rows) => rows,
+            Err(e) => {
+                log::error!("faces::knn_neighbours query failed: {e}");
+                Vec::new()
+            }
+        }
+    });
+    if rows.is_empty() && items.len() > 1 {
+        return None; // could not tell "no edges" from "query died" — let the caller fall back
+    }
+    let mut with_dist: Vec<Vec<(f32, usize)>> = vec![Vec::new(); items.len()];
+    for (src, dst, d) in rows {
+        let (Some(&i), Some(&j)) = (index_of.get(src.as_str()), index_of.get(dst.as_str())) else {
+            continue;
+        };
+        with_dist[i].push((d, j));
+    }
+    Some(
+        with_dist
+            .into_iter()
+            .map(|mut v| {
+                v.sort_by(|a, b| a.0.total_cmp(&b.0));
+                v.truncate(KNN_K);
+                v.into_iter().map(|(_, j)| j).collect()
+            })
+            .collect(),
+    )
+}
+
 /// Each face's `k` nearest neighbours that are also within `eps`, nearest first.
+///
+/// The in-memory O(n²) path. Still the fallback when [`knn_neighbours`] cannot reach the index, and
+/// what the clustering unit tests build their graphs with.
 fn knn_within(items: &[(Face, Vec<f32>)], eps: f32, k: usize) -> Vec<Vec<usize>> {
     let n = items.len();
     (0..n)
@@ -625,12 +804,41 @@ fn shared_count(a: &[usize], b: &[usize]) -> usize {
 }
 
 /// Turn index-groups into cluster cores (representative, centroid, suggestion), largest first.
-fn build_cores(db: &Db, tenant_id: Uuid, items: &[(Face, Vec<f32>)], eps: f32) -> Vec<ClusterCore> {
+///
+/// `since`/`until` must be the SAME window `items` was loaded with — they re-scope the index-backed
+/// neighbour query so its edge list covers exactly the faces being clustered.
+fn build_cores(
+    db: &Db,
+    tenant_id: Uuid,
+    items: &[(Face, Vec<f32>)],
+    eps: f32,
+    since: Option<String>,
+    until: Option<String>,
+) -> Vec<ClusterCore> {
     if items.is_empty() {
         return Vec::new();
     }
     let dim = items[0].1.len();
-    let mut cores: Vec<ClusterCore> = build_groups(items, eps)
+    let neighbours = match knn_neighbours(db, tenant_id, items, eps, since, until) {
+        Some(n) => n,
+        None if items.len() <= IN_MEMORY_KNN_MAX => {
+            log::warn!("faces: index-backed kNN unavailable — falling back to the in-memory scan");
+            knn_within(items, eps, KNN_K)
+        }
+        None => {
+            // Deliberately NOT the in-memory scan: at this size it measured 281 s, so it would turn
+            // a failed query into a wedged request. Empty edges means every face clusters alone,
+            // which is wrong — hence the error, so it shows up as a fault rather than as "no
+            // duplicates found".
+            log::error!(
+                "faces: index-backed kNN failed for {} faces — above the {IN_MEMORY_KNN_MAX}-face \
+                 fallback limit, so clustering is degraded to singletons",
+                items.len()
+            );
+            vec![Vec::new(); items.len()]
+        }
+    };
+    let mut cores: Vec<ClusterCore> = build_groups(items, &neighbours, eps)
         .into_iter()
         .map(|idxs| {
             let rep = *idxs
@@ -735,7 +943,7 @@ fn build_person_cores(
 pub fn cluster_unlabeled(db: &Db, tenant_id: Uuid, eps: f32) -> Vec<FaceCluster> {
     let eps = eps.clamp(0.20, 0.90);
     let items = load_faces(db, tenant_id, FaceScope::Unknown, None, None);
-    build_cores(db, tenant_id, &items, eps)
+    build_cores(db, tenant_id, &items, eps, None, None)
         .into_iter()
         .map(|c| FaceCluster {
             key: c.representative.id.clone(),
@@ -820,7 +1028,14 @@ pub fn layout_faces(
             .collect()
     };
     let mut cores = build_person_cores(&known, &name_of);
-    cores.extend(build_cores(db, tenant_id, &unknown, eps));
+    cores.extend(build_cores(
+        db,
+        tenant_id,
+        &unknown,
+        eps,
+        opts.since.clone(),
+        opts.until.clone(),
+    ));
     cores.sort_by(|a, b| b.face_ids.len().cmp(&a.face_ids.len()));
     // Filters/caps: min size, then keep the largest N islands.
     if let Some(m) = opts.min_size {
@@ -1342,6 +1557,14 @@ mod clustering_tests {
         groups.iter().find(|g| g.contains(&idx)).expect("indexed face is in some group")
     }
 
+    /// Cluster with neighbours computed in memory. In production the edge list comes from the HNSW
+    /// index instead (`knn_neighbours`); these tests exercise the LINKAGE RULE, which is the same
+    /// code either way. The two sources agreeing is a separate, DB-backed assertion — see
+    /// `index_knn_clusters_identically_to_the_in_memory_scan` in `tests/face_knn_bench.rs`.
+    fn groups_of(items: &[(Face, Vec<f32>)], eps: f32) -> Vec<Vec<usize>> {
+        build_groups(items, &knn_within(items, eps, KNN_K), eps)
+    }
+
     /// The bug this card exists for. Two identities that are genuinely far apart, plus ONE
     /// ambiguous face sitting between them and within `eps` of both.
     ///
@@ -1369,7 +1592,7 @@ mod clustering_tests {
         assert!(d(12, 0) <= 0.55 && d(12, 6) <= 0.55, "bridge must reach both identities");
         assert!(d(0, 6) > 0.55, "the two identities must not be directly linked");
 
-        let groups = build_groups(&it, 0.55);
+        let groups = groups_of(&it, 0.55);
         assert!(
             !group_of(&groups, 0).contains(&6),
             "identities A and B were merged — the bridge still welds them: {groups:?}"
@@ -1383,7 +1606,7 @@ mod clustering_tests {
         let spec: Vec<(String, f32)> = (0..8).map(|i| (format!("A{i}"), i as f32 * 0.4)).collect();
         let spec_refs: Vec<(&str, f32)> = spec.iter().map(|(a, b)| (a.as_str(), *b)).collect();
         let it = items(&spec_refs);
-        let groups = build_groups(&it, 0.55);
+        let groups = groups_of(&it, 0.55);
         assert_eq!(
             group_of(&groups, 0).len(),
             8,
@@ -1398,20 +1621,20 @@ mod clustering_tests {
         for i in 0..5 { spec.push((format!("A{i}"), i as f32 * 0.4)); }
         for i in 0..5 { spec.push((format!("B{i}"), 80.0 + i as f32 * 0.4)); }
         let spec_refs: Vec<(&str, f32)> = spec.iter().map(|(a, b)| (a.as_str(), *b)).collect();
-        let groups = build_groups(&items(&spec_refs), 0.55);
+        let groups = groups_of(&items(&spec_refs), 0.55);
         assert!(!group_of(&groups, 0).contains(&5), "distant identities merged: {groups:?}");
     }
 
     /// A lone face is its own cluster, not lost.
     #[test]
     fn a_singleton_survives_as_its_own_group() {
-        let groups = build_groups(&items(&[("only", 0.0)]), 0.55);
+        let groups = groups_of(&items(&[("only", 0.0)]), 0.55);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0], vec![0]);
     }
 
     #[test]
     fn empty_input_yields_no_groups() {
-        assert!(build_groups(&[], 0.55).is_empty());
+        assert!(groups_of(&[], 0.55).is_empty());
     }
 }
