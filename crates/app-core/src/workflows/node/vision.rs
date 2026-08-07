@@ -261,6 +261,19 @@ fn conf_pct(distance: f32) -> i64 {
 
 /// kNN-recognize an embedding against the tenant's union gallery (enrolled + stored). Outputs the
 /// best `person`/`person_id`/`confidence`, a `matches` Dictionary (label → score), and `found`.
+/// Is the winner too close to the runner-up to call? (#123)
+///
+/// Pure so it can be tested without a database — the accept/reject decision is the part that
+/// changes customer-visible behaviour, and it should not need Postgres to prove.
+///
+/// `margin` is in cosine-distance units. **A margin of 0 must be a no-op**: `best + 0 >= second`
+/// is only true when the runner-up is at least as close as the winner, which is genuine ambiguity
+/// and was already indistinguishable before this card. That property is what lets #123 ship
+/// without changing anyone's results until they opt in.
+fn is_ambiguous(best: f32, runner_up: Option<f32>, margin: f32) -> bool {
+    runner_up.is_some_and(|second| best + margin >= second)
+}
+
 pub(super) fn run_recognize_face(
     config: &Value,
     inputs: &PortValues,
@@ -272,33 +285,66 @@ pub(super) fn run_recognize_face(
         .ok_or("Recognize Face: missing required input 'embedding'")?;
     let top_k = cfg_i64(config, "top_k", 5).clamp(1, 50);
     let max_distance = cfg_f64(config, "max_distance", 0.5) as f32;
-    let matches = crate::faces::recognize(&sys.db, sys.tenant_id, embedding, top_k);
+    // #123. How much closer the winner must be than the next DIFFERENT identity. 0 keeps the old
+    // behaviour exactly, so this cannot change anyone's results until they opt in — the default
+    // must stay 0 until [[face-threshold-calibration]] measures a real one, because a margin
+    // guessed here would silently start rejecting true matches.
+    let margin = cfg_f64(config, "margin", 0.0) as f32;
 
-    // matches Dictionary: label (or "unknown:<ref8>") → score. Preserves kNN order (best first).
-    let dict: Vec<(String, String)> = matches
+    // Score per IDENTITY, not per embedding: a person with many enrolled crops could otherwise win
+    // on a single outlier, and one bad enrollment crop could make a true person lose.
+    let people = crate::faces::recognize_people(&sys.db, sys.tenant_id, embedding, top_k);
+
+    // matches Dictionary: label (or "unknown:<ref8>") → score. Preserves order (best identity first).
+    let dict: Vec<(String, String)> = people
         .iter()
         .map(|m| {
             let key = m
                 .label
                 .clone()
                 .unwrap_or_else(|| format!("unknown:{}", &m.reference[..m.reference.len().min(8)]));
-            (key, conf_pct(m.distance).to_string())
+            (key, conf_pct(m.best).to_string())
         })
         .collect();
 
     let mut o = PortValues::new();
     o.insert("matches".into(), PortValue::Dict(dict));
+
     // `found` means "recognized a KNOWN (labeled) person". The union gallery also holds stored
     // UNKNOWN faces (label = None) for dedup/re-id — a nearest match to one of those must NOT count
     // as recognized (else every unknown that resembles a prior unknown fires the True branch). So
-    // pick the nearest LABELED match within threshold, not just the nearest anything.
-    let recognized = matches
+    // pick the nearest LABELED identity within threshold, not just the nearest anything.
+    let best_labeled = people
         .iter()
-        .find(|m| m.label.is_some() && m.distance <= max_distance);
-    match recognized {
+        .find(|m| m.label.is_some() && m.best <= max_distance);
+
+    // The runner-up is the nearest identity that is NOT the winner — labeled or not. An unknown
+    // sitting just as close as the winner is exactly the ambiguity this test exists to catch, so it
+    // counts too.
+    let runner_up = |winner: &crate::faces::PersonScore| {
+        people
+            .iter()
+            .find(|m| m.reference != winner.reference)
+            .map(|m| m.best)
+    };
+
+    match best_labeled {
         Some(m) => {
-            o.insert("found".into(), PortValue::Bool(true));
-            o.insert("confidence".into(), PortValue::Num(conf_pct(m.distance)));
+            let second = runner_up(m);
+            // Ambiguous when the runner-up is within `margin` of the winner. With margin = 0 this
+            // is never true, which is why the default is a no-op.
+            let ambiguous = is_ambiguous(m.best, second, margin);
+            o.insert("found".into(), PortValue::Bool(!ambiguous));
+            o.insert("confidence".into(), PortValue::Num(conf_pct(m.best)));
+            o.insert("consistency".into(), PortValue::Num(conf_pct(m.mean_top3)));
+            o.insert("samples".into(), PortValue::Num(m.n as i64));
+            o.insert(
+                "margin".into(),
+                PortValue::Num(second.map_or(100, |d| conf_pct(m.best) - conf_pct(d)).max(0)),
+            );
+            o.insert("ambiguous".into(), PortValue::Bool(ambiguous));
+            // On an ambiguous result the identity is still reported — a graph may want to show
+            // "probably X" — but `found` is false, so the True branch does not fire.
             o.insert(
                 "person".into(),
                 PortValue::Text(m.label.clone().unwrap_or_default()),
@@ -306,11 +352,21 @@ pub(super) fn run_recognize_face(
             o.insert("person_id".into(), PortValue::Text(m.reference.clone()));
         }
         None => {
-            // No labeled match within threshold → unknown. Report the nearest distance (any kind)
-            // as confidence context, but found=false → the False branch stores it as unknown.
-            let conf = matches.first().map(|m| conf_pct(m.distance)).unwrap_or(0);
+            // No labeled identity within threshold → unknown. Report the nearest distance (any
+            // kind) as confidence context; found=false → the False branch stores it as unknown.
+            let nearest = people.first();
             o.insert("found".into(), PortValue::Bool(false));
-            o.insert("confidence".into(), PortValue::Num(conf));
+            o.insert(
+                "confidence".into(),
+                PortValue::Num(nearest.map_or(0, |m| conf_pct(m.best))),
+            );
+            o.insert(
+                "consistency".into(),
+                PortValue::Num(nearest.map_or(0, |m| conf_pct(m.mean_top3))),
+            );
+            o.insert("samples".into(), PortValue::Num(nearest.map_or(0, |m| m.n as i64)));
+            o.insert("margin".into(), PortValue::Num(0));
+            o.insert("ambiguous".into(), PortValue::Bool(false));
             o.insert("person".into(), PortValue::Text(String::new()));
             o.insert("person_id".into(), PortValue::Text(String::new()));
         }
@@ -917,4 +973,48 @@ fn draw_reticle(
     fill_block(img, cx + gap, cy, cx + gap + len, cy + t - 1, color); // right
     fill_block(img, cx, cy - gap - len, cx + t - 1, cy - gap, color); // up
     fill_block(img, cx, cy + gap, cx + t - 1, cy + gap + len, color); // down
+}
+
+#[cfg(test)]
+mod recognize_scoring_tests {
+    use super::is_ambiguous;
+
+    /// The compatibility guarantee: margin 0 changes nothing for a clear winner.
+    #[test]
+    fn margin_zero_is_a_no_op_for_a_clear_winner() {
+        assert!(!is_ambiguous(0.20, Some(0.45), 0.0));
+        assert!(!is_ambiguous(0.20, None, 0.0));
+    }
+
+    /// A runner-up at least as close as the winner is ambiguous even with no margin — that case
+    /// was always a coin flip, it just used to be silently resolved in the winner's favour.
+    #[test]
+    fn a_tie_is_ambiguous_even_at_margin_zero() {
+        assert!(is_ambiguous(0.30, Some(0.30), 0.0));
+        assert!(is_ambiguous(0.30, Some(0.29), 0.0));
+    }
+
+    /// With a margin, a winner must be clear of the runner-up by at least that much.
+    #[test]
+    fn margin_rejects_a_winner_that_is_barely_ahead() {
+        // 0.05 clear, margin demands 0.10 → not good enough.
+        assert!(is_ambiguous(0.30, Some(0.35), 0.10));
+        // 0.15 clear, margin demands 0.10 → accepted.
+        assert!(!is_ambiguous(0.30, Some(0.45), 0.10));
+    }
+
+    /// Exactly at the margin is ambiguous, not accepted. `>=` on purpose: the boundary case is the
+    /// one most likely to be a false accept, so it should fail closed.
+    #[test]
+    fn the_boundary_fails_closed() {
+        assert!(is_ambiguous(0.30, Some(0.40), 0.10));
+    }
+
+    /// No runner-up at all — a single identity in the gallery — can never be ambiguous.
+    #[test]
+    fn a_lone_candidate_is_never_ambiguous() {
+        for margin in [0.0, 0.1, 0.5, 10.0] {
+            assert!(!is_ambiguous(0.30, None, margin));
+        }
+    }
 }
