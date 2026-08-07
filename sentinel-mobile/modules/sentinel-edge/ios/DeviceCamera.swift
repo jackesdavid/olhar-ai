@@ -80,7 +80,15 @@ final class DeviceCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
       // Portrait, and un-mirrored on the front camera. Mirroring matters beyond looks: the pose
       // estimate reads landmark geometry, so a flipped frame reports the yaw of a person who is not
       // there.
-      if connection.isVideoRotationAngleSupported(90) { connection.videoRotationAngle = 90 }
+      //
+      // Two APIs because the pod deploys to iOS 16.4 (Expo raises it to match ExpoModulesCore) and
+      // `videoRotationAngle` is 17.0+. `videoOrientation` is deprecated in 17 but still works, so
+      // the older branch stays correct rather than merely compiling.
+      if #available(iOS 17.0, *) {
+        if connection.isVideoRotationAngleSupported(90) { connection.videoRotationAngle = 90 }
+      } else if connection.isVideoOrientationSupported {
+        connection.videoOrientation = .portrait
+      }
       if connection.isVideoMirroringSupported { connection.isVideoMirrored = false }
     }
 
