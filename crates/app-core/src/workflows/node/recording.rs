@@ -29,7 +29,7 @@ pub(super) fn run_start_recording(
     if let Some(pr) = pre_roll {
         body["pre_roll_secs"] = serde_json::Value::Number(pr.into());
     }
-    let json = edge_call(sys, "start_recording", "/recording/start", body)?;
+    let json = edge_call(sys, &camera_ip, "start_recording", "/recording/start", body)?;
     let clip_id: String = json
         .get("clip_id")
         .and_then(|s| s.as_str())
@@ -57,17 +57,44 @@ pub(super) fn run_stop_recording(
         .unwrap_or("")
         .to_string();
     let body = serde_json::json!({ "camera_ip": camera_ip, "clip_id": clip_id });
-    edge_call(sys, "stop_recording", "/recording/stop", body)?;
+    edge_call(sys, &camera_ip, "stop_recording", "/recording/stop", body)?;
     Ok(PortValues::new())
 }
 
 /// The tenant's box that is reachable over the SSE command stream right now (fresh `sse_last_seen`),
 /// if any. Its presence is what routes a command over SSE instead of the legacy inbound POST.
-fn sse_box(sys: &ToolContext) -> Option<uuid::Uuid> {
+fn sse_box(sys: &ToolContext, camera_ip: &str) -> Option<uuid::Uuid> {
     let pool = sys.db.pool();
     let tid = sys.tenant_id;
+    let ip = camera_ip.to_string();
     sys.db
         .block(async move {
+            // The box that OWNS this camera, if one has claimed it (#175, migration 0091).
+            //
+            // This used to pick whichever box pinged most recently, for ANY camera — so a recording
+            // could be handed to a box that has never seen the camera in question. That produced a
+            // real, shipped artefact: recording the phone's own camera was routed to the Mac, which
+            // has the camera in its list but none of its frames, so the ring stayed empty and the
+            // clip finalised at 587 bytes in the user's recordings list.
+            //
+            // Ownership is the answer to "who can actually record this", and it is the same answer
+            // as "who may dial it" — one camera, one consumer.
+            let owner = sqlx::query_scalar::<_, Option<uuid::Uuid>>(
+                "SELECT box_id FROM devices WHERE tenant_id = $1 AND ip = $2",
+            )
+            .bind(tid)
+            .bind(&ip)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten()
+            .flatten();
+            if let Some(owner) = owner {
+                return Ok(Some(owner));
+            }
+            // Unclaimed: fall back to the most recently seen box, which is the pre-#175 behaviour.
+            // A camera nobody has claimed is one no box has proven it is reading, so there is no
+            // better answer available — but it is a guess, and it is now only made when it must be.
             sqlx::query_scalar::<_, uuid::Uuid>(
                 "SELECT id FROM tenant_boxes
                  WHERE tenant_id = $1 AND sse_last_seen IS NOT NULL
@@ -91,11 +118,12 @@ fn sse_box(sys: &ToolContext) -> Option<uuid::Uuid> {
 /// as before. `cmd` is the SSE command name; `path` is the equivalent local HTTP endpoint.
 fn edge_call(
     sys: &ToolContext,
+    camera_ip: &str,
     cmd: &str,
     path: &str,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    if let Some(box_id) = sse_box(sys) {
+    if let Some(box_id) = sse_box(sys, camera_ip) {
         // 20s TTL so a command outlives the await window a touch (redelivery/late run); the await
         // itself stays under the node's 15s watchdog.
         let id =
