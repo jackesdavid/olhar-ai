@@ -31,6 +31,8 @@ kanban-plugin: board
 
 ## ToDo
 
+- [ ] #175 Mobile as a real edge — device camera as a face-capture source
+	  - Plan: [[mobile-edge-face-capture]]
 - [ ] #170 Runner hangs pulling any image it does not already have
 	  - Plan: [[self-hosted-runners]]
 - [ ] #169 Windows self-hosted runner + release:edge-windows
