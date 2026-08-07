@@ -42,11 +42,13 @@ export default function Capture() {
     }, []),
   );
 
-  // Register this phone as a light-edge box once (idempotent client-side).
+  // Register this phone as a light-edge box once (idempotent client-side). The name says which
+  // lens, because "front camera" was hardcoded and stayed wrong the moment anyone picked the back
+  // one — and the two are the whole point of comparing captures.
   useEffect(() => {
     let alive = true;
     setStatus("registering");
-    ensureRegistered("iPhone — front camera")
+    ensureRegistered(`iPhone — ${settingsRef.current.facing} camera`)
       .then((e) => {
         if (!alive) return;
         setEdge(e);
@@ -89,10 +91,17 @@ export default function Capture() {
       if (!small.base64) return;
       // bbox / kps / confidence left empty: the cloud pipeline detects and crops the face itself
       // (embed_face_crop's detect+fallback), so the phone need not run a detector for v1.
+      //
+      // `faceWidth: 0` means UNKNOWN, matching the empty bbox. This field was `faceRatio` until
+      // #117 replaced the ratio with a pixel width; the rename never reached here, so the object
+      // carried a property the type does not have and omitted the one it does. TypeScript flagged
+      // it, but Metro strips types without checking them — at run time `face.faceWidth` was
+      // `undefined`, `JSON.stringify` dropped the key, and every capture reached control with no
+      // `face_width` at all. Silent, and precisely the signal the quality gate reads.
       const ok = await pushFace(e, {
         bbox: [0, 0, 0, 0],
         confidence: 0,
-        faceRatio: 0,
+        faceWidth: 0,
         kps: [],
         frameB64: small.base64,
       });
