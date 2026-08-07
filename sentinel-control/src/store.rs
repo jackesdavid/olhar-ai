@@ -456,6 +456,41 @@ pub async fn list_configured(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec
 /// Replace the tenant's "streaming" set — the (ip, codec) pairs the edge currently has a
 /// resolved stream for (the edge pushes its full current set on each reload/rediscover).
 /// backend). Best-effort.
+/// Give `box_id` ownership of any of `ips` that nobody owns yet (#175, migration 0091).
+///
+/// `box_id IS NULL` in the WHERE is the whole safety property: this can only ever claim an
+/// UNCLAIMED camera, never move one between boxes. Two boxes racing on the same camera resolve to
+/// whichever proved it was streaming first, and the loser simply stops being served that camera —
+/// which is the outcome we want, because the reason for all this is that only one of them may dial
+/// it at a time.
+///
+/// Reassignment is deliberately not expressible here. Moving a camera to a different box is an
+/// operator decision (or a consequence of deleting the old box, which the FK handles with
+/// ON DELETE SET NULL); it must not happen as a side effect of a status report.
+pub async fn claim_unowned_cameras(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    box_id: Uuid,
+    ips: &[String],
+) -> sqlx::Result<u64> {
+    let r = sqlx::query(
+        "UPDATE devices SET box_id = $2 \
+          WHERE tenant_id = $1 AND box_id IS NULL AND ip = ANY($3)",
+    )
+    .bind(tenant_id)
+    .bind(box_id)
+    .bind(ips)
+    .execute(pool)
+    .await?;
+    if r.rows_affected() > 0 {
+        log::info!(
+            "claimed {} camera(s) for box {box_id} — they will stop being served to other boxes",
+            r.rows_affected()
+        );
+    }
+    Ok(r.rows_affected())
+}
+
 pub async fn upsert_streaming(
     pool: &PgPool,
     tenant_id: Uuid,
