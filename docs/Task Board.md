@@ -105,6 +105,9 @@ kanban-plugin: board
 
 - [ ] #174 Faces — complete the pipeline
 	  - Plan: [[faces-completion]]
+	  - Steps 1 (per-tenant capture stream) and 2 (index-backed cluster neighbours) shipped.
+	    Next: step 3 (capture volume — blocks 4 and 5), then 6, 6.5 (one Faces settings tab),
+	    and the reference doc last.
 - [ ] #160 Tenant isolation by construction — row-level security
 	  - Plan: [[tenant-isolation-rls]]
 - [ ] #167 Terms of Service + Privacy Policy + consent at signup
