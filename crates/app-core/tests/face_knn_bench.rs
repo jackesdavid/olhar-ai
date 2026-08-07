@@ -673,3 +673,270 @@ fn insert_and_recognize_roundtrip() {
         std::panic::resume_unwind(e);
     }
 }
+
+// =============================================================================================
+// Card #174 step 2 — clustering neighbours sourced from the HNSW index.
+//
+// The clustering pass used to compute every pairwise distance in Rust, which is why it was capped
+// at 2000 faces. Neighbours now come from one `CROSS JOIN LATERAL` top-k probe per face, so the
+// quadratic term is gone. Two things have to be true for that to be a real change and not a
+// plausible-looking one:
+//
+//   1. **The plan uses the index.** Same trap as #127 — a LATERAL whose ordering expression is not
+//      a bare `<vec col> <op> <const>` silently falls back to a sequential scan per outer row,
+//      which is QUADRATIC AGAIN and slower than what it replaced.
+//   2. **The clusters are still right.** An empty or truncated edge list does not error; it returns
+//      every face as its own singleton, which reads as "no duplicates found" rather than as a bug.
+//      So this asserts against seeded ground truth, not against "it ran".
+//
+// Purity is the #124 property restated at integration level: no cluster may contain two identities.
+// =============================================================================================
+
+/// Seed `identities` × `per_identity` UNLABELED faces. Returns face id → identity tag.
+///
+/// Unlabeled on purpose: `build_cores` only ever clusters faces with `person_id IS NULL`, so
+/// labeled rows would be partitioned off and the clustering path would never see them.
+async fn seed_unlabeled(
+    pool: &PgPool,
+    tenant: uuid::Uuid,
+    identities: usize,
+    per_identity: usize,
+) -> std::collections::HashMap<String, String> {
+    sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, 'cluster-bench', $2)")
+        .bind(tenant)
+        .bind(format!("cluster-bench-{tenant}"))
+        .execute(pool)
+        .await
+        .expect("seed tenant");
+
+    let mut rng = Rng(0x0174_0002_5EED_0001);
+    let now = app_core::timeutil::now_rfc3339();
+    // sigma = 1.0 reproduces the real-capture regime the #127 gallery measured: intra-identity
+    // ~0.50 (inside CLUSTER_EPS = 0.55) and inter-identity ~1.00 (well outside it).
+    let sigma = 1.0f32;
+
+    let mut batch: Vec<(String, String)> = Vec::new();
+    for i in 0..identities {
+        let centroid = l2_normalize(&rng.vec(DIM));
+        let tag = format!("ident-{i:04}");
+        for _ in 0..per_identity {
+            batch.push((tag.clone(), vector_literal(&member_of(&centroid, sigma, &mut rng))));
+        }
+    }
+    // The identity tag rides in `source` so ground truth can be read back from the DB rather than
+    // depending on multi-row INSERT ... RETURNING preserving VALUES order.
+    for chunk in batch.chunks(100) {
+        let mut sql = String::from(
+            "INSERT INTO faces (tenant_id, embedding, confidence, face_width, source, created_at) VALUES ",
+        );
+        for i in 0..chunk.len() {
+            if i > 0 {
+                sql.push(',');
+            }
+            sql.push_str(&format!(
+                "($1, ${}::vector, 90, 120, ${}, $2)",
+                3 + i * 2,
+                4 + i * 2
+            ));
+        }
+        let mut q = sqlx::query(&sql).bind(tenant).bind(&now);
+        for (tag, v) in chunk {
+            q = q.bind(v).bind(tag);
+        }
+        q.execute(pool).await.expect("seed unlabeled faces");
+    }
+
+    sqlx::query("ANALYZE faces").execute(pool).await.ok();
+
+    sqlx::query_as::<_, (String, String)>(
+        "SELECT id::text, source FROM faces WHERE tenant_id = $1",
+    )
+    .bind(tenant)
+    .fetch_all(pool)
+    .await
+    .expect("read back ground truth")
+    .into_iter()
+    .collect()
+}
+
+#[test]
+fn clustering_recovers_seeded_identities_via_the_index() {
+    let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
+        eprintln!("face_knn_bench: TEST_DATABASE_URL unset — skipping");
+        return;
+    };
+    // ~5000 faces, deliberately, for the reason the module doc gives about the #127 sizing: below
+    // a few thousand rows a sequential scan is genuinely the CHEAPER plan, so the planner picks it
+    // and the index assertion fails on a perfectly good query. Measured on this schema: at 600
+    // faces the LATERAL plans `Seq Scan on faces x` (599 rows x 600 loops, 2.3 s); at 10 000 it
+    // plans `Index Scan using faces_embedding_hnsw` (10 rows x 10 000 loops, 5.2 s). Shrinking
+    // these knobs to make the test faster will make it fail for the wrong reason.
+    let identities = env_usize("CLUSTER_IDENTITIES", 200);
+    let per_identity = env_usize("CLUSTER_PER_IDENTITY", 25);
+
+    let db = Db::connect(&url).expect("connect + migrate");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let pool = rt.block_on(async {
+        PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&url)
+            .await
+            .expect("pool")
+    });
+    let tenant = uuid::Uuid::new_v4();
+    let truth = rt.block_on(seed_unlabeled(&pool, tenant, identities, per_identity));
+    let total = truth.len();
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // ---- 1. the plan ----------------------------------------------------------------
+        let plan = rt.block_on(async {
+            let mut tx = pool.begin().await.expect("tx");
+            sqlx::query("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
+                .execute(&mut *tx)
+                .await
+                .ok();
+            let rows = sqlx::query(
+                "EXPLAIN (ANALYZE, TIMING OFF) \
+                 WITH scoped AS ( \
+                   SELECT id, embedding FROM faces \
+                    WHERE tenant_id = $1 AND person_id IS NULL AND NOT ignored \
+                    ORDER BY created_at DESC LIMIT 20000 ) \
+                 SELECT s.id, n.id FROM scoped s CROSS JOIN LATERAL ( \
+                   SELECT x.id, x.embedding <=> s.embedding AS d FROM faces x \
+                    WHERE x.tenant_id = $1 AND x.person_id IS NULL AND NOT x.ignored \
+                      AND x.id <> s.id \
+                    ORDER BY x.embedding <=> s.embedding LIMIT 40 ) n \
+                  WHERE n.d <= 0.55",
+            )
+            .bind(tenant)
+            .fetch_all(&mut *tx)
+            .await
+            .expect("explain");
+            let text: Vec<String> = rows.iter().map(|r| r.get::<String, _>(0)).collect();
+            tx.commit().await.ok();
+            text.join("\n")
+        });
+        println!("\n--- LATERAL kNN plan ---\n{plan}\n");
+        assert!(
+            plan.contains("hnsw"),
+            "the LATERAL kNN is not using the HNSW index — clustering is quadratic again:\n{plan}"
+        );
+        assert!(
+            !plan.contains("Seq Scan on faces x"),
+            "the LATERAL's inner candidate scan is sequential — one full scan PER FACE:\n{plan}"
+        );
+
+        // ---- 2. the clusters ------------------------------------------------------------
+        let started = Instant::now();
+        let clusters = faces::cluster_unlabeled(&db, tenant, 0.55);
+        let elapsed = started.elapsed();
+        println!(
+            "clustered {total} faces ({identities} identities x {per_identity}) into {} clusters in {:?}",
+            clusters.len(),
+            elapsed
+        );
+
+        assert!(
+            !clusters.is_empty(),
+            "clustering returned nothing for {total} seeded faces — the edge list is empty, which \
+             is what a failed neighbour query looks like"
+        );
+
+        // Purity: the anti-chaining property. A cluster spanning two seeded identities means the
+        // linkage rule welded them, which is exactly the #124 bug.
+        let mut mixed = Vec::new();
+        let mut largest_per_identity: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for c in &clusters {
+            let tags: std::collections::HashSet<&str> = c
+                .face_ids
+                .iter()
+                .map(|id| truth.get(id).expect("clustered face was seeded").as_str())
+                .collect();
+            if tags.len() > 1 {
+                let mut t: Vec<&str> = tags.into_iter().collect();
+                t.sort_unstable();
+                mixed.push((c.size, t));
+                continue;
+            }
+            let tag = *tags.iter().next().expect("non-empty cluster");
+            let e = largest_per_identity.entry(tag).or_insert(0);
+            *e = (*e).max(c.size);
+        }
+        assert!(
+            mixed.is_empty(),
+            "clusters span more than one seeded identity — chaining is back: {mixed:?}"
+        );
+
+        // Coverage: purity alone is satisfied by returning every face as a singleton, which would
+        // be useless. Each identity must be substantially recovered in ONE cluster.
+        let recovered: Vec<(&str, usize)> = largest_per_identity
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .filter(|(_, size)| *size * 100 < per_identity * 60)
+            .collect();
+        let mean: f64 = largest_per_identity.values().sum::<usize>() as f64
+            / largest_per_identity.len().max(1) as f64;
+        println!(
+            "largest cluster per identity: mean {mean:.1} of {per_identity} faces; \
+             {} identities under 60%",
+            recovered.len()
+        );
+        assert!(
+            recovered.len() * 10 <= identities, // allow a 10% tail of fragmented identities
+            "identities were fragmented rather than clustered ({} of {identities} recovered less \
+             than 60% into one cluster): {recovered:?}",
+            recovered.len()
+        );
+    }));
+
+    rt.block_on(cleanup(&pool, tenant));
+    if let Err(e) = result {
+        std::panic::resume_unwind(e);
+    }
+}
+
+/// Where the index actually starts winning — the number that decides `MAX_CLUSTER_N`.
+///
+/// The index-backed neighbour query is not free: each of the N probes pays HNSW graph traversal,
+/// tuple fetch and row plumbing, and that per-probe cost grows with the index. The in-memory scan is
+/// N²/2 dot products over contiguous f32 — quadratic, but with an extremely small constant.
+///
+/// So "quadratic is worse" is an asymptotic claim, not a claim about the sizes this product has. At
+/// some N the index wins; below it the naive scan does, and capping the workspace on the wrong side
+/// of that crossover makes clustering slower in the name of scale. This measures the Rust side; the
+/// SQL side comes from `clustering_recovers_seeded_identities_via_the_index`, which prints the
+/// LATERAL's `Execution Time` at the same sizes.
+///
+/// Run it with `--release`: a debug-build number here is meaningless and would push the crossover
+/// the wrong way by an order of magnitude.
+#[test]
+fn in_memory_knn_cost_at_scale() {
+    if std::env::var("BENCH_KNN_SCAN").is_err() {
+        eprintln!("in_memory_knn_cost_at_scale: set BENCH_KNN_SCAN=1 to run — skipping");
+        return;
+    }
+    let mut rng = Rng(0x5CA1_AB1E);
+    for n in [1000usize, 5000, 10000, 20000] {
+        let vecs: Vec<Vec<f32>> = (0..n).map(|_| l2_normalize(&rng.vec(DIM))).collect();
+        let started = Instant::now();
+        let mut edges = 0usize;
+        for i in 0..n {
+            let mut d: Vec<(f32, usize)> = (0..n)
+                .filter(|&j| j != i)
+                .map(|j| (cosine_distance(&vecs[i], &vecs[j]), j))
+                .collect();
+            d.sort_by(|a, b| a.0.total_cmp(&b.0));
+            d.truncate(40);
+            edges += d.len();
+        }
+        println!(
+            "in-memory kNN: n={n:>6}  {:>8.2?}  ({edges} edges)",
+            started.elapsed()
+        );
+    }
+}
