@@ -88,7 +88,9 @@ export async function registerDeviceCamera(
   facing: "front" | "back",
 ): Promise<string> {
   const ip = edge.cameraIp; // stable + unique per phone, derived from the box id server-side
-  await saveDevice({ ip, name: `Phone — ${facing} camera` });
+  // `xaddr` empty, not absent: there is no ONVIF endpoint on a phone lens, but the field is
+  // required by the Rust `Device` (it has no serde default).
+  await saveDevice({ ip, xaddr: "", name: `Phone — ${facing} camera` });
   await setCredentials(ip, "", "", `device:${facing}`);
   return ip;
 }

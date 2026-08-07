@@ -2,10 +2,16 @@
 // `types.ts` — only the fields the phone actually uses.
 import { api } from "./session";
 
-/** A saved camera (`app_core::devices::Device`). */
+/** A saved camera (`app_core::devices::Device`).
+ *
+ *  `xaddr` is REQUIRED, matching the Rust struct — it carries no `#[serde(default)]`, so a payload
+ *  without it is rejected with "missing field `xaddr`". It was optional here, which let a caller
+ *  omit it and only find out from the server at run time. Empty string is the right value for a
+ *  camera with no ONVIF endpoint. */
 export type Device = {
   id?: string;
   ip: string;
+  xaddr: string;
   name: string;
   manufacturer?: string | null;
   model?: string | null;
