@@ -458,6 +458,11 @@ pub struct RecordingManager {
     dials: Mutex<HashMap<String, String>>,
 }
 
+/// Smallest file that can hold actual video. An empty fMP4 — `ftyp` plus a `moov` describing a
+/// track with no samples — measures about 587 bytes, so anything at or below this is a container
+/// with nothing in it, never a short clip.
+const MIN_PLAYABLE_CLIP_BYTES: i64 = 1000;
+
 impl RecordingManager {
     pub fn boot(control_url: &str) -> Arc<RecordingManager> {
         let mut config = fetch_config(control_url).unwrap_or_default();
@@ -573,6 +578,26 @@ impl RecordingManager {
         camera_ip: &str,
         requested_pre_roll_secs: u32,
     ) -> Result<(String, bool), String> {
+        // A device camera (#175) has no H264 ANYWHERE. The host app pushes JPEG frames into the
+        // capture slot, while recording collects H264 by dialling the camera over RTSP — there is
+        // nothing here to dial, and `device:front` is not a URL retina can parse.
+        //
+        // Left alone, that failure is silent and produces something worse than an error: the ring
+        // stays empty, the muxer writes ftyp+moov with no samples, and a 587-byte file lands in the
+        // recordings list looking like a clip whose video was lost. Refusing says what is true.
+        //
+        // Making this work means encoding the pushed frames to H264 (GStreamer is linked, so an
+        // appsrc → jpegdec → encoder chain is the shape) or having the host deliver H264 instead of
+        // JPEG. Both are real work and neither is this guard.
+        if let Some(dial) = self.dials.lock().unwrap().get(camera_ip) {
+            if crate::capture::is_device_url(dial) {
+                return Err(format!(
+                    "{camera_ip} is a device camera: it streams JPEG frames from the app, and \
+                     recording needs H264. Recording it is not supported yet."
+                ));
+            }
+        }
+
         {
             let sessions = self.sessions.lock().unwrap();
             if let Some((id, _)) = sessions.iter().find(|(_, s)| s.camera_ip == camera_ip) {
@@ -742,10 +767,22 @@ impl RecordingManager {
         let _ = sess.muxer.wait();
 
         let size_bytes = fs::metadata(&sess.output).map(|m| m.len()).unwrap_or(0) as i64;
-        if size_bytes < 1000 {
-            log::warn!(
-                "recording[{clip_id}]: clip is only {size_bytes}B — ring may not have been warm"
-            );
+        // A clip with no media is not a clip. `ftyp` + `moov` with zero samples is ~587 bytes, and
+        // that is EXACTLY what shipped to the UI whenever the ring never filled: a row in the
+        // recordings list, an upload to R2, a duration in seconds, and a file no player can open.
+        // This used to be a `log::warn!` that then published the artefact anyway — the warning went
+        // to a log nobody reads while the user got something that looks like their video was lost.
+        //
+        // Seen twice in one session: a device camera, which has no H264 to record at all (#175),
+        // and a wall camera whose RTSP session was taken by a second edge dialling it concurrently.
+        // Different causes, identical 587-byte output, and neither said anything.
+        if size_bytes < MIN_PLAYABLE_CLIP_BYTES {
+            let _ = fs::remove_file(&sess.output);
+            return Err(format!(
+                "clip has no video ({size_bytes} bytes — header only). The camera delivered no \
+                 frames for this window: it may be unreachable, or another client may hold its \
+                 RTSP session."
+            ));
         }
 
         let started = chrono::DateTime::parse_from_rfc3339(&sess.started_at)
