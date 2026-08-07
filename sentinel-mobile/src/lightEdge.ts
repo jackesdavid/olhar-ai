@@ -48,13 +48,40 @@ export async function restore(): Promise<LightEdge | null> {
   return boxToken && cameraIp ? { boxToken, cameraIp } : null;
 }
 
+/** Is this stored box identity still one the server knows?
+ *
+ *  `/config/cameras` is the box's own endpoint and answers 401 "unknown box token" for an identity
+ *  that no longer exists — the cheapest honest check, and it exercises the exact credential the
+ *  edge will boot with. A network failure is NOT treated as invalid: dropping a good identity
+ *  because the wifi blipped would spawn a duplicate box every time the phone is offline. */
+async function stillValid(edge: LightEdge): Promise<boolean> {
+  try {
+    const r = await fetch(`${CONTROL_BASE}/config/cameras`, {
+      headers: { authorization: `Bearer ${edge.boxToken}` },
+      signal: AbortSignal.timeout(8000),
+    });
+    return r.status !== 401;
+  } catch {
+    return true; // unreachable ≠ rejected
+  }
+}
+
 /** Register this phone as a light-edge box, or return the existing identity if already registered.
- *  Idempotent on the CLIENT: we only call the server when there is no stored token, so a phone does
- *  not spawn a new box on every launch. (If the keychain is cleared — reinstall — it registers
- *  afresh; the stale box can be deleted from the Boxes screen. See the plan's open decisions.) */
+ *
+ *  Idempotent on the CLIENT: the server is only called when there is no usable stored token, so a
+ *  phone does not spawn a new box on every launch.
+ *
+ *  The stored identity is VERIFIED, not trusted. The keychain outlives the server row — delete the
+ *  box from the Boxes screen (or wipe the tenant's boxes) and the phone keeps a token nothing
+ *  accepts. Everything then fails in the most confusing way available: registering a camera still
+ *  works (that uses the USER's JWT), so a device row appears and looks right, while the edge boots
+ *  with a rejected token, pulls no cameras, starts no frame hub, and reports nothing at all. That is
+ *  exactly what happened on the first end-to-end run of #175: a `phone-227a7d58` device sitting in
+ *  the tenant with no box `227a7d58` behind it. */
 export async function ensureRegistered(name: string): Promise<LightEdge> {
   const existing = await restore();
-  if (existing) return existing;
+  if (existing && (await stillValid(existing))) return existing;
+  if (existing) await forget(); // orphaned by a server-side delete — start over
 
   const resp = await api<SelfRegisterResp>("/boxes/self-register", {
     method: "POST",
