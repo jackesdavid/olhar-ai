@@ -33,6 +33,8 @@ export default function EdgeTest() {
   const [camState, setCamState] = useState<string | null>(null);
   const [camBusy, setCamBusy] = useState(false);
   const [camOn, setCamOn] = useState(false);
+  const [hub, setHub] = useState<string | null>(null);
+  const [hubBusy, setHubBusy] = useState(false);
 
   async function boot() {
     setError(null);
@@ -76,6 +78,27 @@ export default function EdgeTest() {
       setRec(`could not record: ${(e as Error).message}`);
     } finally {
       setRecBusy(false);
+    }
+  }
+
+  /** Read the hub's own counters. This is the diagnosis the cloud cannot give: `last_frame_at` and
+   *  the streaming list both report the capture SLOT, so they go green whenever the app is pushing
+   *  — with or without a hub consuming those frames. */
+  async function readHub() {
+    setHub(null);
+    setHubBusy(true);
+    try {
+      const r = await fetch(`${EDGE}/hub`, { signal: AbortSignal.timeout(8000) });
+      const stats = (await r.json()) as Record<string, Record<string, number>>;
+      const lines = Object.entries(stats).map(([ip, s]) => {
+        const size = s.width ? ` ${s.width}x${s.height}` : "";
+        return `${ip}: frames=${s.frames} vazio=${s.empty_reads} decodeFail=${s.decode_failures} qualif=${s.qualified} emit=${s.emitted} score=${(s.last_score ?? 0).toFixed(2)}%${size}`;
+      });
+      setHub(lines.length ? lines.join("\n\n") : "no camera has a hub thread yet");
+    } catch (e) {
+      setHub(`could not read: ${(e as Error).message}`);
+    } finally {
+      setHubBusy(false);
     }
   }
 
@@ -129,6 +152,16 @@ export default function EdgeTest() {
         {rec ? <Muted>{rec}</Muted> : null}
       </Card>
       <Button label="Record (8s)" onPress={recordCamera} busy={recBusy} disabled={status !== "up"} />
+
+      <Card>
+        <Strong>Hub diagnostics</Strong>
+        <Muted>
+          What the frame hub itself saw, per camera. The cloud can only see that frames ARRIVED —
+          these counters say whether anything read them.
+        </Muted>
+        {hub ? <Muted>{hub}</Muted> : null}
+      </Card>
+      <Button label="Read hub counters" onPress={readHub} busy={hubBusy} disabled={status !== "up"} />
 
       <Card>
         <Strong>This phone's camera</Strong>

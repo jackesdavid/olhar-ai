@@ -21,6 +21,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/health", get(health))
         .route("/devices", get(devices))
         .route("/streams", get(streams))
+        // Per-camera hub counters (#175). The cloud-visible signals all read the capture SLOT, so
+        // they cannot distinguish "frames arrive and the hub consumes them" from "frames arrive and
+        // nothing does" — both look healthy. This reports what the hub thread itself saw.
+        .route("/hub", get(hub))
         .route("/snapshot/:ip", get(snapshot))
         .route("/api/frame.jpeg", get(frame_jpeg))
         .route("/probe/:ip", post(probe))
@@ -64,6 +68,10 @@ async fn devices(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         })
         .collect();
     Json(list)
+}
+
+async fn hub() -> impl IntoResponse {
+    Json(crate::frames::hub_stats())
 }
 
 async fn streams(State(state): State<Arc<AppState>>) -> impl IntoResponse {
