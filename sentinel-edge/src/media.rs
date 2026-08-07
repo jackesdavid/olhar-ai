@@ -121,7 +121,15 @@ pub fn init_gstreamer() -> Result<(), String> {
 /// The plugins our pipelines need — the visible elements plus rtspsrc's hidden deps (rtpmanager, udp), registered from their static
 /// `gst_plugin_<name>_register` symbols in the iOS GStreamer framework. Keep this list in step with
 /// the pipeline (and with the Mac `.pkg`'s bundled-plugin list).
-#[cfg(all(feature = "gst-linked", target_os = "ios"))]
+// Gated on the PLATFORM only. This carried `feature = "gst-linked"` as well, and 277f079 deleted
+// that feature when GStreamer became the only media path — so on iOS the module stopped compiling
+// in while `init_gstreamer` (gated on `target_os` alone) went on calling it. The iOS edge library
+// has not built since.
+//
+// Nothing noticed because nothing builds it: CI has no iOS job, and the checked-in `.a` is a build
+// artefact that kept working from before the break. A cfg that silently removes code is invisible
+// until something asks for the symbol.
+#[cfg(target_os = "ios")]
 mod ios_static_plugins {
     use std::sync::Once;
 

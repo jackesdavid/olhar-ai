@@ -68,6 +68,46 @@ fn slot_for(ip: &str) -> Arc<Slot> {
     Arc::clone(map.entry(ip.to_string()).or_default())
 }
 
+/// What one camera's hub thread has actually been doing, exposed at `GET /hub` on the edge's local
+/// server.
+///
+/// This exists because bringing up the phone camera (#175) was debugged blind. Every signal
+/// reachable from the cloud — `last_frame_at`, the streaming list — reads the capture SLOT, which
+/// says frames ARRIVED and nothing about whether the hub consumed them; both go green while the hub
+/// is absent, and the box relays no logs. These counters separate the failures that look identical
+/// from outside:
+///
+/// - `frames == 0` with `empty_reads` climbing → the hub is running but reading a slot nobody fills
+/// - both zero → no hub thread at all for this camera
+/// - `decode_failures` climbing → frames arrive in a format `decode_bgr` rejects
+/// - `frames` climbing with `last_score` under the floor → it is the motion gate, not the plumbing
+#[derive(Default, Clone, serde::Serialize)]
+pub struct HubStats {
+    pub frames: u64,
+    pub empty_reads: u64,
+    pub decode_failures: u64,
+    pub qualified: u64,
+    pub emitted: u64,
+    pub last_score: f64,
+    pub width: u32,
+    pub height: u32,
+}
+
+fn stats() -> &'static Mutex<HashMap<String, HubStats>> {
+    static S: OnceLock<Mutex<HashMap<String, HubStats>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Per-camera hub counters for the local `/hub` endpoint.
+pub fn hub_stats() -> HashMap<String, HubStats> {
+    stats().lock().unwrap().clone()
+}
+
+fn bump(ip: &str, f: impl FnOnce(&mut HubStats)) {
+    let mut map = stats().lock().unwrap();
+    f(map.entry(ip.to_string()).or_default());
+}
+
 /// A consumer's handle on one camera's frames.
 pub struct Sub {
     slot: Arc<Slot>,
@@ -104,7 +144,7 @@ impl Sub {
     }
 }
 
-/// Spawn the hub manager: every 30s reconcile one source thread per camera that has a resolvable
+/// Spawn the hub manager: every 5s reconcile one source thread per camera that has a resolvable
 /// stream URL, starting new ones and stopping sources whose camera vanished. (Same reconciler shape
 /// the motion watcher had — this replaces `motion::spawn`.)
 pub fn spawn(state: &Arc<AppState>) {
@@ -138,7 +178,14 @@ pub fn spawn(state: &Arc<AppState>) {
                     std::thread::spawn(move || source(st, ip2, stop));
                 }
             }
-            std::thread::sleep(Duration::from_secs(30));
+            // 5s, not 30. The body is a lock and a set comparison — nothing that justifies half a
+            // minute — and the delay is how long a NEWLY ADDED camera waits before anything reads
+            // it. That is invisible on a wall camera and fatal on a phone (#175): the user adds the
+            // device camera, starts capture, watches for ten seconds and sees nothing, because the
+            // hub has not started yet. Worse, it looks healthy while it happens — `last_frame_at`
+            // and the streaming list both read the capture SLOT, which the host app is filling, so
+            // they go green with no hub behind them.
+            std::thread::sleep(Duration::from_secs(5));
         }
     });
 }
@@ -246,6 +293,12 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
             .config
             .face_capture_stream
             .eq_ignore_ascii_case("hd");
+    // Resolve the slot ONCE and read from that same slot below. `ensure` resolves it internally via
+    // `stream_slot`, so passing the raw `hd` to `latest_fresh` was reading a different key than the
+    // one being filled whenever the two disagree — silently, since a missing frame is a skipped
+    // tick, not an error. For a device camera (#175) they disagree exactly when
+    // `face_capture_stream` is "hd": the app fills `ip`, the hub would poll `ip/hd` forever.
+    let read_slot = crate::capture::stream_slot(state, ip, hd);
     // Warm, continuous frames from the supervised persistent decoder (#120).
     crate::capture::ensure(state, ip, hd);
     log::info!(
@@ -271,9 +324,10 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
         // model and try again, never tear the source down.
         // The decoder is the only source. No fresh frame means it is warming or restarting: skip
         // this tick and keep the background model rather than tearing the source down.
-        let jpeg = match crate::capture::latest_fresh(ip, hd, Duration::from_secs(3)) {
+        let jpeg = match crate::capture::latest_fresh(ip, read_slot, Duration::from_secs(3)) {
             Some(j) => (*j).clone(),
             None => {
+                bump(ip, |s| s.empty_reads += 1);
                 std::thread::sleep(frame_gap);
                 continue;
             }
@@ -282,6 +336,7 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
         let d0 = Instant::now();
         // The one decode. Every consumer of this camera works off the buffer it produces.
         let Some((bgr, w, h)) = decode_bgr(&jpeg) else {
+            bump(ip, |s| s.decode_failures += 1);
             std::thread::sleep(frame_gap);
             continue;
         };
@@ -310,6 +365,15 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
         }
 
         let verdict = detector.feed(&bgr, w, h)?;
+        bump(ip, |s| {
+            s.frames += 1;
+            s.last_score = verdict.score;
+            s.width = w;
+            s.height = h;
+            if verdict.qualifies {
+                s.qualified += 1;
+            }
+        });
         if verdict.qualifies {
             motion_at = Some(t0);
         }
@@ -349,6 +413,7 @@ fn run(state: &Arc<AppState>, ip: &str, stop: &AtomicBool) -> Result<(), String>
             .unwrap_or(false);
         if verdict.qualifies && !throttled {
             last_emit = Some(Instant::now());
+            bump(ip, |s| s.emitted += 1);
             crate::motion::push_event(state, ip, &jpeg, (w, h), &verdict, detector.params());
             // Same gate + throttle as motion: on a qualifying frame, detect faces on the hub's BGR
             // and emit one `face_detected` per face → the cloud recognition pipeline (#117).

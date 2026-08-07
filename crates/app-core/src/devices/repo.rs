@@ -8,7 +8,7 @@ use crate::db::Db;
 use super::Device;
 
 const COLS: &str = "id, ip, xaddr, name, manufacturer, model, username, password, rtsp_url, \
-     stream_mode, probe_status, probe_detail, probe_at, last_frame_at";
+     stream_mode, probe_status, probe_detail, probe_at, last_frame_at, box_id::text AS box_id";
 
 /// The tenant's device list, ordered by name. Empty (and logged) on a query error.
 pub fn load(db: &Db, tenant_id: Uuid) -> Vec<Device> {
@@ -40,8 +40,8 @@ pub fn save(db: &Db, tenant_id: Uuid, devices: &[Device]) {
                 // re-insert, so omitting them would wipe every camera's status on any device edit.
                 "INSERT INTO devices \
                  (tenant_id, ip, id, xaddr, name, manufacturer, model, username, password, rtsp_url, stream_mode, \
-                  probe_status, probe_detail, probe_at, last_frame_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+                  probe_status, probe_detail, probe_at, last_frame_at, box_id) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::uuid)",
             )
             .bind(tenant_id)
             .bind(&d.ip)
@@ -58,6 +58,10 @@ pub fn save(db: &Db, tenant_id: Uuid, devices: &[Device]) {
             .bind(&d.probe_detail)
             .bind(&d.probe_at)
             .bind(&d.last_frame_at)
+            // Carried through the delete-all + re-insert for the same reason the status columns
+            // are: omitting it would silently UNCLAIM every camera on any device edit, and an
+            // unclaimed camera is served to every box again.
+            .bind(&d.box_id)
             .execute(&mut *tx)
             .await?;
         }

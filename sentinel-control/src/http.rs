@@ -530,9 +530,11 @@ async fn cameras(
     headers: HeaderMap,
     RawQuery(q): RawQuery,
 ) -> Response {
-    let tenant = match box_tenant(&st, &headers).await {
-        Ok(Some(tid)) => tid,
-        Ok(None) if untenanted_dev_config() => DEFAULT_TENANT_ID,
+    // Identity, not just tenancy (#175): the response must be scoped to THIS BOX, because a camera
+    // belongs to one box and no other may dial it. `box_tenant` cannot express that.
+    let (tenant, this_box) = match box_identity(&st, &headers).await {
+        Ok(Some((tid, bid))) => (tid, Some(bid)),
+        Ok(None) if untenanted_dev_config() => (DEFAULT_TENANT_ID, None),
         Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
         Err(resp) => return resp,
     };
@@ -559,6 +561,14 @@ async fn cameras(
     }
 
     let mut list = devices::repo::load(&st.db, tenant);
+    // Serve a camera only to the box that owns it. `None` is unclaimed and goes to everyone, which
+    // is the pre-#175 behaviour every existing row starts with — so this filter changes nothing
+    // until a box claims something, and there is no deploy window where a working box loses its
+    // cameras.
+    if let Some(bid) = this_box {
+        let me = bid.to_string();
+        list.retain(|d| d.box_id.as_deref().map(|o| o == me).unwrap_or(true));
+    }
     // Hand over any credentials the web staged for this tenant's cameras — ONCE — then
     // discard them. Camera credentials are never persisted in the control DB.
     {
@@ -732,13 +742,36 @@ async fn camera_status_push(
     headers: HeaderMap,
     body: Option<Json<Vec<store::CameraStatusIn>>>,
 ) -> Response {
-    let tenant = match box_tenant(&st, &headers).await {
-        Ok(Some(t)) => t,
+    let (tenant, this_box) = match box_identity(&st, &headers).await {
+        Ok(Some((t, b))) => (t, b),
         Ok(None) => return (StatusCode::UNAUTHORIZED, "box token required").into_response(),
         Err(resp) => return resp,
     };
     let items = body.map(|Json(v)| v).unwrap_or_default();
     let now = app_core::timeutil::now_rfc3339();
+
+    // Claim (#175). `streaming` here means the edge has RECENT FRAMES from that camera
+    // (`push_camera_status` derives it from `last_frame_age`), which is the only honest evidence of
+    // who is actually consuming it.
+    //
+    // Not `/config/streaming`: that reports every camera with a non-empty `rtsp_url` — what the box
+    // INTENDS to serve, not what it is reading. Claiming on that would let the appliance take the
+    // phone's device camera and the phone take the appliance's wall cameras, which is the failure
+    // being fixed.
+    //
+    // Only unclaimed cameras are taken, never moved between boxes: two boxes both reading one
+    // camera today resolve to whichever reports first, and the loser stops being served it on its
+    // next config pull. That is the intended outcome — one consumer per camera.
+    let streaming: Vec<String> = items
+        .iter()
+        .filter(|s| s.status == "streaming")
+        .map(|s| s.ip.clone())
+        .collect();
+    if !streaming.is_empty() {
+        if let Err(e) = store::claim_unowned_cameras(&st.pool, tenant, this_box, &streaming).await {
+            log::error!("claim_unowned_cameras failed: {e}");
+        }
+    }
 
     for s in &items {
         let healthy_now = matches!(s.status.as_str(), "ok" | "streaming");

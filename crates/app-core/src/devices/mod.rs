@@ -42,6 +42,18 @@ pub struct Device {
     /// (highest-resolution) profile's stream.
     #[serde(default)]
     pub rtsp_url: Option<String>,
+    /// The box that OWNS this camera — the only one allowed to dial it (#175, migration 0091).
+    ///
+    /// `capture.rs` requires exactly one connection per camera because a consumer camera caps
+    /// concurrent RTSP sessions and the extra client is what makes it go dark. That was enforced
+    /// within an edge and by nothing between edges, which held only while a tenant had one box.
+    ///
+    /// `None` means unclaimed: served to every box, which is the pre-#175 behaviour and what every
+    /// existing row starts as. A box claims a camera by reporting it as streaming — the honest
+    /// evidence of who is actually consuming it — and `/config/cameras` then serves that camera to
+    /// that box alone.
+    #[serde(default)]
+    pub box_id: Option<String>,
     /// Live status (card #155, migration 0083) — `rtsp_probe::ProbeStatus` snake_case, plus the
     /// camera's own words and when it was established. NULL until first reported.
     ///
@@ -92,6 +104,10 @@ impl Device {
             rtsp_url: None,
             rtsp_sub_url: None,
             stream_mode: None,
+            // Unclaimed. Discovery is the wrong moment to assign an owner: on a shared LAN every
+            // box discovers the same cameras, so the phone would happily claim the appliance's.
+            // Ownership follows STREAMING — who is actually consuming it — not who can see it.
+            box_id: None,
             // A just-discovered camera has no status yet, and NULL is the honest answer. It is also
             // load-bearing: control treats "no previous status" as "not a transition", so a new
             // camera never announces itself as having "come online".
