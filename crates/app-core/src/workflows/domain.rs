@@ -938,7 +938,7 @@ const RECOGNIZE_FACE_OUT: [Port; 9] = [
     p("margin", PortType::Num, false),  // percentage points clear of the next DIFFERENT identity
     p("ambiguous", PortType::Bool, false), // runner-up within `margin` — found is forced false
 ];
-const STORE_FACE_IN: [Port; 11] = [
+const STORE_FACE_IN: [Port; 12] = [
     p("image", PortType::Image, false),
     p("embedding", PortType::Embedding, true),
     p("bbox", PortType::Bbox, false),
@@ -948,6 +948,10 @@ const STORE_FACE_IN: [Port; 11] = [
     p("face_width", PortType::Num, false), // face box width in source px (far-face signal)
     // Quality signals (#126), carried through from `face_detected` so the stored capture records
     // what it was measured at. STORED, never judged — the gate that used them ran upstream.
+    // The edge's 5 YuNet keypoints, if the graph wires them from `face_detected`. Used only as a
+    // FALLBACK for the stored overlay when the sidecar cannot produce the dense 106 — the pose
+    // columns are already computed from these on the edge, so nothing here recomputes them.
+    p("kps", PortType::Landmarks, false),
     p("blur", PortType::Num, false),  // sharpness; higher = sharper
     p("yaw", PortType::Num, false),   // degrees
     p("pitch", PortType::Num, false), // degrees

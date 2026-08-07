@@ -127,6 +127,8 @@ async fn seed(pool: &PgPool, db: &Db) -> Fixture {
                     yaw: Some(0.0),
                     pitch: Some(0.0),
                     roll: Some(0.0),
+                    landmarks: None,
+                    landmarks_source: None,
                 },
             )
             .expect("seed face");

@@ -6,6 +6,8 @@
   import { onMount } from "svelte";
   import { toast } from "svelte-sonner";
   import ScanFace from "@lucide/svelte/icons/scan-face";
+  import Axis3d from "@lucide/svelte/icons/axis-3d";
+  import PoseGizmo from "$lib/components/pose-gizmo.svelte";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
   import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
   import Lasso from "@lucide/svelte/icons/lasso";
@@ -93,6 +95,8 @@
   let busyDetail = $state(false);
   // Facial landmark overlay — on-demand 5 keypoints drawn over the crop, toggled like Context.
   let pointsOn = $state(false);
+  // Pose gizmo, off by default: it is a diagnostic, and the panel should open showing the face.
+  let poseOn = $state(false);
   let pointsBusy = $state(false);
   let detailPoints = $state<{ pts: [number, number][]; w: number; h: number } | null>(null);
   // Which landmark pairs to connect into the biometric constellation (InsightFace kps order:
@@ -499,6 +503,27 @@
       toast.error(t.faceLoadFailed, { description: String(e) });
     }
   }
+  /** Was pose measured for this face? Captures from before #126 — or from a graph that never wired
+   *  the ports — carry null, and a gizmo drawn from nulls would confidently show a face staring
+   *  straight ahead. Absent is not zero. */
+  function hasPose(d: FaceDetail | null | undefined): boolean {
+    return !!d && (d.yaw !== null || d.pitch !== null || d.roll !== null);
+  }
+
+  function fmtNum(v: number | null | undefined): string {
+    return v === null || v === undefined ? t.notMeasured : String(Math.round(v));
+  }
+
+  function fmtDeg(v: number | null | undefined): string {
+    return v === null || v === undefined ? "—" : `${Math.round(v)}°`;
+  }
+
+  /** The three angles on one line, for the summary row. */
+  function fmtPose(d: FaceDetail | null | undefined): string {
+    if (!hasPose(d)) return t.notMeasured;
+    return `${fmtDeg(d!.yaw)} / ${fmtDeg(d!.pitch)} / ${fmtDeg(d!.roll)}`;
+  }
+
   function closeDetail() {
     if (!detail) return;
     detailReady = false;
@@ -886,6 +911,11 @@
         <button class="flex items-center gap-1.5 {pointsOn ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}" disabled={pointsBusy} onclick={toggleDetailPoints}>
           <ScanFace class="size-3.5" /> {pointsBusy ? t.detecting : pointsOn ? t.hidePoints : t.facePoints}
         </button>
+        {#if hasPose(detail.data)}
+          <button class="flex items-center gap-1.5 {poseOn ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}" onclick={() => (poseOn = !poseOn)}>
+            <Axis3d class="size-3.5" /> {poseOn ? t.hidePose : t.showPose}
+          </button>
+        {/if}
       </div>
 
       {#if detail.data}
@@ -894,10 +924,24 @@
           <div><dt class="text-muted-foreground">{t.source}</dt><dd>{detail.data.source}</dd></div>
           <div><dt class="text-muted-foreground">{t.matchConfidence}</dt><dd class="tabular-nums">{Math.round(detail.data.confidence)}%</dd></div>
           <div><dt class="text-muted-foreground">{t.faceSize}</dt><dd class="tabular-nums">{t.facePx(detail.data.face_width)}</dd></div>
+          <div><dt class="text-muted-foreground">{t.sharpness}</dt><dd class="tabular-nums">{fmtNum(detail.data.blur)}</dd></div>
+          <div><dt class="text-muted-foreground">{t.headPose}</dt><dd class="tabular-nums">{fmtPose(detail.data)}</dd></div>
           {#if detail.data.bbox}
             <div class="col-span-2"><dt class="text-muted-foreground">{t.detectionBox}</dt><dd class="tabular-nums">[{detail.data.bbox.join(", ")}]</dd></div>
           {/if}
         </dl>
+
+        {#if poseOn && hasPose(detail.data)}
+          <div class="mt-3 flex items-center gap-4 rounded-lg border border-border bg-well p-3">
+            <PoseGizmo yaw={detail.data.yaw ?? 0} pitch={detail.data.pitch ?? 0} roll={detail.data.roll ?? 0} />
+            <div class="min-w-0 space-y-1 text-xs">
+              <p class="tabular-nums">yaw <span class="font-medium">{fmtDeg(detail.data.yaw)}</span></p>
+              <p class="tabular-nums">pitch <span class="font-medium">{fmtDeg(detail.data.pitch)}</span></p>
+              <p class="tabular-nums">roll <span class="font-medium">{fmtDeg(detail.data.roll)}</span></p>
+              <p class="pt-1 text-muted-foreground">{t.poseHint}</p>
+            </div>
+          </div>
+        {/if}
       {:else}
         <p class="mt-3 text-xs text-muted-foreground">{t.loadingDetails}</p>
       {/if}
