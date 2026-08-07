@@ -30,6 +30,29 @@ export type RecordingPage = { total: number; items: Recording[] };
 
 export const listDevices = () => api<Device[]>("/devices");
 
+/** Create or update a camera. Note the cloud STRIPS `rtsp_url` and credentials from this payload by
+ *  design — they live only on the edge — so a stream URL has to travel via [`setCredentials`]. */
+export const saveDevice = (device: Device) =>
+  api<void>("/devices", { method: "PUT", body: JSON.stringify(device) });
+
+/** Relay a camera's credentials — and, for a source with no ONVIF, its explicit stream URL — to the
+ *  tenant's edge. Held in control's memory until the edge collects them, then discarded; nothing
+ *  here is persisted, because an RTSP URL routinely embeds credentials.
+ *
+ *  This is how the phone's own camera becomes a real camera (#175): `rtspUrl` is `device:front` or
+ *  `device:back`, which tells the edge to expect frames pushed in by the host app rather than
+ *  something to dial. */
+export const setCredentials = (
+  ip: string,
+  username: string,
+  password: string,
+  rtspUrl?: string,
+) =>
+  api<void>(`/devices/${encodeURIComponent(ip)}/credentials`, {
+    method: "POST",
+    body: JSON.stringify({ username, password, ...(rtspUrl ? { rtsp_url: rtspUrl } : {}) }),
+  });
+
 export const listRecordings = (limit = 50) =>
   api<RecordingPage>(`/recordings?limit=${limit}&sort=started_at&dir=desc`);
 

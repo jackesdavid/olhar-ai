@@ -65,8 +65,54 @@ fn cam_key(ip: &str, hd: bool) -> String {
     }
 }
 
+/// URL scheme for a camera whose frames arrive from the HOST APPLICATION instead of over RTSP —
+/// the phone's own front/back camera (#175 Phase 1).
+///
+/// It is a URL rather than a flag so the existing plumbing carries it untouched: `frames::spawn`
+/// only starts a hub for a device with a non-empty `rtsp_url`, and a device camera genuinely has a
+/// source, just not a dialable one. Everything downstream of the frame — motion, YuNet, the quality
+/// signals, the events — is byte-identical to a wall camera's, which is the entire point of feeding
+/// the same slot rather than adding a parallel path.
+pub const DEVICE_SCHEME: &str = "device:";
+
+/// Is this a host-app camera rather than something to dial?
+pub fn is_device_url(url: &str) -> bool {
+    url.trim_start().starts_with(DEVICE_SCHEME)
+}
+
+/// Is `ip` a camera the host app feeds?
+pub fn is_device_camera(state: &crate::state::AppState, ip: &str) -> bool {
+    state
+        .device_by_ip(ip)
+        .and_then(|d| d.rtsp_url.clone())
+        .map(|u| is_device_url(&u))
+        .unwrap_or(false)
+}
+
+/// Publish a frame captured by the host app into `ip`'s preview slot (#175 Phase 1).
+///
+/// This is the ONLY writer for a device camera, and it marks the slot `started` so no supervisor
+/// ever tries to dial it — the ONE-PIPELINE invariant above is about not opening a second
+/// connection to a camera, and here there is no connection at all.
+///
+/// `jpeg` is what the phone's encoder produced. The hub decodes it exactly once, like any other
+/// source, so sharpness and pose are measured on the same kind of buffer the wall camera's are —
+/// which is what makes a phone-vs-camera comparison mean anything.
+pub fn push_device_frame(ip: &str, jpeg: Vec<u8>) {
+    let cam = cam_for(ip, false);
+    cam.started.store(true, Ordering::SeqCst);
+    *cam.latest.lock().unwrap() = Some((Arc::new(jpeg), Instant::now()));
+}
+
 /// Which decoder slot a request should join. Unified never opens a second main-stream session.
 pub fn stream_slot(state: &crate::state::AppState, ip: &str, hd: bool) -> bool {
+    // A device camera has ONE stream — no main/sub pair to choose between — so it always uses the
+    // preview slot, which is where `push_device_frame` writes. Without this, a box whose
+    // `face_capture_stream` is "hd" would have the hub read `ip/hd` while the app filled `ip`, and
+    // the camera would look permanently frozen with no error anywhere.
+    if is_device_camera(state, ip) {
+        return false;
+    }
     let unified = state
         .device_by_ip(ip)
         .map(|d| d.is_unified())
@@ -96,6 +142,13 @@ pub fn ensure(state: &crate::state::AppState, ip: &str, hd: bool) {
     let slot = stream_slot(state, ip, hd);
     let cam = cam_for(ip, slot);
     if cam.started.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    // A device camera has nothing to dial — the host app pushes into the slot via
+    // `push_device_frame`. Returning here (rather than spawning a supervisor that would fail to
+    // parse `device:front` forever) is what keeps the retry log quiet and the CPU idle.
+    if is_device_camera(state, ip) {
+        log::info!("capture[{ip}]: device camera — frames pushed by the host app, no pipeline");
         return;
     }
     // We dial the camera ourselves — that is the difference between owning the ingest and renting
@@ -548,69 +601,15 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
-#[cfg(all(test, feature = "gst-linked"))]
-mod is_keyframe_tests {
-    use super::{is_keyframe, VideoCodec};
-
-    /// Builds one retina-style access unit: 4-byte big-endian length + NAL bytes, whose first
-    /// byte carries `nal_header` (H264: `nal_unit_type` in bits 0-4; H265: `nal_unit_type` in
-    /// bits 1-6 of the FIRST of its two header bytes).
-    fn au(nal_header: u8, rest: &[u8]) -> Vec<u8> {
-        let mut nal = vec![nal_header];
-        nal.extend_from_slice(rest);
-        if matches!(rest.first(), None) {
-            nal.push(0); // H265's 2-byte header — pad so real slice data isn't required
-        }
-        let mut out = (nal.len() as u32).to_be_bytes().to_vec();
-        out.extend_from_slice(&nal);
-        out
-    }
-
-    #[test]
-    fn h264_idr_is_a_keyframe() {
-        let data = au(0x65, &[0x88]); // nal_unit_type = 5 (IDR), nal_ref_idc = 3
-        assert!(is_keyframe(&data, VideoCodec::H264));
-    }
-
-    #[test]
-    fn h264_non_idr_is_not_a_keyframe() {
-        let data = au(0x41, &[0x9a]); // nal_unit_type = 1 (non-IDR slice)
-        assert!(!is_keyframe(&data, VideoCodec::H264));
-    }
-
-    #[test]
-    fn h265_idr_is_a_keyframe() {
-        // nal_unit_type = 19 (IDR_W_RADL) in bits 1-6: header byte = 19 << 1 = 0x26.
-        let data = au(0x26, &[]);
-        assert!(is_keyframe(&data, VideoCodec::H265));
-    }
-
-    #[test]
-    fn h265_cra_is_a_keyframe() {
-        // The exact case `retina::VideoFrame::is_random_access_point()` misses (#132): CRA_NUT
-        // is NAL type 21 → header byte = 21 << 1 = 0x2a. Cameras that refresh via CRA instead of
-        // IDR (verified live on a Dahua) would otherwise never produce a fragment, ever.
-        let data = au(0x2a, &[]);
-        assert!(is_keyframe(&data, VideoCodec::H265));
-    }
-
-    #[test]
-    fn h265_trail_r_is_not_a_keyframe() {
-        // TRAIL_R = NAL type 1 → header byte = 1 << 1 = 0x02.
-        let data = au(0x02, &[]);
-        assert!(!is_keyframe(&data, VideoCodec::H265));
-    }
-
-    #[test]
-    fn multiple_nals_in_one_au_are_all_scanned() {
-        // A real AU can carry VPS+SPS+PPS+slice concatenated; the slice's IRAP-ness is what
-        // matters, wherever in the AU it lands.
-        let vps = au(0x40, &[]); // VPS_NUT = 32 → 0x40
-        let mut data = vps;
-        data.extend(au(0x2a, &[])); // CRA slice appended after it
-        assert!(is_keyframe(&data, VideoCodec::H265));
-    }
-}
+// `is_keyframe_tests` lived here and is gone. It covered `is_keyframe`, a function deleted when
+// GStreamer took over depacketizing — `h264parse`/`isomp4` decide keyframes now, so there is no
+// longer anything of ours to test. The module survived the deletion only because it was gated on
+// `feature = "gst-linked"`, itself deleted in 277f079: it had not compiled since, and restoring the
+// gate would have meant re-implementing a function nothing calls.
+//
+// Two of these were left by the same commit (see the media_smoke doc below for the other). A cfg
+// referencing a feature that does not exist removes the code silently — `cargo check` reports
+// nothing, and a dead test reads exactly like a passing one.
 
 #[cfg(test)]
 mod media_smoke {

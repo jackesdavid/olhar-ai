@@ -10,6 +10,7 @@
 import * as SecureStore from "expo-secure-store";
 
 import { CONTROL_BASE } from "./config";
+import { saveDevice, setCredentials } from "./data";
 import { api } from "./session";
 
 const BOX_TOKEN_KEY = "sentinel.lightedge.boxToken";
@@ -64,6 +65,32 @@ export async function ensureRegistered(name: string): Promise<LightEdge> {
     SecureStore.setItemAsync(CAMERA_IP_KEY, resp.camera_ip),
   ]);
   return { boxToken: resp.token, cameraIp: resp.camera_ip };
+}
+
+/** Register the phone's OWN camera as a real camera on this box (#175 Phase 1).
+ *
+ *  Two calls, and the split is forced by the credential invariant: `PUT /devices` creates the row
+ *  but control deliberately STRIPS `rtsp_url` from it (camera URLs never touch the cloud DB), so the
+ *  URL has to travel the memory-only credential channel instead. The edge collects it on its next
+ *  config pull — which `setCredentials` wakes immediately — and from then on the frame hub runs for
+ *  this camera exactly as it does for a wall camera.
+ *
+ *  `self_register` documents that it creates no `devices` row because "that table is full-replaced
+ *  by the appliance's camera sync, which would clobber a phone camera". That is no longer true: no
+ *  edge endpoint calls `devices::repo::save`, discovery lands in the separate `discovered_cameras`
+ *  table, and the only edge-driven write (`move_ip`) matches on an ONVIF id a phone camera does not
+ *  have. The remaining full-replaces are the user's own upsert/remove, which rewrite the whole list
+ *  including this row.
+ *
+ *  Returns the camera key to pass to `startDeviceCamera`. */
+export async function registerDeviceCamera(
+  edge: LightEdge,
+  facing: "front" | "back",
+): Promise<string> {
+  const ip = edge.cameraIp; // stable + unique per phone, derived from the box id server-side
+  await saveDevice({ ip, name: `Phone — ${facing} camera` });
+  await setCredentials(ip, "", "", `device:${facing}`);
+  return ip;
 }
 
 /** Forget this phone's light-edge identity (the box row stays server-side until deleted there). */

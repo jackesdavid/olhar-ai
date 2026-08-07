@@ -498,3 +498,42 @@ pub unsafe extern "C" fn start_edge(
 pub extern "C" fn stop_edge() {
     EDGE_RUNNING.store(false, Ordering::SeqCst);
 }
+
+/// Hand the edge a frame from the HOST APPLICATION's own camera (#175 Phase 1).
+///
+/// This is the whole of "the phone's camera is a real camera". The host encodes a JPEG from
+/// `AVFoundation` and calls this; the frame lands in the same slot a GStreamer pipeline would have
+/// filled, and from there the existing hub decodes it once, runs MOG2 motion, and on a qualifying
+/// throttled frame runs YuNet and emits `face_detected` with `blur`/`yaw`/`pitch` computed on the
+/// decoded buffer — the identical path a wall camera takes, with nothing branched or duplicated.
+///
+/// The camera must exist in the device list with an `rtsp_url` of `device:<something>`; that is what
+/// makes the hub start for it and what stops anything trying to dial it.
+///
+/// Returns `false` when the arguments are unusable, so the caller can tell "rejected" from
+/// "accepted and dropped later" rather than assuming every push landed.
+///
+/// # Safety
+/// `camera_id` must be a valid NUL-terminated UTF-8 C string, and `jpeg` must point to at least
+/// `len` readable bytes. The bytes are COPIED before returning, so the caller may free them
+/// immediately — which is what lets Swift hand over a buffer it does not own.
+#[no_mangle]
+pub unsafe extern "C" fn push_camera_frame(
+    camera_id: *const std::os::raw::c_char,
+    jpeg: *const u8,
+    len: usize,
+) -> bool {
+    if camera_id.is_null() || jpeg.is_null() || len == 0 {
+        return false;
+    }
+    let Ok(id) = std::ffi::CStr::from_ptr(camera_id).to_str() else {
+        return false;
+    };
+    let id = id.trim();
+    if id.is_empty() {
+        return false;
+    }
+    let bytes = std::slice::from_raw_parts(jpeg, len).to_vec();
+    capture::push_device_frame(id, bytes);
+    true
+}

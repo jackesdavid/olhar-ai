@@ -5,8 +5,14 @@
 import { useState } from "react";
 import { ScrollView, StyleSheet } from "react-native";
 
-import { hasEmbeddedEdge, startEdge } from "sentinel-edge";
-import { ensureRegistered } from "@/lightEdge";
+import {
+  hasEmbeddedEdge,
+  startDeviceCamera,
+  startEdge,
+  stopDeviceCamera,
+  type DeviceFacing,
+} from "sentinel-edge";
+import { ensureRegistered, registerDeviceCamera } from "@/lightEdge";
 import { CONTROL_BASE } from "@/config";
 import { Button, Card, Danger, Heading, Input, Muted, Strong } from "@/styles/ui";
 import { space } from "@/styles/theme";
@@ -21,6 +27,12 @@ export default function EdgeTest() {
   const [cameraIp, setCameraIp] = useState("192.168.0.7");
   const [rec, setRec] = useState<string | null>(null);
   const [recBusy, setRecBusy] = useState(false);
+
+  // The phone's OWN camera as a camera on this box (#175 Phase 1).
+  const [facing, setFacing] = useState<DeviceFacing>("front");
+  const [camState, setCamState] = useState<string | null>(null);
+  const [camBusy, setCamBusy] = useState(false);
+  const [camOn, setCamOn] = useState(false);
 
   async function boot() {
     setError(null);
@@ -67,6 +79,38 @@ export default function EdgeTest() {
     }
   }
 
+  /** Register the phone's camera as a device, then start pushing its frames into the running edge.
+   *
+   *  Both halves are needed and neither is optional: the device row (with a `device:` URL) is what
+   *  makes the frame hub START for this camera, and the capture session is what fills the slot the
+   *  hub reads. With only the first, the hub spins on an empty slot; with only the second, frames
+   *  arrive somewhere nothing is looking. */
+  async function toggleDeviceCamera() {
+    setCamState(null);
+    setCamBusy(true);
+    try {
+      if (camOn) {
+        await stopDeviceCamera();
+        setCamOn(false);
+        setCamState("Stopped.");
+        return;
+      }
+      const edge = await ensureRegistered("iPhone edge");
+      const cameraId = await registerDeviceCamera(edge, facing);
+      // The edge collects the URL on its next config pull, which registering just woke. Give it a
+      // moment before pushing frames at a slot whose hub has not started — early frames are simply
+      // overwritten, but the log reads better when they are not there at all.
+      await new Promise((res) => setTimeout(res, 1500));
+      await startDeviceCamera(cameraId, facing);
+      setCamOn(true);
+      setCamState(`Capturing on ${cameraId} (${facing}). Motion and faces run on the edge, same as a wall camera.`);
+    } catch (e) {
+      setCamState(`could not start: ${(e as Error).message}`);
+    } finally {
+      setCamBusy(false);
+    }
+  }
+
   return (
     <ScrollView
       contentContainerStyle={styles.body}
@@ -85,6 +129,27 @@ export default function EdgeTest() {
         {rec ? <Muted>{rec}</Muted> : null}
       </Card>
       <Button label="Record (8s)" onPress={recordCamera} busy={recBusy} disabled={status !== "up"} />
+
+      <Card>
+        <Strong>This phone's camera</Strong>
+        <Muted>
+          Registers the phone's own lens as a camera on this box, then feeds it into the edge. Motion
+          detection, face detection and the quality signals run exactly as they do for a wall camera —
+          same code, same frame hub. Foreground only: iOS stops the camera when the app leaves.
+        </Muted>
+        <Button
+          label={facing === "front" ? "Using the front lens — switch to back" : "Using the back lens — switch to front"}
+          onPress={() => setFacing(facing === "front" ? "back" : "front")}
+          disabled={camOn || camBusy}
+        />
+        {camState ? <Muted>{camState}</Muted> : null}
+      </Card>
+      <Button
+        label={camOn ? "Stop this phone's camera" : "Start this phone's camera"}
+        onPress={toggleDeviceCamera}
+        busy={camBusy}
+        disabled={status !== "up"}
+      />
 
       <Card>
         <Strong>{label(status)}</Strong>

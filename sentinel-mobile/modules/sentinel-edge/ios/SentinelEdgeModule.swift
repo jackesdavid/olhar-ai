@@ -9,6 +9,11 @@ func rust_start_edge(_ boxToken: UnsafePointer<CChar>?, _ controlUrl: UnsafePoin
 @_silgen_name("stop_edge") func rust_stop_edge()
 
 public class SentinelEdgeModule: Module {
+  /// The phone's own camera, feeding the edge's frame slot (#175 Phase 1). Held here so the session
+  /// outlives the JS call that started it — a local would be deallocated and the capture would stop
+  /// a moment after it began, which looks like a camera that never worked.
+  private let deviceCamera = DeviceCamera()
+
   public func definition() -> ModuleDefinition {
     Name("SentinelEdge")
 
@@ -22,6 +27,21 @@ public class SentinelEdgeModule: Module {
 
     AsyncFunction("stopEdge") {
       rust_stop_edge()
+    }
+
+    // Feed the phone's own camera into the running edge as an ordinary camera. `cameraId` must
+    // match a device in the tenant's list whose `rtsp_url` is `device:…`; that is what makes the
+    // frame hub start for it and what stops anything trying to dial it.
+    AsyncFunction("startDeviceCamera") { (cameraId: String, facing: String, fps: Double, quality: Double) in
+      try self.deviceCamera.start(cameraId: cameraId, facing: facing, fps: fps, quality: quality)
+    }
+
+    AsyncFunction("stopDeviceCamera") {
+      self.deviceCamera.stop()
+    }
+
+    Function("isDeviceCameraRunning") { () -> Bool in
+      self.deviceCamera.running
     }
   }
 }
