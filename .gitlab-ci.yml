@@ -249,6 +249,80 @@ check:web:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       changes: [sentinel-app/**/*]
 
+check:mobile:
+  stage: check
+  image: node:22-bookworm
+  interruptible: true
+  # The mobile app had NO CI at all — every build of it was made by hand, which is how it rotted
+  # unnoticed. The bug that motivated this job is the shape to remember: `capture.tsx` built its
+  # payload with `faceRatio`, a property removed when #117 replaced the ratio with a pixel width.
+  # `tsc` flagged it, but Metro strips types WITHOUT checking them, so the app bundled and ran; at
+  # run time the field was `undefined`, `JSON.stringify` dropped the key, and every face the phone
+  # captured reached control with no `face_width`. A type error that only a typecheck can see, doing
+  # silent damage to the data — exactly what an untested tree accumulates.
+  #
+  # BLOCKING, unlike check:web. That job reports-only because it inherited 9 pre-existing errors and
+  # a gate nobody can pass gets disabled. Mobile is at zero errors today, so it can block from the
+  # first day and stay there.
+  cache:
+    key:
+      files: [sentinel-mobile/package-lock.json]
+    paths: [sentinel-mobile/node_modules]
+  script:
+    - cd sentinel-mobile
+    - npm ci --no-audit --no-fund
+    - npx tsc --noEmit
+    # Typecheck alone would miss a broken import or a module that throws while loading. Exporting
+    # the bundle is what proves the app can actually START — it is the same Metro pass the device
+    # runs, minus the device. Verified to work on a clean linux/node:22 container before shipping
+    # this job, so a first-run failure means the tree, not the runner.
+    - npx expo export --platform ios --output-dir "$CI_PROJECT_DIR/mobile-bundle"
+  artifacts:
+    when: on_failure
+    paths: [sentinel-mobile/npm-debug.log]
+    expire_in: 1 week
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: [sentinel-mobile/**/*]
+    # No `changes:` on the default branch, deliberately. There it is evaluated against
+    # CI_COMMIT_BEFORE_SHA, which is empty on a merge commit — the filter then matches nothing and
+    # the job SKIPS while reporting success. That is the same failure that produced a hollow deploy
+    # (see check:pipeline-shape); a check that silently does not run is worse than no check, because
+    # the green tick claims it did.
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# Build the installable iOS app. MANUAL because an EAS build is metered and slow — it is a release
+# action, not something every merge should trigger — and because it needs `EXPO_TOKEN` set in
+# Settings → CI/CD → Variables (Masked + Protected). Without it the job stops with a clear message
+# rather than a confusing EAS auth error.
+#
+# `--profile preview` produces a STANDALONE build with the JS bundled in, which is what a phone
+# should have: the `development` profile in eas.json needs a Metro server running on a laptop on
+# the same network, and an app that white-screens the moment that laptop is closed is not an app.
+#
+# In `release`, not `build`. The build stage is for the container images deploy:vps pulls, and
+# check:pipeline-shape guards THAT set — its whole subject is "every build job must actually run on
+# the default branch, or the deploy ships nothing". A manual job sitting in that stage would be
+# counted by a guard whose meaning does not apply to it. The app is an installable artifact, which
+# is what `release` already holds.
+release:mobile-ios:
+  stage: release
+  image: node:22-bookworm
+  when: manual
+  allow_failure: true
+  script:
+    - |
+      if [ -z "$EXPO_TOKEN" ]; then
+        echo "EXPO_TOKEN is not set — add it in Settings → CI/CD → Variables (Masked + Protected)."
+        echo "Until then this job cannot authenticate with EAS."
+        exit 1
+      fi
+    - cd sentinel-mobile
+    - npm ci --no-audit --no-fund
+    - npx eas-cli@latest build --platform ios --profile preview --non-interactive --no-wait
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
 # ---------------------------------------------------------------------------------------------
 # Shared bits
 # ---------------------------------------------------------------------------------------------
