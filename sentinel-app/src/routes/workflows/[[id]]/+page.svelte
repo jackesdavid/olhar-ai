@@ -2068,7 +2068,13 @@
       return;
     }
     // A real event: clear the cron marker in the SAME write, so the node can never be both.
-    chooseEvent({ ...n, config: { ...n.config, source: "event" } } as Node, value);
+    //
+    // Mutate the node's config in place FIRST, then delegate. `saveNodeConfig` assigns to
+    // `n.config` on the object it is handed, so passing a spread COPY of the node wrote the choice
+    // into a throwaway and left the real node untouched — the dropdown showed a tick next to the
+    // old value and picking anything did nothing.
+    n.config = { ...n.config, source: "event" };
+    chooseEvent(n, value);
   }
 
   // Next fire per cron node, polled from the server. The countdown ticks locally between polls so
