@@ -942,3 +942,91 @@ fn in_memory_knn_cost_at_scale() {
         );
     }
 }
+
+/// `get_detail` must actually DECODE, not merely prepare.
+///
+/// This exists because a real bug shipped through every other guard. `blur`/`yaw`/`pitch`/`roll`
+/// are `float4`; the row struct declared them `f64`. sqlx matches types strictly — a float4 does
+/// not widen into an f64, it errors — so every detail request failed, and `get_detail` collapsed
+/// the error into `None`, which the handler renders as 404 "face not found". A missing row and a
+/// broken query were indistinguishable, and the image proxy kept working, so the face was plainly
+/// there while its detail insisted it was not.
+///
+/// `check:sql` cannot see this: `sql_prepare` PREPAREs statements and counts binds, both of which
+/// were fine. `cargo check` cannot see it either — the types are consistent with each other, just
+/// not with the database. Only fetching a real row does.
+#[test]
+fn face_detail_decodes_every_column() {
+    let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
+        eprintln!("face_knn_bench: TEST_DATABASE_URL unset — skipping");
+        return;
+    };
+    let db = Db::connect(&url).expect("connect + migrate");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let pool = rt.block_on(async {
+        PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .expect("pool")
+    });
+    let tenant = uuid::Uuid::new_v4();
+    rt.block_on(async {
+        sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, 'detail-rt', $2)")
+            .bind(tenant)
+            .bind(format!("detail-rt-{tenant}"))
+            .execute(&pool)
+            .await
+            .expect("tenant");
+    });
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut rng = Rng(0xD37A11);
+        let v = l2_normalize(&rng.vec(DIM));
+        // Every optional column POPULATED: a row of NULLs would decode whatever the declared type,
+        // so nulls would have let the original bug through this test too.
+        let id = faces::insert(
+            &db,
+            tenant,
+            faces::NewFace {
+                person_id: None,
+                embedding: v,
+                image_key: Some("k.jpg".into()),
+                camera: Some("cam-1".into()),
+                bbox: Some(serde_json::json!([1, 2, 3, 4])),
+                confidence: 91.5,
+                face_width: 128,
+                source: "test".into(),
+                crop_key: Some("c.jpg".into()),
+                blur: Some(412.25),
+                yaw: Some(-7.5),
+                pitch: Some(3.25),
+                roll: Some(1.5),
+                landmarks: Some(serde_json::json!([[10.0, 20.0], [30.0, 40.0]])),
+                landmarks_source: Some("yunet_5".into()),
+            },
+        )
+        .expect("insert");
+
+        let d = faces::get_detail(&db, tenant, &id)
+            .expect("get_detail returned None — the query failed, or the row is missing");
+
+        assert_eq!(d.bbox, Some([1, 2, 3, 4]), "bbox");
+        assert_eq!(d.blur.map(|v| v.round()), Some(412.0), "blur");
+        assert_eq!(d.yaw.map(|v| v.round()), Some(-8.0), "yaw");
+        assert_eq!(d.pitch.map(|v| v.round()), Some(3.0), "pitch");
+        assert_eq!(d.roll.map(|v| v.round()), Some(2.0), "roll");
+        assert_eq!(d.landmarks_source.as_deref(), Some("yunet_5"), "landmarks source");
+        assert!(d.landmarks.is_some(), "landmarks");
+        assert_eq!(d.face.face_width, 128, "face_width");
+    }));
+
+    rt.block_on(cleanup(&pool, tenant));
+    if let Err(e) = result {
+        std::panic::resume_unwind(e);
+    }
+}
