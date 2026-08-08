@@ -1244,10 +1244,14 @@ struct FaceDetailRow {
     created_at: String,
     bbox: Option<serde_json::Value>,
     person_name: Option<String>,
-    blur: Option<f64>,
-    yaw: Option<f64>,
-    pitch: Option<f64>,
-    roll: Option<f64>,
+    // f32, because the columns are `float4`. sqlx matches types STRICTLY: decoding a float4 into
+    // f64 is an error, not a widening — and this row's `confidence: f32` was the hint sitting right
+    // above. Declared as f64, every detail request failed, and `get_detail` swallowed the error
+    // into a 404 "face not found" that looked like a missing row.
+    blur: Option<f32>,
+    yaw: Option<f32>,
+    pitch: Option<f32>,
+    roll: Option<f32>,
     landmarks: Option<serde_json::Value>,
     landmarks_source: Option<String>,
 }
@@ -1302,10 +1306,10 @@ pub fn get_detail(db: &Db, tenant_id: Uuid, id: &str) -> Option<FaceDetail> {
                 },
                 bbox: bb,
                 person_name: r.person_name,
-                blur: r.blur,
-                yaw: r.yaw,
-                pitch: r.pitch,
-                roll: r.roll,
+                blur: r.blur.map(f64::from),
+                yaw: r.yaw.map(f64::from),
+                pitch: r.pitch.map(f64::from),
+                roll: r.roll.map(f64::from),
                 landmarks: r.landmarks,
                 landmarks_source: r.landmarks_source,
             }
