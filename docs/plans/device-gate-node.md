@@ -103,8 +103,30 @@ other.
 
 ## Security notes worth stating up front
 
-- The verdict must be signed by the answering session, not merely POSTed. A request id leaking into
-  a log should not be enough to open a gate.
+### One secret per execution, and the answer must carry it back
+
+Every entry into this node mints its OWN unguessable token. The push carries it, and an answer is
+accepted only if it returns the same one. No token, wrong token, or a token for a different
+execution — refused.
+
+This is what makes the node safe to expose at all. Without it the endpoint is `POST
+/device-gate/:id/answer` with a guessable or enumerable id, and anyone who can reach control can
+approve someone else's gate. The token is the proof that the answer came from the phone that was
+actually asked.
+
+Three properties it must have, and each one has a real failure behind it:
+
+- **Per execution, never per node or per graph.** A token that outlived one request would let a
+  replay of yesterday's approval open the gate today.
+- **Single use.** Settling a request burns its token, so a duplicate push delivery — which happens —
+  lands on a settled request and says so instead of opening a second slider.
+- **Compared in constant time, and never logged.** A token that reaches a log file is a token that
+  reaches whoever reads logs, and this one opens a gate.
+
+The token is necessary but NOT sufficient: the answer must still come from an authenticated session
+whose user is allowed to answer that request. The token proves *which request*; the session proves
+*who*. Neither alone is enough — a leaked token must not be usable by a stranger, and a valid
+session must not be able to answer a request it was never sent.
 - The prompt is authored in the graph, so it is **operator-controlled text rendered on a phone**.
   Treat it as untrusted for display purposes.
 - Every answer belongs in the audit trail (`events`), with who, when, and from which device. This is
