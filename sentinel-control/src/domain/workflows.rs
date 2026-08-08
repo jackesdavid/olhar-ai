@@ -53,6 +53,7 @@ pub fn router() -> Router<AppState> {
             axum::routing::patch(rename).delete(remove),
         )
         .route("/workflows/:id/instances", get(instances))
+        .route("/workflows/:id/cron", get(cron_next))
         .route("/workflows/:id/instance-values", get(instance_values))
         .route("/workflows/:id/description", put(set_description))
         .route("/workflows/:id/group", put(set_group))
@@ -570,6 +571,48 @@ async fn flow_get_json(url: &str) -> Value {
 /// instance (an armed latent window); `run_id`/`status`/`updated_at` describe the graph's latest run
 /// and are the same for every row — runs aren't instance-keyed yet (#95 phase 2), so this is a
 /// best-effort annotation, not a per-instance attribution.
+/// Next fire time for each cron-mode `When Event` node in this graph.
+///
+/// Computed HERE rather than in the browser. The editor could evaluate the schedule itself, but
+/// then two implementations of "when does this fire" would have to agree forever — and the one the
+/// user believes is the one on screen. `next_occurrence` is the single source of truth; the client
+/// only formats the countdown.
+///
+/// A disabled graph reports `null`: it is not going to fire, and counting down to something that
+/// will not happen is worse than saying so.
+async fn cron_next(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<Value>, ApiErr> {
+    auth::require(&c, "workflows.read")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let out = blocking(move || {
+        let Some(g) = workflows::repo::load(&db, tid).into_iter().find(|g| g.id == id) else {
+            return serde_json::json!({ "enabled": false, "nodes": [] });
+        };
+        let now = chrono::Utc::now();
+        let nodes: Vec<Value> = g
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                let cron = n.cron()?;
+                let next = if g.enabled {
+                    app_core::workflows::schedule::next_occurrence(&cron.schedule, now)
+                        .map(|t| t.to_rfc3339())
+                } else {
+                    None
+                };
+                Some(serde_json::json!({ "node": n.id, "next_fire_at": next }))
+            })
+            .collect();
+        serde_json::json!({ "enabled": g.enabled, "nodes": nodes })
+    })
+    .await?;
+    Ok(Json(out))
+}
+
 async fn instances(
     UserClaims(c): UserClaims,
     State(st): State<AppState>,

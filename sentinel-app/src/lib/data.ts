@@ -454,6 +454,16 @@ export const data = {
     api.get<FaceCluster[]>(
       `/faces/clusters${eps != null ? `?eps=${eps}` : ""}`,
     ),
+  /** Next fire time for each cron-mode When Event node in a graph.
+   *
+   *  Server-computed on purpose: the browser could evaluate the schedule itself, but then two
+   *  implementations of "when does this fire" would have to agree forever — and the one the user
+   *  believes is the one on screen. `next_fire_at` is null for a disabled graph, which is not going
+   *  to fire at all. */
+  cronNext: (
+    graphId: string,
+  ): Promise<{ enabled: boolean; nodes: { node: number; next_fire_at: string | null }[] }> =>
+    api.get(`/workflows/${encodeURIComponent(graphId)}/cron`),
   faceDetail: (id: string): Promise<FaceDetail> =>
     api.get<FaceDetail>(`/faces/${encodeURIComponent(id)}/detail`),
   /** On-demand facial landmarks (5 keypoints, in the crop's pixel coords) for the detail overlay. */
