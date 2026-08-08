@@ -98,10 +98,46 @@ other.
 - A consumer that expires a pending request at its deadline and resumes down Failure.
 
 **Mobile**
-- Handle the notification tap → deep link to the approval screen (no listener today).
-- The approval screen: the node's description, slide-to-approve, deny.
-- Biometrics on APPROVE only (`expo-local-authentication`, not currently a dependency).
-- Maximum-attention delivery: sound, vibration, a critical/time-sensitive category.
+
+*Getting the person's attention*
+- Sound, vibration, and the most interruptive notification category the platform allows (iOS
+  time-sensitive; a high-importance channel with a custom sound on Android). This is a gate being
+  asked about — it should survive Do Not Disturb where the OS permits it, and the plan should say
+  plainly where it cannot: iOS **critical** alerts need a separate Apple entitlement, which is a
+  request with a review, not a flag we can set.
+- The notification body carries the message and the flow name, so the decision is legible from the
+  lock screen even before unlocking.
+
+*Two ways in, not one*
+- **Tapping the notification** deep-links straight to the approval screen. No listener exists today
+  (`addNotificationResponseReceivedListener`), so this is new.
+- **Opening the app normally** must show it too. A notification is a best-effort delivery: it gets
+  swiped away, silenced, batched, or lost when a phone is off. A gate request that only exists
+  inside a notification is a gate request that quietly expires. So pending requests are FETCHED on
+  launch and on foreground, and shown as a banner or a screen the user cannot miss.
+- That means the app needs `GET /device-gate/pending` — its own list, not a copy of the push
+  payload, so what it shows is what the server still considers open.
+
+*The approval screen*
+- The flow name (small) and the message (large) — what is asking, and what for.
+- A countdown to the TTL, because "how long do I have" changes whether someone acts now or later.
+- **Slide to approve**: a deliberate, sustained gesture to the end of the track. Not a button — a
+  gate should be impossible to open with a mis-tap, and a slider is the one control that cannot
+  fire from a stray touch.
+- **Deny is an ordinary button.** Denial is the safe direction; making it hard to say no is how a
+  person under pressure approves by accident.
+- On approve: biometrics (`expo-local-authentication` — not currently a dependency). Prompt AFTER
+  the slide completes, so the gesture is the intent and the biometric is the confirmation.
+- On failure to authenticate: stay on the screen. Never approve, never auto-deny — a failed
+  fingerprint is not an answer, and consuming the request would be worse than the original problem.
+
+*States it must show honestly*
+- Already answered (by this person or another device), expired, or the request no longer exists.
+  A settled request must render as settled rather than as an approvable slider — this is the
+  visible half of single-use tokens.
+- No connectivity: fail closed, say why, and do not queue the approval for later. Approving offline
+  and syncing when the signal returns is exactly wrong for a gate; the person would believe they
+  opened something they did not.
 
 ## Decisions that need making, not assuming
 
