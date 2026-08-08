@@ -6,6 +6,12 @@ kanban-plugin: board
 
 ## Backlog
 
+- [ ] #176 Device Gate node — a human approves from their phone before the graph continues
+	  - Plan: [[device-gate-node]]
+	  - Exec in, Success/Failure out. Pushes an authorization request; slide-to-approve with
+	    biometrics; denial and timeout take Failure. Agnostic — it gates an exec edge, not a Tuya
+	    device. Opening a gate is a security decision, not a switch.
+
 - [ ] #1 School Student Frequency Case
 	  - Plan: [[school-student-frequency]]
 	  - Use case: [[school-frequence]]
