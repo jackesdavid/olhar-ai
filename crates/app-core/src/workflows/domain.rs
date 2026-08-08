@@ -1967,6 +1967,55 @@ pub struct GraphNode {
     pub memoize: bool,
 }
 
+/// Default grace for a LATE cron fire, in seconds (#cron-node).
+///
+/// A fire missed while flow was down runs if it is less late than this, and is skipped otherwise.
+/// 15 minutes covers the realistic outage — a deploy, a restart, a pod reschedule — and is short
+/// enough that a scheduled light or lock never switches in a visibly wrong part of the day.
+///
+/// The behaviour it replaces was unbounded catch-up, and it was accidental rather than chosen: the
+/// job simply waited in `work_jobs` with a past `run_after` and fired whenever flow returned, so a
+/// missed bedtime switch could land at breakfast.
+pub const DEFAULT_CRON_GRACE_SECS: u64 = 15 * 60;
+
+/// A `When Event` node configured as a schedule rather than an event listener.
+///
+/// The selector lives in the node's config instead of in a separate `NodeKind` because everything
+/// downstream is identical: it is an entry point, it seeds a sub-run, and the graph reads the same
+/// either way. One entry-point concept in the catalog, two sources.
+pub struct CronConfig {
+    pub schedule: Schedule,
+    pub grace_secs: u64,
+}
+
+impl GraphNode {
+    /// This node's cron configuration, or `None` when it is a plain event listener.
+    ///
+    /// Requires BOTH `source == "cron"` and a parseable schedule. A node marked cron whose schedule
+    /// is malformed returns `None` rather than a default: silently scheduling something the user
+    /// did not describe is worse than not scheduling it, and an entry point that never fires is
+    /// visible in a way that one firing hourly-by-accident is not.
+    pub fn cron(&self) -> Option<CronConfig> {
+        if self.kind != NodeKind::OnEvent {
+            return None;
+        }
+        if self.config.get("source").and_then(|v| v.as_str()) != Some("cron") {
+            return None;
+        }
+        let schedule: Schedule =
+            serde_json::from_value(self.config.get("schedule")?.clone()).ok()?;
+        let grace_secs = self
+            .config
+            .get("grace_secs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(DEFAULT_CRON_GRACE_SECS);
+        Some(CronConfig {
+            schedule,
+            grace_secs,
+        })
+    }
+}
+
 fn default_true() -> bool {
     true
 }
