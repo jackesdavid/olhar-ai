@@ -19,7 +19,25 @@ a door relay we do not support yet.
                                   └─► Failure   (timed out, undeliverable, error)
 ```
 
-Config: who to ask (a Recipient), what to tell them, and how long the request stays valid.
+### Properties panel
+
+| Field | What it is |
+|---|---|
+| **Recipient** | which device is asked |
+| **Message** | what the person reads — the whole basis for their decision |
+| **Timeout (TTL)** | how long the request stays answerable before it takes Failure |
+
+The **flow name is NOT a field.** It is taken from the graph and sent with every request, shown
+small on the approval screen. Making it typed would let the text disagree with the flow actually
+asking — and "which automation wants this?" is a question whose answer must not be authorable by
+whoever writes the prompt. Small, but present: a person approving a gate should never have to
+recognise a request purely from its wording.
+
+The message deserves care in the UI. It is the only thing standing between a push notification and
+someone opening a gate, so the field should be a multi-line input with a visible hint that it is
+what the person will read on their phone — not a one-line box that invites "ok?".
+
+`Failure` on timeout, not `Negative`: the TTL expiring means nobody decided.
 
 ### Why three arms and not two
 
