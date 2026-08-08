@@ -1147,6 +1147,9 @@
     // only. Extend this list + the backend's on_event_node match for the next event that needs
     // scoping — never a new node kind (see the same doc section).
     if (node.kind === "on_event") {
+      // Cron mode: exec only. A schedule has no payload to expose and no camera to gate on, so it
+      // must not inherit either from whatever event the node pointed at before.
+      if (nodeSource(node) === "cron") return k;
       const isTracking = TRACKING_EVENTS.includes(String(node.config?.event ?? ""));
       const gatingInputs: CatPort[] = isTracking
         ? [
@@ -2051,6 +2054,20 @@
     const s = n.config?.schedule as Partial<ScheduleT> | undefined;
     return { ...defaultSchedule(), ...(s ?? {}) };
   }
+  /** Remove this node's outgoing edges whose source port will not exist any more.
+   *
+   *  An edge pointing at a port that is gone is invisible in the canvas (there is no pin to draw it
+   *  from) but still rides in the saved graph, so it reaches the engine as a wire between a port
+   *  that does not exist and a node that expects a value. `keep` is the port names that survive. */
+  function dropOutputEdges(n: Node, keep: string[]) {
+    if (!graph) return;
+    const survives = new Set([...keep, "exec_out"]);
+    for (let i = graph.edges.length - 1; i >= 0; i--) {
+      const e = graph.edges[i];
+      if (e.from === n.id && !survives.has(e.from_port)) graph.edges.splice(i, 1);
+    }
+  }
+
   /** The sentinel value for "a schedule" in the event dropdown. Prefixed so it can never collide
    *  with a real event name, including a custom one a tenant invents. */
   const CRON_OPTION = "__cron__";
@@ -2062,11 +2079,18 @@
    *  an unused key costs nothing. */
   function chooseTrigger(n: Node, value: string) {
     if (value === CRON_OPTION) {
-      const cfg: Record<string, unknown> = { ...n.config, source: "cron" };
+      // A schedule fire carries NO payload, so the node keeps no data outputs. Clearing `payload`
+      // is what removes them — leaving it behind left the node wearing the previous event's ports.
+      const cfg: Record<string, unknown> = { ...n.config, source: "cron", payload: [], event: "" };
       if (!n.config?.schedule) cfg.schedule = defaultSchedule();
+      dropOutputEdges(n, []);
       saveNodeConfig(n, cfg);
       return;
     }
+    // Event → event also drops ports the new event does not have. Same bug, older: the registry
+    // reconciler only runs when an event's SCHEMA changes, never when a node is pointed at a
+    // different event.
+    dropOutputEdges(n, eventFields(value.trim()).map((f) => f.name));
     // A real event: clear the cron marker in the SAME write, so the node can never be both.
     //
     // Mutate the node's config in place FIRST, then delegate. `saveNodeConfig` assigns to
@@ -2091,6 +2115,12 @@
   // fire. Only while the graph has a cron node — a graph without one asks for nothing.
   $effect(() => {
     const gid = graph?.id;
+    // Read `enabled` INSIDE the effect so toggling it re-runs this and refetches at once. Without
+    // it the node kept saying "graph disabled" for up to 30s after being enabled — the countdown
+    // was right eventually, which is the worst kind of wrong for a thing whose whole job is to say
+    // when something happens.
+    const enabled = graph?.enabled;
+    void enabled;
     const hasCron = (graph?.nodes ?? []).some((n) => n.kind === "on_event" && nodeSource(n) === "cron");
     if (!gid || !hasCron) return;
     void refreshCronNext(gid);
