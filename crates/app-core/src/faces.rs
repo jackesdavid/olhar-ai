@@ -1269,8 +1269,13 @@ pub fn get_detail(db: &Db, tenant_id: Uuid, id: &str) -> Option<FaceDetail> {
         .bind(&id)
         .fetch_optional(&pool)
         .await
-        .ok()
-        .flatten();
+        // A query FAILURE and a missing row both used to collapse to `None`, and the handler turns
+        // `None` into 404 "face not found" — so a broken column, a decode mismatch or a dead pool
+        // all reported themselves as "that face does not exist", with nothing in the log. Say which.
+        .unwrap_or_else(|e| {
+            log::error!("faces::get_detail({id}) query failed: {e}");
+            None
+        });
         row.map(|r| {
             let bb = r.bbox.and_then(|v| {
                 let a = v.as_array()?;
