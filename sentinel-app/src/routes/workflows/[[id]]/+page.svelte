@@ -76,6 +76,7 @@
 
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
+  import ScheduleEditor from "$lib/components/schedule-editor.svelte";
   import { Textarea } from "$lib/components/ui/textarea";
   import { Slider } from "$lib/components/ui/slider";
   import { Label } from "$lib/components/ui/label";
@@ -2036,6 +2037,72 @@
     if (s.freq === "yearly") return `${MONTH_LABELS[(s.month || 1) - 1]} ${s.day_of_month} at ${times}`;
     return `Daily at ${times}`;
   }
+  // ---- cron-mode When Event (per-node schedule) ----------------------------
+  /** "event" (a listener) or "cron" (a schedule). Absent = event, so every existing node is
+   *  unchanged and nothing needs migrating. */
+  function nodeSource(n: Node): "event" | "cron" {
+    return String(n.config?.source ?? "event") === "cron" ? "cron" : "event";
+  }
+  function nodeSchedule(n: Node): ScheduleT {
+    const s = n.config?.schedule as Partial<ScheduleT> | undefined;
+    return { ...defaultSchedule(), ...(s ?? {}) };
+  }
+  /** Flip the selector. Switching TO cron seeds a schedule so the editor has something to show;
+   *  switching back leaves it in place, so a mis-click does not discard what was configured. */
+  function setNodeSource(n: Node, src: "event" | "cron") {
+    const cfg: Record<string, unknown> = { ...n.config, source: src };
+    if (src === "cron" && !n.config?.schedule) cfg.schedule = defaultSchedule();
+    saveNodeConfig(n, cfg);
+  }
+
+  // Next fire per cron node, polled from the server. The countdown ticks locally between polls so
+  // it reads as live without asking every second.
+  let cronNext = $state<Record<number, string | null>>({});
+  let cronEnabled = $state(true);
+  let nowTick = $state(Date.now());
+  $effect(() => {
+    const id = setInterval(() => (nowTick = Date.now()), 1000);
+    return () => clearInterval(id);
+  });
+  // Poll the server for the next fire. Every 30s, not every second: the countdown ticks locally in
+  // between, so the display is live while the SOURCE of truth is still the one that will actually
+  // fire. Only while the graph has a cron node — a graph without one asks for nothing.
+  $effect(() => {
+    const gid = graph?.id;
+    const hasCron = (graph?.nodes ?? []).some((n) => n.kind === "on_event" && nodeSource(n) === "cron");
+    if (!gid || !hasCron) return;
+    void refreshCronNext(gid);
+    const id = setInterval(() => void refreshCronNext(gid), 30_000);
+    return () => clearInterval(id);
+  });
+  async function refreshCronNext(graphId: string) {
+    try {
+      const r = await data.cronNext(graphId);
+      cronEnabled = r.enabled;
+      cronNext = Object.fromEntries(r.nodes.map((n) => [n.node, n.next_fire_at]));
+    } catch {
+      // A failed poll leaves the last known values rather than blanking the countdown — a
+      // momentary network blip should not read as "this node has no schedule".
+    }
+  }
+  /** "in 2h 14m" — or why there is nothing to count down to. */
+  function cronCountdown(n: Node): string {
+    if (!cronEnabled) return t.cronGraphDisabled;
+    const at = cronNext[n.id];
+    if (!at) return t.cronNoNext;
+    const ms = new Date(at).getTime() - nowTick;
+    if (ms <= 0) return t.cronDueNow;
+    const s = Math.floor(ms / 1000);
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (d > 0) return t.cronIn(`${d}d ${h}h`);
+    if (h > 0) return t.cronIn(`${h}h ${m}m`);
+    if (m > 0) return t.cronIn(`${m}m ${sec}s`);
+    return t.cronIn(`${sec}s`);
+  }
+
   function triggerSummary(t: Trigger): string {
     if (t === "Manual") return "Manual";
     if (typeof t === "object" && "Cron" in t) return `Every ${t.Cron.every_secs}s`;
@@ -3523,6 +3590,26 @@
                     stroke-opacity="0.55"
                     stroke-width="1.5"
                   />
+                  <!-- Cron countdown, drawn IN the node: a schedule you have to open a panel to
+                       read is a schedule nobody checks, and with two of them in one graph the whole
+                       question is which fires next. -->
+                  {#if n.kind === "on_event" && nodeSource(n) === "cron"}
+                    <text
+                      x={nw / 2}
+                      y={HEAD_H + 18}
+                      text-anchor="middle"
+                      font-size="11"
+                      font-weight="600"
+                      class="pointer-events-none select-none fill-primary"
+                    >{cronCountdown(n)}</text>
+                    <text
+                      x={nw / 2}
+                      y={HEAD_H + 31}
+                      text-anchor="middle"
+                      font-size="8"
+                      class="pointer-events-none select-none fill-muted-foreground/70"
+                    >{scheduleSummary(nodeSchedule(n))}</text>
+                  {/if}
                   {#if isCompareOrLogic(n.kind)}
                     {@const op = opLabel(n.kind, n.config)}
                     {@const aVal = exprOperand(n.id, "a", n.config)}
@@ -4813,10 +4900,46 @@
                   {/each}
                 </div>
               {/if}
+              <!-- Source selector: this entry point is either an event listener or a SCHEDULE.
+                   One node kind, two sources — everything downstream is identical (it is an entry
+                   point, it seeds a sub-run), so a second NodeKind would only have duplicated the
+                   catalog. Several cron nodes in one graph is the point: each fire wakes exactly
+                   one of them. -->
+              {#if selectedNode.kind === "on_event"}
+                {@const src = nodeSource(selectedNode)}
+                <div class="space-y-2 border-t border-border pt-2.5">
+                  <p class="text-[10px] font-medium text-muted-foreground">{t.cronSource}</p>
+                  <div class="grid grid-cols-2 gap-1">
+                    <button type="button" disabled={editLocked}
+                      class="interactive rounded px-2 py-1 text-[11px] {src === 'event' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}"
+                      onclick={() => setNodeSource(selectedNode, "event")}>{t.cronSourceEvent}</button>
+                    <button type="button" disabled={editLocked}
+                      class="interactive rounded px-2 py-1 text-[11px] {src === 'cron' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}"
+                      onclick={() => setNodeSource(selectedNode, "cron")}>{t.cronSourceCron}</button>
+                  </div>
+                  {#if src === "cron"}
+                    <ScheduleEditor
+                      value={nodeSchedule(selectedNode)}
+                      disabled={editLocked}
+                      onchange={(next) => saveNodeConfig(selectedNode, { ...selectedNode.config, schedule: next })}
+                      labels={{ times: t.times, addTime: t.addTime, removeTime: editorMsgs.removeTime, timezone: "Timezone" }}
+                    />
+                    <div class="flex items-center gap-2">
+                      <span class="text-[11px] text-muted-foreground">{t.cronGrace}</span>
+                      <Input type="number" min="0" disabled={editLocked} class="h-8 w-24"
+                        value={Number(selectedNode.config.grace_secs ?? 900)}
+                        onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, grace_secs: Math.max(0, Number(e.currentTarget.value)) })} />
+                      <span class="text-[11px] text-muted-foreground">s</span>
+                    </div>
+                    <p class="text-[10px] text-muted-foreground">{t.cronGraceHint}</p>
+                  {/if}
+                </div>
+              {/if}
+
               <!-- Event payload form: category, the typed fields (label on the left like every
                    other row), and a Save at the bottom. Saving updates the registry; graphs
                    using this event self-heal when next opened. -->
-              {#if selectedNode.kind === "emit_event" || selectedNode.kind === "on_event"}
+              {#if (selectedNode.kind === "emit_event" || selectedNode.kind === "on_event") && nodeSource(selectedNode) !== "cron"}
                 {@const evName = String(selectedNode.config.event ?? "").trim()}
                 {@const knownEv = events.find((e) => e.name === evName)}
                 {#if evName && knownEv && knownEv.source === "system"}

@@ -105,7 +105,14 @@ fn process(state: &Arc<AppState>, job: work_queue::Job) {
     }
 
     // We closed it, so this job owns the trailing edge.
-    crate::engine::spawn_node_subrun(state, job.tenant_id, graph_id, node_id);
+    crate::engine::spawn_node_subrun(
+        state,
+        job.tenant_id,
+        graph_id,
+        node_id,
+        app_core::workflows::domain::TriggerSource::Timer,
+        stop_payload(),
+    );
     work_queue::mark_done_blocking(&state.db, job.id);
 }
 

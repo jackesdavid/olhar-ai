@@ -624,9 +624,20 @@ pub fn fire_system_event(state: &Arc<AppState>, tenant: Uuid, label: &str, event
 /// Run one node's subtree as its own run — the delivery half of a durable timer (card #86).
 ///
 /// Forces `node_id` so only it and its live descendants execute; nothing else in the graph is
-/// seeded. Today this is a `DelayTrigger` whose quiet window elapsed, firing its trailing `stop`.
-/// The payload carries the window marker so the node can tell this from a re-trigger.
-pub fn spawn_node_subrun(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid, node_id: u32) {
+/// seeded. Two callers: a `DelayTrigger` whose quiet window elapsed (payload carries the window
+/// marker so the node can tell this from a re-trigger), and a `When Event` node in cron mode.
+///
+/// `source` and `payload` are parameters rather than hardcoded because addressing a single node is
+/// the shared mechanism, and the reason for doing it is not. Two cron nodes in one graph rely on
+/// this: each fire wakes ONE entry point, so nothing else in the graph runs.
+pub fn spawn_node_subrun(
+    state: &Arc<AppState>,
+    tenant: Uuid,
+    graph_id: Uuid,
+    node_id: u32,
+    source: TriggerSource,
+    payload: PortValues,
+) {
     let graph: WfGraph = match state::find_graph(&state.store, tenant, graph_id) {
         Some(g) => g,
         None => return,
@@ -634,13 +645,7 @@ pub fn spawn_node_subrun(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid, no
     let state = Arc::clone(state);
     let run_id = Uuid::new_v4();
     // Register before the thread starts — see spawn_graph_run.
-    mark_run_started(
-        &state,
-        tenant,
-        graph_id,
-        run_id,
-        TriggerSource::Timer.as_str(),
-    );
+    mark_run_started(&state, tenant, graph_id, run_id, source.as_str());
     std::thread::spawn(move || {
         workflows::repo::insert_run(
             &state.db,
@@ -648,7 +653,7 @@ pub fn spawn_node_subrun(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid, no
             run_id,
             graph_id,
             &graph.name,
-            TriggerSource::Timer,
+            source,
             None,
             None,
             None,
@@ -657,10 +662,9 @@ pub fn spawn_node_subrun(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid, no
         events::publish(
             &state.events,
             "workflow-run-start",
-            serde_json::json!({ "tenant": tenant, "graph": graph_id, "name": graph.name, "run_id": run_id, "trigger": "timer" }),
+            serde_json::json!({ "tenant": tenant, "graph": graph_id, "name": graph.name, "run_id": run_id, "trigger": source.as_str() }),
         );
 
-        let payload = crate::window_consumer::stop_payload();
         let (ok, summary) = execute_run(
             &state,
             tenant,
@@ -673,7 +677,10 @@ pub fn spawn_node_subrun(state: &Arc<AppState>, tenant: Uuid, graph_id: Uuid, no
 
         mark_run_finished(&state, tenant, graph_id);
         if !ok {
-            log::warn!("window stop ({tenant}/{graph_id} node {node_id}) failed: {summary}");
+            log::warn!(
+                "{} sub-run ({tenant}/{graph_id} node {node_id}) failed: {summary}",
+                source.as_str()
+            );
         }
         events::publish(
             &state.events,
