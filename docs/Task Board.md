@@ -8,9 +8,10 @@ kanban-plugin: board
 
 - [ ] #176 Device Gate node — a human approves from their phone before the graph continues
 	  - Plan: [[device-gate-node]]
-	  - Exec in, Success/Failure out. Pushes an authorization request; slide-to-approve with
-	    biometrics; denial and timeout take Failure. Agnostic — it gates an exec edge, not a Tuya
-	    device. Opening a gate is a security decision, not a switch.
+	  - Exec in; Positive / Negative / Failure out. Pushes an authorization request; slide-to-approve
+	    with biometrics. A denial is an ANSWER and gets its own arm — Failure is for timeout, no
+	    device, or error, where no human decided. Agnostic: it gates an exec edge, not a Tuya device.
+	    Opening a gate is a security decision, not a switch.
 
 - [ ] #1 School Student Frequency Case
 	  - Plan: [[school-student-frequency]]

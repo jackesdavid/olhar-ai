@@ -2,23 +2,39 @@
 
 **Goal:** a workflow node that stops and asks a person. It pushes an authorization request to the
 phone, the person slides to approve (confirming with biometrics) or denies, and the graph continues
-down **Success** or **Failure** accordingly.
+down **Positive**, **Negative** or **Failure** accordingly.
 
 **Driving case:** opening an electric gate through a Tuya device. Opening a gate is not a switch —
 it is a security decision, and it should not share a node with turning on a lamp.
 
 **Agnostic by design.** The node knows nothing about Tuya, gates or locks. It gates an *exec edge*;
-whatever hangs off Success is the sensitive action, whether that is a Tuya control, an HTTP call, or
+whatever hangs off Positive is the sensitive action, whether that is a Tuya control, an HTTP call, or
 a door relay we do not support yet.
 
 ## Shape
 
 ```
-        exec in ──►  Device Gate  ──► Success   (approved)
-                                  └─► Failure   (denied, expired, or nobody answered)
+        exec in ──►  Device Gate  ──► Positive  (a person approved)
+                                  ├─► Negative  (a person denied)
+                                  └─► Failure   (timed out, undeliverable, error)
 ```
 
 Config: who to ask (a Recipient), what to tell them, and how long the request stays valid.
+
+### Why three arms and not two
+
+An explicit denial is an ANSWER, and it is the most informative thing this node produces: someone
+was there, read the request, and said no. Folding it into a generic failure throws that away and
+leaves the graph unable to tell it from a phone that was face-down on a table.
+
+The two also want opposite handling. A denial is usually terminal — log it, notify, stop. A timeout
+often wants a retry, an escalation to a second recipient, or a fallback. A single arm forces every
+graph to re-derive which happened from something else, and the graphs that skip that step are the
+ones that treat "nobody answered" as "go ahead", which is the incident this node exists to prevent.
+
+`Failure` stays deliberately broad — timeout, no registered device, push rejected, control
+unreachable. What they share is that **no human decided**, and that is the property a graph branches
+on.
 
 ## The one hard constraint
 
@@ -31,10 +47,10 @@ Config: who to ask (a Recipient), what to tell them, and how long the request st
 Device Gate is the same shape, and should reuse the same machinery rather than invent a second
 suspend mechanism:
 
-1. The node fires the push and **returns without taking either branch**. The run ends.
+1. The node fires the push and **returns without taking any branch**. The run ends.
 2. A row holds the pending request — durable, so an armed gate survives a pod restart.
 3. The answer (or the timeout) **resumes at that node** via `spawn_node_subrun`, with a payload
-   carrying the verdict; the node reads it and fires Success or Failure.
+   carrying the verdict; the node reads it and fires Positive, Negative or Failure.
 
 `spawn_node_subrun` is already parameterised by trigger source and payload (done for the cron node),
 so this needs no new engine primitive — which is the strongest argument for this design over any
@@ -54,7 +70,10 @@ other.
 
 **Backend**
 - A `device_gate_requests` table: request id, tenant, graph, node, run, recipient, prompt, state
-  (`pending`/`approved`/`denied`/`expired`), who answered, when, and the approval evidence.
+  (`pending`/`approved`/`denied`/`expired`/`failed`), who answered, when, and the approval evidence.
+  The four settled states map onto three arms — `approved` → Positive, `denied` → Negative,
+  `expired`/`failed` → Failure — and are stored SEPARATELY rather than as the arm taken, because the
+  audit trail needs to say which one happened.
 - The node: push on entry, return without a branch.
 - `POST /device-gate/:id/answer` — the phone's verdict. Must be **idempotent** and must reject a
   second answer to a settled request, or a retried tap could approve something twice.
@@ -68,23 +87,18 @@ other.
 
 ## Decisions that need making, not assuming
 
-1. **What does a denial mean versus a timeout?** Both take Failure today, and that may be wrong:
-   "someone said no" and "nobody was holding their phone" are different facts, and a gate that
-   opens on the second because the graph treated them alike would be a real incident. A third
-   `Expired` output, or a payload field the graph can branch on?
-
-2. **Who may answer?** The addressed Recipient only, or anyone in the tenant with a permission? A
+1. **Who may answer?** The addressed Recipient only, or anyone in the tenant with a permission? A
    gate approved by the wrong person is the failure mode this node exists to prevent.
 
-3. **Is biometry required or best-effort?** A phone with no enrolled biometric still needs to work,
+2. **Is biometry required or best-effort?** A phone with no enrolled biometric still needs to work,
    but "approve anyway" quietly turns the strongest control into a suggestion. Refuse on such a
    device, or fall back to the device passcode?
 
-4. **Replay and reuse.** The request id must be single-use, and the notification carries it. If the
+3. **Replay and reuse.** The request id must be single-use, and the notification carries it. If the
    same push is delivered twice — which happens — the second tap must land on a settled request and
    say so, not open a second slider.
 
-5. **What the phone shows when it cannot reach control.** Approving offline and syncing later is
+4. **What the phone shows when it cannot reach control.** Approving offline and syncing later is
    exactly wrong for a security gate; the screen should fail closed and say why.
 
 ## Security notes worth stating up front
@@ -102,7 +116,8 @@ The property with no other guard: **a settled request cannot be settled again.**
 approval. Worth an explicit test, because the failure is silent and the consequence is a gate that
 opens twice.
 
-Then the end-to-end: a graph whose Success arm flips a Tuya device, approved from a real phone.
+Then the end-to-end: a graph whose Positive arm flips a Tuya device, approved from a real phone —
+and a denial on the same graph reaching Negative, not Failure.
 
 ## Related
 [[tuya-integration]] · [[workflow-engine-loops-events]] · [[mobile-edge-face-capture]]
