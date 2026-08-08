@@ -639,6 +639,8 @@ fn insert_and_recognize_roundtrip() {
                 yaw: Some(-4.0),
                 pitch: Some(2.0),
                 roll: Some(1.0),
+                landmarks: None,
+                landmarks_source: None,
             },
         )
         .expect("insert");

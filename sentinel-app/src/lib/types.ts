@@ -214,6 +214,23 @@ export type Face = {
 export type FaceDetail = Face & {
   bbox: [number, number, number, number] | null;
   person_name: string | null;
+  /** Quality signals measured on the EDGE at capture time (#126), on the decoded frame — not on
+   *  the JPEG the cloud receives, which has already lost the detail a sharpness metric reads.
+   *
+   *  `null` means NOT MEASURED, which is not zero: a face captured before the graph wired these
+   *  ports has no value, while a real blur of 0 is a genuinely flat crop. A UI that renders the
+   *  two the same invites a threshold fitted against data that was never there. */
+  blur: number | null;
+  yaw: number | null;
+  pitch: number | null;
+  roll: number | null;
+  /** Landmarks stored at capture time (migration 0092) as `[[x, y], …]` in CROP pixels, so the
+   *  overlay needs no sidecar call. `null` on older faces, which still fall back to the on-demand
+   *  endpoint. */
+  landmarks: [number, number][] | null;
+  /** `insightface_106` (dense) or `yunet_5` (the edge's keypoints) — the two are not
+   *  interchangeable, and array length is a poor way to tell them apart. */
+  landmarks_source: string | null;
 };
 /** The enrolled person a cluster's centroid recognizes as (auto-suggest). */
 export type ClusterSuggestion = { person_id: string; name: string; confidence: number };

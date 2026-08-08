@@ -428,10 +428,37 @@ pub(super) fn run_store_face(
     let bbox = bb.map(|b| serde_json::json!([b.x1, b.y1, b.x2, b.y2]));
     // Pre-crop the face → a small passthrough thumbnail so the image proxy serves reads WITHOUT
     // decoding + cropping the frame each time (the read-concurrency fix). None → crop on read.
-    let crop_key = match (frame, bb) {
-        (Some(f), Some(b)) => crate::faces::render_face_image(f, [b.x1, b.y1, b.x2, b.y2], false)
-            .and_then(|c| crate::media::put_face(&c, "image/jpeg", "jpg").ok()),
+    let crop_bytes = match (frame, bb) {
+        (Some(f), Some(b)) => crate::faces::render_face_image(f, [b.x1, b.y1, b.x2, b.y2], false),
         _ => None,
+    };
+    let crop_key = crop_bytes
+        .as_deref()
+        .and_then(|c| crate::media::put_face(c, "image/jpeg", "jpg").ok());
+
+    // Landmarks, stored ONCE here instead of recomputed on every view (migration 0092).
+    //
+    // The detail overlay used to call the sidecar on each open — one inference per view, for points
+    // that never change, and an overlay that silently emptied whenever the sidecar was down. A face
+    // is stored once and looked at many times, so paying here is the right side of that ratio.
+    //
+    // Dense (InsightFace 106) when the sidecar answers, else the edge's own 5 YuNet keypoints if
+    // the graph wired them. The source is recorded because the two sets are NOT interchangeable: a
+    // viewer expecting 106 that receives 5 draws five dots and looks broken.
+    let wired_kps = inputs.get("kps").and_then(PortValue::as_landmarks);
+    let (landmarks, landmarks_source) = match crop_bytes
+        .as_deref()
+        .and_then(|c| crate::agent::face::detect_landmarks(&sys.db, sys.tenant_id, c).ok())
+        .filter(|p| !p.is_empty())
+    {
+        Some(pts) => (
+            Some(serde_json::json!(pts)),
+            Some("insightface_106".to_string()),
+        ),
+        None => match wired_kps {
+            Some(k) if !k.is_empty() => (Some(serde_json::json!(k)), Some("yunet_5".to_string())),
+            _ => (None, None),
+        },
     };
     let label = inputs
         .get("label")
@@ -471,6 +498,8 @@ pub(super) fn run_store_face(
             yaw,
             pitch,
             roll,
+            landmarks,
+            landmarks_source,
         },
     )?;
     o.insert("stored".into(), PortValue::Bool(true));

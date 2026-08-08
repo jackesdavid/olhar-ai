@@ -29,6 +29,12 @@ pub struct NewFace {
     pub yaw: Option<f32>,
     pub pitch: Option<f32>,
     pub roll: Option<f32>,
+    /// Facial landmarks as `[[x, y], …]` in CROP pixel coordinates, stored so the detail overlay
+    /// does not re-run a detector on every view (migration 0092).
+    pub landmarks: Option<serde_json::Value>,
+    /// Which detector produced them — `insightface_106` or `yunet_5`. The two sets are not
+    /// interchangeable, and the length alone is a poor way to tell a reader which one it has.
+    pub landmarks_source: Option<String>,
 }
 
 /// A stored face as returned (no embedding — that stays server-side).
@@ -100,8 +106,9 @@ pub fn insert(db: &Db, tenant_id: Uuid, f: NewFace) -> Result<String, String> {
         let row: (String,) = sqlx::query_as(
             "INSERT INTO faces (tenant_id, person_id, embedding, image_key, camera, bbox, \
                                 confidence, face_width, source, created_at, crop_key, \
-                                blur, yaw, pitch, roll) \
-             VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+                                blur, yaw, pitch, roll, landmarks, landmarks_source) \
+             VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
+                     $16, $17) \
              RETURNING id::text",
         )
         .bind(tenant_id)
@@ -119,6 +126,8 @@ pub fn insert(db: &Db, tenant_id: Uuid, f: NewFace) -> Result<String, String> {
         .bind(f.yaw)
         .bind(f.pitch)
         .bind(f.roll)
+        .bind(&f.landmarks)
+        .bind(&f.landmarks_source)
         .fetch_one(&pool)
         .await
         .map_err(|e| format!("faces::insert: {e}"))?;
@@ -1207,6 +1216,20 @@ pub struct FaceDetail {
     pub face: Face,
     pub bbox: Option<[i64; 4]>,
     pub person_name: Option<String>,
+    /// Quality signals (#126), measured on the edge at capture time.
+    ///
+    /// `None` on a face captured before the graph wired these ports — which is most of them, and
+    /// worth showing as "not measured" rather than as a zero. A zero blur is a real, meaningful
+    /// value (a completely flat crop); conflating it with "we never looked" is how a threshold
+    /// gets fitted against data that was never there.
+    pub blur: Option<f64>,
+    pub yaw: Option<f64>,
+    pub pitch: Option<f64>,
+    pub roll: Option<f64>,
+    /// Landmarks stored at capture time (migration 0092), so the overlay needs no sidecar call.
+    /// `None` on a face captured before that — those still fall back to `/faces/:id/landmarks`.
+    pub landmarks: Option<serde_json::Value>,
+    pub landmarks_source: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -1221,6 +1244,12 @@ struct FaceDetailRow {
     created_at: String,
     bbox: Option<serde_json::Value>,
     person_name: Option<String>,
+    blur: Option<f64>,
+    yaw: Option<f64>,
+    pitch: Option<f64>,
+    roll: Option<f64>,
+    landmarks: Option<serde_json::Value>,
+    landmarks_source: Option<String>,
 }
 
 /// Full detail for one face (row + bbox + person name). `None` if not found / wrong tenant.
@@ -1230,7 +1259,8 @@ pub fn get_detail(db: &Db, tenant_id: Uuid, id: &str) -> Option<FaceDetail> {
     db.block(async move {
         let row: Option<FaceDetailRow> = sqlx::query_as(
             "SELECT f.id::text AS id, f.person_id, f.image_key, f.camera, f.confidence, \
-                    f.face_width, f.source, f.created_at, f.bbox, p.name AS person_name \
+                    f.face_width, f.source, f.created_at, f.bbox, p.name AS person_name, \
+                    f.blur, f.yaw, f.pitch, f.roll, f.landmarks, f.landmarks_source \
              FROM faces f \
              LEFT JOIN persons p ON p.tenant_id = f.tenant_id AND p.id = f.person_id \
              WHERE f.tenant_id = $1 AND f.id = $2::uuid",
@@ -1267,6 +1297,12 @@ pub fn get_detail(db: &Db, tenant_id: Uuid, id: &str) -> Option<FaceDetail> {
                 },
                 bbox: bb,
                 person_name: r.person_name,
+                blur: r.blur,
+                yaw: r.yaw,
+                pitch: r.pitch,
+                roll: r.roll,
+                landmarks: r.landmarks,
+                landmarks_source: r.landmarks_source,
             }
         })
     })
