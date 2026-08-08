@@ -145,9 +145,8 @@ export const workflowEditor = {
     times: "Times",
     addTime: "+ Add time",
     // cron-mode When Event (per-node schedule)
-    cronSource: "Fires on",
-    cronSourceEvent: "An event",
-    cronSourceCron: "A schedule",
+    cronOption: "On a schedule",
+    cronOptionCategory: "Time",
     cronGrace: "Run late up to",
     cronGraceHint:
       "If the engine was down at the scheduled time, a fire this late still runs; later than this it is skipped. Keep it short for anything that switches a device.",
@@ -328,9 +327,8 @@ export const workflowEditor = {
     times: "Horários",
     addTime: "+ Adicionar horário",
     // When Event em modo cron (agenda por nó)
-    cronSource: "Dispara por",
-    cronSourceEvent: "Um evento",
-    cronSourceCron: "Uma agenda",
+    cronOption: "Em uma agenda",
+    cronOptionCategory: "Tempo",
     cronGrace: "Executa atrasado até",
     cronGraceHint:
       "Se o motor estava fora no horário, um disparo até esse atraso ainda roda; mais tarde que isso é pulado. Mantenha curto para qualquer coisa que aciona um dispositivo.",

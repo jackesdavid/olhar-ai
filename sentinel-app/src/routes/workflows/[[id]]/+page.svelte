@@ -240,6 +240,9 @@
   // Extra height inserted between the header divider and data ports on comparison/logic
   // nodes, used to render the inline expression (a OP b).
   const EXPR_H = 30;
+  /** Extra body height for a cron node: two lines — the countdown and the schedule summary.
+   *  Without it both are drawn past the node's bottom edge and the summary is simply clipped. */
+  const CRON_H = 42;
   // ShowImage preview: a 16:9 thumbnail tucked below the node's ports.
   const PREVIEW_W = NODE_W - 16;
   function commentW(n: Node): number { return Math.max(120, Number(n.config.width) || 400); }
@@ -1339,6 +1342,7 @@
     return !((k?.inputs ?? []).some((p) => p.type === "exec"));
   }
   function nodeExprH(n: Node): number {
+    if (n.kind === "on_event" && nodeSource(n) === "cron") return CRON_H;
     return isCompareOrLogic(n.kind) ? EXPR_H : 0;
   }
   function opLabel(kind: string, config: Record<string, unknown>): string {
@@ -2047,12 +2051,24 @@
     const s = n.config?.schedule as Partial<ScheduleT> | undefined;
     return { ...defaultSchedule(), ...(s ?? {}) };
   }
-  /** Flip the selector. Switching TO cron seeds a schedule so the editor has something to show;
-   *  switching back leaves it in place, so a mis-click does not discard what was configured. */
-  function setNodeSource(n: Node, src: "event" | "cron") {
-    const cfg: Record<string, unknown> = { ...n.config, source: src };
-    if (src === "cron" && !n.config?.schedule) cfg.schedule = defaultSchedule();
-    saveNodeConfig(n, cfg);
+  /** The sentinel value for "a schedule" in the event dropdown. Prefixed so it can never collide
+   *  with a real event name, including a custom one a tenant invents. */
+  const CRON_OPTION = "__cron__";
+
+  /** One dropdown decides everything: a schedule, or an event by name.
+   *
+   *  Switching TO cron seeds a schedule so the editor has something to show. Switching AWAY leaves
+   *  the schedule in the config untouched — a mis-click should not discard what was configured, and
+   *  an unused key costs nothing. */
+  function chooseTrigger(n: Node, value: string) {
+    if (value === CRON_OPTION) {
+      const cfg: Record<string, unknown> = { ...n.config, source: "cron" };
+      if (!n.config?.schedule) cfg.schedule = defaultSchedule();
+      saveNodeConfig(n, cfg);
+      return;
+    }
+    // A real event: clear the cron marker in the SAME write, so the node can never be both.
+    chooseEvent({ ...n, config: { ...n.config, source: "event" } } as Node, value);
   }
 
   // Next fire per cron node, polled from the server. The countdown ticks locally between polls so
@@ -3596,17 +3612,17 @@
                   {#if n.kind === "on_event" && nodeSource(n) === "cron"}
                     <text
                       x={nw / 2}
-                      y={HEAD_H + 18}
+                      y={HEAD_H + 19}
                       text-anchor="middle"
-                      font-size="11"
+                      font-size="12"
                       font-weight="600"
                       class="pointer-events-none select-none fill-primary"
                     >{cronCountdown(n)}</text>
                     <text
                       x={nw / 2}
-                      y={HEAD_H + 31}
+                      y={HEAD_H + 34}
                       text-anchor="middle"
-                      font-size="8"
+                      font-size="9"
                       class="pointer-events-none select-none fill-muted-foreground/70"
                     >{scheduleSummary(nodeSchedule(n))}</text>
                   {/if}
@@ -4775,22 +4791,48 @@
                              below stays as the escape hatch for a brand-new custom event name. -->
                         {@const evName = String(selectedNode.config[key] ?? "").trim()}
                         {@const known = events.find((e) => e.name === evName)}
+                        {@const isCron = nodeSource(selectedNode) === "cron"}
+                        <!-- A schedule is just another thing this node can fire on, so it sits IN
+                             the same list. A separate mode toggle would have made the user answer
+                             two questions ("what kind of trigger" then "which one") where there is
+                             only one. -->
                         <Select.Root
                           type="single"
                           disabled={editLocked}
-                          value={known ? evName : ""}
-                          onValueChange={(v) => { if (v) chooseEvent(selectedNode, v); }}
+                          value={isCron ? CRON_OPTION : known ? evName : ""}
+                          onValueChange={(v) => { if (v) chooseTrigger(selectedNode, v); }}
                         >
                           <Select.Trigger class="h-8 w-full">
-                            {known ? evName : evName || "Choose an event…"}
+                            {isCron ? t.cronOption : known ? evName : evName || "Choose an event…"}
                           </Select.Trigger>
                           <Select.Content>
+                            <Select.Item value={CRON_OPTION} label={t.cronOption}>{t.cronOption} · {t.cronOptionCategory}</Select.Item>
                             {#each events as e (e.name)}
                               <Select.Item value={e.name} label={e.name}>{e.name} · {e.category}</Select.Item>
                             {/each}
                           </Select.Content>
                         </Select.Root>
-                        {#if known}
+                        {#if isCron}
+                          <div class="mt-2 space-y-2">
+                            <ScheduleEditor
+                              value={nodeSchedule(selectedNode)}
+                              disabled={editLocked}
+                              onchange={(next) => saveNodeConfig(selectedNode, { ...selectedNode.config, schedule: next })}
+                              labels={{ times: t.times, addTime: t.addTime, removeTime: editorMsgs.removeTime, timezone: "Timezone" }}
+                            />
+                            <div class="flex items-center gap-2">
+                              <span class="text-[11px] text-muted-foreground">{t.cronGrace}</span>
+                              <Input type="number" min="0" disabled={editLocked} class="h-8 w-24"
+                                value={Number(selectedNode.config.grace_secs ?? 900)}
+                                onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, grace_secs: Math.max(0, Number(e.currentTarget.value)) })} />
+                              <span class="text-[11px] text-muted-foreground">s</span>
+                            </div>
+                            <p class="text-[10px] text-muted-foreground">{t.cronGraceHint}</p>
+                          </div>
+                        {/if}
+                        {#if isCron}
+                          <!-- nothing: a schedule has no registry entry and no custom name -->
+                        {:else if known}
                           <p class="mt-1 text-[10px] text-muted-foreground">Registered · “{known.category}”</p>
                         {:else}
                           <Input
@@ -4900,42 +4942,6 @@
                   {/each}
                 </div>
               {/if}
-              <!-- Source selector: this entry point is either an event listener or a SCHEDULE.
-                   One node kind, two sources — everything downstream is identical (it is an entry
-                   point, it seeds a sub-run), so a second NodeKind would only have duplicated the
-                   catalog. Several cron nodes in one graph is the point: each fire wakes exactly
-                   one of them. -->
-              {#if selectedNode.kind === "on_event"}
-                {@const src = nodeSource(selectedNode)}
-                <div class="space-y-2 border-t border-border pt-2.5">
-                  <p class="text-[10px] font-medium text-muted-foreground">{t.cronSource}</p>
-                  <div class="grid grid-cols-2 gap-1">
-                    <button type="button" disabled={editLocked}
-                      class="interactive rounded px-2 py-1 text-[11px] {src === 'event' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}"
-                      onclick={() => setNodeSource(selectedNode, "event")}>{t.cronSourceEvent}</button>
-                    <button type="button" disabled={editLocked}
-                      class="interactive rounded px-2 py-1 text-[11px] {src === 'cron' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}"
-                      onclick={() => setNodeSource(selectedNode, "cron")}>{t.cronSourceCron}</button>
-                  </div>
-                  {#if src === "cron"}
-                    <ScheduleEditor
-                      value={nodeSchedule(selectedNode)}
-                      disabled={editLocked}
-                      onchange={(next) => saveNodeConfig(selectedNode, { ...selectedNode.config, schedule: next })}
-                      labels={{ times: t.times, addTime: t.addTime, removeTime: editorMsgs.removeTime, timezone: "Timezone" }}
-                    />
-                    <div class="flex items-center gap-2">
-                      <span class="text-[11px] text-muted-foreground">{t.cronGrace}</span>
-                      <Input type="number" min="0" disabled={editLocked} class="h-8 w-24"
-                        value={Number(selectedNode.config.grace_secs ?? 900)}
-                        onchange={(e) => saveNodeConfig(selectedNode, { ...selectedNode.config, grace_secs: Math.max(0, Number(e.currentTarget.value)) })} />
-                      <span class="text-[11px] text-muted-foreground">s</span>
-                    </div>
-                    <p class="text-[10px] text-muted-foreground">{t.cronGraceHint}</p>
-                  {/if}
-                </div>
-              {/if}
-
               <!-- Event payload form: category, the typed fields (label on the left like every
                    other row), and a Save at the bottom. Saving updates the registry; graphs
                    using this event self-heal when next opened. -->
