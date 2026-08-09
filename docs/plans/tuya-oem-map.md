@@ -39,8 +39,18 @@ Decided while charting, do not reopen:
 
 <!-- one line per resolved ticket -->
 
+- [What the OEM licence actually costs](./tuya-oem-map/01-what-the-licence-costs.md) — USD 5 000
+  first year then 2 000/yr, mandatory to ship on the App Store; the free tier caps at 100 users and
+  is non-commercial, which is enough to BUILD and prove the whole thing without paying.
+- [What the iOS bridge actually requires](./tuya-oem-map/02-ios-bridge-feasibility.md) — CocoaPods
+  (`ThingSmartHomeKit`), and anonymous sign-up with NO verification code exists, so the invisible
+  account holds. Whether it coexists with our Rust lib and GStreamer needs a build, not a doc.
+
 ## Not yet specified
 
+- **The Wi-Fi EZ/AP pairing call shape and its failure modes.** Pairing is what users experience as
+  "it didn't work", so its error surface should be learned from the API with the SDK in hand rather
+  than from a documentation index.
 - **App Store review and privacy.** A pairing flow wants local network and Bluetooth permissions and
   ships a third-party SDK that phones home. What Apple asks for, and what the privacy labels must
   say, only gets sharp once the SDK surface is known.
