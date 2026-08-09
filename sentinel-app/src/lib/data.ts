@@ -20,6 +20,7 @@ import {
   type Face,
   type FaceCluster,
   type FaceDetail,
+  type TuyaProvider,
   type CanvasLayout,
   type Settings,
   type TelegramConfigState,
@@ -257,14 +258,15 @@ export const data = {
   /** Pull the project's linked devices from the Tuya Cloud and cache them. */
   syncTuyaDevices: (): Promise<{ synced: number }> =>
     api.post<{ synced: number }>("/tuya/sync", {}),
-  /** Whether Tuya is connected for this tenant + via which source (tenant creds / operator / none). */
-  getTuyaProvider: (): Promise<{
-    configured: boolean;
-    source: "tenant" | "operator" | "none";
-  }> =>
-    api.get<{ configured: boolean; source: "tenant" | "operator" | "none" }>(
-      "/tuya/provider",
-    ),
+  /** Adding a SECOND Smart Life account is a console action — Tuya publishes no API for the QR —
+   *  so `console_url` is how we help: a deep link to the tab where it happens. `console_url_exact`
+   *  is false when we only know the region and the link lands on the project LIST instead, which
+   *  is when it is worth asking for a pasted URL. */
+  setTuyaConsoleUrl: (url: string): Promise<void> =>
+    api.put<void>("/tuya/console", { url }),
+  /** Whether Tuya is connected for this tenant, via which source, and where to link another
+   *  Smart Life account. */
+  getTuyaProvider: (): Promise<TuyaProvider> => api.get<TuyaProvider>("/tuya/provider"),
   /** Save the tenant's own Tuya project credentials (validated server-side before saving). */
   setTuyaConfig: async (
     access_id: string,

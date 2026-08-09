@@ -15,6 +15,16 @@ export const integrations = {
     readNode: "Read Tuya Status",
     tuyaDescriptionAfter: " nodes.",
     syncing: "Syncing…",
+    linkAnotherAccount: "Add another Tuya account",
+    linkAnotherAccountHint:
+      "Several Smart Life accounts can share one project, and every account's devices arrive together. Linking one is done in your own Tuya console — Tuya publishes no API for the QR code, so we can only take you to the right tab. Once there: Add App Account, then scan with the OTHER account's Smart Life app.",
+    openConsoleTab: "Open the linking tab in my Tuya console",
+    openConsoleList: "Open my Tuya console",
+    pasteConsoleUrl:
+      "Paste any URL from your project in the console and this button will jump straight to the linking tab next time:",
+    consoleLinkSaved: "Saved — the button now opens the linking tab",
+    consoleLinkFailed: "Couldn't read that URL",
+    saveConsole: "Save",
     refreshDevices: "Refresh devices",
     loading: "Loading…",
     // guide
@@ -79,6 +89,16 @@ export const integrations = {
     readNode: "Ler Status Tuya",
     tuyaDescriptionAfter: ".",
     syncing: "Sincronizando…",
+    linkAnotherAccount: "Adicionar outra conta Tuya",
+    linkAnotherAccountHint:
+      "Várias contas Smart Life podem dividir um projeto, e os dispositivos de todas chegam juntos. Vincular é feito no seu próprio console da Tuya — não há API pública para o QR, então só podemos te levar até a aba certa. Lá: Add App Account e escaneie com o Smart Life da OUTRA conta.",
+    openConsoleTab: "Abrir a aba de vinculação no meu console Tuya",
+    openConsoleList: "Abrir meu console Tuya",
+    pasteConsoleUrl:
+      "Cole qualquer URL do seu projeto no console e da próxima vez o botão vai direto para a aba de vinculação:",
+    consoleLinkSaved: "Salvo — o botão agora abre a aba de vinculação",
+    consoleLinkFailed: "Não consegui ler essa URL",
+    saveConsole: "Salvar",
     refreshDevices: "Atualizar dispositivos",
     loading: "Carregando…",
     // guide
