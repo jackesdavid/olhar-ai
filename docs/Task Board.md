@@ -6,11 +6,13 @@ kanban-plugin: board
 
 ## Backlog
 
-- [ ] #177 Tuya OEM in our own app [map] — replace BYO with the SDK embedded in Olhar AI
+- [ ] #177 Tuya OEM in our own app [map] — PARKED on cost (USD 5k/yr then 2k/yr)
 	  - Map: [[tuya-oem-map]] · today's model: [[tuya]]
 	  - Charted with /wayfinder. Five decision tickets in `docs/plans/tuya-oem-map/`. Decided while
 	    charting: SDK in our app (not a Tuya white-label), OEM replaces BYO, iOS first, the Tuya
 	    account is invisible, pairing v1 is Wi-Fi only. Users re-pair everything — accepted.
+	  - Parked once the licence number landed: mandatory to ship, before the first customer, for
+	    something BYO already does. The map records what would reopen it.
 
 - [ ] #1 School Student Frequency Case
 	  - Plan: [[school-student-frequency]]

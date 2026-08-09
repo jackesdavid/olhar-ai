@@ -1,4 +1,20 @@
-# Tuya OEM in our own app [map]
+# Tuya OEM in our own app [map] — PARKED
+
+> **Parked 2026-08-09 on cost, with the number in hand.** USD 5 000 the first year and USD 2 000/yr
+> after, mandatory before a single customer is served, for an integration that already works by
+> another route. The map is left standing rather than deleted: the research is durable, and the
+> question returns the moment the economics change.
+>
+> **What would reopen it**, concretely — so this is a decision and not a mood:
+> - Tuya opening OAuth to non-OEM apps, which removes the licence from the path entirely.
+> - Enough tenants on Tuya that ~USD 170/month is noise rather than a bet. At a handful of tenants
+>   it is the whole integration's margin; at a hundred it is a rounding error.
+> - Selling hardware, where owning the pairing flow is the product rather than a convenience.
+>
+> **What stays true regardless:** BYO onboarding is five steps and four happen outside our product.
+> That is the real pain, and it is fixable without a licence — the console deep link shipped on
+> 2026-08-09 is the first piece.
+
 
 ## Destination
 
