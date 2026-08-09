@@ -8,29 +8,6 @@
         "type": "tabs",
         "children": [
           {
-            "id": "f7dd7af0b8d4da54",
-            "type": "leaf",
-            "state": {
-              "type": "kanban",
-              "state": {
-                "file": "Task Board.md",
-                "kanbanViewState": {
-                  "kanban-plugin": "board",
-                  "list-collapse": [
-                    false,
-                    true,
-                    false,
-                    false,
-                    false,
-                    false
-                  ]
-                }
-              },
-              "icon": "lucide-trello",
-              "title": "Task Board"
-            }
-          },
-          {
             "id": "b0c2853a209ba4bb",
             "type": "leaf",
             "state": {
@@ -53,8 +30,7 @@
               "title": "Task Board"
             }
           }
-        ],
-        "currentTab": 1
+        ]
       }
     ],
     "direction": "vertical"
@@ -113,7 +89,8 @@
       }
     ],
     "direction": "horizontal",
-    "width": 230.5
+    "width": 230.5,
+    "collapsed": true
   },
   "right": {
     "id": "7890933a22997089",
@@ -222,6 +199,29 @@
   },
   "active": "b0c2853a209ba4bb",
   "lastOpenFiles": [
+    "plans/tuya-oem-map/06-sdk-coexistence-build.md",
+    "plans/tuya-oem-map/05-migration-off-byo.md",
+    "plans/tuya-oem-map/04-server-side-control.md",
+    "plans/tuya-oem-map/03-account-per-user-or-per-tenant.md",
+    "plans/tuya-oem-map/02-ios-bridge-feasibility.md",
+    "plans/tuya-oem-map/01-what-the-licence-costs.md",
+    "plans/tuya-oem-map.md",
+    "plans/tuya-oem-map",
+    "plans/device-gate-map/06-approval-screen.md",
+    "plans/device-gate-map/05-attention-limits.md",
+    "plans/device-gate-map/04-token-shape.md",
+    "plans/device-gate-map/03-run-state-while-suspended.md",
+    "plans/device-gate-map/02-biometrics-without-biometrics.md",
+    "plans/device-gate-map/01-who-may-answer.md",
+    "plans/device-gate-map.md",
+    "plans/device-gate-map",
+    "agents/issue-tracker.md",
+    "agents",
+    "plans/device-gate-node.md",
+    "plans/when-event-cron.md",
+    "plans/mobile-edge-face-capture.md",
+    "plans/faces-completion.md",
+    "plans/mobile-edge-face-capture.md.tmp.14447.cf4b28e93ffa",
     "plans/db-superuser-privilege.md",
     "plans/tenant-isolation-rls.md",
     "legal/README.md",
@@ -234,30 +234,7 @@
     "plans/architecture-weaknesses.md",
     "Task Board.md.tmp.6853.7bdfa62a3cae",
     "plans/camera-status-visibility.md",
-    "plans/face-pipeline-hd-stream.md",
-    "Task Board.md",
-    "plans/security-hardening-remainder.md",
-    "plans/fido2-webauthn.md",
-    "plans/tracking-job-resolution.md",
-    "plans/workflow-editor-refactor.md",
-    "plans/default-workflow-templates.md",
-    "plans/workflow-display-nodes.md",
-    "plans/editor-dirty-tracking-settings.md",
     "Task Board.md.tmp.45226.925ccf2831ec",
-    "plans/tuya-integration.md",
-    "plans/workflow-memoize-off-default.md",
-    "Task Board.md.tmp.5186.e5057e0f9042",
-    "Task Board.md.tmp.5186.f05244c08fa8",
-    "Task Board.md.tmp.68407.66125e8afc6a",
-    "Task Board.md.tmp.68407.9e4979f0f4dc",
-    "plans/face-threshold-calibration.md",
-    "plans/face-knn-hnsw-rerank.md",
-    "plans/face-quality-gate-upstream.md",
-    "plans/face-embedding-l2-normalization.md",
-    "plans/face-clustering-chaining-fix.md",
-    "plans/face-recognition-per-person-scoring.md",
-    "plans/face-embed-landmark-align.md",
-    "plans/retire-local-builds-ci.md",
     "plans/logo-exploration/warm-concepts-overview.png",
     "plans/logo-exploration/concept-5.svg",
     "plans/logo-exploration/concept-4.svg",
