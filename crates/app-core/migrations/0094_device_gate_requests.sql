@@ -14,8 +14,14 @@ CREATE TABLE IF NOT EXISTS device_gate_requests (
     tenant_id        uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
 
     -- Where to resume. `node_id` is the per-graph integer the engine addresses.
+    --
+    -- `bigint`, matching `run_logs.node_id`, NOT the `integer` used by `workflow_node_state`. Every
+    -- call site binds `node_id as i64`, and sqlx matches column types STRICTLY on the way back —
+    -- int4 does not widen into i64. Declaring this `integer` would compile, pass review, and fail
+    -- every read at runtime, which is exactly how a `float4` column declared as `f64` took face
+    -- detail down until a screenshot made it obvious.
     graph_id         uuid NOT NULL,
-    node_id          integer NOT NULL,
+    node_id          bigint NOT NULL,
     -- The run that ASKED. That run is over by the time anyone answers, so this is not a foreign key
     -- into live state — it is the audit join. Decision 03 accepted that run history shows the ask
     -- and the answer as two entries; this column is what lets an incident be reconstructed anyway.
@@ -58,7 +64,17 @@ CREATE TABLE IF NOT EXISTS device_gate_requests (
     -- requirement of the product, so a phone with none falls back to the passcode — and recording
     -- WHICH is the only thing keeping that fallback from being a silent downgrade. An approval
     -- whose strength is unknowable is the outcome this column exists to prevent.
-    auth_factor      text
+    auth_factor      text,
+
+    -- When the engine actually resumed the node for this request. NULL = settled but not yet
+    -- delivered to the graph.
+    --
+    -- This column is what makes the answer DURABLE. The alternative — control settles the row and
+    -- then POSTs sentinel-flow to resume — loses the resume whenever that POST fails, leaving a
+    -- gate that a person approved and a graph that never continued, with nothing anywhere saying
+    -- so. With this, the row IS the queue: flow's sweep claims anything settled-and-unresumed, and
+    -- the POST degrades from a correctness requirement to a latency optimisation.
+    resumed_at       text
 );
 
 -- The phone's own list: `GET /device-gate/pending`, scoped to the calling device (decision 01 —
@@ -66,9 +82,13 @@ CREATE TABLE IF NOT EXISTS device_gate_requests (
 CREATE INDEX IF NOT EXISTS device_gate_requests_device_pending_idx
     ON device_gate_requests (push_device_id, state);
 
--- The expiry sweep, so finding what is due does not scan the table.
-CREATE INDEX IF NOT EXISTS device_gate_requests_expiry_idx
-    ON device_gate_requests (state, expires_at);
+-- The sweep, which looks for two things: still pending past its deadline, and settled but never
+-- delivered. Partial, because the rows it wants are a vanishing fraction of the table once a
+-- system has been running a while — every finished request has both a terminal state and a
+-- `resumed_at`, and drops out of the index entirely.
+CREATE INDEX IF NOT EXISTS device_gate_requests_sweep_idx
+    ON device_gate_requests (expires_at)
+ WHERE resumed_at IS NULL;
 
 -- The canvas countdown reads the pending request for a node without scanning by tenant.
 CREATE INDEX IF NOT EXISTS device_gate_requests_node_idx

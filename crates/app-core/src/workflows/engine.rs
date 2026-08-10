@@ -1029,6 +1029,184 @@ fn forward_epoch(
             continue;
         }
 
+        // Device Gate: ask a person, on their phone, before continuing. Two paths, and the node
+        // takes NO arm on the way in — the run ends at the ask.
+        //
+        //  * Resume (the answer endpoint or the expiry sweep forced this node, and the payload
+        //    carries a verdict) — fire the arm the verdict names.
+        //  * Ask (an ordinary exec pin) — mint the request, push it, and stop. The run ends here.
+        //    Not because asking is slow, but because a run cannot block on a human: a handler runs
+        //    to completion before the pass settles it, so waiting here would hold the whole graph
+        //    for as long as someone leaves their phone face-down.
+        if n.kind == NodeKind::DeviceGate {
+            // Resume. The PRESENCE of the verdict key is the test, not `forced` alone — a loop
+            // back-edge forces a node too, and firing an arm nobody chose would be worse than not
+            // resuming at all.
+            if forced.contains(&nid) {
+                if let Some(verdict) = entry_payload
+                    .get(crate::workflows::domain::DEVICE_GATE_VERDICT)
+                    .and_then(PortValue::as_text)
+                {
+                    let arm = super::device_gate::GateState::from_str(verdict)
+                        .unwrap_or(super::device_gate::GateState::Failed)
+                        .exec_arm();
+                    live_out.insert((nid, arm.to_string()));
+
+                    let mut o = PortValues::new();
+                    let carried = |k: &str| {
+                        entry_payload
+                            .get(k)
+                            .and_then(PortValue::as_text)
+                            .unwrap_or_default()
+                            .to_string()
+                    };
+                    o.insert(
+                        "answered_by".into(),
+                        PortValue::Text(carried(
+                            crate::workflows::domain::DEVICE_GATE_ANSWERED_BY,
+                        )),
+                    );
+                    o.insert(
+                        "factor".into(),
+                        PortValue::Text(carried(crate::workflows::domain::DEVICE_GATE_FACTOR)),
+                    );
+                    on_log(nid, &format!("Device Gate: {verdict} → {arm}"), 0);
+                    *steps += 1;
+                    outputs.insert(nid, o);
+                    ran.insert(nid);
+                    settle(&mut settled, &mut indeg);
+                    continue;
+                }
+            }
+
+            // Ask. Both values may be wired or authored in the panel; `literal_for` is what makes
+            // a `required` port satisfiable from config.
+            let cfg_text = |key: &str| -> String {
+                inputs
+                    .get(key)
+                    .and_then(PortValue::as_text)
+                    .map(str::to_string)
+                    .or_else(|| {
+                        n.config
+                            .get(key)
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_default()
+            };
+            let recipient = cfg_text("recipient");
+            let message = cfg_text("message");
+            let ttl_secs = n
+                .config
+                .get("ttl_secs")
+                .and_then(|v| {
+                    v.as_i64()
+                        .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+                })
+                .unwrap_or(600);
+
+            // An unset Recipient or an empty prompt is an AUTHORING mistake, and it fails the run
+            // rather than taking `failure`. `failure` means a human was asked and did not decide;
+            // letting a broken gate arrive on the same arm is how a graph comes to treat "never
+            // asked" as "asked and ignored".
+            if recipient.is_empty() {
+                return Err("Device Gate: no Recipient set — nobody to ask".into());
+            }
+            if message.trim().is_empty() {
+                return Err("Device Gate: the message is empty — nothing to decide on".into());
+            }
+
+            match super::device_gate::resolve_device_by_label(&sys.db, sys.tenant_id, &recipient) {
+                Ok((device_id, token)) => {
+                    match super::device_gate::mint(
+                        &sys.db,
+                        sys.tenant_id,
+                        graph.id,
+                        nid,
+                        sys.run_id,
+                        device_id,
+                        &message,
+                        &graph.name,
+                        ttl_secs,
+                    ) {
+                        Ok(minted) => {
+                            // The push carries the request id and the raw token — the only copy
+                            // that will ever exist. The body carries the message and the flow name
+                            // so the decision is legible from the lock screen.
+                            // The token rides in `data`, which the app reads and the OS never
+                            // renders. It must never reach `body` — that would print a
+                            // gate-opening secret on the lock screen.
+                            let payload = serde_json::json!({
+                                "kind": "device_gate",
+                                "request_id": minted.id,
+                                "token": minted.token,
+                                "expires_at": minted.expires_at,
+                            });
+                            // The flow name is the title, so "which automation wants this?" is
+                            // answerable before unlocking — and it comes from the graph, never
+                            // from text the prompt's author could make disagree with it.
+                            let title = format!("{}: approval needed", graph.name);
+                            match crate::notification::push::send_data(
+                                &[token],
+                                &title,
+                                &message,
+                                payload,
+                            ) {
+                                Ok(_) => {
+                                    on_log(
+                                        nid,
+                                        &format!(
+                                            "Device Gate: asked {recipient}, expires {}",
+                                            minted.expires_at
+                                        ),
+                                        0,
+                                    );
+                                }
+                                Err(e) => {
+                                    // Undeliverable. Settle it now rather than leaving a request
+                                    // nobody will ever see waiting for its TTL: the graph learns
+                                    // in seconds instead of ten minutes, and the audit trail
+                                    // records `failed` rather than `expired` — different events.
+                                    super::device_gate::settle_failed(&sys.db, minted.id);
+                                    live_out.insert((nid, "failure".to_string()));
+                                    on_log(nid, &format!("Device Gate: push failed — {e}"), 0);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            live_out.insert((nid, "failure".to_string()));
+                            on_log(nid, &format!("Device Gate: {e}"), 0);
+                        }
+                    }
+                }
+                Err(super::device_gate::ResolveError::NoDevice) => {
+                    live_out.insert((nid, "failure".to_string()));
+                    on_log(
+                        nid,
+                        &format!("Device Gate: '{recipient}' has no registered phone"),
+                        0,
+                    );
+                }
+                Err(super::device_gate::ResolveError::Ambiguous(count)) => {
+                    live_out.insert((nid, "failure".to_string()));
+                    on_log(
+                        nid,
+                        &format!(
+                            "Device Gate: '{recipient}' matches {count} phones — only the addressed \
+                             device may answer, so there is no one device to ask"
+                        ),
+                        0,
+                    );
+                }
+            }
+
+            *steps += 1;
+            outputs.insert(nid, PortValues::new());
+            ran.insert(nid);
+            settle(&mut settled, &mut indeg);
+            continue;
+        }
+
         let started = Instant::now();
         // IO-bound kinds run under a per-node deadline (watchdog thread) so a stuck call
         // aborts the run instead of hanging forever; pure/instant kinds run inline.

@@ -1161,6 +1161,15 @@ const EXEC_OUT_TIME_GATE: [Port; 1] = [p("out", PortType::Exec, false)];
 /// the window consumer. The node tests for this rather than trusting `forced` alone, because a
 /// loop back-edge can force a node too and must not be mistaken for an expired window.
 pub const WINDOW_STOP_MARKER: &str = "__window_stop";
+/// Entry-payload key carrying a Device Gate verdict back to its node (#176). Its PRESENCE is what
+/// distinguishes an answer-resume from an ordinary force — a loop back-edge forces a node too, and
+/// mistaking one for the other would fire an arm nobody chose. Same test the window stop uses, for
+/// the same reason.
+pub const DEVICE_GATE_VERDICT: &str = "__device_gate_verdict";
+/// Which device answered (label) and with which factor, carried alongside the verdict so the
+/// node's data outputs can report them without a second query.
+pub const DEVICE_GATE_ANSWERED_BY: &str = "__device_gate_answered_by";
+pub const DEVICE_GATE_FACTOR: &str = "__device_gate_factor";
 
 // Delay Trigger exec outputs: `start` on the leading edge, `stop` on the trailing one.
 const EXEC_OUT_DELAY_TRIGGER: [Port; 2] = [

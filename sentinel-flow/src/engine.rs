@@ -284,7 +284,7 @@ fn execute_run(
     // HERE with this run's real context, rather than building a throwaway one in the HTTP handler.
     input_overrides: std::collections::HashMap<String, String>,
 ) -> (bool, String) {
-    let (ctx, drain) = build_run_context(state, tenant, graph.id);
+    let (ctx, drain) = build_run_context(state, tenant, graph.id, run_id);
     // Seed this run's variables from the graph's declared defaults (card #5b) — a Get before any
     // Set then returns the author's default instead of a type-zero.
     app_core::workflows::node::seed_variable_defaults(&graph.variables, &ctx);
@@ -798,6 +798,7 @@ fn build_run_context(
     state: &Arc<AppState>,
     tenant: Uuid,
     graph_id: Uuid,
+    run_id: Uuid,
 ) -> (ToolContext, std::thread::JoinHandle<()>) {
     let devices = Arc::new(std::sync::Mutex::new(app_core::devices::repo::load(
         &state.db, tenant,
@@ -848,6 +849,9 @@ fn build_run_context(
         });
     }
     ctx.active_gates = std::sync::Arc::clone(&state.active_gates);
+    // So a Device Gate can record WHICH run asked (#176). Two entries in the history, joined
+    // by this column — see the field's doc on ToolContext.
+    ctx.run_id = run_id;
     // Snapshot the tenant's dictionaries (#113) for run-start Table resolution + read nodes. Mutate
     // nodes bypass this snapshot and hit the DB row under a lock, so cross-run writes stay visible.
     ctx.dictionaries = app_core::dictionaries::list(&state.db, tenant)
