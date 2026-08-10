@@ -1,7 +1,7 @@
 # Who may answer a gate request
 
 Type: grilling
-Status: open
+Status: resolved
 
 ## Question
 
@@ -22,3 +22,31 @@ at a device, a user, or a permission — and everything downstream (the pending 
 endpoint's authorization, the audit line) inherits that choice.
 
 Resolve with: what does the customer actually expect when the addressed phone is flat at 2am?
+
+## Answer: only the addressed device
+
+The request points at a `push_devices` row and nothing else may settle it. **Recipient keeps the
+meaning it has today** (#139) — a device IS a Recipient — so nothing about the picker, the
+notification path or the existing model changes.
+
+Chosen knowing the cost: a phone that is flat, lost or replaced makes that gate unanswerable until
+someone edits the flow. That is the honest trade for the strongest guarantee this node can make —
+the person the author addressed is the person who answered, and the audit line says so without
+qualification.
+
+The 2am objection is real but it is answered elsewhere rather than by widening who may answer.
+A gate that nobody can open is a safe failure; a gate that the wrong person can open is the
+incident this node exists to prevent. Expiry takes Failure and the graph decides what happens next.
+
+**What this fixes downstream:**
+
+- `device_gate_requests.push_device_id` → `push_devices(id)`. Not a user id, not a permission.
+- The answer endpoint authorizes on THREE things: a valid session, the session's user owning that
+  push device, and the token matching. No new RBAC permission is added — a permission-based path is
+  precisely what this decision rejected.
+- `GET /device-gate/pending` is scoped to the calling device, not the user's devices.
+
+**Interaction with [02](./02-biometrics-without-biometrics.md), which decided it:** if only one
+device may answer, refusing approval on a phone without enrolled biometrics would make that gate
+permanently unanswerable. 02's passcode fallback is what keeps this decision survivable — the two
+answers are load-bearing on each other and should not be revisited separately.

@@ -6,13 +6,6 @@ kanban-plugin: board
 
 ## Backlog
 
-- [ ] #176 Device Gate node [map] — a human approves from their phone before the graph continues
-	  - Map: [[device-gate-map]] · baseline: [[device-gate-node]]
-	  - Exec in; Positive / Negative / Failure out. Agnostic: it gates an exec edge, not a Tuya
-	    device. Opening a gate is a security decision, not a switch.
-	  - Charted with /wayfinder — six decision tickets in `docs/plans/device-gate-map/`. One board
-	    card on purpose: a dozen open questions here would bury the actual work.
-
 - [ ] #133 Tuya local control [map] — the edge talks to the device on the LAN, cloud out of the path
 	  - Map: [[tuya-local-map]] · today's model: [[tuya]]
 	  - Charted with /wayfinder. Four decision tickets in `docs/plans/tuya-local-map/`. Decided while
@@ -125,6 +118,10 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #176 Device Gate node — a human approves from their phone before the graph continues
+	  - Map: [[device-gate-map]] · baseline: [[device-gate-node]]
+	  - Exec in; Positive / Negative / Failure out. Agnostic: it gates an exec edge, not a Tuya
+	    device. Opening a gate is a security decision, not a switch.
 - [ ] #174 Faces — complete the pipeline
 	  - Plan: [[faces-completion]]
 	  - Steps 1 (per-tenant capture stream) and 2 (index-backed cluster neighbours) shipped.

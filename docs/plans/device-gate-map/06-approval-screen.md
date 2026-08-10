@@ -1,8 +1,7 @@
 # What the approval screen looks and feels like
 
 Type: prototype
-Status: open
-Blocked by: 01, 02
+Status: open — unblocked, ready to prototype
 
 ## Question
 
