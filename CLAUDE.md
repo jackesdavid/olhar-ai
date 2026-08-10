@@ -24,6 +24,10 @@ matches your task:
   `feat/map-redesign`.)
 - **[Brand](docs/ref/brand.md)** — the visual identity: the dot-field mark, the Sora sentence-case
   wordmark (`--font-brand`), and the `SentinelLogo` lockup. Monochrome ink; form over colour.
+- **[Issue tracker](docs/agents/issue-tracker.md)** — where work is tracked and how the planning
+  skills address it. The board is `docs/Task Board.md` (Obsidian Kanban, committed) with detail in
+  `docs/plans/`; the doc maps `/wayfinder`'s map/ticket/blocking/frontier operations onto that,
+  since a markdown board has no child issues, native blocking or assignees.
 - **[Handoff log](docs/HANDOFF.md)** — rolling session memory (newest first): what changed, branch,
   pending, blockers. Save/resume it with the `/handoff` skill.
 
