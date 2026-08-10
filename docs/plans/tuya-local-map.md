@@ -44,6 +44,18 @@ reading.
 
 <!-- one line per resolved ticket -->
 
+- **The protocol client is the `rustuya` crate, not a port** — 3.1–3.5, MIT, pure Rust on tokio, no
+  C dependency. Days rather than weeks. Young and single-maintainer, so vendor-or-fork if it goes
+  quiet; the fallback is the port we would otherwise have started with.
+  ([[01-protocol-client-in-rust]])
+- **One persistent connection per device, heartbeated** — the device permits only ONE TCP connection
+  and closes an idle socket at ~30s. This is the camera ONE-PIPELINE rule on different hardware, and
+  it fails the same silent way. 3.4/3.5 negotiate a per-connection session key, so dial-per-command
+  would also pay three round-trips per command. ([[01-protocol-client-in-rust]])
+- **Discovery listens on 6666, 6667 AND 7000** — the broadcast carries device id, ip and protocol
+  version, so the edge learns the version rather than being told it. 7000 is *solicited*: listening
+  only on 6666/6667 silently misses the newest hardware. ([[01-protocol-client-in-rust]])
+
 ## Not yet specified
 
 - **What the Live/status path does.** `Read Tuya` fetches device state; whether it also moves local,
