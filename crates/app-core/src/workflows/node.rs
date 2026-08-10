@@ -597,6 +597,11 @@ pub fn run_node(
         // DelayTrigger is engine-driven too (arms/extends cross-run state and schedules its
         // own trailing stop). Never called through run_node.
         NodeKind::DelayTrigger => Ok(PortValues::new()),
+        // DeviceGate is engine-driven for the same reason, one step further: it mints a request
+        // row, pushes it, and takes NO branch — the run ends there. The answer (or the TTL) comes
+        // back later as a sub-run forced at this node, which is when the arm is chosen. Never
+        // called through run_node.
+        NodeKind::DeviceGate => Ok(PortValues::new()),
         NodeKind::GetVariable => variable::run_get_variable(config, sys),
         NodeKind::SetVariable => variable::run_set_variable(config, inputs, sys),
         NodeKind::ReplyToSender => telegram::run_reply_to_sender(config, inputs, sys),
@@ -706,6 +711,10 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::Gauge
         | NodeKind::TimeGate
         | NodeKind::DelayTrigger
+        // No watchdog, and NOT because it is instant: the wait for a person is a row in Postgres,
+        // not a held handler, so there is nothing here for a timeout to kill. The human deadline
+        // is the request's own TTL, enforced by the expiry sweep.
+        | NodeKind::DeviceGate
         | NodeKind::GetVariable
         | NodeKind::SetVariable
         | NodeKind::DictRowCount
@@ -1233,6 +1242,9 @@ pub fn debug_summary(
         // The engine logs the real state transition (armed / extended / stopped) — this is
         // only the fallback for a node that somehow reached the generic summary path.
         NodeKind::DelayTrigger => "delay trigger".into(),
+        // The engine logs the real outcome (asked / approved / denied / expired). This is only the
+        // fallback for a node that somehow reached the generic summary path.
+        NodeKind::DeviceGate => "device gate".into(),
         NodeKind::GetVariable => {
             let name = config
                 .get("variable")

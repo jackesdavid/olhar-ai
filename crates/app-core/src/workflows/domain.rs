@@ -568,6 +568,17 @@ pub enum NodeKind {
     /// run, so the trailing `stop` is delivered by a later run forced at this node, scheduled
     /// on the durable `work_jobs` queue. Engine-driven (not `run_node`).
     DelayTrigger,
+    /// Flow control: ask a PERSON, on their phone, before continuing. Pushes an authorization
+    /// request to the addressed Recipient and returns WITHOUT taking a branch — the run ends,
+    /// exactly as `DelayTrigger`'s trailing edge does, because a run cannot block on a human.
+    /// The answer (or the TTL expiring) resumes at this node via `spawn_node_subrun` and fires
+    /// one of `positive` / `negative` / `failure`.
+    ///
+    /// Agnostic by design: it gates an exec edge, not a device. Whatever hangs off `positive` is
+    /// the sensitive action. A denial is an ANSWER (`negative`) and is the most informative thing
+    /// this node produces; `failure` means NO HUMAN DECIDED — timed out, undeliverable, error.
+    /// Folding those together is how "nobody answered" gets treated as "go ahead".
+    DeviceGate,
     /// Variables: read a workflow variable's current value → one typed data output (`value`).
     /// Pure (no exec pins) — drop it anywhere and wire its output, no flow wires needed. The
     /// variable name + type are in config; the output port type follows the variable's type.
@@ -716,6 +727,25 @@ const DESCRIBE_IMAGE_OUT: [Port; 2] = [
 const GET_RECIPIENT_OUT: [Port; 2] = [
     p("recipient", PortType::Recipient, false),
     p("ok", PortType::Bool, false),
+];
+
+// Device Gate: ask a person before continuing. Both inputs are `required` — which still allows
+// authoring them in the panel, since a required input is only unsatisfied when it has neither an
+// edge NOR a config literal. An unset Recipient or an empty prompt is an AUTHORING mistake and
+// should fail the run loudly; it must not arrive as `failure`, which means a human was asked and
+// did not answer. Hiding a broken gate behind the same arm as an unanswered one is how a graph
+// ends up treating "never asked" as "asked and ignored".
+const DEVICE_GATE_IN: [Port; 2] = [
+    p("recipient", PortType::Recipient, true),
+    p("message", PortType::Text, true),
+];
+// What the answer was, for graphs that want to log or notify on it. `factor` carries the map's
+// decision 02: an approval confirmed by passcode rather than biometrics is still an approval, but
+// its strength must be legible rather than assumed. Empty on the `failure` arm — nobody answered,
+// so there is nothing to attribute.
+const DEVICE_GATE_OUT: [Port; 2] = [
+    p("answered_by", PortType::Text, false),
+    p("factor", PortType::Text, false),
 ];
 
 const NOTIFY_RECIPIENT_IN: [Port; 3] = [
@@ -1148,6 +1178,12 @@ pub const EXEC_FALSE: Port = p("false", PortType::Exec, false);
 /// `For each` exec outs: `loop_body` fires once per element; `completed` fires once after.
 pub const EXEC_LOOP_BODY: Port = p("loop_body", PortType::Exec, false);
 pub const EXEC_COMPLETED: Port = p("completed", PortType::Exec, false);
+const EXEC_OUT_DEVICE_GATE: [Port; 3] = [
+    p("positive", PortType::Exec, false),
+    p("negative", PortType::Exec, false),
+    p("failure", PortType::Exec, false),
+];
+
 const EXEC_OUT_DEFAULT: [Port; 1] = [EXEC_OUT];
 const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
@@ -1155,7 +1191,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 87] = [
+    pub const ALL: [NodeKind; 88] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -1222,6 +1258,7 @@ impl NodeKind {
         NodeKind::StopRecording,
         NodeKind::TimeGate,
         NodeKind::DelayTrigger,
+        NodeKind::DeviceGate,
         NodeKind::GetVariable,
         NodeKind::SetVariable,
         NodeKind::ReplyToSender,
@@ -1316,6 +1353,7 @@ impl NodeKind {
             NodeKind::StopRecording => "stop_recording",
             NodeKind::TimeGate => "time_gate",
             NodeKind::DelayTrigger => "delay_trigger",
+            NodeKind::DeviceGate => "device_gate",
             NodeKind::GetVariable => "get_variable",
             NodeKind::SetVariable => "set_variable",
             NodeKind::ReplyToSender => "reply_to_sender",
@@ -1413,6 +1451,7 @@ impl NodeKind {
             NodeKind::StopRecording => "Stop Recording",
             NodeKind::TimeGate => "Time Gate",
             NodeKind::DelayTrigger => "Delay Trigger",
+            NodeKind::DeviceGate => "Device Gate",
             NodeKind::GetVariable => "Get Variable",
             NodeKind::SetVariable => "Set Variable",
             NodeKind::ReplyToSender => "Reply to Sender",
@@ -1463,7 +1502,8 @@ impl NodeKind {
             | NodeKind::CameraSwitch
             | NodeKind::AiSwitch
             | NodeKind::TimeGate
-            | NodeKind::DelayTrigger => "Control",
+            | NodeKind::DelayTrigger
+            | NodeKind::DeviceGate => "Control",
             NodeKind::NumLt
             | NodeKind::NumLte
             | NodeKind::NumGt
@@ -1577,6 +1617,9 @@ impl NodeKind {
             NodeKind::Reroute => &NO_PORTS, // pure passthrough, no exec pins
             NodeKind::TimeGate => &EXEC_OUT_TIME_GATE, // "out" fires when countdown expires
             NodeKind::DelayTrigger => &EXEC_OUT_DELAY_TRIGGER, // leading "start", trailing "stop"
+            // Three arms, and the split is deliberate: `negative` is an ANSWER, `failure` is
+            // the absence of one. See the kind's doc comment.
+            NodeKind::DeviceGate => &EXEC_OUT_DEVICE_GATE,
             _ => &EXEC_OUT_DEFAULT,
         }
     }
@@ -1619,6 +1662,7 @@ impl NodeKind {
             NodeKind::Region => &REGION_IN,
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_IN,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_IN,
+            NodeKind::DeviceGate => &DEVICE_GATE_IN,
             NodeKind::Format => &FORMAT_IN,
             NodeKind::Wait => &NO_PORTS, // control-flow only — sequenced via exec ports
             NodeKind::HttpPost => &HTTP_POST_IN,
@@ -1713,6 +1757,7 @@ impl NodeKind {
             NodeKind::Region => &REGION_OUT,
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_OUT,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_OUT,
+            NodeKind::DeviceGate => &DEVICE_GATE_OUT,
             NodeKind::Format => &FORMAT_OUT,
             NodeKind::Wait => &NO_PORTS, // control-flow only — sequenced via exec ports
             NodeKind::HttpPost => &HTTP_POST_OUT,
@@ -1825,6 +1870,12 @@ impl NodeKind {
             NodeKind::Region => json!({ "camera": "first", "name": "", "points": [] }),
             NodeKind::DescribeImage => json!({ "label": "", "question": "", "timeout_secs": "65" }),
             NodeKind::NotifyRecipient => json!({ "message": "", "timeout_secs": "35" }),
+            // 10 minutes. Deliberately not seconds: decision 05 established that a push is
+            // best-effort — it can be batched, silenced, or arrive late on a phone in Doze — so
+            // the TTL has to assume the phone is CHECKED, not that the person was alerted. A
+            // default measured in seconds would expire in a pocket and teach users the node is
+            // unreliable.
+            NodeKind::DeviceGate => json!({ "message": "", "ttl_secs": "600" }),
             NodeKind::Format => json!({ "template": "{p1} — {p2}", "p1": "", "p2": "", "p3": "" }),
             NodeKind::Wait => json!({ "seconds": "1" }),
             NodeKind::HttpPost => {
