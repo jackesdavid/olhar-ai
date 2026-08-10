@@ -1,8 +1,7 @@
 # How a workflow command reaches the edge
 
 Type: grilling
-Status: open
-Blocked by: 01
+Status: open — unblocked, ready to run
 
 ## Question
 
@@ -24,6 +23,19 @@ deciding is the shape.
   currently records which appliance can see which plug.
 - Does the command wait for the device's acknowledgement, or return once sent?
 
-Blocked by [What speaks the Tuya LAN protocol from the edge](./01-protocol-client-in-rust.md): the
-client's own semantics — connection lifetime, acknowledgement, error surface — determine what this
-endpoint can honestly promise.
+## Unblocked by 01 — what the client's semantics now constrain
+
+[01](./01-protocol-client-in-rust.md) resolved to `rustuya`, holding **one persistent, heartbeated
+connection per device**. That narrows three of the questions above before this ticket even starts:
+
+- The edge is not a stateless command forwarder. It holds a long-lived per-device task, so the
+  endpoint hands work to something already connected rather than dialling. Connection setup cost
+  disappears from the command path — which is what makes the millisecond claim honest.
+- The device tolerates **only one TCP connection**, so "which edge" is not a routing preference, it
+  is an exclusivity constraint: two appliances that can both see a plug must not both hold it. That
+  is the same problem `devices.box_id` solved for cameras, and it now needs an answer here rather
+  than being deferred.
+- The connection can be up or down independently of any command, so the edge already knows whether
+  a device is reachable. The timeout question changes from "did it answer in 15s" to "was it
+  connected at all" — which distinguishes "the gate did not open" from "we do not know", the
+  distinction this ticket cares about.

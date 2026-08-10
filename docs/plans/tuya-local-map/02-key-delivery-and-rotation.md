@@ -24,3 +24,19 @@ failure shape as several bugs already hit this month. So:
   refreshing" rather than nothing.
 
 Resolve with: what should happen the first time someone re-pairs a plug in the Smart Life app.
+
+## What 01 established
+
+[01](./01-protocol-client-in-rust.md) answered the detectability question, which was the one that
+decided whether the rest is designable:
+
+- **A wrong key is distinguishable from an offline device.** On 3.4/3.5 the key is used in a session
+  handshake before any command — a bad key fails the handshake, a dead device fails to connect.
+  Two different failures at two different stages, so the edge can say which. On 3.1–3.3 there is no
+  handshake and a bad key surfaces as a garbage decrypt instead; still distinguishable from a
+  refused connection, but by a different signal, and the UI copy has to hold for both.
+- **Rotation is not a rare event to design around later.** tinytuya states it outright: the key
+  changes every time a device is removed and re-added, or reset and re-paired. Any tenant who
+  troubleshoots a misbehaving plug the ordinary way — delete it, pair it again — rotates the key.
+- The `local_key` is never broadcast on the LAN. Discovery gives id, ip and version only, so the
+  Cloud API remains the sole source and there is no local shortcut that would avoid this ticket.
