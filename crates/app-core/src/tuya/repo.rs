@@ -151,8 +151,9 @@ pub fn resolve_config(db: &Db, tenant_id: Uuid) -> Option<TuyaConfig> {
 pub fn load_config(db: &Db, tenant_id: Uuid) -> Option<TuyaConfig> {
     let pool = db.pool();
     db.block(async move {
-        let row: Option<(String, String, String)> = sqlx::query_as(
-            "SELECT access_id, access_key, endpoint FROM tuya_config WHERE tenant_id = $1",
+        let row: Option<(String, String, String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT access_id, access_key, endpoint, console_project_id, console_region \
+             FROM tuya_config WHERE tenant_id = $1",
         )
         .bind(tenant_id)
         .fetch_optional(&pool)
@@ -161,11 +162,15 @@ pub fn load_config(db: &Db, tenant_id: Uuid) -> Option<TuyaConfig> {
             log::error!("tuya::repo::load_config failed: {e}");
             None
         });
-        row.map(|(access_id, access_key, endpoint)| TuyaConfig {
-            access_id,
-            access_key,
-            endpoint,
-        })
+        row.map(
+            |(access_id, access_key, endpoint, console_project_id, console_region)| TuyaConfig {
+                access_id,
+                access_key,
+                endpoint,
+                console_project_id,
+                console_region,
+            },
+        )
     })
 }
 
@@ -197,6 +202,40 @@ pub fn save_config(db: &Db, tenant_id: Uuid, cfg: &TuyaConfig) -> Result<(), Str
 }
 
 /// Remove the tenant's own Tuya credentials (disconnect → falls back to operator env, if any).
+/// Record the console's project id + data-centre for the deep link, without touching credentials.
+///
+/// Separate from `save_config` deliberately: that path rewrites `access_key`, which the UI treats
+/// as write-only, so routing this through it would make "paste your console URL" also mean
+/// "re-enter your secret". Nothing here is a credential — it is the same identity that sits in the
+/// address bar of a logged-in console.
+pub fn set_console_project(
+    db: &Db,
+    tenant_id: Uuid,
+    project_id: &str,
+    region: Option<&str>,
+) -> Result<(), String> {
+    let pool = db.pool();
+    let (pid, region) = (project_id.to_string(), region.map(str::to_string));
+    let now = now_rfc3339();
+    let res: Result<(), sqlx::Error> = db.block(async move {
+        sqlx::query(
+            "UPDATE tuya_config SET console_project_id = $2, console_region = $3, updated_at = $4 \
+             WHERE tenant_id = $1",
+        )
+        .bind(tenant_id)
+        .bind(&pid)
+        .bind(&region)
+        .bind(&now)
+        .execute(&pool)
+        .await?;
+        Ok(())
+    });
+    res.map_err(|e| {
+        log::error!("tuya::repo::set_console_project failed: {e}");
+        format!("database error: {e}")
+    })
+}
+
 pub fn delete_config(db: &Db, tenant_id: Uuid) -> Result<(), String> {
     let pool = db.pool();
     let res: Result<(), sqlx::Error> = db.block(async move {

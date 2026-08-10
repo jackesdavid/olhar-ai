@@ -437,3 +437,16 @@ export const DEFAULT_SETTINGS: Settings = {
   recordings_path: "/opt/sentinel-edge/recordings",
   delete_local_after_upload: false,
 };
+
+/** Tuya connection state for a tenant, plus where to go to link another app account.
+ *
+ *  `console_url` is a deep link into the tenant's OWN Tuya console — adding a second Smart Life
+ *  account has no public API (OAuth is OEM-only, the QR is console-generated), so the most the
+ *  product can do is remove the hunting. `console_url_exact` is false when we only know the
+ *  region and the link lands on the project list rather than the tab. */
+export type TuyaProvider = {
+  configured: boolean;
+  source: "tenant" | "operator" | "none";
+  console_url: string | null;
+  console_url_exact: boolean;
+};

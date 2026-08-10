@@ -25,6 +25,7 @@ pub fn router() -> Router<AppState> {
         .route("/tuya/devices/:device_id/labels", patch(set_labels))
         .route("/tuya/sync", post(sync))
         .route("/tuya/provider", get(provider))
+        .route("/tuya/console", put(set_console))
         .route("/tuya/config", put(set_config).delete(delete_config))
 }
 
@@ -106,6 +107,10 @@ async fn set_config(
         access_id,
         access_key,
         endpoint,
+        // Saved separately by `PUT /tuya/console`, and NOT cleared here: re-entering credentials
+        // must not silently drop the console link the tenant already gave us.
+        console_project_id: None,
+        console_region: None,
     };
     let db = st.db.clone();
     blocking(move || -> Result<(), String> {
@@ -170,7 +175,49 @@ async fn provider(
     auth::require(&c, "tuya.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    let connected = blocking(move || tuya::repo::load_config(&db, tid).is_some()).await?;
+    let cfg = blocking(move || tuya::repo::load_config(&db, tid)).await?;
+    let connected = cfg.is_some();
     let source = if connected { "tenant" } else { "none" };
-    Ok(Json(json!({ "configured": connected, "source": source })))
+    // Where to send someone who wants to link ANOTHER Smart Life account. Always present once
+    // credentials exist; sharper once the tenant has pasted a console URL. `exact` says which,
+    // so the UI can offer the paste field only when it would actually improve the link.
+    let (console_url, exact) = match &cfg {
+        Some(c) => (
+            Some(tuya::domain::console_link_url(c)),
+            c.console_project_id.is_some(),
+        ),
+        None => (None, false),
+    };
+    Ok(Json(
+        json!({ "configured": connected, "source": source, "console_url": console_url, "console_url_exact": exact }),
+    ))
+}
+
+#[derive(serde::Deserialize)]
+struct ConsoleUrlReq {
+    url: String,
+}
+
+/// Remember which console project this tenant's credentials belong to, from a URL they pasted.
+///
+/// Not a credential — it is the identity in the address bar of a console the tenant is already
+/// logged into — but it is still tenant data, so it is scoped and permissioned like the rest.
+async fn set_console(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(b): Json<ConsoleUrlReq>,
+) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "tuya.write")?;
+    let tid = tenant_of(&c)?;
+    let Some((project_id, region)) = tuya::domain::parse_console_url(&b.url) else {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "That does not look like a Tuya console project URL — it needs an `id=p…` parameter",
+        ));
+    };
+    let db = st.db.clone();
+    blocking(move || tuya::repo::set_console_project(&db, tid, &project_id, region.as_deref()))
+        .await?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(StatusCode::NO_CONTENT)
 }

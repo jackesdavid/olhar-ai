@@ -24,6 +24,12 @@
   let devices = $state<TuyaDevice[]>([]);
   let loading = $state(true);
   let syncing = $state(false);
+  // Where to send someone who wants a SECOND Smart Life account on this project, and whether that
+  // link is the exact tab or just the project list (see `TuyaProvider`).
+  let consoleUrl = $state<string | null>(null);
+  let consoleExact = $state(false);
+  let consolePaste = $state("");
+  let savingConsole = $state(false);
   let expanded = $state<Record<string, boolean>>({});
   let edits = $state<Record<string, Record<string, string>>>({});
   let savingLabels = $state<string | null>(null);
@@ -75,14 +81,37 @@
   async function reload() {
     loading = true;
     try {
-      const prov = await data.getTuyaProvider().catch(() => ({ configured: false, source: "none" as Source }));
+      const prov = await data
+        .getTuyaProvider()
+        .catch(() => ({ configured: false, source: "none" as Source, console_url: null, console_url_exact: false }));
       source = prov.source;
+      consoleUrl = prov.console_url;
+      consoleExact = prov.console_url_exact;
       devices = prov.configured ? await data.listTuyaDevices().catch(() => []) : [];
     } catch (err) {
       console.error("Failed to load Tuya integration", err);
       toast.error(t.loadFailed, { description: String(err) });
     } finally {
       loading = false;
+    }
+  }
+
+  /** Remember which console project these credentials belong to, so the link lands on the tab
+   *  rather than the project list. Any tab's URL will do — we keep the identity and rebuild the
+   *  tab ourselves. */
+  async function saveConsoleUrl() {
+    const url = consolePaste.trim();
+    if (!url) return;
+    savingConsole = true;
+    try {
+      await data.setTuyaConsoleUrl(url);
+      consolePaste = "";
+      await reload();
+      toast.success(t.consoleLinkSaved);
+    } catch (err) {
+      toast.error(t.consoleLinkFailed, { description: String(err) });
+    } finally {
+      savingConsole = false;
     }
   }
 
@@ -181,6 +210,43 @@
       </div>
     </Card.Header>
     <Card.Content class="space-y-4">
+      {#if consoleUrl && source === "tenant"}
+        <!-- Linking another Smart Life account happens in the tenant's OWN Tuya console: there is
+             no public API for the QR, so the product's whole contribution is knowing where the tab
+             is. After the first account that tab shows a LIST, and the QR only returns behind an
+             "Add App Account" button nobody finds by accident. -->
+        <div class="rounded-lg border border-border bg-well p-3 text-sm">
+          <p class="font-medium">{t.linkAnotherAccount}</p>
+          <p class="mt-1 text-xs text-muted-foreground">{t.linkAnotherAccountHint}</p>
+          <a
+            href={consoleUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="interactive mt-2 inline-flex items-center gap-1.5 text-xs font-medium underline"
+          >
+            {consoleExact ? t.openConsoleTab : t.openConsoleList}
+            <ExternalLink class="size-3.5" />
+          </a>
+          {#if !consoleExact}
+            <div class="mt-3 space-y-1">
+              <p class="text-xs text-muted-foreground">{t.pasteConsoleUrl}</p>
+              <div class="flex items-center gap-2">
+                <Input
+                  bind:value={consolePaste}
+                  placeholder="https://us.platform.tuya.com/cloud/basic?id=p17…"
+                  class="h-8"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+                <Button size="sm" onclick={saveConsoleUrl} disabled={savingConsole || !consolePaste.trim()}>
+                  {t.saveConsole}
+                </Button>
+              </div>
+            </div>
+          {/if}
+        </div>
+      {/if}
+
       {#if loading || source === null}
         <p class="text-sm text-muted-foreground">{t.loading}</p>
 
