@@ -34,6 +34,14 @@ Self-service in-app linking to ONE Sentinel project is **not possible** without 
 - **OEM app** — the only sanctioned self-service unlock, but it's a whole published/maintained mobile
   app (users install YOUR app, not Smart Life) + Tuya OEM fees. Deferred (product decision).
 
+**The OEM licence has a number, established 2026-08-09 so nobody re-researches it:** the SmartLife
+App SDK costs **USD 5 000 the first year and USD 2 000/yr to renew**, and the Official edition is
+MANDATORY to ship on an app store — the free Development edition caps at 100 registered users per
+data centre and is explicitly non-commercial. Rejected on cost: an annual floor paid before the
+first customer, for something BYO already does. (Programmatic sign-up is not the blocker —
+`registerAnonymousWithCountryCode:` creates an account with no verification code — and the iOS SDK
+ships via CocoaPods. The money was the blocker.)
+
 **Conclusion:** BYO-project sidesteps all of it — the tenant links their OWN account to their OWN
 project (self-consent), no OEM, no hacks, ToS-clean.
 

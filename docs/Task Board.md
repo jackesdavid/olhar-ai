@@ -6,6 +6,14 @@ kanban-plugin: board
 
 ## Backlog
 
+- [ ] #133 Tuya local control [map] — the edge talks to the device on the LAN, cloud out of the path
+	  - Map: [[tuya-local-map]] · today's model: [[tuya]]
+	  - Charted with /wayfinder. Four decision tickets in `docs/plans/tuya-local-map/`. Decided while
+	    charting: the edge becomes REQUIRED for Tuya (no cloud fallback, one path), and the node and
+	    its selectors do not change. Latency in ms, works with the internet down, no licence.
+	  - Does NOT remove the BYO onboarding — the local_key still comes from the Cloud API. It takes
+	    the cloud out of the EXECUTION path, not the configuration one.
+
 - [ ] #1 School Student Frequency Case
 	  - Plan: [[school-student-frequency]]
 	  - Use case: [[school-frequence]]
