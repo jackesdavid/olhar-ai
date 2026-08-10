@@ -20,6 +20,11 @@ kanban-plugin: board
 	    its selectors do not change. Latency in ms, works with the internet down, no licence.
 	  - Does NOT remove the BYO onboarding — the local_key still comes from the Cloud API. It takes
 	    the cloud out of the EXECUTION path, not the configuration one.
+	  - Ticket 01 resolved: it is a CRATE, not a port — `rustuya` covers 3.1–3.5, MIT, pure Rust.
+	    A device accepts ONE TCP connection and drops idle sockets at ~30s, so the edge holds one
+	    persistent heartbeated connection per device — the camera ONE-PIPELINE rule again.
+	  - Remaining 02/03/04 are conversation tickets — they need a session, not an AFK agent. 04 is
+	    unblocked.
 
 - [ ] #1 School Student Frequency Case
 	  - Plan: [[school-student-frequency]]
