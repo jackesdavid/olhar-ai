@@ -2963,11 +2963,14 @@
     if (e.target !== e.currentTarget) return; // only grab empty canvas, not a node
     if (pending) {
       // Dropping a wire onto empty canvas → open context-aware node search at the cursor.
+      // `p` is a const copy: the `find` callback below reads it, and there the outer `let` widens
+      // back to `| null`.
+      const p0 = pending;
       if (svgEl) {
-        const pn = nodeById.get(pending.node);
-        const portType = (pn ? effectiveKind(pn)?.outputs.find((p) => p.name === pending.port)?.type : null) ?? "any";
+        const pn = nodeById.get(p0.node);
+        const portType = (pn ? effectiveKind(pn)?.outputs.find((p) => p.name === p0.port)?.type : null) ?? "any";
         dropAt = hoverWorld;
-        contextPending = { node: pending.node, port: pending.port, portType: portType as PortType };
+        contextPending = { node: p0.node, port: p0.port, portType: portType as PortType };
         contextPos = { x: e.clientX, y: e.clientY };
         contextOpen = true;
       }

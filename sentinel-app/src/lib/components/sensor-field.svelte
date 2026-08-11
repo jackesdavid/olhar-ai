@@ -11,8 +11,12 @@
   let canvas: HTMLCanvasElement;
 
   onMount(() => {
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    // Bound to a non-nullable local rather than used through the narrowed original: every draw
+    // below happens inside a nested function, and the narrowing from an early return does not
+    // reliably survive into those — which is what had `check:web` red on six "possibly null".
+    const maybeCtx = canvas.getContext("2d");
+    if (!maybeCtx) return;
+    const ctx: CanvasRenderingContext2D = maybeCtx;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     const S = 44; // lattice spacing (px)
