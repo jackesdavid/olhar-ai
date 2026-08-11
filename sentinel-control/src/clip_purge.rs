@@ -163,20 +163,40 @@ async fn delete_from_cloud(_pool: PgPool, job: Job) -> Result<bool, String> {
         .map(|()| true)
 }
 
-/// Delete the local file from the tenant's edge box over the tailnet proxy. Knows only the edge.
+/// Delete the local file from the tenant's edge box. Knows only the edge.
 /// Idempotent: a 404 from the edge means it's already gone.
+///
+/// SSE first (card #144), tailnet second — the same order as the Devices probe. Without the SSE leg
+/// this job did something worse than fail: `box_host_for_tenant` is NULL for every outbound-only
+/// box, so it took the "no box connected — nothing to delete here" branch and reported SUCCESS
+/// while the file stayed on the appliance forever. A delete that frees no space and says it worked
+/// is how a disk fills up with clips the product believes are gone.
 async fn delete_from_edge(pool: PgPool, job: Job) -> Result<bool, String> {
     let Some(clip_id) = job.payload.get("clip_id").and_then(|v| v.as_str()) else {
         return Ok(true);
     };
+    let path = format!("/recording/{}", urlencoding::encode(clip_id));
+
+    if let Some(res) =
+        app_core::edge_commands::edge_http_via_sse(&pool, job.tenant_id, "DELETE", &path, None, 30)
+            .await
+    {
+        let (status, _) = res.map_err(|e| format!("edge delete over SSE: {e}"))?;
+        // 404 = already gone, which is success for an idempotent delete.
+        if (200..300).contains(&status) || status == 404 {
+            return Ok(true);
+        }
+        return Err(format!("edge returned {status}"));
+    }
+
     let Some(host) = crate::store::box_host_for_tenant(&pool, job.tenant_id)
         .await
         .map_err(|e| e.to_string())?
     else {
-        return Ok(true); // no box connected — nothing to delete here
+        return Ok(true); // no box on SSE and none on the tailnet — nothing reachable to delete
     };
     let base = edge_api_base(&normalize_host(&host));
-    let url = format!("{base}/recording/{}", urlencoding::encode(clip_id));
+    let url = format!("{base}{path}");
     match reqwest::Client::new().delete(&url).send().await {
         Ok(r) if r.status().is_success() || r.status() == reqwest::StatusCode::NOT_FOUND => {
             Ok(true)

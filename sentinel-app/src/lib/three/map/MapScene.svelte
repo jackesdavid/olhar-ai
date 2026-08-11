@@ -240,9 +240,12 @@
 
     if (drag.mode === "shape-resize") {
       if (!drag.started) { store.checkpoint(); drag.started = true; }
-      const s = store.shapes.find((x) => x.id === drag!.id);
+      // A `const` copy of the already-narrowed drag: inside the `find` callback the outer `let`
+      // widens back to the whole union, where `pan` has no `id`, and `drag!` only strips the null.
+      const d = drag;
+      const s = store.shapes.find((x) => x.id === d.id);
       if (!s) return;
-      const idx = (drag as { mode: "shape-resize"; id: number; idx: number; started: boolean }).idx;
+      const idx = d.idx;
 
       if (s.kind === "circle") {
         const r = Math.max(0.1, Math.hypot(sp.x - s.x, sp.z - s.y));
@@ -271,8 +274,9 @@
     }
 
     if (drag.mode === "marker") {
+      const d = drag; // same reason as above — the callback below loses the narrowing
       const mp = resolveMarkerPoint(worldAt(e), store.walls);
-      const m2 = store.markers.find((x) => x.id === drag!.id);
+      const m2 = store.markers.find((x) => x.id === d.id);
       if (m2 && (m2.x !== mp.x || m2.y !== mp.z)) {
         if (!drag.started) { store.checkpoint(); drag.started = true; }
         store.updateMarker(m2.id, { x: mp.x, y: mp.z });

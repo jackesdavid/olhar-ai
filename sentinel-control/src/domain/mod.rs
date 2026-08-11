@@ -17,6 +17,7 @@ mod billing;
 pub mod boxes;
 mod devices;
 mod dictionaries;
+mod device_gate;
 mod events;
 mod faces;
 mod jobs;
@@ -50,6 +51,7 @@ pub fn router() -> Router<AppState> {
         .merge(recordings::router())
         .merge(jobs::router())
         .merge(events::router())
+        .merge(device_gate::router())
         .merge(settings::router())
         .merge(tuya::router())
 }
@@ -100,6 +102,7 @@ mod authz_guard {
         ("beacons.rs", include_str!("beacons.rs")),
         ("billing.rs", include_str!("billing.rs")),
         ("boxes.rs", include_str!("boxes.rs")),
+        ("device_gate.rs", include_str!("device_gate.rs")),
         ("devices.rs", include_str!("devices.rs")),
         ("dictionaries.rs", include_str!("dictionaries.rs")),
         ("events.rs", include_str!("events.rs")),
@@ -119,6 +122,11 @@ mod authz_guard {
         // Browser error telemetry. Any signed-in user may report their own crash; there is no
         // action to gate on, and refusing telemetry to a narrow role just loses the crash report.
         "client_log",
+        // Device Gate (#176). Both gate on OWNERSHIP of the addressed phone, not on a role: the
+        // graph author picked a device, and a permission check would mean a Viewer holding that
+        // phone cannot answer the question the graph asked them. See `device_gate.rs`.
+        "answer",
+        "pending",
     ];
 
     /// Split a file into `(name, text)` for every `async fn`, where `text` spans the signature and

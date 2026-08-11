@@ -563,6 +563,29 @@ pub fn pending_deadline_for_node(
     res.ok().flatten().map(|(s,)| s)
 }
 
+/// Who owns a device, and which tenant it belongs to — the authorization read for
+/// `GET /device-gate/pending`, which is addressed by device rather than by request.
+///
+/// `None` = no such device. `Some((None, _))` = a device with no owner (`user_id` is nullable so a
+/// device can outlive a user row); nobody can list or answer for it, which is correct rather than
+/// unfortunate — an unowned phone is one no session can prove it holds.
+pub fn owner_of_device(db: &Db, device_id: Uuid) -> Option<(Option<Uuid>, Uuid)> {
+    let pool = db.pool();
+    let res: Result<Option<(Option<Uuid>, Uuid)>, sqlx::Error> = db.block(async move {
+        sqlx::query_as("SELECT user_id, tenant_id FROM push_devices WHERE id = $1")
+            .bind(device_id)
+            .fetch_optional(&pool)
+            .await
+    });
+    match res {
+        Ok(row) => row,
+        Err(e) => {
+            log::error!("device_gate device lookup failed for {device_id}: {e}");
+            None
+        }
+    }
+}
+
 /// Who owns a request's device, and whether it is still pending — the authorization read for the
 /// answer endpoint. Decision 01: the session's user must own the addressed device.
 ///
