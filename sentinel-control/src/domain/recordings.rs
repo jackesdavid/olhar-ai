@@ -243,10 +243,20 @@ async fn remove(
     Ok(StatusCode::ACCEPTED)
 }
 
-/// Stream a clip from the edge over the tailnet, proxying through control so
-/// the browser doesn't need to be on the Tailscale network.
-/// Stream a clip from the edge to the browser. Control resolves the tenant's edge
-/// MagicDNS host and proxies bytes on-demand — no video is stored cloud-side.
+/// Fetch a clip that is still only on the box, and hand it to the browser.
+///
+/// **Over the SSE command channel, not over HTTP to the box.** This used to resolve the tenant's
+/// MagicDNS host and `reqwest::get` it, which stopped being able to work when the edge became
+/// outbound-only (card #144): `magicdns_host` is NULL for every box now, so the handler could only
+/// ever answer 502 "no edge box connected" — and the Playback tab, which falls back to the edge copy
+/// for any clip the cloud does not have, could not play anything that had not been uploaded.
+///
+/// The edge side of the proxy was already built for this: its `http_request` handler reads up to
+/// 64 MB with a 120 s timeout, and its comment says "a clip fetch can be large". Only the caller was
+/// left behind.
+///
+/// Buffered rather than streamed, unavoidably — the proxy answers with a whole body, base64 in a
+/// command result. Clips are minutes long and a few MB, and the 64 MB ceiling is the edge's.
 async fn download(
     UserClaims(c): UserClaims,
     State(st): State<AppState>,
@@ -263,12 +273,11 @@ async fn download(
         })?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "recording not found"))?;
 
-    let edge_host = store::box_host_for_tenant(&st.pool, tid)
+    let path = format!("/recording/{}", urlencoding::encode(&rec.clip_id));
+    // 120s to match the edge's own read timeout: a clip that takes longer than that to hand over
+    // has not failed here, and a shorter deadline would report someone else's slowness as ours.
+    let proxied = app_core::edge_commands::edge_http_via_sse(&st.pool, tid, "GET", &path, None, 120)
         .await
-        .map_err(|e| {
-            log::error!("box host lookup: {e}");
-            err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
-        })?
         .ok_or_else(|| {
             err(
                 StatusCode::BAD_GATEWAY,
@@ -276,28 +285,23 @@ async fn download(
             )
         })?;
 
-    let base = normalize_host(&edge_host);
-    let base = edge_api_base(&base);
-    let url = format!("{base}/recording/{}", urlencoding::encode(&rec.clip_id));
-
-    let resp = reqwest::get(&url).await.map_err(|e| {
-        log::error!("edge clip fetch {url}: {e}");
+    let (status, bytes) = proxied.map_err(|e| {
+        log::error!("edge clip fetch {} via sse: {e}", rec.clip_id);
         err(StatusCode::BAD_GATEWAY, format!("edge unreachable: {e}"))
     })?;
 
-    if !resp.status().is_success() {
-        let edge_status = resp.status();
+    if !(200..300).contains(&status) {
         // Pass 404 through so the browser shows "not found" rather than a confusing gateway error.
-        let our_status = if edge_status == reqwest::StatusCode::NOT_FOUND {
+        // A clip the box has already evicted is the ordinary case here, not an outage.
+        let our_status = if status == 404 {
             StatusCode::NOT_FOUND
         } else {
             StatusCode::BAD_GATEWAY
         };
-        return Err(err(our_status, format!("edge returned {edge_status}")));
+        return Err(err(our_status, format!("edge returned {status}")));
     }
 
     let filename = format!("{}.mp4", rec.clip_id);
-    let stream = resp.bytes_stream();
     Ok((
         [
             (header::CONTENT_TYPE, "video/mp4".to_string()),
@@ -306,7 +310,7 @@ async fn download(
                 format!("attachment; filename=\"{filename}\""),
             ),
         ],
-        Body::from_stream(stream),
+        Body::from(bytes),
     )
         .into_response())
 }
