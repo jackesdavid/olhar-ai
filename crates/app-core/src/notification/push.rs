@@ -152,6 +152,49 @@ pub fn enabled_tokens(db: &Db, tenant_id: Uuid, label: Option<&str>) -> Vec<Stri
     })
 }
 
+/// The Android channel a Device Gate request arrives on. Created app-side at MAX importance with
+/// its own sound; naming it here keeps the two halves from drifting apart silently.
+pub const GATE_CHANNEL_ID: &str = "device-gate";
+
+/// Deliver an urgent, machine-readable notification — used by the Device Gate (#176).
+///
+/// Two things this does that [`send`] does not, and both matter:
+///
+/// 1. **`data` carries the payload, `body` carries only what a person should read.** The request's
+///    token travels in `data`, which the app reads programmatically and the OS never renders.
+///    Putting it in `body` would print a gate-opening secret on the lock screen.
+/// 2. **It asks for the most interruptive level each platform actually allows.** iOS
+///    `timeSensitive` — NOT `critical`, which needs an Apple entitlement restricted to health and
+///    public-safety apps and is not obtainable for this one (map decision 05). Android rides a
+///    MAX-importance channel. Neither is guaranteed to pierce Do Not Disturb, which is exactly why
+///    the app also fetches pending requests on launch rather than trusting the push.
+pub fn send_data(
+    tokens: &[String],
+    title: &str,
+    message: &str,
+    data: serde_json::Value,
+) -> Result<usize, String> {
+    if tokens.is_empty() {
+        return Err("no registered push devices".into());
+    }
+    let body: Vec<serde_json::Value> = tokens
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "to": t,
+                "title": title,
+                "body": message,
+                "sound": "default",
+                "data": data,
+                "priority": "high",
+                "interruptionLevel": "timeSensitive",
+                "channelId": GATE_CHANNEL_ID,
+            })
+        })
+        .collect();
+    post_expo(body, tokens.len())
+}
+
 /// Deliver `message` to every token. Expo accepts a batch in one POST; a per-message error comes
 /// back in the response body rather than as an HTTP status, so we surface the first one. Returns
 /// how many messages Expo accepted.
@@ -165,6 +208,12 @@ pub fn send(tokens: &[String], title: &str, message: &str) -> Result<usize, Stri
             |t| serde_json::json!({ "to": t, "title": title, "body": message, "sound": "default" }),
         )
         .collect();
+    post_expo(body, tokens.len())
+}
+
+/// The shared POST + per-message error surfacing. Expo returns a 200 with per-item statuses, so a
+/// rejected message is invisible to anyone checking only the HTTP code.
+fn post_expo(body: Vec<serde_json::Value>, sent: usize) -> Result<usize, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(15))
         .build();
@@ -192,5 +241,5 @@ pub fn send(tokens: &[String], title: &str, message: &str) -> Result<usize, Stri
             .unwrap_or("unknown");
         return Err(format!("expo push rejected: {msg}"));
     }
-    Ok(items.len().max(tokens.len()))
+    Ok(items.len().max(sent))
 }

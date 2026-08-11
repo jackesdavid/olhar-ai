@@ -568,6 +568,17 @@ pub enum NodeKind {
     /// run, so the trailing `stop` is delivered by a later run forced at this node, scheduled
     /// on the durable `work_jobs` queue. Engine-driven (not `run_node`).
     DelayTrigger,
+    /// Flow control: ask a PERSON, on their phone, before continuing. Pushes an authorization
+    /// request to the addressed Recipient and returns WITHOUT taking a branch — the run ends,
+    /// exactly as `DelayTrigger`'s trailing edge does, because a run cannot block on a human.
+    /// The answer (or the TTL expiring) resumes at this node via `spawn_node_subrun` and fires
+    /// one of `positive` / `negative` / `failure`.
+    ///
+    /// Agnostic by design: it gates an exec edge, not a device. Whatever hangs off `positive` is
+    /// the sensitive action. A denial is an ANSWER (`negative`) and is the most informative thing
+    /// this node produces; `failure` means NO HUMAN DECIDED — timed out, undeliverable, error.
+    /// Folding those together is how "nobody answered" gets treated as "go ahead".
+    DeviceGate,
     /// Variables: read a workflow variable's current value → one typed data output (`value`).
     /// Pure (no exec pins) — drop it anywhere and wire its output, no flow wires needed. The
     /// variable name + type are in config; the output port type follows the variable's type.
@@ -716,6 +727,25 @@ const DESCRIBE_IMAGE_OUT: [Port; 2] = [
 const GET_RECIPIENT_OUT: [Port; 2] = [
     p("recipient", PortType::Recipient, false),
     p("ok", PortType::Bool, false),
+];
+
+// Device Gate: ask a person before continuing. Both inputs are `required` — which still allows
+// authoring them in the panel, since a required input is only unsatisfied when it has neither an
+// edge NOR a config literal. An unset Recipient or an empty prompt is an AUTHORING mistake and
+// should fail the run loudly; it must not arrive as `failure`, which means a human was asked and
+// did not answer. Hiding a broken gate behind the same arm as an unanswered one is how a graph
+// ends up treating "never asked" as "asked and ignored".
+const DEVICE_GATE_IN: [Port; 2] = [
+    p("recipient", PortType::Recipient, true),
+    p("message", PortType::Text, true),
+];
+// What the answer was, for graphs that want to log or notify on it. `factor` carries the map's
+// decision 02: an approval confirmed by passcode rather than biometrics is still an approval, but
+// its strength must be legible rather than assumed. Empty on the `failure` arm — nobody answered,
+// so there is nothing to attribute.
+const DEVICE_GATE_OUT: [Port; 2] = [
+    p("answered_by", PortType::Text, false),
+    p("factor", PortType::Text, false),
 ];
 
 const NOTIFY_RECIPIENT_IN: [Port; 3] = [
@@ -1131,6 +1161,15 @@ const EXEC_OUT_TIME_GATE: [Port; 1] = [p("out", PortType::Exec, false)];
 /// the window consumer. The node tests for this rather than trusting `forced` alone, because a
 /// loop back-edge can force a node too and must not be mistaken for an expired window.
 pub const WINDOW_STOP_MARKER: &str = "__window_stop";
+/// Entry-payload key carrying a Device Gate verdict back to its node (#176). Its PRESENCE is what
+/// distinguishes an answer-resume from an ordinary force — a loop back-edge forces a node too, and
+/// mistaking one for the other would fire an arm nobody chose. Same test the window stop uses, for
+/// the same reason.
+pub const DEVICE_GATE_VERDICT: &str = "__device_gate_verdict";
+/// Which device answered (label) and with which factor, carried alongside the verdict so the
+/// node's data outputs can report them without a second query.
+pub const DEVICE_GATE_ANSWERED_BY: &str = "__device_gate_answered_by";
+pub const DEVICE_GATE_FACTOR: &str = "__device_gate_factor";
 
 // Delay Trigger exec outputs: `start` on the leading edge, `stop` on the trailing one.
 const EXEC_OUT_DELAY_TRIGGER: [Port; 2] = [
@@ -1148,6 +1187,12 @@ pub const EXEC_FALSE: Port = p("false", PortType::Exec, false);
 /// `For each` exec outs: `loop_body` fires once per element; `completed` fires once after.
 pub const EXEC_LOOP_BODY: Port = p("loop_body", PortType::Exec, false);
 pub const EXEC_COMPLETED: Port = p("completed", PortType::Exec, false);
+const EXEC_OUT_DEVICE_GATE: [Port; 3] = [
+    p("positive", PortType::Exec, false),
+    p("negative", PortType::Exec, false),
+    p("failure", PortType::Exec, false),
+];
+
 const EXEC_OUT_DEFAULT: [Port; 1] = [EXEC_OUT];
 const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
 const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
@@ -1155,7 +1200,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 87] = [
+    pub const ALL: [NodeKind; 88] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -1222,6 +1267,7 @@ impl NodeKind {
         NodeKind::StopRecording,
         NodeKind::TimeGate,
         NodeKind::DelayTrigger,
+        NodeKind::DeviceGate,
         NodeKind::GetVariable,
         NodeKind::SetVariable,
         NodeKind::ReplyToSender,
@@ -1316,6 +1362,7 @@ impl NodeKind {
             NodeKind::StopRecording => "stop_recording",
             NodeKind::TimeGate => "time_gate",
             NodeKind::DelayTrigger => "delay_trigger",
+            NodeKind::DeviceGate => "device_gate",
             NodeKind::GetVariable => "get_variable",
             NodeKind::SetVariable => "set_variable",
             NodeKind::ReplyToSender => "reply_to_sender",
@@ -1413,6 +1460,7 @@ impl NodeKind {
             NodeKind::StopRecording => "Stop Recording",
             NodeKind::TimeGate => "Time Gate",
             NodeKind::DelayTrigger => "Delay Trigger",
+            NodeKind::DeviceGate => "Device Gate",
             NodeKind::GetVariable => "Get Variable",
             NodeKind::SetVariable => "Set Variable",
             NodeKind::ReplyToSender => "Reply to Sender",
@@ -1463,7 +1511,8 @@ impl NodeKind {
             | NodeKind::CameraSwitch
             | NodeKind::AiSwitch
             | NodeKind::TimeGate
-            | NodeKind::DelayTrigger => "Control",
+            | NodeKind::DelayTrigger
+            | NodeKind::DeviceGate => "Control",
             NodeKind::NumLt
             | NodeKind::NumLte
             | NodeKind::NumGt
@@ -1577,6 +1626,9 @@ impl NodeKind {
             NodeKind::Reroute => &NO_PORTS, // pure passthrough, no exec pins
             NodeKind::TimeGate => &EXEC_OUT_TIME_GATE, // "out" fires when countdown expires
             NodeKind::DelayTrigger => &EXEC_OUT_DELAY_TRIGGER, // leading "start", trailing "stop"
+            // Three arms, and the split is deliberate: `negative` is an ANSWER, `failure` is
+            // the absence of one. See the kind's doc comment.
+            NodeKind::DeviceGate => &EXEC_OUT_DEVICE_GATE,
             _ => &EXEC_OUT_DEFAULT,
         }
     }
@@ -1619,6 +1671,7 @@ impl NodeKind {
             NodeKind::Region => &REGION_IN,
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_IN,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_IN,
+            NodeKind::DeviceGate => &DEVICE_GATE_IN,
             NodeKind::Format => &FORMAT_IN,
             NodeKind::Wait => &NO_PORTS, // control-flow only — sequenced via exec ports
             NodeKind::HttpPost => &HTTP_POST_IN,
@@ -1713,6 +1766,7 @@ impl NodeKind {
             NodeKind::Region => &REGION_OUT,
             NodeKind::DescribeImage => &DESCRIBE_IMAGE_OUT,
             NodeKind::NotifyRecipient => &NOTIFY_RECIPIENT_OUT,
+            NodeKind::DeviceGate => &DEVICE_GATE_OUT,
             NodeKind::Format => &FORMAT_OUT,
             NodeKind::Wait => &NO_PORTS, // control-flow only — sequenced via exec ports
             NodeKind::HttpPost => &HTTP_POST_OUT,
@@ -1825,6 +1879,12 @@ impl NodeKind {
             NodeKind::Region => json!({ "camera": "first", "name": "", "points": [] }),
             NodeKind::DescribeImage => json!({ "label": "", "question": "", "timeout_secs": "65" }),
             NodeKind::NotifyRecipient => json!({ "message": "", "timeout_secs": "35" }),
+            // 10 minutes. Deliberately not seconds: decision 05 established that a push is
+            // best-effort — it can be batched, silenced, or arrive late on a phone in Doze — so
+            // the TTL has to assume the phone is CHECKED, not that the person was alerted. A
+            // default measured in seconds would expire in a pocket and teach users the node is
+            // unreliable.
+            NodeKind::DeviceGate => json!({ "message": "", "ttl_secs": "600" }),
             NodeKind::Format => json!({ "template": "{p1} — {p2}", "p1": "", "p2": "", "p3": "" }),
             NodeKind::Wait => json!({ "seconds": "1" }),
             NodeKind::HttpPost => {
@@ -2146,22 +2206,39 @@ pub struct Edge {
     pub to_port: String,
 }
 
-/// How a graph fires. A property of the engine/graph — NOT a node.
+/// How a graph fires **as a whole** — which, since the cron selector landed on `When Event`, is
+/// only ever "someone or something started it at the top". Everything recurring is a NODE now.
 ///
-/// Alert reactivity used to live here as `OnNewAlert`; it was retired in favor of the
+/// Two variants used to live here and are gone (migration `0095`):
+///
+///  * `Cron { every_secs }` — an interval poller in `sentinel-flow`.
+///  * `Schedule(Schedule)` — a calendar, added by #111.
+///
+/// They were removed because a graph could carry a schedule AND hold cron nodes with their own,
+/// and nothing said which won; one production graph really did run on two clocks at once. The node
+/// is the better home for the same reason it always was: one graph, several independent schedules,
+/// each firing only what hangs off it.
+///
+/// The one thing the node cannot do is a SUB-MINUTE interval — `Cron { every_secs: 2 }` was a legal
+/// polling loop and a calendar's finest grain is the minute. A graph that needs to poll faster than
+/// that builds it out of an exec loop and a `Delay`, or, far better, listens for the event it was
+/// polling for.
+///
+/// Alert reactivity used to live here too, as `OnNewAlert`; it was retired in favor of the
 /// cross-graph event system (a future `System-Alerts` event an `OnEvent` can listen for).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Trigger {
-    /// Only fired by Run-now.
+    /// Fired by Run-now, by a cron-mode `When Event` node coming due, or by an event handler.
+    /// Kept as an enum rather than collapsed away so the stored `"trigger":"Manual"` in every
+    /// graph's JSON still deserializes, and so a future top-level trigger has somewhere to go.
     Manual,
-    /// Engine poller starts a fresh one-shot run every `every_secs`.
-    Cron { every_secs: u64 },
-    /// Calendar schedule (#111) — fire at wall-clock times in a timezone (daily at 9am, weekly on
-    /// Mon/Wed, …). Durable via the `work_jobs` queue; next-occurrence math in [`super::schedule`].
-    Schedule(Schedule),
 }
 
-/// A recurring calendar schedule for a graph. Wall-clock, timezone-aware. Minute granularity.
+/// A recurring calendar schedule. Wall-clock, timezone-aware, minute granularity.
+///
+/// Outlived the graph-level `Trigger::Schedule` that introduced it: cron-mode `When Event` nodes
+/// store one of these in their config (`GraphNode::cron`), and `schedule_consumer` does the
+/// calendar math against it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Schedule {
     pub freq: ScheduleFreq,
@@ -2983,7 +3060,7 @@ mod tests {
     #[test]
     fn graph_json_round_trips_with_trigger_concurrency_and_typed_edges() {
         let (mut g, _a, _b) = chain();
-        g.trigger = Trigger::Cron { every_secs: 10 };
+        g.trigger = Trigger::Manual;
         g.concurrency = ConcurrencyPolicy::QueueSingle { max_queued: 3 };
         g.enabled = true;
         let s = serde_json::to_string(&g).unwrap();

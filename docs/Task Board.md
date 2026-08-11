@@ -6,13 +6,6 @@ kanban-plugin: board
 
 ## Backlog
 
-- [ ] #176 Device Gate node [map] — a human approves from their phone before the graph continues
-	  - Map: [[device-gate-map]] · baseline: [[device-gate-node]]
-	  - Exec in; Positive / Negative / Failure out. Agnostic: it gates an exec edge, not a Tuya
-	    device. Opening a gate is a security decision, not a switch.
-	  - Charted with /wayfinder — six decision tickets in `docs/plans/device-gate-map/`. One board
-	    card on purpose: a dozen open questions here would bury the actual work.
-
 - [ ] #133 Tuya local control [map] — the edge talks to the device on the LAN, cloud out of the path
 	  - Map: [[tuya-local-map]] · today's model: [[tuya]]
 	  - Charted with /wayfinder. Four decision tickets in `docs/plans/tuya-local-map/`. Decided while
@@ -125,6 +118,16 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #176 Device Gate node — a human approves from their phone before the graph continues
+	  - Map: [[device-gate-map]] · baseline: [[device-gate-node]]
+	  - Exec in; Positive / Negative / Failure out. Agnostic: it gates an exec edge, not a Tuya
+	    device. Opening a gate is a security decision, not a switch.
+	  - Backend spine + per-phone cap (`device_gate_max_pending`, default 10) done. Left: the
+	    control endpoints, the properties panel + countdown, the mobile approval screen.
+- [ ] #177 Retire the graph-level Cron/Schedule trigger — scheduling is a node property
+	  - Migration `0095` rewrites every stored trigger to Manual and refreshes the three seeded
+	    templates; poller, cron timer, trigger endpoint and editor picker removed. Sub-minute
+	    polling is gone with it — deliberately. Ref: [[workflows]] "Triggers".
 - [ ] #174 Faces — complete the pipeline
 	  - Plan: [[faces-completion]]
 	  - Steps 1 (per-tenant capture stream) and 2 (index-backed cluster neighbours) shipped.

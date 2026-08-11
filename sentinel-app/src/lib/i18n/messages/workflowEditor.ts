@@ -86,8 +86,6 @@ export const workflowEditor = {
     deleteFailed: "Failed to delete",
     updateFailed: "Couldn't update",
     runLabel: "Run",
-    triggerFailed: "Couldn't set trigger",
-    scheduleFailed: "Couldn't set schedule",
     concurrencyFailed: "Couldn't set concurrency",
     scopeFailed: "Couldn't set instance scope",
     eventSaved: (name: string) => `Event “${name}” saved`,
@@ -102,7 +100,6 @@ export const workflowEditor = {
     // ---- run-button tooltips ----
     runningEllipsis: "Running…",
     activeStopFirst: "Active — stop it to run manually",
-    scheduleUseEditor: "Runs on a schedule — use the editor to run manually",
     unfilledInput: "A node has a required input not filled",
     runNow: "Run now",
     nothingToRun: "Nothing to run — connect nodes or enable orphans",
@@ -141,6 +138,12 @@ export const workflowEditor = {
     deleteWorkflow: "Delete workflow",
     describePlaceholder: "What does this workflow do?",
     ungrouped: "Ungrouped",
+    // Where scheduling lives now: on the node, not on the graph.
+    triggerOnNodes:
+      "Run now, or whenever a When Event node fires — as an event listener or on its own schedule.",
+    manualSummary: "Run now only",
+    onEventSummary: "On event",
+    schedulesCount: (n: number) => `${n} schedules`,
     removeTime: "Remove time",
     times: "Times",
     addTime: "+ Add time",
@@ -268,8 +271,7 @@ export const workflowEditor = {
     deleteFailed: "Falha ao excluir",
     updateFailed: "Não foi possível atualizar",
     runLabel: "Execução",
-    triggerFailed: "Não foi possível definir o gatilho",
-    scheduleFailed: "Não foi possível definir o agendamento",
+
     concurrencyFailed: "Não foi possível definir a concorrência",
     scopeFailed: "Não foi possível definir o escopo da instância",
     eventSaved: (name: string) => `Evento “${name}” salvo`,
@@ -284,7 +286,6 @@ export const workflowEditor = {
     // ---- run-button tooltips ----
     runningEllipsis: "Executando…",
     activeStopFirst: "Ativo — pare-o para executar manualmente",
-    scheduleUseEditor: "Roda por agendamento — use o editor para executar manualmente",
     unfilledInput: "Um nó tem uma entrada obrigatória não preenchida",
     runNow: "Executar agora",
     nothingToRun: "Nada para executar — conecte nós ou ative os órfãos",
@@ -323,6 +324,12 @@ export const workflowEditor = {
     deleteWorkflow: "Excluir fluxo",
     describePlaceholder: "O que este fluxo faz?",
     ungrouped: "Sem grupo",
+    // Onde o agendamento mora agora: no nó, não no grafo.
+    triggerOnNodes:
+      "Rode agora, ou quando um nó When Event disparar — ouvindo um evento ou na agenda dele.",
+    manualSummary: "Só com Run now",
+    onEventSummary: "Por evento",
+    schedulesCount: (n: number) => `${n} agendas`,
     removeTime: "Remover horário",
     times: "Horários",
     addTime: "+ Adicionar horário",

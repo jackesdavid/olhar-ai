@@ -121,6 +121,15 @@ pub struct ToolContext {
     /// `db` (a live, row-locked transaction) so cross-run writes are seen. Empty for non-flow
     /// callers (the chat agent, tests) — they don't touch dictionaries.
     pub dictionaries: std::collections::HashMap<String, crate::dictionaries::Dictionary>,
+    /// This run's id. Per-run context, which is what this struct is — the alternative was
+    /// threading it through `run_dag` → `run_driver` → `forward_epoch`, widening three signatures
+    /// for one audit column.
+    ///
+    /// `Uuid::nil()` for callers that have no run (the chat agent, tests). The Device Gate stores
+    /// it as `asked_by_run` so an incident can be reconstructed: the run that ASKED and the run
+    /// that ANSWERED are two separate entries in the history by design (map decision 03), and this
+    /// is the only thing that joins them.
+    pub run_id: uuid::Uuid,
 }
 
 impl ToolContext {
@@ -156,6 +165,7 @@ impl ToolContext {
             )),
             variables: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             dictionaries: std::collections::HashMap::new(),
+            run_id: uuid::Uuid::nil(),
         }
     }
 }

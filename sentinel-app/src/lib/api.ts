@@ -169,6 +169,23 @@ export const boxes = {
   storageStats: (id: string) => api.get<StorageStats>(`/boxes/${id}/storage-stats`),
 };
 
+/**
+ * Workspace-wide preferences (`/settings`), as opposed to the per-box `recording_config` and the
+ * UI-local blob in `data.getSettings`. Absent key = never chosen, which is NOT the same as the
+ * default value — the server decides what unset means.
+ */
+export type TenantSettings = {
+  face_capture_stream?: "preview" | "hd";
+  /** How many unanswered Device Gate requests one phone may hold at once (#176). Unset = 10. */
+  device_gate_max_pending?: number;
+};
+
+export const tenantSettings = {
+  get: () => api.get<TenantSettings>("/settings"),
+  /** Merges server-side: sending one key cannot clear another. */
+  put: (patch: TenantSettings) => api.put<void>("/settings", patch),
+};
+
 export type RecordingConfig = {
   pre_roll_secs: number;
   max_storage_mb: number;

@@ -11,7 +11,6 @@
 //! axum server runs on the tokio runtime alongside. `Db::block` bridges sqlx safely
 //! from either.
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
@@ -19,7 +18,7 @@ use app_core::agent::{ToolContext, ToolUiEvent};
 use app_core::notification::{NotificationConfig, NotificationStore};
 use app_core::workflows::{
     self, ConcurrencyPolicy, EventSource, Fire, Graph as WfGraph, PortValues, RunLogLine,
-    RunStatus, Trigger, TriggerSource,
+    RunStatus, TriggerSource,
 };
 
 use crate::events;
@@ -35,54 +34,10 @@ fn total_in_flight(activity: &Activity) -> u32 {
     activity.lock().unwrap().values().map(|a| a.running).sum()
 }
 
-/// Spawn the 1 s trigger poller on a background thread. Across ALL tenants: fires due
-/// Cron graphs under each graph's concurrency policy, persisting the cron timing state
-/// (Phase 0.5) as it goes. (Alert reactivity moved to the cross-graph event system.)
-pub fn spawn_poller(state: Arc<AppState>) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(1));
-        let now = Instant::now();
-
-        // Snapshot enabled graphs' firing properties (don't hold the lock during runs).
-        let graphs: Vec<(Uuid, Uuid, Trigger, ConcurrencyPolicy)> = {
-            let s = state.store.lock().unwrap();
-            s.iter()
-                .filter(|(_, g)| g.enabled)
-                .map(|(t, g)| (*t, g.id, g.trigger.clone(), g.concurrency.clone()))
-                .collect()
-        };
-
-        for (tenant, id, trigger, policy) in graphs {
-            if total_in_flight(&state.activity) >= WF_GLOBAL_CAP {
-                break; // global backstop
-            }
-            let due = match &trigger {
-                Trigger::Manual => false,
-                Trigger::Cron { every_secs } => {
-                    state
-                        .engine
-                        .lock()
-                        .unwrap()
-                        .cron_due(tenant, id, *every_secs, now)
-                }
-                // Calendar schedules (#111) fire via the durable `work_jobs` consumer
-                // (schedule_consumer), reconciled on reload — not this interval poller.
-                Trigger::Schedule(_) => false,
-            };
-            if due {
-                workflows::repo::save_cron_fired(&state.db, tenant, id, crate::now_epoch_ms());
-                fire_graph(
-                    &state,
-                    tenant,
-                    id,
-                    &policy,
-                    TriggerSource::Cron,
-                    std::collections::HashMap::new(),
-                );
-            }
-        }
-    });
-}
+// The 1 s trigger poller lived here. It is GONE with `Trigger::Cron` (migration `0095`): scheduling
+// is a node property now, and every recurring fire arrives through `schedule_consumer` — a durable
+// `work_jobs` row per cron node, which survives a pod restart instead of re-arming from an
+// in-memory `Instant`. Nothing polls graphs on an interval any more.
 
 /// Apply a graph's concurrency policy to a fire: spawn, queue, or skip. `source` records
 /// what kicked it off (manual / cron) on the run record.
@@ -284,7 +239,7 @@ fn execute_run(
     // HERE with this run's real context, rather than building a throwaway one in the HTTP handler.
     input_overrides: std::collections::HashMap<String, String>,
 ) -> (bool, String) {
-    let (ctx, drain) = build_run_context(state, tenant, graph.id);
+    let (ctx, drain) = build_run_context(state, tenant, graph.id, run_id);
     // Seed this run's variables from the graph's declared defaults (card #5b) — a Get before any
     // Set then returns the author's default instead of a type-zero.
     app_core::workflows::node::seed_variable_defaults(&graph.variables, &ctx);
@@ -798,6 +753,7 @@ fn build_run_context(
     state: &Arc<AppState>,
     tenant: Uuid,
     graph_id: Uuid,
+    run_id: Uuid,
 ) -> (ToolContext, std::thread::JoinHandle<()>) {
     let devices = Arc::new(std::sync::Mutex::new(app_core::devices::repo::load(
         &state.db, tenant,
@@ -848,6 +804,9 @@ fn build_run_context(
         });
     }
     ctx.active_gates = std::sync::Arc::clone(&state.active_gates);
+    // So a Device Gate can record WHICH run asked (#176). Two entries in the history, joined
+    // by this column — see the field's doc on ToolContext.
+    ctx.run_id = run_id;
     // Snapshot the tenant's dictionaries (#113) for run-start Table resolution + read nodes. Mutate
     // nodes bypass this snapshot and hit the DB row under a lock, so cross-run writes stay visible.
     ctx.dictionaries = app_core::dictionaries::list(&state.db, tenant)

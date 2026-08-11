@@ -185,44 +185,10 @@ pub fn save_alert_seen_max(db: &Db, tenant_id: Uuid, max: u64) {
     }
 }
 
-/// The tenant's per-graph cron timers as `(graph_id, last_fired_ms)`. Empty on error.
-pub fn load_cron_state(db: &Db, tenant_id: Uuid) -> Vec<(Uuid, u64)> {
-    let pool = db.pool();
-    db.block(async move {
-        sqlx::query_as::<_, (Uuid, i64)>(
-            "SELECT graph_id, last_fired_ms FROM workflow_cron_state WHERE tenant_id = $1",
-        )
-        .bind(tenant_id)
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_else(|e| {
-            log::error!("workflows::repo::load_cron_state query failed: {e}");
-            Vec::new()
-        })
-        .into_iter()
-        .map(|(id, ms)| (id, ms as u64))
-        .collect()
-    })
-}
-
-/// Record that the tenant's cron graph `graph_id` fired at `fired_ms`. Best-effort.
-pub fn save_cron_fired(db: &Db, tenant_id: Uuid, graph_id: Uuid, fired_ms: u64) {
-    let pool = db.pool();
-    let res: Result<_, sqlx::Error> = db.block(async move {
-        sqlx::query(
-            "INSERT INTO workflow_cron_state (tenant_id, graph_id, last_fired_ms) VALUES ($1, $2, $3)
-             ON CONFLICT (tenant_id, graph_id) DO UPDATE SET last_fired_ms = EXCLUDED.last_fired_ms",
-        )
-        .bind(tenant_id)
-        .bind(graph_id)
-        .bind(fired_ms as i64)
-        .execute(&pool)
-        .await
-    });
-    if let Err(e) = res {
-        log::error!("workflows::repo::save_cron_fired failed: {e}");
-    }
-}
+// `load_cron_state` / `save_cron_fired` lived here — the last-fired anchor for graph-level
+// `Trigger::Cron`, which is gone (migration `0095`). The `workflow_cron_state` table is left in
+// place, now written and read by nothing; a cron NODE keeps its next fire in `work_jobs` instead,
+// where it is a scheduled row rather than a timestamp something has to reason backwards from.
 
 /// Returns the persisted JSON state for a node, or `None` if never set.
 pub fn get_node_state(

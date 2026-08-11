@@ -22,9 +22,82 @@ once to completion. The pure domain + engine live in `crates/app-core/src/workfl
 
 ## Triggers
 
-`Manual` and `Cron { every_secs }` only. **`OnNewAlert` was removed** — alert reactivity is
-meant to return as a future `System-Alerts` cross-graph event. The poller (`spawn_poller`)
-evaluates Cron; manual fires come from `POST /runs`.
+**Scheduling is a NODE property now, not a graph one.** A `When Event` node has a source selector;
+in **Cron** mode it holds a `Schedule` (hourly/daily/weekly/monthly/yearly + IANA tz) and fires only
+that node, so one graph can hold several independent schedules. `schedule_consumer.rs` keeps one
+`work_jobs` row per cron node and reschedules it after each fire; `next_occurrence` does the
+calendar math. The node renders a live countdown from a server-computed `next_fire_at` — one source
+of truth for *when*, the client only formats it.
+
+`Trigger` on the graph now has **one variant, `Manual`**. `Cron { every_secs }` (the 1 s interval
+poller) and `Schedule(Schedule)` were removed in migration `0095`, along with `spawn_poller`,
+`WorkflowEngine::cron_due`, the boot restore in `sentinel-flow/src/state.rs`, `load_cron_state` /
+`save_cron_fired`, `PUT /workflows/:id/trigger` and the editor's trigger picker. Two ways to
+schedule the same graph needed a precedence rule nobody remembered, and one production graph really
+did run on both clocks at once.
+
+What that cost, stated plainly: **sub-minute polling is gone.** `Cron { every_secs: 2 }` was legal
+and a calendar's finest grain is the minute. A graph that genuinely needs it builds an exec loop with
+a `Delay`; a graph that was polling for something (the two seeded templates that polled at 2 s and
+3 s) should listen for the `motion` event instead, which is what they do now.
+
+`Trigger` is kept as a one-variant enum rather than deleted: every stored graph's JSON carries
+`"trigger":"Manual"`, and a future top-level trigger needs somewhere to go. The `Schedule` STRUCT is
+very much alive — cron nodes hold one.
+
+**`OnNewAlert` was removed** — alert reactivity is meant to return as a future `System-Alerts`
+cross-graph event. Manual fires come from `POST /runs`.
+
+The migration order is load-bearing: `0095` must land BEFORE the code that drops the variants, or a
+row still holding `{"Cron": …}` fails to deserialize and the graph stops loading entirely — not
+"loses its schedule". It also deletes the three seeded templates it rewrote so `seed_templates`
+re-inserts the new bodies (they are `ON CONFLICT DO NOTHING` against a stable id).
+
+## Device Gate — a human approves before the graph continues (#176)
+
+A node that suspends a run, asks a person on their phone, and continues down **Positive** /
+**Negative** / **Failure**. Agnostic: it gates an exec edge, not a device.
+
+Three arms, not two, and the split carries weight: `negative` is an ANSWER — someone read it and
+said no — while `failure` means NO HUMAN DECIDED (timed out, undeliverable, error). Collapsing them
+is how a graph comes to treat "nobody answered" as "go ahead".
+
+| Piece | Where |
+|---|---|
+| `device_gate_requests` table | migration `0094` |
+| Request lifecycle (mint / settle / claim / pending) | `crates/app-core/src/workflows/device_gate.rs` |
+| Node kind + 3 exec arms | `workflows/domain.rs` (`NodeKind::DeviceGate`) |
+| Ask + resume | `workflows/engine.rs` (engine-driven, like `DelayTrigger`) |
+| Push with a machine-readable payload | `notification/push.rs` (`send_data`) |
+| Resume sweep | `sentinel-flow/src/gate_consumer.rs` |
+
+Five rules that are load-bearing, each with a real failure behind it:
+
+- **The run ENDS at the ask.** A run cannot block on a person — a handler runs to completion before
+  the pass settles it. Same machinery as `DelayTrigger`'s trailing edge, so there is one suspend
+  mechanism rather than two. A `waiting` run would also make a `SkipIfRunning` graph refuse every
+  trigger while a phone lies face-down.
+- **A settled request can never be settled again.** Every settle is ONE conditional `UPDATE … WHERE
+  state = 'pending' RETURNING`; the row count answers "did I win". Do NOT copy password reset's
+  check-then-act shape — benign there (both writes set the same password), a gate opened twice here.
+- **The row IS the queue.** `resumed_at` makes delivery durable: control settles and nudges flow,
+  but `FLOW_URL` is load-balanced DNS and that nudge can be lost. The sweep claims anything settled
+  and undelivered, so an approval can never leave a graph silently unfinished.
+- **The token never reaches anything that renders.** Stored as `sha256` hex, sent in the push `data`
+  field. In `body` it would print a gate-opening secret on the lock screen.
+- **A phone holds at most N unanswered requests** — `device_gate_max_pending` in `tenant_settings`,
+  default 10, 1–100, edited on Settings → General. Depth, not rate: a rate limit still lets a loop
+  bury someone overnight. At the cap nothing is minted and the node takes `failure` with the reason
+  in the run log. The count and the insert share ONE transaction behind a per-device
+  `pg_advisory_xact_lock` — count-then-insert is a check-then-act on exactly what a runaway loop
+  does concurrently, and two asks at `cap - 1` would both write. Expired-but-unswept rows are not
+  counted (`expires_at > now`), or a phone that ignored yesterday is full forever.
+
+Decisions are in `docs/plans/device-gate-map/` (five resolved + the cap). Notable: only the
+**addressed device** may answer; biometrics fall back to the **device passcode** with the factor
+recorded; iOS **critical alerts are unobtainable** (Apple restricts them to health/public-safety),
+so the TTL assumes the phone is CHECKED, not alerted — which is why `GET /device-gate/pending` is
+the reliable path and the push is the optimisation.
 
 ## Cross-graph events (tenant event bus)
 
@@ -126,3 +199,38 @@ change (that's the chat agent, not workflow nodes). An edge-facing action node (
 network call out) reaches the tenant's edge via `resolve_edge_api_base(sys)` (tailnet, port
 snapshot-only. If the new kind is really "react to X" rather than "fetch/do X", see **Gated
 events** above before reaching for a new node kind at all.
+
+## Build status
+
+**Device Gate (#176)** — branch `feat/device-gate-node`, pushed, no MR yet.
+
+Done and verified: migration `0094` applied against a real Postgres with the full prior chain; all
+seven `device_gate.rs` statements `PREPARE` and their return types match the Rust tuples; the
+double-tap race proven closed (first settle returns 1 row, second returns 0). Workspace compiles.
+
+`node_id` is **`bigint`**, matching `run_logs` and NOT the `integer` used by `workflow_node_state`.
+Every call site binds `node_id as i64` and sqlx will not widen int4 into i64 — `integer` would
+compile, pass review, and fail every read at runtime.
+
+The per-phone cap is in and verified the same way: `PREPARE` on every new statement (the advisory
+lock's parameter had to be `$1::uuid::text` — `$1::text` infers a TEXT parameter that a bound `Uuid`
+cannot satisfy, and it compiles either way), the counting rule checked against seeded rows (3
+pending count, an expired one and an answered one do not), and the lock proven to serialise two
+sessions on the same device while leaving a different device free.
+
+Not done: `POST /device-gate/:id/answer` and `GET /device-gate/pending` in control; the properties
+panel + canvas countdown; the mobile approval screen (ticket 06, still open — it is a prototype).
+**Nothing has run end to end** — no graph has entered the node and no phone has received a push.
+
+**Graph-level `Trigger::Cron` / `Trigger::Schedule` are REMOVED** (same branch). Migration `0095`
+rewrites every stored trigger to `"Manual"` and deletes the three seeded templates it rebuilt;
+`alerta_pessoa` and `presenca_mapa` now listen for `motion` instead of polling at 2 s / 3 s, and
+`relatorio_diario` carries a cron node (daily 08:00 America/Sao_Paulo). The migration was applied
+against a real Postgres over the full prior chain and re-applied to prove it idempotent; a row with
+`{"Cron":…}`, one with `{"Schedule":…}`, one already `"Manual"` and one with NO trigger key all end
+up `"Manual"`.
+
+`enabled` is deliberately untouched by the migration. `Turn On/Off Daily` (tenant `Default`) was the
+only legacy trigger armed in production and it already had the two cron nodes (18:00 and 08:09) that
+replaced it — it was running on two clocks, and now runs on the two it should. Disarming it to be
+tidy would have taken a working automation down.

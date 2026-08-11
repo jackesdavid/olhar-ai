@@ -35,17 +35,9 @@
 
   // --- domain types (verbatim copies of the parent's — kept structurally identical so the
   //     callback props below stay assignable from the parent's functions) ---
-  type ScheduleFreq = "hourly" | "daily" | "weekly" | "monthly" | "yearly";
-  type ScheduleT = {
-    freq: ScheduleFreq;
-    tz: string;
-    times: string[];
-    minute: number;
-    weekdays: number[]; // 0=Mon … 6=Sun
-    day_of_month: number;
-    month: number; // 1-12
-  };
-  type Trigger = "Manual" | { Cron: { every_secs: number } } | { Schedule: ScheduleT };
+  /** One value left: schedules and event listeners are node config now, and the row summarises them
+   *  by reading the graph's nodes (see the parent's `triggerSummary`). */
+  type Trigger = "Manual";
   type Concurrency =
     | "SkipIfRunning"
     | { QueueSingle: { max_queued: number } }
@@ -157,7 +149,8 @@
     openDelete: (g: Graph) => void;
     runStatus: (g: Graph) => "running" | "idle" | "disabled";
     dotState: (g: Graph) => "online" | "warn" | "offline";
-    triggerSummary: (t: Trigger) => string;
+    /** What the row says the graph runs on — read from its cron/event NODES, not a graph trigger. */
+    triggerSummary: (g: Graph) => string;
     graphHasUnfilled: (g: Graph) => boolean;
     listRunTitle: (g: Graph, unfilled: boolean) => string;
     listRunDisabled: (g: Graph, unfilled: boolean) => boolean;
@@ -211,7 +204,7 @@
       <span class="font-medium">{g.name}</span>
       {#if g.description}<span class="ml-1.5 text-xs text-muted-foreground">— {g.description}</span>{/if}
     </span>
-    <span class="hidden w-32 shrink-0 truncate text-xs text-muted-foreground md:inline">{triggerSummary(g.trigger)}</span>
+    <span class="hidden w-32 shrink-0 truncate text-xs text-muted-foreground md:inline">{triggerSummary(g)}</span>
     <span class="hidden w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground sm:inline">{g.nodes.length}</span>
     <span class="w-24 shrink-0 text-xs">
       {#if st === "running"}

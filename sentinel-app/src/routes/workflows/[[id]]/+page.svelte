@@ -136,7 +136,9 @@
     day_of_month: number;
     month: number; // 1-12
   };
-  type Trigger = "Manual" | { Cron: { every_secs: number } } | { Schedule: ScheduleT };
+  // The graph-level trigger has one value left. Schedules moved onto the `When Event` node, which
+  // is why `ScheduleT` above is still very much alive.
+  type Trigger = "Manual";
   type EventField = { name: string; type: PortType };
   type WorkflowEvent = { name: string; category: string; source: string; fields?: EventField[] };
   type EventCategory = { name: string; source: string };
@@ -974,22 +976,17 @@
   const graphReady = $derived(!!graph && canRun(graph) && !graphHasUnfilled(graph));
 
   // ---- render decisions (kept out of the markup) ---------------------------
-  // Run-now in the list: only a stopped, runnable, non-cron, complete graph.
+  // Run-now in the list: only a stopped, runnable, complete graph. The "not on a schedule" clause
+  // is gone — a schedule is a node now, and a graph that has one is still perfectly runnable by hand.
   // `unfilled` is computed ONCE per row (in the wfRow snippet) and threaded into both, so a row
   // scans its nodes once instead of twice per render.
   function listRunDisabled(g: Graph, unfilled: boolean): boolean {
-    return (
-      runStatus(g) !== "disabled" ||
-      triggerKind(g.trigger) !== "manual" ||
-      !canRun(g) ||
-      unfilled
-    );
+    return runStatus(g) !== "disabled" || !canRun(g) || unfilled;
   }
   function listRunTitle(g: Graph, unfilled: boolean): string {
     const st = runStatus(g);
     if (st === "running") return t.runningEllipsis;
     if (st === "idle") return t.activeStopFirst;
-    if (triggerKind(g.trigger) !== "manual") return t.scheduleUseEditor;
     if (unfilled) return t.unfilledInput;
     if (canRun(g)) return t.runNow;
     return t.nothingToRun;
@@ -2003,16 +2000,10 @@
     if (g) doRun(g, { ...runInputs });
   }
 
-  // ---- trigger / concurrency ----------------------------------------------
-  function triggerKind(t: Trigger): "manual" | "cron" | "schedule" {
-    if (t === "Manual") return "manual";
-    if (typeof t === "object" && "Cron" in t) return "cron";
-    return "schedule";
-  }
-  function triggerSecs(t: Trigger): number {
-    return typeof t === "object" && "Cron" in t ? t.Cron.every_secs : 60;
-  }
-  // ---- Calendar schedule (#111) ----
+  // ---- concurrency ---------------------------------------------------------
+  // `triggerKind` / `triggerSecs` lived here, next to a Manual/Cron/Schedule picker. Both are gone:
+  // a graph has one trigger, and everything recurring is a cron-mode `When Event` node.
+  // ---- Calendar schedule (#111) — now a NODE property ----
   const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const SCHED_FREQ_OPTS: { value: ScheduleFreq; label: string }[] = [
@@ -2025,9 +2016,6 @@
   const BROWSER_TZ = typeof Intl !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().timeZone : "UTC";
   function defaultSchedule(): ScheduleT {
     return { freq: "daily", tz: BROWSER_TZ, times: ["09:00"], minute: 0, weekdays: [0, 1, 2, 3, 4], day_of_month: 1, month: 1 };
-  }
-  function schedOf(t: Trigger): ScheduleT {
-    return typeof t === "object" && "Schedule" in t ? { ...defaultSchedule(), ...t.Schedule } : defaultSchedule();
   }
   function ordinal(n: number): string {
     const s = ["th", "st", "nd", "rd"], v = n % 100;
@@ -2155,10 +2143,15 @@
     return t.cronIn(`${sec}s`);
   }
 
-  function triggerSummary(t: Trigger): string {
-    if (t === "Manual") return "Manual";
-    if (typeof t === "object" && "Cron" in t) return `Every ${t.Cron.every_secs}s`;
-    return scheduleSummary(schedOf(t));
+  /** What the list column says a graph runs on. Reads the graph's cron NODES now — the row used to
+   *  summarise a graph-level trigger, and a graph with two schedules had no honest way to say so. */
+  function triggerSummary(g: Graph): string {
+    const crons = g.nodes.filter((n) => n.kind === "on_event" && nodeSource(n) === "cron");
+    if (crons.length === 1) return scheduleSummary(nodeSchedule(crons[0]));
+    if (crons.length > 1) return t.schedulesCount(crons.length);
+    const events = g.nodes.filter((n) => n.kind === "on_event");
+    if (events.length > 0) return t.onEventSummary;
+    return t.manualSummary;
   }
   function concKind(c: Concurrency): "skip" | "queue" | "concurrent" {
     if (c === "SkipIfRunning") return "skip";
@@ -2168,52 +2161,10 @@
     if (typeof c !== "object") return 1;
     return "QueueSingle" in c ? c.QueueSingle.max_queued : c.Concurrent.max_concurrent;
   }
-  async function applyTrigger(g: Graph, kind: string, everySecs: number) {
-    // Trigger persists immediately (its own endpoint); reflect locally with no reload —
-    // a reload would wipe unsaved canvas edits (#122).
-    g.trigger = kind === "cron" ? { Cron: { every_secs: everySecs } } : "Manual";
-    markDirty(); // surface the edit in the Save indicator too (this setting also auto-saves)
-    try {
-      await data.setGraphTrigger(g.id, kind, everySecs);
-    } catch (err) {
-      toast.error(t.triggerFailed, { description: String(err) });
-    }
-  }
-  // Switch trigger kind from the dropdown — schedule seeds/keeps its own config.
-  function onTriggerKind(g: Graph, kind: string) {
-    if (kind === "schedule") applySchedule(g, schedOf(g.trigger));
-    else applyTrigger(g, kind, triggerSecs(g.trigger));
-  }
-  async function applySchedule(g: Graph, sched: ScheduleT) {
-    g.trigger = { Schedule: sched } as Trigger;
-    markDirty(); // surface the edit in the Save indicator too (this setting also auto-saves)
-    try {
-      await data.setGraphTrigger(g.id, "schedule", undefined, sched);
-    } catch (err) {
-      toast.error(t.scheduleFailed, { description: String(err) });
-    }
-  }
-  // Merge one field change into the current schedule + persist.
-  function patchSchedule(g: Graph, patch: Partial<ScheduleT>) {
-    applySchedule(g, { ...schedOf(g.trigger), ...patch });
-  }
-  function toggleWeekday(g: Graph, day: number) {
-    const cur = schedOf(g.trigger).weekdays;
-    const next = cur.includes(day) ? cur.filter((d) => d !== day) : [...cur, day];
-    patchSchedule(g, { weekdays: next });
-  }
-  function setScheduleTime(g: Graph, i: number, value: string) {
-    const times = [...schedOf(g.trigger).times];
-    times[i] = value;
-    patchSchedule(g, { times });
-  }
-  function addScheduleTime(g: Graph) {
-    patchSchedule(g, { times: [...schedOf(g.trigger).times, "12:00"] });
-  }
-  function removeScheduleTime(g: Graph, i: number) {
-    const times = schedOf(g.trigger).times.filter((_, idx) => idx !== i);
-    patchSchedule(g, { times: times.length ? times : ["09:00"] });
-  }
+  // The graph-level trigger setters lived here: `applyTrigger`, `onTriggerKind`, `applySchedule`
+  // and the schedule field helpers, all of them PUTting `/workflows/:id/trigger`. That endpoint is
+  // gone with the variants; the equivalent edits happen on a cron node, through `ScheduleEditor`
+  // and the ordinary graph save.
   async function applyConcurrency(g: Graph, kind: string, max: number) {
     g.concurrency =
       kind === "queue" ? { QueueSingle: { max_queued: max } } : kind === "concurrent" ? { Concurrent: { max_concurrent: max } } : "SkipIfRunning";
@@ -3221,11 +3172,6 @@
     "chair","couch","potted plant","bed","dining table","toilet","tv","laptop",
     "mouse","remote","keyboard","cell phone","microwave","oven","toaster","sink",
     "refrigerator","book","clock","vase","scissors","teddy bear","hair drier","toothbrush",
-  ];
-  const TRIGGER_OPTS = [
-    { value: "manual", label: "Manual (Run-now only)" },
-    { value: "cron", label: "Cron (every N seconds)" },
-    { value: "schedule", label: "Schedule (calendar)" },
   ];
   const CONC_OPTS = [
     { value: "skip", label: "Skip if running" },
@@ -4268,91 +4214,11 @@
               Arm, Debug and Run-orphans are the three icon toggles at the top of the canvas.
             </p>
 
-            <!-- Trigger -->
+            <!-- Trigger: nothing to choose any more. A graph runs when you press Run now, or when
+                 one of its `When Event` nodes fires — as an event listener or on a schedule. -->
             <div class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-3">
-              <Label class="pt-2 text-xs text-muted-foreground">Trigger</Label>
-              <div class="space-y-1.5">
-                <Select.Root
-                  type="single"
-                  disabled={editLocked}
-                  value={triggerKind(graph.trigger)}
-                  onValueChange={(v) => onTriggerKind(graph, v ?? "manual")}
-                >
-                  <Select.Trigger class="h-8 w-full">{labelOf(TRIGGER_OPTS, triggerKind(graph.trigger))}</Select.Trigger>
-                  <Select.Content>
-                    {#each TRIGGER_OPTS as o (o.value)}
-                      <Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>
-                    {/each}
-                  </Select.Content>
-                </Select.Root>
-                {#if triggerKind(graph.trigger) === "cron"}
-                  <div class="flex items-center gap-2">
-                    <Input type="number" min="1" disabled={editLocked} value={triggerSecs(graph.trigger)} class="h-8" onchange={(e) => applyTrigger(graph, "cron", Number(e.currentTarget.value))} />
-                    <span class="text-xs text-muted-foreground">sec</span>
-                  </div>
-                {/if}
-                {#if triggerKind(graph.trigger) === "schedule"}
-                  {@const s = schedOf(graph.trigger)}
-                  <div class="space-y-2 rounded-md border border-border p-2">
-                    <Select.Root type="single" disabled={editLocked} value={s.freq} onValueChange={(v) => patchSchedule(graph, { freq: (v ?? "daily") as ScheduleFreq })}>
-                      <Select.Trigger class="h-8 w-full">{labelOf(SCHED_FREQ_OPTS, s.freq)}</Select.Trigger>
-                      <Select.Content>
-                        {#each SCHED_FREQ_OPTS as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
-                      </Select.Content>
-                    </Select.Root>
-
-                    {#if s.freq === "hourly"}
-                      <div class="flex items-center gap-2">
-                        <span class="text-xs text-muted-foreground">at minute</span>
-                        <Input type="number" min="0" max="59" disabled={editLocked} value={s.minute} class="h-8 w-20" onchange={(e) => patchSchedule(graph, { minute: Math.max(0, Math.min(59, Number(e.currentTarget.value))) })} />
-                      </div>
-                    {:else}
-                      {#if s.freq === "weekly"}
-                        <div class="flex flex-wrap gap-1">
-                          {#each WEEKDAY_LABELS as wd, i}
-                            <button type="button" disabled={editLocked} class="interactive rounded px-2 py-1 text-[11px] {s.weekdays.includes(i) ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}" onclick={() => toggleWeekday(graph, i)}>{wd}</button>
-                          {/each}
-                        </div>
-                      {/if}
-                      {#if s.freq === "monthly"}
-                        <div class="flex items-center gap-2">
-                          <span class="text-xs text-muted-foreground">day</span>
-                          <Input type="number" min="1" max="31" disabled={editLocked} value={s.day_of_month} class="h-8 w-20" onchange={(e) => patchSchedule(graph, { day_of_month: Math.max(1, Math.min(31, Number(e.currentTarget.value))) })} />
-                        </div>
-                      {/if}
-                      {#if s.freq === "yearly"}
-                        <div class="flex items-center gap-2">
-                          <Select.Root type="single" disabled={editLocked} value={String(s.month)} onValueChange={(v) => patchSchedule(graph, { month: Number(v ?? 1) })}>
-                            <Select.Trigger class="h-8 w-24">{MONTH_LABELS[(s.month || 1) - 1]}</Select.Trigger>
-                            <Select.Content>
-                              {#each MONTH_LABELS as m, i}<Select.Item value={String(i + 1)} label={m}>{m}</Select.Item>{/each}
-                            </Select.Content>
-                          </Select.Root>
-                          <Input type="number" min="1" max="31" disabled={editLocked} value={s.day_of_month} class="h-8 w-20" onchange={(e) => patchSchedule(graph, { day_of_month: Math.max(1, Math.min(31, Number(e.currentTarget.value))) })} />
-                        </div>
-                      {/if}
-                      <div class="space-y-1">
-                        <span class="text-[11px] text-muted-foreground">{t.times}</span>
-                        {#each s.times as tm, i (i)}
-                          <div class="flex items-center gap-1">
-                            <Input type="time" disabled={editLocked} value={tm} class="h-8" onchange={(e) => setScheduleTime(graph, i, e.currentTarget.value)} />
-                            {#if s.times.length > 1}
-                              <button type="button" disabled={editLocked} class="interactive px-1 text-xs text-muted-foreground hover:text-destructive" onclick={() => removeScheduleTime(graph, i)} aria-label={editorMsgs.removeTime}>✕</button>
-                            {/if}
-                          </div>
-                        {/each}
-                        <button type="button" disabled={editLocked} class="interactive text-[11px] text-muted-foreground hover:text-foreground" onclick={() => addScheduleTime(graph)}>{t.addTime}</button>
-                      </div>
-                    {/if}
-
-                    <div class="space-y-1">
-                      <span class="text-[11px] text-muted-foreground">Timezone</span>
-                      <Input disabled={editLocked} value={s.tz} placeholder="America/Sao_Paulo" class="h-8" onchange={(e) => patchSchedule(graph, { tz: e.currentTarget.value.trim() })} />
-                    </div>
-                    <p class="text-[11px] text-muted-foreground">{scheduleSummary(s)}</p>
-                  </div>
-                {/if}
-              </div>
+              <Label class="pt-0.5 text-xs text-muted-foreground">Trigger</Label>
+              <p class="text-[11px] leading-snug text-muted-foreground">{t.triggerOnNodes}</p>
             </div>
 
             <!-- Concurrency -->
