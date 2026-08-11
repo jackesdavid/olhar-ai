@@ -1118,6 +1118,9 @@ fn forward_epoch(
 
             match super::device_gate::resolve_device_by_label(&sys.db, sys.tenant_id, &recipient) {
                 Ok((device_id, token)) => {
+                    // The cap is read per ask rather than cached: it is one indexed row, and a
+                    // tenant that lowers it while a loop is running expects the next ask to obey.
+                    let cap = super::device_gate::max_pending_for_tenant(&sys.db, sys.tenant_id);
                     match super::device_gate::mint(
                         &sys.db,
                         sys.tenant_id,
@@ -1128,6 +1131,7 @@ fn forward_epoch(
                         &message,
                         &graph.name,
                         ttl_secs,
+                        cap,
                     ) {
                         Ok(minted) => {
                             // The push carries the request id and the raw token — the only copy
@@ -1173,9 +1177,24 @@ fn forward_epoch(
                                 }
                             }
                         }
-                        Err(e) => {
+                        // At the cap. `failure` is right for the same reason expiry is: no human
+                        // decided. The graph author sees the reason in the log rather than a run
+                        // that took Failure for no visible cause — which is what a silent drop
+                        // would look like from the canvas.
+                        Err(super::device_gate::MintError::AtCap(cap)) => {
                             live_out.insert((nid, "failure".to_string()));
-                            on_log(nid, &format!("Device Gate: {e}"), 0);
+                            on_log(
+                                nid,
+                                &format!(
+                                    "Device Gate: '{recipient}' already has {cap} unanswered \
+                                     requests — not asking again until some are answered or expire"
+                                ),
+                                0,
+                            );
+                        }
+                        Err(super::device_gate::MintError::Db) => {
+                            live_out.insert((nid, "failure".to_string()));
+                            on_log(nid, "Device Gate: could not create the approval request", 0);
                         }
                     }
                 }

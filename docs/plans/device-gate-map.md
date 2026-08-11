@@ -48,16 +48,22 @@ map is done.
   'pending' RETURNING id`.** Copy password-reset's minting, NOT its check-then-act settle — that is
   the double-tap race. No constant-time compare exists in this repo and none is needed: tokens are
   looked up by hash, never compared. ([[04-token-shape]])
+- **The limit is a cap on UNANSWERED requests per PHONE, set per tenant, 10 by default.** Not a
+  rate (asks/minute): a rate limits how fast a graph annoys someone and still lets a loop bury them
+  overnight, while a depth limit bounds what a person is actually holding. Per device because
+  decision 01 makes the phone the thing that can answer — per user would let two graphs bury one
+  phone while the tenant total looked healthy, per graph would let ten graphs fill the same pocket.
+  At the cap the node takes **Failure** (nobody decided) and says so in the run log. Expired-but-
+  unswept requests do not count, or a phone that ignored yesterday would be permanently full.
+  Enforced in one transaction behind a per-device advisory lock — count-then-insert is a
+  check-then-act on precisely what a runaway loop does concurrently. Tenant key:
+  `device_gate_max_pending` in `tenant_settings` (1–100), on Settings → General.
 - **iOS `timeSensitive`, Android a MAX-importance channel — critical alerts are out of reach**
   (Apple restricts them to health/safety and declines "merely time-sensitive"). Delivery is
   best-effort, so the TTL must assume the phone is CHECKED, not alerted: `GET /device-gate/pending`
   is the reliable path and the push is the optimisation. ([[05-attention-limits]])
 
 ## Not yet specified
-
-- **Abuse and rate limiting.** Nothing stops a graph from firing approval requests in a loop. Where
-  the limit belongs — the node, the recipient, the tenant — depends on how the run behaves while
-  suspended, so it cannot be phrased sharply yet.
 - **A pending request whose graph changed underneath it.** The node deleted, the graph disabled, the
   TTL edited, the Recipient swapped. Each is a different answer and they hang on the run-state
   decision.

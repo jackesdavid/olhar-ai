@@ -150,6 +150,62 @@ pub struct MintedRequest {
     pub expires_at: String,
 }
 
+/// Why a request could not be minted. Both take the `failure` arm — nobody was asked — but they are
+/// different events and the log has to say which.
+pub enum MintError {
+    /// The addressed phone already holds `cap` unanswered requests. Not an error in the system: the
+    /// system working. See [`max_pending_for_tenant`].
+    AtCap(i64),
+    /// The write failed.
+    Db,
+}
+
+/// The tenant setting that caps how many requests one phone may hold unanswered at once.
+pub const MAX_PENDING_KEY: &str = "device_gate_max_pending";
+
+/// What a tenant that has never chosen gets. Ten is a number a person can still work through; the
+/// point of the cap is not to pick the perfect depth but to bound it at all.
+pub const DEFAULT_MAX_PENDING: i64 = 10;
+
+/// The highest a tenant may set. A cap is a safety limit, and a limit an operator can raise to a
+/// million is not one — past a certain depth the queue is indistinguishable from no cap, and the
+/// phone is unusable either way.
+pub const MAX_PENDING_CEILING: i64 = 100;
+
+/// How many unanswered requests ONE phone may hold, for this tenant.
+///
+/// **Per device, not per user or per graph.** Decision 01 makes a Recipient a specific phone and
+/// only that phone may answer, so the phone is where the queue actually lands — capping per user
+/// would let two graphs bury one device while the tenant total looked healthy, and capping per
+/// graph would let ten graphs each fill the same pocket.
+///
+/// Unset means [`DEFAULT_MAX_PENDING`]. Out-of-range values are clamped rather than rejected: this
+/// is read on the hot path of an ask, and a graph that stops asking because a settings row holds a
+/// nonsense number is a worse failure than a cap that quietly lands on the nearest legal value.
+pub fn max_pending_for_tenant(db: &Db, tenant_id: Uuid) -> i64 {
+    let pool = db.pool();
+    let res: Result<Option<(Option<String>,)>, sqlx::Error> = db.block(async move {
+        sqlx::query_as(
+            "SELECT settings->>'device_gate_max_pending' FROM tenant_settings WHERE tenant_id = $1",
+        )
+        .bind(tenant_id)
+        .fetch_optional(&pool)
+        .await
+    });
+    match res {
+        Ok(row) => row
+            .and_then(|(v,)| v)
+            .and_then(|s| s.trim().parse::<i64>().ok())
+            .map(|n| n.clamp(1, MAX_PENDING_CEILING))
+            .unwrap_or(DEFAULT_MAX_PENDING),
+        Err(e) => {
+            // A settings read that fails must not decide the gate is closed for business.
+            log::error!("device_gate cap lookup failed for {tenant_id}: {e}");
+            DEFAULT_MAX_PENDING
+        }
+    }
+}
+
 /// A pending request as the phone sees it. Deliberately does NOT carry the token: the phone already
 /// has it from the push, and `GET /device-gate/pending` is reachable by any session that owns the
 /// device — handing the secret back over that endpoint would make the token pointless.
@@ -192,6 +248,13 @@ pub fn hash_token(raw: &str) -> String {
 }
 
 /// Mint a request and return the raw token exactly once.
+///
+/// `max_pending` bounds how many unanswered requests the addressed phone may hold; at the cap
+/// nothing is written and the node takes `failure`. The count and the insert run in ONE transaction
+/// behind a per-device advisory lock, because the obvious shape — count, decide, insert — is a
+/// check-then-act on exactly the thing a runaway loop does concurrently, and under `READ COMMITTED`
+/// two asks at `cap - 1` both read `cap - 1` and both write. The lock is keyed on the device, so
+/// asks to different phones never wait on each other.
 #[allow(clippy::too_many_arguments)]
 pub fn mint(
     db: &Db,
@@ -203,7 +266,8 @@ pub fn mint(
     prompt: &str,
     flow_name: &str,
     ttl_secs: i64,
-) -> Result<MintedRequest, String> {
+    max_pending: i64,
+) -> Result<MintedRequest, MintError> {
     let token = new_token();
     let token_hash = hash_token(&token);
     let created_at = now_rfc3339();
@@ -217,7 +281,39 @@ pub fn mint(
     let prompt = prompt.to_string();
     let flow_name = flow_name.to_string();
     let expires_for_row = expires_at.clone();
-    let res: Result<Uuid, sqlx::Error> = db.block(async move {
+    let now = created_at.clone();
+    let res: Result<Option<Uuid>, sqlx::Error> = db.block(async move {
+        let mut tx = pool.begin().await?;
+
+        // Held until this transaction ends, so the count below and the insert that follows are one
+        // decision. `hashtextextended` turns the device uuid into the bigint the lock API wants.
+        //
+        // `$1::uuid::text`, NOT `$1::text`: Postgres infers a parameter's type from its cast, and
+        // the shorter form makes `$1` a TEXT parameter that a bound `Uuid` cannot satisfy —
+        // verified with `PREPARE` rather than reasoned about, because it compiles either way and
+        // fails only when a graph first asks someone for approval.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::uuid::text, 0))")
+            .bind(push_device_id)
+            .execute(&mut *tx)
+            .await?;
+
+        // `expires_at > now` on purpose: a request past its deadline is nobody's burden, whether or
+        // not the sweep has reached it yet. Counting those would let a phone that answered nothing
+        // yesterday be permanently at its cap today.
+        let (pending,): (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM device_gate_requests
+              WHERE push_device_id = $1 AND state = 'pending' AND expires_at > $2",
+        )
+        .bind(push_device_id)
+        .bind(&now)
+        .fetch_one(&mut *tx)
+        .await?;
+        if pending >= max_pending {
+            // Nothing was written; the rollback is the whole outcome.
+            tx.rollback().await?;
+            return Ok(None);
+        }
+
         let row: (Uuid,) = sqlx::query_as(
             "INSERT INTO device_gate_requests
                 (tenant_id, graph_id, node_id, asked_by_run, push_device_id, token_hash,
@@ -235,20 +331,22 @@ pub fn mint(
         .bind(flow_name)
         .bind(created_at)
         .bind(expires_for_row)
-        .fetch_one(&pool)
+        .fetch_one(&mut *tx)
         .await?;
-        Ok(row.0)
+        tx.commit().await?;
+        Ok(Some(row.0))
     });
 
     match res {
-        Ok(id) => Ok(MintedRequest {
+        Ok(Some(id)) => Ok(MintedRequest {
             id,
             token,
             expires_at,
         }),
+        Ok(None) => Err(MintError::AtCap(max_pending)),
         Err(e) => {
             log::error!("device_gate mint failed: {e}");
-            Err("could not create the approval request".into())
+            Err(MintError::Db)
         }
     }
 }

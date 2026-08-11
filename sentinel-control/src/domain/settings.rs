@@ -18,6 +18,8 @@ use axum::Router;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use app_core::workflows::device_gate;
+
 use super::{err, tenant_of, ApiErr};
 use crate::auth::{self, UserClaims};
 use crate::{store, AppState};
@@ -36,6 +38,10 @@ struct SettingsReq {
     /// a request to clear it, or a UI that only knows about one setting would wipe the others.
     #[serde(default)]
     face_capture_stream: Option<String>,
+    /// How many unanswered Device Gate requests one phone may hold at once (#176). Absent leaves
+    /// the current value; unset means [`app_core::workflows::device_gate::DEFAULT_MAX_PENDING`].
+    #[serde(default)]
+    device_gate_max_pending: Option<i64>,
 }
 
 /// The tenant's settings. `{}` when nothing has been chosen — absent means "not chosen", never a
@@ -71,6 +77,20 @@ async fn write(
             ));
         }
         patch.insert(FACE_CAPTURE_STREAM.to_string(), json!(v));
+    }
+    if let Some(n) = b.device_gate_max_pending {
+        // Rejected, not clamped, unlike the engine's read. Here a person typed it and can be told;
+        // there a graph is mid-ask and silence would be worse than the nearest legal value.
+        if !(1..=device_gate::MAX_PENDING_CEILING).contains(&n) {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "device_gate_max_pending must be between 1 and {}",
+                    device_gate::MAX_PENDING_CEILING
+                ),
+            ));
+        }
+        patch.insert(device_gate::MAX_PENDING_KEY.to_string(), json!(n));
     }
     if patch.is_empty() {
         return Ok(StatusCode::NO_CONTENT); // nothing asked for; not an error

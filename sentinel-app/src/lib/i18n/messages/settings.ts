@@ -30,6 +30,13 @@ export const settings = {
     connectionDescription: "Network transport for the backend link.",
     transport: "Transport",
     transportAuto: "Auto",
+    // automations — approvals (#176)
+    approvals: "Approval requests",
+    approvalsDescription:
+      "When an automation asks someone to approve an action on their phone.",
+    approvalsCap: "Most requests waiting on one phone",
+    approvalsCapHint:
+      "An automation that keeps asking can bury a phone in requests. Past this many unanswered, further asks stop and the automation takes its Failure path until some are answered or expire.",
     // cameras
     camerasTitle: "Cameras",
     camerasDescription: "Live feed and recording behaviour.",
@@ -128,6 +135,13 @@ export const settings = {
     connectionDescription: "Transporte de rede para o link com o backend.",
     transport: "Transporte",
     transportAuto: "Automático",
+    // automations — approvals (#176)
+    approvals: "Pedidos de aprovação",
+    approvalsDescription:
+      "Quando uma automação pede que alguém aprove uma ação pelo celular.",
+    approvalsCap: "Máximo de pedidos aguardando em um celular",
+    approvalsCapHint:
+      "Uma automação que pede sem parar pode soterrar um celular de pedidos. Passando desse número de pedidos sem resposta, novos pedidos deixam de ser enviados e a automação segue pelo caminho de Falha até que alguns sejam respondidos ou expirem.",
     // cameras
     camerasTitle: "Câmeras",
     camerasDescription: "Comportamento da transmissão ao vivo e da gravação.",
