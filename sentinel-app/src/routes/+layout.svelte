@@ -31,8 +31,13 @@
   import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
   import Plug from "@lucide/svelte/icons/plug";
   import { Button } from "$lib/components/ui/button";
-  import { billing } from "$lib/api";
-  import { billingLock, syncFromStatus } from "$lib/billing.svelte";
+  import { billing, billingPortal } from "$lib/api";
+  import {
+    billingLock,
+    syncFromStatus,
+    actionFor,
+    type BillingAction,
+  } from "$lib/billing.svelte";
   import LogOut from "@lucide/svelte/icons/log-out";
   import Undo2 from "@lucide/svelte/icons/undo-2";
 
@@ -261,6 +266,35 @@
       .then((s) => syncFromStatus(s?.status))
       .catch(() => {});
   });
+
+  // ---- billing banner (kept out of the markup, house style) ------------------
+  let portalBusy = $state(false);
+
+  function billingAction(): BillingAction {
+    return actionFor(billingLock.status);
+  }
+  function billingTitle(): string {
+    return billingAction() === "portal" ? t.shell.pastDueTitle : t.shell.lapsedTitle;
+  }
+  /** The 402 backstop has a server message and no status; prefer it when that is all we have. */
+  function billingBody(): string {
+    if (billingLock.status == null && billingLock.message) return billingLock.message;
+    return billingAction() === "portal" ? t.shell.pastDueBody : t.shell.lapsedBody;
+  }
+  /** Stripe hosts the card form — we never see a card number, so there is nothing to build here. */
+  async function openBillingPortal() {
+    if (portalBusy) return;
+    portalBusy = true;
+    try {
+      const { url } = await billingPortal.open();
+      window.location.href = url;
+    } catch (err) {
+      // Falling back to the plan grid would be the duplicate-subscription trap again, so this
+      // says what failed and leaves the tenant where they are.
+      toast.error(t.shell.portalFailed, { description: String(err) });
+      portalBusy = false;
+    }
+  }
   const mainNav = $derived(
     !inTenant
       ? []
@@ -515,12 +549,24 @@
             </button>
           </div>
         {/if}
+        <!-- Billing banner: shown on every page of a locked workspace, and NOT dismissible —
+             footage is quietly failing to reach the cloud while it is up, so a banner someone can
+             hide is a banner that costs them recordings. -->
         {#if billingLock.locked}
           <div
-            class="flex items-center justify-between gap-4 border-b border-border bg-elev-1 px-6 py-2.5 text-sm"
+            class="flex items-center justify-between gap-4 border-b border-destructive/30 bg-destructive/10 px-6 py-2.5 text-sm"
           >
-            <span>{billingLock.message}</span>
-            <Button size="sm" onclick={() => goto("/billing")}>{t.shell.choosePlan}</Button>
+            <span class="min-w-0">
+              <span class="font-medium">{billingTitle()}</span>
+              <span class="text-muted-foreground"> {billingBody()}</span>
+            </span>
+            {#if billingAction() === "portal"}
+              <Button size="sm" disabled={portalBusy} onclick={openBillingPortal}>
+                {t.shell.updatePayment}
+              </Button>
+            {:else}
+              <Button size="sm" onclick={() => goto("/billing")}>{t.shell.choosePlan}</Button>
+            {/if}
           </div>
         {/if}
         <main class="flex-1 overflow-y-auto">

@@ -37,6 +37,11 @@ export const billing = {
     upToCameras: (n: number) => `Up to ${n} cameras`,
     trialDays: (n: number) => `${n}-day free trial`,
     currentPlanButton: "Current plan",
+    // The provider's hosted page: update the card, see invoices, cancel. The correct answer to a
+    // failed payment — subscribing again would open a second subscription.
+    managePayment: "Manage payment method",
+    manageInstead: "Manage your subscription",
+    portalFailed: "Couldn't open the payment page",
     trialOnly: "Trial only",
     choosePlan: (name: string) => `Choose ${name}`,
     // invoices
@@ -106,6 +111,10 @@ export const billing = {
     upToCameras: (n: number) => `Até ${n} câmeras`,
     trialDays: (n: number) => `${n} dias de teste grátis`,
     currentPlanButton: "Plano atual",
+    // Página do provedor: atualizar cartão, ver faturas, cancelar.
+    managePayment: "Gerenciar forma de pagamento",
+    manageInstead: "Gerencie sua assinatura",
+    portalFailed: "Não foi possível abrir a página de pagamento",
     trialOnly: "Somente teste",
     choosePlan: (name: string) => `Escolher ${name}`,
     // invoices

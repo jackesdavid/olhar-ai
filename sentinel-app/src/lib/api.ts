@@ -180,6 +180,13 @@ export type TenantSettings = {
   device_gate_max_pending?: number;
 };
 
+/** The provider's hosted page for managing an existing subscription — where a failed card is
+ *  fixed. Separate from `subscribe`, which starts a NEW subscription and must not be the answer
+ *  to a payment failure. */
+export const billingPortal = {
+  open: () => api.post<{ url: string }>("/billing/portal", {}),
+};
+
 export const tenantSettings = {
   get: () => api.get<TenantSettings>("/settings"),
   /** Merges server-side: sending one key cannot clear another. */

@@ -14,7 +14,7 @@
   import { Label } from "$lib/components/ui/label";
   import { Badge } from "$lib/components/ui/badge";
 
-  import { billing, type PricedPlan, type BillingSubscription, type Invoice, type SubscribeBody, type TenantStorage } from "$lib/api";
+  import { billing, billingPortal, type PricedPlan, type BillingSubscription, type Invoice, type SubscribeBody, type TenantStorage } from "$lib/api";
   import { dict, lang, locale } from "$lib/i18n";
 
   const t = $derived(dict[lang()].billing);
@@ -33,6 +33,7 @@
   let email = $state("");
   let cpf = $state("");
   let subscribing = $state(false);
+  let portalBusy = $state(false);
 
   /** Format an amount in its own currency, in the language the user picked. */
   function money(n: number | null | undefined, currency: string): string {
@@ -157,6 +158,36 @@
   function isCurrent(p: PricedPlan): boolean {
     return sub?.plan_id === p.id && sub?.status === "active";
   }
+  /** Does this workspace already have a subscription, in any state we would not start another over?
+   *
+   *  `isCurrent` only recognises `active`, which is why a `past_due` tenant saw a live Subscribe
+   *  button on every plan — pressing it opened a SECOND subscription at the provider while the
+   *  first kept dunning the card that had failed. Subscribing is for a workspace with nothing;
+   *  everything else goes through the portal. */
+  function hasSubscription(): boolean {
+    return !!sub && sub.status !== "canceled" && sub.status !== "expired";
+  }
+  function planDisabled(p: PricedPlan): boolean {
+    return isCurrent(p) || p.amount === 0 || hasSubscription();
+  }
+  function planButtonLabel(p: PricedPlan): string {
+    if (isCurrent(p)) return t.currentPlanButton;
+    if (p.amount === 0) return t.trialOnly;
+    if (hasSubscription()) return t.manageInstead;
+    return t.choosePlan(p.name);
+  }
+  /** Stripe hosts the card form; we never see a card number. */
+  async function openPortal() {
+    if (portalBusy) return;
+    portalBusy = true;
+    try {
+      const { url } = await billingPortal.open();
+      window.location.href = url;
+    } catch (err) {
+      toast.error(t.portalFailed, { description: String(err) });
+      portalBusy = false;
+    }
+  }
 </script>
 
 <div class="space-y-6">
@@ -180,7 +211,17 @@
             {currentPlan ? t.planSummary(money(currentPlan.amount, currentPlan.currency), currentPlan.camera_cap) : t.chooseBelow}
           </p>
         </div>
-        {#if sub}<Badge variant={statusVariant(sub.status)}>{statusLabel(sub.status)}</Badge>{/if}
+        <div class="flex items-center gap-3">
+          {#if sub}<Badge variant={statusVariant(sub.status)}>{statusLabel(sub.status)}</Badge>{/if}
+          <!-- The one place to fix a card, change a plan or cancel. Present whenever a subscription
+               exists, not only when it has failed — a card updated before it expires is a
+               `past_due` that never happens. -->
+          {#if hasSubscription()}
+            <Button size="sm" variant="outline" disabled={portalBusy} onclick={openPortal}>
+              {t.managePayment}
+            </Button>
+          {/if}
+        </div>
       </Card.Content>
     </Card.Root>
 
@@ -239,8 +280,8 @@
               <li>{t.upToCameras(p.camera_cap)}</li>
               {#if p.trial_days}<li>{t.trialDays(p.trial_days)}</li>{/if}
             </ul>
-            <Button class="w-full" variant={isCurrent(p) ? "outline" : "default"} disabled={isCurrent(p) || p.amount === 0} onclick={() => choose(p)}>
-              {#if isCurrent(p)}{t.currentPlanButton}{:else if p.amount === 0}{t.trialOnly}{:else}{t.choosePlan(p.name)}{/if}
+            <Button class="w-full" variant={isCurrent(p) ? "outline" : "default"} disabled={planDisabled(p)} onclick={() => choose(p)}>
+              {planButtonLabel(p)}
             </Button>
           </Card.Content>
         </Card.Root>

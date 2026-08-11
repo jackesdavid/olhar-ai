@@ -95,6 +95,23 @@ pub trait PaymentGateway: Send + Sync {
         tenant_id: Uuid,
     ) -> Result<StartedSubscription, String>;
 
+    /// A hosted page where the customer manages the subscription they already have — above all,
+    /// updating the card behind a failed payment. `None` for a provider with no such page.
+    ///
+    /// This exists so that "my payment failed" has an answer that is not "subscribe again". It was
+    /// added after a `past_due` tenant did exactly that and ended up with TWO live subscriptions on
+    /// one customer, the old one still dunning a card that had already been replaced.
+    fn manage_url(&self, _customer_ref: &str, _return_url: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    /// Cancel a subscription at the provider, immediately. Used to undo a duplicate, and by the
+    /// tenant-facing cancel flow. Idempotent from the caller's side: cancelling something already
+    /// cancelled must not be an error.
+    fn cancel_subscription(&self, _subscription_ref: &str) -> Result<(), String> {
+        Err("this provider cannot cancel a subscription from the API".into())
+    }
+
     /// Authenticate an inbound webhook from its **raw body** + headers (lowercased keys).
     /// Stripe signs the payload (HMAC); Asaas sends a shared token.
     fn verify_webhook(&self, raw_body: &[u8], headers: &HashMap<String, String>) -> bool;
@@ -271,10 +288,89 @@ pub fn apply_status(db: &Db, provider: &str, subscription_ref: &str, status: &st
                 log::error!("payments: set_plan after payment failed: {e}");
             }
         }
-    } else {
-        set_tenant_status(db, tenant_id, status);
+        return Some(tenant_id);
     }
+
+    // A DOWNGRADE, and it must only come from the subscription the tenant is actually living on.
+    //
+    // This check is the whole fix for a real incident: a tenant held two provider subscriptions —
+    // an old `past_due` one and the new `active` one they had just paid — and cancelling the dead
+    // one flipped the tenant to `canceled`, because this function used to write the current
+    // `tenant_subscriptions` row for ANY non-active event, whatever it came from. Uploads stopped
+    // for a customer who was paid up. Any stale subscription left at the provider could revoke a
+    // live one at any moment.
+    if let Some(other) = live_subscription_excluding(db, tenant_id, provider, subscription_ref) {
+        log::info!(
+            "payments: ignoring '{status}' for {provider}:{subscription_ref} — tenant {tenant_id} \
+             still has a live subscription ({other})"
+        );
+        return Some(tenant_id);
+    }
+    set_tenant_status(db, tenant_id, status);
     Some(tenant_id)
+}
+
+/// Statuses that mean "this provider subscription is still carrying the tenant".
+const LIVE_STATUSES: [&str; 2] = ["active", "trialing"];
+
+/// Another provider subscription for this tenant that is still live, if any — the guard that keeps
+/// a stale subscription's death from taking a paying tenant with it.
+fn live_subscription_excluding(
+    db: &Db,
+    tenant_id: Uuid,
+    provider: &str,
+    subscription_ref: &str,
+) -> Option<String> {
+    let provider = provider.to_string();
+    let subscription_ref = subscription_ref.to_string();
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_scalar::<_, String>(
+            "SELECT subscription_ref FROM payment_subscriptions
+              WHERE tenant_id = $1
+                AND NOT (provider = $2 AND subscription_ref = $3)
+                AND status = ANY($4)
+              ORDER BY updated_at DESC
+              LIMIT 1",
+        )
+        .bind(tenant_id)
+        .bind(&provider)
+        .bind(&subscription_ref)
+        .bind(LIVE_STATUSES.map(|s| s.to_string()).to_vec())
+        .fetch_optional(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            // Fail CLOSED on the guard, not on the tenant: if we cannot prove another subscription
+            // is alive we fall through to the downgrade, which is the pre-existing behaviour.
+            log::error!("payments::live_subscription_excluding failed: {e}");
+            None
+        })
+    })
+}
+
+/// The tenant's live provider subscription, if it has one. `subscribe` refuses to open a second.
+pub fn live_subscription(db: &Db, tenant_id: Uuid) -> Option<(String, String, String)> {
+    let pool = db.pool();
+    db.block(async move {
+        sqlx::query_as::<_, (String, String, String)>(
+            "SELECT provider, subscription_ref, status FROM payment_subscriptions
+              WHERE tenant_id = $1 AND status = ANY($2)
+              ORDER BY updated_at DESC
+              LIMIT 1",
+        )
+        .bind(tenant_id)
+        .bind(
+            ["active", "trialing", "past_due", "pending"]
+                .map(|s| s.to_string())
+                .to_vec(),
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            log::error!("payments::live_subscription failed: {e}");
+            None
+        })
+    })
 }
 
 /// Bind a Checkout-created subscription to its tenant, then activate the plan.

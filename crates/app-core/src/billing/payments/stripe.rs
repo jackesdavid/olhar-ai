@@ -158,6 +158,44 @@ impl PaymentGateway for StripeGateway {
             .ok_or_else(|| format!("stripe: customer create returned no id: {out}"))
     }
 
+    /// A Billing Portal session — Stripe's hosted page for updating the card, seeing invoices and
+    /// cancelling. This is the answer to "my payment failed"; without it the only button in the
+    /// product was Subscribe, which starts a SECOND subscription on the same customer.
+    ///
+    /// Needs the portal configured once in the Stripe Dashboard (Settings → Billing → Customer
+    /// portal). Until then Stripe answers with an error, which we pass through rather than
+    /// swallow — a dead button that looks alive is worse than a message saying what is missing.
+    fn manage_url(&self, customer_ref: &str, return_url: &str) -> Result<Option<String>, String> {
+        let out = self.post_form(
+            "/v1/billing_portal/sessions",
+            &[
+                ("customer", customer_ref.to_string()),
+                ("return_url", return_url.to_string()),
+            ],
+        )?;
+        if let Some(msg) = out
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+        {
+            return Err(format!("stripe portal: {msg}"));
+        }
+        Ok(out.get("url").and_then(|v| v.as_str()).map(String::from))
+    }
+
+    fn cancel_subscription(&self, subscription_ref: &str) -> Result<(), String> {
+        let out = ureq::delete(&format!("{}/v1/subscriptions/{}", self.base, subscription_ref))
+            .set("Authorization", &format!("Bearer {}", self.api_key))
+            .timeout(Duration::from_secs(20))
+            .call();
+        match out {
+            Ok(_) => Ok(()),
+            // Already gone is the outcome we wanted, not a failure.
+            Err(ureq::Error::Status(404, _)) => Ok(()),
+            Err(e) => Err(format!("stripe cancel {subscription_ref}: {e}")),
+        }
+    }
+
     fn start_subscription(
         &self,
         customer_ref: &str,
