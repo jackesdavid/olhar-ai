@@ -183,6 +183,65 @@ impl PaymentGateway for StripeGateway {
         Ok(out.get("url").and_then(|v| v.as_str()).map(String::from))
     }
 
+    /// Swap the subscription's single item onto the new plan's Price, prorating.
+    ///
+    /// Stripe changes a plan by EDITING the item, not by adding one — passing a bare
+    /// `items[0][price]` without the existing `items[0][id]` appends a second line and bills both.
+    /// So this reads the subscription first to learn its item id.
+    fn change_plan(
+        &self,
+        subscription_ref: &str,
+        plan: &PlanRef<'_>,
+    ) -> Result<Option<String>, String> {
+        let (price_id, created) = match plan.price_ref {
+            Some(p) => (p.to_string(), None),
+            None => {
+                let p = self.create_price(plan)?;
+                (p.clone(), Some(p))
+            }
+        };
+
+        let current = ureq::get(&format!(
+            "{}/v1/subscriptions/{}",
+            self.base, subscription_ref
+        ))
+        .set("Authorization", &format!("Bearer {}", self.api_key))
+        .timeout(Duration::from_secs(20))
+        .call()
+        .map_err(|e| format!("stripe read {subscription_ref}: {e}"))?
+        .into_json::<serde_json::Value>()
+        .map_err(|e| format!("stripe read {subscription_ref}: bad JSON: {e}"))?;
+
+        let item_id = current
+            .get("items")
+            .and_then(|i| i.get("data"))
+            .and_then(|d| d.as_array())
+            .and_then(|a| a.first())
+            .and_then(|i| i.get("id"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("stripe: subscription {subscription_ref} has no items"))?;
+
+        let out = self.post_form(
+            &format!("/v1/subscriptions/{subscription_ref}"),
+            &[
+                ("items[0][id]", item_id.to_string()),
+                ("items[0][price]", price_id),
+                // Bill the difference now rather than silently at renewal: an upgrade the customer
+                // just asked for should show up on their next invoice as the thing they chose.
+                ("proration_behavior", "create_prorations".to_string()),
+                ("metadata[plan_id]", plan.plan_id.to_string()),
+            ],
+        )?;
+        if let Some(msg) = out
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+        {
+            return Err(format!("stripe change plan: {msg}"));
+        }
+        Ok(created)
+    }
+
     fn cancel_subscription(&self, subscription_ref: &str) -> Result<(), String> {
         let out = ureq::delete(&format!("{}/v1/subscriptions/{}", self.base, subscription_ref))
             .set("Authorization", &format!("Bearer {}", self.api_key))

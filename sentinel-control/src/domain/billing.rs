@@ -30,6 +30,7 @@ pub fn router() -> Router<AppState> {
         .route("/billing/invoices/:period", get(my_invoice))
         .route("/billing/subscribe", post(subscribe))
         .route("/billing/portal", post(portal))
+        .route("/billing/change-plan", post(change_plan))
         .route("/admin/billing", get(admin_list))
         .route("/admin/billing/overview", get(admin_overview))
         .route("/admin/storage", get(admin_storage))
@@ -400,6 +401,65 @@ async fn portal(
     .await?
     .map_err(|e| err(StatusCode::BAD_GATEWAY, e))?;
     Ok(Json(serde_json::json!({ "url": url })))
+}
+
+#[derive(Deserialize)]
+struct ChangePlanReq {
+    plan_id: String,
+}
+
+/// Move an existing subscription onto another plan.
+///
+/// The missing half of the one-subscription rule: `subscribe` refuses when a tenant already has
+/// one, so without this there was no way to upgrade at all. It edits the subscription the tenant
+/// has rather than opening a second — which is the whole point, since two live subscriptions is the
+/// failure this endpoint exists to make impossible.
+///
+/// Unlike `subscribe` (a Checkout session, confirmed later by webhook), the provider applies this
+/// synchronously, so the tenant's plan moves here on success. The webhook still arrives and is
+/// idempotent — `apply_status` no-ops when the tenant is already on the plan.
+async fn change_plan(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(req): Json<ChangePlanReq>,
+) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "billing.write")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    blocking(move || {
+        let gw = payments::active_gateway().ok_or("no payment provider configured")?;
+        let provider = gw.provider();
+        let (sub_provider, sub_ref, _status) = payments::live_subscription(&db, tid)
+            .ok_or("this workspace has no subscription to change — subscribe first")?;
+        if sub_provider != provider {
+            return Err(format!(
+                "the subscription lives on {sub_provider}, but {provider} is configured"
+            ));
+        }
+        let plan = plans::get(&db, &req.plan_id).ok_or("plan not found")?;
+        let currency = billing::tenant_currency(&db, tid);
+        let amount = plans::price(&db, &plan.id, &currency)
+            .ok_or_else(|| format!("plan '{}' has no price in {currency}", plan.id))?;
+        let price_ref = plans::provider_price_ref(&db, &plan.id, provider, &currency);
+        let plan_ref = payments::PlanRef {
+            plan_id: &plan.id,
+            name: &plan.name,
+            amount,
+            currency: &currency,
+            price_ref: price_ref.as_deref(),
+        };
+
+        if let Some(minted) = gw.change_plan(&sub_ref, &plan_ref)? {
+            let _ = plans::set_provider_price_ref(&db, &plan.id, provider, &currency, &minted);
+        }
+        // The provider accepted, so the tenant is on the new plan now — record both sides.
+        payments::set_subscription_plan(&db, provider, &sub_ref, &plan.id);
+        subscriptions::set_plan(&db, tid, &plan.id)?;
+        Ok::<(), String>(())
+    })
+    .await?
+    .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]

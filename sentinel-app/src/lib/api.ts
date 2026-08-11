@@ -597,6 +597,9 @@ export const billing = {
   invoice: (period: string) => api.get<InvoiceView>(`/billing/invoices/${period}`),
   subscribe: (body: SubscribeBody) =>
     api.post<{ subscription_ref: string | null; payment_url: string | null }>("/billing/subscribe", body),
+  /** Move the EXISTING subscription onto another plan, prorated. Not `subscribe` — a second
+   *  subscription on one customer is the failure this endpoint exists to avoid. */
+  changePlan: (plan_id: string) => api.post<void>("/billing/change-plan", { plan_id }),
 };
 
 /** Master cross-tenant billing + plan administration. */

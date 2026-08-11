@@ -112,6 +112,19 @@ pub trait PaymentGateway: Send + Sync {
         Err("this provider cannot cancel a subscription from the API".into())
     }
 
+    /// Move an EXISTING subscription onto another plan's price, prorating the difference.
+    ///
+    /// Upgrading by starting a second subscription is how a customer ends up paying twice, so a
+    /// change of plan has to be an edit of the one they have. Returns the price ref if the gateway
+    /// had to mint one, so the caller can persist it (same contract as `start_subscription`).
+    fn change_plan(
+        &self,
+        _subscription_ref: &str,
+        _plan: &PlanRef<'_>,
+    ) -> Result<Option<String>, String> {
+        Err("this provider cannot change a subscription's plan from the API".into())
+    }
+
     /// Authenticate an inbound webhook from its **raw body** + headers (lowercased keys).
     /// Stripe signs the payload (HMAC); Asaas sends a shared token.
     fn verify_webhook(&self, raw_body: &[u8], headers: &HashMap<String, String>) -> bool;
@@ -346,6 +359,31 @@ fn live_subscription_excluding(
             None
         })
     })
+}
+
+/// Record that a subscription now bills a different plan. Called after the provider accepted the
+/// change, so our mapping and theirs agree on which plan the webhook is talking about.
+pub fn set_subscription_plan(db: &Db, provider: &str, subscription_ref: &str, plan_id: &str) {
+    let now = now_rfc3339();
+    let provider = provider.to_string();
+    let subscription_ref = subscription_ref.to_string();
+    let plan_id = plan_id.to_string();
+    let pool = db.pool();
+    let res: Result<_, sqlx::Error> = db.block(async move {
+        sqlx::query(
+            "UPDATE payment_subscriptions SET plan_id = $3, updated_at = $4
+             WHERE provider = $1 AND subscription_ref = $2",
+        )
+        .bind(&provider)
+        .bind(&subscription_ref)
+        .bind(&plan_id)
+        .bind(&now)
+        .execute(&pool)
+        .await
+    });
+    if let Err(e) = res {
+        log::error!("payments::set_subscription_plan failed: {e}");
+    }
 }
 
 /// The tenant's live provider subscription, if it has one. `subscribe` refuses to open a second.
