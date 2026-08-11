@@ -17,8 +17,8 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use app_core::workflows::{
-    self, ConcurrencyPolicy, Graph as WfGraph, InstanceScope, NodeKind as WfNodeKind, Schedule,
-    Trigger, VariableDecl, Viewport, Workflows,
+    self, ConcurrencyPolicy, Graph as WfGraph, InstanceScope, NodeKind as WfNodeKind, VariableDecl,
+    Viewport, Workflows,
 };
 
 use super::{blocking, err, tenant_of, ApiErr};
@@ -62,7 +62,6 @@ pub fn router() -> Router<AppState> {
         .route("/workflows/templates/:id/use", post(use_template))
         .route("/workflows/:id/template", put(set_template))
         .route("/workflows/:id/global", put(set_global))
-        .route("/workflows/:id/trigger", put(set_trigger))
         .route("/workflows/:id/concurrency", put(set_concurrency))
         .route("/workflows/:id/instance-scope", put(set_instance_scope))
         .route("/workflows/:id/viewport", put(set_viewport))
@@ -1183,45 +1182,9 @@ async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Deserialize)]
-struct TriggerReq {
-    kind: String,
-    every_secs: Option<u64>,
-    /// Present when `kind == "schedule"` (#111) — the calendar schedule config.
-    #[serde(default)]
-    schedule: Option<Schedule>,
-}
-
-async fn set_trigger(
-    UserClaims(c): UserClaims,
-    State(st): State<AppState>,
-    Path(id): Path<uuid::Uuid>,
-    Json(b): Json<TriggerReq>,
-) -> Result<StatusCode, ApiErr> {
-    auth::require(&c, "workflows.write")?;
-    let tid = tenant_of(&c)?;
-    mutate(&st, tid, move |wf| {
-        let trigger = match b.kind.as_str() {
-            "manual" => Trigger::Manual,
-            "cron" => Trigger::Cron {
-                every_secs: b.every_secs.unwrap_or(60).max(1),
-            },
-            "schedule" => Trigger::Schedule(
-                b.schedule
-                    .clone()
-                    .ok_or("schedule config is required for a scheduled trigger")?,
-            ),
-            other => return Err(format!("unknown trigger kind '{other}'")),
-        };
-        let g = wf.graph_mut(id).ok_or("graph not found")?;
-        g.trigger = trigger;
-        // A trigger change always stops the graph — it never starts firing on a config change.
-        g.enabled = false;
-        Ok(())
-    })
-    .await?;
-    Ok(StatusCode::NO_CONTENT)
-}
+// `PUT /workflows/:id/trigger` is gone. There is one graph-level trigger left (`Manual`), so an
+// endpoint to choose it would only ever be a way to write the value it already has. Schedules are
+// set on the `When Event` node that owns them, and reach the server through the ordinary graph save.
 
 #[derive(Deserialize)]
 struct ConcurrencyReq {

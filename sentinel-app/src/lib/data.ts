@@ -641,18 +641,8 @@ export const data = {
   deleteGraph: async (id: string): Promise<void> => {
     await api.del<void>(`/workflows/${id}`);
   },
-  setGraphTrigger: async (
-    id: string,
-    kind: string,
-    everySecs?: number,
-    schedule?: unknown,
-  ): Promise<void> => {
-    await api.put<void>(`/workflows/${id}/trigger`, {
-      kind,
-      every_secs: everySecs,
-      schedule,
-    });
-  },
+  // `setGraphTrigger` is gone with `PUT /workflows/:id/trigger`: a graph has one trigger, and a
+  // schedule is config on a `When Event` node, saved with the graph.
   setGraphConcurrency: async (
     id: string,
     kind: string,

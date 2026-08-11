@@ -122,6 +122,12 @@ kanban-plugin: board
 	  - Map: [[device-gate-map]] · baseline: [[device-gate-node]]
 	  - Exec in; Positive / Negative / Failure out. Agnostic: it gates an exec edge, not a Tuya
 	    device. Opening a gate is a security decision, not a switch.
+	  - Backend spine + per-phone cap (`device_gate_max_pending`, default 10) done. Left: the
+	    control endpoints, the properties panel + countdown, the mobile approval screen.
+- [ ] #177 Retire the graph-level Cron/Schedule trigger — scheduling is a node property
+	  - Migration `0095` rewrites every stored trigger to Manual and refreshes the three seeded
+	    templates; poller, cron timer, trigger endpoint and editor picker removed. Sub-minute
+	    polling is gone with it — deliberately. Ref: [[workflows]] "Triggers".
 - [ ] #174 Faces — complete the pipeline
 	  - Plan: [[faces-completion]]
 	  - Steps 1 (per-tenant capture stream) and 2 (index-backed cluster neighbours) shipped.

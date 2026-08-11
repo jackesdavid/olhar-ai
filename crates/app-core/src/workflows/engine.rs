@@ -1421,13 +1421,15 @@ struct GraphRun {
     queued: u32,
 }
 
-/// Per-(tenant, graph) trigger timers + concurrency counters + per-tenant new-alert
-/// high-water mark. Keyed by `(tenant_id, graph_id)` because graph ids are per-tenant — a
-/// single pod serving multiple tenants would otherwise collide graph 1 of tenant A with
-/// graph 1 of tenant B.
+/// Per-(tenant, graph) concurrency counters + per-tenant new-alert high-water mark. Keyed by
+/// `(tenant_id, graph_id)` because graph ids are per-tenant — a single pod serving multiple tenants
+/// would otherwise collide graph 1 of tenant A with graph 1 of tenant B.
+///
+/// It used to hold `cron_last`, the in-memory anchor for graph-level `Trigger::Cron`. That went
+/// with the trigger (migration `0095`): a cron NODE's next fire is a durable `work_jobs` row, so
+/// nothing has to be reconstructed at boot to keep a schedule honest.
 #[derive(Default)]
 pub struct WorkflowEngine {
-    cron_last: HashMap<(uuid::Uuid, uuid::Uuid), Instant>,
     runs: HashMap<(uuid::Uuid, uuid::Uuid), GraphRun>,
     alert_seen_max: HashMap<uuid::Uuid, u64>,
 }
@@ -1509,37 +1511,12 @@ impl WorkflowEngine {
     // every event handler. The pod-wide backstop counts the activity map instead
     // (`sentinel_flow::engine::total_in_flight`), which both spawn paths register with.
 
-    /// Seed a graph's cron timer to a prior fire instant (Phase 0.5 restore). The adapter
-    /// computes this anchor from the persisted wall-clock fire time so a mid-interval restart
-    /// waits out the remainder. Pure: persistence lives in `workflows::repo`.
-    pub fn seed_cron_last(&mut self, tenant: uuid::Uuid, graph_id: uuid::Uuid, last: Instant) {
-        self.cron_last.insert((tenant, graph_id), last);
-    }
-
     /// A tenant's current new-alert high-water mark (0 if unseen) — so the adapter can
     /// detect when a tick advanced it and persist the new value.
     pub fn alert_seen_max(&self, tenant: uuid::Uuid) -> u64 {
         self.alert_seen_max.get(&tenant).copied().unwrap_or(0)
     }
 
-    /// Cron: returns `true` (and re-arms the timer) when `every_secs` has elapsed.
-    pub fn cron_due(
-        &mut self,
-        tenant: uuid::Uuid,
-        graph_id: uuid::Uuid,
-        every_secs: u64,
-        now: Instant,
-    ) -> bool {
-        let key = (tenant, graph_id);
-        let due = match self.cron_last.get(&key) {
-            Some(last) => now.duration_since(*last) >= Duration::from_secs(every_secs),
-            None => true,
-        };
-        if due {
-            self.cron_last.insert(key, now);
-        }
-        due
-    }
 }
 
 #[cfg(test)]
@@ -2366,7 +2343,9 @@ mod tests {
 
     #[test]
     fn same_graph_id_under_different_tenants_is_isolated() {
-        // Graph id 1 of tenant A must not share run/cron state with graph id 1 of tenant B.
+        // Graph id 1 of tenant A must not share run state with graph id 1 of tenant B. (This test
+        // also covered the cron timer until `Trigger::Cron` was removed; concurrency is what is
+        // left keyed by `(tenant, graph)`, and it is the half that would actually cross-fire.)
         let a = uuid::Uuid::from_u128(1);
         let b = uuid::Uuid::from_u128(2);
         let mut e = WorkflowEngine::new();
@@ -2381,23 +2360,6 @@ mod tests {
             e.decide(b, uuid::Uuid::from_u128(1), &p),
             Fire::Spawn,
             "B's graph 1 is independent"
-        );
-        let base = Instant::now();
-        e.seed_cron_last(a, uuid::Uuid::from_u128(1), base);
-        assert!(!e.cron_due(
-            a,
-            uuid::Uuid::from_u128(1),
-            30,
-            base + Duration::from_secs(10)
-        ));
-        assert!(
-            e.cron_due(
-                b,
-                uuid::Uuid::from_u128(1),
-                30,
-                base + Duration::from_secs(10)
-            ),
-            "B's cron is independent"
         );
     }
 
@@ -2666,34 +2628,8 @@ mod tests {
         assert!(outs.contains_key(&def), "default fires for unset arms");
     }
 
-    #[test]
-    fn seeded_cron_waits_out_remaining_interval() {
-        // Phase 0.5: a restart seeds cron_last from the persisted fire time so a
-        // 30s cron that fired mid-interval does NOT fire immediately on boot.
-        let t = uuid::Uuid::nil();
-        let mut e = WorkflowEngine::new();
-        let base = Instant::now();
-        e.seed_cron_last(t, uuid::Uuid::from_u128(1), base);
-        // 10s after the last fire → not due yet.
-        assert!(!e.cron_due(
-            t,
-            uuid::Uuid::from_u128(1),
-            30,
-            base + Duration::from_secs(10)
-        ));
-        // 40s after the last fire → due (and re-arms at that instant).
-        assert!(e.cron_due(
-            t,
-            uuid::Uuid::from_u128(1),
-            30,
-            base + Duration::from_secs(40)
-        ));
-        // Just after re-arming → not due again.
-        assert!(!e.cron_due(
-            t,
-            uuid::Uuid::from_u128(1),
-            30,
-            base + Duration::from_secs(50)
-        ));
-    }
+    // `seeded_cron_waits_out_remaining_interval` was here. It guarded the Phase 0.5 restore — a
+    // boot re-anchoring `cron_last` so a 30s interval that fired mid-window did not fire again
+    // immediately. Both the timer and the restore are gone with `Trigger::Cron`; a cron node's next
+    // fire is a stored timestamp, so there is no in-memory clock left to get wrong across a restart.
 }

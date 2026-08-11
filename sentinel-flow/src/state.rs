@@ -112,7 +112,10 @@ impl AppState {
         );
         let store: WfStore = Arc::new(Mutex::new(graphs));
 
-        let engine = restore_engine(&db, &tenants);
+        // Nothing to restore any more: the engine's only persistent timing state was the
+        // graph-level cron anchor, and cron NODES keep theirs in `work_jobs` (reconciled by
+        // `schedule_consumer` on boot and on every reload).
+        let engine = WorkflowEngine::new();
 
         Ok(Arc::new(AppState {
             db,
@@ -191,19 +194,5 @@ pub fn distinct_tenants(graphs: &[(Uuid, Graph)]) -> Vec<Uuid> {
         .collect()
 }
 
-/// Build the engine with each tenant's cron timing restored from Postgres (Phase 0.5):
-/// each persisted wall-clock fire is anchored to "now" on the monotonic clock so a
-/// mid-interval restart waits out the remainder instead of firing immediately.
-fn restore_engine(db: &Db, tenants: &[Uuid]) -> WorkflowEngine {
-    let mut engine = WorkflowEngine::new();
-    let now_ms = crate::now_epoch_ms();
-    let now_inst = Instant::now();
-    for &tenant in tenants {
-        for (graph_id, last_fired_ms) in workflows::repo::load_cron_state(db, tenant) {
-            let elapsed = Duration::from_millis(now_ms.saturating_sub(last_fired_ms));
-            let anchor = now_inst.checked_sub(elapsed).unwrap_or(now_inst);
-            engine.seed_cron_last(tenant, graph_id, anchor);
-        }
-    }
-    engine
-}
+// `restore_engine` lived here — the Phase 0.5 boot restore that re-anchored each graph's cron timer
+// so a mid-interval restart waited out the remainder. Removed with `Trigger::Cron`.

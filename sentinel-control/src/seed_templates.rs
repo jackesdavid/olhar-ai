@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use app_core::workflows::domain::{Graph, NodeKind, Schedule, ScheduleFreq, Trigger};
+use app_core::workflows::domain::{Graph, NodeKind};
 
 use crate::store;
 
@@ -157,7 +157,7 @@ fn onboarding_tour() -> Graph {
         &mut g,
         triggers,
         json!({
-            "text": "## Como um grafo dispara\n\n- **Manual** — só pelo Run now\n- **Cron** — a cada N segundos\n- **Agenda** — calendário no fuso\n- **On event** — reage a movimento, telegram, rosto…",
+            "text": "## Como um grafo dispara\n\n- **Run now** — você aperta o botão\n- **When Event (evento)** — reage a movimento, telegram, rosto…\n- **When Event (agenda)** — o mesmo nó em modo horário: diário, semanal, mensal, no seu fuso\n\nO horário mora no NÓ, então um grafo pode ter várias agendas independentes.",
             "width": 380, "height": 200
         }),
     );
@@ -177,16 +177,21 @@ fn onboarding_tour() -> Graph {
 
 // ---- L1 — Fundamentals ------------------------------------------------------
 
-/// #1 — Cron → frame → person detection → Compare/If → Cooldown → Notify (with photo).
+/// #1 — When Event(motion) → frame → person detection → Compare/If → Cooldown → Notify (with photo).
+///
+/// Used to poll on a 2s graph cron. That trigger is gone (migration `0095`), and movement is the
+/// thing the poll was looking for anyway: the graph now wakes when the edge reports motion instead
+/// of decoding a frame thirty times a minute to find out nothing happened.
 fn alerta_pessoa() -> Graph {
     let mut g = template(
         0x02,
         "Alerta de pessoa",
-        "Cron 2s → detecta pessoas na câmera → te avisa no Telegram, com foto e anti-spam.",
+        "Detecta pessoas quando há movimento na câmera → te avisa no Telegram, com foto e anti-spam.",
     );
-    g.trigger = Trigger::Cron { every_secs: 2 };
     title(&mut g, 40, -120, "Alerta de pessoa");
-    note(&mut g, 40, -60, "**Cron 2s** pega o frame, detecta pessoas e — se houver — te avisa.\n\n- **Compare** count > 0\n- **Cooldown** evita spam (5 min)\n- **Notify** com a foto\n\nEscolha a câmera no nó Get current frame.");
+    note(&mut g, 40, -60, "**When Event(motion)** pega o frame, detecta pessoas e — se houver — te avisa.\n\n- **Compare** count > 0\n- **Cooldown** evita spam (5 min)\n- **Notify** com a foto\n\nEscolha a câmera no nó Get current frame.");
+    let onev = g.add_node(NodeKind::OnEvent, -220, 120);
+    set_cfg(&mut g, onev, json!({ "event": "motion" }));
     let frame = g.add_node(NodeKind::GetCurrentFrame, 40, 120);
     set_cfg(
         &mut g,
@@ -201,6 +206,7 @@ fn alerta_pessoa() -> Graph {
     set_cfg(&mut g, cool, json!({ "window_secs": "300" }));
     let notify = g.add_node(NodeKind::NotifyRecipient, 1080, 120);
     set_cfg(&mut g, notify, json!({ "message": "Pessoa detectada" }));
+    ex(&mut g, onev, "exec_out", frame);
     ex(&mut g, frame, "exec_out", det);
     ex(&mut g, det, "exec_out", iff);
     wire(&mut g, det, "count", cmp, "a");
@@ -382,17 +388,29 @@ fn relatorio_diario() -> Graph {
         "Relatório diário de ocupação",
         "Todo dia num horário, conta as pessoas e te manda um resumo.",
     );
-    g.trigger = Trigger::Schedule(Schedule {
-        freq: ScheduleFreq::Daily,
-        tz: "America/Sao_Paulo".to_string(),
-        times: vec!["08:00".to_string()],
-        minute: 0,
-        weekdays: vec![],
-        day_of_month: 1,
-        month: 1,
-    });
     title(&mut g, 40, -120, "Relatório diário");
-    note(&mut g, 40, -60, "**Agenda (diário, 08:00)** → frame → conta pessoas → **Format** monta o texto → **Notify**.\n\nExtensão: grave o número numa **Dictionary Table** com Add Row pra ter histórico.");
+    note(&mut g, 40, -60, "**When Event (agenda, diário 08:00)** → frame → conta pessoas → **Format** monta o texto → **Notify**.\n\nO horário fica no próprio nó — abra-o pra mudar hora, dias ou fuso.\n\nExtensão: grave o número numa **Dictionary Table** com Add Row pra ter histórico.");
+    // The schedule that used to be the GRAPH's trigger, now on the node that owns it. `payload: []`
+    // matters: a schedule fire carries no data, so the node must not wear an event's output ports.
+    let onev = g.add_node(NodeKind::OnEvent, -220, 120);
+    set_cfg(
+        &mut g,
+        onev,
+        json!({
+            "source": "cron",
+            "event": "",
+            "payload": [],
+            "schedule": {
+                "freq": "daily",
+                "tz": "America/Sao_Paulo",
+                "times": ["08:00"],
+                "minute": 0,
+                "weekdays": [],
+                "day_of_month": 1,
+                "month": 1,
+            },
+        }),
+    );
     let frame = g.add_node(NodeKind::GetCurrentFrame, 40, 120);
     set_cfg(
         &mut g,
@@ -414,6 +432,7 @@ fn relatorio_diario() -> Graph {
     wire(&mut g, det, "count", ntt, "value");
     wire(&mut g, ntt, "text", fmt, "p1");
     wire(&mut g, fmt, "text", notify, "message");
+    ex(&mut g, onev, "exec_out", frame);
     g
 }
 
@@ -523,9 +542,10 @@ fn presenca_mapa() -> Graph {
         "Presença viva no Mapa",
         "Detecta pessoas e registra a presença — o pulso categorizado no Mapa.",
     );
-    g.trigger = Trigger::Cron { every_secs: 3 };
     title(&mut g, 40, -120, "Presença viva no Mapa");
-    note(&mut g, 40, -60, "**Cron 3s** → frame → detecta pessoas → **Record presence** (categoria `person`).\n\nAbra o **Mapa** pra ver o pulso ao vivo. Escolha a câmera/sala.");
+    note(&mut g, 40, -60, "**When Event(motion)** → frame → detecta pessoas → **Record presence** (categoria `person`).\n\nAbra o **Mapa** pra ver o pulso ao vivo. Escolha a câmera/sala.");
+    let onev = g.add_node(NodeKind::OnEvent, -220, 120);
+    set_cfg(&mut g, onev, json!({ "event": "motion" }));
     let frame = g.add_node(NodeKind::GetCurrentFrame, 40, 120);
     set_cfg(
         &mut g,
@@ -539,6 +559,7 @@ fn presenca_mapa() -> Graph {
         pres,
         json!({ "category": "person", "label": "", "duration_secs": 8 }),
     );
+    ex(&mut g, onev, "exec_out", frame);
     ex(&mut g, frame, "exec_out", det);
     ex(&mut g, det, "exec_out", pres);
     g

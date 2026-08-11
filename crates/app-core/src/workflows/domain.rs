@@ -2206,22 +2206,39 @@ pub struct Edge {
     pub to_port: String,
 }
 
-/// How a graph fires. A property of the engine/graph — NOT a node.
+/// How a graph fires **as a whole** — which, since the cron selector landed on `When Event`, is
+/// only ever "someone or something started it at the top". Everything recurring is a NODE now.
 ///
-/// Alert reactivity used to live here as `OnNewAlert`; it was retired in favor of the
+/// Two variants used to live here and are gone (migration `0095`):
+///
+///  * `Cron { every_secs }` — an interval poller in `sentinel-flow`.
+///  * `Schedule(Schedule)` — a calendar, added by #111.
+///
+/// They were removed because a graph could carry a schedule AND hold cron nodes with their own,
+/// and nothing said which won; one production graph really did run on two clocks at once. The node
+/// is the better home for the same reason it always was: one graph, several independent schedules,
+/// each firing only what hangs off it.
+///
+/// The one thing the node cannot do is a SUB-MINUTE interval — `Cron { every_secs: 2 }` was a legal
+/// polling loop and a calendar's finest grain is the minute. A graph that needs to poll faster than
+/// that builds it out of an exec loop and a `Delay`, or, far better, listens for the event it was
+/// polling for.
+///
+/// Alert reactivity used to live here too, as `OnNewAlert`; it was retired in favor of the
 /// cross-graph event system (a future `System-Alerts` event an `OnEvent` can listen for).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Trigger {
-    /// Only fired by Run-now.
+    /// Fired by Run-now, by a cron-mode `When Event` node coming due, or by an event handler.
+    /// Kept as an enum rather than collapsed away so the stored `"trigger":"Manual"` in every
+    /// graph's JSON still deserializes, and so a future top-level trigger has somewhere to go.
     Manual,
-    /// Engine poller starts a fresh one-shot run every `every_secs`.
-    Cron { every_secs: u64 },
-    /// Calendar schedule (#111) — fire at wall-clock times in a timezone (daily at 9am, weekly on
-    /// Mon/Wed, …). Durable via the `work_jobs` queue; next-occurrence math in [`super::schedule`].
-    Schedule(Schedule),
 }
 
-/// A recurring calendar schedule for a graph. Wall-clock, timezone-aware. Minute granularity.
+/// A recurring calendar schedule. Wall-clock, timezone-aware, minute granularity.
+///
+/// Outlived the graph-level `Trigger::Schedule` that introduced it: cron-mode `When Event` nodes
+/// store one of these in their config (`GraphNode::cron`), and `schedule_consumer` does the
+/// calendar math against it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Schedule {
     pub freq: ScheduleFreq,
@@ -3043,7 +3060,7 @@ mod tests {
     #[test]
     fn graph_json_round_trips_with_trigger_concurrency_and_typed_edges() {
         let (mut g, _a, _b) = chain();
-        g.trigger = Trigger::Cron { every_secs: 10 };
+        g.trigger = Trigger::Manual;
         g.concurrency = ConcurrencyPolicy::QueueSingle { max_queued: 3 };
         g.enabled = true;
         let s = serde_json::to_string(&g).unwrap();

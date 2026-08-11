@@ -50,10 +50,10 @@ fn main() {
     // Postgres coming up after it (e.g. compose ordering).
     let state = boot_with_retry(&database_url);
 
-    // The engine + poller run on their own std threads (blocking), like the Tauri
-    // shell. `Db::block` bridges sqlx from there safely (it spawns, never block_on).
-    engine::spawn_poller(state.clone());
-    log::info!("Workflow engine + trigger poller started");
+    // The consumers run on their own std threads (blocking), like the Tauri shell. `Db::block`
+    // bridges sqlx from there safely (it spawns, never block_on). There is no interval poller any
+    // more — graph-level `Trigger::Cron` is gone and every recurring fire is a cron NODE, armed by
+    // `schedule_consumer` below.
     // Durable inbound triggers: claim from the Postgres event_queue and fire OnEvent handlers
     // (card #57 — replaces the lossy Redis flow:inject injector). Runs on its own std thread.
     event_consumer::spawn(state.clone());

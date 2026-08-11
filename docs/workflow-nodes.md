@@ -93,14 +93,20 @@ so that data exists to read; it still makes no quality decision itself.
 > from that box. Such captures store `blur = NULL`, not the sentinel — "unknown" must not enter
 > calibration data as "excellent".
 
-### Triggers (graph-level, not nodes)
-How a whole graph starts a run (set in the graph header, not a node):
-- **Manual** — only via Run-now.
-- **Cron { every_secs }** — a fresh run every N seconds (a stopwatch, no wall-clock time).
-- **Schedule** — a **calendar** schedule (#111): hourly at a minute, daily/weekly/monthly/yearly at
-  chosen wall-clock times, in a timezone. Durable via the `work_jobs` queue (survives a flow-pod
-  restart); next-occurrence math is `app_core::workflows::schedule` (chrono-tz, DST-correct). Built
-  from dropdowns in the graph header — no cron syntax.
+### How a graph starts a run
+There is **no graph-level schedule any more** (migration `0095` removed `Cron { every_secs }` and
+`Schedule`; the graph header shows no picker). A run begins in one of three ways:
+- **Run now** — you press the button.
+- **When Event (event mode)** — the graph reacts to `motion`, `telegram_message`, a face, a
+  cross-graph event…
+- **When Event (schedule mode)** — the same node holding a **calendar** schedule (#111): hourly at a
+  minute, daily/weekly/monthly/yearly at chosen wall-clock times, in a timezone. Durable via the
+  `work_jobs` queue (survives a flow-pod restart); next-occurrence math is
+  `app_core::workflows::schedule` (chrono-tz, DST-correct). Dropdowns on the node — no cron syntax.
+
+Because the schedule is a NODE, one graph can hold several independent ones, each firing only what
+hangs off it. The minute is the finest grain: sub-minute polling ended with the old interval cron,
+and a graph that was polling should listen for the event it was polling for.
 
 ### Concurrency policy (graph-level)
 What happens when a graph fires while a previous run is in flight:
@@ -118,7 +124,7 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 
 | Node | Inputs | Outputs | Config | Behavior | Sample usage |
 |---|---|---|---|---|---|
-| **Get current frame** | `camera*` | `image`, `age_ms`, `ok` | `camera`, `max_age_ms` (2000) | Most-recent frame from a warm in-memory grabber (~0 latency); falls back to a snapshot until warm. | `Cron 1s → Get current frame (memoize off) → Person detection` |
+| **Get current frame** | `camera*` | `image`, `age_ms`, `ok` | `camera`, `max_age_ms` (2000) | Most-recent frame from a warm in-memory grabber (~0 latency); falls back to a snapshot until warm. | `When Event(motion) → Get current frame (memoize off) → Person detection` |
 
 ### Vision / AI
 
@@ -142,7 +148,7 @@ column lists explicit exec pins. `*` = required input. All nodes have a **Memoiz
 | **AI Answer** | `prompt*` (Text), `image` (Image, optional) | `response` (Text), `ok` | `prompt` (literal fallback), `timeout_secs` (default `30`) | Single-turn Claude — a free-text prompt (+ optional image for vision) → a plain-text answer. No tool-use loop, so it's fast enough for a chat reply. Complements **AI If** (yes/no routing) and **Describe image** (fixed caption). Needs `ANTHROPIC_API_KEY`. | `On event("telegram_message") → (args) → AI Answer(prompt=args) → (response) → Reply to sender` |
 | **AI Extract** | `text*` (Text) | `value` (**typed per `type`**), `found` (Bool) | `field` (what to extract, e.g. "the camera name"), `type` (Text / Camera / Recipient / Number), `timeout_secs` (default `30`) | Slot/entity extraction — the NLU companion to **AI Switch**. One LLM call pulls `field` out of the message and resolves it to `type`: a **Camera** name → a real Camera entity (wires straight into Camera snapshot), a **Recipient** name → a Recipient, Number/Text parsed. `found` is false when nothing matched (or a camera name didn't resolve) → branch to a clarification. Needs `ANTHROPIC_API_KEY`. | `AI Switch →snapshot AI Extract(field="camera name", type=Camera) → (value) Camera snapshot → Reply to sender` |
 | **Region** | `camera` (Camera, optional — wire override, else config `camera`) | `region` (**Region**) | `camera` (name/ip/"first"), `name`, `points` (drawn on a snapshot in the property panel) | Pure/reusable: a named line or zone. 2 points = a line, 3+ = a zone — which it means is decided by whichever `On event` reads it (card: edge tracking). Wire the SAME `Region` node into several `On event`s so they share one definition instead of each re-drawing it. | `Region(name="counter", points=[...]) → region → On event("object_entered").region` + `On event("object_exited").region` |
-| **Get tracked objects** | `camera*` | `objects` (**TrackedObject[]**), `count` | `camera` (name/ip/"first"), `timeout_secs` (default `10`) | Pull-based "state of the world": every currently-tracked entity on a camera right now (uuid, class, bbox, zone if inside one) — the query counterpart to `On event("object_entered"/"object_exited"/"line_crossed")`'s transition events. Use this when a graph wants to check state on its own schedule (e.g. a Cron) instead of reacting to a change. | `Cron 5s → Get tracked objects(camera="Front") → (objects) For each → Break tracked object` |
+| **Get tracked objects** | `camera*` | `objects` (**TrackedObject[]**), `count` | `camera` (name/ip/"first"), `timeout_secs` (default `10`) | Pull-based "state of the world": every currently-tracked entity on a camera right now (uuid, class, bbox, zone if inside one) — the query counterpart to `On event("object_entered"/"object_exited"/"line_crossed")`'s transition events. Use this when a graph wants to check state on its own schedule (a cron-mode When Event) instead of reacting to a change. | `When Event(hourly) → Get tracked objects(camera="Front") → (objects) For each → Break tracked object` |
 | **Break tracked object** | `object*` (TrackedObject) | `uuid`, `class`, `bbox` (Bbox), `zone` | — | Destructures a `TrackedObject` element (from **Get tracked objects**' `objects` array) into its fields — the Break node this list was missing at first. `zone` is empty unless the object is currently inside a zone. | `For each(objects) → item → Break tracked object → (bbox) Draw BBox → Show image` |
 
 ### Alerts
@@ -293,7 +299,7 @@ Events let a fast path trigger a slower, decoupled handler without blocking it o
    `On event("person_seen") → Get current frame → Recognize person → Notify recipient`.
 2. **Fire it.** On your main flow, add an **Emit event** node with the **same** `event`
    name on the exec chain, e.g. inside a per-person loop:
-   `Cron 1s → Get current frame (memoize off) → Person detection → (persons) → For each
+   `When Event(motion) → Get current frame (memoize off) → Person detection → (persons) → For each
    →loop_body Emit event("person_seen")`.
 3. **Behavior at runtime.** Each second the loop emits `person_seen`; the handler runs
    concurrently. If a previous `person_seen` handler is still running, the new fire is
@@ -304,7 +310,7 @@ Events let a fast path trigger a slower, decoupled handler without blocking it o
 - The "skip if still running" guard is keyed per `(graph, event-name)`.
 - Handler subtrees should be self-contained; data wired from outside the handler won't be
   available in the sub-run.
-- `On event` is inert on `Manual`/`Cron`/`OnNewAlert` triggers — it only fires on its event.
+- `On event` in EVENT mode is inert on a Run-now fire — it only fires on its event (or, in schedule mode, on its own clock).
 
 **Gating by camera/region (card: edge tracking).** `object_entered`/`object_exited`/
 `line_crossed` are a special case: `On event` gains `camera` + `region` inputs for them, and
@@ -327,7 +333,7 @@ how to handle (like `motion`/`telegram_message`), plus one pull-based query node
 | `On event("object_entered")` | A tracked entity is first confirmed (whole frame, or entering a zone if scoped — see below) | `uuid`, `class`, `camera`, `bbox`, `count`, `zone` |
 | `On event("object_exited")` | A tracked entity disappears (or leaves its zone) | `uuid`, `class`, `camera`, `dwell_secs`, `count`, `zone` |
 | `On event("line_crossed")` | A tracked entity's centre crosses a wired 2-point **Region** | `uuid`, `class`, `camera`, `line`, `direction` (`forward`/`backward`) |
-| **Get tracked objects** (node, camera input) | Called on demand (e.g. from a Cron) | `objects` (**TrackedObject[]**: `uuid`, `class`, `bbox`, `zone`), `count` |
+| **Get tracked objects** (node, camera input) | Called on demand (e.g. from a cron-mode When Event) | `objects` (**TrackedObject[]**: `uuid`, `class`, `bbox`, `zone`), `count` |
 
 `object_entered`/`object_exited`/`line_crossed` are events (react to a transition); **Get
 tracked objects** is a node (ask "what's true right now"). Reach for whichever matches what
@@ -380,8 +386,11 @@ never share or confuse uuids.
 ## Worked example: recognize anyone in a room ≥ 1×/second
 
 ```
-Trigger: Cron { every_secs: 1 }, Concurrency: SkipIfRunning
+Concurrency: SkipIfRunning
 
+[When Event("motion")]          — was a 1s cron; react instead of polling
+      │ exec
+      ▼
 [Get current frame]            memoize = OFF   (camera = "Front")
       │ image
       ▼
@@ -485,8 +494,9 @@ seconds or divide client-side when you read the alert.)
 ## Worked example: periodic occupancy check (pull instead of react)
 
 ```
-Trigger: Cron { every_secs: 30 }
-
+[When Event(schedule: hourly at :00)]   — a cron-mode node; the minute is the finest grain
+      │ exec
+      ▼
 [Get tracked objects(camera="Warehouse")]
       │ count
       ▼
