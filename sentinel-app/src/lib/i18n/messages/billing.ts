@@ -1,12 +1,14 @@
 // The Billing page (/billing) — trial banner, current plan, storage-this-period, the plan cards,
 // the invoice table and the subscribe dialog. Plan names and invoice periods are backend data.
+import { PRODUCT } from "$lib/brand";
+
 export const billing = {
   en: {
     title: "Billing",
     description: "Your plan, payment, and invoices.",
     trialEnded: "Your trial has ended — pick a plan to continue.",
     trialLeft: (days: number) =>
-      `Trial — ${days} day${days === 1 ? "" : "s"} left. Pick a plan to keep Sentinel after it ends.`,
+      `Trial — ${days} day${days === 1 ? "" : "s"} left. Pick a plan to keep ${PRODUCT} after it ends.`,
     // current plan
     currentPlanTitle: "Current plan",
     noPlan: "No plan",
@@ -92,7 +94,7 @@ export const billing = {
     description: "Seu plano, pagamento e faturas.",
     trialEnded: "Seu período de teste acabou — escolha um plano para continuar.",
     trialLeft: (days: number) =>
-      `Teste — ${days} dia${days === 1 ? "" : "s"} restante${days === 1 ? "" : "s"}. Escolha um plano para manter o Sentinel depois que acabar.`,
+      `Teste — ${days} dia${days === 1 ? "" : "s"} restante${days === 1 ? "" : "s"}. Escolha um plano para manter o ${PRODUCT} depois que acabar.`,
     // current plan
     currentPlanTitle: "Plano atual",
     noPlan: "Sem plano",

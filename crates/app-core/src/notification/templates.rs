@@ -29,10 +29,9 @@
 //! No external stylesheet, no `<style>` block, no web fonts, no images. Every rule is inline.
 use super::email::Email;
 
-/// The product name **as customers see it**. The codebase, services and repo stay "Sentinel";
-/// only the copy is Olhar AI (card #76). One constant, so the two never drift apart in a string
-/// literal someone forgot.
-const PRODUCT: &str = "Olhar AI";
+/// The product name as customers see it. Lives in [`crate::brand`] now — the emails were the only
+/// place that had it right, and the rest of the product needed the same single source.
+use crate::brand::PRODUCT;
 /// Origin for images referenced by email. Overridable so a staging deployment does not hotlink
 /// production, and so the mark follows the app if the domain moves.
 fn asset_base() -> String {

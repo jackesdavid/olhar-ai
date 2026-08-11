@@ -1,9 +1,11 @@
 // The Recipients page (/beacons) — Telegram enrollment (pairing code, link, QR) and the
 // paired-recipients table with its rename/remove dialogs.
+import { PRODUCT } from "$lib/brand";
+
 export const beacons = {
   en: {
     title: "Recipients",
-    description: "Trusted Telegram contacts that receive Sentinel's alerts.",
+    description: `Trusted Telegram contacts that receive ${PRODUCT} alerts.`,
     telegram: "Telegram",
     providerActive: "Provider active",
     providerNotConfigured: "Provider not configured",
@@ -29,7 +31,7 @@ export const beacons = {
     copyLink: "Copy link",
     share: "Share",
     open: "Open",
-    shareTitle: "Connect Telegram to Sentinel",
+    shareTitle: `Connect Telegram to ${PRODUCT}`,
     shareText: "Tap to connect your Telegram to receive alerts:",
     noResponseHint:
       "Bot doesn't respond after opening? If they've messaged it before, Telegram won't resend the code — paste this to the bot instead:",
@@ -81,7 +83,7 @@ export const beacons = {
   },
   pt: {
     title: "Destinatários",
-    description: "Contatos confiáveis do Telegram que recebem os alertas do Sentinel.",
+    description: `Contatos confiáveis do Telegram que recebem os alertas do ${PRODUCT}.`,
     telegram: "Telegram",
     providerActive: "Provedor ativo",
     providerNotConfigured: "Provedor não configurado",
@@ -107,7 +109,7 @@ export const beacons = {
     copyLink: "Copiar link",
     share: "Compartilhar",
     open: "Abrir",
-    shareTitle: "Conectar o Telegram ao Sentinel",
+    shareTitle: `Conectar o Telegram ao ${PRODUCT}`,
     shareText: "Toque para conectar seu Telegram e receber alertas:",
     noResponseHint:
       "O bot não responde depois de abrir? Se a pessoa já conversou com ele antes, o Telegram não reenvia o código — cole isto no bot:",

@@ -1,8 +1,10 @@
 // The People hub (/people) — the two entry tiles and their live counts.
+import { PRODUCT } from "$lib/brand";
+
 export const people = {
   en: {
     title: "People",
-    description: "Manage the people Sentinel knows, or test who it recognises.",
+    description: `Manage the people ${PRODUCT} knows, or test who it recognises.`,
     directoryTitle: "Directory",
     directoryDesc:
       "Browse, add and edit people, the hierarchy, recipients and permissions.",
@@ -14,7 +16,7 @@ export const people = {
   },
   pt: {
     title: "Pessoas",
-    description: "Gerencie as pessoas que o Sentinel conhece, ou teste quem ele reconhece.",
+    description: `Gerencie as pessoas que o ${PRODUCT} conhece, ou teste quem ele reconhece.`,
     directoryTitle: "Diretório",
     directoryDesc:
       "Navegue, adicione e edite pessoas, a hierarquia, destinatários e permissões.",

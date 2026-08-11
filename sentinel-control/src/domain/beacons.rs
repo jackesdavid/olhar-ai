@@ -197,7 +197,7 @@ async fn test_send(
         notification::client::send_message(
             &cfg,
             chat_id,
-            "Sentinel test \u{2713} — delivery confirmed.",
+            &format!("{} test ✓ — delivery confirmed.", app_core::brand::PRODUCT),
         )
         .map_err(|e| format!("Send failed: {e}"))
     })

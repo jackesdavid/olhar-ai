@@ -1,10 +1,12 @@
 // Settings → Edge boxes (/settings/boxes): the box table (version/health/resources/last seen),
 // the restart + update actions, the add-a-box form and the remove confirm.
+import { PRODUCT } from "$lib/brand";
+
 export const boxes = {
   en: {
     title: "Edge boxes",
     description:
-      "Install a Sentinel edge appliance on-site. It pulls only this workspace's cameras and streams them privately.",
+      `Install an ${PRODUCT} edge appliance on-site. It pulls only this workspace's cameras and streams them privately.`,
     noPermission: "You don't have permission to manage edge boxes.",
     yourBoxes: "Your boxes",
     colName: "Name",
@@ -64,7 +66,7 @@ export const boxes = {
   pt: {
     title: "Appliances",
     description:
-      "Instale um appliance Sentinel no local. Ele puxa apenas as câmeras deste workspace e as transmite de forma privada.",
+      `Instale um appliance ${PRODUCT} no local. Ele puxa apenas as câmeras deste workspace e as transmite de forma privada.`,
     noPermission: "Você não tem permissão para gerenciar appliances.",
     yourBoxes: "Seus appliances",
     colName: "Nome",

@@ -1,9 +1,11 @@
 // Settings → Integrations (/settings/integrations): the Tuya connect walkthrough, the credential
 // form and the per-device control-label editor.
+import { PRODUCT } from "$lib/brand";
+
 export const integrations = {
   en: {
     title: "Integrations",
-    description: "Third-party services Sentinel can act on from workflows.",
+    description: `Third-party services ${PRODUCT} can act on from workflows.`,
     tuya: "Tuya",
     connected: "Connected",
     connectedManaged: "Connected (managed)",
@@ -77,7 +79,7 @@ export const integrations = {
   },
   pt: {
     title: "Integrações",
-    description: "Serviços de terceiros sobre os quais o Sentinel pode agir a partir de fluxos.",
+    description: `Serviços de terceiros sobre os quais o ${PRODUCT} pode agir a partir de fluxos.`,
     tuya: "Tuya",
     connected: "Conectado",
     connectedManaged: "Conectado (gerenciado)",
