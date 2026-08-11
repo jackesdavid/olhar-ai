@@ -187,7 +187,16 @@ pub fn send_data(
                 "sound": "default",
                 "data": data,
                 "priority": "high",
-                "interruptionLevel": "timeSensitive",
+                // `time-sensitive`, HYPHENATED. Expo's enum is
+                // `'active' | 'critical' | 'passive' | 'time-sensitive'`, and it rejects the whole
+                // request with a 400 for anything else — it does not ignore an unknown value.
+                //
+                // The camelCase spelling was here first, and it meant EVERY Device Gate push failed
+                // outright: the node caught the send error, settled the request `failed`, and took
+                // the failure arm within seconds. A gate nobody could answer, every time. Nothing
+                // upstream could see it — it compiles, it reads correctly, and the only way to find
+                // it was to fire one and watch a real phone stay silent.
+                "interruptionLevel": "time-sensitive",
                 "channelId": GATE_CHANNEL_ID,
             })
         })
