@@ -8,6 +8,7 @@ import { ActivityIndicator, View } from "react-native";
 import { useLoadThemePref, useTheme } from "@/styles/theme";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import * as Notifications from "expo-notifications";
 import { currentToken, restore, subscribe } from "@/session";
 
 export default function RootLayout() {
@@ -25,9 +26,33 @@ export default function RootLayout() {
   useEffect(() => {
     if (!ready) return;
     const inApp = segments[0] === "(tabs)";
-    if (!signedIn && inApp) router.replace("/login");
-    if (signedIn && !inApp) router.replace("/(tabs)");
+    // `approve` is reachable while signed in without being a tab — it is summoned by a push, not
+    // navigated to. Excluding it from the gate keeps a tapped approval from bouncing to the tabs.
+    const allowed = inApp || segments[0] === "approve";
+    if (!signedIn && allowed) router.replace("/login");
+    if (signedIn && !allowed) router.replace("/(tabs)");
   }, [ready, signedIn, segments]);
+
+  // A tapped Device Gate push opens the decision, carrying the request id and the single-use token
+  // that proves WHICH request is being answered (card #176). Handles both the cold start (the app
+  // was not running) and a tap while it is open.
+  useEffect(() => {
+    if (!ready || !signedIn) return;
+    function openFrom(data: Record<string, unknown> | undefined) {
+      if (!data || data.kind !== "device_gate") return;
+      const request_id = String(data.request_id ?? "");
+      const token = String(data.token ?? "");
+      if (!request_id || !token) return;
+      router.push({ pathname: "/approve", params: { request_id, token } });
+    }
+    Notifications.getLastNotificationResponseAsync().then((r) =>
+      openFrom(r?.notification.request.content.data as Record<string, unknown> | undefined),
+    );
+    const sub = Notifications.addNotificationResponseReceivedListener((r) =>
+      openFrom(r.notification.request.content.data as Record<string, unknown> | undefined),
+    );
+    return () => sub.remove();
+  }, [ready, signedIn]);
 
   if (!ready) {
     return (
@@ -44,6 +69,7 @@ export default function RootLayout() {
         <Stack.Screen name="login" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="capture-settings" options={{ headerShown: true, title: "Capture settings", presentation: "modal" }} />
+        <Stack.Screen name="approve" options={{ headerShown: true, title: "Approval", presentation: "modal" }} />
       </Stack>
     </>
   );

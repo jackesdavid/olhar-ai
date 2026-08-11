@@ -2,10 +2,11 @@
 // wired up to receive alerts?* It shows the Recipient label the workflow editor will list, lets you
 // fire a test push, and logs notifications as they arrive so delivery is visible in-app.
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { ActivityIndicator, AppState, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import * as Notifications from "expo-notifications";
 import { useRouter } from "expo-router";
 import { registerThisDevice, sendTestPush } from "@/push";
+import { formatLeft, listPending, secondsLeft, type PendingRequest } from "@/deviceGate";
 import { signOut } from "@/session";
 import { Body, Button, Card, Danger, Heading, Muted, Screen, Status, Strong, ThemePicker, Title } from "@/styles/ui";
 import { radius, space, useTheme } from "@/styles/theme";
@@ -18,6 +19,10 @@ export default function Alerts() {
   const [busy, setBusy] = useState(true);
   const [note, setNote] = useState<string | null>(null);
   const [received, setReceived] = useState<Received[]>([]);
+  /** Approval requests waiting on THIS phone. Polled rather than pushed, because decision 05 makes
+   *  the push best-effort: a request nobody can reach without a notification is a request that
+   *  quietly expires when the notification is batched, silenced or lost. */
+  const [pending, setPending] = useState<PendingRequest[]>([]);
   const router = useRouter();
   const t = useTheme();
 
@@ -34,6 +39,17 @@ export default function Alerts() {
       ]);
     });
     return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
+    const poll = () => listPending().then(setPending).catch(() => {});
+    poll();
+    const id = setInterval(poll, 20_000);
+    const app = AppState.addEventListener("change", (st) => st === "active" && poll());
+    return () => {
+      clearInterval(id);
+      app.remove();
+    };
   }, []);
 
   async function test() {
@@ -56,6 +72,21 @@ export default function Alerts() {
     <Screen>
       <ScrollView contentContainerStyle={{ padding: space.xl, gap: space.md, paddingBottom: space.xxl * 2 }}>
         <Title>Alerts</Title>
+
+        {/* Waiting on you — above everything, because someone is being kept waiting by it. The
+            token lives in the push, so opening from here shows the request and asks for the
+            notification when it is time to answer. */}
+        {pending.map((p) => (
+          <Pressable key={p.id} onPress={() => router.push({ pathname: "/approve", params: { request_id: p.id } })}>
+            <Card>
+              <Muted>{p.flow_name}</Muted>
+              <Heading>{p.prompt}</Heading>
+              <Body>
+                <Strong>{formatLeft(secondsLeft(p.expires_at))}</Strong> left to decide
+              </Body>
+            </Card>
+          </Pressable>
+        ))}
 
         <Card>
           {busy ? (
