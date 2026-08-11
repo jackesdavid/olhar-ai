@@ -29,6 +29,8 @@ pub fn router() -> Router<AppState> {
         .route("/billing/invoices", get(my_invoices))
         .route("/billing/invoices/:period", get(my_invoice))
         .route("/billing/subscribe", post(subscribe))
+        .route("/billing/portal", post(portal))
+        .route("/billing/change-plan", post(change_plan))
         .route("/admin/billing", get(admin_list))
         .route("/admin/billing/overview", get(admin_overview))
         .route("/admin/storage", get(admin_storage))
@@ -368,7 +370,97 @@ async fn admin_set_price(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ---- payments (Asaas) ----
+// ---- payments ----
+
+/// A hosted page where the customer manages the subscription they already have — updating the card
+/// behind a failed payment above all.
+///
+/// This is the CORRECT action for `past_due`, and it exists because the product previously had
+/// none: the only button was Subscribe, so a customer whose card failed created a second
+/// subscription while the first kept dunning. Read-only permission on purpose — `billing.read` is
+/// the right gate for "let me fix my own payment", and requiring `billing.write` would lock a
+/// tenant out of paying us.
+async fn portal(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    auth::require(&c, "billing.read")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let url = blocking(move || {
+        let gw = payments::active_gateway().ok_or("no payment provider configured")?;
+        let customer =
+            payments::customer_ref(&db, tid, gw.provider()).ok_or("no customer with the provider")?;
+        let return_url = std::env::var("APP_ORIGIN")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "https://app.olharai.com".to_string());
+        gw.manage_url(&customer, &format!("{}/billing", return_url.trim_end_matches('/')))?
+            .ok_or_else(|| "this payment provider has no self-service portal".to_string())
+    })
+    .await?
+    .map_err(|e| err(StatusCode::BAD_GATEWAY, e))?;
+    Ok(Json(serde_json::json!({ "url": url })))
+}
+
+#[derive(Deserialize)]
+struct ChangePlanReq {
+    plan_id: String,
+}
+
+/// Move an existing subscription onto another plan.
+///
+/// The missing half of the one-subscription rule: `subscribe` refuses when a tenant already has
+/// one, so without this there was no way to upgrade at all. It edits the subscription the tenant
+/// has rather than opening a second — which is the whole point, since two live subscriptions is the
+/// failure this endpoint exists to make impossible.
+///
+/// Unlike `subscribe` (a Checkout session, confirmed later by webhook), the provider applies this
+/// synchronously, so the tenant's plan moves here on success. The webhook still arrives and is
+/// idempotent — `apply_status` no-ops when the tenant is already on the plan.
+async fn change_plan(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(req): Json<ChangePlanReq>,
+) -> Result<StatusCode, ApiErr> {
+    auth::require(&c, "billing.write")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    blocking(move || {
+        let gw = payments::active_gateway().ok_or("no payment provider configured")?;
+        let provider = gw.provider();
+        let (sub_provider, sub_ref, _status) = payments::live_subscription(&db, tid)
+            .ok_or("this workspace has no subscription to change — subscribe first")?;
+        if sub_provider != provider {
+            return Err(format!(
+                "the subscription lives on {sub_provider}, but {provider} is configured"
+            ));
+        }
+        let plan = plans::get(&db, &req.plan_id).ok_or("plan not found")?;
+        let currency = billing::tenant_currency(&db, tid);
+        let amount = plans::price(&db, &plan.id, &currency)
+            .ok_or_else(|| format!("plan '{}' has no price in {currency}", plan.id))?;
+        let price_ref = plans::provider_price_ref(&db, &plan.id, provider, &currency);
+        let plan_ref = payments::PlanRef {
+            plan_id: &plan.id,
+            name: &plan.name,
+            amount,
+            currency: &currency,
+            price_ref: price_ref.as_deref(),
+        };
+
+        if let Some(minted) = gw.change_plan(&sub_ref, &plan_ref)? {
+            let _ = plans::set_provider_price_ref(&db, &plan.id, provider, &currency, &minted);
+        }
+        // The provider accepted, so the tenant is on the new plan now — record both sides.
+        payments::set_subscription_plan(&db, provider, &sub_ref, &plan.id);
+        subscriptions::set_plan(&db, tid, &plan.id)?;
+        Ok::<(), String>(())
+    })
+    .await?
+    .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
 
 #[derive(Deserialize)]
 struct SubscribeReq {
@@ -393,6 +485,17 @@ async fn subscribe(
     let started = blocking(move || {
         let gw = payments::active_gateway().ok_or("no payment provider configured")?;
         let provider = gw.provider();
+        // ONE subscription per tenant. Without this a `past_due` customer doing the obvious thing —
+        // pressing Subscribe again, which the plan grid happily offers because `isCurrent` only
+        // recognises `active` — ends up with two live subscriptions on one provider customer, the
+        // old one still dunning a card they have already replaced. That happened; this is the guard.
+        // Fixing a failed payment is `POST /billing/portal`, not a second subscription.
+        if let Some((_, sub_ref, status)) = payments::live_subscription(&db, tid) {
+            return Err(format!(
+                "this workspace already has a subscription ({sub_ref}, {status}) — \
+                 manage it instead of starting another"
+            ));
+        }
         // The client picks the method, so trust it as far as the gateway does. Without this a
         // stale UI (or a hand-rolled request) reaches the provider and comes back with its error.
         if !gw.payment_methods().contains(&req.billing_type.as_str()) {

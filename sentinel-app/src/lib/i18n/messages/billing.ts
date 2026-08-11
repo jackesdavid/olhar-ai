@@ -37,6 +37,23 @@ export const billing = {
     upToCameras: (n: number) => `Up to ${n} cameras`,
     trialDays: (n: number) => `${n}-day free trial`,
     currentPlanButton: "Current plan",
+    // The provider's hosted page: update the card, see invoices, cancel. The correct answer to a
+    // failed payment — subscribing again would open a second subscription.
+    managePayment: "Manage payment method",
+    manageInstead: "Manage your subscription",
+    // Change plan — edits the subscription they have, prorated. Never a second subscription.
+    switchToPlan: "Switch to this plan",
+    switchNamed: (plan: string) => `Switch to ${plan}`,
+    switchSummary: (price: string, cameras: number) =>
+      `${price} per month, up to ${cameras} cameras.`,
+    prorationNote:
+      "We'll charge the difference for the rest of this billing period on your next invoice — same card, same subscription.",
+    confirmSwitch: "Switch plan",
+    switching: "Switching…",
+    cancel: "Cancel",
+    planChanged: (plan: string) => `You're on ${plan} now.`,
+    planChangeFailed: "Couldn't change the plan",
+    portalFailed: "Couldn't open the payment page",
     trialOnly: "Trial only",
     choosePlan: (name: string) => `Choose ${name}`,
     // invoices
@@ -106,6 +123,22 @@ export const billing = {
     upToCameras: (n: number) => `Até ${n} câmeras`,
     trialDays: (n: number) => `${n} dias de teste grátis`,
     currentPlanButton: "Plano atual",
+    // Página do provedor: atualizar cartão, ver faturas, cancelar.
+    managePayment: "Gerenciar forma de pagamento",
+    manageInstead: "Gerencie sua assinatura",
+    // Trocar de plano — edita a assinatura existente, com rateio. Nunca cria uma segunda.
+    switchToPlan: "Mudar para este plano",
+    switchNamed: (plan: string) => `Mudar para ${plan}`,
+    switchSummary: (price: string, cameras: number) =>
+      `${price} por mês, até ${cameras} câmeras.`,
+    prorationNote:
+      "Cobramos a diferença do restante deste ciclo na próxima fatura — mesmo cartão, mesma assinatura.",
+    confirmSwitch: "Mudar de plano",
+    switching: "Mudando…",
+    cancel: "Cancelar",
+    planChanged: (plan: string) => `Agora você está no ${plan}.`,
+    planChangeFailed: "Não foi possível mudar o plano",
+    portalFailed: "Não foi possível abrir a página de pagamento",
     trialOnly: "Somente teste",
     choosePlan: (name: string) => `Escolher ${name}`,
     // invoices

@@ -180,6 +180,13 @@ export type TenantSettings = {
   device_gate_max_pending?: number;
 };
 
+/** The provider's hosted page for managing an existing subscription — where a failed card is
+ *  fixed. Separate from `subscribe`, which starts a NEW subscription and must not be the answer
+ *  to a payment failure. */
+export const billingPortal = {
+  open: () => api.post<{ url: string }>("/billing/portal", {}),
+};
+
 export const tenantSettings = {
   get: () => api.get<TenantSettings>("/settings"),
   /** Merges server-side: sending one key cannot clear another. */
@@ -590,6 +597,9 @@ export const billing = {
   invoice: (period: string) => api.get<InvoiceView>(`/billing/invoices/${period}`),
   subscribe: (body: SubscribeBody) =>
     api.post<{ subscription_ref: string | null; payment_url: string | null }>("/billing/subscribe", body),
+  /** Move the EXISTING subscription onto another plan, prorated. Not `subscribe` — a second
+   *  subscription on one customer is the failure this endpoint exists to avoid. */
+  changePlan: (plan_id: string) => api.post<void>("/billing/change-plan", { plan_id }),
 };
 
 /** Master cross-tenant billing + plan administration. */

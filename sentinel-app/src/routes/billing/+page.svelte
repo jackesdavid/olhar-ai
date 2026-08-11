@@ -14,7 +14,7 @@
   import { Label } from "$lib/components/ui/label";
   import { Badge } from "$lib/components/ui/badge";
 
-  import { billing, type PricedPlan, type BillingSubscription, type Invoice, type SubscribeBody, type TenantStorage } from "$lib/api";
+  import { billing, billingPortal, type PricedPlan, type BillingSubscription, type Invoice, type SubscribeBody, type TenantStorage } from "$lib/api";
   import { dict, lang, locale } from "$lib/i18n";
 
   const t = $derived(dict[lang()].billing);
@@ -33,6 +33,10 @@
   let email = $state("");
   let cpf = $state("");
   let subscribing = $state(false);
+  let portalBusy = $state(false);
+  /** The plan a subscribed tenant is switching TO, pending confirmation. */
+  let switching = $state<PricedPlan | null>(null);
+  let changingPlan = $state(false);
 
   /** Format an amount in its own currency, in the language the user picked. */
   function money(n: number | null | undefined, currency: string): string {
@@ -157,6 +161,61 @@
   function isCurrent(p: PricedPlan): boolean {
     return sub?.plan_id === p.id && sub?.status === "active";
   }
+  /** Does this workspace already have a subscription, in any state we would not start another over?
+   *
+   *  `isCurrent` only recognises `active`, which is why a `past_due` tenant saw a live Subscribe
+   *  button on every plan — pressing it opened a SECOND subscription at the provider while the
+   *  first kept dunning the card that had failed. Subscribing is for a workspace with nothing;
+   *  everything else goes through the portal. */
+  function hasSubscription(): boolean {
+    return !!sub && sub.status !== "canceled" && sub.status !== "expired";
+  }
+  /** A paid tier the tenant is not already on. Free tiers are trial-only, never chosen here. */
+  function planDisabled(p: PricedPlan): boolean {
+    return isCurrent(p) || p.amount === 0 || changingPlan;
+  }
+  function planButtonLabel(p: PricedPlan): string {
+    if (isCurrent(p)) return t.currentPlanButton;
+    if (p.amount === 0) return t.trialOnly;
+    if (hasSubscription()) return t.switchToPlan;
+    return t.choosePlan(p.name);
+  }
+  /** Subscribing is for a workspace with nothing; a workspace WITH a subscription changes the one
+   *  it has. Two live subscriptions on one customer is the failure this split exists to prevent. */
+  function choosePlanAction(p: PricedPlan) {
+    if (hasSubscription()) {
+      switching = p;
+      return;
+    }
+    choose(p);
+  }
+  async function confirmSwitch() {
+    const p = switching;
+    if (!p || changingPlan) return;
+    changingPlan = true;
+    try {
+      await billing.changePlan(p.id);
+      switching = null;
+      await load();
+      toast.success(t.planChanged(p.name));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t.planChangeFailed);
+    } finally {
+      changingPlan = false;
+    }
+  }
+  /** Stripe hosts the card form; we never see a card number. */
+  async function openPortal() {
+    if (portalBusy) return;
+    portalBusy = true;
+    try {
+      const { url } = await billingPortal.open();
+      window.location.href = url;
+    } catch (err) {
+      toast.error(t.portalFailed, { description: String(err) });
+      portalBusy = false;
+    }
+  }
 </script>
 
 <div class="space-y-6">
@@ -180,7 +239,17 @@
             {currentPlan ? t.planSummary(money(currentPlan.amount, currentPlan.currency), currentPlan.camera_cap) : t.chooseBelow}
           </p>
         </div>
-        {#if sub}<Badge variant={statusVariant(sub.status)}>{statusLabel(sub.status)}</Badge>{/if}
+        <div class="flex items-center gap-3">
+          {#if sub}<Badge variant={statusVariant(sub.status)}>{statusLabel(sub.status)}</Badge>{/if}
+          <!-- The one place to fix a card, change a plan or cancel. Present whenever a subscription
+               exists, not only when it has failed — a card updated before it expires is a
+               `past_due` that never happens. -->
+          {#if hasSubscription()}
+            <Button size="sm" variant="outline" disabled={portalBusy} onclick={openPortal}>
+              {t.managePayment}
+            </Button>
+          {/if}
+        </div>
       </Card.Content>
     </Card.Root>
 
@@ -239,8 +308,8 @@
               <li>{t.upToCameras(p.camera_cap)}</li>
               {#if p.trial_days}<li>{t.trialDays(p.trial_days)}</li>{/if}
             </ul>
-            <Button class="w-full" variant={isCurrent(p) ? "outline" : "default"} disabled={isCurrent(p) || p.amount === 0} onclick={() => choose(p)}>
-              {#if isCurrent(p)}{t.currentPlanButton}{:else if p.amount === 0}{t.trialOnly}{:else}{t.choosePlan(p.name)}{/if}
+            <Button class="w-full" variant={isCurrent(p) ? "outline" : "default"} disabled={planDisabled(p)} onclick={() => choosePlanAction(p)}>
+              {planButtonLabel(p)}
             </Button>
           </Card.Content>
         </Card.Root>
@@ -277,6 +346,28 @@
     </Card.Root>
   {/if}
 </div>
+
+<!-- Change plan: edits the subscription they have. No payment form — the card on file is already
+     the one being charged, and asking for it again is how you end up with two subscriptions. -->
+<Dialog.Root open={switching !== null} onOpenChange={(o) => { if (!o) switching = null; }}>
+  <Dialog.Content>
+    <Dialog.Header>
+      <Dialog.Title>{switching ? t.switchNamed(switching.name) : ""}</Dialog.Title>
+      <Dialog.Description>
+        {switching ? t.switchSummary(money(switching.amount, switching.currency), switching.camera_cap) : ""}
+      </Dialog.Description>
+    </Dialog.Header>
+    <p class="text-sm text-muted-foreground">{t.prorationNote}</p>
+    <Dialog.Footer>
+      <Button variant="outline" onclick={() => (switching = null)} disabled={changingPlan}>
+        {t.cancel}
+      </Button>
+      <Button onclick={confirmSwitch} disabled={changingPlan}>
+        {changingPlan ? t.switching : t.confirmSwitch}
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
 
 <!-- Subscribe / pay -->
 <Dialog.Root open={picked !== null} onOpenChange={(o) => { if (!o) picked = null; }}>
