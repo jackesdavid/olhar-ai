@@ -54,6 +54,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/workflows/:id/instances", get(instances))
         .route("/workflows/:id/cron", get(cron_next))
+        .route("/workflows/:id/device-gate", get(device_gate_pending))
         .route("/workflows/:id/instance-values", get(instance_values))
         .route("/workflows/:id/description", put(set_description))
         .route("/workflows/:id/group", put(set_group))
@@ -607,6 +608,39 @@ async fn cron_next(
             })
             .collect();
         serde_json::json!({ "enabled": g.enabled, "nodes": nodes })
+    })
+    .await?;
+    Ok(Json(out))
+}
+
+/// Deadlines for every Device Gate node in this graph that is waiting on someone (#176).
+///
+/// Same contract as `cron_next` and for the same reason: the server owns *when*, the canvas only
+/// formats it. A node with nobody waiting is absent from the list rather than present with a null —
+/// the countdown either has a deadline to show or there is nothing to show.
+async fn device_gate_pending(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<Value>, ApiErr> {
+    auth::require(&c, "workflows.read")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let out = blocking(move || {
+        let Some(g) = workflows::repo::load(&db, tid).into_iter().find(|g| g.id == id) else {
+            return serde_json::json!({ "nodes": [] });
+        };
+        let nodes: Vec<Value> = g
+            .nodes
+            .iter()
+            .filter(|n| n.kind == WfNodeKind::DeviceGate)
+            .filter_map(|n| {
+                let expires_at =
+                    app_core::workflows::device_gate::pending_deadline_for_node(&db, tid, g.id, n.id)?;
+                Some(serde_json::json!({ "node": n.id, "expires_at": expires_at }))
+            })
+            .collect();
+        serde_json::json!({ "nodes": nodes })
     })
     .await?;
     Ok(Json(out))

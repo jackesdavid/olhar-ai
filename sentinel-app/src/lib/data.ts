@@ -466,6 +466,12 @@ export const data = {
     graphId: string,
   ): Promise<{ enabled: boolean; nodes: { node: number; next_fire_at: string | null }[] }> =>
     api.get(`/workflows/${encodeURIComponent(graphId)}/cron`),
+  /** Device Gate nodes with someone still deciding (#176). A node with nobody waiting is ABSENT,
+   *  not present with a null — there is either a deadline to count down to or nothing to show. */
+  deviceGatePending: (
+    graphId: string,
+  ): Promise<{ nodes: { node: number; expires_at: string }[] }> =>
+    api.get(`/workflows/${encodeURIComponent(graphId)}/device-gate`),
   faceDetail: (id: string): Promise<FaceDetail> =>
     api.get<FaceDetail>(`/faces/${encodeURIComponent(id)}/detail`),
   /** On-demand facial landmarks (5 keypoints, in the crop's pixel coords) for the detail overlay. */

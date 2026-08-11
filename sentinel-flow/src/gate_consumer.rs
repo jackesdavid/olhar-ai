@@ -18,7 +18,7 @@
 //!
 //! Runs on a std thread; `Db::block` bridges sqlx, so no tokio context is needed (mirrors
 //! [`crate::window_consumer`]).
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use app_core::workflows::device_gate::{self, GateState};
@@ -35,7 +35,20 @@ const IDLE_POLL: Duration = Duration::from_secs(5);
 /// Cap the requests settled per pass so one backlog cannot monopolise the thread.
 const BATCH: usize = 25;
 
+/// Woken by the `device_gate_settled` NOTIFY. The sweep still runs on `IDLE_POLL` regardless — this
+/// only decides whether an approval opens the gate in a moment or in up to five seconds.
+static WAKE: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+
 pub fn spawn(state: Arc<AppState>) {
+    // EVERY flow pod listens, because control cannot know which one will claim the row — and does
+    // not need to: `claim_one_resumable` is atomic, so all of them racing is the normal case and
+    // exactly one wins each request.
+    state.db.listen("device_gate_settled", |_payload| {
+        let (lock, cv) = &WAKE;
+        *lock.lock().unwrap() = true;
+        cv.notify_all();
+    });
+
     std::thread::spawn(move || loop {
         let mut settled = 0;
         // `claim_one_resumable` claims ONE row atomically (`FOR UPDATE SKIP LOCKED`), so two flow
@@ -49,7 +62,17 @@ pub fn spawn(state: Arc<AppState>) {
             settled += 1;
         }
         if settled == 0 {
-            std::thread::sleep(IDLE_POLL);
+            // Wait for a nudge OR the poll interval, whichever comes first, and clear the flag
+            // under the lock. A notify that lands DURING the sweep above is not lost: it sets the
+            // flag, so this returns immediately instead of sleeping through an answer that arrived
+            // a microsecond too early.
+            let (lock, cv) = &WAKE;
+            let mut woken = lock.lock().unwrap();
+            if !*woken {
+                let (guard, _) = cv.wait_timeout(woken, IDLE_POLL).unwrap();
+                woken = guard;
+            }
+            *woken = false;
         }
     });
     log::info!("device gate resume sweep started");

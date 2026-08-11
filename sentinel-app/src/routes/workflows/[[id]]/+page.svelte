@@ -1343,6 +1343,9 @@
   }
   function nodeExprH(n: Node): number {
     if (n.kind === "on_event" && nodeSource(n) === "cron") return CRON_H;
+    // Only while someone is deciding. A gate at rest has nothing to say, and a permanently
+    // reserved empty band would read as a broken node; growing IS the signal.
+    if (gateWaiting(n)) return CRON_H;
     return isCompareOrLogic(n.kind) ? EXPR_H : 0;
   }
   function opLabel(kind: string, config: Record<string, unknown>): string {
@@ -2124,6 +2127,47 @@
       // A failed poll leaves the last known values rather than blanking the countdown — a
       // momentary network blip should not read as "this node has no schedule".
     }
+  }
+  // Device Gate: the deadline of whatever request is waiting on each node (#176). Polled on the
+  // same principle as the cron countdown — the server owns *when*, the canvas formats it — but more
+  // often, because a gate's whole span can be ten minutes and a stale "4m left" on something already
+  // decided is worse than no number at all.
+  let gateDeadlines = $state<Record<number, string>>({});
+  $effect(() => {
+    const gid = graph?.id;
+    const hasGate = (graph?.nodes ?? []).some((n) => n.kind === "device_gate");
+    if (!gid || !hasGate) return;
+    void refreshGatePending(gid);
+    const id = setInterval(() => void refreshGatePending(gid), 10_000);
+    return () => clearInterval(id);
+  });
+  async function refreshGatePending(graphId: string) {
+    try {
+      const r = await data.deviceGatePending(graphId);
+      gateDeadlines = Object.fromEntries(r.nodes.map((n) => [n.node, n.expires_at]));
+    } catch {
+      // Keep the last known deadlines; a blip must not read as "nobody is waiting".
+    }
+  }
+  /** Is anyone deciding on this node right now? */
+  function gateWaiting(n: Node): boolean {
+    return n.kind === "device_gate" && !!gateDeadlines[n.id];
+  }
+  /** "4m 12s left" while someone decides. Empty when nothing is pending — the caller guards. */
+  function gateCountdown(n: Node): string {
+    const at = gateDeadlines[n.id];
+    if (!at) return "";
+    const ms = new Date(at).getTime() - nowTick;
+    // Past its deadline but still listed: the sweep has not claimed it yet. Say what is true — it
+    // is over — rather than counting into negative numbers.
+    if (ms <= 0) return t.gateExpiring;
+    const s = Math.floor(ms / 1000);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return t.gateLeft(`${h}h ${m}m`);
+    if (m > 0) return t.gateLeft(`${m}m ${sec}s`);
+    return t.gateLeft(`${sec}s`);
   }
   /** "in 2h 14m" — or why there is nothing to count down to. */
   function cronCountdown(n: Node): string {
@@ -3607,6 +3651,26 @@
                       font-size="9"
                       class="pointer-events-none select-none fill-muted-foreground/70"
                     >{scheduleSummary(nodeSchedule(n))}</text>
+                  {/if}
+                  <!-- Device Gate: someone is deciding. Drawn in the node for the same reason as the
+                       cron countdown — a run that ended at a question looks identical to a run that
+                       finished, unless the node says it is waiting. -->
+                  {#if gateWaiting(n)}
+                    <text
+                      x={nw / 2}
+                      y={HEAD_H + 19}
+                      text-anchor="middle"
+                      font-size="12"
+                      font-weight="600"
+                      class="pointer-events-none select-none fill-primary"
+                    >{gateCountdown(n)}</text>
+                    <text
+                      x={nw / 2}
+                      y={HEAD_H + 34}
+                      text-anchor="middle"
+                      font-size="9"
+                      class="pointer-events-none select-none fill-muted-foreground/70"
+                    >{t.gateWaitingOn(String(n.config?.recipient ?? ""))}</text>
                   {/if}
                   {#if isCompareOrLogic(n.kind)}
                     {@const op = opLabel(n.kind, n.config)}

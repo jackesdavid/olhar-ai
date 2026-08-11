@@ -157,6 +157,10 @@ export const workflowEditor = {
     cronDueNow: "due now",
     cronNoNext: "no next run",
     cronGraphDisabled: "graph disabled",
+    // Device Gate countdown, drawn in the node while someone decides (#176).
+    gateLeft: (d: string) => `${d} left`,
+    gateExpiring: "time is up",
+    gateWaitingOn: (who: string) => (who ? `waiting on ${who}` : "waiting for an answer"),
     deleteNode: "Delete node",
     addColumn: "Add column",
     removeRow: "Remove row",
@@ -343,6 +347,10 @@ export const workflowEditor = {
     cronDueNow: "agora",
     cronNoNext: "sem próxima execução",
     cronGraphDisabled: "grafo desabilitado",
+    // Contagem regressiva do Device Gate, desenhada no nó enquanto alguém decide (#176).
+    gateLeft: (d: string) => `faltam ${d}`,
+    gateExpiring: "o tempo acabou",
+    gateWaitingOn: (who: string) => (who ? `aguardando ${who}` : "aguardando uma resposta"),
     deleteNode: "Excluir nó",
     addColumn: "Adicionar coluna",
     removeRow: "Remover linha",
