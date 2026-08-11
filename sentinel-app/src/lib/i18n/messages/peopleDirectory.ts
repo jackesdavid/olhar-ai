@@ -1,12 +1,14 @@
 // People → Directory (/people/directory) and People → Recognition (/people/recognize).
 // Person names, recipient labels and permission slugs are tenant data, so they render as stored.
+import { PRODUCT } from "$lib/brand";
+
 export const peopleDirectory = {
   en: {
     backToPeople: "Back to People",
     // directory
     title: "Directory",
     description:
-      "The people Sentinel manages — guardian hierarchy, notification recipient, and permissions.",
+      `The people ${PRODUCT} manages — guardian hierarchy, notification recipient, and permissions.`,
     addPerson: "Add person",
     peopleTitle: "People",
     peopleDescription: "Select a person to open their full record.",
@@ -54,7 +56,7 @@ export const peopleDirectory = {
     // directory
     title: "Diretório",
     description:
-      "As pessoas que o Sentinel gerencia — hierarquia de responsáveis, destinatário de notificações e permissões.",
+      `As pessoas que o ${PRODUCT} gerencia — hierarquia de responsáveis, destinatário de notificações e permissões.`,
     addPerson: "Adicionar pessoa",
     peopleTitle: "Pessoas",
     peopleDescription: "Selecione uma pessoa para abrir o registro completo.",

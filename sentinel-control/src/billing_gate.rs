@@ -52,7 +52,10 @@ pub async fn soft_lock(State(st): State<AppState>, req: Request, next: Next) -> 
     match status {
         Some(s) if subscriptions::LOCKED_STATUSES.contains(&s.as_str()) => (
             StatusCode::PAYMENT_REQUIRED,
-            format!("Your subscription is {s} — Sentinel is read-only until you choose a plan."),
+            format!(
+                "Your subscription is {s} — {} is read-only until you choose a plan.",
+                app_core::brand::PRODUCT
+            ),
         )
             .into_response(),
         // No subscription at all (a tenant created before billing) stays unlocked.

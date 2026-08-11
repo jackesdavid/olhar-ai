@@ -1,10 +1,12 @@
 // Settings → Edge boxes → Install (/settings/boxes/install): the pairing flow (download the
 // installer, enter the code, watch the box come online) and the headless-command fallback.
+import { PRODUCT } from "$lib/brand";
+
 export const boxInstall = {
   en: {
     backToBoxes: "Edge boxes",
     connectTitle: (name: string) => `Connect "${name}"`,
-    connectSubtitle: "Install Sentinel on the on-site machine, then enter this code there.",
+    connectSubtitle: `Install ${PRODUCT} on the on-site machine, then enter this code there.`,
     // online
     onlineTitle: (name: string) => `"${name}" is online.`,
     onlineHint: "The appliance checked in. You can add its cameras now.",
@@ -52,7 +54,7 @@ export const boxInstall = {
   pt: {
     backToBoxes: "Appliances",
     connectTitle: (name: string) => `Conectar "${name}"`,
-    connectSubtitle: "Instale o Sentinel na máquina do local e depois informe este código lá.",
+    connectSubtitle: `Instale o ${PRODUCT} na máquina do local e depois informe este código lá.`,
     // online
     onlineTitle: (name: string) => `"${name}" está online.`,
     onlineHint: "O appliance se conectou. Você já pode adicionar as câmeras dele.",

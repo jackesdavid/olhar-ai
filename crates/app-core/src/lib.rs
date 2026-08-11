@@ -9,6 +9,7 @@
 
 pub mod agent;
 pub mod billing;
+pub mod brand;
 pub mod clip_store;
 pub mod config;
 pub mod datadog;

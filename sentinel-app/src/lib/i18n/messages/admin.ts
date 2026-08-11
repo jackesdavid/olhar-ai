@@ -1,11 +1,13 @@
 // The master-only platform console: Tenants, Billing, Storage, System load and Notification
 // Providers. Tenant names, plan names and job categories/kinds are backend data.
+import { PRODUCT } from "$lib/brand";
+
 export const admin = {
   en: {
     consoleOnly: "This console is for the SaaS administrator only.",
     // ---- tenants ----
     tenantsTitle: "Tenants",
-    tenantsDescription: "Every workspace on this Sentinel instance.",
+    tenantsDescription: `Every workspace on this ${PRODUCT} instance.`,
     newTenant: "New tenant",
     colName: "Name",
     colSlug: "Slug",
@@ -178,7 +180,7 @@ export const admin = {
     consoleOnly: "Este console é apenas para o administrador do SaaS.",
     // ---- tenants ----
     tenantsTitle: "Organizações",
-    tenantsDescription: "Todos os workspaces nesta instância do Sentinel.",
+    tenantsDescription: `Todos os workspaces nesta instância do ${PRODUCT}.`,
     newTenant: "Nova organização",
     colName: "Nome",
     colSlug: "Slug",
