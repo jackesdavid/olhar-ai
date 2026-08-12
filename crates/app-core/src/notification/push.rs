@@ -53,7 +53,12 @@ pub fn register(
              VALUES ($1,$2,$3,$4,$5,$6,$6)
              ON CONFLICT (tenant_id, device_token) DO UPDATE
                SET platform = EXCLUDED.platform,
-                   label     = EXCLUDED.label,
+                   -- KEEP a name someone gave this device. The phone re-registers on every launch
+                   -- with whatever iOS calls itself, so overwriting here meant a Recipient renamed
+                   -- in the product reverted the next time the app opened — and every graph
+                   -- addressing the new name broke silently. The incoming label is only a seed: it
+                   -- fills a brand-new row, or one whose label is somehow empty.
+                   label     = COALESCE(NULLIF(push_devices.label, ''), EXCLUDED.label),
                    user_id   = EXCLUDED.user_id,
                    enabled   = true,
                    last_seen = EXCLUDED.last_seen
@@ -101,6 +106,48 @@ pub fn list(db: &Db, tenant_id: Uuid) -> Vec<PushDevice> {
             log::error!("push::list query failed: {e}");
             Vec::new()
         })
+    })
+}
+
+/// Rename a device — the label IS how a workflow addresses it (card #139), so this renames a
+/// RECIPIENT, not a cosmetic field.
+///
+/// Returns the OLD label so the caller can repoint the graphs that used it. Refuses a name another
+/// device already answers to: two Recipients with one name make `resolve_device_by_label`
+/// ambiguous, and a Device Gate refuses an ambiguous Recipient outright (decision 01).
+pub fn rename(db: &Db, tenant_id: Uuid, id: Uuid, label: &str) -> Result<String, String> {
+    let label = label.trim().to_string();
+    if label.is_empty() {
+        return Err("Name can't be empty.".into());
+    }
+    let pool = db.pool();
+    db.block(async move {
+        let taken: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT id FROM push_devices WHERE tenant_id = $1 AND label = $2 AND id <> $3",
+        )
+        .bind(tenant_id)
+        .bind(&label)
+        .bind(id)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        if taken.is_some() {
+            return Err(format!("Another device is already called {label:?}."));
+        }
+        // Read the old label in the same statement that replaces it — the caller needs it to
+        // rewrite graphs, and a separate SELECT could read a value another request just changed.
+        let row: Option<(String,)> = sqlx::query_as(
+            "UPDATE push_devices SET label = $3
+              WHERE tenant_id = $1 AND id = $2
+              RETURNING (SELECT d.label FROM push_devices d WHERE d.id = $2)",
+        )
+        .bind(tenant_id)
+        .bind(id)
+        .bind(&label)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        row.map(|(old,)| old).ok_or_else(|| "No such device.".to_string())
     })
 }
 

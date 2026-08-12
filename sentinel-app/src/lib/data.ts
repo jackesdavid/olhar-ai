@@ -547,6 +547,14 @@ export const data = {
   listPushDevices: <
     T = { id: string; label: string; platform: string; enabled: boolean },
   >(): Promise<T[]> => api.get<T[]>("/push/devices"),
+  /** Rename a phone — which renames a RECIPIENT, since the label is how a workflow addresses it.
+   *  The server also repoints every graph that used the old name, and answers with how many it
+   *  changed, so the UI can say so instead of leaving the user to wonder. */
+  renamePushDevice: (id: string, label: string): Promise<{ workflows_updated: number }> =>
+    api.patch<{ workflows_updated: number }>(`/push/devices/${encodeURIComponent(id)}`, { label }),
+  deletePushDevice: async (id: string): Promise<void> => {
+    await api.del<void>(`/push/devices/${encodeURIComponent(id)}`);
+  },
   getTelegramConfig: (): Promise<TelegramConfigState> =>
     api.get<TelegramConfigState>("/telegram"),
   setPairingCode: async (pairingCode: string): Promise<void> => {

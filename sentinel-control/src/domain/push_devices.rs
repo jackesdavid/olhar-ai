@@ -20,7 +20,10 @@ use crate::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/push/devices", get(list).post(register))
-        .route("/push/devices/:id", axum::routing::delete(remove))
+        .route(
+            "/push/devices/:id",
+            axum::routing::patch(rename).delete(remove),
+        )
         .route("/push/devices/test", post(test_send))
 }
 
@@ -65,6 +68,39 @@ async fn register(
         .await?
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(serde_json::json!({ "id": id })))
+}
+
+#[derive(Deserialize)]
+struct RenameReq {
+    label: String,
+}
+
+/// Rename a phone — which renames a RECIPIENT, because the label is how a workflow addresses it.
+///
+/// Two things happen together on purpose. The device gets its new name, and every graph that
+/// addressed the old one is repointed at it. Renaming without the second half is how automations
+/// break silently: `resolve_device_by_label` stops finding the phone, the Device Gate takes
+/// `failure`, and the run log says "no registered phone" about a device sitting on the desk.
+async fn rename(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(b): Json<RenameReq>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    auth::require(&c, "beacons.write")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let label = b.label.clone();
+    let repointed = blocking(move || {
+        let old = push::rename(&db, tid, id, &label)?;
+        Ok::<usize, String>(app_core::workflows::repo::rename_recipient(&db, tid, &old, &label))
+    })
+    .await?
+    .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    // The engine holds graphs in memory; without this the rewritten labels do not reach a run
+    // until something else happens to reload them.
+    crate::domain::workflows::poke_reload(&st.db).await;
+    Ok(Json(serde_json::json!({ "workflows_updated": repointed })))
 }
 
 async fn remove(

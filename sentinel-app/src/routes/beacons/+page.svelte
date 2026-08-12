@@ -41,6 +41,10 @@
   let beacons = $state<NotificationTarget[]>([]);
   let config = $state<TelegramConfigState | null>(null);
   let loading = $state(true);
+  /** Registered phones. A phone IS a Recipient (#139) — same picker, same addressing-by-label —
+   *  so it belongs on this page rather than hidden in a mobile-only screen. */
+  let phones = $state<{ id: string; label: string; platform: string; enabled: boolean }[]>([]);
+  let phoneRenameTarget = $state<{ id: string; label: string } | null>(null);
 
   // ---- pairing code edit ---------------------------------------------------
   let pairingCode = $state("");
@@ -138,6 +142,14 @@
   let deleteTarget = $state<NotificationTarget | null>(null);
   let deleting = $state(false);
 
+  async function loadPhones() {
+    try {
+      phones = await data.listPushDevices();
+    } catch {
+      phones = []; // a phone list that failed to load must not break the beacons table
+    }
+  }
+
   async function loadBeacons() {
     const before = beacons.length;
     beacons = await data.listBeacons();
@@ -167,6 +179,7 @@
   }
 
   onMount(() => {
+    loadPhones();
     load().then(() => {
       // No code yet, but the bot is ready → offer a strong one pre-filled, so the user just clicks
       // Save instead of inventing a secret. Not auto-saved — they stay in control.
@@ -233,6 +246,45 @@
     renameTarget = b;
     renameValue = b.label;
     renameOpen = true;
+  }
+
+  function startPhoneRename(p: { id: string; label: string }) {
+    phoneRenameTarget = { id: p.id, label: p.label };
+    renameTarget = null;
+    renameValue = p.label;
+    renameOpen = true;
+  }
+
+  async function doPhoneRename() {
+    if (!phoneRenameTarget) return;
+    if (renameValue.trim().length === 0) {
+      toast.error(t.nameEmpty);
+      return;
+    }
+    renaming = true;
+    try {
+      const { workflows_updated } = await data.renamePushDevice(
+        phoneRenameTarget.id,
+        renameValue.trim(),
+      );
+      // Say how many graphs followed the rename. A Recipient is addressed BY NAME, so this is the
+      // difference between a rename and a rename that quietly broke your automations.
+      toast.success(workflows_updated > 0 ? t.renamedAndRepointed(workflows_updated) : t.renamed);
+      renameOpen = false;
+      phoneRenameTarget = null;
+      await loadPhones();
+    } catch (err) {
+      console.error("Rename failed", err);
+      toast.error(t.renameFailed, { description: String(err) });
+    } finally {
+      renaming = false;
+    }
+  }
+
+  /** One dialog, two kinds of Recipient. */
+  function submitRename() {
+    if (phoneRenameTarget) return doPhoneRename();
+    return doRename();
   }
 
   async function doRename() {
@@ -518,6 +570,51 @@
       {/if}
     </Card.Content>
   </Card.Root>
+
+  <!-- Phones. A registered phone is its own Recipient, addressed by the same label a workflow
+       picks from a dropdown — so naming it belongs here, next to the Telegram recipients, not
+       buried in iOS settings. -->
+  {#if phones.length > 0}
+    <Card.Root>
+      <Card.Header>
+        <Card.Title>{t.phonesTitle}</Card.Title>
+        <Card.Description>{t.phonesDescription}</Card.Description>
+      </Card.Header>
+      <Card.Content>
+        <Table.Root>
+          <Table.Header>
+            <Table.Row>
+              <Table.Head>{t.colLabel}</Table.Head>
+              <Table.Head>{t.colPlatform}</Table.Head>
+              <Table.Head class="w-28">{t.colEnabled}</Table.Head>
+              <Table.Head class="text-right">{t.colActions}</Table.Head>
+            </Table.Row>
+          </Table.Header>
+          <Table.Body>
+            {#each phones as p (p.id)}
+              <Table.Row class="transition-colors hover:bg-primary/5">
+                <Table.Cell class="font-medium">{p.label}</Table.Cell>
+                <Table.Cell class="text-muted-foreground">{p.platform}</Table.Cell>
+                <Table.Cell>
+                  <StatusDot state={p.enabled ? "online" : "offline"} />
+                </Table.Cell>
+                <Table.Cell class="text-right">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    title={t.rename}
+                    onclick={() => startPhoneRename(p)}
+                  >
+                    <Pencil class="size-4" />
+                  </Button>
+                </Table.Cell>
+              </Table.Row>
+            {/each}
+          </Table.Body>
+        </Table.Root>
+      </Card.Content>
+    </Card.Root>
+  {/if}
 </div>
 
 <!-- Rename dialog -->
@@ -535,7 +632,7 @@
       <Button variant="outline" onclick={() => (renameOpen = false)} disabled={renaming}>
         {c.cancel}
       </Button>
-      <Button onclick={doRename} disabled={renaming}>
+      <Button onclick={submitRename} disabled={renaming}>
         {renaming ? t.saving : c.save}
       </Button>
     </Dialog.Footer>

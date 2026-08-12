@@ -106,7 +106,7 @@ fn flow_base() -> String {
 /// so all replicas converge — without it, the pod that didn't get the POST keeps a stale store and
 /// silently drops events for graphs it thinks are absent/disabled. The POST stays as a low-latency
 /// nudge for whichever replica answers (and for single-pod/dev where NOTIFY and POST hit the same one).
-async fn poke_reload(db: &app_core::db::Db) {
+pub(crate) async fn poke_reload(db: &app_core::db::Db) {
     let d = db.clone();
     let _ = tokio::task::spawn_blocking(move || d.notify("graphs_reload", "")).await;
     let _ = reqwest::Client::new()
