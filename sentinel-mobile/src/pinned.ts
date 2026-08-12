@@ -13,9 +13,11 @@ import * as SecureStore from "expo-secure-store";
 import { ExtensionStorage } from "@bacons/apple-targets";
 
 const KEY = "sentinel.pinned_workflows";
-/** Must match `SharedPins.suite` / `SharedPins.key` in `targets/widget/OlharAIWidget.swift`. */
+/** Must match `SharedWorkflows.suite` / `.key` in `targets/widget/OlharAIWidget.swift`. */
 const APP_GROUP = "group.com.olharai.app";
-const WIDGET_KEY = "pinned_workflows";
+/** EVERY workflow, because the widget's "Edit Widget" picker offers this list. Starring orders the
+ *  Run tab; it does not decide what a widget can point at — the home screen chooses for itself. */
+const WIDGET_KEY = "workflows";
 
 /** What the widget needs to draw a button: a label to show and an id to deep-link. */
 export type Pin = { id: string; name: string };
@@ -29,15 +31,28 @@ function emit() {
   listeners.forEach((l) => l());
 }
 
-/** Push the current set to the widget and ask iOS to redraw it. */
+/** Everything the widget picker can offer. Starred first, so the default pick is a favourite. */
+let published: Pin[] = [];
+
+/** Push the workflow list to the widget and ask iOS to redraw it. */
 function publish(): void {
   try {
-    shared.set(WIDGET_KEY, JSON.stringify(cache));
-    // Without this the tile keeps yesterday's buttons until iOS decides to refresh on its own.
+    const starredFirst = [
+      ...published.filter((w) => cache.some((p) => p.id === w.id)),
+      ...published.filter((w) => !cache.some((p) => p.id === w.id)),
+    ];
+    shared.set(WIDGET_KEY, JSON.stringify(starredFirst));
+    // Without this the tile keeps yesterday's label until iOS decides to refresh on its own.
     ExtensionStorage.reloadWidget();
   } catch {
     // A widget that missed an update is a stale tile, not a broken app — never throw into a tap.
   }
+}
+
+/** Hand the widget the full list of workflows (called whenever the Run tab loads). */
+export function publishWorkflows(all: Pin[]): void {
+  published = all;
+  publish();
 }
 
 async function load(): Promise<Pin[]> {
@@ -77,6 +92,7 @@ export function togglePinned(pin: Pin): void {
 
 /** Keep a starred label current when a workflow is renamed on the web. */
 export function syncNames(known: Pin[]): void {
+  publishWorkflows(known);
   const byId = new Map(known.map((k) => [k.id, k.name]));
   let changed = false;
   const next = cache.map((p) => {

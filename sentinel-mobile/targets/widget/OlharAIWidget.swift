@@ -1,108 +1,168 @@
-// The home-screen widget (card #178): the workflows you starred, one tap each.
+// The home-screen widget (card #178): one button that runs a workflow you choose.
+//
+// Configurable per instance, the iOS way — long-press → Edit Widget → pick the workflow. That
+// matters more than it sounds: a widget you configure is one you can place several of, each opening
+// a different thing, named the way you named it. The first version made you star workflows inside
+// the app instead, which is the app dictating the home screen rather than the other way round.
 //
 // A widget extension is a separate process with its own sandbox. It holds NO credentials and speaks
-// to no API — every button is a `Link` to `olharai://run/<id>`, which the app already handles. That
-// is deliberate: a widget that called the control plane itself would be a second implementation of
-// "run a workflow", with its own auth, its own error handling and its own bugs. It opens the app,
-// and the app does the thing it already knows how to do.
+// to no API — the button is a `Link` to `olharai://run/<id>`, which the app already handles. A
+// widget that called the control plane itself would be a second implementation of "run a workflow",
+// with its own auth and its own bugs, and would need a session token living in an extension.
 //
-// The data comes through the shared App Group container, written by the app whenever the starred
-// set changes. If nothing has been starred yet the widget says so, rather than rendering an empty
-// tile that reads as broken.
+// Everything it knows comes through the shared App Group container, written by the app.
+import AppIntents
 import SwiftUI
 import WidgetKit
 
-/// One starred workflow, as the app writes it into the App Group.
-struct PinnedWorkflow: Codable, Identifiable, Hashable {
+/// One workflow, as the app publishes it into the App Group.
+struct Workflow: Codable, Identifiable, Hashable {
   let id: String
   let name: String
 }
 
-struct WorkflowEntry: TimelineEntry {
-  let date: Date
-  let workflows: [PinnedWorkflow]
-}
-
-/// Reads the starred list the app shares. Never network, never disk beyond the container.
-enum SharedPins {
+/// Reads what the app shared. Never network, never disk beyond the container.
+enum SharedWorkflows {
   static let suite = "group.com.olharai.app"
-  static let key = "pinned_workflows"
+  static let key = "workflows"
 
-  static func read() -> [PinnedWorkflow] {
+  static func read() -> [Workflow] {
     guard
       let defaults = UserDefaults(suiteName: suite),
       let raw = defaults.string(forKey: key),
       let data = raw.data(using: .utf8),
-      let decoded = try? JSONDecoder().decode([PinnedWorkflow].self, from: data)
+      let decoded = try? JSONDecoder().decode([Workflow].self, from: data)
     else { return [] }
-    // Four is what fits a medium tile without the labels truncating into nonsense. Starring more
-    // is allowed; the widget shows the first four and the app shows them all.
-    return Array(decoded.prefix(4))
+    return decoded
+  }
+
+  static func named(_ id: String) -> Workflow? {
+    read().first { $0.id == id }
   }
 }
 
-struct Provider: TimelineProvider {
+// MARK: - The picker
+
+/// What the Edit Widget sheet offers. The entity is the workflow itself, so the sheet shows real
+/// names rather than asking someone to remember a UUID.
+struct WorkflowEntity: AppEntity {
+  let id: String
+  let name: String
+
+  static var typeDisplayRepresentation: TypeDisplayRepresentation { "Workflow" }
+  var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(name)") }
+  static var defaultQuery = WorkflowQuery()
+}
+
+struct WorkflowQuery: EntityQuery {
+  func entities(for identifiers: [String]) async throws -> [WorkflowEntity] {
+    SharedWorkflows.read()
+      .filter { identifiers.contains($0.id) }
+      .map { WorkflowEntity(id: $0.id, name: $0.name) }
+  }
+
+  /// The list in the sheet. Empty until the app has run once and published — which is why the
+  /// unconfigured tile says to open the app rather than showing a blank picker.
+  func suggestedEntities() async throws -> [WorkflowEntity] {
+    SharedWorkflows.read().map { WorkflowEntity(id: $0.id, name: $0.name) }
+  }
+
+  func defaultResult() async -> WorkflowEntity? {
+    SharedWorkflows.read().first.map { WorkflowEntity(id: $0.id, name: $0.name) }
+  }
+}
+
+struct SelectWorkflowIntent: WidgetConfigurationIntent {
+  static var title: LocalizedStringResource { "Choose a workflow" }
+  static var description: IntentDescription { "Pick the workflow this button runs." }
+
+  @Parameter(title: "Workflow")
+  var workflow: WorkflowEntity?
+}
+
+// MARK: - Timeline
+
+struct WorkflowEntry: TimelineEntry {
+  let date: Date
+  let workflow: Workflow?
+  /// True when the app has never published anything — a different problem from "not configured
+  /// yet", and it needs different advice.
+  let appNeverOpened: Bool
+}
+
+struct Provider: AppIntentTimelineProvider {
   func placeholder(in context: Context) -> WorkflowEntry {
     WorkflowEntry(
       date: Date(),
-      workflows: [PinnedWorkflow(id: "", name: "Open the garage")]
+      workflow: Workflow(id: "", name: "Open the garage"),
+      appNeverOpened: false
     )
   }
 
-  func getSnapshot(in context: Context, completion: @escaping (WorkflowEntry) -> Void) {
-    completion(WorkflowEntry(date: Date(), workflows: SharedPins.read()))
+  func snapshot(for configuration: SelectWorkflowIntent, in context: Context) async -> WorkflowEntry {
+    entry(for: configuration)
   }
 
-  func getTimeline(in context: Context, completion: @escaping (Timeline<WorkflowEntry>) -> Void) {
-    // `.never` on purpose: this widget shows a list of buttons, not a countdown or a live value.
-    // Nothing about it goes stale on a clock — it changes when the app writes a new set and calls
-    // `reloadAllTimelines`, and asking iOS to refresh it on a schedule would spend the system's
-    // widget budget to redraw the same four names.
-    completion(Timeline(entries: [WorkflowEntry(date: Date(), workflows: SharedPins.read())], policy: .never))
+  func timeline(for configuration: SelectWorkflowIntent, in context: Context) async -> Timeline<WorkflowEntry> {
+    // `.never`: this is a button, not a countdown. Nothing about it goes stale on a clock — it
+    // changes when the app republishes and calls `reloadAllTimelines`, and asking iOS to refresh on
+    // a schedule would spend the system's widget budget redrawing the same name.
+    Timeline(entries: [entry(for: configuration)], policy: .never)
   }
-}
 
-/// One button. Big enough to hit without looking, because that is the whole point of a widget.
-struct RunButton: View {
-  let workflow: PinnedWorkflow
-
-  var body: some View {
-    Link(destination: URL(string: "olharai://run/\(workflow.id)")!) {
-      HStack(spacing: 8) {
-        Text(workflow.name)
-          .font(.system(size: 15, weight: .semibold))
-          .lineLimit(1)
-          .minimumScaleFactor(0.8)
-        Spacer(minLength: 4)
-        Image(systemName: "play.fill").font(.system(size: 11, weight: .bold))
-      }
-      .padding(.horizontal, 12)
-      .padding(.vertical, 10)
-      .frame(maxWidth: .infinity)
-      .background(Color.primary.opacity(0.10))
-      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+  private func entry(for configuration: SelectWorkflowIntent) -> WorkflowEntry {
+    let all = SharedWorkflows.read()
+    guard let chosen = configuration.workflow else {
+      return WorkflowEntry(date: Date(), workflow: nil, appNeverOpened: all.isEmpty)
     }
+    // Prefer the CURRENT name: a workflow renamed on the web should not leave a stale label on the
+    // home screen, and the configuration only remembers what it was called when it was picked.
+    let live = SharedWorkflows.named(chosen.id)
+    return WorkflowEntry(
+      date: Date(),
+      workflow: Workflow(id: chosen.id, name: live?.name ?? chosen.name),
+      appNeverOpened: all.isEmpty
+    )
   }
 }
+
+// MARK: - The tile
 
 struct WidgetView: View {
-  var entry: Provider.Entry
+  var entry: WorkflowEntry
+  @Environment(\.widgetFamily) private var family
 
   var body: some View {
-    if entry.workflows.isEmpty {
+    if let w = entry.workflow {
+      // The whole tile is the tap target. A widget button people have to aim at is one they open
+      // the app instead of using.
+      Link(destination: URL(string: "olharai://run/\(w.id)")!) {
+        VStack(alignment: .leading, spacing: 6) {
+          Image(systemName: "play.circle.fill")
+            .font(.system(size: family == .systemSmall ? 26 : 30, weight: .semibold))
+          Spacer(minLength: 0)
+          Text(w.name)
+            .font(.system(size: family == .systemSmall ? 15 : 17, weight: .semibold))
+            .lineLimit(2)
+            .minimumScaleFactor(0.75)
+            .multilineTextAlignment(.leading)
+          Text("Tap to run")
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+      }
+      .buttonStyle(.plain)
+    } else {
       VStack(alignment: .leading, spacing: 6) {
-        Text("Olhar AI").font(.system(size: 13, weight: .semibold))
-        Text("Star a workflow in the app to put it here.")
+        Text("Olhar AI").font(.system(size: 15, weight: .semibold))
+        Text(entry.appNeverOpened
+             ? "Open the app once, then long-press here → Edit Widget."
+             : "Long-press → Edit Widget to choose a workflow.")
           .font(.system(size: 12))
           .foregroundStyle(.secondary)
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-    } else {
-      VStack(spacing: 6) {
-        ForEach(entry.workflows) { w in
-          RunButton(workflow: w)
-        }
-      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
   }
 }
@@ -110,15 +170,15 @@ struct WidgetView: View {
 @main
 struct OlharAIWidget: Widget {
   var body: some WidgetConfiguration {
-    StaticConfiguration(kind: "OlharAIWidget", provider: Provider()) { entry in
-      if #available(iOS 17.0, *) {
-        WidgetView(entry: entry).containerBackground(.fill.tertiary, for: .widget)
-      } else {
-        WidgetView(entry: entry).padding()
-      }
+    AppIntentConfiguration(
+      kind: "OlharAIWidget",
+      intent: SelectWorkflowIntent.self,
+      provider: Provider()
+    ) { entry in
+      WidgetView(entry: entry).containerBackground(.fill.tertiary, for: .widget)
     }
     .configurationDisplayName("Run a workflow")
-    .description("One tap to run the workflows you starred.")
-    .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+    .description("One tap to run a workflow you choose.")
+    .supportedFamilies([.systemSmall, .systemMedium])
   }
 }
