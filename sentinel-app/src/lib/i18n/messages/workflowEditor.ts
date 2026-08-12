@@ -132,6 +132,8 @@ export const workflowEditor = {
     deleteSelection: "Delete selection",
     showPanel: "Show panel",
     hidePanel: "Hide panel",
+    hidePanels: "Hide all panels",
+    showPanels: "Show panels",
     resizePanel: "Resize panel",
     resizeConsole: "Resize console",
     // ---- inspector ----

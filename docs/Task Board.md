@@ -72,8 +72,6 @@ kanban-plugin: board
 	  - Plan: [[draw-text-inside-outside-bbox]]
 - [ ] #59 Person Re-Identification (ReID) — body-appearance matching
 	  - Plan: [[reid-person-reidentification]]
-- [ ] #60 Editor keybinds: hold Space to pan (temp H) — workflow + map
-	  - Plan: [[editor-space-hold-pan]]
 - [ ] #64 Cloud recording storage (R2) + GB-month billing
 	  - Plan: [[cloud-recording-storage]]
 - [ ] #65 User invite: onboarding email + set-password confirmation
@@ -102,10 +100,11 @@ kanban-plugin: board
 	  - Plan: [[editor-panel-toggle-rebind]]
 - [ ] #106 Get/Set Variable node — width fits the variable name
 	  - Plan: [[get-variable-node-width]]
-- [ ] #107 Node input: inline-value indicator
-	  - Plan: [[node-input-inline-value-indicator]]
-- [ ] #108 Editor chrome-toggle — visible toolbar button
-	  - Plan: [[editor-chrome-toggle-button]]
+- [ ] #60 Editor keybinds: hold Space to pan (temp H) — workflow + map
+	  - Plan: [[editor-space-hold-pan]]
+	  - Phase 1 (workflow editor) SHIPPED: hold Space → temporary pan, release restores the tool;
+	    key-repeat guarded, window blur force-releases. Phase 2 (map editor) remains — the map has
+	    no pan tool at all, so it needs a force-pan flag rather than a mode switch.
 - [ ] #109 Comment node missing from add-node palette
 	  - Plan: [[comment-node-palette-restore]]
 - [ ] #110 Node palette — focus search on open
@@ -154,6 +153,12 @@ kanban-plugin: board
 
 
 ## Done
+
+- [x] #108 Editor chrome-toggle — visible toolbar button
+	  - Plan: [[editor-chrome-toggle-button]]
+
+- [x] #107 Node input: inline-value indicator
+	  - Plan: [[node-input-inline-value-indicator]]
 
 **Complete**
 
