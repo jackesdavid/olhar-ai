@@ -87,3 +87,82 @@ pub(super) fn run_set_variable(
     sys.variables.lock().unwrap().insert(name, value);
     Ok(PortValues::new())
 }
+
+/// The variable names configured on a multi node, in order. Blank and duplicate entries are
+/// dropped so this agrees exactly with the ports `multi_variable_ports` derives — the ports and
+/// the execution must not disagree about which variables the node has.
+pub(super) fn multi_var_names(config: &Value) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let Some(list) = config.get("variables").and_then(|v| v.as_array()) else {
+        return names;
+    };
+    for entry in list {
+        if let Some(n) = entry.get("name").and_then(|v| v.as_str()) {
+            let n = n.trim();
+            if !n.is_empty() && !names.iter().any(|k| k == n) {
+                names.push(n.to_string());
+            }
+        }
+    }
+    names
+}
+
+/// The declared type of one entry, for the zero-value fallback on the Get side.
+fn multi_var_type(config: &Value, name: &str) -> PortType {
+    config
+        .get("variables")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .find(|e| e.get("name").and_then(|v| v.as_str()).map(str::trim) == Some(name))
+        .and_then(|e| e.get("type").cloned())
+        .and_then(|t| serde_json::from_value::<PortType>(t).ok())
+        .unwrap_or(PortType::Text)
+}
+
+/// Write every WIRED input into its variable. Exec passes through.
+///
+/// A configured variable whose input is missing is SKIPPED, not zeroed. "Not wired" means "leave
+/// this one alone", which is what lets the same node sit on two branches that each write a
+/// different subset — zeroing would clobber whatever an earlier branch had set.
+pub(super) fn run_multi_set_variables(
+    config: &Value,
+    inputs: &PortValues,
+    sys: &ToolContext,
+) -> Result<PortValues, String> {
+    let names = multi_var_names(config);
+    if names.is_empty() {
+        return Err("Set Variables: no variables added — pick them in the properties panel".into());
+    }
+    let mut vars = sys.variables.lock().unwrap();
+    for name in names {
+        if let Some(v) = inputs.get(&name) {
+            vars.insert(name, v.clone());
+        }
+    }
+    Ok(PortValues::new())
+}
+
+/// Read every configured variable into a same-named output, falling back to the type's zero so a
+/// read before any write never fails the run — identical to `run_get_variable`, N times over.
+pub(super) fn run_multi_get_variables(
+    config: &Value,
+    sys: &ToolContext,
+) -> Result<PortValues, String> {
+    let names = multi_var_names(config);
+    if names.is_empty() {
+        return Err("Get Variables: no variables added — pick them in the properties panel".into());
+    }
+    let stored = sys.variables.lock().unwrap();
+    let mut o = PortValues::new();
+    for name in names {
+        let v = stored
+            .get(&name)
+            .cloned()
+            .or_else(|| zero_value(multi_var_type(config, &name)));
+        if let Some(v) = v {
+            o.insert(name, v);
+        }
+    }
+    Ok(o)
+}

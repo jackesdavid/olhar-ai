@@ -1150,7 +1150,7 @@
     const payloadNames = new Set(payloadFields(selectedNode).map((f) => f.name));
     const inputs = (nk?.inputs ?? []).filter((p) => p.type !== "exec" && !payloadNames.has(p.name));
     const rows: { key: string; port: CatPort | null }[] = inputs.map((p) => ({ key: p.name, port: p }));
-    const MANAGED_KEYS: Record<string, string[]> = { string_switch: ["arms"], ai_switch: ["arms"], camera_switch: ["arms"], comment: ["width", "height"], dict_schema: ["columns"], dict_make_row: ["columns"], tuya_control: ["value_type"], tuya_read_status: ["value_type"], paragraph: ["width", "height"], markdown: ["width", "height"] };
+    const MANAGED_KEYS: Record<string, string[]> = { string_switch: ["arms"], ai_switch: ["arms"], camera_switch: ["arms"], comment: ["width", "height"], dict_schema: ["columns"], dict_make_row: ["columns"], multi_set_variable: ["variables"], multi_get_variable: ["variables"], tuya_control: ["value_type"], tuya_read_status: ["value_type"], paragraph: ["width", "height"], markdown: ["width", "height"] };
     const managedForKind = new Set(MANAGED_KEYS[selectedNode.kind] ?? []);
     for (const key of Object.keys(nk?.default_config ?? {})) {
       if (!inputs.some((p) => p.name === key) && !managedForKind.has(key)) rows.push({ key, port: null });
@@ -1235,6 +1235,16 @@
           { name: "raw", type: "text" as CatPort["type"], required: false },
         ],
       };
+    }
+    // Set Variables / Get Variables (#179): one typed port per variable in `config.variables`,
+    // named after the variable. Mirrors `multi_variable_ports` in domain.rs — including dropping
+    // blanks and duplicates, because a canvas that draws a port the engine does not have is worse
+    // than one that draws none.
+    if (node.kind === "multi_set_variable" || node.kind === "multi_get_variable") {
+      const ports = multiVarPorts(node);
+      return node.kind === "multi_set_variable"
+        ? { ...k, inputs: [...k.inputs, ...ports] }
+        : { ...k, outputs: [...k.outputs, ...ports] };
     }
     // Create Dictionary Row (#113): the schema's columns (baked into config.columns when a
     // Dictionary Schema is wired) each become a typed input, so you fill the row field by field.
@@ -2445,6 +2455,8 @@
           n.config = { ...n.config, variable: updated.name, type: updated.type }; // local; persisted on Save (#122)
         }
       }
+      // The multi nodes need their EDGES rewritten too, not just their config (#179).
+      repointMultiVarNodes(old.name, updated);
     }
     markDirty(); // any variable edit (incl. default-only) should light the Save indicator; vars auto-save via scheduleVarSave
     scheduleVarSave(graph.id);
@@ -2455,6 +2467,123 @@
     markDirty(); // surface the change in the Save indicator (vars auto-save via scheduleVarSave)
     scheduleVarSave(graph.id);
   }
+  // ---- Set Variables / Get Variables: the multi nodes (#179) ----------------
+  //
+  // These carry their own list in `config.variables` — `[{name, type}]`, the same shape a
+  // declaration serialises to — and each entry becomes one typed port NAMED after the variable.
+  // The list is deliberately not auto-populated from the graph: a node that grew a port every
+  // time someone declared a variable would rewire graphs behind the author's back.
+
+  type NodeVar = { name: string; type: string };
+
+  const MULTI_VAR_KINDS = ["multi_set_variable", "multi_get_variable"];
+
+  function isMultiVarNode(node: Node): boolean {
+    return MULTI_VAR_KINDS.includes(node.kind);
+  }
+
+  /** A multi node's configured variables, blanks and duplicates dropped — the client mirror of
+   *  `multi_variable_ports` in domain.rs. The two MUST agree: a port drawn here that the engine
+   *  does not have is a wire that silently carries nothing. */
+  function nodeVariables(node: Node): NodeVar[] {
+    const raw = Array.isArray(node.config?.variables) ? (node.config.variables as NodeVar[]) : [];
+    const out: NodeVar[] = [];
+    for (const v of raw) {
+      const name = String(v?.name ?? "").trim();
+      if (!name || out.some((x) => x.name === name)) continue;
+      out.push({ name, type: String(v?.type ?? "text") });
+    }
+    return out;
+  }
+
+  function multiVarPorts(node: Node): CatPort[] {
+    return nodeVariables(node).map((v) => ({
+      name: v.name,
+      type: v.type as CatPort["type"],
+      required: false,
+    }));
+  }
+
+  /** The graph's declared variables this node has not taken yet — the Add picker's options. */
+  function availableVariables(node: Node): VarDecl[] {
+    const taken = new Set(nodeVariables(node).map((v) => v.name));
+    return variables.filter((v) => !taken.has(v.name));
+  }
+
+  function setNodeVariables(node: Node, next: NodeVar[]) {
+    node.config = { ...node.config, variables: next };
+    markDirty(); // local until Save, like every other canvas edit (#122)
+  }
+
+  function addNodeVariable(node: Node, name: string) {
+    if (editLocked) return;
+    const decl = variables.find((v) => v.name === name);
+    if (!decl) return;
+    setNodeVariables(node, [...nodeVariables(node), { name: decl.name, type: decl.type }]);
+  }
+
+  /** Drop a variable AND the wires that were attached to its port. A port that no longer exists
+   *  with an edge still pointing at it validates fine on screen and fails at run time. */
+  function removeNodeVariable(node: Node, name: string) {
+    if (editLocked || !graph) return;
+    setNodeVariables(
+      node,
+      nodeVariables(node).filter((v) => v.name !== name),
+    );
+    const isSet = node.kind === "multi_set_variable";
+    graph.edges = graph.edges.filter((e) =>
+      isSet ? !(e.to === node.id && e.to_port === name) : !(e.from === node.id && e.from_port === name),
+    );
+  }
+
+  /** Re-point a multi node after the graph renames a variable: the config entry AND every edge on
+   *  that port, in one pass. Port names here ARE variable names — the single Get/Set nodes never
+   *  had this problem, since their port is always called `value`. Rewriting the config without the
+   *  edges silently unwires the graph, which is the failure this function exists to prevent. */
+  function repointMultiVarNodes(oldName: string, updated: VarDecl) {
+    if (!graph) return;
+    for (const n of graph.nodes) {
+      if (!isMultiVarNode(n)) continue;
+      const vars = nodeVariables(n);
+      if (!vars.some((v) => v.name === oldName)) continue;
+      setNodeVariables(
+        n,
+        vars.map((v) => (v.name === oldName ? { name: updated.name, type: updated.type } : v)),
+      );
+      if (updated.name === oldName) continue; // a retype leaves the port name alone
+      const isSet = n.kind === "multi_set_variable";
+      for (const e of graph.edges) {
+        if (isSet && e.to === n.id && e.to_port === oldName) e.to_port = updated.name;
+        if (!isSet && e.from === n.id && e.from_port === oldName) e.from_port = updated.name;
+      }
+    }
+  }
+
+  /** True when a node's baked type has drifted from the graph's declaration — shown in the panel
+   *  so a stale port is visible rather than merely wrong. `undefined` decl = the variable was
+   *  deleted from the graph; the node keeps its port so existing wires survive. */
+  function variableDrifted(v: NodeVar): boolean {
+    const decl = variables.find((d) => d.name === v.name);
+    return !!decl && decl.type !== v.type;
+  }
+
+  /** Adopt the declaration's current type for one entry, and drop any wire that no longer type-
+   *  checks. Retyping a port while leaving a wire of the old type attached is exactly the silent
+   *  mismatch the drift marker exists to surface. */
+  function resyncNodeVariable(node: Node, name: string) {
+    if (editLocked || !graph) return;
+    const decl = variables.find((d) => d.name === name);
+    if (!decl) return;
+    setNodeVariables(
+      node,
+      nodeVariables(node).map((v) => (v.name === name ? { name, type: decl.type } : v)),
+    );
+    const isSet = node.kind === "multi_set_variable";
+    graph.edges = graph.edges.filter((e) =>
+      isSet ? !(e.to === node.id && e.to_port === name) : !(e.from === node.id && e.from_port === name),
+    );
+  }
+
   // ---- drag a variable from the panel onto the canvas (Unreal-style) -------
   const VAR_DRAG_MIME = "application/x-sentinel-variable";
   // After a drop, a small chooser asks Get vs Set at the drop point.
@@ -4606,7 +4735,50 @@
                   <Trash2 class="size-3.5" />
                 </Button>
               </div>
-              {#if selectedNode.kind === "dict_schema"}
+              {#if isMultiVarNode(selectedNode)}
+                <!-- Set Variables / Get Variables (#179): pick which of the graph's variables this
+                     node handles. Each one added becomes a typed port named after it. -->
+                <div class="space-y-1.5">
+                  <div class="flex items-center justify-between">
+                    <Label class="text-xs text-muted-foreground">{t.variables}</Label>
+                    <span class="text-[11px] text-muted-foreground">{nodeVariables(selectedNode).length}</span>
+                  </div>
+                  {#each nodeVariables(selectedNode) as v (v.name)}
+                    <div class="flex items-center gap-1.5">
+                      <span class="min-w-0 flex-1 truncate rounded border border-input bg-background px-2 py-1 text-xs">{v.name}</span>
+                      <span class="shrink-0 rounded bg-hover px-1.5 py-1 text-[11px] text-muted-foreground">{v.type}</span>
+                      {#if variableDrifted(v)}
+                        <!-- The declaration's type changed after this node baked it. Baking is what
+                             keeps a wire's type stable when a variable is deleted, so the answer is
+                             to SHOW the drift and offer the resync, not to silently re-derive. -->
+                        <Button variant="ghost" size="icon" class="size-6 shrink-0 text-muted-foreground hover:text-foreground" title={t.resyncVariableType} disabled={editLocked} onclick={() => resyncNodeVariable(selectedNode, v.name)}>
+                          <RefreshCw class="size-3" />
+                        </Button>
+                      {/if}
+                      <Button variant="ghost" size="icon" class="size-6 shrink-0 text-muted-foreground hover:text-destructive" title={t.removeVariableFromNode} disabled={editLocked} onclick={() => removeNodeVariable(selectedNode, v.name)}>
+                        <Trash2 class="size-3" />
+                      </Button>
+                    </div>
+                  {/each}
+                  {#if availableVariables(selectedNode).length > 0}
+                    <select
+                      class="h-7 w-full rounded border border-input bg-background px-1 text-xs disabled:opacity-50"
+                      value=""
+                      disabled={editLocked}
+                      onchange={(e) => { addNodeVariable(selectedNode, e.currentTarget.value); e.currentTarget.value = ""; }}
+                    >
+                      <option value="" disabled>{t.addVariableToNode}</option>
+                      {#each availableVariables(selectedNode) as v (v.name)}
+                        <option value={v.name}>{v.name} · {v.type}</option>
+                      {/each}
+                    </select>
+                  {:else if variables.length === 0}
+                    <p class="text-[11px] leading-snug text-muted-foreground">{t.noGraphVariables}</p>
+                  {:else}
+                    <p class="text-[11px] leading-snug text-muted-foreground">{t.allVariablesAdded}</p>
+                  {/if}
+                </div>
+              {:else if selectedNode.kind === "dict_schema"}
                 <!-- Dictionary Schema (#113): define the columns (the plan). These become the
                      inputs of a Create Dictionary Row wired to this schema. -->
                 <div class="space-y-1.5">
