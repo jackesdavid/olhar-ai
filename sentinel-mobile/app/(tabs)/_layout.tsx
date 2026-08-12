@@ -19,6 +19,7 @@ export default function TabsLayout() {
       }}
     >
       <Tabs.Screen name="index" options={{ title: "Alerts" }} />
+      <Tabs.Screen name="run" options={{ title: "Run" }} />
       <Tabs.Screen name="live" options={{ title: "Live" }} />
       <Tabs.Screen name="capture" options={{ title: "Capture" }} />
       <Tabs.Screen name="edge" options={{ title: "Edge" }} />

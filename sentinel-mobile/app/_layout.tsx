@@ -9,6 +9,8 @@ import { useLoadThemePref, useTheme } from "@/styles/theme";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
+import * as Linking from "expo-linking";
+import { runWorkflow } from "@/workflows";
 import { currentToken, restore, subscribe } from "@/session";
 
 export default function RootLayout() {
@@ -33,6 +35,24 @@ export default function RootLayout() {
     if (signedIn && !allowed) router.replace("/(tabs)");
   }, [ready, signedIn, segments]);
 
+  // `olharai://run/<graph_id>` — what a home-screen widget button fires (card #178). The widget
+  // holds no credentials and speaks no API: it opens this, and the app (which already has the
+  // session) does the work. One implementation of "run a workflow", two entry points.
+  useEffect(() => {
+    if (!ready || !signedIn) return;
+    function fireFrom(url: string | null) {
+      if (!url) return;
+      const { hostname, path } = Linking.parse(url);
+      // olharai://run/<id> parses as hostname="run", path="<id>".
+      if (hostname !== "run") return;
+      const id = (path ?? "").replace(/^\/+/, "");
+      if (id) void runWorkflow(id).catch(() => {});
+    }
+    Linking.getInitialURL().then(fireFrom);
+    const sub = Linking.addEventListener("url", (e) => fireFrom(e.url));
+    return () => sub.remove();
+  }, [ready, signedIn]);
+
   // A tapped Device Gate push opens the decision, carrying the request id and the single-use token
   // that proves WHICH request is being answered (card #176). Handles both the cold start (the app
   // was not running) and a tap while it is open.
@@ -48,10 +68,20 @@ export default function RootLayout() {
     Notifications.getLastNotificationResponseAsync().then((r) =>
       openFrom(r?.notification.request.content.data as Record<string, unknown> | undefined),
     );
-    const sub = Notifications.addNotificationResponseReceivedListener((r) =>
+    const tapped = Notifications.addNotificationResponseReceivedListener((r) =>
       openFrom(r.notification.request.content.data as Record<string, unknown> | undefined),
     );
-    return () => sub.remove();
+    // Arriving while the app is OPEN goes straight to the decision, without waiting for a tap.
+    // That is what makes the widget journey feel like one gesture: tap the widget, the app opens,
+    // and a second later the approval is in front of you. The notification still carries the token,
+    // so nothing about the two-factor shape changes — only who does the tapping.
+    const arrived = Notifications.addNotificationReceivedListener((n) =>
+      openFrom(n.request.content.data as Record<string, unknown> | undefined),
+    );
+    return () => {
+      tapped.remove();
+      arrived.remove();
+    };
   }, [ready, signedIn]);
 
   if (!ready) {
