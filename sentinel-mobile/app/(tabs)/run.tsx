@@ -18,7 +18,7 @@ import {
   View,
 } from "react-native";
 import { listWorkflows, runWorkflow, type WorkflowSummary } from "@/workflows";
-import { togglePinned, usePinned } from "@/pinned";
+import { syncNames, togglePinned, usePinned } from "@/pinned";
 import { Body, Card, Danger, Heading, Muted, Screen, Strong, Title } from "@/styles/ui";
 import { radius, space, typeScale, useTheme } from "@/styles/theme";
 
@@ -33,7 +33,11 @@ export default function Run() {
 
   const load = useCallback(async () => {
     try {
-      setAll(await listWorkflows());
+      const list = await listWorkflows();
+      setAll(list);
+      // A workflow renamed on the web should not leave a stale label on the home screen — the
+      // widget has no way to look a name up for itself.
+      syncNames(list.map((w) => ({ id: w.id, name: w.name })));
       setProblem(null);
     } catch (e) {
       setProblem((e as Error).message);
@@ -62,8 +66,9 @@ export default function Run() {
   }
 
   /** Starred first — a favourite is the thing you opened this screen to press. */
+  const pinnedIds = pinned.map((p) => p.id);
   const ordered = [...all].sort((a, b) => {
-    const rank = (id: string) => (pinned.includes(id) ? 0 : 1);
+    const rank = (id: string) => (pinnedIds.includes(id) ? 0 : 1);
     return rank(a.id) - rank(b.id) || a.name.localeCompare(b.name);
   });
 
@@ -97,9 +102,13 @@ export default function Run() {
                 <Strong>{w.name}</Strong>
                 {w.description ? <Muted>{w.description}</Muted> : null}
               </View>
-              <Pressable onPress={() => togglePinned(w.id)} hitSlop={12} style={styles.star}>
+              <Pressable
+                onPress={() => togglePinned({ id: w.id, name: w.name })}
+                hitSlop={12}
+                style={styles.star}
+              >
                 <Text style={[typeScale.title, { color: t.foreground }]}>
-                  {pinned.includes(w.id) ? "★" : "☆"}
+                  {pinnedIds.includes(w.id) ? "★" : "☆"}
                 </Text>
               </Pressable>
             </View>

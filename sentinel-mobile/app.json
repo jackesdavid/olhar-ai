@@ -12,7 +12,13 @@
       "bundleIdentifier": "com.olharai.app",
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "Olhar AI connects to the development server and to cameras on your local network."
-      }
+      },
+      "entitlements": {
+        "com.apple.security.application-groups": [
+          "group.com.olharai.app"
+        ]
+      },
+      "appleTeamId": "3A4H2Y6ZVM"
     },
     "android": {
       "package": "com.olharai.app"
@@ -27,6 +33,12 @@
         "expo-camera",
         {
           "cameraPermission": "Olhar AI uses the camera to capture faces while you are on the capture screen."
+        }
+      ],
+      [
+        "@bacons/apple-targets",
+        {
+          "appleTeamId": "3A4H2Y6ZVM"
         }
       ]
     ],
