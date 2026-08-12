@@ -2524,17 +2524,6 @@
       return;
     }
 
-    // ⌘D is the one shortcut that survives a focused field. Clicking a node very often leaves the
-    // caret in one of its inline value inputs, so requiring a click on empty canvas first — with
-    // nothing on screen saying so — is indistinguishable from "duplicate is broken". ⌘C and ⌘V are
-    // deliberately NOT exempted: inside a text field they mean copy/paste TEXT, and stealing them
-    // for nodes would break the more common thing.
-    if (inField && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") {
-      e.preventDefault();
-      duplicateSelection();
-      return;
-    }
-
     if (inField) return;  // remaining shortcuts require no active text input
 
     // Backtick (`): collapse/expand the chrome (rail + console) as a group. Rebound off Tab
@@ -2576,6 +2565,17 @@
       return;
     }
 
+    // d: duplicate the selection. A BARE key, joining the tool letters above, because ⌘D belongs
+    // to the browser — Chrome opens its bookmark dialog on it, and while `preventDefault` can
+    // usually suppress that, "usually" is not a thing to build a shortcut on. Every round we spent
+    // on the clipboard came from claiming keys the platform had already claimed; this one is ours
+    // outright, and it costs nothing to reach for.
+    if ((e.key === "d" || e.key === "D") && !contextOpen) {
+      e.preventDefault();
+      duplicateSelection();
+      return;
+    }
+
     // n / N: open node search palette at cursor position.
     if ((e.key === "n" || e.key === "N") && !editLocked && !contextOpen && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
@@ -2601,14 +2601,12 @@
       return;
     }
 
-    // Select-all and Duplicate. ⌘C / ⌘X / ⌘V are deliberately NOT here — they are handled by the
-    // window's real `copy`/`cut`/`paste` events (see `onWindowCopy` and friends), because
-    // re-deriving them from `keydown` is what let the V tool swallow ⌘V in the first place.
-    // Duplicate has no platform event of its own, so it stays a keybind.
+    // Select-all. ⌘C / ⌘X / ⌘V are deliberately NOT here — they are handled by the window's real
+    // `copy`/`cut`/`paste` events (see `onWindowCopy` and friends), because re-deriving them from
+    // `keydown` is what let the V tool swallow ⌘V in the first place. ⌘D is not here either: it
+    // is Chrome's bookmark shortcut, and duplicate now lives on a bare `d` above.
     if (e.metaKey || e.ctrlKey) {
-      const k = e.key.toLowerCase();
-      if (k === "a") { selectAll(); e.preventDefault(); return; }
-      if (k === "d") { duplicateSelection(); e.preventDefault(); return; }
+      if (e.key.toLowerCase() === "a") { selectAll(); e.preventDefault(); return; }
     }
   }
 
@@ -2906,7 +2904,7 @@
     for (const n of selectedNodeList()) removeNode(n);
   }
 
-  /** Copy + paste in one step, so the button and ⌘D take the SAME path.
+  /** Copy + paste in one step, so the button and the `d` key take the SAME path.
    *
    *  It fills the clipboard too — that is what every editor does, and it means a duplicate can be
    *  pasted again elsewhere. Deliberately NOT routed through `copySelection()`: that would fire a
