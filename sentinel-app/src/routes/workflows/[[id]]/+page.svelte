@@ -2516,13 +2516,17 @@
     }
 
     // Copy / Cut / Paste / Duplicate of the selection (Cmd/Ctrl).
-    if ((e.metaKey || e.ctrlKey) && !editLocked) {
+    //
+    // COPY and SELECT-ALL are not gated on `editLocked`: neither mutates the graph, and refusing
+    // to let someone copy nodes out of a running workflow — to paste into another one — is a
+    // restriction with no reason behind it. The three that DO mutate say why they refused.
+    if (e.metaKey || e.ctrlKey) {
       const k = e.key.toLowerCase();
       if (k === "c") { copySelection(); e.preventDefault(); return; }
-      if (k === "x") { copySelection(); deleteSelection(); e.preventDefault(); return; }
-      if (k === "v") { pasteClipboard(); e.preventDefault(); return; }
-      if (k === "d") { copySelection(); pasteClipboard(); e.preventDefault(); return; }
       if (k === "a") { selectAll(); e.preventDefault(); return; }
+      if (k === "x") { e.preventDefault(); if (!lockedNotice()) { copySelection(); deleteSelection(); } return; }
+      if (k === "v") { pasteClipboard(); e.preventDefault(); return; }
+      if (k === "d") { duplicateSelection(); e.preventDefault(); return; }
     }
   }
 
@@ -2789,12 +2793,33 @@
     clipboard = { nodes: cloned, edges };
   }
   function deleteSelection() {
+    if (lockedNotice()) return;
     for (const n of selectedNodeList()) removeNode(n);
+  }
+
+  /** Copy + paste in one step, so the button and ⌘D take the SAME path. They used to inline
+   *  `copySelection(); pasteClipboard();` in two places, which is how two callers drift. */
+  function duplicateSelection() {
+    if (lockedNotice()) return;
+    if (!selectedNodeList().length) return;
+    copySelection();
+    pasteClipboard();
+  }
+
+  /** An armed or running graph is read-only — you cannot even drag a node in it. That is
+   *  deliberate, but it used to be SILENT: ⌘V, Duplicate and Delete simply did nothing, and the
+   *  selection toolbar hid itself, so the only available conclusion was "the editor is broken".
+   *  Returns true when the action must not proceed, having said why. */
+  function lockedNotice(): boolean {
+    if (!editLocked) return false;
+    toast.error(isRunning ? t.lockedRunning : t.lockedArmed);
+    return true;
   }
   // Paste the clipboard offset from the originals, recreating internal wiring. Local —
   // nodes + wires get client ids and render instantly; persisted on Save (#122).
   function pasteClipboard() {
-    if (!graph || editLocked || !clipboard.nodes.length) return;
+    if (!graph || !clipboard.nodes.length) return;
+    if (lockedNotice()) return;
     const g = graph;
     const OFFSET = 48;
     const realOf = new Map<number, number>();
@@ -4226,21 +4251,21 @@
                 wiring from #{pending.node}.{pending.port} — click an input port
                 <button class="text-muted-foreground transition-colors hover:text-foreground" onclick={() => (pending = null)}>cancel</button>
               </div>
-            {:else if selectedIds.size > 0 && !editLocked}
+            {:else if selectedIds.size > 0}
               <!-- Selection actions: the copy/duplicate/paste/delete shortcuts are keyboard-only,
                    so surface them as buttons for touch (tablet has no ⌘C/⌘V/Delete). -->
               <div class="flex items-center gap-1 rounded-lg border border-border bg-hud p-1 shadow-lg backdrop-blur">
                 <span class="px-1.5 text-[11px] text-muted-foreground">{selectedIds.size} selected</span>
-                <Button variant="ghost" size="icon" class="size-8" title={t.duplicateShortcut} onclick={() => { copySelection(); pasteClipboard(); }}>
+                <Button variant="ghost" size="icon" class="size-8" title={editLocked ? t.lockedArmed : t.duplicateShortcut} disabled={editLocked} onclick={duplicateSelection}>
                   <CopyPlus class="size-4" />
                 </Button>
                 <Button variant="ghost" size="icon" class="size-8" title={t.copyShortcut} onclick={copySelection}>
                   <Copy class="size-4" />
                 </Button>
-                <Button variant="ghost" size="icon" class="size-8" title={t.pasteShortcut} disabled={!clipboard.nodes.length} onclick={pasteClipboard}>
+                <Button variant="ghost" size="icon" class="size-8" title={editLocked ? t.lockedArmed : t.pasteShortcut} disabled={!clipboard.nodes.length || editLocked} onclick={pasteClipboard}>
                   <ClipboardPaste class="size-4" />
                 </Button>
-                <Button variant="ghost" size="icon" class="size-8 text-muted-foreground hover:text-destructive" title={t.deleteSelection} onclick={deleteSelection}>
+                <Button variant="ghost" size="icon" class="size-8 text-muted-foreground hover:text-destructive" title={editLocked ? t.lockedArmed : t.deleteSelection} disabled={editLocked} onclick={deleteSelection}>
                   <Trash2 class="size-4" />
                 </Button>
               </div>
