@@ -8,18 +8,10 @@
 // which lands in the same `runWorkflow` this screen calls. One implementation, two entry points —
 // a widget must not become a second, subtly different way to run a workflow.
 import { useCallback, useEffect, useState } from "react";
-import {
-  ActivityIndicator,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { listWorkflows, runWorkflow, type WorkflowSummary } from "@/workflows";
 import { syncNames, togglePinned, usePinned } from "@/pinned";
-import { Body, Card, Danger, Heading, Muted, Screen, Strong, Title } from "@/styles/ui";
+import { Card, Danger, EmptyState, Loader, Muted, Screen, Strong, Title } from "@/styles/ui";
 import { radius, space, typeScale, useTheme } from "@/styles/theme";
 
 export default function Run() {
@@ -91,7 +83,7 @@ export default function Run() {
         <Title>Run</Title>
         <Muted>One tap starts a workflow. Star the ones you want on your home-screen widget.</Muted>
 
-        {loading && all.length === 0 ? <ActivityIndicator color={t.mutedForeground} /> : null}
+        {loading && all.length === 0 ? <Loader label="Loading workflows…" /> : null}
         {problem ? <Danger>{problem}</Danger> : null}
         {note ? <Muted>{note}</Muted> : null}
 
@@ -132,10 +124,9 @@ export default function Run() {
         ))}
 
         {!loading && ordered.length === 0 && !problem ? (
-          <Card>
-            <Heading>No workflows yet</Heading>
-            <Body>Build one in the web app and it shows up here, ready to run with a tap.</Body>
-          </Card>
+          <EmptyState title="No workflows yet">
+            Build one in the web app and it shows up here, ready to run with a tap.
+          </EmptyState>
         ) : null}
       </ScrollView>
     </Screen>

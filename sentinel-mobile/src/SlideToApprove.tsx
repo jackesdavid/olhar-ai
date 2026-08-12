@@ -23,12 +23,19 @@ export function SlideToApprove({
   disabled,
   busy,
   onCommit,
+  onDragging,
 }: {
   label: string;
   confirmingLabel: string;
   disabled?: boolean;
   busy?: boolean;
   onCommit: () => void;
+  /** Fires true while a finger is on the knob. The parent uses it to FREEZE its ScrollView.
+   *
+   *  Claiming the pan responder is not enough on its own: the ScrollView's native recogniser keeps
+   *  running underneath, so the page slides while the knob does and the gesture is lost. The only
+   *  reliable answer is for the scroll view to stop scrolling while a slide is in progress. */
+  onDragging?: (active: boolean) => void;
 }) {
   const t = useTheme();
   const x = useRef(new Animated.Value(0)).current;
@@ -45,27 +52,38 @@ export function SlideToApprove({
   const travelRef = useRef(0);
   const lockedRef = useRef(false);
   const commitRef = useRef(onCommit);
+  const draggingRef = useRef(onDragging);
   useEffect(() => {
     lockedRef.current = !!disabled || !!busy;
   }, [disabled, busy]);
   useEffect(() => {
     commitRef.current = onCommit;
   }, [onCommit]);
+  useEffect(() => {
+    draggingRef.current = onDragging;
+  }, [onDragging]);
 
   const responder = useRef(
     PanResponder.create({
+      // CLAIM ON TOUCH-DOWN, not on movement. A finger on the knob is a slide, full stop — the
+      // parent ScrollView must never get a say. Deciding by direction (|dx| > |dy|) meant a slide
+      // with any vertical drift handed the gesture to the scroll view part-way, which terminated
+      // the responder and sprang the knob back to zero. Reported as exactly that: scroll a little
+      // and the slide position is lost.
       onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 2,
-      // Claim the gesture before the ScrollView can steal it: a mostly-horizontal drag belongs to
-      // the slider, and without this the parent scroll swallows it on a short screen.
-      onMoveShouldSetPanResponderCapture: (_e, g) =>
-        Math.abs(g.dx) > 4 && Math.abs(g.dx) > Math.abs(g.dy),
+      onStartShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponderCapture: () => true,
       onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: () => {
+        if (!committed.current && !lockedRef.current) draggingRef.current?.(true);
+      },
       onPanResponderMove: (_e, g) => {
         if (committed.current || lockedRef.current) return;
         x.setValue(Math.max(0, Math.min(travelRef.current, g.dx)));
       },
       onPanResponderRelease: (_e, g) => {
+        draggingRef.current?.(false);
         if (committed.current || lockedRef.current) return;
         const travel = travelRef.current;
         const reached = travel > 0 && g.dx >= travel * COMMIT;
@@ -79,7 +97,10 @@ export function SlideToApprove({
         }
         Animated.spring(x, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
       },
+      // If the system takes the gesture anyway (a call, a system sheet), HOLD the knob where it
+      // is rather than rewinding. Rewinding punishes someone for an interruption they did not cause.
       onPanResponderTerminate: () => {
+        draggingRef.current?.(false);
         if (!committed.current) {
           Animated.spring(x, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
         }
