@@ -9,9 +9,30 @@
 // batched, silenced or simply lost. So the pending list is the PATH and the push is the
 // optimisation, not the other way round. A request that exists only inside a notification is a
 // request that quietly expires.
-import * as LocalAuthentication from "expo-local-authentication";
 import { api } from "./session";
 import { thisDeviceId } from "./push";
+
+/**
+ * Biometrics, resolved at CALL time rather than imported at module load.
+ *
+ * `expo-local-authentication` is a native module: a binary built before it was added does not
+ * contain it, and a top-level `import` of a missing native module throws while the bundle is
+ * evaluating — taking the whole app down, not just this screen. A gate the phone cannot confirm is
+ * a degraded feature; an app that will not start is an outage.
+ *
+ * `null` means this build cannot confirm anyone is present. The screen says so and refuses to
+ * answer, because sending a `factor` we did not actually obtain is the silent downgrade decision 02
+ * exists to prevent — worse than not answering at all.
+ */
+type LocalAuth = typeof import("expo-local-authentication");
+function localAuth(): LocalAuth | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require("expo-local-authentication") as LocalAuth;
+  } catch {
+    return null;
+  }
+}
 
 /** A request as the phone sees it. No token — the phone already has that from the push, and
  *  handing it back over this endpoint would make the token pointless. */
@@ -67,16 +88,22 @@ export async function answer(
 
 /** Was a biometric even possible on this phone? Drives the copy, not the decision. */
 export async function biometricsAvailable(): Promise<boolean> {
-  const [hardware, enrolled] = await Promise.all([
-    LocalAuthentication.hasHardwareAsync(),
-    LocalAuthentication.isEnrolledAsync(),
-  ]);
+  const LA = localAuth();
+  if (!LA) return false;
+  const [hardware, enrolled] = await Promise.all([LA.hasHardwareAsync(), LA.isEnrolledAsync()]);
   return hardware && enrolled;
+}
+
+/** Can this build confirm a person at all? False on a binary predating the native module. */
+export function canConfirmPresence(): boolean {
+  return localAuth() !== null;
 }
 
 export type ConfirmResult =
   | { ok: true; factor: AuthFactor }
-  | { ok: false; cancelled: boolean };
+  | { ok: false; cancelled: boolean }
+  /** This build has no way to check who is holding the phone. Never answer in this state. */
+  | { ok: false; unavailable: true; cancelled: false };
 
 /**
  * Confirm the person is here, and report WHICH factor did it.
@@ -91,8 +118,10 @@ export type ConfirmResult =
  * of decision 02 — refusing would make a single-device gate permanently unanswerable.
  */
 export async function confirmPresence(prompt: string): Promise<ConfirmResult> {
+  const LA = localAuth();
+  if (!LA) return { ok: false, unavailable: true, cancelled: false };
   if (await biometricsAvailable()) {
-    const bio = await LocalAuthentication.authenticateAsync({
+    const bio = await LA.authenticateAsync({
       promptMessage: prompt,
       disableDeviceFallback: true,
       cancelLabel: "Use passcode",
@@ -105,7 +134,7 @@ export async function confirmPresence(prompt: string): Promise<ConfirmResult> {
     }
   }
 
-  const pass = await LocalAuthentication.authenticateAsync({
+  const pass = await LA.authenticateAsync({
     promptMessage: prompt,
     disableDeviceFallback: false,
   });
