@@ -83,13 +83,28 @@ async fn rename(
     auth::require(&c, "beacons.write")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
+    let label = b.label.clone();
     blocking(move || {
         let store: NotificationStore =
             Arc::new(Mutex::new(notification::repo::load_beacons(&db, tid)));
-        notification::rename_target(&store, Some(&db), tid, chat_id, &b.label)
+        // The OLD label first: a Recipient is addressed by name, so renaming one without
+        // repointing the graphs that used it breaks them silently — the same bug the phone
+        // rename fixes, and it has been here as long as beacons have.
+        let old = store
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|t| t.chat_id == chat_id)
+            .map(|t| t.label.clone())
+            .unwrap_or_default();
+        let new_label = notification::rename_target(&store, Some(&db), tid, chat_id, &label)?;
+        app_core::workflows::repo::rename_recipient(&db, tid, &old, &new_label);
+        Ok::<(), String>(())
     })
     .await?
     .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    // Push the rewritten labels to the running engine, which holds graphs in memory.
+    crate::domain::workflows::poke_reload(&st.db).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

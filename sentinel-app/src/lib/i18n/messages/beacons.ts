@@ -32,6 +32,13 @@ export const beacons = {
     share: "Share",
     open: "Open",
     shareTitle: `Connect Telegram to ${PRODUCT}`,
+    // Phones (#139): a registered phone is its own Recipient, addressed by the same label.
+    phonesTitle: "Phones",
+    phonesDescription:
+      "Phones signed in to the app. Each one is a Recipient a workflow can address by name.",
+    colPlatform: "Platform",
+    renamedAndRepointed: (n: number) =>
+      `Renamed — ${n} workflow${n === 1 ? "" : "s"} updated to match.`,
     shareText: "Tap to connect your Telegram to receive alerts:",
     noResponseHint:
       "Bot doesn't respond after opening? If they've messaged it before, Telegram won't resend the code — paste this to the bot instead:",
@@ -110,6 +117,13 @@ export const beacons = {
     share: "Compartilhar",
     open: "Abrir",
     shareTitle: `Conectar o Telegram ao ${PRODUCT}`,
+    // Celulares (#139): um celular registrado é um Destinatário, endereçado pelo mesmo nome.
+    phonesTitle: "Celulares",
+    phonesDescription:
+      "Celulares conectados ao app. Cada um é um Destinatário que um fluxo pode endereçar pelo nome.",
+    colPlatform: "Plataforma",
+    renamedAndRepointed: (n: number) =>
+      `Renomeado — ${n} fluxo${n === 1 ? "" : "s"} atualizado${n === 1 ? "" : "s"}.`,
     shareText: "Toque para conectar seu Telegram e receber alertas:",
     noResponseHint:
       "O bot não responde depois de abrir? Se a pessoa já conversou com ele antes, o Telegram não reenvia o código — cole isto no bot:",

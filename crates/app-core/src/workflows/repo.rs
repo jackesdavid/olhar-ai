@@ -114,6 +114,52 @@ pub fn load_global_templates(db: &Db) -> Vec<(Uuid, Graph)> {
     })
 }
 
+/// Point every graph that addressed `old` at `new` after a Recipient is renamed.
+///
+/// A Recipient is addressed BY LABEL: a node stores `config.recipient = "Jackes iPhone"`, and the
+/// engine resolves that string to a phone (or a Telegram beacon) at run time. So renaming one used
+/// to break every graph that used it, silently — `resolve_device_by_label` finds nothing, the gate
+/// takes `failure`, and the run log says "no registered phone" about a device sitting right there.
+/// Renaming and then discovering your automations stopped is a terrible way to learn that.
+///
+/// Rewrites two places, because a label can hide in either: a node's `recipient` config, and a
+/// graph variable of type `recipient` whose default carries the name. Returns how many graphs
+/// changed, so the caller can say so.
+///
+/// This is a stopgap for label-as-identity, not a defence of it. Addressing a device by its id
+/// would make renaming a non-event; that is a bigger change and wants its own card.
+pub fn rename_recipient(db: &Db, tenant_id: Uuid, old: &str, new: &str) -> usize {
+    if old == new || old.is_empty() {
+        return 0;
+    }
+    let mut graphs = load(db, tenant_id);
+    let mut touched = 0usize;
+    for g in &mut graphs {
+        let mut changed = false;
+        for n in &mut g.nodes {
+            if n.config.get("recipient").and_then(|v| v.as_str()) == Some(old) {
+                n.config["recipient"] = serde_json::Value::String(new.to_string());
+                changed = true;
+            }
+        }
+        for v in &mut g.variables {
+            if v.ty == crate::workflows::domain::PortType::Recipient
+                && v.default.as_deref() == Some(old)
+            {
+                v.default = Some(new.to_string());
+                changed = true;
+            }
+        }
+        if changed {
+            touched += 1;
+        }
+    }
+    if touched > 0 {
+        save(db, tenant_id, &graphs);
+    }
+    touched
+}
+
 /// Replace the whole graph set (delete-all + insert each as a JSON row), mirroring
 /// the in-memory store after every editor mutation. Best-effort.
 pub fn save(db: &Db, tenant_id: Uuid, graphs: &[Graph]) {
