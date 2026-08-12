@@ -34,6 +34,8 @@
   import Copy from "@lucide/svelte/icons/copy";
   import CopyPlus from "@lucide/svelte/icons/copy-plus";
   import ClipboardPaste from "@lucide/svelte/icons/clipboard-paste";
+  import Expand from "@lucide/svelte/icons/expand";
+  import Minimize2 from "@lucide/svelte/icons/minimize-2";
   import Bookmark from "@lucide/svelte/icons/bookmark";
   import LayoutTemplate from "@lucide/svelte/icons/layout-template";
   import Workflow from "@lucide/svelte/icons/workflow";
@@ -501,6 +503,26 @@
   // to exactly what it was: a panel you'd already closed by hand stays closed. Any manual toggle
   // clears the memory, so the next press is a fresh collapse rather than a partial restore.
   let preToggledPanels: { rail: boolean; console: boolean } | null = null;
+  /** The tool to return to when Space is released; null when not space-panning. */
+  let spacePanPrev = $state<typeof editorMode | null>(null);
+
+  /** Release the temporary pan. Also called on blur: alt-tabbing mid-hold must not strand the
+   *  editor in pan mode, because the keyup lands in another window and never reaches us. */
+  function releaseSpacePan() {
+    if (spacePanPrev === null) return;
+    editorMode = spacePanPrev;
+    spacePanPrev = null;
+  }
+
+  function onWindowKeyUp(e: KeyboardEvent) {
+    if (e.key === " ") releaseSpacePan();
+  }
+
+  /** True when the canvas already has the window — drives the button's icon and its label. */
+  function chromeHidden(): boolean {
+    return !panelOpen && !consoleOpen;
+  }
+
   function toggleChrome() {
     if (preToggledPanels) {
       panelOpen = preToggledPanels.rail;
@@ -950,8 +972,14 @@
 
   // ---- required-input validation -------------------------------------------
   // A required input is "filled" when it's wired or has a usable config literal.
-  function isFilled(node: Node, port: CatPort): boolean {
-    if (filledPorts.has(`${node.id}:${port.name}`)) return true;
+  /** Does this port's `config` entry hold a value a person actually typed?
+   *
+   *  An inline literal for input `foo` lives at `node.config.foo` — config key == port name, no
+   *  separate values map (Rust: "Static settings + literal fallbacks for unconnected input
+   *  ports"). What counts as "a value" is per type, which is why this is one function used by
+   *  both `isFilled` and the canvas indicator: two copies of this rule would drift, and the
+   *  canvas would start disagreeing with the red required-input badge. */
+  function hasLiteral(node: Node, port: CatPort): boolean {
     const v = node.config[port.name];
     switch (port.type) {
       case "bool":
@@ -965,6 +993,20 @@
       default: // text / num
         return v !== undefined && v !== null && String(v).trim() !== "";
     }
+  }
+
+  function isFilled(node: Node, port: CatPort): boolean {
+    if (filledPorts.has(`${node.id}:${port.name}`)) return true;
+    return hasLiteral(node, port);
+  }
+
+  /** An UNCONNECTED input carrying a typed value — what the canvas marks (card #107).
+   *
+   *  Wired ports already read as filled through their colour; the gap was an unconnected port
+   *  that is nonetheless configured. Before this, "empty" and "someone typed 30 seconds in here"
+   *  looked identical, and the only way to tell was to open the panel node by node. */
+  function hasInlineValue(node: Node, port: CatPort): boolean {
+    return !filledPorts.has(`${node.id}:${port.name}`) && hasLiteral(node, port);
   }
   function requiredUnfilled(node: Node): CatPort[] {
     return (catalog[node.kind]?.inputs ?? []).filter((p) => p.required && !isFilled(node, p));
@@ -2418,9 +2460,30 @@
       return;
     }
 
+    // Space: hold to pan, release to go back (card #60). A temporary H without leaving V — the
+    // tools keep working exactly as they do now, this is only a shortcut for the common case of
+    // "I want to look somewhere else for a second".
+    //
+    // Guarded against key-repeat: `keydown` fires over and over while held, and without the flag
+    // the second one would remember "pan" as the tool to restore and strand the editor there.
+    if (e.key === " " && !contextOpen) {
+      e.preventDefault(); // and stop the page scrolling under the canvas
+      if (spacePanPrev === null && editorMode !== "pan") {
+        spacePanPrev = editorMode;
+        editorMode = "pan";
+        pending = null; // a wire in progress does not survive a tool change
+      }
+      return;
+    }
+
     // Tool shortcuts (mouse parity for the touch tool palette): v move, h pan, l link, b break.
+    //
+    // BARE keys only. Without the modifier guard this block ran first and swallowed ⌘V — the
+    // paste never reached the clipboard handler below, it just switched to the Move tool. ⌘B and
+    // ⌘H went the same way. A shortcut table that ignores modifiers will always eat the platform
+    // ones sooner or later.
     const toolKey: Record<string, typeof editorMode> = { v: "move", h: "pan", l: "link", b: "break" };
-    if (toolKey[e.key] && !contextOpen) {
+    if (toolKey[e.key] && !contextOpen && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
       editorMode = toolKey[e.key];
       pending = null; // switching tools cancels an in-progress wire
@@ -2428,7 +2491,7 @@
     }
 
     // n / N: open node search palette at cursor position.
-    if ((e.key === "n" || e.key === "N") && !editLocked && !contextOpen) {
+    if ((e.key === "n" || e.key === "N") && !editLocked && !contextOpen && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       dropAt = hoverWorld;
       contextPos = hoverClient;
@@ -3246,6 +3309,8 @@
 
 <svelte:window
   onkeydown={onWindowKey}
+  onkeyup={onWindowKeyUp}
+  onblur={releaseSpacePan}
   onbeforeunload={(e) => {
     if (dirty) {
       e.preventDefault();
@@ -3759,6 +3824,7 @@
                   {#each dataPorts(k, "in") as p, i}
                     {@const wired = wiredInto(n.id, p.name)}
                     {@const need = p.required && !isFilled(n, p)}
+                    {@const inline = !wired && hasInlineValue(n, p)}
                     {@const py = dataPortY(i) + nodeExprH(n)}
                     <circle
                       cx="0"
@@ -3770,6 +3836,21 @@
                       onclick={() => clickInPort(n, p.name)}
                       role="presentation"
                     />
+                    <!-- Typed by hand, not wired (#107). A small core in the port's own type
+                         colour: it reads as "this one is set" at a glance, stays distinct from a
+                         wired port (which is filled edge to edge) and from required-empty (red
+                         stroke), and needs no new colour in a monochrome port language. -->
+                    {#if inline}
+                      <circle
+                        cx="0"
+                        cy={py}
+                        r={portR * 0.45}
+                        style="fill: {portColor[p.type]}"
+                        class="pointer-events-none"
+                      >
+                        <title>Value set by hand</title>
+                      </circle>
+                    {/if}
                     <text
                       x="11"
                       y={py + 3}
@@ -4120,6 +4201,22 @@
             <span class="w-10 text-center text-[11px] tabular-nums text-muted-foreground">{Math.round(zoom * 100)}%</span>
             <Button variant="ghost" size="icon" class="size-8" title={t.zoomIn} onclick={() => zoomBy(1.2)}><ZoomIn class="size-4" /></Button>
             <Button variant="ghost" size="icon" class="size-8" title={t.fitToView} onclick={fitView}><Maximize class="size-4" /></Button>
+            <!-- Hide every panel and give the canvas the window. The backtick shortcut has done
+                 this since #105, but a keyboard-only affordance is invisible: nobody discovers it,
+                 and it does not exist at all on a tablet. -->
+            <Button
+              variant="ghost"
+              size="icon"
+              class="size-8"
+              title={chromeHidden() ? t.showPanels : t.hidePanels}
+              onclick={toggleChrome}
+            >
+              {#if chromeHidden()}
+                <Minimize2 class="size-4" />
+              {:else}
+                <Expand class="size-4" />
+              {/if}
+            </Button>
           </div>
 
           <!-- bottom-center: wiring hint · selection actions (touch-reachable) · idle hint -->

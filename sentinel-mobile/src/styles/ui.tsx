@@ -2,6 +2,20 @@
 // Deliberately small — these mirror the web's card / button / muted-text roles, not a component kit.
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewProps } from "react-native";
 import { radius, space, setThemePref, typeScale, useTheme, useThemePref, type ThemePref } from "./theme";
+import { Loader as MarkLoader, PulseDot } from "./Mark";
+
+export { EmptyState, OlharMark, PulseDot } from "./Mark";
+
+/** The loader: the dot-field breathing. Never a bare spinner — the mark IS the brand. */
+export function Loader({ label }: { label?: string }) {
+  const t = useTheme();
+  return (
+    <View style={{ alignItems: "center", gap: space.md, paddingVertical: space.xl }}>
+      <MarkLoader />
+      {label ? <Text style={[typeScale.body, { color: t.mutedForeground }]}>{label}</Text> : null}
+    </View>
+  );
+}
 
 export function Card({ style, ...rest }: ViewProps) {
   const t = useTheme();
@@ -9,10 +23,49 @@ export function Card({ style, ...rest }: ViewProps) {
     <View
       {...rest}
       style={[
-        { backgroundColor: t.card, borderColor: t.border, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.xl, padding: space.lg, gap: space.md },
+        {
+          backgroundColor: t.card,
+          borderColor: t.border,
+          // 1px, not hairline. On the web a card lifts off the page through hover, an ambient
+          // shadow and a wide viewport; a phone has none of those, and at 3× a hairline over a
+          // nine-value elevation step is a card you cannot see. Reported as exactly that.
+          borderWidth: 1,
+          borderRadius: radius.xl,
+          padding: space.lg,
+          gap: space.md,
+          // Depth, subtle: the panel sits ABOVE the canvas rather than being tinted differently.
+          shadowColor: "#000",
+          shadowOpacity: 0.18,
+          shadowRadius: 12,
+          shadowOffset: { width: 0, height: 4 },
+          elevation: 3,
+        },
         style,
       ]}
     />
+  );
+}
+
+/** A card you can press. Tactile feedback on every interactive surface — the web's `.press`. */
+export function PressableCard({
+  onPress,
+  disabled,
+  style,
+  children,
+}: {
+  onPress: () => void;
+  disabled?: boolean;
+  style?: ViewProps["style"];
+  children: React.ReactNode;
+}) {
+  return (
+    <Pressable onPress={onPress} disabled={disabled}>
+      {({ pressed }) => (
+        <Card style={[pressed && { transform: [{ scale: 0.985 }], opacity: 0.92 }, style]}>
+          {children}
+        </Card>
+      )}
+    </Pressable>
   );
 }
 
@@ -47,14 +100,15 @@ export function Strong({ children }: { children: React.ReactNode }) {
   return <Text style={{ fontWeight: "600", color: t.foreground }}>{children}</Text>;
 }
 
-/** Status dot + label, matching the web's live/offline treatment. */
+/** Status + the signal ping. Liveness reads through MOTION, not a colour swatch — the ink theme
+ *  has no brand green, and a pulsing dot says "right now" in a way a static one cannot. */
 export function Status({ ok, children }: { ok: boolean; children: React.ReactNode }) {
   const t = useTheme();
   return (
-    <Text style={{ fontWeight: "600", color: ok ? t.foreground : t.destructive }}>
-      {ok ? "● " : "● "}
-      {children}
-    </Text>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginLeft: -6 }}>
+      <PulseDot live={ok} />
+      <Text style={{ fontWeight: "600", color: ok ? t.foreground : t.destructive }}>{children}</Text>
+    </View>
   );
 }
 

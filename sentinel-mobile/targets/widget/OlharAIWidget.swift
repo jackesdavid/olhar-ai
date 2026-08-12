@@ -128,18 +128,62 @@ struct Provider: AppIntentTimelineProvider {
 
 // MARK: - The tile
 
+/// The Olhar AI mark, drawn where the widget can use it.
+///
+/// An eclipse: a filled disc with a crescent bitten out of its upper right, a small dot inside the
+/// bite and a satellite further out. Traced from `assets/olhar-ai-mark-white.svg` — the same
+/// geometry as the app icon and the in-app mark, so the widget is not the one surface of the
+/// product that fails to look like the product. It is also the surface people see most often.
+struct EyeMark: View {
+  var size: CGFloat
+  /// The surface behind the mark: the crescent is SUBTRACTIVE, so the bite has to be painted in
+  /// whatever colour sits under it.
+  var bg: Color
+
+  // The SVG's own 120×120 space, so these numbers match the source file line for line.
+  private let box: CGFloat = 120
+  private let discR: CGFloat = 31
+  private let bite = (x: CGFloat(71), y: CGFloat(49), r: CGFloat(27))
+  private let pupil = (x: CGFloat(71), y: CGFloat(49), r: CGFloat(6))
+  private let satellite = (x: CGFloat(95.4), y: CGFloat(24.6), r: CGFloat(4))
+
+  var body: some View {
+    let k = size / box
+    ZStack(alignment: .topLeading) {
+      Circle()
+        .frame(width: discR * 2 * k, height: discR * 2 * k)
+        .offset(x: (box / 2 - discR) * k, y: (box / 2 - discR) * k)
+      Circle()
+        .foregroundStyle(bg)
+        .frame(width: bite.r * 2 * k, height: bite.r * 2 * k)
+        .offset(x: (bite.x - bite.r) * k, y: (bite.y - bite.r) * k)
+      Circle()
+        .frame(width: pupil.r * 2 * k, height: pupil.r * 2 * k)
+        .offset(x: (pupil.x - pupil.r) * k, y: (pupil.y - pupil.r) * k)
+      Circle()
+        .frame(width: satellite.r * 2 * k, height: satellite.r * 2 * k)
+        .offset(x: (satellite.x - satellite.r) * k, y: (satellite.y - satellite.r) * k)
+    }
+    .frame(width: size, height: size, alignment: .topLeading)
+  }
+}
+
 struct WidgetView: View {
   var entry: WorkflowEntry
   @Environment(\.widgetFamily) private var family
+
+  /// The dark ramp's page stop from `styles/sentinel-tokens.css`, mirrored here because a widget
+  /// cannot read CSS vars. One near-black canvas, one off-white ink — the app's two colours.
+  static let canvas = Color(red: 0.082, green: 0.082, blue: 0.082)
+  static let ink = Color(red: 0.980, green: 0.980, blue: 0.980)
 
   var body: some View {
     if let w = entry.workflow {
       // The whole tile is the tap target. A widget button people have to aim at is one they open
       // the app instead of using.
       Link(destination: URL(string: "olharai://run/\(w.id)")!) {
-        VStack(alignment: .leading, spacing: 6) {
-          Image(systemName: "play.circle.fill")
-            .font(.system(size: family == .systemSmall ? 26 : 30, weight: .semibold))
+        VStack(alignment: .leading, spacing: 8) {
+          EyeMark(size: family == .systemSmall ? 30 : 34, bg: Self.canvas)
           Spacer(minLength: 0)
           Text(w.name)
             .font(.system(size: family == .systemSmall ? 15 : 17, weight: .semibold))
@@ -148,19 +192,20 @@ struct WidgetView: View {
             .multilineTextAlignment(.leading)
           Text("Tap to run")
             .font(.system(size: 12))
-            .foregroundStyle(.secondary)
+            .opacity(0.6)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
       }
       .buttonStyle(.plain)
     } else {
-      VStack(alignment: .leading, spacing: 6) {
-        Text("Olhar AI").font(.system(size: 15, weight: .semibold))
+      VStack(alignment: .leading, spacing: 8) {
+        EyeMark(size: 30, bg: Self.canvas)
+        Spacer(minLength: 0)
         Text(entry.appNeverOpened
              ? "Open the app once, then long-press here → Edit Widget."
              : "Long-press → Edit Widget to choose a workflow.")
           .font(.system(size: 12))
-          .foregroundStyle(.secondary)
+          .opacity(0.6)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
@@ -175,7 +220,12 @@ struct OlharAIWidget: Widget {
       intent: SelectWorkflowIntent.self,
       provider: Provider()
     ) { entry in
-      WidgetView(entry: entry).containerBackground(.fill.tertiary, for: .widget)
+      // The ink theme, not the system's translucent fill: one near-black canvas and one off-white
+      // ink, exactly the two the app uses. `#151515` is the dark ramp's page stop from
+      // `styles/sentinel-tokens.css`, mirrored here because a widget cannot read CSS vars.
+      WidgetView(entry: entry)
+        .foregroundStyle(WidgetView.ink)
+        .containerBackground(for: .widget) { WidgetView.canvas }
     }
     .configurationDisplayName("Run a workflow")
     .description("One tap to run a workflow you choose.")

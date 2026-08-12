@@ -10,7 +10,7 @@
 // connectivity — each has to say what happened plainly, because the alternative is a person tapping
 // a dead slider wondering whether they just opened their front door.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, AppState, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { AppState, Pressable, StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import {
   answer,
@@ -21,7 +21,17 @@ import {
   type PendingRequest,
 } from "@/deviceGate";
 import { SlideToApprove } from "@/SlideToApprove";
-import { Body, Card, Danger, Heading, Muted, Screen, Strong, Title } from "@/styles/ui";
+import {
+  Body,
+  Card,
+  Danger,
+  EmptyState,
+  Heading,
+  Loader,
+  Muted,
+  Screen,
+  Title,
+} from "@/styles/ui";
 import { space, typeScale, useTheme } from "@/styles/theme";
 
 /** Everything the screen can be. `answered` and `expired` are outcomes, not errors — they are what
@@ -51,7 +61,14 @@ export default function Approve() {
     return () => clearInterval(id);
   }, []);
 
+  // Once THIS session has answered, the screen is done: it shows the outcome and nothing re-reads
+  // over it. Without this the next foreground refresh finds the request gone from the pending list
+  // and replaces "Approved" with "Already answered" — technically true, and a pointless slap for
+  // the person who just answered it.
+  const settledHere = useRef(false);
+
   const load = useCallback(async () => {
+    if (settledHere.current) return;
     try {
       const pending = await listPending();
       // Prefer the request the push named; fall back to whatever is waiting, so opening the app
@@ -119,7 +136,10 @@ export default function Approve() {
         return;
       }
       const out = await answer(req.id, token, approved, who.factor);
-      if (out.ok) setPhase({ k: "answered", approved });
+      if (out.ok) {
+        settledHere.current = true;
+        setPhase({ k: "answered", approved });
+      }
       else if (out.settled) setPhase({ k: "settled" });
       else setPhase({ k: "offline", reason: out.reason });
     } finally {
@@ -129,16 +149,20 @@ export default function Approve() {
 
   return (
     <Screen>
-      <ScrollView contentContainerStyle={styles.body}>
-        {phase.k === "loading" && <ActivityIndicator />}
+      <View style={styles.body}>
+        {phase.k === "loading" && <Loader />}
 
         {(phase.k === "asking" || phase.k === "sending") && (
           <Card>
-            <Muted>{phase.req.flow_name}</Muted>
+            <Text style={[typeScale.caption, styles.eyebrow, { color: t.mutedForeground }]}>
+              {phase.req.flow_name.toUpperCase()}
+            </Text>
             <Title>{phase.req.prompt}</Title>
-            <Body>
-              <Strong>{formatLeft(left)}</Strong> left to decide
-            </Body>
+            {/* The clock is the only number here, so it gets tabular figures — a countdown that
+                reflows every second is one nobody trusts. */}
+            <Text style={[typeScale.body, styles.clock, { color: t.foreground }]}>
+              {formatLeft(left)} <Text style={{ color: t.mutedForeground }}>left to decide</Text>
+            </Text>
 
             <SlideToApprove
               label="Slide to approve"
@@ -161,35 +185,27 @@ export default function Approve() {
         )}
 
         {phase.k === "answered" && (
-          <Card>
-            <Heading>{phase.approved ? "Approved" : "Denied"}</Heading>
-            <Muted>The automation has been told. You can close this.</Muted>
-          </Card>
+          <EmptyState title={phase.approved ? "Approved" : "Denied"}>
+            The automation has been told. You can close this.
+          </EmptyState>
         )}
 
         {phase.k === "expired" && (
-          <Card>
-            <Heading>Time is up</Heading>
-            <Muted>
-              Nobody answered in time, so the automation took its failure path. Nothing was approved.
-            </Muted>
-          </Card>
+          <EmptyState title="Time is up">
+            Nobody answered in time, so the automation took its failure path. Nothing was approved.
+          </EmptyState>
         )}
 
         {phase.k === "settled" && (
-          <Card>
-            <Heading>Already answered</Heading>
-            <Muted>This request was decided somewhere else, or it expired. Nothing to do.</Muted>
-          </Card>
+          <EmptyState title="Already answered">
+            This request was decided somewhere else, or it expired. Nothing to do.
+          </EmptyState>
         )}
 
         {phase.k === "none" && (
-          <Card>
-            <Heading>Nothing waiting</Heading>
-            <Muted>
-              When an automation needs your approval it will appear here, and your phone will buzz.
-            </Muted>
-          </Card>
+          <EmptyState title="Nothing waiting">
+            When an automation needs your approval it appears here, and your phone buzzes.
+          </EmptyState>
         )}
 
         {phase.k === "offline" && (
@@ -210,12 +226,14 @@ export default function Approve() {
             <Muted>Close</Muted>
           </Pressable>
         )}
-      </ScrollView>
+      </View>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
   body: { padding: space.lg, gap: space.lg },
+  eyebrow: { fontWeight: "600", letterSpacing: 0.8 },
+  clock: { fontVariant: ["tabular-nums"], fontWeight: "600" },
   deny: { alignSelf: "center", paddingVertical: space.md, paddingHorizontal: space.lg },
 });
