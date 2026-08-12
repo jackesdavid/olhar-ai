@@ -557,15 +557,38 @@
     }
   }
 
+  // BOTH paths, because neither one alone has proved reliable here.
+  //
+  // The native events are the better path when they fire: they carry the system clipboard, so
+  // nodes travel between graphs and tabs, and nothing in the keydown handler can intervene. But
+  // a browser only guarantees `copy`/`paste` when the page has a selection or an editable focus,
+  // and this canvas has neither — an SVG with an empty document selection. Whether Chrome fires
+  // them here is exactly the kind of thing I kept asserting instead of proving, and three rounds
+  // of "still not working" is the cost of that.
+  //
+  // So: the native event runs first and stamps `nativeClipboardAt`; a keydown fallback is queued
+  // and cancels itself if that stamp moved. One of the two always runs, and never both.
+  let nativeClipboardAt = 0;
+
+  /** Run `fn` shortly, unless a native clipboard event handles it first. keydown fires BEFORE
+   *  `copy`/`paste`, so the fallback has to wait rather than race. */
+  function clipboardFallback(fn: () => void) {
+    const at = nativeClipboardAt;
+    setTimeout(() => {
+      if (nativeClipboardAt === at) fn();
+    }, 120);
+  }
+
   function onWindowCopy(e: ClipboardEvent) {
     if (!canvasOwnsClipboard()) return;
     const snap = snapshotSelection();
     // Nothing selected: leave the event alone. Hijacking it would break copying text out of the
     // run console or a node title, which is a real thing people do on this page.
     if (!snap) return;
+    nativeClipboardAt = Date.now();
     e.preventDefault();
     clipboard = snap;
-    e.clipboardData?.setData("text/plain", JSON.stringify({ tag: CLIP_TAG, ...snap }));
+    writeSystemClipboard(e, snap);
     toast.success(t.copied(snap.nodes.length));
   }
 
@@ -573,9 +596,10 @@
     if (!canvasOwnsClipboard()) return;
     const snap = snapshotSelection();
     if (!snap) return;
+    nativeClipboardAt = Date.now();
     e.preventDefault();
     clipboard = snap;
-    e.clipboardData?.setData("text/plain", JSON.stringify({ tag: CLIP_TAG, ...snap }));
+    writeSystemClipboard(e, snap);
     // The copy half is always allowed — it mutates nothing. `deleteSelection` refuses the delete
     // half on an armed graph and says why, so a cut there degrades to a copy rather than to
     // silence.
@@ -589,8 +613,20 @@
     // in-page clipboard is the fallback for when the browser hands us nothing readable.
     if (fromSystem) clipboard = fromSystem;
     else if (!clipboard.nodes.length) return; // not ours and nothing held — let the page have it
+    nativeClipboardAt = Date.now();
     e.preventDefault();
     pasteClipboard();
+  }
+
+  /** Put the payload on the system clipboard. Wrapped because `setData` can throw on a synthetic
+   *  or already-consumed event, and losing the OS clipboard must not lose the in-page copy — the
+   *  toast has already promised the nodes were taken. */
+  function writeSystemClipboard(e: ClipboardEvent, snap: { nodes: Node[]; edges: Edge[] }) {
+    try {
+      e.clipboardData?.setData("text/plain", JSON.stringify({ tag: CLIP_TAG, ...snap }));
+    } catch (err) {
+      console.warn("Couldn't reach the system clipboard; the in-page copy still holds.", err);
+    }
   }
 
   /** True when the canvas already has the window — drives the button's icon and its label. */
@@ -2730,12 +2766,18 @@
       return;
     }
 
-    // Select-all. ⌘C / ⌘X / ⌘V are deliberately NOT here — they are handled by the window's real
-    // `copy`/`cut`/`paste` events (see `onWindowCopy` and friends), because re-deriving them from
-    // `keydown` is what let the V tool swallow ⌘V in the first place. ⌘D is not here either: it
-    // is Chrome's bookmark shortcut, and duplicate now lives on a bare `d` above.
+    // ⌘A, plus the clipboard FALLBACK for when the browser does not fire its own `copy`/`cut`/
+    // `paste` on this canvas (see the `clipboardFallback` note). Each one is queued rather than
+    // run: keydown arrives first, so acting immediately would double up with the native event
+    // whenever that does fire — and a double paste is a worse bug than the one being fixed.
+    //
+    // ⌘D is deliberately absent: it is Chrome's bookmark shortcut, and duplicate is a bare `d`.
     if (e.metaKey || e.ctrlKey) {
-      if (e.key.toLowerCase() === "a") { selectAll(); e.preventDefault(); return; }
+      const k = e.key.toLowerCase();
+      if (k === "a") { selectAll(); e.preventDefault(); return; }
+      if (k === "c") { clipboardFallback(copySelection); return; }
+      if (k === "x") { clipboardFallback(() => { copySelection(); deleteSelection(); }); return; }
+      if (k === "v") { clipboardFallback(pasteClipboard); return; }
     }
   }
 
