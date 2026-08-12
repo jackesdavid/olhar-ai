@@ -518,6 +518,81 @@
     if (e.key === " ") releaseSpacePan();
   }
 
+  // ---- clipboard: the BROWSER's copy/cut/paste events, not our own key matching -------------
+  //
+  // ⌘C used to be re-implemented from `keydown` — match the key, check the modifiers, hope no
+  // earlier branch swallowed it. That is a reconstruction of something the browser already tells
+  // us exactly, and it is fragile in every direction: another shortcut claims the key first (the
+  // V tool ate ⌘V for weeks), a keyboard layout reports a different `key`, an element stops
+  // propagation, focus sits somewhere unexpected. `copy`/`cut`/`paste` fire from the platform
+  // itself — the same events the Edit menu and a right-click → Paste fire — so none of that can
+  // intervene.
+  //
+  // It also buys the thing an internal variable never could: the payload rides on the SYSTEM
+  // clipboard, so nodes copied in one workflow paste into another, in another tab.
+
+  /** Our payload's marker. Namespaced because the plain-text flavour is what other apps see. */
+  const CLIP_TAG = "olharai/workflow-nodes@1";
+
+  function isTypingTarget(): boolean {
+    const el = document.activeElement as HTMLElement | null;
+    const tag = el?.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!el?.isContentEditable;
+  }
+
+  /** True when the editor should own this clipboard event rather than the text underneath it. */
+  function canvasOwnsClipboard(): boolean {
+    return view === "editor" && !isTypingTarget();
+  }
+
+  /** Read our payload out of pasted text, or null if this came from somewhere else entirely. */
+  function parseNodePayload(text: string): { nodes: Node[]; edges: Edge[] } | null {
+    if (!text.includes(CLIP_TAG)) return null;
+    try {
+      const p = JSON.parse(text) as { tag?: string; nodes?: Node[]; edges?: Edge[] };
+      if (p.tag !== CLIP_TAG || !Array.isArray(p.nodes) || !p.nodes.length) return null;
+      return { nodes: p.nodes, edges: Array.isArray(p.edges) ? p.edges : [] };
+    } catch {
+      return null;
+    }
+  }
+
+  function onWindowCopy(e: ClipboardEvent) {
+    if (!canvasOwnsClipboard()) return;
+    const snap = snapshotSelection();
+    // Nothing selected: leave the event alone. Hijacking it would break copying text out of the
+    // run console or a node title, which is a real thing people do on this page.
+    if (!snap) return;
+    e.preventDefault();
+    clipboard = snap;
+    e.clipboardData?.setData("text/plain", JSON.stringify({ tag: CLIP_TAG, ...snap }));
+    toast.success(t.copied(snap.nodes.length));
+  }
+
+  function onWindowCut(e: ClipboardEvent) {
+    if (!canvasOwnsClipboard()) return;
+    const snap = snapshotSelection();
+    if (!snap) return;
+    e.preventDefault();
+    clipboard = snap;
+    e.clipboardData?.setData("text/plain", JSON.stringify({ tag: CLIP_TAG, ...snap }));
+    // The copy half is always allowed — it mutates nothing. `deleteSelection` refuses the delete
+    // half on an armed graph and says why, so a cut there degrades to a copy rather than to
+    // silence.
+    deleteSelection();
+  }
+
+  function onWindowPaste(e: ClipboardEvent) {
+    if (!canvasOwnsClipboard()) return;
+    const fromSystem = parseNodePayload(e.clipboardData?.getData("text/plain") ?? "");
+    // The system clipboard wins when it holds nodes (possibly from another workflow or tab); the
+    // in-page clipboard is the fallback for when the browser hands us nothing readable.
+    if (fromSystem) clipboard = fromSystem;
+    else if (!clipboard.nodes.length) return; // not ours and nothing held — let the page have it
+    e.preventDefault();
+    pasteClipboard();
+  }
+
   /** True when the canvas already has the window — drives the button's icon and its label. */
   function chromeHidden(): boolean {
     return !panelOpen && !consoleOpen;
@@ -2526,17 +2601,13 @@
       return;
     }
 
-    // Copy / Cut / Paste / Duplicate of the selection (Cmd/Ctrl).
-    //
-    // COPY and SELECT-ALL are not gated on `editLocked`: neither mutates the graph, and refusing
-    // to let someone copy nodes out of a running workflow — to paste into another one — is a
-    // restriction with no reason behind it. The three that DO mutate say why they refused.
+    // Select-all and Duplicate. ⌘C / ⌘X / ⌘V are deliberately NOT here — they are handled by the
+    // window's real `copy`/`cut`/`paste` events (see `onWindowCopy` and friends), because
+    // re-deriving them from `keydown` is what let the V tool swallow ⌘V in the first place.
+    // Duplicate has no platform event of its own, so it stays a keybind.
     if (e.metaKey || e.ctrlKey) {
       const k = e.key.toLowerCase();
-      if (k === "c") { copySelection(); e.preventDefault(); return; }
       if (k === "a") { selectAll(); e.preventDefault(); return; }
-      if (k === "x") { e.preventDefault(); if (!lockedNotice()) { copySelection(); deleteSelection(); } return; }
-      if (k === "v") { pasteClipboard(); e.preventDefault(); return; }
       if (k === "d") { duplicateSelection(); e.preventDefault(); return; }
     }
   }
@@ -2822,6 +2893,12 @@
       return;
     }
     clipboard = snap;
+    // Mirror onto the system clipboard so the BUTTON reaches other workflows and other tabs too,
+    // exactly like ⌘C does. Best-effort: `writeText` needs a permission the toolbar click grants
+    // but a programmatic call may not, and failing to reach the OS must not lose the in-page copy.
+    void navigator.clipboard
+      ?.writeText(JSON.stringify({ tag: CLIP_TAG, ...snap }))
+      .catch(() => {});
     toast.success(t.copied(snap.nodes.length));
   }
   function deleteSelection() {
@@ -3381,6 +3458,9 @@
 <svelte:window
   onkeydown={onWindowKey}
   onkeyup={onWindowKeyUp}
+  oncopy={onWindowCopy}
+  oncut={onWindowCut}
+  onpaste={onWindowPaste}
   onblur={releaseSpacePan}
   onbeforeunload={(e) => {
     if (dirty) {
