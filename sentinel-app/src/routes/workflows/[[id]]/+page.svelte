@@ -2449,6 +2449,17 @@
       return;
     }
 
+    // ⌘D is the one shortcut that survives a focused field. Clicking a node very often leaves the
+    // caret in one of its inline value inputs, so requiring a click on empty canvas first — with
+    // nothing on screen saying so — is indistinguishable from "duplicate is broken". ⌘C and ⌘V are
+    // deliberately NOT exempted: inside a text field they mean copy/paste TEXT, and stealing them
+    // for nodes would break the more common thing.
+    if (inField && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") {
+      e.preventDefault();
+      duplicateSelection();
+      return;
+    }
+
     if (inField) return;  // remaining shortcuts require no active text input
 
     // Backtick (`): collapse/expand the chrome (rail + console) as a group. Rebound off Tab
@@ -2782,27 +2793,56 @@
     selectedIds = new Set(graph.nodes.map((n) => n.id));
     selectedNodeId = graph.nodes.at(-1)?.id ?? null;
   }
-  function copySelection() {
+  /** The selection as a detached clipboard payload, or null when nothing is selected. Pure — no
+   *  toasts, no state written. The shared core of copy and duplicate, so the two can never drift
+   *  on what "the selection" means. */
+  function snapshotSelection(): { nodes: Node[]; edges: Edge[] } | null {
     const nodes = selectedNodeList();
+    if (!nodes.length) return null;
     const ids = new Set(nodes.map((n) => n.id));
     const cloned = nodes.map(
       (n) => ({ id: n.id, kind: n.kind, x: n.x, y: n.y, config: $state.snapshot(n.config), memoize: n.memoize }) as Node,
     );
     // Only wires whose BOTH ends are in the copied set travel with it (internal wiring).
     const edges = (graph?.edges ?? []).filter((e) => ids.has(e.from) && ids.has(e.to)).map((e) => ({ ...e }));
-    clipboard = { nodes: cloned, edges };
+    return { nodes: cloned, edges };
+  }
+
+  /** Copy the selection, and SAY what happened.
+   *
+   *  ⌘C used to be silent in BOTH directions: no sign it had worked, no sign it had not. Copying
+   *  nothing looks identical to copying something, so the first evidence either way arrived at
+   *  ⌘V — by which point the obvious conclusion is "paste is broken", when the real answer was
+   *  that nothing had been selected. A shortcut with no feedback cannot be debugged by the person
+   *  using it. */
+  function copySelection() {
+    const snap = snapshotSelection();
+    if (!snap) {
+      toast.error(t.copyNothing);
+      return;
+    }
+    clipboard = snap;
+    toast.success(t.copied(snap.nodes.length));
   }
   function deleteSelection() {
     if (lockedNotice()) return;
     for (const n of selectedNodeList()) removeNode(n);
   }
 
-  /** Copy + paste in one step, so the button and ⌘D take the SAME path. They used to inline
-   *  `copySelection(); pasteClipboard();` in two places, which is how two callers drift. */
+  /** Copy + paste in one step, so the button and ⌘D take the SAME path.
+   *
+   *  It fills the clipboard too — that is what every editor does, and it means a duplicate can be
+   *  pasted again elsewhere. Deliberately NOT routed through `copySelection()`: that would fire a
+   *  "3 nodes copied" toast on top of the paste, and two notifications for one keystroke reads as
+   *  a bug of its own. */
   function duplicateSelection() {
     if (lockedNotice()) return;
-    if (!selectedNodeList().length) return;
-    copySelection();
+    const snap = snapshotSelection();
+    if (!snap) {
+      toast.error(t.copyNothing);
+      return;
+    }
+    clipboard = snap;
     pasteClipboard();
   }
 
@@ -2818,8 +2858,14 @@
   // Paste the clipboard offset from the originals, recreating internal wiring. Local —
   // nodes + wires get client ids and render instantly; persisted on Save (#122).
   function pasteClipboard() {
-    if (!graph || !clipboard.nodes.length) return;
+    if (!graph) return;
     if (lockedNotice()) return;
+    // Pasting an empty clipboard is the other half of the silent-⌘C problem: nothing appears, and
+    // nothing explains why. Say which step is missing.
+    if (!clipboard.nodes.length) {
+      toast.error(t.pasteNothing);
+      return;
+    }
     const g = graph;
     const OFFSET = 48;
     const realOf = new Map<number, number>();
