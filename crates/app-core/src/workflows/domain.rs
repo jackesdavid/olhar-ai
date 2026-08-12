@@ -277,6 +277,43 @@ fn variable_port(config: &Value, required: bool) -> Vec<ResolvedPort> {
     }]
 }
 
+/// The ports of a `MultiSetVariable` / `MultiGetVariable` — one per entry in `config.variables`,
+/// which is `[{ name, type }]`, the same shape a `VariableDecl` serialises to. The port is NAMED
+/// after the variable, which is what makes the node readable on the canvas: eight labelled pins
+/// instead of eight nodes each saying `value`.
+///
+/// Nothing here is required. On the Set side that is load-bearing rather than lax — an unwired
+/// input means "leave this variable alone", so the same node can sit on two branches that each
+/// write a different subset. Marking them required would turn that into a validation error.
+///
+/// Blank and duplicate names are dropped: a port with no name cannot be wired to, and two ports
+/// sharing one would make `PortValues` (a map) silently keep only the last.
+fn multi_variable_ports(config: &Value) -> Vec<ResolvedPort> {
+    let mut ports: Vec<ResolvedPort> = Vec::new();
+    let Some(list) = config.get("variables").and_then(|v| v.as_array()) else {
+        return ports;
+    };
+    for entry in list {
+        let name = match entry.get("name").and_then(|v| v.as_str()) {
+            Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+            _ => continue,
+        };
+        if ports.iter().any(|p| p.name == name) {
+            continue;
+        }
+        let ty = entry
+            .get("type")
+            .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())
+            .unwrap_or(PortType::Text);
+        ports.push(ResolvedPort {
+            name,
+            ty,
+            required: false,
+        });
+    }
+    ports
+}
+
 /// `TuyaControl`'s `value` input port, typed by the selected data point (baked into `value_type`
 /// by the editor when a `tuya_code` is chosen: `bool`/`num`/`text`). Wireable so a dynamic value
 /// can drive the device; when unwired the node falls back to the config literal. Mirrors
@@ -587,6 +624,14 @@ pub enum NodeKind {
     /// exec passthrough so it writes at an exact point in the flow. The variable name + type
     /// are in config; the input port type follows the variable's type.
     SetVariable,
+    /// Variables: write SEVERAL workflow variables at once — one typed input per variable listed
+    /// in `config.variables`, plus an exec passthrough. Pure sugar over a column of `SetVariable`
+    /// nodes: same per-run map, same semantics, one node instead of eight. An unwired input
+    /// leaves its variable alone (that is what makes the node reusable across branches).
+    MultiSetVariable,
+    /// Variables: read SEVERAL workflow variables at once — one typed output per variable listed
+    /// in `config.variables`. Pure (no exec pins), like `GetVariable`.
+    MultiGetVariable,
     /// Telegram: reply directly to the chat that triggered the run (the `chat_id` from
     /// `On event("telegram_message")`), not a configured recipient. Sends `message` + optional
     /// `image`. Everything is queued (durable) — outputs `queued` + the `result` confirmation.
@@ -1200,7 +1245,7 @@ const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
     /// UI-only wire organiser that the engine collapses before execution.
-    pub const ALL: [NodeKind; 88] = [
+    pub const ALL: [NodeKind; 90] = [
         NodeKind::GetLastAlert,
         NodeKind::GetRecipient,
         NodeKind::CreateAlert,
@@ -1270,6 +1315,8 @@ impl NodeKind {
         NodeKind::DeviceGate,
         NodeKind::GetVariable,
         NodeKind::SetVariable,
+        NodeKind::MultiSetVariable,
+        NodeKind::MultiGetVariable,
         NodeKind::ReplyToSender,
         NodeKind::AiAnswer,
         NodeKind::ReplyWithRecording,
@@ -1365,6 +1412,8 @@ impl NodeKind {
             NodeKind::DeviceGate => "device_gate",
             NodeKind::GetVariable => "get_variable",
             NodeKind::SetVariable => "set_variable",
+            NodeKind::MultiSetVariable => "multi_set_variable",
+            NodeKind::MultiGetVariable => "multi_get_variable",
             NodeKind::ReplyToSender => "reply_to_sender",
             NodeKind::AiAnswer => "ai_answer",
             NodeKind::ReplyWithRecording => "reply_with_recording",
@@ -1463,6 +1512,8 @@ impl NodeKind {
             NodeKind::DeviceGate => "Device Gate",
             NodeKind::GetVariable => "Get Variable",
             NodeKind::SetVariable => "Set Variable",
+            NodeKind::MultiSetVariable => "Set Variables",
+            NodeKind::MultiGetVariable => "Get Variables",
             NodeKind::ReplyToSender => "Reply to Sender",
             NodeKind::AiAnswer => "AI Answer",
             NodeKind::ReplyWithRecording => "Reply with Recording",
@@ -1556,7 +1607,10 @@ impl NodeKind {
             | NodeKind::Text
             | NodeKind::Gauge => "Display",
             NodeKind::StartRecording | NodeKind::StopRecording => "Recording",
-            NodeKind::GetVariable | NodeKind::SetVariable => "Variables",
+            NodeKind::GetVariable
+            | NodeKind::SetVariable
+            | NodeKind::MultiSetVariable
+            | NodeKind::MultiGetVariable => "Variables",
             NodeKind::DictRowCount
             | NodeKind::DictGetRow
             | NodeKind::DictFindRow
@@ -1597,6 +1651,7 @@ impl NodeKind {
                 | NodeKind::TextCompare
                 | NodeKind::Reroute
                 | NodeKind::GetVariable
+                | NodeKind::MultiGetVariable
                 | NodeKind::DictRowCount
                 | NodeKind::DictGetRow
                 | NodeKind::DictFindRow
@@ -1653,7 +1708,10 @@ impl NodeKind {
     pub fn is_pure_source(self) -> bool {
         matches!(
             self,
-            NodeKind::GetVariable | NodeKind::GetCameraByName | NodeKind::GetRecipient
+            NodeKind::GetVariable
+                | NodeKind::MultiGetVariable
+                | NodeKind::GetCameraByName
+                | NodeKind::GetRecipient
         )
     }
 
@@ -1727,7 +1785,11 @@ impl NodeKind {
             NodeKind::TimeGate => &NO_PORTS, // exec-only; wait_secs/extend_secs are config
             NodeKind::DelayTrigger => &NO_PORTS, // exec-only; wait_secs/extend_secs are config
             // Get has no inputs; Set's typed `value` input is dynamic (GraphNode::input_ports).
-            NodeKind::GetVariable | NodeKind::SetVariable => &NO_PORTS,
+            // The multi pair is entirely dynamic on both sides — every port comes from config.
+            NodeKind::GetVariable
+            | NodeKind::SetVariable
+            | NodeKind::MultiSetVariable
+            | NodeKind::MultiGetVariable => &NO_PORTS,
             NodeKind::ReplyToSender => &REPLY_TO_SENDER_IN,
             NodeKind::AiAnswer => &AI_ANSWER_IN,
             NodeKind::ReplyWithRecording => &REPLY_RECORDING_IN,
@@ -1816,7 +1878,10 @@ impl NodeKind {
             NodeKind::TimeGate => &NO_PORTS, // exec-only; fires via exec "out" port
             NodeKind::DelayTrigger => &NO_PORTS, // exec-only; fires via exec "start"/"stop"
             // Get's typed `value` output is dynamic (GraphNode::output_ports); Set has none.
-            NodeKind::GetVariable | NodeKind::SetVariable => &NO_PORTS,
+            NodeKind::GetVariable
+            | NodeKind::SetVariable
+            | NodeKind::MultiSetVariable
+            | NodeKind::MultiGetVariable => &NO_PORTS,
             NodeKind::ReplyToSender => &REPLY_TO_SENDER_OUT,
             NodeKind::AiAnswer => &AI_ANSWER_OUT,
             NodeKind::ReplyWithRecording => &REPLY_RECORDING_OUT,
@@ -1990,6 +2055,12 @@ impl NodeKind {
             // Build nodes compose a table in-graph. `columns` = `[{name, type}]` (same shape as a
             // Dictionary's schema); DictSchema/DictMakeRow bake it, DictAppendRow is input-only.
             NodeKind::DictSchema | NodeKind::DictMakeRow => json!({ "columns": [] }),
+            // The multi variable pair starts EMPTY — dropping the node lists nothing, and you add
+            // the variables you want. A node that grew a port every time someone declared a
+            // variable would rewire graphs behind the author's back.
+            NodeKind::MultiSetVariable | NodeKind::MultiGetVariable => {
+                json!({ "variables": [] })
+            }
             NodeKind::DictAppendRow => json!({}),
             // `tuya_device` = the device dropdown (stores the stable device id); `tuya_code` =
             // the data point dropdown (e.g. `switch_1`); `value` = the value literal, rendered
@@ -2088,6 +2159,8 @@ impl GraphNode {
             NodeKind::EmitEvent => payload_ports(&self.config),
             // Set Variable: one `value` input typed by the variable (required).
             NodeKind::SetVariable => variable_port(&self.config, true),
+            // Set Variables: one typed input per variable in `config.variables` (see the fn).
+            NodeKind::MultiSetVariable => multi_variable_ports(&self.config),
             // Control Tuya Device: one `value` input typed by the selected data point (optional —
             // config literal is the fallback). See `tuya_value_port`.
             NodeKind::TuyaControl => tuya_value_port(&self.config),
@@ -2106,6 +2179,8 @@ impl GraphNode {
             NodeKind::OnEvent => payload_ports(&self.config),
             // Get Variable: one `value` output typed by the variable.
             NodeKind::GetVariable => variable_port(&self.config, false),
+            // Get Variables: one typed output per variable in `config.variables`.
+            NodeKind::MultiGetVariable => multi_variable_ports(&self.config),
             // Read Tuya Status: `value` typed by the selected data point (+ static `on`/`raw`).
             NodeKind::TuyaReadStatus => tuya_read_output_ports(&self.config),
             // AI Extract: `value` typed per config.type (like a variable) + a static `found` bool.
@@ -3156,5 +3231,64 @@ mod tests {
         assert_eq!(arms.len(), 2);
         assert_eq!(arms[0].as_str(), Some("arm_1"));
         assert_eq!(arms[1].as_str(), Some("arm_2"));
+    }
+
+    /// The multi variable nodes derive a port per configured entry, named after the variable and
+    /// typed by its declaration — the whole point of the pair (#179).
+    #[test]
+    fn multi_variable_nodes_derive_one_port_per_variable() {
+        let mut g = Graph::new("multi");
+        let set = g.add_node(NodeKind::MultiSetVariable, 0, 0);
+        let get = g.add_node(NodeKind::MultiGetVariable, 0, 0);
+        let cfg = json!({ "variables": [
+            { "name": "bbox", "type": "bbox" },
+            { "name": "confidence", "type": "num" },
+        ] });
+        g.node_mut(set).unwrap().config = cfg.clone();
+        g.node_mut(get).unwrap().config = cfg;
+
+        let ins = g.node(set).unwrap().input_ports();
+        assert_eq!(ins.len(), 2, "Set grows one input per variable");
+        assert_eq!(ins[0].name, "bbox");
+        assert_eq!(ins[0].ty, PortType::Bbox);
+        assert_eq!(ins[1].ty, PortType::Num);
+        // Never required: an unwired input means "leave this variable alone".
+        assert!(ins.iter().all(|p| !p.required));
+        // Set writes; it exposes no data outputs, only its exec passthrough.
+        assert!(g.node(set).unwrap().output_ports().is_empty());
+
+        let outs = g.node(get).unwrap().output_ports();
+        assert_eq!(outs.len(), 2, "Get grows one output per variable");
+        assert_eq!(outs[1].name, "confidence");
+        assert!(g.node(get).unwrap().input_ports().is_empty());
+        // Pure, like the single Get — drop it anywhere and wire it, no flow wires needed.
+        assert!(NodeKind::MultiGetVariable.is_pure());
+        assert!(!NodeKind::MultiSetVariable.is_pure());
+    }
+
+    /// Blank and duplicate names are dropped rather than emitted: an unnamed port cannot be wired
+    /// to, and two ports sharing a name would collapse in the `PortValues` map, so the second
+    /// would silently win at run time while the canvas showed both.
+    #[test]
+    fn multi_variable_ports_drop_blanks_and_duplicates() {
+        let ports = multi_variable_ports(&json!({ "variables": [
+            { "name": "a", "type": "num" },
+            { "name": "  ", "type": "num" },
+            { "name": "a", "type": "text" },
+            { "name": " b ", "type": "bool" },
+        ] }));
+        let names: Vec<&str> = ports.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b"], "blanks and repeats are dropped");
+        assert_eq!(ports[0].ty, PortType::Num, "the FIRST entry wins");
+        assert_eq!(ports[1].name, "b", "names are trimmed");
+    }
+
+    /// An empty list is a node with no ports at all — not a crash, and not a default port. It is
+    /// the state a freshly dropped node is in.
+    #[test]
+    fn multi_variable_ports_of_a_fresh_node_are_empty() {
+        let cfg = NodeKind::MultiSetVariable.default_config();
+        assert!(multi_variable_ports(&cfg).is_empty());
+        assert!(multi_variable_ports(&json!({})).is_empty());
     }
 }

@@ -43,8 +43,6 @@ kanban-plugin: board
 
 ## ToDo
 
-- [ ] #179 Set Variables / Get Variables — one node instead of a column of them
-	  - Plan: [[multiset-multiget-nodes]]
 - [ ] #175 Mobile as a real edge — device camera as a face-capture source
 	  - Plan: [[mobile-edge-face-capture]]
 - [ ] #170 Runner hangs pulling any image it does not already have
@@ -118,6 +116,8 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #179 Set Variables / Get Variables — one node instead of a column of them
+	  - Plan: [[multiset-multiget-nodes]]
 - [ ] #174 Faces — complete the pipeline
 	  - Plan: [[faces-completion]]
 	  - Steps 1 (per-tenant capture stream) and 2 (index-backed cluster neighbours) shipped.

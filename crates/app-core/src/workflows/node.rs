@@ -604,6 +604,8 @@ pub fn run_node(
         NodeKind::DeviceGate => Ok(PortValues::new()),
         NodeKind::GetVariable => variable::run_get_variable(config, sys),
         NodeKind::SetVariable => variable::run_set_variable(config, inputs, sys),
+        NodeKind::MultiSetVariable => variable::run_multi_set_variables(config, inputs, sys),
+        NodeKind::MultiGetVariable => variable::run_multi_get_variables(config, sys),
         NodeKind::ReplyToSender => telegram::run_reply_to_sender(config, inputs, sys),
         NodeKind::AiAnswer => ai::run_ai_answer(config, inputs, sys),
         NodeKind::ReplyWithRecording => telegram::run_reply_with_recording(config, inputs, sys),
@@ -717,6 +719,8 @@ pub fn node_timeout(kind: NodeKind, config: &Value) -> Option<std::time::Duratio
         | NodeKind::DeviceGate
         | NodeKind::GetVariable
         | NodeKind::SetVariable
+        | NodeKind::MultiSetVariable
+        | NodeKind::MultiGetVariable
         | NodeKind::DictRowCount
         | NodeKind::DictGetRow
         | NodeKind::DictFindRow
@@ -1258,6 +1262,28 @@ pub fn debug_summary(
                 .and_then(|v| v.as_str())
                 .unwrap_or("?");
             format!("set ${name}")
+        }
+        // A node that touches eight variables has to say WHICH in the run log, or the log is less
+        // informative than the column of single nodes this replaces. Named up to four, then a
+        // count — the point is to recognise the node, not to reprint its config.
+        NodeKind::MultiSetVariable | NodeKind::MultiGetVariable => {
+            let verb = if kind == NodeKind::MultiSetVariable {
+                "set"
+            } else {
+                "get"
+            };
+            let names = variable::multi_var_names(config);
+            let shown = names
+                .iter()
+                .take(4)
+                .map(|n| format!("${n}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            match (names.len(), names.len().saturating_sub(4)) {
+                (0, _) => format!("{verb} — no variables"),
+                (_, 0) => format!("{verb} {shown}"),
+                (_, more) => format!("{verb} {shown} (+{more})"),
+            }
         }
         NodeKind::ReplyToSender => {
             let chat = num("chat_id")

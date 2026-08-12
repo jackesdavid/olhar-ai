@@ -241,6 +241,19 @@ type's zero value. The node's port type follows the variable's declared type.
 |---|---|---|---|---|---|
 | **Get Variable** | — | `value` (the variable's type) | `variable`, `type` (baked from the declaration) | **Pure** (no exec pins) — drop anywhere, wire its `value` out, no flow wires needed. Reads the variable's current value. | `Get Variable(count) → (value) → Compare(b=0)` |
 | **Set Variable** | `value`* (the variable's type) | — | `variable`, `type` | Writes `value` into the variable; **exec passes through** so it writes at an exact point in the flow. | `Person detection → (count) → Set Variable(count) →exec next` |
+| **Set Variables** | one per configured variable, **named after it** | — | `variables` = `[{name, type}]` | The multi form of Set Variable — same run map, same semantics, one node instead of a column of them. **An unwired input leaves its variable alone**, so the same node can sit on two branches that each write a different subset. Exec passes through. | `When Event(face_detected) → Set Variables(bbox, confidence, blur, yaw…)` |
+| **Get Variables** | — | one per configured variable, **named after it** | `variables` = `[{name, type}]` | The multi form of Get Variable. **Pure** (no exec pins). Each output falls back to its type's zero if the variable was never set. | `Get Variables(bbox, confidence, …) → Store Face` |
+
+Pick a node's variables in its **properties panel**: an *Add a variable…* dropdown lists the graph's
+declarations that are not on the node yet, and each one added becomes a typed port. The list starts
+**empty** — declaring a variable never grows a port on an existing node, because that would rewire
+graphs behind the author's back.
+
+Types are **baked** into the node, like the singles, so a wire keeps a valid type even after the
+declaration is deleted. When a declaration is retyped afterwards the panel marks the entry as
+drifted and offers a one-click resync (which drops the now-mismatched wire). Renaming a variable
+repoints the multi nodes automatically — **config entry and edges together**, since here the port
+name *is* the variable name.
 
 ---
 
