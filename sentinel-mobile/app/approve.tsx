@@ -106,6 +106,15 @@ export default function Approve() {
         approved ? `Approve: ${req.prompt}` : `Deny: ${req.prompt}`,
       );
       if (!who.ok) {
+        if ("unavailable" in who) {
+          // This binary predates `expo-local-authentication`. Say so and send NOTHING: a `factor`
+          // we did not obtain is exactly the silent downgrade decision 02 forbids.
+          setPhase({
+            k: "offline",
+            reason: "This build can't confirm it's you — update the app to answer.",
+          });
+          return;
+        }
         setPhase({ k: "asking", req }); // cancelled — back to the question, nothing sent
         return;
       }

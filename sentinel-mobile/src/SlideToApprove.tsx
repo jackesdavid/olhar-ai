@@ -7,7 +7,7 @@
 //
 // Built on `PanResponder` + `Animated`, both React Native core: this screen must not wait on a
 // gesture library to exist in the app.
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Animated, PanResponder, StyleSheet, Text, View } from "react-native";
 import { radius, space, typeScale, useTheme } from "./styles/theme";
 
@@ -34,25 +34,47 @@ export function SlideToApprove({
   const x = useRef(new Animated.Value(0)).current;
   const [trackW, setTrackW] = useState(0);
   const committed = useRef(false);
-  const travel = Math.max(0, trackW - KNOB - 8);
+
+  // Everything the gesture reads lives in a REF, not a closure variable.
+  //
+  // `PanResponder.create` runs ONCE (it is wrapped in `useRef`), so it captures whatever the render
+  // scope held at that moment. The track has not been laid out yet then, so `travel` was 0 — and
+  // `Math.min(0, dx)` pinned the knob at zero forever. The slider looked alive and could not be
+  // moved a pixel. Same trap for `disabled`/`busy`/`onCommit`: a stale closure would keep answering
+  // with the first render's values.
+  const travelRef = useRef(0);
+  const lockedRef = useRef(false);
+  const commitRef = useRef(onCommit);
+  useEffect(() => {
+    lockedRef.current = !!disabled || !!busy;
+  }, [disabled, busy]);
+  useEffect(() => {
+    commitRef.current = onCommit;
+  }, [onCommit]);
 
   const responder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 2,
+      // Claim the gesture before the ScrollView can steal it: a mostly-horizontal drag belongs to
+      // the slider, and without this the parent scroll swallows it on a short screen.
+      onMoveShouldSetPanResponderCapture: (_e, g) =>
+        Math.abs(g.dx) > 4 && Math.abs(g.dx) > Math.abs(g.dy),
+      onPanResponderTerminationRequest: () => false,
       onPanResponderMove: (_e, g) => {
-        if (committed.current || disabled || busy) return;
-        x.setValue(Math.max(0, Math.min(travel, g.dx)));
+        if (committed.current || lockedRef.current) return;
+        x.setValue(Math.max(0, Math.min(travelRef.current, g.dx)));
       },
       onPanResponderRelease: (_e, g) => {
-        if (committed.current || disabled || busy) return;
+        if (committed.current || lockedRef.current) return;
+        const travel = travelRef.current;
         const reached = travel > 0 && g.dx >= travel * COMMIT;
         if (reached) {
           committed.current = true;
           // Settle AT the end and stay there — the knob holding is the visual promise that the
           // answer was sent, and it must not rewind while the request is in flight.
           Animated.timing(x, { toValue: travel, duration: 90, useNativeDriver: false }).start();
-          onCommit();
+          commitRef.current();
           return;
         }
         Animated.spring(x, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
@@ -68,7 +90,11 @@ export function SlideToApprove({
   const dim = disabled ? 0.4 : 1;
   return (
     <View
-      onLayout={(e) => setTrackW(e.nativeEvent.layout.width)}
+      onLayout={(e) => {
+        const w = e.nativeEvent.layout.width;
+        setTrackW(w);
+        travelRef.current = Math.max(0, w - KNOB - 8);
+      }}
       style={[
         styles.track,
         { backgroundColor: t.elev1, borderColor: t.border, borderRadius: radius.xl, opacity: dim },
