@@ -328,6 +328,8 @@ export const workflowEditor = {
     lockedRunning: "Espere a execução terminar para editar",
     showPanel: "Mostrar o painel",
     hidePanel: "Ocultar o painel",
+    hidePanels: "Ocultar todos os painéis",
+    showPanels: "Mostrar os painéis",
     resizePanel: "Redimensionar o painel",
     resizeConsole: "Redimensionar o console",
     // ---- inspector ----
