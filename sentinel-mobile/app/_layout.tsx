@@ -9,8 +9,6 @@ import { useLoadThemePref, useTheme } from "@/styles/theme";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
-import * as Linking from "expo-linking";
-import { runWorkflow } from "@/workflows";
 import { currentToken, restore, subscribe } from "@/session";
 
 export default function RootLayout() {
@@ -30,28 +28,15 @@ export default function RootLayout() {
     const inApp = segments[0] === "(tabs)";
     // `approve` is reachable while signed in without being a tab — it is summoned by a push, not
     // navigated to. Excluding it from the gate keeps a tapped approval from bouncing to the tabs.
-    const allowed = inApp || segments[0] === "approve";
+    const allowed = inApp || segments[0] === "approve" || segments[0] === "run";
     if (!signedIn && allowed) router.replace("/login");
     if (signedIn && !allowed) router.replace("/(tabs)");
   }, [ready, signedIn, segments]);
 
-  // `olharai://run/<graph_id>` — what a home-screen widget button fires (card #178). The widget
-  // holds no credentials and speaks no API: it opens this, and the app (which already has the
-  // session) does the work. One implementation of "run a workflow", two entry points.
-  useEffect(() => {
-    if (!ready || !signedIn) return;
-    function fireFrom(url: string | null) {
-      if (!url) return;
-      const { hostname, path } = Linking.parse(url);
-      // olharai://run/<id> parses as hostname="run", path="<id>".
-      if (hostname !== "run") return;
-      const id = (path ?? "").replace(/^\/+/, "");
-      if (id) void runWorkflow(id).catch(() => {});
-    }
-    Linking.getInitialURL().then(fireFrom);
-    const sub = Linking.addEventListener("url", (e) => fireFrom(e.url));
-    return () => sub.remove();
-  }, [ready, signedIn]);
+  // `olharai://run/<graph_id>` is handled by `app/run/[id].tsx`, NOT by a listener here.
+  // expo-router owns incoming URLs — it maps them onto the file tree and shows "Unmatched Route"
+  // for anything it cannot resolve, so a `Linking` handler never sees the widget's tap. Worse, a
+  // handler that DID fire alongside the route would run the workflow twice for one press.
 
   // A tapped Device Gate push opens the decision, carrying the request id and the single-use token
   // that proves WHICH request is being answered (card #176). Handles both the cold start (the app
@@ -100,6 +85,7 @@ export default function RootLayout() {
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="capture-settings" options={{ headerShown: true, title: "Capture settings", presentation: "modal" }} />
         <Stack.Screen name="approve" options={{ headerShown: true, title: "Approval", presentation: "modal" }} />
+        <Stack.Screen name="run/[id]" options={{ headerShown: false }} />
       </Stack>
     </>
   );
