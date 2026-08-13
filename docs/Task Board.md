@@ -123,6 +123,8 @@ kanban-plugin: board
 	    and the reference doc last.
 - [ ] #160 Tenant isolation by construction — row-level security
 	  - Plan: [[tenant-isolation-rls]]
+	  - UNBLOCKED (2026-08-12): control connects as `sentinel_app` (rolsuper=f, rolbypassrls=f),
+	    so policies would actually apply. But RLS is unbuilt — 0 of 64 public tables have it on.
 - [ ] #167 Terms of Service + Privacy Policy + consent at signup
 	  - Plan: [[launch-readiness-selfserve]]
 - [ ] #151 Security plan §1.8 — scoped media tokens, get JWTs out of query strings

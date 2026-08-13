@@ -90,13 +90,21 @@ Without the negative control this test will pass forever regardless of whether i
 
 ### Phase 2 — Make RLS possible at all
 
-> **Blocked on #173.** Measured on production: the connecting role is `superuser=true
-> bypassrls=true`. Superusers bypass RLS *unconditionally*, and `FORCE ROW LEVEL SECURITY` only
-> makes policies apply to the table OWNER — it does nothing for a superuser. So the role change is a
-> hard prerequisite, not an optimisation, and it is large enough to be its own card
-> ([[db-superuser-privilege]]).
-1. A non-owner role for the application (`sentinel_app`): `GRANT SELECT/INSERT/UPDATE/DELETE` on the
-   47 tenant tables, owning nothing. Migrations keep running as `sentinel`.
+> **UNBLOCKED as of 2026-08-12 — step 1 is already done.** This used to read "blocked on #173":
+> the connecting role was `superuser=true bypassrls=true`, and a superuser bypasses RLS
+> *unconditionally* (`FORCE ROW LEVEL SECURITY` only makes policies apply to the table OWNER, which
+> does nothing for a superuser). That is fixed. Measured on production:
+>
+> | role | `rolsuper` | `rolbypassrls` |
+> |---|---|---|
+> | `sentinel` (migrations, owner) | t | t |
+> | `sentinel_app` (what control connects as) | **f** | **f** |
+>
+> So policies would now actually apply. **Nothing else here has been built**: `0 of 64` public
+> tables have `relrowsecurity` set. Steps 2 and 3 below are untouched work, and the cutover risk
+> in the closing paragraph still stands.
+1. ~~A non-owner role for the application (`sentinel_app`): `GRANT SELECT/INSERT/UPDATE/DELETE` on
+   the 47 tenant tables, owning nothing. Migrations keep running as `sentinel`.~~ **Done** (#173).
 2. `ALTER TABLE … ENABLE ROW LEVEL SECURITY` **and** `FORCE ROW LEVEL SECURITY` on those tables.
 3. A `BYPASSRLS` service role for the paths that are legitimately cross-tenant: the master console,
    the pg_cron sweeps (events retention, TTLs), and the `work_jobs` queue consumers.

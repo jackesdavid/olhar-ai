@@ -6,6 +6,87 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-08-12 — Editor clipboard (four rounds), duplicate off ⌘D, and #179 Set/Get Variables
+
+- **Branch:** `main` — everything merged and deployed. HEAD `c2e223e`. Open MR: **!78**
+  (`docs/board-179-review`, board move only).
+- **Commits:** `ba0c5f2` (copy/paste feedback) → `cf182fb` (native clipboard events) → `3a69d7a`
+  (duplicate off ⌘D) → `88f6675` (**#179** Set/Get Variables) → `0c49a11` (dual clipboard path).
+
+### Done
+
+**#179 Set Variables / Get Variables** — the multi form of the variable nodes. One node instead of
+a column: the face pipeline needed sixteen single nodes and thirty-two wires to move eight values.
+Config is `variables: [{name,type}]`; each entry derives one port NAMED after the variable
+(`multi_variable_ports` in `domain.rs`, mirrored in `effectiveKind()`). Properties panel has an
+*Add a variable…* picker + per-entry remove and a drift/resync marker. Full detail and the three
+load-bearing rules are in `docs/ref/workflows.md` § Variables.
+
+**Editor clipboard — four rounds, and the last one is the honest fix.** ⌘C/⌘V/⌘D were reported
+broken three times running. Each fix closed one hole in a *reconstruction* of ⌘C from `keydown`
+(match the key, check modifiers, hope nothing claimed it first): the `V` tool had been eating ⌘V;
+an armed graph refused to copy and said nothing; a focused inline input swallowed everything.
+
+Replacing keydown with the browser's real `copy`/`cut`/`paste` events was better — it carries the
+system clipboard, so nodes now paste **between graphs and tabs** — but it was still an assertion
+about a mechanism I had not verified. A browser only guarantees those events when the page has a
+selection or an editable focus, and this canvas is an SVG with neither.
+
+Final shape: **both paths, interlocked.** The native event stamps a timestamp; the keydown handler
+queues a fallback that cancels itself if the stamp moved. Exactly one runs, never both — ordering
+matters because keydown fires *before* the clipboard event, so acting immediately would double-paste
+wherever the native path does work.
+
+**Duplicate moved off ⌘D to a bare `d`.** ⌘D is Chrome's bookmark shortcut. `preventDefault` usually
+suppresses it, but "usually" is not something to build a shortcut on, and the ⌘D binding was removed
+rather than kept as a fallback — both firing means bookmarking AND duplicating on one keystroke.
+`d` joins the existing bare tool letters (`v` `h` `l` `b`), which no browser contests.
+
+Also: **copy and paste now say what they did.** Every failure mode had been silent, so an empty
+selection was indistinguishable from a broken editor. That toast is the diagnostic that was missing
+for three rounds.
+
+### State
+
+- `cargo check -p app-core` clean; three new `domain.rs` tests pass (port derivation,
+  blank/duplicate dropping, pure/exec split). `svelte-check` 0 errors.
+- Deploy **verified by grepping the served bundle and the running containers**, not the pipeline UI —
+  `multi_set_variable` and `olharai/workflow-nodes@1` are both in
+  `_app/immutable/nodes/35.CnUFrj3-.js`, and app/control/flow all restarted together.
+- **Not verified:** that the clipboard works in the user's browser, and #179 has never run on a real
+  graph. Those are the two open questions, and I have been wrong about the first one twice.
+
+### Pending / next
+
+- **#179 → Review.** The real test is rewiring the face graph's sixteen variable nodes down to two.
+- **#160 RLS is NO LONGER BLOCKED** — the board and plan still say "blocked on #173", but production
+  control connects as `sentinel_app` (`rolsuper=f`, `rolbypassrls=f`). RLS itself is unbuilt:
+  **0 of 64 public tables** have row security on. Phase 2 onward is real work ending in a production
+  cutover that must be proven against a restored copy first. **Update the plan's blocked note.**
+- **#174 Faces** — steps 1–2 shipped; step 3 (capture volume) gates 4 and 5, then 6, 6.5, docs last.
+- **#167 ToS/Privacy** — the consent plumbing is buildable now; the legal text is not mine to write.
+- **#151 §1.8** — mid-soak.
+- **#60 phase 2** — hold-Space pan in the MAP editor; needs a force-pan flag, not a mode switch
+  (the map has no pan tool to switch to).
+
+### Blockers
+
+- Clipboard + #179 both need **user confirmation in a real browser**.
+- #167 needs legal copy from the user.
+- Device Gate test graph is still armed in production — the user said to leave it.
+
+### Notes on the day's CI
+
+Three unrelated infrastructure flakes, none of them code: two OrbStack socket drops mid-restart
+(`docker.sock: no such file or directory`) and one GitLab registry `blob unknown to registry` while
+pushing `sentinel-flow:latest`. All cleared on retry. Also: local `main` was tracking
+`origin/docs/step3-prerequisites`, so `git pull` on main was quietly pulling a docs branch — repointed,
+but worth checking in other clones.
+
+- **Refs:** `docs/ref/workflows.md`, `docs/workflow-nodes.md`, `docs/plans/multiset-multiget-nodes.md`,
+  `sentinel-app/src/routes/workflows/[[id]]/+page.svelte`,
+  `crates/app-core/src/workflows/{domain.rs,node.rs,node/variable.rs}`
+
 ## 2026-07-22 — Tuya v2: friendly labels, dynamic typed I/O, self-service BYO project (#131)
 
 - **Branch:** `main` — pushed + deployed via CI (multiple deploys, all clean). HEAD `03c8d2d`.

@@ -99,6 +99,36 @@ recorded; iOS **critical alerts are unobtainable** (Apple restricts them to heal
 so the TTL assumes the phone is CHECKED, not alerted — which is why `GET /device-gate/pending` is
 the reliable path and the push is the optimisation.
 
+## Variables — and the multi form (#179)
+
+Typed, per-graph variables live on `Graph.variables` (`VariableDecl`: name + `PortType` + optional
+default + the `param` "expose as input" flag). Scope is **one run**: a `Get` before any `Set`
+returns the type's zero. `GetVariable` is pure; `SetVariable` takes an exec passthrough.
+
+**`MultiSetVariable` / `MultiGetVariable`** are the multi form — same per-run map, same semantics,
+one node instead of a column of them. The face pipeline is why they exist: unpacking one
+`face_detected` took eight `Set Variable` nodes and filling `Store Face` took eight `Get Variable`
+nodes, so sixteen nodes and thirty-two wires moved eight values.
+
+Each carries its own list in `config.variables` (`[{name, type}]`, the shape a `VariableDecl`
+serialises to) and derives **one port per entry, NAMED after the variable** —
+`multi_variable_ports()` in `domain.rs`, mirrored client-side in `effectiveKind()`. Blanks and
+duplicates are dropped on both sides; they must agree, or the canvas draws a port the engine does
+not have.
+
+Three rules that are load-bearing rather than stylistic:
+
+- **An unwired Set input skips its variable**, it does not write a zero. That is what lets one node
+  sit on two branches which each write a different subset.
+- **The list never self-populates.** Declaring a variable must not grow a port on an existing node.
+- **Types are baked**, like the singles, so a wire survives its declaration being deleted. A later
+  retype is shown as *drift* with a one-click resync rather than silently re-derived.
+
+⚠️ **Port names ARE variable names here** — the singles never had this, their port is always
+`value`. Renaming a variable must rewrite the config entry **and every edge on that port in the
+same pass** (`repointMultiVarNodes`); removing one must drop its wires. Config without edges leaves
+a graph that looks correct on screen and fails at run time.
+
 ## Cross-graph events (tenant event bus)
 
 `EmitEvent` / `OnEvent` nodes carry an event name in `config.event`. When an `EmitEvent`
@@ -202,35 +232,35 @@ events** above before reaching for a new node kind at all.
 
 ## Build status
 
-**Device Gate (#176)** — branch `feat/device-gate-node`, pushed, no MR yet.
+**Device Gate (#176) — SHIPPED and proven on hardware (2026-08-12).** All three arms fired on a real
+iPhone (approve → Positive, deny → Negative, expiry → Failure), `auth_factor` recorded as
+`biometric`, and the sweep resumed the graph **21 ms** after the answer via the `device_gate_settled`
+NOTIFY.
 
-Done and verified: migration `0094` applied against a real Postgres with the full prior chain; all
-seven `device_gate.rs` statements `PREPARE` and their return types match the Rust tuples; the
-double-tap race proven closed (first settle returns 1 row, second returns 0). Workspace compiles.
+Three bugs only a device could find, and the first one is the lesson: **Expo rejects
+`interruptionLevel: "timeSensitive"`** — its enum is `'active' | 'critical' | 'passive' |
+'time-sensitive'`, hyphenated — so it 400s the whole request and EVERY gate push failed. The
+feature was dead on arrival and nothing in CI, the type-checker or a code read could have said so.
+The other two: the approval slider was frozen by a closure captured before layout (`PanResponder.create`
+runs once, so `travel` was 0 forever), and the Android notification channel the backend stamps did
+not exist app-side.
 
-`node_id` is **`bigint`**, matching `run_logs` and NOT the `integer` used by `workflow_node_state`.
-Every call site binds `node_id as i64` and sqlx will not widen int4 into i64 — `integer` would
-compile, pass review, and fail every read at runtime.
+Per-phone cap `device_gate_max_pending` (default 10, per tenant) is enforced in one transaction
+behind a per-device advisory lock. Its parameter had to be **`$1::uuid::text`** — `$1::text` infers
+a TEXT parameter a bound `Uuid` cannot satisfy, and it compiles either way. `node_id` is **`bigint`**,
+matching `run_logs` and not the `integer` used by `workflow_node_state`; `integer` would compile,
+pass review, and fail every read at runtime.
 
-The per-phone cap is in and verified the same way: `PREPARE` on every new statement (the advisory
-lock's parameter had to be `$1::uuid::text` — `$1::text` infers a TEXT parameter that a bound `Uuid`
-cannot satisfy, and it compiles either way), the counting rule checked against seeded rows (3
-pending count, an expired one and an answered one do not), and the lock proven to serialise two
-sessions on the same device while leaving a different device free.
+**Graph-level `Trigger::Cron` / `Trigger::Schedule` are REMOVED (#177).** Migration `0095` rewrote
+every stored trigger to `"Manual"` and deleted the three seeded templates it rebuilt. Verified in
+production: all 30 graphs on `"Manual"`, flow loaded them all (nothing failed to deserialize — the
+real risk of dropping enum variants), and `Turn On/Off Daily` went from two clocks to the two cron
+nodes it should have had. Sub-minute polling is gone with it, deliberately.
 
-Not done: `POST /device-gate/:id/answer` and `GET /device-gate/pending` in control; the properties
-panel + canvas countdown; the mobile approval screen (ticket 06, still open — it is a prototype).
-**Nothing has run end to end** — no graph has entered the node and no phone has received a push.
+`enabled` was deliberately untouched by that migration — disarming a working automation to be tidy
+would have taken it down.
 
-**Graph-level `Trigger::Cron` / `Trigger::Schedule` are REMOVED** (same branch). Migration `0095`
-rewrites every stored trigger to `"Manual"` and deletes the three seeded templates it rebuilt;
-`alerta_pessoa` and `presenca_mapa` now listen for `motion` instead of polling at 2 s / 3 s, and
-`relatorio_diario` carries a cron node (daily 08:00 America/Sao_Paulo). The migration was applied
-against a real Postgres over the full prior chain and re-applied to prove it idempotent; a row with
-`{"Cron":…}`, one with `{"Schedule":…}`, one already `"Manual"` and one with NO trigger key all end
-up `"Manual"`.
-
-`enabled` is deliberately untouched by the migration. `Turn On/Off Daily` (tenant `Default`) was the
-only legacy trigger armed in production and it already had the two cron nodes (18:00 and 08:09) that
-replaced it — it was running on two clocks, and now runs on the two it should. Disarming it to be
-tidy would have taken a working automation down.
+**Set Variables / Get Variables (#179)** — merged (`88f6675`) and deployed; verified present in the
+served bundle and in the control catalog. Three tests cover port derivation, blank/duplicate
+handling and the pure/exec split. **Not yet exercised on a real graph** — the face pipeline still
+carries its sixteen single nodes, and collapsing them to two is the actual test.
