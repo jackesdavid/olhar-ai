@@ -450,3 +450,39 @@ export type TuyaProvider = {
   console_url: string | null;
   console_url_exact: boolean;
 };
+
+/** Which of the four connection steps a diagnosis stopped at (#182). */
+export type TuyaStep = "credentials" | "apis" | "account" | "devices" | "ok";
+
+/** Why a Tuya connection is not working. `kind` is a STABLE machine string the UI maps to
+ *  localised copy — the backend deliberately does not send a sentence, because three of these
+ *  failures need wording that names a specific Tuya console screen. */
+export type TuyaDiagnosis = {
+  ok: boolean;
+  step: TuyaStep;
+  kind:
+    | "ok"
+    | "signature"
+    | "not_subscribed"
+    | "api"
+    | "network"
+    | "wrong_data_center"
+    | "no_linked_account"
+    | "no_devices";
+  code?: number;
+  /** Tuya's own message, shown under our sentence rather than instead of it. */
+  detail?: string;
+  devices: number;
+  linked_accounts: number;
+  /** Set when these credentials work against a DIFFERENT data centre — one click to fix the
+   *  single most common failure. */
+  suggested_endpoint?: string;
+  suggested_region?: string;
+};
+
+export type TuyaTestResult = {
+  ok: boolean;
+  /** Round-trip to the Tuya cloud. 300-800 ms is normal, and worth showing. */
+  ms: number;
+  result: { status?: Record<string, unknown>; sent?: { code: string; value: unknown } };
+};

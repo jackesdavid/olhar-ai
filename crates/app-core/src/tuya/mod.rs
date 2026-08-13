@@ -6,10 +6,16 @@
 //!   [`TuyaFunction`] (the type metadata the editor uses to render a value widget).
 //! - [`client`] — HMAC-SHA256 signed calls to the Tuya Cloud (token, list, status, command).
 //! - [`repo`] — the `tuya_devices` table (per-tenant), populated by the sync route.
+//! - [`diagnose`] — WHY a connection is not working, as a four-step checklist with a machine
+//!   `kind` the UI localises (#182). Three of the four failures look identical from the UI, so
+//!   yes/no validation is not enough to act on.
 //!
 //! Shared by `sentinel-control` (list/sync routes) and `sentinel-flow` (the workflow nodes).
 pub mod client;
+pub mod diagnose;
 pub mod domain;
 pub mod repo;
 
+pub use client::TuyaError;
+pub use diagnose::{diagnose, Diagnosis};
 pub use domain::{TuyaConfig, TuyaDevice, TuyaFunction};

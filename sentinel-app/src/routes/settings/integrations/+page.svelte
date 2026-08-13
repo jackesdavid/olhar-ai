@@ -4,6 +4,8 @@
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import ExternalLink from "@lucide/svelte/icons/external-link";
+  import Check from "@lucide/svelte/icons/check";
+  import X from "@lucide/svelte/icons/x";
   import { onMount } from "svelte";
   import { data } from "$lib/data";
   import { toast } from "svelte-sonner";
@@ -15,7 +17,7 @@
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import { dict, lang } from "$lib/i18n";
-  import type { TuyaDevice } from "$lib/types";
+  import type { TuyaDevice, TuyaDiagnosis } from "$lib/types";
 
   const t = $derived(dict[lang()].integrations);
 
@@ -46,6 +48,10 @@
   let endpoint = $state("https://openapi.tuyaus.com");
   let connecting = $state(false);
   let showGuide = $state(true);
+  // Why the connection is not working (#182). Null = not checked yet.
+  let diagnosis = $state<TuyaDiagnosis | null>(null);
+  let checking = $state(false);
+  let testing = $state<string | null>(null);
   const dcLabel = $derived(DATA_CENTERS.find((d) => d.url === endpoint)?.label ?? t.dataCenter);
 
   onMount(reload);
@@ -115,6 +121,80 @@
     }
   }
 
+  /** The localised sentence for a diagnosis kind. Keyed on the backend's stable `kind` rather
+   *  than on a message it sent, so the copy lives here where it can be translated. */
+  function diagMessage(d: TuyaDiagnosis): string {
+    switch (d.kind) {
+      case "signature": return t.diagSignature;
+      case "not_subscribed": return t.diagNotSubscribed;
+      case "wrong_data_center": return t.diagWrongDataCenter(d.suggested_region ?? "");
+      case "no_linked_account": return t.diagNoLinkedAccount;
+      case "no_devices": return t.diagNoDevices;
+      case "network": return t.diagNetwork;
+      case "ok": return t.diagOk(d.devices);
+      default: return t.diagApi;
+    }
+  }
+  /** Which checklist rows passed. A step only counts as reached once the ones before it did. */
+  const DIAG_ORDER = ["credentials", "apis", "account", "devices"] as const;
+  function stepState(d: TuyaDiagnosis, step: (typeof DIAG_ORDER)[number]): "ok" | "fail" | "idle" {
+    if (d.ok) return "ok";
+    const failedAt = DIAG_ORDER.indexOf(d.step as (typeof DIAG_ORDER)[number]);
+    const here = DIAG_ORDER.indexOf(step);
+    if (failedAt < 0) return "idle";
+    if (here < failedAt) return "ok";
+    if (here === failedAt) return "fail";
+    return "idle";
+  }
+  function stepLabel(step: (typeof DIAG_ORDER)[number]): string {
+    if (step === "credentials") return t.diagStepCredentials;
+    if (step === "apis") return t.diagStepApis;
+    if (step === "account") return t.diagStepAccount;
+    return t.diagStepDevices;
+  }
+
+  /** Probe the credentials in the form (or the saved ones) and say what is wrong. Runs BEFORE
+   *  saving, so a wrong data centre is caught without persisting it. */
+  async function check(withForm: boolean) {
+    checking = true;
+    try {
+      diagnosis = await data.diagnoseTuya(
+        withForm
+          ? { access_id: accessId.trim(), access_key: accessKey.trim(), endpoint }
+          : undefined,
+      );
+    } catch (err) {
+      toast.error(t.connectFailed, { description: String(err) });
+    } finally {
+      checking = false;
+    }
+  }
+
+  /** Adopt the data centre the probe found. Deliberately a CLICK, not automatic: silently
+   *  rewriting a saved endpoint is the kind of helpfulness nobody can debug later. */
+  function useSuggestedRegion() {
+    if (!diagnosis?.suggested_endpoint) return;
+    endpoint = diagnosis.suggested_endpoint;
+    diagnosis = null;
+  }
+
+  /** Prove the device answers. Reads status — changes nothing — and reports the round-trip. */
+  async function testDevice(d: TuyaDevice) {
+    testing = d.device_id;
+    try {
+      const r = await data.testTuyaDevice(d.device_id);
+      toast.success(t.testOk(r.ms), {
+        description: Object.entries(r.result.status ?? {})
+          .map(([k, v]) => `${k}: ${v}`)
+          .join(" · "),
+      });
+    } catch (err) {
+      toast.error(t.testFailed, { description: String(err) });
+    } finally {
+      testing = null;
+    }
+  }
+
   async function connect() {
     if (!accessId.trim() || !accessKey.trim()) {
       toast.error(t.enterCreds);
@@ -122,6 +202,18 @@
     }
     connecting = true;
     try {
+      // Diagnose BEFORE saving. `set_config` validates too, but it can only answer yes/no — this
+      // is what turns "couldn't connect" into "your project is in Western America".
+      const d = await data.diagnoseTuya({
+        access_id: accessId.trim(),
+        access_key: accessKey.trim(),
+        endpoint,
+      });
+      if (d.step === "credentials" || d.step === "apis") {
+        diagnosis = d;
+        return; // nothing saved — the form still holds what they typed
+      }
+      diagnosis = d; // linked-account / no-devices are shown but do NOT block saving
       await data.setTuyaConfig(accessId.trim(), accessKey.trim(), endpoint);
       toast.success(t.connectedToast);
       accessKey = ""; // don't keep the secret around in the field
@@ -299,7 +391,15 @@
             <Label for="tuya-key">{t.accessSecret}</Label>
             <Input id="tuya-key" type="password" placeholder={t.accessSecretPlaceholder} autocomplete="off" bind:value={accessKey} />
           </div>
-          <Button onclick={connect} disabled={connecting}>{connecting ? t.connecting : t.connectTuya}</Button>
+          <div class="flex items-center gap-2">
+            <Button onclick={connect} disabled={connecting}>{connecting ? t.connecting : t.connectTuya}</Button>
+            <!-- Check WITHOUT saving. Someone who has not finished the console steps can find out
+                 which one they are missing instead of guessing from a failed save. -->
+            <Button variant="outline" onclick={() => check(true)} disabled={checking || !accessId.trim() || !accessKey.trim()}>
+              {checking ? t.checking : t.checkConnection}
+            </Button>
+          </div>
+          {@render diagPanel()}
           <p class="text-xs text-muted-foreground">{t.trialWarning}</p>
         </div>
 
@@ -309,10 +409,16 @@
           <span>
             {source === "tenant" ? t.viaYourAccount : t.viaManaged}
           </span>
-          {#if source === "tenant"}
-            <button type="button" class="interactive underline hover:text-foreground" onclick={disconnect}>{t.disconnect}</button>
-          {/if}
+          <div class="flex items-center gap-3">
+            <button type="button" class="interactive underline hover:text-foreground" onclick={() => check(false)}>
+              {checking ? t.checking : t.checkConnection}
+            </button>
+            {#if source === "tenant"}
+              <button type="button" class="interactive underline hover:text-foreground" onclick={disconnect}>{t.disconnect}</button>
+            {/if}
+          </div>
         </div>
+        {@render diagPanel()}
 
         {#if devices.length === 0}
           <p class="rounded border border-dashed border-border px-3 py-2 text-sm text-muted-foreground">
@@ -323,24 +429,38 @@
             {#each devices as d (d.device_id)}
               {@const fns = functionsOf(d)}
               <li class="py-2.5">
-                <button
-                  type="button"
-                  class="interactive flex w-full items-center justify-between gap-3 text-left"
-                  onclick={() => toggle(d)}
-                >
-                  <div class="flex min-w-0 items-center gap-2">
-                    <ChevronRight class="size-4 shrink-0 text-muted-foreground transition-transform {expanded[d.device_id] ? 'rotate-90' : ''}" />
-                    <div class="min-w-0">
-                      <p class="truncate text-sm font-medium">{d.name}</p>
-                      <p class="truncate text-xs text-muted-foreground">
-                        {d.category ?? t.deviceKind} · {t.controlCount(fns.length)}
-                      </p>
+                <div class="flex w-full items-center gap-2">
+                  <button
+                    type="button"
+                    class="interactive flex min-w-0 flex-1 items-center justify-between gap-3 text-left"
+                    onclick={() => toggle(d)}
+                  >
+                    <div class="flex min-w-0 items-center gap-2">
+                      <ChevronRight class="size-4 shrink-0 text-muted-foreground transition-transform {expanded[d.device_id] ? 'rotate-90' : ''}" />
+                      <div class="min-w-0">
+                        <p class="truncate text-sm font-medium">{d.name}</p>
+                        <p class="truncate text-xs text-muted-foreground">
+                          {d.category ?? t.deviceKind} · {t.controlCount(fns.length)}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                  <Badge variant={d.online ? "secondary" : "outline"} class="shrink-0">
-                    {d.online ? t.online : t.offline}
-                  </Badge>
-                </button>
+                    <Badge variant={d.online ? "secondary" : "outline"} class="shrink-0">
+                      {d.online ? t.online : t.offline}
+                    </Badge>
+                  </button>
+                  <!-- Reads the device's status and changes nothing — the point is to SEE it
+                       answer, and the round-trip time, before building a workflow on it. A
+                       toggle would need a confirm: this may be a lock. -->
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="shrink-0"
+                    disabled={testing === d.device_id}
+                    onclick={() => testDevice(d)}
+                  >
+                    {testing === d.device_id ? t.testing : t.testDevice}
+                  </Button>
+                </div>
 
                 {#if expanded[d.device_id]}
                   <div class="mt-3 space-y-2 pl-6">
@@ -377,3 +497,38 @@
     </Card.Content>
   </Card.Root>
 </div>
+
+<!-- The four-step connection checklist (#182). Three of the failures it separates end in an empty
+     device list, which is why "connected: yes/no" was never enough to act on. -->
+{#snippet diagPanel()}
+  {#if diagnosis}
+    {@const d = diagnosis}
+    <div class="space-y-2 rounded-lg border {d.ok ? 'border-border' : 'border-destructive/40'} bg-card p-3">
+      <p class="text-xs font-medium text-muted-foreground">{t.diagTitle}</p>
+      <ul class="space-y-1">
+        {#each DIAG_ORDER as step (step)}
+          {@const st = stepState(d, step)}
+          <li class="flex items-center gap-2 text-sm">
+            {#if st === "ok"}
+              <Check class="size-4 shrink-0 text-primary" />
+            {:else if st === "fail"}
+              <X class="size-4 shrink-0 text-destructive" />
+            {:else}
+              <span class="size-4 shrink-0"></span>
+            {/if}
+            <span class={st === "idle" ? "text-muted-foreground" : ""}>{stepLabel(step)}</span>
+          </li>
+        {/each}
+      </ul>
+      <p class="text-sm {d.ok ? 'text-muted-foreground' : ''}">{diagMessage(d)}</p>
+      {#if d.suggested_endpoint && d.suggested_region}
+        <Button size="sm" onclick={useSuggestedRegion}>{t.diagUseRegion(d.suggested_region)}</Button>
+      {/if}
+      {#if d.detail}
+        <!-- Tuya's own wording, kept as supporting detail rather than instead of ours: inventing a
+             friendly message for a code we have not seen would be worse than showing the raw one. -->
+        <p class="text-xs text-muted-foreground">{t.diagDetail}: {d.detail}{d.code ? ` (${d.code})` : ""}</p>
+      {/if}
+    </div>
+  {/if}
+{/snippet}

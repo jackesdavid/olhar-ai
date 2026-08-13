@@ -25,6 +25,8 @@ import {
   type Settings,
   type TelegramConfigState,
   type TuyaDevice,
+  type TuyaDiagnosis,
+  type TuyaTestResult,
 } from "./types";
 
 /** Unsubscribe handle returned by [`onEvent`]. */
@@ -279,6 +281,23 @@ export const data = {
   deleteTuyaConfig: async (): Promise<void> => {
     await api.del<void>("/tuya/config");
   },
+  /** Why the connection is not working, as a four-step checklist (#182). Pass credentials to
+   *  probe them BEFORE saving; omit them to re-check what is already saved. Answers 200 with a
+   *  diagnosis even when everything failed — "wrong data centre" is an answer, not an error. */
+  diagnoseTuya: (creds?: {
+    access_id: string;
+    access_key: string;
+    endpoint: string;
+  }): Promise<TuyaDiagnosis> => api.post<TuyaDiagnosis>("/tuya/diagnose", creds ?? {}),
+  /** Prove a device answers. No `code` = read its status and change nothing. */
+  testTuyaDevice: (
+    deviceId: string,
+    fn?: { code: string; value: unknown },
+  ): Promise<TuyaTestResult> =>
+    api.post<TuyaTestResult>(
+      `/tuya/devices/${encodeURIComponent(deviceId)}/test`,
+      fn ? { code: fn.code, value: fn.value } : {},
+    ),
   /** Set a device's friendly per-function labels (`{ code: label }`). Survives sync. */
   setTuyaFunctionLabels: async (
     deviceId: string,

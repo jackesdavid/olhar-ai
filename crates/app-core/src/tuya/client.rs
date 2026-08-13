@@ -15,6 +15,96 @@ use super::domain::{TuyaConfig, TuyaDevice};
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// What went wrong, as a KIND rather than a sentence (#182).
+///
+/// Every Tuya failure used to surface as the same `tuya api error {code}: {msg}` string, which is
+/// Tuya's own wording written for a developer reading API docs — not for someone who has to know
+/// which console screen to open. Worse, three of the five real failures are indistinguishable from
+/// the UI because they all end in an empty device list.
+///
+/// The kind is a stable machine string, so the **frontend** owns the wording and can localise it
+/// (i18n lives in `sentinel-app/src/lib/i18n`, never in backend strings). `Display` still produces
+/// an English sentence, because plenty of call sites — workflow node errors, run logs — only have
+/// somewhere to put a string.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TuyaError {
+    /// `1004` — the signature did not verify. In practice: the Access Secret is wrong or was
+    /// copied with whitespace. Notably NOT "the account is wrong".
+    Signature { code: i64, msg: String },
+    /// `1106` / `2406` / `28841105` — the project exists but this API is not authorised for it.
+    /// The fix is a specific console screen (Service API → Go to Authorize), not new credentials.
+    NotSubscribed { code: i64, msg: String },
+    /// Anything else Tuya answered with.
+    Api { code: i64, msg: String },
+    /// Never reached Tuya at all — DNS, TLS, timeout. Distinct because retrying is the fix.
+    Network(String),
+}
+
+impl TuyaError {
+    /// The stable identifier the UI maps to localised copy. Adding a variant means adding a key.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            TuyaError::Signature { .. } => "signature",
+            TuyaError::NotSubscribed { .. } => "not_subscribed",
+            TuyaError::Api { .. } => "api",
+            TuyaError::Network(_) => "network",
+        }
+    }
+
+    pub fn code(&self) -> Option<i64> {
+        match self {
+            TuyaError::Signature { code, .. }
+            | TuyaError::NotSubscribed { code, .. }
+            | TuyaError::Api { code, .. } => Some(*code),
+            TuyaError::Network(_) => None,
+        }
+    }
+
+    /// Tuya's own message, kept verbatim as supporting detail. We show our sentence AND this —
+    /// inventing a friendly message for a code we have not seen is worse than showing the raw one.
+    pub fn detail(&self) -> &str {
+        match self {
+            TuyaError::Signature { msg, .. }
+            | TuyaError::NotSubscribed { msg, .. }
+            | TuyaError::Api { msg, .. }
+            | TuyaError::Network(msg) => msg,
+        }
+    }
+
+    /// Classify a Tuya API error code. The three "not subscribed" codes all mean the same thing to
+    /// a person — the project is missing an API authorisation — even though Tuya words them
+    /// differently depending on which call tripped it.
+    fn from_api(code: i64, msg: String) -> Self {
+        match code {
+            1004 => TuyaError::Signature { code, msg },
+            1106 | 2406 | 28841105 => TuyaError::NotSubscribed { code, msg },
+            _ => TuyaError::Api { code, msg },
+        }
+    }
+}
+
+impl std::fmt::Display for TuyaError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TuyaError::Signature { msg, .. } => {
+                write!(f, "tuya: signature rejected — check the Access Secret ({msg})")
+            }
+            TuyaError::NotSubscribed { code, msg } => write!(
+                f,
+                "tuya: the project is not authorised for this API — subscribe it in the console (code {code}: {msg})"
+            ),
+            TuyaError::Api { code, msg } => write!(f, "tuya api error {code}: {msg}"),
+            TuyaError::Network(e) => write!(f, "tuya request failed: {e}"),
+        }
+    }
+}
+
+impl From<TuyaError> for String {
+    fn from(e: TuyaError) -> String {
+        e.to_string()
+    }
+}
+
 /// Cap below the node watchdog (15s) so a stalled Tuya call fails fast with a clean error.
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
@@ -51,7 +141,7 @@ fn call(
     path: &str,
     token: Option<&str>,
     body: Option<&str>,
-) -> Result<Value, String> {
+) -> Result<Value, TuyaError> {
     let t = now_ms();
     let body_str = body.unwrap_or("");
     let string_to_sign = format!("{method}\n{}\n\n{path}", sha256_hex(body_str));
@@ -85,14 +175,16 @@ fn call(
     let json: Value = match resp {
         Ok(r) => r
             .into_json()
-            .map_err(|e| format!("tuya: malformed response: {e}"))?,
+            .map_err(|e| TuyaError::Network(format!("malformed response: {e}")))?,
+        // An HTTP status error is still Tuya answering, but not in the shape we can classify —
+        // keep the body, it is the only clue.
         Err(ureq::Error::Status(code, r)) => {
-            return Err(format!(
-                "tuya http {code}: {}",
-                r.into_string().unwrap_or_default()
-            ));
+            return Err(TuyaError::Api {
+                code: code as i64,
+                msg: r.into_string().unwrap_or_default(),
+            });
         }
-        Err(e) => return Err(format!("tuya request failed: {e}")),
+        Err(e) => return Err(TuyaError::Network(e.to_string())),
     };
     if json
         .get("success")
@@ -106,23 +198,29 @@ fn call(
             .get("msg")
             .and_then(Value::as_str)
             .unwrap_or("unknown error");
-        Err(format!("tuya api error {code}: {msg}"))
+        Err(TuyaError::from_api(code, msg.to_string()))
     }
 }
 
 /// Verify a set of credentials by fetching a token. `Ok(())` = the access_id/access_key/endpoint
 /// are valid; `Err` carries the Tuya error (wrong keys, wrong data center, unsubscribed API…).
 pub fn validate(cfg: &TuyaConfig) -> Result<(), String> {
+    validate_typed(cfg).map_err(String::from)
+}
+
+/// `validate`, keeping the KIND. The diagnosis path (#182) needs to tell "wrong secret" from
+/// "API not authorised" from "never reached Tuya" — three different things to do about it.
+pub fn validate_typed(cfg: &TuyaConfig) -> Result<(), TuyaError> {
     token(cfg).map(|_| ())
 }
 
 /// A project token (grant_type=1). Valid ~2h; we fetch per operation (v1 — no cache).
-fn token(cfg: &TuyaConfig) -> Result<String, String> {
+fn token(cfg: &TuyaConfig) -> Result<String, TuyaError> {
     let j = call(cfg, "GET", "/v1.0/token?grant_type=1", None, None)?;
     j["result"]["access_token"]
         .as_str()
         .map(str::to_string)
-        .ok_or_else(|| "tuya: no access_token in response".to_string())
+        .ok_or_else(|| TuyaError::Network("no access_token in response".into()))
 }
 
 /// Every device linked to the project's app accounts, with its `functions` (type metadata)
@@ -132,6 +230,14 @@ fn token(cfg: &TuyaConfig) -> Result<String, String> {
 /// tenant's OAuth-linked accounts). Empty = no filter (the operator/Default-tenant case, which was
 /// linked via the console and has no per-tenant uid mapping).
 pub fn fetch_devices(cfg: &TuyaConfig, allowed_uids: &[String]) -> Result<Vec<TuyaDevice>, String> {
+    fetch_devices_typed(cfg, allowed_uids).map_err(String::from)
+}
+
+/// `fetch_devices`, keeping the KIND (see `validate_typed`).
+pub fn fetch_devices_typed(
+    cfg: &TuyaConfig,
+    allowed_uids: &[String],
+) -> Result<Vec<TuyaDevice>, TuyaError> {
     let tok = token(cfg)?;
     let listing = call(
         cfg,
@@ -190,7 +296,7 @@ pub fn send_command(
     code: &str,
     value: &Value,
 ) -> Result<Value, String> {
-    let tok = token(cfg)?;
+    let tok = token(cfg).map_err(String::from)?;
     let body = json!({ "commands": [ { "code": code, "value": value } ] }).to_string();
     call(
         cfg,
@@ -199,18 +305,20 @@ pub fn send_command(
         Some(&tok),
         Some(&body),
     )
+    .map_err(String::from)
 }
 
 /// The device's current status as `(code, value)` pairs.
 pub fn get_status(cfg: &TuyaConfig, device_id: &str) -> Result<Vec<(String, Value)>, String> {
-    let tok = token(cfg)?;
+    let tok = token(cfg).map_err(String::from)?;
     let j = call(
         cfg,
         "GET",
         &format!("/v1.0/devices/{device_id}/status"),
         Some(&tok),
         None,
-    )?;
+    )
+    .map_err(String::from)?;
     let arr = j["result"].as_array().cloned().unwrap_or_default();
     Ok(arr
         .into_iter()
