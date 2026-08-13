@@ -116,8 +116,6 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #180 Copy / Paste — paste at the cursor, config only, no wires
-	  - Plan: [[editor-copy-paste-spec]]
 - [ ] #174 Faces — complete the pipeline
 	  - Plan: [[faces-completion]]
 	  - Steps 1 (per-tenant capture stream) and 2 (index-backed cluster neighbours) shipped.
@@ -135,6 +133,8 @@ kanban-plugin: board
 
 ## Review
 
+- [ ] #180 Copy / Paste — paste at the cursor, config only, no wires
+	  - Plan: [[editor-copy-paste-spec]]
 - [ ] #179 Set Variables / Get Variables — one node instead of a column of them
 	  - Plan: [[multiset-multiget-nodes]]
 	  - Deployed and verified in the served bundle + catalog. Awaiting a real rewire of the
