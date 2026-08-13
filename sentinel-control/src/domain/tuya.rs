@@ -27,6 +27,8 @@ pub fn router() -> Router<AppState> {
         .route("/tuya/provider", get(provider))
         .route("/tuya/console", put(set_console))
         .route("/tuya/config", put(set_config).delete(delete_config))
+        .route("/tuya/diagnose", post(diagnose))
+        .route("/tuya/devices/:device_id/test", post(test_device))
 }
 
 /// The tenant's linked Tuya devices (with `functions_json` + `function_labels_json`).
@@ -89,14 +91,7 @@ async fn set_config(
     let tid = tenant_of(&c)?;
     let access_id = b.access_id.trim().to_string();
     let access_key = b.access_key.trim().to_string();
-    let endpoint = {
-        let e = b.endpoint.trim().trim_end_matches('/');
-        if e.is_empty() {
-            "https://openapi.tuyaus.com".to_string()
-        } else {
-            e.to_string()
-        }
-    };
+    let endpoint = normalise_endpoint(Some(&b.endpoint));
     if access_id.is_empty() || access_key.is_empty() {
         return Err(err(
             StatusCode::BAD_REQUEST,
@@ -125,6 +120,114 @@ async fn set_config(
         )
     })?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct DiagnoseReq {
+    /// Credentials to probe. Omitted → probe the ones already saved, which is how the connected
+    /// state re-checks itself without making anyone re-type a secret.
+    #[serde(default)]
+    access_id: Option<String>,
+    #[serde(default)]
+    access_key: Option<String>,
+    #[serde(default)]
+    endpoint: Option<String>,
+}
+
+/// Say WHY a Tuya connection is not working, as a four-step checklist (#182).
+///
+/// Deliberately answers `200` with a diagnosis rather than an error status: "your project is in
+/// another data centre" is a successful diagnosis, not a failed request, and the UI needs the whole
+/// struct — the suggested endpoint especially — which an `ApiErr` (a bare `(Status, String)`) has
+/// nowhere to carry.
+async fn diagnose(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(b): Json<DiagnoseReq>,
+) -> Result<Json<tuya::Diagnosis>, ApiErr> {
+    auth::require(&c, "tuya.write")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let d = blocking(move || -> Result<tuya::Diagnosis, String> {
+        let cfg = match (b.access_id, b.access_key) {
+            (Some(id), Some(key)) if !id.trim().is_empty() && !key.trim().is_empty() => TuyaConfig {
+                access_id: id.trim().to_string(),
+                access_key: key.trim().to_string(),
+                endpoint: normalise_endpoint(b.endpoint.as_deref()),
+                console_project_id: None,
+                console_region: None,
+            },
+            // No credentials in the request: diagnose what is saved. `resolve_config` is the one
+            // resolver (see the module header) — do not read the table directly here.
+            _ => tuya::repo::resolve_config(&db, tid).ok_or(
+                "Tuya is not connected — add your Tuya project credentials first.",
+            )?,
+        };
+        let uids = tuya::repo::linked_uids(&db, tid);
+        Ok(tuya::diagnose(&cfg, &uids))
+    })
+    .await?
+    .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(d))
+}
+
+#[derive(Deserialize)]
+struct TestReq {
+    /// The function to exercise. Omitted → read the device's status and change nothing.
+    #[serde(default)]
+    code: Option<String>,
+    /// The value to send. Only honoured with `code`, and the UI confirms first — the device may be
+    /// a lock or a heater, and a "just checking" click must not open a door (#176's reasoning).
+    #[serde(default)]
+    value: Option<Value>,
+}
+
+/// Prove the device actually answers — the moment someone believes the integration works.
+///
+/// Reads status by default (changes nothing). With `code` + `value` it sends one command. Reports
+/// the round-trip in milliseconds either way: a Tuya cloud call is 300-800 ms, and seeing that
+/// number sets the right expectation before anyone builds a workflow on it. It is also the
+/// measured argument for local control (#133) rather than an asserted one.
+async fn test_device(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Path(device_id): Path<String>,
+    Json(b): Json<TestReq>,
+) -> Result<Json<Value>, ApiErr> {
+    auth::require(&c, "tuya.write")?;
+    let tid = tenant_of(&c)?;
+    let db = st.db.clone();
+    let out = blocking(move || -> Result<Value, String> {
+        let cfg = tuya::repo::resolve_config(&db, tid)
+            .ok_or("Tuya is not connected — add your Tuya project credentials first.")?;
+        let started = std::time::Instant::now();
+        let result = match (&b.code, &b.value) {
+            (Some(code), Some(value)) => {
+                tuya::client::send_command(&cfg, &device_id, code, value)?;
+                json!({ "sent": { "code": code, "value": value } })
+            }
+            _ => {
+                let status = tuya::client::get_status(&cfg, &device_id)?;
+                json!({ "status": status.into_iter().collect::<serde_json::Map<_, _>>() })
+            }
+        };
+        let ms = started.elapsed().as_millis() as u64;
+        Ok(json!({ "ok": true, "ms": ms, "result": result }))
+    })
+    .await?
+    .map_err(|e| err(StatusCode::BAD_GATEWAY, e))?;
+    Ok(Json(out))
+}
+
+/// The saved-or-default data-centre base URL. One place, so `set_config` and `diagnose` cannot
+/// disagree about what a blank endpoint means.
+fn normalise_endpoint(raw: Option<&str>) -> String {
+    let e = raw.unwrap_or("").trim().trim_end_matches('/');
+    if e.is_empty() {
+        "https://openapi.tuyaus.com".to_string()
+    } else {
+        e.to_string()
+    }
 }
 
 /// Disconnect the tenant's Tuya account (removes their saved credentials).

@@ -45,6 +45,32 @@ ships via CocoaPods. The money was the blocker.)
 **Conclusion:** BYO-project sidesteps all of it — the tenant links their OWN account to their OWN
 project (self-consent), no OEM, no hacks, ToS-clean.
 
+## `local_key` — where it comes from (researched 2026-08-13, do not re-research)
+
+Question asked: *can our own app discover a device's key, in any way?* **No — and it does not
+matter, because the credentials we already hold can fetch it.**
+
+- The `local_key` is **issued by the Tuya cloud at pairing/activation**. It is not derivable from
+  the device and the device never transmits it: in protocol 3.4/3.5 it only validates the handshake
+  and derives a per-session key (nonce XOR, AES-GCM, HMAC-SHA256). Sniffing the LAN yields the
+  session key at best, never the static one.
+- It **changes every time the device is re-paired**, so any key captured out-of-band goes stale the
+  first time a customer re-adds a device.
+- **Our own app doing the pairing would not help.** The app must first obtain a pairing token from
+  the cloud, and the key comes back afterwards *through* the cloud device list. That is the OEM SDK
+  path — the same USD 5 000/yr wall documented above, reached from a different direction.
+- **What DOES work, with what we already have:** `GET /v1.0/users/{uid}/devices` returns `local_key`
+  per device. We already store the tenant's linked app-account uids (`repo::linked_uids`) and their
+  BYO project credentials, so local control (#133) needs **no new credential model** — only a
+  different listing call than the `/v1.0/iot-01/associated-users/devices` sync uses today. It does
+  need the Device Management / IoT Core authorisation on the project, and a re-sync after any
+  re-pair.
+
+Sources: [Tuya "Get User's Device List"](https://developer.tuya.com/en/docs/cloud/cacc9c4989?id=Ka7kk03zdecl4),
+[tinytuya PROTOCOL.md](https://github.com/jasonacox/tinytuya/blob/master/PROTOCOL.md),
+[tinytuya #111](https://github.com/jasonacox/tinytuya/discussions/111),
+[localtuya README](https://github.com/rospogrigio/localtuya).
+
 ## File layout
 
 | Path | What |
