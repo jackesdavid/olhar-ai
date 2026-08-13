@@ -258,8 +258,8 @@ export const data = {
   listTuyaDevices: (): Promise<TuyaDevice[]> =>
     api.get<TuyaDevice[]>("/tuya/devices"),
   /** Pull the project's linked devices from the Tuya Cloud and cache them. */
-  syncTuyaDevices: (): Promise<{ synced: number }> =>
-    api.post<{ synced: number }>("/tuya/sync", {}),
+  syncTuyaDevices: (): Promise<{ synced: number; unreadable: string[] }> =>
+    api.post<{ synced: number; unreadable: string[] }>("/tuya/sync", {}),
   /** Adding a SECOND Smart Life account is a console action — Tuya publishes no API for the QR —
    *  so `console_url` is how we help: a deep link to the tab where it happens. `console_url_exact`
    *  is false when we only know the region and the link lands on the project LIST instead, which

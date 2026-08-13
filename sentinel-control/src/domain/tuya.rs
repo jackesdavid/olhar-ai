@@ -253,19 +253,27 @@ async fn sync(
     auth::require(&c, "tuya.read")?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
-    let synced = blocking(move || -> Result<usize, String> {
+    let out = blocking(move || -> Result<Value, String> {
         let cfg = tuya::repo::resolve_config(&db, tid).ok_or(
             "Tuya is not connected — add your Tuya project credentials in Settings → Integrations.",
         )?;
         let uids = tuya::repo::linked_uids(&db, tid);
         let devices = tuya::client::fetch_devices(&cfg, &uids)?;
         let n = devices.len();
+        // A device whose `/functions` call failed is stored with an empty list rather than dropped
+        // (`fetch_devices` logs and continues) — it appears in the catalog but a workflow cannot
+        // control it, which looks like our bug unless the sync says so. Name them.
+        let unreadable: Vec<String> = devices
+            .iter()
+            .filter(|d| d.functions_json.as_deref().unwrap_or("[]").trim() == "[]")
+            .map(|d| d.name.clone())
+            .collect();
         tuya::repo::upsert_many(&db, tid, &devices)?;
-        Ok(n)
+        Ok(json!({ "synced": n, "unreadable": unreadable }))
     })
     .await?
     .map_err(|e| err(StatusCode::BAD_GATEWAY, e))?;
-    Ok(Json(json!({ "synced": synced })))
+    Ok(Json(out))
 }
 
 /// Whether this tenant connected its own Tuya project — drives the UI: `none` shows the
