@@ -239,6 +239,10 @@
   // ---- layout constants ----------------------------------------------------
   const NODE_W = 176;
   const HEAD_H = 26;
+  /** How far a duplicate sits from its original, and how far each repeated paste at an unmoved
+   *  cursor steps on from the last. Big enough to see two nodes, small enough to stay one cluster. */
+  const DUPLICATE_OFFSET = 48;
+  const PASTE_CASCADE = 24;
   const ROW_H = 22;
   const PAD = 8;
   // Extra height inserted between the header divider and data ports on comparison/logic
@@ -299,8 +303,18 @@
   const isSelected = (id: number) => selectedIds.has(id) || selectedNodeId === id;
   // Rubber-band marquee (world coords) while drag-selecting on empty canvas in move mode.
   let marquee = $state<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
-  // Copy/paste buffer: deep-cloned nodes (+ their internal edges) from the last copy/duplicate.
-  let clipboard = $state<{ nodes: Node[]; edges: Edge[] }>({ nodes: [], edges: [] });
+  /** One entry of the copy buffer: what a pasted node is rebuilt from (#180). No id — the paste
+   *  mints one. No absolute position — `dx`/`dy` are offsets from the copied set's top-left, and
+   *  the cursor supplies the origin. No wires at all. */
+  type ClipNode = {
+    kind: string;
+    config: Record<string, unknown>;
+    memoize?: boolean;
+    dx: number;
+    dy: number;
+  };
+  // Copy buffer: detached node descriptions from the last ⌘C. Wires are deliberately absent (#180).
+  let clipboard = $state<{ nodes: ClipNode[] }>({ nodes: [] });
   // Select exactly one node (replace the set); shift-click toggles instead (see onNodeSelect).
   function selectOnly(id: number) {
     selectedNodeId = id;
@@ -545,13 +559,27 @@
     return view === "editor" && !isTypingTarget();
   }
 
-  /** Read our payload out of pasted text, or null if this came from somewhere else entirely. */
-  function parseNodePayload(text: string): { nodes: Node[]; edges: Edge[] } | null {
+  /** Read our payload out of pasted text, or null if this came from somewhere else entirely.
+   *
+   *  Entries are validated rather than trusted: this string can be anything a person had on their
+   *  clipboard, including an OLDER payload from before the shape changed (#180), which carried
+   *  ids, absolute coordinates and edges. A missing `dx`/`dy` is coerced rather than rejected so
+   *  such a payload still pastes — at the cursor, as a stack, which is the new contract. */
+  function parseNodePayload(text: string): { nodes: ClipNode[] } | null {
     if (!text.includes(CLIP_TAG)) return null;
     try {
-      const p = JSON.parse(text) as { tag?: string; nodes?: Node[]; edges?: Edge[] };
+      const p = JSON.parse(text) as { tag?: string; nodes?: unknown };
       if (p.tag !== CLIP_TAG || !Array.isArray(p.nodes) || !p.nodes.length) return null;
-      return { nodes: p.nodes, edges: Array.isArray(p.edges) ? p.edges : [] };
+      const nodes = (p.nodes as Record<string, unknown>[])
+        .filter((n) => n && typeof n.kind === "string")
+        .map((n) => ({
+          kind: n.kind as string,
+          config: (n.config ?? {}) as Record<string, unknown>,
+          memoize: n.memoize as boolean | undefined,
+          dx: Number(n.dx) || 0,
+          dy: Number(n.dy) || 0,
+        }));
+      return nodes.length ? { nodes } : null;
     } catch {
       return null;
     }
@@ -621,7 +649,7 @@
   /** Put the payload on the system clipboard. Wrapped because `setData` can throw on a synthetic
    *  or already-consumed event, and losing the OS clipboard must not lose the in-page copy — the
    *  toast has already promised the nodes were taken. */
-  function writeSystemClipboard(e: ClipboardEvent, snap: { nodes: Node[]; edges: Edge[] }) {
+  function writeSystemClipboard(e: ClipboardEvent, snap: { nodes: ClipNode[] }) {
     try {
       e.clipboardData?.setData("text/plain", JSON.stringify({ tag: CLIP_TAG, ...snap }));
     } catch (err) {
@@ -3034,18 +3062,31 @@
     selectedNodeId = graph.nodes.at(-1)?.id ?? null;
   }
   /** The selection as a detached clipboard payload, or null when nothing is selected. Pure — no
-   *  toasts, no state written. The shared core of copy and duplicate, so the two can never drift
-   *  on what "the selection" means. */
-  function snapshotSelection(): { nodes: Node[]; edges: Edge[] } | null {
+   *  toasts, no state written.
+   *
+   *  A clipboard entry carries the node's KIND, its panel config, its memoize flag, and where it
+   *  sat relative to the top-left of the copied set. Deliberately NOT its id (the paste mints one),
+   *  NOT its absolute position (the cursor decides that), and NOT its wires (#180).
+   *
+   *  Wires do not travel because a pasted node is a fresh node to be connected by hand. That is
+   *  also what makes "only the values chosen in the panel" fall out for free: a wired input's value
+   *  lives on the edge, not in `config`, so dropping the edges drops exactly those values and
+   *  keeps exactly the typed ones. */
+  function snapshotSelection(): { nodes: ClipNode[] } | null {
     const nodes = selectedNodeList();
     if (!nodes.length) return null;
-    const ids = new Set(nodes.map((n) => n.id));
-    const cloned = nodes.map(
-      (n) => ({ id: n.id, kind: n.kind, x: n.x, y: n.y, config: $state.snapshot(n.config), memoize: n.memoize }) as Node,
-    );
-    // Only wires whose BOTH ends are in the copied set travel with it (internal wiring).
-    const edges = (graph?.edges ?? []).filter((e) => ids.has(e.from) && ids.has(e.to)).map((e) => ({ ...e }));
-    return { nodes: cloned, edges };
+    // Relative layout is preserved so a five-node copy does not collapse onto one point.
+    const left = Math.min(...nodes.map((n) => n.x));
+    const top = Math.min(...nodes.map((n) => n.y));
+    return {
+      nodes: nodes.map((n) => ({
+        kind: n.kind,
+        config: $state.snapshot(n.config) as Record<string, unknown>,
+        memoize: n.memoize,
+        dx: n.x - left,
+        dy: n.y - top,
+      })),
+    };
   }
 
   /** Copy the selection, and SAY what happened.
@@ -3075,21 +3116,42 @@
     for (const n of selectedNodeList()) removeNode(n);
   }
 
-  /** Copy + paste in one step, so the button and the `d` key take the SAME path.
+  /** Duplicate in place, beside the originals. UNCHANGED behaviour, but no longer routed through
+   *  the clipboard (#180).
    *
-   *  It fills the clipboard too — that is what every editor does, and it means a duplicate can be
-   *  pasted again elsewhere. Deliberately NOT routed through `copySelection()`: that would fire a
-   *  "3 nodes copied" toast on top of the paste, and two notifications for one keystroke reads as
-   *  a bug of its own. */
+   *  It used to be `clipboard = snapshot; pasteClipboard()`, which was fine while paste also meant
+   *  "offset from the original". Now that paste means "at the cursor", sharing that path would drag
+   *  duplicate along with it — and duplicate is a separate card with its own spec still to be
+   *  written. Standing it on its own keeps today's behaviour exactly and leaves that card a clean
+   *  edit rather than an untangling.
+   *
+   *  It also stops clobbering the clipboard, which is a small win in its own right: duplicating
+   *  something no longer throws away what you had copied. */
   function duplicateSelection() {
     if (lockedNotice()) return;
-    const snap = snapshotSelection();
-    if (!snap) {
+    if (!graph) return;
+    const nodes = selectedNodeList();
+    if (!nodes.length) {
       toast.error(t.copyNothing);
       return;
     }
-    clipboard = snap;
-    pasteClipboard();
+    const g = graph;
+    const created: number[] = [];
+    for (const src of nodes) {
+      const id = nextNodeId(g);
+      created.push(id);
+      g.nodes.push({
+        id,
+        kind: src.kind,
+        x: src.x + DUPLICATE_OFFSET,
+        y: src.y + DUPLICATE_OFFSET,
+        config: structuredClone($state.snapshot(src.config)) as Record<string, unknown>,
+        memoize: src.memoize,
+      } as Node);
+    }
+    selectedIds = new Set(created);
+    selectedNodeId = created.at(-1) ?? null;
+    markDirty();
   }
 
   /** An armed or running graph is read-only — you cannot even drag a node in it. That is
@@ -3101,8 +3163,26 @@
     toast.error(isRunning ? t.lockedRunning : t.lockedArmed);
     return true;
   }
-  // Paste the clipboard offset from the originals, recreating internal wiring. Local —
-  // nodes + wires get client ids and render instantly; persisted on Save (#122).
+  /** Where the cursor last was, in world coordinates — the anchor a paste lands on (#180).
+   *
+   *  `hoverWorld` is null until the pointer has actually been over the canvas, which is the state a
+   *  paste driven from the Edit menu, from a right-click, or from a keyboard-only session arrives
+   *  in. Falling back to the viewport centre (the same expression fit-to-view uses) is what keeps
+   *  that from placing a node at NaN. */
+  function pasteAnchor(): { x: number; y: number } {
+    if (hoverWorld) return hoverWorld;
+    const r = svgEl?.getBoundingClientRect();
+    if (!r) return { x: 0, y: 0 };
+    return { x: (r.width / 2 - pan.x) / zoom, y: (r.height / 2 - pan.y) / zoom };
+  }
+
+  /** Successive pastes without moving the mouse would stack exactly on top of each other — literal
+   *  to "at the last cursor position", and unusable. Each repeat at an unmoved anchor steps down
+   *  and right; moving the mouse resets the cascade. */
+  let pasteCascade = { x: NaN, y: NaN, n: 0 };
+
+  /** Paste the clipboard AT THE CURSOR, as new nodes with new ids and no wires (#180). Local —
+   *  they render instantly and persist on Save (#122). */
   function pasteClipboard() {
     if (!graph) return;
     if (lockedNotice()) return;
@@ -3113,19 +3193,25 @@
       return;
     }
     const g = graph;
-    const OFFSET = 48;
-    const realOf = new Map<number, number>();
+    const at = pasteAnchor();
+    const repeat = at.x === pasteCascade.x && at.y === pasteCascade.y ? pasteCascade.n + 1 : 0;
+    pasteCascade = { x: at.x, y: at.y, n: repeat };
+    // Centre on the cursor exactly the way `addNodeKind` centres a palette drop, so pasting and
+    // adding a node feel like the same gesture.
+    const originX = at.x - NODE_W / 2 + repeat * PASTE_CASCADE;
+    const originY = at.y - HEAD_H / 2 + repeat * PASTE_CASCADE;
     const created: number[] = [];
     for (const src of clipboard.nodes) {
       const id = nextNodeId(g);
-      realOf.set(src.id, id);
       created.push(id);
-      const config = structuredClone(src.config) as Record<string, unknown>;
-      g.nodes.push({ id, kind: src.kind, x: src.x + OFFSET, y: src.y + OFFSET, config, memoize: src.memoize } as Node);
-    }
-    for (const e of clipboard.edges) {
-      if (!realOf.has(e.from) || !realOf.has(e.to)) continue; // only fully-internal wires
-      g.edges.push({ from: realOf.get(e.from)!, from_port: e.from_port, to: realOf.get(e.to)!, to_port: e.to_port });
+      g.nodes.push({
+        id,
+        kind: src.kind,
+        x: Math.round(originX + src.dx),
+        y: Math.round(originY + src.dy),
+        config: structuredClone(src.config) as Record<string, unknown>,
+        memoize: src.memoize,
+      } as Node);
     }
     selectedIds = new Set(created);
     selectedNodeId = created.at(-1) ?? null;
