@@ -4,8 +4,8 @@
 **Goal:** ⌘C takes a node's settings; ⌘V drops a new node with a new id **at the cursor**, carrying
 the panel values and nothing else — no wires, no id, no original position.
 
-Duplicate (⌘D / `d`) is **out of scope** and gets its own card. It currently routes through the
-same code as paste, so decision 1 below has to settle before it can be split cleanly.
+Duplicate (`d`) is **out of scope** and gets its own card. It used to route through paste; this
+change stands it on its own so that card is a clean edit — see the decisions below.
 
 ## Why this is a rewrite, not a tweak
 
@@ -39,8 +39,8 @@ from `hoverWorld`, centred exactly the way `addNodeKind` centres a palette drop
 
 **Config is what the panel holds.** A wired input's value is runtime data and lives on the edge, not
 in `config`, so "only what was chosen in the panel" falls out of copying `config` and dropping the
-edges. Nothing needs filtering for the common case — but see decision 2 for the keys that are baked
-from wiring rather than typed.
+edges. Nothing needs filtering for the common case — but see the decisions for the keys that are
+baked from wiring rather than typed.
 
 ## Phase 1 — Copy
 
@@ -70,31 +70,33 @@ from wiring rather than typed.
 1. Copy a `Set Variable`, paste — new id, same variable + type, at the cursor, unwired.
 2. Copy a node with an inline literal (a `Format` template), paste — the literal survives.
 3. Copy two wired nodes, paste — **two nodes, zero wires**.
-4. Paste twice without moving the mouse — see decision 3.
+4. Paste twice without moving the mouse — the second cascades 24px, it does not stack.
 5. Copy on an armed graph → allowed; paste → refused with the reason.
 6. Copy in graph A, paste in graph B.
 
-## Open decisions
+## Decisions taken (implemented 2026-08-12)
 
-1. **Does Duplicate stay routed through paste?** It shares `pasteClipboard()` today. Once paste
-   means "at the cursor", duplicate has to decide whether it also means that or keeps a fixed
-   offset — and whether it still overwrites the clipboard. **This blocks the duplicate card**, so
-   settle it there; Phase 1/2 should leave `duplicateSelection()` working on its current path.
-2. **Config keys that are BAKED FROM A WIRE, not chosen.** `dict_make_row.columns` is copied off a
-   wired Dictionary Schema; `tuya_control.value_type` is derived from the chosen data point. With
-   edges no longer copied, a pasted `dict_make_row` keeps ports whose schema wire is gone.
-   Proposed: **keep them.** The ports are the node's shape, and a node that pastes back to a bare
-   stub looks broken. Stripping is the reversible choice if it proves wrong.
-3. **Two pastes without moving the mouse** stack exactly, which is literal to the spec and unusable.
-   Proposed: exact position for the first paste, then a small cascade for repeats while the anchor
-   has not moved. Flagged rather than assumed — the spec says "the last mouse position".
-4. **Pasting into a graph that lacks the variable.** A `Set Variable` pasted into graph B references
-   a declaration that may not exist there. Proposed: paste it anyway and let the node render as
-   incomplete (the editor already marks required-unfilled with a red border), rather than silently
-   dropping the node or the config.
+1. **Duplicate is off the clipboard entirely.** It used to be `clipboard = snapshot;
+   pasteClipboard()`, which was fine while paste also meant "offset from the original" — but paste
+   now means "at the cursor", and sharing the path would have dragged duplicate along with it.
+   `duplicateSelection()` now clones in place at `DUPLICATE_OFFSET`, behaviour unchanged, ready for
+   its own card to edit cleanly. Side effect worth having: duplicating no longer throws away what
+   you had copied.
+2. **Baked-from-wire config keys are KEPT** (`dict_make_row.columns`, `tuya_control.value_type`).
+   The ports are the node's shape; a paste that returned a bare stub would look broken. Reversible.
+3. **Repeated paste cascades.** First paste lands exactly on the cursor; each repeat at an unmoved
+   anchor steps `PASTE_CASCADE` (24px) down-right. Moving the mouse resets it. Stacking exactly was
+   literal to the spec and unusable.
+4. **A pasted node whose variable does not exist in the target graph is pasted anyway**, rendering
+   incomplete (the editor already draws required-unfilled with a red border). No code needed —
+   this is what falls out of not filtering.
+
+Also handled, not in the original plan: `parseNodePayload` now **validates rather than trusts** the
+pasted text, and coerces a missing `dx`/`dy`. A payload copied before this change carries ids,
+absolute coordinates and edges; it still pastes, as a stack at the cursor, instead of throwing.
 
 ## Out of scope
 
-- Duplicate — its own card, after decision 1.
+- Duplicate — its own card. It is decoupled here but its behaviour is unchanged.
 - Copying wires. Explicitly not wanted: the pasted node is a fresh node to be wired by hand.
 - Any change to how the keystroke arrives. That is settled and must not be reopened as part of this.

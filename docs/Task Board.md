@@ -43,8 +43,6 @@ kanban-plugin: board
 
 ## ToDo
 
-- [ ] #180 Copy / Paste — paste at the cursor, config only, no wires
-	  - Plan: [[editor-copy-paste-spec]]
 - [ ] #175 Mobile as a real edge — device camera as a face-capture source
 	  - Plan: [[mobile-edge-face-capture]]
 - [ ] #170 Runner hangs pulling any image it does not already have
@@ -118,6 +116,8 @@ kanban-plugin: board
 
 ## In Progress
 
+- [ ] #180 Copy / Paste — paste at the cursor, config only, no wires
+	  - Plan: [[editor-copy-paste-spec]]
 - [ ] #174 Faces — complete the pipeline
 	  - Plan: [[faces-completion]]
 	  - Steps 1 (per-tenant capture stream) and 2 (index-backed cluster neighbours) shipped.
