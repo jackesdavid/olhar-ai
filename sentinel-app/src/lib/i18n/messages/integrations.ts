@@ -99,6 +99,10 @@ export const integrations = {
     disconnected: "Tuya disconnected",
     disconnectFailed: "Couldn't disconnect",
     synced: (n: number) => `Synced ${n} Tuya device${n === 1 ? "" : "s"}`,
+    // A device we could not read the controls of is in the catalog but not controllable, which
+    // looks like our bug unless the sync names it.
+    syncUnreadable: (names: string[]) =>
+      `Couldn't read the controls of: ${names.join(", ")}. They will show up but can't be used in a workflow yet.`,
     syncFailed: "Tuya sync failed",
     namesSaved: "Names saved",
     namesFailed: "Couldn't save names",
@@ -195,6 +199,8 @@ export const integrations = {
     disconnected: "Tuya desconectada",
     disconnectFailed: "Não foi possível desconectar",
     synced: (n: number) => `${n} dispositivo${n === 1 ? "" : "s"} Tuya sincronizado${n === 1 ? "" : "s"}`,
+    syncUnreadable: (names: string[]) =>
+      `Não foi possível ler os controles de: ${names.join(", ")}. Eles aparecem na lista, mas ainda não dá para usá-los num fluxo.`,
     syncFailed: "Falha na sincronização da Tuya",
     namesSaved: "Nomes salvos",
     namesFailed: "Não foi possível salvar os nomes",

@@ -241,9 +241,16 @@
   async function sync() {
     syncing = true;
     try {
-      const { synced } = await data.syncTuyaDevices();
+      const { synced, unreadable } = await data.syncTuyaDevices();
       toast.success(t.synced(synced));
+      // Named rather than counted: "2 devices had unreadable controls" tells nobody which two.
+      if (unreadable?.length) toast.warning(t.syncUnreadable(unreadable));
       await reload();
+      // Land on naming. `switch_1` means nothing to the person writing a workflow, and the label
+      // editor is one click deeper than anyone will look for on their own — so open the first
+      // device once, right after the sync that made it exist.
+      const first = devices[0];
+      if (first && !expanded[first.device_id]) toggle(first);
     } catch (err) {
       console.error("Tuya sync failed", err);
       toast.error(t.syncFailed, { description: String(err) });
