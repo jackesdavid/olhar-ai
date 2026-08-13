@@ -43,6 +43,10 @@ kanban-plugin: board
 
 ## ToDo
 
+- [ ] #181 Mobile onboarding — invite a person, pair their phone
+	  - Plan: [[mobile-tenant-onboarding]]
+- [ ] #182 Tuya onboarding — diagnose the failure, prove the device moves
+	  - Plan: [[tuya-onboarding-journey]]
 - [ ] #175 Mobile as a real edge — device camera as a face-capture source
 	  - Plan: [[mobile-edge-face-capture]]
 - [ ] #170 Runner hangs pulling any image it does not already have
