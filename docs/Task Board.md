@@ -116,8 +116,6 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #179 Set Variables / Get Variables — one node instead of a column of them
-	  - Plan: [[multiset-multiget-nodes]]
 - [ ] #174 Faces — complete the pipeline
 	  - Plan: [[faces-completion]]
 	  - Steps 1 (per-tenant capture stream) and 2 (index-backed cluster neighbours) shipped.
@@ -125,6 +123,8 @@ kanban-plugin: board
 	    and the reference doc last.
 - [ ] #160 Tenant isolation by construction — row-level security
 	  - Plan: [[tenant-isolation-rls]]
+	  - UNBLOCKED (2026-08-12): control connects as `sentinel_app` (rolsuper=f, rolbypassrls=f),
+	    so policies would actually apply. But RLS is unbuilt — 0 of 64 public tables have it on.
 - [ ] #167 Terms of Service + Privacy Policy + consent at signup
 	  - Plan: [[launch-readiness-selfserve]]
 - [ ] #151 Security plan §1.8 — scoped media tokens, get JWTs out of query strings
@@ -133,6 +133,11 @@ kanban-plugin: board
 
 ## Review
 
+- [ ] #179 Set Variables / Get Variables — one node instead of a column of them
+	  - Plan: [[multiset-multiget-nodes]]
+	  - Deployed and verified in the served bundle + catalog. Awaiting a real rewire of the
+	    face graph: eight Set Variable nodes → one, eight Get Variable → one.
+	  - Ports are NAMED after the variables, so a rename repoints config AND edges together.
 - [ ] #123 Recognition scoring — per-person template + margin test
 	  - Plan: [[face-recognition-per-person-scoring]]
 - [ ] #154 Security hardening PRs 1–5 — landed, pending prod verification
