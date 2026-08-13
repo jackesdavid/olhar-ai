@@ -116,8 +116,6 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #180 Copy / Paste — paste at the cursor, config only, no wires
-	  - Plan: [[editor-copy-paste-spec]]
 - [ ] #174 Faces — complete the pipeline
 	  - Plan: [[faces-completion]]
 	  - Steps 1 (per-tenant capture stream) and 2 (index-backed cluster neighbours) shipped.
@@ -150,6 +148,12 @@ kanban-plugin: board
 
 ## Done
 
+- [x] #180 Copy / Paste — paste at the cursor, config only, no wires
+	  - Plan: [[editor-copy-paste-spec]]
+	  - Confirmed working in the editor. Paste lands where the mouse is, carries only the
+	    panel config, and brings no wires — a pasted node is a fresh node to wire by hand.
+	  - Duplicate (`d`) was decoupled from the clipboard here so it keeps its own behaviour;
+	    it still has no spec of its own.
 - [x] #176 Device Gate node — a human approves from their phone before the graph continues
 	  - Map: [[device-gate-map]] (6/6 decisions resolved) · baseline: [[device-gate-node]]
 	  - PROVEN END TO END on a real iPhone: all three arms fired (approve → Positive, deny →
