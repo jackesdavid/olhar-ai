@@ -6,6 +6,44 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-08-13 — #180 copy/paste rewritten to spec (paste at the cursor)
+
+- **Branch:** `main`, deployed and CONFIRMED WORKING by the user. HEAD `898255d`.
+  Open: **!81** (`docs/board-180-review`, board move #180 → Done, pipeline still running).
+- **Commits:** `1243a69` (spec) → `87489dd` (implementation).
+
+**What changed.** Copy/paste had been touched four times the day before, and every round fixed how
+the *keystroke arrives* — never what the operation does. This card specified the behaviour, which
+was wrong on three counts:
+
+- **Paste lands at the cursor**, not at the original position `+48`. `hoverWorld` already tracked
+  the pointer (it is what the `n`-to-add-here shortcut uses); the node is centred on it the same
+  way `addNodeKind` centres a palette drop.
+- **Wires do not travel.** This is also what makes "only the values chosen in the panel" free: a
+  wired input's value lives on the edge, not in `config`, so dropping edges drops exactly those.
+- **A clipboard entry is no longer a node** — `ClipNode` is `{kind, config, memoize, dx, dy}`, where
+  dx/dy are offsets from the copied set's top-left, so multi-node copies keep their layout.
+
+Three things the spec did not cover: `hoverWorld` is null until the pointer has been over the canvas
+(viewport-centre fallback, or a paste from the Edit menu lands at NaN); repeated pastes at an
+unmoved anchor cascade 24px instead of stacking; `parseNodePayload` validates rather than trusts,
+coercing a missing dx/dy so an older payload still pastes.
+
+**Duplicate was decoupled from the clipboard.** It used to be `clipboard = snap; pasteClipboard()`,
+which would have dragged it along to "at the cursor". Behaviour unchanged, and it no longer clobbers
+what you copied. It still has **no spec of its own** — that is the obvious next card.
+
+- **State:** `svelte-check` clean. Deploy verified by fetching the served editor chunk
+  (`35.CsCXGenx.js`) and finding the new `snapshotSelection`/`parseNodePayload` in it. User confirmed
+  it works in the browser.
+- **Pending:** merge !81. Write the duplicate spec. In Progress is unchanged: #174, #160
+  (unblocked, unbuilt), #167, #151.
+- **CI note:** `build:rust` failed again with `blob unknown to registry` pushing
+  `sentinel-flow:latest` — same flake as 2026-08-12, cleared on retry. Second occurrence in two
+  days; if it recurs it is worth a card rather than a retry.
+
+- **Refs:** `docs/plans/editor-copy-paste-spec.md`, `sentinel-app/src/routes/workflows/[[id]]/+page.svelte`
+
 ## 2026-08-12 — Editor clipboard (four rounds), duplicate off ⌘D, and #179 Set/Get Variables
 
 - **Branch:** `main` — everything merged and deployed. HEAD `c2e223e`. Open MR: **!78**
