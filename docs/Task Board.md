@@ -43,6 +43,8 @@ kanban-plugin: board
 
 ## ToDo
 
+- [ ] #180 Copy / Paste — paste at the cursor, config only, no wires
+	  - Plan: [[editor-copy-paste-spec]]
 - [ ] #175 Mobile as a real edge — device camera as a face-capture source
 	  - Plan: [[mobile-edge-face-capture]]
 - [ ] #170 Runner hangs pulling any image it does not already have
