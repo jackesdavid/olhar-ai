@@ -412,16 +412,20 @@ build:rust:
       for SVC in sentinel-control sentinel-flow sentinel-gateway sentinel-notification; do
         echo "▸ $SVC"
         # ONE CACHE REF PER SERVICE (#183). All four used to export `mode=max` to a single
-        # `buildcache:rust`, which cost twice: each export REPLACED the previous manifest, so the
-        # stored cache was only ever the last service's; and four exports interleaving with four
-        # image pushes on the same repo raced the registry into `blob unknown to registry` — four
-        # times in three days, on sentinel-flow and sentinel-postgres alike.
+        # `buildcache:rust`, and each export REPLACED the previous manifest — so the stored cache
+        # was only ever the last service's, and the other three read a stranger's every run.
+        #
+        # That alone did NOT stop `blob unknown to registry`: it recurred with per-service refs, on
+        # the last service, so the race is between a build's own `--push` and its `--cache-to`,
+        # not between services. `image-manifest=true,oci-mediatypes=true` writes the cache as a
+        # standard OCI image manifest instead of the buildkit-specific shape, which is what the
+        # GitLab registry expects to see referenced — the documented fix for exactly this error.
         CACHE="$IMAGE_PREFIX/buildcache:rust-$SVC"
         docker buildx build \
           --file Dockerfile \
           --build-arg PACKAGE="$SVC" \
           --cache-from "type=registry,ref=$CACHE" \
-          --cache-to   "type=registry,ref=$CACHE,mode=max" \
+          --cache-to   "type=registry,ref=$CACHE,mode=max,image-manifest=true,oci-mediatypes=true" \
           --tag "$IMAGE_PREFIX/$SVC:latest" \
           --tag "$IMAGE_PREFIX/$SVC:$CI_COMMIT_SHORT_SHA" \
           --metadata-file "/tmp/meta-$SVC.json" \
