@@ -291,25 +291,55 @@ pub fn fetch_devices_typed(
 /// rather than being deleted, since it is what the already-working devices were read with and
 /// there is no reason to risk them on one report.
 fn device_functions(cfg: &TuyaConfig, tok: &str, device_id: &str) -> String {
-    // 1. The modern reader. Best answer when the product has a real instruction set.
-    let spec = call(
+    // 1. THE THING MODEL (v2). Proven against a real gate module whose product answers 2009 on
+    //    every v1.0/v1.1 instruction-set endpoint while working perfectly in the Smart Life app:
+    //    the product is published as a thing model, and the v1 family simply does not describe it.
+    //    `shadow/properties` carries code, dp_id, type and the CURRENT value for every property.
+    if let Ok(j) = call(
+        cfg,
+        "GET",
+        &format!("/v2.0/cloud/thing/{device_id}/shadow/properties"),
+        Some(tok),
+        None,
+    ) {
+        if let Some(props) = j["result"]["properties"].as_array() {
+            if !props.is_empty() {
+                let fns: Vec<Value> = props
+                    .iter()
+                    .filter_map(|p| {
+                        let code = p["code"].as_str()?;
+                        Some(json!({
+                            "code": code,
+                            "name": p["custom_name"].as_str().filter(|n| !n.is_empty()).unwrap_or(code),
+                            "desc": "",
+                            "type": thing_type_to_tuya(p["type"].as_str().unwrap_or("string")),
+                            "values": "{}",
+                        }))
+                    })
+                    .collect();
+                if !fns.is_empty() {
+                    return Value::Array(fns).to_string();
+                }
+            }
+        }
+    }
+
+    // 2. The v1 instruction set, which is what the already-working devices use. Kept ahead of the
+    //    legacy call and unchanged in behaviour.
+    if let Ok(j) = call(
         cfg,
         "GET",
         &format!("/v1.0/iot-03/devices/{device_id}/specification"),
         Some(tok),
         None,
-    );
-    match &spec {
-        Ok(j) => {
-            let f = &j["result"]["functions"];
-            if f.as_array().is_some_and(|a| !a.is_empty()) {
-                return f.to_string();
-            }
+    ) {
+        let f = &j["result"]["functions"];
+        if f.as_array().is_some_and(|a| !a.is_empty()) {
+            return f.to_string();
         }
-        Err(e) => log::warn!("tuya: specification for {device_id} failed: {e}"),
     }
 
-    // 2. The legacy reader, for products the modern one does not describe.
+    // 3. The legacy reader.
     match call(
         cfg,
         "GET",
@@ -325,44 +355,16 @@ fn device_functions(cfg: &TuyaConfig, tok: &str, device_id: &str) -> String {
         }
         Err(e) => log::warn!("tuya: functions for {device_id} failed: {e}"),
     }
+    "[]".to_string()
+}
 
-    // 3. DP-ONLY DEVICES. Some products expose no instruction set at all — a gate opener
-    //    (`ckmkzq`) answers the modern endpoint with an empty `functions` list and the legacy one
-    //    with `2009 not support this device`, while working perfectly in the Smart Life app.
-    //    Reported from production.
-    //
-    //    For those, the STATUS set is the data point set: the same codes, and writing one is how
-    //    the app controls the device. The specification response carries it in the same shape
-    //    functions use, so it drops straight in.
-    if let Ok(j) = &spec {
-        let st = &j["result"]["status"];
-        if st.as_array().is_some_and(|a| !a.is_empty()) {
-            log::info!("tuya: {device_id} has no instruction set; using its status set as the data points");
-            return st.to_string();
-        }
-    }
-
-    // 4. Last resort: the device's LIVE status, which every device answers. Types are inferred
-    //    from the values because this endpoint reports no schema. Thinner than the sets above —
-    //    no ranges, no enum members — but a named, typed, controllable code beats a device the
-    //    editor calls uncontrollable.
-    match get_status(cfg, device_id) {
-        Ok(pairs) if !pairs.is_empty() => {
-            let fns: Vec<Value> = pairs
-                .into_iter()
-                .map(|(code, v)| {
-                    let ty = match &v {
-                        Value::Bool(_) => "Boolean",
-                        Value::Number(_) => "Integer",
-                        _ => "String",
-                    };
-                    json!({ "code": code, "name": code, "desc": "", "type": ty, "values": "{}" })
-                })
-                .collect();
-            log::info!("tuya: {device_id} data points inferred from its live status");
-            Value::Array(fns).to_string()
-        }
-        _ => "[]".to_string(),
+/// Thing-model property types → the vocabulary the editor's value widget already understands.
+fn thing_type_to_tuya(t: &str) -> &'static str {
+    match t {
+        "bool" => "Boolean",
+        "value" | "int" | "integer" => "Integer",
+        "enum" => "Enum",
+        _ => "String",
     }
 }
 
@@ -374,6 +376,22 @@ pub fn send_command(
     value: &Value,
 ) -> Result<Value, String> {
     let tok = token(cfg).map_err(String::from)?;
+    // The v1 command endpoint answers `2008 command or value not support` for thing-model
+    // products — verified against a real device, where the v2 write below turned the same data
+    // point on and off while v1 refused it. v1 stays as the fallback because the devices that
+    // already work go through it.
+    let props = json!({ code: value }).to_string();
+    let v2 = call(
+        cfg,
+        "POST",
+        &format!("/v2.0/cloud/thing/{device_id}/shadow/properties/issue"),
+        Some(&tok),
+        Some(&json!({ "properties": props }).to_string()),
+    );
+    match v2 {
+        Ok(j) => return Ok(j),
+        Err(e) => log::warn!("tuya: thing-model write for {device_id} failed: {e}; trying v1"),
+    }
     let body = json!({ "commands": [ { "code": code, "value": value } ] }).to_string();
     call(
         cfg,
@@ -388,28 +406,36 @@ pub fn send_command(
 /// The device's current status as `(code, value)` pairs.
 pub fn get_status(cfg: &TuyaConfig, device_id: &str) -> Result<Vec<(String, Value)>, String> {
     let tok = token(cfg).map_err(String::from)?;
-    // `/status` is the standard-instruction reader and answers `2003 function not support` for
-    // devices outside that set — the same split as `device_functions`. The device DETAIL endpoint
-    // carries a `status` array for every device, so it is the fallback rather than an error.
-    let first = call(
+    // Same split as `device_functions`: the thing model answers for products the v1 status
+    // endpoint rejects with `2003 function not support`.
+    if let Ok(j) = call(
+        cfg,
+        "GET",
+        &format!("/v2.0/cloud/thing/{device_id}/shadow/properties"),
+        Some(&tok),
+        None,
+    ) {
+        if let Some(props) = j["result"]["properties"].as_array() {
+            if !props.is_empty() {
+                return Ok(props
+                    .iter()
+                    .filter_map(|p| Some((p["code"].as_str()?.to_string(), p["value"].clone())))
+                    .collect());
+            }
+        }
+    }
+    let arr = match call(
         cfg,
         "GET",
         &format!("/v1.0/devices/{device_id}/status"),
         Some(&tok),
         None,
-    );
-    let arr = match first {
+    ) {
         Ok(j) => j["result"].as_array().cloned().unwrap_or_default(),
         Err(e) => {
             log::warn!("tuya: status for {device_id} failed ({e}); trying the device detail");
-            let j = call(
-                cfg,
-                "GET",
-                &format!("/v1.0/devices/{device_id}"),
-                Some(&tok),
-                None,
-            )
-            .map_err(String::from)?;
+            let j = call(cfg, "GET", &format!("/v1.0/devices/{device_id}"), Some(&tok), None)
+                .map_err(String::from)?;
             j["result"]["status"].as_array().cloned().unwrap_or_default()
         }
     };
@@ -418,3 +444,4 @@ pub fn get_status(cfg: &TuyaConfig, device_id: &str) -> Result<Vec<(String, Valu
         .filter_map(|s| Some((s["code"].as_str()?.to_string(), s["value"].clone())))
         .collect())
 }
+
