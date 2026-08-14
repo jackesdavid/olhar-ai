@@ -13,8 +13,11 @@
   import { Label } from "$lib/components/ui/label";
   import { Badge } from "$lib/components/ui/badge";
   import Loader from "$lib/components/loader.svelte";
+  import Link2 from "@lucide/svelte/icons/link-2";
+  import QRCode from "qrcode";
 
   import { rbac, type Role, type TenantUser } from "$lib/api";
+  import { API_BASE } from "$lib/config";
   import { auth, hasPerm } from "$lib/auth.svelte";
   import { dict, lang } from "$lib/i18n";
 
@@ -29,6 +32,55 @@
   let invitePassword = $state("");
   let inviteRoles = $state<Set<string>>(new Set());
   let inviting = $state(false);
+
+  // ---- invite link + QR (#181) --------------------------------------------
+  // The token comes back exactly once (it is stored hashed), so everything the admin needs has to
+  // be on screen now — link, QR and typed code together.
+  let invite_ = $state<{ token: string; code: string; expires_at: string } | null>(null);
+  let inviteQr = $state<string | null>(null);
+  let makingLink = $state(false);
+  let copied = $state(false);
+
+  /** The link a person opens in a browser. */
+  function inviteLink(token: string): string {
+    return `${window.location.origin}/join/${token}`;
+  }
+
+  /** What the QR encodes.
+   *
+   *  JSON with the CONTROL URL in it, not a bare token: one app binary has to serve any
+   *  deployment, and the mobile defaults are a compiled constant that has already pointed at a
+   *  host which does not resolve. Letting the invite carry the address removes that whole class
+   *  of "the app reaches nothing". */
+  function qrPayload(token: string): string {
+    return JSON.stringify({ v: 1, url: API_BASE, t: token });
+  }
+
+  async function createLink() {
+    if (makingLink) return;
+    makingLink = true;
+    try {
+      const email = inviteEmail.trim();
+      const r = await rbac.createInvite({
+        email: email.includes("@") ? email : undefined,
+        roleIds: [...inviteRoles],
+      });
+      invite_ = { token: r.token, code: r.code, expires_at: r.expires_at };
+      inviteQr = await QRCode.toDataURL(qrPayload(r.token), { margin: 1, width: 220 });
+      copied = false;
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t.inviteLinkFailed);
+    } finally {
+      makingLink = false;
+    }
+  }
+
+  async function copyLink() {
+    if (!invite_) return;
+    await navigator.clipboard.writeText(inviteLink(invite_.token));
+    copied = true;
+    toast.success(t.copied);
+  }
 
   // The owner can always reach this screen: control allows the user list for the owner even
   // without users.manage, because every owner action lives here.
@@ -335,11 +387,47 @@
               {/each}
             </div>
           </div>
-          <Button type="submit" disabled={!canInvite || inviting}>
-            {#if inviting}<Busy />{:else}<UserPlus class="size-4" />{/if}
-            {t.invite}
-          </Button>
+          <div class="flex flex-wrap items-center gap-2">
+            <Button type="submit" disabled={!canInvite || inviting}>
+              {#if inviting}<Busy />{:else}<UserPlus class="size-4" />{/if}
+              {t.invite}
+            </Button>
+            <!-- The link path needs no password: the person sets their own on accept, which is
+                 the whole point (#181). Roles come from the checkboxes above either way. -->
+            <Button type="button" variant="outline" disabled={makingLink} onclick={createLink}>
+              {#if makingLink}<Busy />{:else}<Link2 class="size-4" />{/if}
+              {makingLink ? t.creatingLink : t.createLink}
+            </Button>
+          </div>
         </form>
+
+        {#if invite_ && inviteQr}
+          <div class="mt-4 space-y-3 rounded-lg border border-border p-4">
+            <div>
+              <p class="text-sm font-medium">{t.inviteLinkTitle}</p>
+              <p class="text-xs text-muted-foreground">{t.inviteLinkDescription}</p>
+            </div>
+            <div class="flex flex-wrap items-start gap-4">
+              <img src={inviteQr} alt={t.qrAlt} class="size-[220px] rounded bg-white p-2" />
+              <div class="min-w-0 flex-1 space-y-3">
+                <div class="space-y-1.5">
+                  <Input readonly value={inviteLink(invite_.token)} class="font-mono text-xs" />
+                  <Button size="sm" variant="secondary" onclick={copyLink}>
+                    {copied ? t.copied : t.copyLink}
+                  </Button>
+                </div>
+                <div class="space-y-1">
+                  <p class="text-xs text-muted-foreground">{t.inviteCode}</p>
+                  <p class="font-mono text-2xl tracking-[0.25em]">{invite_.code}</p>
+                </div>
+                <p class="text-xs text-muted-foreground">{t.expiresOn(invite_.expires_at.slice(0, 10))}</p>
+                <!-- Said plainly because it is true: the token is stored hashed and this is the
+                     only time it can be shown. -->
+                <p class="text-xs text-muted-foreground">{t.inviteOnce}</p>
+              </div>
+            </div>
+          </div>
+        {/if}
       </Card.Content>
     </Card.Root>
   {/if}

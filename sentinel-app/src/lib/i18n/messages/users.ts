@@ -39,6 +39,19 @@ export const users = {
     ownerHint: "The owner can't be removed and only they can reset their own password.",
     rolesFailed: "Failed to update roles",
     invited: "User invited",
+    // ---- invite link / QR (#181) ----
+    inviteLinkTitle: "Invite link",
+    inviteLinkDescription:
+      "Send the link, or have them scan the QR with the Olhar AI app. It works once and then expires.",
+    createLink: "Create invite link",
+    creatingLink: "Creating…",
+    inviteCode: "Or type this code in the app",
+    copyLink: "Copy link",
+    copied: "Copied",
+    expiresOn: (when: string) => `Expires ${when}`,
+    inviteOnce: "Shown once — it cannot be read again after you leave this page.",
+    inviteLinkFailed: "Couldn't create the invite link",
+    qrAlt: "QR code for the invite",
     inviteFailed: "Failed to invite user",
   },
   pt: {
@@ -79,6 +92,18 @@ export const users = {
     ownerHint: "O proprietário não pode ser removido e só ele pode redefinir a própria senha.",
     rolesFailed: "Falha ao atualizar os perfis",
     invited: "Usuário convidado",
+    inviteLinkTitle: "Link de convite",
+    inviteLinkDescription:
+      "Mande o link, ou peça para escanear o QR com o app Olhar AI. Funciona uma vez e depois expira.",
+    createLink: "Criar link de convite",
+    creatingLink: "Criando…",
+    inviteCode: "Ou digite este código no app",
+    copyLink: "Copiar link",
+    copied: "Copiado",
+    expiresOn: (when: string) => `Expira em ${when}`,
+    inviteOnce: "Mostrado uma vez — não dá para ler de novo depois que você sair desta página.",
+    inviteLinkFailed: "Não foi possível criar o link de convite",
+    qrAlt: "QR code do convite",
     inviteFailed: "Falha ao convidar o usuário",
   },
 };
