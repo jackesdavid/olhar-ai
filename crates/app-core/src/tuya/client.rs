@@ -263,19 +263,7 @@ pub fn fetch_devices_typed(
                 continue;
             }
         }
-        let functions_json = match call(
-            cfg,
-            "GET",
-            &format!("/v1.0/devices/{device_id}/functions"),
-            Some(&tok),
-            None,
-        ) {
-            Ok(f) => f["result"]["functions"].to_string(),
-            Err(e) => {
-                log::warn!("tuya: functions for {device_id} failed: {e}");
-                "[]".to_string()
-            }
-        };
+        let functions_json = device_functions(cfg, &tok, &device_id);
         out.push(TuyaDevice {
             device_id,
             name: d["name"].as_str().unwrap_or_default().to_string(),
@@ -287,6 +275,52 @@ pub fn fetch_devices_typed(
         });
     }
     Ok(out)
+}
+
+
+/// A device's controllable functions, as JSON.
+///
+/// TWO endpoints, in this order, because one of them does not work for a large class of real
+/// devices. `/v1.0/devices/{id}/functions` only covers products migrated to Tuya's **standard
+/// instruction set**; anything else answers `2003 function not support`. A gate opener
+/// (category `ckmkzq`) is exactly that case — reported from production, where the device worked
+/// perfectly in the Smart Life app and arrived here with an empty control list.
+///
+/// `/v1.0/iot-03/devices/{id}/specification` is the modern one and returns the instruction set
+/// AND the status set for both kinds. It is tried FIRST; the legacy call stays as the fallback
+/// rather than being deleted, since it is what the already-working devices were read with and
+/// there is no reason to risk them on one report.
+fn device_functions(cfg: &TuyaConfig, tok: &str, device_id: &str) -> String {
+    match call(
+        cfg,
+        "GET",
+        &format!("/v1.0/iot-03/devices/{device_id}/specification"),
+        Some(tok),
+        None,
+    ) {
+        Ok(spec) => {
+            let f = &spec["result"]["functions"];
+            if f.as_array().is_some_and(|a| !a.is_empty()) {
+                return f.to_string();
+            }
+            // A device with a genuinely empty instruction set is possible (a read-only sensor);
+            // fall through so the legacy endpoint gets its say before we call it uncontrollable.
+        }
+        Err(e) => log::warn!("tuya: specification for {device_id} failed: {e}"),
+    }
+    match call(
+        cfg,
+        "GET",
+        &format!("/v1.0/devices/{device_id}/functions"),
+        Some(tok),
+        None,
+    ) {
+        Ok(f) => f["result"]["functions"].to_string(),
+        Err(e) => {
+            log::warn!("tuya: functions for {device_id} failed: {e}");
+            "[]".to_string()
+        }
+    }
 }
 
 /// Send one control command (`{"commands":[{"code","value"}]}`) to a device.
@@ -311,15 +345,31 @@ pub fn send_command(
 /// The device's current status as `(code, value)` pairs.
 pub fn get_status(cfg: &TuyaConfig, device_id: &str) -> Result<Vec<(String, Value)>, String> {
     let tok = token(cfg).map_err(String::from)?;
-    let j = call(
+    // `/status` is the standard-instruction reader and answers `2003 function not support` for
+    // devices outside that set — the same split as `device_functions`. The device DETAIL endpoint
+    // carries a `status` array for every device, so it is the fallback rather than an error.
+    let first = call(
         cfg,
         "GET",
         &format!("/v1.0/devices/{device_id}/status"),
         Some(&tok),
         None,
-    )
-    .map_err(String::from)?;
-    let arr = j["result"].as_array().cloned().unwrap_or_default();
+    );
+    let arr = match first {
+        Ok(j) => j["result"].as_array().cloned().unwrap_or_default(),
+        Err(e) => {
+            log::warn!("tuya: status for {device_id} failed ({e}); trying the device detail");
+            let j = call(
+                cfg,
+                "GET",
+                &format!("/v1.0/devices/{device_id}"),
+                Some(&tok),
+                None,
+            )
+            .map_err(String::from)?;
+            j["result"]["status"].as_array().cloned().unwrap_or_default()
+        }
+    };
     Ok(arr
         .into_iter()
         .filter_map(|s| Some((s["code"].as_str()?.to_string(), s["value"].clone())))
