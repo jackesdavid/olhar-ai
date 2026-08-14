@@ -409,9 +409,14 @@ build:rust:
   script:
     - |
       set -eu
-      CACHE="$IMAGE_PREFIX/buildcache:rust"
       for SVC in sentinel-control sentinel-flow sentinel-gateway sentinel-notification; do
         echo "▸ $SVC"
+        # ONE CACHE REF PER SERVICE (#183). All four used to export `mode=max` to a single
+        # `buildcache:rust`, which cost twice: each export REPLACED the previous manifest, so the
+        # stored cache was only ever the last service's; and four exports interleaving with four
+        # image pushes on the same repo raced the registry into `blob unknown to registry` — four
+        # times in three days, on sentinel-flow and sentinel-postgres alike.
+        CACHE="$IMAGE_PREFIX/buildcache:rust-$SVC"
         docker buildx build \
           --file Dockerfile \
           --build-arg PACKAGE="$SVC" \
