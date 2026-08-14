@@ -2,7 +2,7 @@
 // it is a bearer credential). The token is HS256 and shared between control and gateway, so the
 // same value authenticates live video later (Phase 2).
 import * as SecureStore from "expo-secure-store";
-import { CONTROL_BASE } from "./config";
+import { controlBase, restoreBase } from "./invite";
 
 const TOKEN_KEY = "sentinel.token";
 
@@ -39,14 +39,25 @@ export function currentToken(): string | null {
   return token;
 }
 
-/** Restore a previous sign-in on app start. Returns null when there is none. */
+/** Restore a previous sign-in on app start. Returns null when there is none.
+ *
+ *  Also restores which BACKEND this phone talks to: an invite can point the app at the cloud it
+ *  came from (#181), and that has to be known before the first authenticated call, not after. */
 export async function restore(): Promise<string | null> {
+  await restoreBase();
   setToken(await SecureStore.getItemAsync(TOKEN_KEY));
   return token;
 }
 
+/** Adopt a session minted somewhere other than the password form — today, accepting an invite.
+ *  Same storage, same listeners, so the route gate reacts identically. */
+export async function storeSession(t: string): Promise<void> {
+  await SecureStore.setItemAsync(TOKEN_KEY, t);
+  setToken(t);
+}
+
 export async function signIn(email: string, password: string): Promise<Session> {
-  const r = await fetch(`${CONTROL_BASE}/auth/login`, {
+  const r = await fetch(`${controlBase()}/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: email.trim(), password }),
@@ -73,7 +84,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...((init.headers as Record<string, string>) ?? {}),
   };
   if (token) headers.authorization = `Bearer ${token}`;
-  const r = await fetch(`${CONTROL_BASE}${path}`, { ...init, headers });
+  const r = await fetch(`${controlBase()}${path}`, { ...init, headers });
   if (r.status === 401) {
     await signOut();
     throw new Error("session expired");
