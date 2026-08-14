@@ -34,6 +34,8 @@ kanban-plugin: board
 
 ## Bugs
 
+- [ ] #183 CI: image push races the build cache and fails ~once a day
+	  - Plan: [[ci-registry-blob-race]]
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
 - [ ] #9 We should encrypt the passwords in the db column level too
 - [ ] #10 Update available — reload to get the latest version.
