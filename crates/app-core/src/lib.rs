@@ -22,6 +22,7 @@ pub mod edge_metrics;
 pub mod event_queue;
 pub mod events;
 pub mod faces;
+pub mod invites;
 pub mod stream_names;
 pub mod legal;
 pub mod listen;
