@@ -78,6 +78,11 @@ pub fn router() -> Router<AppState> {
             get(get_role_perms).put(set_role_perms),
         )
         .route("/users", get(list_users).post(invite_user))
+        // Invites (#181). Creating one is authenticated; PREVIEWING and ACCEPTING are public —
+        // an invitee has no account yet, which is the whole point.
+        .route("/users/invites", post(create_invite))
+        .route("/auth/invites/:token", get(preview_invite))
+        .route("/auth/invites/:token/accept", post(accept_invite))
         .route("/users/:id/roles", put(set_user_roles))
         .route("/users/:id/password", post(set_user_password))
         .route("/users/:id", axum::routing::delete(remove_user))
@@ -876,6 +881,149 @@ async fn invite_user(
         store::grant_role(&st.pool, uid, r).await.map_err(db_err)?;
     }
     Ok(Json(uid))
+}
+
+#[derive(Deserialize)]
+struct CreateInviteReq {
+    /// Optional: a QR handed over in person needs no address, and demanding one invents a fake.
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    role_ids: Vec<Uuid>,
+    /// Days the invite stays open. Clamped in `invites::mint`.
+    #[serde(default)]
+    expires_days: Option<i64>,
+}
+
+/// Mint an invite. Returns the raw token + typed code EXACTLY once — they are not stored in the
+/// clear and cannot be re-read, so the UI must show them now (#181).
+async fn create_invite(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+    Json(b): Json<CreateInviteReq>,
+) -> Result<Json<app_core::invites::MintedInvite>, ApiErr> {
+    auth::require(&c, "users.manage")?;
+    let tid = tenant_ctx(&c)?;
+    let by = c.sub.parse::<Uuid>().ok();
+    let email = b.email.map(|e| e.trim().to_lowercase()).filter(|e| !e.is_empty());
+    if let Some(e) = &email {
+        if !e.contains('@') {
+            return Err(err(StatusCode::BAD_REQUEST, "valid email required"));
+        }
+    }
+    let ttl = b.expires_days.unwrap_or(7).clamp(1, 30) * 24 * 3600;
+    let db = st.db.clone();
+    let minted = crate::domain::blocking(move || {
+        app_core::invites::mint(&db, tid, email.as_deref(), &b.role_ids, ttl, by)
+    })
+    .await?
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(minted))
+}
+
+/// What an unauthenticated holder of an invite may see: which organisation it is for, so the app
+/// can ask "Join Acme?" before anyone types anything. Deliberately not the roles or any id.
+///
+/// A missing, expired or already-redeemed invite all answer 404 identically — this endpoint is
+/// enumerable, and distinguishing them would say which tokens exist.
+async fn preview_invite(
+    State(st): State<AppState>,
+    Path(token): Path<String>,
+) -> Result<Json<app_core::invites::InvitePreview>, ApiErr> {
+    let db = st.db.clone();
+    let p = crate::domain::blocking(move || app_core::invites::preview(&db, &token)).await?;
+    p.map(Json)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "this invite is not valid any more"))
+}
+
+#[derive(Deserialize)]
+struct AcceptInviteReq {
+    /// Required when the invite carries no address (a QR handed over in person).
+    #[serde(default)]
+    email: Option<String>,
+    password: String,
+}
+
+/// Redeem an invite: create the user, grant the baked-in roles, and mint the SAME session shape
+/// `/auth/login` returns — so the app's existing session handling is untouched and the phone is
+/// usable before any second step.
+async fn accept_invite(
+    State(st): State<AppState>,
+    Path(token): Path<String>,
+    Json(b): Json<AcceptInviteReq>,
+) -> Result<Json<AuthResp>, ApiErr> {
+    use app_core::invites::AcceptError;
+    if b.password.len() < 8 {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "password must be at least 8 characters",
+        ));
+    }
+    let db = st.db.clone();
+    let claimed = crate::domain::blocking(move || app_core::invites::claim(&db, &token))
+        .await?
+        .map_err(|e| match e {
+            AcceptError::NotFound => err(
+                StatusCode::NOT_FOUND,
+                "this invite is not valid any more — ask for a new one",
+            ),
+            AcceptError::Expired => err(
+                StatusCode::GONE,
+                "this invite has expired — ask for a new one",
+            ),
+            AcceptError::EmailTaken => {
+                err(StatusCode::CONFLICT, "that address is already in use")
+            }
+            AcceptError::Db(m) => err(StatusCode::INTERNAL_SERVER_ERROR, m),
+        })?;
+
+    let email = claimed
+        .email
+        .clone()
+        .or_else(|| b.email.map(|e| e.trim().to_lowercase()))
+        .filter(|e| e.contains('@'))
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "valid email required"))?;
+
+    let hash =
+        auth::hash_password(&b.password).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let uid = store::create_user(&st.pool, Some(claimed.tenant_id), &email, Some(&hash), false)
+        .await
+        .map_err(db_err)?;
+    for r in claimed.role_ids {
+        store::grant_role(&st.pool, uid, r).await.map_err(db_err)?;
+    }
+    let db = st.db.clone();
+    let invite_id = claimed.id;
+    let _ = crate::domain::blocking(move || {
+        app_core::invites::note_accepted_user(&db, invite_id, uid);
+    })
+    .await;
+
+    let perms = store::effective_perms(&st.pool, uid).await.map_err(db_err)?;
+    let claims = Claims {
+        sub: uid.to_string(),
+        tid: Some(claimed.tenant_id.to_string()),
+        master: false,
+        act_as: false,
+        perms: perms.clone(),
+        exp: auth::expiry_24h(),
+        scope: None,
+        iat: Some(app_core::signing::now_unix() as usize),
+    };
+    let token = auth::issue(&st.jwt_secret, &claims)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let mut ev = app_core::events::NewEvent::new(claimed.tenant_id, "auth.invite_accepted", "user");
+    ev.title = Some("Joined the team".to_string());
+    ev.message = Some(format!("{email} accepted an invitation"));
+    ev.user_id = Some(uid);
+    st.event_queue.push(ev);
+    Ok(Json(AuthResp {
+        token,
+        user_id: uid,
+        tenant_id: Some(claimed.tenant_id),
+        is_master: false,
+        perms,
+    }))
 }
 
 #[derive(Deserialize)]
