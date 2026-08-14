@@ -291,23 +291,25 @@ pub fn fetch_devices_typed(
 /// rather than being deleted, since it is what the already-working devices were read with and
 /// there is no reason to risk them on one report.
 fn device_functions(cfg: &TuyaConfig, tok: &str, device_id: &str) -> String {
-    match call(
+    // 1. The modern reader. Best answer when the product has a real instruction set.
+    let spec = call(
         cfg,
         "GET",
         &format!("/v1.0/iot-03/devices/{device_id}/specification"),
         Some(tok),
         None,
-    ) {
-        Ok(spec) => {
-            let f = &spec["result"]["functions"];
+    );
+    match &spec {
+        Ok(j) => {
+            let f = &j["result"]["functions"];
             if f.as_array().is_some_and(|a| !a.is_empty()) {
                 return f.to_string();
             }
-            // A device with a genuinely empty instruction set is possible (a read-only sensor);
-            // fall through so the legacy endpoint gets its say before we call it uncontrollable.
         }
         Err(e) => log::warn!("tuya: specification for {device_id} failed: {e}"),
     }
+
+    // 2. The legacy reader, for products the modern one does not describe.
     match call(
         cfg,
         "GET",
@@ -315,11 +317,52 @@ fn device_functions(cfg: &TuyaConfig, tok: &str, device_id: &str) -> String {
         Some(tok),
         None,
     ) {
-        Ok(f) => f["result"]["functions"].to_string(),
-        Err(e) => {
-            log::warn!("tuya: functions for {device_id} failed: {e}");
-            "[]".to_string()
+        Ok(f) => {
+            let arr = &f["result"]["functions"];
+            if arr.as_array().is_some_and(|a| !a.is_empty()) {
+                return arr.to_string();
+            }
         }
+        Err(e) => log::warn!("tuya: functions for {device_id} failed: {e}"),
+    }
+
+    // 3. DP-ONLY DEVICES. Some products expose no instruction set at all — a gate opener
+    //    (`ckmkzq`) answers the modern endpoint with an empty `functions` list and the legacy one
+    //    with `2009 not support this device`, while working perfectly in the Smart Life app.
+    //    Reported from production.
+    //
+    //    For those, the STATUS set is the data point set: the same codes, and writing one is how
+    //    the app controls the device. The specification response carries it in the same shape
+    //    functions use, so it drops straight in.
+    if let Ok(j) = &spec {
+        let st = &j["result"]["status"];
+        if st.as_array().is_some_and(|a| !a.is_empty()) {
+            log::info!("tuya: {device_id} has no instruction set; using its status set as the data points");
+            return st.to_string();
+        }
+    }
+
+    // 4. Last resort: the device's LIVE status, which every device answers. Types are inferred
+    //    from the values because this endpoint reports no schema. Thinner than the sets above —
+    //    no ranges, no enum members — but a named, typed, controllable code beats a device the
+    //    editor calls uncontrollable.
+    match get_status(cfg, device_id) {
+        Ok(pairs) if !pairs.is_empty() => {
+            let fns: Vec<Value> = pairs
+                .into_iter()
+                .map(|(code, v)| {
+                    let ty = match &v {
+                        Value::Bool(_) => "Boolean",
+                        Value::Number(_) => "Integer",
+                        _ => "String",
+                    };
+                    json!({ "code": code, "name": code, "desc": "", "type": ty, "values": "{}" })
+                })
+                .collect();
+            log::info!("tuya: {device_id} data points inferred from its live status");
+            Value::Array(fns).to_string()
+        }
+        _ => "[]".to_string(),
     }
 }
 
