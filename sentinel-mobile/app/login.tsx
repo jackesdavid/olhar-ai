@@ -2,7 +2,7 @@
 // the point of Phase 1 — an operator who logs in and never opens Settings should still get alerts.
 // A push failure does NOT block sign-in; it is reported on the Alerts tab instead.
 import { useState } from "react";
-import { KeyboardAvoidingView, Platform } from "react-native";
+import { KeyboardAvoidingView, Platform, Pressable } from "react-native";
 import { useRouter } from "expo-router";
 import { signIn } from "@/session";
 import { registerThisDevice } from "@/push";
@@ -53,6 +53,12 @@ export default function Login() {
         {error ? <Danger>{error}</Danger> : null}
 
         <Button label="Sign in" onPress={submit} busy={busy} />
+
+        {/* Someone who was invited has no account yet and no reason to guess that a scan screen
+            exists. It has to be on the first screen, not behind a menu. */}
+        <Pressable onPress={() => router.replace("/invite")} style={{ alignSelf: "center", paddingVertical: space.md }}>
+          <Muted>I have an invite</Muted>
+        </Pressable>
       </KeyboardAvoidingView>
     </Screen>
   );

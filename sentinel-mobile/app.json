@@ -32,7 +32,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Olhar AI uses the camera to capture faces while you are on the capture screen."
+          "cameraPermission": "Olhar AI uses the camera to scan an invite QR code and to capture faces on the capture screen."
         }
       ],
       [
