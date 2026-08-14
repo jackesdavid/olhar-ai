@@ -208,6 +208,37 @@ export async function signup(
   await loadMe();
 }
 
+/// Look at an invite without committing to it: which organisation is this? (#181)
+///
+/// Public and enumerable, so the server answers 404 identically for missing, expired and
+/// already-redeemed. Surfaces failure — someone holding a link they believe in needs to be told
+/// it is dead, and "ask for a new one" is what lets them recover.
+export async function previewInvite(
+  token: string,
+): Promise<{ tenant_name: string; email: string | null; expires_at: string }> {
+  const r = await fetch(`${API_BASE}/auth/invites/${encodeURIComponent(token)}`);
+  if (!r.ok) throw new Error((await r.text()) || "This invite is not valid any more");
+  return await r.json();
+}
+
+/// Redeem an invite: create the account and sign in, in one step. The server returns the same
+/// session shape login does, so nothing downstream has to know how this session was obtained.
+export async function acceptInvite(
+  token: string,
+  password: string,
+  email?: string,
+): Promise<void> {
+  const r = await fetch(`${API_BASE}/auth/invites/${encodeURIComponent(token)}/accept`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ password, email }),
+  });
+  if (!r.ok) throw new Error((await r.text()) || "Could not accept the invite");
+  const data = await r.json();
+  setToken(data.token);
+  await loadMe();
+}
+
 export function logout(): void {
   setToken(null);
   if (typeof localStorage !== "undefined") localStorage.removeItem(MASTER_KEY);

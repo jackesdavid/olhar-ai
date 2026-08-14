@@ -75,6 +75,14 @@ export const rbac = {
   inviteUser: (email: string, password: string, roleIds: string[]) =>
     api.post<string>("/users", { email, password, role_ids: roleIds }),
   setUserRoles: (id: string, roleIds: string[]) => api.put<void>(`/users/${id}/roles`, { role_ids: roleIds }),
+  /** Mint an invite (#181). The raw token and code come back EXACTLY once — they are stored
+   *  hashed and cannot be re-read, so whatever the UI does with them, it does now. */
+  createInvite: (opts: { email?: string; roleIds: string[]; expiresDays?: number }) =>
+    api.post<{ id: string; token: string; code: string; expires_at: string }>("/users/invites", {
+      email: opts.email,
+      role_ids: opts.roleIds,
+      expires_days: opts.expiresDays,
+    }),
   /** Owner (or `users.password_reset`): set another member's password. Ends their active sessions. */
   setUserPassword: (id: string, password: string) =>
     api.post<void>(`/users/${id}/password`, { password }),
