@@ -51,83 +51,85 @@ error nobody can act on.
 This is small and independent. It should ship before anything below, because every phase here makes
 the dropdowns matter more.
 
-## Phase 1 — `ensure` mode on Control Tuya Device
+## The shape, decided 2026-08-14: separate nodes, generic wait
 
-A `mode` config on the existing node: `set` (today's behaviour, unchanged) or `ensure`.
+No `ensure` mode, no Tuya-specific waiting. Every step is its own node, so the author composes
+them — which also means the pieces work for the next provider, and for conditions that have
+nothing to do with a device.
 
-In `ensure`, the node reads the point first and writes **only if it differs**, then reports:
-
-- `ok` (Bool, existing)
-- `changed` (Bool, new) — false means it was already in the wanted state
-
-That is exactly "open or close based on the real state" for a **setpoint** like `door_control_1`,
-and it makes the node idempotent: running the graph twice does not pulse anything twice.
-
-## Phase 2 — pulse points need a state point
-
-`ensure` cannot work on `gate1` alone: writing `true` is a momentary pulse, and reading it back
-tells you nothing about the gate. The state lives in `gate1_fca` / `gate1_fcf`.
-
-So `ensure` on a pulse point takes an optional **state code** and a **desired state**:
-
-> *pulse `gate1` unless `gate1_fca` is already true*
-
-Config: `state_code` (a read-only point from the same device) + `desired` (the value it should end
-at). When `state_code` is unset, `ensure` falls back to reading the written point itself, which is
-correct for a normal switch.
-
-## Phase 3 — confirm it actually moved
-
-The difference between "sent" and "done". A new **`Wait For State`** node:
-
-- inputs: exec, plus config `tuya_device`, `tuya_code`, `value`, `timeout_secs`, `poll_secs`
-- exec outputs: `reached` / `timeout`
-- data output: the final observed value
-
-A gate takes 10–20 seconds to travel. Polling `gate1_fca` until it is true — or giving up and
-taking the `timeout` arm — is what lets the next node say "the gate is open" truthfully, and what
-lets a workflow raise an alert when a gate is blocked.
-
-`Wait` + a back-edge can already express polling, but not the timeout arm, and not without the
-author hand-building a counter. This is a node because the pattern is universal and the failure
-mode (a loop with no exit) is one people ship by accident.
-
-**Engine note:** the run must not block on a physical device any more than it blocks on a person.
-The suspend/resume machinery already exists twice — `DelayTrigger`'s trailing edge and Device
-Gate's sweep (`docs/ref/workflows.md`). This is the third user, and it should reuse that shape
-rather than invent a fourth.
-
-## Phase 4 — the one-button graph
-
-With the above, the whole journey is three nodes:
+The insight that makes this cheap: a wait needs to **re-read**, and re-reading is what an exec
+back-edge already does. So the wait node does not poll anything itself. It has a **`retry` arm**
+that the author wires back to whatever produces the condition:
 
 ```
-When Event(widget run) → Device Gate("Open the gate?") → Control(ensure, gate1, state gate1_fca)
-                                                       → Wait For State(gate1_fca = true, 25s)
-                                                          reached → Notify("Gate is open")
-                                                          timeout → Notify("Gate did not move")
+Control(gate1) →exec  Read Tuya Status(gate1_fca) →exec  Wait Until(cond, 25s)
+                            ▲                                   │ retry
+                            └───────────────────────────────────┘
+                                                        reached → Notify("Gate is open")
+                                                        timeout → Notify("Gate did not move")
 ```
 
-Ship a **template** for it, so the next person does not rebuild it from parts.
+The Read node re-runs because the loop re-enters it (`memoize=false`, as loop bodies already
+require). Nothing in the scheduler changes. `Wait Until` only sleeps, counts, and picks an arm.
+
+## Phase 1 — the `Wait Until` node
+
+- **Inputs:** exec, `condition` (Bool).
+- **Config:** `timeout_secs` (default 30), `poll_secs` (default 3, floor 2).
+- **Exec outputs:** `reached` · `retry` · `timeout`. Three arms, and the split is load-bearing in
+  the same way Device Gate's is: `timeout` means *nobody proved it happened*, which is not the
+  same as proving it did not.
+- **Data output:** `waited_secs` (Num), so a graph can report how long the gate took.
+
+Deliberately generic: the condition is any Bool. A dictionary lookup, an HTTP result, a person
+count, a limit switch. Nothing about it knows what Tuya is.
+
+**How it counts.** State lives on `workflow_node_state` keyed by node + run, like `Cooldown`
+already does (`engine.rs`) — first entry stamps a deadline, each re-entry compares against it.
+Without that the node cannot tell its first visit from its fiftieth, and every loop would run
+forever.
+
+**On the run budget:** `WF_MAX_STEPS` (10 000) is the only bound actually enforced —
+`WF_MAX_RUNTIME` survives in `docs/ref/workflows.md` and in one old plan note, but not in
+`engine.rs`. At a 3 s poll a 30 s wait is ten steps, so the budget is not the constraint here.
+**Fix the stale doc** as part of this card rather than leaving a limit documented that does not
+exist.
+
+## Phase 2 — nothing else is a new node
+
+With separate nodes, "act on the real state" is already expressible and needs no new kind:
+
+| want | nodes |
+|---|---|
+| open only if closed | `Read Tuya Status(gate1_fcf)` → `If` → `Control(gate1)` |
+| toggle | `Read` → `If` → two `Control`s |
+| confirm it moved | `Control` → `Read` → `Wait Until` (loop) |
+| give up loudly | `Wait Until` → `timeout` → `Notify` |
+
+That is the flexibility being asked for: the graph says what it does, and any piece can be
+swapped for a different device, a different condition, or a different reaction.
+
+## Phase 3 — a template, not a node
+
+Ship the one-button gate graph as a **global workflow template** (`seed_templates.rs`), so the
+pattern is a starting point rather than folklore. Templates are already the mechanism for this
+(see [[global-workflow-templates]]).
 
 ## Open decisions
 
-1. **Is `Wait For State` Tuya-specific or generic?** Proposed: **Tuya-specific first**, because it
-   needs to poll a device the engine has no generic notion of. A generic "wait until this Bool is
-   true" would need to re-run its producer, which means re-entering an arbitrary subgraph — a much
-   larger change to the scheduler. Revisit once a second provider exists.
-2. **Should `ensure` be a mode, or a separate node?** Proposed: a mode. The device/point selectors
-   and the typed value widget are the entire node; duplicating them to change one behaviour is how
-   two nodes drift.
-3. **What does `ensure` do when the state point disagrees with the setpoint** (a gate stopped
-   half-way — neither `fca` nor `fcf` true)? Proposed: treat "not in the desired state" as "act",
-   and let Phase 3 catch the case where it still does not arrive.
-4. **Poll interval floor.** Every poll is a cloud round-trip (~300–800 ms, measured). Proposed
-   floor 2 s, default 3 s — and this is the measured argument for local control (#133), where a
-   poll is a LAN round-trip.
+1. **Does `Wait Until` sleep in-run, or suspend?** Proposed: **sleep in-run** for v1 — a gate is
+   10–25 s and the existing `Wait` node already blocks that way. If a use case wants minutes, the
+   suspend/resume machinery exists twice over (`DelayTrigger`'s trailing edge, Device Gate's
+   sweep) and this becomes its third user. Revisit then, not now.
+2. **Does `retry` need to exist, or should the node loop internally?** Proposed: **`retry` as an
+   arm.** An internal loop would have to re-run the producer subgraph itself, which is the
+   scheduler change this design exists to avoid — and an explicit back-edge is visible on the
+   canvas, where a hidden loop is not.
+3. **Poll floor.** 2 s. Every retry is a cloud round-trip (300–800 ms, measured), and this is the
+   measured argument for local control (#133) rather than an asserted one.
 
 ## Out of scope
 
 - Local control. That is #133, and it changes the transport, not this logic.
-- Any change to Device Gate. It already does its job.
+- Any change to Device Gate, or to Control Tuya Device beyond Phase 0.
 - Multi-device orchestration ("close every gate").
