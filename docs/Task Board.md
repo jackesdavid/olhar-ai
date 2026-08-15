@@ -43,7 +43,7 @@ kanban-plugin: board
 	  - Plan: [[box-health-copy-no-internals]]
 
 
-## ToDo
+## Specification
 
 - [ ] #185 Mobile production launch — App Store review readiness
 	  - Plan: [[mobile-app-store-launch]]
@@ -122,7 +122,7 @@ kanban-plugin: board
 	  - Plan: [[retire-local-builds-ci]]
 
 
-## In Progress
+## Generation
 
 	    a per-device Test that reads status + reports the round-trip. Phase 5 (sync count +
 	    land on naming) remains. Nothing verified against a real Tuya project yet.
@@ -141,7 +141,7 @@ kanban-plugin: board
 	  - Plan: [[security-hardening-remainder]]
 
 
-## Review
+## Validation
 
 - [ ] #179 Set Variables / Get Variables — one node instead of a column of them
 	  - Plan: [[multiset-multiget-nodes]]
@@ -154,6 +154,14 @@ kanban-plugin: board
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #83 Windows installer — signed .exe
 	  - Plan: [[edge-windows-installer]]
+
+
+## Revision
+
+
+
+## Audit
+
 
 
 ## Done
@@ -206,6 +214,6 @@ kanban-plugin: board
 
 %% kanban:settings
 ```
-{"kanban-plugin":"board","list-collapse":[false,true,false,false,false,false],"show-checkboxes":true,"date-display-format":"YYYY-MM-DD","hide-date-in-title":true,"full-list-lane-width":true,"move-tags":true,"tag-colors":[{"tagKey":"","color":"","backgroundColor":""}],"inline-metadata-position":"footer","move-task-metadata":true}
+{"kanban-plugin":"board","list-collapse":[false,true,false,false,false,false,false,false],"show-checkboxes":true,"date-display-format":"YYYY-MM-DD","hide-date-in-title":true,"full-list-lane-width":true,"move-tags":true,"tag-colors":[{"tagKey":"","color":"","backgroundColor":""}],"inline-metadata-position":"footer","move-task-metadata":true}
 ```
 %%

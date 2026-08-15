@@ -1,8 +1,8 @@
 ---
 name: board
-description: "Drive the team Kanban board — the Obsidian Kanban board at `docs/Task Board.md`, the SOURCE OF TRUTH. Turn a use case into a planned card, and move cards across columns as work progresses: plan → In Progress → Review → Done. Each card is a short \"#N title\" checklist item; detail lives in a plan note under docs/plans/, linked from the card. Triggers: 'plan this use case', 'move the card', 'start implementation', 'this is in review now', 'mark it done', '/board'."
+description: "Drive the team Kanban board — the Obsidian Kanban board at `docs/Task Board.md`, the SOURCE OF TRUTH. Work moves through a pipeline: Specification → Generation → Validation → Revision → Audit → Done. Specification writes the verification criteria; Validation runs them and isolates failures; Revision fixes only what failed. Each card is a short \"#N title\" checklist item; detail lives in a plan note under docs/plans/, linked from the card. Triggers: 'spec this use case', 'start implementation', 'validate it', 'revise', 'audit', 'mark it done', '/board'."
 user-invocable: true
-argument-hint: "[plan|implement|review|done] [use-case name | card #N or keyword]"
+argument-hint: "[spec|implement|validate|revise|audit|done] [use-case name | card #N or keyword]"
 allowed-tools:
   - Bash
   - Read
@@ -33,9 +33,11 @@ kanban-plugin: board
 
 ## Backlog
 ## Bugs
-## ToDo
-## In Progress
-## Review
+## Specification
+## Generation
+## Validation
+## Revision
+## Audit
 ## Done
 
 **Complete**
@@ -53,14 +55,34 @@ Columns are separated by **two blank lines**. Match the existing spacing when in
 
 ## Columns
 
-| Column | Meaning | Checkbox |
+Work moves through a **pipeline**, in this order. Each stage has one job, and doing another
+stage's job inside it is the failure mode the pipeline exists to prevent.
+
+| Column | What it is | Checkbox |
 |---|---|---|
 | `## Backlog` | not scheduled | `- [ ] ` |
 | `## Bugs` | defects, any priority — the column **is** the marker, so **no `🐛` prefix** | `- [ ] ` |
-| `## ToDo` | ready to pick up | `- [ ] ` |
-| `## In Progress` | being worked now | `- [ ] ` |
-| `## Review` | done, awaiting verification | `- [ ] ` |
-| `## Done` | shipped — goes **below the `**Complete**` line** | `- [x] ` |
+| `## Specification` | clear outcomes, scope boundaries, constraints and **verification criteria**, before any code or text is written | `- [ ] ` |
+| `## Generation` | build the raw solution **strictly to the defined contract** | `- [ ] ` |
+| `## Validation` | run tests, linters and logic checks against the output **to isolate specific failures** | `- [ ] ` |
+| `## Revision` | fix **only what failed**, preventing unguided drift or wholesale rewriting | `- [ ] ` |
+| `## Audit` | log final assumptions, behaviour consistency and security boundaries for human review | `- [ ] ` |
+| `## Done` | shipped and verified — goes **below the `**Complete**` line** | `- [x] ` |
+
+`Backlog` and `Bugs` are intake lanes, not stages: a card enters the pipeline at `Specification`.
+
+Three rules carry the weight:
+
+**Specification writes the verification criteria.** They are the contract. Validation does not
+invent its own standard later — it runs what Specification already committed to. A plan with no
+verification criteria is not specified, however detailed it looks.
+
+**Validation isolates failures; it does not fix them.** Its output is *which* check failed and on
+what input. Fixing inside Validation is how a card silently becomes a rewrite.
+
+**Revision touches only what failed.** Not the neighbouring function, not the naming, not the
+thing that looked wrong on the way past. Unguided drift is the specific thing this stage forbids.
+Anything else found goes on a new card.
 
 ## Card format
 
@@ -92,14 +114,35 @@ disambiguates `#8 ` from `#80 `.
 
 ## Stages (the argument)
 
-Read the first word of the argument; infer from the conversation if absent.
+Read the first word of the argument; infer from the conversation if absent. The stage words are
+the column names — moving a card is naming what has just been finished.
 
 | Arg | Action |
 |-----|--------|
-| `plan` | Draft a codebase-grounded plan note → `docs/plans/<slug>.md`, then add a card to `## ToDo`. |
-| `implement` / `start` | Move the card to `## In Progress`; ensure its plan note exists/refreshed. |
-| `review` | Move the card to `## Review`. |
-| `done` | Move the card to `## Done` below `**Complete**`, and flip `- [ ]` → `- [x]`. |
+| `plan` / `spec` | Draft a codebase-grounded plan note → `docs/plans/<slug>.md`, then add a card to `## Specification`. |
+| `implement` / `start` | Move the card to `## Generation`; ensure its plan note exists and is current. |
+| `validate` | Move to `## Validation`. **Then actually validate it** — see below. |
+| `revise` | Move to `## Revision` (validation found something). |
+| `audit` | Move to `## Audit`. |
+| `done` | Move to `## Done` below `**Complete**`, and flip `- [ ]` → `- [x]`. |
+
+### What each stage owes
+
+- **Specification** — outcomes, scope boundaries, constraints, and the **verification criteria**:
+  the concrete checks that will decide whether this is done. Named modules, tables and files;
+  open decisions stated; what is out of scope. Written before any code.
+- **Generation** — the solution built to that contract, and nothing beyond it. A good idea that is
+  not in the spec is a new card, not a bonus.
+- **Validation** — run the criteria. Report **which** failed and on what input, precisely enough
+  to act on. In this project that means proving it works *where it has to work*: for the web app
+  the **served bundle**, not a green pipeline; for a device, the **device**; for a migration, a
+  real Postgres. This project has repeatedly shipped changes that compiled, type-checked, deployed
+  and did not work — "it built" is not a criterion.
+- **Revision** — fix exactly those failures, then re-run Validation. Note on the card what failed
+  and what changed. A card bouncing Validation → Revision → Validation is the pipeline working.
+- **Audit** — write down what the work assumed, whether behaviour stayed consistent with what the
+  docs claim, and where the security boundaries ended up. Update the reference docs, resolve the
+  plan note's open decisions, and confirm no credential or secret landed anywhere it should not.
 
 ### Move a card
 Read the file, then cut the card's lines — the `- [ ]` line **and** its indented `Plan:` line if it
@@ -108,7 +151,7 @@ has one — from the current column and paste them into the target column. Two r
 - **Keep the pair together.** An orphaned `Plan:` line renders as a stray card.
 - **Only `## Done` flips the checkbox.** Every other column keeps `- [ ]`.
 
-Then confirm in one line, e.g. "Moved #119 → Review."
+Then confirm in one line, e.g. "Moved #119 → Validation."
 
 ### Plan a card
 1. **Find + read the use case** in `docs/use-cases/` (fuzzy-match the name).
@@ -116,9 +159,11 @@ Then confirm in one line, e.g. "Moved #119 → Review."
    reuse existing infra, honour project memory.
 3. **Write the plan** to `docs/plans/<slug>.md` (`<slug>` kebab-case): phases (ordered, buildable
    slices), open decisions, out-of-scope.
-4. **Add the card** to `## ToDo` with the next `#N` and a `Plan: [[<slug>]]` line.
+4. **Add the card** to `## Specification` with the next `#N` and a `Plan: [[<slug>]]` line.
 5. Several clearly-independent features → one card each, each with its own note.
-6. For `implement` with **no** existing card → create one directly in `## In Progress`.
+6. For `implement` with **no** existing card → create one directly in `## Generation`, and write
+   the plan note anyway. Skipping Specification because the work already started is how a card ends
+   up with no record of what it was meant to do.
 
 ### Which card
 After the stage word, the rest is a card ref — match by `#N` or fuzzy title against the board. No
@@ -135,14 +180,22 @@ ref → the task being actively worked in **this** conversation. Several plausib
 **Goal:** <one line>
 ## Phase 1 — <slice>
 - concrete steps naming real files/modules
+## Verification criteria
+- the concrete checks that decide this is done, written BEFORE the code
+- each one testable by someone who did not write it
 ## Open decisions
 1. …
 ## Out of scope (v1)
 - …
 ```
 
-`[[wikilinks]]` are fine again now that the board is Obsidian. They do **not** render on GitHub, so
-use plain repo-relative links for anything a non-Obsidian reader needs to follow.
+**The verification criteria are the contract Validation runs.** Write them in Specification, where
+they are a design decision, not afterwards, where they become a description of whatever got built.
+Prefer criteria that name a place and an observation — "the served bundle contains X", "the device
+answers Y", "the migration applies over the full chain on a real Postgres" — over "works".
+
+`[[wikilinks]]` are fine now that the board is Obsidian. They do **not** render on GitHub, so use
+plain repo-relative links for anything a non-Obsidian reader needs to follow.
 
 ## Commit the change
 
