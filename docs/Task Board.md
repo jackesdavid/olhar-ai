@@ -45,6 +45,8 @@ kanban-plugin: board
 
 ## ToDo
 
+- [ ] #185 Mobile production launch — App Store review readiness
+	  - Plan: [[mobile-app-store-launch]]
 - [ ] #184 State-aware device control — act on the real state, confirm it changed
 	  - Plan: [[tuya-state-aware-control]]
 - [ ] #181 Mobile onboarding — invite a person, pair their phone
@@ -122,9 +124,6 @@ kanban-plugin: board
 
 ## In Progress
 
-- [ ] #182 Tuya onboarding — diagnose the failure, prove the device moves
-	  - Plan: [[tuya-onboarding-journey]]
-	  - Phases 1-4 merged: typed errors, the data-centre probe, the four-step checklist, and
 	    a per-device Test that reads status + reports the round-trip. Phase 5 (sync count +
 	    land on naming) remains. Nothing verified against a real Tuya project yet.
 - [ ] #174 Faces — complete the pipeline
@@ -159,6 +158,14 @@ kanban-plugin: board
 
 ## Done
 
+- [x] #182 Tuya onboarding — diagnose the failure, prove the device moves
+	  - Plan: [[tuya-onboarding-journey]]
+	  - CONFIRMED on the owner's own devices: connect → diagnose → sync → control. The gate
+	    opens from the iPhone widget through Device Gate + Face ID.
+	  - The find that mattered: the gate module is published as a THING MODEL, and the whole
+	    v1.0/v1.1 API family answers 2009/2003/2008 for it. Two fixes deduced from docs and
+	    logs failed; only probing every endpoint against the real device found it.
+	  - Also ships the 4-step checklist, the data-centre probe, and a per-device Test.
 - [x] #180 Copy / Paste — paste at the cursor, config only, no wires
 	  - Plan: [[editor-copy-paste-spec]]
 	  - Confirmed working in the editor. Paste lands where the mouse is, carries only the

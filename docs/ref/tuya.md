@@ -71,6 +71,43 @@ Sources: [Tuya "Get User's Device List"](https://developer.tuya.com/en/docs/clou
 [tinytuya #111](https://github.com/jasonacox/tinytuya/discussions/111),
 [localtuya README](https://github.com/rospogrigio/localtuya).
 
+## Thing model vs the v1 API family (learned the hard way, 2026-08-14)
+
+Not every Tuya product is described by the same API family, and picking the wrong one looks
+exactly like a broken device.
+
+A gate module (category `ckmkzq`, product "Module Wifi", model "Garen Mobile") answered **every**
+v1.0/v1.1 metadata and command endpoint with an error while working perfectly in the Smart Life
+app:
+
+| endpoint | answer |
+|---|---|
+| `/v1.0/devices/{id}/functions` | `2009 not support this device` |
+| `/v1.1/devices/{id}/specifications` | `2009` |
+| `/v1.0/iot-03/devices/{id}/specification` | OK, but only `{"category":"ckmkzq"}` |
+| `/v1.0/devices/{id}/status` | `2003 function not support` |
+| `/v1.0/devices/{id}/commands` | `2008 command or value not support` |
+| **`/v2.0/cloud/thing/{id}/model`** | **OK — every property, with real names and `accessMode`** |
+| **`/v2.0/cloud/thing/{id}/shadow/properties`** | **OK — code, dp_id, type, current value** |
+| **`/v2.0/cloud/thing/{id}/shadow/properties/issue`** | **OK — writes** |
+
+So `client.rs` tries the **thing model first** for metadata, status and commands, falling back to
+v1 (which is what the already-working devices use, and must not be risked).
+
+Two details that cost time:
+
+- **`/model` is preferred over `/shadow/properties`** for the catalog. Only the model carries the
+  real names ("Portão 1", not `gate1`), `accessMode`, and enum ranges. Dropping `accessMode` means
+  the editor offers read-only points — limit switches — in the Control node, and writing one fails
+  at run time. Treat a missing `access` as writable: the v1 sources describe only functions.
+- **`result.model` is a JSON STRING**, not an object.
+
+**The method, not just the answer:** two fixes were deduced from documentation and logs, and both
+were wrong, because they assumed which API family the device belonged to. Only probing every
+endpoint against the real device settled it. When a Tuya device misbehaves, probe first — and probe
+the RIGHT tenant's project (`tuya_config` has one row per tenant; a `LIMIT 1` reads someone else's
+and produces a confidently wrong diagnosis).
+
 ## File layout
 
 | Path | What |
