@@ -41,6 +41,19 @@ That costs twice over:
 One cache ref per service — `buildcache:rust-$SVC`. The exports stop clobbering each other, the
 cache becomes real for all four, and nothing writes the same manifest twice in a job.
 
+## Round 1 did not fix it (2026-08-14)
+
+Per-service refs shipped, and the very next pipeline failed the same way — on
+`sentinel-notification`, the LAST service, with four separate cache refs in play. So the race is
+not between services competing for one ref: it is between a single build's own `--push` and its
+own `--cache-to`, both writing blobs to the same repository at once.
+
+Round 2 is `image-manifest=true,oci-mediatypes=true` on `--cache-to`, which stores the cache as a
+standard OCI image manifest rather than the buildkit-specific shape. That is the documented fix for
+this error against registries that verify blob references, GitLab's included.
+
+The per-service refs stay regardless — the cache-clobbering they fixed was real and separate.
+
 ## If it recurs
 
 The next lever is `--cache-to type=registry,…,image-manifest=true,oci-mediatypes=true`, which
