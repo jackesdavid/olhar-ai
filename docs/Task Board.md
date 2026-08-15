@@ -45,8 +45,6 @@ kanban-plugin: board
 
 ## Specification
 
-- [ ] #185 Mobile production launch — App Store review readiness
-	  - Plan: [[mobile-app-store-launch]]
 - [ ] #184 State-aware device control — act on the real state, confirm it changed
 	  - Plan: [[tuya-state-aware-control]]
 - [ ] #181 Mobile onboarding — invite a person, pair their phone
@@ -124,6 +122,8 @@ kanban-plugin: board
 
 ## Generation
 
+- [ ] #185 Mobile production launch — App Store review readiness
+	  - Plan: [[mobile-app-store-launch]]
 	    a per-device Test that reads status + reports the round-trip. Phase 5 (sync count +
 	    land on naming) remains. Nothing verified against a real Tuya project yet.
 - [ ] #174 Faces — complete the pipeline
