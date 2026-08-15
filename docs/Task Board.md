@@ -45,6 +45,8 @@ kanban-plugin: board
 
 ## ToDo
 
+- [ ] #184 State-aware device control — act on the real state, confirm it changed
+	  - Plan: [[tuya-state-aware-control]]
 - [ ] #181 Mobile onboarding — invite a person, pair their phone
 	  - Plan: [[mobile-tenant-onboarding]]
 - [ ] #175 Mobile as a real edge — device camera as a face-capture source
