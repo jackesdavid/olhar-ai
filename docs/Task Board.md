@@ -43,7 +43,7 @@ kanban-plugin: board
 	  - Plan: [[box-health-copy-no-internals]]
 
 
-## ToDo
+## Specification
 
 - [ ] #184 State-aware device control — act on the real state, confirm it changed
 	  - Plan: [[tuya-state-aware-control]]
@@ -120,7 +120,7 @@ kanban-plugin: board
 	  - Plan: [[retire-local-builds-ci]]
 
 
-## In Progress
+## Generation
 
 - [ ] #182 Tuya onboarding — diagnose the failure, prove the device moves
 	  - Plan: [[tuya-onboarding-journey]]
@@ -142,7 +142,7 @@ kanban-plugin: board
 	  - Plan: [[security-hardening-remainder]]
 
 
-## Review
+## Validation
 
 - [ ] #179 Set Variables / Get Variables — one node instead of a column of them
 	  - Plan: [[multiset-multiget-nodes]]
@@ -155,6 +155,14 @@ kanban-plugin: board
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #83 Windows installer — signed .exe
 	  - Plan: [[edge-windows-installer]]
+
+
+## Revision
+
+
+
+## Audit
+
 
 
 ## Done
@@ -199,6 +207,6 @@ kanban-plugin: board
 
 %% kanban:settings
 ```
-{"kanban-plugin":"board","list-collapse":[false,true,false,false,false,false],"show-checkboxes":true,"date-display-format":"YYYY-MM-DD","hide-date-in-title":true,"full-list-lane-width":true,"move-tags":true,"tag-colors":[{"tagKey":"","color":"","backgroundColor":""}],"inline-metadata-position":"footer","move-task-metadata":true}
+{"kanban-plugin":"board","list-collapse":[false,true,false,false,false,false,false,false],"show-checkboxes":true,"date-display-format":"YYYY-MM-DD","hide-date-in-title":true,"full-list-lane-width":true,"move-tags":true,"tag-colors":[{"tagKey":"","color":"","backgroundColor":""}],"inline-metadata-position":"footer","move-task-metadata":true}
 ```
 %%
