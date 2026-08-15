@@ -108,6 +108,35 @@ endpoint against the real device settled it. When a Tuya device misbehaves, prob
 the RIGHT tenant's project (`tuya_config` has one row per tenant; a `LIMIT 1` reads someone else's
 and produces a confidently wrong diagnosis).
 
+## Gate boards: the command point is not the state point (2026-08-15)
+
+A "House Gate" workflow always asked "Fechar o portão?", whatever the gate was doing. The cause is
+worth generalising, because any pulse-driven device has it.
+
+**The graph read `gate1` — the COMMAND point — and branched on it.** On a gate board, writing
+`gate1 = true` is a momentary pulse that runs the motor; the stored value is just *the last thing
+written*, not where the gate is. After the first approval it stayed `true` for ever, so the branch
+froze. Confirmed from `device_gate_requests`: two runs said "Abrir", then an approval at 12:34:49,
+then "Fechar" on every run after it.
+
+**The state lives in the limit switches.** On this board (Garen, `ckmkzq`):
+
+| code | reads |
+|---|---|
+| `gate1_fca` | **`True` when the gate is CLOSED**, `False` when open |
+| `gate1_status` | `2` at rest, `1` while travelling |
+| `gate1_fcf`, `gate2_*`, `social_gate_sensor` | frozen since first report — **not wired** on this install |
+
+Note `gate1_fca` is **inverted relative to its name**. "FCA" reads as *fim de curso aberto*, and it
+is `True` when CLOSED. Do not infer polarity from a data point's name — confirm it against the
+physical state, twice, in both positions.
+
+**How this was got wrong, so it is not repeated.** Two diagnoses were built on unlabelled captures:
+the transitions were recorded, but the gate's actual position at each end was *assumed* rather than
+asked. Both assumptions were wrong, and the second produced a confident safety warning that did not
+apply. A device capture is only evidence if someone looking at the device says what state it was
+in — the timestamps prove a change happened, never which way.
+
 ## File layout
 
 | Path | What |
