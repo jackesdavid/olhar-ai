@@ -7,8 +7,8 @@ import { useEffect, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { registerThisDevice, sendTestPush } from "@/push";
-import { signOut } from "@/session";
-import { Button, Card, Danger, Loader, Muted, Screen, Status, Strong, ThemePicker } from "@/styles/ui";
+import { deleteAccount, signOut } from "@/session";
+import { Body, Button, Card, Danger, Input, Loader, Muted, Screen, Status, Strong, ThemePicker } from "@/styles/ui";
 import { space, typeScale, useTheme } from "@/styles/theme";
 
 export default function Settings() {
@@ -39,6 +39,27 @@ export default function Settings() {
   async function leave() {
     await signOut();
     router.replace("/login");
+  }
+
+  // Deleting an account is destructive and irreversible, so it is two deliberate steps rather than
+  // one button: reveal what will happen, then confirm with the password. Apple requires the
+  // capability (5.1.1(v)); saying plainly what survives is what makes it honest.
+  const [confirming, setConfirming] = useState(false);
+  const [password, setPassword] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function reallyDelete() {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteAccount(password || undefined);
+      router.replace("/login");
+    } catch (e) {
+      setDeleteError((e as Error).message);
+    } finally {
+      setDeleting(false);
+    }
   }
 
   return (
@@ -87,6 +108,42 @@ export default function Settings() {
                 ACCOUNT
               </Text>
               <Button label="Sign out" onPress={leave} />
+            </View>
+
+            <View style={styles.section}>
+              <Text style={[typeScale.caption, styles.eyebrow, { color: t.mutedForeground }]}>
+                DELETE ACCOUNT
+              </Text>
+              <Card>
+                {confirming ? (
+                  <>
+                    {/* Named precisely, because the difference is the whole point: this removes a
+                        PERSON, not a workspace. Someone deleting their login should not fear they
+                        are deleting the cameras their household depends on. */}
+                    <Body>This deletes your sign-in and removes you from the workspace.</Body>
+                    <Muted>
+                      The workspace itself carries on: cameras, automations, recordings and everyone
+                      else are untouched. This phone stops receiving notifications. What you did
+                      stays in the activity history.
+                    </Muted>
+                    <Muted>This cannot be undone.</Muted>
+                    <Input
+                      placeholder="Your password"
+                      secureTextEntry
+                      value={password}
+                      onChangeText={setPassword}
+                    />
+                    {deleteError ? <Danger>{deleteError}</Danger> : null}
+                    <Button label="Delete my account" onPress={reallyDelete} busy={deleting} />
+                    <Button label="Cancel" onPress={() => { setConfirming(false); setDeleteError(null); }} />
+                  </>
+                ) : (
+                  <>
+                    <Muted>Removes you from the workspace. The workspace itself keeps running.</Muted>
+                    <Button label="Delete my account" onPress={() => setConfirming(true)} />
+                  </>
+                )}
+              </Card>
             </View>
           </>
         )}

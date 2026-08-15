@@ -95,15 +95,42 @@ declared or every upload stalls).
 TestFlight before submission is not optional here: it is the only way to test the production
 signing path, and push behaves differently on a production `aps-environment`.
 
+## Verification criteria
+
+Written before the code, and what Validation runs. Each names a place and an observation.
+
+**Account deletion**
+1. A non-owner member, signed in on the phone, deletes their account from Settings and is signed
+   out. Their row is gone from `users` in the production database.
+2. Their **push devices are detached, not deleted** — no notification is ever routed at a deleted
+   person, and the row survives for the audit trail (`push_devices.user_id` is `ON DELETE SET NULL`).
+3. Their **events remain** in the tenant feed. `events.user_id` has no foreign key precisely so
+   that leaving never erases what was done.
+4. **The tenant is untouched**: cameras, workflows, recordings, boxes and every other member work
+   exactly as before. Verified by listing them after the deletion.
+5. The **owner** attempting it is refused with a message naming the fix (transfer ownership), and
+   is still able to sign in afterwards.
+6. An account **with** a password requires the correct one; a wrong password refuses. An account
+   **without** one (social-only) deletes without a password rather than becoming undeletable.
+7. `auth.user_left` appears in the events feed.
+
+**Store readiness**
+8. `/privacy` and `/terms` render with **no `[` placeholder** anywhere in the page source.
+9. No reviewer-visible permission string contains the word "development".
+10. `app.json` and `package.json` both read `1.0.0`.
+11. A production build reaches TestFlight **from CI**, not from a laptop.
+
 ## Open decisions
 
-1. **What does "delete my account" mean for a tenant OWNER?** Deleting the only admin would strand
-   cameras, boxes and recordings that other members rely on. Proposed: a member deletes themselves
-   outright; an owner is told they must transfer ownership or delete the whole tenant, with the
-   tenant-deletion path being explicit and confirmed. Apple accepts "you must resolve X first" as
-   long as it is actionable **in the app**.
-2. **Keep iPad support?** `supportsTablet: true` doubles the screenshot work and adds a review
-   surface for layouts nobody has tested. Proposed: **drop it for 1.0**, add it back deliberately.
+1. ~~What does "delete my account" mean for a tenant owner?~~ **Decided 2026-08-15: deleting a
+   mobile account has nothing to do with deleting the cloud tenant — in the cloud the product
+   carries on.** An account is a login; the product belongs to the tenant. So a member deletes
+   themselves and everything else continues untouched. The owner is the one exception, and only
+   because `tenants.owner_user_id` is `ON DELETE SET NULL`: deleting them would leave the tenant
+   ownerless and unrecoverable. They are told to transfer ownership first, which is a feature that
+   already exists — Apple accepts a blocker that is actionable in the app.
+2. **Keep iPad support?** `supportsTablet: true` doubles the screenshot work and adds layouts
+   nobody has tested. Proposed: **drop it for 1.0**, add it back deliberately.
 3. **Does the widget need its own review consideration?** It runs App Intents and holds no
    credentials, so no — but its screenshots help the listing.
 4. **Brazil-first or worldwide?** The legal text assumes LGPD and GDPR. Proposed: launch in Brazil

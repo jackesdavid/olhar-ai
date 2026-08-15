@@ -3,7 +3,7 @@
     "name": "Olhar AI",
     "slug": "olharai",
     "owner": "olharai",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "olharai",
     "userInterfaceStyle": "automatic",
@@ -11,7 +11,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.olharai.app",
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "Olhar AI connects to the development server and to cameras on your local network."
+        "NSLocalNetworkUsageDescription": "Olhar AI finds and streams your cameras over your local network."
       },
       "entitlements": {
         "com.apple.security.application-groups": [

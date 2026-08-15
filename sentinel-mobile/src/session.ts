@@ -72,6 +72,22 @@ export async function signIn(email: string, password: string): Promise<Session> 
   return s;
 }
 
+/** Delete YOUR OWN account (App Store guideline 5.1.1(v), card #185).
+ *
+ *  This deletes the person, not the organisation: the tenant and everything in it — cameras,
+ *  workflows, recordings, other members — carry on untouched. An account is a login; the product
+ *  it logs into belongs to the tenant.
+ *
+ *  `password` is required when the account has one. Social-only accounts have nothing to check,
+ *  and refusing those would make them undeletable — the exact state this exists to prevent. */
+export async function deleteAccount(password?: string): Promise<void> {
+  await api<void>("/auth/me", {
+    method: "DELETE",
+    body: JSON.stringify({ password }),
+  });
+  await signOut();
+}
+
 export async function signOut(): Promise<void> {
   await SecureStore.deleteItemAsync(TOKEN_KEY);
   setToken(null);

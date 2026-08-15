@@ -86,6 +86,9 @@ pub fn router() -> Router<AppState> {
         .route("/users/:id/roles", put(set_user_roles))
         .route("/users/:id/password", post(set_user_password))
         .route("/users/:id", axum::routing::delete(remove_user))
+        // Leaving on your own account — the "different feature" `remove_user` refers to. Required
+        // by App Store guideline 5.1.1(v): an app that creates accounts must delete them in-app.
+        .route("/auth/me", axum::routing::delete(delete_own_account))
         .route("/tenant/transfer-ownership", post(transfer_ownership))
         .route("/admin/tenants", get(list_tenants).post(create_tenant))
         .route("/admin/tenants/:id/assume", post(assume_tenant))
@@ -641,6 +644,84 @@ async fn remove_user(
     ev.message = Some(format!("{} was removed from the tenant", target.email));
     ev.user_id = Some(target_id);
     ev.data = Some(serde_json::json!({ "by": caller.to_string() }));
+    st.event_queue.push(ev);
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct DeleteMeReq {
+    /// Required when the account HAS a password. Absent for social-only accounts, which have
+    /// nothing to check — refusing those would make the account undeletable, which is the state
+    /// this endpoint exists to prevent.
+    #[serde(default)]
+    password: Option<String>,
+}
+
+/// `DELETE /auth/me` — delete your OWN account.
+///
+/// This deletes the person, not the organisation. The tenant, its cameras, workflows, recordings
+/// and every other member carry on exactly as before: an account is a login, and the product it
+/// logs into belongs to the tenant. Apple requires this (5.1.1(v)) because the app creates
+/// accounts — which it does since invites shipped — and `remove_user` deliberately refuses
+/// self-removal, naming this as the separate feature it is.
+///
+/// What goes: the user row, their role grants, passkeys and Google links (FK CASCADE), and their
+/// push devices detach (SET NULL) so no notification is ever routed at a deleted person. What
+/// stays: their history in the events feed. `events.user_id` has no foreign key precisely so that
+/// leaving never erases the record of what was done.
+async fn delete_own_account(
+    State(st): State<AppState>,
+    UserClaims(c): UserClaims,
+    Json(b): Json<DeleteMeReq>,
+) -> Result<StatusCode, ApiErr> {
+    let tid = tenant_ctx(&c)?;
+    let me = Uuid::parse_str(&c.sub).map_err(|_| err(StatusCode::UNAUTHORIZED, "bad subject"))?;
+    let user = store::find_user_by_id(&st.pool, me)
+        .await
+        .map_err(db_err)?
+        .ok_or(err(StatusCode::NOT_FOUND, "user not found"))?;
+    if user.is_master {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "a master account is not a tenant member",
+        ));
+    }
+
+    // The owner cannot delete themselves, for the same reason nobody else can:
+    // `tenants.owner_user_id` is ON DELETE SET NULL, so it would leave the tenant ownerless and
+    // unrecoverable. Apple accepts a blocker like this as long as it is ACTIONABLE in the app —
+    // transferring ownership is, and the message says so rather than just refusing.
+    let owner = store::tenant_owner(&st.pool, tid).await.map_err(db_err)?;
+    if owner == Some(me) {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "you own this workspace — transfer ownership to someone else first, then delete your account",
+        ));
+    }
+
+    // A password re-check, when there is one to check. An unlocked phone in the wrong hands should
+    // not be one tap away from destroying an account.
+    if let Some(hash) = user.password_hash.as_deref() {
+        let given = b.password.unwrap_or_default();
+        if given.is_empty() || !auth::verify_password(&given, hash) {
+            return Err(err(StatusCode::UNAUTHORIZED, "wrong password"));
+        }
+    }
+
+    let n = store::remove_tenant_user(&st.pool, tid, me)
+        .await
+        .map_err(db_err)?;
+    if n == 0 {
+        return Err(err(StatusCode::NOT_FOUND, "user not found"));
+    }
+
+    log::warn!("user deleted their own account: {me} (tenant {tid})");
+    let mut ev = app_core::events::NewEvent::new(tid, "auth.user_left", "user");
+    ev.severity = "warn".to_string();
+    ev.title = Some("Account deleted".to_string());
+    ev.message = Some(format!("{} deleted their own account", user.email));
+    ev.user_id = Some(me);
     st.event_queue.push(ev);
 
     Ok(StatusCode::NO_CONTENT)
