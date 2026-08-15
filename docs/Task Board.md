@@ -45,6 +45,8 @@ kanban-plugin: board
 
 ## ToDo
 
+- [ ] #185 Mobile production launch — App Store review readiness
+	  - Plan: [[mobile-app-store-launch]]
 - [ ] #184 State-aware device control — act on the real state, confirm it changed
 	  - Plan: [[tuya-state-aware-control]]
 - [ ] #181 Mobile onboarding — invite a person, pair their phone
