@@ -84,7 +84,22 @@ export default function RootLayout() {
         <Stack.Screen name="login" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="capture-settings" options={{ headerShown: true, title: "Capture settings", presentation: "modal" }} />
-        <Stack.Screen name="approve" options={{ headerShown: true, title: "Approval", presentation: "modal" }} />
+        {/* A FULL SCREEN, not a modal sheet (#176 follow-up).
+            `presentation: "modal"` is a sheet the user can drag down to dismiss, and that vertical
+            gesture competes with the horizontal slide-to-approve — reported as the slider fighting
+            the finger even after the ScrollView underneath it was removed. A gate is also not a
+            glance: it is the only thing that matters while it is on screen, and it should own the
+            screen. `gestureEnabled: false` removes the swipe-back for the same reason — the way
+            out of a gate is to answer it or close it deliberately. */}
+        <Stack.Screen
+          name="approve"
+          options={{
+            headerShown: true,
+            title: "Approval",
+            presentation: "fullScreenModal",
+            gestureEnabled: false,
+          }}
+        />
         <Stack.Screen name="run/[id]" options={{ headerShown: false }} />
       </Stack>
     </>

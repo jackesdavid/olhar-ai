@@ -95,6 +95,29 @@ forever.
 **Fix the stale doc** as part of this card rather than leaving a limit documented that does not
 exist.
 
+## The order matters: READ BEFORE THE GATE
+
+The first sketch put the Device Gate first and decided afterwards. That is backwards. If the phone
+is going to ask a person to approve something, the question has to name what will happen — "Fechar
+o portão?" is a different decision from "Abrir o portão?", and a prompt that says neither is asking
+someone to authorise a surprise.
+
+So the state is read FIRST, and the answer picks the message:
+
+```
+When Event → Read Tuya Status(Portão 1 Sensor FCA)
+                  │ on
+                  ▼
+                 If ── true  → Text("Fechar o portão?") ─┐
+                    └─ false → Text("Abrir o portão?")  ─┴→ Device Gate → Control
+```
+
+**This already works.** `message` is a wired, required `Text` input on Device Gate
+(`DEVICE_GATE_IN`), not a config literal — so a `Text` or `Format` node drives it and the push, the
+approval screen and the run log all carry the same sentence. Nothing to build.
+
+What Phase 0 adds is the ability to *pick the right points* in those two nodes.
+
 ## Phase 2 — nothing else is a new node
 
 With separate nodes, "act on the real state" is already expressible and needs no new kind:
@@ -103,6 +126,7 @@ With separate nodes, "act on the real state" is already expressible and needs no
 |---|---|
 | open only if closed | `Read Tuya Status(gate1_fcf)` → `If` → `Control(gate1)` |
 | toggle | `Read` → `If` → two `Control`s |
+| ask a person, naming the action | `Read` → `If` → `Text` → `Device Gate` |
 | confirm it moved | `Control` → `Read` → `Wait Until` (loop) |
 | give up loudly | `Wait Until` → `timeout` → `Notify` |
 

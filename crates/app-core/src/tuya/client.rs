@@ -294,7 +294,63 @@ fn device_functions(cfg: &TuyaConfig, tok: &str, device_id: &str) -> String {
     // 1. THE THING MODEL (v2). Proven against a real gate module whose product answers 2009 on
     //    every v1.0/v1.1 instruction-set endpoint while working perfectly in the Smart Life app:
     //    the product is published as a thing model, and the v1 family simply does not describe it.
-    //    `shadow/properties` carries code, dp_id, type and the CURRENT value for every property.
+    //
+    //    `/model` is preferred over `/shadow/properties` because it is the only source of the two
+    //    things an author actually needs: the REAL names ("Portão 1", not `gate1`) and
+    //    `accessMode`. Without the latter the editor offers read-only points — limit switches — in
+    //    the Control node's dropdown, and writing one fails at run time with a Tuya error nobody
+    //    can act on.
+    if let Ok(j) = call(
+        cfg,
+        "GET",
+        &format!("/v2.0/cloud/thing/{device_id}/model"),
+        Some(tok),
+        None,
+    ) {
+        // `result.model` is a JSON STRING containing the model, not an object.
+        if let Some(model) = j["result"]["model"]
+            .as_str()
+            .and_then(|m| serde_json::from_str::<Value>(m).ok())
+        {
+            let fns: Vec<Value> = model["services"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|svc| svc["properties"].as_array())
+                .flatten()
+                .filter_map(|p| {
+                    let code = p["code"].as_str()?;
+                    let spec = &p["typeSpec"];
+                    // `values` keeps Tuya's own convention: a JSON STRING, so an enum's range and
+                    // a number's min/max survive into the editor's value widget unchanged.
+                    let values = match spec["range"].as_array() {
+                        Some(r) => json!({ "range": r }).to_string(),
+                        None => spec
+                            .as_object()
+                            .filter(|o| o.len() > 1)
+                            .map(|_| spec.to_string())
+                            .unwrap_or_else(|| "{}".to_string()),
+                    };
+                    Some(json!({
+                        "code": code,
+                        "name": p["name"].as_str().filter(|n| !n.is_empty()).unwrap_or(code),
+                        "desc": p["description"].as_str().unwrap_or(""),
+                        "type": thing_type_to_tuya(spec["type"].as_str().unwrap_or("string")),
+                        "values": values,
+                        // "rw" | "ro" | "wr". Absent on the v1 sources, where every function is
+                        // writable by definition — readers must treat a missing field as writable.
+                        "access": p["accessMode"].as_str().unwrap_or("rw"),
+                    }))
+                })
+                .collect();
+            if !fns.is_empty() {
+                return Value::Array(fns).to_string();
+            }
+        }
+    }
+
+    // 1b. The shadow, when the model is unavailable. Carries code, type and the current value,
+    //     but no names and no access mode — so everything is assumed writable.
     if let Ok(j) = call(
         cfg,
         "GET",
@@ -314,6 +370,7 @@ fn device_functions(cfg: &TuyaConfig, tok: &str, device_id: &str) -> String {
                             "desc": "",
                             "type": thing_type_to_tuya(p["type"].as_str().unwrap_or("string")),
                             "values": "{}",
+                            "access": "rw",
                         }))
                     })
                     .collect();
