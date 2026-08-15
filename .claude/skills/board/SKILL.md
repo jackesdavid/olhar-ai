@@ -1,8 +1,8 @@
 ---
 name: board
-description: "Drive the team Kanban board — the Obsidian Kanban board at `docs/Task Board.md`, the SOURCE OF TRUTH. Turn a use case into a planned card, and move cards across columns as work progresses: plan → In Progress → Review → Done. Each card is a short \"#N title\" checklist item; detail lives in a plan note under docs/plans/, linked from the card. Triggers: 'plan this use case', 'move the card', 'start implementation', 'this is in review now', 'mark it done', '/board'."
+description: "Drive the team Kanban board — the Obsidian Kanban board at `docs/Task Board.md`, the SOURCE OF TRUTH. Work moves through a pipeline: Specification → Generation → Validation → Revision → Audit → Done. Specification writes the verification criteria; Validation runs them and isolates failures; Revision fixes only what failed. Each card is a short \"#N title\" checklist item; detail lives in a plan note under docs/plans/, linked from the card. Triggers: 'spec this use case', 'start implementation', 'validate it', 'revise', 'audit', 'mark it done', '/board'."
 user-invocable: true
-argument-hint: "[plan|implement|review|done] [use-case name | card #N or keyword]"
+argument-hint: "[spec|implement|validate|revise|audit|done] [use-case name | card #N or keyword]"
 allowed-tools:
   - Bash
   - Read
