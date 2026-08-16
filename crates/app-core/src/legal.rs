@@ -16,10 +16,10 @@ use crate::timeutil::now_rfc3339;
 
 /// Version of the Terms of Service currently published at `/terms`.
 /// **Bump this in the same commit that edits the document.**
-pub const TERMS_VERSION: &str = "2026-08-04";
+pub const TERMS_VERSION: &str = "2026-08-16";
 /// Version of the Privacy Policy currently published at `/privacy`.
 /// **Bump this in the same commit that edits the document.**
-pub const PRIVACY_VERSION: &str = "2026-08-04";
+pub const PRIVACY_VERSION: &str = "2026-08-16";
 
 /// The documents a signup must accept. Extend this and both the API check and the recorded rows
 /// follow — there is no second list to keep in sync.

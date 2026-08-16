@@ -10,21 +10,32 @@
 //     without its version moving makes every stored acceptance point at the wrong text.
 //
 // ⚠️  UNREVIEWED DRAFT. Every factual claim below was checked against the implementation, but this
-//     has NOT been reviewed by a lawyer. The bracketed placeholders must be filled and the whole
-//     text reviewed before taking consumer money. See docs/legal/README.md.
+//     has NOT been reviewed by a lawyer. The operator details are now filled from the CNPJ record;
+//     the TEXT still needs review by counsel before taking consumer money. See docs/legal/README.md.
 
 export type Section = { heading: string; body: string[] };
 export type Document = { title: string; updated: string; intro: string; sections: Section[] };
 
-/** Fill these before publishing. They appear verbatim in both documents. */
+/** The operator, as registered. These appear VERBATIM in both documents and in the App Store
+ *  listing, so they must match the CNPJ record — a privacy policy naming an entity that does not
+ *  exist is worse than none.
+ *
+ *  The legal name is the person, because the company is an `Empresário Individual` (natureza
+ *  jurídica 213-5); JACKTECH is the trading name. Both are given, since a customer knows the
+ *  second and a regulator asks for the first. */
 export const OPERATOR = {
-  entity: "[LEGAL ENTITY NAME]",
-  address: "[REGISTERED ADDRESS]",
-  contact: "[CONTACT EMAIL]",
-  privacyContact: "[PRIVACY / DPO EMAIL]",
+  entity:
+    "Jackes David Vieira Cavalcante de Lemos (JACKTECH), CNPJ 39.845.019/0001-74",
+  address:
+    "Rua Sobrinho Maranhão, 310, Loja 13, Térreo, Ed. ATR — São Francisco, Manaus/AM, CEP 69.079-210, Brasil",
+  // One address for both. A data-subject request under the LGPD legally ARRIVES here, so it has to
+  // be a mailbox somebody reads — which is the argument for one real address over two aspirational
+  // ones. Split it later if the volume ever justifies a separate privacy queue.
+  contact: "contact@olharai.com",
+  privacyContact: "contact@olharai.com",
 };
 
-const UPDATED = "2026-08-04";
+const UPDATED = "2026-08-16";
 
 export const terms: { en: Document; pt: Document } = {
   en: {
