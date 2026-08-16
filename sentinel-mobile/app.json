@@ -11,7 +11,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.olharai.app",
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "Olhar AI finds and streams your cameras over your local network."
+        "NSLocalNetworkUsageDescription": "Olhar AI finds and streams your cameras over your local network.",
+        "ITSAppUsesNonExemptEncryption": false
       },
       "entitlements": {
         "com.apple.security.application-groups": [
@@ -56,16 +57,7 @@
               "appExtensions": [
                 {
                   "bundleIdentifier": "com.olharai.app.widget",
-                  "targetName": "OlharAI",
-                  "entitlements": {
-                    "com.apple.security.application-groups": [
-                      "group.com.olharai.app"
-                    ]
-                  }
-                },
-                {
-                  "bundleIdentifier": "com.olharai.app.widget",
-                  "targetName": "OlharAI",
+                  "targetName": "OlharAIWidget",
                   "entitlements": {
                     "com.apple.security.application-groups": [
                       "group.com.olharai.app"

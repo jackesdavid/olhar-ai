@@ -9,7 +9,8 @@
     "android": "expo run:android",
     "fix": "expo install --fix",
     "check": "tsc --noEmit",
-    "postinstall": "patch-package"
+    "postinstall": "patch-package",
+    "eas-build-pre-install": "bash scripts/fetch-edge-lib.sh"
   },
   "dependencies": {
     "@bacons/apple-targets": "^5.0.0",

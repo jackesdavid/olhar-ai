@@ -31,12 +31,28 @@ Pod::Spec.new do |s|
   # so the app just needs -framework GStreamer + where to find it. It lives in the SDK, not a standard
   # framework path, hence the explicit search path on BOTH the pod and the consuming app target — the
   # app is where the vendored .a's gst/glib symbols must resolve (card #144).
-  gst_search = '$(inherited) "$(HOME)/Library/Developer/GStreamer/iPhone.sdk"'
+  # TWO search paths, and the order is the point (#185).
+  #
+  # A CI worker has no `$HOME/Library/Developer/GStreamer` — that is a manual SDK install on a
+  # developer's Mac. An EAS build therefore failed at link with `framework 'GStreamer' not found`,
+  # four steps past the error anyone reads, and only after compiling everything.
+  #
+  # So the vendored path comes FIRST: `scripts/fetch-edge-lib.sh` drops an arm64-only GStreamer
+  # there on a fresh checkout, and a machine that has it locally never downloads anything. The
+  # `$HOME` path stays as the fallback so an existing developer setup keeps working untouched.
+  # TWO DIFFERENT VARIABLES, because the same one does not resolve in both places.
+  # `PODS_TARGET_SRCROOT` is defined for the POD target only; in the consuming app target it
+  # expands to nothing and the path collapses to a bare "/libs" — which the linker reported as
+  # `search path '/libs' not found` and I read past twice. The app target has `SRCROOT` = ios/,
+  # so it walks up to the module directory instead.
+  home_sdk = '"$(HOME)/Library/Developer/GStreamer/iPhone.sdk"'
+  pod_gst  = %Q{$(inherited) "$(PODS_TARGET_SRCROOT)/libs" #{home_sdk}}
+  app_gst  = %Q{$(inherited) "$(SRCROOT)/../modules/sentinel-edge/ios/libs" #{home_sdk}}
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
-    'FRAMEWORK_SEARCH_PATHS' => gst_search
+    'FRAMEWORK_SEARCH_PATHS' => pod_gst
   }
   s.user_target_xcconfig = {
-    'FRAMEWORK_SEARCH_PATHS' => gst_search
+    'FRAMEWORK_SEARCH_PATHS' => app_gst
   }
 end
