@@ -1,7 +1,12 @@
 /** @type {import('@bacons/apple-targets/app.plugin').Config} */
 module.exports = {
   type: "widget",
-  name: "Olhar AI",
+  // NOT "Olhar AI". Sanitised, that becomes "OlharAI" — the app target's own name — and the two
+  // collide when credentials are keyed by target: the widget's provisioning profile overwrites the
+  // app's, and the build fails with "profile has app ID com.olharai.app.widget, which does not
+  // match the bundle ID com.olharai.app". The user-visible name is set in Swift
+  // (`configurationDisplayName`), so this string is internal and free to be unambiguous.
+  name: "OlharAIWidget",
   icon: "../../assets/icon.png",
   // 17.0 because the widget is CONFIGURABLE: `AppIntentConfiguration` and `AppEntity` are the iOS 17
   // way to let someone long-press → Edit Widget → pick which workflow this button runs. The older
