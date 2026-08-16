@@ -10,6 +10,19 @@ make them *sufficient*.
 **Before taking money from a consumer, both documents need review by counsel qualified in the
 jurisdictions you sell into** (Brazil/LGPD and the EU/GDPR are the two the text assumes).
 
+### Operator details — FILLED 2026-08-16
+
+Taken from the CNPJ record. The legal name is the person because the company is an
+`Empresário Individual` (natureza jurídica 213-5); JACKTECH is the trading name, and both appear
+so a customer recognises one and a regulator can act on the other.
+
+`contact@olharai.com` serves as both the general and the privacy address. A data-subject request
+under the LGPD legally *arrives* there, so one mailbox that is actually read beats two that are
+aspirational. Split it if the volume ever justifies a queue.
+
+**What is still outstanding is the TEXT, not the details.** Counsel review before taking consumer
+money remains required.
+
 ### Placeholders that must be filled first
 
 `sentinel-app/src/lib/legal/documents.ts`, in the `OPERATOR` constant:
