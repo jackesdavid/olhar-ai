@@ -143,9 +143,6 @@ kanban-plugin: board
 
 ## Validation
 
-- [ ] #179 Set Variables / Get Variables — one node instead of a column of them
-	  - Plan: [[multiset-multiget-nodes]]
-	  - Deployed and verified in the served bundle + catalog. Awaiting a real rewire of the
 	    face graph: eight Set Variable nodes → one, eight Get Variable → one.
 	  - Ports are NAMED after the variables, so a rename repoints config AND edges together.
 - [ ] #123 Recognition scoring — per-person template + margin test
@@ -166,6 +163,10 @@ kanban-plugin: board
 
 ## Done
 
+- [x] #179 Set Variables / Get Variables — one node instead of a column of them
+	  - Plan: [[multiset-multiget-nodes]]
+	  - VALIDATED by the owner on the real face graph — the column of single Set/Get nodes it
+	    was built to replace.
 - [x] #182 Tuya onboarding — diagnose the failure, prove the device moves
 	  - Plan: [[tuya-onboarding-journey]]
 	  - CONFIRMED on the owner's own devices: connect → diagnose → sync → control. The gate
