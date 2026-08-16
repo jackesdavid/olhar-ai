@@ -18,8 +18,7 @@
       "autoIncrement": true,
       "ios": {
         "buildConfiguration": "Release"
-      },
-      "channel": "production"
+      }
     }
   },
   "submit": {
