@@ -40,13 +40,19 @@ Pod::Spec.new do |s|
   # So the vendored path comes FIRST: `scripts/fetch-edge-lib.sh` drops an arm64-only GStreamer
   # there on a fresh checkout, and a machine that has it locally never downloads anything. The
   # `$HOME` path stays as the fallback so an existing developer setup keeps working untouched.
-  vendored_gst = '"$(PODS_TARGET_SRCROOT)/libs"'
-  gst_search = %Q{$(inherited) #{vendored_gst} "$(HOME)/Library/Developer/GStreamer/iPhone.sdk"}
+  # TWO DIFFERENT VARIABLES, because the same one does not resolve in both places.
+  # `PODS_TARGET_SRCROOT` is defined for the POD target only; in the consuming app target it
+  # expands to nothing and the path collapses to a bare "/libs" — which the linker reported as
+  # `search path '/libs' not found` and I read past twice. The app target has `SRCROOT` = ios/,
+  # so it walks up to the module directory instead.
+  home_sdk = '"$(HOME)/Library/Developer/GStreamer/iPhone.sdk"'
+  pod_gst  = %Q{$(inherited) "$(PODS_TARGET_SRCROOT)/libs" #{home_sdk}}
+  app_gst  = %Q{$(inherited) "$(SRCROOT)/../modules/sentinel-edge/ios/libs" #{home_sdk}}
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
-    'FRAMEWORK_SEARCH_PATHS' => gst_search
+    'FRAMEWORK_SEARCH_PATHS' => pod_gst
   }
   s.user_target_xcconfig = {
-    'FRAMEWORK_SEARCH_PATHS' => gst_search
+    'FRAMEWORK_SEARCH_PATHS' => app_gst
   }
 end
