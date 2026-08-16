@@ -1,19 +1,18 @@
-// Live — Phase 2. Camera list from control, playback through the gateway WebSocket.
+// Live — camera list from control, playback through the gateway WebSocket.
 //
 // Playback runs in a WebView because the transport is fragmented MP4 over a WebSocket and React
-// Native has no MediaSource; see src/live/msePlayer.ts for why. Requires `live.view`, which is
-// Admin-only by default, so a 403 gets an honest message rather than a spinner forever.
-import { useEffect, useMemo, useState } from "react";
+// Native has no MediaSource; see src/live/msePlayer.ts. Requires `live.view`, which is Admin-only
+// by default, so a 403 gets an honest message rather than a spinner forever.
+//
+// The player itself lives in `src/live/LivePlayer.tsx` — shared with the fullscreen view, so the
+// reconnect policy exists once.
+import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { WebView } from "react-native-webview";
-import { GATEWAY_BASE } from "@/config";
-import { listDevices, streamName, type Device } from "@/data";
-import { currentToken } from "@/session";
-import { playerHtml, type PlayerEvent } from "@/live/msePlayer";
+import { useRouter } from "expo-router";
+import { listDevices, type Device } from "@/data";
+import { LivePlayer, phaseLabel, type Phase } from "@/live/LivePlayer";
 import { Danger, Heading, Muted, Screen, Strong } from "@/styles/ui";
 import { radius, space, useTheme } from "@/styles/theme";
-
-type Phase = "connecting" | "live" | "stalled" | "error";
 
 export default function Live() {
   const [devices, setDevices] = useState<Device[] | null>(null);
@@ -21,10 +20,9 @@ export default function Live() {
   const [selected, setSelected] = useState<string | null>(null);
   const [hd, setHd] = useState(false);
   const [phase, setPhase] = useState<Phase>("connecting");
+  const [retried, setRetried] = useState(false);
   const [playerError, setPlayerError] = useState<string | null>(null);
-  /** Bumped to remount the WebView, which is how a stream restarts: a fresh socket and a fresh
-   *  MediaSource. Reusing a MediaSource that has already errored does not work. */
-  const [attempt, setAttempt] = useState(0);
+  const router = useRouter();
   const t = useTheme();
 
   useEffect(() => {
@@ -36,50 +34,14 @@ export default function Live() {
       .catch((e) => setLoadError((e as Error).message));
   }, []);
 
-  const token = currentToken();
-  const wsBase = GATEWAY_BASE.replace(/^http/, "ws");
+  const current = devices?.find((d) => d.ip === selected);
 
-  // Remounting the WebView is how we restart a stream: a new key throws away the old socket and
-  // MediaSource instead of trying to reuse them.
-  const playerKey = `${selected}-${hd ? "hd" : "sd"}-${attempt}`;
-  const html = useMemo(
-    () => (selected && token ? playerHtml({ wsBase, stream: streamName(selected, hd), token }) : null),
-    [selected, hd, token, wsBase],
-  );
-
-  function onMessage(raw: string) {
-    let msg: PlayerEvent;
-    try {
-      msg = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    if (msg.type === "phase") setPhase(msg.phase);
-    if (msg.type === "error") {
-      setPhase("error");
-      setPlayerError(msg.message);
-    }
-  }
-
-  // A live stream will drop — a decode error, a socket close, the box restarting. What matters is
-  // that it comes back on its own: an operator checking a camera should never have to know to
-  // leave the tab and come back. Restart on any non-playing state, backing off a little so a
-  // camera that is genuinely down does not spin.
-  useEffect(() => {
-    if (phase !== "error" && phase !== "stalled") return;
-    const delay = Math.min(1500 * (attempt + 1), 8000);
-    const timer = setTimeout(() => {
-      setPlayerError(null);
-      setPhase("connecting");
-      setAttempt((n) => n + 1);
-    }, delay);
-    return () => clearTimeout(timer);
-  }, [phase]);
-
-  function badgeLabel(): string {
-    if (phase === "live") return "LIVE";
-    if (phase === "error" || phase === "stalled") return "Reconnecting…";
-    return attempt > 0 ? "Reconnecting…" : "Connecting…";
+  function openFullscreen() {
+    if (!selected) return;
+    router.push({
+      pathname: "/live-full",
+      params: { ip: selected, name: current?.name || selected, hd: hd ? "1" : "0" },
+    });
   }
 
   if (loadError) {
@@ -112,45 +74,36 @@ export default function Live() {
   return (
     <Screen>
       <View style={{ aspectRatio: 16 / 9, backgroundColor: "#000" }}>
-        {html ? (
-          <WebView
-            key={playerKey}
-            // Inline HTML loads as an opaque origin, and WKWebView blocks a WebSocket from one.
-            // Giving the page the gateway's own origin makes the connection same-origin.
-            source={{ html, baseUrl: GATEWAY_BASE }}
-            originWhitelist={["*"]}
-            style={{ flex: 1, backgroundColor: "#000" }}
-            allowsInlineMediaPlayback
-            mediaPlaybackRequiresUserAction={false}
-            onMessage={(e) => onMessage(e.nativeEvent.data)}
+        {selected ? (
+          <LivePlayer
+            ip={selected}
+            hd={hd}
+            onPhase={(p) => {
+              setPhase(p);
+              if (p === "connecting") setRetried(true);
+            }}
+            onError={setPlayerError}
           />
         ) : null}
-        <View
-          style={{
-            position: "absolute",
-            top: space.sm,
-            left: space.sm,
-            backgroundColor: "#000000AA",
-            borderRadius: radius.pill,
-            paddingHorizontal: space.md,
-            paddingVertical: space.xs,
-          }}
-        >
-          <Text style={{ color: "#FFF", fontSize: 12, fontWeight: "600" }}>{badgeLabel()}</Text>
+
+        {/* The picture itself opens fullscreen. A dedicated expand button would be one more thing
+            to find on a 16:9 strip; tapping the video is what people already try. */}
+        <Pressable style={StyleSheet.absoluteFill} onPress={openFullscreen} />
+
+        <View style={[styles.pill, { top: space.sm, left: space.sm }]}>
+          <Text style={styles.pillText}>{phaseLabel(phase, retried)}</Text>
         </View>
         <Pressable
           onPress={() => setHd((v) => !v)}
-          style={{
-            position: "absolute",
-            top: space.sm,
-            right: space.sm,
-            backgroundColor: "#000000AA",
-            borderRadius: radius.pill,
-            paddingHorizontal: space.md,
-            paddingVertical: space.xs,
-          }}
+          style={[styles.pill, { top: space.sm, right: space.sm }]}
         >
-          <Text style={{ color: "#FFF", fontSize: 12, fontWeight: "600" }}>{hd ? "HD" : "SD"}</Text>
+          <Text style={styles.pillText}>{hd ? "HD" : "SD"}</Text>
+        </Pressable>
+        <Pressable
+          onPress={openFullscreen}
+          style={[styles.pill, { bottom: space.sm, right: space.sm }]}
+        >
+          <Text style={styles.pillText}>⤢</Text>
         </Pressable>
       </View>
 
@@ -169,9 +122,8 @@ export default function Live() {
               key={d.ip}
               onPress={() => {
                 setSelected(d.ip);
-                setPhase("connecting");
                 setPlayerError(null);
-                setAttempt(0);
+                setRetried(false);
               }}
               style={{
                 backgroundColor: on ? t.elev7 : t.card,
@@ -190,3 +142,14 @@ export default function Live() {
     </Screen>
   );
 }
+
+const styles = StyleSheet.create({
+  pill: {
+    position: "absolute",
+    backgroundColor: "#000000AA",
+    borderRadius: 999,
+    paddingHorizontal: space.md,
+    paddingVertical: space.xs,
+  },
+  pillText: { color: "#FFF", fontSize: 12, fontWeight: "600" },
+});

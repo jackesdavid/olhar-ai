@@ -45,6 +45,8 @@ kanban-plugin: board
 
 ## Specification
 
+- [ ] #186 Device Gate offers recipients that can never answer
+	  - Plan: [[device-gate-phone-only-recipients]]
 - [ ] #184 State-aware device control — act on the real state, confirm it changed
 	  - Plan: [[tuya-state-aware-control]]
 - [ ] #175 Mobile as a real edge — device camera as a face-capture source

@@ -9,6 +9,7 @@ import { useLoadThemePref, useTheme } from "@/styles/theme";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
+import * as ScreenOrientation from "expo-screen-orientation";
 import { currentToken, restore, subscribe } from "@/session";
 
 export default function RootLayout() {
@@ -23,12 +24,23 @@ export default function RootLayout() {
     restore().finally(() => setReady(true));
   }, []);
 
+  // PORTRAIT EVERYWHERE BY DEFAULT.
+  //
+  // `app.json` had to become `orientation: "default"` so iOS permits landscape at all — with
+  // "portrait" the plist wins and `lockAsync(LANDSCAPE)` is silently a no-op. But permitting it
+  // globally would let every screen rotate, and every screen except the fullscreen player is laid
+  // out for one hand upright. So the app locks portrait here, and exactly one screen unlocks it and
+  // puts it back on the way out.
+  useEffect(() => {
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+  }, []);
+
   useEffect(() => {
     if (!ready) return;
     const inApp = segments[0] === "(tabs)";
     // `approve` is reachable while signed in without being a tab — it is summoned by a push, not
     // navigated to. Excluding it from the gate keeps a tapped approval from bouncing to the tabs.
-    const allowed = inApp || segments[0] === "approve" || segments[0] === "run";
+    const allowed = inApp || segments[0] === "approve" || segments[0] === "run" || segments[0] === "live-full";
     if (!signedIn && allowed) router.replace("/login");
     if (signedIn && !allowed) router.replace("/(tabs)");
   }, [ready, signedIn, segments]);
@@ -101,6 +113,12 @@ export default function RootLayout() {
           }}
         />
         <Stack.Screen name="run/[id]" options={{ headerShown: false }} />
+        {/* Fullscreen live video. No header and no back gesture: it rotates to landscape and owns
+            the device, and a swipe-back mid-rotation leaves the app sideways. The ✕ is the way out. */}
+        <Stack.Screen
+          name="live-full"
+          options={{ headerShown: false, presentation: "fullScreenModal", gestureEnabled: false, animation: "fade" }}
+        />
       </Stack>
     </>
   );
