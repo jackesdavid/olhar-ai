@@ -47,8 +47,6 @@ kanban-plugin: board
 
 - [ ] #184 State-aware device control — act on the real state, confirm it changed
 	  - Plan: [[tuya-state-aware-control]]
-- [ ] #181 Mobile onboarding — invite a person, pair their phone
-	  - Plan: [[mobile-tenant-onboarding]]
 - [ ] #175 Mobile as a real edge — device camera as a face-capture source
 	  - Plan: [[mobile-edge-face-capture]]
 - [ ] #170 Runner hangs pulling any image it does not already have
@@ -143,6 +141,12 @@ kanban-plugin: board
 
 ## Validation
 
+- [ ] #181 Mobile onboarding — invite a person, pair their phone
+	  - Plan: [[mobile-tenant-onboarding]]
+	  - All three phases shipped and deployed: invite tokens + public preview/accept, the QR
+	    and /join page on the web, and the scanner in the app.
+	  - Awaiting a SECOND iPhone — the real test is a person who is not the owner, on a fresh
+	    install. Note that device needs the build installed first (no TestFlight yet, #185).
 	    face graph: eight Set Variable nodes → one, eight Get Variable → one.
 	  - Ports are NAMED after the variables, so a rename repoints config AND edges together.
 - [ ] #123 Recognition scoring — per-person template + margin test
