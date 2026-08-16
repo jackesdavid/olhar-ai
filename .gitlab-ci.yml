@@ -310,16 +310,40 @@ release:mobile-ios:
   image: node:22-bookworm
   when: manual
   allow_failure: true
+  # MANUAL on purpose. An EAS build costs money and a queue slot, and a store build should be a
+  # decision someone makes, not a side effect of merging. `--no-wait` returns as soon as the build
+  # is queued; watch it on expo.dev.
   script:
     - |
-      if [ -z "$EXPO_TOKEN" ]; then
-        echo "EXPO_TOKEN is not set — add it in Settings → CI/CD → Variables (Masked + Protected)."
-        echo "Until then this job cannot authenticate with EAS."
+      if [ -z "${EXPO_TOKEN:-}" ]; then
+        echo "EXPO_TOKEN is not set — create one at expo.dev → Account Settings → Access Tokens,"
+        echo "then add it in Settings → CI/CD → Variables (Masked + Protected)."
         exit 1
       fi
     - cd sentinel-mobile
     - npm ci --no-audit --no-fund
-    - npx eas-cli@latest build --platform ios --profile preview --non-interactive --no-wait
+    - npx eas-cli@latest build --platform ios --profile production --non-interactive --no-wait
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# Hands the finished build to TestFlight. Separate from the build because they fail for different
+# reasons and at different times: a build fails on code, a submit fails on App Store Connect
+# credentials or a missing app record, and bundling them hides which.
+release:mobile-testflight:
+  stage: release
+  image: node:22-bookworm
+  when: manual
+  allow_failure: true
+  script:
+    - |
+      for v in EXPO_TOKEN APPLE_ID ASC_APP_ID; do
+        eval "val=\${$v:-}"
+        if [ -z "$val" ]; then echo "$v is not set — see eas.json submit.production."; exit 1; fi
+      done
+    - cd sentinel-mobile
+    - npm ci --no-audit --no-fund
+    # `--latest` submits the most recent finished production build for the platform.
+    - npx eas-cli@latest submit --platform ios --profile production --latest --non-interactive
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 

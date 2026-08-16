@@ -1,8 +1,8 @@
 {
   "expo": {
     "name": "Olhar AI",
-    "slug": "olharai",
-    "owner": "olharai",
+    "slug": "olhar-ai",
+    "owner": "olhar-ai",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "olharai",
@@ -21,7 +21,11 @@
       "appleTeamId": "3A4H2Y6ZVM"
     },
     "android": {
-      "package": "com.olharai.app"
+      "package": "com.olharai.app",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "plugins": [
       "expo-router",
@@ -45,7 +49,33 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "4388df5f-6d84-459e-81c8-a6fe62fd3e8b"
+        "projectId": "94781a1a-dffb-4eda-8496-646ac21a168c",
+        "build": {
+          "experimental": {
+            "ios": {
+              "appExtensions": [
+                {
+                  "bundleIdentifier": "com.olharai.app.widget",
+                  "targetName": "OlharAI",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.com.olharai.app"
+                    ]
+                  }
+                },
+                {
+                  "bundleIdentifier": "com.olharai.app.widget",
+                  "targetName": "OlharAI",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.com.olharai.app"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
       }
     },
     "icon": "./assets/icon.png",
