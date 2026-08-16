@@ -57,16 +57,7 @@
               "appExtensions": [
                 {
                   "bundleIdentifier": "com.olharai.app.widget",
-                  "targetName": "OlharAI",
-                  "entitlements": {
-                    "com.apple.security.application-groups": [
-                      "group.com.olharai.app"
-                    ]
-                  }
-                },
-                {
-                  "bundleIdentifier": "com.olharai.app.widget",
-                  "targetName": "OlharAI",
+                  "targetName": "OlharAIWidget",
                   "entitlements": {
                     "com.apple.security.application-groups": [
                       "group.com.olharai.app"
