@@ -8,7 +8,6 @@ import ScanFace from "@lucide/svelte/icons/scan-face";
 import Map from "@lucide/svelte/icons/map";
 import MessageSquare from "@lucide/svelte/icons/message-square";
 import Workflow from "@lucide/svelte/icons/workflow";
-import ScrollText from "@lucide/svelte/icons/scroll-text";
 import Clapperboard from "@lucide/svelte/icons/clapperboard";
 import Film from "@lucide/svelte/icons/film";
 
@@ -37,5 +36,4 @@ export const navItems: NavItem[] = [
   { key: "workflows", href: "/workflows", icon: Workflow },
   { key: "recordings", href: "/recordings", icon: Clapperboard },
   { key: "playback", href: "/playback", icon: Film },
-  { key: "logs", href: "/logs", icon: ScrollText },
 ];

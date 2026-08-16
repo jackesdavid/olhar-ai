@@ -3,7 +3,9 @@
   import LayoutDashboard from "@lucide/svelte/icons/layout-dashboard";
   import { onMount } from "svelte";
   import { data } from "$lib/data";
+  import { boxes as boxesApi } from "$lib/api";
   import { dict, lang } from "$lib/i18n";
+  import { Button } from "$lib/components/ui/button";
 
   import Cpu from "@lucide/svelte/icons/cpu";
   import Bell from "@lucide/svelte/icons/bell";
@@ -15,6 +17,7 @@
   import Map from "@lucide/svelte/icons/map";
 
   type Device = { rtsp_url?: string | null };
+  type Box = { id: string };
   type Alert = { deliveries?: { ok: boolean }[] };
   type Target = { enabled: boolean };
 
@@ -23,7 +26,12 @@
   let devices = $state<Device[]>([]);
   let alerts = $state<Alert[]>([]);
   let recipients = $state<Target[]>([]);
+  let boxList = $state<Box[]>([]);
   let loaded = $state(false);
+  // A load that partly failed is NOT an empty account, and the difference is the whole point of
+  // this flag. Three `.catch(() => [])` used to turn a control-plane outage into "0 of everything,
+  // System ready" — a false claim rendered confidently.
+  let untrusted = $state(false);
 
   const camerasReady = $derived(devices.filter((d) => d.rtsp_url && d.rtsp_url.trim()).length);
   const openAlerts = $derived(alerts.filter((a) => !(a.deliveries ?? []).some((d) => d.ok)).length);
@@ -43,20 +51,37 @@
     { title: t.liveTitle, caption: t.liveCaption, icon: Video, href: "/live" },
   ]);
 
-  onMount(async () => {
-    try {
-      const [d, a, r] = await Promise.all([
-        data.listDevices().catch(() => []),
-        data.listAlerts().catch(() => []),
-        data.listBeacons().catch(() => []),
-      ]);
-      devices = d;
-      alerts = a;
-      recipients = r;
-    } finally {
-      loaded = true;
-    }
-  });
+  async function load() {
+    loaded = false;
+    untrusted = false;
+    // `allSettled`, so one failure does not blank the rest — but it is RECORDED rather than
+    // swallowed. Anything that failed leaves the view marked untrusted.
+    const results = await Promise.allSettled([
+      data.listDevices(),
+      data.listAlerts(),
+      data.listBeacons(),
+      boxesApi.list(),
+    ]);
+    const [d, a, r, b] = results;
+    devices = d.status === "fulfilled" ? d.value : [];
+    alerts = a.status === "fulfilled" ? a.value : [];
+    recipients = r.status === "fulfilled" ? r.value : [];
+    boxList = b.status === "fulfilled" ? (b.value as Box[]) : [];
+    untrusted = results.some((x) => x.status === "rejected");
+    loaded = true;
+  }
+
+  onMount(load);
+
+  /** No appliance means the numbers below are all structurally zero, and every quick action leads
+   *  somewhere that cannot work yet. Show the one next step instead. */
+  function needsSetup(): boolean {
+    return loaded && !untrusted && boxList.length === 0;
+  }
+  /** "System ready" is a claim. It is only true once something is actually connected. */
+  function systemIsReady(): boolean {
+    return loaded && !untrusted && boxList.length > 0;
+  }
 </script>
 
 <div class="space-y-8">
@@ -66,14 +91,38 @@
     icon={LayoutDashboard}
   >
     {#snippet actions()}
-      <div
-        class="flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
-      >
-        <span class="size-1.5 rounded-full bg-primary status-live"></span>
-        {t.systemReady}
-      </div>
+      {#if systemIsReady()}
+        <div
+          class="flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
+        >
+          <span class="size-1.5 rounded-full bg-primary status-live"></span>
+          {t.systemReady}
+        </div>
+      {/if}
     {/snippet}
   </PageHeader>
+
+  {#if untrusted}
+    <!-- Said plainly, and owned: "this is our side, not yours". A person who thinks they broke it
+         goes looking for their own mistake. -->
+    <div class="space-y-2 rounded-xl border border-destructive/40 bg-card p-5">
+      <p class="font-medium">{t.loadFailedTitle}</p>
+      <p class="text-sm text-muted-foreground">{t.loadFailedBody}</p>
+      <Button size="sm" variant="outline" onclick={load}>{t.retry}</Button>
+    </div>
+  {/if}
+
+  {#if needsSetup()}
+    <!-- The first screen after signup. One next step, and the reason behind it — someone about to
+         put cameras on their home network deserves to know what leaves it. -->
+    <div class="space-y-3 rounded-xl border border-border bg-card p-6">
+      <h2 class="text-lg font-semibold">{t.setupTitle}</h2>
+      <p class="max-w-2xl text-sm text-muted-foreground">{t.setupBody}</p>
+      <!-- The LIST, not /install: install bounces a user with no box straight back out. Creating a
+           box on the list flows into the install view. -->
+      <Button href="/settings/boxes">{t.setupCta}</Button>
+    </div>
+  {/if}
 
   <!-- Stat cards -->
   <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
