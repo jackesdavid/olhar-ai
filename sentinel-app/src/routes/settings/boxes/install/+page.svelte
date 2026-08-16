@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
+  import { page } from "$app/stores";
   import { goto } from "$app/navigation";
   import { toast } from "svelte-sonner";
 
@@ -37,12 +38,28 @@
   let showAllPlatforms = $state(false);
   let timer: ReturnType<typeof setInterval> | null = null;
 
-  // The token only exists in memory from the create step — on a refresh or direct hit
-  // there's nothing to show, so send the user back to the list.
+  // Re-enterable by box id (`?box=<id>`). A refresh used to bounce silently back to the list,
+  // losing the pairing code someone was in the middle of typing into an appliance.
+  //
+  // The one-time install TOKEN is still never persisted, and does not need to be: a pairing code
+  // mints from the box ID alone (see `mint`), so the fix costs no secret. What the rebuilt entry
+  // cannot reconstruct is the headless command, which embeds the token — that part says so instead
+  // of rendering blank.
   onMount(() => {
     if (!pendingInstall.value) {
-      goto("/settings/boxes");
-      return;
+      const id = $page.url.searchParams.get("box");
+      if (!id) {
+        goto("/settings/boxes");
+        return;
+      }
+      pendingInstall.value = {
+        id,
+        name: $page.url.searchParams.get("name") ?? "",
+        token: "",
+        command: "",
+        auto: false,
+        needsKey: false,
+      };
     }
     mint();
     loadInstallers();
@@ -290,12 +307,21 @@
             <Card.Description>{t.headlessDescription}</Card.Description>
           </Card.Header>
           <Card.Content class="space-y-4">
-            <div class="relative">
-              <pre class="overflow-x-auto rounded-md border border-border bg-well p-4 pr-12 font-mono text-xs leading-relaxed">{install.command}</pre>
-              <Button variant="ghost" size="icon" class="absolute right-2 top-2" title={t.copyCommand} onclick={() => copy(install.command)}>
-                <Copy class="size-4" />
-              </Button>
-            </div>
+            {#if install.command}
+              <div class="relative">
+                <pre class="overflow-x-auto rounded-md border border-border bg-well p-4 pr-12 font-mono text-xs leading-relaxed">{install.command}</pre>
+                <Button variant="ghost" size="icon" class="absolute right-2 top-2" title={t.copyCommand} onclick={() => copy(install.command)}>
+                  <Copy class="size-4" />
+                </Button>
+              </div>
+            {:else}
+              <!-- Re-entered by box id, so the token — and the command that embeds it — are gone.
+                   The pairing code above still works, which is the path most people take. Say what
+                   happened rather than rendering an empty box. -->
+              <p class="rounded-md border border-dashed border-border px-3 py-2 text-sm text-muted-foreground">
+                {t.commandUnavailable}
+              </p>
+            {/if}
 
             <div class="space-y-1.5">
               <Label>{t.boxToken}</Label>

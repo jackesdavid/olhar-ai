@@ -14,6 +14,7 @@ import { join } from "./messages/join";
 import { reset } from "./messages/reset";
 import { dashboard } from "./messages/dashboard";
 import { live } from "./messages/live";
+import { errorPage } from "./messages/errorPage";
 import { events } from "./messages/events";
 import { people } from "./messages/people";
 import { beacons } from "./messages/beacons";
@@ -60,6 +61,7 @@ const modules = {
   reset: domain(reset),
   dashboard: domain(dashboard),
   live: domain(live),
+  errorPage: domain(errorPage),
   events: domain(events),
   people: domain(people),
   beacons: domain(beacons),

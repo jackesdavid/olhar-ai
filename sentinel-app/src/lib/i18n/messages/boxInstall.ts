@@ -39,6 +39,8 @@ export const boxInstall = {
     headlessDescription:
       "For a machine with no screen: this enrolls the box directly, so no pairing code is needed. It carries the box token — treat it like a password, and note it's shown only once.",
     copyCommand: "Copy command",
+    commandUnavailable:
+      "The one-line command is not shown here — it carries a token that exists only once, when the appliance is created. Use the pairing code above, or create a new appliance.",
     boxToken: "Box token",
     copy: "Copy",
     nothingElse:
@@ -87,6 +89,8 @@ export const boxInstall = {
     headlessDescription:
       "Para uma máquina sem tela: isto registra o appliance direto, sem precisar de código de pareamento. Ele carrega o token do appliance — trate como uma senha, e note que é exibido apenas uma vez.",
     copyCommand: "Copiar comando",
+    commandUnavailable:
+      "O comando de uma linha não aparece aqui — ele carrega um token que existe uma única vez, na criação do appliance. Use o código de pareamento acima, ou crie um novo appliance.",
     boxToken: "Token do appliance",
     copy: "Copiar",
     nothingElse:
