@@ -61,6 +61,7 @@ export const beacons = {
     colEnabled: "Enabled",
     colActions: "Actions",
     sendTest: "Send test message",
+    sendTestPush: "Send test notification",
     rename: "Rename",
     delete: "Delete",
     // rename dialog
@@ -71,6 +72,10 @@ export const beacons = {
     removeTitle: "Remove recipient?",
     removeBefore: "Remove ",
     removeAfter: ". It will stop receiving alerts until it pairs again.",
+    // A phone can be re-added by signing in again, but any workflow that ADDRESSES it by name will
+    // fail at that step — a rename repoints graphs, a delete has nothing to repoint them to.
+    removePhoneAfter:
+      ". Any workflow that addresses this phone will fail at that step until you pick another recipient. Signing in again on the phone re-adds it.",
     removing: "Removing…",
     remove: "Remove",
     // toasts
@@ -146,6 +151,7 @@ export const beacons = {
     colEnabled: "Ativo",
     colActions: "Ações",
     sendTest: "Enviar mensagem de teste",
+    sendTestPush: "Enviar notificação de teste",
     rename: "Renomear",
     delete: "Excluir",
     // rename dialog
@@ -156,6 +162,8 @@ export const beacons = {
     removeTitle: "Remover destinatário?",
     removeBefore: "Remover ",
     removeAfter: ". Ele deixará de receber alertas até parear de novo.",
+    removePhoneAfter:
+      ". Qualquer workflow que endereça este celular vai falhar nesse passo até você escolher outro destinatário. Entrar de novo no app pelo celular o cadastra outra vez.",
     removing: "Removendo…",
     remove: "Remover",
     // toasts

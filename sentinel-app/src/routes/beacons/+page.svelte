@@ -53,6 +53,9 @@
   // ---- per-beacon action state ---------------------------------------------
   let togglingId = $state<number | null>(null);
   let testingId = $state<number | null>(null);
+  // Phones key on a uuid, beacons on a numeric chat_id, and both must be able to be mid-test at
+  // once — so this is a second piece of state rather than a widened type.
+  let testingPhoneId = $state<string | null>(null);
 
   // ---- enrollment link copy ------------------------------------------------
   let copied = $state(false);
@@ -138,9 +141,23 @@
   let renaming = $state(false);
 
   // ---- Delete dialog -------------------------------------------------------
+  // One dialog, two kinds of Recipient — exactly like the rename dialog above. Only one of the two
+  // targets is ever set; `deleteLabel`/`deleteConsequence` read whichever it is.
   let deleteOpen = $state(false);
   let deleteTarget = $state<NotificationTarget | null>(null);
+  let deletePhoneTarget = $state<{ id: string; label: string } | null>(null);
   let deleting = $state(false);
+
+  function deleteLabel() {
+    return deletePhoneTarget?.label ?? deleteTarget?.label ?? "";
+  }
+
+  /** Removing a phone is NOT the mirror of renaming one. A rename repoints every graph that used
+   *  the old name; a delete cannot — there is no new name to point at. So the two dialogs have to
+   *  promise different things. */
+  function deleteConsequence() {
+    return deletePhoneTarget ? t.removePhoneAfter : t.removeAfter;
+  }
 
   async function loadPhones() {
     try {
@@ -308,9 +325,54 @@
     }
   }
 
+  async function testPhone(p: { id: string; label: string }) {
+    testingPhoneId = p.id;
+    try {
+      await data.testPushDevice(p.label);
+      toast.success(t.testSent(p.label));
+    } catch (err) {
+      console.error("Phone test send failed", err);
+      // The server's reason matters more here than anywhere else on this page: a push can be
+      // accepted by us and still die at Apple, and this button is the shortest path to finding out.
+      toast.error(t.testFailed, { description: String(err) });
+    } finally {
+      testingPhoneId = null;
+    }
+  }
+
   function confirmDelete(b: NotificationTarget) {
+    deletePhoneTarget = null;
     deleteTarget = b;
     deleteOpen = true;
+  }
+
+  function confirmDeletePhone(p: { id: string; label: string }) {
+    deleteTarget = null;
+    deletePhoneTarget = { id: p.id, label: p.label };
+    deleteOpen = true;
+  }
+
+  /** One dialog, two kinds of Recipient. */
+  function submitDelete() {
+    if (deletePhoneTarget) return doPhoneDelete();
+    return doDelete();
+  }
+
+  async function doPhoneDelete() {
+    if (!deletePhoneTarget) return;
+    deleting = true;
+    try {
+      await data.deletePushDevice(deletePhoneTarget.id);
+      toast.success(t.removed);
+      deleteOpen = false;
+      deletePhoneTarget = null;
+      await loadPhones();
+    } catch (err) {
+      console.error("Phone delete failed", err);
+      toast.error(t.deleteFailed, { description: String(err) });
+    } finally {
+      deleting = false;
+    }
   }
 
   async function doDelete() {
@@ -599,14 +661,37 @@
                   <StatusDot state={p.enabled ? "online" : "offline"} />
                 </Table.Cell>
                 <Table.Cell class="text-right">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    title={t.rename}
-                    onclick={() => startPhoneRename(p)}
-                  >
-                    <Pencil class="size-4" />
-                  </Button>
+                  <div class="flex items-center justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title={t.sendTestPush}
+                      disabled={testingPhoneId === p.id}
+                      onclick={() => testPhone(p)}
+                    >
+                      {#if testingPhoneId === p.id}
+                        <Busy />
+                      {:else}
+                        <Send class="size-4" />
+                      {/if}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title={t.rename}
+                      onclick={() => startPhoneRename(p)}
+                    >
+                      <Pencil class="size-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title={t.delete}
+                      onclick={() => confirmDeletePhone(p)}
+                    >
+                      <Trash2 class="size-4" />
+                    </Button>
+                  </div>
                 </Table.Cell>
               </Table.Row>
             {/each}
@@ -645,14 +730,14 @@
     <Dialog.Header>
       <Dialog.Title>{t.removeTitle}</Dialog.Title>
       <Dialog.Description>
-        {t.removeBefore}<span class="font-medium text-foreground">{deleteTarget?.label}</span>{t.removeAfter}
+        {t.removeBefore}<span class="font-medium text-foreground">{deleteLabel()}</span>{deleteConsequence()}
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
       <Button variant="outline" onclick={() => (deleteOpen = false)} disabled={deleting}>
         {c.cancel}
       </Button>
-      <Button variant="destructive" onclick={doDelete} disabled={deleting}>
+      <Button variant="destructive" onclick={submitDelete} disabled={deleting}>
         {deleting ? t.removing : t.remove}
       </Button>
     </Dialog.Footer>

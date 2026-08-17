@@ -574,6 +574,11 @@ export const data = {
   deletePushDevice: async (id: string): Promise<void> => {
     await api.del<void>(`/push/devices/${encodeURIComponent(id)}`);
   },
+  /** Send a test push — the phone's equivalent of the beacon test button. ALWAYS pass the label:
+   *  the endpoint falls back to every enabled device when it is omitted, and a "test" that buzzes
+   *  the whole household when someone meant to check one phone is a bad surprise. */
+  testPushDevice: (label: string): Promise<{ sent: number }> =>
+    api.post<{ sent: number }>("/push/devices/test", { label }),
   getTelegramConfig: (): Promise<TelegramConfigState> =>
     api.get<TelegramConfigState>("/telegram"),
   setPairingCode: async (pairingCode: string): Promise<void> => {
