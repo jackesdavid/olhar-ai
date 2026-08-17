@@ -7,11 +7,15 @@
 // This is also what the home-screen widget drives: a widget button deep-links `olharai://run/<id>`,
 // which lands in the same `runWorkflow` this screen calls. One implementation, two entry points —
 // a widget must not become a second, subtly different way to run a workflow.
+//
+// THE ROW IS THE BUTTON. It used to be a card with a full-width "Run" button underneath, which cost
+// two lines of height per workflow and made a list of six into a scroll. A button inside a button
+// is also a question — which part do I press? — and the answer was never the obvious one.
 import { useCallback, useEffect, useState } from "react";
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { listWorkflows, runWorkflow, type WorkflowSummary } from "@/workflows";
 import { syncNames, togglePinned, usePinned } from "@/pinned";
-import { Card, Danger, EmptyState, Loader, Muted, Screen, Strong, Title } from "@/styles/ui";
+import { Danger, EmptyState, Loader, Muted, Screen, Title } from "@/styles/ui";
 import { radius, space, typeScale, useTheme } from "@/styles/theme";
 
 export default function Run() {
@@ -64,64 +68,82 @@ export default function Run() {
     return rank(a.id) - rank(b.id) || a.name.localeCompare(b.name);
   });
 
-  function runLabel(w: WorkflowSummary): string {
-    return busyId === w.id ? "Starting…" : "Run";
-  }
-  function runOpacity(w: WorkflowSummary, pressed: boolean): number {
-    if (busyId && busyId !== w.id) return 0.4;
-    return pressed ? 0.8 : 1;
+  /** Dim the rows that are not the one running, so the screen shows what it is doing. */
+  function rowOpacity(w: WorkflowSummary, pressed: boolean): number {
+    if (busyId && busyId !== w.id) return 0.35;
+    return pressed ? 0.7 : 1;
   }
 
   return (
     <Screen>
       <ScrollView
-        contentContainerStyle={{ padding: space.xl, gap: space.md, paddingBottom: space.xxl * 2 }}
+        contentContainerStyle={styles.page}
         refreshControl={
           <RefreshControl refreshing={loading} onRefresh={load} tintColor={t.mutedForeground} />
         }
       >
         <Title>Run</Title>
-        <Muted>One tap starts a workflow. Star the ones you want on your home-screen widget.</Muted>
+        <Muted>Tap to start. Star the ones you want on your home-screen widget.</Muted>
 
         {loading && all.length === 0 ? <Loader label="Loading workflows…" /> : null}
         {problem ? <Danger>{problem}</Danger> : null}
         {note ? <Muted>{note}</Muted> : null}
 
-        {ordered.map((w) => (
-          <Card key={w.id}>
-            <View style={styles.row}>
-              <View style={styles.grow}>
-                <Strong>{w.name}</Strong>
-                {w.description ? <Muted>{w.description}</Muted> : null}
-              </View>
-              <Pressable
-                onPress={() => togglePinned({ id: w.id, name: w.name })}
-                hitSlop={12}
-                style={styles.star}
-              >
-                <Text style={[typeScale.title, { color: t.foreground }]}>
-                  {pinnedIds.includes(w.id) ? "★" : "☆"}
-                </Text>
-              </Pressable>
-            </View>
-            <Pressable
-              onPress={() => fire(w)}
-              disabled={busyId !== null}
-              style={({ pressed }) => [
-                styles.run,
-                {
-                  backgroundColor: t.foreground,
-                  borderRadius: radius.lg,
-                  opacity: runOpacity(w, pressed),
-                },
-              ]}
-            >
-              <Text style={[typeScale.body, styles.runText, { color: t.background }]}>
-                {runLabel(w)}
-              </Text>
-            </Pressable>
-          </Card>
-        ))}
+        {/* One surface, hairline-separated, so six workflows read as a list rather than six cards
+            competing for attention. */}
+        {ordered.length > 0 ? (
+          <View style={[styles.list, { backgroundColor: t.card, borderColor: t.border }]}>
+            {ordered.map((w, i) => {
+              const starred = pinnedIds.includes(w.id);
+              const running = busyId === w.id;
+              return (
+                <View
+                  key={w.id}
+                  style={[
+                    styles.row,
+                    i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.border },
+                  ]}
+                >
+                  <Pressable
+                    onPress={() => fire(w)}
+                    disabled={busyId !== null}
+                    style={({ pressed }) => [styles.tap, { opacity: rowOpacity(w, pressed) }]}
+                  >
+                    <View style={styles.grow}>
+                      <Text style={[typeScale.body, styles.name, { color: t.foreground }]} numberOfLines={1}>
+                        {w.name}
+                      </Text>
+                      {w.description ? (
+                        <Text style={[typeScale.caption, { color: t.mutedForeground }]} numberOfLines={1}>
+                          {w.description}
+                        </Text>
+                      ) : null}
+                    </View>
+                    {/* The chevron says "this whole row does something". A spinner replaces it while
+                        the run is starting, in the same place, so nothing shifts. */}
+                    {running ? (
+                      <ActivityIndicator color={t.mutedForeground} />
+                    ) : (
+                      <Text style={[typeScale.body, { color: t.mutedForeground }]}>›</Text>
+                    )}
+                  </Pressable>
+
+                  {/* Outside the run Pressable: nesting it would make the star ambiguous with the
+                      row, and starring by accident when you meant to run is the worse mistake. */}
+                  <Pressable
+                    onPress={() => togglePinned({ id: w.id, name: w.name })}
+                    hitSlop={10}
+                    style={styles.star}
+                  >
+                    <Text style={{ fontSize: 18, color: starred ? t.foreground : t.mutedForeground }}>
+                      {starred ? "★" : "☆"}
+                    </Text>
+                  </Pressable>
+                </View>
+              );
+            })}
+          </View>
+        ) : null}
 
         {!loading && ordered.length === 0 && !problem ? (
           <EmptyState title="No workflows yet">
@@ -134,9 +156,18 @@ export default function Run() {
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: "row", alignItems: "flex-start", gap: space.sm },
-  grow: { flex: 1, gap: 2 },
-  star: { padding: space.sm },
-  run: { alignItems: "center", paddingVertical: space.md },
-  runText: { fontWeight: "600" },
+  page: { padding: space.lg, gap: space.md, paddingBottom: space.xxl * 2 },
+  list: { borderWidth: 1, borderRadius: radius.xl, overflow: "hidden" },
+  row: { flexDirection: "row", alignItems: "center" },
+  tap: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    paddingVertical: space.md,
+    paddingLeft: space.md,
+  },
+  grow: { flex: 1, gap: 1 },
+  name: { fontWeight: "600" },
+  star: { paddingHorizontal: space.md, paddingVertical: space.md },
 });

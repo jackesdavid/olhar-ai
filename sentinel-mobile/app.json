@@ -4,7 +4,7 @@
     "slug": "olhar-ai",
     "owner": "olhar-ai",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "scheme": "olharai",
     "userInterfaceStyle": "automatic",
     "ios": {
@@ -45,7 +45,8 @@
         {
           "appleTeamId": "3A4H2Y6ZVM"
         }
-      ]
+      ],
+      "expo-screen-orientation"
     ],
     "extra": {
       "router": {},
