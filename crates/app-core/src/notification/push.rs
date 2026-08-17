@@ -13,9 +13,24 @@ use uuid::Uuid;
 use crate::db::Db;
 use crate::timeutil::now_rfc3339;
 
-/// Expo's send endpoint. An access token is optional unless the project turns on enhanced
-/// security, so Phase 1 needs no operator-level credential to deliver.
 const EXPO_SEND_URL: &str = "https://exp.host/--/api/v2/push/send";
+
+/// Expo access token, when the project requires one.
+///
+/// An ORGANISATION-owned Expo project has "Enhanced Security for Push Notifications" on by
+/// default, and every send without this header is refused:
+///
+///   403 UNAUTHORIZED — "Insufficient permissions to send push notifications to @org/project"
+///
+/// A personal project does not require it, which is why this went unnoticed until the app moved to
+/// the `olhar-ai` organisation and every Device Gate push started failing at once. Optional on
+/// purpose: a deployment against a personal project keeps working with nothing set.
+fn expo_access_token() -> Option<String> {
+    std::env::var("EXPO_ACCESS_TOKEN")
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
 
 /// One registered phone. `token` is write-mostly (only dispatch needs it), so the API layer
 /// returns the rest and leaves the token out of list responses.
@@ -273,11 +288,22 @@ fn post_expo(body: Vec<serde_json::Value>, sent: usize) -> Result<usize, String>
     let agent = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(15))
         .build();
-    let resp = agent
-        .post(EXPO_SEND_URL)
-        .set("accept", "application/json")
-        .send_json(serde_json::json!(body))
-        .map_err(|e| format!("expo push failed: {e}"))?;
+    let mut req = agent.post(EXPO_SEND_URL).set("accept", "application/json");
+    if let Some(tok) = expo_access_token() {
+        req = req.set("authorization", &format!("Bearer {tok}"));
+    }
+    let has_token = expo_access_token().is_some();
+    let resp = req.send_json(serde_json::json!(body)).map_err(|e| {
+        // A 403 with no token set has exactly one cause worth naming, and the raw ureq error does
+        // not name it: the project needs an access token this deployment was never given. Saying
+        // "expo push failed: status code 403" sends whoever reads it hunting through APNs keys.
+        if !has_token && e.to_string().contains("403") {
+            return "expo push refused (403): this Expo project requires an access token — set \
+                    EXPO_ACCESS_TOKEN on the service (expo.dev → Account settings → Access tokens)"
+                .to_string();
+        }
+        format!("expo push failed: {e}")
+    })?;
     let parsed: serde_json::Value = resp
         .into_json()
         .map_err(|e| format!("expo push: bad response: {e}"))?;
