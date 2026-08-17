@@ -149,8 +149,6 @@ kanban-plugin: board
 
 ## Validation
 
-- [ ] #187 Recipients: a phone can't be tested or deleted
-	  - Plan: [[recipients-phone-parity]]
 - [ ] #181 Mobile onboarding — invite a person, pair their phone
 	  - Plan: [[mobile-tenant-onboarding]]
 	  - All three phases shipped and deployed: invite tokens + public preview/accept, the QR
@@ -177,6 +175,10 @@ kanban-plugin: board
 
 ## Done
 
+- [x] #187 Recipients: a phone can't be tested or deleted
+	  - Plan: [[recipients-phone-parity]]
+	  - VALIDATED in production by the owner. The dialog names the consequence of removing a
+	    phone but does NOT count the affected workflows — that half is left with #188.
 - [x] #179 Set Variables / Get Variables — one node instead of a column of them
 	  - Plan: [[multiset-multiget-nodes]]
 	  - VALIDATED by the owner on the real face graph — the column of single Set/Get nodes it

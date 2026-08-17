@@ -49,6 +49,20 @@ label to point at. So the dialog must say what will break before it breaks:
 That count comes from the same query `rename_recipient` uses, read-only. **Failing is the correct
 outcome** — the alternative is silently re-addressing someone else's phone, which is #188.
 
+## Audit — what shipped (2026-08-17, `ef90e90`)
+
+Phase 1 in full: Test and Remove on the phones table, `testPushDevice` in `data.ts` always passing
+the label, a second `testingPhoneId` so a phone and a beacon can be mid-test at once, and one
+delete dialog serving both kinds. Validated on production by the operator.
+
+Phase 2 **partially**: the dialog names the consequence ("any workflow that addresses this phone
+will fail at that step") but does **not** count the affected workflows — that needs a read-only
+endpoint over the same query `rename_recipient` uses, which was not built. The sentence is honest
+without the number; the number would make it actionable. Left for whoever picks up #188, since the
+two are the warning and the safety net for the same hazard.
+
+Open decision 2 (toggling a phone like a beacon) remains untouched and unclaimed.
+
 ## Verification criteria
 
 1. Test on a phone row delivers a push to that phone, and only that phone.
