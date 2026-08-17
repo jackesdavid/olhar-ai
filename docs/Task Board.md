@@ -34,6 +34,8 @@ kanban-plugin: board
 
 ## Bugs
 
+- [ ] #190 Push delivery is never verified — we read the ticket, never the receipt
+	  - Plan: [[push-receipts-not-just-tickets]]
 - [ ] #188 A dangling recipient/camera reference auto-selects the first option
 	  - Plan: [[dangling-recipient-must-not-autoselect]]
 - [ ] #187 Recipients: a phone can't be tested or deleted
