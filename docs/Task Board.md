@@ -34,6 +34,12 @@ kanban-plugin: board
 
 ## Bugs
 
+- [ ] #190 Push delivery is never verified — we read the ticket, never the receipt
+	  - Plan: [[push-receipts-not-just-tickets]]
+- [ ] #188 A dangling recipient/camera reference auto-selects the first option
+	  - Plan: [[dangling-recipient-must-not-autoselect]]
+- [ ] #187 Recipients: a phone can't be tested or deleted
+	  - Plan: [[recipients-phone-parity]]
 - [ ] #183 CI: image push races the build cache and fails ~once a day
 	  - Plan: [[ci-registry-blob-race]]
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
@@ -45,6 +51,8 @@ kanban-plugin: board
 
 ## Specification
 
+- [ ] #189 Organise the Recipients screen into tabs
+	  - Plan: [[recipients-tabs]]
 - [ ] #186 Device Gate offers recipients that can never answer
 	  - Plan: [[device-gate-phone-only-recipients]]
 - [ ] #184 State-aware device control — act on the real state, confirm it changed
