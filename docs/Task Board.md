@@ -38,8 +38,6 @@ kanban-plugin: board
 	  - Plan: [[push-receipts-not-just-tickets]]
 - [ ] #188 A dangling recipient/camera reference auto-selects the first option
 	  - Plan: [[dangling-recipient-must-not-autoselect]]
-- [ ] #187 Recipients: a phone can't be tested or deleted
-	  - Plan: [[recipients-phone-parity]]
 - [ ] #183 CI: image push races the build cache and fails ~once a day
 	  - Plan: [[ci-registry-blob-race]]
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
@@ -151,6 +149,8 @@ kanban-plugin: board
 
 ## Validation
 
+- [ ] #187 Recipients: a phone can't be tested or deleted
+	  - Plan: [[recipients-phone-parity]]
 - [ ] #181 Mobile onboarding — invite a person, pair their phone
 	  - Plan: [[mobile-tenant-onboarding]]
 	  - All three phases shipped and deployed: invite tokens + public preview/accept, the QR
