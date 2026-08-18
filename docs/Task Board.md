@@ -38,8 +38,8 @@ kanban-plugin: board
 
 ## Specification
 
-- [ ] #196 Almost nothing is armed — automatic triggering is unproven in production
-	  - Plan: [[armed-automations-gap]]
+- [ ] #196 On-demand graphs are indistinguishable from switched-off ones
+	  - Plan: [[on-demand-graphs-read-as-disabled]]
 - [ ] #189 Organise the Recipients screen into tabs
 	  - Plan: [[recipients-tabs]]
 - [ ] #186 Device Gate offers recipients that can never answer
