@@ -53,7 +53,8 @@ export const beacons = {
     linkCopied: "Link copied",
     copyEnrollmentLink: "Copy enrollment link",
     pairThisDevice: "Pair this device",
-    emptySetCodeHint: "Set a pairing code above, then share the enrollment link.",
+    emptySetCodeHint: "Set a pairing code on Integrations, then share the enrollment link.",
+    openIntegrations: "Open Integrations",
     emptyNoProviderHint:
       "The Telegram provider needs to be configured before pairing is available.",
     colLabel: "Label",
@@ -143,7 +144,8 @@ export const beacons = {
     linkCopied: "Link copiado",
     copyEnrollmentLink: "Copiar link de inscrição",
     pairThisDevice: "Parear este dispositivo",
-    emptySetCodeHint: "Defina um código de pareamento acima e compartilhe o link de inscrição.",
+    emptySetCodeHint: "Defina um código de pareamento em Integrações e compartilhe o link de inscrição.",
+    openIntegrations: "Abrir Integrações",
     emptyNoProviderHint:
       "O provedor do Telegram precisa ser configurado antes do pareamento ficar disponível.",
     colLabel: "Nome",

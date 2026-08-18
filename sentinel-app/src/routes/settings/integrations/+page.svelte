@@ -1,6 +1,7 @@
 <script lang="ts">
   import PageHeader from "$lib/components/page-header.svelte";
   import Plug from "@lucide/svelte/icons/plug";
+  import Send from "@lucide/svelte/icons/send";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import ExternalLink from "@lucide/svelte/icons/external-link";
@@ -12,14 +13,44 @@
 
   import * as Card from "$lib/components/ui/card";
   import * as Select from "$lib/components/ui/select";
+  import * as Dialog from "$lib/components/ui/dialog";
+  import TelegramProvider from "$lib/components/telegram-provider.svelte";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
+  import { Switch } from "$lib/components/ui/switch";
   import { dict, lang } from "$lib/i18n";
   import type { TuyaDevice, TuyaDiagnosis } from "$lib/types";
 
   const t = $derived(dict[lang()].integrations);
+  const c = $derived(dict[lang()].common);
+
+  // Which provider is showing. In the URL (`?tab=telegram`) so a reload stays put and a link can
+  // point at one provider — "where do I configure X" should be answerable with a link.
+  const TABS = ["telegram", "tuya"] as const;
+  function tabFromUrl(): string {
+    if (typeof window === "undefined") return "tuya";
+    const q = new URLSearchParams(window.location.search).get("tab");
+    return TABS.includes(q as (typeof TABS)[number]) ? (q as string) : "tuya";
+  }
+  let tab = $state(tabFromUrl());
+
+  /** The app has no Tabs primitive; this is the same underline pattern the workflows list uses. */
+  function tabClass(v: string): string {
+    const base =
+      "flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition-colors -mb-px";
+    return tab === v
+      ? `${base} border-primary text-foreground`
+      : `${base} border-transparent text-muted-foreground hover:text-foreground`;
+  }
+  function selectTab(v: string) {
+    tab = v;
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", v);
+    history.replaceState({}, "", url);
+  }
 
   type Source = "tenant" | "operator" | "none";
   let source = $state<Source | null>(null);
@@ -56,15 +87,77 @@
 
   onMount(reload);
 
-  type Fn = { code: string; type: string };
+  /** One data point of a device.
+   *
+   * `values` and `access` come straight from Tuya's v2.0 thing model (`tuya/client.rs`) and are
+   * what make a control renderable rather than a label: `values` carries an enum's range and an
+   * integer's min/max, and `access` says whether the point can be WRITTEN at all. The page used to
+   * map both away, which is why a limit switch looked exactly like a command. */
+  type Fn = { code: string; type: string; values: string; access: string };
   function functionsOf(d: TuyaDevice): Fn[] {
     if (!d.functions_json) return [];
     try {
       const arr = JSON.parse(d.functions_json);
-      return Array.isArray(arr) ? arr.map((f) => ({ code: f.code, type: f.type })) : [];
+      if (!Array.isArray(arr)) return [];
+      const fns: Fn[] = arr.map((f) => ({
+        code: String(f.code ?? ""),
+        type: String(f.type ?? ""),
+        values: typeof f.values === "string" ? f.values : JSON.stringify(f.values ?? {}),
+        // A device synced before the thing model was read has no `access`; treat it as writable,
+        // which is what the old UI effectively assumed, rather than hiding every control.
+        access: String(f.access ?? "rw"),
+      }));
+      return sortByChannel(fns);
     } catch {
       return [];
     }
+  }
+
+  /** The first integer in a code — the channel a control belongs to. `gate1_fca` → 1. */
+  function channelOf(code: string): number | null {
+    const m = code.match(/\d+/);
+    return m ? Number(m[0]) : null;
+  }
+
+  /** Group a device's points by CHANNEL, so `gate1` and `gate1_fca` sit next to each other.
+   *
+   * Channel first, name second: when you are testing channel 1, its command and its limit switch
+   * are the pair that tells you whether the command actually did anything. Points with no number
+   * are device-wide, so they go last rather than interleaving. */
+  function sortByChannel(fns: Fn[]): Fn[] {
+    return [...fns].sort((a, b) => {
+      const ca = channelOf(a.code);
+      const cb = channelOf(b.code);
+      if (ca === null && cb === null) return a.code.localeCompare(b.code);
+      if (ca === null) return 1;
+      if (cb === null) return -1;
+      return ca - cb || a.code.localeCompare(b.code);
+    });
+  }
+
+  /** Tuya's `values` is a JSON *string* (its own convention), so it needs a second parse. */
+  function rangeOf(f: Fn): { range?: string[]; min?: number; max?: number } {
+    try {
+      const v = JSON.parse(f.values || "{}");
+      return v && typeof v === "object" ? v : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /** Whether this point can be written. A read-only point (`ro`) is a SENSOR — `gate1_fca` is the
+   *  limit switch that reports whether the gate is closed. Offering to "set" it invites someone to
+   *  believe they closed a gate they never touched. */
+  function isWritable(f: Fn): boolean {
+    return f.access !== "ro";
+  }
+
+  function kindOf(f: Fn): "bool" | "enum" | "num" | "text" {
+    const ty = f.type.toLowerCase();
+    if (ty === "boolean") return "bool";
+    if (ty === "enum") return "enum";
+    if (ty === "integer") return "num";
+    return "text";
   }
   function labelsOf(d: TuyaDevice): Record<string, string> {
     if (!d.function_labels_json) return {};
@@ -179,6 +272,84 @@
   }
 
   /** Prove the device answers. Reads status — changes nothing — and reports the round-trip. */
+  // ---- per-control console -------------------------------------------------
+  // Last status read per device (`{ code: value }`), what is pending, and the last round-trip.
+  let status = $state<Record<string, Record<string, unknown>>>({});
+  let reading = $state<string | null>(null);
+  let sending = $state<string | null>(null);
+  let lastMs = $state<Record<string, number>>({});
+  /** Draft value per `${deviceId}:${code}` — what the widget holds before Send. */
+  let draft = $state<Record<string, unknown>>({});
+  /** The write awaiting confirmation. These are gates and locks: nothing is sent unasked. */
+  let pending = $state<{ device: TuyaDevice; fn: Fn; value: unknown } | null>(null);
+
+  function key(deviceId: string, code: string) {
+    return `${deviceId}:${code}`;
+  }
+
+  function valueOf(deviceId: string, code: string): unknown {
+    return status[deviceId]?.[code];
+  }
+
+  /** What the widget shows: the local draft if the user touched it, else the last read value. */
+  function draftOf(d: TuyaDevice, f: Fn): unknown {
+    const k = key(d.device_id, f.code);
+    return k in draft ? draft[k] : valueOf(d.device_id, f.code);
+  }
+
+  function setDraft(d: TuyaDevice, f: Fn, v: unknown) {
+    draft = { ...draft, [key(d.device_id, f.code)]: v };
+  }
+
+  function displayValue(v: unknown): string {
+    if (v === undefined || v === null) return "—";
+    return String(v);
+  }
+
+  /** Read every point and cache it. One call answers the whole console — Tuya returns all points
+   *  together, so there is nothing to gain from asking per control. */
+  async function readStatus(d: TuyaDevice) {
+    reading = d.device_id;
+    try {
+      const r = await data.testTuyaDevice(d.device_id);
+      status = { ...status, [d.device_id]: r.result.status ?? {} };
+      lastMs = { ...lastMs, [d.device_id]: r.ms };
+      // A fresh read is the truth; drop drafts for this device so widgets show what the device says.
+      const keep: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(draft)) {
+        if (!k.startsWith(`${d.device_id}:`)) keep[k] = v;
+      }
+      draft = keep;
+    } catch (err) {
+      toast.error(t.testFailed, { description: String(err) });
+    } finally {
+      reading = null;
+    }
+  }
+
+  function askSend(d: TuyaDevice, f: Fn) {
+    pending = { device: d, fn: f, value: draftOf(d, f) };
+  }
+
+  /** Send ONE point, then re-read — the read is what proves the write landed, and for something
+   *  like a gate the value only settles seconds later. */
+  async function confirmSend() {
+    if (!pending) return;
+    const { device, fn, value } = pending;
+    sending = key(device.device_id, fn.code);
+    pending = null;
+    try {
+      const r = await data.testTuyaDevice(device.device_id, { code: fn.code, value });
+      lastMs = { ...lastMs, [device.device_id]: r.ms };
+      toast.success(t.sentOk(fn.code, String(value), r.ms));
+      await readStatus(device);
+    } catch (err) {
+      toast.error(t.sendFailed, { description: String(err) });
+    } finally {
+      sending = null;
+    }
+  }
+
   async function testDevice(d: TuyaDevice) {
     testing = d.device_id;
     try {
@@ -280,6 +451,19 @@
     icon={Plug}
   />
 
+  <div class="flex shrink-0 items-center gap-1 border-b border-border">
+    <button type="button" class={tabClass("telegram")} onclick={() => selectTab("telegram")}>
+      <Send class="size-4" /> {t.tabTelegram}
+    </button>
+    <button type="button" class={tabClass("tuya")} onclick={() => selectTab("tuya")}>
+      <Plug class="size-4" /> {t.tabTuya}
+    </button>
+  </div>
+
+  {#if tab === "telegram"}
+    <TelegramProvider />
+  {:else}
+    <div class="space-y-6">
   <Card.Root>
     <Card.Header>
       <div class="flex items-start justify-between gap-4">
@@ -474,14 +658,87 @@
                     {#if fns.length === 0}
                       <p class="text-xs text-muted-foreground">{t.noControls}</p>
                     {:else}
+                      <!-- Read once for the whole device: Tuya answers with every point at
+                           once, so a per-control read would be the same call N times. -->
+                      <div class="flex items-center justify-between gap-2 pb-1">
+                        <p class="text-[10px] text-muted-foreground">
+                          {lastMs[d.device_id] ? t.roundTrip(lastMs[d.device_id]) : t.notReadYet}
+                        </p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={reading === d.device_id}
+                          onclick={() => readStatus(d)}
+                        >
+                          {reading === d.device_id ? t.readingNow : t.readAll}
+                        </Button>
+                      </div>
+
                       {#each fns as f (f.code)}
-                        <div class="flex items-center gap-3">
+                        {@const range = rangeOf(f)}
+                        {@const kind = kindOf(f)}
+                        {@const busy = sending === key(d.device_id, f.code)}
+                        <div class="flex items-center gap-3 border-t border-border/40 py-2">
                           <div class="w-40 shrink-0">
                             <p class="truncate font-mono text-xs">{f.code}</p>
-                            <p class="text-[10px] text-muted-foreground">{f.type}</p>
+                            <p class="text-[10px] text-muted-foreground">
+                              {f.type}{isWritable(f) ? "" : ` · ${t.readOnly}`}
+                            </p>
                           </div>
+
+                          <!-- What the device last said. This is the column that proves a write:
+                               send, read, and watch this change. -->
+                          <div class="w-24 shrink-0">
+                            <p class="truncate font-mono text-xs">{displayValue(valueOf(d.device_id, f.code))}</p>
+                          </div>
+
+                          <!-- A read-only point gets NO control. It is a sensor. -->
+                          {#if isWritable(f)}
+                            <div class="flex min-w-0 flex-1 items-center gap-2">
+                              {#if kind === "bool"}
+                                <Switch
+                                  checked={draftOf(d, f) === true}
+                                  onCheckedChange={(v) => setDraft(d, f, v)}
+                                />
+                              {:else if kind === "enum" && (range.range ?? []).length > 0}
+                                <select
+                                  class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs"
+                                  value={String(draftOf(d, f) ?? "")}
+                                  onchange={(e) => setDraft(d, f, e.currentTarget.value)}
+                                >
+                                  {#each range.range ?? [] as opt (opt)}
+                                    <option value={opt}>{opt}</option>
+                                  {/each}
+                                </select>
+                              {:else if kind === "num"}
+                                <Input
+                                  class="h-8 w-28"
+                                  type="number"
+                                  min={range.min}
+                                  max={range.max}
+                                  value={String(draftOf(d, f) ?? "")}
+                                  oninput={(e) => setDraft(d, f, Number(e.currentTarget.value))}
+                                />
+                                {#if range.min !== undefined && range.max !== undefined}
+                                  <span class="text-[10px] text-muted-foreground">{range.min}–{range.max}</span>
+                                {/if}
+                              {:else}
+                                <Input
+                                  class="h-8 min-w-0 flex-1"
+                                  value={String(draftOf(d, f) ?? "")}
+                                  oninput={(e) => setDraft(d, f, e.currentTarget.value)}
+                                />
+                              {/if}
+                              <Button size="sm" disabled={busy} onclick={() => askSend(d, f)}>
+                                {busy ? t.sendingNow : t.send}
+                              </Button>
+                            </div>
+                          {:else}
+                            <div class="min-w-0 flex-1"></div>
+                          {/if}
+
                           <Input
-                            class="h-8"
+                            class="h-8 w-40 shrink-0"
                             placeholder={t.friendlyNamePlaceholder}
                             value={edits[d.device_id]?.[f.code] ?? ""}
                             oninput={(e) => editLabel(d.device_id, f.code, e.currentTarget.value)}
@@ -503,6 +760,8 @@
       {/if}
     </Card.Content>
   </Card.Root>
+    </div>
+  {/if}
 </div>
 
 <!-- The four-step connection checklist (#182). Three of the failures it separates end in an empty
@@ -539,3 +798,21 @@
     </div>
   {/if}
 {/snippet}
+
+<!-- Confirm every write. A Tuya point on this account is a gate or a lock: the cost of an
+     accidental click is a door opening, which is not a mistake a toast can undo. The dialog names
+     the device, the control and the exact value, because "are you sure?" alone is not information. -->
+<Dialog.Root open={pending !== null} onOpenChange={(v) => { if (!v) pending = null; }}>
+  <Dialog.Content class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>{t.confirmSendTitle}</Dialog.Title>
+      <Dialog.Description>
+        {t.confirmSendBefore}<span class="font-mono font-medium text-foreground">{pending?.fn.code}</span>{t.confirmSendMiddle}<span class="font-mono font-medium text-foreground">{String(pending?.value)}</span>{t.confirmSendAfter}<span class="font-medium text-foreground">{pending?.device.name}</span>.
+      </Dialog.Description>
+    </Dialog.Header>
+    <Dialog.Footer>
+      <Button variant="outline" onclick={() => (pending = null)}>{c.cancel}</Button>
+      <Button onclick={confirmSend}>{t.send}</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
