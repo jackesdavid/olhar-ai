@@ -22,7 +22,9 @@
                     false,
                     false,
                     false,
-                    false
+                    false,
+                    null,
+                    true
                   ]
                 }
               },
@@ -199,6 +201,12 @@
   },
   "active": "b0c2853a209ba4bb",
   "lastOpenFiles": [
+    "plans/on-demand-graphs-read-as-disabled.md",
+    "plans/armed-automations-gap.md",
+    "plans/outcome-based-pricing.md",
+    "plans/llm-cost-metering.md",
+    "plans/integrations-tabs-tuya-console.md",
+    "ref/push.md",
     "Task Board.md.tmp.7543.ae9ea689e5b8",
     "plans/when-event-cron.md",
     "plans/tuya-local-map/04-command-path-through-the-edge.md",
@@ -223,18 +231,12 @@
     "plans/tuya-oem-map/04-server-side-control.md",
     "plans/tuya-oem-map/03-account-per-user-or-per-tenant.md",
     "plans/tuya-oem-map/02-ios-bridge-feasibility.md",
-    "plans/tuya-oem-map/01-what-the-licence-costs.md",
-    "plans/tuya-oem-map.md",
     "plans/tuya-oem-map",
-    "plans/mobile-edge-face-capture.md",
-    "plans/faces-completion.md",
     "plans/mobile-edge-face-capture.md.tmp.14447.cf4b28e93ffa",
-    "plans/db-superuser-privilege.md",
     "legal",
     "Task Board.md.tmp.20301.6d8cf89fd390",
     "Task Board.md.tmp.20301.d1d00185956d",
     "Task Board.md.tmp.20301.5b8b6456152c",
-    "Task Board.md.tmp.6853.7bdfa62a3cae",
     "plans/logo-exploration/warm-concepts-overview.png",
     "plans/logo-exploration/concept-5.svg",
     "plans/logo-exploration/concept-4.svg",

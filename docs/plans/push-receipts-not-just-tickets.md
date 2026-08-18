@@ -29,7 +29,32 @@ exactly like *the person ignored it*. The run history said the gate was delivere
 It was never delivered. **That is the bug worth fixing** — the key was a configuration mistake and
 took ten minutes to correct once named; the silence cost far more.
 
-## Phase 1 — read the receipt
+## Phase 1 — read the receipt — **BUILT 2026-08-18**
+
+Shipped as a delayed job rather than a table: `push_receipt` / `check` on `work_jobs`, enqueued
+15 seconds after a send by `push::enqueue_receipt_check`, drained by `spawn_push_receipts` in
+`sentinel-notification`.
+
+- `post_expo` now returns `(token, ticket_id)` pairs instead of a count. Expo answers `data` in
+  request order, which is the only thing that makes the pairing possible — and the pairing is what
+  lets a receipt naming a dead device be traced back to the row to disable.
+- `push::check_receipts` calls `POST /--/api/v2/push/getReceipts`. A receipt that is not ready yet
+  comes back **absent**, not as an error; that is treated as "nothing to say", never as a failure.
+- Both senders enqueue: the notification consumer and the Device Gate site in `engine.rs`. The
+  gate's log line still says "asked", deliberately — it is the honest word for a queued push.
+- Expo being unreachable **retries**; a receipt we never read is not a receipt that said no.
+
+**Only `DeviceNotRegistered` mutates our state.** Everything else — a wrong key, the wrong APNs
+environment — is logged loudly and changes nothing. Disabling a customer's phone because our own
+credentials were misconfigured would turn a ten-minute fix into a silent outage for them.
+
+Verified before shipping: `sql_prepare` PREPAREs all 336 statements against a real migrated schema,
+and the tenant-predicate ratchet is unchanged at 60 — the new `UPDATE` names `tenant_id`.
+
+**Phases 2 and 3 are NOT built.** The reason still only reaches the service log; it does not reach
+the run log, the Recipients screen, or the gate's failure arm.
+
+## Phase 1 — as specified
 
 - `post_expo` returns the ticket ids it got back instead of only a count.
 - A follow-up `getReceipts` call, after a short delay, resolves those ids. Because the caller (a

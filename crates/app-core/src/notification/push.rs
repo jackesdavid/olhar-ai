@@ -14,6 +14,11 @@ use crate::db::Db;
 use crate::timeutil::now_rfc3339;
 
 const EXPO_SEND_URL: &str = "https://exp.host/--/api/v2/push/send";
+const EXPO_RECEIPTS_URL: &str = "https://exp.host/--/api/v2/push/getReceipts";
+
+/// How long to wait before asking for the receipt. Long enough that the provider has usually
+/// answered, short enough that a broken channel is reported while someone still cares.
+const RECEIPT_DELAY_SECS: i64 = 15;
 
 /// Expo access token, when the project requires one.
 ///
@@ -235,7 +240,7 @@ pub fn send_data(
     title: &str,
     message: &str,
     data: serde_json::Value,
-) -> Result<usize, String> {
+) -> Result<Vec<(String, String)>, String> {
     if tokens.is_empty() {
         return Err("no registered push devices".into());
     }
@@ -263,13 +268,17 @@ pub fn send_data(
             })
         })
         .collect();
-    post_expo(body, tokens.len())
+    post_expo(body, tokens)
 }
 
 /// Deliver `message` to every token. Expo accepts a batch in one POST; a per-message error comes
 /// back in the response body rather than as an HTTP status, so we surface the first one. Returns
 /// how many messages Expo accepted.
-pub fn send(tokens: &[String], title: &str, message: &str) -> Result<usize, String> {
+pub fn send(
+    tokens: &[String],
+    title: &str,
+    message: &str,
+) -> Result<Vec<(String, String)>, String> {
     if tokens.is_empty() {
         return Err("no registered push devices".into());
     }
@@ -279,12 +288,20 @@ pub fn send(tokens: &[String], title: &str, message: &str) -> Result<usize, Stri
             |t| serde_json::json!({ "to": t, "title": title, "body": message, "sound": "default" }),
         )
         .collect();
-    post_expo(body, tokens.len())
+    post_expo(body, tokens)
 }
 
 /// The shared POST + per-message error surfacing. Expo returns a 200 with per-item statuses, so a
 /// rejected message is invisible to anyone checking only the HTTP code.
-fn post_expo(body: Vec<serde_json::Value>, sent: usize) -> Result<usize, String> {
+///
+/// Returns one `(token, ticket_id)` pair per accepted message. The ticket is NOT proof of
+/// delivery — it means Expo queued it. Pairing it with the token here is what later lets a receipt
+/// naming a dead device be traced back to the row to disable (card #190); Expo answers `data` in
+/// request order, which is the only thing that makes the pairing possible.
+fn post_expo(
+    body: Vec<serde_json::Value>,
+    tokens: &[String],
+) -> Result<Vec<(String, String)>, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(15))
         .build();
@@ -307,7 +324,7 @@ fn post_expo(body: Vec<serde_json::Value>, sent: usize) -> Result<usize, String>
     let parsed: serde_json::Value = resp
         .into_json()
         .map_err(|e| format!("expo push: bad response: {e}"))?;
-    // { "data": [ { "status": "ok" | "error", "message": … }, … ] }
+    // { "data": [ { "status": "ok" | "error", "id": …, "message": … }, … ] }
     let items = parsed
         .get("data")
         .and_then(|d| d.as_array())
@@ -323,5 +340,122 @@ fn post_expo(body: Vec<serde_json::Value>, sent: usize) -> Result<usize, String>
             .unwrap_or("unknown");
         return Err(format!("expo push rejected: {msg}"));
     }
-    Ok(items.len().max(sent))
+    Ok(items
+        .iter()
+        .zip(tokens.iter())
+        .filter_map(|(item, token)| {
+            item.get("id")
+                .and_then(|v| v.as_str())
+                .map(|id| (token.clone(), id.to_string()))
+        })
+        .collect())
+}
+
+/// What the provider finally said about one push, fetched from Expo's receipt endpoint.
+#[derive(Debug, Clone)]
+pub struct Receipt {
+    pub ticket_id: String,
+    /// `true` when the provider accepted it. `false` means it did NOT arrive.
+    pub ok: bool,
+    /// Expo's human-readable reason, e.g. the APNs `BadEnvironmentKeyInToken` text.
+    pub message: String,
+    /// Expo's machine-readable code, e.g. `DeviceNotRegistered` — the one worth acting on.
+    pub code: Option<String>,
+}
+
+/// Ask Expo what actually happened to `ticket_ids`.
+///
+/// This is the half the send path never read. A ticket says "queued"; this says whether APNs or
+/// FCM took it, and why not. Receipts are available for a limited window after the send, so this
+/// is called from a delayed job rather than kept for later.
+pub fn check_receipts(ticket_ids: &[String]) -> Result<Vec<Receipt>, String> {
+    if ticket_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(15))
+        .build();
+    let mut req = agent
+        .post(EXPO_RECEIPTS_URL)
+        .set("accept", "application/json");
+    if let Some(tok) = expo_access_token() {
+        req = req.set("authorization", &format!("Bearer {tok}"));
+    }
+    let resp = req
+        .send_json(serde_json::json!({ "ids": ticket_ids }))
+        .map_err(|e| format!("expo receipts failed: {e}"))?;
+    let parsed: serde_json::Value = resp
+        .into_json()
+        .map_err(|e| format!("expo receipts: bad response: {e}"))?;
+    // { "data": { "<ticket id>": { "status": "ok" | "error", "message": …, "details": {…} } } }
+    let map = match parsed.get("data").and_then(|d| d.as_object()) {
+        Some(m) => m,
+        // A receipt that is not ready yet comes back absent, not as an error. Treat that as
+        // "nothing to say" rather than inventing a failure.
+        None => return Ok(Vec::new()),
+    };
+    Ok(map
+        .iter()
+        .map(|(id, v)| Receipt {
+            ticket_id: id.clone(),
+            ok: v.get("status").and_then(|s| s.as_str()) != Some("error"),
+            message: v
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            code: v
+                .get("details")
+                .and_then(|d| d.get("error"))
+                .and_then(|e| e.as_str())
+                .map(str::to_string),
+        })
+        .collect())
+}
+
+/// Disable the device holding `token`, after a receipt said the app is gone.
+///
+/// The ONLY receipt code that justifies mutating our own state: `DeviceNotRegistered` means the
+/// app was uninstalled or the token rotated, so every future push to it is waste. Every other
+/// failure is an operator problem (a wrong key, a bad environment) and must change nothing —
+/// disabling a device because our own credentials were misconfigured would turn a ten-minute fix
+/// into a silent outage for that customer.
+pub fn disable_by_token(db: &Db, tenant_id: Uuid, token: &str) -> bool {
+    let pool = db.pool();
+    let token = token.to_string();
+    db.block(async move {
+        sqlx::query("UPDATE push_devices SET enabled = false WHERE tenant_id = $1 AND device_token = $2")
+            .bind(tenant_id)
+            .bind(&token)
+            .execute(&pool)
+            .await
+    })
+    .map(|r| r.rows_affected() > 0)
+    .unwrap_or_else(|e| {
+        log::error!("push::disable_by_token failed: {e}");
+        false
+    })
+}
+
+/// Queue the receipt check for a set of just-sent pushes.
+///
+/// Deferred, not inline: the receipt is not ready the moment the POST returns, and the sender must
+/// not block waiting for it. `op` is carried through so a failure names the feature it broke
+/// ("device_gate"), not just a tenant.
+pub fn enqueue_receipt_check(db: &Db, tenant_id: Uuid, op: &str, sent: &[(String, String)]) {
+    if sent.is_empty() {
+        return;
+    }
+    let tickets: Vec<serde_json::Value> = sent
+        .iter()
+        .map(|(token, id)| serde_json::json!({ "token": token, "ticket_id": id }))
+        .collect();
+    crate::work_queue::enqueue_at_blocking(
+        db,
+        tenant_id,
+        crate::work_queue::PUSH_RECEIPT_CATEGORY,
+        crate::work_queue::PUSH_RECEIPT_KIND,
+        serde_json::json!({ "op": op, "tickets": tickets }),
+        &crate::timeutil::plus_secs_rfc3339(RECEIPT_DELAY_SECS),
+    );
 }

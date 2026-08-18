@@ -21,6 +21,8 @@ const PURGE_INTERVAL: Duration = Duration::from_secs(300);
 /// How long a terminal notification's media survives, so an operator can still inspect a
 /// just-failed send before its attachment disappears.
 const PURGE_GRACE_SECS: i64 = 3600;
+/// How long before re-asking for a receipt Expo could not answer for.
+const RECEIPT_RETRY_SECS: i64 = 30;
 /// Objects reclaimed per pass — bounded so a backlog can't monopolise the thread.
 const PURGE_BATCH: i64 = 200;
 /// Backstop expiry for objects nothing points at (staged, then the enqueue failed).
@@ -43,6 +45,108 @@ pub fn spawn(state: Arc<AppState>) {
         }
     });
     log::info!("notification send consumer started (work_jobs)");
+}
+
+/// Read the RECEIPT for pushes sent a few seconds ago — the half the send path never read.
+///
+/// Expo answers a send in two stages: a **ticket** ("queued", which `send` already checks) and a
+/// **receipt**, which carries APNs/FCM's verdict. On 2026-08-17 every Device Gate push was dying
+/// at Apple with `BadEnvironmentKeyInToken` while the run log read `asked iPhone` → `expired` —
+/// indistinguishable from the person ignoring the prompt. The key was a ten-minute fix once named;
+/// the silence cost a day.
+///
+/// Only ONE receipt code justifies changing our own state. `DeviceNotRegistered` means the app is
+/// gone, so the row is disabled. Everything else — a wrong key, the wrong APNs environment — is an
+/// operator problem: it is reported loudly and nothing is mutated. Disabling a customer's phone
+/// because our credentials were misconfigured would turn a config error into a silent outage.
+pub fn spawn_push_receipts(state: Arc<AppState>) {
+    std::thread::spawn(move || loop {
+        let jobs = work_queue::claim_blocking(
+            &state.db,
+            work_queue::PUSH_RECEIPT_CATEGORY,
+            work_queue::PUSH_RECEIPT_KIND,
+            BATCH,
+        );
+        if jobs.is_empty() {
+            std::thread::sleep(IDLE_POLL);
+            continue;
+        }
+        for job in jobs {
+            check_receipts(&state, job);
+        }
+    });
+    log::info!("push receipt consumer started (work_jobs)");
+}
+
+fn check_receipts(state: &Arc<AppState>, job: work_queue::Job) {
+    use app_core::notification::push;
+
+    let op = job
+        .payload
+        .get("op")
+        .and_then(|v| v.as_str())
+        .unwrap_or("push")
+        .to_string();
+    // ticket id -> the token it was sent to, so a dead-device verdict can name the row to disable.
+    let by_ticket: Vec<(String, String)> = job
+        .payload
+        .get("tickets")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| {
+                    Some((
+                        t.get("ticket_id")?.as_str()?.to_string(),
+                        t.get("token")?.as_str()?.to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if by_ticket.is_empty() {
+        work_queue::mark_done_blocking(&state.db, job.id);
+        return;
+    }
+
+    let ids: Vec<String> = by_ticket.iter().map(|(id, _)| id.clone()).collect();
+    let receipts = match push::check_receipts(&ids) {
+        Ok(r) => r,
+        Err(e) => {
+            // Expo unreachable is OUR problem, not a verdict — retry rather than concluding the
+            // push failed. A receipt we never read is not a receipt that said no.
+            log::warn!("push receipt check failed ({op}): {e}");
+            work_queue::retry_after_blocking(&state.db, job.id, RECEIPT_RETRY_SECS, &e);
+            return;
+        }
+    };
+
+    for r in receipts {
+        if r.ok {
+            continue;
+        }
+        let token = by_ticket
+            .iter()
+            .find(|(id, _)| *id == r.ticket_id)
+            .map(|(_, t)| t.as_str())
+            .unwrap_or("");
+        let code = r.code.as_deref().unwrap_or("unknown");
+        if code == "DeviceNotRegistered" {
+            let gone = push::disable_by_token(&state.db, job.tenant_id, token);
+            log::warn!(
+                "push receipt ({op}): device no longer registered — {} (tenant {})",
+                if gone { "disabled it" } else { "already gone" },
+                job.tenant_id
+            );
+        } else {
+            log::error!(
+                "push receipt ({op}): NOT DELIVERED — {code}: {} (tenant {}). Nothing disabled: \
+                 this is a configuration problem, not a dead device.",
+                r.message,
+                job.tenant_id
+            );
+        }
+    }
+    work_queue::mark_done_blocking(&state.db, job.id);
 }
 
 /// Reclaim staged media.
@@ -135,8 +239,20 @@ fn process(state: &AppState, job: work_queue::Job) {
             .unwrap_or("Sentinel");
         let tokens = app_core::notification::push::enabled_tokens(&state.db, job.tenant_id, target);
         match app_core::notification::push::send(&tokens, title, &message) {
-            Ok(n) => {
-                log::info!("push delivered to {n} device(s) (tenant {})", job.tenant_id);
+            Ok(sent) => {
+                // "accepted", not "delivered": Expo has queued it and nothing has reached a phone
+                // yet. The receipt job below is what learns whether it actually arrived (#190).
+                log::info!(
+                    "push accepted for {} device(s) (tenant {})",
+                    sent.len(),
+                    job.tenant_id
+                );
+                app_core::notification::push::enqueue_receipt_check(
+                    &state.db,
+                    job.tenant_id,
+                    "notification",
+                    &sent,
+                );
                 work_queue::mark_done_blocking(&state.db, job.id);
             }
             Err(e) => fail(state, &e),

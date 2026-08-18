@@ -23,8 +23,6 @@ kanban-plugin: board
 ## Bugs
 
 - [ ] #192 Split `tuya.control` out of `tuya.write` — editing labels should not open gates
-- [ ] #190 Push delivery is never verified — we read the ticket, never the receipt
-	  - Plan: [[push-receipts-not-just-tickets]]
 - [ ] #188 A dangling recipient/camera reference auto-selects the first option
 	  - Plan: [[dangling-recipient-must-not-autoselect]]
 - [ ] #183 CI: image push races the build cache and fails ~once a day
@@ -119,6 +117,10 @@ kanban-plugin: board
 
 ## Generation
 
+- [ ] #190 Push delivery is never verified — we read the ticket, never the receipt
+	  - Plan: [[push-receipts-not-just-tickets]]
+	  - Phase 1 BUILT: receipts read on a delayed work_jobs job; only DeviceNotRegistered
+	    disables a device. Phases 2-3 (run log, Recipients screen, fail the gate) remain.
 - [ ] #185 Mobile production launch — App Store review readiness
 	  - Plan: [[mobile-app-store-launch]]
 	    a per-device Test that reads status + reports the round-trip. Phase 5 (sync count +
