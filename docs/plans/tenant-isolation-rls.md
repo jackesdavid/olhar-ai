@@ -128,6 +128,26 @@ whether RLS would hold, which is Phase 2's job.
 3. A `BYPASSRLS` service role for the paths that are legitimately cross-tenant: the master console,
    the pg_cron sweeps (events retention, TTLs), and the `work_jobs` queue consumers.
 
+**The mechanism is now PROVEN, in tests, before any migration (2026-08-18).** `tenant_isolation.rs`
+gained two:
+
+- `rls_does_nothing_for_a_superuser_or_owner_which_is_the_whole_trap` — enables RLS, adds a policy,
+  and asserts the owner **still sees both tenants**. That is the state a naive "enable RLS" commit
+  ships, and it is indistinguishable from working unless someone counts rows. Output:
+  `trap confirmed: RLS enabled + policy present, owner still sees 2 rows`.
+- `rls_isolates_a_non_owner_role_and_fails_closed_without_the_session_variable` — with `FORCE` on and
+  a non-owner role, it asserts all four properties: a query with no `app.tenant_id` **errors**
+  (fails closed, not "returns nothing"), an unqualified `SELECT` sees one tenant, an unqualified
+  `UPDATE` rewrites one row, and the other tenant's row is byte-identical afterwards.
+
+Both run on a scratch `rls_probe` table and role, created and dropped by the test, so nothing
+application-owned is touched. The policy deliberately uses `current_setting('app.tenant_id')`
+**without** the `missing_ok` argument: a forgotten `SET LOCAL` then raises, instead of silently
+returning an empty list that a caller cannot distinguish from "no data".
+
+So the migration can now be written against a mechanism known to work here, rather than hoping.
+What remains is the risky half, unchanged:
+
 Changing the connecting role is a production cutover with a real rollback story. It must be proven
 against a restored copy of production before it touches the live database.
 
