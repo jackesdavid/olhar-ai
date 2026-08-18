@@ -45,7 +45,23 @@ being overwritten. It stays.
 - **Nothing auto-saves.** The config keeps the dead label until a human picks a replacement — an
   editor that silently rewrites a graph on open is how the reference was lost in the first place.
 
-## Phase 2 — fail loudly at run time (engine)
+## Phase 2 — VERIFIED, no change needed (2026-08-18)
+
+The plan said to check this rather than assume it. Checked, and the engine was already right:
+
+- `notification::handler::resolve_target` matches a named target case-insensitively and, on no
+  match, returns `Err("No target named 'X'. Available: …")` — it fails closed AND names both the
+  dead label and the alternatives. The broadcast form is reachable only when the caller passes
+  `None`, i.e. no recipient was set at all.
+- `run_notify_recipient` always passes `Some(label)` to `push::enabled_tokens` when the label is
+  non-empty, so the "every enabled device" branch cannot be reached with a set-but-unresolvable
+  label. It falls through to Telegram when the label matches no phone, and Telegram then produces
+  the error above.
+
+So the run-time half of this card was a hazard that did not exist. Recording that is the point of
+having written the check down: the editor was substituting silently, the engine never was.
+
+## Phase 2 — as specified (engine)
 
 `crates/app-core/src/workflows/node/recipients.rs` and
 `crates/app-core/src/workflows/device_gate.rs` must already fail rather than fan out to everyone —

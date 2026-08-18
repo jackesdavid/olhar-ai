@@ -1051,10 +1051,22 @@
   ]);
   // Presence categories for the `category` dropdown (slug → friendly label).
   const categoryOptions = PRESENCE_CATEGORIES.map((c) => ({ value: c, label: PRESENCE_CATEGORY_STYLE[c].label }));
+  // Resolve a stored camera reference (id / ip / name) to the option key.
+  //
+  // EMPTY means "never configured" — defaulting that to the first camera is a convenience, and
+  // nothing is being overwritten. A NON-EMPTY value that matches nothing is a different thing
+  // entirely: the camera it named is gone. Returning the first camera there would silently point
+  // the node at someone else's camera, so this returns "" and the UI says which name died (#188).
   function cameraValue(stored: string): string {
     const s = String(stored ?? "");
+    if (s === "") return cameraOptions[0]?.value ?? "";
     const d = devices.find((x) => (x.id && x.id === s) || x.ip === s || x.name === s);
-    return d ? cameraKey(d) : (cameraOptions[0]?.value ?? "");
+    return d ? cameraKey(d) : "";
+  }
+  /** True when a camera was configured and no longer exists. */
+  function cameraMissing(stored: string): boolean {
+    const s = String(stored ?? "");
+    return s !== "" && cameraValue(s) === "";
   }
   // A node's `camera` config (id/ip/name/"first") resolved to the real device IP the
   // Region-drawing UI needs to fetch a snapshot for (the snapshot proxy only knows exact IPs).
@@ -1062,10 +1074,24 @@
     const key = cameraValue(stored);
     return devices.find((d) => cameraKey(d) === key)?.ip ?? "";
   }
-  // Resolve a stored value to a real option — falls back to the FIRST item in the
-  // list (what "default to first" means) when the stored value is empty/missing.
+  // Resolve a stored value to a real option.
+  //
+  // This used to fall back to the first item for ANY unmatched value, which meant deleting the
+  // recipient "Jackes" made every node that addressed him display "Ana" — and the moment anything
+  // rewrote that node, the gate really was addressed to Ana. Failing is strictly better than
+  // substituting a person (#188).
+  //
+  // Empty still defaults to the first item: that is a new node with nothing chosen yet, and there
+  // is nothing to overwrite.
   function resolveOpt(opts: { value: string; label: string }[], stored: string) {
-    return opts.some((o) => o.value === stored) ? stored : (opts[0]?.value ?? "");
+    const s = String(stored ?? "");
+    if (s === "") return opts[0]?.value ?? "";
+    return opts.some((o) => o.value === s) ? s : "";
+  }
+  /** True when a value was configured and the thing it named no longer exists. */
+  function optMissing(opts: { value: string; label: string }[], stored: string): boolean {
+    const s = String(stored ?? "");
+    return s !== "" && !opts.some((o) => o.value === s);
   }
 
   // When a CameraSwitch node is selected and has empty-string arms (the old default config
@@ -4979,10 +5005,12 @@
                             No cameras — add one in Devices.
                           </p>
                         {:else}
-                          {@const cv = cameraValue(String(selectedNode.config[key] ?? ""))}
+                          {@const camStored = String(selectedNode.config[key] ?? "")}
+                          {@const cv = cameraValue(camStored)}
                           {@const clabel = cameraOptions.find((o) => o.value === cv)?.label ?? cv}
+                          {@render missingRef(cameraMissing(camStored), camStored, "camera")}
                           <Select.Root type="single" disabled={editLocked} value={cv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? cv })}>
-                            <Select.Trigger class="h-8 w-full">{clabel}</Select.Trigger>
+                            <Select.Trigger class="h-8 w-full">{clabel || "—"}</Select.Trigger>
                             <Select.Content>
                               {#each cameraOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
                             </Select.Content>
@@ -5057,9 +5085,11 @@
                             No recipients — pair one in Recipients.
                           </p>
                         {:else}
-                          {@const rv = resolveOpt(recipientOptions, String(selectedNode.config[key] ?? ""))}
+                          {@const stored = String(selectedNode.config[key] ?? "")}
+                          {@const rv = resolveOpt(recipientOptions, stored)}
+                          {@render missingRef(optMissing(recipientOptions, stored), stored, "recipient")}
                           <Select.Root type="single" disabled={editLocked} value={rv} onValueChange={(v) => saveNodeConfig(selectedNode, { ...selectedNode.config, [key]: v ?? rv })}>
-                            <Select.Trigger class="h-8 w-full">{rv}</Select.Trigger>
+                            <Select.Trigger class="h-8 w-full">{rv || "—"}</Select.Trigger>
                             <Select.Content>
                               {#each recipientOptions as o (o.value)}<Select.Item value={o.value} label={o.label}>{o.label}</Select.Item>{/each}
                             </Select.Content>
@@ -5573,6 +5603,7 @@
                         {:else}
                           {@const cv = cameraValue(arm)}
                           {@const clabel = cameraOptions.find((o) => o.value === cv)?.label ?? cv}
+                          {@render missingRef(cameraMissing(arm), arm, "camera")}
                           <Select.Root
                             type="single"
                             disabled={editLocked}
@@ -6000,3 +6031,16 @@
     }
   }
 </style>
+
+{#snippet missingRef(missing: boolean, name: string, what: string)}
+  {#if missing}
+    <!-- Card #188. The dropdown deliberately shows NOTHING selected rather than the first item in
+         the list: this node named a real thing that no longer exists, and quietly resolving it to
+         a different camera or a different person is the failure this exists to prevent. Nothing is
+         auto-saved either — the dead name stays in the config until a human picks a replacement,
+         because an editor that silently rewrites a graph on open is how the reference was lost. -->
+    <p class="mb-1 rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive">
+      The {what} <span class="font-mono font-medium">{name}</span> no longer exists. Pick another one — this step will fail until you do.
+    </p>
+  {/if}
+{/snippet}

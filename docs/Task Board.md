@@ -23,8 +23,6 @@ kanban-plugin: board
 ## Bugs
 
 - [ ] #192 Split `tuya.control` out of `tuya.write` — editing labels should not open gates
-- [ ] #188 A dangling recipient/camera reference auto-selects the first option
-	  - Plan: [[dangling-recipient-must-not-autoselect]]
 - [ ] #183 CI: image push races the build cache and fails ~once a day
 	  - Plan: [[ci-registry-blob-race]]
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
@@ -121,6 +119,11 @@ kanban-plugin: board
 	  - Plan: [[push-receipts-not-just-tickets]]
 	  - Phase 1 BUILT: receipts read on a delayed work_jobs job; only DeviceNotRegistered
 	    disables a device. Phases 2-3 (run log, Recipients screen, fail the gate) remain.
+- [ ] #188 A dangling recipient/camera reference auto-selects the first option
+	  - Plan: [[dangling-recipient-must-not-autoselect]]
+	  - Editor no longer substitutes: a configured value that no longer exists resolves to
+	    nothing and says which name died, for recipients AND cameras. Phase 2 verified as
+	    already-correct — the engine fails closed and names the label.
 - [ ] #185 Mobile production launch — App Store review readiness
 	  - Plan: [[mobile-app-store-launch]]
 	    a per-device Test that reads status + reports the round-trip. Phase 5 (sync count +
