@@ -549,6 +549,20 @@ pub fn monitor_list_blocking(
     })
 }
 
+// ---- push receipts (card #190) ----------------------------------------------
+// Expo answers a send in TWO stages. The POST returns a TICKET ("queued"), which is all the send
+// path ever read; the RECEIPT, fetched seconds later, carries APNs/FCM's verdict and its reason.
+// On 2026-08-17 every Device Gate push was dying at Apple with BadEnvironmentKeyInToken while the
+// run log read `asked iPhone` -> `expired`, which is indistinguishable from the person ignoring it.
+//
+// The check cannot run inline: the sender must not block, and the receipt is not ready yet. So it
+// is a delayed job, and the queue's `run_after` is exactly the mechanism for that.
+
+/// Category for deferred push-receipt checks.
+pub const PUSH_RECEIPT_CATEGORY: &str = "push_receipt";
+/// Kind — one action.
+pub const PUSH_RECEIPT_KIND: &str = "check";
+
 // ---- notification sends (migrated from notification_queue) ------------------
 // One send per job. The send is non-idempotent (a re-run is a duplicate Telegram), so it relies
 // on the atomic claim; transient failures reschedule with backoff via `retry_after`.

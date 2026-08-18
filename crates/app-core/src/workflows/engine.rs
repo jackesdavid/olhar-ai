@@ -1156,7 +1156,17 @@ fn forward_epoch(
                                 &message,
                                 payload,
                             ) {
-                                Ok(_) => {
+                                Ok(sent) => {
+                                    // Expo QUEUED it. Nothing has reached a phone yet, and the
+                                    // log line below deliberately says "asked" rather than
+                                    // "delivered" — on 2026-08-17 every one of these was dying at
+                                    // Apple while this line read exactly the same (#190).
+                                    crate::notification::push::enqueue_receipt_check(
+                                        &sys.db,
+                                        sys.tenant_id,
+                                        "device_gate",
+                                        &sent,
+                                    );
                                     on_log(
                                         nid,
                                         &format!(
