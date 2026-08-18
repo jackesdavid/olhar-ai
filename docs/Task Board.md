@@ -38,6 +38,10 @@ kanban-plugin: board
 
 ## Specification
 
+- [ ] #194 Outcome-based pricing — bill for results, not capacity
+	  - Plan: [[outcome-based-pricing]]
+- [ ] #193 Meter what the AI assistant costs, per tenant
+	  - Plan: [[llm-cost-metering]]
 - [ ] #189 Organise the Recipients screen into tabs
 	  - Plan: [[recipients-tabs]]
 - [ ] #186 Device Gate offers recipients that can never answer
