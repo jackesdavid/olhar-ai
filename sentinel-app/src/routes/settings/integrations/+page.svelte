@@ -20,6 +20,7 @@
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import { Switch } from "$lib/components/ui/switch";
+  import Busy from "$lib/components/busy.svelte";
   import { dict, lang } from "$lib/i18n";
   import type { TuyaDevice, TuyaDiagnosis } from "$lib/types";
 
@@ -35,6 +36,14 @@
     return TABS.includes(q as (typeof TABS)[number]) ? (q as string) : "tuya";
   }
   let tab = $state(tabFromUrl());
+
+  /** Segmented control inside the console header (Test | Names). */
+  function segClass(active: boolean): string {
+    const base = "rounded px-2.5 py-1 text-xs font-medium transition-colors";
+    return active
+      ? `${base} bg-primary/10 text-primary ring-1 ring-inset ring-primary/20`
+      : `${base} text-muted-foreground hover:text-foreground`;
+  }
 
   /** The app has no Tabs primitive; this is the same underline pattern the workflows list uses. */
   function tabClass(v: string): string {
@@ -282,6 +291,35 @@
   let draft = $state<Record<string, unknown>>({});
   /** The write awaiting confirmation. These are gates and locks: nothing is sent unasked. */
   let pending = $state<{ device: TuyaDevice; fn: Fn; value: unknown } | null>(null);
+
+  /** Testing and naming are different jobs. Cramming both into one row is what made every Send
+   *  button land at a different x — the widget widths vary, so the columns after them cannot align.
+   *  One mode at a time, and each gets a layout that fits it. */
+  let mode = $state<Record<string, "test" | "names">>({});
+  function modeOf(deviceId: string): "test" | "names" {
+    return mode[deviceId] ?? "test";
+  }
+  function setMode(deviceId: string, m: "test" | "names") {
+    mode = { ...mode, [deviceId]: m };
+  }
+
+  /** The sort already groups by channel; this makes the grouping VISIBLE. Reading `gate1_fca`
+   *  against `gate2_fca` in a flat list is work the eye should not have to do. */
+  function groupsOf(fns: Fn[]): { channel: number | null; fns: Fn[] }[] {
+    const out: { channel: number | null; fns: Fn[] }[] = [];
+    for (const f of fns) {
+      const ch = channelOf(f.code);
+      const last = out[out.length - 1];
+      if (last && last.channel === ch) last.fns.push(f);
+      else out.push({ channel: ch, fns: [f] });
+    }
+    return out;
+  }
+
+  /** The name someone gave this point, falling back to nothing — the code is always shown. */
+  function labelFor(d: TuyaDevice, code: string): string {
+    return (edits[d.device_id]?.[code] ?? labelsOf(d)[code] ?? "").trim();
+  }
 
   function key(deviceId: string, code: string) {
     return `${deviceId}:${code}`;
@@ -654,102 +692,152 @@
                 </div>
 
                 {#if expanded[d.device_id]}
-                  <div class="mt-3 space-y-2 pl-6">
+                  <div class="mt-3 pl-6">
                     {#if fns.length === 0}
                       <p class="text-xs text-muted-foreground">{t.noControls}</p>
                     {:else}
-                      <!-- Read once for the whole device: Tuya answers with every point at
-                           once, so a per-control read would be the same call N times. -->
-                      <div class="flex items-center justify-between gap-2 pb-1">
-                        <p class="text-[10px] text-muted-foreground">
-                          {lastMs[d.device_id] ? t.roundTrip(lastMs[d.device_id]) : t.notReadYet}
-                        </p>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={reading === d.device_id}
-                          onclick={() => readStatus(d)}
-                        >
-                          {reading === d.device_id ? t.readingNow : t.readAll}
-                        </Button>
-                      </div>
-
-                      {#each fns as f (f.code)}
-                        {@const range = rangeOf(f)}
-                        {@const kind = kindOf(f)}
-                        {@const busy = sending === key(d.device_id, f.code)}
-                        <div class="flex items-center gap-3 border-t border-border/40 py-2">
-                          <div class="w-40 shrink-0">
-                            <p class="truncate font-mono text-xs">{f.code}</p>
-                            <p class="text-[10px] text-muted-foreground">
-                              {f.type}{isWritable(f) ? "" : ` · ${t.readOnly}`}
-                            </p>
-                          </div>
-
-                          <!-- What the device last said. This is the column that proves a write:
-                               send, read, and watch this change. -->
-                          <div class="w-24 shrink-0">
-                            <p class="truncate font-mono text-xs">{displayValue(valueOf(d.device_id, f.code))}</p>
-                          </div>
-
-                          <!-- A read-only point gets NO control. It is a sensor. -->
-                          {#if isWritable(f)}
-                            <div class="flex min-w-0 flex-1 items-center gap-2">
-                              {#if kind === "bool"}
-                                <Switch
-                                  checked={draftOf(d, f) === true}
-                                  onCheckedChange={(v) => setDraft(d, f, v)}
-                                />
-                              {:else if kind === "enum" && (range.range ?? []).length > 0}
-                                <select
-                                  class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs"
-                                  value={String(draftOf(d, f) ?? "")}
-                                  onchange={(e) => setDraft(d, f, e.currentTarget.value)}
-                                >
-                                  {#each range.range ?? [] as opt (opt)}
-                                    <option value={opt}>{opt}</option>
-                                  {/each}
-                                </select>
-                              {:else if kind === "num"}
-                                <Input
-                                  class="h-8 w-28"
-                                  type="number"
-                                  min={range.min}
-                                  max={range.max}
-                                  value={String(draftOf(d, f) ?? "")}
-                                  oninput={(e) => setDraft(d, f, Number(e.currentTarget.value))}
-                                />
-                                {#if range.min !== undefined && range.max !== undefined}
-                                  <span class="text-[10px] text-muted-foreground">{range.min}–{range.max}</span>
-                                {/if}
-                              {:else}
-                                <Input
-                                  class="h-8 min-w-0 flex-1"
-                                  value={String(draftOf(d, f) ?? "")}
-                                  oninput={(e) => setDraft(d, f, e.currentTarget.value)}
-                                />
-                              {/if}
-                              <Button size="sm" disabled={busy} onclick={() => askSend(d, f)}>
-                                {busy ? t.sendingNow : t.send}
-                              </Button>
-                            </div>
-                          {:else}
-                            <div class="min-w-0 flex-1"></div>
-                          {/if}
-
-                          <Input
-                            class="h-8 w-40 shrink-0"
-                            placeholder={t.friendlyNamePlaceholder}
-                            value={edits[d.device_id]?.[f.code] ?? ""}
-                            oninput={(e) => editLabel(d.device_id, f.code, e.currentTarget.value)}
-                          />
+                      {@const isNames = modeOf(d.device_id) === "names"}
+                      <!-- Console header: what the device last said, and which job you are doing.
+                           Read is ONE call for the whole device — Tuya answers with every point at
+                           once, so a per-control read would be the same request N times. -->
+                      <div class="flex flex-wrap items-center justify-between gap-2 rounded-t-lg border border-b-0 border-border/60 bg-muted/30 px-3 py-2">
+                        <div class="flex items-center gap-1 rounded-md bg-background p-0.5 ring-1 ring-inset ring-border/60">
+                          <button
+                            type="button"
+                            class={segClass(!isNames)}
+                            onclick={() => setMode(d.device_id, "test")}
+                          >{t.modeTest}</button>
+                          <button
+                            type="button"
+                            class={segClass(isNames)}
+                            onclick={() => setMode(d.device_id, "names")}
+                          >{t.modeNames}</button>
                         </div>
-                      {/each}
-                      <div class="flex justify-end pt-1">
-                        <Button size="sm" onclick={() => saveLabels(d)} disabled={savingLabels === d.device_id}>
-                          {savingLabels === d.device_id ? t.savingNames : t.saveNames}
-                        </Button>
+
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs tabular-nums text-muted-foreground">
+                            {lastMs[d.device_id] ? t.roundTrip(lastMs[d.device_id]) : t.notReadYet}
+                          </span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            class="interactive"
+                            disabled={reading === d.device_id}
+                            onclick={() => readStatus(d)}
+                          >
+                            {#if reading === d.device_id}
+                              <Busy />
+                            {/if}
+                            {reading === d.device_id ? t.readingNow : t.readAll}
+                          </Button>
+                        </div>
                       </div>
+
+                      <div class="divide-y divide-border/50 overflow-hidden rounded-b-lg border border-border/60">
+                        {#each groupsOf(fns) as g (g.channel ?? "device")}
+                          <!-- Channel eyebrow: makes the sort legible instead of implied. -->
+                          <p class="bg-muted/20 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            {g.channel === null ? t.deviceWide : t.channelN(g.channel)}
+                          </p>
+
+                          {#each g.fns as f (f.code)}
+                            {@const range = rangeOf(f)}
+                            {@const kind = kindOf(f)}
+                            {@const busy = sending === key(d.device_id, f.code)}
+                            {@const named = labelFor(d, f.code)}
+
+                            {#if isNames}
+                              <!-- Naming: two columns, so the inputs form one straight edge. -->
+                              <div class="grid grid-cols-[minmax(0,1fr)_minmax(0,18rem)] items-center gap-3 px-3 py-2">
+                                {@render identity(f, named)}
+                                <Input
+                                  class="h-8"
+                                  placeholder={t.friendlyNamePlaceholder}
+                                  value={edits[d.device_id]?.[f.code] ?? ""}
+                                  oninput={(e) => editLabel(d.device_id, f.code, e.currentTarget.value)}
+                                />
+                              </div>
+                            {:else}
+                              <!-- Testing: fixed tracks, so VALUE and SEND each form one column no
+                                   matter how wide a given widget is. That alignment is the whole
+                                   difference between a console and a pile of form fields. -->
+                              <div class="grid grid-cols-[minmax(0,1fr)_5rem_minmax(0,15rem)_5rem] items-center gap-3 px-3 py-2 transition-colors hover:bg-muted/20">
+                                {@render identity(f, named)}
+
+                                <!-- The focal column: what the device reports. -->
+                                <span class="truncate text-right font-mono text-sm tabular-nums {valueOf(d.device_id, f.code) === undefined ? 'text-muted-foreground/50' : 'text-foreground'}">
+                                  {displayValue(valueOf(d.device_id, f.code))}
+                                </span>
+
+                                <!-- A read-only point keeps its tracks EMPTY rather than getting a
+                                     control. gate1_fca is a limit switch; offering to "set" it
+                                     invites someone to believe they closed a gate they never
+                                     touched. -->
+                                {#if isWritable(f)}
+                                  <div class="flex min-w-0 items-center gap-2">
+                                    {#if kind === "bool"}
+                                      <Switch
+                                        checked={draftOf(d, f) === true}
+                                        onCheckedChange={(v) => setDraft(d, f, v)}
+                                      />
+                                      <span class="text-xs text-muted-foreground">
+                                        {draftOf(d, f) === true ? t.valueOn : t.valueOff}
+                                      </span>
+                                    {:else if kind === "enum" && (range.range ?? []).length > 0}
+                                      <select
+                                        class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs"
+                                        value={String(draftOf(d, f) ?? "")}
+                                        onchange={(e) => setDraft(d, f, e.currentTarget.value)}
+                                      >
+                                        {#each range.range ?? [] as opt (opt)}
+                                          <option value={opt}>{opt}</option>
+                                        {/each}
+                                      </select>
+                                    {:else if kind === "num"}
+                                      <Input
+                                        class="h-8 w-24"
+                                        type="number"
+                                        min={range.min}
+                                        max={range.max}
+                                        value={String(draftOf(d, f) ?? "")}
+                                        oninput={(e) => setDraft(d, f, Number(e.currentTarget.value))}
+                                      />
+                                      {#if range.min !== undefined && range.max !== undefined}
+                                        <span class="text-xs tabular-nums text-muted-foreground">{range.min}–{range.max}</span>
+                                      {/if}
+                                    {:else}
+                                      <Input
+                                        class="h-8 min-w-0 flex-1"
+                                        value={String(draftOf(d, f) ?? "")}
+                                        oninput={(e) => setDraft(d, f, e.currentTarget.value)}
+                                      />
+                                    {/if}
+                                  </div>
+                                  <Button
+                                    size="sm"
+                                    class="interactive w-full"
+                                    disabled={busy}
+                                    onclick={() => askSend(d, f)}
+                                  >
+                                    {busy ? t.sendingNow : t.send}
+                                  </Button>
+                                {:else}
+                                  <span class="text-xs text-muted-foreground">{t.sensorOnly}</span>
+                                  <span></span>
+                                {/if}
+                              </div>
+                            {/if}
+                          {/each}
+                        {/each}
+                      </div>
+
+                      {#if isNames}
+                        <div class="flex justify-end pt-2">
+                          <Button size="sm" class="interactive" onclick={() => saveLabels(d)} disabled={savingLabels === d.device_id}>
+                            {savingLabels === d.device_id ? t.savingNames : t.saveNames}
+                          </Button>
+                        </div>
+                      {/if}
                     {/if}
                   </div>
                 {/if}
@@ -816,3 +904,19 @@
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
+
+{#snippet identity(f: Fn, named: string)}
+  <div class="min-w-0">
+    {#if named}
+      <p class="truncate text-sm font-medium">{named}</p>
+      <p class="truncate font-mono text-xs text-muted-foreground">
+        {f.code} · {f.type}{isWritable(f) ? "" : ` · ${t.readOnly}`}
+      </p>
+    {:else}
+      <p class="truncate font-mono text-sm">{f.code}</p>
+      <p class="truncate text-xs text-muted-foreground">
+        {f.type}{isWritable(f) ? "" : ` · ${t.readOnly}`}
+      </p>
+    {/if}
+  </div>
+{/snippet}
