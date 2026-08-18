@@ -22,6 +22,7 @@ kanban-plugin: board
 
 ## Bugs
 
+- [ ] #192 Split `tuya.control` out of `tuya.write` — editing labels should not open gates
 - [ ] #190 Push delivery is never verified — we read the ticket, never the receipt
 	  - Plan: [[push-receipts-not-just-tickets]]
 - [ ] #188 A dangling recipient/camera reference auto-selects the first option
@@ -116,8 +117,6 @@ kanban-plugin: board
 
 ## Generation
 
-- [ ] #191 Integrations screen in tabs + a testable Tuya device console
-	  - Plan: [[integrations-tabs-tuya-console]]
 - [ ] #185 Mobile production launch — App Store review readiness
 	  - Plan: [[mobile-app-store-launch]]
 	    a per-device Test that reads status + reports the round-trip. Phase 5 (sync count +
@@ -165,6 +164,11 @@ kanban-plugin: board
 
 ## Done
 
+- [x] #191 Integrations screen in tabs + a testable Tuya device console
+	  - Plan: [[integrations-tabs-tuya-console]]
+	  - VALIDATED in production by the owner on the Garen gate board. Needed no backend:
+	    /tuya/devices/:id/test already wrote when given {code, value}. Audit raised #192 —
+	    tuya.write now opens gates and its description said 'edit device labels'.
 - [x] #133 Tuya local control [map] — the edge talks to the device on the LAN, cloud out of the path
 	  - Map: [[tuya-local-map]] · today's model: [[tuya]]
 	  - CLOSED 2026-08-17 by the owner: we are not pursuing LAN control this way. Cloud control
