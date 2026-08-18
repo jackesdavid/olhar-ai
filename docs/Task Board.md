@@ -38,6 +38,8 @@ kanban-plugin: board
 
 ## Specification
 
+- [ ] #196 On-demand graphs are indistinguishable from switched-off ones
+	  - Plan: [[on-demand-graphs-read-as-disabled]]
 - [ ] #189 Organise the Recipients screen into tabs
 	  - Plan: [[recipients-tabs]]
 - [ ] #186 Device Gate offers recipients that can never answer
@@ -138,6 +140,7 @@ kanban-plugin: board
 
 ## Validation
 
+- [ ] #195 Capture-from-camera always failed — enroll and recognize called a stub
 - [ ] #181 Mobile onboarding — invite a person, pair their phone
 	  - Plan: [[mobile-tenant-onboarding]]
 	  - All three phases shipped and deployed: invite tokens + public preview/accept, the QR

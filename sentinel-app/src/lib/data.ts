@@ -1,8 +1,10 @@
 // Data layer: one API the pages call, dispatching to the control-plane HTTP API. Sentinel
 // is web-only now (the Tauri desktop shell was removed), so every command goes to the cloud
 // backend (`api.*`) or localStorage for UI-local state. A few capabilities have no cloud
-// backend yet (ONVIF discovery, credential test, snapshots, chat/voice, beacon test) and
-// throw a clear error via `cloudOnly(...)` — pages don't surface those affordances.
+// backend yet and throw a clear error via `cloudOnly(...)`; the pages must not surface those
+// affordances. Snapshots are NOT among them any more — camera capture goes through the edge
+// proxy (see `snapshotBlob`). A stub whose comment says callers fall back is only true if a
+// caller actually falls back; check before adding one.
 import { api } from "./api";
 import { API_BASE } from "./config";
 import { auth, mediaToken, mediaTokenExpiresAt } from "./auth.svelte";
@@ -130,6 +132,28 @@ export type ProbeResult = {
 };
 
 const SETTINGS_KEY = "sentinel.settings";
+
+/** A live JPEG frame of `ip` from the tenant's edge, via control's proxy
+ * (`GET /devices/:ip/snapshot`).
+ *
+ * A module-level function rather than an object method because two exported entries need it —
+ * `snapshotBlob` (the workflow editor's region-drawing UI) and `captureSnapshot` (enroll /
+ * recognize) — and an object literal cannot reference its own siblings.
+ *
+ * Fetches a Blob rather than handing back an `<img src>` URL: the request needs the
+ * Authorization header, and an image element cannot carry one. */
+async function snapshotBlob(ip: string, timeoutMs?: number): Promise<Blob> {
+  const headers: Record<string, string> = {};
+  if (auth.token) headers.Authorization = `Bearer ${auth.token}`;
+  // A timeout is optional because some callers poll this in a loop and must keep moving.
+  const signal = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
+  const r = await fetch(`${API_BASE}/devices/${encodeURIComponent(ip)}/snapshot`, {
+    headers,
+    signal,
+  });
+  if (!r.ok) throw new Error(`Snapshot failed (${r.status})`);
+  return r.blob();
+}
 
 function cloudOnly(feature: string): never {
   throw new Error(`${feature} is not available in the web app yet.`);
@@ -385,27 +409,28 @@ export const data = {
   validateDevice: (): Promise<never> => cloudOnly("Credential validation"),
 
   // ---- live / snapshots (edge-owned, via the streaming gateway) ------------
-  // Camera-frame capture (e.g. enroll/recognize from a live camera) has no cloud backend
-  // yet — callers fall back to file upload. The `ip` arg is kept for call-site compat.
-  captureSnapshot: (_ip?: string): Promise<never> =>
-    cloudOnly("Camera capture"),
-  ensureStreams: (): Promise<never> => cloudOnly("Live streams"),
-  /** A live JPEG snapshot of `ip` from the tenant's edge, via control's proxy (`GET
-   * /devices/:ip/snapshot`) — for the workflow editor's Region-drawing UI (card: edge
-   * tracking). Needs the Authorization header (image requests can't carry one), so this
-   * fetches a Blob rather than returning a plain `<img src>` URL. */
-  snapshotBlob: async (ip: string, timeoutMs?: number): Promise<Blob> => {
-    const headers: Record<string, string> = {};
-    if (auth.token) headers.Authorization = `Bearer ${auth.token}`;
-    // this in a loop and must keep moving).
-    const signal = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
-    const r = await fetch(
-      `${API_BASE}/devices/${encodeURIComponent(ip)}/snapshot`,
-      { headers, signal },
-    );
-    if (!r.ok) throw new Error(`Snapshot failed (${r.status})`);
-    return r.blob();
+  /** A camera frame as a `data:` URL, for enroll / recognize.
+   *
+   * This used to be a `cloudOnly()` stub whose comment claimed callers fell back to file upload.
+   * They did not: both `captureFromCamera` handlers awaited it and showed the thrown "not
+   * available in the web app yet" as an error, so the button never worked. Meanwhile the real
+   * path was two functions below — `snapshotBlob` has been fetching live frames through control's
+   * edge proxy for the workflow editor's region-drawing UI the whole time.
+   *
+   * The callers want a data URL (they hand it straight to enroll/recognize), so this is
+   * `snapshotBlob` plus a Blob→data-URL read. */
+  captureSnapshot: async (ip: string, timeoutMs?: number): Promise<string> => {
+    if (!ip) throw new Error("Pick a camera first.");
+    const blob = await snapshotBlob(ip, timeoutMs);
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("Could not read the camera frame."));
+      reader.onload = () => resolve(String(reader.result));
+      reader.readAsDataURL(blob);
+    });
   },
+  ensureStreams: (): Promise<never> => cloudOnly("Live streams"),
+  snapshotBlob,
 
   // ---- alerts -------------------------------------------------------------
   listAlerts: (): Promise<Alert[]> => api.get<Alert[]>("/alerts"),
